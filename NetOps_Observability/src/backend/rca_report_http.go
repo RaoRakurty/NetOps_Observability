@@ -187,8 +187,10 @@ func rcaTopologyFromSpine(block any) rcaTopologyView {
 		switch n.Fault {
 		case "broken", "suspected":
 			// CAUSAL: the case's verdict blames this path, and this is where it broke.
+			// P1.8 wording: the last RESPONDING hop is a fact; the failure/visibility
+			// boundary sits AFTER it — a responding hop is never labelled failed.
 			out.DropPoint = fmt.Sprintf(
-				"The measured path stops responding after %s (%s boundary) — every later hop went dark. This case's fault is on the path, so this drop point is where it breaks; it is consistent with the propagation ladder's origin.",
+				"The last responding hop was %s (%s boundary); the destination did not respond beyond this point. This case's fault is on the path, so the failure or visibility boundary after this hop is consistent with the propagation ladder's origin. This narrows the affected path; it does not by itself identify the exact failed component.",
 				orDefault(n.Label, n.Address), strings.ToLower(orDefault(n.Boundary, "unknown")))
 		case "last_response":
 			// FACT ONLY: state where the measurement stopped, blame nothing.

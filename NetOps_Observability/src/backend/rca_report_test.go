@@ -63,8 +63,10 @@ func buildTestReport(t *testing.T, meta map[string]any, sigs []map[string]any) r
 	})
 }
 
-// 1. Confirmed root cause → the document may call itself an RCA.
-func TestRcaReportConfirmedIsRCA(t *testing.T) {
+// 1. A confirmed signature verdict confirms the FAULT CONDITION — never the
+// root cause (P1.3). The document is a fault-confirmed incident analysis; it
+// may call itself an RCA only when mechanism + causal object concluded.
+func TestRcaReportConfirmedIsFaultConfirmedNotRCA(t *testing.T) {
 	meta := testMeta("open", "confirmed", "sig.ent.wan-edge.bgp-peer-down",
 		testHyp("sig.ent.wan-edge.bgp-peer-down", 0.9, "confirmed",
 			[]string{"bgp_adjacency_change", "probe_loss"}, nil, nil, "netops", false))
@@ -74,11 +76,23 @@ func TestRcaReportConfirmedIsRCA(t *testing.T) {
 			map[string]any{"probe_scope": "customer_path"}),
 	}
 	rep := buildTestReport(t, meta, sigs)
-	if rep.ReportType != "Root Cause Analysis" {
-		t.Fatalf("report type = %q, want Root Cause Analysis", rep.ReportType)
+	if rep.ReportType != "Incident Analysis — Fault Confirmed" {
+		t.Fatalf("report type = %q, want Incident Analysis — Fault Confirmed", rep.ReportType)
 	}
-	if rep.States.Analysis != "confirmed" || rep.States.Impact != "confirmed" {
+	if rep.States.Analysis != "confirmed" || rep.States.FaultDomain != "confirmed" {
 		t.Fatalf("states = %+v", rep.States)
+	}
+	// synthetic evidence only → impact is detected (synthetic scope), never
+	// "confirmed" customer impact; root cause stays under investigation.
+	if rep.States.Impact != "detected" || rep.States.ImpactSynthetic != "confirmed" {
+		t.Fatalf("impact = %s / syn %s", rep.States.Impact, rep.States.ImpactSynthetic)
+	}
+	if rep.States.RootCauseState != "under_investigation" || rep.RootCause.Identified {
+		t.Fatalf("root cause = %s identified=%v — a verdict never confirms root cause",
+			rep.States.RootCauseState, rep.RootCause.Identified)
+	}
+	if !rep.Quality.Passed {
+		t.Fatalf("quality gate failed: %+v", rep.Quality.Errors)
 	}
 }
 
@@ -112,8 +126,10 @@ func TestRcaReportActiveCheckOnlyRecovered(t *testing.T) {
 	if rep.Times.DurationBasis != "to_recovery" {
 		t.Fatalf("duration basis = %q", rep.Times.DurationBasis)
 	}
-	// impact telemetry-qualified: no bare "no impact"
-	if !strings.Contains(rep.Summary.Management, "within available telemetry coverage") &&
+	// impact telemetry-qualified: no bare "no impact" — synthetic-only evidence
+	// states the synthetic scope and the unconfirmed real-user axis explicitly.
+	if !strings.Contains(rep.Summary.Management, "Synthetic path impact is confirmed") &&
+		!strings.Contains(rep.Summary.Management, "within available telemetry coverage") &&
 		!strings.Contains(rep.Summary.Management, "could not be assessed") {
 		t.Fatalf("management impact wording not telemetry-qualified: %q", rep.Summary.Management)
 	}
@@ -420,25 +436,34 @@ func TestRcaReportImpactAxes(t *testing.T) {
 			map[string]any{"probe_scope": "customer_path"}),
 	}
 	rep := buildTestReport(t, meta, syntheticOnly)
-	if rep.States.Impact != "confirmed" || rep.States.ImpactSynthetic != "confirmed" {
-		t.Fatalf("synthetic axis wrong: %+v", rep.States)
+	// synthetic-only impact never claims customer impact confirmation (P1.5)
+	if rep.States.Impact != "detected" || rep.States.ImpactSynthetic != "confirmed" {
+		t.Fatalf("synthetic axis wrong: impact=%s syn=%s", rep.States.Impact, rep.States.ImpactSynthetic)
 	}
 	if rep.States.ImpactRealUser != "not_observable" {
 		t.Fatalf("real-user axis = %q — no real-traffic telemetry existed", rep.States.ImpactRealUser)
 	}
-	if !strings.Contains(rep.Summary.Management, "real-user impact was not directly observed") {
+	if !strings.Contains(rep.Summary.Management, "Synthetic path impact is confirmed") {
 		t.Fatalf("summary must qualify synthetic-only impact: %s", rep.Summary.Management)
 	}
 
-	// add real-traffic evidence (flow collapse) → real-user impact confirmed
-	withFlow := append(syntheticOnly,
+	// a flow-volume delta is an INDICATOR, never real-user confirmation (P1.5)
+	withFlow := append(append([]map[string]any{}, syntheticOnly...),
 		testSig("flow_volume_anomaly", "passive_flow", "exporter1", "interface", "if1", "high", "2026-07-12 18:13:00", true, nil))
 	rep2 := buildTestReport(t, meta, withFlow)
-	if rep2.States.ImpactRealUser != "confirmed" {
-		t.Fatalf("real-user axis = %q with flow evidence", rep2.States.ImpactRealUser)
+	if rep2.States.ImpactRealUser != "indicator_detected" {
+		t.Fatalf("real-user axis = %q with flow evidence — a volume delta is an indicator", rep2.States.ImpactRealUser)
 	}
-	if !strings.Contains(rep2.Summary.Management, "including real user traffic") {
-		t.Fatalf("summary must cite real traffic: %s", rep2.Summary.Management)
+
+	// REAL serving-infrastructure errors (LB 5xx) + confirmed analysis → confirmed
+	withLB := append(append([]map[string]any{}, syntheticOnly...),
+		testSig("lb_5xx", "device_telemetry", "alb-1", "app", "portal", "high", "2026-07-12 18:13:10", true, nil))
+	rep3 := buildTestReport(t, meta, withLB)
+	if rep3.States.ImpactRealUser != "confirmed" || rep3.States.Impact != "confirmed" {
+		t.Fatalf("real-user axis = %s impact = %s with LB error evidence", rep3.States.ImpactRealUser, rep3.States.Impact)
+	}
+	if !strings.Contains(rep3.Summary.Management, "including real user traffic") {
+		t.Fatalf("summary must cite real traffic: %s", rep3.Summary.Management)
 	}
 }
 
@@ -527,7 +552,9 @@ func TestRcaReportDimensionalStatesAndEscalation(t *testing.T) {
 	if rep.States.Symptom != "confirmed" {
 		t.Fatalf("symptom = %q", rep.States.Symptom)
 	}
-	if rep.States.FaultDomain != "confirmed" || rep.States.Mechanism != "confirmed" {
+	// P1.3: the fault DOMAIN confirms; the MECHANISM (why it failed) requires
+	// its own causal evidence and stays under investigation.
+	if rep.States.FaultDomain != "confirmed" || rep.States.Mechanism != "under_investigation" {
 		t.Fatalf("domain/mechanism = %s/%s", rep.States.FaultDomain, rep.States.Mechanism)
 	}
 	// no grounded convergence and no seam context in this fixture → root honest

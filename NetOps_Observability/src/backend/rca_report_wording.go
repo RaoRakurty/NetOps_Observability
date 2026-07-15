@@ -434,6 +434,29 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 			Missing:       humanizeClauses(h.Missing),
 			Owner:         rcaOwnerTeam[h.Verdict.Owner],
 		}
+		// P1.9 taxonomy: observation and causal role are independent axes.
+		// "Condition observed: yes / origin: ruled out" is expressible; a single
+		// blended "Confirmed / Ruled out" field is not renderable.
+		hy.ObservationState = "not_observed"
+		if len(hy.Supporting) > 0 {
+			hy.ObservationState = "observed"
+			if strings.ToLower(h.Verdict.Tier) == "confirmed" && !h.Contradicted {
+				hy.ObservationState = "confirmed"
+			}
+		}
+		switch {
+		case h.Contradicted:
+			hy.CausalRole, hy.CandidacyState = "ruled_out_as_origin", "ruled_out"
+			// a ruled-out row never renders a live confidence label (audit D7)
+			hy.Label = ""
+		case hy.Type == "symptom classification":
+			// a symptom names what was observed — it is never ranked as a cause
+			hy.CausalRole, hy.CandidacyState = "symptom", "not_ranked_as_cause"
+		case strings.ToLower(h.ConfidenceLabel) == "likely" || strings.ToLower(h.ConfidenceLabel) == "confirmed":
+			hy.CausalRole, hy.CandidacyState = "probable_origin", "active"
+		default:
+			hy.CausalRole, hy.CandidacyState = "possible_origin", "active"
+		}
 		for _, m := range humanizeClauses(h.Missing) {
 			hy.ConfirmWhen = append(hy.ConfirmWhen, "observe "+m)
 		}
@@ -447,7 +470,16 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 
 // ---- ownership ----------------------------------------------------------------------------
 
-func buildOwnership(analysis string, rootIdentified bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
+// rcaExternalOwnerTeams — owner teams that are OUTSIDE this organization.
+// Accountability never lands on an external provider without demarcation
+// evidence (P1.10); until then they are candidates and the internal network
+// team owns the technical investigation.
+var rcaExternalOwnerTeams = map[string]bool{
+	"ISP / carrier": true, "Carrier": true, "Cloud provider": true,
+	"Colo provider": true, "SD-WAN vendor": true,
+}
+
+func buildOwnership(analysis string, faultLocalized bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
 	own := rcaOwnership{
 		TriageOwner:      "NOC",
 		TriageReason:     "Default triage owner until the failure stage and fault domain are identified.",
@@ -476,13 +508,27 @@ func buildOwnership(analysis string, rootIdentified bool, serviceClassification 
 		if team != "" {
 			own.SuspectedDomain = orDefault(top.Verdict.Layer, team)
 			switch {
-			case analysis == "confirmed" && rootIdentified && team == "Application team" &&
+			case analysis == "confirmed" && faultLocalized && rcaExternalOwnerTeams[team]:
+				// P1.10: an external provider/carrier is never handed
+				// accountability from a hypothesis token. The internal network
+				// team owns the investigation; the provider is a CANDIDATE
+				// pending demarcation (local side healthy, loss beyond the
+				// customer boundary, provider alarm or confirmation).
+				own.TechnicalOwner = "NetOps"
+				own.ExternalCandidate = team
+				own.Demarcation = "local_checks_pending"
+				own.DemarcationBasis = "No demarcation evidence has been captured: local egress, route/neighbor state and independent-vantage reachability must localize the loss beyond the customer boundary before provider accountability is assigned."
+				own.EscalationOwner = "NetOps"
+				own.EscalationReason = fmt.Sprintf("the fault localizes toward the %s domain; %s escalation is pending provider-demarcation confirmation", strings.ToLower(team), strings.ToLower(team))
+			case analysis == "confirmed" && faultLocalized && team == "Application team" &&
 				serviceClassification == "external / third-party service":
 				// §12: the internal Application team does not own a third-party
 				// service — vendor escalation does, once the fault localizes there.
+				own.TechnicalOwner = team
 				own.EscalationOwner = "SaaS vendor escalation (via vendor management)"
 				own.EscalationReason = fmt.Sprintf("the fault localizes to %s — an external service this platform does not operate", signatureNocTitle(top.ID))
-			case analysis == "confirmed" && rootIdentified:
+			case analysis == "confirmed" && faultLocalized:
+				own.TechnicalOwner = team
 				own.EscalationOwner = team
 				own.EscalationReason = fmt.Sprintf("the confirmed leading hypothesis (%s) places the fault in this team's domain", signatureNocTitle(top.ID))
 			case analysis == "confirmed":
@@ -501,35 +547,6 @@ func buildOwnership(analysis string, rootIdentified bool, serviceClassification 
 	// triage owner stays NOC and the domain stays Undetermined by default.
 	_ = sig
 	return own
-}
-
-// firstStepExpectedOutput derives the concrete observable a first-step should
-// yield (§21) — keyed on what the step examines, never a circular phrase.
-func firstStepExpectedOutput(step string) string {
-	l := strings.ToLower(step)
-	switch {
-	case strings.Contains(l, "trace"):
-		return "the hop where loss begins (address, TTL, and loss percentage per hop)"
-	case strings.Contains(l, "link") || strings.Contains(l, "route"):
-		return "interface/link state, error counters, and the active route toward the target"
-	case strings.Contains(l, "reachab") || strings.Contains(l, "third vantage") || strings.Contains(l, "ping"):
-		return "reachability result from an independent vantage (reply/loss and RTT)"
-	case strings.Contains(l, "ike") || strings.Contains(l, "ipsec") || strings.Contains(l, "tunnel") || strings.Contains(l, "sa"):
-		return "IKE/child-SA state, last DPD result, and rekey timestamps from the gateway"
-	case strings.Contains(l, "dns"):
-		return "the DNS response code and resolved addresses from the configured resolver"
-	case strings.Contains(l, "cert") || strings.Contains(l, "tls"):
-		return "the TLS handshake result, certificate validity window, and issuer"
-	case strings.Contains(l, "bgp") || strings.Contains(l, "peer") || strings.Contains(l, "routing"):
-		return "session state and prefix counts for the affected peer/session"
-	case strings.Contains(l, "load balancer") || strings.Contains(l, "lb") || strings.Contains(l, "health check"):
-		return "target-health states and backend error rates on the load balancer"
-	case strings.Contains(l, "log"):
-		return "matching log lines with timestamps bracketing the incident window"
-	case strings.Contains(l, "traffic") || strings.Contains(l, "flow"):
-		return "request/flow volume and completion rate versus the pre-incident baseline"
-	}
-	return "the specific observation that isolates the fault to, or clears, this step's domain"
 }
 
 // ---- decision --------------------------------------------------------------------------------
@@ -682,7 +699,7 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 
 // ---- management summary (§3) -----------------------------------------------------------------------
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration) string {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) string {
 	var b strings.Builder
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
@@ -703,8 +720,15 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 		}
 	}
 	fmt.Fprintf(&b, "At %s, %s detected a condition of “%s” affecting %s. ", when, src, orDefault(problemNoun, "telemetry anomaly"), subject)
-	// still happening / duration
+	// still happening / duration. Component vs service recovery are stated
+	// SEPARATELY (P1.2): a conflicting timeline is explained, never averaged.
 	switch {
+	case ra.ResidualAfterComponent && times.ComponentRecoveredAt != "" && !times.RecoveredCaptured:
+		fmt.Fprintf(&b, "A component recovered at %s, but end-to-end service checks continued failing through %s — the incident entered residual degradation rather than full recovery, and service recovery is not confirmed. ",
+			times.ComponentRecoveredAt, orDefault(times.LastAnomalous, "the end of the window"))
+		if incident == "active" && times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0 {
+			fmt.Fprintf(&b, "The condition is ongoing (%s elapsed). ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
+		}
 	case times.RecoveredCaptured && times.DurationMS > 0:
 		fmt.Fprintf(&b, "The condition recovered after %s. ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
 	case incident == "no_longer_observed":
@@ -720,33 +744,35 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	default:
 		b.WriteString("The condition is under observation. ")
 	}
-	// impact — ALWAYS telemetry-qualified (§3/§12)
+	// impact — ALWAYS telemetry-qualified (§3/§12); axes never conflated (P1.5)
 	switch impact {
 	case "confirmed":
-		if impactRealUser == "confirmed" {
-			b.WriteString("Customer impact is confirmed by independent evidence, including real user traffic. ")
+		b.WriteString("Customer impact is confirmed by independent evidence, including real user traffic. ")
+	case "detected":
+		if impactRealUser == "confirmed" || impactRealUser == "detected" {
+			b.WriteString("Customer-impact indicators were detected but are not independently confirmed. ")
 		} else {
 			// §5: synthetic checks model a representative transaction — they do
 			// not prove real users failed the same one.
-			b.WriteString("Impact is confirmed for synthetic customer-path checks; real-user impact was not directly observed. ")
+			b.WriteString("Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. ")
 		}
-	case "detected":
-		b.WriteString("Customer-impact indicators were detected but are not independently confirmed. ")
+	case "indicator_detected":
+		b.WriteString("A real-traffic indicator was detected — traffic behaviour deviated from baseline — but actual customer impact is unconfirmed. ")
 	case "none_detected":
 		b.WriteString("No customer impact was detected within available telemetry coverage. ")
 	case "not_observable":
-		b.WriteString("Customer impact could not be assessed — impact telemetry was unavailable for this window. ")
+		b.WriteString("Customer impact could not be assessed — impact telemetry coverage was unavailable or insufficient for this window. ")
 	default:
 		b.WriteString("Customer impact is unknown. ")
 	}
-	// cause status
+	// cause status — a confirmed FAULT is never called a confirmed ROOT CAUSE (P1.3)
 	switch analysis {
 	case "confirmed":
-		b.WriteString("The root cause is confirmed. ")
+		b.WriteString("The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation. ")
 	case "probable":
-		b.WriteString("A probable cause is identified, pending independent confirmation. ")
+		b.WriteString("A probable fault domain is identified, pending independent confirmation. ")
 	case "inconclusive":
-		b.WriteString("The leading cause was ruled out by contradicting evidence; the cause is currently inconclusive. ")
+		b.WriteString("The leading explanation was ruled out by contradicting evidence; the cause is currently inconclusive. ")
 	default:
 		b.WriteString("The cause remains unconfirmed because independent evidence classes did not corroborate the observations. ")
 	}
@@ -765,82 +791,36 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	return b.String()
 }
 
-// ---- next actions (§14) --------------------------------------------------------------------------------
-
-func buildActions(analysis string, hb rcaHypBlob, sig rcaSignalSummary, decision rcaDecision, own rcaOwnership) []rcaAction {
-	// Differential control (§13/owner feedback): a single-vantage failure needs
-	// an independent vantage before any target-side conclusion firms up.
-	var differential *rcaAction
-	if sig.Probe != nil && len(sig.Probe.AffectedVantages) == 1 {
-		differential = &rcaAction{
-			Action:         fmt.Sprintf("Run the same check from an independent vantage (only %s has reported this)", sig.Probe.AffectedVantages[0]),
-			Owner:          "NOC",
-			ExpectedResult: "the same target's result from a second vantage — fails there too (target side) or only here (local side)",
-		}
-	}
-	var out []rcaAction
-	add := func(a rcaAction) {
-		a.Priority = len(out) + 1
-		out = append(out, a)
-	}
-	// engine runbook first (fault-class-specific first steps)
-	if len(hb.Ranking.Hypotheses) > 0 {
-		for _, step := range hb.Ranking.Hypotheses[0].Verdict.FirstSteps {
-			if len(out) >= 3 {
-				break
-			}
-			// §21: never the generic "confirm or rule out". Each first-step names
-			// the concrete observation it should produce, derived from the step.
-			add(rcaAction{Action: step, Owner: own.TriageOwner, ExpectedResult: firstStepExpectedOutput(step)})
-		}
-	}
-	// probe forensics when the evidence is active-check-shaped
-	if sig.Probe != nil && sig.Probe.Failed > 0 {
-		add(rcaAction{
-			Action:         "Inspect the most recent failed check transaction",
-			Owner:          "NOC",
-			ExpectedResult: "DNS result, resolved IP, TCP status, TLS status, HTTP status, response time, and the failure stage",
-		})
-		if sig.Probe.IndependenceNote != "" && !strings.Contains(sig.Probe.IndependenceNote, "established by the verdict gate") {
-			add(rcaAction{
-				Action:         "Validate vantage independence for the reporting checks",
-				Owner:          "Platform operations",
-				ExpectedResult: "agent host, site, DNS resolver, upstream provider, and path overlap for each vantage",
-			})
-		}
-		add(rcaAction{
-			Action:         "Compare real traffic and application health during the incident window",
-			Owner:          "NOC",
-			ExpectedResult: "request volume, completion rate, load-balancer target health, application error rate",
-			EscalateWhen:   "real-user impact, flow loss, or application errors corroborate the checks",
-		})
-	}
-	if analysis != "confirmed" {
-		add(rcaAction{
-			Action:         "Continue monitoring under the active policy",
-			Owner:          "NOC",
-			ExpectedResult: "auto-close after the stability window, reopen on recurrence",
-			EscalateWhen:   decision.EscalateWhen,
-		})
-	}
-	if differential != nil {
-		out = append(out, *differential)
-	}
-	return out
-}
-
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------
 
-func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction) []rcaKV {
+func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction, ra rcaRecoveryAssessment) []rcaKV {
 	kv := []rcaKV{
 		{K: "Incident", V: strings.ReplaceAll(incident, "_", " ")},
 		{K: "Recovery", V: strings.ReplaceAll(recovery, "_", " ")},
-		{K: "Analysis", V: analysis},
-		{K: "Impact", V: impact},
-		{K: "Synthetic impact", V: strings.ReplaceAll(impactSyn, "_", " ")},
-		{K: "Real-user impact", V: strings.ReplaceAll(impactRU, "_", " ")},
-		{K: "Ticket", V: ticket},
 	}
+	// Recovery BY SCOPE (P1.1) — the NOC sees component vs service recovery as
+	// separate rows, never one blended state.
+	if ra.Component.State != "not_applicable" {
+		v := strings.ReplaceAll(ra.Component.State, "_", " ")
+		if ra.Component.At != "" {
+			v += " at " + ra.Component.At
+		}
+		kv = append(kv, rcaKV{K: "Component recovery", V: v})
+	}
+	if ra.Service.State != "not_applicable" {
+		v := strings.ReplaceAll(ra.Service.State, "_", " ")
+		if ra.Service.At != "" {
+			v += " at " + ra.Service.At
+		}
+		kv = append(kv, rcaKV{K: "Service recovery", V: v})
+	}
+	kv = append(kv,
+		rcaKV{K: "Analysis", V: analysis},
+		rcaKV{K: "Impact", V: strings.ReplaceAll(impact, "_", " ")},
+		rcaKV{K: "Synthetic impact", V: strings.ReplaceAll(impactSyn, "_", " ")},
+		rcaKV{K: "Real-user impact", V: strings.ReplaceAll(impactRU, "_", " ")},
+		rcaKV{K: "Ticket", V: strings.ReplaceAll(ticket, "_", " ")},
+	)
 	if times.FirstObserved != "" {
 		kv = append(kv, rcaKV{K: "First observed", V: times.FirstObserved})
 	}
@@ -924,8 +904,18 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 		kv = append(kv, rcaKV{K: "Evidence missing", V: strings.Join(absent, ", ")})
 	}
 	kv = append(kv, rcaKV{K: "Triage owner", V: own.TriageOwner})
+	if own.TechnicalOwner != "" {
+		kv = append(kv, rcaKV{K: "Technical owner", V: own.TechnicalOwner})
+	}
+	if own.ExternalCandidate != "" {
+		kv = append(kv, rcaKV{K: "External provider", V: own.ExternalCandidate + " (candidate — " + strings.ReplaceAll(own.Demarcation, "_", " ") + ")"})
+	}
 	if len(actions) > 0 {
-		kv = append(kv, rcaKV{K: "Next action", V: actions[0].Action})
+		v := actions[0].Action
+		if actions[0].OperationalPriority != "" {
+			v = "[" + actions[0].OperationalPriority + "] " + v
+		}
+		kv = append(kv, rcaKV{K: "Next action", V: v})
 	}
 	return kv
 }
