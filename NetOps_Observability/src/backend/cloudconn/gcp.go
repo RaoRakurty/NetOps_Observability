@@ -126,12 +126,12 @@ func gcpGcloud(projectNum, project, issuer, subject string, pack CapabilityPack)
 func gcpTerraform(project string, issuer string, pack CapabilityPack) string {
 	var roleBlocks strings.Builder
 	for i, role := range gcpRoles(pack) {
-		roleBlocks.WriteString(fmt.Sprintf(`resource "google_project_iam_member" "correlix_observer_%d" {
+		fmt.Fprintf(&roleBlocks, `resource "google_project_iam_member" "correlix_observer_%d" {
   project = "%s"
   role    = "%s"
   member  = "serviceAccount:${google_service_account.correlix_observer.email}"
 }
-`, i, project, role))
+`, i, project, role)
 	}
 	return `# Correlix Workload Identity Federation (` + pack.FullID() + `, read-only)
 resource "google_iam_workload_identity_pool" "correlix" {
