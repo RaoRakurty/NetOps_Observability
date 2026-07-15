@@ -288,11 +288,11 @@ func newCoverageEngine(perTenant map[string]tenantCoveragePolicy) *EvidenceCover
 	}
 	// env: per-class strategy override.
 	for _, entry := range splitEnvList(os.Getenv("CORR_COVERAGE_STRATEGY")) {
-		class, strat, ok := strings.Cut(entry, ":")
+		class, strategy, ok := strings.Cut(entry, ":")
 		if !ok {
 			continue
 		}
-		if s, valid := parseStrategy(strat); valid {
+		if s, valid := parseStrategy(strategy); valid {
 			pol.strategyByClass[strings.TrimSpace(class)] = s
 		}
 	}
@@ -384,11 +384,11 @@ func (e *EvidenceCoverageEngine) thresholdsFor(tenant, class string) coverageThr
 // Assess produces the CoverageAssessment for one lane and tenant. Pure function of
 // the input + the caller tenant's policy — no shared mutable state.
 func (e *EvidenceCoverageEngine) Assess(tenant string, in LaneCoverageInput) CoverageAssessment {
-	strat := e.strategyFor(tenant, in.Class)
+	strategy := e.strategyFor(tenant, in.Class)
 	th := e.thresholdsFor(tenant, in.Class)
 	a := CoverageAssessment{
 		Class:              in.Class,
-		Strategy:           strat,
+		Strategy:           strategy,
 		Scope:              orTri(in.Scope),
 		CollectorHealth:    orHealth(in.CollectorHealthIn),
 		Sampled:            orTri(in.Sampled),
@@ -414,7 +414,7 @@ func (e *EvidenceCoverageEngine) Assess(tenant string, in LaneCoverageInput) Cov
 		return a
 	}
 
-	switch strat {
+	switch strategy {
 	case strategyEventBased:
 		e.assessEventBased(&a, in)
 	case strategyFreshness:
