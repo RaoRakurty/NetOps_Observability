@@ -89,4 +89,15 @@ captured as test fixtures:
 - Per-record firehoses are forbidden: every high-volume log family lands as
   bounded rollups (the P1-6 discipline).
 - Fixture files written by pollers are LIVE data; the demo/synthetic badge
-  must reflect collection mode, not transport (task: stamp + surface).
+  must reflect collection mode, not transport. ✅ DONE 2026-07-15: every
+  inventory writer (discover.py / azure.py / gcp.py) stamps
+  `collection: {mode: live_poller, collected_at}`; the API derives per-file
+  connector provenance from the stamp (cloud/provider.go `Connectors`,
+  default-closed — no stamp or unknown mode reads "fixture"), serves it on
+  `GET /api/cloud/resources` (`connectors`, tenant-scoped), and the UI badge
+  is measured (`deriveConnectorKind`): "Live telemetry" only when EVERY
+  contributing inventory file is live-poller written.
+- CloudTrail checkpoint burn (side-find, closed 2026-07-15): `trail_ts` now
+  advances over everything SEEN (matched or excluded) via `trail_state.py`,
+  with a 15-min delivery-lag guard on empty windows — quiet periods no longer
+  re-read the 20-page ceiling every cycle.

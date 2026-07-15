@@ -144,8 +144,18 @@ wired into poller (own failure domains, `CLOUD_SEAM_TELEMETRY`/`SEAM_EVERY_S`), 
 registered in `cloud_producers.py`, 18 unit tests (`test_seam_state.py`). **Not yet watched
 rendered** — lab has no managed seam resources (AWS VPN/TGW/NAT-GW, Azure ER/VPN-GW) and GCP is
 cred-gated; render validation rides the acceptance drills.
-**Also queued:** stale "DEMO TENANT · SYNTHETIC SIGNALS" badge (fixtures are live poller data now —
-stamp collection mode, surface via API).
+**✅ Badge provenance + CloudTrail checkpoint (2026-07-15):** the stale "DEMO TENANT · SYNTHETIC
+SIGNALS" badge is now MEASURED — pollers stamp `collection:{mode:live_poller,collected_at}` into
+every inventory file they write; backend `cloud/provider.go Connectors()` derives per-file kind
+(default-closed: unstamped/unknown ⇒ fixture), tenant-scoped via the store, served on
+`/api/cloud/resources`; UI `deriveConnectorKind` claims "Live telemetry" only when every
+contributing file is live-written. CloudTrail poller checkpoint (`trail_state.py`) advances over
+seen-not-just-matched events + delivery-lag guard — kills the every-cycle 20-page re-read burn.
+**⚠️ Incident 2026-07-14 19:18Z (canary-caught):** kafka disk-pressure crash-loop wedged the
+correlation consumer — supervisor's unbounded `consumer.stop()` hung forever ("restarting in 1s"
+never happened), engine consumed nothing 5.5h. Fixed: bounded stop/start
+(`CONSUMER_STOP/START_TIMEOUT_S`, `test_consumer_supervisor.py` pins the wedge), redeployed,
+548 corr tests green. The RCA canary alerted correctly every 15 min — dead-man coverage works.
 
 ## #104 — Service View cloud lane to world-class (owner demand 2026-07-14) — 🟡 W1+W2+W2.5 SHIPPED+LIVE
 

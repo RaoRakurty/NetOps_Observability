@@ -1196,11 +1196,36 @@ async def cloud_log_tailer() -> None:
         await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
 
 
+# Bounds for the consumer supervisor (env-tunable; tests use tiny values).
+# stop() and start() are awaited against a BROKER — when the broker is mid
+# crash-loop either call can hang forever, and an unbounded await turns the
+# "restarting in 1s" promise into a silent permanent wedge (live incident
+# 2026-07-14 19:18Z: handler raised, finally awaited consumer.stop(), stop
+# hung on the churning coordinator, engine consumed NOTHING for 5.5h while
+# the process looked healthy).
+CONSUMER_STOP_TIMEOUT_S = float(os.environ.get("CONSUMER_STOP_TIMEOUT_S", "30"))
+CONSUMER_START_TIMEOUT_S = float(os.environ.get("CONSUMER_START_TIMEOUT_S", "90"))
+
+
+async def _stop_bounded(consumer) -> None:
+    """Stop a consumer without letting a hung broker wedge the supervisor.
+    On timeout the old consumer is ABANDONED (its group member times out
+    broker-side); a fresh consumer replaces it. Never raises."""
+    try:
+        await asyncio.wait_for(consumer.stop(), timeout=CONSUMER_STOP_TIMEOUT_S)
+    except asyncio.CancelledError:
+        raise
+    except Exception:                                      # noqa: BLE001
+        log.exception("consumer stop failed/timed out — abandoning old consumer")
+
+
 async def consume() -> None:
     """Supervised consumer: a poison batch / codec error / broker hiccup is
     logged and retried with backoff, NEVER a silent task death (§10 — the
     pre-build-⑥ consumer died unobserved on a snappy-compressed batch and
-    starved the whole engine; this loop is the guarantee that can't recur)."""
+    starved the whole engine; this loop is the guarantee that can't recur).
+    Every broker-facing await is BOUNDED so the guarantee holds even when the
+    broker itself is wedged (see CONSUMER_*_TIMEOUT_S above)."""
     backoff = 1.0
     while True:
         consumer = AIOKafkaConsumer(
@@ -1212,17 +1237,17 @@ async def consume() -> None:
             enable_auto_commit=True,
         )
         try:
-            await consumer.start()
+            await asyncio.wait_for(consumer.start(), timeout=CONSUMER_START_TIMEOUT_S)
             log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
             backoff = 1.0
             async for msg in consumer:
                 await handle(msg.topic, msg.value)
         except asyncio.CancelledError:
+            await _stop_bounded(consumer)
             raise
         except Exception:                                  # noqa: BLE001
             log.exception("consumer failed; restarting in %.0fs", backoff)
-        finally:
-            await consumer.stop()
+        await _stop_bounded(consumer)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
 
