@@ -168,6 +168,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/topology/links":         "scoped",
 	"/api/topology/view":          "scoped",
 	"/api/topology/graph":         "scoped",
+	"/api/topology/cloud":         "scoped",
 	"/api/vulns":                  "scoped",
 	"/api/apikeys":                "scoped",
 	"/api/apikeys/":               "scoped",

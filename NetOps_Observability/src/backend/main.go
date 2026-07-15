@@ -937,6 +937,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/topology/links", s.handleTopologyLinks) // LLDP-discovered adjacencies
 	mux.HandleFunc("/api/topology/view", s.handleTopologyView)   // resolved renderer-agnostic TopologyView
 	mux.HandleFunc("/api/topology/graph", s.handleTopologyGraph) // persistent reconciled graph (stable ids + stale)
+	mux.HandleFunc("/api/topology/cloud", s.handleCloudTopology) // in-cloud VPC/VNet→subnet→route-table→gateway network
 	mux.HandleFunc("/api/tunnels", s.handleTunnels)
 	mux.HandleFunc("/api/findings", s.handleFindings)
 	mux.HandleFunc("/api/vulns", s.handleVulns)           // #13: device OS × advisory feed

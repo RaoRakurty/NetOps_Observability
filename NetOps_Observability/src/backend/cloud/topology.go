@@ -40,6 +40,11 @@ type TopoEdge struct {
 	To             string `json:"to"`
 	ToKind         string `json:"to_kind"`
 	Destination    string `json:"destination"`
+	// State is the route's lifecycle from the provider: "active" (working) vs
+	// "blackhole" (target gone — traffic to this CIDR is silently discarded). A
+	// blackhole is a live, actionable fault, so we carry it and render its edge
+	// as down rather than as a working egress. "" is treated as active.
+	State          string `json:"state,omitempty"`
 	ViaRouteTable  string `json:"via_route_table"`
 	RouteTableName string `json:"route_table_name"`
 }
