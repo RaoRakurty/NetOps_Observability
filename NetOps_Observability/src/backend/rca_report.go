@@ -1417,8 +1417,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		// decision, ticket recommendation and escalation are all TRANSFERRED, never
 		// left as ambiguous local states.
 		applyMergeToDecision(&decision, merge)
-		ticketRecommended = decision.TicketRecommended
-		ticketExecNote = decision.TicketExecutionNote
 	} else {
 		if ticketExecNote == "" && decision.EscalationState == "triggered" &&
 			(ticketState == "not_opened" || ticketState == "held") {
@@ -1515,8 +1513,8 @@ func reportTypeFor(rootState, analysis, incident string) string {
 	if incident == "merged" || incident == "superseded" {
 		// A merged source report is an incident analysis handed to the survivor —
 		// it names the merge in its type so the state is unmissable (P1 header).
-		switch {
-		case analysis == "confirmed":
+		switch analysis {
+		case "confirmed":
 			return "Incident Analysis — Merged / Fault Confirmed"
 		default:
 			return "Incident Analysis — Merged"

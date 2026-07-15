@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# pre-push guard: if this push touches Go backend files, run the backend-ci gate
+# locally and BLOCK the push on failure (owner directive: every push must pass
+# backend CI). Bypass only in a true emergency with `git push --no-verify`.
+set -uo pipefail
+root="$(git rev-parse --show-toplevel)"
+changed="$(git diff --name-only @{push}..HEAD 2>/dev/null || git diff --name-only origin/HEAD..HEAD 2>/dev/null || echo "")"
+if echo "$changed" | grep -q 'NetOps_Observability/src/backend/.*\.go$'; then
+  echo "── pre-push: Go backend changed → running backend-ci guard ──"
+  bash "$root/NetOps_Observability/scripts/ci-backend-guard.sh" || {
+    echo "✗ PUSH BLOCKED: backend-ci gate failed locally. Fix, then push."; exit 1; }
+fi
+exit 0
