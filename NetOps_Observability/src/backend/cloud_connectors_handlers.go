@@ -1,0 +1,719 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"netops/backend/cloudconn"
+)
+
+// Connector lifecycle audit event names (emitted through the request-path audit
+// middleware Detail, plus explicit records for security-relevant transitions).
+const (
+	evConnectorCreated  = "CONNECTOR_CREATED"
+	evConnectorValidated = "TRUST_VALIDATED"
+	evConnectorActivated = "CONNECTOR_ENABLED"
+	evConnectorDisabled = "CONNECTOR_DISABLED"
+	evConnectorRevoked  = "CONNECTOR_REVOKED"
+	evScopeChanged      = "SCOPE_CHANGED"
+)
+
+var (
+	errCCNStoreOff = errors.New("cloud connectors require the postgres backend or dev in-memory store")
+	errCCNNotFound = errors.New("connector not found")
+)
+
+// cloudConnectorView is the API projection — trust metadata only, NEVER a secret.
+type cloudConnectorView struct {
+	ID              string                     `json:"id"`
+	Provider        cloudconn.Provider         `json:"provider"`
+	DisplayName     string                     `json:"display_name"`
+	AuthMethod      cloudconn.AuthMethod       `json:"auth_method"`
+	AuthFederated   bool                       `json:"auth_federated"`
+	AuthLegacy      bool                       `json:"auth_legacy"`
+	PackFullID      string                     `json:"capability_pack"`
+	State           cloudconn.LifecycleState   `json:"state"`
+	Collecting      bool                       `json:"collecting"`
+	Identity        cloudConnIdentityView      `json:"identity"`
+	Scopes          []cloudconn.Scope          `json:"scopes"`
+	IdentityHealth  healthStatus               `json:"identity_health"`
+	TelemetryHealth healthStatus               `json:"telemetry_health"`
+	LastValidation  cloudconn.ValidationResult `json:"last_validation"`
+	Version         int64                      `json:"version"`
+	CreatedAt       time.Time                  `json:"created_at"`
+	UpdatedAt       time.Time                  `json:"updated_at"`
+}
+
+// cloudConnIdentityView exposes only NON-secret trust metadata.
+type cloudConnIdentityView struct {
+	RoleARN          string `json:"role_arn,omitempty"`
+	ExternalID       string `json:"external_id,omitempty"`
+	AzureTenantID    string `json:"azure_tenant_id,omitempty"`
+	ClientID         string `json:"client_id,omitempty"`
+	Audience         string `json:"audience,omitempty"`
+	Issuer           string `json:"issuer,omitempty"`
+	FederatedSubject string `json:"federated_subject,omitempty"`
+	CertThumbprint   string `json:"cert_thumbprint,omitempty"`
+	ProjectNumber    string `json:"project_number,omitempty"`
+	WorkloadPool     string `json:"workload_pool,omitempty"`
+	WorkloadProvider string `json:"workload_provider,omitempty"`
+	ServiceAccount   string `json:"service_account,omitempty"`
+	HasLegacySecret  bool   `json:"has_legacy_secret"` // a secret is stored (never the value)
+	LegacyKeyHint    string `json:"legacy_key_hint,omitempty"`
+}
+
+func toConnectorView(c cloudConnector) cloudConnectorView {
+	return cloudConnectorView{
+		ID: c.ConnectorID, Provider: c.Provider, DisplayName: c.DisplayName,
+		AuthMethod: c.AuthMethod, AuthFederated: c.AuthMethod.IsFederated(), AuthLegacy: c.AuthMethod.IsLegacy(),
+		PackFullID: c.PackFullID, State: c.State, Collecting: c.State.Collecting(),
+		Identity: cloudConnIdentityView{
+			RoleARN: c.Identity.RoleARN, ExternalID: c.Identity.ExternalID,
+			AzureTenantID: c.Identity.AzureTenantID, ClientID: c.Identity.ClientID,
+			Audience: c.Identity.Audience, Issuer: c.Identity.Issuer,
+			FederatedSubject: c.Identity.FederatedSubject, CertThumbprint: c.Identity.CertThumbprint,
+			ProjectNumber: c.Identity.ProjectNumber, WorkloadPool: c.Identity.WorkloadPool,
+			WorkloadProvider: c.Identity.WorkloadProvider, ServiceAccount: c.Identity.ServiceAccount,
+			HasLegacySecret: c.Identity.LegacySecretRef != "", LegacyKeyHint: c.Identity.LegacyKeyID,
+		},
+		Scopes: c.Scopes, IdentityHealth: c.IdentityHealth, TelemetryHealth: c.TelemetryHealth,
+		LastValidation: c.LastValidation, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+	}
+}
+
+// cloudTrustAnchor builds Correlix's own trust anchor from PLATFORM env (never a
+// request body): the AWS principal customer roles trust, and the OIDC issuer for
+// Azure/GCP workload federation.
+func (s *server) cloudTrustAnchor(connectorID string) cloudconn.TrustAnchor {
+	return cloudconn.TrustAnchor{
+		AWSPrincipalARN: os.Getenv("CLOUD_CONNECTOR_AWS_PRINCIPAL_ARN"),
+		OIDCIssuer:      os.Getenv("CLOUD_CONNECTOR_OIDC_ISSUER"),
+		OIDCSubject:     "correlix:connector:" + connectorID,
+		OIDCAudience:    envOr("CLOUD_CONNECTOR_OIDC_AUDIENCE", ""),
+	}
+}
+
+// ── collection: /api/cloud/connectors ────────────────────────────────────────
+
+func (s *server) handleCloudConnectors(w http.ResponseWriter, r *http.Request) {
+	if s.cloudConn == nil {
+		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		list, err := s.cloudConn.List(r.Context(), tenant, cross)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		views := make([]cloudConnectorView, 0, len(list))
+		for _, c := range list {
+			views = append(views, toConnectorView(c))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"connectors": views})
+	case http.MethodPost:
+		s.createCloudConnectorDraft(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or POST"))
+	}
+}
+
+type createConnectorReq struct {
+	Provider    string `json:"provider"`
+	DisplayName string `json:"display_name"`
+}
+
+func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Request) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
+	if !ok {
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	var req createConnectorReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	provider, valid := cloudconn.ParseProvider(req.Provider)
+	if !valid {
+		writeJSONError(w, http.StatusBadRequest, "unknown provider (aws|azure|gcp)", "PROVIDER_INVALID")
+		return
+	}
+	c := cloudConnector{
+		TenantID: tenant, ConnectorID: newOpaqueID(ccnIDPrefix), Provider: provider,
+		DisplayName: strings.TrimSpace(req.DisplayName), State: cloudconn.StateDraft,
+		Identity: cloudconn.IdentityConfig{Provider: provider, TenantID: tenant},
+		Scopes:   []cloudconn.Scope{},
+		IdentityHealth:  healthStatus{State: "unknown"},
+		TelemetryHealth: healthStatus{State: "unknown"},
+	}
+	c.Identity.ConnectorID = c.ConnectorID
+	created, err := s.cloudConn.Create(r.Context(), c)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.recordConnectorEvent(r, claims, evConnectorCreated, created, "provider="+string(provider))
+	writeJSON(w, http.StatusCreated, toConnectorView(created))
+}
+
+// ── by-id subtree: /api/cloud/connectors/{id}[/action] ───────────────────────
+
+func (s *server) handleCloudConnectorByID(w http.ResponseWriter, r *http.Request) {
+	if s.cloudConn == nil {
+		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/cloud/connectors/")
+	parts := strings.Split(rest, "/")
+	id := parts[0]
+	if !strings.HasPrefix(id, ccnIDPrefix) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid connector id"))
+		return
+	}
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	switch action {
+	case "":
+		s.serveConnectorRoot(w, r, id)
+	case "auth":
+		s.serveConnectorAuth(w, r, id)
+	case "scopes":
+		s.serveConnectorScopes(w, r, id)
+	case "capabilities":
+		s.serveConnectorCapabilities(w, r, id)
+	case "setup":
+		s.serveConnectorSetup(w, r, id)
+	case "validate":
+		s.serveConnectorValidate(w, r, id)
+	case "permissions":
+		s.serveConnectorPermissions(w, r, id)
+	case "discover-scopes":
+		s.serveConnectorDiscover(w, r, id)
+	case "activate":
+		s.serveConnectorTransition(w, r, id, cloudconn.StateActive, evConnectorActivated)
+	case "disable":
+		s.serveConnectorTransition(w, r, id, cloudconn.StateDisabled, evConnectorDisabled)
+	case "revoke":
+		s.serveConnectorTransition(w, r, id, cloudconn.StateRevoked, evConnectorRevoked)
+	case "secret":
+		s.serveConnectorSecret(w, r, id)
+	case "rotate":
+		s.serveConnectorRotate(w, r, id)
+	case "health":
+		s.serveConnectorHealth(w, r, id)
+	default:
+		writeError(w, http.StatusNotFound, errors.New("unknown connector action"))
+	}
+}
+
+func (s *server) loadConnector(w http.ResponseWriter, r *http.Request, id string, level int) (cloudConnector, jwtClaims, bool) {
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return cloudConnector{}, claims, false
+	}
+	tenant, cross := principalTenant(claims)
+	c, found, err := s.cloudConn.Get(r.Context(), tenant, cross, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return cloudConnector{}, claims, false
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errCCNNotFound)
+		return cloudConnector{}, claims, false
+	}
+	return c, claims, true
+}
+
+func (s *server) serveConnectorRoot(w http.ResponseWriter, r *http.Request, id string) {
+	switch r.Method {
+	case http.MethodGet:
+		c, _, ok := s.loadConnector(w, r, id, LevelRead)
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, toConnectorView(c))
+	case http.MethodDelete:
+		c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		if _, err := s.cloudConn.DeleteSecretRefs(r.Context(), tenant, cross, id); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		deleted, err := s.cloudConn.Delete(r.Context(), tenant, cross, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !deleted {
+			writeError(w, http.StatusNotFound, errCCNNotFound)
+			return
+		}
+		if s.cloudBroker != nil {
+			s.cloudBroker.Invalidate(id)
+		}
+		s.recordConnectorEvent(r, claims, evConnectorRevoked, c, "deleted")
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or DELETE"))
+	}
+}
+
+type selectAuthReq struct {
+	Method           string `json:"method"`
+	RoleARN          string `json:"role_arn"`
+	AzureTenantID    string `json:"azure_tenant_id"`
+	ClientID         string `json:"client_id"`
+	Audience         string `json:"audience"`
+	Issuer           string `json:"issuer"`
+	FederatedSubject string `json:"federated_subject"`
+	CertThumbprint   string `json:"cert_thumbprint"`
+	ProjectNumber    string `json:"project_number"`
+	WorkloadPool     string `json:"workload_pool"`
+	WorkloadProvider string `json:"workload_provider"`
+	ServiceAccount   string `json:"service_account"`
+}
+
+func (s *server) serveConnectorAuth(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	var req selectAuthReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	method, valid := cloudconn.ParseAuthMethod(req.Method)
+	if !valid || !cloudconn.MethodAllowed(c.Provider, method) {
+		writeJSONError(w, http.StatusBadRequest, "auth method not supported for provider", "METHOD_INVALID")
+		return
+	}
+	// Trust metadata is stamped from the request; the TENANT is never taken from
+	// the body (it stays the connector's owner). Secrets never travel here.
+	c.AuthMethod = method
+	c.Identity.Method = method
+	c.Identity.RoleARN = strings.TrimSpace(req.RoleARN)
+	c.Identity.AzureTenantID = strings.TrimSpace(req.AzureTenantID)
+	c.Identity.ClientID = strings.TrimSpace(req.ClientID)
+	c.Identity.Audience = strings.TrimSpace(req.Audience)
+	c.Identity.Issuer = strings.TrimSpace(req.Issuer)
+	c.Identity.FederatedSubject = strings.TrimSpace(req.FederatedSubject)
+	c.Identity.CertThumbprint = strings.TrimSpace(req.CertThumbprint)
+	c.Identity.ProjectNumber = strings.TrimSpace(req.ProjectNumber)
+	c.Identity.WorkloadPool = strings.TrimSpace(req.WorkloadPool)
+	c.Identity.WorkloadProvider = strings.TrimSpace(req.WorkloadProvider)
+	c.Identity.ServiceAccount = strings.TrimSpace(req.ServiceAccount)
+
+	// AWS cross-account role: mint a per-tenant+connector ExternalId if absent
+	// (confused-deputy). Never derived — always framework-minted randomness.
+	if c.Provider == cloudconn.ProviderAWS && (method == cloudconn.AuthMethodCloudRole || method == cloudconn.AuthMethodWorkloadFederation) && c.Identity.ExternalID == "" {
+		c.Identity.ExternalID = cloudconn.NewExternalID()
+	}
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+type selectScopesReq struct {
+	Scopes []cloudconn.Scope `json:"scopes"`
+}
+
+func (s *server) serveConnectorScopes(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	var req selectScopesReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := cloudconn.ValidateScopes(c.Provider, req.Scopes); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error(), "SCOPE_INVALID")
+		return
+	}
+	c.Scopes = req.Scopes
+	s.recordConnectorEvent(r, claims, evScopeChanged, c, "scopes updated")
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+type selectCapReq struct {
+	CapabilityPack string `json:"capability_pack"`
+}
+
+func (s *server) serveConnectorCapabilities(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	var req selectCapReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	pack, found := cloudconn.Pack(req.CapabilityPack)
+	if !found || pack.Provider != c.Provider {
+		writeJSONError(w, http.StatusBadRequest, "unknown capability pack for provider", "PACK_INVALID")
+		return
+	}
+	c.PackFullID = pack.FullID()
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+func (s *server) serveConnectorSetup(w http.ResponseWriter, r *http.Request, id string) {
+	c, _, ok := s.loadConnector(w, r, id, LevelRead)
+	if !ok {
+		return
+	}
+	pack, found := cloudconn.Pack(c.PackFullID)
+	if !found {
+		// Default to the provider's observer pack so setup can be previewed early.
+		packs := cloudconn.PacksForProvider(c.Provider)
+		if len(packs) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "no capability pack selected", "PACK_MISSING")
+			return
+		}
+		pack = packs[0]
+	}
+	adapter := cloudconn.AdapterFor(c.Provider)
+	cfg := c.Identity
+	cfg.Anchor = s.cloudTrustAnchor(c.ConnectorID)
+	bundle, err := adapter.SetupInstructions(cfg, pack)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, bundle)
+}
+
+// serveConnectorValidate runs the PURE configuration validation (no network) and
+// records the result + identity health. It does NOT auto-activate. Live trust
+// (STS/token-exchange) proof is a documented follow-up; identity health is set to
+// config_validated, never "live_verified", so a passing config never implies data
+// is flowing (identity health stays SEPARATE from telemetry health).
+func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	if c.AuthMethod == "" {
+		writeJSONError(w, http.StatusConflict, "select an auth method before validating", "AUTH_NOT_SET")
+		return
+	}
+	adapter := cloudconn.AdapterFor(c.Provider)
+	res := adapter.ValidateConfiguration(c.Identity)
+	c.LastValidation = res
+	now := time.Now().UTC()
+	if res.OK {
+		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live trust proof deferred", Checked: now}
+		if cloudconn.CanTransition(c.State, cloudconn.StateValidating) {
+			c.State = cloudconn.StateValidating
+		}
+	} else {
+		c.IdentityHealth = healthStatus{State: "failed", Detail: "configuration has blocking findings", Checked: now}
+	}
+	// Warn if the collection scope reaches beyond validated permission scope isn't
+	// checkable without live discovery; surface the deferral explicitly.
+	s.recordConnectorEvent(r, claims, evConnectorValidated, c, "ok="+boolStr(res.OK))
+	saved, ok := s.persistConnector(w, r, c)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"connector":  toConnectorView(saved),
+		"validation": res,
+		"live_check": "deferred",
+	})
+}
+
+// serveConnectorPermissions is the live permission validation — deferred to the
+// provider-runtime phase. Returns the pack's declared required permissions and a
+// clear deferral marker so the wizard can render the remediation surface.
+func (s *server) serveConnectorPermissions(w http.ResponseWriter, r *http.Request, id string) {
+	c, _, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	pack, found := cloudconn.Pack(c.PackFullID)
+	if !found {
+		writeJSONError(w, http.StatusBadRequest, "no capability pack selected", "PACK_MISSING")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"capability_pack":      pack.FullID(),
+		"required_permissions": pack.AllPermissions(),
+		"live_check":           "deferred",
+		"note":                 "Live permission validation against the provider is a follow-up phase; the required permissions are enforced by the setup templates.",
+	})
+}
+
+// serveConnectorDiscover is live scope discovery — deferred. Returns any operator-
+// entered scopes plus a deferral marker.
+func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, id string) {
+	c, _, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scopes":     c.Scopes,
+		"scope_types": cloudconn.ScopeTypesForProvider(c.Provider),
+		"live_check": "deferred",
+	})
+}
+
+func (s *server) serveConnectorTransition(w http.ResponseWriter, r *http.Request, id string, target cloudconn.LifecycleState, event string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	// A connector cannot go ACTIVE until its configuration validation succeeded.
+	if target == cloudconn.StateActive && !c.LastValidation.OK {
+		writeJSONError(w, http.StatusConflict, "validate the connector before activating", "NOT_VALIDATED")
+		return
+	}
+	if !cloudconn.CanTransition(c.State, target) {
+		writeJSONError(w, http.StatusConflict, "illegal transition from "+string(c.State)+" to "+string(target), "ILLEGAL_TRANSITION")
+		return
+	}
+	c.State = target
+	if target != cloudconn.StateActive {
+		// Pausing/revoking clears any cached token so collection stops immediately.
+		if s.cloudBroker != nil {
+			s.cloudBroker.Invalidate(id)
+		}
+	}
+	s.recordConnectorEvent(r, claims, event, c, "state="+string(target))
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+type storeSecretReq struct {
+	Kind    string `json:"kind"`
+	KeyHint string `json:"key_hint"`
+	Secret  string `json:"secret"`
+}
+
+func (s *server) serveConnectorSecret(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	if !c.AuthMethod.HoldsStoredSecret() {
+		writeJSONError(w, http.StatusConflict, "this auth method does not use a stored secret (prefer federated)", "NOT_LEGACY")
+		return
+	}
+	if s.cloudBroker == nil {
+		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
+		return
+	}
+	var req storeSecretReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Secret) == "" {
+		writeJSONError(w, http.StatusBadRequest, "secret is required", "SECRET_MISSING")
+		return
+	}
+	if isRootKeyHint(req.KeyHint) {
+		writeJSONError(w, http.StatusBadRequest, "root/admin credentials are rejected — use a dedicated least-privilege identity", "ROOT_REJECTED")
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	ref, err := s.cloudBroker.StoreSecret(r.Context(), tenant, c.ConnectorID, c.Provider, strings.TrimSpace(req.Kind), strings.TrimSpace(req.KeyHint), req.Secret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	c.Identity.LegacySecretRef = ref
+	c.Identity.LegacyKeyID = strings.TrimSpace(req.KeyHint)
+	// The plaintext is now encrypted in the Vault; it is never echoed back.
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+type rotateSecretReq struct {
+	KeyHint string `json:"key_hint"`
+	Secret  string `json:"secret"`
+}
+
+func (s *server) serveConnectorRotate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	if c.Identity.LegacySecretRef == "" || s.cloudBroker == nil {
+		writeJSONError(w, http.StatusConflict, "no stored secret to rotate", "NO_SECRET")
+		return
+	}
+	var req rotateSecretReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if isRootKeyHint(req.KeyHint) {
+		writeJSONError(w, http.StatusBadRequest, "root/admin credentials are rejected", "ROOT_REJECTED")
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	found, err := s.cloudBroker.RotateSecret(r.Context(), tenant, c.Identity.LegacySecretRef, c.ConnectorID, strings.TrimSpace(req.KeyHint), req.Secret)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errCCNNotFound)
+		return
+	}
+	if strings.TrimSpace(req.KeyHint) != "" {
+		c.Identity.LegacyKeyID = strings.TrimSpace(req.KeyHint)
+		s.saveConnectorAndRespond(w, r, claims, c)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rotated": id})
+}
+
+// serveConnectorHealth returns identity + telemetry health SEPARATELY.
+func (s *server) serveConnectorHealth(w http.ResponseWriter, r *http.Request, id string) {
+	c, _, ok := s.loadConnector(w, r, id, LevelRead)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"state":            c.State,
+		"collecting":       c.State.Collecting(),
+		"identity_health":  c.IdentityHealth,
+		"telemetry_health": c.TelemetryHealth,
+	})
+}
+
+// ── shared helpers ────────────────────────────────────────────────────────────
+
+func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudConnector) {
+	saved, ok := s.persistConnector(w, r, c)
+	if !ok {
+		return
+	}
+	_ = claims
+	writeJSON(w, http.StatusOK, toConnectorView(saved))
+}
+
+func (s *server) persistConnector(w http.ResponseWriter, r *http.Request, c cloudConnector) (cloudConnector, bool) {
+	// Anchor is derived at template time; never persist it.
+	c.Identity.Anchor = cloudconn.TrustAnchor{}
+	saved, found, err := s.cloudConn.Update(r.Context(), c, 0)
+	if err != nil {
+		if errors.Is(err, errCCNVersionConflict) {
+			writeJSONError(w, http.StatusConflict, "connector changed concurrently; reload", "VERSION_CONFLICT")
+			return cloudConnector{}, false
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return cloudConnector{}, false
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errCCNNotFound)
+		return cloudConnector{}, false
+	}
+	return saved, true
+}
+
+// recordConnectorEvent writes a connector security event into the immutable audit
+// trail. NEVER logs secrets/tokens.
+func (s *server) recordConnectorEvent(r *http.Request, claims jwtClaims, event string, c cloudConnector, detail string) {
+	if s.audit == nil {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor: claims.Sub, Tenant: tenant, Cross: cross,
+		Method: event, Path: "/api/cloud/connectors/" + c.ConnectorID, Status: 200, Decision: "allow",
+		Remote: auditClientIP(r),
+		Detail: map[string]any{
+			"event": event, "connector": c.ConnectorID, "provider": string(c.Provider),
+			"state": string(c.State), "info": detail,
+		},
+	})
+}
+
+func isRootKeyHint(hint string) bool {
+	h := strings.ToLower(strings.TrimSpace(hint))
+	return h == "root" || strings.HasPrefix(h, "root:") || strings.Contains(h, "administratoraccess")
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// ── provider catalog for the onboarding wizard: /api/cloud/providers ──────────
+
+func (s *server) handleCloudProviderCatalog(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	type methodView struct {
+		Method     cloudconn.AuthMethod `json:"method"`
+		Rank       int                  `json:"rank"`
+		Federated  bool                 `json:"federated"`
+		Legacy     bool                 `json:"legacy"`
+		Recommended bool                `json:"recommended"`
+	}
+	type providerView struct {
+		Provider   cloudconn.Provider     `json:"provider"`
+		Methods    []methodView           `json:"methods"`
+		ScopeTypes []cloudconn.ScopeType  `json:"scope_types"`
+		Packs      []cloudconn.CapabilityPack `json:"capability_packs"`
+	}
+	out := make([]providerView, 0, 3)
+	for _, p := range []cloudconn.Provider{cloudconn.ProviderAWS, cloudconn.ProviderAzure, cloudconn.ProviderGCP} {
+		methods := cloudconn.ProviderMethods(p)
+		mv := make([]methodView, 0, len(methods))
+		for i, m := range methods {
+			mv = append(mv, methodView{Method: m, Rank: m.Rank(), Federated: m.IsFederated(), Legacy: m.IsLegacy(), Recommended: i == 0})
+		}
+		out = append(out, providerView{Provider: p, Methods: mv, ScopeTypes: cloudconn.ScopeTypesForProvider(p), Packs: cloudconn.PacksForProvider(p)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
+}

@@ -201,6 +201,15 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/changes":   "scoped",
 	"/api/cloud/evidence":  "scoped",
 
+	// ── Cloud Connector framework ──
+	// Connectors are per-tenant DATA (each tenant's cloud connections); scoped +
+	// backed by cloud_connectors_isolation_test.go.
+	"/api/cloud/connectors":  "scoped",
+	"/api/cloud/connectors/": "scoped",
+	// Provider/method/capability-pack catalog: static, platform-wide reference
+	// data (identical for every tenant), infra-read gated.
+	"/api/cloud/providers": "globalRef",
+
 	// ── identity/admin, scoped to caller's tenant/org by the handler ──
 	"/api/audit":             "adminScoped",
 	"/api/users":             "adminScoped",
