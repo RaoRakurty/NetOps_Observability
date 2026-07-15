@@ -201,8 +201,41 @@ export async function loadApps(): Promise<App[]> {
   });
 }
 
+// ── Shared inventory read (2026-07 review, improvement #14) ──────────────────
+// One page visit used to fire GET /api/cloud/resources 3–5× (the shell hook plus
+// every tab that needs the inventory), each pulling the FULL inventory. A short-
+// TTL module cache with in-flight dedup keeps a visit to one fetch without
+// changing any consumer's data shape. 30s stays well inside the backend's
+// 2-minute inventory refresh cadence, so staleness is bounded by the store
+// itself; errors are never cached (zero-trust: a failure is re-asked, not
+// remembered as truth).
+type CloudResourcesResponse = Awaited<ReturnType<typeof api.cloudResources>>;
+const INVENTORY_TTL_MS = 30_000;
+let invCache: { at: number; data: CloudResourcesResponse } | null = null;
+let invInflight: Promise<CloudResourcesResponse> | null = null;
+
+export function fetchCloudInventory(): Promise<CloudResourcesResponse> {
+  if (invCache && Date.now() - invCache.at < INVENTORY_TTL_MS) {
+    return Promise.resolve(invCache.data);
+  }
+  if (invInflight) return invInflight;
+  invInflight = api.cloudResources().then(
+    (r) => { invCache = { at: Date.now(), data: r }; invInflight = null; return r; },
+    (e) => { invInflight = null; throw e; },
+  );
+  return invInflight;
+}
+
+// Drop the cached inventory: after a write that changes attribution (e.g. a
+// bulk service assignment) the next read must see the server's truth. Also the
+// test seam.
+export function invalidateCloudInventory(): void {
+  invCache = null;
+  invInflight = null;
+}
+
 export async function loadResources(): Promise<CloudResource[]> {
-  const r = await api.cloudResources();
+  const r = await fetchCloudInventory();
   const consoleUrls = r.console_urls ?? {};
   return (r.resources ?? []).map((row) => ({
     ...toResource(row),
@@ -282,14 +315,20 @@ function toHealthSignal(r: CloudHealthSignalRow): HealthSignal {
   };
 }
 
-// Zero-trust gate on server-built console links: only https URLs on the two
+// Zero-trust gate on server-built console links: only https URLs on the three
 // provider console hosts ever reach an <a href>. Anything else renders no link.
+// (2026-07 product review finding: GCP was missing here, so every GCP console /
+// Logs Explorer pivot the backend built was silently dropped in the UI.)
 export function safeConsoleUrl(u: string | undefined): string {
   if (!u) return "";
   try {
     const p = new URL(u);
     if (p.protocol !== "https:") return "";
-    if (p.hostname === "portal.azure.com" || p.hostname.endsWith(".console.aws.amazon.com")) return u;
+    if (
+      p.hostname === "portal.azure.com" ||
+      p.hostname.endsWith(".console.aws.amazon.com") ||
+      p.hostname === "console.cloud.google.com"
+    ) return u;
   } catch { /* not parseable — no link */ }
   return "";
 }

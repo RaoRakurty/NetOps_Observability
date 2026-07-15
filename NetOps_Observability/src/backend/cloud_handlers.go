@@ -41,7 +41,16 @@ func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string,
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
 	res, err := s.cloud.ListResources(r.Context(), tenant, cross)
-	return res, tenant, cross, err
+	if err != nil {
+		return res, tenant, cross, err
+	}
+	// Manual overrides win over inference EVERYWHERE this inventory is read
+	// (2026-07 review): the overlay used to apply only on the /resources
+	// handler, so a confirmed operator assignment lifted the Resources table
+	// but Apps / Coverage / Untagged still counted the resource as unknown —
+	// the operator's fix looked like it didn't take. One shared read = one truth.
+	s.overlayManualMappings(r, tenant, cross, res)
+	return res, tenant, cross, nil
 }
 
 func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {

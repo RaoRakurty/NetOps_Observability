@@ -2108,6 +2108,31 @@ export const api = {
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
+  // Business services + manual resource→service assignment (2026-07 review #5:
+  // these endpoints shipped with the Azure optional-tags epic but had NO UI —
+  // the untagged remediation queue dead-ended at the provider console). The
+  // assignment is the operator-authoritative override layer: it wins over tag /
+  // graph inference on the Resources surface (backend overlayManualMappings).
+  cloudBusinessServices: () =>
+    request<{ business_services: BusinessServiceRow[]; count: number }>("/api/cloud/business-services"),
+  cloudCreateBusinessService: (name: string, criticality?: string) =>
+    request<BusinessServiceRow>("/api/cloud/business-services", {
+      method: "POST",
+      body: JSON.stringify({ name, ...(criticality ? { criticality } : {}) }),
+    }),
+  cloudAssignResources: (body: { business_service_id?: string; service_name?: string; resource_ids: string[] }) =>
+    request<{ assigned: number }>("/api/cloud/resource-mappings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  // Resource ids are ARM ids / ARNs / GCP paths — slashes are load-bearing path
+  // segments the backend reads back out of the URL. Encode per-segment so a "/"
+  // survives while every other reserved char is escaped.
+  cloudClearResourceMapping: (resourceId: string) =>
+    request<{ cleared: string }>(
+      `/api/cloud/resource-mappings/${resourceId.split("/").map(encodeURIComponent).join("/")}`,
+      { method: "DELETE" },
+    ),
   // Per-source ingestion status, MEASURED from what actually landed (signals,
   // active seams, inventory) — not a hard-coded assumption.
   cloudIngestion: () => request<{
@@ -2892,6 +2917,18 @@ export type CloudCoverageReport = {
   suspected_domain_ip: number;
   unknown: number;
   total: number;
+};
+
+// A named business service (backend business_service_store.go BusinessService).
+export type BusinessServiceRow = {
+  business_service_id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  criticality: string; // critical | high | normal | low | ""
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type CloudIdentityMappingRow = {

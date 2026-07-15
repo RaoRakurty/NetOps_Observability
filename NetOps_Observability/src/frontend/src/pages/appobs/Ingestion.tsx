@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api, CloudResourceRow } from "../../services/api";
+import { fetchCloudInventory } from "./api";
 import { Skeleton } from "../../components/ui";
 import { EmptyState } from "./badges";
 import { ReadinessStrip, SourceStatusBadge, FreshnessBadge } from "./shell";
@@ -29,7 +30,7 @@ export default function Ingestion() {
   useEffect(() => {
     let live = true;
     Promise.all([
-      api.cloudResources(),
+      fetchCloudInventory(), // shared 30s-TTL inventory read (review #14)
       // measured per-provider statuses (audit P0-7); failure keeps the honest
       // inventory-only default — never a fabricated "flowing".
       api.cloudIngestion().catch(() => ({ providers: {} as Record<string, IngestionSource[]> })),

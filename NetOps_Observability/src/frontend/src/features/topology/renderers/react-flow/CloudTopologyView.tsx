@@ -9,12 +9,13 @@
 //
 // Data: GET /api/topology/cloud — the REAL in-cloud network (VPC/VNet → subnets →
 // route-table egress → gateways/NVAs), discovered from the provider APIs and mapped
-// server-side to this same TopologyView contract. Graceful degradation: when the API
-// returns nothing (no fixtures / a tenant that doesn't own them / discovery off) or
-// errors, it falls back to the grounded `cloudNetworkTopology` mock so the tab is
-// never blank in dev (see fetchCloudTopology). An explicit `view` prop still wins
-// (tests / embedding). The carrier overlay is a pure view transform toggled by the
-// parent tab bar.
+// server-side to this same TopologyView contract. HONESTY (2026-07 product review):
+// when the API returns nothing (no connected cloud account / a tenant that owns no
+// discovered network / discovery off) or errors, the tab renders an honest empty /
+// error state with the next action — NEVER a fabricated sample network presented as
+// the operator's own (the old mock fallback is gone). An explicit `view` prop still
+// wins (tests / embedding). The carrier overlay is a pure view transform toggled by
+// the parent tab bar.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -38,39 +39,93 @@ import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
 import { cloudNodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { TopologySideDrawer, TopologyLegend } from "../../components";
-import { cloudNetworkTopology } from "../../mock/cloudNetworkTopology";
-import { fetchCloudTopology } from "../../api/topologyApi";
+import { fetchCloudTopology, type CloudTopologyStatus } from "../../api/topologyApi";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
 
 type AnyNodeData = RFNodeData | RFGroupData;
+
+// A well-formed zero-node view: what the canvas holds while loading and when the
+// tenant owns no discovered cloud network. Rendering nothing honest beats
+// rendering a fabricated sample network.
+const EMPTY_CLOUD_VIEW: TopologyView = {
+  view_id: "cloud-network-empty",
+  mode: "explore",
+  scope: { tenant_id: "" },
+  layout_type: "cloud_grouped",
+  generated_at: "",
+  nodes: [],
+  edges: [],
+  groups: [],
+  overlays: ["health"],
+} as unknown as TopologyView;
+
+// Honest non-live states for the Cloud tab (loading / nothing discovered / read
+// failed) — plain ds-token styling, one next action, no fake canvas.
+function CloudTopologyState({ status }: { status: "loading" | "empty" | "error" }) {
+  const copy = {
+    loading: {
+      title: "Loading the cloud network…",
+      hint: "reading the discovered VPC/VNet → subnet → gateway topology",
+    },
+    empty: {
+      title: "No cloud network discovered yet",
+      hint: "connect an AWS / Azure / GCP account and enable discovery — the VPC/VNet → subnet → route-table → gateway graph appears here as it is discovered",
+    },
+    error: {
+      title: "Unable to load the cloud network",
+      hint: "the topology read failed — retry, or check the cloud data sources",
+    },
+  }[status];
+  return (
+    <div className="topo-stage" style={{ display: "grid", placeItems: "center" }}>
+      <div style={{ maxWidth: 460, textAlign: "center", padding: 24 }}>
+        <div style={{ fontWeight: 600, color: "var(--fg)", marginBottom: 6 }}>{copy.title}</div>
+        <div style={{ fontSize: 12.5, color: "var(--fg-subtle)", lineHeight: 1.5 }}>{copy.hint}</div>
+        {status !== "loading" && (
+          <button
+            className="ao-btn ao-btn--primary"
+            style={{ marginTop: 14 }}
+            onClick={() => { location.hash = "#/monitoring/appobs/datasources"; }}
+          >
+            Open Data sources
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function CloudTopologyView({
   view: viewProp,
   carrier = false,
 }: {
-  /** The cloud-network view to render (defaults to the grounded mock). */
+  /** The cloud-network view to render (default: fetched live from /api/topology/cloud). */
   view?: TopologyView;
   /** Attach the shared carrier/transport overlay. */
   carrier?: boolean;
 }) {
   const rf = useReactFlow();
 
-  // Real cloud topology from GET /api/topology/cloud, with the grounded mock as
-  // the fallback until it resolves (and if it returns nothing/errors). An explicit
+  // Real cloud topology from GET /api/topology/cloud. Until it resolves the tab
+  // shows a loading state; nothing discovered / a failed read renders the honest
+  // empty / error card below — never a fabricated sample network. An explicit
   // `view` prop always wins and skips the fetch (tests / embedding).
   const [fetched, setFetched] = useState<TopologyView | null>(null);
+  const [status, setStatus] = useState<CloudTopologyStatus | "loading">(viewProp ? "live" : "loading");
   useEffect(() => {
     if (viewProp) return;
     let alive = true;
-    fetchCloudTopology().then(({ view }) => {
-      if (alive) setFetched(view);
+    fetchCloudTopology().then(({ view, status: st }) => {
+      if (!alive) return;
+      setFetched(view);
+      setStatus(st);
     });
     return () => {
       alive = false;
     };
   }, [viewProp]);
 
-  const base = viewProp ?? fetched ?? cloudNetworkTopology;
+  const base = viewProp ?? fetched ?? EMPTY_CLOUD_VIEW;
   // Carrier is a pure, memoized view transform — no effect on the base data.
   const view = useMemo(() => (carrier ? withCarrierOverlay(base) : base), [base, carrier]);
 
@@ -146,6 +201,13 @@ export default function CloudTopologyView({
   }, []);
   const onEdgeClick = useCallback<EdgeMouseHandler>((_e, ed) => setSelection({ edgeId: ed.id }), []);
   const onPaneClick = useCallback(() => setSelection({}), []);
+
+  // Honest non-live states (after every hook, so hook order is stable): while
+  // loading, and when nothing real is available, the canvas is replaced by the
+  // state card — never a fabricated sample network.
+  if (!viewProp && status !== "live") {
+    return <CloudTopologyState status={status} />;
+  }
 
   return (
     <div className="topo-stage">
