@@ -41,7 +41,16 @@ func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string,
 	claims, _ := userFrom(r.Context())
 	tenant, cross := principalTenant(claims)
 	res, err := s.cloud.ListResources(r.Context(), tenant, cross)
-	return res, tenant, cross, err
+	if err != nil {
+		return res, tenant, cross, err
+	}
+	// Manual overrides win over inference EVERYWHERE this inventory is read
+	// (2026-07 review): the overlay used to apply only on the /resources
+	// handler, so a confirmed operator assignment lifted the Resources table
+	// but Apps / Coverage / Untagged still counted the resource as unknown —
+	// the operator's fix looked like it didn't take. One shared read = one truth.
+	s.overlayManualMappings(r, tenant, cross, res)
+	return res, tenant, cross, nil
 }
 
 func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
@@ -53,12 +62,8 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Manual overrides win over inference: a human who confirmed/assigned a
-	// resource→service mapping (resource_mappings, migration 0024) is
-	// authoritative. Overlay it onto the inventory's inferred attribution so the
-	// operator's decision actually takes effect on this surface. Tenant-scoped
-	// like everything else; absent store (file backend) = no overlay.
-	s.overlayManualMappings(r, tenant, cross, res)
+	// Manual operator overrides are already applied by s.cloudResources (the one
+	// shared inventory read — so Resources / Apps / Coverage / Untagged all agree).
 	// Inventory-source provenance (live poller vs hand fixture) — drives the
 	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
 	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)

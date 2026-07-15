@@ -145,10 +145,12 @@ export const NAV: NavSection[] = [
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
       { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
+      // Sub-items mirror the page's REAL 5-tab IA (2026-07 review: the flyout
+      // still advertised the retired 11-tab vocabulary — two names for one view).
       { id: "appobs", label: "Service View", group: "Event Management", render: () => <AppObservability />, subItems: [
-        { id: "overview", label: "Overview" }, { id: "applications", label: "Applications" },
-        { id: "attribution", label: "Attribution" }, { id: "unknowns", label: "Unknowns" },
-        { id: "evidence", label: "Evidence" },
+        { id: "overview", label: "Overview" }, { id: "services", label: "Services" },
+        { id: "investigations", label: "Investigations" }, { id: "resources", label: "Resources" },
+        { id: "datasources", label: "Data Sources" },
       ] },
       { id: "reliability", label: "Recovery Scorecard", group: "Event Management", render: () => <ReliabilityScorecard /> },
     ],

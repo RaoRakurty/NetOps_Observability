@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api, CloudResourceRow, CloudIngestionSource, CloudConnectorInfo } from "../../services/api";
+import { fetchCloudInventory } from "./api";
 import { useAuth } from "../../hooks/useAuth";
 import {
   deriveScope, deriveReadiness, deriveDataMode, deriveConnectorKind, summarize,
@@ -31,7 +32,9 @@ export function useCloudShell(): CloudShell {
 
   useEffect(() => {
     let live = true;
-    api.cloudResources().then(
+    // Shared 30s-TTL inventory read (review #14) — the shell + tabs coalesce to
+    // one GET /api/cloud/resources per visit instead of 3–5.
+    fetchCloudInventory().then(
       (r) => { if (live) { setRows(r.resources ?? []); setConnectors(r.connectors); setLoading(false); } },
       () => { if (live) { setErr(true); setLoading(false); } },
     );

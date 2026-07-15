@@ -4395,6 +4395,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-freshstrip-i { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-micro, 12px); }
 .ao-freshstrip-l { color: var(--fg-muted); }
 
+/* bulk-selection action bar (Resources) — appears when rows are selected, hosts
+   the "assign to service" affordance (2026-07 review imp #5) */
+.ao-selbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--accent); border-radius: var(--r-2); }
+.ao-selbar-n { font-size: var(--fs-meta, 13px); font-weight: 700; color: var(--fg); margin-right: auto; }
+.ao-selbar-note { font-size: var(--fs-micro, 12px); color: var(--ok); padding: 2px var(--sp-1); }
+
 /* app→underlay path ribbon (Underlay Impact) — degraded segment lit */
 .ao-path { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: var(--sp-2) 0; }
 .ao-path-node { display: inline-flex; flex-direction: column; gap: 1px; padding: 6px 10px;

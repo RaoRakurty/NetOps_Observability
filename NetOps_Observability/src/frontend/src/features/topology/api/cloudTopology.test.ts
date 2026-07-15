@@ -1,6 +1,8 @@
 // cloudTopology.test.ts — the real-data path of the Cloud tab's topology client.
 // Asserts fetchCloudTopology serves the live API view when it has content, and
-// gracefully degrades to the grounded mock (never blank) on an empty graph or error.
+// returns an HONEST empty view (status "empty" | "error") otherwise — never a
+// fabricated sample network (2026-07 product review: the old mock fallback rendered
+// a fake VPC map to tenants with no discovered cloud network).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TopologyView } from "./topologyTypes";
@@ -57,27 +59,31 @@ beforeEach(() => {
 describe("fetchCloudTopology", () => {
   it("serves the live API view when it has content", async () => {
     topologyCloud.mockImplementation(() => Promise.resolve(realView));
-    const { view, live } = await fetchCloudTopology();
+    const { view, live, status } = await fetchCloudTopology();
     expect(live).toBe(true);
+    expect(status).toBe("live");
     expect(view.nodes.map((n) => n.id).sort()).toEqual(["igw-1", "subnet-app"]);
     // The route edge keeps its destination-CIDR label (source_port) through normalize.
     expect(view.edges[0].source_port).toBe("0.0.0.0/0");
     expect(view.groups[0].id).toBe("vpc-1");
   });
 
-  it("falls back to the grounded mock when the API returns an empty graph", async () => {
+  it("returns an honest EMPTY view (never a mock) when the API returns an empty graph", async () => {
     topologyCloud.mockImplementation(() => Promise.resolve({ ...realView, nodes: [], edges: [], groups: [] }));
-    const { view, live } = await fetchCloudTopology();
+    const { view, live, status } = await fetchCloudTopology();
     expect(live).toBe(false);
-    expect(view.nodes.length).toBeGreaterThan(0); // the mock, never blank
+    expect(status).toBe("empty");
+    expect(view.nodes.length).toBe(0); // no fabricated sample network, ever
+    expect(view.edges.length).toBe(0);
   });
 
-  it("falls back to the grounded mock on an API error", async () => {
+  it("returns an honest EMPTY view with status=error on an API error", async () => {
     topologyCloud.mockImplementation(() => Promise.reject(new Error("network")));
-    // fetchCloudTopology owns the rejection (try/catch) and resolves to the mock —
-    // it must never propagate the API error to the caller.
-    const { view, live } = await fetchCloudTopology();
+    // fetchCloudTopology owns the rejection (try/catch) and resolves to the empty
+    // view — it must never propagate the API error, and never substitute a mock.
+    const { view, live, status } = await fetchCloudTopology();
     expect(live).toBe(false);
-    expect(view.nodes.length).toBeGreaterThan(0);
+    expect(status).toBe("error");
+    expect(view.nodes.length).toBe(0);
   });
 });

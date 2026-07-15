@@ -104,6 +104,7 @@ export function consoleName(provider: string): string {
   switch (provider.toLowerCase()) {
     case "aws": return "AWS Console";
     case "azure": return "Azure Portal";
+    case "gcp": return "Google Cloud Console";
     default: return "cloud console";
   }
 }

@@ -169,14 +169,21 @@ describe("loadEvidence", () => {
   });
 });
 
-// Zero-trust gate on server-built links: only https on the two console hosts.
+// Zero-trust gate on server-built links: only https on the three console hosts.
 describe("safeConsoleUrl", () => {
-  it("admits only https on the two console hosts", () => {
+  it("admits only https on the three console hosts", () => {
     expect(safeConsoleUrl("https://portal.azure.com/#resource/subscriptions/x")).toContain("portal.azure.com");
     expect(safeConsoleUrl("https://us-west-2.console.aws.amazon.com/ec2/home")).toContain("aws.amazon.com");
+    // GCP console + Logs Explorer pivots (2026-07 review: these were dropped).
+    expect(safeConsoleUrl("https://console.cloud.google.com/compute/instancesDetail/zones/us-west1-a/instances/x"))
+      .toContain("console.cloud.google.com");
+    expect(safeConsoleUrl("https://console.cloud.google.com/logs/query;query=insertId%3D%22abc%22?project=p"))
+      .toContain("console.cloud.google.com");
     expect(safeConsoleUrl("http://portal.azure.com/#resource/x")).toBe("");
     expect(safeConsoleUrl("https://portal.azure.com.evil.io/x")).toBe("");
     expect(safeConsoleUrl("https://fakeconsole.aws.amazon.com.evil.io/x")).toBe("");
+    expect(safeConsoleUrl("https://console.cloud.google.com.evil.io/x")).toBe("");
+    expect(safeConsoleUrl("https://evilconsole.cloud.google.com/x")).toBe("");
     expect(safeConsoleUrl("not a url")).toBe("");
     expect(safeConsoleUrl(undefined)).toBe("");
   });
