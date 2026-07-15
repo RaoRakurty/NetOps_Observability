@@ -166,7 +166,44 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 		t.Fatal("platform owner should see the secret ref exists")
 	}
 
-	// (8) Cross-tenant AUDIT access fails closed: A's audit view excludes B's
+	// (8) EXCHANGE PATH isolation: with both connectors forced collectable and a
+	//     fake provider, tenant A can neither mint a token for B's connector nor
+	//     ever be served B's cached credential.
+	fakeEx := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	s.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fakeEx }
+	for _, f := range []*ccnFixture{a, b} {
+		c, found, err := s.cloudConn.Get(t.Context(), f.tenantID, false, f.connID)
+		if err != nil || !found {
+			t.Fatalf("reload %s: found=%v err=%v", f.connID, found, err)
+		}
+		c.State = cloudconn.StateActive
+		// (7) switched B to static_key; force both back onto the secretless role
+		// path for the exchange assertions.
+		c.AuthMethod = cloudconn.AuthMethodCloudRole
+		c.Identity.Method = cloudconn.AuthMethodCloudRole
+		if _, _, err := s.cloudConn.Update(t.Context(), c, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// B warms the cache first.
+	tokB, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: b.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"})
+	if err != nil {
+		t.Fatalf("B mint: %v", err)
+	}
+	// A asking for B's connector id fails closed (404-equivalent, no mint).
+	if _, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: a.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"}); err == nil {
+		t.Fatal("tenant A minted a token for tenant B's connector — cross-tenant exchange leak")
+	}
+	// A's own otherwise-identical request gets A's OWN credential, never B's.
+	tokA, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: a.tenantID, ConnectorID: a.connID, ProviderAccount: "123456789012"})
+	if err != nil {
+		t.Fatalf("A mint: %v", err)
+	}
+	if tokA.Value == tokB.Value {
+		t.Fatal("tenant A received tenant B's cached credential — cross-tenant cache leak")
+	}
+
+	// (9) Cross-tenant AUDIT access fails closed: A's audit view excludes B's
 	//     connector events (and vice-versa).
 	aEvents := s.audit.List(a.tenantID, false, auditQuery{Limit: 500})
 	for _, e := range aEvents {

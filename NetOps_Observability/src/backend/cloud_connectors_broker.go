@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,18 @@ const brokerMaxTokenLifetime = time.Hour
 
 // brokerTokenMargin is how long before expiry a cached token stops being served.
 const brokerTokenMargin = 30 * time.Second
+
+// brokerRefreshFraction: a cached token is proactively refreshed once this
+// fraction of its lifetime has elapsed (expiry-aware refresh at 80% TTL), so
+// consumers never receive a credential about to die mid-collection.
+const brokerRefreshFraction = 0.8
+
+// brokerLifetimeSlack: some providers mint fixed lifetimes the caller cannot
+// shorten (Azure Entra access tokens run 60–90 min). A token exceeding the
+// requested lifetime by up to this factor is CLAMPED to the cap (the broker
+// simply refuses to serve it past the cap); anything beyond is rejected as a
+// contract violation.
+const brokerLifetimeSlack = 2.0
 
 var (
 	errBrokerNotFound   = errors.New("cloudconn: connector not found for tenant")
@@ -74,7 +87,21 @@ func (r scopedTokenRequest) cacheKey(provider cloudconn.Provider, identityRef st
 }
 
 type cachedToken struct {
-	token cloudconn.ScopedToken
+	token    cloudconn.ScopedToken
+	mintedAt time.Time // for the 80%-TTL proactive refresh window
+}
+
+// fresh reports whether the cached token may still be served at now: within
+// 80% of its lifetime AND comfortably before expiry.
+func (ct cachedToken) fresh(now time.Time) bool {
+	if ct.token.Expiry.Sub(now) <= brokerTokenMargin {
+		return false
+	}
+	life := ct.token.Expiry.Sub(ct.mintedAt)
+	if life <= 0 {
+		return false
+	}
+	return now.Sub(ct.mintedAt) < time.Duration(float64(life)*brokerRefreshFraction)
 }
 
 // cloudIdentityBroker is the ONLY component that decrypts connector secrets and
@@ -216,9 +243,10 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 	identityRef := connectorIdentityRef(c)
 	key := req.cacheKey(c.Provider, identityRef)
 
-	// Serve from cache if the token is still comfortably valid.
+	// Serve from cache while the token is within its refresh window (80% TTL)
+	// and comfortably before expiry.
 	b.mu.Lock()
-	if ct, ok := b.cache[key]; ok && ct.token.Expiry.Sub(b.now()) > brokerTokenMargin {
+	if ct, ok := b.cache[key]; ok && ct.fresh(b.now()) {
 		tok := ct.token
 		b.mu.Unlock()
 		return tok, nil
@@ -235,6 +263,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 		CapabilitySetID: req.CapabilitySetID,
 		Scope:           cloudconn.Scope{Ref: req.ProviderAccount},
 		Audience:        req.Audience,
+		Region:          req.Region,
 		MaxLifetime:     effLife,
 	}
 	// Legacy methods need the decrypted secret — resolved ONLY here, at call time.
@@ -248,15 +277,28 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 
 	tok, err := adapter.ExchangeCredential(ctx, exReq)
 	if err != nil {
+		// Observable failure: structured log + audit, NEVER any secret material
+		// (ExchangeError is sanitized by contract; deferral sentinels are static).
+		log.Printf(`{"event":"cloudconn_exchange_failed","tenant":%q,"connector":%q,"provider":%q,"error":%q}`,
+			normTenant(req.Tenant), c.ConnectorID, string(c.Provider), err.Error())
+		b.audit(evTokenIssued, req.Tenant, c.ConnectorID, string(c.Provider), "deny", "exchange failed: "+err.Error())
 		return cloudconn.ScopedToken{}, err
 	}
-	// Enforce the max-lifetime cap on the returned token.
-	if !tok.Expiry.IsZero() && tok.Expiry.Sub(b.now()) > effLife+brokerTokenMargin {
-		return cloudconn.ScopedToken{}, errBrokerTokenTooLong
+	now := b.now()
+	// Enforce the max-lifetime cap on the returned token. Providers with fixed
+	// token lifetimes the caller cannot shorten (Azure Entra: 60–90 min) are
+	// CLAMPED to the cap; a token beyond the slack bound is rejected outright.
+	if !tok.Expiry.IsZero() && tok.Expiry.Sub(now) > effLife+brokerTokenMargin {
+		if tok.Expiry.Sub(now) > time.Duration(float64(effLife)*brokerLifetimeSlack)+brokerTokenMargin {
+			log.Printf(`{"event":"cloudconn_token_lifetime_rejected","tenant":%q,"connector":%q,"provider":%q,"lifetime":%q,"cap":%q}`,
+				normTenant(req.Tenant), c.ConnectorID, string(c.Provider), tok.Expiry.Sub(now).String(), effLife.String())
+			return cloudconn.ScopedToken{}, errBrokerTokenTooLong
+		}
+		tok.Expiry = now.Add(effLife)
 	}
 
 	b.mu.Lock()
-	b.cache[key] = cachedToken{token: tok}
+	b.cache[key] = cachedToken{token: tok, mintedAt: now}
 	b.mu.Unlock()
 	b.audit(evTokenIssued, req.Tenant, c.ConnectorID, string(c.Provider), "success",
 		fmt.Sprintf("account=%s caps=%s ttl=%s", req.ProviderAccount, req.CapabilitySetID, effLife))

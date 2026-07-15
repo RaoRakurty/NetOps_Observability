@@ -9,8 +9,11 @@ import (
 // awsAdapter implements CloudIdentityProvider for AWS. The preferred method is a
 // cross-account IAM role assumed via sts:AssumeRole with a per-tenant+connector
 // ExternalId (confused-deputy protection). Static access keys are a labeled
-// legacy fallback (root rejected).
-type awsAdapter struct{}
+// legacy fallback (root rejected). Live credential exchange is delegated to the
+// injected TokenExchanger (AWSSTSExchanger in production).
+type awsAdapter struct {
+	exchange TokenExchanger
+}
 
 func (awsAdapter) Provider() Provider { return ProviderAWS }
 
@@ -250,13 +253,20 @@ func awsManual(trusted, extID string, pack CapabilityPack, perms []string) strin
 	return b.String()
 }
 
-// ── live-network methods: deferred to the AWS runtime phase ──────────────────
+// ── live-network methods ──────────────────────────────────────────────────────
 
-func (a awsAdapter) ExchangeCredential(_ context.Context, _ ExchangeRequest) (ScopedToken, error) {
-	// Runtime path (documented follow-up): sts:AssumeRole with RoleArn + ExternalId
-	// (+ optional AssumeRoleWithWebIdentity for the OIDC-federation variant),
-	// DurationSeconds ≤ MaxLifetime, returning short-lived STS credentials.
-	return ScopedToken{}, ErrProviderExchangeDeferred
+// ExchangeCredential mints short-lived STS session credentials: sts:AssumeRole
+// (RoleArn + ExternalId, DurationSeconds ≤ MaxLifetime) for role identities,
+// sts:GetSessionToken for legacy static keys. The configuration is re-validated
+// first — an invalid trust config never reaches the wire (zero trust).
+func (a awsAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest) (ScopedToken, error) {
+	if a.exchange == nil {
+		return ScopedToken{}, ErrProviderExchangeDeferred
+	}
+	if res := a.ValidateConfiguration(req.Identity); !res.OK {
+		return ScopedToken{}, &ExchangeError{Provider: ProviderAWS, Code: "request_invalid", Msg: "identity configuration has blocking findings"}
+	}
+	return a.exchange.Exchange(ctx, req)
 }
 
 func (a awsAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {

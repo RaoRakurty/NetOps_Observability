@@ -44,6 +44,7 @@ type ExchangeRequest struct {
 	CapabilitySetID string        // pack FullID the token is bounded to
 	Scope           Scope         // the provider account/sub/project the token targets
 	Audience        string        // token audience (federation)
+	Region          string        // optional regional binding (AWS regional STS endpoint)
 	MaxLifetime     time.Duration // upper bound the broker enforces
 	// LegacySecret is populated by the broker ONLY for legacy static-credential
 	// methods, decrypted from the Vault at call time. Empty for federated methods.
@@ -57,6 +58,10 @@ type ScopedToken struct {
 	Value     string    `json:"-"` // opaque provider token — never serialized
 	Expiry    time.Time `json:"expiry"`
 	TokenType string    `json:"token_type,omitempty"`
+	// AWS carries the STS session-credential TRIPLET (AWS consumers need all
+	// three to sign requests). Populated only for ProviderAWS; never serialized,
+	// and AWSCredentials self-redacts under fmt verbs.
+	AWS *AWSCredentials `json:"-"`
 }
 
 // DiscoverRequest asks a provider adapter to enumerate reachable scopes.
@@ -114,10 +119,12 @@ type SetupBundle struct {
 // CloudIdentityProvider is the provider-neutral adapter contract. Adapters are
 // stateless and hold no credentials of their own.
 //
-// Implemented purely (no network) in this build: Provider, ValidateConfiguration,
-// SetupInstructions. Live-network methods (ExchangeCredential, DiscoverScopes,
-// ValidateCapabilities, Revoke) return ErrProviderExchangeDeferred until the
-// per-provider runtime is wired (documented follow-up phase).
+// Implemented purely (no network): Provider, ValidateConfiguration,
+// SetupInstructions. ExchangeCredential is LIVE (delegated to the provider's
+// TokenExchanger — AWS STS AssumeRole/GetSessionToken, Azure Entra client
+// credentials/WIF assertion, GCP assertion grant/STS exchange+impersonation).
+// The remaining live-network methods (DiscoverScopes, ValidateCapabilities,
+// Revoke) still return ErrProviderExchangeDeferred (documented follow-up).
 type CloudIdentityProvider interface {
 	Provider() Provider
 
@@ -143,15 +150,33 @@ type CloudIdentityProvider interface {
 	Revoke(ctx context.Context, req RevokeRequest) error
 }
 
-// AdapterFor returns the provider adapter for p, or nil if unknown.
+// AdapterFor returns the provider adapter for p wired to its LIVE production
+// token exchanger (real endpoints, env-backed platform identity), or nil if
+// unknown.
 func AdapterFor(p Provider) CloudIdentityProvider {
 	switch p {
 	case ProviderAWS:
-		return awsAdapter{}
+		return awsAdapter{exchange: NewAWSSTSExchanger()}
 	case ProviderAzure:
-		return azureAdapter{}
+		return azureAdapter{exchange: NewAzureEntraExchanger()}
 	case ProviderGCP:
-		return gcpAdapter{}
+		return gcpAdapter{exchange: NewGCPSTSExchanger()}
+	default:
+		return nil
+	}
+}
+
+// NewAdapterWithExchanger returns the provider adapter wired to an injected
+// TokenExchanger — the DI seam tests and alternative deployments use (e.g. an
+// httptest server standing in for STS/Entra/Google endpoints).
+func NewAdapterWithExchanger(p Provider, x TokenExchanger) CloudIdentityProvider {
+	switch p {
+	case ProviderAWS:
+		return awsAdapter{exchange: x}
+	case ProviderAzure:
+		return azureAdapter{exchange: x}
+	case ProviderGCP:
+		return gcpAdapter{exchange: x}
 	default:
 		return nil
 	}

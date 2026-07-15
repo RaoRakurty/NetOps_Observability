@@ -10,8 +10,11 @@ import (
 // Workload Identity Federation: Correlix presents its OIDC assertion to a workload
 // identity pool provider and receives a short-lived federated token (optionally
 // impersonating a least-privilege service account) — no stored SA key. An SA JSON
-// key is a labeled legacy fallback.
-type gcpAdapter struct{}
+// key is a labeled legacy fallback. Live credential exchange is delegated to
+// the injected TokenExchanger (GCPSTSExchanger in production).
+type gcpAdapter struct {
+	exchange TokenExchanger
+}
 
 func (gcpAdapter) Provider() Provider { return ProviderGCP }
 
@@ -154,12 +157,18 @@ resource "google_service_account" "correlix_observer" {
 ` + roleBlocks.String()
 }
 
-func (a gcpAdapter) ExchangeCredential(_ context.Context, _ ExchangeRequest) (ScopedToken, error) {
-	// Runtime path (documented follow-up): STS token exchange
-	// (sts.googleapis.com/v1/token, grant_type=token-exchange) presenting the
-	// Correlix OIDC assertion → federated token → optional
-	// generateAccessToken SA impersonation → short-lived OAuth token.
-	return ScopedToken{}, ErrProviderExchangeDeferred
+// ExchangeCredential mints a short-lived GCP access token: STS token exchange
+// (Correlix OIDC assertion → federated token → optional generateAccessToken SA
+// impersonation) for WIF, or a self-signed RS256 assertion grant for the legacy
+// SA key. The configuration is re-validated first (zero trust).
+func (a gcpAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest) (ScopedToken, error) {
+	if a.exchange == nil {
+		return ScopedToken{}, ErrProviderExchangeDeferred
+	}
+	if res := a.ValidateConfiguration(req.Identity); !res.OK {
+		return ScopedToken{}, &ExchangeError{Provider: ProviderGCP, Code: "request_invalid", Msg: "identity configuration has blocking findings"}
+	}
+	return a.exchange.Exchange(ctx, req)
 }
 
 func (a gcpAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {

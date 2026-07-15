@@ -65,7 +65,17 @@ recommended".
 - Setup: `SetupInstructions` renders CloudFormation, Terraform and manual-IAM
   templates wiring the exact ExternalId + the pack's least-privilege permissions,
   `MaxSessionDuration: 3600`.
-- Runtime (deferred): `sts:AssumeRole(RoleArn, ExternalId, DurationSeconds ≤ cap)`.
+- Runtime (LIVE): `sts:AssumeRole(RoleArn, ExternalId, RoleSessionName=
+  correlix-<connector>, DurationSeconds ≤ cap)` via the STS Query API
+  (`cloudconn/exchange_aws.go`), SigV4-signed (stdlib signer `cloudconn/sigv4.go`,
+  pinned to the **official AWS SigV4 test-vector suite**, 38 vectors vendored in
+  `cloudconn/testdata/sigv4/`) with the broker's PLATFORM identity
+  (`AWSPlatformCredentialSource`; env-backed default reads the standard
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`). Legacy
+  static-key connectors go through `sts:GetSessionToken` signed with the
+  Vault-decrypted key, so collectors STILL only ever see short-lived session
+  credentials. `AssumeRoleWithWebIdentity` (true OIDC federation without a
+  platform key pair) is a follow-up.
 
 ### Azure — Entra Workload Identity Federation (+ admin-consent OAuth setup)
 - Preferred: a **federated credential** on the Correlix app registration trusts
@@ -77,6 +87,15 @@ recommended".
   APP roles; runtime uses the app/workload identity, **never** a delegated user
   token, and stores no user session.
 - Fallbacks: `certificate` (non-federated), `client_secret` (legacy).
+- Runtime (LIVE): client-credentials grant against
+  `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`
+  (`cloudconn/exchange_azure.go`), scope `https://management.azure.com/.default`.
+  WIF presents the Correlix workload OIDC JWT as `client_assertion`
+  (`WorkloadAssertionSource`; env/file-backed default reads
+  `CLOUD_CONNECTOR_WORKLOAD_JWT_FILE` or `CLOUD_CONNECTOR_WORKLOAD_JWT`);
+  `client_secret` uses the Vault-decrypted secret. `certificate` runtime stays
+  deferred: the cert is customer-held by reference (thumbprint), Correlix has no
+  private key to sign a client JWT with.
 
 ### GCP — Workload Identity Federation (+ optional SA impersonation)
 - Preferred: a **workload identity pool + OIDC provider** federated to the
@@ -87,6 +106,12 @@ recommended".
   binding.
 - Fallback: `static_key` (SA JSON key, legacy; owner/editor/default-compute SA
   rejected).
+- Runtime (LIVE, `cloudconn/exchange_gcp.go`): WIF → STS token exchange at
+  `https://sts.googleapis.com/v1/token` (RFC 8693, Correlix OIDC assertion as
+  `subject_token`) → federated token → optional `iamcredentials
+  generateAccessToken` impersonation of the observer SA (lifetime-bounded).
+  Legacy SA key → self-signed **RS256 JWT (stdlib crypto/rsa)** → assertion
+  grant at `https://oauth2.googleapis.com/token`, read-only cloud-platform scope.
 
 Legacy secrets across all three: labeled "legacy — not recommended", root/admin
 rejected, **encrypted immediately via the existing Vault**, never re-displayed,
@@ -98,12 +123,26 @@ rotatable, and tenant-policy-disableable (policy hook is a follow-up).
 ask the broker for a **scoped token**: one tenant, one connector, one provider
 account, one identity, one bounded capability set, one bounded lifetime.
 
+- **Live exchange** (this build): the broker delegates to the provider adapter's
+  injectable `TokenExchanger` (`cloudconn/exchange*.go`) — AWS STS, Azure Entra,
+  GCP STS/IAM — over plain HTTPS with context deadlines, bounded retries
+  (3 attempts, backoff+jitter on 429/5xx/network), 1 MiB response caps and the
+  default verified TLS transport. Failed exchanges are logged (structured) AND
+  audited (`TOKEN_ISSUED` deny) with a sanitized `ExchangeError`
+  (denied / throttled / malformed_response / …) that never carries a secret.
 - **Cache key** binds tenant + connector + provider + provider-account + identity
   ref + capability-set hash + audience + region. Two tenants with identical role
   ARNs / client ids / account ids therefore never share a cache entry (proved by
-  `TestBrokerTokenCacheTenantConnectorIsolation`).
-- **Max lifetime** capped at 1h; a provider token exceeding the cap is rejected;
-  tokens are never persisted and never logged.
+  `TestBrokerTokenCacheTenantConnectorIsolation` and
+  `TestBrokerCachedCredentialNeverCrossesTenants` — tenant A can never be served
+  tenant B's cached credential).
+- **Expiry-aware refresh**: cached tokens are proactively re-minted once 80% of
+  their lifetime has elapsed (`brokerRefreshFraction`), so consumers never
+  receive a credential about to expire mid-collection.
+- **Max lifetime** capped at 1h. Providers with FIXED token lifetimes the caller
+  cannot shorten (Azure Entra mints 60–90 min) are **clamped** to the cap — the
+  broker refuses to serve them past it; a token beyond 2× the cap is rejected
+  outright. Tokens are never persisted and never logged.
 - **Fail-closed**: disabled/revoked/draft/deleted connectors cannot mint a token
   (`LifecycleState.CanExchangeToken`).
 - **Secret custody**: only the broker decrypts, via the existing envelope Vault
@@ -134,7 +173,7 @@ Review/Activate. Backed by:
 | select scopes | `POST /api/cloud/connectors/{id}/scopes` |
 | discover scopes | `POST /api/cloud/connectors/{id}/discover-scopes` (deferred live) |
 | select capabilities | `POST /api/cloud/connectors/{id}/capabilities` |
-| validate trust | `POST /api/cloud/connectors/{id}/validate` (config validation, real) |
+| validate trust | `POST /api/cloud/connectors/{id}/validate` (config validation + LIVE trust proof via the broker; `live_check`: ok / failed / deferred; identity health → `live_verified` on success) |
 | validate permissions | `POST /api/cloud/connectors/{id}/permissions` (deferred live) |
 | activate / disable / revoke | `POST /api/cloud/connectors/{id}/{activate\|disable\|revoke}` |
 | store / rotate secret | `POST /api/cloud/connectors/{id}/{secret\|rotate}` |
@@ -154,11 +193,19 @@ fields this contract lacks, extend `cloudconn.Capability` (additively) — do no
 fork. This package intentionally has no dependency on package main, the DB, or the
 Vault, so it is safe to import from any layer.
 
-## 8. Phased roadmap (deferred)
+## 8. Phased roadmap
 
-- **P5** AWS STS AssumeRole runtime + live permission/scope validation.
-- **P6** Azure Entra WIF token runtime + admin-consent OAuth runtime.
-- **P7** GCP WIF token-exchange runtime (+ SA impersonation).
+- **P5 ✅ SHIPPED** AWS STS AssumeRole runtime (SigV4 + Query API, official
+  test-vector suite) + GetSessionToken for legacy keys. Live permission/scope
+  validation (`validate-permissions` / `discover-scopes`) still deferred.
+- **P6 ✅ SHIPPED (token runtime)** Azure Entra client-credentials runtime:
+  WIF `client_assertion` + legacy `client_secret`. Still open: certificate
+  runtime (customer-held key) and the admin-consent OAuth redirect flow.
+- **P7 ✅ SHIPPED** GCP runtime: STS token-exchange + SA impersonation (WIF)
+  and RS256 assertion grant (legacy SA key).
+- **P5–P7 shared, still open**: a platform OIDC issuer that MINTS the workload
+  assertion (today `WorkloadAssertionSource` reads a mounted/env token);
+  AWS `AssumeRoleWithWebIdentity`; live permission validation & scope discovery.
 - **P8** Onboarding wizard UI (reuse admin/integration primitives).
 - **P9** Migrate the `deployment/docker/cloud-ingest/` Python sidecar to request
   broker tokens; retire env-var/mounted-file creds.
