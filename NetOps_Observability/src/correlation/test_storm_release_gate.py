@@ -17,12 +17,11 @@ Asserted SLOs, from docs/design/correlation-data-contract.md §new-lane:
                       rollup (who / dominant kind / dominant entity).
 """
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import main
 from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
-from test_lane_soak import _StubCH, _dead_target_batches, run_broken_source_soak
+from test_lane_soak import _dead_target_batches, run_broken_source_soak
 
 
 def _sig(tenant: str, kind: str, entity: str, *, offset_s: float, now: datetime) -> Signal:
