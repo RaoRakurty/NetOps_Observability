@@ -55,11 +55,15 @@ export function utilizationWidth(base: number, utilization: number | undefined):
  * the old three-line card did. (PDF §11 — calm by default.)
  */
 export function EdgeLabelCard({ edge }: { edge: TopologyEdgeModel }): ReactNode {
-  // "Where it goes": prefer the port pair, fall back to the far-end device.
+  // "Where it goes": prefer the port pair; a LONE label (e.g. a cloud route's
+  // destination CIDR, carried in source_port with no target port) shows on its
+  // own; otherwise fall back to the far-end device.
   const text =
-    edge.source_port || edge.target_port
-      ? `${edge.source_port ?? "·"} → ${edge.target_port ?? "·"}`
-      : `→ ${edge.target}`;
+    edge.source_port && edge.target_port
+      ? `${edge.source_port} → ${edge.target_port}`
+      : edge.source_port || edge.target_port
+        ? `${edge.source_port ?? edge.target_port}`
+        : `→ ${edge.target}`;
   return (
     <div
       style={{

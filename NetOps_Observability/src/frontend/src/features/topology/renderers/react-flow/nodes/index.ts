@@ -6,6 +6,7 @@ import { SwitchNode } from "./SwitchNode";
 import { RouterNode } from "./RouterNode";
 import { FirewallNode } from "./FirewallNode";
 import { CloudNode } from "./CloudNode";
+import { CloudResourceNode } from "./CloudResourceNode";
 import { GroupNode } from "./GroupNode";
 import { UnresolvedNode } from "./UnresolvedNode";
 
@@ -19,10 +20,19 @@ export const nodeTypes = {
   unresolvedNode: UnresolvedNode,
 };
 
+// Cloud-tab node registry: the cloud NETWORK view swaps the generic cloud glyph
+// for the official-provider-mark card. Kept SEPARATE from `nodeTypes` so the
+// default canvas (and every non-cloud view) renders exactly as before.
+export const cloudNodeTypes = {
+  ...nodeTypes,
+  cloudNode: CloudResourceNode,
+};
+
 export { DeviceNode, NodeCard } from "./DeviceNode";
 export { SwitchNode } from "./SwitchNode";
 export { RouterNode } from "./RouterNode";
 export { FirewallNode } from "./FirewallNode";
 export { CloudNode } from "./CloudNode";
+export { CloudResourceNode } from "./CloudResourceNode";
 export { GroupNode } from "./GroupNode";
 export { UnresolvedNode } from "./UnresolvedNode";

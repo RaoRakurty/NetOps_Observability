@@ -51,6 +51,10 @@ import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
+import { filterViewByDomain, type NetworkDomain } from "../../utils/topologyDomains";
+import { withCarrierOverlay } from "../../utils/carrierOverlay";
+import TopologyDomainTabs from "../../components/TopologyDomainTabs";
+import CloudTopologyView from "./CloudTopologyView";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
 import {
   TopologyToolbar,
@@ -98,7 +102,7 @@ function mostActionableIncident(incidents: CorrObject[]): string {
   return best?.correlation_id ?? "";
 }
 
-function CanvasInner() {
+function CanvasInner({ domain = "lan", carrier = false }: { domain?: NetworkDomain; carrier?: boolean }) {
   const rf = useReactFlow();
 
   const [mode, setMode] = useState<WorkflowMode>("explore");
@@ -233,8 +237,15 @@ function CanvasInner() {
   // platform's own stack (api/correlation/prober/etc.) so it never pollutes the map.
   const baseView = useMemo(() => {
     const v = fetched ?? workflow?.view;
-    return v ? excludeInternalNodes(v) : v;
-  }, [fetched, workflow?.view]);
+    if (!v) return v;
+    // LAN + carrier-off is the IDENTITY path — the default canvas is byte-for-byte
+    // unchanged. SD-WAN / DC apply a client-side domain slice; the carrier overlay
+    // (any tab) appends the shared transport node + uplinks.
+    let out = excludeInternalNodes(v);
+    if (domain !== "lan") out = filterViewByDomain(out, domain);
+    if (carrier) out = withCarrierOverlay(out);
+    return out;
+  }, [fetched, workflow?.view, domain, carrier]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
   // — the operator's lens, not just the backend's fixed site hierarchy.
   const view = useMemo(() => (baseView ? regroupView(baseView, groupBy) : baseView), [baseView, groupBy]);
@@ -866,9 +877,23 @@ function PlaceholderWorkflow({ label, blurb }: { label: string; blurb: string })
 }
 
 export default function TopologyCanvas() {
+  // Network-DOMAIN tabs (LAN · SD-WAN · DC · Cloud) — the primary "where am I
+  // looking" control, orthogonal to the workflow selector inside the canvas.
+  // LAN (default) + carrier-off renders the existing canvas unchanged.
+  const [domain, setDomain] = useState<NetworkDomain>("lan");
+  const [carrier, setCarrier] = useState(false);
   return (
-    <ReactFlowProvider>
-      <CanvasInner />
-    </ReactFlowProvider>
+    <div className="topo-domain-shell">
+      <TopologyDomainTabs value={domain} onChange={setDomain} carrier={carrier} onToggleCarrier={setCarrier} />
+      <ReactFlowProvider>
+        {domain === "cloud" ? (
+          <div className="topo-root">
+            <CloudTopologyView carrier={carrier} />
+          </div>
+        ) : (
+          <CanvasInner domain={domain} carrier={carrier} />
+        )}
+      </ReactFlowProvider>
+    </div>
   );
 }
