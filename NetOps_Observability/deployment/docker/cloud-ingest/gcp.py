@@ -36,11 +36,25 @@ import urllib.parse
 import urllib.request
 
 import cloud_events
+import gcp_log_lanes
 import trail_state
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 CREDS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
+
+# ── log-fidelity lane gates (#105 parity: flow/firewall/LB+Armor/DNS) ────────
+# Each lane is an explicit OPT-IN ("on"), mirroring the AWS S3-prefix gates:
+# these log families only exist when the customer enabled them in GCP (flow
+# logs per subnet, Firewall Rules Logging per rule, LB logging per backend
+# service, a DNS logging policy), so an unset gate = lane honestly OFF — the
+# matrix shows it disabled, the poller never guesses. entries:list reads are
+# free, but the 60 req/min project quota is real: one bounded read per enabled
+# lane per cadence, never per-instance.
+GCP_VPC_FLOW_LOGS = os.environ.get("GCP_VPC_FLOW_LOGS", "").lower() == "on"
+GCP_FIREWALL_LOGS = os.environ.get("GCP_FIREWALL_LOGS", "").lower() == "on"
+GCP_LB_LOGS = os.environ.get("GCP_LB_LOGS", "").lower() == "on"
+GCP_DNS_LOGS = os.environ.get("GCP_DNS_LOGS", "").lower() == "on"
 
 # canonical series (identical names to the AWS/Azure lanes — provider-blind):
 # (monitoring metric type, canonical name, unit, is_rate_fraction)
@@ -243,40 +257,77 @@ def _overlap_since(since: str, seconds: int = 120) -> str:
         return since
 
 
+_LOG_PAGE_SIZE = 200
+_LOG_MAX_PAGES = 5  # bounded read per lane per cycle (1000-entry ceiling)
+
+
+def list_log_entries(tok: str, log_filter: str, since: str,
+                     seen_ids: list | None = None,
+                     page_size: int = _LOG_PAGE_SIZE,
+                     max_pages: int = _LOG_MAX_PAGES) -> tuple[list[dict], str, list]:
+    """Cloud Logging entries:list with the checkpoint discipline poll_audit_log
+    established, shared by every log lane (audit / vpc_flows / firewall / LB /
+    dns_queries): trailing 120s overlap (late-arriving entries are re-read, not
+    dropped — receiveTimestamp > timestamp is normal), insertId dedup (re-reads
+    are idempotent), checkpoint anchored on everything SEEN (matched, excluded
+    or deduped — the trail_ts defect class, see trail_state.py), and a cleanly
+    fetched EMPTY window still advances (delivery-lagged now) so quiet periods
+    stay one page wide instead of growing without bound.
+
+    Bounded: page_size × max_pages entries per call — a burst past the ceiling
+    is picked up next cycle from the advanced checkpoint, never buffered
+    unboundedly. Returns (new entries — deduped, oldest→newest —, the next
+    checkpoint, the next dedup window)."""
+    seen = set(seen_ids or [])
+    body = {
+        "resourceNames": [f"projects/{PROJECT}"],
+        "filter": f'{log_filter} AND timestamp>"{_overlap_since(since)}"',
+        "orderBy": "timestamp asc",
+        "pageSize": page_size,
+    }
+    newest, saw = since, False
+    fresh: list[dict] = []
+    new_seen: list = []
+    for _ in range(max_pages):
+        req = urllib.request.Request(
+            "https://logging.googleapis.com/v2/entries:list",
+            data=json.dumps(body).encode(),
+            headers={**_gcp_headers(tok), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
+            res = json.loads(resp.read().decode())
+        for e in res.get("entries") or []:
+            saw = True
+            newest = max(newest, str(e.get("timestamp", "")))
+            insert_id = str(e.get("insertId", ""))
+            if insert_id:
+                new_seen.append(insert_id)
+                if insert_id in seen:
+                    continue  # overlap re-read: already emitted
+            fresh.append(e)
+        page_token = res.get("nextPageToken")
+        if not page_token:
+            break
+        body["pageToken"] = page_token
+    if not saw:
+        lagged = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(seconds=trail_state.DELIVERY_LAG_S))
+        newest = trail_state.advance_checkpoint_any(
+            since, newest, False,
+            lagged.replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+    # trim the dedup window to what the next overlap could possibly re-read
+    return fresh, newest, new_seen[-(page_size * max_pages):]
+
+
 def poll_audit_log(tok: str, producer, tenant: str, since: str,
                    seen_ids: list | None = None) -> tuple[int, str, list]:
     """Admin-activity audit log → cloud_change (the CloudTrail/Activity Log
-    equivalent). Checkpointed on the newest timestamp seen, with a trailing
-    overlap + insertId dedup so late-arriving entries are neither dropped nor
-    double-emitted. `seen_ids` is the caller-persisted dedup window."""
-    seen = set(seen_ids or [])
-    body = json.dumps({
-        "resourceNames": [f"projects/{PROJECT}"],
-        "filter": (f'logName="projects/{PROJECT}/logs/cloudaudit.googleapis.com%2Factivity" '
-                   f'AND timestamp>"{_overlap_since(since)}"'),
-        "orderBy": "timestamp asc",
-        "pageSize": 200,
-    }).encode()
-    req = urllib.request.Request(
-        "https://logging.googleapis.com/v2/entries:list", data=body,
-        headers={**_gcp_headers(token()), "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
-        res = json.loads(resp.read().decode())
-    n, newest = 0, since
-    saw = False
-    new_seen: list = []
-    for e in res.get("entries") or []:
-        # Checkpoint anchors on everything SEEN — matched, excluded or deduped.
-        # Advancing only past matched entries pinned `since` through windows of
-        # excluded-method churn (the trail_ts defect class; see trail_state.py).
-        # The insertId overlap dedup makes advancing over skipped entries safe.
-        saw = True
-        newest = max(newest, str(e.get("timestamp", "")))
-        insert_id = str(e.get("insertId", ""))
-        if insert_id:
-            new_seen.append(insert_id)
-            if insert_id in seen:
-                continue  # overlap re-read: already emitted
+    equivalent). Checkpoint/overlap/dedup live in list_log_entries (shared with
+    the log-fidelity lanes); this lane owns only the method filter + mapping."""
+    entries, newest, new_seen = list_log_entries(
+        tok, f'logName="projects/{PROJECT}/logs/cloudaudit.googleapis.com%2Factivity"',
+        since, seen_ids)
+    n = 0
+    for e in entries:
         proto = e.get("protoPayload", {}) or {}
         method = str(proto.get("methodName", ""))
         if not method or method.endswith(CHANGE_EXCLUDE_SUFFIXES):
@@ -293,16 +344,72 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
                 "request_id": str(e.get("insertId", "")),
             }))
         n += 1
-    # A cleanly-fetched EMPTY window still advances (delivery-lagged now) so
-    # quiet periods stay one page wide instead of growing without bound.
-    if not saw:
-        lagged = (dt.datetime.now(dt.timezone.utc)
-                  - dt.timedelta(seconds=trail_state.DELIVERY_LAG_S))
-        newest = trail_state.advance_checkpoint_any(
-            since, newest, False,
-            lagged.replace(microsecond=0).isoformat().replace("+00:00", "Z"))
-    # trim the dedup window to the entries the next overlap can re-read
-    return n, newest, new_seen[-500:]
+    return n, newest, new_seen
+
+
+# ── log-fidelity lanes (#105 parity): flow / firewall / LB+Armor / DNS ───────
+# One shared reader (list_log_entries), one pure-rollup module (gcp_log_lanes),
+# one lane table. Each lane: fetch its log id since its own checkpoint, run the
+# bounded rollup(s), stamp the tenant, produce to netops.cloud — the SAME kinds
+# the AWS tailer lanes emit, so every downstream consumer stays provider-blind.
+# The LB fetch feeds TWO rollups (5xx + Cloud Armor): Armor has no log of its
+# own — it rides the LB request log, so one read closes two matrix rows.
+
+def _lane_log(msg: str, **kw) -> None:
+    import time as _time
+    print(json.dumps({"ts": _time.time(), "service": "cloud-ingest",
+                      "msg": msg, **kw}), flush=True)
+
+
+def _log_lanes() -> list[tuple]:
+    """(state_key, filter, rollup functions) per ENABLED lane. Computed per call
+    so tests can flip the module gates."""
+    lanes: list[tuple] = []
+    if GCP_VPC_FLOW_LOGS:
+        lanes.append(("gcp_flow",
+                      f'logName="projects/{PROJECT}/logs/compute.googleapis.com%2Fvpc_flows"',
+                      (gcp_log_lanes.flow_volume_rollup,)))
+    if GCP_FIREWALL_LOGS:
+        lanes.append(("gcp_fw",
+                      f'logName="projects/{PROJECT}/logs/compute.googleapis.com%2Ffirewall"',
+                      (gcp_log_lanes.firewall_reject_rollup,)))
+    if GCP_LB_LOGS:
+        lanes.append(("gcp_lb",
+                      f'logName="projects/{PROJECT}/logs/requests" '
+                      f'AND resource.type="http_load_balancer"',
+                      (gcp_log_lanes.lb_5xx_rollup, gcp_log_lanes.armor_block_rollup)))
+    if GCP_DNS_LOGS:
+        lanes.append(("gcp_dns",
+                      f'logName="projects/{PROJECT}/logs/dns.googleapis.com%2Fdns_queries"',
+                      (gcp_log_lanes.dns_error_rollup,)))
+    return lanes
+
+
+def poll_log_lanes(tok: str, producer, tenant: str, st: dict, since_default: str) -> int:
+    """Run every enabled log-fidelity lane once. Per-lane try/except: one bad
+    lane (a missing log, a quota trip) must never block the others or roll back
+    their checkpoints. Returns the number of rollup signals produced."""
+    n = 0
+    for state_key, log_filter, rollups in _log_lanes():
+        try:
+            since = st.get(f"{state_key}_ts") or since_default
+            entries, newest, new_seen = list_log_entries(
+                tok, log_filter, since, st.get(f"{state_key}_seen") or [])
+            for rollup in rollups:
+                events = rollup(entries, PROJECT)
+                for ev in events:
+                    ev["tenant_id"] = tenant
+                    producer.send("netops.cloud", ev)
+                    n += 1
+                if events and events[0]["attrs"].get("rollup_truncated"):
+                    _lane_log("gcp log lane rollup truncated", lane=state_key,
+                              rollup=rollup.__name__,
+                              dropped=events[0]["attrs"]["rollup_truncated"])
+            st[f"{state_key}_ts"] = newest
+            st[f"{state_key}_seen"] = new_seen
+        except Exception as exc:  # noqa: BLE001 - lane isolation
+            _lane_log("gcp log lane error", lane=state_key, error=str(exc)[:200])
+    return n
 
 
 # ── hybrid-seam lane (#105 P1): Cloud Router BGP/BFD via FREE REST ───────────
