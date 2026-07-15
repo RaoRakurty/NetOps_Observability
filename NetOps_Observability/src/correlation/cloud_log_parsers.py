@@ -303,10 +303,10 @@ def waf_block_rollup(records: list[dict]) -> list[dict]:
                     a["host"] = str(h.get("value") or "")
     out: list[dict] = []
     for (acl, rule), a in sorted(agg.items()):
-        ts = ""
+        ts_iso = ""
         if a["ts_ms"]:
-            ts = (datetime.fromtimestamp(a["ts_ms"] / 1000, tz=timezone.utc)
-                  .isoformat().replace("+00:00", "Z"))
+            ts_iso = (datetime.fromtimestamp(a["ts_ms"] / 1000, tz=timezone.utc)
+                      .isoformat().replace("+00:00", "Z"))
         out.append({
             "kind": "cloud_waf_log",
             # the web ACL is the resource whose behavior changed; its ARN is
@@ -317,7 +317,7 @@ def waf_block_rollup(records: list[dict]) -> list[dict]:
             "severity": "warn",
             "metric_name": "waf_blocked_requests",
             "value": float(a["count"]),
-            "ts": ts,
+            "ts": ts_iso,
             "attrs": {
                 "provider": "aws",
                 "rule": rule,
