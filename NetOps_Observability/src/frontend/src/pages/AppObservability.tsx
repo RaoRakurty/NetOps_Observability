@@ -22,12 +22,14 @@ import {
 } from "./appobs/badges";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
+import AssignServiceDrawer from "./appobs/AssignService";
+import { toggleSelection, toggleAllVisible } from "./appobs/assign";
 import type {
   App, ChangeEvent, CloudResource, Confidence, Coverage, EvidenceRow, HealthSignal, UnknownContributor,
 } from "./appobs/types";
 import {
   loadApps, loadResources, loadCoverage, loadHealthSignals, loadChangeEvents, loadEvidence,
-  NOT_MEASURED,
+  invalidateCloudInventory, NOT_MEASURED,
 } from "./appobs/api";
 import type { CloudRcaObject } from "./appobs/api";
 import { signatureNocTitle } from "../components/rca/labels";
@@ -40,7 +42,7 @@ import { api } from "../services/api";
 
 // async loader with explicit loading/error/empty states (no fake-data fallback —
 // an empty inventory shows an honest "connect a cloud account" state).
-function useAsync<T>(fn: () => Promise<T>): { data: T | null; status: LoadState } {
+function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): { data: T | null; status: LoadState } {
   const [data, setData] = useState<T | null>(null);
   const [status, setStatus] = useState<LoadState>("loading");
   useEffect(() => {
@@ -51,8 +53,9 @@ function useAsync<T>(fn: () => Promise<T>): { data: T | null; status: LoadState 
       () => { if (live) setStatus("error"); },
     );
     return () => { live = false; };
+    // deps let a caller force a refetch (e.g. after a bulk service assignment).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, deps);
   return { data, status };
 }
 
@@ -449,7 +452,13 @@ function AppMap() {
 function Resources() {
   const [f, setF] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<CloudResource | null>(null);
-  const { data, status } = useAsync(loadResources);
+  // Bulk service-attribution (2026-07 review imp #5): select resources → assign
+  // them to a business service via the operator-authoritative override API.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [assigning, setAssigning] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const { data, status } = useAsync(loadResources, [reloadKey]);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="cloud resources" />;
   const all = data ?? [];
@@ -460,6 +469,11 @@ function Resources() {
     (!f.provider || r.provider === f.provider));
   const providerOpts = [...new Set(all.map((r) => r.provider))]
     .filter((p) => p !== "—").map((p) => ({ value: p, label: p.toUpperCase() }));
+  const visibleIds = rows.map((r) => r.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => picked.has(id));
+  // After a write the cached inventory is stale — drop it and refetch so the
+  // table shows the stored truth (operator mapping now wins over inference).
+  const reload = () => { invalidateCloudInventory(); setReloadKey((k) => k + 1); };
   return (
     <div className="ao-stack">
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
@@ -468,9 +482,22 @@ function Resources() {
           { key: "missing", label: "Missing tag", options: [{ value: "app", label: "app" }, { value: "owner", label: "owner" }, { value: "env", label: "env" }] },
           { key: "unknown", label: "Untagged service", options: [{ value: "yes", label: "yes" }] },
         ]} />
+      {picked.size > 0 && (
+        <div className="ao-selbar" role="region" aria-label="Selection actions">
+          <span className="ao-selbar-n">{picked.size.toLocaleString()} selected</span>
+          <button className="ao-btn ao-btn--primary" onClick={() => setAssigning(true)}>Assign to service</button>
+          <button className="ao-btn" onClick={() => setPicked(new Set())}>Clear</button>
+        </div>
+      )}
+      {notice && <div className="ao-selbar-note" role="status">{notice}</div>}
       <div className="ao-panel">
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
           columns={[
+            { key: "_sel", width: 34,
+              header: <input type="checkbox" aria-label="Select all shown resources" checked={allVisibleSelected}
+                onChange={() => setPicked((s) => toggleAllVisible(s, visibleIds))} onClick={(e) => e.stopPropagation()} />,
+              render: (r) => <input type="checkbox" aria-label={`Select ${r.name}`} checked={picked.has(r.id)}
+                onChange={() => setPicked((s) => toggleSelection(s, r.id))} onClick={(e) => e.stopPropagation()} /> },
             { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.consoleUrl && <ConsoleLink compact href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} />}</> },
             { key: "type", header: "Type", width: 120, render: (r) => r.type },
             { key: "power", header: "State", width: 90, sortable: true, sortValue: (r) => r.powerState, render: (r) => r.powerState === "—" ? DASH : (
@@ -491,6 +518,18 @@ function Resources() {
           ]} />
       </div>
       {sel && <ResourceDrawer r={sel} onClose={() => setSel(null)} />}
+      {assigning && (
+        <AssignServiceDrawer
+          resourceIds={[...picked]}
+          onClose={() => setAssigning(false)}
+          onAssigned={(n, label) => {
+            setAssigning(false);
+            setPicked(new Set());
+            setNotice(`Assigned ${n.toLocaleString()} resource${n === 1 ? "" : "s"} to ${label}.`);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -748,8 +787,13 @@ function openIntegrations() { location.hash = "#/incident/integrations"; }
 
 function Unknowns() {
   const [fix, setFix] = useState<UnknownContributor | null>(null);
-  const res = useAsync(loadResources);
-  const cov = useAsync(loadCoverage);
+  // In-product remediation (2026-07 review imp #5): assign an untagged resource
+  // to a business service instead of dead-ending at "go tag it in the console".
+  const [assignRes, setAssignRes] = useState<UnknownContributor | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const res = useAsync(loadResources, [reloadKey]);
+  const cov = useAsync(loadCoverage, [reloadKey]);
+  const reload = () => { invalidateCloudInventory(); setReloadKey((k) => k + 1); };
   if (res.status === "loading" || cov.status === "loading") return <TableSkeleton />;
   if (res.status === "error" || cov.status === "error") return <LoadError what="unknowns" />;
   const resources = res.data ?? [];
@@ -801,13 +845,22 @@ function Unknowns() {
               happens in the provider console; rules/precedence live in
               Integrations. Everything else is guidance, not a fake button. */}
           <div className="ao-cta-btns">
+            <button className="ao-btn ao-btn--primary" onClick={() => { setAssignRes(fix); setFix(null); }}>Assign to a service</button>
             {(() => {
               const url = consoleUrlFor(fix, resources);
               return url ? <ConsoleLink href={url} label={`Tag in ${consoleName(fix.provider)}`} /> : null;
             })()}
-            <button className="ao-btn ao-btn--primary" onClick={openIntegrations}>Attribution rules · Integrations</button>
+            <button className="ao-btn" onClick={openIntegrations}>Attribution rules · Integrations</button>
           </div>
         </EvidenceDrawer>
+      )}
+
+      {assignRes && (
+        <AssignServiceDrawer
+          resourceIds={[assignRes.resourceId]}
+          onClose={() => setAssignRes(null)}
+          onAssigned={() => { setAssignRes(null); reload(); }}
+        />
       )}
     </div>
   );
