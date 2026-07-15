@@ -365,6 +365,11 @@ type rcaEvidenceLane struct {
 	// CountsTowardConfidence: this lane is among the verdict gate's trusted /
 	// covering modalities for the top hypothesis.
 	CountsTowardConfidence bool `json:"counts_toward_confidence"`
+	// Assessment is the canonical Phase C coverage verdict for this lane (quality
+	// state, overlap/ratio, leading/trailing/internal gaps, cadence provenance,
+	// eligibility + reason codes). The legacy State/Coverage/MissingInterval fields
+	// above are DERIVED from it; Phase D renders the richer struct directly.
+	Assessment *CoverageAssessment `json:"assessment,omitempty"`
 }
 
 type rcaCloudChange struct {

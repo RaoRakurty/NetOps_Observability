@@ -323,10 +323,24 @@ func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map
 		if n == 0 && lane == "management_plane" {
 			continue // controller lane omitted entirely when absent, not "no data"
 		}
+		// Phase C: the EvidenceCoverageEngine is the single source of coverage truth.
+		// Through this legacy shim it sees only the min/max span (no per-observation
+		// series), so it honestly reports cadence + internal gaps as `unknown` and
+		// caps continuous quality at "substantial" — the richer per-observation path
+		// is wired by Phase D. Tenant is not threaded through this stable signature,
+		// so the engine uses global-default thresholds (per-tenant policy is applied
+		// on the richer path); this shim never crosses tenants.
+		assessment := rcaCoverageEngine.Assess("", LaneCoverageInput{
+			Class:       lane,
+			WindowStart: firstObs, WindowEnd: lastObs,
+			LaneStart: laneMin[lane], LaneEnd: laneMax[lane],
+			TotalCount: n, AnomalousCount: an,
+		})
 		l := rcaEvidenceLane{
 			Class: lane, Label: rcaLaneLabel[lane],
 			Observations: n, Anomalous: an,
 			CountsTowardConfidence: an > 0 && trusted[lane],
+			Assessment:             &assessment,
 		}
 		if t := laneMin[lane]; !t.IsZero() {
 			l.From = fmtUTC(t)
@@ -334,66 +348,58 @@ func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map
 		if t := laneMax[lane]; !t.IsZero() {
 			l.To = fmtUTC(t)
 		}
-		switch {
-		case an > 0:
-			l.Availability, l.State, l.Coverage = "available", "anomalous", "full"
-			l.Finding = fmt.Sprintf("%d of %d observations in this window are anomalous and tied to this case.", an, n)
-		case n > 0:
-			// P1 coverage quality: "no anomaly" is a claim about the window — it is
-			// only clean when the lane actually SPANNED the incident window. A lane
-			// that stopped before the last anomaly (or started after the first) has
-			// PARTIAL coverage and is inconclusive, never a green Normal.
-			full, missing := rcaLaneWindowCoverage(laneMin[lane], laneMax[lane], firstObs, lastObs)
+		l.State = assessment.legacyState(an > 0)
+		l.Coverage = assessment.legacyCoverage()
+		l.MissingInterval = assessment.MissingInterval
+		if l.State == "no_data" {
+			l.Availability = "no_data"
+		} else {
 			l.Availability = "available"
-			if full {
-				l.State, l.Coverage = "normal", "full"
-				l.Finding = fmt.Sprintf("%d observations spanning the incident window; none tied to this case as anomalous.", n)
-			} else {
-				l.State, l.Coverage = "inconclusive", "partial"
-				l.MissingInterval = missing
-				l.Finding = fmt.Sprintf("%d observations, but coverage did not span the full incident window — no anomaly observed during available coverage. Missing interval: %s. Insufficient to confirm or exclude impact for the full incident.", n, orDefault(missing, "unknown"))
-			}
-		default:
-			// §7: "No data" is coverage ABSENCE. It is never healthy evidence and
-			// we do not claim to know whether the lane is unconfigured or broken.
-			l.Availability, l.State, l.Coverage = "no_data", "no_data", "none"
-			l.Finding = "No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health."
 		}
+		l.Finding = rcaCoverageFinding(n, an, assessment)
 		out = append(out, l)
 	}
 	return out
 }
 
+// rcaCoverageFinding renders the NOC finding text for a lane from its coverage
+// assessment — the same per-class-aware wording the engine's quality state implies.
+// (Phase D replaces the whole coverage renderer; this keeps the current one honest.)
+func rcaCoverageFinding(n, an int, a CoverageAssessment) string {
+	switch {
+	case a.legacyState(an > 0) == "no_data":
+		return "No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health."
+	case an > 0:
+		if a.Strategy == strategyEventBased {
+			return fmt.Sprintf("%d anomalous state transition(s) in this window tied to this case — a point-in-time control-plane event, not a continuous-coverage lane.", an)
+		}
+		return fmt.Sprintf("%d of %d observations in this window are anomalous and tied to this case.", an, n)
+	case a.NormalityEligible:
+		return fmt.Sprintf("%d observations spanning the incident window at the expected cadence; none tied to this case as anomalous.", n)
+	case a.Strategy == strategyEventBased:
+		return fmt.Sprintf("%d observation(s), but this control-plane lane is point-in-time (state transitions only) — insufficient to assert health across the incident window.", n)
+	default:
+		missing := orDefault(a.MissingInterval, "unknown")
+		return fmt.Sprintf("%d observations, but coverage did not span the full incident window — no anomaly observed during available coverage. Missing interval: %s. Insufficient to confirm or exclude impact for the full incident.", n, missing)
+	}
+}
+
 // rcaLaneWindowCoverage reports whether a lane's observation span [laneMin,
 // laneMax] covered the incident window [firstObs, lastObs], and (when partial)
-// the missing interval. A small slack (the greater of 2 min or a fifth of the
-// window) absorbs sampling jitter — the same tolerance the impact-axis coverage
-// check uses. When the incident window is a single instant, any observation
-// counts as full coverage (there is no interval to miss).
+// the missing interval. Its signature is kept stable for callers; internally it
+// now delegates to the EvidenceCoverageEngine (continuous strategy) so there is one
+// coverage definition. "Full" means the engine judged the lane complete.
 func rcaLaneWindowCoverage(laneMin, laneMax, firstObs, lastObs time.Time) (bool, string) {
-	if firstObs.IsZero() || lastObs.IsZero() || laneMin.IsZero() || laneMax.IsZero() {
-		return true, "" // insufficient timing to make a partial-coverage claim
-	}
-	if !lastObs.After(firstObs) {
+	a := rcaCoverageEngine.Assess("", LaneCoverageInput{
+		Class:       "active_probe", // force the continuous strategy for a raw span check
+		WindowStart: firstObs, WindowEnd: lastObs,
+		LaneStart: laneMin, LaneEnd: laneMax,
+		TotalCount: 1,
+	})
+	if a.Quality == qualityComplete {
 		return true, ""
 	}
-	slack := lastObs.Sub(firstObs) / 5
-	if slack < 2*time.Minute {
-		slack = 2 * time.Minute
-	}
-	lateStart := laneMin.After(firstObs.Add(slack))
-	earlyEnd := laneMax.Before(lastObs.Add(-slack))
-	if !lateStart && !earlyEnd {
-		return true, ""
-	}
-	switch {
-	case lateStart && earlyEnd:
-		return false, fmt.Sprintf("%s–%s and %s–%s", fmtUTC(firstObs), fmtUTC(laneMin), fmtUTC(laneMax), fmtUTC(lastObs))
-	case lateStart:
-		return false, fmt.Sprintf("%s–%s", fmtUTC(firstObs), fmtUTC(laneMin))
-	default:
-		return false, fmt.Sprintf("%s–%s", fmtUTC(laneMax), fmtUTC(lastObs))
-	}
+	return false, a.MissingInterval
 }
 
 // ---- hypotheses view -------------------------------------------------------------------
