@@ -212,16 +212,24 @@ def poll_metrics(tok: str, instances: list[dict]) -> int:
                 v = float(val.get("doubleValue", val.get("int64Value", 0)) or 0)
                 if is_fraction:
                     v *= 100.0  # fraction → percent (canonical form)
+                # MetricEvent contract (identical to cloudmetrics.py/azure.py —
+                # the field names the Vector metrics lane keys on). This lane was
+                # never live-tested (cred-gated) and had drifted: it emitted
+                # "name" instead of "metric" and omitted vendor/signal_family/
+                # collection_path, so the sink dropped the metric name and no GCP
+                # series ever formed. Fixed 2026-07-15 on the first live GCP VM.
                 events.append({
-                    "name": canon,
+                    "observer_type": "cloud_provider",
+                    "modality_class": "device_telemetry",
+                    "collection_path": "gcp_monitoring_api",
+                    "device": inst["name"],
+                    "vendor": "gcp",
+                    "index": inst["resource_id"],
+                    "signal_family": "cloud_resource",
+                    "metric": canon,
                     "value": v,
                     "unit": unit,
                     "ts": latest.get("interval", {}).get("endTime", ""),
-                    "observer_type": "cloud_provider",
-                    "modality_class": "device_telemetry",
-                    "device": inst["name"],
-                    "index": inst["resource_id"],
-                    "labels": {"provider": "gcp", "account": PROJECT, "region": inst["region"]},
                 })
             token_next = res.get("nextPageToken")
             url = (url.split("&pageToken=")[0] + "&pageToken=" + token_next) if token_next else ""
