@@ -32,6 +32,8 @@ import ssl
 import urllib.parse
 import urllib.request
 
+import cloud_events
+import service_infer
 import trail_state
 
 TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
@@ -157,19 +159,9 @@ def poll_metrics(tok: str, vms: list[dict]) -> int:
                 val = float(p[agg.lower()])
                 if invert:
                     val = 1.0 - val  # Azure: 1=available → canonical: 1=failed
-                events.append({
-                    "observer_type": "cloud_provider",
-                    "modality_class": "device_telemetry",
-                    "collection_path": "azure_monitor_api",
-                    "device": vm["name"],
-                    "vendor": "azure",
-                    "index": vm["resource_id"],
-                    "signal_family": "cloud_resource",
-                    "metric": canon,
-                    "value": val,
-                    "unit": unit,
-                    "ts": p["timeStamp"],
-                })
+                events.append(cloud_events.metric_event(
+                    vendor="azure", device=vm["name"], index=vm["resource_id"],
+                    metric=canon, value=val, unit=unit, ts=p["timeStamp"]))
     if events:
         body = "\n".join(json.dumps(e) for e in events).encode()
         req = urllib.request.Request(METRICS_SINK, data=body,
@@ -337,13 +329,18 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
         model = models.get(arm_id_l, {})
         props = model.get("properties", {}) or {}
         tags = vm.get("tags") or {}
-        private_ips, public_ips, nic_ids = [], [], []
+        private_ips, public_ips, nic_ids, subnet_ids = [], [], [], []
         for nic in nics_by_vm.get(arm_id_l, []):
             nic_ids.append(str(nic.get("id", "")))
             for cfg in (nic.get("properties", {}) or {}).get("ipConfigurations", []):
                 cp = cfg.get("properties", {}) or {}
                 if cp.get("privateIPAddress"):
                     private_ips.append(cp["privateIPAddress"])
+                # Subnet id — the STRUCTURAL signal the service inference uses to
+                # corroborate a resource-group name guess (no tag write needed).
+                sn = str((cp.get("subnet") or {}).get("id", ""))
+                if sn:
+                    subnet_ids.append(sn)
                 pref = str((cp.get("publicIPAddress") or {}).get("id", "")).lower()
                 if pref and pref in pub_by_ref:
                     public_ips.append(pub_by_ref[pref])
@@ -359,12 +356,30 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
             "private_ips": private_ips,
             "public_ips": public_ips,
             "network_interface_ids": nic_ids,
+            # Tags are OPTIONAL metadata: absent tags never fail discovery, and no
+            # key is required. When present they are carried verbatim (below); the
+            # workload is attributed by tag if tagged, else by inference.
             "tags": tags,
+            "subnet_ids": subnet_ids,
             "owner": tags.get("owner", ""),
             "env": tags.get("environment", tags.get("env", "")),
             "source": "cloud_api",
             "confidence": "confirmed" if any(k in tags for k in APP_TAG_KEYS) else "strong",
         })
+
+    # Built-in service mapping: infer a BusinessService for every tag-less VM from
+    # resource-group naming + subnet/hostname structure (service_infer.py). The
+    # monitoring SP is READ-ONLY, so this attributes WITHOUT writing a tag. Each
+    # inference carries an explicit confidence + basis; a resource with no usable
+    # signal is left un-inferred (stays unknown → generic descriptor downstream).
+    inferred = service_infer.infer_services(resources)
+    for r in resources:
+        r.pop("subnet_ids", None)  # transient signal, not part of the stored shape
+        hit = inferred.get(r["resource_id"])
+        if hit:
+            r["inferred_service"] = hit["service"]
+            r["inferred_service_confidence"] = hit["confidence"]
+            r["inferred_service_basis"] = hit["basis"]
 
     # Live-poller provenance stamp — same contract as discover.py/gcp.py
     # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.
