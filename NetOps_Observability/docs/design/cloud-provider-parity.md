@@ -29,12 +29,12 @@ rows added below. Corrections from the audit are folded in.
 | Burstable credit visibility | ✅ CPUCreditBalance | n/a (B-series credits metric: queued check) | n/a (no burstable credit metric) |
 | Resource health lane | 🕳 (= the Health events row above) | ✅ Resource Health | 🕳 system_event lane (S) |
 | Change/audit lane | ✅ CloudTrail (paginated, filtered) | ✅ Activity Log | 🔧 Audit Logs (`poll_audit_log`) |
-| Flow logs → REJECT faults | ✅ VPC flow logs (S3+CW lanes) | 🕳 **VNet flow logs** (queued next after GCP) | 🕳 VPC Flow Logs (via Logging sink) |
-| Flow logs → ACCEPT volume rollup | ✅ `vpc_accept_rollup` | 🕳 (with VNet flow logs) | 🕳 |
-| LB access logs → LB-plane 5xx | 🔧 parser live-unvalidated (fidelity drill) | 🕳 App Gateway/Front Door access logs | 🕳 Cloud Load Balancing logs |
-| LB target health | 🕳 blocked: no ALB in lab (owner infra) | 🕳 App Gateway backend health | 🕳 backend service health |
-| WAF blocks → `cloud_waf_log` | 🔧 parser+rollup built (fidelity drill) | 🕳 Azure WAF logs | 🕳 Cloud Armor logs |
-| DNS failures → `cloud_dns_log` | 🔧 R53 Resolver parser built (fidelity drill) | 🕳 DNS Analytics / Resolver logs | 🕳 Cloud DNS logging |
+| Flow logs → REJECT faults | ✅ VPC flow logs (S3+CW lanes) | 🕳 **VNet flow logs** (queued next after GCP) | 🔧 **Firewall Rules Logging DENIED** rollup (`gcp.poll_log_lanes`, gate `GCP_FIREWALL_LOGS`) — GCP flow logs carry NO deny records (catalog KEY CORRECTION); the rule is named in-record, entity = the rule, same `cloud_flow_log`/REJECT kind |
+| Flow logs → ACCEPT volume rollup | ✅ `vpc_accept_rollup` | 🕳 (with VNet flow logs) | 🔧 `vpc_flows` → per-instance `cloud_flow_volume` rollup (gate `GCP_VPC_FLOW_LOGS`) |
+| LB access logs → LB-plane 5xx | 🔧 parser live-unvalidated (fidelity drill) | 🕳 App Gateway/Front Door access logs | 🔧 LB request-log 5xx rollup per (LB, status), `statusDetails` = LB-vs-target blame in-record (gate `GCP_LB_LOGS`) |
+| LB target health | 🕳 blocked: no ALB in lab (owner infra) | 🕳 App Gateway backend health | 🕳 backend service health (`backendServices.getHealth`, no lab infra needed — next slice) |
+| WAF blocks → `cloud_waf_log` | 🔧 parser+rollup built (fidelity drill) | 🕳 Azure WAF logs | 🔧 Cloud Armor DENY rollup per (policy, rule priority) — rides the SAME LB request-log fetch (gate `GCP_LB_LOGS`) |
+| DNS failures → `cloud_dns_log` | 🔧 R53 Resolver parser built (fidelity drill) | 🕳 DNS Analytics / Resolver logs | 🔧 `dns_queries` error rollup per (name, rcode), entity = the queried NAME (gate `GCP_DNS_LOGS`) |
 | Console deep-links | ✅ | ✅ | 🕳 `cloud_console.go` GCP formats |
 | Provider mark (official icon) | ✅ | ✅ | 🕳 official GCP icon set (vendor + terms doc) |
 | Ingestion matrix facet | ✅ | ✅ | 🔧 automatic once signals stamp `provider:gcp` (done in lanes) |
@@ -101,3 +101,15 @@ captured as test fixtures:
   advances over everything SEEN (matched or excluded) via `trail_state.py`,
   with a 15-min delivery-lag guard on empty windows — quiet periods no longer
   re-read the 20-page ceiling every cycle.
+- GCP log-fidelity lanes landed 2026-07-15 (parsers built, live validation
+  owner-gated): `gcp_log_lanes.py` (pure bounded rollups, cardinality-capped
+  at 100 keys/batch with an honest `rollup_truncated` stamp) +
+  `gcp.poll_log_lanes` (per-lane opt-in gates, per-lane checkpoints +
+  isolation) on a shared `gcp.list_log_entries` reader (the audit lane's
+  overlap + insertId-dedup + advance-over-everything-seen discipline,
+  bounded at 5 pages × 200 entries/lane/cycle; audit lane refactored onto
+  it). NO new signal kinds — all five lanes reuse the provider-blind
+  `cloud_flow_volume` / `cloud_flow_log` / `cloud_lb_log` / `cloud_waf_log` /
+  `cloud_dns_log` contract, so correlation/UI need zero changes. Cadence
+  `GCP_LOG_LANES_EVERY_S` (default 120s) keeps 4 lanes inside the 60 req/min
+  entries:list project quota.

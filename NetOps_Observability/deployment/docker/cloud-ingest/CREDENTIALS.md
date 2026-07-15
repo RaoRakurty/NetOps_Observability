@@ -107,6 +107,7 @@ scoped to the project — read-only, no mutation permission anywhere:
 | `roles/compute.viewer` | inventory writer (`gcp.write_inventory`) |
 | `roles/monitoring.viewer` | Cloud Monitoring metric lane |
 | `roles/logging.viewer` | admin-activity Audit Logs → cloud_change |
+| `roles/logging.viewer` (same grant) | log-fidelity lanes (`gcp.poll_log_lanes`): VPC flow volume, Firewall Rules Logging DENIED (the GCP REJECT lane), LB request-log 5xx + Cloud Armor blocks, Cloud DNS query errors — each an explicit opt-in (`GCP_VPC_FLOW_LOGS` / `GCP_FIREWALL_LOGS` / `GCP_LB_LOGS` / `GCP_DNS_LOGS` = `on`) and dependent on the customer having enabled that logging in GCP |
 
 Create (owner command, one-off):
 
