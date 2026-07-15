@@ -2,24 +2,18 @@
 // degrades honestly (official img → monogram → generic glyph).
 
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, cleanup } from "@testing-library/react";
 import ProviderMark, { providerAccent, PROVIDER_ACCENT, GENERIC_CLOUD_ACCENT } from "./ProviderMark";
 
 afterEach(cleanup);
 
 describe("ProviderMark", () => {
-  it("renders the OFFICIAL mark (an <img>) for aws and azure", () => {
-    const { container: aws } = render(<ProviderMark provider="aws" />);
-    expect(aws.querySelector("img")).toBeTruthy();
-    cleanup();
-    const { container: az } = render(<ProviderMark provider="azure" />);
-    expect(az.querySelector("img")).toBeTruthy();
-  });
-
-  it("falls back to a monogram badge for gcp (no vendored official mark)", () => {
-    const { container } = render(<ProviderMark provider="gcp" />);
-    expect(container.querySelector("img")).toBeNull();
-    expect(screen.getByText("G")).toBeTruthy();
+  it("renders the OFFICIAL mark (an <img>) for aws, azure and gcp", () => {
+    for (const provider of ["aws", "azure", "gcp"]) {
+      const { container } = render(<ProviderMark provider={provider} />);
+      expect(container.querySelector("img"), provider).toBeTruthy();
+      cleanup();
+    }
   });
 
   it("renders a generic cloud glyph for an unknown provider (never iconless)", () => {

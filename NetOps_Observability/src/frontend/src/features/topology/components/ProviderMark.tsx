@@ -3,24 +3,24 @@
 // Reuses the SAME vendored official icons as the RCA report path
 // (src/assets/cloud/*.svg — source + terms in assets/cloud/README.md): the mark
 // is rendered AS-IS, only composited onto a neutral tile for contrast when it is
-// transparent (Azure) — never recoloured, cropped, flipped or reshaped. Providers
-// without a vendored official mark (GCP) fall back to a monogram badge, so the
-// component is provider-parametric and degrades honestly. No external assets are
-// fetched (CSP / offline rule) — the SVGs are bundled at build time as URLs.
+// transparent (Azure, GCP) — never recoloured, cropped, flipped or reshaped.
+// Providers without a vendored official mark fall back to a monogram badge, so
+// the component is provider-parametric and degrades honestly. No external assets
+// are fetched (CSP / offline rule) — the SVGs are bundled at build time as URLs.
 
 import awsMark from "../../../assets/cloud/aws.svg";
 import azureMark from "../../../assets/cloud/azure.svg";
+import gcpMark from "../../../assets/cloud/gcp.svg";
 
 /** Official marks keyed by provider. `tile` is drawn behind a transparent mark. */
 const PROVIDER_ICON: Record<string, { href: string; tile?: string }> = {
   aws: { href: awsMark }, // ships its own navy tile
   azure: { href: azureMark, tile: "#FFFFFF" }, // transparent mark → white tile
+  gcp: { href: gcpMark, tile: "#FFFFFF" }, // transparent mark → white tile
 };
 
-/** Monogram fallback for providers with no vendored official mark. */
-const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {
-  gcp: { bg: "#FFFFFF", fg: "#4285F4", text: "G" },
-};
+/** Monogram fallback for providers with no vendored official mark (none today). */
+const PROVIDER_MARK: Record<string, { bg: string; fg: string; text: string }> = {};
 
 /** Left-rule accent per provider — lets a multi-cloud canvas sort by provider. */
 export const PROVIDER_ACCENT: Record<string, string> = {
