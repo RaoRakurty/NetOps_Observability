@@ -41,12 +41,15 @@ type rcaReport struct {
 	Validation  bool   `json:"validation"`
 	GeneratedAt string `json:"generated_at"` // UTC, canonical
 
-	States   rcaReportStates    `json:"states"`
-	Times    rcaReportTimes     `json:"times"`
-	Scope    rcaReportScope     `json:"scope"`
-	Summary  rcaReportSummaries `json:"summary"`
-	Signals  rcaSignalSummary   `json:"signal_summary"`
-	Coverage []rcaEvidenceLane  `json:"evidence_coverage"`
+	States rcaReportStates `json:"states"`
+	Times  rcaReportTimes  `json:"times"`
+	Scope  rcaReportScope  `json:"scope"`
+	// IssueContext: the resolved interpretation context (IssueContextResolver)
+	// — issue family, classifications, prohibited claims, applicable actions.
+	IssueContext rcaIssueContext    `json:"issue_context"`
+	Summary      rcaReportSummaries `json:"summary"`
+	Signals      rcaSignalSummary   `json:"signal_summary"`
+	Coverage     []rcaEvidenceLane  `json:"evidence_coverage"`
 	// Cloud change events observed in/near the window. Empty = none observed
 	// (the section is omitted, not rendered as healthy).
 	CloudChanges []rcaCloudChange `json:"cloud_changes,omitempty"`
@@ -77,6 +80,10 @@ type rcaReport struct {
 	// service/vantage names primary, addresses secondary, seam + state per hop.
 	// Available=false renders as an honest absence, never an invented diagram.
 	Topology rcaTopologyView `json:"topology"`
+
+	// mgmtTrimmed: the management summary exceeded the word cap and dropped
+	// lower-priority sentences — surfaced as a P2 quality warning.
+	mgmtTrimmed bool
 }
 
 type rcaSpineHopView struct {
@@ -757,7 +764,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRealUser           int
 		impactRealUserIndicator  int
 		realUserLanesPresent     bool
-		impactLanesPresent       bool
 		changes                  []rcaCloudChange
 		stateUps                 []rcaStateUp
 	)
@@ -839,12 +845,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		attached, _ := sig["attached"].(bool)
 		if rcaCloudChangeKinds[kind] && !attached && !strings.HasSuffix(kind, "_clear") {
 			changes = append(changes, decodeCloudChange(sig, false))
-		}
-	}
-	// any lane that could carry customer impact present at all?
-	for _, lane := range []string{"active_probe", "passive_flow"} {
-		if laneTotal[lane] > 0 {
-			impactLanesPresent = true
 		}
 	}
 	// real-user impact is observable only where real-traffic telemetry exists:
@@ -974,13 +974,22 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impactRU = "confirmed"
 	case impactRealUser > 0:
 		impactRU = "detected"
-	case impactRealUserIndicator > 0:
+	case impactRealUserIndicator > 0 || laneAnomalous["passive_flow"] > 0:
+		// P1.5: ANY anomalous real-traffic observation is an INDICATOR — the
+		// classification is lane-based, never kind-name-based, so provider flow
+		// kinds (cloud_flow_log, …) can never fall through to a no-impact claim.
+		// One uncorroborated traffic class from one observer NEVER grounds
+		// "none detected": the lane that raised the case cannot also clear it.
 		impactRU = "indicator_detected"
 	case realUserLanesPresent && laneCovers("passive_flow"):
 		impactRU = "none_detected"
 	}
 	// Overall impact summarizes the axes; it never claims more than the
 	// strongest axis. "Missing evidence is not evidence of no impact."
+	// A "none detected" CLAIM additionally requires sufficient multi-class
+	// coverage (P1.6): both the synthetic and the real-traffic axis observed
+	// the window and neither carried an anomaly. A single covering class is
+	// partial coverage — it can honestly report its own axis, never the claim.
 	impact := "unknown"
 	switch {
 	case impactRU == "confirmed":
@@ -989,8 +998,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		impact = "detected"
 	case impactRU == "indicator_detected":
 		impact = "indicator_detected"
-	case impactLanesPresent && (impactSyn == "none_detected" || impactRU == "none_detected"):
+	case impactSyn == "none_detected" && impactRU == "none_detected":
 		impact = "none_detected"
+	case impactSyn == "none_detected" || impactRU == "none_detected":
+		impact = "unknown" // partial coverage — cannot ground a no-impact claim
 	default:
 		impact = "not_observable"
 	}
@@ -1072,13 +1083,37 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
+	// ---- scope + issue context (the single resolver) ----------------------------
+	// The IssueContextResolver consolidates what used to be distributed across
+	// the action-family table, classifyServiceScope and rcaHypothesisType: one
+	// resolved context every downstream consumer reads.
+	scope := buildRcaScope(meta, anomalous, hb)
+	kindCounts := map[string]int{}
+	kindObservers := map[string]map[string]bool{}
+	for _, sig := range anomalous {
+		k := fmt.Sprintf("%v", sig["kind"])
+		kindCounts[k]++
+		if kindObservers[k] == nil {
+			kindObservers[k] = map[string]bool{}
+		}
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+			kindObservers[k][o] = true
+		}
+	}
+	ictx := resolveIssueContext(rcaIssueContextInput{
+		Analysis: analysis, RecoveryState: recoveryState, ImpactRU: impactRU,
+		Validation: validation, Hyp: hb, Targets: scope.Targets,
+		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
+		Anomalous: anomalous, Changes: changes,
+	})
+	scope.ServiceClassification = ictx.ServiceClassification
+
 	// ── dimensional analysis states ──
 	symptom := "observed"
 	if len(anomalous) > 0 {
 		symptom = "confirmed" // the anomaly itself is a fact once evidence exists
 	}
-	topIsSymptom := len(hb.Ranking.Hypotheses) > 0 &&
-		rcaHypothesisType(hb.Ranking.Hypotheses[0].ID) == "symptom classification"
+	topIsSymptom := ictx.topIsSymptom
 	faultDomain := "not_localized"
 	switch {
 	case analysis == "confirmed" && !topIsSymptom:
@@ -1219,10 +1254,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
-	// ---- scope -------------------------------------------------------------------
-	scope := buildRcaScope(meta, anomalous, hb)
-	scope.ServiceClassification = classifyServiceScope(scope.Targets)
-
 	// ---- signal summary ------------------------------------------------------------
 	sigSummary := buildSignalSummary(in.Signals, anomalous, clears, observers, peakSev, hb)
 
@@ -1236,18 +1267,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	sort.SliceStable(changes, func(i, j int) bool { return changes[i].At < changes[j].At })
 
 	// ---- hypotheses --------------------------------------------------------------------
-	kindCounts := map[string]int{}
-	kindObservers := map[string]map[string]bool{}
-	for _, sig := range anomalous {
-		k := fmt.Sprintf("%v", sig["kind"])
-		kindCounts[k]++
-		if kindObservers[k] == nil {
-			kindObservers[k] = map[string]bool{}
-		}
-		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
-			kindObservers[k][o] = true
-		}
-	}
 	hyps := buildHypothesesView(hb, kindCounts, kindObservers)
 
 	// ---- fault localization vs root cause (P1.3/P1.4, audit D2) -------------------
@@ -1330,10 +1349,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	case analysis == "confirmed" || analysis == "suspected" || analysis == "probable":
 		rootState = "under_investigation"
 	}
-	ownership := buildOwnership(analysis, loc.Localized, scope.ServiceClassification, hb, sigSummary)
+	ownership := buildOwnership(analysis, loc.Localized, ictx.ServiceClassification, hb, sigSummary, kindCounts)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
-	decision := buildDecision(analysis, incident, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
+	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
 	decision.TicketRecommended = ticketRecommended
 	decision.TicketRecommendReason = ticketRecReason
 	if ticketExecNote == "" && decision.EscalationState == "triggered" &&
@@ -1352,13 +1371,13 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
-	mgmt := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
+	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra)
 
 	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
 	actions := planActions(rcaActionInput{
 		Analysis: analysis, Incident: incident, Hyp: hb, Signals: sigSummary,
-		Decision: decision, Ownership: ownership,
-		LaneAnomalous: laneAnomalous, KindCounts: rcaKindCounts(anomalous),
+		Decision: decision, Ownership: ownership, Ctx: ictx,
+		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
 		Residual: ra.ResidualAfterComponent, Validation: validation,
 	})
 
@@ -1389,6 +1408,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		},
 		Times:             times,
 		Scope:             scope,
+		IssueContext:      ictx,
 		Summary:           rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
 		Signals:           sigSummary,
 		Coverage:          coverage,
@@ -1404,6 +1424,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		Actions:           actions,
 		Ticket:            in.Ticket,
 		Path:              in.Path,
+		mgmtTrimmed:       mgmtTrimmed,
 	}
 	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
 	// document. Errors downgrade the report type — a contradictory document is
@@ -1435,15 +1456,6 @@ func reportTypeFor(rootState, analysis string) string {
 	default:
 		return "Incident Assessment"
 	}
-}
-
-// rcaKindCounts — anomalous evidence kind → count (action-planner context).
-func rcaKindCounts(anomalous []map[string]any) map[string]int {
-	out := map[string]int{}
-	for _, sig := range anomalous {
-		out[fmt.Sprintf("%v", sig["kind"])]++
-	}
-	return out
 }
 
 // groundedLocus — the entity the grounded topo edges converge on (same rule the

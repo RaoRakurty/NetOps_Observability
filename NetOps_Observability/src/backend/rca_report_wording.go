@@ -485,7 +485,7 @@ var rcaExternalOwnerTeams = map[string]bool{
 	"Colo provider": true, "SD-WAN vendor": true,
 }
 
-func buildOwnership(analysis string, faultLocalized bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
+func buildOwnership(analysis string, faultLocalized bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary, kindCounts map[string]int) rcaOwnership {
 	own := rcaOwnership{
 		TriageOwner:      "NOC",
 		TriageReason:     "Default triage owner until the failure stage and fault domain are identified.",
@@ -518,14 +518,19 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 				// P1.10: an external provider/carrier is never handed
 				// accountability from a hypothesis token. The internal network
 				// team owns the investigation; the provider is a CANDIDATE
-				// pending demarcation (local side healthy, loss beyond the
-				// customer boundary, provider alarm or confirmation).
+				// until the demarcation evidence contract is satisfied
+				// (provider-side alarm + independent-vantage evidence beyond
+				// the customer boundary — assessDemarcation).
 				own.TechnicalOwner = "NetOps"
 				own.ExternalCandidate = team
-				own.Demarcation = "local_checks_pending"
-				own.DemarcationBasis = "No demarcation evidence has been captured: local egress, route/neighbor state and independent-vantage reachability must localize the loss beyond the customer boundary before provider accountability is assigned."
-				own.EscalationOwner = "NetOps"
-				own.EscalationReason = fmt.Sprintf("the fault localizes toward the %s domain; %s escalation is pending provider-demarcation confirmation", strings.ToLower(team), strings.ToLower(team))
+				own.Demarcation, own.DemarcationBasis = assessDemarcation(team, kindCounts)
+				if own.Demarcation == "provider_boundary_confirmed" {
+					own.EscalationOwner = team
+					own.EscalationReason = fmt.Sprintf("demarcation is confirmed — a provider-side alarm and independent-vantage evidence localize the fault beyond the customer boundary, so %s escalation is warranted", strings.ToLower(team))
+				} else {
+					own.EscalationOwner = "NetOps"
+					own.EscalationReason = fmt.Sprintf("the fault localizes toward the %s domain; %s escalation is pending provider-demarcation confirmation", strings.ToLower(team), strings.ToLower(team))
+				}
 			case analysis == "confirmed" && faultLocalized && team == "Application team" &&
 				serviceClassification == "external / third-party service":
 				// §12: the internal Application team does not own a third-party
@@ -557,7 +562,7 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 
 // ---- decision --------------------------------------------------------------------------------
 
-func buildDecision(analysis, incident, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
+func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
 	polName := pol.Name
 	if !configured {
 		polName = pol.Name + " (platform default — no tenant policy configured)"
@@ -587,9 +592,21 @@ func buildDecision(analysis, incident, impact, monitoring string, generatedAt st
 	case analysis == "confirmed" && incident == "active":
 		d.Decision = "Open incident"
 		d.Reason = "Customer impact and fault are confirmed by independent evidence; restoration workflow should begin."
-	case incident == "recovered" || incident == "closed":
+	case incident == "recovered" || incident == "closed" || incident == "no_longer_observed":
+		// Monitoring copy is RECOVERY-STATE-AWARE (P1.5/P1.6 residue): "has
+		// recovered" may only ever render on observed recovery evidence. A
+		// window that merely quiesced is "no longer observed" — never recovered.
 		d.Decision = "Monitor"
-		d.Reason = "The condition has recovered. The case is held in a monitoring window; it reopens on recurrence and closes clean otherwise."
+		switch recoveryState {
+		case "explicitly_confirmed":
+			d.Reason = "The condition has recovered. The case is held in a monitoring window; it reopens on recurrence and closes clean otherwise."
+		case "not_applicable":
+			d.Reason = "This case was merged into another; lifecycle and monitoring continue on the surviving case."
+		case "component_only", "failed_validation":
+			d.Reason = "The condition is no longer observed, but recovery is not confirmed end-to-end — recovery evidence did not cover every participating scope. The case reopens on recurrence."
+		default: // inferred | not_observed — no recovery evidence: never claim recovery
+			d.Reason = "The condition is no longer observed; no recovery evidence was captured. The case reopens on recurrence."
+		}
 	case analysis == "probable" || (analysis == "suspected" && impact == "detected"):
 		d.Decision = "Investigate"
 		d.Reason = "Evidence is aligned but not independently confirmed. Validate the missing evidence before opening a customer incident."
@@ -705,13 +722,75 @@ func buildWhyWording(analysis string, hb rcaHypBlob, sig rcaSignalSummary, laneA
 
 // ---- management summary (§3) -----------------------------------------------------------------------
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) string {
-	var b strings.Builder
+// rcaMgmtWordCap is the management summary's word ceiling (130–160-word
+// target). Over the cap, whole LOWER-PRIORITY sentences drop — never a
+// mid-sentence truncation, never the what-happened / is-it-still-happening /
+// impact sentences.
+const rcaMgmtWordCap = 160
+
+// rcaSummarySentence is one management-summary sentence with its trim priority.
+type rcaSummarySentence struct {
+	text      string
+	protected bool // never dropped
+	dropRank  int  // among unprotected sentences, HIGHER rank drops first
+}
+
+// rcaComposeSummary joins the sentences, enforcing the word cap by dropping
+// unprotected sentences in deterministic priority order (highest dropRank
+// first; ties drop the later sentence first). Returns the text and whether
+// trimming occurred.
+func rcaComposeSummary(sents []rcaSummarySentence, capWords int) (string, bool) {
+	words := func() int {
+		n := 0
+		for _, s := range sents {
+			if s.text != "" {
+				n += len(strings.Fields(s.text))
+			}
+		}
+		return n
+	}
+	trimmed := false
+	for words() > capWords {
+		drop := -1
+		for i, s := range sents {
+			if s.protected || s.text == "" {
+				continue
+			}
+			if drop == -1 || s.dropRank >= sents[drop].dropRank {
+				drop = i
+			}
+		}
+		if drop == -1 {
+			break // only protected sentences remain — never truncate mid-sentence
+		}
+		sents[drop].text = ""
+		trimmed = true
+	}
+	var parts []string
+	for _, s := range sents {
+		if s.text != "" {
+			parts = append(parts, s.text)
+		}
+	}
+	return strings.Join(parts, " "), trimmed
+}
+
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment) (string, bool) {
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
 		subject = scope.Services[0]
 	} else if len(scope.Targets) > 0 {
 		subject = aiEntityLabel(scope.Targets[0])
+	}
+	// Sentences are collected with their trim priority (length discipline):
+	// what-happened / still-happening / impact are PROTECTED; the monitoring
+	// tail drops first (rank 3), then cause status (2), then the decision (1).
+	var sents []rcaSummarySentence
+	addP := func(text string) {
+		sents = append(sents, rcaSummarySentence{text: strings.TrimSpace(text), protected: true})
+	}
+	add := func(rank int, text string) {
+		sents = append(sents, rcaSummarySentence{text: strings.TrimSpace(text), dropRank: rank})
 	}
 	// what happened + when
 	when := times.FirstObserved
@@ -725,76 +804,83 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 			src = "automated checks"
 		}
 	}
-	fmt.Fprintf(&b, "At %s, %s detected a condition of “%s” affecting %s. ", when, src, orDefault(problemNoun, "telemetry anomaly"), subject)
+	addP(fmt.Sprintf("At %s, %s detected a condition of “%s” affecting %s.", when, src, orDefault(problemNoun, "telemetry anomaly"), subject))
 	// still happening / duration. Component vs service recovery are stated
 	// SEPARATELY (P1.2): a conflicting timeline is explained, never averaged.
 	switch {
 	case ra.ResidualAfterComponent && times.ComponentRecoveredAt != "" && !times.RecoveredCaptured:
-		fmt.Fprintf(&b, "A component recovered at %s, but end-to-end service checks continued failing through %s — the incident entered residual degradation rather than full recovery, and service recovery is not confirmed. ",
-			times.ComponentRecoveredAt, orDefault(times.LastAnomalous, "the end of the window"))
+		addP(fmt.Sprintf("A component recovered at %s, but end-to-end service checks continued failing through %s — the incident entered residual degradation rather than full recovery, and service recovery is not confirmed.",
+			times.ComponentRecoveredAt, orDefault(times.LastAnomalous, "the end of the window")))
 		if incident == "active" && times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0 {
-			fmt.Fprintf(&b, "The condition is ongoing (%s elapsed). ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
+			addP(fmt.Sprintf("The condition is ongoing (%s elapsed).", fmtDur(time.Duration(times.DurationMS)*time.Millisecond)))
 		}
 	case times.RecoveredCaptured && times.DurationMS > 0:
-		fmt.Fprintf(&b, "The condition recovered after %s. ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
+		addP(fmt.Sprintf("The condition recovered after %s.", fmtDur(time.Duration(times.DurationMS)*time.Millisecond)))
 	case incident == "no_longer_observed":
 		last := times.LastAnomalous
 		if last == "" {
 			last = times.WindowEnd + " UTC"
 		}
-		fmt.Fprintf(&b, "Anomalous signals were last observed at %s; no recovery evidence was captured, so recovery is NOT confirmed. ", last)
+		addP(fmt.Sprintf("Anomalous signals were last observed at %s; no recovery evidence was captured, so recovery is NOT confirmed.", last))
 	case incident == "recovered" || incident == "closed":
-		b.WriteString("The condition is no longer observed; the exact recovery time was not captured. ")
+		addP("The condition is no longer observed; the exact recovery time was not captured.")
 	case times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0:
-		fmt.Fprintf(&b, "The condition is ongoing (%s elapsed). ", fmtDur(time.Duration(times.DurationMS)*time.Millisecond))
+		addP(fmt.Sprintf("The condition is ongoing (%s elapsed).", fmtDur(time.Duration(times.DurationMS)*time.Millisecond)))
 	default:
-		b.WriteString("The condition is under observation. ")
+		addP("The condition is under observation.")
 	}
 	// impact — ALWAYS telemetry-qualified (§3/§12); axes never conflated (P1.5)
 	switch impact {
 	case "confirmed":
-		b.WriteString("Customer impact is confirmed by independent evidence, including real user traffic. ")
+		addP("Customer impact is confirmed by independent evidence, including real user traffic.")
 	case "detected":
 		if impactRealUser == "confirmed" || impactRealUser == "detected" {
-			b.WriteString("Customer-impact indicators were detected but are not independently confirmed. ")
+			addP("Customer-impact indicators were detected but are not independently confirmed.")
 		} else {
 			// §5: synthetic checks model a representative transaction — they do
 			// not prove real users failed the same one.
-			b.WriteString("Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. ")
+			addP("Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient.")
 		}
 	case "indicator_detected":
-		b.WriteString("A real-traffic indicator was detected — traffic behaviour deviated from baseline — but actual customer impact is unconfirmed. ")
+		addP("A real-traffic indicator was detected — traffic behaviour deviated from baseline — but actual customer impact is unconfirmed.")
 	case "none_detected":
-		b.WriteString("No customer impact was detected within available telemetry coverage. ")
+		addP("No customer impact was detected within available telemetry coverage.")
 	case "not_observable":
-		b.WriteString("Customer impact could not be assessed — impact telemetry coverage was unavailable or insufficient for this window. ")
+		addP("Customer impact could not be assessed — impact telemetry coverage was unavailable or insufficient for this window.")
 	default:
-		b.WriteString("Customer impact is unknown. ")
+		if impactSyn == "none_detected" || impactRealUser == "none_detected" {
+			// Partial coverage (P1.6): one axis observed cleanly, the other did
+			// not cover the window — the covered axis is reported honestly, the
+			// overall no-impact CLAIM is not made.
+			addP("No impact signature appeared in the covered evidence, but impact-relevant coverage was incomplete for this window, so absence of customer impact is not established.")
+		} else {
+			addP("Customer impact is unknown.")
+		}
 	}
 	// cause status — a confirmed FAULT is never called a confirmed ROOT CAUSE (P1.3)
 	switch analysis {
 	case "confirmed":
-		b.WriteString("The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation. ")
+		add(2, "The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation.")
 	case "probable":
-		b.WriteString("A probable fault domain is identified, pending independent confirmation. ")
+		add(2, "A probable fault domain is identified, pending independent confirmation.")
 	case "inconclusive":
-		b.WriteString("The leading explanation was ruled out by contradicting evidence; the cause is currently inconclusive. ")
+		add(2, "The leading explanation was ruled out by contradicting evidence; the cause is currently inconclusive.")
 	default:
-		b.WriteString("The cause remains unconfirmed because independent evidence classes did not corroborate the observations. ")
+		add(2, "The cause remains unconfirmed because independent evidence classes did not corroborate the observations.")
 	}
 	// decision + next
-	fmt.Fprintf(&b, "Decision: %s — %s ", decision.Decision, decision.Reason)
+	add(1, fmt.Sprintf("Decision: %s — %s", decision.Decision, decision.Reason))
 	switch {
 	case monitoring == "active":
-		fmt.Fprintf(&b, "Monitoring is active until %s, with automatic escalation if the condition recurs or customer-impact evidence appears.", times.MonitoringUntil)
+		add(3, fmt.Sprintf("Monitoring is active until %s, with automatic escalation if the condition recurs or customer-impact evidence appears.", times.MonitoringUntil))
 	case monitoring == "completed":
-		b.WriteString("The post-recovery monitoring window has completed without recurrence.")
+		add(3, "The post-recovery monitoring window has completed without recurrence.")
 	case incident == "recovered" || incident == "recovering":
-		fmt.Fprintf(&b, "A %s monitoring window follows recovery, with automatic escalation if the condition recurs or customer-impact evidence appears.", fmtDur(monitorWindow))
+		add(3, fmt.Sprintf("A %s monitoring window follows recovery, with automatic escalation if the condition recurs or customer-impact evidence appears.", fmtDur(monitorWindow)))
 	default:
-		b.WriteString("Escalation follows the policy thresholds stated in the decision section.")
+		add(3, "Escalation follows the policy thresholds stated in the decision section.")
 	}
-	return b.String()
+	return rcaComposeSummary(sents, rcaMgmtWordCap)
 }
 
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------

@@ -128,10 +128,15 @@ func TestRcaReportActiveCheckOnlyRecovered(t *testing.T) {
 	}
 	// impact telemetry-qualified: no bare "no impact" — synthetic-only evidence
 	// states the synthetic scope and the unconfirmed real-user axis explicitly.
+	// (P1.6: a single covering axis is PARTIAL coverage — the overall no-impact
+	// claim is not made; the covered axis is reported honestly instead.)
 	if !strings.Contains(rep.Summary.Management, "Synthetic path impact is confirmed") &&
-		!strings.Contains(rep.Summary.Management, "within available telemetry coverage") &&
+		!strings.Contains(rep.Summary.Management, "coverage was incomplete") &&
 		!strings.Contains(rep.Summary.Management, "could not be assessed") {
 		t.Fatalf("management impact wording not telemetry-qualified: %q", rep.Summary.Management)
+	}
+	if rep.States.Impact == "none_detected" {
+		t.Fatal("single-axis coverage must not ground a no-impact claim (P1.6)")
 	}
 }
 
@@ -573,5 +578,74 @@ func TestRcaReportDimensionalStatesAndEscalation(t *testing.T) {
 	// a symptom-classification hypothesis is labeled as one
 	if got := rcaHypothesisType("sig.ent.app.saas-experience-degraded"); got != "symptom classification" {
 		t.Fatalf("type = %q", got)
+	}
+}
+
+// Management-summary length discipline (mission item 4): compose-then-trim to
+// the 130–160-word target — whole sentences drop in deterministic priority
+// order; the what-happened / still-happening / impact sentences never drop;
+// trimming is surfaced as a P2 quality warning.
+func TestManagementSummaryTrimOverflow(t *testing.T) {
+	sent := func(words int, marker string) string {
+		return marker + " " + strings.Repeat("w ", words-1)
+	}
+	sents := []rcaSummarySentence{
+		{text: sent(40, "WHAT"), protected: true},
+		{text: sent(40, "STILL"), protected: true},
+		{text: sent(40, "IMPACT"), protected: true},
+		{text: sent(40, "CAUSE"), dropRank: 2},
+		{text: sent(30, "DECISION"), dropRank: 1},
+		{text: sent(30, "MONITORING"), dropRank: 3},
+	}
+	out, trimmed := rcaComposeSummary(sents, rcaMgmtWordCap)
+	if !trimmed {
+		t.Fatal("220-word summary did not trim")
+	}
+	if n := len(strings.Fields(out)); n > rcaMgmtWordCap {
+		t.Fatalf("still %d words after trim (cap %d)", n, rcaMgmtWordCap)
+	}
+	for _, protected := range []string{"WHAT", "STILL", "IMPACT"} {
+		if !strings.Contains(out, protected) {
+			t.Fatalf("protected sentence %q dropped: %s", protected, out)
+		}
+	}
+	// deterministic order: MONITORING (rank 3) drops first, then CAUSE (rank 2)
+	if strings.Contains(out, "MONITORING") || strings.Contains(out, "CAUSE") {
+		t.Fatalf("drop priority violated: %s", out)
+	}
+	if !strings.Contains(out, "DECISION") {
+		t.Fatalf("decision dropped although cap already met: %s", out)
+	}
+
+	// under the cap: nothing trims, text joins unchanged
+	short := []rcaSummarySentence{
+		{text: "One.", protected: true}, {text: "Two.", dropRank: 1},
+	}
+	out2, trimmed2 := rcaComposeSummary(short, rcaMgmtWordCap)
+	if trimmed2 || out2 != "One. Two." {
+		t.Fatalf("under-cap compose changed text: %q trimmed=%v", out2, trimmed2)
+	}
+
+	// protected-only overflow: never truncate mid-sentence — stays over cap
+	// (the validator raises management_summary_over_length instead).
+	huge := []rcaSummarySentence{{text: sent(200, "WHAT"), protected: true}}
+	out3, trimmed3 := rcaComposeSummary(huge, rcaMgmtWordCap)
+	if trimmed3 || len(strings.Fields(out3)) != 200 {
+		t.Fatalf("protected sentence was altered: %d words trimmed=%v", len(strings.Fields(out3)), trimmed3)
+	}
+
+	// end-to-end: a trimmed report carries the P2 warning
+	rep := rcaReport{Summary: rcaReportSummaries{Management: "short"}, mgmtTrimmed: true,
+		States: rcaReportStates{Incident: "active", Recovery: "not_observed"}}
+	rep.Decision.EscalationState = "armed"
+	q := validateRcaReport(&rep, rcaTestNow)
+	found := false
+	for _, w := range q.Warnings {
+		if w.Code == "management_summary_trimmed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("trimmed summary missing P2 warning: %+v", q.Warnings)
 	}
 }

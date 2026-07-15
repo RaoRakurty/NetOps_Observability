@@ -178,6 +178,7 @@ type rcaActionInput struct {
 	Signals       rcaSignalSummary
 	Decision      rcaDecision
 	Ownership     rcaOwnership
+	Ctx           rcaIssueContext // resolved issue context (applicable families)
 	LaneAnomalous map[string]int
 	KindCounts    map[string]int
 	Residual      bool // anomalies continued after a component recovery
@@ -220,7 +221,9 @@ func planActions(in rcaActionInput) []rcaAction {
 			applicable := true
 			expected := ""
 			for _, f := range fams {
-				if !rcaFamilyEvidencePresent(f, in.KindCounts, in.LaneAnomalous) {
+				// the resolved issue context is the single applicability
+				// authority (IssueContextResolver.applicable_actions)
+				if !in.Ctx.familyApplicable(f.Name) {
 					applicable = false
 					break
 				}

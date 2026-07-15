@@ -153,3 +153,47 @@ report/ticket/escalation emission:
 The Python engine deliberately stays fact-producing (open/merged/closed +
 signals); recovery semantics remain a read-time derivation so historical
 reports are reconstructed under the corrected rules too.
+
+## 4. Follow-ups closed in the P1-residue pass (2026-07-15, second series)
+
+The four deferred P1 items plus the live rendering residue were closed:
+
+- **Impact-coverage gating (P1.5/P1.6 residue, live P-261D09).** Real-user
+  impact indicator classification is lane-based (any anomalous `passive_flow`
+  evidence — provider kinds like `cloud_flow_log` included); the overall
+  `none_detected` claim requires BOTH impact axes to have covered the window
+  cleanly. Monitoring/decision copy is recovery-state-aware ("has recovered"
+  only on explicit recovery evidence; otherwise "no longer observed; no
+  recovery evidence was captured; reopens on recurrence"). New validator
+  checks: `no_impact_claim_without_sufficient_coverage`,
+  `recovery_claim_without_evidence`.
+- **Emitter-side quality gate.** `ticketFactConsistencyIssues`
+  (rca_consistency.go) validates the already-loaded facts;
+  `decideSweepAction` holds create AND update actions for every destination
+  system with an observable `suppression_reason` (structured log, never a
+  silent drop). §11 validation-scenario/canary suppression unchanged.
+- **IssueContextResolver.** `rca_issue_context.go` consolidates the
+  distributed resolver (action-family table + classifyServiceScope +
+  rcaHypothesisType) into `resolveIssueContext` → issue_family,
+  service_classification, active_failure_stage, topology_domain,
+  participating_modalities, path_type, cloud_provider, environment,
+  required_confirmation_gates, prohibited_claims, applicable_actions;
+  embedded in the report as `issue_context`.
+- **Management-summary length discipline.** Compose-then-trim to the
+  130–160-word target; deterministic sentence-priority drops (monitoring tail
+  → cause status → decision), protected what-happened/still-happening/impact
+  sentences; P2 warnings `management_summary_trimmed` /
+  `management_summary_over_length`.
+- **Demarcation promotion path (D8).** `assessDemarcation` promotes
+  `provider_boundary_confirmed` ONLY when a provider-side alarm AND
+  independent-vantage evidence both participate. **Kind-name contract**:
+  `provider_alarm`, `carrier_alarm` (any external provider/carrier) and the
+  existing `cloud_health`/`cloud_resource_health` (cloud provider only) as
+  alarm classes; `independent_vantage_probe` as the beyond-boundary vantage
+  class. The correlation catalog (`src/correlation/catalog.py`) currently
+  produces NONE of `provider_alarm`/`carrier_alarm`/`independent_vantage_probe`
+  — **Python producers for these kinds are a future lane**; until they land,
+  promotion can occur only for cloud cases that carry `cloud_health` /
+  `cloud_resource_health` plus a future vantage producer, so external
+  escalation ownership effectively stays pending in production. Never promote
+  carrier ownership outside this evidence list.

@@ -36,6 +36,10 @@ type corrTicketFacts struct {
 	Signature         string
 	WindowStart       time.Time
 	WindowEnd         time.Time
+	// ConsistencyIssues: P1 fact-level contradictions found while projecting
+	// the facts (ticketFactConsistencyIssues — the emitter-side quality gate).
+	// Non-empty holds every RCA-derived emission with an observable reason.
+	ConsistencyIssues []string
 }
 
 // persistenceSeconds is how long the incident has been observed (window span).
@@ -127,6 +131,12 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 	// observed window → persistence.
 	f.WindowStart = parseCorrTime(meta["window_start"])
 	f.WindowEnd = parseCorrTime(meta["window_end"])
+
+	// Emitter-side consistency gate (audit D11 follow-through): the same facts
+	// every destination system's message is built from are validated once, here,
+	// so the sweeper/notify emitters can hold contradictory state with a reason.
+	f.ConsistencyIssues = ticketFactConsistencyIssues(
+		strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", meta["state"]))), sigRows)
 	return f
 }
 

@@ -124,6 +124,20 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 		errf("impact_confirmed_without_real_user_evidence", "states.impact",
 			"overall impact may be confirmed only when real-user impact is confirmed; a synthetic failure proves only its own scope")
 	}
+	// P1.6: a "no impact" CLAIM requires sufficient multi-class coverage — every
+	// impact-relevant axis observed the window and none carried an anomaly. One
+	// covering class is partial coverage; one anomalous class is an indicator.
+	if st.Impact == "none_detected" && (st.ImpactSynthetic != "none_detected" || st.ImpactRealUser != "none_detected") {
+		errf("no_impact_claim_without_sufficient_coverage", "states.impact",
+			"impact none_detected requires every impact axis to have covered the window cleanly (synthetic=%s, real_user=%s)",
+			st.ImpactSynthetic, st.ImpactRealUser)
+	}
+	// P1.5 residue: monitoring/decision copy may claim "has recovered" ONLY on
+	// observed, reconciled recovery evidence — a quiesced window never recovered.
+	if strings.Contains(strings.ToLower(rep.Decision.Reason), "has recovered") && st.Recovery != "explicitly_confirmed" {
+		errf("recovery_claim_without_evidence", "decision.reason",
+			"decision/monitoring copy claims recovery while recovery is %q", st.Recovery)
+	}
 
 	// ---- P1.9 hypothesis taxonomy ------------------------------------------------------
 	for i, h := range rep.Hypotheses {
@@ -214,6 +228,16 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 			}
 		}
 	}
+	// ---- management-summary length discipline (P2) --------------------------------
+	if rep.mgmtTrimmed {
+		warnf("management_summary_trimmed", "summary.management",
+			"summary exceeded the %d-word cap; lower-priority sentences were dropped", rcaMgmtWordCap)
+	}
+	if n := len(strings.Fields(rep.Summary.Management)); n > rcaMgmtWordCap {
+		warnf("management_summary_over_length", "summary.management",
+			"summary is %d words after trimming (cap %d) — protected sentences alone exceed the cap", n, rcaMgmtWordCap)
+	}
+
 	scan("summary.management", rep.Summary.Management)
 	for _, kv := range rep.Summary.Noc {
 		scan("summary.noc", kv.V)
@@ -226,6 +250,71 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 
 	q.Passed = len(q.Errors) == 0
 	return q
+}
+
+// ticketFactConsistencyIssues is the EMITTER-side consistency gate (P1 gate at
+// the sweeper/notify boundary): a cheap, single-pass validation of the already-
+// loaded facts an RCA-derived external message would be built from. It never
+// recomposes the report — it checks the same P1 invariants the report gate
+// enforces, at the fidelity the raw slice offers. A non-empty result means the
+// composed state contradicts itself and MUST NOT be emitted to an external
+// system; callers suppress with an observable, structured reason — never a
+// silent drop. Generic: cross-field invariants only, no case/signature matches.
+func ticketFactConsistencyIssues(state string, sigRows []map[string]any) []string {
+	var (
+		firstAnomaly, lastAnomaly time.Time
+		lastRecovery              time.Time
+		stateUpTimes              []time.Time
+		anomalous                 int
+	)
+	for _, sig := range sigRows {
+		kind := fmt.Sprintf("%v", sig["kind"])
+		ts, tsOK := parseChTS(fmt.Sprintf("%v", sig["ts"]))
+		if rcaIsRecoveryStateSignal(sig) {
+			if tsOK {
+				stateUpTimes = append(stateUpTimes, ts)
+			}
+			continue
+		}
+		if strings.HasSuffix(kind, "_clear") {
+			ct, ok := parseChTS(fmt.Sprintf("%v", sig["clear_ts"]))
+			if !ok {
+				ct, ok = ts, tsOK
+			}
+			if ok && ct.After(lastRecovery) {
+				lastRecovery = ct
+			}
+			continue
+		}
+		if attached, _ := sig["attached"].(bool); !attached {
+			continue
+		}
+		anomalous++
+		if tsOK {
+			if firstAnomaly.IsZero() || ts.Before(firstAnomaly) {
+				firstAnomaly = ts
+			}
+			if ts.After(lastAnomaly) {
+				lastAnomaly = ts
+			}
+		}
+	}
+	// a semantic up-state is recovery evidence only AFTER the first anomaly —
+	// the same rule the report builder applies (§17).
+	for _, t := range stateUpTimes {
+		if !firstAnomaly.IsZero() && t.After(firstAnomaly) && t.After(lastRecovery) {
+			lastRecovery = t
+		}
+	}
+	var issues []string
+	// P1.1: a closed object whose recovery evidence PRECEDES later anomalies
+	// carries a recovery claim its own evidence contradicts.
+	if state == "closed" && !lastRecovery.IsZero() && lastAnomaly.After(lastRecovery) {
+		issues = append(issues, fmt.Sprintf(
+			"recovered_before_last_anomaly: closure recovery evidence at %s precedes anomalous evidence through %s",
+			fmtUTC(lastRecovery), fmtUTC(lastAnomaly)))
+	}
+	return issues
 }
 
 // applyReportQualityGate runs the validator and downgrades a contradictory
