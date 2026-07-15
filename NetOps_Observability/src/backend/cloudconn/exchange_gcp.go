@@ -29,14 +29,14 @@ import (
 )
 
 const (
-	gcpTokenEndpoint       = "https://oauth2.googleapis.com/token" // #nosec G101 -- endpoint URL, not a credential
-	gcpSTSEndpoint         = "https://sts.googleapis.com/v1/token" // #nosec G101 -- endpoint URL, not a credential
-	gcpIAMCredentialsBase  = "https://iamcredentials.googleapis.com"
+	gcpTokenEndpoint       = "https://oauth2.googleapis.com/token"   // #nosec G101 -- endpoint URL, not a credential
+	gcpSTSEndpoint         = "https://sts.googleapis.com/v1/token"   // #nosec G101 -- endpoint URL, not a credential
+	gcpIAMCredentialsBase  = "https://iamcredentials.googleapis.com" // #nosec G101 -- endpoint URL, not a credential
 	gcpReadOnlyScope       = "https://www.googleapis.com/auth/cloud-platform.read-only"
-	gcpJWTBearerGrant      = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-	gcpTokenExchangeGrant  = "urn:ietf:params:oauth:grant-type:token-exchange"
-	gcpAccessTokenType     = "urn:ietf:params:oauth:token-type:access_token" // #nosec G101 -- RFC 8693 type URN
-	gcpSubjectJWTTokenType = "urn:ietf:params:oauth:token-type:jwt"          // #nosec G101 -- RFC 8693 type URN
+	gcpJWTBearerGrant      = "urn:ietf:params:oauth:grant-type:jwt-bearer"     // #nosec G101 -- OAuth grant-type URN, not a credential
+	gcpTokenExchangeGrant  = "urn:ietf:params:oauth:grant-type:token-exchange" // #nosec G101 -- OAuth grant-type URN, not a credential
+	gcpAccessTokenType     = "urn:ietf:params:oauth:token-type:access_token"   // #nosec G101 -- RFC 8693 type URN
+	gcpSubjectJWTTokenType = "urn:ietf:params:oauth:token-type:jwt"            // #nosec G101 -- RFC 8693 type URN
 )
 
 // GCPSTSExchanger implements TokenExchanger for GCP. All fields injectable;
@@ -134,7 +134,7 @@ func (x *GCPSTSExchanger) exchangeSAKey(ctx context.Context, req ExchangeRequest
 	payload := form.Encode()
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderGCP, func() (*http.Request, error) {
-		hreq, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(payload))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(payload))
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func (x *GCPSTSExchanger) exchangeWIF(ctx context.Context, req ExchangeRequest) 
 	payload := form.Encode()
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderGCP, func() (*http.Request, error) {
-		hreq, err := http.NewRequest(http.MethodPost, stsURL, strings.NewReader(payload))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, stsURL, strings.NewReader(payload))
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +226,7 @@ func (x *GCPSTSExchanger) impersonate(ctx context.Context, serviceAccount, feder
 	endpoint := base + "/v1/projects/-/serviceAccounts/" + url.PathEscape(serviceAccount) + ":generateAccessToken"
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderGCP, func() (*http.Request, error) {
-		hreq, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(reqBody)))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(reqBody)))
 		if err != nil {
 			return nil, err
 		}

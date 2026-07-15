@@ -105,7 +105,7 @@ func (x *AzureEntraExchanger) Exchange(ctx context.Context, req ExchangeRequest)
 	payload := form.Encode()
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderAzure, func() (*http.Request, error) {
-		hreq, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(payload))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(payload))
 		if err != nil {
 			return nil, err
 		}

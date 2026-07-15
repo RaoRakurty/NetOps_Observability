@@ -118,7 +118,7 @@ func (x *AWSSTSExchanger) Exchange(ctx context.Context, req ExchangeRequest) (Sc
 	payload := []byte(form.Encode())
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderAWS, func() (*http.Request, error) {
-		hreq, err := http.NewRequest(http.MethodPost, endpoint+"/", strings.NewReader(string(payload)))
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/", strings.NewReader(string(payload)))
 		if err != nil {
 			return nil, err
 		}

@@ -257,7 +257,7 @@ func sleepBackoff(ctx context.Context, attempt int) bool {
 	}
 	d := exchangeRetryBase << (attempt - 1)
 	// ±50% jitter; math/rand is fine here (scheduling, not security).
-	jitter := time.Duration(rand.Int64N(int64(d))) - d/2
+	jitter := time.Duration(rand.Int64N(int64(d))) - d/2 // #nosec G404 -- retry jitter, not a security context
 	t := time.NewTimer(d + jitter)
 	defer t.Stop()
 	select {
