@@ -21,6 +21,7 @@ import cloudmetrics
 import discover
 import gcp
 import seam_aws
+import trail_state
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 LOG_GROUP = os.environ.get("FLOW_LOG_GROUP", "")  # CloudWatch lane (needs delivery role)
@@ -228,11 +229,13 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         jlog("cloudtrail page ceiling hit — window truncated", pages=20)
 
     for e in events:
+        # The checkpoint anchors on everything SEEN, matched or excluded —
+        # advancing only over matched events pinned trail_ts during quiet
+        # periods and re-read 20 pages of SSM chatter every cycle (trail_state).
+        newest = max(newest, e["EventTime"].timestamp())
         name = e.get("EventName", "")
         if not name.startswith(TRAIL_PREFIXES) or name in TRAIL_EXCLUDE:
             continue
-        ts = e["EventTime"].timestamp()
-        newest = max(newest, ts)
         detail = json.loads(e.get("CloudTrailEvent", "{}"))
         resources = e.get("Resources") or []
         rid = resources[0]["ResourceName"] if resources else name
@@ -255,8 +258,8 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         sent += 1
     if sent:
         producer.flush(10)
-        st["trail_ts"] = newest
         jlog("cloudtrail changes produced", count=sent)
+    st["trail_ts"] = trail_state.advance_checkpoint(start, newest, bool(events), time.time())
 
 
 def _iso_minutes_ago(minutes: int) -> str:
