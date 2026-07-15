@@ -63,21 +63,33 @@ _creds = None
 
 
 def token() -> str:
-    """Access token via the service account (google-auth handles the RS256 JWT
-    exchange; cached + auto-refreshed)."""
+    """Access token from the configured credential — EITHER a service-account
+    key (RS256 JWT exchange) OR an authorized-user credential (refresh-token
+    flow). google.auth.load_credentials_from_file transparently handles both,
+    so a consumer GCP account that is blocked from creating SA keys (org policy
+    iam.disableServiceAccountKeyCreation with no organization to override it)
+    can still feed the poller via `gcloud auth application-default login`.
+    Cached + auto-refreshed."""
     global _creds
-    from google.auth.transport.requests import Request  # deferred: lane may be off
-    from google.oauth2 import service_account
+    import google.auth  # deferred: lane may be off
+    from google.auth.transport.requests import Request
     if _creds is None:
-        _creds = service_account.Credentials.from_service_account_file(
+        _creds, _ = google.auth.load_credentials_from_file(
             CREDS_PATH, scopes=["https://www.googleapis.com/auth/cloud-platform"])
     if not _creds.valid:
         _creds.refresh(Request())
     return _creds.token
 
 
+def _gcp_headers(tok: str) -> dict:
+    """Common request headers. X-Goog-User-Project attributes quota/billing to
+    our project — REQUIRED when the credential is an authorized-user login (no
+    resource project of its own), harmless for a service-account key."""
+    return {"Authorization": f"Bearer {tok}", "X-Goog-User-Project": PROJECT}
+
+
 def _get_json(url: str, tok: str) -> dict:
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+    req = urllib.request.Request(url, headers=_gcp_headers(tok))
     with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
         return json.loads(resp.read().decode())
 
@@ -245,7 +257,7 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
     }).encode()
     req = urllib.request.Request(
         "https://logging.googleapis.com/v2/entries:list", data=body,
-        headers={"Authorization": f"Bearer {token()}", "Content-Type": "application/json"})
+        headers={**_gcp_headers(token()), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
         res = json.loads(resp.read().decode())
     n, newest = 0, since
