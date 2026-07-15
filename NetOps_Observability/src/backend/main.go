@@ -93,6 +93,8 @@ type server struct {
 	tktMergedRedirects    atomic.Int64
 	seams               *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn           cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker         *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
 	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline    incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
@@ -501,6 +503,15 @@ func newServer() *server {
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
 	srv.services = newServiceStore()
+	// Cloud Connector framework: tenant-safe connector store (pg or in-memory) +
+	// the Identity Broker (scoped short-lived provider tokens; the ONLY component
+	// that decrypts connector secrets, via the existing envelope Vault).
+	srv.cloudConn = newCloudConnStore()
+	srv.cloudBroker = newCloudIdentityBroker(srv.cloudConn, vault, func(e AuditEvent) {
+		if srv.audit != nil {
+			srv.audit.Record(e)
+		}
+	})
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
@@ -989,6 +1000,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
 	mux.HandleFunc("/api/cloud/changes", s.handleCloudChanges)
 	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
+	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
+	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)
+	mux.HandleFunc("/api/cloud/connectors", s.handleCloudConnectors)
+	mux.HandleFunc("/api/cloud/connectors/", s.handleCloudConnectorByID)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)

@@ -1,0 +1,151 @@
+package cloudconn
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// azureAdapter implements CloudIdentityProvider for Azure. The preferred method is
+// Entra Workload Identity Federation: Correlix presents its own OIDC workload
+// assertion and receives a short-lived Azure token — no stored client secret. A
+// certificate credential is the non-federated fallback; a client secret is a
+// labeled legacy option. Runtime uses the app/workload identity, NEVER delegated
+// user tokens (admin-consent OAuth is a SETUP step that grants app roles).
+type azureAdapter struct{}
+
+func (azureAdapter) Provider() Provider { return ProviderAzure }
+
+func (a azureAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {
+	r := ValidationResult{OK: true}
+	if cfg.Provider != ProviderAzure {
+		r.Add(SeverityError, "provider_mismatch", "identity provider is not azure", "Recreate the connector with provider=azure.")
+		return r
+	}
+	if cfg.Method.IsProhibited() {
+		r.Add(SeverityError, "method_prohibited", "an Azure admin username/password is never a connector credential", "Use Workload Identity Federation (recommended), a certificate, or a legacy client secret.")
+		return r
+	}
+	if !MethodAllowed(ProviderAzure, cfg.Method) {
+		r.Add(SeverityError, "method_unsupported", "auth method "+string(cfg.Method)+" is not supported for Azure", "Use Workload Identity Federation (recommended), a certificate, or a client secret.")
+		return r
+	}
+	// Common identifiers required for every Azure method.
+	if strings.TrimSpace(cfg.AzureTenantID) == "" {
+		r.Add(SeverityError, "azure_tenant_missing", "the Entra (Azure AD) tenant id is required", "Copy the Directory (tenant) ID from the app registration.")
+	}
+	if strings.TrimSpace(cfg.ClientID) == "" {
+		r.Add(SeverityError, "client_id_missing", "the application (client) id is required", "Copy the Application (client) ID from the app registration.")
+	}
+
+	switch cfg.Method {
+	case AuthMethodWorkloadFederation:
+		if strings.TrimSpace(cfg.Issuer) == "" || strings.TrimSpace(cfg.FederatedSubject) == "" {
+			r.Add(SeverityError, "federation_incomplete", "workload federation needs the issuer + subject of the Correlix workload identity", "Deploy the federated credential from the setup step; the framework supplies issuer/subject.")
+		}
+		if strings.TrimSpace(cfg.Audience) == "" {
+			r.Add(SeverityWarning, "audience_default", "no audience set; the Entra default api://AzureADTokenExchange will be used", "")
+		}
+	case AuthMethodCertificate:
+		if strings.TrimSpace(cfg.CertThumbprint) == "" {
+			r.Add(SeverityError, "cert_thumbprint_missing", "the certificate thumbprint is required", "Upload the certificate to the app registration and paste its thumbprint.")
+		}
+	case AuthMethodClientSecret:
+		r.Add(SeverityWarning, "legacy_method", "a client secret is a legacy credential — not recommended", "Prefer Workload Identity Federation: no stored secret, short-lived tokens.")
+		if cfg.LegacySecretRef == "" {
+			r.Add(SeverityError, "secret_ref_missing", "the encrypted client-secret reference is required", "Submit the client secret; it is encrypted immediately and never re-displayed.")
+		}
+	}
+	return r
+}
+
+func (a azureAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (SetupBundle, error) {
+	if pack.Provider != ProviderAzure {
+		return SetupBundle{}, &ContractError{Code: "pack_provider_mismatch", Msg: "capability pack is not an Azure pack"}
+	}
+	issuer := orPlaceholder(cfg.Anchor.OIDCIssuer, "https://<correlix-issuer>")
+	subject := orPlaceholder(cfg.Anchor.OIDCSubject, "correlix:connector:<connector-id>")
+	audience := orPlaceholder(cfg.Audience, "api://AzureADTokenExchange")
+	sub := "<SUBSCRIPTION_ID>"
+
+	bundle := SetupBundle{
+		Provider: ProviderAzure,
+		Method:   cfg.Method,
+		Summary:  fmt.Sprintf("Register a Correlix app in Entra, grant it read-only roles (%s), and federate it to the Correlix workload identity — no stored secret.", pack.FullID()),
+		Steps: []string{
+			"Option A (recommended): click Connect with Microsoft to run admin-consent OAuth — it registers the app and grants the read-only roles below in one flow. Consent grants APP roles; Correlix's runtime uses the app/workload identity, never your user token.",
+			"Option B (manual): create an app registration, then add the federated credential JSON below (Workload Identity Federation).",
+			"Assign the built-in Reader + Monitoring Reader roles at the subscription scope.",
+			"Paste the tenant id + client id back into Correlix and run Validate Trust.",
+		},
+		Artifacts: []SetupArtifact{
+			{Kind: "federated_credential", Title: "Entra federated credential (Workload Identity Federation)", Format: "json", Content: azureFederatedCredential(issuer, subject, audience)},
+			{Kind: "azure_cli", Title: "Azure CLI — app + least-privilege role assignment", Format: "text", Content: azureCLI(sub, pack)},
+			{Kind: "manual", Title: "Admin-consent OAuth (Connect with Microsoft)", Format: "text", Content: azureAdminConsent(pack)},
+		},
+	}
+	return bundle, nil
+}
+
+func azureFederatedCredential(issuer, subject, audience string) string {
+	return `{
+  "name": "correlix-workload-federation",
+  "issuer": "` + issuer + `",
+  "subject": "` + subject + `",
+  "description": "Correlix workload identity — short-lived federated tokens, no client secret",
+  "audiences": ["` + audience + `"]
+}
+`
+}
+
+func azureCLI(sub string, pack CapabilityPack) string {
+	var b strings.Builder
+	b.WriteString("# Register the Correlix observer app and grant read-only roles (" + pack.FullID() + ")\n")
+	b.WriteString("APP_ID=$(az ad app create --display-name correlix-observer --query appId -o tsv)\n")
+	b.WriteString("az ad sp create --id \"$APP_ID\"\n")
+	b.WriteString("SUB=" + sub + "\n")
+	b.WriteString("az role assignment create --assignee \"$APP_ID\" --role \"Reader\" --scope \"/subscriptions/$SUB\"\n")
+	b.WriteString("az role assignment create --assignee \"$APP_ID\" --role \"Monitoring Reader\" --scope \"/subscriptions/$SUB\"\n")
+	b.WriteString("# Then add the federated credential (see the federated_credential artifact):\n")
+	b.WriteString("az ad app federated-credential create --id \"$APP_ID\" --parameters correlix-fic.json\n")
+	b.WriteString("# Reader + Monitoring Reader are read-only. Never grant Owner/Contributor.\n")
+	return b.String()
+}
+
+func azureAdminConsent(pack CapabilityPack) string {
+	return "Connect with Microsoft (admin-consent OAuth):\n\n" +
+		"1. A Global Administrator opens the Correlix consent link and approves the read-only role grant.\n" +
+		"2. Consent registers the multi-tenant Correlix app in your Entra tenant and grants the built-in\n" +
+		"   Reader + Monitoring Reader roles for " + pack.FullID() + " (read-only).\n" +
+		"3. IMPORTANT: consent grants APPLICATION roles. Correlix's runtime authenticates as the\n" +
+		"   app / workload identity via Workload Identity Federation — it never uses a signed-in\n" +
+		"   user's delegated token, and no user session is stored.\n" +
+		"4. Return to Correlix and run Validate Trust.\n"
+}
+
+func (a azureAdapter) ExchangeCredential(_ context.Context, _ ExchangeRequest) (ScopedToken, error) {
+	// Runtime path (documented follow-up): present the Correlix workload OIDC
+	// assertion to Entra (client_assertion_type=jwt-bearer, federated credential)
+	// → short-lived Azure AD token for management.azure.com. Certificate/secret
+	// variants use the same token endpoint with the respective client credential.
+	return ScopedToken{}, ErrProviderExchangeDeferred
+}
+
+func (a azureAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {
+	return nil, ErrProviderExchangeDeferred
+}
+
+func (a azureAdapter) ValidateCapabilities(_ context.Context, _ CapabilityCheckRequest) (CapabilityReport, error) {
+	return CapabilityReport{}, ErrProviderExchangeDeferred
+}
+
+func (a azureAdapter) Revoke(_ context.Context, _ RevokeRequest) error {
+	return ErrProviderExchangeDeferred
+}
+
+func orPlaceholder(v, placeholder string) string {
+	if strings.TrimSpace(v) == "" {
+		return placeholder
+	}
+	return v
+}
