@@ -35,6 +35,8 @@ import os
 import urllib.parse
 import urllib.request
 
+import trail_state
+
 PROJECT = os.environ.get("GCP_PROJECT", "")
 CREDS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
@@ -247,8 +249,15 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
     with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
         res = json.loads(resp.read().decode())
     n, newest = 0, since
+    saw = False
     new_seen: list = []
     for e in res.get("entries") or []:
+        # Checkpoint anchors on everything SEEN — matched, excluded or deduped.
+        # Advancing only past matched entries pinned `since` through windows of
+        # excluded-method churn (the trail_ts defect class; see trail_state.py).
+        # The insertId overlap dedup makes advancing over skipped entries safe.
+        saw = True
+        newest = max(newest, str(e.get("timestamp", "")))
         insert_id = str(e.get("insertId", ""))
         if insert_id:
             new_seen.append(insert_id)
@@ -259,7 +268,6 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
         if not method or method.endswith(CHANGE_EXCLUDE_SUFFIXES):
             continue
         ts = str(e.get("timestamp", ""))
-        newest = max(newest, ts)
         producer.send("netops.cloud", {
             "kind": "cloud_change",
             "tenant_id": tenant,
@@ -278,6 +286,14 @@ def poll_audit_log(tok: str, producer, tenant: str, since: str,
             },
         })
         n += 1
+    # A cleanly-fetched EMPTY window still advances (delivery-lagged now) so
+    # quiet periods stay one page wide instead of growing without bound.
+    if not saw:
+        lagged = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(seconds=trail_state.DELIVERY_LAG_S))
+        newest = trail_state.advance_checkpoint_any(
+            since, newest, False,
+            lagged.replace(microsecond=0).isoformat().replace("+00:00", "Z"))
     # trim the dedup window to the entries the next overlap can re-read
     return n, newest, new_seen[-500:]
 

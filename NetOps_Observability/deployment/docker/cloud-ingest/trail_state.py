@@ -26,6 +26,18 @@ def advance_checkpoint(start: float, newest_seen: float, saw_events: bool, now: 
     - empty window: anchor on now - DELIVERY_LAG_S, so quiet periods re-scan at
       most the delivery-lag window (1 page) instead of an ever-growing one.
     """
+    return advance_checkpoint_any(start, newest_seen, saw_events, now - DELIVERY_LAG_S)
+
+
+def advance_checkpoint_any(start, newest_seen, saw_events: bool, lagged_now):
+    """Ordering-generic checkpoint advance — same rule for epoch-seconds,
+    epoch-millis and ISO-8601 string lanes (each lane passes its own
+    delivery-lagged 'now' in ITS units/format). The audit that followed the
+    trail_ts fix found the identical matched-only defect in the Azure activity
+    and GCP audit lanes, and an empty-window pin in the CloudWatch flow lane —
+    one rule now serves them all: advance over anything SEEN; an empty window
+    advances to the lagged now; never regress.
+    """
     if saw_events:
         return max(start, newest_seen)
-    return max(start, now - DELIVERY_LAG_S)
+    return max(start, lagged_now)

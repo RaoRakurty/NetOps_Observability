@@ -32,6 +32,8 @@ import ssl
 import urllib.parse
 import urllib.request
 
+import trail_state
+
 TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET", "")
@@ -216,6 +218,13 @@ def poll_resource_health(tok: str, producer, tenant: str) -> int:
     return n
 
 
+def _lagged_now_iso() -> str:
+    """now - delivery lag, in the same second-resolution Z format the
+    checkpoints use (lexicographic max stays consistent)."""
+    t = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=trail_state.DELIVERY_LAG_S)
+    return t.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def poll_activity_log(tok: str, producer, tenant: str, since: str) -> tuple[int, str]:
     """Activity Log → cloud_change (the CloudTrail equivalent)."""
     flt = urllib.parse.quote(f"eventTimestamp ge '{since}'")
@@ -223,20 +232,28 @@ def poll_activity_log(tok: str, producer, tenant: str, since: str) -> tuple[int,
            f"/eventtypes/management/values?api-version=2015-04-01&$filter={flt}")
     newest = since
     n = 0
+    saw = False
+    clean = True
     while url:
         try:
             res = _get_json(url, tok)
         except Exception:  # noqa: BLE001
+            clean = False
             break
         for e in res.get("value", []):
+            # The checkpoint anchors on everything SEEN — matched or excluded.
+            # Advancing only on matched events pinned `since` through windows
+            # of pure bookkeeping churn (the trail_ts defect class; see
+            # trail_state.py).
+            ts = str(e.get("eventTimestamp", ""))
+            saw = True
+            if ts > newest:
+                newest = ts
             op = str((e.get("operationName") or {}).get("value", "")).lower()
             if not op or op.startswith(CHANGE_EXCLUDE_PREFIXES):
                 continue
             if str((e.get("status") or {}).get("value", "")) not in ("Succeeded", "Failed"):
                 continue  # 'Started' is bookkeeping, not a completed change
-            ts = e.get("eventTimestamp", "")
-            if ts > newest:
-                newest = ts
             producer.send("netops.cloud", {
                 "kind": "cloud_change",
                 "tenant_id": tenant,
@@ -256,6 +273,10 @@ def poll_activity_log(tok: str, producer, tenant: str, since: str) -> tuple[int,
             })
             n += 1
         url = res.get("nextLink") or ""
+    # A cleanly-fetched EMPTY window still advances (to the delivery-lagged
+    # now) so quiet periods stay one page wide; a failed fetch never advances.
+    if clean and not saw:
+        newest = trail_state.advance_checkpoint_any(since, newest, False, _lagged_now_iso())
     return n, newest
 
 

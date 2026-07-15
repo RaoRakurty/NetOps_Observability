@@ -137,8 +137,13 @@ def poll_flow_logs(logs, st: dict) -> None:
     except logs.exceptions.ResourceNotFoundException:
         jlog("flow log group missing (not enabled yet?)", group=LOG_GROUP)
         return
+    # Checkpoint advances on EVERY successful poll (all events are written, so
+    # `newest` covers everything seen); an empty window anchors on the lagged
+    # now instead of pinning `flow_ts` and re-scanning an ever-growing range
+    # (same defect class as trail_ts — see trail_state.py). Millisecond lane.
+    st["flow_ts"] = int(trail_state.advance_checkpoint_any(
+        start, newest, written > 0, (time.time() - trail_state.DELIVERY_LAG_S) * 1000))
     if written:
-        st["flow_ts"] = newest
         jlog("flow events appended", count=written)
 
 
