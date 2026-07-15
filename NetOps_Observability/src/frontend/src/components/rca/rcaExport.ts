@@ -302,8 +302,10 @@ function reportHtml(d: RcaCase, objId: string): string {
   /* force background colours/graphics (pills, callouts, table headers, topology
      node fills) to print — browsers drop backgrounds by default on Save-as-PDF. */
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font: 13px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; }
+  /* color-scheme: an about:blank popup/iframe INHERITS the opener's color-scheme
+     (dark app theme → dark canvas). This is a light paper document — pin it. */
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; color-scheme: light; background: #fff; }
+  body { font: 13px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; background: #fff; }
   .doc { max-width: 740px; margin: 0 auto; padding: 8px 0 32px; }
   header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom: 2px solid #172033; padding-bottom: 10px; margin-bottom: 16px; }
   header.rpt .brand { font-weight: 800; letter-spacing: .5px; font-size: 13px; color:#334155; }

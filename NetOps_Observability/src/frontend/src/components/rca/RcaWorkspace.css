@@ -19,6 +19,41 @@
 }
 .rca-ws * { box-sizing: border-box; }
 
+/* Document theme lock — the RCA sheet is a PAPER DOCUMENT: it must render
+ * identically whichever app theme (Dark/Light) is active. Embedded slot cards
+ * (Iris AI, Network-Path topology, ticket/debug panels) are built from shared
+ * app components that consume the global theme tokens, so the dark themes'
+ * [data-theme] token overrides (styles.css) leaked black surfaces into the
+ * white sheet. Re-pin every theme-swapped token the embedded content consumes
+ * to the light/document palette. NOTE: :root ALIAS tokens (--panel/--muted/
+ * --good/--bad…) must be re-pinned too — a custom property resolves its var()
+ * references where it is DECLARED (on :root), so redefining only the base
+ * tokens would not reach the already-resolved inherited aliases. */
+.rca-ws {
+  color-scheme: light;
+  /* canvas + text */
+  --bg: var(--rw-bg); --fg: var(--rw-text); --hover: rgba(17, 24, 39, 0.05);
+  /* surfaces + borders (+ legacy aliases) */
+  --surface: var(--rw-panel); --surface-2: var(--rw-panel2); --overlay: var(--rw-panel);
+  --border: var(--rw-line); --border-strong: #cdd4e0;
+  --panel: var(--rw-panel); --panel-solid: var(--rw-panel); --panel-border: var(--rw-line);
+  /* text ramp (+ alias) */
+  --fg-muted: var(--rw-muted); --fg-subtle: var(--rw-muted2); --muted: var(--rw-muted);
+  /* status hues — light values (+ legacy aliases onto the document palette) */
+  --ok: #059669; --crit: #e11d48; --info: #2563eb; --ack: #6639ba;
+  --good: var(--rw-green); --warn: var(--rw-orange); --bad: var(--rw-red);
+  /* accent family — document indigo, not the dark themes' pale violet */
+  --accent: #4f46e5; --accent-bright: #6366f1; --accent-2: #8b5cf6;
+  --accent-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  --accent-soft: rgba(99, 102, 241, 0.10); --accent-soft-2: rgba(139, 92, 246, 0.10);
+  --accent-ring: rgba(99, 102, 241, 0.35);
+  /* elevation + topology label ink (dark themes force #fff) */
+  --shadow-1: 0 1px 2px rgba(17, 24, 39, 0.05);
+  --shadow-2: 0 4px 14px rgba(17, 24, 39, 0.08);
+  --shadow-pop: 0 12px 32px rgba(17, 24, 39, 0.16);
+  --topo-node-fg: var(--rw-text);
+}
+
 /* topbar */
 .rca-ws .rw-topbar { display: flex; justify-content: space-between; gap: 16px; align-items: center;
   border-bottom: 1px solid var(--rw-line); padding: 12px 4px; margin-bottom: 14px; flex-wrap: wrap; }

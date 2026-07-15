@@ -271,7 +271,10 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <style>
   @page { size: A4; margin: 16mm 12mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font: 12.5px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; }
+  /* This is a light paper document: pin the color-scheme + canvas so a dark
+     browser/OS preference (or a dark-themed embedder) can never restyle it. */
+  html { color-scheme: light; background: #fff; }
+  body { font: 12.5px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #172033; margin: 0; background: #fff; }
   .doc { max-width: 760px; margin: 0 auto; padding: 4px 0 24px; }
   header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #172033; padding-bottom:9px; margin-bottom:14px; }
   header.rpt .brand { font-weight:800; letter-spacing:.5px; font-size:13px; color:#334155; }
