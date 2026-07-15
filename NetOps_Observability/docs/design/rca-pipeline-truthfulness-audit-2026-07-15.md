@@ -197,3 +197,86 @@ The four deferred P1 items plus the live rendering residue were closed:
   `cloud_resource_health` plus a future vantage producer, so external
   escalation ownership effectively stays pending in production. Never promote
   carrier ownership outside this evidence list.
+
+---
+
+## Addendum — merged-incident lifecycle hardening (2026-07-15, P-E22C5E pass)
+
+Production-hardening pass using the merged case **P-E22C5E** as one generic
+regression fixture. No case-specific logic was added; every change is a
+cross-field derivation that works for LAN/WAN/SD-WAN/cloud/routing/flow/SaaS/
+app/device-health/multi-domain incidents.
+
+### The core defect
+`buildRcaReport` collapsed a merged source to `incident="closed"` +
+`recovery="not_applicable"` — losing the reconciled service-recovery state and
+implying the case was operationally closed. A merged child is a **tombstone**,
+not a closed incident.
+
+### What changed (all in `src/backend/`)
+- **`rca_merge.go` (new).** `rcaIncidentMerge` (structured merge record:
+  source/surviving ids + display ids, merged_at/reason/actor/policy read
+  opportunistically from meta, transferred evidence ids, authoritative-state
+  fields, per-side-effect responsibilities, statement). `buildIncidentMerge`,
+  `rcaMergeStatement`, `applyMergeToDecision`, `rcaMergeIncidentState`, and the
+  canonical lifecycle vocabulary `rcaCanonicalLifecycles`
+  (candidate/active/recovering/monitoring/resolved/closed/merged/superseded/
+  duplicate).
+- **`rca_report.go`.** `state ∈ {merged,superseded}` → `incident="merged"`
+  (canonical `Lifecycle`), recovery is NO LONGER overridden to `not_applicable`
+  (the reconciled service-recovery state is inherited by the survivor); ticket
+  execution → `transferred_to_survivor`; `reportTypeFor` merge-aware
+  ("Incident Analysis — Merged / Fault Confirmed"). Also: incident-severity
+  basis (`SeverityIncidentBasis`, non-circular), fault-localization evidence now
+  renders ACTUAL matched case evidence (`supportingCaseEvidence`) not the
+  humanized signature clause.
+- **`rca_report_wording.go`.** NOC quick-read leads with the merge (Incident
+  state / Surviving incident / Operational ownership; ticket → "Managed by
+  surviving incident P-XXXXXX"). Management summary carries the protected merge
+  sentence. Evidence coverage now computes window coverage
+  (`rcaLaneWindowCoverage`): a lane that observed cleanly but did not span the
+  incident window is **partial / inconclusive** with a missing interval — never
+  a green Normal. Hypothesis confirmation gate: `observation_state="confirmed"`
+  requires no outstanding required evidence. `rcaSeverityIncidentBasis`.
+- **`rca_actions.go`.** A merged source issues NO independent restoration/
+  diagnostic actions — one P2 coordination action pointing at the survivor.
+- **`rca_consistency.go`.** Merge validation (replaces closure validation for a
+  merged source): P1 errors `merged_without_surviving_incident`,
+  `merged_source_remains_authoritative`,
+  `merged_source_side_effects_not_transferred`,
+  `merged_source_monitoring_active`, `merged_source_independent_ticket`,
+  `merged_source_independent_escalation`; plus
+  `hypothesis_confirmed_with_missing_evidence` and
+  `rule_expression_in_fault_localization`. A contradictory merged report is
+  downgraded to a draft (no final PDF).
+- **`rca_report_html.go`.** Merge badge + "Merged case" banner + merge kv;
+  path-boundary rendering: a RESPONDING hop is never painted red / "BREAK
+  POINT" — it is the "LAST RESPONDING HOP" with the failure/visibility boundary
+  drawn AFTER it (`rcaHopRespondingWithMark`); coverage table shows
+  coverage-quality + missing interval; incident-severity basis rendered.
+- **`rca_report_http.go`.** Resolves the TERMINAL surviving incident via the
+  audited, tenant-scoped, cycle-safe `resolveMergeChain` (never crosses the
+  owning tenant boundary) and passes it to the pure builder.
+
+### Schema / migration
+**None required.** All new fields are derived at report-compose time from the
+existing `corr_objects.state` + `merged_into` (already in ClickHouse). Optional
+merge metadata (`merged_at`, `merge_reason`, `merge_actor`, `merge_policy_id`,
+`merge_confidence`) is read opportunistically from meta and renders honest
+absence when absent — historical rows reconstruct unchanged. IF a future
+correlation producer records these, add them as **additive** columns to
+`netops.corr_objects` and stamp them in `src/correlation/`; no read-path change
+is needed. Backward-compatible by construction.
+
+### Tenant isolation
+Survivor resolution reuses `resolveMergeChain`, which is tenant-scoped and stops
+at the last same-owner id on any cross-tenant merge pointer (logged as an
+INVARIANT VIOLATION). The builder is pure and only ever renders the
+handler-resolved (same-tenant) survivor. A merge pointer that resolves to a
+foreign-owned row is never followed, so a merged source can never surface
+another tenant's surviving incident, evidence, ticket or PDF.
+
+### Tests
+`rca_merge_test.go`, `rca_path_boundary_test.go`, `rca_coverage_test.go`,
+`rca_hypothesis_gate_test.go` extend the shared harness; the property test and
+every scenario still pass the consistency gate. Full `go test .` green (~230s).
