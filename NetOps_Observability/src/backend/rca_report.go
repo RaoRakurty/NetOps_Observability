@@ -1349,7 +1349,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	case analysis == "confirmed" || analysis == "suspected" || analysis == "probable":
 		rootState = "under_investigation"
 	}
-	ownership := buildOwnership(analysis, loc.Localized, ictx.ServiceClassification, hb, sigSummary)
+	ownership := buildOwnership(analysis, loc.Localized, ictx.ServiceClassification, hb, sigSummary, kindCounts)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
 	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)

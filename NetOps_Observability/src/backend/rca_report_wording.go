@@ -485,7 +485,7 @@ var rcaExternalOwnerTeams = map[string]bool{
 	"Colo provider": true, "SD-WAN vendor": true,
 }
 
-func buildOwnership(analysis string, faultLocalized bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary) rcaOwnership {
+func buildOwnership(analysis string, faultLocalized bool, serviceClassification string, hb rcaHypBlob, sig rcaSignalSummary, kindCounts map[string]int) rcaOwnership {
 	own := rcaOwnership{
 		TriageOwner:      "NOC",
 		TriageReason:     "Default triage owner until the failure stage and fault domain are identified.",
@@ -518,14 +518,19 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 				// P1.10: an external provider/carrier is never handed
 				// accountability from a hypothesis token. The internal network
 				// team owns the investigation; the provider is a CANDIDATE
-				// pending demarcation (local side healthy, loss beyond the
-				// customer boundary, provider alarm or confirmation).
+				// until the demarcation evidence contract is satisfied
+				// (provider-side alarm + independent-vantage evidence beyond
+				// the customer boundary — assessDemarcation).
 				own.TechnicalOwner = "NetOps"
 				own.ExternalCandidate = team
-				own.Demarcation = "local_checks_pending"
-				own.DemarcationBasis = "No demarcation evidence has been captured: local egress, route/neighbor state and independent-vantage reachability must localize the loss beyond the customer boundary before provider accountability is assigned."
-				own.EscalationOwner = "NetOps"
-				own.EscalationReason = fmt.Sprintf("the fault localizes toward the %s domain; %s escalation is pending provider-demarcation confirmation", strings.ToLower(team), strings.ToLower(team))
+				own.Demarcation, own.DemarcationBasis = assessDemarcation(team, kindCounts)
+				if own.Demarcation == "provider_boundary_confirmed" {
+					own.EscalationOwner = team
+					own.EscalationReason = fmt.Sprintf("demarcation is confirmed — a provider-side alarm and independent-vantage evidence localize the fault beyond the customer boundary, so %s escalation is warranted", strings.ToLower(team))
+				} else {
+					own.EscalationOwner = "NetOps"
+					own.EscalationReason = fmt.Sprintf("the fault localizes toward the %s domain; %s escalation is pending provider-demarcation confirmation", strings.ToLower(team), strings.ToLower(team))
+				}
 			case analysis == "confirmed" && faultLocalized && team == "Application team" &&
 				serviceClassification == "external / third-party service":
 				// §12: the internal Application team does not own a third-party

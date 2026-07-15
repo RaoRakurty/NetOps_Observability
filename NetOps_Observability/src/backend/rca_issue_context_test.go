@@ -137,3 +137,47 @@ func TestResolveIssueContextNoSignatureAndValidation(t *testing.T) {
 		}
 	}
 }
+
+// assessDemarcation — the P1.10 promotion contract: provider-side alarm AND
+// independent-vantage evidence, with provider-scoped alarm kinds.
+func TestAssessDemarcation(t *testing.T) {
+	cases := []struct {
+		name  string
+		team  string
+		kinds map[string]int
+		want  string
+	}{
+		{"alarm + vantage promotes carrier", "ISP / carrier",
+			map[string]int{"provider_alarm": 1, "independent_vantage_probe": 1, "probe_loss": 2},
+			"provider_boundary_confirmed"},
+		{"carrier alarm kind promotes too", "Carrier",
+			map[string]int{"carrier_alarm": 1, "independent_vantage_probe": 1},
+			"provider_boundary_confirmed"},
+		{"cloud health speaks only for the cloud provider", "ISP / carrier",
+			map[string]int{"cloud_health": 1, "independent_vantage_probe": 1},
+			"local_checks_pending"},
+		{"cloud health + vantage promotes cloud provider", "Cloud provider",
+			map[string]int{"cloud_health": 1, "independent_vantage_probe": 1},
+			"provider_boundary_confirmed"},
+		{"alarm alone stays pending", "ISP / carrier",
+			map[string]int{"provider_alarm": 1, "probe_loss": 3},
+			"local_checks_pending"},
+		{"vantage alone stays pending", "ISP / carrier",
+			map[string]int{"independent_vantage_probe": 1, "probe_loss": 3},
+			"local_checks_pending"},
+		{"no evidence stays pending", "ISP / carrier",
+			map[string]int{"probe_loss": 3},
+			"local_checks_pending"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state, basis := assessDemarcation(tc.team, tc.kinds)
+			if state != tc.want {
+				t.Fatalf("state = %q, want %q (basis %q)", state, tc.want, basis)
+			}
+			if basis == "" {
+				t.Fatal("basis must always be stated")
+			}
+		})
+	}
+}

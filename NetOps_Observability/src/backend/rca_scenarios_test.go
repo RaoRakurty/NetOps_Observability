@@ -930,6 +930,63 @@ func TestScenarioMatrixGeneric(t *testing.T) {
 				}
 			},
 		}),
+		// (34) demarcation PROMOTION path (P1.10 / audit D8): a provider-side
+		// alarm AND independent-vantage evidence beyond the customer boundary
+		// satisfy the demarcation evidence contract — only then may the external
+		// carrier own escalation.
+		mk(rcaScenario{
+			name: "provider demarcation promotion",
+			meta: testMeta("open", "confirmed", "sig.ent.middle-mile.dia-egress-loss",
+				testHyp("sig.ent.middle-mile.dia-egress-loss", 0.9, "confirmed",
+					[]string{"probe_loss", "provider_alarm"}, nil, nil, "isp", false)),
+			sigs: []map[string]any{
+				sigProbeLoss("2026-07-12 18:00:00", "crit", "branch-vantage", "8.8.8.8"),
+				testSig("provider_alarm", "control_plane", "carrier-noc-feed", "seam", "dia-1", "crit", "2026-07-12 18:01:00", true, nil),
+				testSig("independent_vantage_probe", "active_probe", "ext-vantage-1", "path", "ext-vantage-1->peer", "high", "2026-07-12 18:02:00", true, nil),
+			},
+			incident: "active",
+			custom: func(t *testing.T, rep rcaReport) {
+				if rep.Ownership.Demarcation != "provider_boundary_confirmed" {
+					t.Fatalf("demarcation = %q (basis %q)", rep.Ownership.Demarcation, rep.Ownership.DemarcationBasis)
+				}
+				if rep.Ownership.EscalationOwner != "ISP / carrier" {
+					t.Fatalf("escalation owner = %q, want the demarcated carrier", rep.Ownership.EscalationOwner)
+				}
+				if rep.Ownership.TechnicalOwner != "NetOps" || rep.Ownership.ExternalCandidate != "ISP / carrier" {
+					t.Fatalf("ownership split wrong: %+v", rep.Ownership)
+				}
+				// the prohibited claim lifts only under the evidence contract
+				for _, c := range rep.IssueContext.ProhibitedClaims {
+					if c == "external_provider_accountability_without_demarcation" {
+						t.Fatalf("prohibition still present after demarcation: %v", rep.IssueContext.ProhibitedClaims)
+					}
+				}
+			},
+		}),
+		// (35) provider alarm WITHOUT independent-vantage evidence — the
+		// demarcation list is not satisfied; carrier stays a candidate.
+		mk(rcaScenario{
+			name: "provider alarm alone stays pending",
+			meta: testMeta("open", "confirmed", "sig.ent.middle-mile.dia-egress-loss",
+				testHyp("sig.ent.middle-mile.dia-egress-loss", 0.9, "confirmed",
+					[]string{"probe_loss", "provider_alarm"}, nil, nil, "isp", false)),
+			sigs: []map[string]any{
+				sigProbeLoss("2026-07-12 18:00:00", "crit", "branch-vantage", "8.8.8.8"),
+				testSig("provider_alarm", "control_plane", "carrier-noc-feed", "seam", "dia-1", "crit", "2026-07-12 18:01:00", true, nil),
+			},
+			incident: "active",
+			custom: func(t *testing.T, rep rcaReport) {
+				if rep.Ownership.Demarcation != "local_checks_pending" {
+					t.Fatalf("demarcation = %q", rep.Ownership.Demarcation)
+				}
+				if rcaExternalOwnerTeams[rep.Ownership.EscalationOwner] {
+					t.Fatalf("carrier handed ownership without the demarcation evidence list: %+v", rep.Ownership)
+				}
+				if !strings.Contains(rep.Ownership.DemarcationBasis, "independent-vantage") {
+					t.Fatalf("basis must name the missing evidence: %q", rep.Ownership.DemarcationBasis)
+				}
+			},
+		}),
 		// (30) historical/legacy object with empty blobs
 		mk(rcaScenario{
 			name: "historical legacy compat",

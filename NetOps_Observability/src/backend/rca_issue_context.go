@@ -13,6 +13,7 @@ package main
 // before the consolidation (the scenario suite is the proof).
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -59,6 +60,75 @@ type rcaIssueContext struct {
 // familyApplicable reports whether an action family's evidence participated in
 // this incident (the P1.13 gate the planner enforces).
 func (c rcaIssueContext) familyApplicable(name string) bool { return c.applicable[name] }
+
+// ---- demarcation evidence contract (P1.10 promotion, audit D8) -----------------
+//
+// An external provider/carrier may be handed escalation accountability ONLY
+// when the demarcation evidence list is satisfied — BOTH of:
+//
+//  (a) a provider-side alarm/health declaration participating in the case.
+//      Kind contract: `provider_alarm`, `carrier_alarm` (generic classes a
+//      future correlation producer emits — none exist in the catalog today),
+//      plus the EXISTING provider-declared health kinds `cloud_health` /
+//      `cloud_resource_health`, which speak ONLY for the cloud provider.
+//  (b) independent-vantage reachability evidence localizing the loss beyond
+//      the customer boundary. Kind contract: `independent_vantage_probe`.
+//
+// Local checks alone, a hypothesis owner token, seam grounding or a confirmed
+// verdict NEVER promote — carrier ownership without this list is prohibited.
+
+// rcaProviderAlarmKinds: provider-side alarm evidence and the external teams
+// each kind may speak for ("" key set = any external team).
+var rcaProviderAlarmKinds = map[string]map[string]bool{
+	"provider_alarm":        nil, // any external provider/carrier
+	"carrier_alarm":         nil,
+	"cloud_health":          {"Cloud provider": true},
+	"cloud_resource_health": {"Cloud provider": true},
+}
+
+// rcaIndependentVantageKinds: beyond-boundary reachability evidence classes.
+var rcaIndependentVantageKinds = map[string]bool{
+	"independent_vantage_probe": true,
+}
+
+// assessDemarcation evaluates the demarcation evidence for one external
+// candidate team over the case's participating anomalous evidence kinds.
+// Returns (state, basis): provider_boundary_confirmed only when BOTH evidence
+// classes participated; local_checks_pending otherwise, with a basis that
+// names what is still missing.
+func assessDemarcation(team string, kindCounts map[string]int) (string, string) {
+	alarm, vantage := "", ""
+	kinds := make([]string, 0, len(kindCounts))
+	for k := range kindCounts {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds) // deterministic evidence naming
+	for _, k := range kinds {
+		if teams, ok := rcaProviderAlarmKinds[k]; ok && alarm == "" {
+			if teams == nil || teams[team] {
+				alarm = k
+			}
+		}
+		if rcaIndependentVantageKinds[k] && vantage == "" {
+			vantage = k
+		}
+	}
+	switch {
+	case alarm != "" && vantage != "":
+		return "provider_boundary_confirmed", fmt.Sprintf(
+			"Demarcation confirmed by independent evidence: a provider-side alarm (%s) and independent-vantage reachability evidence (%s) localize the loss beyond the customer boundary.",
+			strings.ReplaceAll(alarm, "_", " "), strings.ReplaceAll(vantage, "_", " "))
+	case alarm != "":
+		return "local_checks_pending", fmt.Sprintf(
+			"A provider-side alarm (%s) participates, but independent-vantage reachability evidence has not localized the loss beyond the customer boundary — provider accountability stays pending.",
+			strings.ReplaceAll(alarm, "_", " "))
+	case vantage != "":
+		return "local_checks_pending",
+			"Independent-vantage evidence participates, but no provider-side alarm corroborates a provider-boundary fault — provider accountability stays pending."
+	}
+	return "local_checks_pending",
+		"No demarcation evidence has been captured: local egress, route/neighbor state and independent-vantage reachability must localize the loss beyond the customer boundary before provider accountability is assigned."
+}
 
 // rcaIssueContextInput carries the already-classified slice facts the resolver
 // interprets. All fields are derived upstream in buildRcaReport.
@@ -160,11 +230,15 @@ func resolveIssueContext(in rcaIssueContextInput) rcaIssueContext {
 	if in.ImpactRU != "none_detected" {
 		ctx.ProhibitedClaims = append(ctx.ProhibitedClaims, "no_customer_impact")
 	}
-	if len(in.Hyp.Ranking.Hypotheses) > 0 &&
-		rcaExternalOwnerTeams[rcaOwnerTeam[in.Hyp.Ranking.Hypotheses[0].Verdict.Owner]] {
-		// an external provider/carrier may never be handed accountability
-		// before demarcation confirms the boundary (P1.10).
-		ctx.ProhibitedClaims = append(ctx.ProhibitedClaims, "external_provider_accountability_without_demarcation")
+	if len(in.Hyp.Ranking.Hypotheses) > 0 {
+		if team := rcaOwnerTeam[in.Hyp.Ranking.Hypotheses[0].Verdict.Owner]; rcaExternalOwnerTeams[team] {
+			// an external provider/carrier may never be handed accountability
+			// before demarcation confirms the boundary (P1.10) — the promotion
+			// path is the documented demarcation evidence contract.
+			if dem, _ := assessDemarcation(team, in.KindCounts); dem != "provider_boundary_confirmed" {
+				ctx.ProhibitedClaims = append(ctx.ProhibitedClaims, "external_provider_accountability_without_demarcation")
+			}
+		}
 	}
 	if in.Validation {
 		ctx.ProhibitedClaims = append(ctx.ProhibitedClaims, "production_severity")
