@@ -1474,6 +1474,10 @@ export const api = {
   // ids + first_seen/last_seen/stale + a coverage summary (vs the per-mode live
   // projection of topologyView). Renderer-agnostic TopologyView shape + coverage.
   topologyGraph: () => request<unknown>("/api/topology/graph"),
+  // In-cloud NETWORK topology (VPC/VNet → subnets → route tables → gateways/NVAs),
+  // discovered from the provider APIs and mapped to the same renderer-agnostic
+  // TopologyView the canvas consumes. Tenant-scoped server-side.
+  topologyCloud: () => request<unknown>("/api/topology/cloud"),
   refreshDiscovery: () =>
     request<{ status: string }>("/api/discovery/refresh", { method: "POST" }),
 

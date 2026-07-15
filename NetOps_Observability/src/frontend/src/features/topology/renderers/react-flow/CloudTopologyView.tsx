@@ -7,10 +7,14 @@
 // (cloudNodeTypes: cloudNode → CloudResourceNode) so the default LAN canvas and
 // every other view are untouched.
 //
-// Data: the mock `cloudNetworkTopology` today (grounded in the real
-// aws-topology.json fixture); production feeds GET /api/topology/cloud into the
-// same `view` prop (see docs/design/topology-cloud-tabs.md §8). The carrier
-// overlay is a pure view transform toggled by the parent tab bar.
+// Data: GET /api/topology/cloud — the REAL in-cloud network (VPC/VNet → subnets →
+// route-table egress → gateways/NVAs), discovered from the provider APIs and mapped
+// server-side to this same TopologyView contract. Graceful degradation: when the API
+// returns nothing (no fixtures / a tenant that doesn't own them / discovery off) or
+// errors, it falls back to the grounded `cloudNetworkTopology` mock so the tab is
+// never blank in dev (see fetchCloudTopology). An explicit `view` prop still wins
+// (tests / embedding). The carrier overlay is a pure view transform toggled by the
+// parent tab bar.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -35,6 +39,7 @@ import { cloudNodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { TopologySideDrawer, TopologyLegend } from "../../components";
 import { cloudNetworkTopology } from "../../mock/cloudNetworkTopology";
+import { fetchCloudTopology } from "../../api/topologyApi";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
 
 type AnyNodeData = RFNodeData | RFGroupData;
@@ -49,7 +54,23 @@ export default function CloudTopologyView({
   carrier?: boolean;
 }) {
   const rf = useReactFlow();
-  const base = viewProp ?? cloudNetworkTopology;
+
+  // Real cloud topology from GET /api/topology/cloud, with the grounded mock as
+  // the fallback until it resolves (and if it returns nothing/errors). An explicit
+  // `view` prop always wins and skips the fetch (tests / embedding).
+  const [fetched, setFetched] = useState<TopologyView | null>(null);
+  useEffect(() => {
+    if (viewProp) return;
+    let alive = true;
+    fetchCloudTopology().then(({ view }) => {
+      if (alive) setFetched(view);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [viewProp]);
+
+  const base = viewProp ?? fetched ?? cloudNetworkTopology;
   // Carrier is a pure, memoized view transform — no effect on the base data.
   const view = useMemo(() => (carrier ? withCarrierOverlay(base) : base), [base, carrier]);
 

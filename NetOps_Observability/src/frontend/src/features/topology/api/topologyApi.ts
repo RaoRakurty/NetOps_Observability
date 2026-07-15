@@ -27,6 +27,7 @@ import {
   enterpriseOverviewTopology,
   geoWanTopology,
 } from "../mock";
+import { cloudNetworkTopology } from "../mock/cloudNetworkTopology";
 
 /** Pick the mock view that matches an operator workflow mode. */
 function mockForMode(mode: WorkflowMode): TopologyView {
@@ -88,6 +89,27 @@ export async function fetchTopologyView(
       view_id: `empty-${mode}`, mode, scope: { tenant_id: "" }, layout_type: "spine_leaf",
       generated_at: new Date().toISOString(), nodes: [], edges: [], groups: [], overlays: [],
     } as unknown as TopologyView);
+  }
+}
+
+/**
+ * Fetch the in-cloud NETWORK topology (GET /api/topology/cloud): the discovered
+ * VPC/VNet → subnet → route-table → gateway/NVA graph, mapped server-side from the
+ * provider APIs (route tables are the authoritative egress facts). Same graceful
+ * degradation as the other topology reads: an EMPTY graph (no fixtures / a tenant
+ * that doesn't own them / discovery off) or any error falls back to the grounded
+ * `cloudNetworkTopology` mock, so the Cloud tab is never blank in dev. Returns
+ * `{ view, live }` — `live` is true only when the API served a real, non-empty
+ * topology, so the UI can badge real-vs-sample honestly.
+ */
+export async function fetchCloudTopology(): Promise<{ view: TopologyView; live: boolean }> {
+  try {
+    const raw = (await api.topologyCloud()) as TopologyView;
+    const view = normalizeView(raw);
+    if (view.nodes.length > 0) return { view, live: true };
+    return { view: normalizeView(cloudNetworkTopology), live: false };
+  } catch {
+    return { view: normalizeView(cloudNetworkTopology), live: false };
   }
 }
 
