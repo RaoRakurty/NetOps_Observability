@@ -207,6 +207,14 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		}
 
 		act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
+		if act.suppressionReason != "" {
+			// NEVER a silent drop (§10): the gate's hold is observable and
+			// structured; the object re-evaluates naturally on the next sweep.
+			logWarn("ticketing", "RCA emitter action suppressed by consistency gate",
+				map[string]any{"corr_object_id": c.id, "system": system,
+					"suppression_reason": act.suppressionReason})
+			continue
+		}
 		switch act.kind {
 		case "create":
 			if err := enqueueTicketCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
@@ -228,23 +236,42 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 }
 
 // sweepAction is the pure outcome of evaluating one object: enqueue nothing, a
-// create, or an update — with the assembled payload for the latter two.
+// create, or an update — with the assembled payload for the latter two. A
+// suppressionReason means the consistency gate HELD an action the policy would
+// otherwise have emitted; the caller must surface it (log), never drop it.
 type sweepAction struct {
-	kind    string // "" | "create" | "update"
-	payload ticketPayload
+	kind              string // "" | "create" | "update"
+	payload           ticketPayload
+	suppressionReason string // non-empty = consistency gate held the action
 }
 
 // decideSweepAction is the I/O-free decision for one already-loaded object. A
 // create when the incident policy opens a ticket; otherwise an update when an
 // already-open ticket's RCA state moved on (payload hash changed) so an unchanged
 // state is a no-op. Deterministic, so it is unit-tested in isolation.
+//
+// Consistency gate (audit D11 at the emitter boundary): an action the policy
+// approves is still HELD when the object's facts carry a P1 contradiction
+// (facts.ConsistencyIssues) — contradictory state never reaches an external
+// system. The hold carries its reason; validation-scenario suppression (§11,
+// the rca-canary contract) already happened inside evalTicketDecision and is
+// unaffected: a canary never gets this far.
 func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentPolicy, link *ticketLink, baseURL string, now time.Time) sweepAction {
+	held := func() sweepAction {
+		return sweepAction{suppressionReason: "consistency gate (P1): " + strings.Join(facts.ConsistencyIssues, "; ")}
+	}
 	if dec := evalTicketDecision(facts, policy, link, now); dec.Create {
+		if len(facts.ConsistencyIssues) > 0 {
+			return held()
+		}
 		return sweepAction{kind: "create", payload: buildTicketPayload(view, facts, policy, baseURL)}
 	}
 	if link != nil && link.openTicket() {
 		p := buildTicketPayload(view, facts, policy, baseURL)
 		if payloadHash(p) != link.LastPayloadHash {
+			if len(facts.ConsistencyIssues) > 0 {
+				return held()
+			}
 			return sweepAction{kind: "update", payload: p}
 		}
 	}

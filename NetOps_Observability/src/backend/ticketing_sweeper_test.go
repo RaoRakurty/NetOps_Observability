@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +81,89 @@ func TestDecideSweepAction(t *testing.T) {
 	staleLink.LastPayloadHash = "deadbeefdeadbeef"
 	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, &staleLink, "", now); act.kind != "update" {
 		t.Fatalf("open ticket with changed state should update, got %q", act.kind)
+	}
+}
+
+// The emitter-side consistency gate (audit D11): facts carrying a P1
+// contradiction are HELD with an observable reason — never enqueued, never
+// silently dropped — while clean facts pass through unchanged and the §11
+// validation-scenario suppression (rca-canary contract) is untouched.
+func TestDecideSweepActionConsistencyGate(t *testing.T) {
+	now := time.Date(2026, 6, 27, 10, 11, 0, 0, time.UTC)
+	policy := defaultIncidentPolicy("t_a")
+	view := sampleView()
+
+	// P1-contradictory facts → create suppressed with reason.
+	bad := confirmedCustomerFacts()
+	bad.ConsistencyIssues = []string{"recovered_before_last_anomaly: closure recovery evidence at X precedes anomalous evidence through Y"}
+	act := decideSweepAction(view, bad, policy, nil, "", now)
+	if act.kind != "" {
+		t.Fatalf("contradictory facts enqueued a %q action", act.kind)
+	}
+	if !strings.Contains(act.suppressionReason, "recovered_before_last_anomaly") {
+		t.Fatalf("suppression reason missing/opaque: %q", act.suppressionReason)
+	}
+
+	// Update path is gated too.
+	created := buildTicketPayload(view, confirmedCustomerFacts(), policy, "")
+	stale := &ticketLink{
+		TenantID: "t_a", CorrObjectID: view.CorrObjectID, ExternalSystem: "servicenow",
+		Status: "open", LastPayloadHash: "deadbeefdeadbeef",
+	}
+	_ = created
+	if act := decideSweepAction(view, bad, policy, stale, "", now); act.kind != "" || act.suppressionReason == "" {
+		t.Fatalf("contradictory update not held: kind=%q reason=%q", act.kind, act.suppressionReason)
+	}
+
+	// Clean facts pass through unchanged.
+	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", now); act.kind != "create" || act.suppressionReason != "" {
+		t.Fatalf("clean facts should create: kind=%q reason=%q", act.kind, act.suppressionReason)
+	}
+
+	// §11 canary: a validation scenario is suppressed by the POLICY (its own
+	// reason), not hijacked by the consistency gate — and never enqueues.
+	canary := confirmedCustomerFacts()
+	canary.Validation = true
+	canary.ConsistencyIssues = nil
+	if act := decideSweepAction(view, canary, policy, nil, "", now); act.kind != "" || act.suppressionReason != "" {
+		t.Fatalf("validation scenario handling changed: kind=%q reason=%q", act.kind, act.suppressionReason)
+	}
+}
+
+// ticketFactConsistencyIssues — the cheap fact-level P1 validation the sweeper
+// consumes, exercised over raw signal rows (no report recomposition).
+func TestTicketFactConsistencyIssues(t *testing.T) {
+	anom := func(ts string) map[string]any {
+		return testSig("probe_loss", "active_probe", "prober-1", "path", "prober-1->10.1.1.1", "crit", ts, true, nil)
+	}
+	clear := func(ts string) map[string]any {
+		return testSig("probe_loss_clear", "active_probe", "prober-1", "path", "prober-1->10.1.1.1", "info", ts, false,
+			map[string]any{"clear_ts": ts})
+	}
+
+	// closed object, recovery evidence PRECEDING later anomalies → P1 issue.
+	rows := []map[string]any{anom("2026-07-12 18:00:00"), clear("2026-07-12 18:05:00"), anom("2026-07-12 18:20:00")}
+	issues := ticketFactConsistencyIssues("closed", rows)
+	if len(issues) != 1 || !strings.Contains(issues[0], "recovered_before_last_anomaly") {
+		t.Fatalf("issues = %v", issues)
+	}
+
+	// same evidence on an OPEN object: no closure claim, no contradiction.
+	if issues := ticketFactConsistencyIssues("open", rows); len(issues) != 0 {
+		t.Fatalf("open object flagged: %v", issues)
+	}
+
+	// clean closed recovery (clear after last anomaly) → no issue.
+	cleanRows := []map[string]any{anom("2026-07-12 18:00:00"), clear("2026-07-12 18:25:00")}
+	if issues := ticketFactConsistencyIssues("closed", cleanRows); len(issues) != 0 {
+		t.Fatalf("clean closure flagged: %v", issues)
+	}
+
+	// buildCorrTicketFacts wires the gate onto the facts the sweeper decides on.
+	meta := testMeta("closed", "confirmed", "sig.ent.access.uplink-down", nil)
+	facts := buildCorrTicketFacts(meta, rows, sampleView())
+	if len(facts.ConsistencyIssues) != 1 {
+		t.Fatalf("facts.ConsistencyIssues = %v", facts.ConsistencyIssues)
 	}
 }
 
