@@ -1,7 +1,7 @@
 package main
 
 // Console deep-links — the pivot from a Correlix row to the provider's own
-// console (AWS console / Azure portal). Built SERVER-side so the URL formats
+// console (AWS console / Azure portal / Google Cloud console). Built SERVER-side so the URL formats
 // live in one audited place, resolve through the tenant's DECLARED inventory
 // (Azure signals often carry a VM name; the portal needs the ARM id), and can
 // later be reused by the RCA report. An id we cannot resolve, or that fails the
@@ -63,6 +63,102 @@ func azurePortalEventlogsURL(armID string) string {
 		return ""
 	}
 	return u + "/eventlogs"
+}
+
+// gcpSegmentPattern bounds ONE segment of a GCP resource path (project id,
+// zone/region, resource name) once split on "/": alphanumerics plus . _ - and
+// never a separator — a segment that fails the gate refuses the whole link.
+var gcpSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// gcpResourcePath normalizes the handles our GCP lanes stamp down to a bare
+// resource path (projects/…). Accepted shapes:
+//   - projects/<p>/zones/<z>/instances/<name>        (inventory resource_id)
+//   - //compute.googleapis.com/projects/…            (audit-log resourceName)
+//   - gcprouter:projects/…/routers/<name>:<peer>     (seam-lane signal key)
+func gcpResourcePath(id string) string {
+	if rest, ok := strings.CutPrefix(id, "gcprouter:"); ok {
+		// the seam key suffixes the BGP peer name; the console page is the router's.
+		if router, _, ok := strings.Cut(rest, ":"); ok {
+			return router
+		}
+		return rest
+	}
+	if rest, ok := strings.CutPrefix(id, "//"); ok {
+		// service-qualified audit resourceName: //compute.googleapis.com/projects/…
+		if _, path, ok := strings.Cut(rest, "/"); ok {
+			return path
+		}
+		return ""
+	}
+	return id
+}
+
+// gcpConsoleResourceURL deep-links a GCP resource path into the Cloud console.
+// Only path families our lanes emit AND the console stably routes are linked;
+// anything that does not parse — a bare name, an unknown family, a hostile
+// segment — returns "". A wrong link is worse than no link.
+func gcpConsoleResourceURL(id string) string {
+	path := gcpResourcePath(strings.TrimSpace(id))
+	if path == "" || !cloudIDPattern.MatchString(path) {
+		return ""
+	}
+	seg := strings.Split(path, "/")
+	for _, s := range seg {
+		if !gcpSegmentPattern.MatchString(s) {
+			return ""
+		}
+	}
+	if seg[0] != "projects" {
+		return ""
+	}
+	const base = "https://console.cloud.google.com/"
+	// zonal / regional: projects/<p>/{zones|regions}/<loc>/<family>/<name>
+	if len(seg) == 6 {
+		project, scope, loc, family, name := seg[1], seg[2], seg[3], seg[4], seg[5]
+		switch {
+		case scope == "zones" && family == "instances":
+			return base + "compute/instancesDetail/zones/" + loc + "/instances/" + name + "?project=" + project
+		case scope == "regions" && family == "routers":
+			return base + "hybrid/routers/details/" + loc + "/" + name + "?project=" + project
+		case scope == "regions" && family == "subnetworks":
+			return base + "networking/subnetworks/details/" + loc + "/" + name + "?project=" + project
+		}
+		return ""
+	}
+	// global: projects/<p>/global/<family>/<name>
+	if len(seg) == 5 && seg[2] == "global" {
+		project, family, name := seg[1], seg[3], seg[4]
+		switch family {
+		case "networks":
+			return base + "networking/networks/details/" + name + "?project=" + project
+		case "firewalls":
+			return base + "networking/firewalls/details/" + name + "?project=" + project
+		case "routes":
+			return base + "networking/routes/details/" + name + "?project=" + project
+		}
+	}
+	return ""
+}
+
+// gcpProjectOf extracts the project id from a GCP resource path, "" otherwise.
+func gcpProjectOf(id string) string {
+	seg := strings.Split(gcpResourcePath(strings.TrimSpace(id)), "/")
+	if len(seg) >= 2 && seg[0] == "projects" && gcpSegmentPattern.MatchString(seg[1]) {
+		return seg[1]
+	}
+	return ""
+}
+
+// gcpLogsExplorerURL deep-links ONE audit-log entry in Logs Explorer by its
+// insertId (the request_id our GCP change lane stamps) — the per-record pivot
+// CloudTrail gets via event id.
+func gcpLogsExplorerURL(project, insertID string) string {
+	if !gcpSegmentPattern.MatchString(project) || insertID == "" || !cloudIDPattern.MatchString(insertID) {
+		return ""
+	}
+	// insertId passed the charset gate, so it embeds literally in the
+	// pre-encoded query insertId="<id>" (%3D / %22 are = / ").
+	return "https://console.cloud.google.com/logs/query;query=insertId%3D%22" + insertID + "%22?project=" + project
 }
 
 // cloudResourceIndex — the tenant's declared cloud inventory keyed by every
@@ -176,6 +272,24 @@ func consoleRefLinks(ref cloudEvidenceRef, idx map[string]cloud.CloudResource) (
 		if ref.LogRef != "" {
 			logURL = azurePortalEventlogsURL(arm)
 		}
+	case "gcp":
+		consoleURL = gcpConsoleResourceURL(id)
+		if consoleURL == "" && inInv {
+			// a signal that only knew an IP/name links to the owning resource
+			consoleURL = gcpConsoleResourceURL(owner.ResourceID)
+		}
+		if ref.LogRef != "" {
+			// project id: the signal's account attr, else the resource path itself,
+			// else the declared inventory's account (the poller's GCP_PROJECT).
+			project := ref.Account
+			if project == "" {
+				project = gcpProjectOf(id)
+			}
+			if project == "" && inInv {
+				project = owner.AccountID
+			}
+			logURL = gcpLogsExplorerURL(project, ref.LogRef)
+		}
 	}
 	return consoleURL, logURL
 }
@@ -192,6 +306,9 @@ func resourceConsoleURL(rs cloud.CloudResource) string {
 			arm = rs.ResourceID
 		}
 		return azurePortalResourceURL(arm)
+	case "gcp":
+		// gcp.py stamps resource_id as the full resource path — link it directly.
+		return gcpConsoleResourceURL(rs.ResourceID)
 	}
 	return ""
 }
