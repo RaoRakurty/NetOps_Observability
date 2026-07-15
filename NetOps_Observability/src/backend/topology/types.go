@@ -131,6 +131,12 @@ type Node struct {
 	// derived enrichment the backend can safely supply
 	Resolved bool   `json:"resolved"`
 	GroupID  string `json:"group_id,omitempty"`
+	// Tags are free-form, provider-supplied labels (provider, cidr, az, service…).
+	// DERIVED enrichment matching TopologyNode.tags on the TS side — used by the
+	// Cloud tab's CloudResourceNode to pick the official provider mark and surface
+	// the resource's network context (CIDR, AZ). Omitted (nil) for every other
+	// projection, so no existing view's JSON changes.
+	Tags map[string]string `json:"tags,omitempty"`
 	// Coordinates is geographic placement {x:lng, y:lat} in decimal WGS-84. It is
 	// normally a UI-derived field — EXCEPT for the executive_geo projection, where
 	// the coordinate IS the intent data (it lives in the Source of Truth and cannot

@@ -1,6 +1,10 @@
 {
   "provider": "azure",
   "account_id": "8d0f8a4e-c36e-4265-821f-d6df48123c24",
+  "collection": {
+    "mode": "live_poller",
+    "collected_at": "2026-07-15T16:28:22.340368+00:00"
+  },
   "resources": [
     {
       "region": "westus2",
@@ -8,7 +12,7 @@
       "resource_arn_or_uri": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
       "resource_type": "compute:virtualMachine",
       "resource_name": "correlix-app-host-01",
-      "power_state": "running",
+      "power_state": "deallocated",
       "instance_type": "Standard_B2pls_v2",
       "private_ips": [
         "10.61.10.10"
@@ -21,7 +25,10 @@
       "owner": "",
       "env": "",
       "source": "cloud_api",
-      "confidence": "strong"
+      "confidence": "strong",
+      "inferred_service": "correlix-faultlab",
+      "inferred_service_confidence": "suspected",
+      "inferred_service_basis": "resource-group name 'CORRELIX-FAULTLAB'"
     },
     {
       "region": "westus2",
@@ -44,7 +51,10 @@
       "owner": "",
       "env": "",
       "source": "cloud_api",
-      "confidence": "strong"
+      "confidence": "strong",
+      "inferred_service": "correlix-faultlab",
+      "inferred_service_confidence": "suspected",
+      "inferred_service_basis": "resource-group name 'CORRELIX-FAULTLAB'"
     }
   ]
 }

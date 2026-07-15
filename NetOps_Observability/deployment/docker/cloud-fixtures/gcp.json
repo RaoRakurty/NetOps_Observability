@@ -1,0 +1,37 @@
+{
+  "provider": "gcp",
+  "account_id": "project-cec6e343-72ee-46f4-9cd",
+  "collection": {
+    "mode": "live_poller",
+    "collected_at": "2026-07-15T16:28:17.985423+00:00"
+  },
+  "resources": [
+    {
+      "region": "us-west1",
+      "zone": "us-west1-a",
+      "resource_id": "projects/project-cec6e343-72ee-46f4-9cd/zones/us-west1-a/instances/correlix-gcp-app-01",
+      "resource_arn_or_uri": "projects/project-cec6e343-72ee-46f4-9cd/zones/us-west1-a/instances/correlix-gcp-app-01",
+      "resource_type": "compute:instance",
+      "resource_name": "correlix-gcp-app-01",
+      "power_state": "running",
+      "instance_type": "e2-micro",
+      "private_ips": [
+        "10.62.10.2"
+      ],
+      "public_ips": [],
+      "network_interface_ids": [],
+      "tags": {
+        "app_id": "store",
+        "cloud": "gcp",
+        "environment": "lab",
+        "managed_by": "manual",
+        "owner": "rao",
+        "project": "correlix-faultlab"
+      },
+      "owner": "rao",
+      "env": "lab",
+      "source": "cloud_api",
+      "confidence": "confirmed"
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import boto3
 from kafka import KafkaProducer
 
 import azure
+import azure_topology
 import cloud_events
 import cloudmetrics
 import discover
@@ -386,8 +387,17 @@ def main():
                 # (audit D-P0-4 / P1-3: ARM-id keyed, power_state carried).
                 if now - last_az_inventory >= DISCOVER_EVERY_S:
                     ninv = azure.write_inventory(tok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    # In-cloud NETWORK topology (VNet→subnet→route-table→gateway),
+                    # the Azure twin of discover.py's AWS route-table map. Same
+                    # discover cadence, own guard so a topology hiccup can't block
+                    # the inventory write above.
+                    try:
+                        ntopo = azure_topology.write_topology(tok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    except Exception as exc:  # noqa: BLE001 - lane isolation
+                        ntopo = -1
+                        jlog("azure topology error", error=str(exc)[:200])
                     last_az_inventory = now
-                    jlog("azure inventory", resources=ninv)
+                    jlog("azure inventory", resources=ninv, topology_edges=ntopo)
                 if now - last_az_metrics >= AZ_METRICS_EVERY_S:
                     az_vms = azure.list_vms(tok)
                     n = azure.poll_metrics(tok, az_vms)
