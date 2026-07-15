@@ -41,12 +41,15 @@ type rcaReport struct {
 	Validation  bool   `json:"validation"`
 	GeneratedAt string `json:"generated_at"` // UTC, canonical
 
-	States   rcaReportStates    `json:"states"`
-	Times    rcaReportTimes     `json:"times"`
-	Scope    rcaReportScope     `json:"scope"`
-	Summary  rcaReportSummaries `json:"summary"`
-	Signals  rcaSignalSummary   `json:"signal_summary"`
-	Coverage []rcaEvidenceLane  `json:"evidence_coverage"`
+	States rcaReportStates `json:"states"`
+	Times  rcaReportTimes  `json:"times"`
+	Scope  rcaReportScope  `json:"scope"`
+	// IssueContext: the resolved interpretation context (IssueContextResolver)
+	// — issue family, classifications, prohibited claims, applicable actions.
+	IssueContext rcaIssueContext    `json:"issue_context"`
+	Summary      rcaReportSummaries `json:"summary"`
+	Signals      rcaSignalSummary   `json:"signal_summary"`
+	Coverage     []rcaEvidenceLane  `json:"evidence_coverage"`
 	// Cloud change events observed in/near the window. Empty = none observed
 	// (the section is omitted, not rendered as healthy).
 	CloudChanges []rcaCloudChange `json:"cloud_changes,omitempty"`
@@ -1076,13 +1079,37 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
+	// ---- scope + issue context (the single resolver) ----------------------------
+	// The IssueContextResolver consolidates what used to be distributed across
+	// the action-family table, classifyServiceScope and rcaHypothesisType: one
+	// resolved context every downstream consumer reads.
+	scope := buildRcaScope(meta, anomalous, hb)
+	kindCounts := map[string]int{}
+	kindObservers := map[string]map[string]bool{}
+	for _, sig := range anomalous {
+		k := fmt.Sprintf("%v", sig["kind"])
+		kindCounts[k]++
+		if kindObservers[k] == nil {
+			kindObservers[k] = map[string]bool{}
+		}
+		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
+			kindObservers[k][o] = true
+		}
+	}
+	ictx := resolveIssueContext(rcaIssueContextInput{
+		Analysis: analysis, RecoveryState: recoveryState, ImpactRU: impactRU,
+		Validation: validation, Hyp: hb, Targets: scope.Targets,
+		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
+		Anomalous: anomalous, Changes: changes,
+	})
+	scope.ServiceClassification = ictx.ServiceClassification
+
 	// ── dimensional analysis states ──
 	symptom := "observed"
 	if len(anomalous) > 0 {
 		symptom = "confirmed" // the anomaly itself is a fact once evidence exists
 	}
-	topIsSymptom := len(hb.Ranking.Hypotheses) > 0 &&
-		rcaHypothesisType(hb.Ranking.Hypotheses[0].ID) == "symptom classification"
+	topIsSymptom := ictx.topIsSymptom
 	faultDomain := "not_localized"
 	switch {
 	case analysis == "confirmed" && !topIsSymptom:
@@ -1223,10 +1250,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
-	// ---- scope -------------------------------------------------------------------
-	scope := buildRcaScope(meta, anomalous, hb)
-	scope.ServiceClassification = classifyServiceScope(scope.Targets)
-
 	// ---- signal summary ------------------------------------------------------------
 	sigSummary := buildSignalSummary(in.Signals, anomalous, clears, observers, peakSev, hb)
 
@@ -1240,18 +1263,6 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	sort.SliceStable(changes, func(i, j int) bool { return changes[i].At < changes[j].At })
 
 	// ---- hypotheses --------------------------------------------------------------------
-	kindCounts := map[string]int{}
-	kindObservers := map[string]map[string]bool{}
-	for _, sig := range anomalous {
-		k := fmt.Sprintf("%v", sig["kind"])
-		kindCounts[k]++
-		if kindObservers[k] == nil {
-			kindObservers[k] = map[string]bool{}
-		}
-		if o := fmt.Sprintf("%v", sig["observer_id"]); o != "" && o != "<nil>" {
-			kindObservers[k][o] = true
-		}
-	}
 	hyps := buildHypothesesView(hb, kindCounts, kindObservers)
 
 	// ---- fault localization vs root cause (P1.3/P1.4, audit D2) -------------------
@@ -1334,7 +1345,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	case analysis == "confirmed" || analysis == "suspected" || analysis == "probable":
 		rootState = "under_investigation"
 	}
-	ownership := buildOwnership(analysis, loc.Localized, scope.ServiceClassification, hb, sigSummary)
+	ownership := buildOwnership(analysis, loc.Localized, ictx.ServiceClassification, hb, sigSummary)
 
 	// ---- decision (policy-driven) ---------------------------------------------------------------
 	decision := buildDecision(analysis, incident, recoveryState, impact, monitoring, fmtUTC(in.Now), in.Policy, in.PolicyConfigured, monitorWindow)
@@ -1361,8 +1372,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// ---- actions (contextual planner, P1.13) --------------------------------------------------------
 	actions := planActions(rcaActionInput{
 		Analysis: analysis, Incident: incident, Hyp: hb, Signals: sigSummary,
-		Decision: decision, Ownership: ownership,
-		LaneAnomalous: laneAnomalous, KindCounts: rcaKindCounts(anomalous),
+		Decision: decision, Ownership: ownership, Ctx: ictx,
+		LaneAnomalous: laneAnomalous, KindCounts: kindCounts,
 		Residual: ra.ResidualAfterComponent, Validation: validation,
 	})
 
@@ -1393,6 +1404,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		},
 		Times:             times,
 		Scope:             scope,
+		IssueContext:      ictx,
 		Summary:           rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
 		Signals:           sigSummary,
 		Coverage:          coverage,
@@ -1439,15 +1451,6 @@ func reportTypeFor(rootState, analysis string) string {
 	default:
 		return "Incident Assessment"
 	}
-}
-
-// rcaKindCounts — anomalous evidence kind → count (action-planner context).
-func rcaKindCounts(anomalous []map[string]any) map[string]int {
-	out := map[string]int{}
-	for _, sig := range anomalous {
-		out[fmt.Sprintf("%v", sig["kind"])]++
-	}
-	return out
 }
 
 // groundedLocus — the entity the grounded topo edges converge on (same rule the
