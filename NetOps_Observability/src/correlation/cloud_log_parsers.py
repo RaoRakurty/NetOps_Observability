@@ -258,7 +258,7 @@ def vpc_accept_rollup(records: list[dict]) -> list[dict]:
 # the signal; ALLOW/COUNT are volume and are ignored (anti-noise). Aggregated
 # per (web ACL, terminating rule) per scan batch — never one event per request.
 
-import json as _json
+import json as _json  # noqa: E402 - section-local import (this file groups imports per parser block)
 
 
 def parse_aws_waf_log(line: str) -> dict | None:

@@ -19,6 +19,17 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/scripts/lab/traffic-generator/Dockerfile"
+  # DS-0002 — TEMPORARY exception for the cloud-ingest poller (lab-site service,
+  # not a product default). It currently runs root because it writes the live
+  # inventory into host bind-mounts (./cloud-fixtures, ./cloud-logs) and reads
+  # AWS creds from a /root/.aws mount; it exposes NO listening ports (outbound
+  # poller only). Unlike the two exceptions above, root is NOT intrinsic here —
+  # proper de-rooting (non-root UID + creds-path/volume-ownership change) is
+  # tracked to Task #15, which replaces the env-cred model with Vault-scoped
+  # tenant connectors. Remove this entry when that lands.
+  - id: DS-0002
+    paths:
+      - "NetOps_Observability/deployment/docker/cloud-ingest/Dockerfile"
 vulnerabilities:
   # GHSA-5c6j-r48x-rmvq — serialize-javascript RCE via RegExp.flags/toISOString.
   # Transitive dev-dependency of the DOCS PORTAL's Docusaurus/webpack build chain

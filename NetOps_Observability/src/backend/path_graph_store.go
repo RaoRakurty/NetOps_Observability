@@ -163,7 +163,7 @@ func (m *memPathGraphStore) tenantsFor(tenant string, cross bool) []string {
 }
 
 func (m *memPathGraphStore) UpsertEndpoint(_ context.Context, ep pathgraph.Endpoint) error {
-	if err := ep.Provenance.Validate(); err != nil {
+	if err := ep.Validate(); err != nil {
 		return err
 	}
 	t := normTenant(ep.TenantID)
@@ -191,7 +191,7 @@ func (m *memPathGraphStore) ListEndpoints(_ context.Context, tenant string, cros
 }
 
 func (m *memPathGraphStore) UpsertPathDefinition(_ context.Context, pd pathgraph.PathDefinition) error {
-	if err := pd.Provenance.Validate(); err != nil {
+	if err := pd.Validate(); err != nil {
 		return err
 	}
 	t := normTenant(pd.TenantID)
@@ -345,7 +345,7 @@ type pgchPathGraphStore struct {
 }
 
 func (s *pgchPathGraphStore) UpsertEndpoint(ctx context.Context, ep pathgraph.Endpoint) error {
-	if err := ep.Provenance.Validate(); err != nil {
+	if err := ep.Validate(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -406,7 +406,7 @@ func (s *pgchPathGraphStore) ListEndpoints(ctx context.Context, tenant string, c
 }
 
 func (s *pgchPathGraphStore) UpsertPathDefinition(ctx context.Context, pd pathgraph.PathDefinition) error {
-	if err := pd.Provenance.Validate(); err != nil {
+	if err := pd.Validate(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -472,7 +472,7 @@ func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgrap
 		"environment": o.Environment, "scenario_id": o.ScenarioID, "run_id": o.RunID,
 		"producer_id": o.ProducerID, "provenance_id": o.ProvenanceID,
 		"contract_version": pathgraph.ContractVersion,
-		"src_address": def.SrcAddress, "dst_address": def.DstAddress,
+		"src_address":      def.SrcAddress, "dst_address": def.DstAddress,
 		"protocol": def.Protocol, "dst_port": def.DstPort,
 		"direction": def.Direction, "network_context": def.NetworkContext,
 	}

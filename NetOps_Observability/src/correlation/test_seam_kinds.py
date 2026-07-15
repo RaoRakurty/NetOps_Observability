@@ -64,11 +64,12 @@ def test_seam_signal_roundtrips_with_native_identity():
 
 
 def test_blackhole_vs_noroute_never_merge():
-    mk = lambda kind: cloud_signal_from_event({
-        "kind": kind, "tenant_id": "acme", "resource_id": "tgw-1",
-        "severity": "high", "metric_name": kind, "value": 12.0,
-        "ts": "2026-07-14T22:00:00Z",
-        "attrs": {"provider": "aws", "evidence_class": "forwarding_drop"},
-    }, "acme", TS)
+    def mk(kind):
+        return cloud_signal_from_event({
+            "kind": kind, "tenant_id": "acme", "resource_id": "tgw-1",
+            "severity": "high", "metric_name": kind, "value": 12.0,
+            "ts": "2026-07-14T22:00:00Z",
+            "attrs": {"provider": "aws", "evidence_class": "forwarding_drop"},
+        }, "acme", TS)
     a, b = mk("cloud_gateway_blackhole_drop"), mk("cloud_gateway_no_route_drop")
     assert a.kind != b.kind and a.native_id != b.native_id

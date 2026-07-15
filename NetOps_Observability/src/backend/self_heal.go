@@ -96,7 +96,7 @@ func diskUsedPct(path string) int {
 	if total == 0 {
 		return -1
 	}
-	return int(used * 100 / uint64(total))
+	return int(used * 100 / total)
 }
 
 // shouldHeal is the ONE decision rule (unit-tested): heal only when there is

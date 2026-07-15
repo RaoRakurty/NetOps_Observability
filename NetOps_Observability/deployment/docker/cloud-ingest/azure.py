@@ -187,7 +187,7 @@ def poll_resource_health(tok: str, producer, tenant: str) -> int:
            f"/availabilityStatuses?api-version=2023-07-01-preview")
     try:
         res = _get_json(url, tok)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return 0
     n = 0
     for st in res.get("value", []):

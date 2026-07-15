@@ -336,12 +336,12 @@ func TestPathGraphDataClassExclusion(t *testing.T) {
 	if st != 200 || !sp.SpineAvailable {
 		t.Fatalf("GET path: %d %s", st, raw)
 	}
-	if sp.Spine.ObservationID != live.Observation.ObservationID {
+	if sp.ObservationID != live.Observation.ObservationID {
 		t.Fatalf("the customer API returned observation %s, want the LIVE one %s (a NEWER lab run must be excluded)",
-			sp.Spine.ObservationID, live.Observation.ObservationID)
+			sp.ObservationID, live.Observation.ObservationID)
 	}
-	if sp.Spine.DataClass != pathgraph.DataClassLive || !sp.Spine.AnchorsLive {
-		t.Fatalf("data_class=%s anchors_live=%v", sp.Spine.DataClass, sp.Spine.AnchorsLive)
+	if sp.DataClass != pathgraph.DataClassLive || !sp.AnchorsLive {
+		t.Fatalf("data_class=%s anchors_live=%v", sp.DataClass, sp.AnchorsLive)
 	}
 	if strings.Contains(string(raw), lab.Observation.ObservationID) {
 		t.Fatalf("the lab run leaked into the customer response: %s", raw)
@@ -353,10 +353,10 @@ func TestPathGraphDataClassExclusion(t *testing.T) {
 	}
 	// The platform owner can — that is what makes lab/replay data inspectable at all.
 	st, raw, sp = getPath(t, srv, admin, corr, "?data_class=lab")
-	if st != 200 || !sp.SpineAvailable || sp.Spine.ObservationID != lab.Observation.ObservationID {
+	if st != 200 || !sp.SpineAvailable || sp.ObservationID != lab.Observation.ObservationID {
 		t.Fatalf("platform owner ?data_class=lab: %d %s", st, raw)
 	}
-	if sp.Spine.AnchorsLive {
+	if sp.AnchorsLive {
 		t.Fatal("a LAB observation claimed it could anchor a live verdict")
 	}
 }
@@ -382,9 +382,9 @@ func TestPathGraphStaleObservationDoesNotAnchor(t *testing.T) {
 	if st != 200 || !sp.SpineAvailable {
 		t.Fatalf("GET path: %d %s", st, raw)
 	}
-	if !sp.Spine.Stale || sp.Spine.AnchorsLive {
+	if !sp.Stale || sp.AnchorsLive {
 		t.Fatalf("stale=%v anchors_live_verdict=%v — a stale observation must not anchor a live verdict",
-			sp.Spine.Stale, sp.Spine.AnchorsLive)
+			sp.Stale, sp.AnchorsLive)
 	}
 }
 

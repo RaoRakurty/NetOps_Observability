@@ -542,10 +542,6 @@ func rcaIsRecoveryStateSignal(sig map[string]any) bool {
 	return false
 }
 
-func rcaIsImpactKind(kind, entityType, probeScope string) bool {
-	return rcaIsRealUserImpactKind(kind, entityType) || rcaIsSyntheticImpactKind(kind, probeScope)
-}
-
 // rcaIsRealUserImpactKind: evidence produced by REAL user sessions or the
 // serving infrastructure itself (§5) — the only kinds that may support a
 // real-user impact CLAIM. A failed synthetic check is never in this set, and
@@ -990,7 +986,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// coverage (P1.6): both the synthetic and the real-traffic axis observed
 	// the window and neither carried an anomaly. A single covering class is
 	// partial coverage — it can honestly report its own axis, never the claim.
-	impact := "unknown"
+	var impact string
 	switch {
 	case impactRU == "confirmed":
 		impact = "confirmed"
