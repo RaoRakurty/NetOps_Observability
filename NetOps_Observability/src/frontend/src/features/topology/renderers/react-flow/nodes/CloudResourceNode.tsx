@@ -1,0 +1,34 @@
+// CloudResourceNode.tsx — a CLOUD NETWORK resource card (VPC gateway / NVA /
+// subnet / endpoint …). Distinct from CloudNode (the generic cloud/WAN glyph):
+// this one wears the OFFICIAL provider mark (AWS/Azure vendored icon, GCP
+// monogram fallback) so the card reads as a specific provider's resource.
+//
+// It composes the shared <NodeCard> shell — same fixed geometry, calm health
+// ring, confidence chip and no-shake invariant as every other node. Only the
+// icon (the provider mark) and the left-rule accent (provider colour) differ.
+// The specific network function (IGW/NAT/VGW/…) is carried in the node label
+// and tags (drawer/tooltip) — the card face stays uniform per the skill.
+//
+// Used ONLY inside the Cloud tab's own nodeTypes registry (CloudTopologyView),
+// so the default LAN canvas and every other view are untouched.
+
+import { type NodeProps } from "@xyflow/react";
+import { memo } from "react";
+import type { RFNodeData } from "../rfTypes";
+import { NodeCard } from "./DeviceNode";
+import ProviderMark, { providerAccent } from "../../../components/ProviderMark";
+
+function CloudResourceNodeBase(props: NodeProps) {
+  const data = props.data as unknown as RFNodeData;
+  const provider = (data.node.tags?.provider ?? String(data.node.metrics?.provider ?? "")) || undefined;
+  return (
+    <NodeCard
+      data={data}
+      icon={<ProviderMark provider={provider} size={18} />}
+      accent={providerAccent(provider)}
+    />
+  );
+}
+
+export const CloudResourceNode = memo(CloudResourceNodeBase);
+export default CloudResourceNode;

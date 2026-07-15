@@ -837,6 +837,36 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .topo-search-dock { position: absolute; top: 12px; left: 12px; z-index: 6; width: 320px; max-width: 60%; }
 .topo-path-dock { position: absolute; bottom: 14px; left: 14px; z-index: 6; width: 340px; max-width: 70%;
   max-height: 46%; overflow: auto; }
+/* network-domain tabs (LAN · SD-WAN · DC · Cloud) + carrier overlay toggle.
+   The primary "where am I looking" control, above the workflow toolbar. */
+.topo-domain-shell { display: flex; flex-direction: column; height: 100%; min-height: calc(100vh - 150px); }
+.topo-domain-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px 12px 0 0;
+  border-bottom: none; flex-wrap: wrap; }
+.topo-domain-tabs-eyebrow { font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--fg-subtle); margin-right: 6px; }
+.topo-domain-tabs > button[role="tab"] { font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; padding: 6px 14px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--fg-muted); white-space: nowrap; }
+.topo-domain-tabs > button[role="tab"]:hover { color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.topo-domain-tabs > button[role="tab"].on { background: var(--panel); color: var(--fg);
+  border-color: var(--border); box-shadow: 0 1px 2px rgba(16,24,40,0.14); }
+.topo-domain-tabs-sep { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+.topo-domain-carrier { display: inline-flex; align-items: center; gap: 7px; font: inherit;
+  font-size: 12px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--fg-muted); }
+.topo-domain-carrier .topo-domain-carrier-dot { width: 9px; height: 9px; border-radius: 50%;
+  border: 2px solid var(--fg-subtle); background: transparent; box-sizing: border-box; }
+.topo-domain-carrier.on { color: var(--fg); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.topo-domain-carrier.on .topo-domain-carrier-dot { border-color: var(--accent);
+  background: var(--accent); }
+/* when the domain tabs are present, the canvas root loses its top rounding so the
+   tab bar and stage read as one connected surface. */
+.topo-domain-shell > .topo-root { min-height: 0; flex: 1 1 auto; }
+.topo-domain-shell > .topo-root .topo-stage { margin-top: 0; border-radius: 0 0 12px 12px; }
+
 /* renderer toggle: Canvas ⇄ Overview (WebGL) */
 .topo-render-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--border); }

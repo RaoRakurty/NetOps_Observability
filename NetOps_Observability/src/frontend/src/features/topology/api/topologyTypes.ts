@@ -99,7 +99,7 @@ export type OverlayKind =
   | "golden_path_delta"
   | "historical_diff";
 
-export type GroupType = "site" | "pod" | "rack" | "cluster" | "zone" | "region" | "vpc" | "app";
+export type GroupType = "site" | "pod" | "rack" | "cluster" | "zone" | "region" | "vpc" | "subnet" | "app";
 
 // ── node ──────────────────────────────────────────────────────────────────────
 

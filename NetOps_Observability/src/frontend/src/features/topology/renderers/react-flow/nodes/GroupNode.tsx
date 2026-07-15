@@ -18,6 +18,7 @@ const GROUP_TYPE_LABEL: Record<string, string> = {
   zone: "Zone",
   region: "Region",
   vpc: "VPC",
+  subnet: "Subnet",
   app: "App",
 };
 
