@@ -1,8 +1,11 @@
 # Cloud Connectors — Gap Analysis (as-built vs. target)
 
-Status: **Phase 1 audit + Phases 2–4 foundation implemented** (this run). Live
-per-provider token exchange (AWS STS / Azure Entra / GCP STS) is the documented
-follow-up. Everything below reflects the ACTUAL repository, with `file:line`.
+Status: **Phase 1 audit + Phases 2–4 foundation + P5–P7 LIVE token exchange
+implemented.** The broker now mints real short-lived credentials for all three
+providers (AWS STS AssumeRole/GetSessionToken · Azure Entra client-credentials
+WIF/secret · GCP STS exchange + SA impersonation / RS256 assertion grant), all
+stdlib. Remaining deferrals are listed in §4. Everything below reflects the
+ACTUAL repository, with `file:line`.
 
 ## 1. Current architecture (verified)
 
@@ -108,6 +111,43 @@ different issuer/audience/subject entirely — see the architecture doc.
 - Tests: `cloud_connectors_isolation_test.go`, `cloud_connectors_broker_test.go`,
   `cloudconn/*_test.go`; route ledger updated.
 
+### 2.1 Live credential exchange (P5–P7, second run)
+
+- `cloudconn/sigv4.go` — stdlib SigV4 signer, pinned to the **official AWS
+  SigV4 test-vector suite** (38 vectors vendored `cloudconn/testdata/sigv4/`,
+  run byte-for-byte by `sigv4_test.go`: canonical request, string-to-sign,
+  signature, Authorization). `AWSCredentials` self-redacts under fmt verbs.
+- `cloudconn/exchange.go` — injectable `TokenExchanger` seam, sanitized
+  `ExchangeError` (denied/throttled/malformed_response/…, secret-free by
+  contract), `AWSPlatformCredentialSource` + `WorkloadAssertionSource`
+  (env-backed defaults), bounded HTTP (deadline, 3-attempt retry with
+  backoff+jitter on 429/5xx/network, 1 MiB response caps).
+- `cloudconn/exchange_aws.go` — `sts:AssumeRole` (RoleArn + ExternalId,
+  DurationSeconds ≤ cap, SigV4-signed with the platform identity) and
+  `sts:GetSessionToken` for legacy static keys (legacy connectors STILL hand
+  consumers only short-lived session credentials). XML parsing, error mapping.
+- `cloudconn/exchange_azure.go` — Entra v2.0 client-credentials: WIF
+  `client_assertion` (workload OIDC JWT) + legacy `client_secret`; ARM
+  `.default` scope; certificate runtime deferred (customer-held key).
+- `cloudconn/exchange_gcp.go` — legacy SA key → self-signed RS256 JWT
+  (crypto/rsa) → assertion grant; WIF → STS token exchange (RFC 8693) →
+  optional `generateAccessToken` SA impersonation. Read-only scope.
+- Broker (`cloud_connectors_broker.go`) — live minting through the adapters,
+  **80%-TTL proactive refresh**, provider-fixed-lifetime **clamp** (≤2× cap;
+  beyond rejected), Region pass-through, structured log + `TOKEN_ISSUED` deny
+  audit on every failed exchange.
+- `POST /api/cloud/connectors/{id}/validate` now performs the **live trust
+  proof** after config validation: identity health `live_verified` /
+  `failed` (+ `live_trust_failed` finding with remediation) / `config_validated`
+  when the platform identity is unconfigured (`live_check: ok|failed|deferred`).
+- Tests: per-provider `httptest` table-driven suites (happy/denied/expired/
+  malformed/throttled+bounded-retry, RS256 verified server-side, no-wire-on-
+  invalid-config), broker refresh/clamp/cache-isolation
+  (`TestBrokerCachedCredentialNeverCrossesTenants`), end-to-end handler tests
+  through the real router + real AWS adapter + httptest STS
+  (`cloud_connectors_exchange_live_test.go`), and exchange-path cross-tenant
+  fail-closed assertions added to `cloud_connectors_isolation_test.go`.
+
 ## 3. DB tables added
 
 | Table | Purpose | Isolation |
@@ -126,30 +166,47 @@ psql "$DATABASE_URL" -f src/backend/migrations/0024_cloud_connectors.sql
 
 ## 4. Security / UX / provider gaps still open (honest)
 
-- **Live token exchange is not wired** — AWS STS AssumeRole, Azure Entra federated
-  token, GCP STS token-exchange all return `ErrProviderExchangeDeferred`. The
-  broker, cache, storage, templates, validation and audit around them ARE done.
+- ~~Live token exchange is not wired~~ **CLOSED (P5–P7)** — see §2.1. Remaining
+  per-provider deferrals inside the exchange lane:
+  - **Azure certificate runtime** (`AuthMethodCertificate`) — the customer holds
+    the private key (we store a thumbprint reference only), so Correlix cannot
+    mint the client JWT; returns `ErrProviderExchangeDeferred`.
+  - **AWS `AssumeRoleWithWebIdentity`** — the WIF-labeled AWS method currently
+    exchanges via plain `AssumeRole` signed with the platform key pair; a true
+    keyless OIDC→role path is a follow-up.
+  - **Workload assertion ISSUANCE** — `WorkloadAssertionSource` READS a platform
+    OIDC token (mounted file / env: `CLOUD_CONNECTOR_WORKLOAD_JWT[_FILE]`);
+    Correlix does not yet run its own issuer that mints per-connector-audience
+    assertions.
 - **Live permission/scope validation deferred** — `validate-permissions` and
   `discover-scopes` return the declared required permissions / entered scopes with
   a `"live_check":"deferred"` marker (no provider round-trip yet).
-- **Identity health is `config_validated`, never `live_verified`** this run — by
-  design (identity health stays separate from telemetry health).
+- **Identity health now reaches `live_verified`** via the validate live trust
+  proof; it is still distinct from telemetry health, and there is no periodic
+  re-verification loop yet (health reflects the last explicit validate).
 - **Wizard UI not built** — provider-neutral APIs + the wizard SHAPE are specified;
   the React wizard is a follow-up (reuse admin/integration primitives).
 - **Existing Python sidecar not yet migrated** onto the broker (still env creds).
+- **No per-exchange metrics series yet** — failures are observable via structured
+  logs + the audit trail; a VictoriaMetrics counter lane is a follow-up.
 
 ## 5. Phased plan for deferred work
 
-See `cloud-connectors-architecture.md` §"Phased roadmap". Ordering: (P5) AWS STS
-runtime + live permission validation → (P6) Azure Entra WIF + admin-consent OAuth
-runtime → (P7) GCP WIF runtime → (P8) wizard UI → (P9) migrate the Python sidecar
-to request broker tokens (retire env creds) → (P10) Service View / topology
+See `cloud-connectors-architecture.md` §"Phased roadmap". **P5–P7 token runtimes
+are shipped** (§2.1). Remaining ordering: live permission validation + scope
+discovery → workload-assertion issuer + AWS AssumeRoleWithWebIdentity + Azure
+admin-consent OAuth flow → (P8) wizard UI → (P9) migrate the Python sidecar to
+request broker tokens (retire env creds) → (P10) Service View / topology
 integration of connector-sourced inventory.
 
 ## 6. Risks
 
-- The broker's live exchange must enforce `DurationSeconds ≤ max lifetime` at the
-  provider call (the cap is already enforced on the returned token).
+- ~~The broker's live exchange must enforce `DurationSeconds ≤ max lifetime` at
+  the provider call~~ **done**: AWS sends `DurationSeconds` (clamped 900–3600s),
+  GCP impersonation sends `lifetime`; Azure Entra lifetimes are provider-fixed
+  (60–90 min), so the broker CLAMPS the served expiry to the 1h cap (tokens >2×
+  the cap are rejected). Note the clamped Entra token remains provider-valid
+  slightly past the cap — the broker just refuses to serve it after the cap.
 - Rotation overlap requires the provider-side old credential to remain valid until
   the operator revokes it; the store tracks version + `rotated_at` but cannot force
   upstream revocation.
