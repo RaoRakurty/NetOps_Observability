@@ -54,6 +54,11 @@ AWS_METERED_METRICS = os.environ.get("AWS_METERED_METRICS", "on").lower() != "of
 CLOUD_SEAM_TELEMETRY = os.environ.get("CLOUD_SEAM_TELEMETRY", "on").lower() != "off"
 SEAM_EVERY_S = int(os.environ.get("SEAM_EVERY_S", "120"))
 GCP_METERED_METRICS = os.environ.get("GCP_METERED_METRICS", "on").lower() != "off"
+# GCP log-fidelity lanes (#105 parity: vpc_flows / firewall / LB+Armor / DNS).
+# Per-lane opt-in gates live in gcp.py (GCP_VPC_FLOW_LOGS etc.); this is the
+# shared cadence. entries:list reads are free but the project quota is
+# 60 req/min — 120s keeps 4 lanes × ≤5 pages comfortably inside it.
+GCP_LOG_LANES_EVERY_S = int(os.environ.get("GCP_LOG_LANES_EVERY_S", "120"))
 POLL_S = int(os.environ.get("POLL_S", "60"))
 DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
 # CloudWatch metric lane (Service View counters + CUSUM evidence). CloudWatch's
@@ -296,6 +301,7 @@ def main():
     last_gcp_metrics = 0.0
     last_seam = 0.0
     last_gcp_seam = 0.0
+    last_gcp_logs = 0.0
     last_az_seam = 0.0
     while True:
         try:
@@ -371,6 +377,20 @@ def main():
                     except Exception as exc:  # noqa: BLE001 - lane isolation
                         jlog("gcp seam error", error=str(exc)[:200])
                     last_gcp_seam = now
+                # Log-fidelity lanes (flow/firewall/LB+Armor/DNS): opt-in gates
+                # live in gcp.py; poll_log_lanes has per-lane isolation inside,
+                # and this outer guard keeps a lane-table bug from touching the
+                # audit/seam checkpoints above (P1-11 discipline).
+                if now - last_gcp_logs >= GCP_LOG_LANES_EVERY_S:
+                    try:
+                        nl = gcp.poll_log_lanes(
+                            gtok, producer, TENANT, st, _iso_minutes_ago(15))
+                        save_state(st)
+                        if nl:
+                            jlog("gcp log lanes", signals=nl)
+                    except Exception as exc:  # noqa: BLE001 - lane isolation
+                        jlog("gcp log lanes error", error=str(exc)[:200])
+                    last_gcp_logs = now
             except Exception as exc:  # noqa: BLE001 - lane isolation
                 jlog("gcp cycle error", error=str(exc)[:200])
 
