@@ -94,14 +94,48 @@ type rcaSpineHopView struct {
 }
 
 type rcaTopologyView struct {
-	Available  bool              `json:"available"`
-	Reason     string            `json:"reason,omitempty"`
-	VantageID  string            `json:"vantage_id,omitempty"`
-	ObservedAt string            `json:"observed_at,omitempty"`
-	Stale      bool              `json:"stale"`
-	Hops       []rcaSpineHopView `json:"hops,omitempty"`
+	Available  bool   `json:"available"`
+	Reason     string `json:"reason,omitempty"`
+	VantageID  string `json:"vantage_id,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	Stale      bool   `json:"stale"`
+	// RelationToIncident (P1.8): pre_incident | incident_time |
+	// post_recovery_validation | historical_context | unknown. A path captured
+	// after recovery is recovery VALIDATION — it can never establish
+	// incident-time root cause; the note states so explicitly.
+	RelationToIncident string            `json:"relation_to_incident,omitempty"`
+	TemporalNote       string            `json:"temporal_note,omitempty"`
+	Hops               []rcaSpineHopView `json:"hops,omitempty"`
 	// DropPoint: the path's own causality sentence (set when a fault hop exists).
 	DropPoint string `json:"drop_point,omitempty"`
+}
+
+// stampTopologyTemporalRole classifies the attached path observation's
+// temporal role against the incident window (P1.8, audit D9).
+func stampTopologyTemporalRole(rep *rcaReport) {
+	t := &rep.Topology
+	if !t.Available || t.ObservedAt == "" {
+		return
+	}
+	obs, ok := parseChTS(strings.TrimSuffix(t.ObservedAt, " UTC"))
+	if !ok {
+		t.RelationToIncident = "unknown"
+		return
+	}
+	first, okF := parseChTS(strings.TrimSuffix(rep.Times.FirstObserved, " UTC"))
+	last, okL := parseChTS(strings.TrimSuffix(rep.Times.LastAnomalous, " UTC"))
+	switch {
+	case okF && obs.Before(first):
+		t.RelationToIncident = "pre_incident"
+		t.TemporalNote = "This path was measured BEFORE the incident began — historical context, not incident-time evidence."
+	case okL && obs.After(last):
+		t.RelationToIncident = "post_recovery_validation"
+		t.TemporalNote = "This path was measured AFTER the last anomalous observation — it validates the current/recovered state and cannot establish incident-time root cause."
+	case okF:
+		t.RelationToIncident = "incident_time"
+	default:
+		t.RelationToIncident = "unknown"
+	}
 }
 
 type rcaReportStates struct {
@@ -226,10 +260,14 @@ type rcaKV struct {
 }
 
 type rcaSignalSummary struct {
-	Total           int    `json:"total"`
-	Attached        int    `json:"attached"`
-	Anomalous       int    `json:"anomalous"` // attached, non-clear
-	Clears          int    `json:"clears"`
+	Total     int `json:"total"`
+	Attached  int `json:"attached"`
+	Anomalous int `json:"anomalous"` // attached, non-clear
+	Clears    int `json:"clears"`
+	// EvidenceGroups (P1.7): distinct (observer, entity) groups among the
+	// anomalous evidence — derived signals from one measurement source count
+	// once. Signal counts are volume; groups are the deduplicated evidence.
+	EvidenceGroups  int    `json:"evidence_group_count"`
 	UniqueObservers int    `json:"unique_observers"`
 	PeakSeverity    string `json:"peak_severity"`
 	// Probe detail — present only when active-probe evidence exists. Values are

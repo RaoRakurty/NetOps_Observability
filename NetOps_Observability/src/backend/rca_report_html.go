@@ -363,6 +363,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <h2>Signal measurements</h2>
   <div class="kv">
     <span class="k">Observations (window)</span><span class="v">{{.Signals.Total}} total · {{.Signals.Attached}} tied to this case · {{.Signals.Clears}} recovery signals</span>
+    <span class="k">Evidence groups</span><span class="v">{{.Signals.EvidenceGroups}} (derived signals from one measurement source count once)</span>
     <span class="k">Independent observers</span><span class="v">{{.Signals.UniqueObservers}}</span>
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
@@ -400,7 +401,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <section>
   <h2>Network path &amp; causality (measured)</h2>
   {{if .Topology.Available}}
-  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.RelationToIncident}} · temporal role: <b>{{humanState .Topology.RelationToIncident}}</b>{{end}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  {{if .Topology.TemporalNote}}<div class="note" style="color:#b45309;font-weight:600">{{.Topology.TemporalNote}}</div>{{end}}
   {{pathGraph .Topology}}
   <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
   {{range .Topology.Hops}}<tr>

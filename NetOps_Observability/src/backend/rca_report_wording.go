@@ -200,6 +200,13 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 		Total: len(all), Anomalous: len(anomalous), Clears: len(clears),
 		UniqueObservers: len(observers), PeakSeverity: peakSev,
 	}
+	// P1.7: dedupe derived signals into evidence groups — one (observer, entity)
+	// measurement source is ONE group however many kinds it emitted.
+	groups := map[string]bool{}
+	for _, sig := range anomalous {
+		groups[fmt.Sprintf("%v|%v", sig["observer_id"], sig["entity_id"])] = true
+	}
+	out.EvidenceGroups = len(groups)
 	for _, sig := range all {
 		if b, _ := sig["attached"].(bool); b {
 			out.Attached++

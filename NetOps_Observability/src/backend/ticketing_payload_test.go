@@ -15,7 +15,7 @@ func TestBuildCorrTicketFacts_DerivesFromViewAndSignals(t *testing.T) {
 	sigRows := []map[string]any{
 		{"attached": true, "kind": "if_oper_down", "modality_class": "device_telemetry", "severity": "crit"},
 		{"attached": true, "kind": "probe_loss", "modality_class": "active_probe", "severity": "high", "probe_authority": "authoritative"},
-		{"attached": false, "kind": "noise", "modality_class": "device_telemetry", "severity": "warn"}, // not attached → ignored
+		{"attached": false, "kind": "noise", "modality_class": "device_telemetry", "severity": "warn"},             // not attached → ignored
 		{"attached": true, "kind": "if_oper_down_clear", "modality_class": "device_telemetry", "severity": "crit"}, // clear → ignored
 	}
 	view := rcaPathView{
@@ -59,6 +59,38 @@ func TestBuildCorrTicketFacts_ProbeOnlyLowAuthority(t *testing.T) {
 	f := buildCorrTicketFacts(map[string]any{}, sigRows, rcaPathView{Verdict: "suspected"})
 	if !f.ProbeOnly || !f.LowAuthorityProbe {
 		t.Fatalf("expected probe-only low-authority, got %+v", f)
+	}
+}
+
+// P1.11 on the ticketing path: a single uncorroborated stream (one modality,
+// one observer) never carries CRIT into the policy for an unconfirmed verdict —
+// so a lone crit-labelled flow anomaly cannot satisfy suspected-requires-critical.
+func TestBuildCorrTicketFacts_SingleStreamCritCapped(t *testing.T) {
+	single := []map[string]any{
+		{"attached": true, "kind": "flow_volume_anomaly", "modality_class": "passive_flow",
+			"severity": "crit", "observer_id": "exporter-1"},
+	}
+	f := buildCorrTicketFacts(map[string]any{}, single, rcaPathView{Verdict: "suspected"})
+	if f.PeakSeverity == "crit" {
+		t.Fatalf("single uncorroborated stream kept crit: %+v", f)
+	}
+	dec := evalTicketDecision(f, defaultIncidentPolicy("t_a"), nil, rcaTestNow)
+	if dec.Create {
+		t.Fatalf("single-stream suspected anomaly must not open a ticket: %+v", dec)
+	}
+
+	// corroborated (second modality, second observer) keeps its crit
+	multi := append(single, map[string]any{
+		"attached": true, "kind": "probe_loss", "modality_class": "active_probe",
+		"severity": "crit", "observer_id": "prober-1", "probe_authority": "authoritative"})
+	f2 := buildCorrTicketFacts(map[string]any{}, multi, rcaPathView{Verdict: "suspected"})
+	if f2.PeakSeverity != "crit" {
+		t.Fatalf("corroborated evidence lost its severity: %+v", f2)
+	}
+	// a confirmed verdict is exempt from the cap even single-stream
+	f3 := buildCorrTicketFacts(map[string]any{}, single, rcaPathView{Verdict: "confirmed"})
+	if f3.PeakSeverity != "crit" {
+		t.Fatalf("confirmed verdict must keep evidence severity: %+v", f3)
 	}
 }
 
@@ -147,7 +179,7 @@ func TestTicketSeverityMapping(t *testing.T) {
 // outright — including DEMOTING below the automatic escalation — and 0 keeps
 // the automatic behavior per slot.
 func TestTicketSeverityMapping_CustomerOverrides(t *testing.T) {
-	pol := defaultIncidentPolicy("t_a") // defaults 2/2
+	pol := defaultIncidentPolicy("t_a")                              // defaults 2/2
 	pol.ImpactConfirmedCritical, pol.UrgencyConfirmedCritical = 2, 2 // customer demotes P1→P3
 	pol.ImpactConfirmed = 3                                          // partial: urgency stays automatic (1)
 

@@ -63,6 +63,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		Now:  time.Now().UTC(),
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
+	stampTopologyTemporalRole(&rep)
 
 	switch strings.ToLower(r.URL.Query().Get("format")) {
 	case "", "json":
