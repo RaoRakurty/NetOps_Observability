@@ -18,6 +18,7 @@ type fakeAdapter struct {
 	issued   int
 	lastReq  cloudconn.ExchangeRequest
 	ttl      time.Duration
+	now      func() time.Time // controllable clock; nil = time.Now
 }
 
 func (f *fakeAdapter) Provider() cloudconn.Provider { return f.provider }
@@ -34,7 +35,30 @@ func (f *fakeAdapter) ExchangeCredential(_ context.Context, req cloudconn.Exchan
 	if ttl == 0 {
 		ttl = 10 * time.Minute
 	}
-	return cloudconn.ScopedToken{Provider: f.provider, Value: "tok-secret-value", Expiry: time.Now().UTC().Add(ttl)}, nil
+	now := time.Now
+	if f.now != nil {
+		now = f.now
+	}
+	// The value is bound to the connector's ExternalId + mint count, so tests can
+	// prove WHICH connector a served credential was minted for (isolation) and
+	// WHEN it was refreshed.
+	return cloudconn.ScopedToken{
+		Provider: f.provider,
+		Value:    "tok-" + req.Identity.ExternalID + "-" + itoaTest(f.issued),
+		Expiry:   now().UTC().Add(ttl),
+	}, nil
+}
+
+func itoaTest(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	s := ""
+	for n > 0 {
+		s = string(rune('0'+n%10)) + s
+		n /= 10
+	}
+	return s
 }
 func (f *fakeAdapter) DiscoverScopes(context.Context, cloudconn.DiscoverRequest) ([]cloudconn.Scope, error) {
 	return nil, nil
@@ -98,6 +122,106 @@ func TestBrokerTokenCacheTenantConnectorIsolation(t *testing.T) {
 	// Cross-tenant request for A's connector under tenant B fails closed (Get scoped).
 	if _, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "tenant-b", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012"}); !errors.Is(err, errBrokerNotFound) {
 		t.Fatalf("cross-tenant token request must fail closed, got %v", err)
+	}
+}
+
+// TestBrokerCachedCredentialNeverCrossesTenants proves tenant A's connector can
+// NEVER be served tenant B's cached credential: with identical role ARNs,
+// provider accounts and capability sets, each tenant receives a credential
+// minted for ITS OWN connector (bound to its ExternalId), from mint through
+// cache hit.
+func TestBrokerCachedCredentialNeverCrossesTenants(t *testing.T) {
+	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	b, store := newTestBroker(t, fake)
+	const sameRole = "arn:aws:iam::123456789012:role/correlix-observer"
+	ca := mkActiveConnector(t, store, "tenant-a", sameRole)
+	cb := mkActiveConnector(t, store, "tenant-b", sameRole)
+
+	reqA := scopedTokenRequest{Tenant: "tenant-a", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	reqB := scopedTokenRequest{Tenant: "tenant-b", ConnectorID: cb.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+
+	// B mints first and warms the cache.
+	tokB, err := b.TokenFor(context.Background(), reqB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A then asks with an otherwise-identical request; it must NOT receive B's
+	// cached credential.
+	tokA, err := b.TokenFor(context.Background(), reqA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokA.Value == tokB.Value {
+		t.Fatal("tenant A received tenant B's cached credential — cross-tenant cache leak")
+	}
+	wantA := "tok-" + ca.Identity.ExternalID + "-2"
+	if tokA.Value != wantA {
+		t.Fatalf("A's credential is not bound to A's connector identity: got %q want %q", tokA.Value, wantA)
+	}
+	// Cache hits keep the binding: A's repeat still gets A's credential.
+	tokA2, err := b.TokenFor(context.Background(), reqA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokA2.Value != tokA.Value {
+		t.Fatalf("A's cache hit changed identity: %q -> %q", tokA.Value, tokA2.Value)
+	}
+	if fake.issued != 2 {
+		t.Fatalf("expected 2 mints (one per tenant), got %d", fake.issued)
+	}
+}
+
+// TestBrokerRefreshesAtEightyPercentTTL proves the expiry-aware refresh: a
+// cached token is served before 80% of its lifetime and proactively re-minted
+// after.
+func TestBrokerRefreshesAtEightyPercentTTL(t *testing.T) {
+	t0 := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	current := t0
+	clock := func() time.Time { return current }
+	fake := &fakeAdapter{provider: cloudconn.ProviderAWS, ttl: 10 * time.Minute, now: clock}
+	b, store := newTestBroker(t, fake)
+	b.now = clock
+	c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
+	req := scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID}
+
+	if _, err := b.TokenFor(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	// 7 min elapsed (70% of TTL) → still cached.
+	current = t0.Add(7 * time.Minute)
+	if _, err := b.TokenFor(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if fake.issued != 1 {
+		t.Fatalf("token inside the refresh window must be served from cache, mints=%d", fake.issued)
+	}
+	// 8.5 min elapsed (85% of TTL, still >30s before expiry) → proactive refresh.
+	current = t0.Add(8*time.Minute + 30*time.Second)
+	if _, err := b.TokenFor(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if fake.issued != 2 {
+		t.Fatalf("token past 80%% TTL must be refreshed, mints=%d", fake.issued)
+	}
+}
+
+// TestBrokerClampsFixedProviderLifetimes: providers with fixed token lifetimes
+// the caller cannot shorten (Azure Entra: 60–90 min) are CLAMPED to the cap,
+// not rejected; far-out lifetimes (>2× cap) are still rejected (see
+// TestBrokerMaxLifetimeCap).
+func TestBrokerClampsFixedProviderLifetimes(t *testing.T) {
+	t0 := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return t0 }
+	fake := &fakeAdapter{provider: cloudconn.ProviderAzure, ttl: 90 * time.Minute, now: clock}
+	b, store := newTestBroker(t, fake)
+	b.now = clock
+	c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
+	tok, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID, MaxLifetime: time.Hour})
+	if err != nil {
+		t.Fatalf("a 90m provider token must be clamped, not rejected: %v", err)
+	}
+	if !tok.Expiry.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("expiry must be clamped to the 1h cap, got %v", tok.Expiry)
 	}
 }
 

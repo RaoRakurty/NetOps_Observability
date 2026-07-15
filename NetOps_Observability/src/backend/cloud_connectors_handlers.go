@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -412,11 +413,16 @@ func (s *server) serveConnectorSetup(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, bundle)
 }
 
-// serveConnectorValidate runs the PURE configuration validation (no network) and
-// records the result + identity health. It does NOT auto-activate. Live trust
-// (STS/token-exchange) proof is a documented follow-up; identity health is set to
-// config_validated, never "live_verified", so a passing config never implies data
-// is flowing (identity health stays SEPARATE from telemetry health).
+// serveConnectorValidate runs the PURE configuration validation (no network),
+// then — when the configuration passes — proves the trust LIVE through the
+// Identity Broker (STS AssumeRole / Entra token / GCP STS exchange). It does
+// NOT auto-activate. Identity health outcomes:
+//   - live exchange succeeded          → "live_verified"
+//   - platform identity not configured → "config_validated" (live check deferred)
+//   - provider refused the exchange    → "failed" (+ live_trust_failed finding)
+//
+// A successful auth still never implies data is flowing — identity health stays
+// SEPARATE from telemetry health.
 func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
@@ -434,26 +440,89 @@ func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, 
 	res := adapter.ValidateConfiguration(c.Identity)
 	c.LastValidation = res
 	now := time.Now().UTC()
+	liveCheck := "deferred"
 	if res.OK {
-		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live trust proof deferred", Checked: now}
+		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live trust proof pending", Checked: now}
 		if cloudconn.CanTransition(c.State, cloudconn.StateValidating) {
 			c.State = cloudconn.StateValidating
 		}
 	} else {
 		c.IdentityHealth = healthStatus{State: "failed", Detail: "configuration has blocking findings", Checked: now}
 	}
-	// Warn if the collection scope reaches beyond validated permission scope isn't
-	// checkable without live discovery; surface the deferral explicitly.
-	s.recordConnectorEvent(r, claims, evConnectorValidated, c, "ok="+boolStr(res.OK))
+	// Persist the config-validation outcome FIRST: the broker re-reads the
+	// connector (state gate + secret refs) from the store.
 	saved, ok := s.persistConnector(w, r, c)
 	if !ok {
 		return
 	}
+
+	if res.OK && s.cloudBroker != nil {
+		liveCheck, saved = s.liveTrustCheck(w, r, claims, saved, &res)
+		if saved.ConnectorID == "" { // persist failed and the helper already responded
+			return
+		}
+	}
+	s.recordConnectorEvent(r, claims, evConnectorValidated, saved, "ok="+boolStr(res.OK)+" live="+liveCheck)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"connector":  toConnectorView(saved),
 		"validation": res,
-		"live_check": "deferred",
+		"live_check": liveCheck,
 	})
+}
+
+// liveTrustCheck asks the Identity Broker for a real scoped token (bounded to
+// 15s) and folds the outcome into identity health + the validation findings.
+// Returns the live_check marker and the re-persisted connector (zero-value
+// connector when persisting failed and an error response was already written).
+func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudConnector, res *cloudconn.ValidationResult) (string, cloudConnector) {
+	tenant, _ := principalTenant(claims)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	req := scopedTokenRequest{
+		Tenant:          tenant,
+		ConnectorID:     c.ConnectorID,
+		CapabilitySetID: c.PackFullID,
+	}
+	for _, sc := range c.Scopes {
+		if sc.Type == cloudconn.ScopeRegion && req.Region == "" {
+			req.Region = sc.Ref
+			continue
+		}
+		if req.ProviderAccount == "" {
+			req.ProviderAccount = sc.Ref
+			if len(sc.Regions) > 0 && req.Region == "" {
+				req.Region = sc.Regions[0]
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	liveCheck := "ok"
+	_, err := s.cloudBroker.TokenFor(ctx, req)
+	switch {
+	case err == nil:
+		c.IdentityHealth = healthStatus{State: "live_verified", Detail: "live trust proven: provider issued a scoped short-lived credential", Checked: now}
+	case errors.Is(err, cloudconn.ErrPlatformCredentialsMissing),
+		errors.Is(err, cloudconn.ErrWorkloadAssertionMissing),
+		errors.Is(err, cloudconn.ErrProviderExchangeDeferred):
+		liveCheck = "deferred"
+		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live check deferred: " + err.Error(), Checked: now}
+	default:
+		liveCheck = "failed"
+		// The error surface is sanitized by contract (ExchangeError / broker
+		// sentinels) — safe to persist and show as remediation.
+		c.IdentityHealth = healthStatus{State: "failed", Detail: "live trust check failed: " + err.Error(), Checked: now}
+		res.Add(cloudconn.SeverityWarning, "live_trust_failed",
+			"the provider refused to issue a credential for this identity",
+			"Verify the deployed trust (role/app/pool), the ExternalId/federated subject, and the stored secret, then validate again.")
+		c.LastValidation = *res
+	}
+	saved, ok := s.persistConnector(w, r, c)
+	if !ok {
+		return liveCheck, cloudConnector{}
+	}
+	return liveCheck, saved
 }
 
 // serveConnectorPermissions is the live permission validation — deferred to the
