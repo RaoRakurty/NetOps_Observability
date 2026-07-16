@@ -18,6 +18,7 @@ import {
   HealthBadge, ConfidenceBadge, RootDomainBadge, MetricCard, EmptyState,
   fmtBps, ago,
 } from "./badges";
+import { healthRank, confidenceRank, timeRank } from "./sortRanks";
 import { loadResources, loadAppRca, loadHealthSignals, loadChangeEvents, loadEvidence } from "./api";
 import { resourceCategory } from "./attribution";
 
@@ -147,10 +148,10 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
             columns={[
               { key: "name", header: "Resource", width: 190, text: (r) => r.name, render: (r) => <strong>{r.name}</strong> },
               { key: "cat", header: "Category", width: 116, sortable: true, sortValue: (r) => resourceCategory(r.type), render: (r) => <Chip label={resourceCategory(r.type)} tone="var(--fg-subtle)" /> },
-              { key: "type", header: "Type", width: 120, render: (r) => r.type },
-              { key: "region", header: "Region", width: 100, render: (r) => r.region },
-              { key: "src", header: "Identity source", width: 130, render: (r) => <>{r.source} <ConfidenceBadge level={r.confidence} /></> },
-              { key: "health", header: "Health", width: 110, render: (r) => <HealthBadge status={r.health} /> },
+              { key: "type", header: "Type", width: 120, sortValue: (r) => r.type, render: (r) => r.type },
+              { key: "region", header: "Region", width: 100, sortValue: (r) => r.region, render: (r) => r.region },
+              { key: "src", header: "Identity source", width: 130, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <>{r.source} <ConfidenceBadge level={r.confidence} /></> },
+              { key: "health", header: "Health", width: 110, sortValue: (r) => healthRank(r.health), render: (r) => <HealthBadge status={r.health} /> },
             ]} />
           )}
         </div>
@@ -307,14 +308,14 @@ function HealthTable({ rows }: { rows: HealthSignal[] }) {
   return <div className="ao-panel"><div className="ao-panel-h">Health signals <span className="ao-panel-meta">last 24h · from the connected cloud account</span></div>
     {rows.length === 0 ? <EmptyState title="No cloud health signals for this app in the last 24h" hint="a signal appears here when the provider reports a problem on this app" /> : (
     <DataTable<HealthSignal> rows={rows} rowKey={(r) => r.time + r.signal + r.metric + r.resource} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Health signals" columns={[
-      { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-      { key: "res", header: "Resource", width: 170, render: (r) => r.resource },
-      { key: "sig", header: "Signal", width: 150, render: (r) => r.signal },
-      { key: "metric", header: "Metric", width: 150, render: (r) => <span className="ao-mono">{r.metric}</span> },
-      { key: "state", header: "State", width: 100, render: (r) => <HealthBadge status={r.state} /> },
-      { key: "cur", header: "Current", width: 90, render: (r) => <strong>{r.current}</strong> },
-      { key: "base", header: "Baseline", width: 90, render: (r) => <span className="ao-muted">{r.baseline}</span> },
-      { key: "src", header: "Cloud", width: 90, render: (r) => r.source.toUpperCase() },
+      { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+      { key: "res", header: "Resource", width: 170, sortValue: (r) => r.resource, render: (r) => r.resource },
+      { key: "sig", header: "Signal", width: 150, sortValue: (r) => r.signal, render: (r) => r.signal },
+      { key: "metric", header: "Metric", width: 150, sortValue: (r) => r.metric, render: (r) => <span className="ao-mono">{r.metric}</span> },
+      { key: "state", header: "State", width: 100, sortValue: (r) => healthRank(r.state), render: (r) => <HealthBadge status={r.state} /> },
+      { key: "cur", header: "Current", width: 90, sortValue: (r) => r.current, render: (r) => <strong>{r.current}</strong> },
+      { key: "base", header: "Baseline", width: 90, sortValue: (r) => r.baseline, render: (r) => <span className="ao-muted">{r.baseline}</span> },
+      { key: "src", header: "Cloud", width: 90, sortValue: (r) => r.source, render: (r) => r.source.toUpperCase() },
     ]} />)}</div>;
 }
 
@@ -322,12 +323,12 @@ function ChangeTable({ rows }: { rows: ChangeEvent[] }) {
   return <div className="ao-panel"><div className="ao-panel-h">Change events <span className="ao-panel-meta">provider audit log · last 24h</span></div>
     {rows.length === 0 ? <EmptyState title="No cloud change events for this app in the last 24h" hint="management-plane changes on this app's resources appear here" /> : (
     <DataTable<ChangeEvent> rows={rows} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Change events" columns={[
-      { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-      { key: "type", header: "Change", width: 160, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
-      { key: "res", header: "Resource", width: 190, render: (r) => <span className="ao-mono">{r.resource}</span> },
-      { key: "actor", header: "Actor", width: 180, render: (r) => <span className="ao-mono">{r.actor}</span> },
-      { key: "src", header: "Source", width: 160, render: (r) => r.source },
-      { key: "conf", header: "Confidence", width: 110, render: (r) => <ConfidenceBadge level={r.confidence} /> },
+      { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+      { key: "type", header: "Change", width: 160, sortValue: (r) => r.changeType, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
+      { key: "res", header: "Resource", width: 190, sortValue: (r) => r.resource, render: (r) => <span className="ao-mono">{r.resource}</span> },
+      { key: "actor", header: "Actor", width: 180, sortValue: (r) => r.actor, render: (r) => <span className="ao-mono">{r.actor}</span> },
+      { key: "src", header: "Source", width: 160, sortValue: (r) => r.source, render: (r) => r.source },
+      { key: "conf", header: "Confidence", width: 110, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <ConfidenceBadge level={r.confidence} /> },
     ]} />)}</div>;
 }
 
@@ -335,11 +336,11 @@ function EvidenceTable({ rows }: { rows: EvidenceRow[] }) {
   return <div className="ao-panel"><div className="ao-panel-h">Evidence <span className="ao-panel-meta">what the engine grounded into this app's RCA + its declared gaps</span></div>
     {rows.length === 0 ? <EmptyState title="No cloud evidence for this app" hint="evidence appears when the correlation engine grounds one of this app's cloud signals into an RCA object" /> : (
     <DataTable<EvidenceRow> rows={rows} rowKey={(r) => `${r.evidenceRef}|${r.rcaGroup}|${r.time}|${r.reason}`} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Evidence" columns={[
-      { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-      { key: "cat", header: "Category", width: 110, render: (r) => r.category },
-      { key: "sig", header: "Signal", width: 140, render: (r) => r.signalType },
-      { key: "reason", header: "Reason", width: 320, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
-      { key: "conf", header: "Confidence", width: 110, render: (r) => <ConfidenceBadge level={r.confidence} /> },
-      { key: "ref", header: "Evidence ref", width: 150, render: (r) => <span className="ao-mono ao-muted">{r.evidenceRef}</span> },
+      { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+      { key: "cat", header: "Category", width: 110, sortValue: (r) => r.category, render: (r) => r.category },
+      { key: "sig", header: "Signal", width: 140, sortValue: (r) => r.signalType, render: (r) => r.signalType },
+      { key: "reason", header: "Reason", width: 320, sortValue: (r) => r.reason, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
+      { key: "conf", header: "Confidence", width: 110, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <ConfidenceBadge level={r.confidence} /> },
+      { key: "ref", header: "Evidence ref", width: 150, sortValue: (r) => r.evidenceRef, render: (r) => <span className="ao-mono ao-muted">{r.evidenceRef}</span> },
     ]} />)}</div>;
 }

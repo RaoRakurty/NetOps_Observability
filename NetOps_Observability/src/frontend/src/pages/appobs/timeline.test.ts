@@ -1,0 +1,78 @@
+// timeline.test.ts — the event-timeline episode model (2026-07 UX defect #1).
+// Acceptance: a repeated identical event collapses into ONE episode with a count
+// and a first→last span; genuinely-distinct signals never merge; empty provider
+// values normalize to "" so the UI can omit them honestly (no "— — (baseline —)").
+
+import { describe, it, expect } from "vitest";
+import { buildTimeline, cleanVal } from "./timeline";
+import type { ChangeEvent, HealthSignal } from "./types";
+
+const hs = (time: string, over: Partial<HealthSignal> = {}): HealthSignal => ({
+  time, app: "correlix-faultlab", resource: "vm-1", signal: "cloud_resource_health",
+  state: "down", metric: "", current: "", baseline: "—", severity: "critical", source: "aws", ...over,
+});
+
+describe("cleanVal", () => {
+  it("normalizes provider empties to an empty string", () => {
+    for (const v of ["", "—", "-", "null", "N/A", "none", "  ", undefined, null]) {
+      expect(cleanVal(v as string)).toBe("");
+    }
+  });
+  it("passes real values through, trimmed", () => {
+    expect(cleanVal("  5xx ")).toBe("5xx");
+    expect(cleanVal("down")).toBe("down");
+  });
+});
+
+describe("buildTimeline", () => {
+  it("collapses a consecutive run of identical events into one episode with a count + span", () => {
+    // 22 identical 'down' reports, oldest→newest 2 minutes apart (the real defect).
+    const health: HealthSignal[] = [];
+    for (let i = 0; i < 22; i++) {
+      const t = new Date(Date.UTC(2026, 6, 15, 10, i * 2, 0)).toISOString();
+      health.push(hs(t));
+    }
+    const eps = buildTimeline(health, []);
+    expect(eps).toHaveLength(1);
+    expect(eps[0].count).toBe(22);
+    expect(eps[0].firstSeen).toBe(health[0].time);            // earliest
+    expect(eps[0].lastSeen).toBe(health[health.length - 1].time); // latest
+    // resource identity + kind are surfaced (defect #1b)
+    expect(eps[0].resource).toBe("vm-1");
+    expect(eps[0].kind).toBe("down");
+    // baseline "—" normalized away — no fabricated reading (defect #1c)
+    expect(eps[0].current).toBe("");
+    expect(eps[0].baseline).toBe("");
+  });
+
+  it("does NOT merge genuinely distinct signals on the same resource (different metric)", () => {
+    const t1 = new Date(Date.UTC(2026, 6, 15, 10, 0, 0)).toISOString();
+    const t2 = new Date(Date.UTC(2026, 6, 15, 10, 2, 0)).toISOString();
+    const eps = buildTimeline([hs(t1, { metric: "cpu" }), hs(t2, { metric: "mem" })], []);
+    expect(eps).toHaveLength(2);
+  });
+
+  it("only collapses CONSECUTIVE runs (A,B,A stays three episodes)", () => {
+    const t = (m: number) => new Date(Date.UTC(2026, 6, 15, 10, m, 0)).toISOString();
+    const eps = buildTimeline([
+      hs(t(0), { resource: "vm-a" }),
+      hs(t(2), { resource: "vm-b" }),
+      hs(t(4), { resource: "vm-a" }),
+    ], []);
+    expect(eps).toHaveLength(3);
+  });
+
+  it("orders newest-first and merges health + change feeds", () => {
+    const change: ChangeEvent = {
+      time: new Date(Date.UTC(2026, 6, 15, 11, 0, 0)).toISOString(),
+      app: "correlix-faultlab", resource: "sg-1", changeType: "security_policy_change",
+      actor: "role/deployer", source: "cloudtrail", confidence: "confirmed", relatedSymptoms: [],
+    };
+    const health = hs(new Date(Date.UTC(2026, 6, 15, 10, 0, 0)).toISOString());
+    const eps = buildTimeline([health], [change]);
+    expect(eps).toHaveLength(2);
+    expect(eps[0].kind).toBe("change");      // newest first
+    expect(eps[0].detail).toBe("security policy change"); // humanized, no underscores
+    expect(eps[0].actor).toBe("role/deployer");
+  });
+});

@@ -98,10 +98,28 @@ export default function DataTable<T>({
     const th = (e.currentTarget as HTMLElement).parentElement;
     const startW = th ? th.getBoundingClientRect().width : 120;
     const startX = e.clientX;
+    document.body.classList.add("dtv-resizing");
     const onMove = (me: MouseEvent) => setColW((p) => ({ ...p, [key]: Math.max(60, Math.round(startW + (me.clientX - startX))) }));
-    const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    const onUp = () => {
+      document.body.classList.remove("dtv-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  };
+
+  // Keyboard resize: the handle is focusable, so ←/→ nudge the column width (Shift
+  // for a larger step). This makes the resize affordance operable without a mouse
+  // (WCAG 2.1.1) — matching the visible grip we now render on it.
+  const nudgeResize = (e: React.KeyboardEvent, key: string) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).parentElement;
+    const cur = colW[key] ?? (th ? Math.round(th.getBoundingClientRect().width) : 120);
+    const step = (e.shiftKey ? 24 : 8) * (e.key === "ArrowLeft" ? -1 : 1);
+    setColW((p) => ({ ...p, [key]: Math.max(60, cur + step) }));
   };
 
   // The grid track template — shared verbatim by the header and every body row so
@@ -240,12 +258,17 @@ export default function DataTable<T>({
               {resizable && (
                 <span
                   role="separator"
-                  aria-label="Resize column"
-                  title="Drag to resize"
+                  aria-orientation="vertical"
+                  aria-label={`Resize ${typeof c.header === "string" ? c.header : c.key} column`}
+                  title="Drag or use ←/→ to resize"
+                  tabIndex={0}
+                  className="dtv-resize"
                   onMouseDown={(e) => startResize(e, c.key)}
+                  onKeyDown={(e) => nudgeResize(e, c.key)}
                   onClick={(e) => e.stopPropagation()}
-                  style={{ position: "absolute", top: 0, right: 0, width: 7, height: "100%", cursor: "col-resize" }}
-                />
+                >
+                  <span className="dtv-resize-grip" aria-hidden="true" />
+                </span>
               )}
             </div>
           );

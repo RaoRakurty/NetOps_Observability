@@ -39,6 +39,10 @@ import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell
 import { SOURCE_LABEL } from "./appobs/readiness";
 import type { ReadinessSummary, SourceType, SourceStatus } from "./appobs/readiness";
 import { api } from "../services/api";
+import { severityRank } from "../theme/severity";
+import { healthRank, confidenceRank, verdictRank, timeRank } from "./appobs/sortRanks";
+import { buildTimeline, cleanVal } from "./appobs/timeline";
+import type { TimelineEpisode } from "./appobs/timeline";
 
 // async loader with explicit loading/error/empty states (no fake-data fallback —
 // an empty inventory shows an honest "connect a cloud account" state).
@@ -343,15 +347,16 @@ function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; s
         ) : (
           <DataTable<CloudRcaObject> rows={objects} rowKey={(o) => o.correlationId}
             height={Math.min(460, 56 + objects.length * 34)} ariaLabel="Open investigations"
+            initialSort={{ key: "verdict", dir: "asc" }}
             onRowClick={(o) => { location.hash = `#/monitoring/correlations?id=${encodeURIComponent(o.correlationId)}`; }}
             columns={[
-              { key: "apps", header: "Services", width: 220, render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
-              { key: "verdict", header: "Assessment", width: 120, sortable: true, sortValue: (o) => o.verdictTier, render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
-              { key: "hyp", header: "Probable cause", width: 300, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
-              { key: "conf", header: "Confidence", width: 96, align: "right", render: (o) => `${Math.round(o.confidence * 100)}%` },
-              { key: "sig", header: "Signals", width: 80, align: "right", sortable: true, sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
-              { key: "state", header: "State", width: 80, render: (o) => o.state },
-              { key: "start", header: "Started", width: 110, render: (o) => ago(o.windowStart) },
+              { key: "apps", header: "Services", width: 220, sortValue: (o) => o.apps.join(", "), render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
+              { key: "verdict", header: "Assessment", width: 120, sortValue: (o) => verdictRank(o.verdictTier), render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
+              { key: "hyp", header: "Probable cause", width: 300, sortValue: (o) => o.topHypothesis, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
+              { key: "conf", header: "Confidence", width: 96, align: "right", sortValue: (o) => o.confidence, render: (o) => `${Math.round(o.confidence * 100)}%` },
+              { key: "sig", header: "Signals", width: 80, align: "right", sortValue: (o) => o.signalCount, render: (o) => o.signalCount },
+              { key: "state", header: "State", width: 80, sortValue: (o) => o.state, render: (o) => o.state },
+              { key: "start", header: "Started", width: 110, sortValue: (o) => timeRank(o.windowStart), render: (o) => ago(o.windowStart) },
               { key: "act", header: "Findings", width: 110, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goTab("investigations", "findings"); }}>Findings</button> },
             ]} />
         )}
@@ -391,18 +396,18 @@ function Applications({ onOpen }: { onOpen: (a: App) => void }) {
           ariaLabel="Applications" onRowClick={onOpen} initialSort={{ key: "name", dir: "asc" }}
           columns={[
             { key: "name", header: "Service", width: 160, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
-            { key: "health", header: "Health", width: 100, render: (a) => <HealthBadge status={a.health} /> },
-            { key: "owner", header: "Owner", width: 100, render: (a) => a.owner },
-            { key: "env", header: "Env", width: 60, render: (a) => a.env },
-            { key: "conf", header: "Confidence", width: 110, sortable: true, sortValue: (a) => a.confidence, render: (a) => <ConfidenceBadge level={a.confidence} /> },
-            { key: "src", header: "Mapped by", width: 120, render: (a) => MAPPED_BY[a.source] ?? a.source },
-            { key: "provider", header: "Cloud", width: 90, render: (a) => a.providers.length ? a.providers.map((p) => p.toUpperCase()).join(" + ") : "—" },
-            { key: "acct", header: "Account", width: 130, render: (a) => <span className="ao-mono ao-muted">{a.account}</span> },
-            { key: "region", header: "Region", width: 100, render: (a) => a.region },
+            { key: "health", header: "Health", width: 100, sortValue: (a) => healthRank(a.health), render: (a) => <HealthBadge status={a.health} /> },
+            { key: "owner", header: "Owner", width: 100, sortValue: (a) => a.owner, render: (a) => a.owner },
+            { key: "env", header: "Env", width: 60, sortValue: (a) => a.env, render: (a) => a.env },
+            { key: "conf", header: "Confidence", width: 110, sortValue: (a) => confidenceRank(a.confidence), render: (a) => <ConfidenceBadge level={a.confidence} /> },
+            { key: "src", header: "Mapped by", width: 120, sortValue: (a) => MAPPED_BY[a.source] ?? a.source, render: (a) => MAPPED_BY[a.source] ?? a.source },
+            { key: "provider", header: "Cloud", width: 90, sortValue: (a) => a.providers.join("+"), render: (a) => a.providers.length ? a.providers.map((p) => p.toUpperCase()).join(" + ") : "—" },
+            { key: "acct", header: "Account", width: 130, sortValue: (a) => a.account, render: (a) => <span className="ao-mono ao-muted">{a.account}</span> },
+            { key: "region", header: "Region", width: 100, sortValue: (a) => a.region, render: (a) => a.region },
             { key: "res", header: "Res", width: 50, align: "right", sortable: true, sortValue: (a) => a.resources, render: (a) => a.resources },
-            { key: "traffic", header: "Traffic", width: 95, align: "right", render: (a) => NM(a.trafficBps, fmtBps) },
-            { key: "err", header: "Err%", width: 60, align: "right", render: (a) => NM(a.errorPct, (n) => `${n}%`) },
-            { key: "p95", header: "P95", width: 70, align: "right", render: (a) => NM(a.p95ms, (n) => `${n}ms`) },
+            { key: "traffic", header: "Traffic", width: 95, align: "right", sortValue: (a) => a.trafficBps, render: (a) => NM(a.trafficBps, fmtBps) },
+            { key: "err", header: "Err%", width: 60, align: "right", sortValue: (a) => a.errorPct, render: (a) => NM(a.errorPct, (n) => `${n}%`) },
+            { key: "p95", header: "P95", width: 70, align: "right", sortValue: (a) => a.p95ms, render: (a) => NM(a.p95ms, (n) => `${n}ms`) },
           ]} />
       </div>
     </div>
@@ -499,22 +504,22 @@ function Resources() {
               render: (r) => <input type="checkbox" aria-label={`Select ${r.name}`} checked={picked.has(r.id)}
                 onChange={() => setPicked((s) => toggleSelection(s, r.id))} onClick={(e) => e.stopPropagation()} /> },
             { key: "name", header: "Resource", width: 180, sortable: true, text: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.consoleUrl && <ConsoleLink compact href={r.consoleUrl} label={`Open in ${consoleName(r.provider)}`} />}</> },
-            { key: "type", header: "Type", width: 120, render: (r) => r.type },
+            { key: "type", header: "Type", width: 120, sortValue: (r) => r.type, render: (r) => r.type },
             { key: "power", header: "State", width: 90, sortable: true, sortValue: (r) => r.powerState, render: (r) => r.powerState === "—" ? DASH : (
               <span style={{ color: r.powerState === "running" ? "var(--ok)" : "var(--warn)", fontWeight: 600 }}>
                 {r.powerState.charAt(0).toUpperCase() + r.powerState.slice(1)}
               </span>
             ) },
-            { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
-            { key: "acct", header: "Account", width: 130, render: (r) => <span className="ao-mono ao-muted">{r.account}</span> },
-            { key: "region", header: "Region", width: 100, render: (r) => r.region },
-            { key: "app", header: "Service", width: 150, render: (r) => <AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> },
-            { key: "owner", header: "Owner", width: 90, render: (r) => r.owner },
-            { key: "src", header: "Mapped by", width: 120, render: (r) => MAPPED_BY[r.source] ?? r.source },
-            { key: "conf", header: "Confidence", width: 110, sortable: true, sortValue: (r) => r.confidence, render: (r) => <ConfidenceBadge level={r.confidence} /> },
-            { key: "health", header: "Health", width: 100, render: (r) => <HealthBadge status={r.health} /> },
-            { key: "traffic", header: "Traffic", width: 95, align: "right", render: (r) => NM(r.trafficBps, fmtBps) },
-            { key: "tags", header: "Missing tags", width: 130, render: (r) => r.missingTags.length ? <Chip label={r.missingTags.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
+            { key: "provider", header: "Cloud", width: 65, sortValue: (r) => r.provider, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
+            { key: "acct", header: "Account", width: 130, sortValue: (r) => r.account, render: (r) => <span className="ao-mono ao-muted">{r.account}</span> },
+            { key: "region", header: "Region", width: 100, sortValue: (r) => r.region, render: (r) => r.region },
+            { key: "app", header: "Service", width: 150, sortValue: (r) => r.app, render: (r) => <AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /> },
+            { key: "owner", header: "Owner", width: 90, sortValue: (r) => r.owner, render: (r) => r.owner },
+            { key: "src", header: "Mapped by", width: 120, sortValue: (r) => MAPPED_BY[r.source] ?? r.source, render: (r) => MAPPED_BY[r.source] ?? r.source },
+            { key: "conf", header: "Confidence", width: 110, sortable: true, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <ConfidenceBadge level={r.confidence} /> },
+            { key: "health", header: "Health", width: 100, sortValue: (r) => healthRank(r.health), render: (r) => <HealthBadge status={r.health} /> },
+            { key: "traffic", header: "Traffic", width: 95, align: "right", sortValue: (r) => r.trafficBps, render: (r) => NM(r.trafficBps, fmtBps) },
+            { key: "tags", header: "Missing tags", width: 130, sortValue: (r) => r.missingTags.length, render: (r) => r.missingTags.length ? <Chip label={r.missingTags.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
           ]} />
       </div>
       {sel && <ResourceDrawer r={sel} onClose={() => setSel(null)} />}
@@ -610,19 +615,14 @@ function Attribution() {
       <div className="ao-panel">
         <div className="ao-panel-h">Coverage by scope <span className="ao-panel-meta">attributed resources per provider / region</span></div>
         {byScope.length === 0 ? <EmptyState title="No resources in scope" /> : (
-          <table className="ao-tbl">
-            <thead><tr><th>Provider / Region</th><th>Attributed</th><th>Total</th><th>Coverage</th></tr></thead>
-            <tbody>
-              {byScope.map((s) => (
-                <tr key={s.scope}>
-                  <td>{s.scope}</td>
-                  <td>{s.attributed}</td>
-                  <td>{s.total}</td>
-                  <td><span className="ao-funnel-bar ao-funnel-bar--inline"><span className="ao-funnel-fill" style={{ width: `${s.pct}%`, background: s.pct >= 80 ? "var(--ok)" : s.pct >= 50 ? "var(--warn)" : "var(--crit)" }} /></span> {s.pct}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable rows={byScope} rowKey={(s) => s.scope} height={Math.min(360, 44 + byScope.length * 30)}
+            ariaLabel="Coverage by scope" initialSort={{ key: "pct", dir: "asc" }}
+            columns={[
+              { key: "scope", header: "Provider / Region", width: 220, sortValue: (s) => s.scope, render: (s) => s.scope },
+              { key: "attributed", header: "Attributed", width: 110, align: "right", sortValue: (s) => s.attributed, render: (s) => s.attributed },
+              { key: "total", header: "Total", width: 90, align: "right", sortValue: (s) => s.total, render: (s) => s.total },
+              { key: "pct", header: "Coverage", width: 200, sortValue: (s) => s.pct, render: (s) => <><span className="ao-funnel-bar ao-funnel-bar--inline"><span className="ao-funnel-fill" style={{ width: `${s.pct}%`, background: s.pct >= 80 ? "var(--ok)" : s.pct >= 50 ? "var(--warn)" : "var(--crit)" }} /></span> {s.pct}%</> },
+            ]} />
         )}
       </div>
 
@@ -634,14 +634,14 @@ function Attribution() {
         ) : (
           <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources"
             columns={[
-              { key: "entity", header: "Resource", width: 220, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
-              { key: "kind", header: "Type", width: 120, render: (r) => r.kind },
-              { key: "provider", header: "Cloud", width: 65, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
-              { key: "region", header: "Region", width: 100, render: (r) => r.region },
-              { key: "bytes", header: "Bytes", width: 90, align: "right", render: (r) => NM(r.bytes, fmtBytes) },
-              { key: "flows", header: "Flows", width: 80, align: "right", render: (r) => NM(r.flows, (n) => n.toLocaleString()) },
-              { key: "missing", header: "Missing", width: 140, render: (r) => r.missingFields.length ? <Chip label={r.missingFields.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
-              { key: "rec", header: "Recommendation", width: 260, render: (r) => r.recommendation },
+              { key: "entity", header: "Resource", width: 220, sortValue: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
+              { key: "kind", header: "Type", width: 120, sortValue: (r) => r.kind, render: (r) => r.kind },
+              { key: "provider", header: "Cloud", width: 65, sortValue: (r) => r.provider, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
+              { key: "region", header: "Region", width: 100, sortValue: (r) => r.region, render: (r) => r.region },
+              { key: "bytes", header: "Bytes", width: 90, align: "right", sortValue: (r) => r.bytes, render: (r) => NM(r.bytes, fmtBytes) },
+              { key: "flows", header: "Flows", width: 80, align: "right", sortValue: (r) => r.flows, render: (r) => NM(r.flows, (n) => n.toLocaleString()) },
+              { key: "missing", header: "Missing", width: 140, sortValue: (r) => r.missingFields.length, render: (r) => r.missingFields.length ? <Chip label={r.missingFields.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
+              { key: "rec", header: "Recommendation", width: 260, sortValue: (r) => r.recommendation, render: (r) => r.recommendation },
             ]} />
         )}
       </div>
@@ -681,21 +681,46 @@ function SourceFreshnessStrip() {
   );
 }
 
+// The health reading for a timeline episode — resource identity + metric live in
+// their own columns; this cell is the value vs baseline, rendered HONESTLY: a
+// change row has no reading, and a health signal that reported no value shows one
+// muted "no reading" rather than the old "— — (baseline —)" wall (audit defect #1c).
+function timelineReading(e: TimelineEpisode): React.ReactNode {
+  if (e.kind === "change") return DASH;
+  if (!e.current && !e.baseline) {
+    return <span className="ao-muted" title="the provider health signal carried no metric value">no reading</span>;
+  }
+  return <><strong>{e.current || "—"}</strong>{e.baseline && <span className="ao-muted"> vs {e.baseline} baseline</span>}</>;
+}
+
 // merged change + health timeline, newest first — the NOC "what happened, when".
+// Consecutive identical events collapse into one EPISODE with a ×N count + a
+// first→last span, and every column is click-to-sort (audit defects #1 + #2).
 function HCTimeline({ health, changes }: { health: HealthSignal[]; changes: ChangeEvent[] }) {
-  const items = [
-    ...changes.map((c) => ({ time: c.time, kind: "change", tone: "var(--warn)", app: c.app, label: `${c.changeType.replace(/_/g, " ")} on ${c.resource}` })),
-    ...health.map((h) => ({ time: h.time, kind: h.state === "down" ? "down" : "health", tone: h.severity === "critical" ? "var(--crit)" : "var(--warn)", app: h.app, label: `${h.signal} ${h.metric} ${h.current} (baseline ${h.baseline})` })),
-  ].sort((a, b) => b.time.localeCompare(a.time)).slice(0, 200);
+  const episodes = buildTimeline(health, changes);
   return (
     <div className="ao-panel">
-      <div className="ao-panel-h">Event timeline <span className="ao-panel-meta">change + health, newest first · last 24h</span></div>
-      {items.length === 0 ? <EmptyState title="No cloud events in the last 24h" hint="health + change signals appear here as the connected cloud accounts report them" /> : (
-        <ul className="ao-timeline">
-          {items.map((it, i) => (
-            <li key={i}><span className="ao-tl-t">{ago(it.time)}</span><Chip label={it.kind} tone={it.tone} /> <strong>{it.app}</strong> · {it.label}</li>
-          ))}
-        </ul>
+      <div className="ao-panel-h">Event timeline <span className="ao-panel-meta">change + health · repeats collapsed into episodes · newest first · last 24h</span></div>
+      {episodes.length === 0 ? <EmptyState title="No cloud events in the last 24h" hint="health + change signals appear here as the connected cloud accounts report them" /> : (
+        <DataTable<TimelineEpisode> rows={episodes} rowKey={(e) => `${e.key}|${e.firstSeen}|${e.lastSeen}`}
+          height={Math.min(480, 56 + episodes.length * 30)} ariaLabel="Event timeline"
+          initialSort={{ key: "when", dir: "desc" }}
+          columns={[
+            { key: "when", header: "Last seen", width: 150, sortValue: (e) => timeRank(e.lastSeen),
+              render: (e) => <span className="ao-tl-when"><span className="ao-tl-t">{ago(e.lastSeen)}</span>{e.count > 1 && <span className="ao-muted ao-tl-span"> · first {ago(e.firstSeen)}</span>}</span> },
+            { key: "count", header: "Count", width: 74, align: "right", sortValue: (e) => e.count,
+              render: (e) => e.count > 1
+                ? <span className="ao-count" title={`${e.count} occurrences · ${ago(e.firstSeen)} → ${ago(e.lastSeen)}`}>×{e.count}</span>
+                : <span className="ao-muted">1</span> },
+            { key: "kind", header: "Kind", width: 96, sortValue: (e) => e.kind, render: (e) => <Chip label={e.kind} tone={e.tone} /> },
+            { key: "app", header: "Service", width: 150, sortValue: (e) => e.app, render: (e) => <strong>{e.app}</strong> },
+            { key: "res", header: "Resource", width: 180, sortValue: (e) => e.resource, render: (e) => e.resource === "—" ? DASH : <span className="ao-mono">{e.resource}</span> },
+            { key: "what", header: "Event", width: 220, sortValue: (e) => e.detail,
+              render: (e) => <span className="ao-why" title={e.metric ? `${e.detail} · ${e.metric}` : e.detail}>{e.detail}{(e.metric || e.actor) && <span className="ao-mono ao-muted"> · {e.metric || e.actor}</span>}</span> },
+            { key: "val", header: "Reading", width: 170, sortValue: (e) => e.current || e.actor || "", render: (e) => timelineReading(e) },
+            { key: "sev", header: "Severity", width: 100, sortValue: (e) => e.severity ? severityRank(e.severity) : 99,
+              render: (e) => e.severity ? <Chip label={e.severity} tone={e.tone} /> : DASH },
+          ]} />
       )}
     </div>
   );
@@ -708,9 +733,13 @@ async function loadHealthChanges(): Promise<{ health: HealthSignal[]; changes: C
 
 function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
   const { data, status } = useAsync(loadHealthChanges);
+  // Row drill-in (audit defect #4): open the full record for an alert / change.
+  const [alertSel, setAlertSel] = useState<HealthSignal | null>(null);
+  const [changeSel, setChangeSel] = useState<ChangeEvent | null>(null);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error" || !data) return <LoadError what="cloud health & change signals" />;
   const { health, changes } = data;
+  const sevTone = (s: string) => s === "critical" ? "var(--crit)" : s === "warning" ? "var(--warn)" : "var(--fg-subtle)";
   return (
     <div className="ao-stack">
       <SourceFreshnessStrip />
@@ -721,18 +750,18 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
             <EmptyState title="No cloud alerts in the last 24 hours"
               hint="provider health reports appear here when a connected account reports a problem" />
           ) : (
-          <DataTable<HealthSignal> rows={health} rowKey={(r) => r.time + r.signal + r.app + r.metric} height={Math.min(480, 44 + health.length * 30)} ariaLabel="Health signals"
+          <DataTable<HealthSignal> rows={health} rowKey={(r) => r.time + r.signal + r.app + r.metric} height={Math.min(480, 44 + health.length * 30)} ariaLabel="Health signals" onRowClick={setAlertSel}
             columns={[
-              { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
-              { key: "app", header: "Service", width: 130, render: (r) => <strong>{r.app}</strong> },
-              { key: "res", header: "Resource", width: 160, render: (r) => r.resource },
-              { key: "sig", header: "Signal", width: 150, render: (r) => r.signal },
-              { key: "state", header: "State", width: 96, render: (r) => <HealthBadge status={r.state} /> },
-              { key: "metric", header: "Metric", width: 170, render: (r) => <span className="ao-mono">{r.metric}</span> },
-              { key: "cur", header: "Current", width: 76, render: (r) => <strong>{r.current}</strong> },
-              { key: "base", header: "Baseline", width: 76, render: (r) => <span className="ao-muted">{r.baseline}</span> },
-              { key: "sev", header: "Severity", width: 86, sortable: true, sortValue: (r) => r.severity, render: (r) => <Chip label={r.severity} tone={r.severity === "critical" ? "var(--crit)" : "var(--warn)"} /> },
-              { key: "src", header: "Cloud", width: 90, render: (r) => r.source.toUpperCase() },
+              { key: "time", header: "Time", width: 84, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+              { key: "app", header: "Service", width: 130, sortValue: (r) => r.app, render: (r) => <strong>{r.app}</strong> },
+              { key: "res", header: "Resource", width: 160, sortValue: (r) => r.resource, render: (r) => r.resource },
+              { key: "sig", header: "Signal", width: 150, sortValue: (r) => r.signal, render: (r) => r.signal },
+              { key: "state", header: "State", width: 96, sortValue: (r) => healthRank(r.state), render: (r) => <HealthBadge status={r.state} /> },
+              { key: "metric", header: "Metric", width: 170, sortValue: (r) => r.metric, render: (r) => <span className="ao-mono">{r.metric}</span> },
+              { key: "cur", header: "Current", width: 76, sortValue: (r) => r.current, render: (r) => <strong>{r.current}</strong> },
+              { key: "base", header: "Baseline", width: 76, sortValue: (r) => r.baseline, render: (r) => <span className="ao-muted">{r.baseline}</span> },
+              { key: "sev", header: "Severity", width: 86, sortValue: (r) => severityRank(r.severity), render: (r) => <Chip label={r.severity} tone={sevTone(r.severity)} /> },
+              { key: "src", header: "Cloud", width: 90, sortValue: (r) => r.source, render: (r) => r.source.toUpperCase() },
             ]} />
           )}
         </div>
@@ -743,21 +772,69 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
             <EmptyState title="No cloud change events in the last 24 hours"
               hint="management-plane changes (CloudTrail / Activity Log) appear here as the provider audits them" />
           ) : (
-          <DataTable<ChangeEvent> rows={changes} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(480, 44 + changes.length * 30)} ariaLabel="Change events"
+          <DataTable<ChangeEvent> rows={changes} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(480, 44 + changes.length * 30)} ariaLabel="Change events" onRowClick={setChangeSel}
             columns={[
-              { key: "time", header: "Time", width: 90, render: (r) => ago(r.time) },
-              { key: "app", header: "Service", width: 130, render: (r) => <strong>{r.app}</strong> },
-              { key: "res", header: "Resource", width: 190, render: (r) => <><span className="ao-mono">{r.resource}</span>{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
+              { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+              { key: "app", header: "Service", width: 130, sortValue: (r) => r.app, render: (r) => <strong>{r.app}</strong> },
+              { key: "res", header: "Resource", width: 190, sortValue: (r) => r.resource, render: (r) => <><span className="ao-mono">{r.resource}</span>{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
               { key: "type", header: "Change type", width: 170, sortable: true, sortValue: (r) => r.changeType, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
-              { key: "actor", header: "Actor", width: 190, render: (r) => <span className="ao-mono">{r.actor}</span> },
-              { key: "src", header: "Source", width: 160, render: (r) => <>{r.source}{r.cloudRef?.logUrl && <ConsoleLink compact href={r.cloudRef.logUrl} label={r.cloudRef.provider === "aws" ? "View CloudTrail event" : "View Activity Log"} />}</> },
-              { key: "conf", header: "Confidence", width: 110, render: (r) => <ConfidenceBadge level={r.confidence} /> },
-              { key: "sym", header: "Related symptoms", width: 180, render: (r) => r.relatedSymptoms.length ? r.relatedSymptoms.join(", ") : DASH },
+              { key: "actor", header: "Actor", width: 190, sortValue: (r) => r.actor, render: (r) => <span className="ao-mono">{r.actor}</span> },
+              { key: "src", header: "Source", width: 160, sortValue: (r) => r.source, render: (r) => <>{r.source}{r.cloudRef?.logUrl && <ConsoleLink compact href={r.cloudRef.logUrl} label={r.cloudRef.provider === "aws" ? "View CloudTrail event" : "View Activity Log"} />}</> },
+              { key: "conf", header: "Confidence", width: 110, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <ConfidenceBadge level={r.confidence} /> },
+              { key: "sym", header: "Related symptoms", width: 180, sortValue: (r) => r.relatedSymptoms.length, render: (r) => r.relatedSymptoms.length ? r.relatedSymptoms.join(", ") : DASH },
             ]} />
           )}
         </div>
       )}
+      {alertSel && <HealthSignalDrawer s={alertSel} onClose={() => setAlertSel(null)} sevTone={sevTone} />}
+      {changeSel && <ChangeDrawer c={changeSel} onClose={() => setChangeSel(null)} />}
     </div>
+  );
+}
+
+// Alert (health-signal) detail — the full record behind a timeline/alerts row:
+// exact time, resource identity, metric, the reading vs baseline (honest when the
+// provider reported none), severity and the reporting cloud source.
+function HealthSignalDrawer({ s, onClose, sevTone }: { s: HealthSignal; onClose: () => void; sevTone: (s: string) => string }) {
+  return (
+    <EvidenceDrawer title={`${s.signal} · ${s.app}`}
+      subtitle={<span className="ao-drawer-badges"><HealthBadge status={s.state} /><Chip label={s.severity} tone={sevTone(s.severity)} /></span>}
+      onClose={onClose}>
+      <table className="ao-kv"><tbody>
+        <tr><td>Time</td><td>{new Date(s.time).toLocaleString()}</td></tr>
+        <tr><td>Service</td><td><strong>{s.app}</strong></td></tr>
+        <tr><td>Resource</td><td>{cleanVal(s.resource) ? <span className="ao-mono">{s.resource}</span> : DASH}</td></tr>
+        <tr><td>Signal</td><td>{s.signal}</td></tr>
+        <tr><td>State</td><td><HealthBadge status={s.state} /></td></tr>
+        <tr><td>Metric</td><td>{cleanVal(s.metric) ? <span className="ao-mono">{s.metric}</span> : DASH}</td></tr>
+        <tr><td>Reading</td><td>{cleanVal(s.current)
+          ? <><strong>{s.current}</strong>{cleanVal(s.baseline) && <span className="ao-muted"> vs {s.baseline} baseline</span>}</>
+          : <span className="ao-muted">no reading reported by the provider signal</span>}</td></tr>
+        <tr><td>Severity</td><td>{s.severity}</td></tr>
+        <tr><td>Cloud source</td><td>{s.source.toUpperCase()}</td></tr>
+      </tbody></table>
+    </EvidenceDrawer>
+  );
+}
+
+// Change detail — the full management-plane record behind a change row, with the
+// console + provider-log pivots (CloudTrail event / Activity Log) when resolvable.
+function ChangeDrawer({ c, onClose }: { c: ChangeEvent; onClose: () => void }) {
+  return (
+    <EvidenceDrawer title={`${c.changeType.replace(/_/g, " ")} · ${c.app}`}
+      subtitle={<span className="ao-drawer-badges"><Chip label={c.changeType.replace(/_/g, " ")} tone="var(--warn)" /><ConfidenceBadge level={c.confidence} /></span>}
+      onClose={onClose}>
+      <table className="ao-kv"><tbody>
+        <tr><td>Time</td><td>{new Date(c.time).toLocaleString()}</td></tr>
+        <tr><td>Service</td><td><strong>{c.app}</strong></td></tr>
+        <tr><td>Resource</td><td><span className="ao-mono">{c.resource}</span>{c.cloudRef?.consoleUrl && <> · <ConsoleLink href={c.cloudRef.consoleUrl} label={`Open in ${consoleName(c.cloudRef.provider)}`} /></>}</td></tr>
+        <tr><td>Change type</td><td>{c.changeType.replace(/_/g, " ")}</td></tr>
+        <tr><td>Actor</td><td><span className="ao-mono">{c.actor}</span></td></tr>
+        <tr><td>Source</td><td>{c.source}{c.cloudRef?.logUrl && <> · <ConsoleLink href={c.cloudRef.logUrl} label={c.cloudRef.provider === "aws" ? "View CloudTrail event" : "View Activity Log"} /></>}</td></tr>
+        <tr><td>Confidence</td><td><ConfidenceBadge level={c.confidence} /></td></tr>
+        <tr><td>Related symptoms</td><td>{c.relatedSymptoms.length ? c.relatedSymptoms.join(", ") : "—"}</td></tr>
+      </tbody></table>
+    </EvidenceDrawer>
   );
 }
 
@@ -819,13 +896,13 @@ function Unknowns() {
         ) : (
           <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources" onRowClick={setFix}
             columns={[
-              { key: "entity", header: "Resource", width: 210, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
-              { key: "kind", header: "Type", width: 116, render: (r) => r.kind },
-              { key: "provider", header: "Cloud", width: 60, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
-              { key: "region", header: "Region", width: 96, render: (r) => r.region },
-              { key: "bytes", header: "Traffic", width: 86, align: "right", render: (r) => NM(r.bytes, fmtBytes) },
-              { key: "why", header: "Why untagged", width: 170, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
-              { key: "fix", header: "Recommended fix", width: 240, render: (r) => r.recommendation },
+              { key: "entity", header: "Resource", width: 210, sortValue: (r) => r.name, render: (r) => <><strong>{r.name}</strong>{r.address && <span className="ao-mono ao-muted"> {r.address}</span>}</> },
+              { key: "kind", header: "Type", width: 116, sortValue: (r) => r.kind, render: (r) => r.kind },
+              { key: "provider", header: "Cloud", width: 60, sortValue: (r) => r.provider, render: (r) => r.provider === "—" ? "—" : r.provider.toUpperCase() },
+              { key: "region", header: "Region", width: 96, sortValue: (r) => r.region, render: (r) => r.region },
+              { key: "bytes", header: "Traffic", width: 86, align: "right", sortValue: (r) => r.bytes, render: (r) => NM(r.bytes, fmtBytes) },
+              { key: "why", header: "Why untagged", width: 170, sortValue: (r) => r.missingFields.length, render: (r) => r.missingFields.length ? <Chip label={`missing ${r.missingFields.join("/")}`} tone="var(--fg-subtle)" /> : <span className="ao-muted">—</span> },
+              { key: "fix", header: "Recommended fix", width: 240, sortValue: (r) => r.recommendation, render: (r) => r.recommendation },
               { key: "act", header: "Action", width: 110, render: (r) => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); setFix(r); }}>Remediate</button> },
             ]} />
         )}
@@ -918,16 +995,16 @@ function Evidence() {
         <DataTable<EvidenceRow> rows={rows} rowKey={(r) => `${r.evidenceRef}|${r.rcaGroup}|${r.time}|${r.reason}`} height={Math.min(480, 44 + rows.length * 30)}
           ariaLabel="Findings" onRowClick={setSel}
           columns={[
-            { key: "time", header: "Time", width: 84, render: (r) => ago(r.time) },
+            { key: "time", header: "Time", width: 84, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
             { key: "cat", header: "Category", width: 130, sortable: true, sortValue: (r) => r.category, render: (r) => <EvidenceCategoryBadge category={r.category} /> },
-            { key: "sig", header: "Signal type", width: 140, render: (r) => r.signalType },
-            { key: "app", header: "Service", width: 110, render: (r) => <strong>{r.app}</strong> },
-            { key: "res", header: "Resource", width: 130, render: (r) => <>{r.resource}{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
-            { key: "src", header: "Source", width: 130, render: (r) => r.source },
-            { key: "conf", header: "Confidence", width: 104, render: (r) => <ConfidenceBadge level={r.confidence} /> },
-            { key: "reason", header: "Reason", width: 320, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
-            { key: "grounded", header: "Grounded", width: 90, render: (r) => r.grounded ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">gap</span> },
-            { key: "rca", header: "Investigation", width: 130, render: (r) => r.rcaGroup ? (
+            { key: "sig", header: "Signal type", width: 140, sortValue: (r) => r.signalType, render: (r) => r.signalType },
+            { key: "app", header: "Service", width: 110, sortValue: (r) => r.app, render: (r) => <strong>{r.app}</strong> },
+            { key: "res", header: "Resource", width: 130, sortValue: (r) => r.resource, render: (r) => <>{r.resource}{r.cloudRef?.consoleUrl && <ConsoleLink compact href={r.cloudRef.consoleUrl} label={`Open in ${consoleName(r.cloudRef.provider)}`} />}</> },
+            { key: "src", header: "Source", width: 130, sortValue: (r) => String(r.source), render: (r) => r.source },
+            { key: "conf", header: "Confidence", width: 104, sortValue: (r) => confidenceRank(r.confidence), render: (r) => <ConfidenceBadge level={r.confidence} /> },
+            { key: "reason", header: "Reason", width: 320, sortValue: (r) => r.reason, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
+            { key: "grounded", header: "Grounded", width: 90, sortValue: (r) => (r.grounded ? 0 : 1), render: (r) => r.grounded ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">gap</span> },
+            { key: "rca", header: "Investigation", width: 130, sortValue: (r) => (r.rcaGroup ? 0 : 1), render: (r) => r.rcaGroup ? (
               <a className="ao-rowaction" href={`#/monitoring/correlations?id=${encodeURIComponent(r.rcaGroup)}`}
                 onClick={(e) => e.stopPropagation()} title={r.rcaGroup}>Open</a>
             ) : DASH },

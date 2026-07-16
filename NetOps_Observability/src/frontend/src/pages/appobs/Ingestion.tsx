@@ -10,7 +10,9 @@ import { useEffect, useState } from "react";
 import { api, CloudResourceRow } from "../../services/api";
 import { fetchCloudInventory } from "./api";
 import { Skeleton } from "../../components/ui";
+import DataTable from "../../components/DataTable";
 import { EmptyState } from "./badges";
+import { timeRank } from "./sortRanks";
 import { ReadinessStrip, SourceStatusBadge, FreshnessBadge } from "./shell";
 import {
   SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, isMeasured,
@@ -90,29 +92,20 @@ function Accounts({ accounts }: { accounts: CloudAccount[] }) {
           action={<button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>} /></div>
       ) : (
         <div className="ao-panel">
-          <div className="ao-panel-h">Connected accounts <span className="ao-panel-meta">connection management lives in Admin → Integrations</span></div>
-          <div className="ao-table-wrap">
-            <table className="ao-tbl">
-              <thead><tr>
-                <th>Provider</th><th>Account / Subscription / Project</th><th>Tenant</th><th>Regions</th>
-                <th>Flowing sources</th><th>Connection</th><th>Last sync</th><th>Actions</th>
-              </tr></thead>
-              <tbody>
-                {accounts.map((a) => (
-                  <tr key={a.provider + a.accountId}>
-                    <td>{PROVIDER(a.provider)}</td>
-                    <td><span className="ao-mono">{a.accountId}</span></td>
-                    <td className="ao-muted">{a.tenant || "global"}</td>
-                    <td>{a.regions.join(", ") || "—"}</td>
-                    <td>{a.enabledSources} of {SOURCE_TYPES.length}</td>
-                    <td><SourceStatusBadge status={a.status} /></td>
-                    <td><FreshnessBadge iso={a.lastSyncIso} status={a.status} /></td>
-                    <td><button className="ao-rowaction" onClick={goIntegrations}>Manage</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <div className="ao-panel-h">Connected accounts <span className="ao-panel-meta">connection management lives in Admin → Integrations · sort any column · open a row to manage</span></div>
+          <DataTable<CloudAccount> rows={accounts} rowKey={(a) => a.provider + a.accountId}
+            height={Math.min(360, 44 + accounts.length * 30)} ariaLabel="Connected accounts"
+            onRowClick={goIntegrations}
+            columns={[
+              { key: "provider", header: "Provider", width: 90, sortValue: (a) => a.provider, render: (a) => PROVIDER(a.provider) },
+              { key: "acct", header: "Account / Subscription / Project", width: 240, sortValue: (a) => a.accountId, render: (a) => <span className="ao-mono">{a.accountId}</span> },
+              { key: "tenant", header: "Tenant", width: 120, sortValue: (a) => a.tenant || "global", render: (a) => <span className="ao-muted">{a.tenant || "global"}</span> },
+              { key: "regions", header: "Regions", width: 160, sortValue: (a) => a.regions.length, render: (a) => a.regions.join(", ") || "—" },
+              { key: "flowing", header: "Flowing sources", width: 130, align: "right", sortValue: (a) => a.enabledSources, render: (a) => `${a.enabledSources} of ${SOURCE_TYPES.length}` },
+              { key: "conn", header: "Connection", width: 130, sortValue: (a) => a.status, render: (a) => <SourceStatusBadge status={a.status} /> },
+              { key: "sync", header: "Last sync", width: 120, sortValue: (a) => timeRank(a.lastSyncIso), render: (a) => <FreshnessBadge iso={a.lastSyncIso} status={a.status} /> },
+              { key: "act", header: "Actions", width: 100, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goIntegrations(); }}>Manage</button> },
+            ]} />
         </div>
       )}
     </div>

@@ -2251,6 +2251,27 @@ tbody tr.dt-row:hover { background: var(--hover); }
 .dtv-th.sorted { color: var(--accent); }
 .dtv-arrow { margin-left: 5px; font-size: 9px; opacity: 0.55; }
 .dtv-th.sorted .dtv-arrow { opacity: 1; }
+/* Column resize handle — previously an invisible transparent span (audit defect
+   #3). Now it renders a visible grip bar: subtle by default, accent on hover/focus,
+   keyboard-focusable (←/→ resize), with adequate contrast in light AND dark. */
+.dtv-resize {
+  position: absolute; top: 0; right: 0; width: 11px; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: col-resize; z-index: 3;
+}
+.dtv-resize-grip {
+  width: 2px; height: 56%; border-radius: 2px;
+  background: var(--border-strong, var(--panel-border));
+  opacity: 0.6; transition: background 0.12s, opacity 0.12s, height 0.12s;
+}
+.dtv-resize:hover .dtv-resize-grip { background: var(--accent); opacity: 1; height: 72%; }
+.dtv-resize:focus-visible { outline: none; }
+.dtv-resize:focus-visible .dtv-resize-grip {
+  background: var(--accent); opacity: 1; height: 82%; width: 3px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* While dragging a border, suppress text selection + force the resize cursor. */
+body.dtv-resizing { cursor: col-resize !important; user-select: none !important; }
 .dtv-body { position: relative; width: 100%; }
 .dtv-row {
   position: absolute; left: 0; right: 0; top: 0;
@@ -4507,7 +4528,15 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 /* timeline */
 .ao-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
 .ao-timeline li { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta, 13px); color: var(--fg); }
-.ao-tl-t { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); min-width: 64px; }
+.ao-tl-t { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); }
+/* Episode occurrence count (×N) — a collapsed run of identical events. */
+.ao-count {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 999px; padding: 1px 7px; line-height: 1.4;
+}
+.ao-tl-span { font-size: 11px; }
 
 /* RCA panel */
 .ao-rca { border-left: 3px solid var(--accent); }
