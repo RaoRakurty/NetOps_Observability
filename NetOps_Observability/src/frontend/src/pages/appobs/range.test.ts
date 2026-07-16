@@ -8,8 +8,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  CLOUD_RANGES, CLOUD_WINDOW_MINUTES, DEFAULT_CLOUD_RANGE,
+  CLOUD_RANGES, CLOUD_WINDOW_MINUTES, CLOUD_WINDOW_MAX_MINUTES, DEFAULT_CLOUD_RANGE,
   withinRange, filterByRange, newestIso, feedCount, rangeWords, freshnessText, rangeFor,
+  windowHoursFor,
 } from "./range";
 
 const NOW = Date.UTC(2026, 6, 15, 12, 0, 0);
@@ -17,17 +18,37 @@ const agoMin = (m: number) => new Date(NOW - m * 60_000).toISOString();
 const row = (m: number) => ({ time: agoMin(m) });
 
 describe("the offered presets", () => {
-  it("never exceeds the window the backend actually ingests", () => {
-    // /api/cloud/health|changes|evidence read a fixed 24h and take no window
-    // param — a "7d" preset could only ever return 24h of rows and lie about it.
-    for (const r of CLOUD_RANGES) expect(r.minutes).toBeLessThanOrEqual(CLOUD_WINDOW_MINUTES);
+  it("never exceeds the window the server will honor", () => {
+    // /api/cloud/health|changes|evidence take ?window_hours= clamped to 168h
+    // (Wave 2 #5): every preset must sit inside that clamp so a selected range
+    // is always the range the read actually covered — no label can outrun it.
+    for (const r of CLOUD_RANGES) expect(r.minutes).toBeLessThanOrEqual(CLOUD_WINDOW_MAX_MINUTES);
   });
-  it("defaults to the FULL ingested window so the first paint hides nothing", () => {
+  it("offers 7d now that the server honors it", () => {
+    expect(CLOUD_RANGES.some((r) => r.label === "7d" && r.minutes === CLOUD_WINDOW_MAX_MINUTES)).toBe(true);
+  });
+  it("STILL defaults to the 24h standing window (never the 7d maximum)", () => {
+    // first paint pays the standing read, not the widest scan.
     expect(DEFAULT_CLOUD_RANGE.minutes).toBe(CLOUD_WINDOW_MINUTES);
   });
   it("resolves an unknown minute count back to the default", () => {
     expect(rangeFor(99999).minutes).toBe(CLOUD_WINDOW_MINUTES);
     expect(rangeFor(60).label).toBe("1h");
+  });
+});
+
+describe("windowHoursFor — the server read window a UI range requests", () => {
+  it("sub-24h ranges reuse the default 24h fetch (client narrows inside it)", () => {
+    expect(windowHoursFor(15)).toBe(24);
+    expect(windowHoursFor(60)).toBe(24);
+    expect(windowHoursFor(360)).toBe(24);
+    expect(windowHoursFor(1440)).toBe(24);
+  });
+  it("above 24h the window is the real, server-honored range", () => {
+    expect(windowHoursFor(CLOUD_WINDOW_MAX_MINUTES)).toBe(168);
+  });
+  it("never requests past the server clamp", () => {
+    expect(windowHoursFor(99 * 24 * 60)).toBe(168);
   });
 });
 

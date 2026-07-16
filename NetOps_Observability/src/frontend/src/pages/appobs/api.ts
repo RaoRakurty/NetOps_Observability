@@ -11,6 +11,7 @@ import { api } from "../../services/api";
 import type {
   CloudAppRow, CloudResourceRow, CloudCoverageReport, CloudConfidence, CloudSource,
   CloudHealthSignalRow, CloudChangeRow, CloudEvidenceRow, CloudRcaObjectRow, CloudRefWire,
+  CloudResourceQuery,
 } from "../../services/api";
 import type {
   App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource, AppRca,
@@ -213,36 +214,62 @@ export async function loadApps(): Promise<App[]> {
 // remembered as truth).
 type CloudResourcesResponse = Awaited<ReturnType<typeof api.cloudResources>>;
 const INVENTORY_TTL_MS = 30_000;
-let invCache: { at: number; data: CloudResourcesResponse } | null = null;
-let invInflight: Promise<CloudResourcesResponse> | null = null;
+// Cache is keyed by the server-side filter (Wave 2 #5): the unfiltered read the
+// shell/options need and each scoped read coexist without evicting each other.
+const invCache = new Map<string, { at: number; data: CloudResourcesResponse }>();
+const invInflight = new Map<string, Promise<CloudResourcesResponse>>();
 
-export function fetchCloudInventory(): Promise<CloudResourcesResponse> {
-  if (invCache && Date.now() - invCache.at < INVENTORY_TTL_MS) {
-    return Promise.resolve(invCache.data);
+function invKey(q?: CloudResourceQuery): string {
+  if (!q) return "";
+  return [q.providers ?? [], q.accounts ?? [], q.regions ?? []]
+    .map((v) => [...v].sort().join(",")).join("|");
+}
+
+export function fetchCloudInventory(q?: CloudResourceQuery): Promise<CloudResourcesResponse> {
+  const key = invKey(q);
+  const hit = invCache.get(key);
+  if (hit && Date.now() - hit.at < INVENTORY_TTL_MS) {
+    return Promise.resolve(hit.data);
   }
-  if (invInflight) return invInflight;
-  invInflight = api.cloudResources().then(
-    (r) => { invCache = { at: Date.now(), data: r }; invInflight = null; return r; },
-    (e) => { invInflight = null; throw e; },
+  const inflight = invInflight.get(key);
+  if (inflight) return inflight;
+  const p = api.cloudResources(q).then(
+    (r) => { invCache.set(key, { at: Date.now(), data: r }); invInflight.delete(key); return r; },
+    (e) => { invInflight.delete(key); throw e; },
   );
-  return invInflight;
+  invInflight.set(key, p);
+  return p;
 }
 
 // Drop the cached inventory: after a write that changes attribution (e.g. a
 // bulk service assignment) the next read must see the server's truth. Also the
 // test seam.
 export function invalidateCloudInventory(): void {
-  invCache = null;
-  invInflight = null;
+  invCache.clear();
+  invInflight.clear();
 }
 
-export async function loadResources(): Promise<CloudResource[]> {
-  const r = await fetchCloudInventory();
+// SERVER-side scope filtering (Wave 2 #5): provider/account/region ride the
+// Wave-1 SQL filters on /api/cloud/resources — never fetch-all-and-narrow for
+// dimensions the store filters itself. env is the one client-side leftover:
+// it is a resolved tag, not a store column, and the fetched page is already
+// LIMIT-bounded, so narrowing it here is the honest, cheap remainder.
+export async function loadResources(scope?: {
+  providers: string[]; accounts: string[]; regions: string[]; envs: string[];
+}): Promise<CloudResource[]> {
+  const q: CloudResourceQuery | undefined =
+    scope && (scope.providers.length || scope.accounts.length || scope.regions.length)
+      ? { providers: scope.providers, accounts: scope.accounts, regions: scope.regions }
+      : undefined;
+  const r = await fetchCloudInventory(q);
   const consoleUrls = r.console_urls ?? {};
-  return (r.resources ?? []).map((row) => ({
+  const out = (r.resources ?? []).map((row) => ({
     ...toResource(row),
     consoleUrl: safeConsoleUrl(consoleUrls[row.resource_id]),
   }));
+  const envs = scope?.envs ?? [];
+  if (envs.length === 0) return out;
+  return out.filter((res) => envs.includes(res.env));
 }
 
 // The REAL engine RCA for an app (#81 P3G). Returns the most recent grounded
@@ -394,13 +421,15 @@ function toRcaObject(r: CloudRcaObjectRow): CloudRcaObject {
   };
 }
 
-export async function loadHealthSignals(app?: string): Promise<HealthSignal[]> {
-  const r = await api.cloudHealth(app);
+// windowHours (Wave 2 #5): the REAL server read window — the backend clamps to
+// 1..168 and reports what it honored; absent keeps the 24h default.
+export async function loadHealthSignals(app?: string, windowHours?: number): Promise<HealthSignal[]> {
+  const r = await api.cloudHealth(app, undefined, windowHours);
   return (r.signals ?? []).map(toHealthSignal);
 }
 
-export async function loadChangeEvents(app?: string): Promise<ChangeEvent[]> {
-  const r = await api.cloudChanges(app);
+export async function loadChangeEvents(app?: string, windowHours?: number): Promise<ChangeEvent[]> {
+  const r = await api.cloudChanges(app, undefined, windowHours);
   return (r.changes ?? []).map(toChangeEvent);
 }
 
@@ -415,8 +444,8 @@ export type EvidenceBundle = {
   objectsTruncated: boolean;
 };
 
-export async function loadEvidence(app?: string): Promise<EvidenceBundle> {
-  const r = await api.cloudEvidence(app);
+export async function loadEvidence(app?: string, windowHours?: number): Promise<EvidenceBundle> {
+  const r = await api.cloudEvidence(app, undefined, windowHours);
   const rows = (r.evidence ?? []).map(toEvidenceRow);
   // Origin + fallback identity come from the evidence already in this response —
   // one join, no extra request, and nothing claimed that the engine did not ground.

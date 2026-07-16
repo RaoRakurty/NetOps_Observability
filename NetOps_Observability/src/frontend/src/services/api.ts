@@ -2280,7 +2280,7 @@ export const api = {
   // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
-  cloudResources: () => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number }>("/api/cloud/resources"),
+  cloudResources: (q?: CloudResourceQuery) => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number }>(`/api/cloud/resources${cloudResourceQS(q)}`),
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
   cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
@@ -2325,18 +2325,18 @@ export const api = {
   // #81 P3H — the REAL cloud health / change / evidence surfaces (corr_signals +
   // the cloud correlation objects), tenant-scoped and bounded to a 24h window.
   // Empty lists when nothing landed — the UI shows its honest empty state.
-  cloudHealth: (app?: string, limit?: number) =>
-    request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number }>(`/api/cloud/health${cloudQS(app, limit)}`),
-  cloudChanges: (app?: string, limit?: number) =>
-    request<{ changes: CloudChangeRow[]; count: number; window_hours: number }>(`/api/cloud/changes${cloudQS(app, limit)}`),
-  cloudEvidence: (app?: string, limit?: number) =>
+  cloudHealth: (app?: string, limit?: number, windowHours?: number) =>
+    request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number }>(`/api/cloud/health${cloudQS(app, limit, windowHours)}`),
+  cloudChanges: (app?: string, limit?: number, windowHours?: number) =>
+    request<{ changes: CloudChangeRow[]; count: number; window_hours: number }>(`/api/cloud/changes${cloudQS(app, limit, windowHours)}`),
+  cloudEvidence: (app?: string, limit?: number, windowHours?: number) =>
     request<{
       objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[];
       // count = the TRUE ledger size; returned = this page; open_object_count =
       // a dedicated COUNT of open investigations (audit D-P1-7 / D-P2-13).
       count: number; returned?: number; open_object_count?: number;
       objects_truncated?: boolean; window_hours: number;
-    }>(`/api/cloud/evidence${cloudQS(app, limit)}`),
+    }>(`/api/cloud/evidence${cloudQS(app, limit, windowHours)}`),
 
   // ---- Cloud Connectors: the done 7-step onboarding API (Wave 1 #3) ----
   // Every call is tenant-scoped server-side (owner from the token, never the body).
@@ -2375,10 +2375,32 @@ export const api = {
 };
 
 // shared query string for the cloud signal surfaces (optional app + limit).
-function cloudQS(app?: string, limit?: number): string {
+function cloudQS(app?: string, limit?: number, windowHours?: number): string {
   const p = new URLSearchParams();
   if (app) p.set("app", app);
   if (limit) p.set("limit", String(limit));
+  // Real time-range (Wave 2 #5): the backend clamps to 1..168h and reports the
+  // honored value back in window_hours. Only sent when it differs from the 24h
+  // default, so existing callers keep byte-identical requests.
+  if (windowHours && windowHours !== 24) p.set("window_hours", String(windowHours));
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
+// Multi-value server-side scope filters for /api/cloud/resources (Wave 2 #5 —
+// each value list is comma-joined; OR within a dimension, AND across).
+export interface CloudResourceQuery {
+  providers?: string[];
+  accounts?: string[];
+  regions?: string[];
+}
+
+function cloudResourceQS(q?: CloudResourceQuery): string {
+  if (!q) return "";
+  const p = new URLSearchParams();
+  if (q.providers?.length) p.set("provider", q.providers.join(","));
+  if (q.accounts?.length) p.set("account", q.accounts.join(","));
+  if (q.regions?.length) p.set("region", q.regions.join(","));
   const qs = p.toString();
   return qs ? `?${qs}` : "";
 }
