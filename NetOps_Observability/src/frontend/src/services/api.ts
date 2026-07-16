@@ -522,6 +522,41 @@ export type RcaPathView = {
   layer_coverage?: RcaLayerCoverage;
 };
 
+// ── Path-causality RCA P3 (design §5) — the discovered typed SRC→DST path + the
+// named on-path cause, as decoded server-side (rca_path_attribution.go). This is a
+// PURE render contract: the engine already made the causal decision + applied the
+// honesty caps; the UI only draws it. Absent when no on-path cause was attributed.
+export type RcaOnPathDevice = {
+  address?: string; role: string; label?: string;
+  segment_index: number; segment_type?: string; upstream_rank: number; ambiguous: boolean;
+};
+export type RcaAttributedFault = {
+  device: RcaOnPathDevice; kind: string; modality?: string; headline?: string;
+};
+export type RcaDiscountedFault = { identity: string; kind: string; reason: string };
+export type RcaPathKeyDevice = { address?: string; role: string; label?: string; confidence?: string };
+export type RcaTypedSegment = {
+  index: number; segment_type: string; boundary?: string; provider?: string; confidence?: string;
+  key_devices?: RcaPathKeyDevice[]; unknown_hops?: number[]; ambiguous: boolean; reason?: string;
+};
+export type RcaPathHead = { query_name?: string; resolved_address?: string };
+export type RcaTypedPath = {
+  src?: string; dst?: string; ambiguous: boolean;
+  head?: RcaPathHead | null; segments?: RcaTypedSegment[]; notes?: string[];
+};
+export type RcaPathAttribution = {
+  src?: string; dst?: string; headline?: string;
+  attributed?: RcaAttributedFault | null;
+  explained_away?: RcaAttributedFault[];
+  discounted?: RcaDiscountedFault[];
+  verdict_tier: string; baseline_verdict_tier: string;
+  confidence_lifted: boolean; capped: boolean; cap_reason?: string;
+  on_path_device_count: number; path?: RcaTypedPath | null;
+};
+// The RCA report JSON — we only type the path-causality slice the P3 render reads;
+// the report carries much more (rca_report.go), left loose for other consumers.
+export type RcaReportJson = { path_attribution?: RcaPathAttribution | null; [k: string]: unknown };
+
 // Front page (#69) — scope health score, unified event feed, RCA coverage stats.
 export type HealthContribution = {
   signal_class: string; entity: string; badness: number; points: number; reason: string; timestamp?: string;
@@ -1735,6 +1770,11 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return "html";
   },
+  // Canonical server-side RCA report as JSON (same endpoint the PDF/HTML render
+  // from). The path-causality P3 render reads `path_attribution` off this; the
+  // read is tenant-scoped + permission-gated identically to every correlation read.
+  rcaReportJson: (id: string) =>
+    request<RcaReportJson>(`/api/correlations/${encodeURIComponent(id)}/rca-report?format=json`),
   // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.
   correlationTimeline: (id: string) =>
     request<CorrTimeline>(`/api/correlations/${encodeURIComponent(id)}/timeline`),

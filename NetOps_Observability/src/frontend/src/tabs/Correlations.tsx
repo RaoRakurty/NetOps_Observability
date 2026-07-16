@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrTimeline, RcaPathAttribution, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -7,6 +7,7 @@ import RcaTopology from "../components/rca/RcaTopology";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
+import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { buildRcaCase } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
@@ -450,10 +451,20 @@ export function CorrelationDetail({ id }: { id: string }) {
   const [replaying, setReplaying] = useState(false);
   const [err, setErr] = useState("");
   const [view, setView] = useState<"operator" | "debug">("operator");
+  // Path-causality attribution (P3): the discovered typed SRC→DST path + named
+  // on-path cause, read off the canonical RCA report JSON (same tenant-scoped,
+  // permission-gated endpoint the PDF renders from). `loaded` gates the honest
+  // empty note so it shows only after the fetch settles, never mid-load.
+  const [pathAttr, setPathAttr] = useState<RcaPathAttribution | null>(null);
+  const [pathLoaded, setPathLoaded] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setObj(null); setTimeline(null); setReplay(null); setErr("");
+    setPathAttr(null); setPathLoaded(false);
+    api.rcaReportJson(id)
+      .then((r) => { if (alive) { setPathAttr(r.path_attribution ?? null); setPathLoaded(true); } })
+      .catch(() => { if (alive) setPathLoaded(true); }); // report JSON is best-effort; the rest of the inspector still renders
     api.correlationDetail(id)
       .then((r) => { if (alive) setObj(r.object); })
       .catch((e) => { if (alive) setErr(String(e?.message ?? e)); });
@@ -550,6 +561,7 @@ export function CorrelationDetail({ id }: { id: string }) {
       onExportPdf={exportPdf}
       exportDisabled={!timeline}
       debugExtra={replayPanel}
+      pathSlot={pathLoaded ? <RcaPathCausality data={pathAttr} /> : null}
       topologySlot={
         <RcaTopology timeline={timeline} seams={seams} view={view} height={300} />
       }

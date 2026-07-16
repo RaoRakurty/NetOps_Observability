@@ -586,3 +586,100 @@ export function appIdSourceLabel(s?: string): string {
   const k = (s || "").toLowerCase();
   return APP_ID_SOURCE_LABEL[k] || (s || "").replace(/_/g, " ");
 }
+
+// ── Path-causality RCA (P3 render) — customer-facing labels for the discovered
+// typed SRC→DST path (design §5). The engine speaks in segment_type / role tokens
+// (cloud/lan/dc/wan/wan_seam/internet/unknown; load_balancer/waf/dns/…); operators
+// read plain NOC nouns ("Cloud", "Load Balancer", "Web Application Firewall"). No
+// schema kinds, no backend vendor names — the customer-facing-language rule.
+
+// segment_type → (label, short badge, tone class, accent color). Each type gets a
+// DISTINCT visual treatment so the path reads as a typed sequence at a glance.
+// Tone maps to the rw-pill palette (green/orange/blue/red/gray/purple). Accent is a
+// concrete color (fallbacks legible on both the light report surface and dark app).
+export const SEGMENT_META: Record<string, { label: string; short: string; tone: Tone; color: string }> = {
+  cloud:    { label: "Cloud",        short: "CLOUD", tone: "purple", color: C.discriminates },
+  lan:      { label: "LAN",          short: "LAN",   tone: "blue",   color: C.info },
+  dc:       { label: "Data Center",  short: "DC",    tone: "green",  color: C.flow },
+  wan:      { label: "WAN",          short: "WAN",   tone: "orange", color: C.warn },
+  wan_seam: { label: "WAN Seam",     short: "SEAM",  tone: "orange", color: "#C2410C" },
+  internet: { label: "Internet",     short: "NET",   tone: "gray",   color: C.faint },
+  unknown:  { label: "Unknown segment", short: "?",  tone: "gray",   color: C.faint },
+};
+export function segmentLabel(t?: string): string {
+  return SEGMENT_META[(t || "").toLowerCase()]?.label ?? "Unknown segment";
+}
+export function segmentMeta(t?: string) {
+  return SEGMENT_META[(t || "").toLowerCase()] ?? SEGMENT_META.unknown;
+}
+// A segment we couldn't classify — rendered greyed WITH its reason, never guessed.
+export function isOpaqueSegment(t?: string): boolean {
+  return !t || (t || "").toLowerCase() === "unknown";
+}
+
+// device role → customer-facing device name. Cloud service devices (DNS/WAF/LB/FW/
+// app) + LAN/DC roles (client/leaf/spine/edge) + WAN roles (NVA/tunnel).
+export const ROLE_LABEL: Record<string, string> = {
+  dns: "DNS", waf: "Web Application Firewall",
+  load_balancer: "Load Balancer", lb: "Load Balancer",
+  firewall: "Firewall", fw: "Firewall",
+  app: "Application", application: "Application", host: "Host", server: "Server",
+  client: "Client", leaf: "Leaf switch", spine: "Spine switch",
+  edge: "Edge router", router: "Router", switch: "Switch",
+  nva: "Network appliance", tunnel: "Tunnel", gateway: "Gateway", proxy: "Proxy",
+  unknown: "Device",
+};
+export function roleLabel(r?: string): string {
+  const k = (r || "").toLowerCase();
+  return ROLE_LABEL[k] ?? (r ? r.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Device");
+}
+// Short glyph for the path node badge (kept ≤4 chars, colorblind-safe when paired
+// with the role label it always accompanies).
+export const ROLE_ABBR: Record<string, string> = {
+  dns: "DNS", waf: "WAF", load_balancer: "LB", lb: "LB", firewall: "FW", fw: "FW",
+  app: "APP", application: "APP", host: "HOST", server: "SRV", client: "USER",
+  leaf: "LEAF", spine: "SPN", edge: "EDGE", router: "RTR", switch: "SW",
+  nva: "NVA", tunnel: "TUN", gateway: "GW", proxy: "PXY", unknown: "•",
+};
+export function roleAbbr(r?: string): string {
+  const k = (r || "").toLowerCase();
+  return ROLE_ABBR[k] ?? (r ? r.slice(0, 4).toUpperCase() : "•");
+}
+// role → the Cloud Logs family lane a device's logs live in (design §5: the
+// device-in-path drill opens the family-tagged Cloud Logs). Only cloud service
+// devices have a cloud-logs lane; a LAN/WAN device returns "" (no cloud drill).
+const ROLE_CLOUD_FAMILY: Record<string, string> = {
+  load_balancer: "lb", lb: "lb", waf: "waf", dns: "dns",
+  host: "host", app: "host", application: "host", server: "host",
+};
+export function roleCloudFamily(r?: string): string {
+  return ROLE_CLOUD_FAMILY[(r || "").toLowerCase()] ?? "";
+}
+
+// verdict tier → operator label + pill tone. The path headline shows the LIFT
+// (baseline tier → verdict tier) so the on-path evidence's contribution is visible.
+export const TIER_LABEL: Record<string, string> = {
+  confirmed: "Confirmed", suspected: "Suspected", inconclusive: "Inconclusive",
+  observed: "Observed", undetermined: "Undetermined",
+};
+export function tierLabel(t?: string): string {
+  const k = (t || "").toLowerCase();
+  return TIER_LABEL[k] ?? (t ? t.replace(/\b\w/g, (c) => c.toUpperCase()) : "Undetermined");
+}
+export function tierTone(t?: string): Tone {
+  switch ((t || "").toLowerCase()) {
+    case "confirmed": return "red";      // a confirmed customer-impacting break — loud
+    case "suspected": return "orange";
+    case "inconclusive": case "observed": return "blue";
+    default: return "gray";
+  }
+}
+// confidence token (strong/medium/weak) → operator label, for a segment/device.
+export function confidenceLabel(c?: string): string {
+  switch ((c || "").toLowerCase()) {
+    case "strong": return "strong match";
+    case "medium": return "likely";
+    case "weak": return "weak signal";
+    default: return c || "";
+  }
+}

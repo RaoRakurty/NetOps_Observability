@@ -64,11 +64,32 @@ function luceneEscape(s: string): string {
   return s.replace(/([+\-!(){}[\]^"~*?:\\/ ]|&&|\|\|)/g, "\\$1");
 }
 
+// Deep-link params (#/logs/cloud?family=&provider=&resource_id=&account=). The
+// path-causality RCA device-in-path drill (design §5) links here to open ONE
+// device's family-tagged logs in context. Read once at mount; unknown family →
+// falls back to the default lane (honest, never an empty tab).
+function drillParams(): { family?: string; provider?: string; resourceId?: string; account?: string } {
+  const qs = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
+  const p = new URLSearchParams(qs);
+  const family = p.get("family") || undefined;
+  const laneMatch = family && LANES.some((l) => l.family === family || l.id === family) ? family : undefined;
+  return {
+    family: laneMatch,
+    provider: p.get("provider") || undefined,
+    resourceId: p.get("resource_id") || undefined,
+    account: p.get("account") || undefined,
+  };
+}
+
 export default function CloudLogs() {
-  const [laneId, setLaneId] = useState<string>("inventory");
-  const [provider, setProvider] = useState("");
-  const [account, setAccount] = useState("");
-  const [resourceId, setResourceId] = useState("");
+  const drill = useMemo(drillParams, []);
+  const [laneId, setLaneId] = useState<string>(() => {
+    if (!drill.family) return "inventory";
+    return LANES.find((l) => l.family === drill.family)?.id ?? drill.family;
+  });
+  const [provider, setProvider] = useState(() => drill.provider ?? "");
+  const [account, setAccount] = useState(() => drill.account ?? "");
+  const [resourceId, setResourceId] = useState(() => drill.resourceId ?? "");
   const [text, setText] = useState("");
   const [minutes, setMinutes] = useState(360);
   const [size, setSize] = useState(500);

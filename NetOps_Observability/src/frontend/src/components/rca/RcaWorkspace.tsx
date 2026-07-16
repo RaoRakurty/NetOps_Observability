@@ -139,7 +139,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, topologySlot, timeImpactSlot, ticketSlot, aiSlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, topologySlot, timeImpactSlot, ticketSlot, aiSlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -147,6 +147,7 @@ export default function RcaWorkspace({
   onExportPdf: () => void;
   exportDisabled?: boolean;
   debugExtra?: ReactNode;
+  pathSlot?: ReactNode;       // path-causality RCA (design §5/§5a) — the discovered typed SRC→DST path is the HERO
   topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
@@ -195,6 +196,17 @@ export default function RcaWorkspace({
 
       {view === "operator" ? (
         <>
+          {/* PATH-FIRST (design §5a: the path is the hero). The discovered typed
+              SRC→DST path with the broken link highlighted + the named cause leads
+              the operator view. Absent → the component renders an honest "no
+              discovered path" note; a report without path attribution is unchanged. */}
+          {pathSlot && (
+            <>
+              <div className="rw-section-title">Path causality</div>
+              <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
+            </>
+          )}
+
           {/* summary + impact */}
           <section className="rw-grid">
             <div className="rw-panel">
