@@ -49,7 +49,12 @@ type rcaReport struct {
 	IssueContext rcaIssueContext    `json:"issue_context"`
 	Summary      rcaReportSummaries `json:"summary"`
 	Signals      rcaSignalSummary   `json:"signal_summary"`
-	Coverage     []rcaEvidenceLane  `json:"evidence_coverage"`
+	// Accounting: the derived evidence-accounting presentation block (Phase D) —
+	// canonical evidence groups, classified sources, independent confirming
+	// sources, and the operator lineage ladder. Derived once from the Phase B
+	// EvidenceAccounting; every renderer consumes it, none recomputes a count.
+	Accounting rcaAccountingView `json:"evidence_accounting"`
+	Coverage   []rcaEvidenceLane `json:"evidence_coverage"`
 	// Cloud change events observed in/near the window. Empty = none observed
 	// (the section is omitted, not rendered as healthy).
 	CloudChanges []rcaCloudChange `json:"cloud_changes,omitempty"`
@@ -794,7 +799,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		anomObservers            = map[string]bool{}
 		laneTotal, laneAnomalous = map[string]int{}, map[string]int{}
 		laneMin, laneMax         = map[string]time.Time{}, map[string]time.Time{}
-		firstObs, lastObs        time.Time
+		// laneObs: the full per-observation timestamp series per lane, feeding the
+		// Phase C coverage engine's rich path (internal-gap + inter-arrival cadence).
+		laneObs           = map[string][]time.Time{}
+		firstObs, lastObs time.Time
 		peakSevRank              int
 		peakSev                  = "unknown"
 		peakSevKind              string
@@ -820,6 +828,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			if ts.After(laneMax[lane]) {
 				laneMax[lane] = ts
 			}
+			laneObs[lane] = append(laneObs[lane], ts)
 		}
 		laneTotal[lane]++
 		// Semantic recovery evidence (§17): status lanes signal recovery as
@@ -896,6 +905,14 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			realUserLanesPresent = true
 		}
 	}
+
+	// ---- evidence coverage (Phase C/D) --------------------------------------------
+	// Built here — BEFORE the impact axes — so the impact renderers are DRIVEN by the
+	// same per-lane CoverageAssessment (impact_eligible) instead of an ad-hoc min/max
+	// slack test. Both impact axes and both renderers read one assessment, so they can
+	// never disagree (kills the false "none detected" on insufficient coverage).
+	tenant := fmt.Sprintf("%v", meta["tenant_id"])
+	coverage := buildEvidenceCoverage(tenant, laneTotal, laneAnomalous, laneObs, laneMin, laneMax, hb, firstObs, lastObs, in.Now)
 
 	// ---- states -------------------------------------------------------------------
 	// Recovery is an ASSESSMENT, not a synonym for "the window closed": an
@@ -989,18 +1006,11 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 
-	// Coverage sufficiency (P1.6): "no anomaly detected" is a claim about the
-	// window — it is valid only when the lane actually observed the window.
-	laneCovers := func(lane string) bool {
-		if laneTotal[lane] == 0 || firstObs.IsZero() || lastObs.IsZero() {
-			return false
-		}
-		slack := lastObs.Sub(firstObs) / 5
-		if slack < 2*time.Minute {
-			slack = 2 * time.Minute
-		}
-		return !laneMin[lane].After(firstObs.Add(slack)) && !laneMax[lane].Before(lastObs.Add(-slack))
-	}
+	// Coverage sufficiency (P1.6, Phase D): "no anomaly detected" is a claim about
+	// the whole window — valid ONLY when the lane's CoverageAssessment is
+	// impact-eligible (complete coverage across the incident, no scope/health veto).
+	// This replaces the old min/max slack test with the SAME per-lane assessment
+	// every renderer reads, so the axes and the renderers can never disagree.
 	// §5 axes. A failed configured check IS the synthetic-transaction impact —
 	// a fact, not a hypothesis. Real-user impact needs real-traffic evidence,
 	// and a flow-volume delta is an INDICATOR, never confirmation (P1.5).
@@ -1008,7 +1018,8 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	switch {
 	case impactSynthetic > 0:
 		impactSyn = "confirmed"
-	case laneTotal["active_probe"] > 0 && laneCovers("active_probe"):
+	case laneTotal["active_probe"] > 0 && laneAnomalous["active_probe"] == 0 &&
+		coverageImpactEligible(coverage, "active_probe"):
 		impactSyn = "none_detected"
 	}
 	impactRU := "not_observable"
@@ -1024,7 +1035,10 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		// One uncorroborated traffic class from one observer NEVER grounds
 		// "none detected": the lane that raised the case cannot also clear it.
 		impactRU = "indicator_detected"
-	case realUserLanesPresent && laneCovers("passive_flow"):
+	case realUserLanesPresent && coverageImpactEligible(coverage, "passive_flow"):
+		// A definitive real-user "none detected" needs impact-eligible flow coverage
+		// (complete). A partial lane (P-027379: 78.8% + 2m13s trailing gap) is NOT
+		// eligible → stays not_observable, killing the false "none detected".
 		impactRU = "none_detected"
 	}
 	// Overall impact summarizes the axes; it never claims more than the
@@ -1333,19 +1347,19 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 
 	// ---- evidence accounting (Phase B) ---------------------------------------------
 	// Derive the canonical evidence counts ONCE from the stored records (window
-	// slice + verdict blob + observer registry). Computed here so it runs on real
-	// data and its invariant error can feed the Phase E quality gate; renderers/gate
-	// (Phases D/E) consume `accounting` — this phase changes no rendered output.
+	// slice + verdict blob + observer registry). Its invariant error feeds the Phase
+	// E quality gate; the Phase D renderers consume `accountingView` (derived below),
+	// the coverage lanes were built earlier (before the impact axes).
 	accounting, accountingErr := buildEvidenceAccounting(accountingInput{
-		TenantID:      fmt.Sprintf("%v", meta["tenant_id"]),
+		TenantID:      tenant,
 		CorrelationID: in.ID,
 		Signals:       in.Signals,
 		Hyp:           hb,
 		Registry:      rcaObserverRegistry,
 	})
-
-	// ---- evidence coverage ----------------------------------------------------------
-	coverage := buildEvidenceCoverage(laneTotal, laneAnomalous, laneMin, laneMax, hb, firstObs, lastObs)
+	// The single evidence-accounting presentation block (Phase D): customer view +
+	// operator lineage ladder, derived — never recomputed by a renderer.
+	accountingView := buildAccountingView(accounting, coverage)
 
 	// ---- cloud change correlation -----------------------------------------------------
 	for i := range changes {
@@ -1512,6 +1526,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		IssueContext:      ictx,
 		Summary:           rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
 		Signals:           sigSummary,
+		Accounting:        accountingView,
 		Coverage:          coverage,
 		CloudChanges:      changes,
 		Hypotheses:        hyps,
