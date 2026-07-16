@@ -142,6 +142,32 @@ type CloudResource struct {
 	// deallocated | …). Stopped ≠ broken: the audit found 2 stopped hosts being
 	// read as failures because the product didn't know their lifecycle state.
 	PowerState          string            `json:"power_state,omitempty"`
+	// Network context (cloud-network-overview P0, design §5): the VPC/VNet is
+	// the segregation axis — every component carries it where it has one;
+	// subnets localize a fault within the VPC.
+	VpcID     string   `json:"vpc_id,omitempty"`
+	SubnetIDs []string `json:"subnet_ids,omitempty"`
+	// Status is the component's provider-derived state on the honest vocabulary
+	// healthy | degraded | down | not_measured (see kinds.go). It is only ever
+	// set from a REAL provider signal (target health, tunnel state, provisioning
+	// state); absent/empty means not measured — unknown ≠ green, never default
+	// to healthy. StatusReason names the signal ("targets 2/3 healthy").
+	Status       string `json:"status,omitempty"`
+	StatusReason string `json:"status_reason,omitempty"`
+	// KeyMetric* carry the type's ONE headline number (LB→healthy targets,
+	// SG/NSG→rule count, VPN→tunnels up, DNS→record count). Pointer value so
+	// absence stays absence — an unmeasured metric is never a zero.
+	KeyMetricName  string   `json:"key_metric_name,omitempty"`
+	KeyMetricValue *float64 `json:"key_metric_value,omitempty"`
+	KeyMetricUnit  string   `json:"key_metric_unit,omitempty"`
+	// Attrs are provider-native FACTS about the resource (lb type/scheme, WAF
+	// scope, peer ip) — distinct from operator-authored Tags.
+	Attrs map[string]string `json:"attrs,omitempty"`
+	// Attached* tag a SEAM ENDPOINT (design §4a) with the VPCs/regions it
+	// joins (VPN/DX/ER gateways, TGW/peering attachments, NVAs) so lateral
+	// links are discoverable rather than assumed.
+	AttachedVpcIDs  []string `json:"attached_vpc_ids,omitempty"`
+	AttachedRegions []string `json:"attached_regions,omitempty"`
 	Owner               string            `json:"owner,omitempty"`
 	Env                 string            `json:"env,omitempty"`
 	AppID               string            `json:"app_id,omitempty"`
