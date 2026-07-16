@@ -460,7 +460,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
-    {{if .AffectedVantages}}<span class="k">Affected vantages</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
+    {{if .AffectedVantages}}<span class="k">Reporting sources</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{with .LastTransaction}}
     <span class="k">Last failed check</span><span class="v">{{if .Method}}{{.Method}} {{end}}{{.Target}}{{if .StatusCode}} → HTTP {{.StatusCode}}{{end}}{{if .FailClass}} ({{.FailClass}}){{end}} · {{.At}}</span>
     <span class="k">Phase timings</span><span class="v">{{if .DNSMs}}DNS {{f1 .DNSMs}} ms · {{end}}{{if .TCPMs}}TCP {{f1 .TCPMs}} ms · {{end}}{{if .TLSMs}}TLS {{f1 .TLSMs}} ms · {{end}}{{if .TTFBMs}}TTFB {{f1 .TTFBMs}} ms · {{end}}{{if .TotalMs}}total {{f1 .TotalMs}} ms{{end}}</span>
@@ -486,7 +486,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{if .Accounting.UnknownSources}}<span class="k">Unclassified sources</span><span class="v">{{commaJoin .Accounting.UnknownSources}} <span style="font-weight:400;color:#64748b">— kind not established; never counted as a vantage</span></span>{{end}}
     <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
     <span class="k">Configured tests</span><span class="v">{{.Accounting.ConfiguredTests}}</span>
-    <span class="k">Test executions</span><span class="v">{{.Accounting.TestExecutions}}{{if ne .Accounting.FailedExecutions "Unavailable"}} · {{.Accounting.FailedExecutions}} failed{{end}}</span>
+    <span class="k">Test executions</span><span class="v">{{.Accounting.TestExecutions}}{{if .Accounting.FailedExecutionsBrief}} · {{.Accounting.FailedExecutionsBrief}} failed{{end}}</span>
   </div>
   <div class="note">Reconciliation (operator detail) — each layer is a subset of the one above; the verdict rests on the bottom rows.</div>
   <table><thead><tr><th style="width:58%">Layer</th><th>Count</th></tr></thead><tbody>

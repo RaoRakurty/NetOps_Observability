@@ -52,6 +52,10 @@ type rcaAccountingView struct {
 	ConfiguredTests  string `json:"configured_tests"`
 	TestExecutions   string `json:"test_executions"`
 	FailedExecutions string `json:"failed_executions"`
+	// FailedExecutionsBrief: the bare failed count for inline HTML rendering —
+	// empty when unavailable so the (identical) unavailability reason is not
+	// rendered twice next to TestExecutions. JSON keeps FailedExecutions intact.
+	FailedExecutionsBrief string `json:"-"`
 
 	// ---- operator/debug appendix --------------------------------------------
 	Ladder []rcaAccountingLadderRow `json:"reconciliation_ladder"`
@@ -98,6 +102,9 @@ func buildAccountingView(a EvidenceAccounting, lanes []rcaEvidenceLane) rcaAccou
 	v.ConfiguredTests = accountedText(a.ConfiguredTests)
 	v.TestExecutions = accountedText(a.TestExecutions)
 	v.FailedExecutions = accountedText(a.FailedTestExecutions)
+	if a.FailedTestExecutions.Available {
+		v.FailedExecutionsBrief = fmt.Sprintf("%d", a.FailedTestExecutions.Value)
+	}
 
 	// eligibility rungs, computed from the coverage assessments (Phase C).
 	confEligible, impactEligible := 0, 0

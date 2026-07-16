@@ -1090,7 +1090,10 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 	if sig.Probe != nil {
 		kv = append(kv, rcaKV{K: "Checks failing", V: fmt.Sprintf("%d of %d observations", sig.Probe.Failed, sig.Probe.Observations)})
 		if len(sig.Probe.AffectedVantages) > 0 {
-			kv = append(kv, rcaKV{K: "Affected vantages", V: strings.Join(sig.Probe.AffectedVantages, ", ")})
+			// "Reporting sources", not "vantages": this is the raw observer list
+			// (may include collectors like `api`); the evidence-accounting block
+			// carries the classified vantage/collector/unknown split.
+			kv = append(kv, rcaKV{K: "Reporting sources", V: strings.Join(sig.Probe.AffectedVantages, ", ")})
 		}
 		if len(sig.Probe.FailureStages) > 0 {
 			// §7: packet loss / latency are SYMPTOMS, never protocol stages.

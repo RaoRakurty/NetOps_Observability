@@ -578,6 +578,21 @@ func TestPhaseE_P027379Regeneration(t *testing.T) {
 		t.Errorf("coverage gaps are not visible in the regenerated document")
 	}
 
+	// no raw observer list may be LABELED as vantages anywhere in the document —
+	// the flat probe observer list includes collectors (api) and unclassified
+	// sources (prober); only the accounting block's classified split may use the
+	// word. (Found by the 2026-07-16 page-by-page inspection: the NOC quick read
+	// and Signal measurements still said "Affected vantages: api, …".)
+	if strings.Contains(doc, "Affected vantages") {
+		t.Errorf(`rendered document still labels the raw observer list "Affected vantages"`)
+	}
+
+	// the Unavailable reason for executions renders once, never twice ("… ·
+	// Unavailable — … failed" was the inspection's other finding).
+	if n := strings.Count(doc, "per-execution lineage not joined"); n > 1 {
+		t.Errorf("execution unavailability reason rendered %d times, want 1", n)
+	}
+
 	// zero blockers — the corrected document ships as a full assessment, not a draft.
 	if !rep.Quality.Passed {
 		t.Fatalf("regenerated P-027379 still trips blockers: %+v", rep.Quality.Errors)
