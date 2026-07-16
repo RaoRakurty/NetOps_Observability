@@ -86,9 +86,25 @@ type Engine struct {
 	// OnFire, when set, is invoked once per NEWLY-firing alert (not on every tick).
 	// The server uses it to ingest an incident; it must be non-blocking/best-effort
 	// so the alert loop is never stalled by a downstream consumer.
-	OnFire   func(models.Alert)
-	healthy  bool
-	lastTick time.Time
+	OnFire func(models.Alert)
+	// OnTransition, when set, is invoked on every state TRANSITION: once when an
+	// alert newly fires (firing=true) and once when it resolves (firing=false).
+	// The server uses it to fold firings into alert episodes. It runs BEFORE the
+	// notification decision for a firing alert, so episode-level suppression
+	// (mute/snooze) sees the freshly-folded episode. Best-effort contract like
+	// OnFire: it must never block.
+	OnTransition func(a models.Alert, firing bool)
+	// SuppressNotify, when set, is consulted once per NEWLY-firing alert; true
+	// suppresses the outbound NOTIFICATION for that firing (episode mute/snooze).
+	// It suppresses noise only: the alert stays in the active set, OnFire still
+	// runs (incident ingest is not a notification), and the API still serves it.
+	SuppressNotify func(models.Alert) bool
+	// dispatched tracks the active alert ids whose FIRE notification actually
+	// went out, so a resolve notification is sent only when its counterpart fire
+	// was — a suppressed firing must not emit a dangling resolve.
+	dispatched map[string]bool
+	healthy    bool
+	lastTick   time.Time
 
 	// Seams for tests: the rule evaluator (an HTTP call to VictoriaMetrics in
 	// production) and the clock. Never nil — NewEngine sets the real ones.
@@ -98,13 +114,14 @@ type Engine struct {
 
 func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
 	return &Engine{
-		rulesFile: rulesFile,
-		active:    make(map[string]models.Alert),
-		pending:   make(map[string]time.Time),
-		notifier:  n,
-		healthy:   true,
-		evalFn:    Evaluate,
-		now:       time.Now,
+		rulesFile:  rulesFile,
+		active:     make(map[string]models.Alert),
+		pending:    make(map[string]time.Time),
+		dispatched: make(map[string]bool),
+		notifier:   n,
+		healthy:    true,
+		evalFn:     Evaluate,
+		now:        time.Now,
 	}
 }
 
@@ -244,21 +261,41 @@ func (e *Engine) evaluateAll() {
 		if _, existed := prev[id]; existed {
 			continue
 		}
-		if e.notifier != nil {
+		// Fold the transition into episodes FIRST, so the suppression check sees
+		// the current episode state (a re-fire folding into a muted episode is
+		// suppressed; a fresh episode after a close never inherits a mute).
+		if e.OnTransition != nil {
+			e.OnTransition(a, true)
+		}
+		suppressed := e.SuppressNotify != nil && e.SuppressNotify(a)
+		if !suppressed && e.notifier != nil {
 			e.notifier.Dispatch(a)
 		}
+		if !suppressed {
+			e.mu.Lock()
+			e.dispatched[id] = true
+			e.mu.Unlock()
+		}
 		if e.OnFire != nil {
-			e.OnFire(a)
+			e.OnFire(a) // incident ingest is not a notification — never suppressed
 		}
 	}
 	// Resolution leg: an alert that WAS active and no longer fires has cleared —
 	// tell resolution-capable channels (PagerDuty closes the incident it opened
-	// under the same dedup key). Resolution is tick-grained like everything else.
+	// under the same dedup key), but only when the fire notification actually went
+	// out. Resolution is tick-grained like everything else.
 	for id, a := range prev {
 		if _, still := next[id]; still {
 			continue
 		}
-		if e.notifier != nil {
+		if e.OnTransition != nil {
+			e.OnTransition(a, false)
+		}
+		e.mu.Lock()
+		wasDispatched := e.dispatched[id]
+		delete(e.dispatched, id)
+		e.mu.Unlock()
+		if wasDispatched && e.notifier != nil {
 			e.notifier.DispatchResolve(a)
 		}
 	}

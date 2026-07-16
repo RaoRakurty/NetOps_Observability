@@ -235,3 +235,119 @@ func TestEngineDispatchesResolutions(t *testing.T) {
 		t.Fatalf("resolve must target the fired alert exactly once: sent=%v resolved=%v", ch.sent, ch.resolved)
 	}
 }
+
+// TestOnTransitionFiresOnFireAndResolve asserts the episode hook sees exactly
+// the state TRANSITIONS (fire once, resolve once) — never steady-state ticks.
+func TestOnTransitionFiresOnFireAndResolve(t *testing.T) {
+	firing := true
+	e, _ := newTestEngine(t, func(Rule) ([]Sample, error) {
+		if !firing {
+			return nil, nil
+		}
+		return []Sample{{Labels: map[string]string{"device": "leaf1"}, Value: 99}}, nil
+	})
+	e.AddRule(Rule{Name: "LinkDown", Expr: "x > 0", Severity: "critical"})
+
+	var mu sync.Mutex
+	type transition struct {
+		id     string
+		firing bool
+	}
+	var got []transition
+	e.OnTransition = func(a models.Alert, f bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, transition{a.ID, f})
+	}
+
+	e.evaluateAll() // fires → one firing transition
+	e.evaluateAll() // steady → no transition
+	firing = false
+	e.evaluateAll() // resolves → one clearing transition
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 || !got[0].firing || got[1].firing || got[0].id != got[1].id {
+		t.Fatalf("want [fire, resolve] for one id, got %+v", got)
+	}
+}
+
+// TestSuppressNotifySkipsDispatchButNotOnFire asserts a suppressed firing (a)
+// sends NO notification, (b) still runs OnFire (incident ingest is not a
+// notification), (c) stays in the active set, and (d) emits no dangling
+// resolve notification when it clears.
+func TestSuppressNotifySkipsDispatchButNotOnFire(t *testing.T) {
+	firing := true
+	d := notify.NewDispatcher()
+	ch := &fakeResolveChannel{}
+	d.Register(ch)
+	e := NewEngine("", d)
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	e.now = clock.now
+	e.evalFn = func(Rule) ([]Sample, error) {
+		if !firing {
+			return nil, nil
+		}
+		return []Sample{{Labels: map[string]string{"device": "leaf1"}, Value: 99}}, nil
+	}
+	e.AddRule(Rule{Name: "LinkDown", Expr: "x > 0", Severity: "critical"})
+	e.SuppressNotify = func(models.Alert) bool { return true }
+	onFire := 0
+	e.OnFire = func(models.Alert) { onFire++ }
+
+	e.evaluateAll() // fires, suppressed
+	if n := len(e.Active()); n != 1 {
+		t.Fatalf("suppression must not remove the alert from the active set (got %d)", n)
+	}
+	if onFire != 1 {
+		t.Fatalf("OnFire must still run for a suppressed firing (got %d)", onFire)
+	}
+	firing = false
+	e.evaluateAll() // clears — fire was never notified, so resolve must not be either
+	time.Sleep(50 * time.Millisecond)
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if len(ch.sent) != 0 || len(ch.resolved) != 0 {
+		t.Fatalf("suppressed episode leaked notifications: sent=%v resolved=%v", ch.sent, ch.resolved)
+	}
+}
+
+// TestUnsuppressedFireStillResolves guards the no-regression path: with a
+// SuppressNotify hook installed that does NOT suppress, fire and resolve both
+// dispatch exactly as before.
+func TestUnsuppressedFireStillResolves(t *testing.T) {
+	firing := true
+	d := notify.NewDispatcher()
+	ch := &fakeResolveChannel{}
+	d.Register(ch)
+	e := NewEngine("", d)
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	e.now = clock.now
+	e.evalFn = func(Rule) ([]Sample, error) {
+		if !firing {
+			return nil, nil
+		}
+		return []Sample{{Labels: map[string]string{"device": "leaf1"}, Value: 99}}, nil
+	}
+	e.AddRule(Rule{Name: "LinkDown", Expr: "x > 0", Severity: "critical"})
+	e.SuppressNotify = func(models.Alert) bool { return false }
+
+	waitFor := func(want func() bool) {
+		t.Helper()
+		for i := 0; i < 100; i++ {
+			ch.mu.Lock()
+			ok := want()
+			ch.mu.Unlock()
+			if ok {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("dispatcher goroutines did not deliver in time (sent=%v resolved=%v)", ch.sent, ch.resolved)
+	}
+	e.evaluateAll()
+	waitFor(func() bool { return len(ch.sent) == 1 })
+	firing = false
+	e.evaluateAll()
+	waitFor(func() bool { return len(ch.resolved) == 1 })
+}
