@@ -62,7 +62,7 @@ const { chromium } = frontendRequire("@playwright/test");
 
 // ---- args ------------------------------------------------------------------
 function parseArgs(argv) {
-  const a = { route: "#/dashboards/home", out: null, selector: null,
+  const a = { route: "#/dashboards/home", out: null, selector: null, query: null,
               width: 1600, height: 900, scale: 2, padMs: 1500 };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -71,6 +71,7 @@ function parseArgs(argv) {
       case "--route": a.route = v; i++; break;
       case "--out": a.out = v; i++; break;
       case "--selector": a.selector = v; i++; break;
+      case "--query": a.query = v; i++; break;
       case "--width": a.width = parseInt(v, 10); i++; break;
       case "--height": a.height = parseInt(v, 10); i++; break;
       case "--scale": a.scale = parseInt(v, 10); i++; break;
@@ -160,6 +161,31 @@ async function main() {
     await page.waitForTimeout(600);
     console.log(`[capture] route settled at ${finalHash}` +
                 (finalHash !== wantHash ? ` (asked ${wantHash})` : ""));
+
+    // ---- optional: type a Lucene query into the Log Search box and run it ----
+    // The logs view doesn't consume a ?q= URL param, so a lane filter must be
+    // typed. Target the Log Search input (not the global top-nav search), fill,
+    // and submit via Enter + any "Search" button. Best-effort: on miss, we log
+    // and shoot unfiltered rather than fail the capture.
+    if (args.query) {
+      const applied = await page.evaluate(async (q) => {
+        const inputs = [...document.querySelectorAll('input')];
+        const box = inputs.find((i) => /query|lucene|level:|src_addr/i.test(i.placeholder || ""))
+                 || inputs.find((i) => i.value === "*")
+                 || inputs.find((i) => !/^\s*search\s*…?$/i.test(i.placeholder || "") && i.type !== "checkbox");
+        if (!box) return false;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+        setter.call(box, q);
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+        box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        const btn = [...document.querySelectorAll("button")].find((b) => /^\s*search\s*$/i.test(b.textContent || ""));
+        if (btn) btn.click();
+        return true;
+      }, args.query);
+      await page.waitForTimeout(2600); // let results reload
+      console.log(applied ? `[capture] applied query: ${args.query}`
+                          : `[capture] WARN query input not found — unfiltered shot`);
+    }
 
     // ---- assert the DOM is actually LIGHT (fail loud, never a dark shot) ----
     const themeAttr = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
