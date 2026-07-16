@@ -13,11 +13,12 @@ import { Skeleton } from "../../components/ui";
 import DataTable from "../../components/DataTable";
 import { EmptyState } from "./badges";
 import { timeRank } from "./sortRanks";
-import { ReadinessStrip, SourceStatusBadge, FreshnessBadge } from "./shell";
+import { ReadinessStrip, FreshnessBadge } from "./shell";
+import { isResumable } from "./connectorWizard";
 import {
-  SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, isMeasured,
+  SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, sinceLabel, isMeasured,
 } from "./readiness";
-import { buildAccounts, buildMatrix, CloudAccount, ProviderIngestion, RegionReadiness } from "./ingestion";
+import { mergeAccounts, buildMatrix, MergedAccountRow, ProviderIngestion, RegionReadiness } from "./ingestion";
 import ConnectorWizard from "./ConnectorWizard";
 import Connections from "./Connections";
 
@@ -38,6 +39,7 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
   }, [initialSub]);
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
   const [byProvider, setByProvider] = useState<ProviderIngestion>({});
+  const [connectors, setConnectors] = useState<CloudConnectorView[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   // Cloud Connector onboarding wizard (Wave 1 #3) — the in-product "connect a
   // cloud account" flow over the done 7-step connector API. `wizard` carries an
@@ -53,11 +55,16 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
       // measured per-provider statuses (audit P0-7); failure keeps the honest
       // inventory-only default — never a fabricated "flowing".
       api.cloudIngestion().catch(() => ({ providers: {} as Record<string, IngestionSource[]> })),
+      // the connector store — accounts exist because they are CONFIGURED
+      // (Wave 2 #4), not merely because inventory arrived. Failure (e.g. the
+      // 501 no-store deployment) falls back to discovered-only rows.
+      api.cloudConnectors().catch(() => ({ connectors: [] as CloudConnectorView[] })),
     ]).then(
-      ([r, ing]) => {
+      ([r, ing, conn]) => {
         if (!live) return;
         setRows(r.resources ?? []);
         setByProvider((ing.providers ?? {}) as ProviderIngestion);
+        setConnectors(conn.connectors ?? []);
         setState("ready");
       },
       () => { if (live) setState("error"); },
@@ -72,7 +79,7 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
     return <div className="ao-panel"><EmptyState title="Unable to load ingestion status" hint="retry, or open Admin → Integrations to check the cloud connectors" action={<button className="ao-btn" onClick={goIntegrations}>Open Integrations</button>} /></div>;
   }
 
-  const accounts = buildAccounts(rows, byProvider);
+  const accounts = mergeAccounts(connectors, rows, byProvider);
   const matrix = buildMatrix(rows, byProvider);
   const openWizard = () => setWizard({});
   const openResume = (c: CloudConnectorView) => setWizard({ resume: c });
@@ -89,7 +96,7 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
       </div>
 
       {sub === "accounts" && (
-        <Accounts accounts={accounts} onNew={openWizard}
+        <Accounts accounts={accounts} onNew={openWizard} onResume={openResume}
           connections={<Connections nonce={nonce} onConnect={openWizard} onResume={openResume} />} />
       )}
       {sub === "sources" && <Sources matrix={matrix} />}
@@ -107,10 +114,25 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
 }
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
-function Accounts({ accounts, onNew, connections }: {
-  accounts: CloudAccount[]; onNew: () => void;
+// Connector-first (Wave 2 #4): a row exists because a connection is CONFIGURED
+// (or the deployment's ambient account delivered data) — never only because
+// inventory arrived. Identity and telemetry are separate columns: "connection
+// OK / telemetry silent" is a red attention row, distinct from "connection
+// broken" and from "healthy".
+
+// Telemetry column: the honest data-side verdict, independent of identity.
+function TelemetryCell({ a }: { a: MergedAccountRow }) {
+  if (a.telemetry === "silent") {
+    return <span style={{ color: "var(--crit)" }} title="the connection has produced no data within its expected cadence">No data arriving</span>;
+  }
+  return <FreshnessBadge iso={a.lastSyncIso} status={a.telemetry === "stale" ? "stale" : "flowing"} />;
+}
+
+function Accounts({ accounts, onNew, onResume, connections }: {
+  accounts: MergedAccountRow[]; onNew: () => void;
+  onResume: (c: CloudConnectorView) => void;
   /** The connector-store truth (Connections list) — rendered above the
-   *  inventory-derived accounts so config state and arrived data stay distinct. */
+   *  merged accounts so setup-stage detail stays one click away. */
   connections: ReactNode;
 }) {
   return (
@@ -130,23 +152,44 @@ function Accounts({ accounts, onNew, connections }: {
            "Connect a cloud account" primary action (two stacked identical
            buttons read as a double implementation — user report 2026-07-16). */
         <div className="ao-panel"><EmptyState
-          title="No cloud inventory has arrived yet"
-          hint="Discovered accounts appear here once an enabled connection starts collecting — use “Connect a cloud account” above to link one." /></div>
+          title="No cloud accounts yet"
+          hint="Accounts appear here as soon as a connection is configured — including before any data arrives — use “Connect a cloud account” above to link one." /></div>
       ) : (
         <div className="ao-panel">
-          <div className="ao-panel-h">Connected accounts <span className="ao-panel-meta">connection management lives in Admin → Integrations · sort any column · open a row to manage</span></div>
-          <DataTable<CloudAccount> rows={accounts} rowKey={(a) => a.provider + a.accountId}
-            height={Math.min(360, 44 + accounts.length * 30)} ariaLabel="Connected accounts"
+          <div className="ao-panel-h">Accounts <span className="ao-panel-meta">connection health and data delivery are judged separately · a configured account never disappears for lack of data</span></div>
+          <DataTable<MergedAccountRow> rows={accounts} rowKey={(a) => a.key}
+            height={Math.min(360, 44 + accounts.length * 30)} ariaLabel="Cloud accounts"
             onRowClick={goIntegrations}
+            rowClassName={(a) => (a.state.attention ? "ao-row--attention" : "")}
             columns={[
-              { key: "provider", header: "Provider", width: 90, sortValue: (a) => a.provider, render: (a) => PROVIDER(a.provider) },
-              { key: "acct", header: "Account / Subscription / Project", width: 240, sortValue: (a) => a.accountId, render: (a) => <span className="ao-mono">{a.accountId}</span> },
-              { key: "tenant", header: "Tenant", width: 120, sortValue: (a) => a.tenant || "global", render: (a) => <span className="ao-muted">{a.tenant || "global"}</span> },
-              { key: "regions", header: "Regions", width: 160, sortValue: (a) => a.regions.length, render: (a) => a.regions.join(", ") || "—" },
-              { key: "flowing", header: "Flowing sources", width: 130, align: "right", sortValue: (a) => a.enabledSources, render: (a) => `${a.enabledSources} of ${SOURCE_TYPES.length}` },
-              { key: "conn", header: "Connection", width: 130, sortValue: (a) => a.status, render: (a) => <SourceStatusBadge status={a.status} /> },
-              { key: "sync", header: "Last sync", width: 120, sortValue: (a) => timeRank(a.lastSyncIso), render: (a) => <FreshnessBadge iso={a.lastSyncIso} status={a.status} /> },
-              { key: "act", header: "Actions", width: 100, render: () => <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goIntegrations(); }}>Manage</button> },
+              { key: "provider", header: "Provider", width: 80, sortValue: (a) => a.provider, render: (a) => PROVIDER(a.provider) },
+              {
+                key: "acct", header: "Account / Subscription / Project", width: 210, sortValue: (a) => a.accountId,
+                render: (a) => <span className="ao-mono" title={a.tenant ? `tenant: ${a.tenant}` : undefined}>{a.accountId}</span>,
+              },
+              {
+                key: "name", header: "Connection", width: 150, sortValue: (a) => a.name,
+                render: (a) => a.name ? a.name : <span className="ao-muted">{a.connector ? "Untitled" : "Discovered"}</span>,
+              },
+              {
+                key: "identity", header: "Connection health", width: 160, sortValue: (a) => a.connectionLabel,
+                render: (a) => <span className="ccw-statedot"><i style={{ background: a.connectionTone }} aria-hidden="true" />{a.connectionLabel}</span>,
+              },
+              { key: "telemetry", header: "Data delivery", width: 130, sortValue: (a) => a.telemetry, render: (a) => <TelemetryCell a={a} /> },
+              { key: "flowing", header: "Flowing sources", width: 120, align: "right", sortValue: (a) => a.flowingSources, render: (a) => `${a.flowingSources} of ${SOURCE_TYPES.length}` },
+              { key: "regions", header: "Regions", width: 140, sortValue: (a) => a.regions.length, render: (a) => a.regions.join(", ") || "—" },
+              { key: "sync", header: "Last data", width: 110, sortValue: (a) => timeRank(a.lastSyncIso), render: (a) => a.lastSyncIso ? freshnessLabel(a.lastSyncIso) : <span className="ao-muted">never</span> },
+              {
+                key: "status", header: "Status", width: 210, sortValue: (a) => Number(a.state.attention) * 2 + Number(a.state.tone === "var(--warn)"),
+                render: (a) => <span className="ccw-statedot"><i style={{ background: a.state.tone }} aria-hidden="true" />{a.state.label}</span>,
+              },
+              {
+                key: "act", header: "Actions", width: 110, render: (a) => (
+                  a.connector && isResumable(a.connector)
+                    ? <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); onResume(a.connector!); }}>Resume setup</button>
+                    : <button className="ao-rowaction" onClick={(e) => { e.stopPropagation(); goIntegrations(); }}>Manage</button>
+                ),
+              },
             ]} />
         </div>
       )}
@@ -203,7 +246,13 @@ function Status({ matrix }: { matrix: RegionReadiness[] }) {
 function SourceCell({ r, detailed }: { r: SourceReadiness; detailed: boolean }) {
   const meta = STATUS_META[r.status];
   const measured = isMeasured(r.status);
+  // Poller-reported failure (Wave 2 #4): the chip answers the actual operator
+  // question — "IAM denied flow logs since Tuesday", not just "off".
+  const errored = r.status === "permission_denied" || r.status === "misconfigured";
+  const since = errored ? sinceLabel(r.sinceIso) : "";
   const title = `${SOURCE_LABEL[r.sourceType]}: ${meta.label}` +
+    (errored && since ? ` ${since}` : "") +
+    (errored && r.lastError ? ` · ${r.lastError}` : "") +
     (measured && r.lastSyncIso ? ` · updated ${freshnessLabel(r.lastSyncIso)}` : "") +
     (r.volume != null && measured ? ` · ${r.volume} resources` : "");
   return (
@@ -211,7 +260,12 @@ function SourceCell({ r, detailed }: { r: SourceReadiness; detailed: boolean }) 
       <span className="ao-srccell-dot" style={{ background: meta.tone }} />
       <span className="ao-srccell-l">{SOURCE_LABEL[r.sourceType]}</span>
       {detailed && measured && <span className="ao-srccell-meta">{freshnessLabel(r.lastSyncIso)}{r.volume != null ? ` · ${r.volume}` : ""}</span>}
-      {detailed && !measured && <span className="ao-srccell-meta ao-muted">{meta.label.toLowerCase()}</span>}
+      {detailed && !measured && errored && (
+        <span className="ao-srccell-meta" style={{ color: "var(--crit)" }}>
+          {meta.label.toLowerCase()}{since ? ` ${since}` : ""}
+        </span>
+      )}
+      {detailed && !measured && !errored && <span className="ao-srccell-meta ao-muted">{meta.label.toLowerCase()}</span>}
     </span>
   );
 }

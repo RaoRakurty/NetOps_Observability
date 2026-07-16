@@ -1291,6 +1291,10 @@ export interface CloudIngestionSource {
   volume?: number;
   last_seen_iso?: string;
   capability?: "available" | "planned";
+  // Poller-reported error context (Wave 2 #4): when status is
+  // permission_denied/misconfigured, what failed and since when.
+  detail?: string;
+  since_iso?: string;
 }
 
 // Provenance of each inventory source file, measured by the backend from the
