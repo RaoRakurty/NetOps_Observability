@@ -6,6 +6,14 @@
 
 import { test, expect, type Page } from "@playwright/test";
 
+// The Action Queue renders through the shared DataTable primitive (ae0668a):
+// data rows are div[role=row].dtv-row inside the grid labelled "Action Queue —
+// correlated incidents" — not the old hand-rolled <tr.cc-row> table. Scoping to
+// the named grid keeps the locator anchored to the queue (the accessible
+// contract), not to whatever other tables the page may grow.
+const queueRows = (page: Page) =>
+  page.getByRole("grid", { name: "Action Queue — correlated incidents" }).locator(".dtv-row");
+
 const TENANT = "t_acme";
 
 const ME = {
@@ -80,7 +88,7 @@ test("operator sees only actionable customer-network incidents", async ({ page }
   await bootCommandCenter(page);
 
   // Exactly one row survives the queue filter (noise + internal-stack dropped).
-  const rows = page.locator("tr.cc-row");
+  const rows = queueRows(page);
   await expect(rows).toHaveCount(1);
 
   // The confirmed incident is the survivor; the filtered objects never appear.
@@ -91,15 +99,15 @@ test("operator sees only actionable customer-network incidents", async ({ page }
   // The confirmed row carries a Confirmed RCA chip and an ISP fault domain.
   // (exact match disambiguates the fault chip "ISP / Carrier" from the owner
   // recommendation chip "ISP / carrier".)
-  await expect(page.locator("tr.cc-row").getByText("Confirmed", { exact: true })).toBeVisible();
+  await expect(rows.getByText("Confirmed", { exact: true })).toBeVisible();
   // Scope to the row — the filter bar's fault-domain dropdown also lists "ISP / Carrier".
-  await expect(page.locator("tr.cc-row").getByText("ISP / Carrier", { exact: true })).toBeVisible();
+  await expect(rows.getByText("ISP / Carrier", { exact: true })).toBeVisible();
 });
 
 test("expanding an incident reveals its evidence ledger", async ({ page }) => {
   await bootCommandCenter(page);
 
-  await page.locator("tr.cc-row").first().click();
+  await queueRows(page).first().click();
   // The expand panel shows the evidence summary + recommended next action
   // (scope to the panel's section headings, not the table column header).
   await expect(page.locator(".cc-eh", { hasText: "Evidence" })).toBeVisible();
@@ -110,12 +118,18 @@ test("expanding an incident reveals its evidence ledger", async ({ page }) => {
 test("the filter bar narrows the queue without a refetch", async ({ page }) => {
   await bootCommandCenter(page); // one survivor: confirmed, fault domain "ISP / Carrier"
 
-  await expect(page.locator("tr.cc-row")).toHaveCount(1);
+  await expect(queueRows(page)).toHaveCount(1);
   // Filtering to a domain the row isn't in empties the table (no match state).
-  await page.getByLabel("Fault domain").selectOption("SD-WAN");
-  await expect(page.locator("tr.cc-row")).toHaveCount(0);
+  // Locate the select through its .cc-filter label wrapper — a bare
+  // getByLabel("Fault domain") is ambiguous now that the sortable header's
+  // resize grip carries the aria-label "Resize Fault domain column".
+  await page
+    .locator(".cc-filter", { hasText: "Fault domain" })
+    .locator("select")
+    .selectOption("SD-WAN");
+  await expect(queueRows(page)).toHaveCount(0);
   await expect(page.getByText(/No incidents match the current filters/)).toBeVisible();
   // Clearing brings it back.
   await page.getByRole("button", { name: /Clear/ }).first().click();
-  await expect(page.locator("tr.cc-row")).toHaveCount(1);
+  await expect(queueRows(page)).toHaveCount(1);
 });
