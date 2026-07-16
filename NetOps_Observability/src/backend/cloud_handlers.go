@@ -390,12 +390,18 @@ SELECT toString(o.correlation_id)                   AS correlation_id,
 // connectors replace this loader later; the store + API are unchanged. Stamps
 // CLOUD_FIXTURE_TENANT (default "" = platform/global) — never a tenant from a fixture.
 func (s *server) startCloudInventory(ctx context.Context) {
+	// Layered inventory dirs (hygiene split): CLOUD_FIXTURES_DIR holds the
+	// tracked static fixtures, CLOUD_RUNTIME_DIR the live poller's snapshots
+	// (a gitignored data/ mount). A runtime file shadows the same-named
+	// fixture, so a live deployment reads live data and a fresh install still
+	// gets the demo fixtures.
 	dir := os.Getenv("CLOUD_FIXTURES_DIR")
-	if dir == "" || s.cloud == nil {
+	runtime := os.Getenv("CLOUD_RUNTIME_DIR")
+	if (dir == "" && runtime == "") || s.cloud == nil {
 		return
 	}
 	tenant := os.Getenv("CLOUD_FIXTURE_TENANT") // "" = global
-	prov := cloud.NewFixtureProvider(dir)
+	prov := cloud.NewLayeredFixtureProvider(dir, runtime)
 	lastCount := -1
 	load := func() {
 		res, err := prov.ListResources(ctx, tenant, "")

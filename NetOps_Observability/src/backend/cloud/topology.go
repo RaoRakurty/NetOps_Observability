@@ -71,33 +71,51 @@ type Topology struct {
 // the cloud topology is optional enrichment, and its absence must degrade to
 // "no inferred support", never to a failure.
 func LoadTopologies(dir string) ([]Topology, error) {
-	if dir == "" {
-		return nil, nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []Topology
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), "-topology.json") {
+	return LoadTopologiesLayered(dir, "")
+}
+
+// LoadTopologiesLayered reads fixtureDir then runtimeDir; a runtime file
+// shadows the same-named fixture (the static-fixture/live-runtime split — the
+// live poller's snapshot wins over the tracked demo fixture when both exist).
+// Missing dirs degrade silently, same as LoadTopologies.
+func LoadTopologiesLayered(fixtureDir, runtimeDir string) ([]Topology, error) {
+	byName := map[string]Topology{}
+	var order []string
+	for _, dir := range []string{fixtureDir, runtimeDir} {
+		if dir == "" {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- operator-configured fixtures dir
+		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, err
 		}
-		var t Topology
-		if err := json.Unmarshal(raw, &t); err != nil {
-			return nil, fmt.Errorf("topology %s: %w", e.Name(), err)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), "-topology.json") {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- operator-configured fixtures dir
+			if err != nil {
+				return nil, err
+			}
+			var t Topology
+			if err := json.Unmarshal(raw, &t); err != nil {
+				return nil, fmt.Errorf("topology %s: %w", e.Name(), err)
+			}
+			if !ValidProvider(t.Provider) {
+				continue // unsupported provider: skip, never crash
+			}
+			if _, seen := byName[e.Name()]; !seen {
+				order = append(order, e.Name())
+			}
+			byName[e.Name()] = t // runtime layer shadows fixture
 		}
-		if !ValidProvider(t.Provider) {
-			continue // unsupported provider: skip, never crash
-		}
-		out = append(out, t)
+	}
+	out := make([]Topology, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
 	}
 	return out, nil
 }

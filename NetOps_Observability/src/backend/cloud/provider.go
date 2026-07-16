@@ -58,35 +58,70 @@ type fixtureFile struct {
 }
 
 // FixtureProvider loads cloud inventory from JSON fixtures (stdlib only).
+// It reads one or more layered directories: a file in a LATER dir shadows the
+// same-named file in an earlier one. This is the static-fixture/runtime split
+// (hygiene, 2026-07): tracked demo fixtures stay in the repo, the live
+// poller's snapshots land in a gitignored runtime dir, and the runtime file —
+// when present — wins.
 type FixtureProvider struct {
-	dir string
-	now func() time.Time
+	dirs []string
+	now  func() time.Time
 }
 
 // NewFixtureProvider reads *.json inventory fixtures from dir.
 func NewFixtureProvider(dir string) *FixtureProvider {
-	return &FixtureProvider{dir: dir, now: time.Now}
+	return &FixtureProvider{dirs: []string{dir}, now: time.Now}
+}
+
+// NewLayeredFixtureProvider reads fixtureDir first, then runtimeDir — a
+// runtime file shadows the fixture of the same name. Either dir may be empty
+// or absent; only when NO configured dir is readable does load() error.
+func NewLayeredFixtureProvider(fixtureDir, runtimeDir string) *FixtureProvider {
+	var dirs []string
+	for _, d := range []string{fixtureDir, runtimeDir} {
+		if d != "" {
+			dirs = append(dirs, d)
+		}
+	}
+	return &FixtureProvider{dirs: dirs, now: time.Now}
 }
 
 func (f *FixtureProvider) load() ([]fixtureFile, error) {
-	entries, err := os.ReadDir(f.dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []fixtureFile
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(f.dir, e.Name()))
+	byName := map[string]fixtureFile{}
+	var order []string // stable first-seen order across layers
+	readable := 0
+	var lastErr error
+	for _, dir := range f.dirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return nil, err
+			lastErr = err
+			continue // a missing layer degrades to the other layer(s)
 		}
-		var ff fixtureFile
-		if err := json.Unmarshal(raw, &ff); err != nil {
-			return nil, fmt.Errorf("fixture %s: %w", e.Name(), err)
+		readable++
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- operator-configured inventory dirs
+			if err != nil {
+				return nil, err
+			}
+			var ff fixtureFile
+			if err := json.Unmarshal(raw, &ff); err != nil {
+				return nil, fmt.Errorf("fixture %s: %w", e.Name(), err)
+			}
+			if _, seen := byName[e.Name()]; !seen {
+				order = append(order, e.Name())
+			}
+			byName[e.Name()] = ff // later layer shadows earlier
 		}
-		out = append(out, ff)
+	}
+	if readable == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	out := make([]fixtureFile, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
 	}
 	return out, nil
 }

@@ -44,7 +44,7 @@ func (s *server) handleCloudTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	topos, err := cloud.LoadTopologies(os.Getenv("CLOUD_FIXTURES_DIR"))
+	topos, err := cloud.LoadTopologiesLayered(os.Getenv("CLOUD_FIXTURES_DIR"), os.Getenv("CLOUD_RUNTIME_DIR"))
 	if err != nil {
 		// A malformed/unreadable fixture degrades to an honest empty view (graceful
 		// like /topology/graph) rather than a 500 that blanks the tab.

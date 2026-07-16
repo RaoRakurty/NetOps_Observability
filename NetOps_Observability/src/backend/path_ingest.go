@@ -506,7 +506,7 @@ type serverPathFacts struct{ s *server }
 
 func (f serverPathFacts) Facts(ctx context.Context, tenant string, at time.Time) (pathgraph.PathFacts, netContext, error) {
 	s := f.s
-	topos, err := cloud.LoadTopologies(os.Getenv("CLOUD_FIXTURES_DIR"))
+	topos, err := cloud.LoadTopologiesLayered(os.Getenv("CLOUD_FIXTURES_DIR"), os.Getenv("CLOUD_RUNTIME_DIR"))
 	if err != nil {
 		logWarn("pathgraph", "cloud topology load failed", map[string]any{"err": err.Error()})
 	}

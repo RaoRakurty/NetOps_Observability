@@ -660,6 +660,14 @@ def ensure_data_dirs(root: Path) -> None:
     # (or wire real connectors) to light up the App Observability cloud views.
     cloud_fixtures = root / "data" / "api" / "cloud-fixtures"
     cloud_fixtures.mkdir(parents=True, exist_ok=True)
+    # Runtime layer of the cloud inventory (static-fixture/runtime split): the
+    # live cloud-ingest poller writes its snapshots HERE (gitignored data/),
+    # and the api/correlation read it first with fixture fallback
+    # (CLOUD_RUNTIME_DIR / CLOUD_TOPOLOGY_RUNTIME_DIR). Empty is fine.
+    # NOT chowned to the api uid: the WRITER is the poller (the operator's
+    # uid, 1000 in the lab); the api only reads it.
+    cloud_runtime = root / "data" / "api" / "cloud-runtime"
+    cloud_runtime.mkdir(parents=True, exist_ok=True)
     for d in (appid_feeds, cloud_fixtures):
         try:
             os.chown(d, 65532, 65532)

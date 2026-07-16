@@ -75,6 +75,12 @@ def extra_s3_sources() -> list:
     _extra_s3_sources_cache = out
     return out
 OUT_DIR = os.environ.get("CLOUD_LOGS_OUT", "/out")
+# Live inventory/topology snapshots go to the RUNTIME dir — a gitignored data/
+# mount, never the git-tracked cloud-fixtures (the 2026-07 hygiene split:
+# static fixtures stay tracked, live poller output lives under data/).
+# CLOUD_RUNTIME_OUT is the knob; legacy CLOUD_FIXTURES_OUT still honored.
+RUNTIME_OUT = (os.environ.get("CLOUD_RUNTIME_OUT")
+               or os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
 # Unified Cloud Logs: raw cloud log lines are tagged (cloud_family/cloud_provider/
@@ -472,7 +478,7 @@ def main():
                 gtok = gcp.token()
                 now = time.time()
                 if now - last_gcp_inventory >= DISCOVER_EVERY_S:
-                    ninv = gcp.write_inventory(gtok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    ninv = gcp.write_inventory(gtok, RUNTIME_OUT)
                     last_gcp_inventory = now
                     jlog("gcp inventory", resources=ninv)
                 if GCP_METERED_METRICS and now - last_gcp_metrics >= METRICS_EVERY_S:
@@ -529,13 +535,13 @@ def main():
                 # written like aws.json, never a rotting hand-written fixture
                 # (audit D-P0-4 / P1-3: ARM-id keyed, power_state carried).
                 if now - last_az_inventory >= DISCOVER_EVERY_S:
-                    ninv = azure.write_inventory(tok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                    ninv = azure.write_inventory(tok, RUNTIME_OUT)
                     # In-cloud NETWORK topology (VNet→subnet→route-table→gateway),
                     # the Azure twin of discover.py's AWS route-table map. Same
                     # discover cadence, own guard so a topology hiccup can't block
                     # the inventory write above.
                     try:
-                        ntopo = azure_topology.write_topology(tok, os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
+                        ntopo = azure_topology.write_topology(tok, RUNTIME_OUT)
                     except Exception as exc:  # noqa: BLE001 - lane isolation
                         ntopo = -1
                         jlog("azure topology error", error=str(exc)[:200])
