@@ -14,12 +14,18 @@ import {
   deriveScope, deriveReadiness, deriveDataMode, deriveConnectorKind, summarize,
   CloudScope, DataMode, ReadinessSummary, IngestionSource,
 } from "./readiness";
+import { scopeOptions, ScopeOptions } from "./scope";
 
 export interface CloudShell {
   scope: CloudScope;
   mode: DataMode;
   summary: ReadinessSummary;
   loading: boolean;
+  /** what the interactive scope bar can offer (Wave 2 #5) — the distinct
+   *  provider/account/region/env values present in THIS tenant's inventory.
+   *  Derived from the unfiltered shared read, so options never shrink to the
+   *  current selection. */
+  options: ScopeOptions;
 }
 
 export function useCloudShell(): CloudShell {
@@ -48,10 +54,9 @@ export function useCloudShell(): CloudShell {
   }, []);
 
   const tenant = user?.all_tenants ? "All tenants" : (user?.tenant_id || "—");
-  const scope = deriveScope(
-    rows.map((r) => ({ provider: r.cloud_provider, account: r.account_id, region: r.region, env: r.env })),
-    tenant,
-  );
+  const dims = rows.map((r) => ({ provider: r.cloud_provider, account: r.account_id, region: r.region, env: r.env }));
+  const scope = deriveScope(dims, tenant);
+  const options = scopeOptions(dims);
   // freshest last_seen across the inventory = the inventory's effective sync time.
   const lastSyncIso = rows.reduce((acc, r) => (r.last_seen_at > acc ? r.last_seen_at : acc), "") || undefined;
   const readiness = deriveReadiness({
@@ -68,5 +73,5 @@ export function useCloudShell(): CloudShell {
     connector: deriveConnectorKind(connectors, rows.length),
   });
 
-  return { scope, mode, summary, loading };
+  return { scope, mode, summary, loading, options };
 }

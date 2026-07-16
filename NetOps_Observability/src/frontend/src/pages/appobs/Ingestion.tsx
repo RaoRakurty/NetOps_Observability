@@ -18,7 +18,10 @@ import { isResumable } from "./connectorWizard";
 import {
   SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, sinceLabel, isMeasured,
 } from "./readiness";
-import { mergeAccounts, buildMatrix, MergedAccountRow, ProviderIngestion, RegionReadiness } from "./ingestion";
+import {
+  mergeAccounts, buildMatrix, accountsInScope, matrixInScope,
+  MergedAccountRow, ProviderIngestion, RegionReadiness, IngestionScope,
+} from "./ingestion";
 import ConnectorWizard from "./ConnectorWizard";
 import Connections from "./Connections";
 
@@ -28,7 +31,15 @@ const goIntegrations = () => { location.hash = "#/incident/integrations"; };
 
 const isSub = (v: string): v is Sub => v === "accounts" || v === "sources" || v === "status";
 
-export default function Ingestion({ initialSub = "" }: { initialSub?: string }) {
+// The global scope bar's provider/account/region filters (Wave 2 #5). Optional:
+// the tab renders unfiltered where no scope is wired (e.g. legacy embeds/tests).
+const NO_SCOPE: IngestionScope = { providers: [], accounts: [], regions: [] };
+
+export default function Ingestion({ initialSub = "", scope, onClearScope }: {
+  initialSub?: string;
+  scope?: IngestionScope;
+  onClearScope?: () => void;
+}) {
   // Deep-link target (e.g. Settings → "Connect a cloud account" lands on
   // Accounts). Defaults to Ingestion Status — the trust gate — when unspecified.
   const [sub, setSub] = useState<Sub>(() => (isSub(initialSub) ? initialSub : "status"));
@@ -79,8 +90,16 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
     return <div className="ao-panel"><EmptyState title="Unable to load ingestion status" hint="retry, or open Admin → Integrations to check the cloud connectors" action={<button className="ao-btn" onClick={goIntegrations}>Open Integrations</button>} /></div>;
   }
 
-  const accounts = mergeAccounts(connectors, rows, byProvider);
-  const matrix = buildMatrix(rows, byProvider);
+  // Global scope narrows the merged view rows CLIENT-side (small, already-built
+  // sets — see ingestion.ts accountsInScope). Row EXISTENCE stays connector-
+  // first: scope hides rows from view, it never unconfigures an account.
+  const s = scope ?? NO_SCOPE;
+  const scopeActive = s.providers.length > 0 || s.accounts.length > 0 || s.regions.length > 0;
+  const allAccounts = mergeAccounts(connectors, rows, byProvider);
+  const accounts = accountsInScope(allAccounts, s);
+  const matrix = matrixInScope(buildMatrix(rows, byProvider), s);
+  // empty-scope honesty: data exists, the scope matches none of it.
+  const scopedOut = scopeActive && allAccounts.length > 0 && accounts.length === 0;
   const openWizard = () => setWizard({});
   const openResume = (c: CloudConnectorView) => setWizard({ resume: c });
   // The wizard mutates the connector store step-by-step, so closing it (even
@@ -97,10 +116,11 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
 
       {sub === "accounts" && (
         <Accounts accounts={accounts} onNew={openWizard} onResume={openResume}
+          scopedOut={scopedOut} onClearScope={onClearScope}
           connections={<Connections nonce={nonce} onConnect={openWizard} onResume={openResume} />} />
       )}
-      {sub === "sources" && <Sources matrix={matrix} />}
-      {sub === "status" && <Status matrix={matrix} />}
+      {sub === "sources" && <Sources matrix={matrix} scopedOut={scopeActive && matrix.length === 0} onClearScope={onClearScope} />}
+      {sub === "status" && <Status matrix={matrix} scopedOut={scopeActive && matrix.length === 0} onClearScope={onClearScope} />}
 
       {wizard && (
         <ConnectorWizard
@@ -128,12 +148,15 @@ function TelemetryCell({ a }: { a: MergedAccountRow }) {
   return <FreshnessBadge iso={a.lastSyncIso} status={a.telemetry === "stale" ? "stale" : "flowing"} />;
 }
 
-function Accounts({ accounts, onNew, onResume, connections }: {
+function Accounts({ accounts, onNew, onResume, connections, scopedOut, onClearScope }: {
   accounts: MergedAccountRow[]; onNew: () => void;
   onResume: (c: CloudConnectorView) => void;
   /** The connector-store truth (Connections list) — rendered above the
    *  merged accounts so setup-stage detail stays one click away. */
   connections: ReactNode;
+  /** accounts EXIST but the global scope filters match none (Wave 2 #5). */
+  scopedOut?: boolean;
+  onClearScope?: () => void;
 }) {
   return (
     <div className="ao-stack">
@@ -148,12 +171,23 @@ function Accounts({ accounts, onNew, onResume, connections }: {
       </div>
       {connections}
       {accounts.length === 0 ? (
+        scopedOut ? (
+          /* empty-scope honesty: accounts exist, the scope hides them all —
+             a filter problem, never "connect an account" advice. */
+          <div className="ao-panel"><EmptyState
+            title="No accounts in this scope"
+            hint="connected accounts exist outside the current provider / account / region filters"
+            action={onClearScope
+              ? <button className="ao-btn ao-btn--primary" onClick={onClearScope}>Clear filters</button>
+              : undefined} /></div>
+        ) : (
         /* No duplicate CTA here: the header bar above already carries the ONE
            "Connect a cloud account" primary action (two stacked identical
            buttons read as a double implementation — user report 2026-07-16). */
         <div className="ao-panel"><EmptyState
           title="No cloud accounts yet"
           hint="Accounts appear here as soon as a connection is configured — including before any data arrives — use “Connect a cloud account” above to link one." /></div>
+        )
       ) : (
         <div className="ao-panel">
           <div className="ao-panel-h">Accounts <span className="ao-panel-meta">connection health and data delivery are judged separately · a configured account never disappears for lack of data</span></div>
@@ -198,8 +232,12 @@ function Accounts({ accounts, onNew, onResume, connections }: {
 }
 
 // ── Sources (what we ingest per account/region) ───────────────────────────────
-function Sources({ matrix }: { matrix: RegionReadiness[] }) {
-  if (matrix.length === 0) return <CloudEmpty />;
+function Sources({ matrix, scopedOut, onClearScope }: {
+  matrix: RegionReadiness[]; scopedOut?: boolean; onClearScope?: () => void;
+}) {
+  if (matrix.length === 0) {
+    return scopedOut ? <ScopeEmptyPanel onClearScope={onClearScope} /> : <CloudEmpty />;
+  }
   return (
     <div className="ao-stack">
       <div className="ao-panel">
@@ -211,13 +249,17 @@ function Sources({ matrix }: { matrix: RegionReadiness[] }) {
 }
 
 // ── Ingestion Status (is data actually arriving?) ─────────────────────────────
-function Status({ matrix }: { matrix: RegionReadiness[] }) {
-  // a flat readiness across all regions for the summary cards.
+function Status({ matrix, scopedOut, onClearScope }: {
+  matrix: RegionReadiness[]; scopedOut?: boolean; onClearScope?: () => void;
+}) {
+  // a flat readiness across all regions for the summary cards (scoped rows only
+  // — the cards describe exactly the matrix rendered under them).
   const all = matrix.flatMap((m) => m.readiness);
   const accounts = new Set(matrix.map((m) => m.accountId)).size;
   const summary = summarize(all, accounts);
   if (matrix.length === 0) return (
-    <div className="ao-stack"><ReadinessStrip summary={summary} /><CloudEmpty /></div>
+    <div className="ao-stack"><ReadinessStrip summary={summary} />
+      {scopedOut ? <ScopeEmptyPanel onClearScope={onClearScope} /> : <CloudEmpty />}</div>
   );
   return (
     <div className="ao-stack">
@@ -295,4 +337,14 @@ function CloudEmpty() {
     title="No cloud inventory yet"
     hint="connect an AWS / Azure / GCP account in Integrations — sources appear here as data starts arriving"
     action={<button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>} /></div>;
+}
+
+// empty-scope honesty (Wave 2 #5): rows exist, the scope filters hide them all.
+function ScopeEmptyPanel({ onClearScope }: { onClearScope?: () => void }) {
+  return <div className="ao-panel"><EmptyState
+    title="No sources in this scope"
+    hint="configured accounts and regions exist outside the current scope filters"
+    action={onClearScope
+      ? <button className="ao-btn ao-btn--primary" onClick={onClearScope}>Clear filters</button>
+      : undefined} /></div>;
 }

@@ -97,13 +97,16 @@ describe("FeedBar", () => {
     expect(screen.getByText(/live · updated \d+s ago/)).toBeTruthy();
   });
 
-  it("offers only windows the backend actually ingests, and reports a change", () => {
+  it("offers only server-honorable windows (incl. the real 7d), and reports a change", () => {
     const onRange = vi.fn();
     render(<FeedBar {...base} onRange={onRange} count={feedCount(5, 5, 60)} />);
-    // no 7d button: the cloud endpoints read a fixed 24h (see range.ts)
-    expect(screen.queryByText("7d")).toBeNull();
+    // 7d exists NOW because the endpoints take ?window_hours= (Wave 2 #5) —
+    // it was deliberately absent while the read was a hardwired 24h.
+    expect(screen.getByText("7d")).toBeTruthy();
     fireEvent.click(screen.getByText("15m"));
     expect(onRange).toHaveBeenCalledWith(15);
+    fireEvent.click(screen.getByText("7d"));
+    expect(onRange).toHaveBeenCalledWith(7 * 24 * 60);
   });
 
   it("names the range control for assistive tech", () => {

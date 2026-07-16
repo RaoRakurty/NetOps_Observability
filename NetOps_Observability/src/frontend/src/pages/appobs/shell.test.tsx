@@ -3,10 +3,11 @@
 // scope shows tenant/provider/account/region/env, and unmeasured values render as
 // "not measured" rather than a fabricated number.
 
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
-import { CloudScopeBar, DataModeChip, SourceStatusBadge, MeasuredValue } from "./shell";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { CloudScopeBar, DataModeChip, SourceStatusBadge, MeasuredValue, ScopeBarControl } from "./shell";
 import type { CloudScope, ReadinessSummary } from "./readiness";
+import { emptyScope } from "./scopeUrl";
 
 afterEach(cleanup);
 
@@ -38,6 +39,60 @@ describe("CloudScopeBar", () => {
   it("never renders the word 'mock'", () => {
     const { container } = render(<CloudScopeBar scope={scope} mode="demo" summary={summary} />);
     expect(container.textContent?.toLowerCase()).not.toContain("mock");
+  });
+});
+
+// ── Wave 2 #5 — the scope bar as a REAL global filter ─────────────────────────
+describe("CloudScopeBar (interactive)", () => {
+  const control = (over: Partial<ScopeBarControl> = {}): ScopeBarControl => ({
+    scope: { ...emptyScope(), providers: ["aws"] },
+    options: { providers: ["aws", "azure"], accounts: ["111", "sub-9"], regions: ["us-east-1"], envs: ["prod"] },
+    active: true,
+    add: vi.fn(), remove: vi.fn(), clearFilters: vi.fn(), setRangeMinutes: vi.fn(),
+    ...over,
+  });
+
+  it("renders active filters as chips and reports a chip's removal", () => {
+    const c = control();
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary} control={c} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Provider filter AWS" }));
+    expect(c.remove).toHaveBeenCalledWith("providers", "aws");
+  });
+
+  it("adds a value from the dimension's select (options exclude already-picked)", () => {
+    const c = control();
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary} control={c} />);
+    const sel = screen.getByLabelText("Add Provider filter") as HTMLSelectElement;
+    // "aws" is already selected → only azure remains offerable
+    expect([...sel.options].map((o) => o.value)).toEqual(["", "azure"]);
+    fireEvent.change(sel, { target: { value: "azure" } });
+    expect(c.add).toHaveBeenCalledWith("providers", "azure");
+  });
+
+  it("the Range select drives the REAL window (incl. 7d) and shows the current one", () => {
+    const c = control({ scope: { ...emptyScope(), rangeMinutes: 60 }, active: false });
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary} control={c} />);
+    const sel = screen.getByLabelText("Time range") as HTMLSelectElement;
+    expect(sel.value).toBe("60");
+    fireEvent.change(sel, { target: { value: String(7 * 24 * 60) } });
+    expect(c.setRangeMinutes).toHaveBeenCalledWith(7 * 24 * 60);
+  });
+
+  it("offers 'Clear filters' only when a scope is active", () => {
+    const c = control();
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary} control={c} />);
+    fireEvent.click(screen.getByText("Clear filters"));
+    expect(c.clearFilters).toHaveBeenCalled();
+    cleanup();
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary}
+      control={control({ scope: emptyScope(), active: false })} />);
+    expect(screen.queryByText("Clear filters")).toBeNull();
+  });
+
+  it("tenant stays display-only — scope narrows a tenant view, never widens it", () => {
+    render(<CloudScopeBar scope={scope} mode="live" summary={summary} control={control()} />);
+    expect(screen.getByText("Retail-US")).toBeTruthy();
+    expect(screen.queryByLabelText("Add Tenant filter")).toBeNull();
   });
 });
 
