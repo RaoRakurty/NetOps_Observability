@@ -1,6 +1,6 @@
 # NetOps_Observability — Consolidated Work Tracker
 
-> Branch: `feat/observability-platform` · Last updated: 2026-06-09
+> Branch: `feat/observability-platform` · Last updated: 2026-07-16
 > Single source of truth for remaining work. Reconciled against the git history
 > on this branch and the roadmap memories. Update status here as items land.
 
@@ -108,6 +108,35 @@ transient attribution); Vector buffer/batch sizing after outage benchmark
 B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
+
+## #106 — Cloud Network Overview + Connector Wave 1 close-out (2026-07-16, four parallel subagents) — ✅ SHIPPED (`d80f21c`, backend-ci green)
+
+Design `docs/design/cloud-network-overview.md` (be23c4a): region→VPC→component
+roll-up + seams as first-class lateral links; anti-overwhelm rules binding.
+- ✅ **P0 component inventory** (`68c13cf` `f1dd17d` `460f134`): all 3 providers
+  inventory LB/WAF/FW/DNS/gateways/Cloud Armor/routers + seam endpoints
+  (VPN/DX/ER/TGW/peerings, attached-VPC/region tags); honest status vocabulary
+  (unknown ≠ green, default-closed both sides); `cloud/kinds.go` family map;
+  **fixture/runtime split killed the cloud-fixtures git churn** (poller →
+  `data/api/cloud-runtime`, readers layered). 163 pytest + Go suite + preflight.
+- ✅ **Connector backlog #2 per-tenant ingestion** (`76980ee` `56390a4`):
+  poller-facing ingest surface over the existing `TokenFor` broker (`ingest:cloud`
+  platform-realm API key; tenant stamped server-side from the connector row);
+  per-connector poll cycle w/ failure isolation + budgets; ambient mode untouched
+  (lab). Dormant until `BROKER_API_URL` + key are set on cloud-ingest.
+- ✅ **Connector backlog #3 wizard UI** (`9a1085d` `3517a9a`): resume for
+  incomplete connectors, write-only credential state, required-field legend,
+  Connections list w/ honest states; rendered LIVE on the stack (Accounts tab).
+  Wave 1 of the cloud-platform backlog is COMPLETE → Wave 2 next.
+- ✅ **RCA evidence-accounting epic CLOSED** (`917c4e9` + earlier `0b2851f`):
+  P-027379 PDF regenerated + page-by-page inspected; inspection caught 2 render
+  defects the tests missed ("Affected vantages" labeling collectors, doubled
+  Unavailable reason) — fixed + regression-pinned; after-tables in
+  `docs/design/rca-evidence-accounting-phaseE-after.md`.
+- **REMAINING (this program):** P1 per-VPC/region roll-up model → P2 overview
+  surface (region cards, green-collapses/red-expands) → P3 drills. Pre-existing
+  CI reds unchanged: frontend-ci (CloudTopologyView jsdom test, fails on clean
+  tree) + supply-chain (gitleaks-history false positive).
 
 ## #105 — Cloud provider parity program (owner directive 2026-07-14 eve) — 🟡 IN FLIGHT
 
