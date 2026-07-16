@@ -232,3 +232,28 @@ seam?" → pre-filled bootstrap suggestion).
 
 Non-goals: full-VPC ingestion as default (never), traffic mirroring/eBPF (revisit
 post-P3), per-cloud marketplace packaging (later).
+
+## 6. Multi-source S3 log ingestion (`S3_LOG_SOURCES`)
+
+The primary env config (`FLOW_S3_BUCKET`, `LOGS_S3_BUCKET` + `ALB/WAF/DNS_S3_PREFIX`)
+expresses a single bucket-with-prefixes layout. Real AWS log delivery is
+per-log-type and often multi-account: **WAF logs must live in an `aws-waf-logs-*`
+bucket**, flow and ALB access logs commonly land in their own buckets. `poller.py`
+therefore accepts `S3_LOG_SOURCES` — a JSON array where each entry names its OWN
+per-lane buckets:
+
+```json
+[{"name":"prod-acct","flow_bucket":"...","alb_bucket":"...",
+  "waf_bucket":"aws-waf-logs-...","dns_bucket":"...","prefix":""}]
+```
+
+Each configured source is ingested into the same correlation lanes as the primary
+source, with per-source checkpoints (suffixed state keys) so sources never clobber
+each other's progress. Any omitted bucket = that lane off for that source. Rules:
+empty/unset `S3_LOG_SOURCES` = unchanged single-source behavior (backward
+compatible); a malformed value is logged once and ignored (a bad override must
+never take the poller down); extra sources use the SAME creds/region as the
+primary poller (same-account, or a bucket policy granting this principal) —
+cross-account role assumption is the next increment. Supply source values via env
+(e.g. the gitignored `.env`), never hardcode account-specific buckets in committed
+compose. Tested in `test_poller_sources.py`.
