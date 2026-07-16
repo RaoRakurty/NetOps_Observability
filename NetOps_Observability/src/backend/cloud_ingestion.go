@@ -55,6 +55,11 @@ type cloudSourceStatus struct {
 	// but nothing is configured/landing" (available). Conflating them made the
 	// whole Ingestion matrix read as broken.
 	Capability string `json:"capability"` // available | planned
+	// Poller-reported error context (Wave 2 #4, additive): when Status is
+	// permission_denied/misconfigured, Detail says what failed and SinceISO
+	// when it started — "IAM denied flow logs since Tuesday", not "off".
+	Detail   string `json:"detail,omitempty"`
+	SinceISO string `json:"since_iso,omitempty"`
 }
 
 // ingestStatusFor turns (volume, lastSeen) into the honest status.
@@ -232,13 +237,29 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 		return rows
 	}
 
+	// Poller-reported error states (Wave 2 #4): permission_denied/misconfigured
+	// records, tenant-scoped to the CALLER. An active record also forces its
+	// provider into the matrix — an account whose every read is IAM-denied must
+	// show a red row, never vanish for lack of landed data.
+	var errRecs []cloudSourceStatusRecord
+	if s.cloudSourceStatus != nil {
+		claims, _ := userFrom(r.Context())
+		tenant, cross := principalTenant(claims)
+		errRecs = s.cloudSourceStatus.ForTenant(tenant, cross, now)
+		for _, rec := range errRecs {
+			if rec.Provider != "" {
+				provSet[rec.Provider] = true
+			}
+		}
+	}
+
 	providers := map[string][]cloudSourceStatus{}
 	for p := range provSet {
-		providers[p] = buildRows(byProvKind[p], invByProv[p], p)
+		providers[p] = overlaySourceStatus(buildRows(byProvKind[p], invByProv[p], p), errRecs, p)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sources":      buildRows(globalKind, invTotal, ""),
+		"sources":      overlaySourceStatus(buildRows(globalKind, invTotal, ""), errRecs, ""),
 		"providers":    providers,
 		"generated_at": now.Format(time.RFC3339),
 	})
