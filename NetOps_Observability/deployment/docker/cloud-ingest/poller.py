@@ -20,6 +20,7 @@ import azure
 import azure_logs
 import azure_topology
 import cloud_events
+import cloud_tag
 import cloudmetrics
 import discover
 import gcp
@@ -76,6 +77,15 @@ def extra_s3_sources() -> list:
 OUT_DIR = os.environ.get("CLOUD_LOGS_OUT", "/out")
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
+# Unified Cloud Logs: raw cloud log lines are tagged (cloud_family/cloud_provider/
+# resource_id) and produced to this topic for vector-router → netops-cloudlogs-*
+# so they are searchable as RAW logs, not just correlation signals. Bounded per
+# scan so a flow/access-log firehose can never flood OpenSearch (the 2026-06-10
+# outage class). 0 = unbounded (not recommended); default keeps a lane's per-scan
+# raw-line emission capped.
+CLOUDLOGS_TOPIC = os.environ.get("CLOUDLOGS_TOPIC", "netops.cloudlogs")
+CLOUDLOGS_RAW = os.environ.get("CLOUDLOGS_RAW", "on").lower() != "off"
+CLOUDLOGS_MAX_PER_SCAN = int(os.environ.get("CLOUDLOGS_MAX_PER_SCAN", "5000"))
 ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "945714973156")
 # Cost-tier policy (owner direction 2026-07-14): lanes that are FREE or
 # near-free (inventory describes, audit/change events, health events, S3/
@@ -162,10 +172,36 @@ def jlog(msg: str, **kw):
           flush=True)
 
 
-def poll_flow_logs(logs, st: dict) -> None:
+def _now_iso() -> str:
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def emit_cloud_log(producer, out_name: str, line: str, sent_so_far: int) -> int:
+    """Tag one raw cloud log line and produce it to the cloudlogs topic. Returns 1
+    when emitted, 0 otherwise. Bounded per scan (CLOUDLOGS_MAX_PER_SCAN) so raw
+    access/flow log volume can never flood OpenSearch. Never raises — a tagging
+    hiccup must not take the poll lane (or its file append) down."""
+    if not CLOUDLOGS_RAW or producer is None:
+        return 0
+    if CLOUDLOGS_MAX_PER_SCAN and sent_so_far >= CLOUDLOGS_MAX_PER_SCAN:
+        return 0
+    try:
+        doc = cloud_tag.cloud_log_doc(
+            out_name, line, TENANT, account=ACCOUNT, region=REGION, timestamp=_now_iso())
+        if doc is None:
+            return 0
+        producer.send(CLOUDLOGS_TOPIC, doc)
+        return 1
+    except Exception:  # noqa: BLE001 — tagging is best-effort, never fatal
+        return 0
+
+
+def poll_flow_logs(logs, st: dict, producer=None) -> None:
     start = int(st.get("flow_ts", (time.time() - 300) * 1000))
     kwargs = {"logGroupName": LOG_GROUP, "startTime": start + 1}
     written = 0
+    tagged = 0
     newest = start
     try:
         while True:
@@ -175,7 +211,9 @@ def poll_flow_logs(logs, st: dict) -> None:
                 _roll_if_large(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"))
                 with open(os.path.join(OUT_DIR, "aws-vpc-flow.vpc"), "a") as f:
                     for e in events:
-                        f.write(e["message"].rstrip("\n") + "\n")
+                        line = e["message"].rstrip("\n")
+                        f.write(line + "\n")
+                        tagged += emit_cloud_log(producer, "aws-vpc-flow.vpc", line, tagged)
                         newest = max(newest, e["timestamp"])
                         written += 1
             token = resp.get("nextToken")
@@ -196,12 +234,13 @@ def poll_flow_logs(logs, st: dict) -> None:
 
 
 def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
-                  out_name: str, skip_prefixes: tuple = ()) -> int:
+                  out_name: str, skip_prefixes: tuple = (), producer=None) -> int:
     """One S3 log lane: fetch .gz objects under `prefix` newer than the
     checkpoint, decompress, append raw lines to OUT_DIR/out_name for the
-    correlation tailer (which owns parsing/rollup). Shared by VPC flow, ALB
-    access, WAF and Resolver query logs — same checkpoint discipline (P0-3),
-    same rotation guard (P0-4)."""
+    correlation tailer (which owns parsing/rollup), AND tag+emit each raw line to
+    the cloudlogs topic so it is searchable as a raw log (unified Cloud Logs).
+    Shared by VPC flow, ALB access, WAF and Resolver query logs — same checkpoint
+    discipline (P0-3), same rotation guard (P0-4)."""
     import gzip
     last_key = st.get(state_key, "")
     kwargs = {"Bucket": bucket, "MaxKeys": 200}
@@ -210,6 +249,7 @@ def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
     if last_key:
         kwargs["StartAfter"] = last_key
     written = 0
+    tagged = 0
     resp = s3.list_objects_v2(**kwargs)
     out_path = os.path.join(OUT_DIR, out_name)
     for obj in resp.get("Contents", []):
@@ -226,19 +266,20 @@ def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
                     continue
                 f.write(line + "\n")
                 written += 1
+                tagged += emit_cloud_log(producer, out_name, line, tagged)
         last_key = max(last_key, key)
     if last_key:
         st[state_key] = last_key
     return written
 
 
-def poll_flow_logs_s3(s3, st: dict) -> None:
+def poll_flow_logs_s3(s3, st: dict, producer=None) -> None:
     """VPC flow logs delivered to S3 (header line stripped). Primary source
     (FLOW_S3_BUCKET) plus any extra sources from S3_LOG_SOURCES — extra sources
     keep their own checkpoints (suffixed state key) so the primary is untouched."""
     if FLOW_S3_BUCKET:
         n = _poll_s3_lane(s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX, "flow_s3_key",
-                          "aws-vpc-flow.vpc", skip_prefixes=("version ",))
+                          "aws-vpc-flow.vpc", skip_prefixes=("version ",), producer=producer)
         if n:
             jlog("flow records appended from s3", count=n)
     for src in extra_s3_sources():
@@ -247,12 +288,12 @@ def poll_flow_logs_s3(s3, st: dict) -> None:
             continue
         n = _poll_s3_lane(s3, st, bucket, src.get("flow_prefix", src.get("prefix", "")),
                           f"flow_s3_key::{src['_name']}", "aws-vpc-flow.vpc",
-                          skip_prefixes=("version ",))
+                          skip_prefixes=("version ",), producer=producer)
         if n:
             jlog("flow records appended from s3", source=src["_name"], count=n)
 
 
-def poll_fidelity_logs_s3(s3, st: dict) -> None:
+def poll_fidelity_logs_s3(s3, st: dict, producer=None) -> None:
     """The log-fidelity lanes (ALB access / WAF / Resolver query logs), each an
     opt-in S3 prefix. Absent prefix = lane off — nothing is guessed."""
     lanes = [
@@ -263,7 +304,8 @@ def poll_fidelity_logs_s3(s3, st: dict) -> None:
     for prefix, state_key, out_name in lanes:
         if not prefix:
             continue
-        n = _poll_s3_lane(s3, st, LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key, out_name)
+        n = _poll_s3_lane(s3, st, LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key,
+                          out_name, producer=producer)
         if n:
             jlog("fidelity records appended from s3", lane=out_name, count=n)
     # Extra sources name their OWN per-lane buckets (root prefix by default) —
@@ -278,7 +320,7 @@ def poll_fidelity_logs_s3(s3, st: dict) -> None:
             if not bucket:
                 continue
             n = _poll_s3_lane(s3, st, bucket, src.get(pkey, src.get("prefix", "")),
-                              f"{state_key}::{src['_name']}", out_name)
+                              f"{state_key}::{src['_name']}", out_name, producer=producer)
             if n:
                 jlog("fidelity records appended from s3", lane=out_name, source=src["_name"], count=n)
 
@@ -319,15 +361,26 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         detail = json.loads(e.get("CloudTrailEvent", "{}"))
         resources = e.get("Resources") or []
         rid = resources[0]["ResourceName"] if resources else name
+        actor = (detail.get("userIdentity") or {}).get("arn", "")
+        event_source = detail.get("eventSource", "")
         producer.send("netops.cloud", cloud_events.change_event(
             provider="aws", tenant=TENANT, resource_id=rid, account=ACCOUNT,
             region=REGION, severity="medium", metric_name=name,
             ts=e["EventTime"].isoformat(),
             attrs={
-                "event_source": detail.get("eventSource", ""),
-                "actor": (detail.get("userIdentity") or {}).get("arn", ""),
+                "event_source": event_source,
+                "actor": actor,
                 "request_id": detail.get("requestID", ""),
             }))
+        # Unified Cloud Logs: also emit the change as a tagged RAW log line so the
+        # Change lane shows the record itself, not only its correlation rollup.
+        if CLOUDLOGS_RAW:
+            chg = cloud_tag.change_log_doc(
+                TENANT, resource_id=rid, event_name=name, provider="aws",
+                account=ACCOUNT, region=REGION, actor=actor,
+                event_source=event_source, timestamp=e["EventTime"].isoformat())
+            if chg is not None:
+                producer.send(CLOUDLOGS_TOPIC, chg)
         sent += 1
     if sent:
         producer.flush(10)
@@ -392,9 +445,9 @@ def main():
                 last_metrics = time.time()
                 jlog("cloud metrics", events=n, instances=len(inventory))
             if LOG_GROUP:
-                poll_flow_logs(logs, st)
-            poll_flow_logs_s3(s3, st)      # primary (guarded within) + extra sources
-            poll_fidelity_logs_s3(s3, st)  # opt-in prefixes/buckets; no-op when unset
+                poll_flow_logs(logs, st, producer)
+            poll_flow_logs_s3(s3, st, producer)      # primary (guarded within) + extra sources
+            poll_fidelity_logs_s3(s3, st, producer)  # opt-in prefixes/buckets; no-op when unset
             poll_cloudtrail(ct, producer, st)
             # Seam lane in its OWN guard: a seam hiccup must never block the
             # flow/cloudtrail lanes' save_state below (P1-11, seen live on the

@@ -459,12 +459,64 @@ transforms:
         }
       }
 
+  # Unified Cloud Logs — the HOST family. Cloud-workload app/host log lines
+  # (RFC5424 syslog whose msg is "cloud=<provider> {json}") become tagged RAW
+  # cloud logs (cloud_family=host) searchable in the Cloud Logs view, alongside
+  # the WAF/LB/DNS/flow lanes the poller tags. Distinct from cloud_app_health
+  # above (which keeps ONLY fault lines as correlation signals) — here we keep
+  # EVERY cloud host line as a searchable record, healthy or not. Non-cloud
+  # syslog is dropped (abort). Tenant carried from the device enrichment; "" →
+  # "global" platform view (never an untagged cross-tenant bucket).
+  cloud_host_log:
+    type: remap
+    inputs: [syslog_normalized]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      raw = string!(.message)
+      parsed, rerr = parse_regex(raw, r'cloud=(?P<provider>[a-z0-9]+) (?P<body>\{.+\})')
+      if rerr != null { abort }
+      body, jerr = parse_json(parsed.body)
+      if jerr != null { abort }
+      svc = string(body.service) ?? "unknown"
+      appid = string(body.app_id) ?? svc
+      host = string(.hostname) ?? "unknown"
+      tenant = string(.tenant_id) ?? ""
+      if tenant == "" { tenant = "global" }
+      lvl = downcase(string(body.level) ?? "info")
+      ts, tserr = format_timestamp(.timestamp, format: "%+")
+      if tserr != null { ts = format_timestamp!(now(), format: "%+") }
+      . = {
+        "tenant_id": tenant,
+        "cloud_family": "host",
+        "cloud_provider": parsed.provider,
+        "resource_id": appid,
+        "message": raw,
+        "timestamp": ts,
+        "level": lvl,
+        "host": host,
+        "app": appid,
+        "source_type": "cloud",
+        "signal": "cloud"
+      }
+
 sinks:
   kafka_cloud:
     type: kafka
     inputs: [cloud_app_health]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.cloud"
+    encoding: { codec: json }
+    compression: snappy
+
+  # Tagged raw cloud HOST logs → the cloudlogs topic (vector-router indexes it
+  # into netops-cloudlogs-{tenant}-*). Same topic the cloud poller produces the
+  # WAF/LB/DNS/flow/change lanes onto.
+  kafka_cloudlogs:
+    type: kafka
+    inputs: [cloud_host_log]
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topic: "netops.cloudlogs"
     encoding: { codec: json }
     compression: snappy
 

@@ -28,6 +28,7 @@ import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
 import Incidents from "./tabs/Incidents";
 import Logs from "./tabs/Logs";
+import CloudLogs from "./pages/CloudLogs";
 import SavedSearches from "./tabs/SavedSearches";
 import Flows from "./tabs/Flows";
 import Tunnels from "./tabs/Tunnels";
@@ -246,6 +247,11 @@ export const NAV: NavSection[] = [
     icon: "logs",
     children: [
       { id: "logs", label: "Log Search", render: (c) => <Logs initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      // Unified Cloud Logs — one screen, a lane per cloud log family (Inventory ·
+      // Flow · Load Balancer · WAF · DNS · Change · Host). Lives in the Data zone
+      // beside Log Search: it IS a raw telemetry plane (tagged cloud logs), the
+      // cloud sibling of device syslog — not another correlation surface.
+      { id: "cloud", label: "Cloud Logs", render: () => <CloudLogs /> },
       { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
     ],
   },
