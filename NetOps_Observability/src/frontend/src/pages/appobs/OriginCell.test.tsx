@@ -40,14 +40,35 @@ describe("OriginCell", () => {
     expect(screen.queryByText("AWS")).toBeNull();
   });
 
-  it("shows EVERY cloud of a multi-cloud investigation", () => {
+  it("shows EVERY cloud of a multi-cloud investigation on ONE line (short names)", () => {
+    // Multi-cloud uses the short vocabulary (AWS · Azure · GCP) so two clouds
+    // fit a fixed-height virtualized row without wrapping onto the row below
+    // (the AWS/Azure overlap report, 2026-07-16). Full names stay in the title.
     const origins = deriveObjectOrigins([
       ev({ source: "aws" }),
       ev({ source: "gcp", evidenceRef: "sig-2" }),
     ]);
-    render(<OriginCell providers={origins.get("cid-1")!.providers} />);
+    const { container } = render(<OriginCell providers={origins.get("cid-1")!.providers} />);
     expect(screen.getByText("AWS")).toBeTruthy();
-    expect(screen.getByText("Google Cloud")).toBeTruthy();
+    expect(screen.getByText("GCP")).toBeTruthy();
+    expect(container.querySelector(".ao-provs")!.getAttribute("title")).toBe("AWS + Google Cloud");
+  });
+
+  it("collapses a 3-cloud investigation into two badges + a +N chip (never a second line)", () => {
+    const origins = deriveObjectOrigins([
+      ev({ source: "aws" }),
+      ev({ source: "azure", evidenceRef: "sig-2" }),
+      ev({ source: "gcp", evidenceRef: "sig-3" }),
+    ]);
+    const providers = origins.get("cid-1")!.providers;
+    expect(providers.length).toBe(3);
+    render(<OriginCell providers={providers} />);
+    const more = screen.getByText("+1");
+    expect(more).toBeTruthy();
+    // the chip's tooltip still discloses every cloud — nothing is hidden
+    expect(more.getAttribute("title")).toMatch(/AWS/);
+    expect(more.getAttribute("title")).toMatch(/Azure/);
+    expect(more.getAttribute("title")).toMatch(/Google Cloud/);
   });
 
   it("reads as on-prem — with the reason — when no cloud is in the evidence", () => {

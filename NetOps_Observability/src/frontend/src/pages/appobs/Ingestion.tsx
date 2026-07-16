@@ -126,10 +126,12 @@ function Accounts({ accounts, onNew, connections }: {
       </div>
       {connections}
       {accounts.length === 0 ? (
+        /* No duplicate CTA here: the header bar above already carries the ONE
+           "Connect a cloud account" primary action (two stacked identical
+           buttons read as a double implementation — user report 2026-07-16). */
         <div className="ao-panel"><EmptyState
           title="No cloud inventory has arrived yet"
-          hint="Discovered accounts appear here once an enabled connection starts collecting."
-          action={<button className="ao-btn ao-btn--primary" onClick={onNew}>Connect a cloud account</button>} /></div>
+          hint="Discovered accounts appear here once an enabled connection starts collecting — use “Connect a cloud account” above to link one." /></div>
       ) : (
         <div className="ao-panel">
           <div className="ao-panel-h">Connected accounts <span className="ao-panel-meta">connection management lives in Admin → Integrations · sort any column · open a row to manage</span></div>

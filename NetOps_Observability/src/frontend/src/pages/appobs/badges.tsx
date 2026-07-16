@@ -19,6 +19,13 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   aws: "AWS", azure: "Azure", gcp: "Google Cloud", "—": "—",
 };
 
+// Short forms for space-constrained multi-cloud cells (same vocabulary the
+// Accounts table already uses). Full names stay on single-provider badges and
+// in every tooltip.
+export const PROVIDER_SHORT: Record<Provider, string> = {
+  aws: "AWS", azure: "Azure", gcp: "GCP", "—": "—",
+};
+
 export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
   if (provider === "aws") return <AwsLogo size={size} />;
   if (provider === "azure") return <AzureLogo size={size} />;
@@ -26,21 +33,29 @@ export function ProviderMark({ provider, size = 14 }: { provider: Provider; size
   return null;
 }
 
-export function ProviderBadge({ provider }: { provider: Provider }) {
+export function ProviderBadge({ provider, compact = false }: { provider: Provider; compact?: boolean }) {
   if (provider === "—") return null;
   return (
     <span className="ao-prov" title={PROVIDER_LABEL[provider]}>
       <span className="ao-prov-mark" aria-hidden="true"><ProviderMark provider={provider} /></span>
-      <span className="ao-prov-l">{PROVIDER_LABEL[provider]}</span>
+      <span className="ao-prov-l">{(compact ? PROVIDER_SHORT : PROVIDER_LABEL)[provider]}</span>
     </span>
   );
 }
+
+// Origin cells sit inside FIXED-HEIGHT virtualized table rows, so the cell can
+// never wrap to a second line (wrapped badges paint over the row below — user
+// report 2026-07-16). At most this many badges render; the rest collapse into
+// a "+N" chip whose tooltip (like the cell's) lists every cloud in full.
+const ORIGIN_MAX_BADGES = 2;
 
 // The Origin cell for an investigation. Shows EVERY cloud actually present in the
 // object's evidence (a genuinely multi-cloud incident lists them all — we never
 // collapse it to a single "primary" cloud we did not measure). No cloud in the
 // evidence is NOT an unknown: it is an on-prem / network investigation, and it
 // says so, with a tooltip explaining that the evidence carried no cloud signal.
+// Multi-cloud cells use the short provider names (AWS · Azure · GCP — the same
+// vocabulary as the Accounts table) so two clouds fit on ONE line.
 export function OriginCell({ providers }: { providers: Provider[] }) {
   if (!providers.length) {
     return (
@@ -49,9 +64,14 @@ export function OriginCell({ providers }: { providers: Provider[] }) {
       </span>
     );
   }
+  const full = providers.map((p) => PROVIDER_LABEL[p]).join(" + ");
+  const compact = providers.length > 1;
+  const shown = providers.slice(0, ORIGIN_MAX_BADGES);
+  const extra = providers.length - shown.length;
   return (
-    <span className="ao-provs" title={providers.map((p) => PROVIDER_LABEL[p]).join(" + ")}>
-      {providers.map((p) => <ProviderBadge key={p} provider={p} />)}
+    <span className="ao-provs" title={full}>
+      {shown.map((p) => <ProviderBadge key={p} provider={p} compact={compact} />)}
+      {extra > 0 && <span className="ao-prov ao-prov--more" title={full}>+{extra}</span>}
     </span>
   );
 }

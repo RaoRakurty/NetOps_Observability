@@ -389,7 +389,7 @@ function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; s
                 render: (o) => <ServiceCell o={o} /> },
               // Origin: which cloud this actually came from, proven by the
               // providers present in the object's own evidence (review #5).
-              { key: "origin", header: "Origin", width: 132,
+              { key: "origin", header: "Origin", width: 160,
                 sortValue: (o) => o.origin.providers.join("+") || "~onprem",
                 render: (o) => <OriginCell providers={o.origin.providers} /> },
               { key: "verdict", header: "Assessment", width: 120, sortValue: (o) => verdictRank(o.verdictTier), render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },

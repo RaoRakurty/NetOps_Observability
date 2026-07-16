@@ -4439,8 +4439,12 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-btn--sm { padding: 3px var(--sp-2); font-size: var(--fs-micro, 12px); }
 
 /* provider (Origin) badge — reuses the connector-gallery vendor marks so a cloud
-   looks identical everywhere in the product */
-.ao-provs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+   looks identical everywhere in the product. NOWRAP by design: these cells live
+   in fixed-height virtualized table rows, where a wrapped second badge paints
+   over the row below (AWS/Azure overlap, user report 2026-07-16). Overflow past
+   the visible badges is the "+N" chip's job, never a second line. */
+.ao-provs { display: inline-flex; flex-wrap: nowrap; overflow: hidden; align-items: center; gap: 4px; max-width: 100%; }
+.ao-prov--more { padding: 1px 6px; color: var(--fg-subtle); flex: none; }
 .ao-prov { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px 1px 3px;
   border: 1px solid var(--border); border-radius: var(--r-1, 4px); background: var(--panel);
   font-size: var(--fs-micro, 12px); font-weight: 600; color: var(--fg); white-space: nowrap; }
