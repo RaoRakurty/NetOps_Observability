@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Alert } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
@@ -29,7 +30,7 @@ export default function Alerts() {
       render: (a) => <span title={a.summary}>{a.summary}</span> },
     { key: "fired", header: "Fired", width: 168, sortable: true,
       sortValue: (a) => new Date(a.fired_at).getTime() || 0,
-      render: (a) => new Date(a.fired_at).toLocaleString() },
+      render: (a) => fmtDateTime(a.fired_at) },
   ], []);
 
   useEffect(() => {
@@ -142,8 +143,8 @@ export function AlertDetailBody({ alert: a, onViewLogs }: { alert: Alert; onView
         <p style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{a.description}</p>
       )}
       <div>
-        {row("Fired", <span style={mono}>{new Date(a.fired_at).toLocaleString()}</span>)}
-        {a.resolved_at && row("Resolved", <span style={mono}>{new Date(a.resolved_at).toLocaleString()}</span>)}
+        {row("Fired", <span style={mono}>{fmtDateTime(a.fired_at)}</span>)}
+        {a.resolved_at && row("Resolved", <span style={mono}>{fmtDateTime(a.resolved_at)}</span>)}
         {row("Device", <span style={mono}>{a.device_id || "—"}</span>)}
         {row("ID", <span style={mono}>{a.id}</span>)}
       </div>

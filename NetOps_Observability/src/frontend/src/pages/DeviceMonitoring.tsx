@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, Alert, Tunnel } from "../services/api";
 import { useShell } from "../context/shell";
@@ -124,7 +125,7 @@ function DeviceInventory() {
     { key: "vendor", header: "Vendor", sortable: true, text: (d) => d.vendor || "—", render: (d) => d.vendor || "—" },
     { key: "model", header: "Model", sortable: true, text: (d) => d.model || "—", render: (d) => d.model || "—" },
     { key: "source", header: "Source", sortable: true, text: (d) => d.source, render: (d) => d.source },
-    { key: "last_seen", header: "Last seen", sortable: true, sortValue: (d) => Date.parse(d.last_seen || "") || 0, render: (d) => (d.last_seen ? new Date(d.last_seen).toLocaleString() : "—") },
+    { key: "last_seen", header: "Last seen", sortable: true, sortValue: (d) => Date.parse(d.last_seen || "") || 0, render: (d) => (d.last_seen ? fmtDateTime(d.last_seen) : "—") },
     {
       key: "act", header: "", width: "150px", render: (d) => (
         <button

@@ -267,7 +267,8 @@ function topoGraphSvg(g: TopoGraph): string {
 }
 
 function reportHtml(d: RcaCase, objId: string): string {
-  const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+  // Export header time is explicit-zone (UTC) so a printed report is unambiguous.
+  const now = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
   const why = d.why.map((w) => {
     const t = TONE[w.tone] ?? TONE.orange;

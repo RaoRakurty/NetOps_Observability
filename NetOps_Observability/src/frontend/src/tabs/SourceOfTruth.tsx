@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useRef, useState } from "react";
 import { api, NetboxConfig, NetboxSyncStatus } from "../services/api";
 import Icon from "../components/Icon";
@@ -323,13 +324,13 @@ export default function SourceOfTruth() {
         </div>
         {poll && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-            Last sync: {poll.last_poll ? new Date(poll.last_poll).toLocaleString() : "—"} · {poll.devices ?? 0} device(s)
+            Last sync: {poll.last_poll ? fmtDateTime(poll.last_poll) : "—"} · {poll.devices ?? 0} device(s)
             {poll.last_error ? <span style={{ color: "var(--bad)" }}> · error: {poll.last_error}</span> : null}
           </div>
         )}
         {syncStat?.enabled && (
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            Last push: {syncStat.last_run ? new Date(syncStat.last_run).toLocaleString() : "not run yet"}
+            Last push: {syncStat.last_run ? fmtDateTime(syncStat.last_run) : "not run yet"}
             {syncStat.last_run ? <> · {syncStat.created} added · {syncStat.present} already present</> : null}
             {syncStat.last_error ? <span style={{ color: "var(--bad)" }}> · error: {syncStat.last_error}</span> : null}
           </div>

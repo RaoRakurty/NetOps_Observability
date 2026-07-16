@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Device, Alert, DeviceLocationRow, SiteRow } from "../services/api";
 import { takeDrill } from "../theme/drill";
@@ -282,7 +283,7 @@ export default function Devices() {
       key: "last_seen", header: "Polled", width: "6%", sortable: true,
       sortValue: (d) => new Date(d.last_seen).getTime() || 0,
       sev: (d) => healthSev(health.get(d.id) ?? "up"),
-      render: (d) => <span title={new Date(d.last_seen).toLocaleString()}>{relTime(d.last_seen)}</span>,
+      render: (d) => <span title={fmtDateTime(d.last_seen)}>{relTime(d.last_seen)}</span>,
     },
   ], [health, locs, siteOptions, editableSites, siteName]);
 

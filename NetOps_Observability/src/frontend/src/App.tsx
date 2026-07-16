@@ -3,6 +3,7 @@ import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
+import { useTzMode } from "./lib/time";
 import { resolveRoute, filteredNav, landingResolves, routeFor } from "./nav";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
@@ -73,6 +74,10 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpPath, setHelpPath] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  // Global time-display mode (Local/UTC, top-bar knob). Keying the page on it
+  // remounts the active view so every rendered timestamp — including plain
+  // (non-hook) render helpers — switches zone immediately.
+  const tz = useTzMode();
 
   // Shell-v2 (#24): the slim icon-rail + hover-flyout nav, navy header band, and
   // compact cockpit type — now the DEFAULT. `?shell=v1` is a sticky opt-OUT
@@ -205,7 +210,7 @@ export default function App() {
             </div>
             <SubNav section={section} activeLeaf={leaf?.id} />
           </div>
-          <div className="page">
+          <div className="page" key={tz}>
             {/* Administration acts on config — always state the acting scope
                 (rendered in-page: shell-v2 hides the main-head strip). */}
             {section.id === "admin" && (

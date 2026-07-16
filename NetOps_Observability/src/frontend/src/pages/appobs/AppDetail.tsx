@@ -7,6 +7,7 @@
 // emitted (/api/cloud/health|changes|evidence). Nothing is sample data; a panel with
 // no ingested signal shows its empty state instead.
 
+import { fmtDateTime } from "../../lib/time";
 import { useState, useEffect, ReactNode } from "react";
 import { Segmented } from "../../components/ui";
 import { Chip } from "../../components/noc";
@@ -48,7 +49,7 @@ const NM = (v: number, fmt: (n: number) => string): ReactNode =>
 function AsOf({ iso, prefix = "as of" }: { iso: string; prefix?: string }) {
   if (!iso) return null;
   return (
-    <span className="ao-asof" title={`Source last reported at ${new Date(iso).toLocaleString()}`}>
+    <span className="ao-asof" title={`Source last reported at ${fmtDateTime(iso)}`}>
       {prefix} {ago(iso)}
     </span>
   );

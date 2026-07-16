@@ -5,16 +5,11 @@
 
 import type { EvidenceRef } from "../api/topologyTypes";
 import { SOURCE_LABEL, confidencePct } from "../utils/topologyHealth";
+import { fmtDateTime } from "../../../lib/time";
 
 function formatWhen(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  return new Date(t).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const out = fmtDateTime(iso);
+  return out === "—" ? iso : out;
 }
 
 export default function EvidencePanel({

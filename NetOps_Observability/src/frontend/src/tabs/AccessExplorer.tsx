@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useState } from "react";
 import { api, AccessExplanation } from "../services/api";
 import { StatStrip, Stat, Skeleton } from "../components/ui";
@@ -120,7 +121,7 @@ export default function AccessExplorer() {
                       <td>{b.effect === "deny" ? <span style={{ color: "var(--bad)" }}>Deny</span> : "Allow"}</td>
                       <td style={{ color: "var(--muted)", fontSize: 12 }}>{b.granted_by || "—"}</td>
                       <td style={{ color: "var(--muted)", fontSize: 12 }}>
-                        {b.expires_at ? <span><Icon name="alerts" size={11} /> expires {new Date(b.expires_at).toLocaleString()}</span> : (b.reason || "—")}
+                        {b.expires_at ? <span><Icon name="alerts" size={11} /> expires {fmtDateTime(b.expires_at)}</span> : (b.reason || "—")}
                       </td>
                     </tr>
                   ))}
