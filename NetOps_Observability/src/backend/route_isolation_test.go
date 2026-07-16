@@ -194,6 +194,10 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/identity-map":         "scoped",
 	"/api/cloud/attribution/coverage": "scoped",
 	"/api/cloud/app-rca":              "scoped",
+	// Cloud Network Overview roll-up (P1): tenant DATA — inventory via
+	// principalTenant-scoped cloud store, issues via tenant_scope row policies;
+	// cross-org proof in cloud_network_overview_test.go.
+	"/api/cloud/network/overview": "scoped",
 	// Business Service mapping + manual overrides (migration 0024): tenant DATA,
 	// requirePerm + principalTenant + FORCE-RLS; cross-org proof in
 	// business_service_isolation_test.go.

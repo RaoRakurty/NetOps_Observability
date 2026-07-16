@@ -992,6 +992,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/identity-map", s.handleCloudIdentityMap)
 	mux.HandleFunc("/api/cloud/apps", s.handleCloudApps)
 	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
+	// Cloud Network Overview roll-up (cloud-network-overview P1): provider →
+	// region → VPC hierarchy + lateral seams, tenant-scoped.
+	mux.HandleFunc("/api/cloud/network/overview", s.handleCloudNetworkOverview)
 	// Business Service mapping + manual overrides (Azure optional-tags epic, 0024).
 	mux.HandleFunc("/api/cloud/business-services", s.handleBusinessServices)
 	mux.HandleFunc("/api/cloud/business-services/", s.handleBusinessServiceByID)
