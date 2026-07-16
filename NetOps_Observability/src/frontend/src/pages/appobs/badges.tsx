@@ -7,7 +7,54 @@
 
 import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
-import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory } from "./types";
+import { AwsLogo, AzureLogo, GcpLogo } from "../../components/ConnectorLogos";
+import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory, Provider } from "./types";
+
+// ── Origin (which cloud an investigation comes from) ─────────────────────────
+// Reuses the SAME vendor marks as the connector gallery + wizard
+// (components/ConnectorLogos), so a provider looks identical everywhere in the
+// product. The mark is decorative; the adjacent text carries the meaning, so a
+// screen reader hears the provider name once rather than twice.
+export const PROVIDER_LABEL: Record<Provider, string> = {
+  aws: "AWS", azure: "Azure", gcp: "Google Cloud", "—": "—",
+};
+
+export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
+  if (provider === "aws") return <AwsLogo size={size} />;
+  if (provider === "azure") return <AzureLogo size={size} />;
+  if (provider === "gcp") return <GcpLogo size={size} />;
+  return null;
+}
+
+export function ProviderBadge({ provider }: { provider: Provider }) {
+  if (provider === "—") return null;
+  return (
+    <span className="ao-prov" title={PROVIDER_LABEL[provider]}>
+      <span className="ao-prov-mark" aria-hidden="true"><ProviderMark provider={provider} /></span>
+      <span className="ao-prov-l">{PROVIDER_LABEL[provider]}</span>
+    </span>
+  );
+}
+
+// The Origin cell for an investigation. Shows EVERY cloud actually present in the
+// object's evidence (a genuinely multi-cloud incident lists them all — we never
+// collapse it to a single "primary" cloud we did not measure). No cloud in the
+// evidence is NOT an unknown: it is an on-prem / network investigation, and it
+// says so, with a tooltip explaining that the evidence carried no cloud signal.
+export function OriginCell({ providers }: { providers: Provider[] }) {
+  if (!providers.length) {
+    return (
+      <span className="ao-muted" title="No cloud signal is attached to this investigation — its evidence is network / on-premises telemetry.">
+        On-prem
+      </span>
+    );
+  }
+  return (
+    <span className="ao-provs" title={providers.map((p) => PROVIDER_LABEL[p]).join(" + ")}>
+      {providers.map((p) => <ProviderBadge key={p} provider={p} />)}
+    </span>
+  );
+}
 
 // Finding-category badge — the anti-black-box ledger. Discriminating (the
 // differentiator) reads as accent; contradicting as crit; missing stays muted

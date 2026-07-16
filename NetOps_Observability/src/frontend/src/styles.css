@@ -4424,6 +4424,37 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-freshstrip-i { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-micro, 12px); }
 .ao-freshstrip-l { color: var(--fg-muted); }
 
+/* feed bar (Investigations + App Detail) — the honesty header for a live signal
+   feed: what window, how many of how many, and how fresh (owner review #2).
+   All semantic tokens, so light/dark comes for free. */
+.ao-feedbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2); }
+.ao-feedbar-count { font-size: var(--fs-micro, 12px); color: var(--fg-muted); margin-right: auto; }
+.ao-feedbar-live { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-micro, 12px); color: var(--fg-subtle); }
+.ao-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none;
+  animation: ao-live-pulse 2s ease-in-out infinite; }
+@keyframes ao-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+/* the pulse is decoration, not information — the text says "updated Ns ago" */
+@media (prefers-reduced-motion: reduce) { .ao-live-dot { animation: none; } }
+.ao-btn--sm { padding: 3px var(--sp-2); font-size: var(--fs-micro, 12px); }
+
+/* provider (Origin) badge — reuses the connector-gallery vendor marks so a cloud
+   looks identical everywhere in the product */
+.ao-provs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.ao-prov { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px 1px 3px;
+  border: 1px solid var(--border); border-radius: var(--r-1, 4px); background: var(--panel);
+  font-size: var(--fs-micro, 12px); font-weight: 600; color: var(--fg); white-space: nowrap; }
+.ao-prov-mark { display: inline-flex; align-items: center; flex: none; }
+.ao-prov-l { line-height: 1; }
+
+/* data age — the stamp that stops a stale value reading as a live one */
+.ao-asof { font-size: var(--fs-micro, 12px); color: var(--fg-subtle); white-space: nowrap; }
+/* service-column fallback (primary affected resource stood in for a service) */
+.ao-svc-fallback { display: inline-flex; align-items: baseline; gap: 2px; min-width: 0; }
+.ao-svc-note { font-size: 10px; }
+/* a provider state event's reading: the state + the provider's declared reason */
+.ao-state-read { display: inline-flex; align-items: baseline; gap: 2px; min-width: 0; }
+
 /* bulk-selection action bar (Resources) — appears when rows are selected, hosts
    the "assign to service" affordance (2026-07 review imp #5) */
 .ao-selbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3);

@@ -2340,6 +2340,9 @@ function cloudQS(app?: string, limit?: number): string {
 export type CloudHealthSignalRow = {
   time: string; app: string; resource: string; signal: string; state: string;
   metric: string; current: string; baseline: string; severity: string; source: string;
+  // Provider-declared cause of a health STATE event (Azure reasonType). Absent
+  // for metric anomalies, which carry metric/current/baseline instead.
+  reason?: string;
 };
 // Provider-native identity + server-built console deep-links for a row — the
 // id an engineer pastes into the AWS/Azure console, one click away from the

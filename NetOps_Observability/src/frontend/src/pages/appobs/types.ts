@@ -83,11 +83,19 @@ export interface HealthSignal {
   resource: string;
   signal: string;         // e.g. "alb_5xx", "resource_health"
   state: Health;
+  // metric/current/baseline describe a METRIC ANOMALY only. A provider health
+  // STATE event (cloud_resource_health: "the VM is Unavailable") legitimately has
+  // none of the three — see isStateEvent() in ./timeline. Its substance is the
+  // state + `reason` instead; the UI must render THAT, never an empty triplet.
   metric: string;
   current: string;
   baseline: string;
   severity: "critical" | "warning" | "info";
   source: string;         // cloudwatch_alarm | azure_resource_health | ...
+  // The provider's declared cause for a state event (Azure Resource Health
+  // reasonType: "Customer Initiated" / "Platform Initiated"). "" when the
+  // provider declared none — rendered as an honest "not stated", never guessed.
+  reason?: string;
 }
 
 export interface ChangeEvent {

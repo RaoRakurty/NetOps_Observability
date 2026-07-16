@@ -18,8 +18,13 @@ import DataTable from "../components/DataTable";
 import {
   ConfidenceBadge, HealthBadge, AppIdentityPill, MetricCard,
   CardGroup, EmptyState, FilterBar, EvidenceDrawer,
-  EvidenceCategoryBadge, ConsoleLink, consoleName, fmtBps, fmtBytes, ago,
+  EvidenceCategoryBadge, ConsoleLink, consoleName, fmtBps, fmtBytes, ago, OriginCell,
 } from "./appobs/badges";
+import { serviceIdentity } from "./appobs/origin";
+import { FeedBar } from "./appobs/FeedBar";
+import {
+  DEFAULT_CLOUD_RANGE, filterByRange, feedCount, newestIso, rangeWords,
+} from "./appobs/range";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
@@ -41,8 +46,11 @@ import type { ReadinessSummary, SourceType, SourceStatus } from "./appobs/readin
 import { api } from "../services/api";
 import { severityRank } from "../theme/severity";
 import { healthRank, confidenceRank, verdictRank, timeRank } from "./appobs/sortRanks";
-import { buildTimeline, cleanVal } from "./appobs/timeline";
+import { buildTimeline, cleanVal, isStateEvent, stateLabel, stateReason } from "./appobs/timeline";
 import type { TimelineEpisode } from "./appobs/timeline";
+import {
+  healthMetricCell, healthCurrentCell, healthBaselineCell, healthReasonCell,
+} from "./appobs/healthCells";
 
 // async loader with explicit loading/error/empty states (no fake-data fallback —
 // an empty inventory shows an honest "connect a cloud account" state).
@@ -72,6 +80,24 @@ const DASH = <span className="ao-muted">—</span>;
 // unknown; we never promote it.
 function verdictConf(tier: string): Confidence {
   return tier === "confirmed" ? "confirmed" : tier === "suspected" ? "suspected" : "unknown";
+}
+
+// The Service cell of an investigation (owner review #1). A blank cell told the
+// operator nothing; this always names something and always explains what it is
+// naming — the real service, the primary affected resource as an explicit
+// fallback, or "unattributed" with the reason there is no service mapping.
+function ServiceCell({ o }: { o: CloudRcaObject }) {
+  const id = serviceIdentity(o.apps, o.origin);
+  if (id.kind === "service") return <strong>{id.label}</strong>;
+  if (id.kind === "resource") {
+    return (
+      <span className="ao-svc-fallback" title={id.why}>
+        <span className="ao-mono">{id.label}</span>
+        <span className="ao-muted ao-svc-note"> · resource</span>
+      </span>
+    );
+  }
+  return <span className="ao-unknown" title={id.why}>unattributed</span>;
 }
 
 // developer identity-source enum → the operator words (audit C: "Mapped by").
@@ -115,6 +141,11 @@ const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
   evidence: { tab: "investigations", sub: "findings" },
   underlay: { tab: "investigations", sub: "network" },
   ingestion: { tab: "datasources" },
+  // Deep-link straight to the REAL cloud-account onboarding surface
+  // (Data sources → Accounts → "Connect a cloud account"). Settings' Cloud
+  // Connectors card points here; it used to point at the ITSM Integrations page,
+  // which has nothing to do with cloud accounts (owner review #3/#4).
+  accounts: { tab: "datasources", sub: "accounts" },
 };
 
 export default function AppObservability() {
@@ -165,7 +196,7 @@ export default function AppObservability() {
       {tab === "services" && <Services initialSub={sub} onOpen={setSel} />}
       {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} />}
       {tab === "resources" && <ResourcesGroup initialSub={sub} />}
-      {tab === "datasources" && <Ingestion />}
+      {tab === "datasources" && <Ingestion initialSub={sub} />}
       {tab === "settings" && <Settings />}
     </div>
   );
@@ -350,7 +381,17 @@ function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; s
             initialSort={{ key: "verdict", dir: "asc" }}
             onRowClick={(o) => { location.hash = `#/monitoring/correlations?id=${encodeURIComponent(o.correlationId)}`; }}
             columns={[
-              { key: "apps", header: "Services", width: 220, sortValue: (o) => o.apps.join(", "), render: (o) => o.apps.length ? <strong>{o.apps.join(", ")}</strong> : DASH },
+              // Service: the engine's named service, else the primary affected
+              // resource, else an explicit "unattributed" that says WHY — never
+              // the old silent dash the owner had to guess at (review #1).
+              { key: "apps", header: "Service", width: 220,
+                sortValue: (o) => serviceIdentity(o.apps, o.origin).label,
+                render: (o) => <ServiceCell o={o} /> },
+              // Origin: which cloud this actually came from, proven by the
+              // providers present in the object's own evidence (review #5).
+              { key: "origin", header: "Origin", width: 132,
+                sortValue: (o) => o.origin.providers.join("+") || "~onprem",
+                render: (o) => <OriginCell providers={o.origin.providers} /> },
               { key: "verdict", header: "Assessment", width: 120, sortValue: (o) => verdictRank(o.verdictTier), render: (o) => <ConfidenceBadge level={verdictConf(o.verdictTier)} /> },
               { key: "hyp", header: "Probable cause", width: 300, sortValue: (o) => o.topHypothesis, render: (o) => <span className="ao-why" title={o.topHypothesis}>{o.topHypothesis.startsWith("sig.") ? signatureNocTitle(o.topHypothesis) : o.topHypothesis}</span> },
               { key: "conf", header: "Confidence", width: 96, align: "right", sortValue: (o) => o.confidence, render: (o) => `${Math.round(o.confidence * 100)}%` },
@@ -687,21 +728,37 @@ function SourceFreshnessStrip() {
 // muted "no reading" rather than the old "— — (baseline —)" wall (audit defect #1c).
 function timelineReading(e: TimelineEpisode): React.ReactNode {
   if (e.kind === "change") return DASH;
+  // A provider STATE event has no metric by design (it declares a state, it does
+  // not measure one). Its reading IS the state + the provider's reasonType — the
+  // old "no reading" was true but useless, and hid the one fact the row carried.
+  if (e.stateEvent) {
+    return (
+      <span className="ao-state-read">
+        <strong>{stateLabel(e.state)}</strong>
+        {e.reason
+          ? <span className="ao-muted"> · {e.reason}</span>
+          : <span className="ao-muted" title="the provider declared this state without a reason"> · no reason stated</span>}
+      </span>
+    );
+  }
   if (!e.current && !e.baseline) {
     return <span className="ao-muted" title="the provider health signal carried no metric value">no reading</span>;
   }
   return <><strong>{e.current || "—"}</strong>{e.baseline && <span className="ao-muted"> vs {e.baseline} baseline</span>}</>;
 }
 
+
 // merged change + health timeline, newest first — the NOC "what happened, when".
 // Consecutive identical events collapse into one EPISODE with a ×N count + a
 // first→last span, and every column is click-to-sort (audit defects #1 + #2).
-function HCTimeline({ health, changes }: { health: HealthSignal[]; changes: ChangeEvent[] }) {
+function HCTimeline({ health, changes, minutes, staleHint }: {
+  health: HealthSignal[]; changes: ChangeEvent[]; minutes: number; staleHint: string;
+}) {
   const episodes = buildTimeline(health, changes);
   return (
     <div className="ao-panel">
-      <div className="ao-panel-h">Event timeline <span className="ao-panel-meta">change + health · repeats collapsed into episodes · newest first · last 24h</span></div>
-      {episodes.length === 0 ? <EmptyState title="No cloud events in the last 24h" hint="health + change signals appear here as the connected cloud accounts report them" /> : (
+      <div className="ao-panel-h">Event timeline <span className="ao-panel-meta">change + health · repeats collapsed into episodes · newest first · {rangeWords(minutes)}</span></div>
+      {episodes.length === 0 ? <EmptyState title={`No cloud events in the ${rangeWords(minutes)}`} hint={staleHint} /> : (
         <DataTable<TimelineEpisode> rows={episodes} rowKey={(e) => `${e.key}|${e.firstSeen}|${e.lastSeen}`}
           height={Math.min(480, 56 + episodes.length * 30)} ariaLabel="Event timeline"
           initialSort={{ key: "when", dir: "desc" }}
@@ -731,24 +788,73 @@ async function loadHealthChanges(): Promise<{ health: HealthSignal[]; changes: C
   return { health, changes };
 }
 
+// The cloud signal feed with an explicit freshness stamp + an operator refresh.
+// `loadedAt` is what makes the "live · updated Ns ago" cue truthful: it is set
+// only on a SUCCESSFUL fetch, so a failing refresh can never age-reset the label
+// and make stale data look fresh.
+function useCloudFeed() {
+  const [data, setData] = useState<{ health: HealthSignal[]; changes: ChangeEvent[] } | null>(null);
+  const [status, setStatus] = useState<LoadState>("loading");
+  const [loadedAt, setLoadedAt] = useState<number>(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let live = true;
+    if (nonce > 0) setBusy(true);
+    loadHealthChanges().then(
+      (d) => { if (!live) return; setData(d); setStatus("ready"); setLoadedAt(Date.now()); setBusy(false); },
+      () => { if (!live) return; setStatus("error"); setBusy(false); },
+    );
+    return () => { live = false; };
+  }, [nonce]);
+  return { data, status, loadedAt, busy, refresh: () => setNonce((n) => n + 1) };
+}
+
 function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
-  const { data, status } = useAsync(loadHealthChanges);
+  const feed = useCloudFeed();
+  // The window the tables show. Narrows inside the 24h the backend ingests —
+  // see range.ts for why 7d is deliberately not offered.
+  const [minutes, setMinutes] = useState<number>(DEFAULT_CLOUD_RANGE.minutes);
   // Row drill-in (audit defect #4): open the full record for an alert / change.
   const [alertSel, setAlertSel] = useState<HealthSignal | null>(null);
   const [changeSel, setChangeSel] = useState<ChangeEvent | null>(null);
-  if (status === "loading") return <TableSkeleton />;
-  if (status === "error" || !data) return <LoadError what="cloud health & change signals" />;
-  const { health, changes } = data;
+  if (feed.status === "loading") return <TableSkeleton />;
+  if (feed.status === "error" || !feed.data) return <LoadError what="cloud health & change signals" />;
+  const allHealth = feed.data.health;
+  const allChanges = feed.data.changes;
+  const health = filterByRange(allHealth, minutes);
+  const changes = filterByRange(allChanges, minutes);
+
+  // Counts are per view, so the bar always describes the table under it.
+  const count = view === "alerts" ? feedCount(health.length, allHealth.length, minutes)
+    : view === "changes" ? feedCount(changes.length, allChanges.length, minutes)
+      : feedCount(health.length + changes.length, allHealth.length + allChanges.length, minutes);
+
+  // An empty window is not necessarily an empty feed: when signals exist but all
+  // fall OUTSIDE the selected range, say so and name the age of the newest one —
+  // "nothing here" and "nothing recent" are different answers (owner review #2).
+  const newest = newestIso([...allHealth, ...allChanges]);
+  const emptyHint = (kind: string) => {
+    const all = view === "alerts" ? allHealth.length : view === "changes" ? allChanges.length : allHealth.length + allChanges.length;
+    if (all > 0 && newest) {
+      return `Nothing in the ${rangeWords(minutes)} — the most recent ${kind} landed ${ago(newest)}. Widen the range to see it.`;
+    }
+    return `${kind} appear here as the connected cloud accounts report them`;
+  };
+
   const sevTone = (s: string) => s === "critical" ? "var(--crit)" : s === "warning" ? "var(--warn)" : "var(--fg-subtle)";
   return (
     <div className="ao-stack">
       <SourceFreshnessStrip />
-      {view === "timeline" && <HCTimeline health={health} changes={changes} />}
+      <FeedBar minutes={minutes} onRange={setMinutes} count={count}
+        loadedAt={feed.loadedAt} onRefresh={feed.refresh} busy={feed.busy}
+        label={`${view === "alerts" ? "Alerts" : view === "changes" ? "Changes" : "Timeline"} time range`} />
+      {view === "timeline" && <HCTimeline health={health} changes={changes} minutes={minutes} staleHint={emptyHint("cloud events")} />}
       {view === "alerts" && (
         <div className="ao-panel">
           {health.length === 0 ? (
-            <EmptyState title="No cloud alerts in the last 24 hours"
-              hint="provider health reports appear here when a connected account reports a problem" />
+            <EmptyState title={`No cloud alerts in the ${rangeWords(minutes)}`}
+              hint={emptyHint("provider health reports")} />
           ) : (
           <DataTable<HealthSignal> rows={health} rowKey={(r) => r.time + r.signal + r.app + r.metric} height={Math.min(480, 44 + health.length * 30)} ariaLabel="Health signals" onRowClick={setAlertSel}
             columns={[
@@ -757,9 +863,13 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
               { key: "res", header: "Resource", width: 160, sortValue: (r) => r.resource, render: (r) => r.resource },
               { key: "sig", header: "Signal", width: 150, sortValue: (r) => r.signal, render: (r) => r.signal },
               { key: "state", header: "State", width: 96, sortValue: (r) => healthRank(r.state), render: (r) => <HealthBadge status={r.state} /> },
-              { key: "metric", header: "Metric", width: 170, sortValue: (r) => r.metric, render: (r) => <span className="ao-mono">{r.metric}</span> },
-              { key: "cur", header: "Current", width: 76, sortValue: (r) => r.current, render: (r) => <strong>{r.current}</strong> },
-              { key: "base", header: "Baseline", width: 76, sortValue: (r) => r.baseline, render: (r) => <span className="ao-muted">{r.baseline}</span> },
+              // metric/current/baseline are the METRIC-ANOMALY story; a provider
+              // state event answers each of them differently rather than blank.
+              { key: "metric", header: "Metric", width: 170, sortValue: (r) => r.metric, render: healthMetricCell },
+              { key: "cur", header: "Current", width: 84, sortValue: (r) => r.current, render: healthCurrentCell },
+              { key: "base", header: "Baseline", width: 76, sortValue: (r) => r.baseline, render: healthBaselineCell },
+              // The provider's declared cause — a state event's real substance.
+              { key: "reason", header: "Reason", width: 150, sortValue: (r) => stateReason(r), render: healthReasonCell },
               { key: "sev", header: "Severity", width: 86, sortValue: (r) => severityRank(r.severity), render: (r) => <Chip label={r.severity} tone={sevTone(r.severity)} /> },
               { key: "src", header: "Cloud", width: 90, sortValue: (r) => r.source, render: (r) => r.source.toUpperCase() },
             ]} />
@@ -769,8 +879,8 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
       {view === "changes" && (
         <div className="ao-panel">
           {changes.length === 0 ? (
-            <EmptyState title="No cloud change events in the last 24 hours"
-              hint="management-plane changes (CloudTrail / Activity Log) appear here as the provider audits them" />
+            <EmptyState title={`No cloud change events in the ${rangeWords(minutes)}`}
+              hint={emptyHint("management-plane changes (CloudTrail / Activity Log)")} />
           ) : (
           <DataTable<ChangeEvent> rows={changes} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(480, 44 + changes.length * 30)} ariaLabel="Change events" onRowClick={setChangeSel}
             columns={[
@@ -806,10 +916,21 @@ function HealthSignalDrawer({ s, onClose, sevTone }: { s: HealthSignal; onClose:
         <tr><td>Resource</td><td>{cleanVal(s.resource) ? <span className="ao-mono">{s.resource}</span> : DASH}</td></tr>
         <tr><td>Signal</td><td>{s.signal}</td></tr>
         <tr><td>State</td><td><HealthBadge status={s.state} /></td></tr>
-        <tr><td>Metric</td><td>{cleanVal(s.metric) ? <span className="ao-mono">{s.metric}</span> : DASH}</td></tr>
-        <tr><td>Reading</td><td>{cleanVal(s.current)
-          ? <><strong>{s.current}</strong>{cleanVal(s.baseline) && <span className="ao-muted"> vs {s.baseline} baseline</span>}</>
-          : <span className="ao-muted">no reading reported by the provider signal</span>}</td></tr>
+        {/* A provider STATE event declares a state and its cause; it measures
+            nothing. Show the cause, and say plainly that there is no metric —
+            rather than three empty rows the operator has to interpret. */}
+        {isStateEvent(s) ? (<>
+          <tr><td>Kind</td><td>Provider health-state declaration <span className="ao-muted">— reports a state, not a measurement</span></td></tr>
+          <tr><td>Reason</td><td>{stateReason(s)
+            ? <strong>{stateReason(s)}</strong>
+            : <span className="ao-muted">the provider declared this state without a reason</span>}</td></tr>
+          <tr><td>Reading</td><td><span className="ao-muted">not applicable — a declared state carries no metric or baseline</span></td></tr>
+        </>) : (<>
+          <tr><td>Metric</td><td>{cleanVal(s.metric) ? <span className="ao-mono">{s.metric}</span> : DASH}</td></tr>
+          <tr><td>Reading</td><td>{cleanVal(s.current)
+            ? <><strong>{s.current}</strong>{cleanVal(s.baseline) && <span className="ao-muted"> vs {s.baseline} baseline</span>}</>
+            : <span className="ao-muted">no reading reported by the provider signal</span>}</td></tr>
+        </>)}
         <tr><td>Severity</td><td>{s.severity}</td></tr>
         <tr><td>Cloud source</td><td>{s.source.toUpperCase()}</td></tr>
       </tbody></table>
@@ -860,7 +981,16 @@ function Underlay({ goDataSources }: { goDataSources: () => void }) {
 }
 
 // ── Untagged resources (first-class · LIVE) ──────────────────────────────────
-function openIntegrations() { location.hash = "#/incident/integrations"; }
+// In-page navigation (owner review #3/#4: every one of these used to resolve to
+// the ITSM Integrations page regardless of what its label promised). Each helper
+// is named for the destination it actually opens; the deep-link suffixes are the
+// TAB / TAB_ALIAS keys this page already routes on.
+//
+// Cloud accounts live in Data sources → Accounts (the connector wizard) — NOT in
+// Admin → Integrations, which is the ServiceNow / Jira ticketing gallery.
+function openCloudAccounts() { location.hash = "#/monitoring/appobs/accounts"; }
+// Attribution rules + precedence are Service View settings, not an ITSM concern.
+function openAttributionSettings() { location.hash = "#/monitoring/appobs/settings"; }
 
 function Unknowns() {
   const [fix, setFix] = useState<UnknownContributor | null>(null);
@@ -919,15 +1049,17 @@ function Unknowns() {
           <div className="ao-ev-h">Actions</div>
           {/* Only buttons that DO what they say (audit C: six buttons all led to
               one page — and "open in console" didn't open the console). Tagging
-              happens in the provider console; rules/precedence live in
-              Integrations. Everything else is guidance, not a fake button. */}
+              happens in the provider console; attribution precedence lives in
+              this page's own Settings. Everything else is guidance, not a fake
+              button. (owner review #3/#4: the last button said "Attribution
+              rules" and opened the ServiceNow/Jira gallery.) */}
           <div className="ao-cta-btns">
             <button className="ao-btn ao-btn--primary" onClick={() => { setAssignRes(fix); setFix(null); }}>Assign to a service</button>
             {(() => {
               const url = consoleUrlFor(fix, resources);
               return url ? <ConsoleLink href={url} label={`Tag in ${consoleName(fix.provider)}`} /> : null;
             })()}
-            <button className="ao-btn" onClick={openIntegrations}>Attribution rules · Integrations</button>
+            <button className="ao-btn" onClick={openAttributionSettings}>View attribution rules</button>
           </div>
         </EvidenceDrawer>
       )}
@@ -1044,16 +1176,31 @@ function Evidence() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
-// Advanced configuration only — connector setup lives in the first-class
-// Ingestion tab + Admin → Integrations, not here. Each card shows the current
-// effective config (real resolver defaults) with a single manage action.
+// Advanced configuration + the effective defaults the resolver actually runs.
+//
+// Owner review #3/#4: EVERY card here rendered the same button, and that button
+// opened the ITSM Integrations page (ServiceNow / Jira). So "Cloud Connectors →
+// Open Integrations" sent an operator trying to connect AWS to a ticketing
+// gallery, and four other cards promised editors that do not exist. A button is
+// now rendered ONLY where it has a real destination:
+//   · Cloud Connectors → Data sources → Accounts → "Connect a cloud account",
+//     the live 7-step connector wizard (ConnectorWizard over /api/cloud/*).
+//   · The rest are platform-effective values with no editor built yet, so they
+//     read as the values they are. A button that goes nowhere it names is worse
+//     than no button — the same honesty rule the rest of this page follows.
 function Settings() {
-  const sections: { t: string; d: string; value: string; cta: string }[] = [
-    { t: "Catalog Sources", d: "Managed vendor IP/domain feeds used for catalog-based attribution.", value: "AWS · Azure · GCP · Microsoft 365 (refreshed every 6h)", cta: "Configure catalog sources" },
-    { t: "Cloud Connectors", d: "Cloud account setup is managed in Admin → Integrations.", value: "Connect AWS / Azure / GCP accounts (least-privilege IAM)", cta: "Open Integrations" },
-    { t: "Attribution Rules", d: "Source precedence when signals disagree.", value: "cloud tag → resource graph → firewall App-ID → domain → IP catalog", cta: "Edit attribution precedence" },
-    { t: "Required Tags", d: "Tags an org requires — drives the coverage report.", value: "app · owner · env (case-insensitive)", cta: "Edit required tags" },
-    { t: "RCA Windows", d: "Deploy-to-degradation correlation window + verdict thresholds.", value: "Default deploy→degradation window: 30 minutes", cta: "Edit RCA windows" },
+  const sections: { t: string; d: string; value: string; cta?: string; onClick?: () => void }[] = [
+    { t: "Catalog Sources", d: "Managed vendor IP/domain feeds used for catalog-based attribution.", value: "AWS · Azure · GCP · Microsoft 365 (refreshed every 6h)" },
+    {
+      t: "Cloud Connectors",
+      d: "Connect an AWS, Azure or GCP account with least-privilege access. Setup runs in Data sources → Accounts.",
+      value: "Connect AWS / Azure / GCP accounts (least-privilege IAM)",
+      cta: "Connect a cloud account",
+      onClick: openCloudAccounts,
+    },
+    { t: "Attribution Rules", d: "Source precedence when signals disagree (platform default — not yet editable).", value: "cloud tag → resource graph → firewall App-ID → domain → IP catalog" },
+    { t: "Required Tags", d: "Tags an org requires — drives the coverage report (platform default — not yet editable).", value: "app · owner · env (case-insensitive)" },
+    { t: "RCA Windows", d: "Deploy-to-degradation correlation window + verdict thresholds (platform default — not yet editable).", value: "Default deploy→degradation window: 30 minutes" },
   ];
   return (
     <div className="ao-settings">
@@ -1062,7 +1209,9 @@ function Settings() {
           <div className="ao-panel-h">{s.t}</div>
           <p className="ao-set-d">{s.d}</p>
           <div className="ao-set-v">{s.value}</div>
-          <button className="ao-btn" onClick={openIntegrations}>{s.cta}</button>
+          {s.cta && s.onClick && (
+            <button className="ao-btn ao-btn--primary" onClick={s.onClick}>{s.cta}</button>
+          )}
         </div>
       ))}
     </div>

@@ -16,6 +16,8 @@ import type {
   App, CloudResource, Coverage, UnknownContributor, Provider, Confidence, AttrSource, AppRca,
   HealthSignal, ChangeEvent, EvidenceRow, EvidenceCategory, Health, CloudRef,
 } from "./types";
+import { deriveObjectOrigins, EMPTY_ORIGIN } from "./origin";
+import type { ObjectOrigin } from "./origin";
 
 // Sentinel for a numeric metric the platform does not measure yet (P3B–D).
 // The UI renders any value < 0 as "—" so it reads as "not measured", not "zero".
@@ -312,6 +314,8 @@ function toHealthSignal(r: CloudHealthSignalRow): HealthSignal {
     time: r.time, app: r.app, resource: r.resource, signal: r.signal,
     state: health(r.state), metric: r.metric, current: r.current,
     baseline: r.baseline, severity: severity(r.severity), source: r.source,
+    // the provider's own reasonType for a state event ("" when it declared none)
+    reason: r.reason ?? "",
   };
 }
 
@@ -374,6 +378,11 @@ export interface CloudRcaObject {
   state: string;
   windowStart: string;
   apps: string[];
+  // DERIVED from this object's own attached evidence (see ./origin), not from a
+  // new backend field: the clouds that actually produced its signals, and the
+  // primary affected resource used as the Service column's honest fallback.
+  // providers = [] means no cloud signal is attached — a network/on-prem object.
+  origin: ObjectOrigin;
 }
 function toRcaObject(r: CloudRcaObjectRow): CloudRcaObject {
   return {
@@ -381,6 +390,7 @@ function toRcaObject(r: CloudRcaObjectRow): CloudRcaObject {
     confidence: typeof r.confidence === "number" ? r.confidence : 0,
     topHypothesis: r.top_hypothesis || "—", signalCount: r.signal_count ?? 0,
     state: r.state || "open", windowStart: r.window_start, apps: r.apps ?? [],
+    origin: EMPTY_ORIGIN,
   };
 }
 
@@ -407,10 +417,17 @@ export type EvidenceBundle = {
 
 export async function loadEvidence(app?: string): Promise<EvidenceBundle> {
   const r = await api.cloudEvidence(app);
-  const objects = (r.objects ?? []).map(toRcaObject);
+  const rows = (r.evidence ?? []).map(toEvidenceRow);
+  // Origin + fallback identity come from the evidence already in this response —
+  // one join, no extra request, and nothing claimed that the engine did not ground.
+  const origins = deriveObjectOrigins(rows);
+  const objects = (r.objects ?? []).map(toRcaObject).map((o) => ({
+    ...o,
+    origin: origins.get(o.correlationId) ?? EMPTY_ORIGIN,
+  }));
   return {
     objects,
-    rows: (r.evidence ?? []).map(toEvidenceRow),
+    rows,
     openCount: typeof r.open_object_count === "number"
       ? r.open_object_count
       : objects.filter((o) => o.state === "open").length,
