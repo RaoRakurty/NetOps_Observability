@@ -14,6 +14,15 @@ import type {
   CloudCapabilityPack, CloudConnFinding,
 } from "../../services/api";
 
+// Customer-facing text for an API error thrown by services/api's request()
+// ("<status> <text>: <body>"). The 501 case is the honest "this deployment has
+// no connector store" message — no backend vendor names.
+export function errText(e: unknown): string {
+  const m = (e as Error)?.message ?? String(e);
+  if (m.startsWith("501")) return "Cloud connectors need the platform database backend — this deployment runs the in-memory store.";
+  return m;
+}
+
 // ── Steps ─────────────────────────────────────────────────────────────────────
 export type WizardStep =
   | "provider" | "draft" | "auth" | "trust" | "scopes" | "validate" | "activate";
@@ -310,4 +319,103 @@ export function canActivate(view: CloudConnectorView | null): boolean {
 // The connector already reached ACTIVE.
 export function isActive(view: CloudConnectorView | null): boolean {
   return view?.state === "ACTIVE";
+}
+
+// ── Resume (pick an incomplete connector back up where it left off) ───────────
+// The API keeps the full connector state (GET by id / list), so the wizard can
+// re-open at the first step that still needs work. Derivation is conservative:
+// we only skip a step when the API's stored truth proves it was completed.
+
+// The step an existing connector should re-open at.
+export function resumeStep(v: CloudConnectorView): WizardStep {
+  if (v.state === "ACTIVE" || v.state === "DEGRADED") return "activate";
+  // Backend validation already passed → only activation remains.
+  if (v.last_validation?.ok) return "validate";
+  // Scopes saved → auth + trust were completed; validation is the open step.
+  if ((v.scopes?.length ?? 0) > 0) return "validate";
+  // Auth method chosen and its trust metadata saved → deploy/confirm the trust.
+  if (v.auth_method) return "trust";
+  // Draft exists but nothing else — re-confirm the name/target and continue.
+  return "draft";
+}
+
+// Setup states an operator can resume in the wizard. Paused (DISABLED) and
+// revoked connectors are lifecycle actions, not onboarding resumes.
+export function isResumable(v: CloudConnectorView): boolean {
+  return v.state === "DRAFT" || v.state === "DEPLOYING" || v.state === "VALIDATING"
+    || v.state === "REAUTHORIZATION_REQUIRED";
+}
+
+// The primary (non-region) collection scope ref stored on the connector — the
+// account / subscription / project id the draft step captured.
+export function resumePrimaryRef(v: CloudConnectorView): string {
+  const sc = (v.scopes ?? []).find((s) => s.type !== "region");
+  return sc?.ref ?? "";
+}
+
+// The saved region narrowing, re-flattened to the wizard's comma-separated field.
+export function resumeRegions(v: CloudConnectorView): string {
+  const scopes = v.scopes ?? [];
+  const primary = scopes.find((s) => s.type !== "region");
+  const regionRefs = scopes.filter((s) => s.type === "region").map((s) => s.ref);
+  return [...(primary?.regions ?? []), ...regionRefs].filter(Boolean).join(", ");
+}
+
+// Re-hydrate the auth form from the connector's stored trust metadata. Only
+// NON-secret identity fields exist on the view (the API never echoes a secret),
+// so this is safe by construction.
+export function hydrateAuthValues(v: CloudConnectorView): Partial<Record<AuthFieldKey, string>> {
+  const i = v.identity ?? ({} as CloudConnectorView["identity"]);
+  const out: Partial<Record<AuthFieldKey, string>> = {};
+  const put = (k: AuthFieldKey, val?: string) => { if (val && val.trim() !== "") out[k] = val; };
+  put("role_arn", i.role_arn);
+  put("azure_tenant_id", i.azure_tenant_id);
+  put("client_id", i.client_id);
+  put("audience", i.audience);
+  put("issuer", i.issuer);
+  put("federated_subject", i.federated_subject);
+  put("cert_thumbprint", i.cert_thumbprint);
+  put("project_number", i.project_number);
+  put("workload_pool", i.workload_pool);
+  put("workload_provider", i.workload_provider);
+  put("service_account", i.service_account);
+  return out;
+}
+
+// ── Honest connector status (list view) ──────────────────────────────────────
+// One customer-facing status per connector, derived ONLY from the API's stored
+// truth (lifecycle state + the backend's own validation result). VALIDATING with
+// a failed last_validation reads as failed — we never paint a green (or a blue)
+// the backend didn't earn.
+export interface ConnectorStatus { label: string; tone: string; }
+
+export function connectorStatus(v: CloudConnectorView): ConnectorStatus {
+  switch (v.state) {
+    case "ACTIVE": return { label: "Enabled", tone: "var(--ok)" };
+    case "DEGRADED": return { label: "Enabled — degraded", tone: "var(--warn)" };
+    case "DISABLED": return { label: "Paused", tone: "var(--fg-subtle)" };
+    case "REVOKED": return { label: "Revoked", tone: "var(--crit)" };
+    case "REAUTHORIZATION_REQUIRED": return { label: "Needs re-authorization", tone: "var(--crit)" };
+    case "DELETING": return { label: "Removing", tone: "var(--fg-subtle)" };
+    case "VALIDATING":
+      return v.last_validation?.ok
+        ? { label: "Validated — not enabled", tone: "var(--accent)" }
+        : { label: "Validation failed", tone: "var(--crit)" };
+    default: { // DRAFT / DEPLOYING / ""
+      const failed = v.identity_health?.state === "failed"
+        || (!v.last_validation?.ok && (v.last_validation?.findings?.length ?? 0) > 0);
+      if (failed) return { label: "Validation failed", tone: "var(--crit)" };
+      return v.state === "DEPLOYING"
+        ? { label: "Deploying trust", tone: "var(--warn)" }
+        : { label: "Setup incomplete", tone: "var(--warn)" };
+    }
+  }
+}
+
+// Short scope summary for the list ("123456789012 · 2 regions").
+export function scopeSummary(v: CloudConnectorView): string {
+  const primary = resumePrimaryRef(v);
+  if (!primary) return "—";
+  const regions = resumeRegions(v).split(",").map((s) => s.trim()).filter(Boolean);
+  return regions.length ? `${primary} · ${regions.length} region${regions.length > 1 ? "s" : ""}` : primary;
 }

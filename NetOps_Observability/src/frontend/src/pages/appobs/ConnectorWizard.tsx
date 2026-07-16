@@ -29,6 +29,7 @@ import {
   METHOD_LABEL, METHOD_BLURB, methodHoldsSecret, authFields, AuthFieldKey,
   secretConfig, buildAuthInput, authFieldsComplete, packFullId, packPermissions,
   findingTone, findingIcon, liveCheckDisplay, healthTone, healthLabel, canActivate, isActive,
+  errText, resumeStep, resumePrimaryRef, resumeRegions, hydrateAuthValues,
 } from "./connectorWizard";
 
 function ProviderMark({ provider, size = 40 }: { provider: CloudProvider; size?: number }) {
@@ -37,42 +38,48 @@ function ProviderMark({ provider, size = 40 }: { provider: CloudProvider; size?:
   return <GcpLogo size={size} />;
 }
 
-// error text from the api client's thrown Error ("<status> <text>: <body>").
-function errText(e: unknown): string {
-  const m = (e as Error)?.message ?? String(e);
-  if (m.startsWith("501")) return "Cloud connectors need the platform database backend — this deployment runs the in-memory store.";
-  return m;
+// Red asterisk + legend for required fields (the admin.tsx config-form convention).
+function ReqLegend() {
+  return <p className="ccw-hint"><span className="ccw-req" aria-hidden="true">*</span> required field</p>;
 }
 
-export default function ConnectorWizard({ onClose, onCreated }: {
+export default function ConnectorWizard({ onClose, onCreated, resume }: {
   onClose: () => void;
   /** Called after a connector reaches ACTIVE so the caller reloads its accounts. */
   onCreated: (view: CloudConnectorView) => void;
+  /** Re-open an incomplete connector at the first step that still needs work
+   *  (state re-hydrated from the API's stored truth — never a secret). */
+  resume?: CloudConnectorView;
 }) {
   const [catalog, setCatalog] = useState<CloudProviderCatalogEntry[] | null>(null);
   const [catalogErr, setCatalogErr] = useState<string>("");
 
-  const [step, setStep] = useState<WizardStep>("provider");
-  const [maxReached, setMaxReached] = useState<number>(0);
+  const [step, setStep] = useState<WizardStep>(() => (resume ? resumeStep(resume) : "provider"));
+  const [maxReached, setMaxReached] = useState<number>(() => (resume ? stepIndex(resumeStep(resume)) : 0));
 
-  const [provider, setProvider] = useState<CloudProvider | null>(null);
-  const [connector, setConnector] = useState<CloudConnectorView | null>(null);
+  const [provider, setProvider] = useState<CloudProvider | null>(resume?.provider ?? null);
+  const [connector, setConnector] = useState<CloudConnectorView | null>(resume ?? null);
 
   // draft form
-  const [displayName, setDisplayName] = useState("");
-  const [accountId, setAccountId] = useState("");
+  const [displayName, setDisplayName] = useState(resume?.display_name ?? "");
+  const [accountId, setAccountId] = useState(() => (resume ? resumePrimaryRef(resume) : ""));
 
   // auth form
-  const [method, setMethod] = useState<CloudAuthMethod | null>(null);
-  const [authValues, setAuthValues] = useState<Partial<Record<AuthFieldKey, string>>>({});
+  const [method, setMethod] = useState<CloudAuthMethod | null>(resume?.auth_method || null);
+  const [authValues, setAuthValues] = useState<Partial<Record<AuthFieldKey, string>>>(
+    () => (resume ? hydrateAuthValues(resume) : {}),
+  );
   const [secretHint, setSecretHint] = useState("");
   const [secretValue, setSecretValue] = useState("");
+  // A stored (write-only) credential is never echoed back; the operator can keep
+  // it or explicitly replace it. True only while "Replace" is active.
+  const [replaceSecret, setReplaceSecret] = useState(false);
 
   // trust setup
   const [setup, setSetup] = useState<CloudSetupBundle | null>(null);
 
   // scope
-  const [regions, setRegions] = useState<string>("");
+  const [regions, setRegions] = useState<string>(() => (resume ? resumeRegions(resume) : ""));
 
   // validate
   const [validation, setValidation] = useState<CloudConnectorView["last_validation"] | null>(null);
@@ -140,12 +147,15 @@ export default function ConnectorWizard({ onClose, onCreated }: {
     try {
       let c = await api.cloudConnectorAuth(connector.id, buildAuthInput(method, authValues));
       // Legacy methods: encrypt-and-store the reusable secret (never re-shown).
+      // A credential that is already stored (write-only) is kept unless the
+      // operator explicitly typed a replacement.
       if (methodHoldsSecret(method) && secretValue.trim()) {
         const sc = secretConfig(provider!, method)!;
         c = await api.cloudConnectorSecret(c.id, {
           kind: sc.kind, key_hint: secretHint.trim(), secret: secretValue,
         });
         setSecretValue(""); // drop the plaintext from component state
+        setReplaceSecret(false);
       }
       setConnector(c);
       setSetup(null);
@@ -186,6 +196,12 @@ export default function ConnectorWizard({ onClose, onCreated }: {
     if (!connector) return;
     setBusy(true); setError("");
     try {
+      // A resumed connector may predate the pack binding (the draft step binds
+      // it) — bind the read-only observer pack before the live trust proof so
+      // the exchanged credential is bounded to it.
+      if (!connector.capability_pack && observerPack) {
+        setConnector(await api.cloudConnectorCapabilities(connector.id, packFullId(observerPack)));
+      }
       const r = await api.cloudConnectorValidate(connector.id);
       setConnector(r.connector);
       setValidation(r.validation);
@@ -209,8 +225,11 @@ export default function ConnectorWizard({ onClose, onCreated }: {
 
   // ── per-step gating for the primary button ─────────────────────────────────
   const draftValid = !!provider && displayName.trim() !== "" && accountId.trim() !== "";
+  // A stored credential (write-only, has_legacy_secret) satisfies the secret
+  // requirement unless the operator chose to replace it.
+  const secretStored = !!connector?.identity?.has_legacy_secret && method === (connector?.auth_method || null);
   const authValid = !!method && authFieldsComplete(provider!, method, authValues) &&
-    (!methodHoldsSecret(method) || secretValue.trim() !== "");
+    (!methodHoldsSecret(method) || secretValue.trim() !== "" || (secretStored && !replaceSecret));
 
   return (
     <div className="ev-detail-scrim" onClick={onClose}>
@@ -225,9 +244,11 @@ export default function ConnectorWizard({ onClose, onCreated }: {
       >
         <header className="ccw-head">
           <div>
-            <div className="ccw-eyebrow">Cloud onboarding</div>
+            <div className="ccw-eyebrow">{resume ? "Resume cloud onboarding" : "Cloud onboarding"}</div>
             <h2 className="ccw-title" id="ccw-title">
-              {provider ? `Connect ${PROVIDER_LABEL[provider]}` : "Connect a cloud account"}
+              {resume
+                ? `Finish setting up ${resume.display_name || (provider ? PROVIDER_LABEL[provider] : "this connection")}`
+                : provider ? `Connect ${PROVIDER_LABEL[provider]}` : "Connect a cloud account"}
             </h2>
           </div>
           <button className="ao-x" onClick={onClose} aria-label="Close wizard">×</button>
@@ -249,7 +270,7 @@ export default function ConnectorWizard({ onClose, onCreated }: {
               )}
               {step === "draft" && provider && (
                 <DraftStep
-                  provider={provider}
+                  provider={provider} nameLocked={!!connector}
                   displayName={displayName} onName={setDisplayName}
                   accountId={accountId} onAccount={setAccountId}
                 />
@@ -261,6 +282,8 @@ export default function ConnectorWizard({ onClose, onCreated }: {
                   values={authValues} onValue={(k, v) => setAuthValues((s) => ({ ...s, [k]: v }))}
                   secretHint={secretHint} onSecretHint={setSecretHint}
                   secretValue={secretValue} onSecretValue={setSecretValue}
+                  secretStored={secretStored} storedKeyHint={connector?.identity?.legacy_key_hint}
+                  replaceSecret={replaceSecret} onReplaceSecret={setReplaceSecret}
                 />
               )}
               {step === "trust" && (
@@ -268,7 +291,7 @@ export default function ConnectorWizard({ onClose, onCreated }: {
               )}
               {step === "scopes" && provider && (
                 <ScopeStep
-                  provider={provider} accountId={accountId}
+                  provider={provider} accountId={accountId} onAccount={setAccountId}
                   regions={regions} onRegions={setRegions}
                   pack={observerPack}
                 />
@@ -290,7 +313,7 @@ export default function ConnectorWizard({ onClose, onCreated }: {
         <footer className="ccw-foot">
           <StepNav
             step={step} busy={busy}
-            draftValid={draftValid} authValid={authValid}
+            draftValid={draftValid} authValid={authValid} scopeValid={accountId.trim() !== ""}
             canValidateNext={canActivate(connector)}
             active={isActive(connector)}
             onBack={() => { const i = stepIndex(step); if (i > 0) goStep(STEPS[i - 1]); }}
@@ -366,8 +389,8 @@ function ProviderStep({ catalog, selected, onSelect }: {
 }
 
 // ── Step 2: draft ─────────────────────────────────────────────────────────────
-function DraftStep({ provider, displayName, onName, accountId, onAccount }: {
-  provider: CloudProvider; displayName: string; onName: (v: string) => void;
+function DraftStep({ provider, nameLocked, displayName, onName, accountId, onAccount }: {
+  provider: CloudProvider; nameLocked: boolean; displayName: string; onName: (v: string) => void;
   accountId: string; onAccount: (v: string) => void;
 }) {
   return (
@@ -376,8 +399,9 @@ function DraftStep({ provider, displayName, onName, accountId, onAccount }: {
       <label className="ccw-field">
         <span className="ccw-label">Connection name <span className="ccw-req" aria-hidden="true">*</span></span>
         <input className="ccw-input" value={displayName} maxLength={128}
-          placeholder="e.g. Production — us-east"
+          placeholder="e.g. Production — us-east" disabled={nameLocked}
           onChange={(e) => onName(e.target.value)} aria-required="true" />
+        {nameLocked && <span className="ccw-hint">The name was set when this connection was created and can't be changed here.</span>}
       </label>
       <label className="ccw-field">
         <span className="ccw-label">{primaryScopeLabel(provider)} <span className="ccw-req" aria-hidden="true">*</span></span>
@@ -386,21 +410,28 @@ function DraftStep({ provider, displayName, onName, accountId, onAccount }: {
           onChange={(e) => onAccount(e.target.value)} aria-required="true" />
         <span className="ccw-hint">The primary collection scope. You can narrow to regions on the Scope step.</span>
       </label>
+      <ReqLegend />
     </div>
   );
 }
 
 // ── Step 3: auth method ───────────────────────────────────────────────────────
-function AuthStep({ provider, methods, method, onMethod, values, onValue, secretHint, onSecretHint, secretValue, onSecretValue }: {
+function AuthStep({ provider, methods, method, onMethod, values, onValue, secretHint, onSecretHint, secretValue, onSecretValue, secretStored, storedKeyHint, replaceSecret, onReplaceSecret }: {
   provider: CloudProvider;
   methods: CloudProviderCatalogEntry["methods"];
   method: CloudAuthMethod | null; onMethod: (m: CloudAuthMethod) => void;
   values: Partial<Record<AuthFieldKey, string>>; onValue: (k: AuthFieldKey, v: string) => void;
   secretHint: string; onSecretHint: (v: string) => void;
   secretValue: string; onSecretValue: (v: string) => void;
+  /** A credential is already stored for this method (write-only — never shown). */
+  secretStored: boolean; storedKeyHint?: string;
+  replaceSecret: boolean; onReplaceSecret: (v: boolean) => void;
 }) {
   const fields = method ? authFields(provider, method) : [];
   const sc = method ? secretConfig(provider, method) : null;
+  // Write-only credential already on file → show the configured state instead of
+  // an input; the stored value is NEVER echoed back into the form.
+  const showConfigured = !!sc && secretStored && !replaceSecret;
   return (
     <div className="ccw-stack">
       <p className="ccw-lead">How should Correlix authenticate? <strong>Federated (secretless)</strong> is recommended — nothing to store or rotate.</p>
@@ -440,7 +471,19 @@ function AuthStep({ provider, methods, method, onMethod, values, onValue, secret
               {f.hint && <span className="ccw-hint">{f.hint}</span>}
             </label>
           ))}
-          {sc && (
+          {sc && showConfigured && (
+            <div className="ccw-field">
+              <span className="ccw-label">{sc.secretLabel}</span>
+              <div className="ccw-secretset">
+                <span className="ccw-secretset-dot" aria-hidden="true" />
+                <span>
+                  Credential configured{storedKeyHint ? <> (<code className="ccw-mono">{storedKeyHint}</code>)</> : null} — stored encrypted, write-only, never displayed.
+                </span>
+                <button type="button" className="ao-btn ccw-copy" onClick={() => onReplaceSecret(true)}>Replace</button>
+              </div>
+            </div>
+          )}
+          {sc && !showConfigured && (
             <>
               <label className="ccw-field">
                 <span className="ccw-label">{sc.keyHintLabel}</span>
@@ -458,8 +501,14 @@ function AuthStep({ provider, methods, method, onMethod, values, onValue, secret
                 )}
                 <span className="ccw-hint">Encrypted immediately in the platform vault and never displayed again. Root/admin credentials are rejected.</span>
               </label>
+              {secretStored && replaceSecret && (
+                <button type="button" className="ao-btn ccw-copy" onClick={() => { onReplaceSecret(false); onSecretValue(""); }}>
+                  Keep the stored credential
+                </button>
+              )}
             </>
           )}
+          {(fields.some((f) => f.required) || (sc && !showConfigured)) && <ReqLegend />}
         </div>
       )}
     </div>
@@ -490,8 +539,9 @@ function TrustStep({ setup, connector }: { setup: CloudSetupBundle | null; conne
 }
 
 // ── Step 5: scope + requested permissions ─────────────────────────────────────
-function ScopeStep({ provider, accountId, regions, onRegions, pack }: {
-  provider: CloudProvider; accountId: string; regions: string; onRegions: (v: string) => void;
+function ScopeStep({ provider, accountId, onAccount, regions, onRegions, pack }: {
+  provider: CloudProvider; accountId: string; onAccount: (v: string) => void;
+  regions: string; onRegions: (v: string) => void;
   pack: CloudCapabilityPack | undefined;
 }) {
   const perms = packPermissions(pack);
@@ -500,7 +550,12 @@ function ScopeStep({ provider, accountId, regions, onRegions, pack }: {
       <p className="ccw-lead">Confirm what Correlix will collect from — and exactly what it's allowed to read.</p>
       <div className="ccw-panel">
         <div className="ccw-panel-h">Collection scope</div>
-        <div className="ccw-kv"><span className="ccw-k">{primaryScopeLabel(provider)}</span><span className="ccw-mono">{accountId || "—"}</span></div>
+        <label className="ccw-field">
+          <span className="ccw-label">{primaryScopeLabel(provider)} <span className="ccw-req" aria-hidden="true">*</span></span>
+          <input className="ccw-input ccw-mono" value={accountId} maxLength={200}
+            placeholder={primaryScopePlaceholder(provider)}
+            onChange={(e) => onAccount(e.target.value)} aria-required="true" />
+        </label>
         <label className="ccw-field">
           <span className="ccw-label">Regions (optional)</span>
           <input className="ccw-input ccw-mono" value={regions}
@@ -508,6 +563,7 @@ function ScopeStep({ provider, accountId, regions, onRegions, pack }: {
             onChange={(e) => onRegions(e.target.value)} />
           <span className="ccw-hint">Comma-separated. Leave blank to observe all regions in the {primaryScopeLabel(provider).toLowerCase()}.</span>
         </label>
+        <ReqLegend />
       </div>
       <div className="ccw-panel">
         <div className="ccw-panel-h">
@@ -604,7 +660,7 @@ function ActivateStep({ connector }: { connector: CloudConnectorView | null }) {
 
 // ── footer nav ────────────────────────────────────────────────────────────────
 function StepNav(props: {
-  step: WizardStep; busy: boolean; draftValid: boolean; authValid: boolean;
+  step: WizardStep; busy: boolean; draftValid: boolean; authValid: boolean; scopeValid: boolean;
   canValidateNext: boolean; active: boolean;
   onBack: () => void; onProviderNext: () => void; onDraftNext: () => void;
   onAuthNext: () => void; onTrustNext: () => void; onScopeNext: () => void;
@@ -620,7 +676,12 @@ function StepNav(props: {
     case "draft": primary = <button className="ao-btn ao-btn--primary" onClick={props.onDraftNext} disabled={busy || !props.draftValid}>{busy ? "Creating…" : "Create draft"}</button>; break;
     case "auth": primary = <button className="ao-btn ao-btn--primary" onClick={props.onAuthNext} disabled={busy || !props.authValid}>{busy ? "Saving…" : "Save & continue"}</button>; break;
     case "trust": primary = <button className="ao-btn ao-btn--primary" onClick={props.onTrustNext} disabled={busy}>I've deployed the trust</button>; break;
-    case "scopes": primary = <button className="ao-btn ao-btn--primary" onClick={props.onScopeNext} disabled={busy}>{busy ? "Saving…" : "Save scope"}</button>; break;
+    case "scopes": primary = (
+      <button className="ao-btn ao-btn--primary" onClick={props.onScopeNext} disabled={busy || !props.scopeValid}
+        title={props.scopeValid ? undefined : "Enter the collection target to continue"}>
+        {busy ? "Saving…" : "Save scope"}
+      </button>
+    ); break;
     // validate: the activation gate — enabled ONLY once the backend validation passed.
     case "validate": primary = (
       <button className="ao-btn ao-btn--primary" onClick={props.onActivate} disabled={busy || !props.canValidateNext}
