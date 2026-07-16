@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { fmtDateTime } from "../lib/time";
 
 const alertEpisodes = vi.fn();
 const alerts = vi.fn();
@@ -71,9 +72,10 @@ describe("Active Alerts grouped by episode", () => {
 
     // Count badge: 7 firings folded into ×7.
     expect(await screen.findByText("×7")).toBeTruthy();
-    // First/last seen render for the episode row.
-    expect(screen.getAllByText(new Date("2026-07-16T08:00:00Z").toLocaleString()).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(new Date("2026-07-16T09:30:00Z").toLocaleString()).length).toBeGreaterThan(0);
+    // First/last seen render for the episode row — through the shared labeled
+    // time authority (lib/time), never an unlabeled toLocaleString.
+    expect(screen.getAllByText(fmtDateTime("2026-07-16T08:00:00Z")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(fmtDateTime("2026-07-16T09:30:00Z")).length).toBeGreaterThan(0);
     // Flap chip is visible — flapping is surfaced, never hidden. (It also
     // appears as a KPI label, so assert at least one chip exists.)
     expect(screen.getAllByText("Flapping").length).toBeGreaterThan(0);
