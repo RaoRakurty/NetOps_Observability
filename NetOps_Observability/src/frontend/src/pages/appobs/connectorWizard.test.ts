@@ -13,6 +13,8 @@ import {
   authFields, methodHoldsSecret, secretConfig, buildAuthInput, authFieldsComplete,
   packFullId, packPermissions, findingTone, liveCheckDisplay, healthLabel,
   canActivate, isActive,
+  resumeStep, isResumable, resumePrimaryRef, resumeRegions, hydrateAuthValues,
+  connectorStatus, scopeSummary, errText,
 } from "./connectorWizard";
 
 describe("wizard step model", () => {
@@ -156,5 +158,103 @@ describe("activation honesty gate", () => {
   it("reports ACTIVE state", () => {
     expect(isActive({ ...base, state: "ACTIVE" })).toBe(true);
     expect(isActive({ ...base, state: "VALIDATING" })).toBe(false);
+  });
+});
+
+// ── resume: re-open an incomplete connector at the first step that needs work ──
+describe("resume derivation", () => {
+  const base: CloudConnectorView = {
+    id: "ccn_r", provider: "aws", display_name: "Prod", auth_method: "",
+    auth_federated: false, auth_legacy: false, capability_pack: "",
+    state: "DRAFT", collecting: false,
+    identity: { has_legacy_secret: false }, scopes: [],
+    identity_health: { state: "unknown" }, telemetry_health: { state: "unknown" },
+    last_validation: { ok: false, findings: null }, version: 1,
+    created_at: "", updated_at: "",
+  };
+  it("skips only steps the API's stored truth proves completed", () => {
+    expect(resumeStep(base)).toBe("draft"); // nothing beyond the draft exists
+    expect(resumeStep({ ...base, auth_method: "cloud_role" })).toBe("trust");
+    expect(resumeStep({
+      ...base, auth_method: "cloud_role",
+      scopes: [{ type: "account", ref: "123456789012" }],
+    })).toBe("validate");
+    expect(resumeStep({ ...base, last_validation: { ok: true, findings: [] } })).toBe("validate");
+    expect(resumeStep({ ...base, state: "ACTIVE" })).toBe("activate");
+    expect(resumeStep({ ...base, state: "DEGRADED" })).toBe("activate");
+  });
+  it("marks only setup-stage states resumable", () => {
+    expect(isResumable(base)).toBe(true);
+    expect(isResumable({ ...base, state: "VALIDATING" })).toBe(true);
+    expect(isResumable({ ...base, state: "REAUTHORIZATION_REQUIRED" })).toBe(true);
+    expect(isResumable({ ...base, state: "ACTIVE" })).toBe(false);
+    expect(isResumable({ ...base, state: "DISABLED" })).toBe(false);
+    expect(isResumable({ ...base, state: "REVOKED" })).toBe(false);
+  });
+  it("re-hydrates the primary ref + regions from stored scopes", () => {
+    const v = {
+      ...base,
+      scopes: [
+        { type: "account", ref: "123456789012", regions: ["us-east-1", "eu-west-1"] },
+        { type: "region", ref: "ap-south-1" },
+      ],
+    };
+    expect(resumePrimaryRef(v)).toBe("123456789012");
+    expect(resumeRegions(v)).toBe("us-east-1, eu-west-1, ap-south-1");
+    expect(resumePrimaryRef(base)).toBe("");
+    expect(scopeSummary(v)).toBe("123456789012 · 3 regions");
+    expect(scopeSummary(base)).toBe("—");
+  });
+  it("re-hydrates only NON-empty, non-secret identity fields", () => {
+    const v = {
+      ...base,
+      identity: {
+        has_legacy_secret: true, role_arn: "arn:aws:iam::1:role/x",
+        client_id: "", legacy_key_hint: "AKIA-hint",
+      },
+    };
+    const got = hydrateAuthValues(v);
+    expect(got.role_arn).toBe("arn:aws:iam::1:role/x");
+    expect(got).not.toHaveProperty("client_id"); // empty dropped
+    // secrets never exist on the view, so nothing secret can hydrate
+    expect(Object.values(got)).not.toContain("AKIA-hint");
+  });
+});
+
+// ── honest connector status (list view) ───────────────────────────────────────
+describe("connectorStatus honesty", () => {
+  const base: CloudConnectorView = {
+    id: "ccn_s", provider: "azure", display_name: "s", auth_method: "client_secret",
+    auth_federated: false, auth_legacy: true, capability_pack: "",
+    state: "DRAFT", collecting: false,
+    identity: { has_legacy_secret: true }, scopes: [],
+    identity_health: { state: "unknown" }, telemetry_health: { state: "unknown" },
+    last_validation: { ok: false, findings: null }, version: 1,
+    created_at: "", updated_at: "",
+  };
+  it("labels lifecycle states in customer language", () => {
+    expect(connectorStatus({ ...base, state: "ACTIVE" }).label).toBe("Enabled");
+    expect(connectorStatus({ ...base, state: "DEGRADED" }).label).toBe("Enabled — degraded");
+    expect(connectorStatus({ ...base, state: "DISABLED" }).label).toBe("Paused");
+    expect(connectorStatus({ ...base, state: "REVOKED" }).label).toBe("Revoked");
+    expect(connectorStatus(base).label).toBe("Setup incomplete");
+  });
+  it("VALIDATING is only 'Validated' when the backend validation passed", () => {
+    expect(connectorStatus({ ...base, state: "VALIDATING", last_validation: { ok: true, findings: [] } }).label)
+      .toBe("Validated — not enabled");
+    expect(connectorStatus({ ...base, state: "VALIDATING", last_validation: { ok: false, findings: [] } }).label)
+      .toBe("Validation failed");
+  });
+  it("a DRAFT with blocking findings reads as failed, never as merely incomplete", () => {
+    expect(connectorStatus({
+      ...base,
+      last_validation: { ok: false, findings: [{ severity: "error", code: "x", message: "m" }] },
+    }).label).toBe("Validation failed");
+    expect(connectorStatus({ ...base, identity_health: { state: "failed" } }).label).toBe("Validation failed");
+  });
+  it("translates the 501 no-store error into customer language", () => {
+    expect(errText(new Error("501 Not Implemented: store off"))).toMatch(/platform database backend/);
+    expect(errText(new Error("409 Conflict: validate the connector before activating")))
+      .toBe("409 Conflict: validate the connector before activating");
   });
 });

@@ -6,8 +6,8 @@
 // arriving). Honest by construction: only the inventory source is live today, so
 // every other source reads "off" per region — never a fabricated "flowing".
 
-import { useEffect, useState } from "react";
-import { api, CloudResourceRow } from "../../services/api";
+import { ReactNode, useEffect, useState } from "react";
+import { api, CloudResourceRow, CloudConnectorView } from "../../services/api";
 import { fetchCloudInventory, invalidateCloudInventory } from "./api";
 import { Skeleton } from "../../components/ui";
 import DataTable from "../../components/DataTable";
@@ -19,6 +19,7 @@ import {
 } from "./readiness";
 import { buildAccounts, buildMatrix, CloudAccount, ProviderIngestion, RegionReadiness } from "./ingestion";
 import ConnectorWizard from "./ConnectorWizard";
+import Connections from "./Connections";
 
 type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
@@ -39,9 +40,10 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
   const [byProvider, setByProvider] = useState<ProviderIngestion>({});
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   // Cloud Connector onboarding wizard (Wave 1 #3) — the in-product "connect a
-  // cloud account" flow over the done 7-step connector API. `nonce` re-reads the
-  // inventory after a connector goes live.
-  const [wizard, setWizard] = useState(false);
+  // cloud account" flow over the done 7-step connector API. `wizard` carries an
+  // optional connector to RESUME (re-opened at the first step that still needs
+  // work); `nonce` re-reads inventory + connections after the wizard closes.
+  const [wizard, setWizard] = useState<{ resume?: CloudConnectorView } | null>(null);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -72,7 +74,11 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
 
   const accounts = buildAccounts(rows, byProvider);
   const matrix = buildMatrix(rows, byProvider);
-  const openWizard = () => setWizard(true);
+  const openWizard = () => setWizard({});
+  const openResume = (c: CloudConnectorView) => setWizard({ resume: c });
+  // The wizard mutates the connector store step-by-step, so closing it (even
+  // mid-flow) must re-read the connections list — not only a full activation.
+  const closeWizard = () => { setWizard(null); setNonce((n) => n + 1); };
 
   return (
     <div className="ao-stack">
@@ -82,13 +88,17 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
         <button role="tab" aria-selected={sub === "status"} className={`ao-tab${sub === "status" ? " is-active" : ""}`} onClick={() => setSub("status")}>Ingestion Status</button>
       </div>
 
-      {sub === "accounts" && <Accounts accounts={accounts} onNew={openWizard} />}
+      {sub === "accounts" && (
+        <Accounts accounts={accounts} onNew={openWizard}
+          connections={<Connections nonce={nonce} onConnect={openWizard} onResume={openResume} />} />
+      )}
       {sub === "sources" && <Sources matrix={matrix} />}
       {sub === "status" && <Status matrix={matrix} />}
 
       {wizard && (
         <ConnectorWizard
-          onClose={() => setWizard(false)}
+          resume={wizard.resume}
+          onClose={closeWizard}
           onCreated={() => { invalidateCloudInventory(); setNonce((n) => n + 1); }}
         />
       )}
@@ -97,7 +107,12 @@ export default function Ingestion({ initialSub = "" }: { initialSub?: string }) 
 }
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
-function Accounts({ accounts, onNew }: { accounts: CloudAccount[]; onNew: () => void }) {
+function Accounts({ accounts, onNew, connections }: {
+  accounts: CloudAccount[]; onNew: () => void;
+  /** The connector-store truth (Connections list) — rendered above the
+   *  inventory-derived accounts so config state and arrived data stay distinct. */
+  connections: ReactNode;
+}) {
   return (
     <div className="ao-stack">
       <div className="ao-cta">
@@ -109,10 +124,11 @@ function Accounts({ accounts, onNew }: { accounts: CloudAccount[]; onNew: () => 
           <button className="ao-btn" onClick={goIntegrations}>Manage in Integrations</button>
         </div>
       </div>
+      {connections}
       {accounts.length === 0 ? (
         <div className="ao-panel"><EmptyState
-          title="No cloud accounts connected yet"
-          hint="Connect an AWS / Azure / GCP account to begin observability."
+          title="No cloud inventory has arrived yet"
+          hint="Discovered accounts appear here once an enabled connection starts collecting."
           action={<button className="ao-btn ao-btn--primary" onClick={onNew}>Connect a cloud account</button>} /></div>
       ) : (
         <div className="ao-panel">

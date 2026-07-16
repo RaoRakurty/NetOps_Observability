@@ -45,6 +45,7 @@ const h = vi.hoisted(() => {
     cloudCreateConnector: vi.fn(async () => draft()),
     cloudConnectorCapabilities: vi.fn(async () => draft({ capability_pack: "aws-observer-v1" })),
     cloudConnectorAuth: vi.fn(async () => draft({ auth_method: "cloud_role", identity: { has_legacy_secret: false, external_id: "ext-abc123" } })),
+    cloudConnectorSecret: vi.fn(async () => draft({ auth_method: "static_key", identity: { has_legacy_secret: true } })),
     cloudConnectorSetup: vi.fn(async () => setupBundle),
     cloudConnectorScopes: vi.fn(async () => draft({ state: "DRAFT" })),
     cloudConnectorValidate: vi.fn(async (): Promise<CloudConnValidateResult> => ({
@@ -138,6 +139,53 @@ describe("ConnectorWizard", () => {
     await waitFor(() => expect(mock.cloudConnectorActivate).toHaveBeenCalledWith("ccn_1"));
     expect(onCreated).toHaveBeenCalled();
     expect(await screen.findByText("Connector is live")).toBeTruthy();
+  });
+
+  it("resumes an incomplete connector at the first step that still needs work", async () => {
+    // auth chosen + scopes saved → validation is the open step.
+    const resume = draft({
+      auth_method: "cloud_role",
+      identity: { has_legacy_secret: false, role_arn: "arn:aws:iam::1:role/x", external_id: "ext-1" },
+      scopes: [{ type: "account", ref: "123456789012" }],
+    });
+    render(<ConnectorWizard onClose={() => {}} onCreated={() => {}} resume={resume} />);
+    // lands on Validate without re-walking earlier steps; no new draft created.
+    expect(await screen.findByRole("button", { name: "Run validation" })).toBeTruthy();
+    expect(mock.cloudCreateConnector).not.toHaveBeenCalled();
+    // the header names the resumed connection.
+    expect(screen.getByText(/Finish setting up Prod/)).toBeTruthy();
+  });
+
+  it("resumes at trust when auth is saved but no scope exists yet", async () => {
+    const resume = draft({
+      auth_method: "cloud_role",
+      identity: { has_legacy_secret: false, role_arn: "arn:aws:iam::1:role/x" },
+    });
+    render(<ConnectorWizard onClose={() => {}} onCreated={() => {}} resume={resume} />);
+    // the trust step fetches the setup bundle for THIS connector.
+    await waitFor(() => expect(mock.cloudConnectorSetup).toHaveBeenCalledWith("ccn_1"));
+    expect(await screen.findByRole("button", { name: "I've deployed the trust" })).toBeTruthy();
+  });
+
+  it("treats a stored credential as configured — write-only, never echoed, no re-entry required", async () => {
+    const resume = draft({
+      auth_method: "static_key",
+      identity: { has_legacy_secret: true, legacy_key_hint: "AKIA-hint" },
+    });
+    render(<ConnectorWizard onClose={() => {}} onCreated={() => {}} resume={resume} />);
+    // opens at trust (auth saved); step Back into Authentication.
+    await screen.findByRole("button", { name: "I've deployed the trust" });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    // configured state shown instead of a secret input; the value is never present.
+    expect(await screen.findByText(/Credential configured/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText("…")).toBeNull();
+    // Save & continue is enabled WITHOUT re-typing the secret…
+    const save = screen.getByRole("button", { name: "Save & continue" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    // …and saving does NOT re-store a secret (the stored one is kept).
+    fireEvent.click(save);
+    await waitFor(() => expect(mock.cloudConnectorAuth).toHaveBeenCalled());
+    expect(mock.cloudConnectorSecret).not.toHaveBeenCalled();
   });
 
   it("keeps activation blocked when the backend reports a blocking finding", async () => {
