@@ -26,6 +26,7 @@ import cloudmetrics
 import discover
 import gcp
 import seam_aws
+import source_status
 import trail_state
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -296,26 +297,42 @@ def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
 def poll_flow_logs_s3(s3, st: dict, producer=None) -> None:
     """VPC flow logs delivered to S3 (header line stripped). Primary source
     (FLOW_S3_BUCKET) plus any extra sources from S3_LOG_SOURCES — extra sources
-    keep their own checkpoints (suffixed state key) so the primary is untouched."""
+    keep their own checkpoints (suffixed state key) so the primary is untouched.
+    Each source runs through _lane so an IAM denial / missing bucket becomes a
+    structured flow_logs status record, isolated per source."""
     if FLOW_S3_BUCKET:
-        n = _poll_s3_lane(s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX, "flow_s3_key",
-                          "aws-vpc-flow.vpc", skip_prefixes=("version ",), producer=producer)
+        n = _lane("flow_logs", _poll_s3_lane, s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX,
+                  "flow_s3_key", "aws-vpc-flow.vpc", skip_prefixes=("version ",),
+                  producer=producer)
         if n:
             jlog("flow records appended from s3", count=n)
     for src in extra_s3_sources():
         bucket = src.get("flow_bucket")
         if not bucket:
             continue
-        n = _poll_s3_lane(s3, st, bucket, src.get("flow_prefix", src.get("prefix", "")),
-                          f"flow_s3_key::{src['_name']}", "aws-vpc-flow.vpc",
-                          skip_prefixes=("version ",), producer=producer)
+        n = _lane("flow_logs", _poll_s3_lane, s3, st, bucket,
+                  src.get("flow_prefix", src.get("prefix", "")),
+                  f"flow_s3_key::{src['_name']}", "aws-vpc-flow.vpc",
+                  skip_prefixes=("version ",), producer=producer,
+                  account=src["_name"])
         if n:
             jlog("flow records appended from s3", source=src["_name"], count=n)
 
 
+# The Ingestion Status source each fidelity sink feeds — used to attribute a
+# lane's permission/misconfiguration failure to the RIGHT matrix chip.
+S3_LANE_SOURCE = {
+    "aws-alb-access.alb": "lb_logs",
+    "aws-waf.waf": "firewall_logs",
+    "aws-r53-resolver.dns": "dns_logs",
+}
+
+
 def poll_fidelity_logs_s3(s3, st: dict, producer=None) -> None:
     """The log-fidelity lanes (ALB access / WAF / Resolver query logs), each an
-    opt-in S3 prefix. Absent prefix = lane off — nothing is guessed."""
+    opt-in S3 prefix. Absent prefix = lane off — nothing is guessed. Each lane
+    runs through _lane so an IAM denial surfaces on ITS source chip and never
+    blocks the sibling lanes."""
     lanes = [
         (ALB_S3_PREFIX, "alb_s3_key", "aws-alb-access.alb"),
         (WAF_S3_PREFIX, "waf_s3_key", "aws-waf.waf"),
@@ -324,8 +341,9 @@ def poll_fidelity_logs_s3(s3, st: dict, producer=None) -> None:
     for prefix, state_key, out_name in lanes:
         if not prefix:
             continue
-        n = _poll_s3_lane(s3, st, LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key,
-                          out_name, producer=producer)
+        n = _lane(S3_LANE_SOURCE[out_name], _poll_s3_lane, s3, st,
+                  LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key,
+                  out_name, producer=producer)
         if n:
             jlog("fidelity records appended from s3", lane=out_name, count=n)
     # Extra sources name their OWN per-lane buckets (root prefix by default) —
@@ -339,8 +357,10 @@ def poll_fidelity_logs_s3(s3, st: dict, producer=None) -> None:
             bucket = src.get(bkey)
             if not bucket:
                 continue
-            n = _poll_s3_lane(s3, st, bucket, src.get(pkey, src.get("prefix", "")),
-                              f"{state_key}::{src['_name']}", out_name, producer=producer)
+            n = _lane(S3_LANE_SOURCE[out_name], _poll_s3_lane, s3, st, bucket,
+                      src.get(pkey, src.get("prefix", "")),
+                      f"{state_key}::{src['_name']}", out_name, producer=producer,
+                      account=src["_name"])
             if n:
                 jlog("fidelity records appended from s3", lane=out_name, source=src["_name"], count=n)
 
@@ -428,6 +448,27 @@ def _iso_minutes_ago(minutes: int) -> str:
     return t.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _lane(source_type: str, fn, *args, account: str = "", region: str = "", **kw):
+    """Run one ambient AWS lane with structured error surfacing (Wave 2 #4).
+    A permission/misconfiguration failure becomes a source-status record the
+    Ingestion Status page can render ("IAM denied flow logs since Tuesday")
+    instead of only a log line; success clears the record. Errors that do NOT
+    classify re-raise into the existing cycle handling, unchanged."""
+    acct = account or ACCOUNT
+    reg = region or REGION
+    try:
+        out = fn(*args, **kw)
+    except Exception as exc:
+        status = source_status.note("aws", source_type, exc,
+                                    tenant=TENANT, account=acct, region=reg)
+        if status is None:
+            raise
+        jlog("lane " + status, lane=source_type, error=str(exc)[:200])
+        return None
+    source_status.clear("aws", source_type, tenant=TENANT, account=acct, region=reg)
+    return out
+
+
 # ── Per-tenant ingestion: connector lanes (Wave 1 #2) ────────────────────────
 # One lane per provider. Each lane receives the SERVER-provided connector row
 # (id / tenant / provider / scopes) and the broker-minted short-lived credential,
@@ -486,9 +527,24 @@ def poll_connector_aws(conn: dict, creds: dict, producer, cst: dict) -> dict:
         session.client("ec2"), session=session, region=region)
     broker_client.put_inventory(conn["id"], inventory)
     if producer is not None:
-        poll_cloudtrail(session.client("cloudtrail"), producer, cst,
-                        tenant=conn["tenant"], account=inventory.get("account_id", ""),
-                        region=region, connector_id=conn["id"])
+        # Change evidence in its OWN status scope (Wave 2 #4): inventory can be
+        # healthy while CloudTrail reads are IAM-denied — that must surface as
+        # "permission denied: change_audit", not fail the whole lane.
+        acct = inventory.get("account_id", "")
+        try:
+            poll_cloudtrail(session.client("cloudtrail"), producer, cst,
+                            tenant=conn["tenant"], account=acct,
+                            region=region, connector_id=conn["id"])
+            source_status.clear("aws", "change_audit", tenant=conn["tenant"],
+                                account=acct, region=region)
+        except Exception as exc:
+            status = source_status.note("aws", "change_audit", exc,
+                                        tenant=conn["tenant"], account=acct,
+                                        region=region, connector_id=conn["id"])
+            if status is None:
+                raise
+            jlog("connector change_audit " + status, connector=conn["id"],
+                 error=str(exc)[:200])
     return {"resources": len(inventory.get("resources", []))}
 
 
@@ -545,16 +601,25 @@ def connector_cycle(producer, st: dict) -> dict:
             skipped += 1
             continue
         cst = st.setdefault("connectors", {}).setdefault(cid, {})
+        acct, reg = _connector_scope(conn)
         try:
             creds = broker_client.credentials(cid)  # short-lived; memory only
             counts = lane(conn, creds, producer, cst) or {}
             ok += 1
+            source_status.clear(provider, "inventory", tenant=conn["tenant"],
+                                account=acct, region=reg)
             jlog("connector polled", connector=cid, provider=provider,
                  tenant=conn["tenant"], **counts)
         except Exception as exc:  # noqa: BLE001 — per-connector isolation
             failed += 1
+            # A 403/401-class provider failure becomes a structured record on
+            # the CONNECTOR's tenant (Wave 2 #4) — the Ingestion page shows
+            # "IAM denied X since <time>" instead of a silent 0-forever.
+            status = source_status.note(provider, "inventory", exc,
+                                        tenant=conn["tenant"], account=acct,
+                                        region=reg, connector_id=cid)
             jlog("connector poll error", connector=cid, provider=provider,
-                 error=str(exc)[:200])
+                 classified=status or "", error=str(exc)[:200])
     if skipped:
         jlog("connector cycle budget hit", skipped=skipped, budget_s=CONNECTOR_CYCLE_BUDGET_S)
     return {"connectors": ok, "failed": failed, "skipped": skipped}
@@ -617,10 +682,10 @@ def main():
                 last_metrics = time.time()
                 jlog("cloud metrics", events=n, instances=len(inventory))
             if LOG_GROUP:
-                poll_flow_logs(logs, st, producer)
+                _lane("flow_logs", poll_flow_logs, logs, st, producer)
             poll_flow_logs_s3(s3, st, producer)      # primary (guarded within) + extra sources
             poll_fidelity_logs_s3(s3, st, producer)  # opt-in prefixes/buckets; no-op when unset
-            poll_cloudtrail(ct, producer, st)
+            _lane("change_audit", poll_cloudtrail, ct, producer, st)
             # Seam lane in its OWN guard: a seam hiccup must never block the
             # flow/cloudtrail lanes' save_state below (P1-11, seen live on the
             # Azure side 2026-07-15).
@@ -646,6 +711,8 @@ def main():
                 if now - last_gcp_inventory >= DISCOVER_EVERY_S:
                     ninv = gcp.write_inventory(gtok, RUNTIME_OUT)
                     last_gcp_inventory = now
+                    source_status.clear("gcp", "inventory", tenant=TENANT,
+                                        account=gcp.PROJECT)
                     jlog("gcp inventory", resources=ninv)
                 if GCP_METERED_METRICS and now - last_gcp_metrics >= METRICS_EVERY_S:
                     g_insts = gcp.list_instances(gtok)
@@ -687,6 +754,10 @@ def main():
                         jlog("gcp log lanes error", error=str(exc)[:200])
                     last_gcp_logs = now
             except Exception as exc:  # noqa: BLE001 - lane isolation
+                # A denied token mint / API read is a structured, renderable
+                # state ("permission denied since <t>"), not only a log line.
+                source_status.note("gcp", "inventory", exc, tenant=TENANT,
+                                   account=gcp.PROJECT)
                 jlog("gcp cycle error", error=str(exc)[:200])
 
         # ── AZURE ───────────────────────────────────────────────────────────
@@ -702,6 +773,8 @@ def main():
                 # (audit D-P0-4 / P1-3: ARM-id keyed, power_state carried).
                 if now - last_az_inventory >= DISCOVER_EVERY_S:
                     ninv = azure.write_inventory(tok, RUNTIME_OUT)
+                    source_status.clear("azure", "inventory", tenant=TENANT,
+                                        account=azure.SUBSCRIPTION)
                     # In-cloud NETWORK topology (VNet→subnet→route-table→gateway),
                     # the Azure twin of discover.py's AWS route-table map. Same
                     # discover cadence, own guard so a topology hiccup can't block
@@ -753,6 +826,8 @@ def main():
                         jlog("azure control plane", health=h, changes=c)
                     save_state(st)
             except Exception as exc:  # noqa: BLE001
+                source_status.note("azure", "inventory", exc, tenant=TENANT,
+                                   account=azure.SUBSCRIPTION)
                 jlog("azure cycle error", error=str(exc)[:200])
 
         # ── CONNECTORS (per-tenant ingestion, Wave 1 #2) ────────────────────
@@ -766,6 +841,11 @@ def main():
             except Exception as exc:  # noqa: BLE001 — lane isolation
                 jlog("connector cycle error", error=str(exc)[:200])
             last_connectors = time.time()
+
+        # Structured error reporting (Wave 2 #4): ship the CURRENT permission/
+        # misconfiguration set to the platform once per loop. Best-effort and
+        # bounded inside; a report failure never touches the lanes above.
+        source_status.flush()
 
         time.sleep(POLL_S)
 

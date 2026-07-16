@@ -4417,6 +4417,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 
 .ao-remediation .ao-cta-btns { margin-top: var(--sp-2); }
 
+/* attention row (Wave 2 #4) — a configured account whose connection is broken
+   or whose telemetry is silent: red-tinted, left-edge marked, never dropped */
+.dtv-row.ao-row--attention {
+  background: color-mix(in srgb, var(--crit) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--crit);
+}
+.dtv-row.ao-row--attention:hover { background: color-mix(in srgb, var(--crit) 14%, transparent); }
+
 /* source-freshness strip (Health & Changes) — honest per-source state */
 .ao-freshstrip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4);
   padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-2); }

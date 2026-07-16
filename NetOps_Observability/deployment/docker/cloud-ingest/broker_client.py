@@ -110,3 +110,10 @@ def put_inventory(connector_id: str, doc: dict) -> dict:
     """Deliver one inventory snapshot. The backend stamps the TENANT from the
     connector row — nothing this client sends can change the owner."""
     return _request("PUT", f"/api/cloud/ingest/connectors/{connector_id}/inventory", body=doc)
+
+
+def put_source_status(records: list[dict]) -> dict:
+    """Report the poller's CURRENT per-source error set (permission_denied /
+    misconfigured), full-set replace semantics (Wave 2 #4). Records naming a
+    connector_id get tenant+provider stamped from the connector row server-side."""
+    return _request("PUT", "/api/cloud/ingest/source-status", body={"records": records})

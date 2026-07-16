@@ -260,8 +260,9 @@ var routeIsolationLedger = map[string]string{
 	// poller across EVERY tenant's connectors, so it is platform plumbing by
 	// definition — requireCloudIngestService fails tenant-bound principals closed
 	// (cloud_ingest_service_test.go covers the isolation matrix).
-	"/api/cloud/ingest/connectors":  "platform",
-	"/api/cloud/ingest/connectors/": "platform",
+	"/api/cloud/ingest/connectors":    "platform",
+	"/api/cloud/ingest/connectors/":   "platform",
+	"/api/cloud/ingest/source-status": "platform", // poller error reports (Wave 2 #4) — same service credential
 	"/api/system/network":         "platform",
 	"/api/system/network/test":    "platform",
 	"/api/automation/netbox":      "platform",

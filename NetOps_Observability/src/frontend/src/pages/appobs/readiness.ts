@@ -76,6 +76,8 @@ export interface SourceReadiness {
   volume?: number;
   errorCount?: number;
   lastError?: string;
+  /** First-failure time for permission_denied/misconfigured — "denied since Tuesday". */
+  sinceIso?: string;
   freshnessSeconds?: number;
 }
 
@@ -175,6 +177,10 @@ export interface IngestionSource {
   last_seen_iso?: string;
   /** available = a producer exists for this source; planned = nothing ships it yet. */
   capability?: "available" | "planned";
+  /** Poller-reported failure context (Wave 2 #4): what was denied/misconfigured… */
+  detail?: string;
+  /** …and since when ("IAM denied flow logs since Tuesday"). */
+  since_iso?: string;
 }
 
 export function deriveReadiness(opts: {
@@ -215,6 +221,8 @@ export function deriveReadiness(opts: {
         status,
         volume: s.volume,
         lastSyncIso: s.last_seen_iso,
+        lastError: s.detail,
+        sinceIso: s.since_iso,
       };
     },
   );
@@ -294,6 +302,19 @@ export function deriveHealthFromAvailableSignals(
 // ── Freshness label ──────────────────────────────────────────────────────────
 // Seconds-granularity (the scope bar wants "updated 42s ago"). Pure: pass nowMs
 // in tests for determinism; defaults to Date.now() at call sites.
+// ── Since label ──────────────────────────────────────────────────────────────
+// "IAM denied flow logs since Tuesday" — the operator question the review named.
+// < 24h: the clock time; < 6 days: the weekday; older: the calendar date.
+export function sinceLabel(iso: string | undefined, nowMs: number = Date.now()): string {
+  if (!iso) return "";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "";
+  const age = nowMs - t.getTime();
+  if (age >= 6 * 86400_000) return `since ${t.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  if (age >= 86400_000) return `since ${t.toLocaleDateString(undefined, { weekday: "long" })}`;
+  return `since ${t.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+}
+
 export function freshnessLabel(iso: string | undefined, nowMs: number = Date.now()): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();

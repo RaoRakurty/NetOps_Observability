@@ -7,7 +7,7 @@ import {
   deriveDataMode, DATA_MODE_LABEL, deriveReadiness, summarize, deriveScope,
   deriveConnectorKind,
   getMeasurementState, isMeasured, deriveHealthFromAvailableSignals, freshnessLabel,
-  SOURCE_TYPES,
+  sinceLabel, SOURCE_TYPES,
 } from "./readiness";
 
 describe("data mode", () => {
@@ -157,5 +157,33 @@ describe("freshnessLabel", () => {
     expect(freshnessLabel("2026-06-25T11:59:18Z", now)).toBe("42s ago");
     expect(freshnessLabel("2026-06-25T11:57:00Z", now)).toBe("3m ago");
     expect(freshnessLabel("2026-06-25T11:59:59Z", now)).toBe("just now");
+  });
+});
+
+// Wave 2 #4 — poller-reported failure context flows through to the chip model,
+// and the "since" wording matches the operator question ("denied since Tuesday").
+describe("permission-denied context (Wave 2 #4)", () => {
+  it("deriveReadiness carries detail + since for a denied source", () => {
+    const r = deriveReadiness({
+      inventoryCount: 1, inventoryError: false,
+      ingestion: [{
+        source_type: "flow_logs", status: "permission_denied",
+        detail: "IAM denied logs:FilterLogEvents", since_iso: "2026-06-23T08:00:00Z",
+      }],
+    });
+    const flow = r.find((x) => x.sourceType === "flow_logs")!;
+    expect(flow.status).toBe("permission_denied");
+    expect(flow.lastError).toBe("IAM denied logs:FilterLogEvents");
+    expect(flow.sinceIso).toBe("2026-06-23T08:00:00Z");
+    // …and the summary tile counts it (the "Permission errors" card).
+    expect(summarize(r, 1).permissionErrors).toBe(1);
+  });
+  it("sinceLabel: weekday inside a week, date beyond, empty for garbage", () => {
+    const now = new Date("2026-07-16T12:00:00Z").getTime(); // a Thursday
+    expect(sinceLabel("2026-07-14T08:00:00Z", now)).toBe("since Tuesday");
+    expect(sinceLabel("2026-07-01T08:00:00Z", now)).toBe("since Jul 1");
+    expect(sinceLabel(undefined, now)).toBe("");
+    expect(sinceLabel("not-a-date", now)).toBe("");
+    expect(sinceLabel("2026-07-16T09:30:00Z", now)).toMatch(/^since \d/);
   });
 });

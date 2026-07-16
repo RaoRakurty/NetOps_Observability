@@ -35,6 +35,7 @@ func newIngestTestServer(t *testing.T) (srv *httptest.Server, s *server, fake *f
 		conns: map[string][]cloud.ConnectorInfo{},
 	}
 	st.cloudIngestInv = newCloudIngestInventory()
+	st.cloudSourceStatus = newCloudSourceStatusStore() // poller error reports (Wave 2 #4)
 	return hs, st, fake
 }
 
