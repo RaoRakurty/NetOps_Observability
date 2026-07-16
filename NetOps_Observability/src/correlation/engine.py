@@ -44,6 +44,8 @@ from path_graph import (
     topology_link_relation,
     worst_data_class,
 )
+from path_assembly import AssembledPath
+from path_attribution import Attribution, object_attribution
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 from verdicts import Verdict as GateVerdict
@@ -650,6 +652,31 @@ class ObjectSnapshot:
     # state. Empty for objects that used no path relation → blob byte-identical to
     # pre-contract (no version churn on existing objects).
     paths: PathGraphView = field(default_factory=PathGraphView)
+    # Path-causality RCA P2: the on-path device attribution for this object (design
+    # §2.4) — the named upstream-most on-path fault that explains the app symptom,
+    # its verdict lift, explained-away victims, discounted off-path faults and the
+    # honesty-cap reason. A PROJECTION-style enrichment: like app_impact/
+    # layer_coverage it is NOT in content_hash / material_hash / hypotheses_blob, so
+    # an object with no attribution (None) is byte-for-byte identical to pre-P2 and
+    # REPLAY (which re-runs run_window with no discovery paths) never drifts on it.
+    attribution: "Attribution | None" = None
+    # The DISCOVERED typed path the attributed cause sits on (P1 AssembledPath) —
+    # kept alongside the attribution so the render contract can show the segments /
+    # key devices / unknown+ambiguous / head. Also NOT hashed (additive).
+    attribution_path: "AssembledPath | None" = None
+
+    def attribution_blob(self) -> str:
+        """The corr_objects.attribution JSON the RCA report reads (the P3 render
+        contract): the P2 attribution (named cause, verdict lift, explained-away,
+        honesty-cap reason) PLUS the discovered typed `path` (segments + key devices +
+        unknown/ambiguous + head). '{}' when no on-path cause was attributed — an
+        honest empty, never an invented one."""
+        if self.attribution is None:
+            return "{}"
+        blob = self.attribution.to_dict()
+        if self.attribution_path is not None:
+            blob["path"] = self.attribution_path.to_dict()
+        return json.dumps(blob, separators=(",", ":"), sort_keys=True)
 
     def signal_count(self) -> int:
         return sum(len(n.signals) for n in self.nodes)
@@ -970,6 +997,11 @@ class ObjectSnapshot:
             # column (NOT in the hypotheses blob / content_hash) — a pure projection
             # of attached identities, so it never churns a version. '{}' when none.
             "app_impact": self.app_impact_blob(),
+            # Path-causality RCA P2: the on-path device attribution (design §2.4). A
+            # separate column (NOT in the hypotheses blob / content_hash) — additive
+            # enrichment, so it never churns a version and an un-attributed object is
+            # byte-identical to pre-P2. '{}' when no on-path cause was attributed.
+            "attribution": self.attribution_blob(),
         }
         if merged_into:
             row["merged_into"] = merged_into  # set ONLY on a terminal 'merged' snapshot
@@ -1087,6 +1119,7 @@ def run_window(
     storm_mode: bool = False,
     directed: Oracle | None = None,
     paths: PathGraphView | None = None,
+    discovery: tuple[AssembledPath, ...] = (),
 ) -> list[ObjectSnapshot]:
     """THE pure engine function. One evaluation of one tenant's window.
 
@@ -1098,6 +1131,16 @@ def run_window(
     observations with ORDERED hops, application→endpoint bindings, NAT sessions and
     (inferred) cloud routes. It is scoped to this window's tenant HERE, before any
     lookup — §6 rule 1 / §9: cross-tenant resolution is structurally impossible.
+
+    `discovery` is the path-causality RCA input (P1 output, design §2.3/§2.4): the
+    typed causal paths the CALLER assembled for THIS window's tenant (from measured
+    runs, cloud flow pairs, cloud inventory/topology and DNS via the P1 adapters).
+    It drives an ADDITIVE P2 enrichment pass: for an object carrying an app symptom
+    AND an on-path fault, the attribution (named cause device, segment, verdict lift,
+    explained-away set, honesty-cap reason) is attached. It is NEVER read into the
+    verdict/ranking/edges/content_hash — an object with no discoverable path or no
+    on-path fault is byte-for-byte what it was pre-P2, so replay (which passes no
+    discovery) and the golden fixtures are untouched. Empty default = no enrichment.
     """
     cfg = cfg or EngineConfig()
     sigs = tuple(sorted(window, key=lambda s: (s.ts, str(s.signal_id))))
@@ -1121,6 +1164,10 @@ def run_window(
     # §6 rule 1 / §9 — the ONLY door to the path objects, tenant-scoped at construction.
     view = (paths or PathGraphView()).for_tenant(tenant)
     path_index = PathIndex(view, tenant) if not view.is_empty() else None
+    # Path-causality P2: keep ONLY this tenant's discovery paths (§3a default-closed —
+    # a path with a mismatched/empty tenant can never seed an attribution). object_
+    # attribution re-scopes again; this is the structural first gate.
+    disc = tuple(p for p in discovery if p.tenant_id and p.tenant_id == tenant)
     edges, gap_hints = build_edges(nodes, seams, cfg, adjacency, topology_stale, rec,
                                    path_index)
     open_floor = _SEV_RANK[Severity(cfg.severity_open_floor)]
@@ -1185,6 +1232,11 @@ def run_window(
             (lo, hi) for p in adjacency.pairs
             if p <= comp_devs for lo, hi in (tuple(sorted(p)),)
         ))
+        # Path-causality P2 enrichment (ADDITIVE): name the on-path device that
+        # explains this object's app symptom. None (no discovery / no symptom / no
+        # on-path cause) ⇒ the object is byte-for-byte pre-P2.
+        attr_result = object_attribution(tenant, comp_sigs, disc) if disc else None
+        attribution, attribution_path = attr_result if attr_result is not None else (None, None)
         snapshots.append(ObjectSnapshot(
             correlation_id=cid,
             tenant_id=tenant,
@@ -1209,6 +1261,8 @@ def run_window(
             scenario_id=_first_attr(comp_sigs, "scenario_id", ""),
             run_id=_first_attr(comp_sigs, "run_id", ""),
             paths=view,
+            attribution=attribution,
+            attribution_path=attribution_path,
         ))
     return snapshots
 

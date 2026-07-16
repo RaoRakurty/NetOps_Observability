@@ -159,6 +159,7 @@ SETTINGS index_granularity = 8192`,
     catalog_version  LowCardinality(String),
     layer_coverage   String DEFAULT '{}',
     app_impact       String DEFAULT '{}',
+    attribution      String DEFAULT '{}',
     merged_into      Nullable(UUID),
     created_at       DateTime64(3) DEFAULT now64(3)
 )
@@ -178,6 +179,13 @@ ORDER BY (tenant_id, correlation_id, version)`,
 		// content_hash (never churns a version).
 		`ALTER TABLE netops.corr_objects
     ADD COLUMN IF NOT EXISTS app_impact String DEFAULT '{}' AFTER layer_coverage`,
+
+		// Path-causality RCA P2 (design §2.4): the on-path device attribution (engine
+		// ObjectSnapshot.attribution). Idempotent ADD for live deployments — an
+		// additive enrichment projection, default '{}', NOT in content_hash (never
+		// churns a version), consumed by the RCA report/render.
+		`ALTER TABLE netops.corr_objects
+    ADD COLUMN IF NOT EXISTS attribution String DEFAULT '{}' AFTER app_impact`,
 
 		// CREATE OR REPLACE (not IF NOT EXISTS): a SELECT * view freezes its column
 		// list at creation, so adding a base column (e.g. #81 P5 app_impact) would

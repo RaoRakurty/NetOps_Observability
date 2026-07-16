@@ -487,3 +487,76 @@ def _no_symptom_verdict() -> Verdict:
     return Verdict(VerdictTier.UNDETERMINED,
                    EvidenceCoverage(frozenset(), frozenset(), None, ()),
                    ("no symptom signal for this tenant",))
+
+
+# ── engine enrichment entry (path-causality RCA P2 → run_window) ──────────────
+
+# The app-experience SYMPTOM kinds: the customer-path outcomes an on-path fault
+# is asked to EXPLAIN (never the fault itself — those are CLOUD_EDGE_FAULT_KINDS /
+# NETWORK_FAULT_KINDS). Synthetic DEM checks, active probes to the app, and the
+# app-edge error/latency lane. Deliberately DISJOINT from the fault sets, so a
+# signal is never both the symptom and its own cause.
+APP_SYMPTOM_KINDS: frozenset[str] = frozenset({
+    "synthetic_http_fail", "synthetic_http_5xx", "synthetic_http_4xx",
+    "synthetic_http_latency_high", "synthetic_tls_fail", "synthetic_dns_fail",
+    "synthetic_tcp_connect_fail", "synthetic_timeout", "synthetic_icmp_loss",
+    "synthetic_tcp_probe_fail", "synthetic_cert_expired", "synthetic_cert_expiring",
+    "probe_loss", "probe_rtt_anomaly",
+    "app_error_rate_high", "app_latency_high",
+})
+
+# The on-path fault kinds admissible as app-witnesses — the union P2 restricts to.
+ATTRIBUTABLE_FAULT_KINDS: frozenset[str] = CLOUD_EDGE_FAULT_KINDS | NETWORK_FAULT_KINDS
+
+
+def object_attribution(
+    tenant_id: str,
+    signals: tuple[Signal, ...] | list[Signal],
+    paths: tuple[AssembledPath, ...] | list[AssembledPath],
+    attributor: Optional[OnPathAttributor] = None,
+) -> Optional[tuple[Attribution, AssembledPath]]:
+    """Engine enrichment entry (design §2.4): given ONE correlation object's signals
+    and the P1-assembled typed paths for its tenant, restrict RCA candidates to the
+    on-path devices and return the (attribution, winning typed path) that NAMES the
+    upstream-most on-path fault explaining the app symptom — or None.
+
+    The winning path is returned alongside the attribution so the RCA report/render
+    can show the DISCOVERED typed path (segments + key devices + unknown/ambiguous +
+    head) the cause sits on — the P3 contract.
+
+    Returns None (→ the object is left byte-for-byte unchanged) when: no tenant, no
+    path, no app symptom in the object, or no on-path time-correlated cause. Only a
+    REAL named cause (`attributed is not None`) is returned, so an object with no
+    discoverable path or an off-path fault enriches to nothing (the non-regression
+    contract run_window relies on).
+
+    Pure + deterministic + additive: it READS the object's signals, never mutates
+    them, and given the same (signals, paths) always chooses the same cause + path —
+    the replay contract. Bounded by len(paths) (the caller keeps the per-tenant path
+    set small) × the P1/P2 bounded walks.
+    """
+    if not tenant_id or not paths:
+        return None
+    attr = attributor if attributor is not None else OnPathAttributor()
+    symptom = [s for s in signals
+               if s.tenant_id == tenant_id and s.kind in APP_SYMPTOM_KINDS]
+    if not symptom:
+        return None
+    faults = [s for s in signals
+              if s.tenant_id == tenant_id and s.kind in ATTRIBUTABLE_FAULT_KINDS]
+    if not faults:
+        return None
+    best: Optional[tuple[Attribution, AssembledPath]] = None
+    best_rank: tuple[int, int] = (-1, -1)
+    # Deterministic: paths in (src, dst) order; a strictly higher (verdict tier,
+    # on-path device count) wins, so the earliest path among equals is kept.
+    for path in sorted(paths, key=lambda p: (p.src, p.dst, p.tenant_id)):
+        if path.tenant_id != tenant_id:
+            continue
+        a = attr.attribute(tenant_id, path, symptom, faults)
+        if a.attributed is None:
+            continue
+        rank = (_TIER_RANK[a.verdict.tier], a.on_path_device_count)
+        if rank > best_rank:
+            best, best_rank = (a, path), rank
+    return best

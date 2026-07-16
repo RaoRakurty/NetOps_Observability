@@ -89,6 +89,12 @@ type rcaReport struct {
 	// service/vantage names primary, addresses secondary, seam + state per hop.
 	// Available=false renders as an honest absence, never an invented diagram.
 	Topology rcaTopologyView `json:"topology"`
+	// PathAttribution is the path-causality RCA P2 on-path device attribution
+	// (design §2.4): the named upstream-most on-path cause, its verdict lift, the
+	// explained-away/discounted faults, the honesty-cap reason, and the discovered
+	// typed path the cause sits on. nil (omitted) when the engine attributed no
+	// on-path cause — an honest absence, never an invented one.
+	PathAttribution *rcaPathAttribution `json:"path_attribution,omitempty"`
 
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
@@ -801,19 +807,19 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		laneMin, laneMax         = map[string]time.Time{}, map[string]time.Time{}
 		// laneObs: the full per-observation timestamp series per lane, feeding the
 		// Phase C coverage engine's rich path (internal-gap + inter-arrival cadence).
-		laneObs           = map[string][]time.Time{}
-		firstObs, lastObs time.Time
-		peakSevRank              int
-		peakSev                  = "unknown"
-		peakSevKind              string
-		sevCounts                = map[string]int{}
-		impactAnomalies          int
-		impactSynthetic          int
-		impactRealUser           int
-		impactRealUserIndicator  int
-		realUserLanesPresent     bool
-		changes                  []rcaCloudChange
-		stateUps                 []rcaStateUp
+		laneObs                 = map[string][]time.Time{}
+		firstObs, lastObs       time.Time
+		peakSevRank             int
+		peakSev                 = "unknown"
+		peakSevKind             string
+		sevCounts               = map[string]int{}
+		impactAnomalies         int
+		impactSynthetic         int
+		impactRealUser          int
+		impactRealUserIndicator int
+		realUserLanesPresent    bool
+		changes                 []rcaCloudChange
+		stateUps                []rcaStateUp
 	)
 	sevRank := map[string]int{"info": 1, "warn": 2, "high": 3, "crit": 4}
 	for _, sig := range in.Signals {
@@ -1544,6 +1550,11 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		accounting:        accounting,
 		accountingErr:     accountingErr,
 	}
+	// Path-causality RCA P2: the on-path device attribution the engine wrote to the
+	// attribution column (design §2.4). Pure passthrough decode — nil when no
+	// on-path cause was attributed, so the section is omitted, never invented.
+	rep.PathAttribution = decodePathAttribution(meta)
+
 	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
 	// document. Errors downgrade the report type — a contradictory document is
 	// never emitted as a final assessment (P1 gate).

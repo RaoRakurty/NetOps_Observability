@@ -42,6 +42,12 @@ from pydantic import BaseModel
 from catalog import builtin_catalog
 from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
+from path_assembly import (
+    AssembledPath,
+    DiscoverySources,
+    PathAssembler,
+    measured_run_from_observation,
+)
 from path_graph import PathGraphView
 from entity_resolver import EntityResolver
 from flow_direction import flow_direction_sample, netflow_direction_source
@@ -390,6 +396,12 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
 # seam/links files (mtime older than ~2-3 export intervals; export runs every 60s).
 CORR_TOPO_STALE_S = float(os.environ.get("CORR_TOPO_STALE_S", "180"))
 STORM_BUFFER_FRACTION = float(os.environ.get("CORR_STORM_FRACTION", "0.9"))
+# Path-causality RCA P2 (design §2.4): assemble the tenant's typed causal paths from
+# the LIVE measured path observations and hand them to run_window for the on-path
+# attribution enrichment. Additive + killable; a pure no-op when no path is observed.
+CORR_PATH_ATTRIBUTION = os.environ.get("CORR_PATH_ATTRIBUTION", "true").lower() not in ("0", "false", "no", "off")
+CORR_MAX_DISCOVERY_PATHS = int(os.environ.get("CORR_MAX_DISCOVERY_PATHS", "32"))
+_PATH_ASSEMBLER = PathAssembler()
 # C6 passive_flow: aggregate flow volume per exporting interface, flush each engine
 # cycle through CUSUM → passive_flow episodes. Flows are a firehose — accumulation is
 # O(1) per flow and the flush is bounded by (samplers × interfaces).
@@ -677,6 +689,43 @@ def path_graph_inventory() -> PathGraphView:
     return _path_graph_cache
 
 
+def discovery_paths_for(tenant: str, view: PathGraphView) -> tuple[AssembledPath, ...]:
+    """Build this tenant's P1 typed causal paths for the on-path attribution pass
+    (path-causality RCA P2 / step 4). Source = the LIVE measured path observations the
+    engine already loads (traceroute / STAMP / transaction runs, exported by the Go API
+    into the Service Path Graph), adapted through the real P1 adapter
+    (measured_run_from_observation) and assembled per (src→dst) scope. Flow / cloud-
+    inventory / DNS evidence fold into the SAME DiscoverySources through their P1
+    adapters (flow_edges_from_pairs / inventory_edges_from_topology / DnsHead) once
+    those feeds are plumbed here; measured runs are the live source available today.
+
+    Tenant-scoped (§3a): only THIS tenant's observations contribute. Bounded
+    (CORR_MAX_DISCOVERY_PATHS scopes; assembler caps hops) and exception-safe — any
+    failure logs and yields no paths, so attribution simply doesn't fire and the engine
+    cycle is never broken (§9/§10)."""
+    if not CORR_PATH_ATTRIBUTION:
+        return ()
+    try:
+        obs = [o for o in view.observations if o.tenant_id == tenant and o.hops]
+        if not obs:
+            return ()
+        groups: Dict[tuple[str, str], list] = {}
+        for o in obs:
+            run = measured_run_from_observation(o)
+            responding = [h.address for h in run.hops if h.responding]
+            if len(responding) < 2:
+                continue  # a single-endpoint run is not a path — nothing to walk
+            groups.setdefault((responding[0], responding[-1]), []).append(run)
+        paths: list[AssembledPath] = []
+        for (src, dst), runs in sorted(groups.items())[:CORR_MAX_DISCOVERY_PATHS]:
+            paths.append(_PATH_ASSEMBLER.assemble(
+                tenant, src, dst, DiscoverySources(measured=tuple(runs))))
+        return tuple(paths)
+    except Exception as exc:  # noqa: BLE001 — enrichment must never break the cycle
+        log.warning("path-attribution discovery build failed tenant=%s: %s", tenant, exc)
+        return ()
+
+
 def buffer_signal(sig: Signal) -> None:
     # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
     # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
@@ -877,10 +926,14 @@ async def engine_cycle() -> None:
         if forward:
             sources.append(("routing", routing_direction_source(forward)))
         directed = DirectedTopology(sources=tuple(sources)) if sources else None
+        pgv = path_graph_inventory()
+        # Path-causality RCA P2: the tenant's typed causal paths for the on-path
+        # attribution enrichment (empty ⇒ no-op, objects byte-identical to pre-P2).
+        discovery = discovery_paths_for(tenant, pgv)
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
                                    topology_stale=topo_stale, storm_mode=storm, directed=directed,
-                                   paths=path_graph_inventory())
+                                   paths=pgv, discovery=discovery)
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue

@@ -56,6 +56,15 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # passive-flow lane
     "flow_volume_anomaly": ModalityClass.PASSIVE_FLOW,
     "cloud_flow_log": ModalityClass.PASSIVE_FLOW,
+    # cloud-edge fault lane (path-causality RCA P2). Each mirrors the ModalityClass
+    # its producer stamps (cloud_producers.CLOUD_KINDS): LB 5xx, WAF block, DNS
+    # NXDOMAIN are PASSIVE_FLOW cloud-API observations. They are the on-path
+    # app-witness kinds the P2 attributor admits; registered here so the audit's
+    # independence math counts a cloud-edge fault as a real (passive_flow) witness
+    # rather than an unclassified kind.
+    "cloud_lb_log": ModalityClass.PASSIVE_FLOW,
+    "cloud_waf_log": ModalityClass.PASSIVE_FLOW,
+    "cloud_dns_log": ModalityClass.PASSIVE_FLOW,
     # control-plane lane (syslog/trap/route events)
     "bgp_adjacency_change": ModalityClass.CONTROL_PLANE,
     "ospf_adjacency_change": ModalityClass.CONTROL_PLANE,
@@ -119,6 +128,13 @@ APP_GROUNDABLE_KINDS: frozenset[str] = frozenset(
     # with app:<slug> tokens by construction.
     "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
     "lb_4xx_high",
+    # cloud-edge fault lane (path-causality RCA P2): the kinds whose production
+    # signals ground on an app/service entity (cloud_producers.CLOUD_KINDS):
+    # cloud_lb_log/cloud_flow_log carry EntityType.APP, cloud_dns_log the resolved
+    # SERVICE name — so a cloud-edge fault can co-locate on an app-impact object and
+    # count toward app-domain confirmation. cloud_waf_log grounds on the web-ACL
+    # CLOUD_RESOURCE (not an app entity) and is deliberately NOT listed here.
+    "cloud_lb_log", "cloud_dns_log", "cloud_flow_log",
 })
 
 # App-impact domains whose objects ground on app/service entities, so a second

@@ -57,6 +57,30 @@ INTENTIONAL_BLIND: dict[str, dict] = {
                   "search/enrichment only",
         "owner": "correlix", "date_added": "2026-07-09",
     },
+    # cloud-edge fault lane (path-causality RCA P2). Emitted by
+    # cloud_producers.cloud_signal off the netops.cloud lane and consumed by the
+    # P2 on-path attributor at RUNTIME (path_attribution.CLOUD_EDGE_FAULT_KINDS),
+    # not by a catalog signature clause — so they are intentional blind spots for
+    # the static coverage gate, exactly like the LB/app-edge corroborators.
+    "cloud_lb_log": {
+        "reason": "cloud LB 5xx access-log fault — path-causality RCA P2 on-path "
+                  "app-witness (path_attribution); corroborates an app symptom at "
+                  "runtime via the on-path attributor, consumed by no catalog "
+                  "signature",
+        "owner": "correlix", "date_added": "2026-07-16",
+    },
+    "cloud_waf_log": {
+        "reason": "cloud WAF BLOCK aggregate fault — path-causality RCA P2 on-path "
+                  "witness (path_attribution); consumed by the runtime attributor, "
+                  "not a catalog signature",
+        "owner": "correlix", "date_added": "2026-07-16",
+    },
+    "cloud_dns_log": {
+        "reason": "cloud DNS NXDOMAIN aggregate fault — path-causality RCA P2 "
+                  "upstream-most on-path witness (path_attribution); consumed by "
+                  "the runtime attributor, not a catalog signature",
+        "owner": "correlix", "date_added": "2026-07-16",
+    },
 }
 INTENTIONAL_BLIND_KINDS: frozenset[str] = frozenset(INTENTIONAL_BLIND)
 

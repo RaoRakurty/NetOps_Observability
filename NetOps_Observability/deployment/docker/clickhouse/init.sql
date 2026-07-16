@@ -301,6 +301,12 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
     -- fresh-install schema authority — every live ALTER must land here too.
     layer_coverage   String DEFAULT '{}',    -- JSON: per-layer signal coverage
     app_impact       String DEFAULT '{}',    -- JSON: impacted app identities
+    -- Path-causality RCA P2 (design §2.4): the on-path device attribution — the
+    -- discovered typed path (segments/key devices/head), the named upstream-most
+    -- on-path cause, the verdict lift and the honesty-cap reason. Additive
+    -- projection column (NOT in content_hash), consumed by the RCA report/render.
+    -- Live ALTER must also land here (init.sql is the fresh-install schema authority).
+    attribution      String DEFAULT '{}',    -- JSON: path-causality on-path attribution
     created_at       DateTime64(3) DEFAULT now64(3)
 )
 ENGINE = MergeTree
