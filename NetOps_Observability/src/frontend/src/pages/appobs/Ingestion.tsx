@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { api, CloudResourceRow } from "../../services/api";
-import { fetchCloudInventory } from "./api";
+import { fetchCloudInventory, invalidateCloudInventory } from "./api";
 import { Skeleton } from "../../components/ui";
 import DataTable from "../../components/DataTable";
 import { EmptyState } from "./badges";
@@ -18,6 +18,7 @@ import {
   SOURCE_TYPES, SOURCE_LABEL, SourceReadiness, IngestionSource, STATUS_META, summarize, freshnessLabel, isMeasured,
 } from "./readiness";
 import { buildAccounts, buildMatrix, CloudAccount, ProviderIngestion, RegionReadiness } from "./ingestion";
+import ConnectorWizard from "./ConnectorWizard";
 
 type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
@@ -28,6 +29,11 @@ export default function Ingestion() {
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
   const [byProvider, setByProvider] = useState<ProviderIngestion>({});
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // Cloud Connector onboarding wizard (Wave 1 #3) — the in-product "connect a
+  // cloud account" flow over the done 7-step connector API. `nonce` re-reads the
+  // inventory after a connector goes live.
+  const [wizard, setWizard] = useState(false);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -46,7 +52,7 @@ export default function Ingestion() {
       () => { if (live) setState("error"); },
     );
     return () => { live = false; };
-  }, []);
+  }, [nonce]);
 
   if (state === "loading") {
     return <div className="ao-stack"><div className="ao-panel"><Skeleton w={220} h={14} /><div style={{ marginTop: 12 }}><Skeleton h={260} /></div></div></div>;
@@ -57,6 +63,7 @@ export default function Ingestion() {
 
   const accounts = buildAccounts(rows, byProvider);
   const matrix = buildMatrix(rows, byProvider);
+  const openWizard = () => setWizard(true);
 
   return (
     <div className="ao-stack">
@@ -66,30 +73,38 @@ export default function Ingestion() {
         <button role="tab" aria-selected={sub === "status"} className={`ao-tab${sub === "status" ? " is-active" : ""}`} onClick={() => setSub("status")}>Ingestion Status</button>
       </div>
 
-      {sub === "accounts" && <Accounts accounts={accounts} />}
+      {sub === "accounts" && <Accounts accounts={accounts} onNew={openWizard} />}
       {sub === "sources" && <Sources matrix={matrix} />}
       {sub === "status" && <Status matrix={matrix} />}
+
+      {wizard && (
+        <ConnectorWizard
+          onClose={() => setWizard(false)}
+          onCreated={() => { invalidateCloudInventory(); setNonce((n) => n + 1); }}
+        />
+      )}
     </div>
   );
 }
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
-function Accounts({ accounts }: { accounts: CloudAccount[] }) {
+function Accounts({ accounts, onNew }: { accounts: CloudAccount[]; onNew: () => void }) {
   return (
     <div className="ao-stack">
       <div className="ao-cta">
         <span className="ao-cta-h">Connect and scope AWS, Azure, and GCP accounts for observability.</span>
-        {/* ONE button that does exactly what it says (audit C: five buttons all
-            opened the same page while promising provider-specific flows). */}
+        {/* The guided onboarding wizard (Wave 1 #3) over the done connector API —
+            provider → draft → auth → trust → scope → validate → activate. */}
         <div className="ao-cta-btns">
-          <button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Connect a cloud account · Integrations</button>
+          <button className="ao-btn ao-btn--primary" onClick={onNew}>Connect a cloud account</button>
+          <button className="ao-btn" onClick={goIntegrations}>Manage in Integrations</button>
         </div>
       </div>
       {accounts.length === 0 ? (
         <div className="ao-panel"><EmptyState
           title="No cloud accounts connected yet"
-          hint="Connect AWS / Azure / GCP from Integrations to begin observability."
-          action={<button className="ao-btn ao-btn--primary" onClick={goIntegrations}>Open Integrations</button>} /></div>
+          hint="Connect an AWS / Azure / GCP account to begin observability."
+          action={<button className="ao-btn ao-btn--primary" onClick={onNew}>Connect a cloud account</button>} /></div>
       ) : (
         <div className="ao-panel">
           <div className="ao-panel-h">Connected accounts <span className="ao-panel-meta">connection management lives in Admin → Integrations · sort any column · open a row to manage</span></div>

@@ -1277,6 +1277,95 @@ export interface CloudAppLive {
   traffic_bytes?: number;
 }
 
+// ---- Cloud Connectors (onboarding wizard, backlog Wave 1 #3) ----
+// Trust-metadata projections of the done 7-step connector API — NEVER a secret.
+// Mirrors src/backend/cloud_connectors_handlers.go + cloudconn/*.go.
+export type CloudProvider = "aws" | "azure" | "gcp";
+export type CloudAuthMethod =
+  | "workload_identity_federation"
+  | "cloud_role"
+  | "certificate"
+  | "client_secret"
+  | "static_key"
+  | "admin_password";
+// Connector lifecycle (cloudconn/connection.go). "" only pre-create.
+export type CloudLifecycleState =
+  | "DRAFT" | "DEPLOYING" | "VALIDATING" | "ACTIVE" | "DEGRADED"
+  | "REAUTHORIZATION_REQUIRED" | "DISABLED" | "REVOKED" | "DELETING" | "";
+
+export interface CloudScope {
+  type: string;                 // account|subscription|project|region|vpc|…
+  ref: string;                  // provider-native id
+  display?: string;
+  regions?: string[];
+  discovered?: boolean;
+}
+export interface CloudCapability {
+  key: string; title: string; apis: string[]; permissions: string[];
+  read_only: boolean; data_collected: string; rca_value: string;
+}
+export interface CloudCapabilityPack {
+  id: string; version: string; provider: CloudProvider; title: string;
+  summary: string; read_only: boolean; capabilities: CloudCapability[];
+}
+export interface CloudProviderMethod {
+  method: CloudAuthMethod; rank: number;
+  federated: boolean; legacy: boolean; recommended: boolean;
+}
+export interface CloudProviderCatalogEntry {
+  provider: CloudProvider;
+  methods: CloudProviderMethod[];
+  scope_types: string[];
+  capability_packs: CloudCapabilityPack[];
+}
+export interface CloudConnHealth { state: string; detail?: string; checked?: string; }
+export interface CloudConnFinding {
+  severity: "error" | "warning" | "info";
+  code: string; message: string; remediation?: string;
+}
+export interface CloudConnValidation { ok: boolean; findings: CloudConnFinding[] | null; }
+export interface CloudConnIdentity {
+  role_arn?: string; external_id?: string; azure_tenant_id?: string; client_id?: string;
+  audience?: string; issuer?: string; federated_subject?: string; cert_thumbprint?: string;
+  project_number?: string; workload_pool?: string; workload_provider?: string;
+  service_account?: string; has_legacy_secret: boolean; legacy_key_hint?: string;
+}
+export interface CloudConnectorView {
+  id: string; provider: CloudProvider; display_name: string;
+  auth_method: CloudAuthMethod | ""; auth_federated: boolean; auth_legacy: boolean;
+  capability_pack: string; state: CloudLifecycleState; collecting: boolean;
+  identity: CloudConnIdentity; scopes: CloudScope[] | null;
+  identity_health: CloudConnHealth; telemetry_health: CloudConnHealth;
+  last_validation: CloudConnValidation; version: number;
+  created_at: string; updated_at: string;
+}
+export interface CloudSetupArtifact { kind: string; title: string; format: string; content: string; }
+export interface CloudSetupBundle {
+  provider: CloudProvider; method: CloudAuthMethod; summary: string;
+  steps: string[]; artifacts: CloudSetupArtifact[];
+}
+// The live validate result: pure config findings + the LIVE trust-proof marker
+// ("ok" | "deferred" | "failed") from the Identity Broker exchange.
+export interface CloudConnValidateResult {
+  connector: CloudConnectorView;
+  validation: CloudConnValidation;
+  live_check: "ok" | "deferred" | "failed" | string;
+}
+// The identity-trust fields the operator supplies on the auth step. The TENANT and
+// the ExternalId are NEVER set here — the backend stamps the owner from the token
+// and mints the ExternalId itself (confused-deputy protection).
+export interface CloudAuthInput {
+  method: CloudAuthMethod;
+  role_arn?: string;
+  azure_tenant_id?: string; client_id?: string; audience?: string;
+  issuer?: string; federated_subject?: string; cert_thumbprint?: string;
+  project_number?: string; workload_pool?: string; workload_provider?: string;
+  service_account?: string;
+}
+
+const ccnPath = (id: string, action = ""): string =>
+  `/api/cloud/connectors/${encodeURIComponent(id)}${action ? "/" + action : ""}`;
+
 export const api = {
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
@@ -2161,6 +2250,41 @@ export const api = {
       count: number; returned?: number; open_object_count?: number;
       objects_truncated?: boolean; window_hours: number;
     }>(`/api/cloud/evidence${cloudQS(app, limit)}`),
+
+  // ---- Cloud Connectors: the done 7-step onboarding API (Wave 1 #3) ----
+  // Every call is tenant-scoped server-side (owner from the token, never the body).
+  // The provider catalog needs only infrastructure:read; the create/mutate/validate/
+  // activate calls need infrastructure:write.
+  cloudProviderCatalog: () =>
+    request<{ providers: CloudProviderCatalogEntry[] }>("/api/cloud/providers"),
+  cloudConnectors: () =>
+    request<{ connectors: CloudConnectorView[] }>("/api/cloud/connectors"),
+  cloudCreateConnector: (provider: CloudProvider, displayName: string) =>
+    request<CloudConnectorView>("/api/cloud/connectors", {
+      method: "POST",
+      body: JSON.stringify({ provider, display_name: displayName }),
+    }),
+  cloudConnector: (id: string) => request<CloudConnectorView>(ccnPath(id)),
+  cloudDeleteConnector: (id: string) =>
+    request<{ deleted: string }>(ccnPath(id), { method: "DELETE" }),
+  cloudConnectorAuth: (id: string, body: CloudAuthInput) =>
+    request<CloudConnectorView>(ccnPath(id, "auth"), { method: "POST", body: JSON.stringify(body) }),
+  cloudConnectorCapabilities: (id: string, capabilityPack: string) =>
+    request<CloudConnectorView>(ccnPath(id, "capabilities"), {
+      method: "POST",
+      body: JSON.stringify({ capability_pack: capabilityPack }),
+    }),
+  cloudConnectorScopes: (id: string, scopes: CloudScope[]) =>
+    request<CloudConnectorView>(ccnPath(id, "scopes"), { method: "POST", body: JSON.stringify({ scopes }) }),
+  cloudConnectorSetup: (id: string) => request<CloudSetupBundle>(ccnPath(id, "setup")),
+  // The HONEST trust proof: config validation + a LIVE broker credential exchange.
+  cloudConnectorValidate: (id: string) =>
+    request<CloudConnValidateResult>(ccnPath(id, "validate"), { method: "POST" }),
+  cloudConnectorActivate: (id: string) =>
+    request<CloudConnectorView>(ccnPath(id, "activate"), { method: "POST" }),
+  // Legacy-only: encrypt-and-store a reusable secret (federated methods never call this).
+  cloudConnectorSecret: (id: string, body: { kind: string; key_hint: string; secret: string }) =>
+    request<CloudConnectorView>(ccnPath(id, "secret"), { method: "POST", body: JSON.stringify(body) }),
 };
 
 // shared query string for the cloud signal surfaces (optional app + limit).
