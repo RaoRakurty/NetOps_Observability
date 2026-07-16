@@ -45,7 +45,14 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
    ingestion status ("IAM denied X since Tuesday"). *Blocked by #2, #3.* **M.**
 5. **Interactive scope bar + real time-range** (rev #6). Provider/account/region/env
    global filters feeding all tabs; real 1h/24h/7d param through signal endpoints
-   (kills the dishonest "Last 1h" label). *Blocked by #1.* **M.**
+   (kills the dishonest "Last 1h" label). *Blocked by #1.* **M.** — **SHIPPED
+   2026-07-16**: URL-backed scope state (`scopeUrl.ts`, coexists with `?inv=`),
+   multi-select scope bar (chips + `.app-select`, tenant display-only),
+   `?window_hours=` (1..168, clamped, honored value echoed) on
+   `/api/cloud/health|changes|evidence`, multi-value provider/account/region SQL
+   filters on `/api/cloud/resources`, per-tab server/client filter split
+   documented in `scope.ts`, range-less surfaces say "current inventory",
+   empty-scope states with Clear-filters everywhere.
 6. **Alert episode grouping + triage** (rev #7 + missing #4). Collapse repeated
    (resource, signal, state) into episodes w/ first/last/count + flap detection;
    ack/assign/mute/snooze/notes with audit trail. **M.**
