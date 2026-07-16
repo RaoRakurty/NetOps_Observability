@@ -46,6 +46,36 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 	},
 	"pathGraph":      rcaPathGraphSVG,
 	"respondingMark": rcaHopRespondingWithMark,
+	"commaJoin":      func(ss []string) string { return strings.Join(ss, ", ") },
+	// coverage-assessment renderers (Phase D) — the table consumes the canonical
+	// CoverageAssessment; it never recomputes a coverage number.
+	"covQuality": func(a *CoverageAssessment) string {
+		if a == nil {
+			return ""
+		}
+		return rcaTitleCase(string(a.Quality))
+	},
+	"covStrategy": func(a *CoverageAssessment) string {
+		if a == nil {
+			return ""
+		}
+		return strings.ReplaceAll(string(a.Strategy), "_", " ")
+	},
+	"covPct": func(a *CoverageAssessment) string {
+		if a == nil || !a.RatioKnown {
+			return ""
+		}
+		return fmt.Sprintf("%.0f%%", a.CoverageRatio*100)
+	},
+	"triLabel": func(t coverageTri) string {
+		switch t {
+		case triYes:
+			return "yes"
+		case triNo:
+			return "no"
+		}
+		return "unknown"
+	},
 }).Parse(rcaReportTmplSrc))
 
 // rcaPathGraphSVG draws the measured path as the same causal picture the
@@ -426,8 +456,8 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <h2>Signal measurements</h2>
   <div class="kv">
     <span class="k">Observations (window)</span><span class="v">{{.Signals.Total}} total · {{.Signals.Attached}} tied to this case · {{.Signals.Clears}} recovery signals</span>
-    <span class="k">Evidence groups</span><span class="v">{{.Signals.EvidenceGroups}} (derived signals from one measurement source count once)</span>
-    <span class="k">Independent observers</span><span class="v">{{.Signals.UniqueObservers}}</span>
+    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} (derived signals from one measurement source count once)</span>
+    <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
     {{if .AffectedVantages}}<span class="k">Affected vantages</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
@@ -447,18 +477,42 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 
 <section>
+  <h2>Evidence accounting</h2>
+  <div class="kv">
+    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many kinds from one source count once</span></span>
+    <span class="k">Logical vantages</span><span class="v">{{if .Accounting.LogicalVantages}}{{commaJoin .Accounting.LogicalVantages}}{{else}}none classified{{end}}</span>
+    <span class="k">Control-plane sources</span><span class="v">{{if .Accounting.ControlPlaneSources}}{{commaJoin .Accounting.ControlPlaneSources}}{{else}}none{{end}}</span>
+    {{if .Accounting.Collectors}}<span class="k">Collectors (not vantages)</span><span class="v">{{commaJoin .Accounting.Collectors}}</span>{{end}}
+    {{if .Accounting.UnknownSources}}<span class="k">Unclassified sources</span><span class="v">{{commaJoin .Accounting.UnknownSources}} <span style="font-weight:400;color:#64748b">— kind not established; never counted as a vantage</span></span>{{end}}
+    <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
+    <span class="k">Configured tests</span><span class="v">{{.Accounting.ConfiguredTests}}</span>
+    <span class="k">Test executions</span><span class="v">{{.Accounting.TestExecutions}}{{if ne .Accounting.FailedExecutions "Unavailable"}} · {{.Accounting.FailedExecutions}} failed{{end}}</span>
+  </div>
+  <div class="note">Reconciliation (operator detail) — each layer is a subset of the one above; the verdict rests on the bottom rows.</div>
+  <table><thead><tr><th style="width:58%">Layer</th><th>Count</th></tr></thead><tbody>
+  {{range .Accounting.Ladder}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{end}}
+  </tbody></table>
+</section>
+
+<section>
   <h2>Evidence coverage</h2>
-  <table><thead><tr><th>Evidence class</th><th>Coverage</th><th>State</th><th>Obs.</th><th>Finding</th><th>Time coverage</th></tr></thead><tbody>
+  <table><thead><tr><th style="width:19%">Evidence class</th><th>Quality</th><th>State</th><th>Obs.</th><th>Coverage &amp; gaps</th><th>Contributes</th></tr></thead><tbody>
   {{range .Coverage}}<tr>
-    <td><b>{{.Label}}</b>{{if .CountsTowardConfidence}}<div class="note">counts toward confidence</div>{{end}}</td>
-    <td>{{title .Availability}}{{if .Coverage}}<div class="note">coverage: {{title .Coverage}}</div>{{end}}</td>
+    <td><b>{{.Label}}</b>{{with .Assessment}}<div class="note">{{covStrategy .}}</div>{{end}}</td>
+    <td>{{covQuality .Assessment}}{{with .Assessment}}{{if .RatioKnown}}<div class="note">{{covPct .}} covered</div>{{end}}{{end}}</td>
     <td><span class="pill {{stateTone "lane" .State}}">{{title .State}}</span></td>
-    <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}</td>
-    <td>{{.Finding}}</td>
-    <td>{{if .From}}{{.From}} → {{.To}}{{else}}—{{end}}{{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}</td>
+    <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}{{if .Anomalous}}<div class="note">{{.Anomalous}} anomalous</div>{{end}}</td>
+    <td>{{.Finding}}
+      {{if .From}}<div class="note">observed {{.From}} → {{.To}}</div>{{end}}
+      {{with .Assessment}}{{if .LeadingGap}}<div class="note" style="color:#b45309">leading gap: {{.LeadingGap}}</div>{{end}}{{if .TrailingGap}}<div class="note" style="color:#b45309">trailing gap: {{.TrailingGap}}</div>{{end}}{{if .InternalGapTotal}}<div class="note" style="color:#b45309">internal gaps: {{.InternalGapTotal}}</div>{{end}}{{end}}
+      {{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}</td>
+    <td>{{with .Assessment}}<div class="note">confidence: {{if .ConfidenceEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
+      <div class="note">impact: {{if .ImpactEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
+      <div class="note">scope: {{triLabel .Scope}}</div>{{end}}
+      {{if .CountsTowardConfidence}}<div class="note">counts toward confidence</div>{{end}}</td>
   </tr>{{end}}
   </tbody></table>
-  <div class="note">“No data” is a coverage gap, not evidence of health. Missing telemetry never supports or contradicts a hypothesis.</div>
+  <div class="note">“No data” is a coverage gap, not evidence of health. A lane reads full/Normal only when its covered intervals span the incident at the expected cadence; a point-in-time control-plane event is never scored as continuous coverage. Missing telemetry never supports or contradicts a hypothesis.</div>
 </section>
 
 <section>

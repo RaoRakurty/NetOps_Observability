@@ -304,7 +304,13 @@ func buildSignalSummary(all, anomalous, clears []map[string]any, observers map[s
 
 // ---- evidence coverage --------------------------------------------------------------
 
-func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map[string]time.Time, hb rcaHypBlob, firstObs, lastObs time.Time) []rcaEvidenceLane {
+// buildEvidenceCoverage derives every lane's coverage from the EvidenceCoverageEngine
+// (Phase C). Phase D feeds it the RICH path: the per-observation timestamp series per
+// lane (enables internal-gap + inter-arrival cadence, not just min/max span) and the
+// caller's tenant (so the engine applies THAT tenant's structured coverage policy —
+// never another tenant's). Scope/collector-health stay `unknown` where no per-lane
+// history is stored (audit §4) — the engine reports them honestly, never fabricated.
+func buildEvidenceCoverage(tenant string, total, anomalous map[string]int, laneObs map[string][]time.Time, laneMin, laneMax map[string]time.Time, hb rcaHypBlob, firstObs, lastObs, now time.Time) []rcaEvidenceLane {
 	trusted := map[string]bool{}
 	if len(hb.Ranking.Hypotheses) > 0 {
 		v := hb.Ranking.Hypotheses[0].Verdict
@@ -323,17 +329,15 @@ func buildEvidenceCoverage(total, anomalous map[string]int, laneMin, laneMax map
 		if n == 0 && lane == "management_plane" {
 			continue // controller lane omitted entirely when absent, not "no data"
 		}
-		// Phase C: the EvidenceCoverageEngine is the single source of coverage truth.
-		// Through this legacy shim it sees only the min/max span (no per-observation
-		// series), so it honestly reports cadence + internal gaps as `unknown` and
-		// caps continuous quality at "substantial" — the richer per-observation path
-		// is wired by Phase D. Tenant is not threaded through this stable signature,
-		// so the engine uses global-default thresholds (per-tenant policy is applied
-		// on the richer path); this shim never crosses tenants.
-		assessment := rcaCoverageEngine.Assess("", LaneCoverageInput{
+		// Phase C engine is the single source of coverage truth; Phase D hands it the
+		// full per-observation series + the caller's tenant policy (the rich path), so
+		// cadence + internal gaps are derived, not stubbed `unknown`, and a lane reads
+		// "complete" only when the covered intervals actually prove it.
+		assessment := rcaCoverageEngine.Assess(tenant, LaneCoverageInput{
 			Class:       lane,
-			WindowStart: firstObs, WindowEnd: lastObs,
-			LaneStart: laneMin[lane], LaneEnd: laneMax[lane],
+			WindowStart: firstObs, WindowEnd: lastObs, Now: now,
+			Observations: laneObs[lane],
+			LaneStart:    laneMin[lane], LaneEnd: laneMax[lane],
 			TotalCount: n, AnomalousCount: an,
 		})
 		l := rcaEvidenceLane{

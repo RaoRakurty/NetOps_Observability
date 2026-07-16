@@ -297,6 +297,105 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 		}
 	}
 
+	// ---- Phase E: evidence-accounting & coverage blockers -------------------------
+	// The 12 blockers derived from the canonical EvidenceAccounting (Phase B) and the
+	// per-lane CoverageAssessment (Phase C). Any one blocks the report to a draft — a
+	// document whose counts do not reconcile, that presents the platform's own API as
+	// a network vantage, or that claims full/Normal/no-impact on coverage that cannot
+	// support it, must never ship as a definitive assessment.
+	acc := rep.accounting
+	// (1) case-linked ≤ window total.
+	if acc.CaseLinkedSignalCount() > acc.WindowObservationCount() {
+		errf("accounting_case_linked_exceeds_total", "evidence_accounting",
+			"case-linked signals (%d) exceed window observations (%d)",
+			acc.CaseLinkedSignalCount(), acc.WindowObservationCount())
+	}
+	// (2) anomalous ≤ case-linked.
+	if acc.AnomalousSignalCount() > acc.CaseLinkedSignalCount() {
+		errf("accounting_anomalous_exceeds_case_linked", "evidence_accounting",
+			"anomalous signals (%d) exceed case-linked signals (%d)",
+			acc.AnomalousSignalCount(), acc.CaseLinkedSignalCount())
+	}
+	// (3) failed executions ≤ executions (only when both counts are Available).
+	if acc.FailedTestExecutions.Available && acc.TestExecutions.Available &&
+		acc.FailedTestExecutions.Value > acc.TestExecutions.Value {
+		errf("accounting_failed_exceeds_executions", "evidence_accounting",
+			"failed executions (%d) exceed executions (%d)",
+			acc.FailedTestExecutions.Value, acc.TestExecutions.Value)
+	}
+	// (4) independent confirming sources ≤ distinct anomaly observers.
+	if acc.IndependentObserverCount() > acc.AnomalyObserverCount() {
+		errf("accounting_independent_exceeds_observers", "evidence_accounting",
+			"independent confirming sources (%d) exceed distinct anomaly observers (%d)",
+			acc.IndependentObserverCount(), acc.AnomalyObserverCount())
+	}
+	// (5) verdict-gate ↔ accounting agreement: every source the verdict gate named
+	// as an independent confirming source must be a confirm-eligible source here.
+	if len(acc.VerdictIndependentPair) == 2 {
+		eligible := map[string]bool{}
+		for _, g := range acc.IndependentGroups {
+			for _, oid := range g.ObserverIDs {
+				eligible[oid] = true
+			}
+		}
+		for _, oid := range acc.VerdictIndependentPair {
+			if !eligible[oid] {
+				errf("accounting_verdict_gate_disagreement", "evidence_accounting",
+					"verdict-gate independent source %q is not a confirm-eligible source in the accounting", oid)
+			}
+		}
+	}
+	// (6) api / collector presented as a logical vantage (the P-027379 defect):
+	// a denylisted identity must never render as a vantage, even against policy.
+	for _, o := range acc.AnomalyObservers {
+		if o.Kind == observerLogicalVantage && rcaObserverRegistry.isNeverVantage(o.ObserverID) {
+			errf("api_or_collector_as_vantage", "evidence_accounting.logical_vantages",
+				"observer %q is a collector/API identity but is classified as a logical vantage", o.ObserverID)
+		}
+	}
+	// coverage-rendered blockers (7)-(9): consume the per-lane assessment.
+	for _, l := range rep.Coverage {
+		a := l.Assessment
+		if a == nil {
+			continue
+		}
+		// (7) Full coverage rendered while the covered ratio is clearly below threshold.
+		if l.Coverage == "full" && a.RatioKnown && a.CoverageRatio < 0.80 {
+			errf("coverage_full_below_threshold", "evidence_coverage",
+				"lane %q renders full coverage at %.0f%% covered — below the substantial threshold", l.Class, a.CoverageRatio*100)
+		}
+		// (8) Normal state rendered while coverage is not complete (a material gap):
+		// "no anomaly linked" is never Normal unless the covered intervals span the
+		// incident (owner constraint 7).
+		if l.State == "normal" && a.Quality != qualityComplete {
+			errf("coverage_normal_with_material_gap", "evidence_coverage",
+				"lane %q reads Normal while coverage quality is %q (a material gap) — Normal requires complete coverage", l.Class, a.Quality)
+		}
+		// (9) A point-in-time / event-based lane rendered as full continuous coverage.
+		if a.Strategy == strategyEventBased && l.Coverage == "full" {
+			errf("coverage_point_in_time_as_full", "evidence_coverage",
+				"lane %q is event-based (state transitions) but renders full continuous coverage", l.Class)
+		}
+	}
+	// (10) overall "none detected" impact without any impact-eligible coverage.
+	if st.Impact == "none_detected" &&
+		!coverageImpactEligible(rep.Coverage, "active_probe") &&
+		!coverageImpactEligible(rep.Coverage, "passive_flow") {
+		errf("impact_none_detected_without_coverage", "states.impact",
+			"overall impact none_detected but no evidence class has impact-eligible coverage")
+	}
+	// (11) real-user "none detected" without impact-eligible flow coverage (the
+	// exact P-027379 defect — none-detected on 78.8% flow coverage + a 2m13s gap).
+	if st.ImpactRealUser == "none_detected" && !coverageImpactEligible(rep.Coverage, "passive_flow") {
+		errf("real_user_none_detected_without_eligible_coverage", "states.impact_real_user",
+			"real-user impact none_detected while the flow lane is not impact-eligible (coverage did not span the incident)")
+	}
+	// (12) synthetic "none detected" without impact-eligible active-check coverage.
+	if st.ImpactSynthetic == "none_detected" && !coverageImpactEligible(rep.Coverage, "active_probe") {
+		errf("synthetic_none_detected_without_eligible_coverage", "states.impact_synthetic",
+			"synthetic impact none_detected while the active-check lane is not impact-eligible")
+	}
+
 	q.Passed = len(q.Errors) == 0
 	return q
 }
@@ -362,6 +461,13 @@ func ticketFactConsistencyIssues(state string, sigRows []map[string]any) []strin
 		issues = append(issues, fmt.Sprintf(
 			"recovered_before_last_anomaly: closure recovery evidence at %s precedes anomalous evidence through %s",
 			fmtUTC(lastRecovery), fmtUTC(lastAnomaly)))
+	}
+	// Phase E: an evidence-accounting model that derives contradictory counts from
+	// this same slice must never be turned into a definitive external message. This
+	// mirrors the report gate's reconciliation at the fidelity the raw slice offers
+	// (no hypothesis/registry threaded here — pure count reconciliation).
+	if _, err := buildEvidenceAccounting(accountingInput{Signals: sigRows}); err != nil {
+		issues = append(issues, "accounting_reconciliation_failed: "+err.Error())
 	}
 	return issues
 }
