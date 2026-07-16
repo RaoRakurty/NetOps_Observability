@@ -37,6 +37,42 @@ LOGS_S3_BUCKET = os.environ.get("LOGS_S3_BUCKET", "")
 ALB_S3_PREFIX = os.environ.get("ALB_S3_PREFIX", "")
 WAF_S3_PREFIX = os.environ.get("WAF_S3_PREFIX", "")
 DNS_S3_PREFIX = os.environ.get("DNS_S3_PREFIX", "")
+# Extra S3 log source-sets beyond the primary env config above. Real AWS log
+# delivery is per-log-type (WAF logs MUST live in an aws-waf-logs-* bucket; flow
+# and ALB access logs commonly land in their own buckets) and often spans
+# multiple accounts — so a single LOGS_S3_BUCKET + prefixes can't express it.
+# S3_LOG_SOURCES is a JSON array; each entry names its OWN per-lane buckets:
+#   [{"name":"prod-acct","flow_bucket":"...","alb_bucket":"...",
+#     "waf_bucket":"aws-waf-logs-...","dns_bucket":"...","prefix":""}]
+# Any bucket omitted = that lane off for that source. Empty/unset = today's
+# single-source behavior, unchanged. Extra sources use the SAME creds/region as
+# the primary poller (same-account or a bucket policy that grants this principal);
+# cross-account role assumption is the next increment.
+S3_LOG_SOURCES_RAW = os.environ.get("S3_LOG_SOURCES", "").strip()
+_extra_s3_sources_cache = None
+
+
+def extra_s3_sources() -> list:
+    """Parsed S3_LOG_SOURCES (see above), memoized. A malformed value is logged
+    once and ignored — a bad source override must never take the poller down."""
+    global _extra_s3_sources_cache
+    if _extra_s3_sources_cache is not None:
+        return _extra_s3_sources_cache
+    out = []
+    if S3_LOG_SOURCES_RAW:
+        try:
+            arr = json.loads(S3_LOG_SOURCES_RAW)
+            for i, s in enumerate(arr if isinstance(arr, list) else []):
+                if isinstance(s, dict) and any(
+                    s.get(k) for k in ("flow_bucket", "alb_bucket", "waf_bucket", "dns_bucket")
+                ):
+                    s = dict(s)
+                    s["_name"] = s.get("name") or f"src{i + 1}"
+                    out.append(s)
+        except Exception as e:  # noqa: BLE001 — never crash the poller on config
+            jlog("S3_LOG_SOURCES parse error — ignoring", error=str(e))
+    _extra_s3_sources_cache = out
+    return out
 OUT_DIR = os.environ.get("CLOUD_LOGS_OUT", "/out")
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
@@ -197,11 +233,23 @@ def _poll_s3_lane(s3, st: dict, bucket: str, prefix: str, state_key: str,
 
 
 def poll_flow_logs_s3(s3, st: dict) -> None:
-    """VPC flow logs delivered to S3 (header line stripped)."""
-    n = _poll_s3_lane(s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX, "flow_s3_key",
-                      "aws-vpc-flow.vpc", skip_prefixes=("version ",))
-    if n:
-        jlog("flow records appended from s3", count=n)
+    """VPC flow logs delivered to S3 (header line stripped). Primary source
+    (FLOW_S3_BUCKET) plus any extra sources from S3_LOG_SOURCES — extra sources
+    keep their own checkpoints (suffixed state key) so the primary is untouched."""
+    if FLOW_S3_BUCKET:
+        n = _poll_s3_lane(s3, st, FLOW_S3_BUCKET, FLOW_S3_PREFIX, "flow_s3_key",
+                          "aws-vpc-flow.vpc", skip_prefixes=("version ",))
+        if n:
+            jlog("flow records appended from s3", count=n)
+    for src in extra_s3_sources():
+        bucket = src.get("flow_bucket")
+        if not bucket:
+            continue
+        n = _poll_s3_lane(s3, st, bucket, src.get("flow_prefix", src.get("prefix", "")),
+                          f"flow_s3_key::{src['_name']}", "aws-vpc-flow.vpc",
+                          skip_prefixes=("version ",))
+        if n:
+            jlog("flow records appended from s3", source=src["_name"], count=n)
 
 
 def poll_fidelity_logs_s3(s3, st: dict) -> None:
@@ -218,6 +266,21 @@ def poll_fidelity_logs_s3(s3, st: dict) -> None:
         n = _poll_s3_lane(s3, st, LOGS_S3_BUCKET or FLOW_S3_BUCKET, prefix, state_key, out_name)
         if n:
             jlog("fidelity records appended from s3", lane=out_name, count=n)
+    # Extra sources name their OWN per-lane buckets (root prefix by default) —
+    # the production-realistic separate-bucket-per-log-type layout.
+    for src in extra_s3_sources():
+        for bkey, pkey, state_key, out_name in (
+            ("alb_bucket", "alb_prefix", "alb_s3_key", "aws-alb-access.alb"),
+            ("waf_bucket", "waf_prefix", "waf_s3_key", "aws-waf.waf"),
+            ("dns_bucket", "dns_prefix", "dns_s3_key", "aws-r53-resolver.dns"),
+        ):
+            bucket = src.get(bkey)
+            if not bucket:
+                continue
+            n = _poll_s3_lane(s3, st, bucket, src.get(pkey, src.get("prefix", "")),
+                              f"{state_key}::{src['_name']}", out_name)
+            if n:
+                jlog("fidelity records appended from s3", lane=out_name, source=src["_name"], count=n)
 
 
 def poll_cloudtrail(ct, producer, st: dict) -> None:
@@ -330,9 +393,8 @@ def main():
                 jlog("cloud metrics", events=n, instances=len(inventory))
             if LOG_GROUP:
                 poll_flow_logs(logs, st)
-            if FLOW_S3_BUCKET:
-                poll_flow_logs_s3(s3, st)
-            poll_fidelity_logs_s3(s3, st)  # opt-in prefixes; no-op when unset
+            poll_flow_logs_s3(s3, st)      # primary (guarded within) + extra sources
+            poll_fidelity_logs_s3(s3, st)  # opt-in prefixes/buckets; no-op when unset
             poll_cloudtrail(ct, producer, st)
             # Seam lane in its OWN guard: a seam hiccup must never block the
             # flow/cloudtrail lanes' save_state below (P1-11, seen live on the
