@@ -4,7 +4,7 @@
 // values normalize to "" so the UI can omit them honestly (no "— — (baseline —)").
 
 import { describe, it, expect } from "vitest";
-import { buildTimeline, cleanVal } from "./timeline";
+import { buildTimeline, cleanVal, isStateEvent, stateLabel, stateReason } from "./timeline";
 import type { ChangeEvent, HealthSignal } from "./types";
 
 const hs = (time: string, over: Partial<HealthSignal> = {}): HealthSignal => ({
@@ -21,6 +21,76 @@ describe("cleanVal", () => {
   it("passes real values through, trimmed", () => {
     expect(cleanVal("  5xx ")).toBe("5xx");
     expect(cleanVal("down")).toBe("down");
+  });
+});
+
+// The owner's finding: a CRITICAL Azure cloud_resource_health "down" row rendered
+// empty metric / baseline / current. Those three describe a METRIC ANOMALY; a
+// provider state event has none of them by design and its substance is the state
+// + the provider's reasonType. The two kinds must be told apart and both must
+// render something real.
+describe("state events vs metric anomalies", () => {
+  it("classifies a provider health-state event (no metric) as a state event", () => {
+    expect(isStateEvent(hs("t", { metric: "" }))).toBe(true);
+    // the backend sends "—" for a state event's absent metric
+    expect(isStateEvent(hs("t", { metric: "—" }))).toBe(true);
+  });
+  it("classifies a metric anomaly as NOT a state event", () => {
+    expect(isStateEvent(hs("t", { metric: "CPUUtilization" }))).toBe(false);
+  });
+  it("names the declared state in operator words", () => {
+    expect(stateLabel("down")).toBe("Down");
+    expect(stateLabel("degraded")).toBe("Degraded");
+    expect(stateLabel("healthy")).toBe("Healthy");
+    expect(stateLabel("unknown")).toBe("Unknown"); // never promoted
+  });
+  it("surfaces the provider's reasonType, and stays empty when it declared none", () => {
+    expect(stateReason({ reason: "Customer Initiated" })).toBe("Customer Initiated");
+    expect(stateReason({ reason: "" })).toBe("");
+    expect(stateReason({ reason: undefined })).toBe("");
+    expect(stateReason({ reason: "—" })).toBe(""); // provider empty, not a reason
+  });
+});
+
+describe("buildTimeline", () => {
+  it("carries state + reason on a state-event episode (never an empty triplet)", () => {
+    const eps = buildTimeline([hs("2026-07-15T10:00:00.000Z", {
+      metric: "", current: "", baseline: "", state: "down", reason: "Customer Initiated", source: "azure",
+    })], []);
+    expect(eps[0].stateEvent).toBe(true);
+    expect(eps[0].state).toBe("down");
+    expect(eps[0].reason).toBe("Customer Initiated");
+  });
+
+  it("leaves a metric anomaly's readings intact and does not mark it a state event", () => {
+    const eps = buildTimeline([hs("2026-07-15T10:00:00.000Z", {
+      metric: "CPUUtilization", current: "94%", baseline: "31%", state: "degraded",
+    })], []);
+    expect(eps[0].stateEvent).toBe(false);
+    expect(eps[0].metric).toBe("CPUUtilization");
+    expect(eps[0].current).toBe("94%");
+    expect(eps[0].baseline).toBe("31%");
+  });
+
+  it("does NOT collapse a state run whose declared cause changed", () => {
+    // same resource, same state — but the provider re-attributed the cause.
+    // Collapsing would hide a real change of story.
+    const t = (m: number) => new Date(Date.UTC(2026, 6, 15, 10, m, 0)).toISOString();
+    const eps = buildTimeline([
+      hs(t(0), { metric: "", reason: "Platform Initiated" }),
+      hs(t(2), { metric: "", reason: "Customer Initiated" }),
+    ], []);
+    expect(eps).toHaveLength(2);
+  });
+
+  it("still collapses an identical state run that repeats the same cause", () => {
+    const t = (m: number) => new Date(Date.UTC(2026, 6, 15, 10, m, 0)).toISOString();
+    const eps = buildTimeline([
+      hs(t(0), { metric: "", reason: "Customer Initiated" }),
+      hs(t(2), { metric: "", reason: "Customer Initiated" }),
+    ], []);
+    expect(eps).toHaveLength(1);
+    expect(eps[0].count).toBe(2);
   });
 });
 

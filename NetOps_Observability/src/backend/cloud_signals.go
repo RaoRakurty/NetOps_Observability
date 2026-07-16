@@ -307,6 +307,12 @@ type cloudHealthSignal struct {
 	Baseline string `json:"baseline"`
 	Severity string `json:"severity"`
 	Source   string `json:"source"`
+	// WHY the provider declared this state — Azure Resource Health's reasonType
+	// ("Customer Initiated" / "Platform Initiated"), the equivalent elsewhere.
+	// A health STATE event carries no metric/value/baseline, so this is the only
+	// substance it has: without it the row rendered an empty triplet. Empty when
+	// the provider declared no reason — the UI then says so, never invents one.
+	Reason string `json:"reason,omitempty"`
 }
 
 type cloudChangeEvent struct {
@@ -416,6 +422,9 @@ type signalAttrs struct {
 	Actor       string `json:"actor"`
 	EventSource string `json:"event_source"`
 	RequestID   string `json:"request_id"`
+	// Provider-declared cause of a health STATE event (Azure Resource Health
+	// reasonType, emitted by cloud-ingest/azure.py poll_resource_health).
+	Reason string `json:"reason"`
 }
 
 func parseAttrs(raw string) signalAttrs {
@@ -770,6 +779,8 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 			Baseline: baseline,
 			Severity: cloudHealthSeverity(row.Severity),
 			Source:   providerOf(a),
+			// A state event's only substance (the provider's own reasonType).
+			Reason: strings.TrimSpace(a.Reason),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"signals": out, "count": len(out), "window_hours": cloudSignalWindowHours})

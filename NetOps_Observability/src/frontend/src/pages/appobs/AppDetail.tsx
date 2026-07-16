@@ -21,12 +21,47 @@ import {
 import { healthRank, confidenceRank, timeRank } from "./sortRanks";
 import { loadResources, loadAppRca, loadHealthSignals, loadChangeEvents, loadEvidence } from "./api";
 import { resourceCategory } from "./attribution";
+import { isStateEvent, stateLabel, stateReason, cleanVal } from "./timeline";
+import { DEFAULT_CLOUD_RANGE, filterByRange, newestIso, rangeWords } from "./range";
+import { FeedBar } from "./FeedBar";
+import { feedCount } from "./range";
+import { lbTraffic, isLbErrorSignal } from "./traffic";
+import {
+  healthMetricCell, healthCurrentCell, healthBaselineCell, healthReasonCell,
+} from "./healthCells";
 
 type DetailTab = "overview" | "identity" | "health" | "changes" | "traffic" | "dependencies" | "underlay" | "evidence";
 
 // a metric with no ingested source renders "—", never a fabricated 0.
 const NM = (v: number, fmt: (n: number) => string): ReactNode =>
   v < 0 ? <span className="ao-muted">—</span> : fmt(v);
+
+// ── Data age (owner review: "every panel is empty or stale") ─────────────────
+// The cloud hosts behind this lab were torn down ~2h before the review, so the
+// service genuinely had no live telemetry. That was not the defect — the defect
+// was that the page could not TELL you: a 2h-old "degraded" rendered exactly
+// like a live one, and empty panels never said whether they were empty because
+// nothing was measured or because nothing had arrived recently.
+//
+// So any value derived from a signal now carries the age of the signal it came
+// from, and any empty panel says which of the two empties it is.
+function AsOf({ iso, prefix = "as of" }: { iso: string; prefix?: string }) {
+  if (!iso) return null;
+  return (
+    <span className="ao-asof" title={`Source last reported at ${new Date(iso).toLocaleString()}`}>
+      {prefix} {ago(iso)}
+    </span>
+  );
+}
+
+// The honest hint for a panel with nothing in the selected window: distinguishes
+// "this source has never reported" from "this source went quiet N ago".
+function staleHint(newest: string, minutes: number, what: string): string {
+  if (newest) {
+    return `Nothing in the ${rangeWords(minutes)} — this service's most recent ${what} landed ${ago(newest)}. Widen the range to see it, or check Data sources if the source has stopped reporting.`;
+  }
+  return `No ${what} has been ingested for this service. Connect the source in Data sources — nothing is simulated here.`;
+}
 
 // the app's health, measured from its OWN signals: the worst state any cloud health
 // signal reported in the window. No signals ⇒ whatever identity gave us (unknown) —
@@ -41,24 +76,47 @@ function worstHealth(health: HealthSignal[], app: App): App["health"] {
 }
 
 // the app's own cloud signals — health, change and the evidence the engine grounded.
+// `loadedAt` stamps only a SUCCESSFUL fetch, so the live cue can never age-reset
+// on a failure and make stale data look fresh.
 function useAppSignals(app: App) {
   const [health, setHealth] = useState<HealthSignal[]>([]);
   const [changes, setChanges] = useState<ChangeEvent[]>([]);
   const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
+  const [loadedAt, setLoadedAt] = useState<number>(() => Date.now());
+  const [busy, setBusy] = useState(false);
+  const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let live = true;
     const key = app.name || app.id;
-    loadHealthSignals(key).then((r) => { if (live) setHealth(r); }, () => { if (live) setHealth([]); });
-    loadChangeEvents(key).then((r) => { if (live) setChanges(r); }, () => { if (live) setChanges([]); });
-    loadEvidence(key).then((r) => { if (live) setEvidence(r.rows); }, () => { if (live) setEvidence([]); });
+    if (nonce > 0) setBusy(true);
+    Promise.allSettled([loadHealthSignals(key), loadChangeEvents(key), loadEvidence(key)]).then(
+      ([h, c, e]) => {
+        if (!live) return;
+        setHealth(h.status === "fulfilled" ? h.value : []);
+        setChanges(c.status === "fulfilled" ? c.value : []);
+        setEvidence(e.status === "fulfilled" ? e.value.rows : []);
+        setLoadedAt(Date.now());
+        setBusy(false);
+      },
+    );
     return () => { live = false; };
-  }, [app.name, app.id]);
-  return { health, changes, evidence };
+  }, [app.name, app.id, nonce]);
+  return { health, changes, evidence, loadedAt, busy, refresh: () => setNonce((n) => n + 1) };
 }
 
 export default function AppDetail({ app, onBack }: { app: App; onBack: () => void }) {
   const [tab, setTab] = useState<DetailTab>("overview");
-  const { health, changes, evidence } = useAppSignals(app);
+  const sig = useAppSignals(app);
+  // One window for the whole drill-in, so every panel answers for the same
+  // period the user picked (the same control as Investigations).
+  const [minutes, setMinutes] = useState<number>(DEFAULT_CLOUD_RANGE.minutes);
+  const health = filterByRange(sig.health, minutes);
+  const changes = filterByRange(sig.changes, minutes);
+  const evidence = filterByRange(sig.evidence, minutes);
+  // Freshness anchors — the newest signal of each kind REGARDLESS of range, so
+  // an empty window can still say how old the last real reading was.
+  const newestHealth = newestIso(sig.health);
+  const newestChange = newestIso(sig.changes);
   // App resources are LIVE from the inventory (real), filtered to this app.
   const [resources, setResources] = useState<CloudResource[]>([]);
   useEffect(() => {
@@ -80,6 +138,9 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
         <div className="ao-detail-id">
           <h2>{app.name}</h2>
           <HealthBadge status={app.health} />
+          {/* A health verdict without its age is the review's core dishonesty: a
+              2h-old "degraded" read as current. State the age next to the badge. */}
+          <AsOf iso={newestHealth} />
           <ConfidenceBadge level={app.confidence} title={`identity by ${app.source}`} />
         </div>
         <div className="ao-detail-meta">
@@ -101,26 +162,63 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
         ]}
       />
 
+      {/* One range + liveness cue for every panel below (owner review #2 + #6). */}
+      <FeedBar
+        minutes={minutes} onRange={setMinutes}
+        count={feedCount(health.length + changes.length, sig.health.length + sig.changes.length, minutes)}
+        loadedAt={sig.loadedAt} onRefresh={sig.refresh} busy={sig.busy}
+        label={`${app.name} time range`}
+      />
+
       {tab === "overview" && (
         <div className="ao-stack">
           <div className="ao-cards">
-            {/* Health is MEASURED from this app's own cloud health signals; the
-                traffic/latency cards stay "—" until cloud flow + metric land. */}
-            <MetricCard label="Health" value={<HealthBadge status={worstHealth(health, app)} />} tone={worstHealth(health, app) === "down" ? "bad" : worstHealth(health, app) === "degraded" ? "warn" : "good"} />
-            <MetricCard label="Health signals (24h)" value={health.length} tone={health.length ? "warn" : "good"} />
-            <MetricCard label="Cloud changes (24h)" value={changes.length} />
-            <MetricCard label="P95 latency" value={NM(app.p95ms, (n) => `${n} ms`)} sub="not ingested" />
-            <MetricCard label="Traffic" value={NM(app.trafficBps, fmtBps)} sub="not ingested" tone="accent" />
-            <MetricCard label="Last change" value={changes.length ? ago(changes[0].time) : <span className="ao-muted">—</span>} sub={changes.length ? changes[0].changeType.replace(/_/g, " ") : undefined} />
-            <MetricCard label="Impacted seams" value={<span className="ao-muted">—</span>} sub="not ingested" />
+            {/* Health is MEASURED from this app's own cloud health signals, and
+                every card states the AGE of what it is showing — a value with no
+                timestamp cannot be told apart from a live one (owner review #6). */}
+            <MetricCard label="Health"
+              value={<HealthBadge status={worstHealth(health, app)} />}
+              sub={newestHealth ? `as of ${ago(newestHealth)}` : "never reported"}
+              tone={worstHealth(health, app) === "down" ? "bad" : worstHealth(health, app) === "degraded" ? "warn" : "good"} />
+            <MetricCard label={`Health signals (${rangeWords(minutes).replace("last ", "")})`}
+              value={health.length}
+              sub={health.length ? `newest ${ago(newestIso(health))}` : newestHealth ? `none in range · last ${ago(newestHealth)}` : "never reported"}
+              tone={health.length ? "warn" : "good"} />
+            <MetricCard label={`Cloud changes (${rangeWords(minutes).replace("last ", "")})`}
+              value={changes.length}
+              sub={changes.length ? `newest ${ago(newestIso(changes))}` : newestChange ? `none in range · last ${ago(newestChange)}` : "never reported"} />
+            <MetricCard label="P95 latency" value={NM(app.p95ms, (n) => `${n} ms`)} sub="not ingested — needs cloud metrics" />
+            <MetricCard label="Traffic" value={NM(app.trafficBps, fmtBps)} sub="not ingested — needs cloud flow logs" tone="accent" />
+            <MetricCard label="Last change"
+              value={changes.length ? ago(changes[0].time) : newestChange ? ago(newestChange) : <span className="ao-muted">—</span>}
+              sub={changes.length ? changes[0].changeType.replace(/_/g, " ")
+                : newestChange ? "outside the selected range" : "no change ingested"} />
+            <MetricCard label="Impacted seams" value={<span className="ao-muted">—</span>} sub="not ingested — needs seam telemetry" />
           </div>
           <RcaPanel app={app} evidence={evidence} />
           <div className="ao-panel">
-            <div className="ao-panel-h">Incident timeline <span className="ao-panel-meta">this app's cloud signals · last 24h</span></div>
+            <div className="ao-panel-h">Incident timeline <span className="ao-panel-meta">this app's cloud signals · {rangeWords(minutes)}</span></div>
             <ul className="ao-timeline">
               {changes.map((c, i) => <li key={"c" + i}><span className="ao-tl-t">{ago(c.time)}</span><Chip label="change" tone="var(--warn)" /> {c.changeType.replace(/_/g, " ")} on {c.resource}</li>)}
-              {health.map((h, i) => <li key={"h" + i}><span className="ao-tl-t">{ago(h.time)}</span><Chip label="health" tone="var(--crit)" /> {h.signal} {h.metric} {h.current} (baseline {h.baseline})</li>)}
-              {changes.length + health.length === 0 && <li><EmptyState title="No cloud events for this app in the last 24h" hint="health + change signals appear here as the connected cloud account reports them" /></li>}
+              {/* A state event has no metric/current/baseline — the old line
+                  rendered "resource_health   (baseline )". Say the state + the
+                  provider's reason instead. */}
+              {health.map((h, i) => (
+                <li key={"h" + i}>
+                  <span className="ao-tl-t">{ago(h.time)}</span>
+                  <Chip label="health" tone="var(--crit)" />{" "}
+                  {isStateEvent(h)
+                    ? <>{h.signal.replace(/_/g, " ")} · <strong>{stateLabel(h.state)}</strong>
+                        {stateReason(h) ? <span className="ao-muted"> · {stateReason(h)}</span>
+                          : <span className="ao-muted"> · no reason stated</span>}</>
+                    : <>{h.signal.replace(/_/g, " ")} {h.metric} <strong>{h.current}</strong>
+                        {cleanVal(h.baseline) && <span className="ao-muted"> vs {h.baseline} baseline</span>}</>}
+                </li>
+              ))}
+              {changes.length + health.length === 0 && (
+                <li><EmptyState title={`No cloud events for this app in the ${rangeWords(minutes)}`}
+                  hint={staleHint(newestIso([...sig.health, ...sig.changes]), minutes, "cloud signal")} /></li>
+              )}
             </ul>
           </div>
         </div>
@@ -157,20 +255,12 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
         </div>
       )}
 
-      {tab === "health" && <HealthTable rows={health} />}
-      {tab === "changes" && <ChangeTable rows={changes} />}
-      {tab === "evidence" && <EvidenceTable rows={evidence} />}
+      {tab === "health" && <HealthTable rows={health} minutes={minutes} newest={newestHealth} />}
+      {tab === "changes" && <ChangeTable rows={changes} minutes={minutes} newest={newestChange} />}
+      {tab === "evidence" && <EvidenceTable rows={evidence} minutes={minutes} newest={newestIso(sig.evidence)} />}
 
       {tab === "traffic" && (
-        <div className="ao-panel">
-          <div className="ao-panel-h">Traffic</div>
-          <div className="ao-cards">
-            <MetricCard label="Throughput" value={NM(app.trafficBps, fmtBps)} sub="not ingested" tone="accent" />
-            <MetricCard label="5xx rate" value={NM(app.errorPct, (n) => `${n}%`)} sub="not ingested" />
-            <MetricCard label="Unknown" value={NM(app.unknownPct, (n) => `${n}%`)} sub="not ingested" />
-          </div>
-          <EmptyState title="Per-app cloud traffic is not ingested yet" hint="cloud flow + load-balancer logs feed this panel; connect them in Ingestion — no sample traffic is shown" />
-        </div>
+        <TrafficPanel app={app} evidence={evidence} allEvidence={sig.evidence} minutes={minutes} />
       )}
 
       {tab === "dependencies" && (
@@ -187,6 +277,81 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
             hint="needs cloud seam telemetry (Direct Connect / VPN / ExpressRoute) joined to this app's symptoms — until then no seam is claimed for this app" />
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Traffic (app-edge HTTP telemetry from the cloud LB plane) ────────────────
+// The owner asked for throughput + a 5xx rate. Exactly ONE of those is ingested,
+// and this panel is explicit about which:
+//   · gateway 5xx COUNT — REAL. Every ELB-side 5xx access-log line becomes a
+//     cloud_lb_log signal, so the count over a window is complete.
+//   · THROUGHPUT / 5xx RATE — the ALB tailer drops 2xx/3xx/4xx at parse time
+//     (cloud_log_parsers.alb_lb_signal returns None for them), so the request
+//     volume that would be the rate's denominator is never stored. A "rate" made
+//     from 5xx alone is always 100% — a fabricated number. We name the gap and
+//     the source that closes it instead of inventing the figure.
+// See ./traffic for the derivation.
+function TrafficPanel({ app, evidence, allEvidence, minutes }: {
+  app: App; evidence: EvidenceRow[]; allEvidence: EvidenceRow[]; minutes: number;
+}) {
+  const t = lbTraffic(evidence, minutes);
+  const everNewest = lbTraffic(allEvidence, Number.MAX_SAFE_INTEGER).newest;
+  return (
+    <div className="ao-stack">
+      <div className="ao-panel">
+        <div className="ao-panel-h">Traffic
+          <span className="ao-panel-meta">app-edge HTTP · load-balancer access logs · {rangeWords(minutes)}</span></div>
+        <div className="ao-cards">
+          <MetricCard label="Gateway 5xx"
+            value={t.errors}
+            sub={t.errors ? `newest ${ago(t.newest)}` : everNewest ? `none in range · last ${ago(everNewest)}` : "none ingested"}
+            tone={t.errors ? "bad" : "good"} />
+          <MetricCard label="Request throughput"
+            value={<span className="ao-muted">—</span>}
+            sub="not ingested — access logs are filtered to 5xx faults only" />
+          <MetricCard label="5xx rate"
+            value={<span className="ao-muted">—</span>}
+            sub="needs request volume — not measurable from 5xx alone" />
+          <MetricCard label="Reporting load balancers"
+            value={t.resources.length || <span className="ao-muted">—</span>}
+            sub={t.resources.length ? t.resources.join(", ") : "no LB reported a 5xx in range"} />
+        </div>
+      </div>
+
+      <div className="ao-panel">
+        <div className="ao-panel-h">Gateway 5xx events <span className="ao-panel-meta">every ELB-side 5xx grounded for {app.name}</span></div>
+        {t.errors === 0 ? (
+          <EmptyState
+            title={`No gateway 5xx for this service in the ${rangeWords(minutes)}`}
+            hint={everNewest
+              ? `The most recent 5xx landed ${ago(everNewest)} — widen the range to see it. A quiet load balancer is a healthy one; this panel only fills when the provider reports an error.`
+              : "No load-balancer access logs have been ingested for this service. Connect the LB log source in Data sources — no sample traffic is shown."} />
+        ) : (
+          <DataTable<EvidenceRow>
+            rows={evidence.filter((r) => r.grounded && isLbErrorSignal(r.signalType))}
+            rowKey={(r) => `${r.evidenceRef}|${r.time}`}
+            height={Math.min(320, 44 + t.errors * 30)} ariaLabel="Gateway 5xx events"
+            columns={[
+              { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
+              { key: "res", header: "Load balancer", width: 200, sortValue: (r) => r.resource, render: (r) => <span className="ao-mono">{r.resource}</span> },
+              { key: "sig", header: "Signal", width: 140, sortValue: (r) => r.signalType, render: (r) => r.signalType },
+              { key: "reason", header: "What was observed", width: 320, sortValue: (r) => r.reason, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
+            ]} />
+        )}
+      </div>
+
+      {/* The honest gap, stated once rather than as three fake "—" cards. */}
+      <div className="ao-panel">
+        <div className="ao-panel-h">Not measured</div>
+        <p className="ao-set-d">
+          Request throughput and a true 5xx <em>rate</em> need total request volume.
+          The load-balancer log pipeline keeps only ELB-side 5xx lines (successful
+          requests are discarded at parse time), so the denominator is not stored
+          and Correlix will not estimate it.
+        </p>
+        <div className="ao-set-v">Needs: full load-balancer access-log ingestion (all status codes), or provider request-count metrics.</div>
+      </div>
     </div>
   );
 }
@@ -267,8 +432,10 @@ function RcaPanel({ app, evidence }: { app: App; evidence: EvidenceRow[] }) {
     return (
       <div className="ao-panel ao-rca">
         <div className="ao-panel-h">RCA</div>
+        {/* Honest about WHICH silence this is: the engine forms objects over its
+            own 24h window, so "no investigation" here is not a range artefact. */}
         <EmptyState title="No investigation for this service in the last 24 hours"
-          hint="an investigation opens automatically when correlated signals point at this service" />
+          hint="An investigation opens automatically when correlated signals point at this service. None is open — either nothing faulted, or the signals that would ground one have stopped arriving (check Data sources)." />
       </div>
     );
   }
@@ -304,24 +471,27 @@ const identityWhy = (a: App): string => {
 };
 
 // ── Per-app signal tables (LIVE: /api/cloud/health|changes|evidence) ─────────
-function HealthTable({ rows }: { rows: HealthSignal[] }) {
-  return <div className="ao-panel"><div className="ao-panel-h">Health signals <span className="ao-panel-meta">last 24h · from the connected cloud account</span></div>
-    {rows.length === 0 ? <EmptyState title="No cloud health signals for this app in the last 24h" hint="a signal appears here when the provider reports a problem on this app" /> : (
+function HealthTable({ rows, minutes, newest }: { rows: HealthSignal[]; minutes: number; newest: string }) {
+  return <div className="ao-panel"><div className="ao-panel-h">Health signals <span className="ao-panel-meta">{rangeWords(minutes)} · from the connected cloud account</span></div>
+    {rows.length === 0 ? <EmptyState title={`No cloud health signals for this app in the ${rangeWords(minutes)}`} hint={staleHint(newest, minutes, "health signal")} /> : (
     <DataTable<HealthSignal> rows={rows} rowKey={(r) => r.time + r.signal + r.metric + r.resource} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Health signals" columns={[
       { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
       { key: "res", header: "Resource", width: 170, sortValue: (r) => r.resource, render: (r) => r.resource },
       { key: "sig", header: "Signal", width: 150, sortValue: (r) => r.signal, render: (r) => r.signal },
-      { key: "metric", header: "Metric", width: 150, sortValue: (r) => r.metric, render: (r) => <span className="ao-mono">{r.metric}</span> },
+      // A provider state event carries no metric/value/baseline — the shared
+      // cells say what it IS instead (identical rule to the Alerts table).
+      { key: "metric", header: "Metric", width: 150, sortValue: (r) => r.metric, render: healthMetricCell },
       { key: "state", header: "State", width: 100, sortValue: (r) => healthRank(r.state), render: (r) => <HealthBadge status={r.state} /> },
-      { key: "cur", header: "Current", width: 90, sortValue: (r) => r.current, render: (r) => <strong>{r.current}</strong> },
-      { key: "base", header: "Baseline", width: 90, sortValue: (r) => r.baseline, render: (r) => <span className="ao-muted">{r.baseline}</span> },
+      { key: "cur", header: "Current", width: 90, sortValue: (r) => r.current, render: healthCurrentCell },
+      { key: "base", header: "Baseline", width: 90, sortValue: (r) => r.baseline, render: healthBaselineCell },
+      { key: "reason", header: "Reason", width: 150, sortValue: (r) => stateReason(r), render: healthReasonCell },
       { key: "src", header: "Cloud", width: 90, sortValue: (r) => r.source, render: (r) => r.source.toUpperCase() },
     ]} />)}</div>;
 }
 
-function ChangeTable({ rows }: { rows: ChangeEvent[] }) {
-  return <div className="ao-panel"><div className="ao-panel-h">Change events <span className="ao-panel-meta">provider audit log · last 24h</span></div>
-    {rows.length === 0 ? <EmptyState title="No cloud change events for this app in the last 24h" hint="management-plane changes on this app's resources appear here" /> : (
+function ChangeTable({ rows, minutes, newest }: { rows: ChangeEvent[]; minutes: number; newest: string }) {
+  return <div className="ao-panel"><div className="ao-panel-h">Change events <span className="ao-panel-meta">provider audit log · {rangeWords(minutes)}</span></div>
+    {rows.length === 0 ? <EmptyState title={`No cloud change events for this app in the ${rangeWords(minutes)}`} hint={staleHint(newest, minutes, "change event")} /> : (
     <DataTable<ChangeEvent> rows={rows} rowKey={(r) => r.time + r.changeType + r.resource + r.actor} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Change events" columns={[
       { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
       { key: "type", header: "Change", width: 160, sortValue: (r) => r.changeType, render: (r) => <Chip label={r.changeType.replace(/_/g, " ")} tone="var(--warn)" /> },
@@ -332,9 +502,9 @@ function ChangeTable({ rows }: { rows: ChangeEvent[] }) {
     ]} />)}</div>;
 }
 
-function EvidenceTable({ rows }: { rows: EvidenceRow[] }) {
-  return <div className="ao-panel"><div className="ao-panel-h">Evidence <span className="ao-panel-meta">what the engine grounded into this app's RCA + its declared gaps</span></div>
-    {rows.length === 0 ? <EmptyState title="No cloud evidence for this app" hint="evidence appears when the correlation engine grounds one of this app's cloud signals into an RCA object" /> : (
+function EvidenceTable({ rows, minutes, newest }: { rows: EvidenceRow[]; minutes: number; newest: string }) {
+  return <div className="ao-panel"><div className="ao-panel-h">Evidence <span className="ao-panel-meta">what the engine grounded into this app's RCA + its declared gaps · {rangeWords(minutes)}</span></div>
+    {rows.length === 0 ? <EmptyState title={`No cloud evidence for this app in the ${rangeWords(minutes)}`} hint={staleHint(newest, minutes, "grounded finding")} /> : (
     <DataTable<EvidenceRow> rows={rows} rowKey={(r) => `${r.evidenceRef}|${r.rcaGroup}|${r.time}|${r.reason}`} height={Math.min(320, 44 + rows.length * 30)} ariaLabel="Evidence" columns={[
       { key: "time", header: "Time", width: 90, sortValue: (r) => timeRank(r.time), render: (r) => ago(r.time) },
       { key: "cat", header: "Category", width: 110, sortValue: (r) => r.category, render: (r) => r.category },

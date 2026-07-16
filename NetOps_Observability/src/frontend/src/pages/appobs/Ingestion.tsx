@@ -24,8 +24,17 @@ type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
 const goIntegrations = () => { location.hash = "#/incident/integrations"; };
 
-export default function Ingestion() {
-  const [sub, setSub] = useState<Sub>("status");
+const isSub = (v: string): v is Sub => v === "accounts" || v === "sources" || v === "status";
+
+export default function Ingestion({ initialSub = "" }: { initialSub?: string }) {
+  // Deep-link target (e.g. Settings → "Connect a cloud account" lands on
+  // Accounts). Defaults to Ingestion Status — the trust gate — when unspecified.
+  const [sub, setSub] = useState<Sub>(() => (isSub(initialSub) ? initialSub : "status"));
+  // A hash change while this component is already mounted must still move the
+  // sub-tab; the mount-time initializer alone would silently ignore it.
+  useEffect(() => {
+    if (isSub(initialSub)) setSub(initialSub);
+  }, [initialSub]);
   const [rows, setRows] = useState<CloudResourceRow[]>([]);
   const [byProvider, setByProvider] = useState<ProviderIngestion>({});
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
