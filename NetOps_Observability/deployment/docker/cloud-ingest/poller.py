@@ -19,6 +19,7 @@ from kafka import KafkaProducer
 import azure
 import azure_logs
 import azure_topology
+import broker_client
 import cloud_events
 import cloud_tag
 import cloudmetrics
@@ -108,6 +109,19 @@ GCP_METERED_METRICS = os.environ.get("GCP_METERED_METRICS", "on").lower() != "of
 GCP_LOG_LANES_EVERY_S = int(os.environ.get("GCP_LOG_LANES_EVERY_S", "120"))
 POLL_S = int(os.environ.get("POLL_S", "60"))
 DISCOVER_EVERY_S = int(os.environ.get("DISCOVER_EVERY_S", "300"))
+# ── Per-tenant ingestion (Wave 1 #2) ────────────────────────────────────────
+# When the broker is configured (BROKER_API_URL + BROKER_API_KEY[_FILE]), the
+# poller ALSO iterates the platform's enabled connectors each cycle, obtains a
+# short-lived credential per connector from the backend identity broker, polls
+# that connector's cloud with it, and everything it emits is owned by THAT
+# connector's tenant (stamped server-side on the inventory write; carried on
+# bus events from the server-provided connector list, never from local env).
+# The ambient-credential lanes above keep running unchanged either way.
+CONNECTOR_EVERY_S = int(os.environ.get("CONNECTOR_EVERY_S", "300"))
+CONNECTOR_MAX_PER_CYCLE = int(os.environ.get("CONNECTOR_MAX_PER_CYCLE", "25"))
+# Total wall-clock budget for one connector pass — bounds the whole cycle even
+# if a provider API crawls; connectors past the budget wait for the next pass.
+CONNECTOR_CYCLE_BUDGET_S = int(os.environ.get("CONNECTOR_CYCLE_BUDGET_S", "240"))
 # CloudWatch metric lane (Service View counters + CUSUM evidence). CloudWatch's
 # free basic resolution is 5 min, so polling faster only re-reads the same point.
 METRICS_EVERY_S = int(os.environ.get("CW_METRICS_EVERY_S", "300"))
@@ -325,7 +339,18 @@ def poll_fidelity_logs_s3(s3, st: dict, producer=None) -> None:
                 jlog("fidelity records appended from s3", lane=out_name, source=src["_name"], count=n)
 
 
-def poll_cloudtrail(ct, producer, st: dict) -> None:
+def poll_cloudtrail(ct, producer, st: dict, tenant: str = None, account: str = None,
+                    region: str = None, connector_id: str = "") -> None:
+    """CloudTrail management events → netops.cloud cloud_change evidence.
+
+    Defaults keep today's ambient single-tenant behavior. Per-tenant ingestion
+    (Wave 1 #2) passes a connector-scoped `ct` client, the CONNECTOR's tenant/
+    account/region (all sourced from the broker's connector list — server truth,
+    never local env) and a per-connector state dict so checkpoints never mix.
+    """
+    tenant = TENANT if tenant is None else tenant
+    account = ACCOUNT if account is None else account
+    region = REGION if region is None else region
     import datetime
     start = st.get("trail_ts", time.time() - 900)
     start_dt = datetime.datetime.fromtimestamp(start + 0.001, datetime.timezone.utc)
@@ -363,21 +388,24 @@ def poll_cloudtrail(ct, producer, st: dict) -> None:
         rid = resources[0]["ResourceName"] if resources else name
         actor = (detail.get("userIdentity") or {}).get("arn", "")
         event_source = detail.get("eventSource", "")
+        attrs = {
+            "event_source": event_source,
+            "actor": actor,
+            "request_id": detail.get("requestID", ""),
+        }
+        if connector_id:
+            attrs["connector_id"] = connector_id
         producer.send("netops.cloud", cloud_events.change_event(
-            provider="aws", tenant=TENANT, resource_id=rid, account=ACCOUNT,
-            region=REGION, severity="medium", metric_name=name,
+            provider="aws", tenant=tenant, resource_id=rid, account=account,
+            region=region, severity="medium", metric_name=name,
             ts=e["EventTime"].isoformat(),
-            attrs={
-                "event_source": event_source,
-                "actor": actor,
-                "request_id": detail.get("requestID", ""),
-            }))
+            attrs=attrs))
         # Unified Cloud Logs: also emit the change as a tagged RAW log line so the
         # Change lane shows the record itself, not only its correlation rollup.
         if CLOUDLOGS_RAW:
             chg = cloud_tag.change_log_doc(
-                TENANT, resource_id=rid, event_name=name, provider="aws",
-                account=ACCOUNT, region=REGION, actor=actor,
+                tenant, resource_id=rid, event_name=name, provider="aws",
+                account=account, region=region, actor=actor,
                 event_source=event_source, timestamp=e["EventTime"].isoformat())
             if chg is not None:
                 producer.send(CLOUDLOGS_TOPIC, chg)
@@ -394,6 +422,138 @@ def _iso_minutes_ago(minutes: int) -> str:
     return t.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+# ── Per-tenant ingestion: connector lanes (Wave 1 #2) ────────────────────────
+# One lane per provider. Each lane receives the SERVER-provided connector row
+# (id / tenant / provider / scopes) and the broker-minted short-lived credential,
+# polls with exactly that credential, and delivers inventory back through the
+# broker API — where the backend stamps the tenant from the connector row.
+# Credentials live only in local variables; they are never persisted or logged.
+
+
+def _connector_scope(conn: dict) -> tuple[str, str]:
+    """(account_ref, region) from the connector's declared scopes — the same
+    precedence the backend's own live trust check uses."""
+    account, region = "", ""
+    for sc in conn.get("scopes") or []:
+        if sc.get("type") == "region" and not region:
+            region = sc.get("ref", "")
+            continue
+        if not account:
+            account = sc.get("ref", "")
+            if sc.get("regions") and not region:
+                region = sc["regions"][0]
+    return account, region
+
+
+def _scoped_inventory_doc(mod, scope_attr: str, scope_ref: str, tok: str, out_name: str) -> dict:
+    """Run mod.write_inventory(tok, dir) against a connector's scope and return
+    the inventory doc. The module's scope global (azure.SUBSCRIPTION /
+    gcp.PROJECT) is substituted for the duration of the call and ALWAYS
+    restored — the poller is single-threaded, and this keeps credential/scope
+    injection out of those modules while another workstream extends them.
+    Writes to a private temp dir (never the shared fixtures dir: connector
+    inventory is delivered per-tenant via the broker API, not via files)."""
+    import tempfile
+    old = getattr(mod, scope_attr)
+    if scope_ref:
+        setattr(mod, scope_attr, scope_ref)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            mod.write_inventory(tok, tmp)
+            with open(os.path.join(tmp, out_name), encoding="utf-8") as f:
+                return json.load(f)
+    finally:
+        setattr(mod, scope_attr, old)
+
+
+def poll_connector_aws(conn: dict, creds: dict, producer, cst: dict) -> dict:
+    """AWS connector lane: STS-credentialed discovery → inventory via broker →
+    CloudTrail change evidence stamped with the CONNECTOR's tenant."""
+    _, region = _connector_scope(conn)
+    region = region or REGION
+    session = boto3.Session(
+        aws_access_key_id=creds.get("aws_access_key_id", ""),
+        aws_secret_access_key=creds.get("aws_secret_access_key", ""),
+        aws_session_token=creds.get("aws_session_token", ""),
+        region_name=region)
+    inventory, _topology = discover.discover_aws(
+        session.client("ec2"), session=session, region=region)
+    broker_client.put_inventory(conn["id"], inventory)
+    if producer is not None:
+        poll_cloudtrail(session.client("cloudtrail"), producer, cst,
+                        tenant=conn["tenant"], account=inventory.get("account_id", ""),
+                        region=region, connector_id=conn["id"])
+    return {"resources": len(inventory.get("resources", []))}
+
+
+def poll_connector_azure(conn: dict, creds: dict, producer, cst: dict) -> dict:
+    """Azure connector lane: broker-minted ARM token → subscription-scoped
+    inventory delivered via the broker API."""
+    account, _ = _connector_scope(conn)
+    doc = _scoped_inventory_doc(azure, "SUBSCRIPTION", account, creds.get("token", ""), "azure.json")
+    broker_client.put_inventory(conn["id"], doc)
+    return {"resources": len(doc.get("resources", []))}
+
+
+def poll_connector_gcp(conn: dict, creds: dict, producer, cst: dict) -> dict:
+    """GCP connector lane: broker-minted access token → project-scoped
+    inventory delivered via the broker API."""
+    account, _ = _connector_scope(conn)
+    doc = _scoped_inventory_doc(gcp, "PROJECT", account, creds.get("token", ""), "gcp.json")
+    broker_client.put_inventory(conn["id"], doc)
+    return {"resources": len(doc.get("resources", []))}
+
+
+CONNECTOR_LANES = {
+    "aws": poll_connector_aws,
+    "azure": poll_connector_azure,
+    "gcp": poll_connector_gcp,
+}
+
+
+def connector_cycle(producer, st: dict) -> dict:
+    """One per-connector pass: list enabled connectors → per connector, fetch a
+    short-lived credential and run its provider lane. FAILURE ISOLATION: each
+    connector runs in its own try/except — one connector failing never touches
+    the others (or the ambient lanes). Bounded: connector count capped per
+    cycle, total wall clock capped by CONNECTOR_CYCLE_BUDGET_S."""
+    started = time.time()
+    try:
+        conns = broker_client.list_connectors()
+    except Exception as exc:  # noqa: BLE001 — broker outage must not kill the poller
+        jlog("connector list failed", error=str(exc)[:200])
+        return {"connectors": 0, "failed": 0, "skipped": 0}
+    if len(conns) > CONNECTOR_MAX_PER_CYCLE:
+        jlog("connector list truncated", total=len(conns), cap=CONNECTOR_MAX_PER_CYCLE)
+        conns = conns[:CONNECTOR_MAX_PER_CYCLE]
+    ok = failed = skipped = 0
+    for conn in conns:
+        cid = str(conn.get("id", ""))
+        provider = str(conn.get("provider", ""))
+        if time.time() - started > CONNECTOR_CYCLE_BUDGET_S:
+            skipped += 1
+            continue
+        lane = CONNECTOR_LANES.get(provider)
+        if lane is None or not cid or not conn.get("tenant"):
+            jlog("connector skipped", connector=cid, provider=provider)
+            skipped += 1
+            continue
+        cst = st.setdefault("connectors", {}).setdefault(cid, {})
+        try:
+            creds = broker_client.credentials(cid)  # short-lived; memory only
+            counts = lane(conn, creds, producer, cst) or {}
+            ok += 1
+            jlog("connector polled", connector=cid, provider=provider,
+                 tenant=conn["tenant"], **counts)
+        except Exception as exc:  # noqa: BLE001 — per-connector isolation
+            failed += 1
+            jlog("connector poll error", connector=cid, provider=provider,
+                 error=str(exc)[:200])
+    if skipped:
+        jlog("connector cycle budget hit", skipped=skipped, budget_s=CONNECTOR_CYCLE_BUDGET_S)
+    return {"connectors": ok, "failed": failed, "skipped": skipped}
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     session = boto3.Session(region_name=REGION)
@@ -406,6 +566,12 @@ def main():
         value_serializer=lambda v: json.dumps(v).encode(),
         acks="all", linger_ms=100, retries=5)
     jlog("cloud-ingest started", group=LOG_GROUP, brokers=BROKERS, tenant=TENANT)
+    # Which ingestion mode(s) this process runs (Wave 1 #2). Ambient = today's
+    # single-credential lanes (always on, unchanged); connectors = per-tenant
+    # polling driven by the platform's connector store via the token broker.
+    connector_mode = broker_client.configured()
+    jlog("ingestion modes", ambient=True, connectors=connector_mode)
+    last_connectors = 0.0
     st = load_state()
     last_discover = 0.0
     last_metrics = 0.0
@@ -582,6 +748,18 @@ def main():
                     save_state(st)
             except Exception as exc:  # noqa: BLE001
                 jlog("azure cycle error", error=str(exc)[:200])
+
+        # ── CONNECTORS (per-tenant ingestion, Wave 1 #2) ────────────────────
+        # Its own failure domain, like Azure/GCP: a broker or provider hiccup
+        # must never roll back the ambient lanes' checkpoints above.
+        if connector_mode and time.time() - last_connectors >= CONNECTOR_EVERY_S:
+            try:
+                counts = connector_cycle(producer, st)
+                save_state(st)
+                jlog("connector cycle", **counts)
+            except Exception as exc:  # noqa: BLE001 — lane isolation
+                jlog("connector cycle error", error=str(exc)[:200])
+            last_connectors = time.time()
 
         time.sleep(POLL_S)
 

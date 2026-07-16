@@ -41,9 +41,16 @@ def _pages(client, op: str, key: str, **kw) -> list:
     return [item for page in client.get_paginator(op).paginate(**kw) for item in page.get(key, [])]
 
 
-def discover_aws(ec2) -> tuple[dict, dict]:
+def discover_aws(ec2, session=None, region: str = REGION) -> tuple[dict, dict]:
+    """Discover one account's inventory + egress topology.
+
+    Credential injection (Wave 1 #2): pass a boto3.Session built from a
+    connector's short-lived STS credentials (and its region) to discover THAT
+    connector's account; default keeps today's ambient-credential behavior.
+    """
     vpcs = _pages(ec2, "describe_vpcs", "Vpcs")
-    account = boto3.client("sts", region_name=REGION).get_caller_identity()["Account"]
+    sts = (session or boto3).client("sts", region_name=region)
+    account = sts.get_caller_identity()["Account"]
 
     subnets = {s["SubnetId"]: s for s in _pages(ec2, "describe_subnets", "Subnets")}
     rts = _pages(ec2, "describe_route_tables", "RouteTables")
@@ -69,10 +76,10 @@ def discover_aws(ec2) -> tuple[dict, dict]:
             iid = inst["InstanceId"]
             instances[iid] = inst
             resources.append({
-                "region": REGION,
+                "region": region,
                 "zone": inst.get("Placement", {}).get("AvailabilityZone", ""),
                 "resource_id": iid,
-                "resource_arn_or_uri": f"arn:aws:ec2:{REGION}:{account}:instance/{iid}",
+                "resource_arn_or_uri": f"arn:aws:ec2:{region}:{account}:instance/{iid}",
                 "resource_type": "ec2:instance",
                 "resource_name": tags.get("Name", iid),
                 # Lifecycle truth: a STOPPED instance is not a broken one. Without
@@ -189,7 +196,7 @@ def discover_aws(ec2) -> tuple[dict, dict]:
         "resources": resources,
     }
     topology = {
-        "provider": "aws", "account_id": account, "region": REGION,
+        "provider": "aws", "account_id": account, "region": region,
         "vpcs": [{"id": v["VpcId"], "cidr": v["CidrBlock"]} for v in vpcs],
         "subnets": [{"id": s_id, "cidr": s["CidrBlock"],
                      "name": _tags(s.get("Tags")).get("Name", s_id)}

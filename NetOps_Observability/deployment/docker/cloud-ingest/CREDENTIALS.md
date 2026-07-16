@@ -3,6 +3,29 @@
 The poller is **read-only by design**. This file is the reviewable permission
 contract; anything the poller code calls that is not listed here is a bug.
 
+## Credential modes (Wave 1 #2 — per-tenant ingestion)
+
+The poller runs one or both of:
+
+1. **Ambient mode (default, unchanged)** — the single credential set below
+   (mounted `~/.aws`, `ARM_*`/`AZURE_*` env, `GOOGLE_APPLICATION_CREDENTIALS`).
+   Everything it ingests is owned by `CLOUD_TENANT` (default `global`). This is
+   the standing lab setup.
+2. **Connector mode (opt-in)** — set `BROKER_API_URL` (e.g. `http://api:8080`)
+   plus `BROKER_API_KEY` or `BROKER_API_KEY_FILE`. The key is a **platform-realm
+   API key with the `ingest:cloud` scope** (Administration → API Access, created
+   by the platform owner with an empty tenant binding). Each cycle the poller
+   asks the backend which connectors are enabled, obtains a **short-lived
+   provider credential per connector** from the identity broker (STS / Entra /
+   GCP STS — held in memory only, never persisted, never logged), polls that
+   connector's cloud with it, and delivers inventory back through the API,
+   where the backend stamps the **connector's tenant** onto every row
+   server-side. A tenant-bound key is rejected by design.
+
+Both modes log a startup line: `{"msg":"ingestion modes","ambient":true,
+"connectors":<bool>}`. Connector knobs: `CONNECTOR_EVERY_S` (default 300),
+`CONNECTOR_MAX_PER_CYCLE` (25), `CONNECTOR_CYCLE_BUDGET_S` (240).
+
 ## AWS
 
 Attach `iam-policy-aws.json` (in this directory) to a dedicated IAM user or —
