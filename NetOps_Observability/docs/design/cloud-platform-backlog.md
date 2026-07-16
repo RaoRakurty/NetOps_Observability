@@ -26,7 +26,13 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
    missing #3). cloud-ingest sidecar consumes the connector store (via the broker's
    `TokenFor`) instead of env creds → true multi-tenant "live connectors". Backend
    ready (token exchange done). Pairs with #1. **M–L.** *(blocked by nothing new;
-   benefits from #1's store.)*
+   benefits from #1's store.)* — **SHIPPED 2026-07-16**: ingest-service surface
+   (`/api/cloud/ingest/connectors[…/credentials|/inventory]`, platform-realm
+   `ingest:cloud` API key, tenant stamped server-side from the connector row) +
+   poller connector cycle (`broker_client.py`, per-connector lanes/checkpoints,
+   failure isolation, bounded cycle; ambient mode unchanged). v1 connector lanes =
+   inventory (all 3 clouds) + AWS CloudTrail change evidence; metric/log/seam
+   lanes per connector are the follow-up increment.
 3. **Connector onboarding wizard UI** (rev #1). Front-end over the done 7-step API:
    provider catalog → draft → auth method (federated dominant) → trust templates →
    scopes → validate-with-findings → activate. Highest business value; parallelizable

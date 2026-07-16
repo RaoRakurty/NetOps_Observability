@@ -251,6 +251,13 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/sso/config":        "platform",
 	"/api/auth/token-policy":      "platform",
 	"/api/copilot/config":         "platform",
+	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
+	// platform credential (ingest:cloud API key in the global realm). It fans one
+	// poller across EVERY tenant's connectors, so it is platform plumbing by
+	// definition — requireCloudIngestService fails tenant-bound principals closed
+	// (cloud_ingest_service_test.go covers the isolation matrix).
+	"/api/cloud/ingest/connectors":  "platform",
+	"/api/cloud/ingest/connectors/": "platform",
 	"/api/system/network":         "platform",
 	"/api/system/network/test":    "platform",
 	"/api/automation/netbox":      "platform",

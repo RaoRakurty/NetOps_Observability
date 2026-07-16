@@ -95,6 +95,7 @@ type server struct {
 	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
 	cloudConn           cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
 	cloudBroker         *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	cloudIngestInv      *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
 	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline    incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
@@ -512,6 +513,7 @@ func newServer() *server {
 			srv.audit.Record(e)
 		}
 	})
+	srv.cloudIngestInv = newCloudIngestInventory() // per-tenant ingestion (Wave 1 #2)
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
@@ -1004,6 +1006,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)
 	mux.HandleFunc("/api/cloud/connectors", s.handleCloudConnectors)
 	mux.HandleFunc("/api/cloud/connectors/", s.handleCloudConnectorByID)
+	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller
+	// authenticates with a platform-realm ingest:cloud API key, discovers WHICH
+	// connectors to poll, and obtains short-lived per-connector credentials.
+	mux.HandleFunc("/api/cloud/ingest/connectors", s.handleCloudIngestConnectors)
+	mux.HandleFunc("/api/cloud/ingest/connectors/", s.handleCloudIngestConnectorByID)
 	mux.HandleFunc("/api/seams", s.handleSeams)
 	mux.HandleFunc("/api/seams/", s.handleSeamByID)
 	mux.HandleFunc("/api/seams/groups", s.handleSeamGroups)
