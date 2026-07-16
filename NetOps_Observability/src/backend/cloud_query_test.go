@@ -51,6 +51,15 @@ func TestCloudQueryFilters(t *testing.T) {
 		{"tag app=billing", cloudResourceFilter{Tag: "app=billing"}, 1},
 		{"combined aws prod", cloudResourceFilter{Provider: "aws", Tag: "env=prod"}, 1},
 		{"no filter", cloudResourceFilter{}, 4},
+		// Multi-value OR sets (Wave 2 #5 scope bar): comma-separated values OR
+		// within a dimension, AND across dimensions.
+		{"providers aws,azure", cloudResourceFilter{Provider: "aws,azure"}, 3},
+		{"providers all three", cloudResourceFilter{Provider: "aws,azure,gcp"}, 4},
+		{"accounts 111,sub-9", cloudResourceFilter{Account: "111,sub-9"}, 3},
+		{"regions us-east-1,eastus", cloudResourceFilter{Region: "us-east-1,eastus"}, 2},
+		{"multi-provider AND region", cloudResourceFilter{Provider: "aws,azure", Region: "us-west-2"}, 1},
+		{"multi with stray spaces/commas", cloudResourceFilter{Provider: " aws , azure ,"}, 3},
+		{"multi no match", cloudResourceFilter{Account: "111", Region: "eastus"}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

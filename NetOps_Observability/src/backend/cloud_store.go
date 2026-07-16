@@ -44,10 +44,15 @@ var errBadCursor = errors.New("invalid cursor")
 // cloudResourceFilter is the server-side filter + pagination for /api/cloud/resources.
 // An empty string field means "no filter on this dimension". Limit/Cursor drive the
 // keyset page; the caller clamps Limit before handing it to the store.
+//
+// Provider/Account/Region accept a comma-separated MULTI-VALUE list (Wave 2 #5
+// scope bar: "aws,azure" = either cloud) — OR within a dimension, AND across
+// dimensions. Values never contain commas (provider enums, account ids, region
+// codes), so the separator is unambiguous.
 type cloudResourceFilter struct {
-	Provider    string // exact cloud (aws|azure|gcp), case-insensitive
-	Account     string // account_id | subscription_id | project_id (exact)
-	Region      string // exact
+	Provider    string // cloud(s), comma-separated (aws|azure|gcp), case-insensitive
+	Account     string // account_id | subscription_id | project_id (exact, comma-separated)
+	Region      string // exact, comma-separated
 	Type        string // resource_type (exact)
 	Tag         string // "key" (has tag) or "key=value" (exact value)
 	Attribution string // confidence bucket (confirmed|strong|suspected|weak|unknown) or attributed|unattributed
@@ -106,17 +111,48 @@ func attributionMatches(attribution string, c cloud.Confidence) bool {
 	}
 }
 
+// filterValues splits a (possibly multi-value) filter field into its non-empty
+// parts. "" → nil (no filter); "aws,azure" → the OR set for that dimension.
+func filterValues(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// matchesAny reports whether got equals ANY of the filter's values (fold decides
+// case sensitivity). An empty filter matches everything.
+func matchesAny(got, filter string, fold bool) bool {
+	vals := filterValues(filter)
+	if len(vals) == 0 {
+		return true
+	}
+	for _, v := range vals {
+		if (fold && strings.EqualFold(got, v)) || (!fold && got == v) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchCloudResource reports whether r passes every SET field of f (the pagination
 // fields Limit/Cursor are handled by the caller, not here). Shared by the mem store
 // and the isolation/filter tests; the pg store mirrors this predicate in SQL.
 func matchCloudResource(r cloud.CloudResource, f cloudResourceFilter) bool {
-	if f.Provider != "" && !strings.EqualFold(string(r.Provider), f.Provider) {
+	if !matchesAny(string(r.Provider), f.Provider, true) {
 		return false
 	}
-	if f.Account != "" && r.AccountID != f.Account {
+	if !matchesAny(r.AccountID, f.Account, false) {
 		return false
 	}
-	if f.Region != "" && r.Region != f.Region {
+	if !matchesAny(r.Region, f.Region, false) {
 		return false
 	}
 	if f.Type != "" && r.ResourceType != f.Type {

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 // isCloudAppToken bounds the app id embedded in the app-rca SQL literal (#81 P3G).
 // It must accept real app/resource names (dots, dashes, slashes, colons, spaces)
@@ -44,5 +48,24 @@ func TestIsCloudAppToken(t *testing.T) {
 	}
 	if isCloudAppToken(string(long)) {
 		t.Error("expected over-length app token to be rejected")
+	}
+}
+
+// Wave 2 #5 scope bar: provider accepts a comma-separated OR set, every part
+// enum-checked at the boundary — a typo in ANY part is a clean 400, never a
+// silently-empty result.
+func TestParseCloudResourceFilterMultiValue(t *testing.T) {
+	ok := httptest.NewRequest(http.MethodGet,
+		"/api/cloud/resources?provider=aws,azure&account=111,sub-9&region=us-east-1,eastus", nil)
+	f, err := parseCloudResourceFilter(ok)
+	if err != nil {
+		t.Fatalf("multi-value filter rejected: %v", err)
+	}
+	if f.Provider != "aws,azure" || f.Account != "111,sub-9" || f.Region != "us-east-1,eastus" {
+		t.Fatalf("filter fields not carried: %+v", f)
+	}
+	bad := httptest.NewRequest(http.MethodGet, "/api/cloud/resources?provider=aws,nonsense", nil)
+	if _, err := parseCloudResourceFilter(bad); err == nil {
+		t.Fatal("an unknown provider inside a multi-value list must be rejected")
 	}
 }
