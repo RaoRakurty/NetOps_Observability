@@ -80,3 +80,59 @@ describe("DataTable row drill-in (defect #4)", () => {
     expect(onRowClick).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── Opt-in row expansion (master-detail) ────────────────────────────────────────
+// Added for the Command Center Action Queue migration (owner review 2026-07): the
+// queue's expandable detail row had kept it on a hand-rolled <table>, so it never
+// inherited the resize grip or sortable headers. Expansion is now a capability of
+// the SHARED primitive instead of a fork. It is strictly opt-in — a table that
+// passes neither prop must behave exactly as before.
+describe("DataTable row expansion", () => {
+  const renderExpandable = (expandedKey: string | null) =>
+    render(
+      <DataTable<Row>
+        rows={rows}
+        rowKey={(r) => r.name}
+        ariaLabel="expandable table"
+        expandedKey={expandedKey}
+        renderExpanded={(r) => <div>detail for {r.name}</div>}
+        columns={[{ key: "name", header: "Name", sortValue: (r) => r.name, render: (r) => r.name }]}
+      />,
+    );
+
+  it("renders no detail panel when nothing is expanded", () => {
+    renderExpandable(null);
+    expect(screen.queryByText(/^detail for/)).toBeNull();
+  });
+
+  it("renders the detail panel for the expanded row only", () => {
+    renderExpandable("bravo");
+    expect(screen.getByText("detail for bravo")).toBeTruthy();
+    expect(screen.queryByText("detail for alpha")).toBeNull();
+  });
+
+  it("marks the expanded row with aria-expanded", () => {
+    const { container } = renderExpandable("bravo");
+    const rowsEls = [...container.querySelectorAll(".dtv-row")];
+    const expanded = rowsEls.filter((r) => r.getAttribute("aria-expanded") === "true");
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0].textContent).toContain("bravo");
+    expect(expanded[0].className).toContain("dtv-expanded");
+  });
+
+  it("stays inert (no aria-expanded) when the consumer opts out", () => {
+    const { container } = renderTable();
+    expect(container.querySelector(".dtv-row[aria-expanded]")).toBeNull();
+    expect(container.querySelector(".dtv-expand-row")).toBeNull();
+  });
+
+  it("follows the row through a sort — expansion tracks the KEY, not the index", () => {
+    const { container } = renderExpandable("alpha");
+    fireEvent.click(screen.getByRole("columnheader", { name: /Name/i })); // sort A→Z
+    const expanded = [...container.querySelectorAll(".dtv-row")]
+      .filter((r) => r.getAttribute("aria-expanded") === "true");
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0].textContent).toContain("alpha");
+    expect(screen.getByText("detail for alpha")).toBeTruthy();
+  });
+});

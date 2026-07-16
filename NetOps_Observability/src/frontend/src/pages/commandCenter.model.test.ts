@@ -9,6 +9,7 @@ import {
   fmtAge, parseAffected, parseMissing, deriveRca, deriveEvidence, deriveFault,
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
   filterItems, needsAction, activeFilterCount, isUntriaged,
+  startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
   type ActionItem,
 } from "./commandCenter.model";
 
@@ -95,6 +96,62 @@ describe("severity + sort", () => {
     expect(sorted.map((r) => r.sev)).toEqual(["crit", "crit", "major", "ok"]);
     // within crit, the OLDER (larger ageMs) comes first
     expect(sorted[0].ageMs).toBe(9_000);
+  });
+});
+
+describe("triage ladders — the queue's semantic sort ranks", () => {
+  // These back the Action Queue's sortable columns. The contract is ORDERING
+  // (ascending = work-this-first), not the specific integers.
+  const asc = (xs: number[]) => xs.every((v, i) => i === 0 || xs[i - 1] < v);
+
+  it("severity ranks crit → major → warn → ok (NOT alphabetical)", () => {
+    expect(asc([sevRank("crit"), sevRank("major"), sevRank("warn"), sevRank("ok")])).toBe(true);
+    // The alphabetical trap: "ok" sorts before "warn" as a string, but a warning
+    // must always outrank a benign row in the queue.
+    expect(sevRank("warn")).toBeLessThan(sevRank("ok"));
+  });
+
+  it("RCA state ranks by triage urgency (NOT alphabetical)", () => {
+    expect(asc([rcaRank("Confirmed"), rcaRank("Suspected"), rcaRank("Blocked"),
+      rcaRank("Correlated"), rcaRank("RCA running"), rcaRank("New"), rcaRank("Resolved")])).toBe(true);
+    // Lexically "Correlated" < "Suspected"; semantically it must not outrank it.
+    expect(rcaRank("Suspected")).toBeLessThan(rcaRank("Correlated"));
+    // A resolved incident never sits above live work.
+    expect(rcaRank("Resolved")).toBeGreaterThan(rcaRank("Confirmed"));
+  });
+
+  it("evidence ranks weakest-first — the groups needing corroboration surface", () => {
+    expect(asc([evidenceRank("Single-stream"), evidenceRank("Partial"), evidenceRank("Complete")])).toBe(true);
+  });
+
+  it("owner ranks the biggest gap first", () => {
+    expect(asc([ownerRank("Missing"), ownerRank("Escalated"), ownerRank("Recommended"), ownerRank("Assigned")])).toBe(true);
+  });
+
+  it("ticket ranks the most ITSM-urgent first", () => {
+    expect(asc([ticketRank("Sync failed"), ticketRank("Ticket needed"), ticketRank("Eligible"),
+      ticketRank("Ticketed"), ticketRank("Not eligible")])).toBe(true);
+  });
+
+  it("bySeverityThenAge agrees with sevRank (one ladder, no disagreement)", () => {
+    const mk = (sev: ActionItem["sev"]) => ({ sev, ageMs: 0 } as ActionItem);
+    const sorted = [mk("ok"), mk("warn"), mk("crit"), mk("major")].sort(bySeverityThenAge);
+    expect(sorted.map((r) => r.sev)).toEqual(["crit", "major", "warn", "ok"]);
+  });
+});
+
+describe("startedAt — one timestamp source for both age and the date column", () => {
+  it("prefers window_start, falls back to created_at, else empty", () => {
+    expect(startedAt(corrObject({ window_start: "2026-06-22T11:00:00Z", created_at: "2026-06-01T00:00:00Z" })))
+      .toBe("2026-06-22T11:00:00Z");
+    expect(startedAt(corrObject({ window_start: "", created_at: "2026-06-01T00:00:00Z" })))
+      .toBe("2026-06-01T00:00:00Z");
+    expect(startedAt(corrObject({ window_start: "", created_at: "" }))).toBe("");
+  });
+
+  it("is the SAME instant ageMs is derived from (they can never disagree)", () => {
+    const c = corrObject({ window_start: "", created_at: "2026-06-22T11:00:00Z" });
+    expect(buildItem(c, NOW).ageMs).toBe(NOW - Date.parse(startedAt(c)));
   });
 });
 

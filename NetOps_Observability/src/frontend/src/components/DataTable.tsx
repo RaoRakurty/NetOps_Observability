@@ -12,6 +12,7 @@
 // accessors so every consumer gets the same dense interaction model for free.
 
 import {
+  Fragment,
   ReactNode,
   useCallback,
   useEffect,
@@ -62,6 +63,18 @@ export interface DataTableProps<T> {
   ariaLabel?: string;
   /** Allow the user to drag column borders to widen/narrow them. */
   resizable?: boolean;
+  /**
+   * Opt-in, controlled single-row expansion: the rowKey of the currently
+   * expanded row (null/undefined = none). The consumer owns the state and
+   * typically toggles it from onRowClick. Requires renderExpanded.
+   */
+  expandedKey?: string | null;
+  /**
+   * Renders a detail panel directly under the expanded row (master-detail).
+   * The panel's natural height is measured live (ResizeObserver) so async
+   * content works; rows below shift down and virtualization stays correct.
+   */
+  renderExpanded?: (row: T) => ReactNode;
 }
 
 const OVERSCAN = 12;
@@ -81,6 +94,8 @@ export default function DataTable<T>({
   empty,
   ariaLabel,
   resizable = true,
+  expandedKey,
+  renderExpanded,
 }: DataTableProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -172,6 +187,39 @@ export default function DataTable<T>({
     if (active > view.length - 1) setActive(Math.max(0, view.length - 1));
   }, [view.length, active]);
 
+  // ── Opt-in row expansion (expandedKey + renderExpanded) ──────────────────────
+  // The detail panel is absolutely positioned under its row; its NATURAL height
+  // is measured live (callback ref + ResizeObserver, so async panel content that
+  // grows later still shifts the rows below it) and every row after the expanded
+  // one is offset by that height. Virtualization stays exact.
+  const [expH, setExpH] = useState(0);
+  const expRO = useRef<ResizeObserver | null>(null);
+  const measureExpanded = useCallback((el: HTMLDivElement | null) => {
+    expRO.current?.disconnect();
+    expRO.current = null;
+    // Unmounting because the expanded row scrolled out of the window must NOT
+    // zero the shift (that would yank every row below it back up mid-scroll);
+    // the collapse effect below owns resetting it.
+    if (!el) return;
+    setExpH(el.offsetHeight);
+    const ro = new ResizeObserver(() => setExpH(el.offsetHeight));
+    ro.observe(el);
+    expRO.current = ro;
+  }, []);
+  useEffect(() => () => expRO.current?.disconnect(), []);
+  const expandedIdx = useMemo(() => {
+    if (!renderExpanded || expandedKey == null) return -1;
+    return view.findIndex((r) => rowKey(r) === expandedKey);
+  }, [renderExpanded, expandedKey, view, rowKey]);
+  // Collapsed (or the expanded row filtered away) → no shift.
+  useEffect(() => { if (expandedIdx < 0) setExpH(0); }, [expandedIdx]);
+  const expShift = expandedIdx >= 0 ? expH : 0;
+  // Top of row idx, accounting for the expansion panel above it (if any).
+  const rowTop = useCallback(
+    (idx: number) => idx * rowHeight + (expandedIdx >= 0 && idx > expandedIdx ? expShift : 0),
+    [rowHeight, expandedIdx, expShift],
+  );
+
   // Measure the scroll viewport so the window size tracks resizes/density.
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -183,8 +231,10 @@ export default function DataTable<T>({
     return () => ro.disconnect();
   }, []);
 
-  const total = view.length * rowHeight;
-  const first = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN);
+  const total = view.length * rowHeight + expShift;
+  // With an expansion open, rows after it sit LOWER than idx*rowHeight, so widen
+  // the window's start conservatively by the shift — never a blank viewport.
+  const first = Math.max(0, Math.floor((scrollTop - expShift) / rowHeight) - OVERSCAN);
   const last = Math.min(view.length, Math.ceil((scrollTop + viewport) / rowHeight) + OVERSCAN);
   const windowed = view.slice(first, last);
 
@@ -199,12 +249,12 @@ export default function DataTable<T>({
     (i: number) => {
       const el = scrollRef.current;
       if (!el) return;
-      const top = i * rowHeight;
+      const top = rowTop(i);
       const bottom = top + rowHeight;
       if (top < el.scrollTop) el.scrollTop = top;
       else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
     },
-    [rowHeight],
+    [rowHeight, rowTop],
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -282,37 +332,53 @@ export default function DataTable<T>({
           {windowed.map((row, i) => {
             const idx = first + i;
             const accent = rowAccent?.(row);
+            const isExpanded = expandedIdx >= 0 && idx === expandedIdx;
             return (
-              <div
-                key={rowKey(row)}
-                role="row"
-                aria-rowindex={idx + 1}
-                className={`dtv-row${idx === active ? " active" : ""}${onRowClick ? " clickable" : ""}${rowClassName ? " " + rowClassName(row) : ""}`}
-                style={{
-                  gridTemplateColumns: template,
-                  transform: `translateY(${idx * rowHeight}px)`,
-                  ...(accent ? { boxShadow: `inset 3px 0 0 ${accent}` } : null),
-                }}
-                onMouseEnter={() => setActive(idx)}
-                onClick={() => onRowClick?.(row)}
-              >
-                {columns.map((c) => (
+              <Fragment key={rowKey(row)}>
+                <div
+                  role="row"
+                  aria-rowindex={idx + 1}
+                  aria-expanded={renderExpanded ? isExpanded : undefined}
+                  className={`dtv-row${idx === active ? " active" : ""}${onRowClick ? " clickable" : ""}${isExpanded ? " dtv-expanded" : ""}${rowClassName ? " " + rowClassName(row) : ""}`}
+                  style={{
+                    gridTemplateColumns: template,
+                    transform: `translateY(${rowTop(idx)}px)`,
+                    ...(accent ? { boxShadow: `inset 3px 0 0 ${accent}` } : null),
+                  }}
+                  onMouseEnter={() => setActive(idx)}
+                  onClick={() => onRowClick?.(row)}
+                >
+                  {columns.map((c) => (
+                    <div
+                      key={c.key}
+                      role="gridcell"
+                      className="dtv-cell"
+                      data-sev={c.sev?.(row)}
+                      style={{ justifyContent: align(c.align) }}
+                    >
+                      {c.render(row)}
+                    </div>
+                  ))}
+                  {rowActions && (
+                    <div className="dtv-actions" onClick={(e) => e.stopPropagation()}>
+                      {rowActions(row)}
+                    </div>
+                  )}
+                </div>
+                {isExpanded && renderExpanded && (
                   <div
-                    key={c.key}
-                    role="gridcell"
-                    className="dtv-cell"
-                    data-sev={c.sev?.(row)}
-                    style={{ justifyContent: align(c.align) }}
+                    ref={measureExpanded}
+                    role="row"
+                    className="dtv-expand-row"
+                    style={{ transform: `translateY(${idx * rowHeight + rowHeight}px)` }}
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {c.render(row)}
-                  </div>
-                ))}
-                {rowActions && (
-                  <div className="dtv-actions" onClick={(e) => e.stopPropagation()}>
-                    {rowActions(row)}
+                    <div role="gridcell" className="dtv-expand-cell">
+                      {renderExpanded(row)}
+                    </div>
                   </div>
                 )}
-              </div>
+              </Fragment>
             );
           })}
         </div>

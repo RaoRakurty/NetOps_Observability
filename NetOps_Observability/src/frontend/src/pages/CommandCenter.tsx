@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { api, Incident, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components/rca/labels";
+import DataTable, { type Column } from "../components/DataTable";
+import { LogTime } from "../lib/logfmt";
+import { timeRank } from "./appobs/sortRanks";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
   type FaultDomain, type EvidenceState, type CcFilters,
   fmtAge, buildItem, isActionableCorr, bySeverityThenAge, filterItems, activeFilterCount,
+  startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
 } from "./commandCenter.model";
 
 // Action Queue filter bar — narrows the queue over data already in memory (no
@@ -79,40 +83,103 @@ const impactLabel = (a: ActionItem["affected"]): string => {
   return parts.join(" · ");
 };
 
-// ── Action Queue row (expandable) ───────────────────────────────────────────────
-function QueueRow({ it, expanded, onToggle }: { it: ActionItem; expanded: boolean; onToggle: () => void }) {
-  const c = it.corr;
-  return (
-    <>
-      <tr className={`cc-row sev-${it.sev}`} onClick={onToggle}>
-        <td><span className="cc-sevdot" style={{ background: SEV_TONE[it.sev] }} /></td>
-        <td className="cc-pid">
-          <a className="cc-pid-link" href={rcaHref(c.correlation_id)} title={`Problem ${c.correlation_id} — open RCA`}
-            onClick={(e) => e.stopPropagation()}>{shortProblemId(c.correlation_id)}</a>
-        </td>
-        <td className="cc-title">
-          <span className="cc-caret">{expanded ? "▾" : "▸"}</span>
-          {signatureNocTitle(c.top_hypothesis)}
-          <span className="cc-occ-inline">×{c.signal_count}</span>
-        </td>
-        <td>{ccChip(it.rca, RCA_TONE[it.rca], `confidence ${(c.top_confidence * 100).toFixed(0)}%`)}</td>
-        <td className="cc-mono cc-dim">{impactLabel(it.affected)}</td>
-        <td>{ccChip(it.fault, it.fault === "Unknown" ? "var(--fg-subtle)" : "var(--fg-muted)")}</td>
-        <td>{ccChip(it.evidence, it.evidence === "Complete" ? "var(--ok)" : "var(--warn)", it.missing.join(", "))}</td>
-        <td>{ccChip(it.ownerName, OWNER_TONE[it.owner])}</td>
-        <td className="cc-mono cc-dim" style={{ textAlign: "right" }}>{fmtAge(c.window_start || c.created_at)}</td>
-        <td>{ccChip(it.ticket, TICKET_TONE[it.ticket])}</td>
-        <td className="cc-next">{it.nextAction}</td>
-      </tr>
-      {expanded && (
-        <tr className="cc-expand-row">
-          <td colSpan={11}>
-            <ExpandPanel it={it} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
+// ── Action Queue columns (shared DataTable primitive) ───────────────────────────
+// The queue renders through components/DataTable — the SAME primitive as every
+// other telemetry table — so it inherits the visible column-resize grip (drag or
+// ←/→), click-to-sort headers with aria-sort, and the keyboard grid model for
+// free, instead of re-hand-rolling them here. The expandable detail row survives
+// via DataTable's opt-in expandedKey/renderExpanded master-detail support.
+//
+// EVERY column sorts SEMANTICALLY, never lexically: the state ladders come from
+// the model's exported ranks (sevRank/rcaRank/evidenceRank/ownerRank/ticketRank
+// — ascending = work-this-first), time from timeRank (epoch), impact/occurrence
+// from real counts, and free text A–Z.
+const blastRadius = (a: ActionItem["affected"]): number =>
+  new Set([...a.devices, ...a.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))].filter(Boolean)).size;
+
+function queueColumns(openKey: string | null): Column<ActionItem>[] {
+  return [
+    {
+      key: "sev", header: "Sev", width: 62,
+      sortValue: (it) => sevRank(it.sev), text: (it) => it.sev,
+      render: (it) => <span className="cc-sevdot" style={{ background: SEV_TONE[it.sev] }} title={it.sev} />,
+    },
+    {
+      key: "pid", header: "Problem ID", width: 104,
+      sortValue: (it) => shortProblemId(it.corr.correlation_id), text: (it) => it.corr.correlation_id,
+      render: (it) => (
+        <a className="cc-pid-link" href={rcaHref(it.corr.correlation_id)}
+          title={`Problem ${it.corr.correlation_id} — open RCA`}
+          onClick={(e) => e.stopPropagation()}>{shortProblemId(it.corr.correlation_id)}</a>
+      ),
+    },
+    {
+      key: "title", header: "Incident / correlation group", width: "minmax(220px,1.6fr)",
+      sortValue: (it) => signatureNocTitle(it.corr.top_hypothesis),
+      text: (it) => signatureNocTitle(it.corr.top_hypothesis),
+      render: (it) => (
+        <span className="cc-title">
+          <span className="cc-caret">{openKey === it.corr.correlation_id ? "▾" : "▸"}</span>
+          {signatureNocTitle(it.corr.top_hypothesis)}
+          <span className="cc-occ-inline">×{it.corr.signal_count}</span>
+        </span>
+      ),
+    },
+    {
+      key: "rca", header: "RCA state", width: 124,
+      sortValue: (it) => rcaRank(it.rca), text: (it) => it.rca,
+      render: (it) => ccChip(it.rca, RCA_TONE[it.rca], `confidence ${(it.corr.top_confidence * 100).toFixed(0)}%`),
+    },
+    {
+      key: "impact", header: "Impact", width: 150,
+      // Widest blast radius first — the operator's real ordering, not the label's spelling.
+      sortValue: (it) => -blastRadius(it.affected), text: (it) => impactLabel(it.affected),
+      render: (it) => <span className="cc-mono cc-dim">{impactLabel(it.affected)}</span>,
+    },
+    {
+      key: "fault", header: "Fault domain", width: 132,
+      sortValue: (it) => it.fault, text: (it) => it.fault,
+      render: (it) => ccChip(it.fault, it.fault === "Unknown" ? "var(--fg-subtle)" : "var(--fg-muted)"),
+    },
+    {
+      key: "evidence", header: "Evidence", width: 120,
+      sortValue: (it) => evidenceRank(it.evidence), text: (it) => it.evidence,
+      render: (it) => ccChip(it.evidence, it.evidence === "Complete" ? "var(--ok)" : "var(--warn)", it.missing.join(", ")),
+    },
+    {
+      key: "owner", header: "Owner", width: 124,
+      sortValue: (it) => ownerRank(it.owner), text: (it) => it.ownerName,
+      render: (it) => ccChip(it.ownerName, OWNER_TONE[it.owner]),
+    },
+    {
+      // Absolute start time (owner ask #3). Same instant ageMs is derived from
+      // (startedAt = window_start || created_at) — never a second, invented date.
+      // Rendered with the shared LogTime so a timestamp reads identically here,
+      // in Logs and in Events; sorts by epoch, so it's chronological not lexical.
+      key: "started", header: "Started", width: 148,
+      sortValue: (it) => timeRank(startedAt(it.corr)), text: (it) => startedAt(it.corr),
+      render: (it) => (startedAt(it.corr)
+        ? <LogTime ts={startedAt(it.corr)} />
+        : <span className="cc-dim">—</span>),
+    },
+    {
+      // Relative age stays alongside the absolute date: "how long has this been
+      // burning" and "when exactly did it start" are different operator questions.
+      key: "age", header: "Age", width: 66, align: "right",
+      sortValue: (it) => it.ageMs, text: (it) => fmtAge(startedAt(it.corr)),
+      render: (it) => <span className="cc-mono cc-dim">{fmtAge(startedAt(it.corr))}</span>,
+    },
+    {
+      key: "ticket", header: "Ticket", width: 122,
+      sortValue: (it) => ticketRank(it.ticket), text: (it) => it.ticket,
+      render: (it) => ccChip(it.ticket, TICKET_TONE[it.ticket]),
+    },
+    {
+      key: "next", header: "Next action", width: "minmax(150px,1fr)",
+      sortValue: (it) => it.nextAction, text: (it) => it.nextAction,
+      render: (it) => <span className="cc-next">{it.nextAction}</span>,
+    },
+  ];
 }
 
 // Deep-links — the Action Queue is a launch pad, so every affordance jumps to the
@@ -293,6 +360,14 @@ export default function CommandCenter() {
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
   // A KPI sets its filter on the queue (and toggles off if already active), so its
   // count and the rows shown always come from the SAME data — they can't disagree.
+  // Columns depend on `open` only for the row's expand caret.
+  const columns = useMemo(() => queueColumns(open), [open]);
+  // Size the queue viewport to its rows (capped) so a short queue has no dead
+  // space and a long one windows; expanding a row makes room for its detail.
+  const queueHeight = useMemo(
+    () => Math.min(640, visible.length * 34 + 40 + (open ? 300 : 0)),
+    [visible.length, open],
+  );
   const kpiActive = (f: CcFilters) => JSON.stringify(filters) === JSON.stringify(f);
   const applyKpi = (f: CcFilters) => setFilters((cur) => JSON.stringify(cur) === JSON.stringify(f) ? {} : f);
 
@@ -361,20 +436,18 @@ export default function CommandCenter() {
           <div className="cc-empty">No incidents match the current filters. <button type="button" className="cc-filter-clear" onClick={() => setFilters({})}>Clear filters</button></div>
         ) : (
           <div className="cc-table-wrap">
-            <table className="cc-table">
-              <thead>
-                <tr>
-                  <th aria-label="severity" /><th>Problem ID</th><th>Incident / correlation group</th><th>RCA state</th><th>Impact</th>
-                  <th>Fault domain</th><th>Evidence</th><th>Owner</th><th style={{ textAlign: "right" }}>Age</th><th>Ticket</th><th>Next action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((it) => (
-                  <QueueRow key={it.corr.correlation_id} it={it} expanded={open === it.corr.correlation_id}
-                    onToggle={() => setOpen(open === it.corr.correlation_id ? null : it.corr.correlation_id)} />
-                ))}
-              </tbody>
-            </table>
+            <DataTable<ActionItem>
+              rows={visible}
+              columns={columns}
+              rowKey={(it) => it.corr.correlation_id}
+              rowHeight={34}
+              height={queueHeight}
+              ariaLabel="Action Queue — correlated incidents"
+              rowAccent={(it) => (it.sev === "crit" ? "var(--crit)" : it.sev === "major" ? "var(--warn)" : undefined)}
+              onRowClick={(it) => setOpen((cur) => (cur === it.corr.correlation_id ? null : it.corr.correlation_id))}
+              expandedKey={open}
+              renderExpanded={(it) => <ExpandPanel it={it} />}
+            />
           </div>
         )}
       </div>

@@ -2307,6 +2307,17 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 .dtv-link { cursor: pointer; color: var(--accent); font-weight: 600; }
 .dtv-link:hover { text-decoration: underline; }
 .dtv-row.dtv-selected { background: var(--accent-soft, var(--hover)); outline: 1px solid var(--accent-ring, var(--accent)); outline-offset: -1px; }
+/* Opt-in master-detail expansion (expandedKey + renderExpanded): the panel is
+   absolutely placed under its row and its natural height is measured, so rows
+   below shift down by exactly that much. Tokens only — light + dark. */
+.dtv-row.dtv-expanded { background: var(--accent-soft, var(--hover)); }
+.dtv-expand-row {
+  position: absolute; left: 0; right: 0; top: 0;
+  background: var(--surface, var(--panel));
+  border-bottom: 1px solid var(--border, var(--panel-border));
+  cursor: default;
+}
+.dtv-expand-cell { min-width: 0; overflow: hidden; }
 
 /* ----- Workspace panes (#45 §11): TRUE-DOCKED Inspector (right) + BottomDrawer
    -----
@@ -4128,20 +4139,16 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cc-filter-chip.on { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .cc-filter-count { margin-left: auto; font-size: 11.5px; color: var(--fg-subtle); font-family: var(--font-mono, ui-monospace, monospace); }
 .cc-filter-clear { font-size: 11px; font-weight: 600; padding: 3px 8px; border: 1px solid var(--accent); border-radius: 5px; background: transparent; color: var(--accent); cursor: pointer; }
-/* table */
-.cc-table-wrap { overflow-x: auto; }
-.cc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.cc-table thead th { text-align: left; font-family: "Space Grotesk", var(--font-sans, sans-serif); font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--fg-subtle); padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.cc-row { cursor: pointer; border-bottom: 1px solid var(--border); transition: background .1s; }
-.cc-row:hover { background: var(--accent-soft); }
-.cc-row > td { padding: 9px 12px; vertical-align: middle; }
-.cc-row.sev-crit { box-shadow: inset 3px 0 0 var(--crit); }
-.cc-row.sev-major { box-shadow: inset 3px 0 0 var(--warn); }
-.cc-sevdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
-.cc-title { font-weight: 600; color: var(--fg); min-width: 220px; }
+/* table — the Action Queue renders through the shared DataTable primitive
+   (components/DataTable.tsx): the resize grip, sortable headers and severity
+   row-accent all come from the .dtv layer, so only the queue's own cell
+   vocabulary lives here. */
+.cc-table-wrap { padding: 0 12px 12px; }
+.cc-sevdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+/* Width is owned by the DataTable grid track — never min-width here, or the
+   track and the cell fight and the row overflows. */
+.cc-title { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Problem ID column — compact mono handle (P-5564D1), clickable to the RCA. */
-.cc-pid { white-space: nowrap; }
 .cc-pid-link {
   font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
   color: var(--accent); text-decoration: none; padding: 2px 7px; border-radius: 5px;
@@ -4152,7 +4159,8 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .cc-occ-inline { font-family: var(--font-mono); font-size: 11px; color: var(--fg-subtle); margin-left: 8px; }
 .cc-next { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
 /* row expansion */
-.cc-expand-row > td { padding: 0; background: var(--surface); border-bottom: 1px solid var(--border); }
+/* The detail panel is hosted by DataTable's .dtv-expand-row (surface + border
+   come from there); the queue supplies only its inner padding. */
 .cc-expand { padding: 14px 16px; }
 .cc-expand-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
 @media (max-width: 900px) { .cc-expand-grid { grid-template-columns: 1fr; } }
