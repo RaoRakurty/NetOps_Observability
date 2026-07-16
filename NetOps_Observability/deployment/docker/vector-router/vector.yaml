@@ -126,6 +126,17 @@ transforms:
       # tcpControlBits (IPFIX IE6 / NetFlow TCP_FLAGS): ClickHouse column is
       # UInt16 — coerce like .proto so a string-typed value can't 400 the batch.
       .tcp_flags = to_int(.tcp_flags) ?? 0
+      # Log-time standard: derive the ClickHouse `ts` from goflow2's receive
+      # stamp (time_received_ns, UTC epoch) instead of leaving it to the column
+      # DEFAULT now64() — which re-stamps every flow with the INSERT time, so
+      # bus lag/replay would misplace flows on the timeline. Zone-less string
+      # form is safe because the ClickHouse server timezone is pinned to UTC
+      # (clickhouse/config.d/custom-settings.xml). Flow start/end capture is a
+      # schema follow-up (goflow2 time_flow_start_ns/time_flow_end_ns).
+      trcv = to_int(.time_received_ns) ?? 0
+      if trcv > 0 {
+        .ts = format_timestamp!(from_unix_timestamp!(trcv, unit: "nanoseconds"), format: "%F %T%.3f")
+      }
       # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
       # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.
       ft = to_string(.type) ?? ""
