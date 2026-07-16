@@ -44,8 +44,12 @@ from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
 from path_assembly import (
     AssembledPath,
+    DiscoveredEdge,
     DiscoverySources,
+    DnsHead,
     PathAssembler,
+    flow_edges_from_pairs,
+    inventory_edges_from_topology,
     measured_run_from_observation,
 )
 from path_graph import PathGraphView
@@ -112,6 +116,17 @@ CLOUD_LOGS_DIR = os.environ.get("CLOUD_LOGS_DIR", "")
 CLOUD_LOGS_TENANT = os.environ.get("CLOUD_LOGS_TENANT", "")
 CLOUD_LOGS_REFRESH_S = float(os.environ.get("CLOUD_LOGS_REFRESH_S", "30"))
 _cloud_log_offsets: dict[str, int] = {}  # path → bytes consumed (tail-style; in-memory)
+
+# Cloud inventory topology snapshots (deployment/docker/cloud-fixtures/*-topology.json)
+# mounted read-only into the correlation container. Feeds the path-causality P1
+# INVENTORY discovery source (inventory_edges_from_topology) so a cloud incident gets a
+# discovered SRC→DST path WITHOUT a traceroute (cloud hides hops). Default-CLOSED and
+# tenant-gated exactly like the cloud-log tailer: a topology fixture carries no tenant,
+# so its edges are stamped with CLOUD_LOGS_TENANT and contribute to NO other tenant's
+# path (§3a). Off unless a dir is set AND CLOUD_LOGS_TENANT names the owning tenant.
+CLOUD_TOPOLOGY_DIR = os.environ.get("CLOUD_TOPOLOGY_DIR", "")
+_cloud_topo_cache: dict[str, dict] = {}          # filename → parsed topology dict
+_cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
 
 # Device→tenant map exported by the Go API (#20 multi-tenant telemetry). We stamp
 # tenant_id onto each finding so it carries the same tenant discriminator as the
@@ -689,37 +704,211 @@ def path_graph_inventory() -> PathGraphView:
     return _path_graph_cache
 
 
-def discovery_paths_for(tenant: str, view: PathGraphView) -> tuple[AssembledPath, ...]:
-    """Build this tenant's P1 typed causal paths for the on-path attribution pass
-    (path-causality RCA P2 / step 4). Source = the LIVE measured path observations the
-    engine already loads (traceroute / STAMP / transaction runs, exported by the Go API
-    into the Service Path Graph), adapted through the real P1 adapter
-    (measured_run_from_observation) and assembled per (src→dst) scope. Flow / cloud-
-    inventory / DNS evidence fold into the SAME DiscoverySources through their P1
-    adapters (flow_edges_from_pairs / inventory_edges_from_topology / DnsHead) once
-    those feeds are plumbed here; measured runs are the live source available today.
+def cloud_topology_snapshots() -> dict[str, dict]:
+    """The cloud inventory topology snapshots for the INVENTORY discovery source,
+    read from CLOUD_TOPOLOGY_DIR (deployment/docker/cloud-fixtures/*-topology.json,
+    mounted read-only). mtime-cached per file like the other enrichment loaders; an
+    unreadable/absent dir yields the last-good snapshots (never a silently emptied one
+    mid-incident). Returns {filename: topology_dict}. Tenancy is applied by the CALLER
+    (stamped with CLOUD_LOGS_TENANT) — a fixture carries no tenant of its own."""
+    if not CLOUD_TOPOLOGY_DIR:
+        return {}
+    try:
+        present = {os.path.basename(p): p
+                   for p in glob.glob(os.path.join(CLOUD_TOPOLOGY_DIR, "*-topology.json"))}
+    except OSError as exc:
+        log.warning("cloud topology dir unreadable (%s); keeping previous snapshots", exc)
+        return _cloud_topo_cache
+    # drop snapshots whose file has disappeared (never serve a stale, removed topology).
+    for gone in [n for n in _cloud_topo_cache if n not in present]:
+        _cloud_topo_cache.pop(gone, None)
+        _cloud_topo_mtimes.pop(gone, None)
+    for name, path in present.items():
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            continue
+        if _cloud_topo_mtimes.get(name) == mt:
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                _cloud_topo_cache[name] = raw
+                _cloud_topo_mtimes[name] = mt
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("cloud topology %s unreadable (%s); keeping previous", name, exc)
+    return _cloud_topo_cache
 
-    Tenant-scoped (§3a): only THIS tenant's observations contribute. Bounded
-    (CORR_MAX_DISCOVERY_PATHS scopes; assembler caps hops) and exception-safe — any
-    failure logs and yields no paths, so attribution simply doesn't fire and the engine
-    cycle is never broken (§9/§10)."""
+
+def _flow_discovery_edges(tenant: str) -> tuple[DiscoveredEdge, ...]:
+    """FLOW discovery source (precedence 2): this tenant's directed NetFlow per-pair
+    volume (_FLOW_DIR[tenant], the C7.3 lane) → directed DiscoveredEdges via the P1
+    adapter. STRICTLY this tenant's own map (never the "" global) — a path that seeds
+    attribution must never carry another tenant's / untagged flow (§3a default-closed)."""
+    vol = _FLOW_DIR.get(tenant, {})
+    pairs = [(a, b) for (a, b), nbytes in vol.items() if nbytes > 0]
+    if not pairs:
+        return ()
+    return flow_edges_from_pairs(tenant, pairs, f"netflow:{tenant}")
+
+
+def _inventory_discovery_edges(tenant: str) -> tuple[DiscoveredEdge, ...]:
+    """INVENTORY discovery source (precedence 3): the cloud topology snapshots →
+    inventory edges via the P1 adapter. Default-CLOSED and tenant-gated: contributes
+    ONLY for the single CLOUD_LOGS_TENANT that owns the demo cloud data (a fixture has
+    no tenant of its own, exactly as the cloud-log tailer stamps it), so no other
+    tenant's path can ever include a cloud-inventory edge (§3a)."""
+    if not CLOUD_TOPOLOGY_DIR or not CLOUD_LOGS_TENANT or tenant != CLOUD_LOGS_TENANT:
+        return ()
+    out: list[DiscoveredEdge] = []
+    for name, topo in sorted(cloud_topology_snapshots().items()):
+        out.extend(inventory_edges_from_topology(tenant, topo, f"cloud-topo:{name}"))
+    return tuple(out)
+
+
+def _dns_heads_from_window(tenant: str, window) -> dict[str, DnsHead]:
+    """DNS discovery source: the tenant's cloud_dns_log signals in THIS window → path
+    HEADs (the resolved frontend the app depends on). entity_id is the resolved NAME;
+    a failed resolution carries no answer, so resolved_address stays empty (honest —
+    never a fabricated address). Keyed by resolved_address when known else query_name,
+    so a scope whose endpoint is that frontend can attach its head. Tenant-filtered."""
+    heads: dict[str, DnsHead] = {}
+    for s in window:
+        if s.tenant_id != tenant or s.kind != "cloud_dns_log":
+            continue
+        name = str(s.entity_id or "").strip()
+        if not name:
+            continue
+        attrs = s.attrs if isinstance(s.attrs, dict) else {}
+        resolved = str(attrs.get("resolved_address") or attrs.get("answer") or "").strip()
+        key = resolved or name
+        heads.setdefault(key, DnsHead(
+            tenant_id=tenant, query_name=name, resolved_address=resolved,
+            evidence_ref=f"dns:{name}"))
+    return heads
+
+
+def _edge_discovery_scopes(edges: tuple[DiscoveredEdge, ...], limit: int
+                           ) -> list[tuple[str, str]]:
+    """Derive candidate (src→dst) scopes from a directed edge graph: each path SOURCE
+    (a node with out-edges but no in-edge) to each path SINK (in-edge, no out-edge).
+    This scopes discovery to the AFFECTED src→dst path, never the whole VPC. Bounded by
+    `limit`. Falls back to any-out→any-in when the graph is a cycle with no clean end."""
+    has_in: set[str] = set()
+    has_out: set[str] = set()
+    for e in edges:
+        a, b = e.upstream.address, e.downstream.address
+        if not a or not b or a == b:
+            continue
+        has_out.add(a)
+        has_in.add(b)
+    srcs = sorted(has_out - has_in) or sorted(has_out)
+    dsts = sorted(has_in - has_out) or sorted(has_in)
+    scopes: list[tuple[str, str]] = []
+    for s in srcs:
+        for d in dsts:
+            if s != d:
+                scopes.append((s, d))
+                if len(scopes) >= limit:
+                    return scopes
+    return scopes
+
+
+def _head_for_scope(heads: dict[str, DnsHead], src: str, dst: str) -> "DnsHead | None":
+    """Attach a DNS head to a scope ONLY when the name it resolved points at the scope's
+    frontend endpoint (dst, else src) — never force a head onto an unrelated path."""
+    for key in (dst, src):
+        if key and key in heads:
+            return heads[key]
+    return None
+
+
+def discovery_paths_for(tenant: str, view: PathGraphView,
+                        window: "list | tuple" = ()) -> tuple[AssembledPath, ...]:
+    """Build this tenant's P1 typed causal paths for the on-path attribution pass
+    (path-causality RCA P2 / step 4), FUSING all four discovery sources so a cloud
+    incident gets a discovered SRC→DST path even WITHOUT a traceroute (cloud hides hops):
+
+      * MEASURED  — the LIVE path observations the engine already loads (traceroute /
+        STAMP / transaction runs, exported by the Go API into the Service Path Graph)
+        via measured_run_from_observation. Precedence 1 — the spine when present.
+      * FLOW      — this tenant's directed NetFlow per-pair volume (_FLOW_DIR) via
+        flow_edges_from_pairs. Precedence 2.
+      * INVENTORY — the cloud topology snapshots (cloud-fixtures/*-topology.json) via
+        inventory_edges_from_topology. Precedence 3 — the cloud-without-traceroute path.
+      * DNS       — this window's cloud_dns_log resolutions as the path HEAD (the
+        resolved frontend the app depends on).
+
+    All four fold into the SAME DiscoverySources; P1's precedence (measured > flow >
+    inventory > route) fuses them. Scoped per (src→dst): measured endpoints ∪ the edge
+    graph's source→sink endpoints, so a path is the AFFECTED path, not the whole VPC.
+
+    Tenant-scoped (§3a): every feed is filtered/stamped to THIS tenant before assembly
+    (PathAssembler also drops any cross-tenant run/edge/head structurally). Additive +
+    honest: a feed with no data contributes nothing; when NONE of the four yield
+    anything the result is () — byte-identical to the pre-fusion no-op. Bounded
+    (CORR_MAX_DISCOVERY_PATHS scopes; assembler caps hops) and exception-safe — EACH
+    feed degrades to empty on failure and the whole build returns () on any error, so
+    attribution simply doesn't fire and the engine cycle is never broken (§9/§10)."""
     if not CORR_PATH_ATTRIBUTION:
         return ()
     try:
-        obs = [o for o in view.observations if o.tenant_id == tenant and o.hops]
-        if not obs:
+        # -- feed 1: MEASURED (the live source; groups by observed endpoints) --------
+        measured_groups: Dict[tuple[str, str], list] = {}
+        try:
+            for o in (o for o in view.observations if o.tenant_id == tenant and o.hops):
+                run = measured_run_from_observation(o)
+                responding = [h.address for h in run.hops if h.responding]
+                if len(responding) < 2:
+                    continue  # a single-endpoint run is not a path — nothing to walk
+                measured_groups.setdefault((responding[0], responding[-1]), []).append(run)
+        except Exception as exc:  # noqa: BLE001 — one feed failing degrades to empty
+            log.warning("path-discovery measured feed failed tenant=%s: %s", tenant, exc)
+            measured_groups = {}
+
+        # -- feeds 2-4: FLOW / INVENTORY / DNS (each independently exception-safe) ----
+        try:
+            flow_edges = _flow_discovery_edges(tenant)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery flow feed failed tenant=%s: %s", tenant, exc)
+            flow_edges = ()
+        try:
+            inv_edges = _inventory_discovery_edges(tenant)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery inventory feed failed tenant=%s: %s", tenant, exc)
+            inv_edges = ()
+        try:
+            dns_heads = _dns_heads_from_window(tenant, window)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("path-discovery dns feed failed tenant=%s: %s", tenant, exc)
+            dns_heads = {}
+
+        # Inventory FIRST so its authoritative device role hints (to_kind: lb/nva/…)
+        # seed a node's identity before a hint-less flow edge for the same address does
+        # (the edge-spine takes the first HopNode seen per address). Source PRECEDENCE
+        # for ordering/direction is by rank inside the assembler, unaffected by list order.
+        edges = tuple(inv_edges) + tuple(flow_edges)
+
+        # NONE of the four sources yielded anything → () (byte-identical no-op).
+        if not measured_groups and not edges and not dns_heads:
             return ()
-        groups: Dict[tuple[str, str], list] = {}
-        for o in obs:
-            run = measured_run_from_observation(o)
-            responding = [h.address for h in run.hops if h.responding]
-            if len(responding) < 2:
-                continue  # a single-endpoint run is not a path — nothing to walk
-            groups.setdefault((responding[0], responding[-1]), []).append(run)
+
+        # -- SCOPES: measured endpoints ∪ edge-graph source→sink endpoints -----------
+        scopes: list[tuple[str, str]] = list(measured_groups.keys())
+        if edges:
+            for scope in _edge_discovery_scopes(edges, CORR_MAX_DISCOVERY_PATHS):
+                if scope not in measured_groups:
+                    scopes.append(scope)
+        scopes = sorted(dict.fromkeys(scopes))[:CORR_MAX_DISCOVERY_PATHS]
+
         paths: list[AssembledPath] = []
-        for (src, dst), runs in sorted(groups.items())[:CORR_MAX_DISCOVERY_PATHS]:
-            paths.append(_PATH_ASSEMBLER.assemble(
-                tenant, src, dst, DiscoverySources(measured=tuple(runs))))
+        for (src, dst) in scopes:
+            runs = tuple(measured_groups.get((src, dst), ()))
+            bundle = DiscoverySources(
+                measured=runs, edges=edges,
+                dns_head=_head_for_scope(dns_heads, src, dst))
+            paths.append(_PATH_ASSEMBLER.assemble(tenant, src, dst, bundle))
         return tuple(paths)
     except Exception as exc:  # noqa: BLE001 — enrichment must never break the cycle
         log.warning("path-attribution discovery build failed tenant=%s: %s", tenant, exc)
@@ -928,8 +1117,10 @@ async def engine_cycle() -> None:
         directed = DirectedTopology(sources=tuple(sources)) if sources else None
         pgv = path_graph_inventory()
         # Path-causality RCA P2: the tenant's typed causal paths for the on-path
-        # attribution enrichment (empty ⇒ no-op, objects byte-identical to pre-P2).
-        discovery = discovery_paths_for(tenant, pgv)
+        # attribution enrichment, fusing measured + flow + inventory + DNS discovery
+        # (window carries this tenant's cloud_dns_log heads). Empty ⇒ no-op, objects
+        # byte-identical to pre-P2.
+        discovery = discovery_paths_for(tenant, pgv, window)
         try:
             snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
                                    topology_stale=topo_stale, storm_mode=storm, directed=directed,

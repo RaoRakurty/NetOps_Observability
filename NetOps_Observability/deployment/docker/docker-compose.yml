@@ -714,6 +714,11 @@ services:
       CLOUD_LOGS_DIR: ${CLOUD_LOGS_DIR:-/data/cloud-logs}
       CLOUD_LOGS_TENANT: ${CLOUD_LOGS_TENANT:-}
       CLOUD_LOGS_REFRESH_S: ${CLOUD_LOGS_REFRESH_S:-30}
+      # Cloud inventory topology snapshots (cloud-fixtures/*-topology.json) for the
+      # path-causality P1 INVENTORY discovery source — a cloud incident gets a
+      # discovered SRC→DST path WITHOUT a traceroute. Tenant-gated by CLOUD_LOGS_TENANT
+      # (a fixture carries no tenant), so it is inert until the cloud demo tenant is set.
+      CLOUD_TOPOLOGY_DIR: ${CLOUD_TOPOLOGY_DIR:-/data/cloud-topology}
       # #101 chaos-fixture registry: name=match pairs (comma-separated) tagging
       # INTENTIONAL storm sources (e.g. a lab target kept dead on purpose) so
       # Command Center badges them and auto-ticketing skips them, while the
@@ -725,6 +730,8 @@ services:
     volumes:
       - ../../data/api/enrichment:/data/enrichment:ro
       - ../../data/cloud-logs:/data/cloud-logs:ro
+      # Cloud inventory topology fixtures (read-only) for the P1 INVENTORY source.
+      - ./cloud-fixtures:/data/cloud-topology:ro
     # Broker dependency intentionally absent (external-broker mode; the
     # aiokafka consumer runs in a reconnect/backoff loop).
     depends_on:
