@@ -4365,6 +4365,24 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-scope-right { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .ao-scope-pills { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
+/* interactive scope bar (Wave 2 #5) — editable dims align chips + add-select */
+.ao-scope-f--edit { align-items: center; gap: 4px; }
+/* active filter value: a removable chip (its × clears exactly this value) */
+.ao-scope-chip { display: inline-flex; align-items: center; gap: 4px;
+  font: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px; padding: 2px 8px; cursor: pointer;
+  transition: border-color .18s ease, background-color .18s ease; }
+.ao-scope-chip:hover { border-color: var(--crit);
+  background: color-mix(in srgb, var(--crit) 10%, transparent); color: var(--crit); }
+.ao-scope-chip-x { font-size: 12px; line-height: 1; opacity: .8; }
+/* compact .app-select for the dense scope strip */
+.ao-scope-add.app-select { font-size: 11px; padding: 3px 24px 3px 8px; border-radius: 6px;
+  background-position: right 7px center; background-size: 11px; }
+.ao-scope-add.app-select:disabled { opacity: .45; cursor: default; }
+.ao-scope-clear { align-self: center; }
+
 /* readiness strip = same cards, just a wider min so the 6 fit a row */
 .ao-readiness { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 

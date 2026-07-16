@@ -40,10 +40,10 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 				t.Fatalf("scope = %q, want %q", scope, tc.want)
 			}
 			queries := []string{
-				cloudHealthSQL("", 100, scope),
-				cloudChangesSQL("", 100, scope),
-				cloudEvidenceObjectsSQL("", scope),
-				cloudEvidenceSignalsSQL("'id'", 100, scope),
+				cloudHealthSQL(24, "", 100, scope),
+				cloudChangesSQL(24, "", 100, scope),
+				cloudEvidenceObjectsSQL(24, "", scope),
+				cloudEvidenceSignalsSQL(24, "'id'", 100, scope),
 			}
 			for _, q := range queries {
 				if !strings.Contains(q, "SETTINGS tenant_scope = '"+tc.want+"'") {
@@ -68,14 +68,14 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 // The evidence read must use the HOT projection (never the raw hypotheses/objects
 // table) and must prefilter the archive by the picked object ids — the #100 contract.
 func TestCloudEvidenceQueriesFollowHotReadContract(t *testing.T) {
-	obj := cloudEvidenceObjectsSQL("", "acme")
+	obj := cloudEvidenceObjectsSQL(24, "", "acme")
 	if !strings.Contains(obj, "netops.corr_current FINAL") {
 		t.Fatalf("object read must use corr_current FINAL:\n%s", obj)
 	}
 	if strings.Contains(obj, "netops.hypotheses") {
 		t.Fatalf("object read must never touch hypotheses near a fold:\n%s", obj)
 	}
-	sig := cloudEvidenceSignalsSQL("'a','b'", 50, "acme")
+	sig := cloudEvidenceSignalsSQL(24, "'a','b'", 50, "acme")
 	if !strings.Contains(sig, "archived_for IN ('a','b')") {
 		t.Fatalf("archive read must be prefiltered by the picked ids:\n%s", sig)
 	}
@@ -113,6 +113,48 @@ func TestClampSignalLimit(t *testing.T) {
 	for _, tc := range cases {
 		if got := clampSignalLimit(tc.in); got != tc.want {
 			t.Fatalf("clampSignalLimit(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Wave 2 #5 (real time-range): the caller-selected window is bounded — junk or
+// absent falls back to the 24h default, and nothing may widen past 7 days. The
+// SQL builders must carry the CLAMPED value so the read stays inside the #100
+// budget and the response's window_hours reports only what was honored.
+func TestClampWindowHours(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"", cloudSignalWindowHours},
+		{"0", cloudSignalWindowHours},
+		{"-3", cloudSignalWindowHours},
+		{"junk", cloudSignalWindowHours},
+		{"1", 1},
+		{"24", 24},
+		{"168", cloudSignalWindowMaxHours},
+		{"9999", cloudSignalWindowMaxHours},
+	}
+	for _, tc := range cases {
+		if got := clampWindowHours(tc.in); got != tc.want {
+			t.Fatalf("clampWindowHours(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The selected window must actually parameterize the queries (the whole point of
+// killing the dishonest label): a 168h request reads 168h, not a hardwired 24.
+func TestSignalQueriesCarryWindow(t *testing.T) {
+	for _, q := range []string{
+		cloudHealthSQL(168, "", 100, "acme"),
+		cloudChangesSQL(168, "", 100, "acme"),
+		cloudEvidenceObjectsSQL(168, "", "acme"),
+		cloudEvidenceSignalsSQL(168, "'id'", 100, "acme"),
+		cloudOpenObjectCountSQL(168, "", "acme"),
+		cloudArchivedSignalCountSQL(168, "'id'", "acme"),
+	} {
+		if !strings.Contains(q, "INTERVAL 168 HOUR") {
+			t.Fatalf("query does not honor the requested window:\n%s", q)
 		}
 	}
 }

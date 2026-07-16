@@ -6,39 +6,54 @@
 // many events existed vs how many rendered, and could not tell whether the feed
 // was live or a frozen first paint.
 //
-// WHY THE MAX IS 24h — and why we do not offer 7d:
-// the backend read window is a fixed constant (cloud_signals.go
-// `cloudSignalWindowHours = 24`); /api/cloud/health|changes|evidence take no
-// window parameter, so 24h of signal is genuinely all that exists client-side.
-// We therefore NARROW inside the fetched window rather than pretend to widen it.
-// Offering a "7d" button that silently returned 24h of rows would be exactly the
-// fabrication this page exists to avoid. Widening the server window is a real
-// change (it must respect the #100 ClickHouse bounded-IO read contract), so 7d is
-// deliberately absent until that lands — not quietly broken.
+// HOW THE WINDOW IS HONORED (Wave 2 #5 — real time-range):
+// /api/cloud/health|changes|evidence now take an additive ?window_hours= param
+// (clamped 1..168 server-side, default 24 — cloud_signals.go clampWindowHours),
+// so 7d is a REAL server read, not a re-labeled 24h. Ranges ≤24h keep the one
+// default 24h fetch and NARROW client-side inside it (the set is already loaded
+// and LIMIT-bounded; a per-click refetch would buy nothing) — see
+// windowHoursFor(). A range the server didn't honor is never labeled: callers
+// read the response's window_hours back.
 //
 // Pure + deterministic (an injectable `now`) → unit-tested (range.test.ts).
 
 import type { TimeRange } from "../../context/shell";
 
-// The server-side cloud signal window — the ceiling on anything we can show.
+// The DEFAULT server-side cloud signal window (no window_hours param).
 export const CLOUD_WINDOW_MINUTES = 24 * 60;
+// The server's clamp ceiling for ?window_hours= (7 days).
+export const CLOUD_WINDOW_MAX_MINUTES = 7 * 24 * 60;
 
-// Narrowing presets, all ≤ the ingested window. Shape matches the app-wide
-// TimeRange model (context/shell TIME_RANGES) so the control reads as the same
-// product, and a custom preset could be merged in later.
+// Range presets. Shape matches the app-wide TimeRange model (context/shell
+// TIME_RANGES) so the control reads as the same product, and a custom preset
+// could be merged in later. 7d exists because the server honors it now —
+// it was deliberately absent while the window was a hardwired 24h constant.
 export const CLOUD_RANGES: readonly TimeRange[] = [
   { label: "15m", minutes: 15 },
   { label: "1h", minutes: 60 },
   { label: "6h", minutes: 360 },
   { label: "24h", minutes: CLOUD_WINDOW_MINUTES },
+  { label: "7d", minutes: CLOUD_WINDOW_MAX_MINUTES },
 ] as const;
 
-// Default to the full ingested window: the first paint must not hide events by
-// narrowing on the user's behalf.
-export const DEFAULT_CLOUD_RANGE: TimeRange = CLOUD_RANGES[CLOUD_RANGES.length - 1];
+// Default to the full DEFAULT ingest window (24h — NOT the 7d maximum): the
+// first paint shows everything the standing read covers without paying the
+// wide 7d scan on every visit.
+export const DEFAULT_CLOUD_RANGE: TimeRange =
+  CLOUD_RANGES.find((r) => r.minutes === CLOUD_WINDOW_MINUTES) ?? CLOUD_RANGES[0];
 
 export function rangeFor(minutes: number): TimeRange {
   return CLOUD_RANGES.find((r) => r.minutes === minutes) ?? DEFAULT_CLOUD_RANGE;
+}
+
+// The ?window_hours= a signal fetch should request for a UI range: sub-24h
+// ranges reuse the default 24h window (fetch once, narrow client-side inside
+// the already-loaded, LIMIT-bounded set — that also keeps the "nothing in the
+// range, newest landed 3h ago — widen" hint able to see beyond the narrow
+// range); above 24h the window is the real, server-honored range.
+export function windowHoursFor(minutes: number): number {
+  if (minutes <= CLOUD_WINDOW_MINUTES) return CLOUD_WINDOW_MINUTES / 60;
+  return Math.ceil(Math.min(minutes, CLOUD_WINDOW_MAX_MINUTES) / 60);
 }
 
 // Spoken form for captions/empty states ("last 6 hours").

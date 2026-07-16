@@ -14,6 +14,9 @@ import {
   SourceStatus, STATUS_META, MeasureState, MEASURE_LABEL, getMeasurementState,
   freshnessLabel,
 } from "./readiness";
+import type { CloudScopeState, ScopeDim } from "./scopeUrl";
+import type { ScopeOptions } from "./scope";
+import { CLOUD_RANGES } from "./range";
 
 // ── Data mode chip — replaces the old "Live · mock"; always an honest label ────
 export function DataModeChip({ mode, lastSyncIso }: { mode: DataMode; lastSyncIso?: string }) {
@@ -58,9 +61,59 @@ function ScopePills({ s }: { s: ReadinessSummary }) {
   );
 }
 
+// ── Interactive scope control (Wave 2 #5) ─────────────────────────────────────
+// What the scope bar needs to be a real global filter instead of a summary:
+// the URL-backed scope state, the option sets measured from the tenant's own
+// inventory, and the mutators from useCloudScope. All optional on CloudScopeBar
+// so the bar still renders as an honest read-only summary where no control is
+// wired (and in the existing tests).
+export interface ScopeBarControl {
+  scope: CloudScopeState;
+  options: ScopeOptions;
+  active: boolean;
+  add: (dim: ScopeDim, value: string) => void;
+  remove: (dim: ScopeDim, value: string) => void;
+  clearFilters: () => void;
+  setRangeMinutes: (minutes: number) => void;
+}
+
+// One editable dimension: the active values render as removable chips (each ×
+// clears exactly that value) and the trailing select adds another. Options are
+// only what the inventory actually contains — never a dead filter choice.
+function ScopeDimField({ label, dim, values, options, fmt, add, remove }: {
+  label: string; dim: ScopeDim; values: string[]; options: string[];
+  fmt?: (v: string) => string; add: ScopeBarControl["add"]; remove: ScopeBarControl["remove"];
+}) {
+  const show = (v: string) => (fmt ? fmt(v) : v);
+  const remaining = options.filter((o) => !values.includes(o));
+  return (
+    <span className="ao-scope-f ao-scope-f--edit">
+      <span className="ao-scope-k">{label}</span>
+      {values.map((v) => (
+        <button key={v} type="button" className="ao-scope-chip"
+          onClick={() => remove(dim, v)} aria-label={`Remove ${label} filter ${show(v)}`}
+          title={`Click to remove this ${label.toLowerCase()} filter`}>
+          {show(v)}<span className="ao-scope-chip-x" aria-hidden="true">×</span>
+        </button>
+      ))}
+      <select className="app-select ao-scope-add" value=""
+        aria-label={`Add ${label} filter`}
+        onChange={(e) => { if (e.target.value) add(dim, e.target.value); }}
+        disabled={remaining.length === 0}>
+        <option value="">{values.length ? "+ add" : "All"}</option>
+        {remaining.map((o) => <option key={o} value={o}>{show(o)}</option>)}
+      </select>
+    </span>
+  );
+}
+
 // ── CloudScopeBar — the global scope/freshness strip under the page header ─────
-export function CloudScopeBar({ scope, mode, summary }: {
-  scope: CloudScope; mode: DataMode; summary: ReadinessSummary;
+// With `control`: provider/account/region/env are REAL multi-select filters and
+// Range is the REAL read window every signal surface parameterizes on (Wave 2
+// #5 — the display-only bar with its static "Last 1h" was the one dishonest
+// label on the page). Without `control` it stays the read-only summary.
+export function CloudScopeBar({ scope, mode, summary, control }: {
+  scope: CloudScope; mode: DataMode; summary: ReadinessSummary; control?: ScopeBarControl;
 }) {
   const Field = ({ k, v }: { k: string; v: string }) => (
     <span className="ao-scope-f"><span className="ao-scope-k">{k}</span><span className="ao-scope-v">{v}</span></span>
@@ -68,12 +121,44 @@ export function CloudScopeBar({ scope, mode, summary }: {
   return (
     <div className="ao-scope" role="region" aria-label="Cloud scope and freshness">
       <div className="ao-scope-fields">
+        {/* Tenant is NEVER a filter here: scope narrows within the caller's
+            tenant view, it cannot widen it (§3a). */}
         <Field k="Tenant" v={scope.tenant} />
-        <Field k="Provider" v={scope.provider} />
-        <Field k="Account" v={scope.account} />
-        <Field k="Region" v={scope.region} />
-        <Field k="Env" v={scope.env} />
-        <Field k="Range" v={scope.timeRange} />
+        {control ? (
+          <>
+            <ScopeDimField label="Provider" dim="providers" values={control.scope.providers}
+              options={control.options.providers} fmt={(p) => p.toUpperCase()}
+              add={control.add} remove={control.remove} />
+            <ScopeDimField label="Account" dim="accounts" values={control.scope.accounts}
+              options={control.options.accounts} add={control.add} remove={control.remove} />
+            <ScopeDimField label="Region" dim="regions" values={control.scope.regions}
+              options={control.options.regions} add={control.add} remove={control.remove} />
+            <ScopeDimField label="Env" dim="envs" values={control.scope.envs}
+              options={control.options.envs} add={control.add} remove={control.remove} />
+            <span className="ao-scope-f ao-scope-f--edit">
+              <span className="ao-scope-k">Range</span>
+              <select className="app-select ao-scope-add" aria-label="Time range"
+                value={String(control.scope.rangeMinutes)}
+                onChange={(e) => control.setRangeMinutes(Number(e.target.value))}>
+                {CLOUD_RANGES.map((r) => (
+                  <option key={r.label} value={String(r.minutes)}>{r.label}</option>
+                ))}
+              </select>
+            </span>
+            {control.active && (
+              <button type="button" className="ao-btn ao-btn--sm ao-scope-clear"
+                onClick={control.clearFilters}>Clear filters</button>
+            )}
+          </>
+        ) : (
+          <>
+            <Field k="Provider" v={scope.provider} />
+            <Field k="Account" v={scope.account} />
+            <Field k="Region" v={scope.region} />
+            <Field k="Env" v={scope.env} />
+            <Field k="Range" v={scope.timeRange} />
+          </>
+        )}
         <Field k="Updated" v={freshnessLabel(summary.lastSyncIso)} />
       </div>
       <div className="ao-scope-right">

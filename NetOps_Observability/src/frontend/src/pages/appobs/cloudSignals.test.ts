@@ -40,7 +40,13 @@ describe("loadHealthSignals", () => {
   it("passes the app filter through and returns [] when nothing landed", async () => {
     cloudHealth.mockResolvedValue({ signals: [] });
     expect(await loadHealthSignals("store-api")).toEqual([]);
-    expect(cloudHealth).toHaveBeenCalledWith("store-api");
+    expect(cloudHealth).toHaveBeenCalledWith("store-api", undefined, undefined);
+  });
+
+  it("threads the REAL range window to the read (Wave 2 #5)", async () => {
+    cloudHealth.mockResolvedValue({ signals: [] });
+    await loadHealthSignals("store-api", 168);
+    expect(cloudHealth).toHaveBeenCalledWith("store-api", undefined, 168);
   });
 
   it("defends the enums — an unknown state/severity never crashes a render", async () => {
@@ -165,7 +171,13 @@ describe("loadEvidence", () => {
     const { objects, rows } = await loadEvidence("store-api");
     expect(objects).toEqual([]);
     expect(rows).toEqual([]);
-    expect(cloudEvidence).toHaveBeenCalledWith("store-api");
+    expect(cloudEvidence).toHaveBeenCalledWith("store-api", undefined, undefined);
+  });
+
+  it("threads the REAL range window to the ledger read (Wave 2 #5)", async () => {
+    cloudEvidence.mockResolvedValue({ objects: [], evidence: [] });
+    await loadEvidence(undefined, 168);
+    expect(cloudEvidence).toHaveBeenCalledWith(undefined, undefined, 168);
   });
 });
 

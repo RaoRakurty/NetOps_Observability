@@ -41,6 +41,38 @@ export interface RegionReadiness {
   readiness: SourceReadiness[]; // one per SOURCE_TYPES, inventory first
 }
 
+// ── Global scope application (Wave 2 #5) ──────────────────────────────────────
+// The scope bar's provider/account/region filters narrow the Data sources
+// matrices CLIENT-side: these are small, already-merged view rows (one per
+// account / account×region), not a server-filterable dataset. env never applies
+// here (accounts have no env). Same semantics as scope.ts: OR within a
+// dimension, AND across, empty dimension = no filter.
+export interface IngestionScope {
+  providers: string[];
+  accounts: string[];
+  regions: string[];
+}
+
+const inScopeSet = (v: string, set: string[], fold = false): boolean =>
+  set.length === 0 || (fold ? set.some((s) => s.toLowerCase() === v.toLowerCase()) : set.includes(v));
+
+/** Accounts view: provider/account narrow rows; a region filter keeps any
+ *  account that REACHES one of the scoped regions. */
+export function accountsInScope(rows: MergedAccountRow[], s: IngestionScope): MergedAccountRow[] {
+  return rows.filter((a) =>
+    inScopeSet(a.provider, s.providers, true) &&
+    inScopeSet(a.accountId, s.accounts) &&
+    (s.regions.length === 0 || a.regions.some((r) => s.regions.includes(r))));
+}
+
+/** Sources / Ingestion-Status matrix: exact per-row provider/account/region. */
+export function matrixInScope(rows: RegionReadiness[], s: IngestionScope): RegionReadiness[] {
+  return rows.filter((m) =>
+    inScopeSet(m.provider, s.providers, true) &&
+    inScopeSet(m.accountId, s.accounts) &&
+    inScopeSet(m.region, s.regions));
+}
+
 export function buildMatrix(rows: CloudResourceRow[], byProvider?: ProviderIngestion): RegionReadiness[] {
   const groups = groupBy(rows, (r) => `${r.cloud_provider}|${r.account_id}|${r.region}`);
   const out: RegionReadiness[] = [];

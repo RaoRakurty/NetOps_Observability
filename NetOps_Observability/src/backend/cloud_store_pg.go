@@ -294,14 +294,20 @@ func buildCloudWhere(f cloudResourceFilter) ([]string, []any) {
 		args = append(args, val)
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
-	if f.Provider != "" {
-		add("lower(cloud_provider) = lower($%d)", f.Provider)
+	// Provider/Account/Region are multi-value (comma-separated OR sets, Wave 2 #5
+	// scope bar); pgx v5 binds []string as text[], so `= ANY($n)` stays fully
+	// parameterized — a value never reaches the SQL text.
+	if vals := filterValues(f.Provider); len(vals) > 0 {
+		for i := range vals {
+			vals[i] = strings.ToLower(vals[i])
+		}
+		add("lower(cloud_provider) = ANY($%d)", vals)
 	}
-	if f.Account != "" {
-		add("account_id = $%d", f.Account)
+	if vals := filterValues(f.Account); len(vals) > 0 {
+		add("account_id = ANY($%d)", vals)
 	}
-	if f.Region != "" {
-		add("region = $%d", f.Region)
+	if vals := filterValues(f.Region); len(vals) > 0 {
+		add("region = ANY($%d)", vals)
 	}
 	if f.Type != "" {
 		add("resource_type = $%d", f.Type)

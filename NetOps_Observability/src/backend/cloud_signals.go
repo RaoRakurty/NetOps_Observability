@@ -45,8 +45,12 @@ const (
 	// happening now", and an unbounded scan of corr_signals is exactly the read
 	// pattern the #100 incident was about.
 	cloudSignalWindowHours = 24
-	cloudSignalDefaultLim  = 200
-	cloudSignalMaxLim      = 1000
+	// Caller-selectable ceiling (Wave 2 #5 real time-range): 7 days. Still a
+	// bounded, granule-prunable window + LIMIT, so it stays inside the #100
+	// read contract; anything above clamps here, never widens silently.
+	cloudSignalWindowMaxHours = 7 * 24
+	cloudSignalDefaultLim     = 200
+	cloudSignalMaxLim         = 1000
 	// Cloud RCA objects considered by the evidence ledger (bounded join build side).
 	cloudEvidenceMaxObjects = 10
 )
@@ -61,6 +65,22 @@ func clampSignalLimit(raw string) int {
 	}
 	if n > cloudSignalMaxLim {
 		return cloudSignalMaxLim
+	}
+	return n
+}
+
+// clampWindowHours bounds the caller-supplied ?window_hours= read window
+// (Wave 2 #5): junk/absent/0 → the 24h default the surfaces always had;
+// anything above the 7-day ceiling clamps to it. The handler reports the
+// HONORED value back in window_hours so the UI label never claims a range
+// the data doesn't cover.
+func clampWindowHours(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return cloudSignalWindowHours
+	}
+	if n > cloudSignalWindowMaxHours {
+		return cloudSignalWindowMaxHours
 	}
 	return n
 }
@@ -554,7 +574,7 @@ func providerOf(a signalAttrs) string {
 // without it fails and a query with the wrong one cannot see another tenant's rows.
 // Bounded by construction: a time window, a LIMIT, and named columns only.
 
-func cloudHealthSQL(appFilter string, limit int, scope string) string {
+func cloudHealthSQL(windowHours int, appFilter string, limit int, scope string) string {
 	return fmt.Sprintf(`
 SELECT toString(ts)            AS ts_s,
        kind                    AS kind,
@@ -574,7 +594,7 @@ SELECT toString(ts)            AS ts_s,
  ORDER BY ts DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, cloudSignalWindowHours, appFilter, limit, scope)
+ FORMAT JSONEachRow`, windowHours, appFilter, limit, scope)
 }
 
 // cloudChangesSQL — ONE ROW PER CHANGE. The ingester re-emits the same provider
@@ -583,7 +603,7 @@ SELECT toString(ts)            AS ts_s,
 // read 33 for 2 real events). The evidence store is append-only by design, so
 // the READ must collapse the re-emissions: one row per signal_id, keeping the
 // earliest observation of it (when the change actually happened).
-func cloudChangesSQL(appFilter string, limit int, scope string) string {
+func cloudChangesSQL(windowHours int, appFilter string, limit int, scope string) string {
 	// The filter runs in a subquery: an output alias that shadows a source column
 	// (any(kind) AS kind) is substituted into WHERE by ClickHouse and throws
 	// ILLEGAL_AGGREGATION — the exact bug that made this endpoint answer 0.
@@ -609,10 +629,10 @@ SELECT toString(min(ts))          AS ts_s,
  ORDER BY ts_s DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, cloudSignalWindowHours, appFilter, limit, scope)
+ FORMAT JSONEachRow`, windowHours, appFilter, limit, scope)
 }
 
-func cloudEvidenceObjectsSQL(appPred, scope string) string {
+func cloudEvidenceObjectsSQL(windowHours int, appPred, scope string) string {
 	return fmt.Sprintf(`
 WITH cloud_objs AS (
      SELECT DISTINCT archived_for
@@ -634,10 +654,10 @@ SELECT toString(correlation_id)  AS cid,
  ORDER BY window_start DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, cloudSignalWindowHours, appPred, cloudEvidenceMaxObjects, scope)
+ FORMAT JSONEachRow`, windowHours, appPred, cloudEvidenceMaxObjects, scope)
 }
 
-func cloudEvidenceSignalsSQL(idList string, limit int, scope string) string {
+func cloudEvidenceSignalsSQL(windowHours int, idList string, limit int, scope string) string {
 	return fmt.Sprintf(`
 SELECT toString(archived_for)   AS cid,
        toString(signal_id)      AS signal_id_s,
@@ -656,13 +676,13 @@ SELECT toString(archived_for)   AS cid,
  ORDER BY ts DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, cloudSignalWindowHours, idList, limit, scope)
+ FORMAT JSONEachRow`, windowHours, idList, limit, scope)
 }
 
 // cloudOpenObjectCountSQL counts ALL open cloud objects — the Active-RCA tile
 // must be a real COUNT, never the length of the LIMIT-bounded list above
 // (audit D-P1-7: 10 open rendered as 2).
-func cloudOpenObjectCountSQL(appPred, scope string) string {
+func cloudOpenObjectCountSQL(windowHours int, appPred, scope string) string {
 	return fmt.Sprintf(`
 WITH cloud_objs AS (
      SELECT DISTINCT archived_for
@@ -674,12 +694,12 @@ SELECT count()
  WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
    AND state = 'open'%s
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, cloudSignalWindowHours, appPred, scope)
+ FORMAT TSV`, windowHours, appPred, scope)
 }
 
 // cloudArchivedSignalCountSQL counts ALL grounded signals for the picked
 // objects — the ledger's `count` header (the page itself stays LIMIT-bounded).
-func cloudArchivedSignalCountSQL(idList, scope string) string {
+func cloudArchivedSignalCountSQL(windowHours int, idList, scope string) string {
 	return fmt.Sprintf(`
 SELECT count()
   FROM netops.corr_signals_archive
@@ -687,7 +707,7 @@ SELECT count()
    AND ts > now() - INTERVAL %d HOUR
    AND archived_for IN (%s)
  SETTINGS tenant_scope = '%s'
- FORMAT TSV`, cloudSignalWindowHours, idList, scope)
+ FORMAT TSV`, windowHours, idList, scope)
 }
 
 // chScalarInt runs a single-value TSV query and returns the integer (0 on any
@@ -736,12 +756,13 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	window := clampWindowHours(r.URL.Query().Get("window_hours"))
 	// Resolve each signal's raw resource id → the clean resource NAME + its owning
 	// app from the tenant-scoped inventory, exactly like handleCloudChanges. Health
 	// signals are stamped on a raw provider id (an ARM path, an instance id); the
 	// operator reads a name, not a path.
 	inv := s.cloudResourceIndex(r)
-	rows := chJSONRows[chSignalRow](cloudHealthSQL(appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
+	rows := chJSONRows[chSignalRow](cloudHealthSQL(window, appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudHealthSignal, 0, len(rows))
 	for _, row := range rows {
 		a := parseAttrs(row.Attrs)
@@ -783,7 +804,7 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 			Reason: strings.TrimSpace(a.Reason),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"signals": out, "count": len(out), "window_hours": cloudSignalWindowHours})
+	writeJSON(w, http.StatusOK, map[string]any{"signals": out, "count": len(out), "window_hours": window})
 }
 
 // handleCloudChanges serves GET /api/cloud/changes — the provider-audited change
@@ -799,6 +820,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	window := clampWindowHours(r.URL.Query().Get("window_hours"))
 
 	// resource → (app, name, confidence) from the tenant-scoped cloud inventory,
 	// keyed by every handle a signal can carry (id, ENI, IP).
@@ -822,7 +844,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows := chJSONRows[chSignalRow](cloudChangesSQL(filter, limit, safeScopeLiteral(chTenantScope(r))))
+	rows := chJSONRows[chSignalRow](cloudChangesSQL(window, filter, limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudChangeEvent, 0, len(rows))
 	for _, row := range rows {
 		a := parseAttrs(row.Attrs)
@@ -864,7 +886,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 			CloudRef:        ref,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"changes": out, "count": len(out), "window_hours": cloudSignalWindowHours})
+	writeJSON(w, http.StatusOK, map[string]any{"changes": out, "count": len(out), "window_hours": window})
 }
 
 // handleCloudEvidence serves GET /api/cloud/evidence — the evidence ledger of the
@@ -884,13 +906,14 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	window := clampWindowHours(r.URL.Query().Get("window_hours"))
 	scope := safeScopeLiteral(chTenantScope(r))
 
 	appPred := ""
 	if app != "" {
 		appPred = fmt.Sprintf(" AND has(JSONExtract(affected,'apps','Array(String)'), '%s')", app)
 	}
-	objRows := chJSONRows[chObjectRow](cloudEvidenceObjectsSQL(appPred, scope))
+	objRows := chJSONRows[chObjectRow](cloudEvidenceObjectsSQL(window, appPred, scope))
 	objects := make([]cloudRcaObject, 0, len(objRows))
 	byID := map[string]chObjectRow{}
 	ids := make([]string, 0, len(objRows))
@@ -918,8 +941,8 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	evidence := make([]cloudEvidenceRow, 0, limit)
 	totalGrounded := 0
 	if list := sqlList(ids); list != "" {
-		totalGrounded = chScalarInt(cloudArchivedSignalCountSQL(list, scope))
-		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(list, limit, scope)) {
+		totalGrounded = chScalarInt(cloudArchivedSignalCountSQL(window, list, scope))
+		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(window, list, limit, scope)) {
 			o := byID[row.CorrelationID]
 			a := parseAttrs(row.Attrs)
 			ref := enrichCloudRef(cloudEvidenceRef{
@@ -978,7 +1001,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	// length; `returned` is what this page carries (audit D-P2-13). The open-
 	// object count is a dedicated COUNT so the Active tile can never be capped
 	// by the 10-object evidence join (audit D-P1-7).
-	openCount := chScalarInt(cloudOpenObjectCountSQL(appPred, scope))
+	openCount := chScalarInt(cloudOpenObjectCountSQL(window, appPred, scope))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"objects":           objects,
 		"evidence":          evidence,
@@ -986,7 +1009,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		"returned":          len(evidence),
 		"open_object_count": openCount,
 		"objects_truncated": openCount > len(objects),
-		"window_hours":      cloudSignalWindowHours,
+		"window_hours":      window,
 	})
 }
 

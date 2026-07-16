@@ -5,7 +5,7 @@
 // judged separately, silent-but-connected accounts red and never dropped.
 
 import { describe, it, expect } from "vitest";
-import { buildAccounts, buildMatrix, mergeAccounts } from "./ingestion";
+import { buildAccounts, buildMatrix, mergeAccounts, accountsInScope, matrixInScope } from "./ingestion";
 import type { CloudResourceRow, CloudConnectorView } from "../../services/api";
 
 function row(p: Partial<CloudResourceRow>): CloudResourceRow {
@@ -168,5 +168,32 @@ describe("mergeAccounts", () => {
   it("a scoped-less draft forms no account row (it lives in the Connections list)", () => {
     const out = mergeAccounts([conn({ state: "DRAFT", scopes: [] })], [], undefined, NOW);
     expect(out).toEqual([]);
+  });
+});
+
+// ── Wave 2 #5 — the global scope narrows the Data sources matrices ───────────
+describe("accountsInScope / matrixInScope", () => {
+  const noScope = { providers: [], accounts: [], regions: [] };
+  it("empty scope passes every row through", () => {
+    const accts = mergeAccounts([], rows);
+    expect(accountsInScope(accts, noScope)).toHaveLength(accts.length);
+    const matrix = buildMatrix(rows);
+    expect(matrixInScope(matrix, noScope)).toHaveLength(matrix.length);
+  });
+  it("filters accounts by provider (case-insensitive) and account id", () => {
+    const accts = mergeAccounts([], rows);
+    expect(accountsInScope(accts, { ...noScope, providers: ["AWS"] }).map((a) => a.accountId)).toEqual(["111"]);
+    expect(accountsInScope(accts, { ...noScope, accounts: ["sub-1"] }).map((a) => a.provider)).toEqual(["azure"]);
+  });
+  it("a region scope keeps any account that REACHES a scoped region", () => {
+    const accts = mergeAccounts([], rows);
+    expect(accountsInScope(accts, { ...noScope, regions: ["us-west-2"] }).map((a) => a.accountId)).toEqual(["111"]);
+    expect(accountsInScope(accts, { ...noScope, regions: ["nowhere"] })).toHaveLength(0);
+  });
+  it("the matrix filters exactly per account×region row (AND across dims)", () => {
+    const matrix = buildMatrix(rows);
+    const scoped = matrixInScope(matrix, { providers: ["aws"], accounts: ["111"], regions: ["us-east-1"] });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].region).toBe("us-east-1");
   });
 });

@@ -139,8 +139,12 @@ func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
 	if f.Provider, err = get("provider"); err != nil {
 		return f, err
 	}
-	if f.Provider != "" && !cloud.ValidProvider(cloud.Provider(strings.ToLower(f.Provider))) {
-		return f, errors.New("invalid provider (want aws|azure|gcp)")
+	// provider is a multi-value OR set ("aws,azure" — Wave 2 #5 scope bar);
+	// every part must be a known cloud, so a typo is a clean 400.
+	for _, p := range filterValues(f.Provider) {
+		if !cloud.ValidProvider(cloud.Provider(strings.ToLower(p))) {
+			return f, errors.New("invalid provider (want aws|azure|gcp)")
+		}
 	}
 	if f.Account, err = get("account"); err != nil {
 		return f, err

@@ -126,7 +126,7 @@ func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
 	// ids, ENIs, hosts) and the signal kinds (seam-lane kinds route the issue
 	// to a seam, §4a).
 	if list := sqlList(ids); list != "" {
-		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(list, overviewMaxIssueSignals, scope)) {
+		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(cloudSignalWindowHours, list, overviewMaxIssueSignals, scope)) {
 			i, ok := byID[row.CorrelationID]
 			if !ok {
 				continue
@@ -169,7 +169,7 @@ func (s *server) handleCloudNetworkOverview(w http.ResponseWriter, r *http.Reque
 
 	// total_open is a dedicated COUNT (the same honesty rule as the evidence
 	// ledger): the bounded `considered` set can never masquerade as the total.
-	totalOpen := chScalarInt(cloudOpenObjectCountSQL("", scope))
+	totalOpen := chScalarInt(cloudOpenObjectCountSQL(cloudSignalWindowHours, "", scope))
 	if totalOpen < len(issues) {
 		totalOpen = len(issues) // a count the store failed to serve never understates what we hold
 	}

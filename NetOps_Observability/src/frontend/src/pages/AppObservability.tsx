@@ -24,8 +24,16 @@ import {
 import { serviceIdentity } from "./appobs/origin";
 import { FeedBar } from "./appobs/FeedBar";
 import {
-  DEFAULT_CLOUD_RANGE, filterByRange, feedCount, newestIso, rangeWords,
+  filterByRange, feedCount, newestIso, rangeWords, windowHoursFor, withinRange,
 } from "./appobs/range";
+import { useCloudScope, CloudScopeControl } from "./appobs/useCloudScope";
+import { scopeKey, isScopeActive } from "./appobs/scopeUrl";
+import type { CloudScopeState } from "./appobs/scopeUrl";
+import {
+  appInScope, buildScopeIndex, signalInScope, healthScopeKey, changeScopeKey,
+  evidenceScopeKey, objectInScope, unknownInScope, scopedToNothing,
+} from "./appobs/scope";
+import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
@@ -127,6 +135,26 @@ function CloudEmpty() {
     hint="connect an AWS / Azure / GCP account in Settings (or load inventory fixtures) — identity attribution appears as resources are discovered" /></div>;
 }
 
+// Empty-scope honesty (Wave 2 #5): data EXISTS, the active scope just matches
+// none of it. A distinct state from "nothing ingested" — the fix is the filter,
+// not a connector — so it says so and offers the one-click way out.
+function ScopeEmpty({ what, ctl }: { what: string; ctl: CloudScopeControl }) {
+  return (
+    <div className="ao-panel">
+      <EmptyState title={`No ${what} in this scope`}
+        hint="the provider / account / region / env filters above match nothing here"
+        action={<button className="ao-btn ao-btn--primary" onClick={ctl.clearFilters}>Clear filters</button>} />
+    </div>
+  );
+}
+
+// A surface built from CURRENT inventory is inherently range-less: the global
+// time range parameterizes the SIGNAL surfaces, never this one — and the label
+// says so instead of pretending (Wave 2 #5 honesty rule).
+function CurrentNote() {
+  return <span className="ao-panel-meta" title="the time range applies to signal views (alerts, changes, findings); inventory is always the current state">current inventory · not a time-range view</span>;
+}
+
 // 5-tab IA (audit C): Overview | Services | Investigations | Resources |
 // Data sources (+ Settings). The old 11 tab ids stay valid as deep-link
 // aliases so every existing bookmark/flyout link lands on the right sub-view.
@@ -161,6 +189,9 @@ export default function AppObservability() {
   // page (docked Inspector under shell-v2, page drawer on the v1 shell) and its
   // id is mirrored to ?inv=<id> so refresh / a shared link reopens it here.
   const inv = useInvestigationDrawer();
+  // Global scope + time range (Wave 2 #5): URL-backed (shares the hash query
+  // with ?inv=), feeds EVERY tab below. Narrows within the tenant view only.
+  const scopeCtl = useCloudScope();
 
   // deep-link: #/monitoring/appobs/<tab-or-alias> → opens that (sub-)view.
   // Re-read on hashchange too, so clicking a flyout sub-item while ALREADY on
@@ -188,7 +219,12 @@ export default function AppObservability() {
         title="Service View"
         subtitle="Cloud service identity, health, change & network RCA — evidence-grounded"
       />
-      <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary} />
+      <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary}
+        control={{
+          scope: scopeCtl.scope, options: shell.options, active: scopeCtl.active,
+          add: scopeCtl.add, remove: scopeCtl.remove,
+          clearFilters: scopeCtl.clearFilters, setRangeMinutes: scopeCtl.setRangeMinutes,
+        }} />
 
       <nav className="ao-tabs" role="tablist" aria-label="Service View">
         {TABS.map((tk) => (
@@ -200,11 +236,11 @@ export default function AppObservability() {
         ))}
       </nav>
 
-      {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} />}
-      {tab === "services" && <Services initialSub={sub} onOpen={setSel} />}
-      {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} />}
-      {tab === "resources" && <ResourcesGroup initialSub={sub} />}
-      {tab === "datasources" && <Ingestion initialSub={sub} />}
+      {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} ctl={scopeCtl} />}
+      {tab === "services" && <Services initialSub={sub} onOpen={setSel} ctl={scopeCtl} />}
+      {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} ctl={scopeCtl} />}
+      {tab === "resources" && <ResourcesGroup initialSub={sub} ctl={scopeCtl} />}
+      {tab === "datasources" && <Ingestion initialSub={sub} scope={scopeCtl.scope} onClearScope={scopeCtl.clearFilters} />}
       {tab === "settings" && <Settings />}
 
       {/* v1-shell fallback: same drawer content in the page-local panel (ESC/X/scrim). */}
@@ -233,20 +269,23 @@ function SubTabs<T extends string>({ value, onChange, items }: {
 }
 
 // ── Services (Applications + Service map) ────────────────────────────────────
-function Services({ initialSub, onOpen }: { initialSub: string; onOpen: (a: App) => void }) {
+function Services({ initialSub, onOpen, ctl }: {
+  initialSub: string; onOpen: (a: App) => void; ctl: CloudScopeControl;
+}) {
   const [sub, setSub] = useState<"applications" | "map">(initialSub === "map" ? "map" : "applications");
   return (
     <div className="ao-stack">
       <SubTabs value={sub} onChange={setSub}
         items={[{ key: "applications", label: "Applications" }, { key: "map", label: "Service map" }]} />
-      {sub === "applications" ? <Applications onOpen={onOpen} /> : <AppMap />}
+      {sub === "applications" ? <Applications onOpen={onOpen} ctl={ctl} /> : <AppMap ctl={ctl} />}
     </div>
   );
 }
 
 // ── Investigations (Timeline · Alerts · Changes · Findings · Network) ────────
-function Investigations({ initialSub, goDataSources, openInvestigation }: {
+function Investigations({ initialSub, goDataSources, openInvestigation, ctl }: {
   initialSub: string; goDataSources: () => void; openInvestigation: (id: string) => void;
+  ctl: CloudScopeControl;
 }) {
   const first = (["alerts", "changes", "findings", "network"].includes(initialSub)
     ? initialSub : "timeline") as "timeline" | "alerts" | "changes" | "findings" | "network";
@@ -258,15 +297,15 @@ function Investigations({ initialSub, goDataSources, openInvestigation }: {
         { key: "changes", label: "Changes" }, { key: "findings", label: "Findings" },
         { key: "network", label: "Network connectivity" },
       ]} />
-      {(sub === "timeline" || sub === "alerts" || sub === "changes") && <HealthChanges view={sub} />}
-      {sub === "findings" && <Evidence openInvestigation={openInvestigation} />}
+      {(sub === "timeline" || sub === "alerts" || sub === "changes") && <HealthChanges view={sub} ctl={ctl} />}
+      {sub === "findings" && <Evidence openInvestigation={openInvestigation} ctl={ctl} />}
       {sub === "network" && <Underlay goDataSources={goDataSources} />}
     </div>
   );
 }
 
 // ── Resources group (Resources · Service mapping · Untagged) ─────────────────
-function ResourcesGroup({ initialSub }: { initialSub: string }) {
+function ResourcesGroup({ initialSub, ctl }: { initialSub: string; ctl: CloudScopeControl }) {
   const first = (initialSub === "mapping" || initialSub === "untagged" ? initialSub : "resources") as
     "resources" | "mapping" | "untagged";
   const [sub, setSub] = useState(first);
@@ -277,9 +316,9 @@ function ResourcesGroup({ initialSub }: { initialSub: string }) {
         { key: "mapping", label: "Service mapping" },
         { key: "untagged", label: "Untagged" },
       ]} />
-      {sub === "resources" && <Resources />}
-      {sub === "mapping" && <Attribution />}
-      {sub === "untagged" && <Unknowns />}
+      {sub === "resources" && <Resources ctl={ctl} />}
+      {sub === "mapping" && <Attribution ctl={ctl} />}
+      {sub === "untagged" && <Unknowns ctl={ctl} />}
     </div>
   );
 }
@@ -298,15 +337,37 @@ interface OverviewData {
   objects: CloudRcaObject[];
   openCount: number;         // dedicated COUNT — never the list length (D-P1-7)
   objectsTruncated: boolean;
+  /** rows the ACTIVE scope filtered away (drives "no matches in scope"). */
+  hadObjects: boolean;
 }
 
-async function loadOverview(): Promise<OverviewData> {
-  const [apps, resources, cov, health, changes, ev] = await Promise.all([
-    loadApps(), loadResources(), loadCoverage(), loadHealthSignals(), loadChangeEvents(), loadEvidence(),
+async function loadOverview(scope: CloudScopeState): Promise<OverviewData> {
+  const wh = windowHoursFor(scope.rangeMinutes);
+  // Resources arrive SERVER-filtered (Wave-1 SQL filters); the signal reads take
+  // the real range window. Signals/apps/objects are then narrowed CLIENT-side —
+  // these sets are already loaded and LIMIT-bounded, and the signal store has no
+  // provider/account columns to filter on server-side (see scope.ts header).
+  const [apps, resources, cov, health, changes, ev, allRes] = await Promise.all([
+    loadApps(), loadResources(scope), loadCoverage(),
+    loadHealthSignals(undefined, wh), loadChangeEvents(undefined, wh), loadEvidence(undefined, wh),
+    // The UNFILTERED inventory backs the signal→scope join: a signal on an
+    // out-of-scope resource must RESOLVE (and be excluded), not float through
+    // as "unresolvable". Same shared 30s-TTL cache — no extra request when the
+    // scope is empty, one when it is not.
+    loadResources(),
   ]);
+  const idx = buildScopeIndex(allRes);
+  const minutes = scope.rangeMinutes;
   return {
-    apps, resources, coverage: cov.coverage, health, changes,
-    objects: ev.objects, openCount: ev.openCount, objectsTruncated: ev.objectsTruncated,
+    apps: apps.filter((a) => appInScope(a, scope)),
+    resources,
+    coverage: cov.coverage,
+    health: filterByRange(health, minutes).filter((h) => signalInScope(healthScopeKey(h), scope, idx)),
+    changes: filterByRange(changes, minutes).filter((c) => signalInScope(changeScopeKey(c), scope, idx)),
+    objects: ev.objects.filter((o) => objectInScope(o, scope, idx)),
+    openCount: ev.openCount,
+    objectsTruncated: ev.objectsTruncated,
+    hadObjects: ev.objects.length > 0,
   };
 }
 
@@ -317,11 +378,12 @@ function degradedApps(health: HealthSignal[]): string[] {
     .map((h) => h.app).filter((a) => a && a !== "—"))];
 }
 
-function Overview({ goTab, summary, openInvestigation }: {
+function Overview({ goTab, summary, openInvestigation, ctl }: {
   goTab: (t: Tab, sub?: string) => void; summary: ReadinessSummary;
-  openInvestigation: (id: string) => void;
+  openInvestigation: (id: string) => void; ctl: CloudScopeControl;
 }) {
-  const { data, status } = useAsync(loadOverview);
+  const scope = ctl.scope;
+  const { data, status } = useAsync(() => loadOverview(scope), [scopeKey(scope)]);
 
   if (status === "loading") {
     return (
@@ -339,7 +401,7 @@ function Overview({ goTab, summary, openInvestigation }: {
     return <div className="ao-panel"><EmptyState title="Unable to load the Service View summary" hint="retry, or check the cloud connector status in Settings" /></div>;
   }
 
-  const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated } = data;
+  const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated, hadObjects } = data;
   // Degraded = health-signal verdicts ∪ live measured app health (provider status
   // checks + probe outcomes). A dead health feed must never render as "0 degraded"
   // = "all healthy": with nothing measured at all we say "—", not 0.
@@ -350,6 +412,12 @@ function Overview({ goTab, summary, openInvestigation }: {
   const healthMeasured = health.length > 0 || apps.some((a) => a.health !== "unknown");
   const openRca = objects.filter((o) => o.state === "open");
   const unknownPct = coverage.total ? Math.round((coverage.unknown / coverage.total) * 100) : NOT_MEASURED;
+  const scoped = isScopeActive(scope);
+  // signal-window words: what the health/changes cards actually cover.
+  const rangeText = rangeWords(scope.rangeMinutes);
+  // the investigations window is the SERVER window (sub-day ranges keep the 24h
+  // read: an open investigation that started 20h ago must not vanish at "1h").
+  const objWindowText = rangeWords(windowHoursFor(scope.rangeMinutes) * 60);
 
   return (
     <div className="ao-stack">
@@ -361,21 +429,26 @@ function Overview({ goTab, summary, openInvestigation }: {
       <div className="ao-groups">
         <CardGroup title="Impact">
           <MetricCard label="Services Degraded" value={healthMeasured ? degraded.length : DASH}
-            trend={healthMeasured ? "provider status + health signals · 24h" : "no health feed measured"}
+            trend={healthMeasured ? `provider status + health signals · ${rangeText}` : "no health feed measured"}
             tone={!healthMeasured ? undefined : degraded.length ? "warn" : "good"} />
-          <MetricCard label="Open Investigations" value={openCount} trend="engine-formed · dedicated count" tone={openCount ? "warn" : "good"} />
+          {/* scoped: the count is of the investigations IN scope (the tenant-wide
+              dedicated count stays visible in the trend, never silently replaced) */}
+          <MetricCard label="Open Investigations"
+            value={scoped ? openRca.length : openCount}
+            trend={scoped ? `in scope · ${openCount} open tenant-wide` : "engine-formed · dedicated count"}
+            tone={(scoped ? openRca.length : openCount) ? "warn" : "good"} />
           <MetricCard label="Network Impact" value={DASH} trend="service→connection correlation not ingested" />
         </CardGroup>
         <CardGroup title="Coverage">
-          <MetricCard label="Services Observed" value={apps.length.toLocaleString()} trend="from cloud inventory" tone="accent" />
-          <MetricCard label="Resources Mapped" value={resources.length.toLocaleString()} trend="discovered + attributed" />
+          <MetricCard label="Services Observed" value={apps.length.toLocaleString()} trend="current inventory" tone="accent" />
+          <MetricCard label="Resources Mapped" value={resources.length.toLocaleString()} trend="current inventory · discovered + attributed" />
           <MetricCard label="Untagged Resources"
             value={unknownPct < 0 ? DASH : `${unknownPct}%`}
-            trend={coverage.total ? `${coverage.unknown} of ${coverage.total}` : undefined}
+            trend={coverage.total ? `${coverage.unknown} of ${coverage.total}${scoped ? " · tenant-wide" : ""}` : undefined}
             tone={unknownPct > 10 ? "warn" : unknownPct < 0 ? undefined : "good"} />
         </CardGroup>
         <CardGroup title="Change">
-          <MetricCard label="Recent Cloud Changes" value={changes.length} trend="provider audit log · 24h" />
+          <MetricCard label="Recent Cloud Changes" value={changes.length} trend={`provider audit log · ${rangeText}`} />
           <MetricCard label="Deploy-linked Incidents" value={DASH} trend="deploy events not ingested" />
         </CardGroup>
       </div>
@@ -389,13 +462,19 @@ function Overview({ goTab, summary, openInvestigation }: {
               ` · showing ${openRca.length} of ${openCount} open`}
           </span></div>
         {objects.length === 0 ? (
-          <EmptyState title="No open investigations in the last 24 hours"
+          scopedToNothing(scope, Number(hadObjects), 0) ? (
+            <EmptyState title="No investigations in this scope"
+              hint="investigations exist outside the current provider / account / region / env filters"
+              action={<button className="ao-btn ao-btn--primary" onClick={ctl.clearFilters}>Clear filters</button>} />
+          ) : (
+          <EmptyState title={`No open investigations in the ${objWindowText}`}
             hint={health.length || changes.length
               ? "cloud signals are landing; none has grounded into an investigation yet"
               : "no cloud health or change signals have landed yet"}
             action={!(health.length || changes.length)
               ? <button className="ao-btn ao-btn--primary" onClick={() => goTab("datasources")}>Check data sources</button>
               : undefined} />
+          )
         ) : (
           <DataTable<CloudRcaObject> rows={objects} rowKey={(o) => o.correlationId}
             height={Math.min(460, 56 + objects.length * 34)} ariaLabel="Open investigations"
@@ -428,13 +507,18 @@ function Overview({ goTab, summary, openInvestigation }: {
 }
 
 // ── Applications (LIVE: /api/cloud/apps) ─────────────────────────────────────
-function Applications({ onOpen }: { onOpen: (a: App) => void }) {
+function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudScopeControl }) {
   const [f, setF] = useState<Record<string, string>>({});
   const { data, status } = useAsync(loadApps);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="applications" />;
-  const apps = data ?? [];
-  if (apps.length === 0) return <CloudEmpty />;
+  const all = data ?? [];
+  if (all.length === 0) return <CloudEmpty />;
+  // Global scope first (client-side: apps are DERIVED rows the tab already
+  // loaded whole — there is no server filter on /api/cloud/apps), then the
+  // tab's own FilterBar refines within it.
+  const apps = all.filter((a) => appInScope(a, ctl.scope));
+  if (apps.length === 0) return <ScopeEmpty what="services" ctl={ctl} />;
   const rows = apps.filter((a) =>
     (!f.provider || a.providers.includes(f.provider as App["providers"][number])) &&
     (!f.env || a.env === f.env) &&
@@ -454,6 +538,8 @@ function Applications({ onOpen }: { onOpen: (a: App) => void }) {
           { key: "source", label: "Mapped by", options: [{ value: "cloud_tag", label: "tag" }, { value: "cloud_graph", label: "resource graph" }, { value: "operator_catalog", label: "operator" }, { value: "firewall_appid", label: "firewall" }] },
         ]} />
       <div className="ao-panel">
+        {/* range-less honesty: services come from the inventory, not a window */}
+        <div className="ao-panel-h">Services <CurrentNote /></div>
         <DataTable<App> rows={rows} rowKey={(a) => a.id} height={Math.min(520, 44 + rows.length * 30)}
           ariaLabel="Applications" onRowClick={onOpen} initialSort={{ key: "name", dir: "asc" }}
           columns={[
@@ -480,12 +566,15 @@ function Applications({ onOpen }: { onOpen: (a: App) => void }) {
 // App Map — the STRUCTURAL app→resource map from the live inventory (real). The
 // traffic-dependency layer (talks_to / egresses_via / suspected_cause edges) needs
 // cloud flow logs and is honestly deferred, not faked.
-function AppMap() {
-  const { data, status } = useAsync(loadResources);
+function AppMap({ ctl }: { ctl: CloudScopeControl }) {
+  // Server-side scope (Wave-1 SQL filters) — the map shows the scoped structure.
+  const { data, status } = useAsync(() => loadResources(ctl.scope), [scopeKey(ctl.scope)]);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="app map" />;
   const resources = data ?? [];
-  if (resources.length === 0) return <CloudEmpty />;
+  if (resources.length === 0) {
+    return ctl.active ? <ScopeEmpty what="resources" ctl={ctl} /> : <CloudEmpty />;
+  }
   const groups = groupByApp(resources);
   return (
     <div className="ao-stack">
@@ -516,7 +605,7 @@ function AppMap() {
 }
 
 // ── Cloud Resources (LIVE: /api/cloud/resources) ─────────────────────────────
-function Resources() {
+function Resources({ ctl }: { ctl: CloudScopeControl }) {
   const [f, setF] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<CloudResource | null>(null);
   // Bulk service-attribution (2026-07 review imp #5): select resources → assign
@@ -525,11 +614,16 @@ function Resources() {
   const [assigning, setAssigning] = useState(false);
   const [notice, setNotice] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
-  const { data, status } = useAsync(loadResources, [reloadKey]);
+  // SERVER-side scope: provider/account/region ride the Wave-1 SQL filters on
+  // /api/cloud/resources (env narrows client-side inside loadResources — it is
+  // a resolved tag, not a store column).
+  const { data, status } = useAsync(() => loadResources(ctl.scope), [reloadKey, scopeKey(ctl.scope)]);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="cloud resources" />;
   const all = data ?? [];
-  if (all.length === 0) return <CloudEmpty />;
+  if (all.length === 0) {
+    return ctl.active ? <ScopeEmpty what="resources" ctl={ctl} /> : <CloudEmpty />;
+  }
   const rows = all.filter((r) =>
     (!f.missing || r.missingTags.includes(f.missing)) &&
     (!f.unknown || (f.unknown === "yes") === (r.app === "")) &&
@@ -558,6 +652,8 @@ function Resources() {
       )}
       {notice && <div className="ao-selbar-note" role="status">{notice}</div>}
       <div className="ao-panel">
+        {/* range-less honesty: inventory is the current state, not a window */}
+        <div className="ao-panel-h">Resources <CurrentNote /></div>
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
           columns={[
             { key: "_sel", width: 34,
@@ -638,16 +734,23 @@ function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void 
 }
 
 // ── Attribution (LIVE: /api/cloud/attribution/coverage) ──────────────────────
-function Attribution() {
+function Attribution({ ctl }: { ctl: CloudScopeControl }) {
   const { data, status } = useAsync(loadCoverage);
-  const resq = useAsync(loadResources);
+  // resources SERVER-scoped → the by-scope table follows the global filters;
+  // the coverage AGGREGATE stays tenant-wide (the endpoint computes it over the
+  // whole inventory) and says so when a scope is active — never re-labeled.
+  const resq = useAsync(() => loadResources(ctl.scope), [scopeKey(ctl.scope)]);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="attribution coverage" />;
   const c: Coverage = data?.coverage ?? { confirmedTag: 0, strongGraph: 0, firewallAppId: 0, suspectedDomainIp: 0, unknown: 0, total: 0 };
-  const unknowns: UnknownContributor[] = data?.unknowns ?? [];
+  // untagged rows are resolved inventory facts → the scope applies client-side
+  // over this already-loaded top-N list (see scope.ts unknownInScope).
+  const unknowns: UnknownContributor[] = (data?.unknowns ?? [])
+    .filter((u) => unknownInScope(u, ctl.scope));
   if (c.total === 0) return <CloudEmpty />;
   const pct = (n: number) => Math.round((n / c.total) * 100);
   const resources = resq.data ?? [];
+  const tenantWide = ctl.active ? " · tenant-wide (scope applies to the tables below)" : "";
   const byScope = coverageByScope(resources, (r) => `${r.provider === "—" ? "—" : r.provider.toUpperCase()} / ${r.region || "—"}`);
   return (
     <div className="ao-stack">
@@ -661,7 +764,7 @@ function Attribution() {
 
       {/* coverage funnel — total → confirmed → strong → firewall → suspected → unknown */}
       <div className="ao-panel">
-        <div className="ao-panel-h">Service-mapping coverage <span className="ao-panel-meta">{c.total} observed · how each was identified</span></div>
+        <div className="ao-panel-h">Service-mapping coverage <span className="ao-panel-meta">{c.total} observed · how each was identified{tenantWide}</span></div>
         <div className="ao-funnel">
           {funnelSteps(c).map((s) => (
             <div className="ao-funnel-row" key={s.label}>
@@ -675,8 +778,11 @@ function Attribution() {
 
       {/* coverage by scope (provider / region) — real, from the inventory */}
       <div className="ao-panel">
-        <div className="ao-panel-h">Coverage by scope <span className="ao-panel-meta">attributed resources per provider / region</span></div>
-        {byScope.length === 0 ? <EmptyState title="No resources in scope" /> : (
+        <div className="ao-panel-h">Coverage by scope <span className="ao-panel-meta">attributed resources per provider / region{ctl.active ? " · filtered by the scope bar" : ""}</span></div>
+        {byScope.length === 0 ? (
+          <EmptyState title={ctl.active ? "No resources in this scope" : "No resources in scope"}
+            action={ctl.active ? <button className="ao-btn" onClick={ctl.clearFilters}>Clear filters</button> : undefined} />
+        ) : (
           <DataTable rows={byScope} rowKey={(s) => s.scope} height={Math.min(360, 44 + byScope.length * 30)}
             ariaLabel="Coverage by scope" initialSort={{ key: "pct", dir: "asc" }}
             columns={[
@@ -691,8 +797,15 @@ function Attribution() {
       <div className="ao-panel">
         <div className="ao-panel-h">Untagged resources <span className="ao-panel-meta">tag these to complete your service map · traffic ranking arrives with cloud flow logs</span></div>
         {unknowns.length === 0 ? (
+          // scope-filtered-empty ≠ fully-mapped: never claim the win the scope created
+          scopedToNothing(ctl.scope, (data?.unknowns ?? []).length, 0) ? (
+            <EmptyState title="No untagged resources in this scope"
+              hint="untagged resources exist outside the current scope filters"
+              action={<button className="ao-btn" onClick={ctl.clearFilters}>Clear filters</button>} />
+          ) : (
           <EmptyState title="Every discovered resource is mapped to a service"
             hint="untagged resources appear here with a fix path when discovery finds one" />
+          )
         ) : (
           <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources"
             columns={[
@@ -804,16 +917,19 @@ function HCTimeline({ health, changes, minutes, staleHint }: {
   );
 }
 
-async function loadHealthChanges(): Promise<{ health: HealthSignal[]; changes: ChangeEvent[] }> {
-  const [health, changes] = await Promise.all([loadHealthSignals(), loadChangeEvents()]);
+async function loadHealthChanges(windowHours: number): Promise<{ health: HealthSignal[]; changes: ChangeEvent[] }> {
+  const [health, changes] = await Promise.all([
+    loadHealthSignals(undefined, windowHours), loadChangeEvents(undefined, windowHours),
+  ]);
   return { health, changes };
 }
 
 // The cloud signal feed with an explicit freshness stamp + an operator refresh.
 // `loadedAt` is what makes the "live · updated Ns ago" cue truthful: it is set
 // only on a SUCCESSFUL fetch, so a failing refresh can never age-reset the label
-// and make stale data look fresh.
-function useCloudFeed() {
+// and make stale data look fresh. `windowHours` is the REAL server read window
+// (Wave 2 #5): changing it refetches — never a re-labeled stale set.
+function useCloudFeed(windowHours: number) {
   const [data, setData] = useState<{ health: HealthSignal[]; changes: ChangeEvent[] } | null>(null);
   const [status, setStatus] = useState<LoadState>("loading");
   const [loadedAt, setLoadedAt] = useState<number>(() => Date.now());
@@ -822,20 +938,25 @@ function useCloudFeed() {
   useEffect(() => {
     let live = true;
     if (nonce > 0) setBusy(true);
-    loadHealthChanges().then(
+    loadHealthChanges(windowHours).then(
       (d) => { if (!live) return; setData(d); setStatus("ready"); setLoadedAt(Date.now()); setBusy(false); },
       () => { if (!live) return; setStatus("error"); setBusy(false); },
     );
     return () => { live = false; };
-  }, [nonce]);
+  }, [nonce, windowHours]);
   return { data, status, loadedAt, busy, refresh: () => setNonce((n) => n + 1) };
 }
 
-function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
-  const feed = useCloudFeed();
-  // The window the tables show. Narrows inside the 24h the backend ingests —
-  // see range.ts for why 7d is deliberately not offered.
-  const [minutes, setMinutes] = useState<number>(DEFAULT_CLOUD_RANGE.minutes);
+function HealthChanges({ view, ctl }: { view: "timeline" | "alerts" | "changes"; ctl: CloudScopeControl }) {
+  // The GLOBAL range (URL-backed, Wave 2 #5): sub-24h ranges narrow client-side
+  // inside the fetched window; >24h changes the server read (windowHoursFor).
+  const minutes = ctl.scope.rangeMinutes;
+  const feed = useCloudFeed(windowHoursFor(minutes));
+  // The unfiltered inventory backs the signal→scope join (account/region/env
+  // live on the resource, not the signal). Shared 30s-TTL read — no new fetch
+  // beyond what the shell already did.
+  const invq = useAsync(() => loadResources(), []);
+  const scopeIdx: ScopeIndex = buildScopeIndex(invq.data ?? []);
   // Row drill-in (audit defect #4): open the full record for an alert / change.
   const [alertSel, setAlertSel] = useState<HealthSignal | null>(null);
   const [changeSel, setChangeSel] = useState<ChangeEvent | null>(null);
@@ -843,8 +964,12 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
   if (feed.status === "error" || !feed.data) return <LoadError what="cloud health & change signals" />;
   const allHealth = feed.data.health;
   const allChanges = feed.data.changes;
-  const health = filterByRange(allHealth, minutes);
-  const changes = filterByRange(allChanges, minutes);
+  // range first, then the global scope (client-side over the LIMIT-bounded,
+  // already-loaded window — the signal store has no scope columns; scope.ts).
+  const health = filterByRange(allHealth, minutes)
+    .filter((h) => signalInScope(healthScopeKey(h), ctl.scope, scopeIdx));
+  const changes = filterByRange(allChanges, minutes)
+    .filter((c) => signalInScope(changeScopeKey(c), ctl.scope, scopeIdx));
 
   // Counts are per view, so the bar always describes the table under it.
   const count = view === "alerts" ? feedCount(health.length, allHealth.length, minutes)
@@ -852,11 +977,15 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
       : feedCount(health.length + changes.length, allHealth.length + allChanges.length, minutes);
 
   // An empty window is not necessarily an empty feed: when signals exist but all
-  // fall OUTSIDE the selected range, say so and name the age of the newest one —
-  // "nothing here" and "nothing recent" are different answers (owner review #2).
+  // fall OUTSIDE the selected range (or scope), say so — and say WHICH filter is
+  // hiding them. "nothing here", "nothing recent" and "nothing in scope" are
+  // three different answers (owner review #2 + Wave 2 #5).
   const newest = newestIso([...allHealth, ...allChanges]);
   const emptyHint = (kind: string) => {
     const all = view === "alerts" ? allHealth.length : view === "changes" ? allChanges.length : allHealth.length + allChanges.length;
+    if (all > 0 && ctl.active) {
+      return `Nothing matches the current scope filters in the ${rangeWords(minutes)} — clear or adjust the scope above.`;
+    }
     if (all > 0 && newest) {
       return `Nothing in the ${rangeWords(minutes)} — the most recent ${kind} landed ${ago(newest)}. Widen the range to see it.`;
     }
@@ -867,7 +996,9 @@ function HealthChanges({ view }: { view: "timeline" | "alerts" | "changes" }) {
   return (
     <div className="ao-stack">
       <SourceFreshnessStrip />
-      <FeedBar minutes={minutes} onRange={setMinutes} count={count}
+      {/* onRange writes the GLOBAL range (URL) — the scope-bar Range select and
+          this control are the same state, so they can never disagree. */}
+      <FeedBar minutes={minutes} onRange={ctl.setRangeMinutes} count={count}
         loadedAt={feed.loadedAt} onRefresh={feed.refresh} busy={feed.busy}
         label={`${view === "alerts" ? "Alerts" : view === "changes" ? "Changes" : "Timeline"} time range`} />
       {view === "timeline" && <HCTimeline health={health} changes={changes} minutes={minutes} staleHint={emptyHint("cloud events")} />}
@@ -1013,20 +1144,25 @@ function openCloudAccounts() { location.hash = "#/monitoring/appobs/accounts"; }
 // Attribution rules + precedence are Service View settings, not an ITSM concern.
 function openAttributionSettings() { location.hash = "#/monitoring/appobs/settings"; }
 
-function Unknowns() {
+function Unknowns({ ctl }: { ctl: CloudScopeControl }) {
   const [fix, setFix] = useState<UnknownContributor | null>(null);
   // In-product remediation (2026-07 review imp #5): assign an untagged resource
   // to a business service instead of dead-ending at "go tag it in the console".
   const [assignRes, setAssignRes] = useState<UnknownContributor | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const res = useAsync(loadResources, [reloadKey]);
+  // resources SERVER-scoped (Wave-1 SQL filters); the coverage top-N narrows
+  // client-side over its already-loaded list (scope.ts unknownInScope).
+  const res = useAsync(() => loadResources(ctl.scope), [reloadKey, scopeKey(ctl.scope)]);
   const cov = useAsync(loadCoverage, [reloadKey]);
   const reload = () => { invalidateCloudInventory(); setReloadKey((k) => k + 1); };
   if (res.status === "loading" || cov.status === "loading") return <TableSkeleton />;
   if (res.status === "error" || cov.status === "error") return <LoadError what="unknowns" />;
   const resources = res.data ?? [];
-  const unknowns = cov.data?.unknowns ?? [];
-  if (resources.length === 0) return <CloudEmpty />;
+  const allUnknowns = cov.data?.unknowns ?? [];
+  const unknowns = allUnknowns.filter((u) => unknownInScope(u, ctl.scope));
+  if (resources.length === 0) {
+    return ctl.active ? <ScopeEmpty what="resources" ctl={ctl} /> : <CloudEmpty />;
+  }
   const cats: { label: string; n: number; measured: boolean }[] = [
     { label: "Unattributed resources", n: resources.filter((r) => r.app === "").length, measured: true },
     { label: "Unknown owners", n: resources.filter((r) => r.owner === "—").length, measured: true },
@@ -1042,8 +1178,15 @@ function Unknowns() {
       <div className="ao-panel">
         <div className="ao-panel-h">Remediation queue <span className="ao-panel-meta">tag these resources to complete your service map</span></div>
         {unknowns.length === 0 ? (
+          // scope-filtered-empty ≠ fully-mapped (same honesty rule as Attribution)
+          scopedToNothing(ctl.scope, allUnknowns.length, 0) ? (
+            <EmptyState title="No untagged resources in this scope"
+              hint="untagged resources exist outside the current scope filters"
+              action={<button className="ao-btn" onClick={ctl.clearFilters}>Clear filters</button>} />
+          ) : (
           <EmptyState title="Every discovered resource is mapped to a service"
             hint="untagged resources appear here with a fix path when discovery finds one" />
+          )
         ) : (
           <DataTable<UnknownContributor> rows={unknowns} rowKey={(r) => r.entity} height={Math.min(420, 44 + unknowns.length * 34)} ariaLabel="Untagged resources" onRowClick={setFix}
             columns={[
@@ -1108,22 +1251,46 @@ function consoleUrlFor(u: UnknownContributor, resources: CloudResource[]): strin
 // a cloud correlation object (used in the verdict) plus that object's own declared
 // gaps (category "missing"). The engine records no contradicting/discriminating
 // role today, so those categories simply do not appear — we never claim one.
-function Evidence({ openInvestigation }: { openInvestigation: (id: string) => void }) {
+function Evidence({ openInvestigation, ctl }: {
+  openInvestigation: (id: string) => void; ctl: CloudScopeControl;
+}) {
   const [f, setF] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<EvidenceRow | null>(null);
-  const { data, status } = useAsync(loadEvidence);
+  // REAL range window (Wave 2 #5): the ledger read carries ?window_hours=.
+  const minutes = ctl.scope.rangeMinutes;
+  const wh = windowHoursFor(minutes);
+  const { data, status } = useAsync(() => loadEvidence(undefined, wh), [wh]);
+  // unfiltered inventory backs the finding→scope join (see scope.ts header).
+  const invq = useAsync(() => loadResources(), []);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error" || !data) return <LoadError what="the evidence ledger" />;
   const all = data.rows;
   if (all.length === 0) {
     return (
       <div className="ao-panel">
-        <EmptyState title="No findings in the last 24 hours"
+        <EmptyState title={`No findings in the ${rangeWords(wh * 60)}`}
           hint="findings appear when the engine grounds a cloud signal into an investigation — check Data sources if no cloud signals are landing at all" />
       </div>
     );
   }
-  const rows = all.filter((e) =>
+  const scopeIdx = buildScopeIndex(invq.data ?? []);
+  // global scope + range first (client-side: the page is LIMIT-bounded and
+  // already loaded), then the tab's own FilterBar refines within it.
+  const inScope = all
+    .filter((e) => withinRange(e.time, minutes))
+    .filter((e) => signalInScope(evidenceScopeKey(e), ctl.scope, scopeIdx));
+  if (inScope.length === 0) {
+    return (
+      <div className="ao-panel">
+        <EmptyState title={ctl.active ? "No findings in this scope" : `No findings in the ${rangeWords(minutes)}`}
+          hint={ctl.active
+            ? "findings exist outside the current scope/range — clear or adjust the filters above"
+            : `the most recent finding is older than the selected range — widen it to see more`}
+          action={ctl.active ? <button className="ao-btn" onClick={ctl.clearFilters}>Clear filters</button> : undefined} />
+      </div>
+    );
+  }
+  const rows = inScope.filter((e) =>
     (!f.signal || e.signalType === f.signal) &&
     (!f.confidence || e.confidence === f.confidence) &&
     (!f.category || e.category === f.category) &&
@@ -1133,10 +1300,10 @@ function Evidence({ openInvestigation }: { openInvestigation: (id: string) => vo
     <div className="ao-stack">
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
-          { key: "app", label: "Service", options: [...new Set(all.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
-          { key: "category", label: "Category", options: [...new Set(all.map((e) => e.category))].map((c) => ({ value: c, label: c })) },
-          { key: "signal", label: "Signal type", options: [...new Set(all.map((e) => e.signalType))].map((s) => ({ value: s, label: s })) },
-          { key: "confidence", label: "Confidence", options: [...new Set(all.map((e) => e.confidence))].map((c) => ({ value: c, label: c })) },
+          { key: "app", label: "Service", options: [...new Set(inScope.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
+          { key: "category", label: "Category", options: [...new Set(inScope.map((e) => e.category))].map((c) => ({ value: c, label: c })) },
+          { key: "signal", label: "Signal type", options: [...new Set(inScope.map((e) => e.signalType))].map((s) => ({ value: s, label: s })) },
+          { key: "confidence", label: "Confidence", options: [...new Set(inScope.map((e) => e.confidence))].map((c) => ({ value: c, label: c })) },
           { key: "grounded", label: "Grounded", options: [{ value: "yes", label: "yes" }, { value: "no", label: "gap" }] },
         ]} />
       <div className="ao-panel">
