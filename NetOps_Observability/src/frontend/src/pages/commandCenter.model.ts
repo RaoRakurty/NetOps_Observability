@@ -33,6 +33,11 @@ export interface ActionItem {
   ageMs: number;
 }
 
+// startedAt — the incident's real start timestamp. SINGLE source of truth for the
+// queue's absolute date column AND ageMs (window_start, else created_at), so the
+// relative age and the absolute date can never describe different instants.
+export const startedAt = (c: CorrObject): string => c.window_start || c.created_at || "";
+
 export const fmtAge = (iso?: string, now: number = Date.now()): string => {
   if (!iso) return "—";
   const ms = now - Date.parse(iso);
@@ -127,7 +132,7 @@ export function buildItem(c: CorrObject, now: number = Date.now()): ActionItem {
     fault: deriveFault(c, affected),
     owner, ownerName,
     ticket: deriveTicket(rca),
-    ageMs: now - Date.parse(c.window_start || c.created_at || ""),
+    ageMs: now - Date.parse(startedAt(c)),
   };
   return { ...base, nextAction: deriveNextAction(base) };
 }
@@ -141,10 +146,41 @@ export function isActionableCorr(c: CorrObject): boolean {
   return true;
 }
 
+// ── Triage ladders (semantic sort ranks) ───────────────────────────────────────
+// The queue's columns must sort by OPERATOR URGENCY, never alphabetically
+// ("Blocked" < "Confirmed" lexically is meaningless to a NOC). Each ladder is
+// ascending = work-this-first, mirroring theme/severity.ts::severityRank and
+// appobs/sortRanks.ts. They live here, with the rest of the triage decision
+// logic, because "which state outranks which" IS a product rule — the view only
+// reads them. bySeverityThenAge is defined in terms of the same table, so the
+// default queue order and a click-sort on Sev can never disagree.
+
+const SEV_RANK: Record<Sev, number> = { crit: 0, major: 1, warn: 2, ok: 3 };
+export const sevRank = (s: Sev): number => SEV_RANK[s] ?? 9;
+
+const RCA_RANK: Record<RcaState, number> = {
+  Confirmed: 0, Suspected: 1, Blocked: 2, Correlated: 3, "RCA running": 4, New: 5, Resolved: 6,
+};
+export const rcaRank = (r: RcaState): number => RCA_RANK[r] ?? 9;
+
+// Weakest evidence first — a Single-stream group is the one an operator must
+// shore up before it can ever be confirmed.
+const EVIDENCE_RANK: Record<EvidenceState, number> = { "Single-stream": 0, Partial: 1, Complete: 2 };
+export const evidenceRank = (e: EvidenceState): number => EVIDENCE_RANK[e] ?? 9;
+
+// Biggest ownership gap first.
+const OWNER_RANK: Record<OwnerState, number> = { Missing: 0, Escalated: 1, Recommended: 2, Assigned: 3 };
+export const ownerRank = (o: OwnerState): number => OWNER_RANK[o] ?? 9;
+
+// Most ITSM-urgent first.
+const TICKET_RANK: Record<TicketState, number> = {
+  "Sync failed": 0, "Ticket needed": 1, Eligible: 2, Ticketed: 3, "Not eligible": 4,
+};
+export const ticketRank = (t: TicketState): number => TICKET_RANK[t] ?? 9;
+
 // Severity-first, then newest — the operator works the top of this list.
 export function bySeverityThenAge(a: ActionItem, b: ActionItem): number {
-  const sr: Record<Sev, number> = { crit: 0, major: 1, warn: 2, ok: 3 };
-  return sr[a.sev] - sr[b.sev] || b.ageMs - a.ageMs;
+  return sevRank(a.sev) - sevRank(b.sev) || b.ageMs - a.ageMs;
 }
 
 // ── Action Queue filters (Increment 2) ─────────────────────────────────────────
