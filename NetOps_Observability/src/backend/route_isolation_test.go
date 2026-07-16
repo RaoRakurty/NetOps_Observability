@@ -54,6 +54,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/commands/suggestions":             "selfScoped",
 	"/api/ai/feedback":                         "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
 	"/api/alerts":                              "scoped",
+	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
+	// (own tenant + device-less platform rows); triage is own-tenant-only with
+	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.
+	"/api/alerts/episodes":                     "scoped",
+	"/api/alerts/episodes/":                    "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
 	"/api/compliance":                          "scoped",
 	"/api/correlations":                        "scoped",
 	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited

@@ -97,6 +97,41 @@ export type Rule = {
   annotations?: Record<string, string>;
 };
 
+// Alert episode — repeated firings of the same (resource, signal, state)
+// folded into one row with first/last/count, flap detection and triage state.
+export type EpisodeNote = { at: string; by: string; text: string };
+export type AlertEpisode = {
+  id: string;
+  tenant_id?: string;
+  resource?: string; // device id; absent = platform/stack-level
+  signal: string; // monitor rule name
+  state: string; // severity facet (critical | warning | …)
+  summary?: string;
+  status: "active" | "cleared" | "closed";
+  first_seen: string;
+  last_seen: string;
+  count: number;
+  flapping?: boolean;
+  flip_count?: number;
+  acknowledged_by?: string;
+  acknowledged_at?: string;
+  assigned_to?: string;
+  assigned_by?: string;
+  muted?: boolean;
+  muted_by?: string;
+  snoozed_until?: string;
+  snoozed_by?: string;
+  notes?: EpisodeNote[];
+};
+export type AlertEpisodeList = {
+  episodes: AlertEpisode[];
+  total: number;
+  truncated: boolean;
+  close_window_seconds?: number;
+  flap_flips?: number;
+  flap_window_seconds?: number;
+};
+
 export type MetricTile = {
   title: string;
   value: string;
@@ -1612,6 +1647,20 @@ export const api = {
   saveDiscoveryConfig: (c: DiscoveryConfigInput) =>
     request<DiscoveryConfigEnvelope>("/api/discovery/config", { method: "PUT", body: JSON.stringify(c) }),
   alerts: () => request<Alert[]>("/api/alerts"),
+  // Alert episodes: grouped firings + triage. Actor is always the signed-in
+  // principal (stamped server-side); mute/snooze pause notifications only.
+  alertEpisodes: (status: "open" | "active" | "cleared" | "closed" | "all" = "open") =>
+    request<AlertEpisodeList>(`/api/alerts/episodes?status=${encodeURIComponent(status)}`),
+  episodeAck: (id: string, acknowledged: boolean) =>
+    request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/ack`, { method: "POST", body: JSON.stringify({ acknowledged }) }),
+  episodeAssign: (id: string, assignee: string) =>
+    request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/assign`, { method: "POST", body: JSON.stringify({ assignee }) }),
+  episodeMute: (id: string, muted: boolean) =>
+    request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/mute`, { method: "POST", body: JSON.stringify({ muted }) }),
+  episodeSnooze: (id: string, until: string) =>
+    request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/snooze`, { method: "POST", body: JSON.stringify({ until }) }),
+  episodeNote: (id: string, text: string) =>
+    request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/notes`, { method: "POST", body: JSON.stringify({ text }) }),
   rules: () => request<Rule[]>("/api/rules"),
   addRule: (r: Rule) =>
     request<Rule>("/api/rules", { method: "POST", body: JSON.stringify(r) }),

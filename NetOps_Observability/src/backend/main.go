@@ -42,6 +42,7 @@ type server struct {
 	discovery        *DiscoveryAggregator
 	collectors       *collectors.Pool
 	alerts           *alerts.Engine
+	alertEpisodes    *alertEpisodeStore
 	userRules        *userRulesStore
 	notifier         *notify.Dispatcher
 	selfHeal         *selfHealer
@@ -556,6 +557,11 @@ func newServer() *server {
 	srv.copilotLimiter = newTenantRateLimiter()
 	srv.aiToolBudget = newAIDailyBudget()
 	engine.OnFire = srv.ingestAlertIncident
+	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
+	// into per-tenant episodes; muted/snoozed episodes pause NOTIFICATIONS only.
+	srv.alertEpisodes = newAlertEpisodeStore(envOr("ALERT_EPISODES_FILE", "/data/alert_episodes.json"))
+	engine.OnTransition = srv.observeAlertTransition
+	engine.SuppressNotify = srv.alertNotifySuppressed
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
@@ -909,6 +915,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
+	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)        // tenant-scoped episode list
+	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction)  // POST {id}/(ack|assign|mute|snooze|notes)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
