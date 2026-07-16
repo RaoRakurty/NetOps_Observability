@@ -10,6 +10,12 @@
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
+// The Action Queue renders through the shared DataTable primitive (ae0668a):
+// data rows are div[role=row].dtv-row inside the grid labelled "Action Queue —
+// correlated incidents" — not the old hand-rolled <tr.cc-row> table.
+const queueRows = (page: Page) =>
+  page.getByRole("grid", { name: "Action Queue — correlated incidents" }).locator(".dtv-row");
+
 // Two tenants, each with one confirmed incident touching a tenant-unique device.
 const DB: Record<string, { device: string; corrId: string; objects: unknown[] }> = {
   t_acme: {
@@ -78,8 +84,8 @@ async function bootAs(page: Page, tenant: string) {
 test("tenant A sees ONLY tenant A's incident — never tenant B's", async ({ page }) => {
   await bootAs(page, "t_acme");
 
-  await expect(page.locator("tr.cc-row")).toHaveCount(1);
-  await page.locator("tr.cc-row").first().click(); // expand → blast radius + evidence
+  await expect(queueRows(page)).toHaveCount(1);
+  await queueRows(page).first().click(); // expand → blast radius + evidence
 
   // A's own device is shown in the expanded blast radius…
   await expect(page.getByText("acme-edge-1")).toBeVisible();
@@ -92,8 +98,8 @@ test("tenant A sees ONLY tenant A's incident — never tenant B's", async ({ pag
 test("tenant B sees ONLY tenant B's incident — symmetric isolation", async ({ page }) => {
   await bootAs(page, "t_globex");
 
-  await expect(page.locator("tr.cc-row")).toHaveCount(1);
-  await page.locator("tr.cc-row").first().click();
+  await expect(queueRows(page)).toHaveCount(1);
+  await queueRows(page).first().click();
 
   await expect(page.getByText("globex-core-7")).toBeVisible();
   const body = await page.locator("body").innerText();
