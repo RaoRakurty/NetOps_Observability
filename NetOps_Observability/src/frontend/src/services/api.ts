@@ -553,9 +553,40 @@ export type RcaPathAttribution = {
   confidence_lifted: boolean; capped: boolean; cap_reason?: string;
   on_path_device_count: number; path?: RcaTypedPath | null;
 };
-// The RCA report JSON — we only type the path-causality slice the P3 render reads;
+// The RCA report JSON — we type the path-causality slice the P3 render reads and
+// the recovery/lifecycle slice the embedded-investigation verification loop reads;
 // the report carries much more (rca_report.go), left loose for other consumers.
-export type RcaReportJson = { path_attribution?: RcaPathAttribution | null; [k: string]: unknown };
+export type RcaRecoveryScope = { state: string; at?: string; basis: string };
+export type RcaReportStatesLite = {
+  incident?: string;   // active | recovering | recovered | no_longer_observed | closed | merged | superseded
+  lifecycle?: string;
+  recovery?: string;   // explicitly_confirmed | component_only | failed_validation | inferred | not_observed
+  recovery_basis?: string;
+  recovery_component?: RcaRecoveryScope;
+  recovery_service?: RcaRecoveryScope;
+  monitoring?: string; // not_started | active | completed
+  [k: string]: unknown;
+};
+export type RcaReportTimesLite = {
+  first_observed?: string; last_anomalous?: string;
+  recovered_at?: string; recovered_captured?: boolean;
+  component_recovered_at?: string; monitoring_until?: string;
+  [k: string]: unknown;
+};
+export type RcaReportJson = {
+  path_attribution?: RcaPathAttribution | null;
+  states?: RcaReportStatesLite;
+  times?: RcaReportTimesLite;
+  [k: string]: unknown;
+};
+
+// Manual incident lifecycle events (#84 P1d / #7 investigation close): the
+// caller-tenant's operator-entered timestamps for one correlation object.
+export type TimeEventRow = {
+  id: string; correlation_id: string; event_type: string; event_time: string;
+  timestamp_source: string; confidence: number; source_system: string;
+  note?: string; created_at: string; created_by: string;
+};
 
 // Front page (#69) — scope health score, unified event feed, RCA coverage stats.
 export type HealthContribution = {
@@ -1781,6 +1812,18 @@ export const api = {
   // RCA Time Intelligence — incident time decomposition (phases + time-loss driver).
   correlationTimeMetrics: (id: string) =>
     request<TimeIntel>(`/api/correlations/${encodeURIComponent(id)}/time-metrics`),
+  // Manual lifecycle events for one investigation (tenant-scoped; the embedded
+  // drawer reads WHO closed it + the recorded verification state at close).
+  correlationTimeEvents: (id: string) =>
+    request<{ events: TimeEventRow[] }>(`/api/correlations/${encodeURIComponent(id)}/time-events`),
+  // Record a manual lifecycle event. For a close, `verification` is the
+  // allowlisted recovery-verification state — the server composes the labeled
+  // note and audits the actor; an override can never be recorded silently.
+  correlationTimeEventSet: (id: string, body: {
+    event_type: string; event_time: string; note?: string; verification?: string;
+  }) =>
+    request<TimeEventRow>(`/api/correlations/${encodeURIComponent(id)}/time-events`,
+      { method: "POST", body: JSON.stringify(body) }),
   // RCA auto-ticketing (#78): the external ticket link + audit history for one
   // RCA object, and operator-initiated create / sync (enqueued to the outbox).
   correlationTickets: (id: string) =>
