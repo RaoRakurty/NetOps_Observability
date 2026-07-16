@@ -23,6 +23,7 @@ provider is never guessed).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import shlex
 
@@ -100,6 +101,74 @@ def resource_id_for(family: str, line: str) -> str:
     return ""
 
 
+def _iso_utc(t: _dt.datetime) -> str:
+    """Aware datetime → RFC 3339 UTC string ("...Z")."""
+    return (t.astimezone(_dt.timezone.utc)
+            .isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+
+
+def _parse_provider_iso(s: str) -> str:
+    """Provider ISO-8601 string → RFC 3339 UTC, or "" when unparseable. AWS
+    stamps are UTC ("Z" or offset-suffixed); a zone-less string is refused
+    rather than guessed (log-time standard: never assume a zone silently)."""
+    if not s:
+        return ""
+    try:
+        t = _dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if t.tzinfo is None:
+        return ""
+    return _iso_utc(t)
+
+
+def _epoch_to_iso(v, ms: bool = False) -> str:
+    """Epoch seconds (or millis) → RFC 3339 UTC, "" when not a sane epoch."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return ""
+    if ms:
+        n /= 1000.0
+    # Sanity bounds: 2000-01-01 .. 2200-01-01 — a field that is not actually
+    # an epoch (port, count) must never masquerade as a time.
+    if not (946684800 <= n <= 7258118400):
+        return ""
+    return _iso_utc(_dt.datetime.fromtimestamp(n, tz=_dt.timezone.utc))
+
+
+def event_ts_for(family: str, line: str) -> str:
+    """The record's OWN event time (RFC 3339 UTC) parsed from the raw line, or
+    "" when the line does not carry one where the family's format puts it.
+    Cloud log objects are batch-delivered minutes after the fact (ALB ~5 min,
+    VPC flow up to ~10 min) — stamping ingest time misplaces every record on
+    the timeline, so the searchable `timestamp` must be the event time.
+
+      lb   — ALB/NLB access log, field 1 is ISO-8601 UTC (field 0 is the type).
+      waf  — WAF JSON, "timestamp" is epoch milliseconds.
+      flow — VPC flow log v2 default layout, fields 10/11 are start/end epoch
+             seconds; we use `start` (when the flow began).
+      dns  — Route 53 resolver query log JSON, "query_timestamp" is ISO-8601.
+
+    Never raises; never guesses a timezone (zone-less provider stamps → "")."""
+    if family == "lb":
+        try:
+            f = shlex.split(line)
+        except ValueError:
+            return ""
+        return _parse_provider_iso(f[1]) if len(f) >= 2 else ""
+    if family == "waf":
+        return _epoch_to_iso(_json_field(line, "timestamp"), ms=True)
+    if family == "flow":
+        parts = line.split()
+        if len(parts) >= 12 and parts[0].isdigit():
+            return _epoch_to_iso(parts[10])
+        return ""
+    if family == "dns":
+        return _parse_provider_iso(_json_field(line, "query_timestamp"))
+    return ""
+
+
 def cloud_log_doc(
     out_name: str,
     line: str,
@@ -114,8 +183,13 @@ def cloud_log_doc(
 
     `tenant` is REQUIRED and stamped as tenant_id — cloud logs are tenant-scoped
     (§3a); the caller resolves it at the source and must never leave it empty.
-    `timestamp` is the ingest-time stamp the router sorts/filters on (RFC3339);
-    the caller supplies it so this stays pure."""
+    `timestamp` is the INGEST-time stamp (RFC3339), supplied by the caller so
+    this stays pure. The doc's `timestamp` (what the router indexes and the UI
+    sorts/filters on) is the record's OWN event time parsed from the line
+    (event_ts_for) — batch-delivered cloud logs arrive minutes late, so ingest
+    time would misplace them on the timeline. The ingest stamp is kept as
+    `ingested_at` (and is the `timestamp` fallback when the line carries no
+    parseable event time), so origin-vs-receive skew stays observable."""
     if not (line and line.strip()):
         return None
     if not tenant:
@@ -137,8 +211,13 @@ def cloud_log_doc(
         doc["account"] = account
     if region:
         doc["region"] = region
-    if timestamp:
+    event_ts = event_ts_for(family, line)
+    if event_ts:
+        doc["timestamp"] = event_ts
+    elif timestamp:
         doc["timestamp"] = timestamp
+    if timestamp:
+        doc["ingested_at"] = timestamp
     return doc
 
 

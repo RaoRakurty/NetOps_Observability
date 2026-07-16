@@ -71,6 +71,42 @@ def test_unrecognized_lane_and_blank_drop():
     assert cloud_tag.cloud_log_doc("aws-waf.waf", "   ", "acme") is None
 
 
+def test_event_ts_per_family():
+    # Log-time standard: the searchable timestamp is the record's OWN event
+    # time, parsed from where each family's format carries it — RFC 3339 UTC.
+    assert cloud_tag.event_ts_for("lb", ALB_LINE) == "2026-07-15T00:00:00.000Z"
+    # VPC flow v2 fields 10/11 are start/end epoch seconds → start is used.
+    assert cloud_tag.event_ts_for("flow", VPC_LINE) == "2021-05-03T00:00:00.000Z"
+    waf = json.dumps({"webaclId": "acl", "timestamp": 1752537600000})  # epoch ms
+    assert cloud_tag.event_ts_for("waf", waf) == "2025-07-15T00:00:00.000Z"
+    dns = json.dumps({"query_name": "x.example.com.",
+                      "query_timestamp": "2026-07-15T00:00:05Z"})
+    assert cloud_tag.event_ts_for("dns", dns) == "2026-07-15T00:00:05.000Z"
+
+
+def test_event_ts_never_guesses():
+    # Zone-less / absent / garbage provider stamps → "" (never a silent zone
+    # assumption, never an exception).
+    assert cloud_tag.event_ts_for("dns", json.dumps({"query_timestamp": "2026-07-15 00:00:05"})) == ""
+    assert cloud_tag.event_ts_for("waf", json.dumps({"timestamp": "not-a-number"})) == ""
+    assert cloud_tag.event_ts_for("waf", json.dumps({"timestamp": 42})) == ""  # not a sane epoch
+    assert cloud_tag.event_ts_for("lb", "") == ""
+    assert cloud_tag.event_ts_for("flow", "version account eni") == ""
+    assert cloud_tag.event_ts_for("host", "anything") == ""
+
+
+def test_cloud_log_doc_prefers_event_time_and_keeps_ingest_time():
+    ingest = "2026-07-15T00:07:00Z"  # S3 delivery lag: doc lands ~7 min later
+    doc = cloud_tag.cloud_log_doc("aws-alb-access.alb", ALB_LINE, "acme",
+                                  timestamp=ingest)
+    assert doc["timestamp"] == "2026-07-15T00:00:00.000Z"  # event time wins
+    assert doc["ingested_at"] == ingest                     # skew observable
+    # A line with no parseable event time falls back to the ingest stamp.
+    doc2 = cloud_tag.cloud_log_doc("aws-waf.waf", WAF_LINE, "acme", timestamp=ingest)
+    assert doc2["timestamp"] == ingest
+    assert doc2["ingested_at"] == ingest
+
+
 def test_change_log_doc():
     doc = cloud_tag.change_log_doc("acme", resource_id="sg-123",
                                    event_name="AuthorizeSecurityGroupIngress",
