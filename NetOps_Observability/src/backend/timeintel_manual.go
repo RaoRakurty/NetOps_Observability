@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,10 +33,33 @@ var manualEventTypes = map[timeintel.EventType]bool{
 	timeintel.EvClosed:            true,
 }
 
-// handleCorrelationTimeEvents routes the manual-event write path:
-//   POST   /api/correlations/{id}/time-events           (add/edit a manual event)
+// closeVerificationLabels are the ONLY verification states a close may record
+// (#7 embedded investigation verification loop). The label is composed SERVER-
+// side from the validated enum so an override is always explicit and labeled in
+// the stored note — a client can never record a silent or free-text override.
+var closeVerificationLabels = map[string]string{
+	"verified_clear":               "Verified clear — observed recovery evidence confirmed before close.",
+	"override_signal_present":      "Override — closed while the signal was still present; recovery validation had failed.",
+	"override_recovery_unobserved": "Override — closed without observable recovery evidence.",
+	"override_partial_recovery":    "Override — component recovered, but end-to-end service recovery was not confirmed.",
+}
+
+// handleCorrelationTimeEvents routes the manual-event path:
+//   GET    /api/correlations/{id}/time-events            (list the caller-tenant's manual events)
+//   POST   /api/correlations/{id}/time-events            (add/edit a manual event)
 //   DELETE /api/correlations/{id}/time-events/{eventID}  (remove one)
 func (s *server) handleCorrelationTimeEvents(w http.ResponseWriter, r *http.Request, id, eventID string) {
+	if r.Method == http.MethodGet {
+		// Read-back (who closed / recovery-verification state at close, for the
+		// embedded investigation drawer). Read permission is enough — nothing is
+		// mutated — and the store's List is tenant-scoped (own rows only).
+		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+		if !ok {
+			return
+		}
+		s.listManualTimeEvents(w, r, claims, id)
+		return
+	}
 	claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
 	if !ok {
 		return
@@ -47,8 +71,27 @@ func (s *server) handleCorrelationTimeEvents(w http.ResponseWriter, r *http.Requ
 	case http.MethodDelete:
 		s.deleteManualTimeEvent(w, r, claims, tenant, cross, id, eventID)
 	default:
-		writeError(w, http.StatusMethodNotAllowed, errors.New("POST or DELETE"))
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, POST or DELETE"))
 	}
+}
+
+// listManualTimeEvents returns the caller-tenant's manual lifecycle events for
+// one correlation, oldest first. Tenant isolation is enforced in the store
+// (CLAUDE.md §3a.4) — another tenant's events on the same correlation id are
+// invisible, so the response is always the caller's own view.
+func (s *server) listManualTimeEvents(w http.ResponseWriter, r *http.Request, claims jwtClaims, id string) {
+	if s.incidentTimeline == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("timeline store unavailable"))
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	events, err := s.incidentTimeline.List(r.Context(), tenant, cross, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].EventTime.Before(events[j].EventTime) })
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, claims jwtClaims, tenant, id string) {
@@ -61,6 +104,10 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 		EventTime string  `json:"event_time"` // RFC3339
 		Note      string  `json:"note"`
 		Confidence float64 `json:"confidence"`
+		// Verification: the recovery-verification state at close (#7 embedded
+		// investigation loop). Allowed ONLY on "closed" events, allowlisted
+		// (closeVerificationLabels) — an override is explicit or it is rejected.
+		Verification string `json:"verification"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
@@ -76,9 +123,29 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusBadRequest, errors.New("event_time must be RFC3339"))
 		return
 	}
+	verification := strings.TrimSpace(body.Verification)
+	if verification != "" && et != timeintel.EvClosed {
+		writeJSONError(w, http.StatusBadRequest, "verification applies only to close events", "verification_not_applicable")
+		return
+	}
+	if verification != "" && closeVerificationLabels[verification] == "" {
+		writeJSONError(w, http.StatusBadRequest, "unknown verification state", "verification_unknown")
+		return
+	}
 	conf := body.Confidence
 	if conf <= 0 || conf > 1 {
 		conf = 1
+	}
+	// The stored note ALWAYS leads with the server-composed verification label
+	// when one applies — the record of a verified close vs an override is written
+	// by the server from the validated enum, never client free-text.
+	note := strings.TrimSpace(body.Note)
+	if verification != "" {
+		if note != "" {
+			note = closeVerificationLabels[verification] + " · " + note
+		} else {
+			note = closeVerificationLabels[verification]
+		}
 	}
 	ev := incidentTimelineEvent{
 		TenantID:      tenant, // stamped from the TOKEN, never the body
@@ -89,7 +156,7 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 		Source:        timeintel.SrcUserEntered,
 		Confidence:    conf,
 		SourceSystem:  "manual",
-		Note:          strings.TrimSpace(body.Note),
+		Note:          note,
 		CreatedAt:     time.Now().UTC(),
 		CreatedBy:     claims.Sub,
 	}
@@ -97,10 +164,15 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	// AUDIT every manual edit (CLAUDE.md §8 + spec): who, which incident, which phase.
-	s.auditManualEdit(r, claims, tenant, "rca_time_event_set", id, map[string]any{
+	// AUDIT every manual edit (CLAUDE.md §8 + spec): who, which incident, which
+	// phase — and for a close, the verification state it was closed under.
+	detail := map[string]any{
 		"event_type": string(et), "event_time": ts.UTC().Format(time.RFC3339), "note": ev.Note,
-	})
+	}
+	if verification != "" {
+		detail["verification"] = verification
+	}
+	s.auditManualEdit(r, claims, tenant, "rca_time_event_set", id, detail)
 	writeJSON(w, http.StatusOK, ev)
 }
 
