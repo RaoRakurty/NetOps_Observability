@@ -1,3 +1,4 @@
+import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Finding } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
@@ -22,8 +23,8 @@ export default function Findings() {
 
   const columns = useMemo<Column<Finding>[]>(() => [
     { key: "ts", header: "Time", width: 168, sortable: true,
-      sortValue: (f) => new Date(f.ts).getTime() || 0,
-      render: (f) => <span style={mono}>{new Date(f.ts).toLocaleString()}</span> },
+      sortValue: (f) => parseTs(f.ts)?.getTime() || 0,
+      render: (f) => <span style={mono}>{fmtDateTime(f.ts)}</span> },
     { key: "severity", header: "Severity", width: 92, sortable: true,
       text: (f) => f.severity, sortValue: (f) => severityRank(f.severity),
       render: (f) => <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span> },
@@ -159,7 +160,7 @@ export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding
         <p style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "pre-wrap", margin: 0 }}>{f.description}</p>
       )}
       <div>
-        {row("Time", <span style={mono}>{new Date(f.ts).toLocaleString()}</span>)}
+        {row("Time", <span style={mono}>{fmtDateTime(f.ts)}</span>)}
         {row("Device", <span style={mono}>{f.device || "—"}</span>)}
         {row("Component", f.component || "—")}
         {row("ID", <span style={mono}>{f.id}</span>)}

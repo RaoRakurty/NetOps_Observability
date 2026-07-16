@@ -6,20 +6,33 @@
 // numbers, IPs/MACs, key=value keys, quoted strings, state words).
 
 import React from "react";
+import { parseTs, useTzMode, fmtTooltip, tzToken } from "./time";
 
 // ── Time ──────────────────────────────────────────────────────────────────────
 // date dimmed, clock emphasized, milliseconds whispered — tabular figures so
-// columns never jitter.
+// columns never jitter. Parsing and the Local/UTC display mode come from
+// lib/time.ts (the shared time authority): zone-less strings are UTC by
+// contract, epoch numbers are auto-ranged, and the rendered zone is labeled
+// (whispered token after the ms) so an operator always knows which clock a
+// time is shown in.
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export function LogTime({ ts, withDate = true }: { ts: string | number; withDate?: boolean }) {
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return <span className="lf-time">—</span>;
+  const mode = useTzMode();
+  const d = parseTs(ts);
+  if (!d) return <span className="lf-time">—</span>;
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  const utc = mode === "utc";
+  const month = utc ? d.getUTCMonth() : d.getMonth();
+  const day = utc ? d.getUTCDate() : d.getDate();
+  const hh = utc ? d.getUTCHours() : d.getHours();
+  const mm = utc ? d.getUTCMinutes() : d.getMinutes();
+  const ss = utc ? d.getUTCSeconds() : d.getSeconds();
+  const ms = utc ? d.getUTCMilliseconds() : d.getMilliseconds();
   return (
-    <span className="lf-time" title={d.toISOString()}>
-      {withDate && <span className="lf-time-date">{MONTHS[d.getMonth()]} {p(d.getDate())} </span>}
-      <span className="lf-time-clock">{p(d.getHours())}:{p(d.getMinutes())}:{p(d.getSeconds())}</span>
-      <span className="lf-time-ms">.{p(d.getMilliseconds(), 3)}</span>
+    <span className="lf-time" title={fmtTooltip(d)}>
+      {withDate && <span className="lf-time-date">{MONTHS[month]} {p(day)} </span>}
+      <span className="lf-time-clock">{p(hh)}:{p(mm)}:{p(ss)}</span>
+      <span className="lf-time-ms">.{p(ms, 3)} {tzToken(d, mode)}</span>
     </span>
   );
 }

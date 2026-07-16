@@ -1,3 +1,4 @@
+import { fmtDateTime, fmtTime } from "../lib/time";
 import { Fragment, useEffect, useState } from "react";
 import {
   api,
@@ -80,9 +81,7 @@ const EMPTY: ReportBody = {
 };
 
 function fmt(ts?: string): string {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  return fmtDateTime(ts);
 }
 
 function time12(hour: number, minute: number): string {
@@ -795,7 +794,7 @@ function ExecutionsDrawer({ report, onClose }: { report: SavedObject; onClose: (
                                       return (
                                         <tr key={i}>
                                           <td style={{ textTransform: "capitalize" }}>{ev.phase}</td>
-                                          <td className="mini-meta">{new Date(ev.at).toLocaleTimeString()}</td>
+                                          <td className="mini-meta">{fmtTime(ev.at)}</td>
                                           <td className="mini-meta">{prev ? `+${dur(prev, ev.at)}` : ""}</td>
                                         </tr>
                                       );

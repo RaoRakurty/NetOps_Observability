@@ -9,4 +9,11 @@
 -->
 <clickhouse>
     <custom_settings_prefixes>tenant_</custom_settings_prefixes>
+    <!-- Log-time standard (docs/design/log-time-standard.md): the platform's
+         DateTime64 columns carry UTC instants, and several writers (vector
+         clickhouse sink, correlation service) insert ZONE-LESS datetime
+         strings, which ClickHouse interprets in the SERVER timezone. The
+         container default happens to be UTC today; pin it so a base-image or
+         host change can never silently shift every stored timestamp. -->
+    <timezone>UTC</timezone>
 </clickhouse>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { fmtDateTime } from "../lib/time";
 import { api, AlertEpisode } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
@@ -28,7 +29,9 @@ const statusLabel = (s: AlertEpisode["status"]) =>
 const statusTone = (s: AlertEpisode["status"]) =>
   s === "active" ? "var(--warn)" : s === "cleared" ? "var(--ok)" : "var(--fg-subtle)";
 
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString() : "—");
+// Labeled, mode-aware time rendering (lib/time is the single time authority —
+// never a bare toLocaleString, which shows an unlabeled ambiguous clock).
+const fmt = (iso?: string) => (iso ? fmtDateTime(iso) : "—");
 
 export default function Alerts() {
   const [items, setItems] = useState<AlertEpisode[]>([]);

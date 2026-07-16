@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fmtTime } from "../lib/time";
 import { PANELS } from "./panels";
 import { useShell } from "../context/shell";
 import Icon from "../components/Icon";
@@ -59,7 +60,7 @@ export default function Dashboard() {
         </div>
         <div className="mydash-head-meta">
           <span className="mydash-live"><span className="mydash-live-dot" /> Live</span>
-          <span className="mydash-asof">as of {now.toLocaleTimeString()}</span>
+          <span className="mydash-asof">as of {fmtTime(now)}</span>
         </div>
       </div>
 

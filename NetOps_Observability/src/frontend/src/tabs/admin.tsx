@@ -9,6 +9,7 @@
 //     (/api/itsm/servicenow, /api/itsm/jira)
 // See docs/IDENTITY_ACCESS.md · docs/API_ACCESS.md · docs/ITSM_INTEGRATION.md.
 
+import { fmtDate, fmtDateTime } from "../lib/time";
 import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
 import { BRAND } from "../brand";
@@ -377,7 +378,7 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 <td><span className="badge">{u.auth_source || "local"}</span></td>
                 <td>{u.mfa_enabled ? <span className="badge good" title="Two-factor enabled">On</span> : <span className="mini-meta">—</span>}</td>
                 <td><span className={`badge ${u.status === "disabled" ? "warn" : "good"}`}>{u.status || "active"}</span></td>
-                <td>{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "—"}</td>
+                <td>{u.last_login_at ? fmtDateTime(u.last_login_at) : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -1754,7 +1755,7 @@ export function SessionsAdmin() {
     setErr(null);
     try { await api.revokeSession(s.id); reload(); } catch (e) { setErr((e as Error).message.replace(/^\d+[^:]*:\s*/, "")); }
   };
-  const fmt = (t?: string) => (t ? new Date(t).toLocaleString() : "—");
+  const fmt = (t?: string) => (t ? fmtDateTime(t) : "—");
   const statusBadge = (st: string) => {
     const tone = st === "active" ? "good" : st === "revoked" ? "warn" : "";
     const label = st === "expired_idle" ? "idle-out" : st === "expired_absolute" ? "expired" : st;
@@ -1942,9 +1943,9 @@ export function ApiAccessAdmin() {
                 <td className="mono" style={{ fontSize: "var(--fs-meta)" }}>{(k.source_cidrs || []).join(", ") || "any"}</td>
                 <td className="mono">{cap > 0 ? <span className={near ? "badge warn" : ""}>{k.window_used}/{cap}</span> : <span className="mini-meta">unlimited</span>}</td>
                 <td className="mono">{(k.use_count ?? 0).toLocaleString()}</td>
-                <td>{k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}</td>
-                <td>{k.client_expires_at || k.secret_expires_at ? new Date(k.client_expires_at || k.secret_expires_at || "").toLocaleDateString() : "never"}</td>
-                <td>{k.last_used_at ? new Date(k.last_used_at).toLocaleString() : "never"}</td>
+                <td>{k.created_at ? fmtDate(k.created_at) : "—"}</td>
+                <td>{k.client_expires_at || k.secret_expires_at ? fmtDate(k.client_expires_at || k.secret_expires_at || "") : "never"}</td>
+                <td>{k.last_used_at ? fmtDateTime(k.last_used_at) : "never"}</td>
                 <td>{k.revoked_at ? <span className="badge warn">revoked</span> : <span className="badge good">active</span>}</td>
                 <td>{!k.revoked_at && <button className="dash-btn" onClick={() => revoke(k)}>Revoke</button>}</td>
               </tr>
@@ -2921,7 +2922,7 @@ export function IntegrationsAdmin() {
                   <td><span className="badge">{t.severity}</span></td>
                   <td className="mono">{t.device || "—"}</td>
                   <td>{t.summary || "—"}</td>
-                  <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                  <td>{t.opened_at ? fmtDateTime(t.opened_at) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -2940,7 +2941,7 @@ export function IntegrationsAdmin() {
                   <td><span className="badge">{t.severity}</span></td>
                   <td className="mono">{t.device || "—"}</td>
                   <td>{t.summary || "—"}</td>
-                  <td>{t.opened_at ? new Date(t.opened_at).toLocaleString() : "—"}</td>
+                  <td>{t.opened_at ? fmtDateTime(t.opened_at) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -3759,7 +3760,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
             {decision.policy_name && (
               <p className="mini-meta" style={{ margin: "var(--sp-1) 0 0" }}>
                 Evaluated policy: <b>{decision.policy_name}</b>
-                {decision.policy_updated_at ? ` · saved ${new Date(decision.policy_updated_at).toLocaleString()}` : ""}
+                {decision.policy_updated_at ? ` · saved ${fmtDateTime(decision.policy_updated_at)}` : ""}
               </p>
             )}
             {decision.runtime_state === "shadowed" && (

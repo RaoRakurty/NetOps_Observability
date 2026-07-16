@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, AuditEvent } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
@@ -20,7 +21,7 @@ export default function AuditLog() {
   const columns = useMemo<Column<AuditEvent>[]>(() => [
     { key: "time", header: "Time", width: 168, sortable: true,
       sortValue: (e) => new Date(e.time).getTime() || 0,
-      render: (e) => new Date(e.time).toLocaleString() },
+      render: (e) => fmtDateTime(e.time) },
     { key: "actor", header: "Actor", width: 150, sortable: true, text: (e) => e.actor ?? "",
       render: (e) => e.actor || <span style={muted}>—</span> },
     { key: "tenant", header: "Tenant", width: 110, text: (e) => (e.cross ? "platform" : e.tenant ?? ""),

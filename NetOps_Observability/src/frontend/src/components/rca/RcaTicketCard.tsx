@@ -6,6 +6,7 @@
 // it). Self-contained slot like RcaTimeImpact: fetches its own data, renders an
 // honest empty state, never invents a ticket that isn't there.
 
+import { fmtDateTime } from "../../lib/time";
 import { useCallback, useEffect, useState } from "react";
 import { api, type CorrelationTickets, type TicketStatus } from "../../services/api";
 import { ticketStateLabel, ticketStateTone, ticketActionLabel } from "./labels";
@@ -19,7 +20,7 @@ function fmtWhen(iso?: string | null): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "—";
-  return new Date(t).toLocaleString();
+  return fmtDateTime(t);
 }
 
 export default function RcaTicketCard({ correlationId }: { correlationId: string }) {

@@ -1,3 +1,4 @@
+import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, CorrObject, CorrReplay, CorrTimeline, RcaPathAttribution, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
@@ -141,8 +142,8 @@ export default function Correlations() {
       text: (o) => friendlyProblemId(o.correlation_id),
       render: (o) => <span style={mono} title={o.correlation_id}>{friendlyProblemId(o.correlation_id)}</span> },
     { key: "created_at", header: "Updated", width: 160, sortable: true,
-      sortValue: (o) => new Date(o.created_at + "Z").getTime() || 0,
-      render: (o) => <span style={mono}>{new Date(o.created_at + "Z").toLocaleString()}</span> },
+      sortValue: (o) => parseTs(o.created_at)?.getTime() || 0,
+      render: (o) => <span style={mono}>{fmtDateTime(o.created_at)}</span> },
     { key: "verdict_tier", header: "Status", width: 116, sortable: true, text: (o) => o.verdict_tier,
       render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</span> },
     { key: "quality", header: "Quality", width: 90, sortable: true,
@@ -424,7 +425,7 @@ function SignatureGaps() {
                     </div>
                   </div>
                   <span style={{ fontSize: 11, color: "var(--fg-subtle, var(--muted))", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
-                    title={c.last_seen ? new Date(c.last_seen).toLocaleString() : ""}>
+                    title={c.last_seen ? fmtDateTime(c.last_seen) : ""}>
                     {Number.isFinite(c.avg_signals) ? `${c.avg_signals.toFixed(1)} sig/incident` : ""}
                   </span>
                 </div>

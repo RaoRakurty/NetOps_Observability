@@ -1,3 +1,4 @@
+import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, ExportFmt } from "../services/api";
 import { severityColor, severityRank } from "../theme/severity";
@@ -195,7 +196,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     if (ws.enabled) {
       ws.openInspector(<LogLineDetailBody line={l} />, {
         title: l.source,
-        subtitle: `${l.level || "log"} · ${new Date(l.ts).toLocaleString()}`,
+        subtitle: `${l.level || "log"} · ${fmtDateTime(l.ts)}`,
       });
     }
   };
@@ -270,7 +271,7 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     },
     {
       key: "ts", header: "Time", width: 176, sortable: true,
-      sortValue: (l) => new Date(l.ts).getTime() || 0,
+      sortValue: (l) => parseTs(l.ts)?.getTime() || 0,
       render: (l) => <LogTime ts={l.ts} />,
     },
     {

@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Incident, TimelineEntry } from "../services/api";
 import { severityClass, severityColor, severityRank } from "../theme/severity";
@@ -20,7 +21,7 @@ const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 
 type Action = "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | "assign";
 
-const fmt = (s?: string) => (s ? new Date(s).toLocaleString() : "—");
+const fmt = (s?: string) => (s ? fmtDateTime(s) : "—");
 
 // "Notified via" chips (#103 UX-1) — same visual language as the RCA Candidates
 // column: the ITSM ticket (when one was filed) plus every RECORDED notification

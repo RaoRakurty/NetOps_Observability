@@ -195,11 +195,12 @@ describe("Started column — the incident's real start time (owner gap #3)", () 
     render(<CommandCenter />);
     await screen.findByRole("grid", { name: /Action Queue/i });
 
-    // The shared LogTime renderer titles the cell with the exact ISO instant, so
+    // The shared LogTime renderer titles the cell with a tooltip that BEGINS
+    // with the exact ISO instant (followed by the labeled local rendering), so
     // the absolute date is provably each row's own window_start — not a "now"
     // stamp and not an invented value.
     for (const iso of [T_JUL, T_JUN, T_JUN_LATE, T_MAY]) {
-      expect(screen.getByTitle(new Date(iso).toISOString())).toBeTruthy();
+      expect(screen.getByTitle(new RegExp(`^${new Date(iso).toISOString()}`))).toBeTruthy();
     }
     // And it renders the real calendar date to the operator.
     expect(screen.getByText(/May 20/)).toBeTruthy();
@@ -215,7 +216,7 @@ describe("Started column — the incident's real start time (owner gap #3)", () 
     });
     render(<CommandCenter />);
     await screen.findByRole("grid", { name: /Action Queue/i });
-    expect(screen.getByTitle(new Date(T_JUN).toISOString())).toBeTruthy();
+    expect(screen.getByTitle(new RegExp(`^${new Date(T_JUN).toISOString()}`))).toBeTruthy();
   });
 
   it("keeps the relative Age affordance alongside the absolute date", async () => {

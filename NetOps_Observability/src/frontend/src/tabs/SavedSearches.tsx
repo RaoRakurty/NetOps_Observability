@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, SavedObject } from "../services/api";
 import { useShell } from "../context/shell";
@@ -73,7 +74,7 @@ export default function SavedSearches() {
                 </td>
                 <td>{o.body?.signal || "all"}</td>
                 <td style={{ color: "var(--muted)", fontSize: 12 }}>
-                  {new Date(o.updated_at).toLocaleString()}
+                  {fmtDateTime(o.updated_at)}
                 </td>
                 <td style={{ textAlign: "right" }}>
                   <button onClick={() => open(o)}>Open</button>{" "}

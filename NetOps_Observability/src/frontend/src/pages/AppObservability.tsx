@@ -11,6 +11,7 @@
 // data left in this page: a tab with nothing ingested shows an honest empty state,
 // and a metric we do not measure renders "—" — never a fabricated app or row.
 
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { NocHeader, Chip } from "../components/noc";
 import { Skeleton } from "../components/ui";
@@ -931,7 +932,7 @@ function HealthSignalDrawer({ s, onClose, sevTone }: { s: HealthSignal; onClose:
       subtitle={<span className="ao-drawer-badges"><HealthBadge status={s.state} /><Chip label={s.severity} tone={sevTone(s.severity)} /></span>}
       onClose={onClose}>
       <table className="ao-kv"><tbody>
-        <tr><td>Time</td><td>{new Date(s.time).toLocaleString()}</td></tr>
+        <tr><td>Time</td><td>{fmtDateTime(s.time)}</td></tr>
         <tr><td>Service</td><td><strong>{s.app}</strong></td></tr>
         <tr><td>Resource</td><td>{cleanVal(s.resource) ? <span className="ao-mono">{s.resource}</span> : DASH}</td></tr>
         <tr><td>Signal</td><td>{s.signal}</td></tr>
@@ -966,7 +967,7 @@ function ChangeDrawer({ c, onClose }: { c: ChangeEvent; onClose: () => void }) {
       subtitle={<span className="ao-drawer-badges"><Chip label={c.changeType.replace(/_/g, " ")} tone="var(--warn)" /><ConfidenceBadge level={c.confidence} /></span>}
       onClose={onClose}>
       <table className="ao-kv"><tbody>
-        <tr><td>Time</td><td>{new Date(c.time).toLocaleString()}</td></tr>
+        <tr><td>Time</td><td>{fmtDateTime(c.time)}</td></tr>
         <tr><td>Service</td><td><strong>{c.app}</strong></td></tr>
         <tr><td>Resource</td><td><span className="ao-mono">{c.resource}</span>{c.cloudRef?.consoleUrl && <> · <ConsoleLink href={c.cloudRef.consoleUrl} label={`Open in ${consoleName(c.cloudRef.provider)}`} /></>}</td></tr>
         <tr><td>Change type</td><td>{c.changeType.replace(/_/g, " ")}</td></tr>
@@ -1165,7 +1166,7 @@ function Evidence({ openInvestigation }: { openInvestigation: (id: string) => vo
       {sel && (
         <EvidenceDrawer title={`${sel.signalType} · ${sel.app}`} subtitle={<span className="ao-drawer-badges"><EvidenceCategoryBadge category={sel.category} /><ConfidenceBadge level={sel.confidence} /></span>} onClose={() => setSel(null)}>
           <table className="ao-kv"><tbody>
-            <tr><td>Time</td><td>{new Date(sel.time).toLocaleString()}</td></tr>
+            <tr><td>Time</td><td>{fmtDateTime(sel.time)}</td></tr>
             <tr><td>Category</td><td><EvidenceCategoryBadge category={sel.category} /></td></tr>
             <tr><td>Service / Resource</td><td>{sel.app} · {sel.resource}</td></tr>
             <tr><td>Source</td><td>{sel.source}</td></tr>

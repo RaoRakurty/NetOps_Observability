@@ -1,3 +1,4 @@
+import { fmtDate, fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, CollectorStatus, DiscoveryConfig, DiscoveryConfigEnvelope } from "../services/api";
 import { StatStrip, Stat, InfoTip } from "../components/ui";
@@ -61,7 +62,7 @@ function relSweepTime(iso?: string): string {
   if (age < 60_000) return "just now";
   if (age < 3_600_000) return `${Math.round(age / 60_000)} min ago`;
   if (age < 86_400_000) return `${Math.round(age / 3_600_000)} h ago`;
-  return new Date(iso).toLocaleDateString();
+  return fmtDate(iso);
 }
 
 // Subnet discovery configuration (platform-owner). Scopes the SNMP prober:
@@ -391,7 +392,7 @@ export default function Collectors() {
                   {c.last_poll_ms != null ? `${c.last_poll_ms} ms` : "—"}
                 </td>
                 <td>
-                  {c.last_tick ? new Date(c.last_tick).toLocaleString() : "—"}
+                  {c.last_tick ? fmtDateTime(c.last_tick) : "—"}
                 </td>
               </tr>
             ))}

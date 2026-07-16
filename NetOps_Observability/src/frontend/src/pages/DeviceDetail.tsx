@@ -1,3 +1,4 @@
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, Device, Alert } from "../services/api";
 
@@ -94,7 +95,7 @@ export function DeviceDetailBody({ device, actions }: { device: Device; actions?
     ["OS", device.os || "—"],
     ["Preferred protocol", device.preferred_protocol || "—"],
     ["Source", device.source || "—"],
-    ["Last seen", new Date(device.last_seen).toLocaleString()],
+    ["Last seen", fmtDateTime(device.last_seen)],
   ];
 
   return (
@@ -157,7 +158,7 @@ export function DeviceDetailBody({ device, actions }: { device: Device; actions?
                 <td><span className={`badge sev-${a.severity}`}>{a.severity}</span></td>
                 <td>{a.rule}</td>
                 <td>{a.summary}</td>
-                <td className="mini-meta">{new Date(a.fired_at).toLocaleString()}</td>
+                <td className="mini-meta">{fmtDateTime(a.fired_at)}</td>
               </tr>
             ))}
           </tbody>

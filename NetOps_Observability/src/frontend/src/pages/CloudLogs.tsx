@@ -1,3 +1,4 @@
+import { fmtDateTime, parseTs } from "../lib/time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, CloudResourceRow, CloudChangeRow } from "../services/api";
 import { severityColor } from "../theme/severity";
@@ -210,7 +211,7 @@ export default function CloudLogs() {
     if (ws.enabled) {
       ws.openInspector(<CloudRowDetail row={r} />, {
         title: r.resource || lane.label,
-        subtitle: `${PROVIDER_LABEL[r.provider] || r.provider || "cloud"}${r.ts ? " · " + new Date(r.ts).toLocaleString() : ""}`,
+        subtitle: `${PROVIDER_LABEL[r.provider] || r.provider || "cloud"}${r.ts ? " · " + fmtDateTime(r.ts) : ""}`,
       });
     }
   };
@@ -219,7 +220,7 @@ export default function CloudLogs() {
     const cols: Column<CloudRow>[] = [
       {
         key: "ts", header: "Time", width: 180, sortable: true,
-        sortValue: (r) => new Date(r.ts).getTime() || 0,
+        sortValue: (r) => parseTs(r.ts)?.getTime() || 0,
         text: (r) => r.ts,
         render: (r) => (r.ts ? <LogTime ts={r.ts} /> : <span style={{ color: "var(--muted)" }}>—</span>),
       },
@@ -361,7 +362,7 @@ export function CloudRowDetail({ row }: { row: CloudRow }) {
         <span><span style={{ color: "var(--muted)" }}>Provider </span>{PROVIDER_LABEL[row.provider] || row.provider || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Account </span>{row.account || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Resource </span>{row.resource || "—"}</span>
-        {row.ts && <span><span style={{ color: "var(--muted)" }}>Time </span>{new Date(row.ts).toLocaleString()}</span>}
+        {row.ts && <span><span style={{ color: "var(--muted)" }}>Time </span>{fmtDateTime(row.ts)}</span>}
       </div>
       <div>
         {lbl("Message")}

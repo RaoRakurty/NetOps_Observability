@@ -5,6 +5,7 @@
 // and what the "Add panel" picker lists. Panels render only their body — the
 // shell draws the title bar + resize/remove tools.
 
+import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Alert, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
@@ -417,7 +418,7 @@ function ActiveAlerts() {
             <div className="mini-meta">
               {a.rule}
               {a.device_id ? ` · ${a.device_id}` : ""}
-              {a.fired_at ? ` · ${new Date(a.fired_at).toLocaleString()}` : ""}
+              {a.fired_at ? ` · ${fmtDateTime(a.fired_at)}` : ""}
             </div>
           </div>
         </div>
@@ -870,7 +871,7 @@ function RecentIncidents() {
             <div className="mini-title">{f.summary || f.kind || "(incident)"}</div>
             <div className="mini-meta">
               {f.device}{f.component ? ` · ${f.component}` : ""}
-              {f.ts ? ` · ${new Date(f.ts).toLocaleString()}` : ""}
+              {f.ts ? ` · ${fmtDateTime(f.ts)}` : ""}
             </div>
           </div>
         </div>

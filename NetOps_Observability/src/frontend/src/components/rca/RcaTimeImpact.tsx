@@ -8,6 +8,7 @@
 // finished RCA; the downstream steps just aren't observable yet, so they read
 // "Not measured", never "Workflow required" (which would imply the NOC failed).
 
+import { fmtDateTime } from "../../lib/time";
 import { useEffect, useState } from "react";
 import { api, type TimeIntel, type Bottleneck, type TimeIntelLifecycleRow } from "../../services/api";
 
@@ -215,7 +216,7 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
           const cls = reached ? "on" : notMeasured ? "nm" : "";
           return (
             <div key={st.key} className={`ti-stage ${cls}${st.hero ? " ti-stage-hero" : ""}`}
-              title={`${st.label} — ${st.tip}${row ? ` · ${new Date(row.at).toLocaleString()}${row.timestamp_source !== "observed" ? ` (${row.timestamp_source})` : ""}` : notMeasured ? " · not measured (workflow not connected)" : reached ? "" : " · not reached"}`}>
+              title={`${st.label} — ${st.tip}${row ? ` · ${fmtDateTime(row.at)}${row.timestamp_source !== "observed" ? ` (${row.timestamp_source})` : ""}` : notMeasured ? " · not measured (workflow not connected)" : reached ? "" : " · not reached"}`}>
               <span className="ti-dot" aria-hidden="true" />
               <span className="ti-stage-label">{st.label}</span>
             </div>
