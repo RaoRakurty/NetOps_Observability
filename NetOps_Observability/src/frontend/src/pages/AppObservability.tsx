@@ -44,6 +44,9 @@ import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell
 import { SOURCE_LABEL } from "./appobs/readiness";
 import type { ReadinessSummary, SourceType, SourceStatus } from "./appobs/readiness";
 import { api } from "../services/api";
+import { friendlyProblemId } from "../components/rca/labels";
+import InvestigationDrawer from "./appobs/InvestigationDrawer";
+import { useInvestigationDrawer } from "./appobs/useInvestigationDrawer";
 import { severityRank } from "../theme/severity";
 import { healthRank, confidenceRank, verdictRank, timeRank } from "./appobs/sortRanks";
 import { buildTimeline, cleanVal, isStateEvent, stateLabel, stateReason } from "./appobs/timeline";
@@ -153,6 +156,10 @@ export default function AppObservability() {
   const [sub, setSub] = useState<string>("");
   const [sel, setSel] = useState<App | null>(null);
   const shell = useCloudShell();
+  // Embedded investigation drawer (#7): a correlation object opens INSIDE this
+  // page (docked Inspector under shell-v2, page drawer on the v1 shell) and its
+  // id is mirrored to ?inv=<id> so refresh / a shared link reopens it here.
+  const inv = useInvestigationDrawer();
 
   // deep-link: #/monitoring/appobs/<tab-or-alias> → opens that (sub-)view.
   // Re-read on hashchange too, so clicking a flyout sub-item while ALREADY on
@@ -192,12 +199,20 @@ export default function AppObservability() {
         ))}
       </nav>
 
-      {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} />}
+      {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} />}
       {tab === "services" && <Services initialSub={sub} onOpen={setSel} />}
-      {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} />}
+      {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} />}
       {tab === "resources" && <ResourcesGroup initialSub={sub} />}
       {tab === "datasources" && <Ingestion initialSub={sub} />}
       {tab === "settings" && <Settings />}
+
+      {/* v1-shell fallback: same drawer content in the page-local panel (ESC/X/scrim). */}
+      {inv.inlineId && (
+        <EvidenceDrawer title={`Investigation · ${friendlyProblemId(inv.inlineId)}`}
+          subtitle="Service View" onClose={inv.closeInline}>
+          <InvestigationDrawer id={inv.inlineId} />
+        </EvidenceDrawer>
+      )}
     </div>
   );
 }
@@ -229,7 +244,9 @@ function Services({ initialSub, onOpen }: { initialSub: string; onOpen: (a: App)
 }
 
 // ── Investigations (Timeline · Alerts · Changes · Findings · Network) ────────
-function Investigations({ initialSub, goDataSources }: { initialSub: string; goDataSources: () => void }) {
+function Investigations({ initialSub, goDataSources, openInvestigation }: {
+  initialSub: string; goDataSources: () => void; openInvestigation: (id: string) => void;
+}) {
   const first = (["alerts", "changes", "findings", "network"].includes(initialSub)
     ? initialSub : "timeline") as "timeline" | "alerts" | "changes" | "findings" | "network";
   const [sub, setSub] = useState(first);
@@ -241,7 +258,7 @@ function Investigations({ initialSub, goDataSources }: { initialSub: string; goD
         { key: "network", label: "Network connectivity" },
       ]} />
       {(sub === "timeline" || sub === "alerts" || sub === "changes") && <HealthChanges view={sub} />}
-      {sub === "findings" && <Evidence />}
+      {sub === "findings" && <Evidence openInvestigation={openInvestigation} />}
       {sub === "network" && <Underlay goDataSources={goDataSources} />}
     </div>
   );
@@ -299,7 +316,10 @@ function degradedApps(health: HealthSignal[]): string[] {
     .map((h) => h.app).filter((a) => a && a !== "—"))];
 }
 
-function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; summary: ReadinessSummary }) {
+function Overview({ goTab, summary, openInvestigation }: {
+  goTab: (t: Tab, sub?: string) => void; summary: ReadinessSummary;
+  openInvestigation: (id: string) => void;
+}) {
   const { data, status } = useAsync(loadOverview);
 
   if (status === "loading") {
@@ -363,7 +383,7 @@ function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; s
       <div className="ao-panel">
         <div className="ao-panel-h">Open investigations
           <span className="ao-panel-meta">
-            grounded on cloud signals · click for the full analysis
+            grounded on cloud signals · click a row to open it here
             {objectsTruncated && openRca.length < openCount &&
               ` · showing ${openRca.length} of ${openCount} open`}
           </span></div>
@@ -379,7 +399,7 @@ function Overview({ goTab, summary }: { goTab: (t: Tab, sub?: string) => void; s
           <DataTable<CloudRcaObject> rows={objects} rowKey={(o) => o.correlationId}
             height={Math.min(460, 56 + objects.length * 34)} ariaLabel="Open investigations"
             initialSort={{ key: "verdict", dir: "asc" }}
-            onRowClick={(o) => { location.hash = `#/monitoring/correlations?id=${encodeURIComponent(o.correlationId)}`; }}
+            onRowClick={(o) => openInvestigation(o.correlationId)}
             columns={[
               // Service: the engine's named service, else the primary affected
               // resource, else an explicit "unattributed" that says WHY — never
@@ -1087,7 +1107,7 @@ function consoleUrlFor(u: UnknownContributor, resources: CloudResource[]): strin
 // a cloud correlation object (used in the verdict) plus that object's own declared
 // gaps (category "missing"). The engine records no contradicting/discriminating
 // role today, so those categories simply do not appear — we never claim one.
-function Evidence() {
+function Evidence({ openInvestigation }: { openInvestigation: (id: string) => void }) {
   const [f, setF] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<EvidenceRow | null>(null);
   const { data, status } = useAsync(loadEvidence);
@@ -1137,8 +1157,8 @@ function Evidence() {
             { key: "reason", header: "Reason", width: 320, sortValue: (r) => r.reason, render: (r) => <span className="ao-why" title={r.reason}>{r.reason}</span> },
             { key: "grounded", header: "Grounded", width: 90, sortValue: (r) => (r.grounded ? 0 : 1), render: (r) => r.grounded ? <Chip label="yes" tone="var(--accent)" /> : <span className="ao-muted">gap</span> },
             { key: "rca", header: "Investigation", width: 130, sortValue: (r) => (r.rcaGroup ? 0 : 1), render: (r) => r.rcaGroup ? (
-              <a className="ao-rowaction" href={`#/monitoring/correlations?id=${encodeURIComponent(r.rcaGroup)}`}
-                onClick={(e) => e.stopPropagation()} title={r.rcaGroup}>Open</a>
+              <button className="ao-rowaction" title={r.rcaGroup}
+                onClick={(e) => { e.stopPropagation(); openInvestigation(r.rcaGroup); }}>Open</button>
             ) : DASH },
           ]} />
       </div>
