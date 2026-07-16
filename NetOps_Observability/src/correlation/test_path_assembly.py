@@ -35,7 +35,7 @@ from path_assembly import (
     inventory_edges_from_topology,
     measured_run_from_observation,
 )
-from segment_classifier import Confidence, DeviceRole, SegmentType
+from segment_classifier import DeviceRole, SegmentType
 
 A = PathAssembler()
 
