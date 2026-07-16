@@ -36,6 +36,7 @@ import urllib.parse
 import urllib.request
 
 import cloud_events
+import gcp_components
 import gcp_log_lanes
 import trail_state
 
@@ -109,6 +110,15 @@ def _get_json(url: str, tok: str) -> dict:
         return json.loads(resp.read().decode())
 
 
+def _post_json_api(url: str, body: dict, tok: str) -> dict:
+    """Authenticated JSON POST (backendServices.getHealth is a POST read)."""
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={**_gcp_headers(tok), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
+        return json.loads(resp.read().decode())
+
+
 def _post_ndjson(events: list[dict]) -> None:
     if not events:
         return
@@ -135,6 +145,12 @@ def list_instances(tok: str) -> list[dict]:
                 private = [n.get("networkIP") for n in nics if n.get("networkIP")]
                 public = [ac.get("natIP") for n in nics
                           for ac in (n.get("accessConfigs") or []) if ac.get("natIP")]
+                # Network context (cloud-network-overview P0): the VPC network
+                # is the segregation axis — carried on instances too.
+                networks = [gcp_components.rel_path(n["network"])
+                            for n in nics if n.get("network")]
+                subnets = [gcp_components.rel_path(n["subnetwork"])
+                           for n in nics if n.get("subnetwork")]
                 out.append({
                     "resource_id": f"projects/{PROJECT}/zones/{zone}/instances/{inst.get('name', '')}",
                     "name": inst.get("name", ""),
@@ -147,6 +163,8 @@ def list_instances(tok: str) -> list[dict]:
                     "machine_type": str(inst.get("machineType", "")).rsplit("/", 1)[-1],
                     "private_ips": private,
                     "public_ips": public,
+                    "vpc_id": networks[0] if networks else "",
+                    "subnet_ids": subnets,
                     "tags": inst.get("labels") or {},  # GCP labels = the tag surface
                 })
         token_next = res.get("nextPageToken")
@@ -168,6 +186,8 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
             "resource_type": "compute:instance",
             "resource_name": inst["name"],
             "power_state": inst["power_state"],
+            "vpc_id": inst.get("vpc_id", ""),
+            "subnet_ids": inst.get("subnet_ids", []),
             "instance_type": inst["machine_type"],
             "private_ips": inst["private_ips"],
             "public_ips": inst["public_ips"],
@@ -178,6 +198,18 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
             "source": "cloud_api",
             "confidence": "confirmed" if any(k in tags for k in APP_TAG_KEYS) else "strong",
         })
+    # Network components as first-class resources (P0): forwarding rules /
+    # backend services (+health) / Cloud Armor / firewall rule-sets / DNS /
+    # routers+NAT + the seam endpoints (VPN GW/tunnels/peerings). Per-family
+    # isolation inside collect() — a degraded family is logged, the instance
+    # inventory and the rest of the components still land.
+    comp_rows, comp_errors = gcp_components.collect(
+        lambda url: _get_json(url, tok),
+        lambda url, body: _post_json_api(url, body, tok), PROJECT)
+    resources.extend(comp_rows)
+    if comp_errors:
+        _lane_log("gcp component families degraded", errors=comp_errors)
+
     # Live-poller provenance stamp — same contract as discover.py/azure.py
     # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.
     inventory = {
