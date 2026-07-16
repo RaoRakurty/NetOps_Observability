@@ -719,6 +719,10 @@ services:
       # discovered SRC→DST path WITHOUT a traceroute. Tenant-gated by CLOUD_LOGS_TENANT
       # (a fixture carries no tenant), so it is inert until the cloud demo tenant is set.
       CLOUD_TOPOLOGY_DIR: ${CLOUD_TOPOLOGY_DIR:-/data/cloud-topology}
+      # Runtime layer of the topology snapshots (static-fixture/runtime split):
+      # the live poller writes *-topology.json under data/, mounted below; a
+      # runtime file shadows the tracked fixture of the same name.
+      CLOUD_TOPOLOGY_RUNTIME_DIR: ${CLOUD_TOPOLOGY_RUNTIME_DIR:-/data/cloud-topology-runtime}
       # #101 chaos-fixture registry: name=match pairs (comma-separated) tagging
       # INTENTIONAL storm sources (e.g. a lab target kept dead on purpose) so
       # Command Center badges them and auto-ticketing skips them, while the
@@ -732,6 +736,9 @@ services:
       - ../../data/cloud-logs:/data/cloud-logs:ro
       # Cloud inventory topology fixtures (read-only) for the P1 INVENTORY source.
       - ./cloud-fixtures:/data/cloud-topology:ro
+      # Runtime layer (live-poller snapshots under gitignored data/) — shadows
+      # the tracked fixtures per file (static-fixture/runtime split).
+      - ../../data/api/cloud-runtime:/data/cloud-topology-runtime:ro
     # Broker dependency intentionally absent (external-broker mode; the
     # aiokafka consumer runs in a reconnect/backoff loop).
     depends_on:
@@ -833,6 +840,12 @@ services:
       # at boot. Empty/absent ⇒ no cloud inventory (honest); real per-tenant SDK
       # connectors replace the fixture loader later.
       CLOUD_FIXTURES_DIR: ${CLOUD_FIXTURES_DIR:-/data/cloud-fixtures}
+      # Live-poller inventory/topology snapshots (the static-fixture/runtime
+      # split): the cloud-ingest poller writes here (a gitignored data/ mount,
+      # under the api's /data volume), and a runtime file SHADOWS the tracked
+      # fixture of the same name — live data wins, fresh installs fall back to
+      # fixtures. Empty ⇒ fixtures only (unchanged behavior).
+      CLOUD_RUNTIME_DIR: ${CLOUD_RUNTIME_DIR:-/data/cloud-runtime}
       # Bundled (internal) NetBox: when present, the API auto-wires to it (managed
       # mode) so the UI needs no URL/token. Set by install.py with the netbox
       # profile; NETBOX_URL/NETBOX_TOKEN remain for pointing at an EXTERNAL NetBox.

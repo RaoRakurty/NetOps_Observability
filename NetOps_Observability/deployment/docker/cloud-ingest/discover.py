@@ -24,8 +24,14 @@ import os
 
 import boto3
 
+import aws_components
+
 REGION = os.environ.get("AWS_REGION", "us-west-2")
-FIXTURES_DIR = os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures")
+# Live snapshots belong in a RUNTIME dir (a gitignored data/ mount), never the
+# git-tracked cloud-fixtures. CLOUD_RUNTIME_OUT is the new knob; the legacy
+# CLOUD_FIXTURES_OUT keeps existing deployments working unchanged.
+FIXTURES_DIR = (os.environ.get("CLOUD_RUNTIME_OUT")
+                or os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
 # Tag keys the attribution resolver already understands (cloud/resolve.go).
 APP_TAG_KEYS = ("app", "application", "app_name", "app-name", "service", "workload")
 
@@ -86,6 +92,10 @@ def discover_aws(ec2, session=None, region: str = REGION) -> tuple[dict, dict]:
                 # this the product cannot tell "you turned it off" from "it died"
                 # (audit 2026-07-13, P1-2) — and 2 of 3 lab hosts are stopped.
                 "power_state": (inst.get("State") or {}).get("Name", ""),
+                # Network context (cloud-network-overview P0): the VPC is the
+                # segregation axis — every component carries it, instances too.
+                "vpc_id": inst.get("VpcId", ""),
+                "subnet_ids": [s for s in [inst.get("SubnetId", "")] if s],
                 "instance_type": inst.get("InstanceType", ""),
                 "private_ips": [ip for ip in [inst.get("PrivateIpAddress")] if ip],
                 "public_ips": [ip for ip in [inst.get("PublicIpAddress")] if ip],
@@ -217,8 +227,19 @@ def write_json(path: str, obj: dict) -> None:
 
 def run() -> tuple[int, int]:
     os.makedirs(FIXTURES_DIR, exist_ok=True)
-    ec2 = boto3.client("ec2", region_name=REGION)
+    session = boto3.Session(region_name=REGION)
+    ec2 = session.client("ec2", region_name=REGION, config=aws_components.BOTO_CFG)
     inventory, topology = discover_aws(ec2)
+    # Network components as first-class resources (P0): LB/WAF/SG/DNS/NAT/IGW +
+    # the seam endpoints (VPN/DX/TGW). Per-family isolation inside collect() —
+    # a degraded family is logged, the rest of the inventory still lands.
+    comp_rows, comp_errors = aws_components.collect(session, REGION,
+                                                    inventory.get("account_id", ""))
+    inventory["resources"].extend(comp_rows)
+    if comp_errors:
+        print(json.dumps({"service": "cloud-ingest",
+                          "msg": "aws component families degraded",
+                          "errors": comp_errors}), flush=True)
     write_json(os.path.join(FIXTURES_DIR, "aws.json"), inventory)
     write_json(os.path.join(FIXTURES_DIR, "aws-topology.json"), topology)
     return len(inventory["resources"]), len(topology["edges"])

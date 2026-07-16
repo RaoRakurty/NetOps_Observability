@@ -32,6 +32,7 @@ import ssl
 import urllib.parse
 import urllib.request
 
+import azure_components
 import cloud_events
 import service_infer
 import trail_state
@@ -337,9 +338,15 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
                 if pref and pref in pub_by_ref:
                     public_ips.append(pub_by_ref[pref])
         arm_id = str(model.get("id") or vm["resource_id"])
+        # Network context (cloud-network-overview P0): the VNet is the
+        # segregation axis — derived from the NIC's subnet ARM id.
+        vnet_id = ""
+        if subnet_ids and "/subnets/" in subnet_ids[0]:
+            vnet_id = subnet_ids[0].split("/subnets/", 1)[0]
         resources.append({
             "region": vm.get("location") or REGION,
             "resource_id": arm_id,
+            "vpc_id": vnet_id,
             "resource_arn_or_uri": arm_id,
             "resource_type": "compute:virtualMachine",
             "resource_name": vm.get("name", ""),
@@ -366,12 +373,25 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
     # signal is left un-inferred (stays unknown → generic descriptor downstream).
     inferred = service_infer.infer_services(resources)
     for r in resources:
-        r.pop("subnet_ids", None)  # transient signal, not part of the stored shape
+        # subnet_ids used to be popped as transient; since the network-overview
+        # P0 the subnet is part of the stored shape (the localization axis).
         hit = inferred.get(r["resource_id"])
         if hit:
             r["inferred_service"] = hit["service"]
             r["inferred_service_confidence"] = hit["confidence"]
             r["inferred_service_basis"] = hit["basis"]
+
+    # Network components as first-class resources (P0): LB/AppGW/FD/NSG/DNS/
+    # NAT + the seam endpoints (VNet-GW/peerings/ER). Per-family isolation
+    # inside collect() — a degraded family is logged, the VM inventory and the
+    # rest of the components still land.
+    comp_rows, comp_errors = azure_components.collect(
+        lambda url: _get_json(url, tok), SUBSCRIPTION, REGION)
+    resources.extend(comp_rows)
+    if comp_errors:
+        print(json.dumps({"service": "cloud-ingest",
+                          "msg": "azure component families degraded",
+                          "errors": comp_errors}), flush=True)
 
     # Live-poller provenance stamp — same contract as discover.py/gcp.py
     # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.

@@ -125,6 +125,10 @@ _cloud_log_offsets: dict[str, int] = {}  # path → bytes consumed (tail-style; 
 # so its edges are stamped with CLOUD_LOGS_TENANT and contribute to NO other tenant's
 # path (§3a). Off unless a dir is set AND CLOUD_LOGS_TENANT names the owning tenant.
 CLOUD_TOPOLOGY_DIR = os.environ.get("CLOUD_TOPOLOGY_DIR", "")
+# Runtime layer (static-fixture/runtime split): the live poller's snapshots
+# land under gitignored data/; a runtime file SHADOWS the tracked fixture of
+# the same name — live data wins, fresh installs fall back to fixtures.
+CLOUD_TOPOLOGY_RUNTIME_DIR = os.environ.get("CLOUD_TOPOLOGY_RUNTIME_DIR", "")
 _cloud_topo_cache: dict[str, dict] = {}          # filename → parsed topology dict
 _cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
 
@@ -711,11 +715,17 @@ def cloud_topology_snapshots() -> dict[str, dict]:
     unreadable/absent dir yields the last-good snapshots (never a silently emptied one
     mid-incident). Returns {filename: topology_dict}. Tenancy is applied by the CALLER
     (stamped with CLOUD_LOGS_TENANT) — a fixture carries no tenant of its own."""
-    if not CLOUD_TOPOLOGY_DIR:
+    if not CLOUD_TOPOLOGY_DIR and not CLOUD_TOPOLOGY_RUNTIME_DIR:
         return {}
     try:
-        present = {os.path.basename(p): p
-                   for p in glob.glob(os.path.join(CLOUD_TOPOLOGY_DIR, "*-topology.json"))}
+        # Fixture layer first, then the runtime layer: a live-poller snapshot
+        # shadows the tracked fixture of the same basename (runtime split).
+        present: dict[str, str] = {}
+        for d in (CLOUD_TOPOLOGY_DIR, CLOUD_TOPOLOGY_RUNTIME_DIR):
+            if not d:
+                continue
+            for p in glob.glob(os.path.join(d, "*-topology.json")):
+                present[os.path.basename(p)] = p
     except OSError as exc:
         log.warning("cloud topology dir unreadable (%s); keeping previous snapshots", exc)
         return _cloud_topo_cache
