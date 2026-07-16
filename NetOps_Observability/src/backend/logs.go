@@ -66,7 +66,14 @@ func logError(component, msg string, fields map[string]any) {
 //   - "applogs" → netops-applogs-*    (container/API logs)
 //   - "syslog"  → netops-syslog-*     (network device syslog)
 //   - "flows"   → netops-flows-*      (NetFlow / IPFIX / sFlow records)
+//   - "cloud"   → netops-cloudlogs-*  (tagged raw cloud logs: waf/lb/dns/flow/host…)
 //   - ""        → netops-*            (everything)
+//
+// Cloud logs carry the ingest-tagged fields cloud_family / cloud_provider /
+// resource_id (stamped at the cloud poller + aggregator, see cloud_tag.py and
+// vector), so a caller narrows a lane with a plain Lucene clause, e.g.
+// `cloud_family:waf AND cloud_provider:aws`. They are their OWN plane — kept out
+// of the "all" search like flows — reachable only via signal="cloud".
 // ----------------------------------------------------------------------------
 
 type logSearchReq struct {
@@ -286,6 +293,10 @@ func indexBase(signal string) string {
 		return "netops-snmptrap"
 	case "flows", "netflow", "flow":
 		return "netops-flows"
+	case "cloud", "cloudlogs", "cloudlog":
+		// Tagged raw cloud logs (waf/lb/dns/flow/host/change/inventory), written
+		// by the cloud poller + aggregator into netops-cloudlogs-{tenant}-{date}.
+		return "netops-cloudlogs"
 	default:
 		return "netops"
 	}
@@ -360,8 +371,9 @@ func tenantCatPattern(tenant string, cross bool) string {
 	seg := indexTenantSeg(tenant)
 	// App logs are platform-owner only (handled in the search path) — a scoped
 	// tenant doesn't even enumerate their index names. Device telemetry signals
-	// (syslog, snmp traps, flows) are tenant-visible (own + untagged-from-own-devices).
-	bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows"}
+	// (syslog, snmp traps, flows) plus tagged cloud logs are tenant-visible
+	// (own + untagged-from-own-devices).
+	bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
 	parts := make([]string, 0, len(bases)*2)
 	for _, b := range bases {
 		parts = append(parts, b+"-"+seg+"-*", b+"-untagged-*")

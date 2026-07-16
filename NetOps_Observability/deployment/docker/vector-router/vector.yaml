@@ -47,6 +47,17 @@ sources:
     group_id: "netops-router-snmptrap"
     decoding: { codec: json }
 
+  # Unified Cloud Logs — tagged raw cloud log lines (cloud_family/cloud_provider/
+  # resource_id) produced by the cloud poller (S3/CloudWatch lanes + CloudTrail)
+  # and the aggregator's host lane. Indexed into netops-cloudlogs-{tenant}-* so
+  # they are searchable as RAW logs, not only as correlation signals.
+  kafka_cloudlogs:
+    type: kafka
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.cloudlogs"]
+    group_id: "netops-router-cloudlogs"
+    decoding: { codec: json }
+
 transforms:
   # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
   # Each event already carries .tenant_id (stamped at the aggregator from the
@@ -76,6 +87,18 @@ transforms:
   snmptrap_tagged:
     type: remap
     inputs: [kafka_snmptrap]
+    source: |
+      seg = downcase(to_string(.tenant_id) ?? "")
+      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
+      .tenant_seg = seg
+
+  # Cloud logs carry an explicit tenant_id from the source (cloud logs have no
+  # device to enrich from — the poller/aggregator stamp it). Derive the same
+  # index segment; a `.timestamp` is stamped at the source, so the API's
+  # timestamp sort/range works unchanged.
+  cloudlogs_tagged:
+    type: remap
+    inputs: [kafka_cloudlogs]
     source: |
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
@@ -167,6 +190,18 @@ sinks:
     mode: bulk
     bulk:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  # Tagged raw cloud logs → OpenSearch (the unified Cloud Logs search plane).
+  opensearch_cloudlogs:
+    type: elasticsearch
+    inputs: [cloudlogs_tagged]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }

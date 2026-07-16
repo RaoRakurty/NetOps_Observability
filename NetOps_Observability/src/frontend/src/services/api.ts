@@ -259,7 +259,7 @@ export type LogSearchOpts = {
   from?: string;
   to?: string;
   size?: number;
-  signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "";
+  signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
 };
 
 export type ExportFmt = "csv" | "json" | "ndjson" | "xlsx";
@@ -269,7 +269,7 @@ export type LogExportOpts = {
   query?: string;
   from?: string;
   to?: string;
-  signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "";
+  signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
   mode?: "sync" | "async" | "auto";
 };
 
