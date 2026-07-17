@@ -55,7 +55,9 @@ fi
 
 head_sha="$(git -C "$ROOT" rev-parse --short HEAD)"
 say "bundle-autoupdate: stale — rebuilding customer bundle at $head_sha"
-if ! make -C "$ROOT" bundle >>"$DIR/bundle-autoupdate.build.log" 2>&1; then
+# Call the installer script directly, not `make bundle` — make is not
+# installed on every host this cron runs on (caught first run, 2026-07-17).
+if ! bash "$DIR/make-installer.sh" >>"$DIR/bundle-autoupdate.build.log" 2>&1; then
   say "bundle-autoupdate: BUILD FAILED at $head_sha (see bundle-autoupdate.build.log)"
   notify "Correlix bundle auto-update FAILED at $head_sha"
   exit 1
@@ -75,4 +77,18 @@ fi
 newest="$(ls -1dt "$ROOT"/dist/correlix-*/ 2>/dev/null | head -1)"
 say "bundle-autoupdate: OK — $(basename "${newest%/}") now matches $head_sha"
 notify "Correlix customer bundle auto-updated to $head_sha"
+
+# VM appliance images (qcow2/vmdk/vhdx) ride the same lockstep: rebuild them
+# from the fresh bundle so a demo always has a bootable image. VM_IMAGES=0
+# opts out; make-vm-image.sh preflights disk and fails loudly, never halfway.
+if [ "${VM_IMAGES:-1}" = 1 ]; then
+  if bash "$DIR/make-vm-image.sh" >>"$DIR/bundle-autoupdate.build.log" 2>&1; then
+    say "bundle-autoupdate: VM images rebuilt for $head_sha"
+    notify "Correlix VM images (qcow2/vmdk/vhdx) updated to $head_sha"
+  else
+    say "bundle-autoupdate: VM IMAGE BUILD FAILED at $head_sha (see bundle-autoupdate.build.log)"
+    notify "Correlix VM image auto-update FAILED at $head_sha"
+    exit 1
+  fi
+fi
 exit 0
