@@ -1,5 +1,5 @@
 {
-  "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.",
+  "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green. Time fields follow docs/design/log-time-standard.md: @timestamp/event_time = source event time normalized to UTC at first parse; ingest_time = Correlix receive time; raw_timestamp = the original timestamp material verbatim; tz_assumed = true when the source zone was assumed rather than carried in the payload. Additive changes here apply to NEWLY created daily indices; existing indices keep their mapping (re-index only if needed).",
 
   "templates": {
     "netops-applogs": {
@@ -13,6 +13,11 @@
         "mappings": {
           "properties": {
             "timestamp":      { "type": "date" },
+            "@timestamp":     { "type": "date" },
+            "event_time":     { "type": "date" },
+            "ingest_time":    { "type": "date" },
+            "raw_timestamp":  { "type": "keyword", "ignore_above": 128 },
+            "tz_assumed":     { "type": "boolean" },
             "level":          { "type": "keyword" },
             "component":      { "type": "keyword" },
             "service":        { "type": "keyword" },
@@ -34,12 +39,17 @@
         },
         "mappings": {
           "properties": {
-            "timestamp": { "type": "date" },
-            "hostname":  { "type": "keyword" },
-            "appname":   { "type": "keyword" },
-            "severity":  { "type": "keyword" },
-            "facility":  { "type": "keyword" },
-            "message":   { "type": "text" }
+            "timestamp":     { "type": "date" },
+            "@timestamp":    { "type": "date" },
+            "event_time":    { "type": "date" },
+            "ingest_time":   { "type": "date" },
+            "raw_timestamp": { "type": "keyword", "ignore_above": 128 },
+            "tz_assumed":    { "type": "boolean" },
+            "hostname":      { "type": "keyword" },
+            "appname":       { "type": "keyword" },
+            "severity":      { "type": "keyword" },
+            "facility":      { "type": "keyword" },
+            "message":       { "type": "text" }
           }
         }
       }
@@ -56,6 +66,11 @@
         "mappings": {
           "properties": {
             "timestamp":       { "type": "date" },
+            "@timestamp":      { "type": "date" },
+            "event_time":      { "type": "date" },
+            "ingest_time":     { "type": "date" },
+            "raw_timestamp":   { "type": "keyword", "ignore_above": 128 },
+            "tz_assumed":      { "type": "boolean" },
             "sampler_address": { "type": "ip" },
             "src_addr":        { "type": "ip" },
             "dst_addr":        { "type": "ip" },

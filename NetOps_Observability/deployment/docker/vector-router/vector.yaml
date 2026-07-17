@@ -57,6 +57,22 @@ transforms:
         .proto = to_int(num) ?? 0
       }
 
+  # ClickHouse branch only: stamp the flows.ts DateTime64(3) column from the
+  # flow's own receive time (epoch ns from goflow2), as fractional epoch
+  # seconds — timezone-unambiguous by definition. Without this the column's
+  # DEFAULT now64(3) stamps the ClickHouse INSERT time, so buffering/replay
+  # delays silently shift every flow's timestamp. Kept off the OpenSearch
+  # branch (there `@timestamp` is already the event time and a float `ts`
+  # would dynamic-map wrongly as a date).
+  flows_ch:
+    type: remap
+    inputs: [flows_decoded]
+    source: |
+      ns = to_int(.time_received_ns) ?? 0
+      if ns > 0 {
+        .ts = to_float(ns) / 1000000000.0
+      }
+
 sinks:
   # Application + container logs → OpenSearch
   opensearch_applogs:
@@ -96,7 +112,7 @@ sinks:
 
   clickhouse_flows:
     type: clickhouse
-    inputs: [flows_decoded]
+    inputs: [flows_ch]
     endpoint: "http://clickhouse:8123"
     database: netops
     table: flows

@@ -60,10 +60,24 @@ transforms:
 
   # Parse app log lines as JSON when possible so structured fields are
   # available downstream (level, component, msg).
+  #
+  # CANONICAL TIME SCHEMA (docs/design/log-time-standard.md) — every
+  # family leaves the aggregator carrying:
+  #   .timestamp     event time as a Vector timestamp (UTC internally);
+  #                  the ES sink ships it as @timestamp
+  #   .event_time    the same instant, RFC 3339 UTC string ("...Z")
+  #   .ingest_time   when Correlix first handled the event, RFC 3339 UTC
+  #   .raw_timestamp the original timestamp material, verbatim
+  #   .tz_assumed    true when the source zone was ASSUMED (no offset in
+  #                  the payload), false when the payload carried one
+  # Timezone resolution already happened at the edge (syslog-ng) or in
+  # the emitter (Go API RFC3339Nano, goflow2 epoch-ns) — nothing after
+  # this point may re-interpret a timestamp.
   applogs_normalized:
     type: remap
     inputs: [docker_applogs]
     source: |
+      .ingest_time = format_timestamp!(now(), format: "%FT%T%.3fZ")
       msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
@@ -78,11 +92,25 @@ transforms:
       del(.label)
       .level     = string(.level)     ?? "info"
       .component = string(.component) ?? "container"
+      # Event time: the app's own RFC 3339 `ts` (Go API emits UTC with
+      # offset) beats Docker's read time (.timestamp from docker_logs).
+      raw_ts = string(.ts) ?? ""
+      if raw_ts != "" {
+        app_ts, terr = parse_timestamp(raw_ts, format: "%+")
+        if terr == null {
+          .timestamp     = app_ts
+          .raw_timestamp = raw_ts
+          .tz_assumed    = false
+        }
+      }
+      .event_time = format_timestamp(.timestamp, format: "%FT%T%.3fZ") ?? .ingest_time
+      .tz_assumed = bool(.tz_assumed) ?? false
 
   flows_normalized:
     type: remap
     inputs: [docker_flows]
     source: |
+      .ingest_time = format_timestamp!(now(), format: "%FT%T%.3fZ")
       msg = string!(.message)
       parsed, err = parse_json(msg)
       if err == null && is_object(parsed) {
@@ -91,15 +119,55 @@ transforms:
       # Same dotted-key collision as applogs — drop the Docker label map.
       del(.label)
       .signal = "netflow"
+      # Event time: goflow2's time_received_ns (epoch ns, UTC by
+      # definition) — NOT the docker_logs scrape time that .timestamp
+      # held up to here. Epoch input means nothing to assume: tz_assumed
+      # stays false whenever the field is present.
+      ns = to_int(.time_received_ns) ?? 0
+      if ns > 0 {
+        .timestamp     = from_unix_timestamp(ns, unit: "nanoseconds") ?? .timestamp
+        .raw_timestamp = to_string(ns)
+        .tz_assumed    = false
+      } else {
+        .tz_assumed    = true
+      }
+      .event_time = format_timestamp(.timestamp, format: "%FT%T%.3fZ") ?? .ingest_time
 
   syslog_normalized:
     type: remap
     inputs: [syslog_in]
     source: |
+      .ingest_time = format_timestamp!(now(), format: "%FT%T%.3fZ")
       .signal   = "syslog"
       .hostname = string(.hostname) ?? "unknown"
       .severity = string(.severity) ?? "info"
       .appname  = string(.appname)  ?? "unknown"
+
+      # Time provenance forwarded by syslog-ng as RFC 5424 structured
+      # data [correlix@58700 raw=... ingest=...] (see syslog-ng.conf).
+      #   raw    = first 64 verbatim wire bytes → contains the device's
+      #            original timestamp string
+      #   ingest = edge receive time (beats our aggregator clock)
+      # .timestamp itself is the device time parsed ONCE at the edge;
+      # it is never re-interpreted here.
+      raw_head = string(."correlix@58700".raw) ?? ""
+      edge_rx  = string(."correlix@58700".ingest) ?? ""
+      del(."correlix@58700")
+      if raw_head != "" { .raw_timestamp = raw_head }
+      if edge_rx != "" {
+        edge_ts, eerr = parse_timestamp(edge_rx, format: "%+")
+        if eerr == null { .ingest_time = format_timestamp!(edge_ts, format: "%FT%T%.3fZ") }
+      }
+      # tz_assumed: an RFC 5424 head carries its own offset (trusted);
+      # anything else (plain RFC 3164) had NO offset — its zone was the
+      # edge's configured UTC fallback, so flag it. Unknown head (old
+      # syslog-ng without the rewrite) is conservatively flagged too.
+      if match(raw_head, r'^<\d{1,3}>\d+ \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})') {
+        .tz_assumed = false
+      } else {
+        .tz_assumed = true
+      }
+      .event_time = format_timestamp(.timestamp, format: "%FT%T%.3fZ") ?? .ingest_time
 
       # Vendor classification from the log signature (heuristic). The
       # authoritative vendor still comes from SNMP sysObjectID at discovery;
