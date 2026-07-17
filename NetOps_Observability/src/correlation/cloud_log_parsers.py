@@ -237,7 +237,7 @@ def vpc_pair_rollup(records: list[dict], top_k: int = 20) -> list[dict]:
         a["packets"] += int(str(rec.get("packets") or "0") or 0)
         a["flows"] += 1
         end = str(rec.get("end") or "")
-        if end.isdigit() and end > a["end"]:
+        if end.isdigit() and (not a["end"] or int(end) > int(a["end"])):
             a["end"] = end
     kept = sorted(agg.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))[:max(1, int(top_k))]
     out: list[dict] = []
@@ -286,7 +286,7 @@ def vpc_accept_rollup(records: list[dict]) -> list[dict]:
         a["packets"] += int(str(rec.get("packets") or "0") or 0)
         a["flows"] += 1
         end = str(rec.get("end") or "")
-        if end.isdigit() and end > a["end"]:
+        if end.isdigit() and (not a["end"] or int(end) > int(a["end"])):
             a["end"] = end
     out: list[dict] = []
     for eni, a in sorted(agg.items()):
