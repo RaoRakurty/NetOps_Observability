@@ -136,7 +136,9 @@ transforms:
       # capture is a schema follow-up (goflow2 time_flow_start/end_ns).
       trcv = to_int(.time_received_ns) ?? 0
       if trcv > 0 {
-        .ts = to_int(floor(trcv / 1000000)) ?? 0
+        # floor() of an already-coalesced int is infallible — VRL rejects a
+        # dangling `??` on it (exit 78 at boot, caught in deploy 2026-07-17).
+        .ts = to_int(floor(trcv / 1000000))
       }
       # Preserve the flow protocol family (goflow2 `type`) so the UI can tell
       # NetFlow vs IPFIX vs sFlow apart — they otherwise share one schema.

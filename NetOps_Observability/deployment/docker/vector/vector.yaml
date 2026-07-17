@@ -310,7 +310,10 @@ transforms:
       # OpenSearch and the correlation service raises a per-device finding off
       # the bus copy. The timestamp itself is NEVER rewritten (R2: origin time
       # preserved; R3: receive time alongside).
-      ots = to_unix_timestamp(to_timestamp(.timestamp) ?? now())
+      # (`to_timestamp` does not exist in this Vector's VRL — exit 78 at boot,
+      # caught in deploy 2026-07-17. Render→parse handles both a native
+      # timestamp and a string form of .timestamp.)
+      ots = to_unix_timestamp(parse_timestamp(to_string(.timestamp) ?? "", "%+") ?? now())
       skew_s = ots - to_unix_timestamp(now())
       if abs(skew_s) > 300 { .clock_skew_s = skew_s }
 
