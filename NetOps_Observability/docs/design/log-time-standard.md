@@ -1,8 +1,8 @@
 # Log-Time Standard — timestamp correctness across the pipeline
 
-Status: **audit complete, clear-cut defects fixed (2026-07-16)**; the
-recommended standard in Part 2 is a **draft pending reconciliation with
-owner-provided research** (see the note at the top of Part 2).
+Status: **audit complete; defects D1–D5 and follow-up slices S3–S6 + S5
+shipped; Part 2 is the ADOPTED standard (reconciled 2026-07-17,
+owner-delegated)** — see the per-rule verdicts at the top of Part 2.
 
 Trigger: owner report — *"time on the logs looks wrong to me"* (Correlix host
 itself is NTP-synced, so the suspicion was timestamp **handling**, not clocks).
@@ -83,54 +83,104 @@ parsed with a configured/implicit zone.
 
 ---
 
-## Part 2 — Recommended standard (draft)
+## Part 2 — Adopted standard
 
-> **Reconciliation note (owner request):** the owner will supply his own
-> research on log time/date handling. This section is the *proposed* standard
-> distilled from the sources below; treat every rule as amendable. Part 1
-> (facts) and Part 3 (what was changed) stand regardless. When the owner's
-> research lands, reconcile rule-by-rule and mark each rule
-> `adopted / amended / replaced`.
+> **Reconciliation record (2026-07-17, delegated by the owner):** each rule
+> was checked against authoritative sources (RFC 3339/5424/3164, the OTel
+> Logs Data Model, ClickHouse DateTime64 semantics, the ECMA-262 Date-parsing
+> divergence, and the normalization practice documented by Splunk / Datadog /
+> Elastic / Grafana) **and** against what Part 1 audited about this codebase.
+> Verdicts: **R1 AMENDED** (strengthened — the S4 caveat is gone, epoch
+> inserts shipped), **R2 ADOPTED**, **R3 ADOPTED**, **R4 ADOPTED**,
+> **R5 AMENDED** (per-family tolerances + META-finding semantics, shipped as
+> S5), **R6 ADOPTED**, **R7 ADOPTED**, **R8 AMENDED** (post-S4/S5 test
+> requirements added). No rule was REJECTED — the external research
+> uniformly corroborated the draft; per-rule provenance notes are inline.
 
-### The rules
+### The rules (adopted)
 
-* **R1 — UTC on the wire and at rest.** Every stored/transported timestamp is
-  UTC, serialized RFC 3339 (`2026-07-16T21:56:03.562Z`) in JSON/logs, or UTC
-  epoch (unit explicit in the field name, e.g. `_ns`) in binary/columnar
-  stores. ClickHouse `DateTime64` columns rely on the server TZ being pinned
-  UTC (done) until writers move to epoch inserts (S4).
-* **R2 — Origin time is preserved, never re-stamped.** When the source
-  provides a time (syslog, cloud provider records, flow exports), that is the
-  record's `timestamp` end-to-end. If the source provides an offset, honor it
-  (RFC 5424 path — works today, F1).
-* **R3 — Receive time is recorded *alongside*, not *instead*.** Every ingest
-  hop that can, records `ingested_at` (OTel `ObservedTimestamp` semantics) so
-  origin-vs-receive skew is observable. Sources with no origin wall-clock
-  (SNMP traps) legitimately use receive time as `timestamp` — documented, not
-  accidental.
+* **R1 — UTC on the wire and at rest.** *(AMENDED 2026-07-17 — strengthened;
+  shipped as S3 `f8c2209` + S4 `84ad149`.)* Every stored/transported
+  timestamp is UTC: serialized RFC 3339 **with the `Z` designator**
+  (`2026-07-16T21:56:03.562Z`) in JSON/logs/APIs, and a **scaled-integer UTC
+  epoch** (unit explicit — epoch-ms for `DateTime64(3)`, `_ns`-suffixed
+  fields for nanoseconds) in binary/columnar stores. Rationale (provenance):
+  ECMA-262 parses a zone-less date-time as **local** time (and, divergently,
+  a date-only string as UTC) — so an unlabeled wire string WILL be
+  misinterpreted by some consumer; ClickHouse interprets an inserted STRING
+  in the server/column timezone but an inserted INTEGER as a scaled UTC Unix
+  timestamp — so epoch inserts are structurally timezone-proof where strings
+  are configuration-dependent. The server-TZ pin (R7) remains as defense in
+  depth, no longer as a correctness dependency.
+* **R2 — Origin time is preserved, never re-stamped.** *(ADOPTED 2026-07-17.)*
+  When the source provides a time (syslog, cloud provider records, flow
+  exports), that is the record's `timestamp` end-to-end. If the source
+  provides an offset, honor it (RFC 5424 path — works today, F1).
+  Provenance: identical to the OTel Logs Data Model `Timestamp` ("when the
+  event occurred, measured by the origin clock") and Elastic's
+  origin-time-first guidance; Part 1's D2/D3 defects were exactly violations
+  of this rule.
+* **R3 — Receive time is recorded *alongside*, not *instead*.** *(ADOPTED
+  2026-07-17.)* Every ingest hop that can, records `ingested_at` (OTel
+  `ObservedTimestamp` semantics; Datadog's `event_time` vs `ingestion_time`
+  distinction) so origin-vs-receive skew is observable — this is what makes
+  R5 implementable at all. Sources with no origin wall-clock (SNMP traps)
+  legitimately use receive time as `timestamp` — documented, not accidental
+  (F8), matching the OTel conversion rule "use Timestamp if present,
+  otherwise ObservedTimestamp".
 * **R4 — Zone-less inputs get an *explicit, configured* zone assumption —
-  never the container's local zone.** RFC 3164 syslog is the canonical case:
-  the assumption is pinned in config (`recv-time-zone("UTC")`), and deviating
-  devices get a per-device/site setting (S1) — not a silent shift. Parsers
-  must refuse (not guess) zone-less provider strings (`cloud_tag.py`
-  `_parse_provider_iso` returns "" for naive strings).
-* **R5 — Clock-skew detection.** Flag records whose origin time differs from
-  receive time beyond a family-specific tolerance (S5). A device with a wrong
-  clock must surface as a *finding*, not as silently misplaced logs.
+  never the container's local zone.** *(ADOPTED 2026-07-17.)* RFC 3164
+  syslog is the canonical case: its TIMESTAMP carries **no year and no
+  zone**, and RFC 5424 (A.1) merely says the relay's zone MAY be used for
+  conversion — i.e. the standard itself leaves the assumption to
+  configuration, so we pin it (`recv-time-zone("UTC")`), matching the
+  receiver-side guidance Elastic/Vector document for BSD syslog. Deviating
+  devices get a per-device/site setting — resolved as **S1
+  designed-out-until-needed** (see Part 3): with the UTC pin explicit, the
+  platform-wide default is correct and safe, R5 now *detects* any device
+  actually logging non-UTC local time, and the admin surface is built only
+  when such a device exists. Parsers must refuse (not guess) zone-less
+  provider strings (`cloud_tag._parse_provider_iso` returns "" for naive
+  strings). The RFC 3164 missing *year* is inferred by syslog-ng
+  (year-rollover edge; noted, accepted).
+* **R5 — Clock-skew detection.** *(AMENDED 2026-07-17 — per-family
+  tolerances + META-finding semantics; shipped as S5 `55f8023`.)* Flag
+  records whose origin time differs from receive time beyond a
+  **family-specific** tolerance: syslog 300 s; batch cloud lanes sized ~2–3×
+  their documented delivery lag (lb 900 s, flow 1800 s, waf 600 s, dns
+  900 s) so legitimate S3 delivery lag never fabricates a finding. A device
+  with a wrong clock surfaces as a per-device `clock_skew` *finding* (and a
+  lagging lane as a per-lane one) — never as silently misplaced logs.
+  Findings are META evidence: recorded for operators, never fed to the RCA
+  engine window (a wrong clock must not lend a fake corroborating plane).
+  Provenance: streaming-pipeline practice (flag `future_timestamp` beyond a
+  max-drift budget; monitor event-time vs ingest-time delta per source).
 * **R6 — Display: viewer's local time by default, explicit zone label always,
-  one-click UTC toggle.** Times render via ONE shared utility
+  one-click UTC toggle.** *(ADOPTED 2026-07-17; chart axes closed by S6
+  `e4f62c7`.)* Times render via ONE shared utility
   (`src/frontend/src/lib/time.ts`): browser-local with the zone token shown
   ("14:56:03 PDT", toggle label "PDT (UTC−7)" — customer language, never
-  "browser TZ"), a top-bar Local/UTC knob persisted per user, and tooltips
-  carrying the RFC 3339 UTC instant. Zone-less strings from the API parse as
-  UTC **by contract** (R1), never browser-local.
-* **R7 — Pipeline containers run UTC, explicitly.** No `TZ` envs on pipeline
-  services; components whose *parsing* depends on a zone pin it in their own
-  config (syslog-ng, ClickHouse — done) so a base-image default can never
-  shift data.
+  "browser TZ"), a top-bar Local/UTC knob persisted per user, tooltips
+  carrying the RFC 3339 UTC instant, and chart axes/crosshairs obeying the
+  same knob (`fmtAxisTick`). Zone-less strings from the API parse as UTC
+  **by contract** (R1), never browser-local. Provenance: store-UTC /
+  display-per-user-preference is the uniform practice across Splunk (per-user
+  timezone setting), Datadog (Preferences → Time zone) and Grafana
+  (browser-local default + UTC option).
+* **R7 — Pipeline containers run UTC, explicitly.** *(ADOPTED 2026-07-17.)*
+  No `TZ` envs on pipeline services; components whose *parsing* depends on a
+  zone pin it in their own config (syslog-ng, ClickHouse — done) so a
+  base-image default can never shift data. Post-S4 the ClickHouse pin is
+  defense in depth (integer inserts are TZ-proof), kept deliberately.
+  Provenance: Splunk deployment best practice — run every server in the
+  logging infrastructure on UTC.
 * **R8 — Every new ingest lane ships with a time-audit note** (origin field,
-  zone semantics, receive-stamp) and parse tests including zone-less,
-  DST-boundary, and half-hour-offset (IST) cases.
+  zone semantics, receive-stamp) **and parse tests**. *(AMENDED
+  2026-07-17.)* Tests must cover: zone-less, DST-boundary, and
+  half-hour-offset (IST) parse cases; the epoch **scaled-integer insert**
+  form for any ClickHouse-bound writer (S4 contract); and the lane's
+  clock-skew **tolerance choice** with a stated delivery-lag rationale (S5 —
+  `FAMILY_SKEW_TOLERANCE_S` is the template).
 
 ### Sources
 
@@ -142,6 +192,14 @@ parsed with a configured/implicit zone.
 * Graylog — [Time Zones: A Logger's Worst Nightmare](https://graylog.org/post/time-zones-a-loggers-worst-nightmare/) (send-UTC-from-devices guidance).
 * Datadog — [Custom time frames](https://docs.datadoghq.com/dashboards/guide/custom_time_frames/), [Logs not showing expected timestamp](https://docs.datadoghq.com/logs/guide/logs-not-showing-expected-timestamp/) (store UTC, display local, UTC toggle).
 * Grafana — [dashboard timezone options](https://community.grafana.com/t/set-dashboard-to-timezone-other-than-utc-or-local-browser/9010) (browser-local default + UTC option).
+
+Added at reconciliation (2026-07-17):
+
+* [RFC 3164](https://datatracker.ietf.org/doc/html/rfc3164) — BSD syslog TIMESTAMP: no year, no zone (the R4 canonical case); RFC 5424 A.1: relay zone "MAY be used" on conversion — i.e. an explicit configured assumption is required.
+* ClickHouse — [DateTime64](https://clickhouse.com/docs/sql-reference/data-types/datetime64): an inserted **integer** is "an appropriately scaled Unix Timestamp (UTC)"; an inserted **string** "is treated as being in column timezone" — the R1/S4 rationale.
+* ECMA-262 / MDN — [Date parsing](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/parse): zone-less date-times parse as **local** time while date-only forms parse as UTC (a documented divergence from ISO 8601) — why the wire must always carry `Z` (R1) and why the SPA parses zone-less strings by contract (R6).
+* Splunk — [How time zones are processed](https://docs.splunk.com/Documentation/SplunkCloud/latest/Search/Abouttimezones): `_time` stored UTC, rendered per user's timezone preference; deployment best practice = every server on UTC (R6/R7).
+* Datadog — event_time vs ingestion_time distinction (R3); OTel Logs Data Model `Timestamp`/`ObservedTimestamp` (already cited) remains the R2/R3 anchor.
 
 ---
 
@@ -161,7 +219,7 @@ parsed with a configured/implicit zone.
 | S6 (F12 tail, shipped 2026-07-17, `e4f62c7`): ECharts time axes always rendered browser-local, contradicting the Local/UTC knob | `fmtAxisTick` in `lib/time.ts` (tiered like ECharts defaults: midnight ⇒ "Jul 16", whole minute ⇒ "14:56", else "14:56:03", honoring the active TzMode) + `timeAxisTicks()` fragment in `theme/charts.ts` (axis labels **and** the crosshair pill via `fmtDateTime`); applied to every visible `type:"time"` axis (board panels, Overview/Flows/MetricsExplorer panels) — charts rebuild on toggle via the existing page remount | `lib/time.test.ts` +5 cases (UTC/local tiers, mode override, garbage ⇒ empty), suite run under `TZ=America/Los_Angeles` and `TZ=Asia/Kolkata`; `tsc -b` + full vitest 635 passed |
 | S5 (R5, shipped 2026-07-17): no clock-skew detection — a wrong device clock or a lagging ingest lane surfaced as silently misplaced records | Ingest-side stamping + a per-device/per-lane finding, tolerance **per family**: syslog — Vector `syslog_normalized` compares origin vs `now()`, stamps `clock_skew_s` past 300 s (timestamp itself never rewritten, R2/R3); cloud — `cloud_tag.clock_skew_s()` with `FAMILY_SKEW_TOLERANCE_S` (lb 900 s, flow 1800 s, waf 600 s, dns 900 s — batch S3 delivery lag inside the envelope is legitimate, not a finding). Finding: new canonical kind **`clock_skew`** (registered in `producers.EMITTED_KINDS`, `confirmability.KIND_MODALITY` = management_plane, `cloud_producers.CLOUD_KINDS`, and **INTENTIONAL_BLIND** in coverage.py so the #99 orphan-producer gate passes) raised per device (main.py `handle_syslog`, cooldown 900 s) and per lane (poller → `cloud_events.clock_skew_event` on netops.cloud, throttle 1800 s → `handle_cloud`). META evidence by design: persisted to corr_signals for operators but **never** `buffer_signal()`ed — a wrong clock cannot lend a fake modality plane to a real fault | `test_clock_skew.py` (producer matrix, wire adapter, registration in every gate), `test_cloud_tag.py` +4 (per-family envelope, signed direction, never-guess), `test_cloud_events.py` clock_skew_event shape; correlation suite 647 passed, cloud-ingest suite 194 passed, mypy clean, `vector validate` green on both configs |
 
-### Follow-up slices (designed, not built)
+### Remaining slices (S3–S6 + S5 shipped — see the fixed table above)
 
 * **S1 — Per-device/site timezone for RFC 3164 sources.** Admin surface: a
   `log_timezone` attribute on device (default UTC), applied either as
