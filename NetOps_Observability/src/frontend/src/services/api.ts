@@ -641,6 +641,12 @@ export type CorrStats = {
   open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
   actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;
 };
+// True tenant-scoped window counts for the Correlations page (never the capped
+// list length): total objects, split by verdict tier and by state.
+export type CorrSummary = {
+  total: number; confirmed: number; suspected: number; undetermined: number;
+  open: number; closed: number; window_seconds: number;
+};
 // #80 — recurring undetermined gap-shapes (which signature to write/strengthen next).
 export type UndeterminedGap = { clause: string; count: number };
 export type UndeterminedCluster = {
@@ -1827,12 +1833,22 @@ export const api = {
     if (severity) p.set("severity", severity);
     return request<ClickHouseResponse<Finding>>(`/api/findings?${p}`);
   },
-  // Correlation Engine v2 objects (read-only inspector).
-  correlations: (limit = 100, sinceSeconds = 86400, state?: string, tier?: string) => {
+  // Correlation Engine v2 objects (read-only inspector). `cursor` is the house
+  // keyset cursor — the response's next_cursor (set only when a full page was
+  // returned) fetches the next page of the same window.
+  correlations: (limit = 100, sinceSeconds = 86400, state?: string, tier?: string, cursor?: string) => {
     const p = new URLSearchParams({ limit: String(limit), since: `${sinceSeconds}s` });
     if (state) p.set("state", state);
     if (tier) p.set("tier", tier);
-    return request<ClickHouseResponse<CorrObject>>(`/api/correlations?${p}`);
+    if (cursor) p.set("cursor", cursor);
+    return request<ClickHouseResponse<CorrObject> & { next_cursor?: string }>(`/api/correlations?${p}`);
+  },
+  // True window counts behind the Correlations stat chips — real COUNTs, never
+  // the capped list length (owner directive: DON'T HIDE).
+  correlationsSummary: (sinceSeconds = 86400, state?: string) => {
+    const p = new URLSearchParams({ since: `${sinceSeconds}s` });
+    if (state) p.set("state", state);
+    return request<CorrSummary>(`/api/correlations/summary?${p}`);
   },
   correlationDetail: (id: string) =>
     request<{ object: CorrObject; edges: CorrEdge[] }>(`/api/correlations/${encodeURIComponent(id)}`),

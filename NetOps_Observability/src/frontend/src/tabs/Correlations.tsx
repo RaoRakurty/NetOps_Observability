@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrTimeline, RcaPathAttribution, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaPathAttribution, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -113,8 +113,54 @@ function idFromHash(): string {
   return new URLSearchParams(q).get("id") || "";
 }
 
+// List window + page size. The page is honest about both: the stat chips show
+// the TRUE window totals (server COUNTs) and "Load more" pages through the rest.
+const LIST_WINDOW_S = 86400;
+const PAGE_SIZE = 200;
+
+// mergeCorrPages — base (auto-refreshing) page + user-loaded extra pages,
+// deduplicated by correlation_id (a refreshed base page can re-include a row
+// that was previously loaded via "Load more"). Pure; unit-tested.
+export function mergeCorrPages(base: CorrObject[], extra: CorrObject[]): CorrObject[] {
+  const seen = new Set(base.map((o) => o.correlation_id));
+  return base.concat(extra.filter((o) => !seen.has(o.correlation_id)));
+}
+
+// TierChip — one clickable stat chip of the "don't hide" row. Click filters the
+// table to that verdict tier; the active chip is highlighted.
+function TierChip({ label, n, tone, active, onClick, title }: {
+  label: string; n: number | null; tone: string; active: boolean; onClick: () => void; title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      style={{
+        display: "inline-flex", alignItems: "baseline", gap: 6, cursor: "pointer",
+        padding: "4px 11px", borderRadius: 999, fontSize: 12.5,
+        border: `1px solid ${active ? tone : "var(--border)"}`,
+        background: active ? tone + "1c" : "var(--surface)",
+        color: active ? tone : "var(--fg)",
+        fontWeight: active ? 700 : 500,
+      }}
+    >
+      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{n ?? "…"}</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
+  // True window totals (server COUNTs) + keyset paging: baseCursor continues
+  // after the auto-refreshed first page, moreCursor after user-loaded pages.
+  const [summary, setSummary] = useState<CorrSummary | null>(null);
+  const [more, setMore] = useState<CorrObject[]>([]);
+  const [baseCursor, setBaseCursor] = useState("");
+  const [moreCursor, setMoreCursor] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
   const [state, setState] = useState("");
   const [tier, setTier] = useState(tierFromHash);
   // When arriving via a deep link (?id=…), the target RCA can be older than the
@@ -127,13 +173,16 @@ export default function Correlations() {
   const [notified, setNotified] = useState<Record<string, TicketLinkRow[]>>({});
   const ws = useWorkspace();
 
+  // Base page + user-loaded pages, deduped (a base refresh can re-include a row).
+  const merged = useMemo(() => mergeCorrPages(items, more), [items, more]);
+
   // Hide internal-stack/self-monitoring objects by default — RCA is for customer
   // networks (decision #76). The toggle reveals them for platform debugging.
   const visible = useMemo(
-    () => (showInternal ? items : items.filter((o) => !isInternalStackObject(o))),
-    [items, showInternal],
+    () => (showInternal ? merged : merged.filter((o) => !isInternalStackObject(o))),
+    [merged, showInternal],
   );
-  const hiddenInternal = items.length - visible.length;
+  const hiddenInternal = merged.length - visible.length;
 
   const columns = useMemo<Column<CorrObject>[]>(() => [
     // UX-2: the human incident handle (same P-XXXXXX id the Inspector, Iris AI
@@ -201,12 +250,29 @@ export default function Correlations() {
 
   useEffect(() => {
     let alive = true;
+    // Filter change = a new result set: drop user-loaded pages so page 1 +
+    // "Load more" stay a consistent keyset walk of the new filter.
+    setMore([]);
+    setMoreCursor("");
     const tick = async () => {
       try {
-        const r = await api.correlations(200, 86400, state || undefined, tier || undefined);
-        if (alive) setItems(r?.data ?? []);
+        const r = await api.correlations(PAGE_SIZE, LIST_WINDOW_S, state || undefined, tier || undefined);
+        if (alive) {
+          setItems(r?.data ?? []);
+          setBaseCursor(r?.next_cursor ?? "");
+        }
       } catch {
-        if (alive) setItems([]);
+        if (alive) { setItems([]); setBaseCursor(""); }
+      }
+      // True window totals for the stat chips — real COUNTs, never the capped
+      // list length. Tier is deliberately NOT applied so every chip stays
+      // clickable while one tier is active; the state filter is applied so the
+      // chips describe the same population as the table.
+      try {
+        const sm = await api.correlationsSummary(LIST_WINDOW_S, state || undefined);
+        if (alive) setSummary(sm ?? null);
+      } catch {
+        if (alive) setSummary(null);
       }
       // Ticket links are a best-effort enrichment — the list renders without them.
       try {
@@ -222,6 +288,23 @@ export default function Correlations() {
     const id = setInterval(tick, 15_000);
     return () => { alive = false; clearInterval(id); };
   }, [state, tier]);
+
+  // "Load more" — continue the keyset walk after the last loaded page. The
+  // auto-refresh only replaces the base page; loaded pages stay put (deduped).
+  const nextCursor = more.length > 0 ? moreCursor : baseCursor;
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.correlations(PAGE_SIZE, LIST_WINDOW_S, state || undefined, tier || undefined, nextCursor);
+      setMore((m) => m.concat(r?.data ?? []));
+      setMoreCursor(r?.next_cursor ?? "");
+    } catch {
+      /* keep what we have; the button stays for a retry */
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const select = (o: CorrObject) => {
     setSel(o.correlation_id);
@@ -271,21 +354,33 @@ export default function Correlations() {
   // v1 inline detail: prefer the row from the list, but fall back to the
   // directly-fetched deep-link object so a linked RCA outside the list still renders.
   const selected = !ws.enabled && sel
-    ? (items.find((o) => o.correlation_id === sel) ?? (deepObj?.correlation_id === sel ? deepObj : undefined))
+    ? (merged.find((o) => o.correlation_id === sel) ?? (deepObj?.correlation_id === sel ? deepObj : undefined))
     : undefined;
 
-  const rConfirmed = visible.filter((o) => o.verdict_tier === "confirmed").length;
-  const rSuspected = visible.filter((o) => o.verdict_tier === "suspected").length;
-  const rUndet = visible.filter((o) => o.verdict_tier === "undetermined").length;
+  // Header KPIs = TRUE window totals from the server rollup (never the capped
+  // list length); fall back to loaded-row counts only until the rollup arrives.
+  const rConfirmed = summary?.confirmed ?? visible.filter((o) => o.verdict_tier === "confirmed").length;
+  const rSuspected = summary?.suspected ?? visible.filter((o) => o.verdict_tier === "suspected").length;
+  const rUndet = summary?.undetermined ?? visible.filter((o) => o.verdict_tier === "undetermined").length;
+  const trueTotal = summary?.total ?? null;
+  // The population the TABLE describes (honest "showing X of N"): the active
+  // tier's true count when a tier filter is on, the full window total otherwise.
+  const tierTotal = summary
+    ? tier === "confirmed" ? summary.confirmed
+      : tier === "suspected" ? summary.suspected
+        : tier === "undetermined" ? summary.undetermined
+          : summary.total
+    : null;
+  const truncated = tierTotal !== null && visible.length < tierTotal;
   return (
     <div className="dm-board cc-board">
       <NocHeader
         title="RCA Candidates"
         subtitle="Evidence-linked correlation groups. A root cause is confirmed only when independent evidence agrees across at least two signal classes — weaker candidates say exactly what's missing."
-        chips={<><Chip label={`${visible.length} candidates`} /><LiveChip detail="correlation engine" /></>}
+        chips={<><Chip label={`${trueTotal ?? visible.length} candidates · 24h`} /><LiveChip detail="correlation engine" /></>}
       >
         <NocKpis cols={4}>
-          <NocKpi n={visible.length} label="Candidates" interp="correlation groups" />
+          <NocKpi n={trueTotal ?? visible.length} label="Candidates" interp="in the last 24h" />
           <NocKpi n={rConfirmed} label="Confirmed" interp="≥2 evidence streams" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
           <NocKpi n={rSuspected} label="Suspected" interp="impact not confirmed" tone={rSuspected ? "var(--warn)" : undefined} />
           <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
@@ -303,9 +398,34 @@ export default function Correlations() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Candidate queue</h3>
-          <span className="cc-panel-meta">{visible.length} · click a row for the RCA workspace</span>
+          <span className="cc-panel-meta">
+            {truncated
+              ? `showing ${visible.length} of ${tierTotal} in 24h · click a row for the RCA workspace`
+              : `${visible.length} · click a row for the RCA workspace`}
+          </span>
         </div>
         <div style={{ padding: "11px 13px" }}>
+          {/* Stat-chip row (owner directive: DON'T HIDE) — true window counts,
+              each chip clickable to filter the table to that verdict tier. */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <TierChip label="total" n={trueTotal} tone="var(--accent, #2563EB)"
+              active={tier === ""} onClick={() => setTier("")}
+              title="All correlation objects in the last 24h — click to clear the status filter" />
+            <TierChip label="confirmed" n={summary?.confirmed ?? null} tone="#E11D48"
+              active={tier === "confirmed"} onClick={() => setTier(tier === "confirmed" ? "" : "confirmed")}
+              title="Confirmed root causes — click to show only these" />
+            <TierChip label="suspected" n={summary?.suspected ?? null} tone="#D97706"
+              active={tier === "suspected"} onClick={() => setTier(tier === "suspected" ? "" : "suspected")}
+              title="Suspected root causes — click to show only these" />
+            <TierChip label="not confirmed" n={summary?.undetermined ?? null} tone="#8A93A6"
+              active={tier === "undetermined"} onClick={() => setTier(tier === "undetermined" ? "" : "undetermined")}
+              title="Undetermined — still gathering evidence; click to show only these" />
+            {summary && (
+              <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>
+                {summary.open} open · {summary.closed} resolved
+              </span>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <select value={state} onChange={(e) => setState(e.target.value)}>
               <option value="">All states</option>
@@ -325,7 +445,7 @@ export default function Correlations() {
           </div>
           {visible.length === 0 ? (
             <div className="empty">
-              {items.length > 0
+              {merged.length > 0
                 ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
                 : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
             </div>
@@ -341,6 +461,14 @@ export default function Correlations() {
               rowClassName={(o) => (sel === o.correlation_id ? "dtv-selected" : "")}
               initialSort={{ key: "created_at", dir: "desc" }}
             />
+          )}
+          {/* Every truncated list SAYS it's truncated and offers the rest. */}
+          {nextCursor && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 10, gap: 10, alignItems: "center" }}>
+              <button className="rw-btn" type="button" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : `Load ${PAGE_SIZE} more${tierTotal !== null ? ` (${merged.length} of ${tierTotal} loaded)` : ""}`}
+              </button>
+            </div>
           )}
           {selected && (
             <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 12 }}>

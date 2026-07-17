@@ -977,6 +977,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Correlation Engine v2 objects — read-only inspector + replay proxy (#67).
 	mux.HandleFunc("/api/correlations", s.handleCorrelations)
 	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
+	mux.HandleFunc("/api/correlations/summary", s.handleCorrelationsSummary)                  // true window counts (total / tier / state) behind the page's stat chips
 	mux.HandleFunc("/api/correlations/undetermined-frequency", s.handleUndeterminedFrequency) // #80 signature-governance: ranked recurring undetermined gap-shapes
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	// Service Path Graph (frozen contract §7): GET /api/rca/{correlation_id}/path —
