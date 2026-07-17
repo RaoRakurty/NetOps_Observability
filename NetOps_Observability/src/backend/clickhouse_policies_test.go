@@ -88,6 +88,10 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 	// would open a policyless exposure window.)
 	for _, table := range []string{
 		"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence",
+		// Same-pattern extension (separate commit): the already-strict family
+		// also self-heals via atomic OR REPLACE.
+		"corr_current", "corr_tenant_write_amp", "corr_path_edges",
+		"path_observations", "path_hops",
 	} {
 		want := "CREATE OR REPLACE ROW POLICY tenant_iso_" + table + " ON netops." + table
 		found := false

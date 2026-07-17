@@ -98,12 +98,9 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 		// STRICT row policy (the corr_current model, NOT the loose telemetry one):
 		// path data is never shared with a tenant just because it is untagged. An
 		// untagged ('') row is platform-only. §9: no endpoint resolution, edge,
-		// observation or API response crosses tenants.
-		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_observations ON netops.path_observations
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
-    TO ALL`,
-		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_hops ON netops.path_hops
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
-    TO ALL`,
+		// observation or API response crosses tenants. CREATE OR REPLACE (atomic,
+		// never DROP+CREATE) so a drifted/legacy policy is upgraded in place.
+		chStrictRowPolicyDDL("path_observations"),
+		chStrictRowPolicyDDL("path_hops"),
 	}
 }
