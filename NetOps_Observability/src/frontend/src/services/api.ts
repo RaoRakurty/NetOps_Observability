@@ -758,6 +758,9 @@ export type OwnerDomainStat = {
 export type ReliabilityRollupResp = {
   window_seconds: number; rollup: ReliabilityRollup; by_owner_domain: OwnerDomainStat[];
   mttf_ms: number; mttf_asset_count: number; capped: boolean; scan_cap: number; include_internal: boolean;
+  // #84 tail: rollups read persisted phase-metric snapshots; "live_scan" only on
+  // cold start before the first backfill pass.
+  source?: "snapshots" | "live_scan";
 };
 export type ReliabilityTrendBucket = {
   bucket_start: string; incident_count: number;

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -13,13 +14,18 @@ import (
 
 // timeintel_reliability.go — RCA Time Intelligence reliability rollups:
 //   GET /api/reliability/rollups            (percentile phase stats, MTBF, repeat rate, top time-loss phase)
+//   GET /api/reliability/trends             (the same rollup bucketed over time)
 //   GET /api/reliability/chronic-offenders  (recurring objects ranked by incident count)
 //
-// Both aggregate per-incident time decompositions over a window. The per-incident
-// metrics are derived from corr objects (no engine change, no persisted table yet) —
-// a single batched ClickHouse read, tenant-scoped via chRows (chTenantScope), so a
-// tenant only ever aggregates its OWN incidents (no cross-tenant leak). Percentiles
-// (p50/p90/p95), NOT just averages.
+// All three aggregate per-incident time decompositions over a window. The
+// PRIMARY source is the persisted incident_time_metrics snapshot store (#84 tail:
+// populated by timeintel_backfill.go, tenant-scoped in the store itself — RLS via
+// withTenant on PG, tenant filter in the mem store), read via ListWindow which
+// windows/dedupes/bounds IN the database. Snapshots outlive the ClickHouse TTL and
+// lift the old 5000-row live-scan cap that silently under-reported large windows.
+// The live ClickHouse derivation remains ONLY as a fallback for cold start (the
+// first backfill pass hasn't run yet — mem store after a restart, or a fresh
+// install). Percentiles (p50/p90/p95), NOT just averages.
 
 // reliabilityFilters are the optional scoping filters (network-specific dimensions).
 type reliabilityFilters struct {
@@ -48,12 +54,114 @@ func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
 	}
 }
 
-// buildIncidentSummaries loads corr objects in the window (tenant-scoped) and turns
-// each into a timeintel.IncidentSummary: derive lifecycle (engine facts; detection
-// falls back to onset here — per-object ingest queries would be N+1), compute phase
-// durations + the time-loss driver, and extract grouping keys for MTBF / chronic
-// offenders. Maintenance/child classification: merged objects are children.
-func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) ([]timeintel.IncidentSummary, error) {
+// incidentSummariesResult carries the summaries plus honest provenance: which
+// source produced them, the bound that applied, and whether it was hit.
+type incidentSummariesResult struct {
+	Incidents []timeintel.IncidentSummary
+	Source    string // "snapshots" (persisted store) | "live_scan" (CH fallback)
+	ScanCap   int    // the row bound that applied to the read
+	Capped    bool   // the raw read filled the bound → older incidents beyond it
+}
+
+// buildIncidentSummaries resolves the per-incident summaries for a window.
+// Primary: persisted snapshots via ListWindow (tenant-scoped in the store, §3a;
+// window + dedupe + bound applied in the database). Fallback: the live ClickHouse
+// derivation — only when the snapshot store has no rows yet (cold start before the
+// first backfill pass) or errors (logged, never silent).
+func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) (incidentSummariesResult, error) {
+	if s.incidentTimeMetrics != nil {
+		if claims, ok := userFrom(r.Context()); ok {
+			tenant, cross := principalTenant(claims)
+			since := time.Now().UTC().Add(-time.Duration(sinceSeconds) * time.Second)
+			rows, err := s.incidentTimeMetrics.ListWindow(r.Context(), tenant, cross, since, timeIntelCalcVersion, timeIntelBackfillCap)
+			switch {
+			case err != nil:
+				// Observable, not silent: fall back to the live derivation so the
+				// dashboard stays up, but say so in the log.
+				log.Printf("reliability rollup: snapshot read failed, falling back to live scan: %v", err)
+			case len(rows) > 0:
+				return incidentSummariesResult{
+					Incidents: summariesFromSnapshots(rows, f, includeInternal),
+					Source:    "snapshots",
+					ScanCap:   timeIntelBackfillCap,
+					Capped:    len(rows) >= timeIntelBackfillCap,
+				}, nil
+			}
+			// len(rows) == 0 → cold start (backfill hasn't produced rows yet): live fallback.
+		}
+	}
+	incs, err := s.buildIncidentSummariesLive(r, sinceSeconds, f, includeInternal)
+	if err != nil {
+		return incidentSummariesResult{}, err
+	}
+	return incidentSummariesResult{
+		Incidents: incs,
+		Source:    "live_scan",
+		ScanCap:   reliabilityLiveScanCap,
+		Capped:    len(incs) >= reliabilityLiveScanCap,
+	}, nil
+}
+
+// summariesFromSnapshots converts persisted snapshot rows to rollup inputs,
+// applying the customer-impacting default (internal excluded) and the dimension
+// filters. Pure — no IO. TTD is excluded for the same honesty reason as the live
+// path: the batch derivation has no per-object ingest time, so detection falls
+// back to onset → a misleading 0.
+func summariesFromSnapshots(rows []incidentTimeMetricRow, f reliabilityFilters, includeInternal bool) []timeintel.IncidentSummary {
+	out := make([]timeintel.IncidentSummary, 0, len(rows))
+	for _, row := range rows {
+		if row.Internal && !includeInternal {
+			continue
+		}
+		group := row.Group
+		if group == nil {
+			group = map[string]string{}
+		}
+		owner := strings.ToLower(strings.TrimSpace(row.Owner))
+		if f.Owner != "" && owner != f.Owner {
+			continue
+		}
+		if f.Provider != "" && group["provider"] != f.Provider {
+			continue
+		}
+		if f.Device != "" && group["device"] != f.Device {
+			continue
+		}
+		if f.Signature != "" && group["signature"] != f.Signature {
+			continue
+		}
+		durs := map[timeintel.MetricName]int64{}
+		for _, m := range row.Metrics {
+			if m.Complete && m.Name != timeintel.MetricTTD {
+				durs[m.Name] = m.DurationMs
+			}
+		}
+		out = append(out, timeintel.IncidentSummary{
+			CorrelationID:  row.CorrelationID,
+			Durations:      durs,
+			TimeLossDriver: timeintel.TimeLossDriver(row.Bottleneck),
+			Group:          group,
+			OccurredAt:     row.OccurredAt,
+			State:          row.State,
+			IsChild:        strings.EqualFold(row.State, "merged"),
+			OwnerDomain:    timeintel.OwnerDomain(row.OwnerDomain),
+			Internal:       row.Internal,
+		})
+	}
+	return out
+}
+
+// reliabilityLiveScanCap bounds the FALLBACK live ClickHouse scan (cold start
+// only); the primary snapshot path is bounded by timeIntelBackfillCap instead.
+const reliabilityLiveScanCap = 5000
+
+// buildIncidentSummariesLive is the cold-start FALLBACK: loads corr objects in the
+// window (tenant-scoped via chRows/chTenantScope) and turns each into a
+// timeintel.IncidentSummary: derive lifecycle (engine facts; detection falls back
+// to onset here — per-object ingest queries would be N+1), compute phase durations
+// + the time-loss driver, and extract grouping keys for MTBF / chronic offenders.
+// Maintenance/child classification: merged objects are children.
+func (s *server) buildIncidentSummariesLive(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) ([]timeintel.IncidentSummary, error) {
 	// Qualify with a table alias so WHERE references the real DateTime64 column, not
 	// the toString() SELECT alias of the same name (which would be String → type
 	// mismatch — the same gotcha handleCorrelations documents).
@@ -76,7 +184,7 @@ SELECT toString(o.correlation_id) AS correlation_id,
   FROM netops.corr_current AS o FINAL
  WHERE o.window_start >= now() - INTERVAL ` + intToString(sinceSeconds) + ` SECOND
  ORDER BY o.window_start ASC
- LIMIT 5000
+ LIMIT ` + intToString(reliabilityLiveScanCap) + `
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
 	if err != nil {
@@ -191,23 +299,24 @@ func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request
 		return
 	}
 	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
+	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	rollup := timeintel.Rollup(incs)
-	mttf, mttfCount := timeintel.MTTF(incs)
+	rollup := timeintel.Rollup(res.Incidents)
+	mttf, mttfCount := timeintel.MTTF(res.Incidents)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"window_seconds":      since,
 		"rollup":              rollup,
-		"by_owner_domain":     timeintel.RollupByDomain(incs),
+		"by_owner_domain":     timeintel.RollupByDomain(res.Incidents),
 		"mttf_ms":             mttf,
 		"mttf_asset_count":    mttfCount,
 		"calculation_version": timeIntelCalcVersion,
 		"include_internal":    includeInternalFrom(r),
-		"scan_cap":            5000,
-		"capped":              len(incs) >= 5000, // info, not error — surfaced cleanly in the UI
+		"source":              res.Source,  // snapshots (persisted) | live_scan (cold-start fallback)
+		"scan_cap":            res.ScanCap, // bound of the source that served this window
+		"capped":              res.Capped,  // info, not error — surfaced cleanly in the UI
 	})
 }
 
@@ -225,13 +334,13 @@ func (s *server) handleReliabilityTrends(w http.ResponseWriter, r *http.Request)
 	}
 	since := intQuery(r, "since", 30*86400, 86400, 365*86400)
 	bucket := intQuery(r, "bucket", 86400, 3600, 30*86400) // default daily
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
+	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	byBucket := map[int64][]timeintel.IncidentSummary{}
-	for _, in := range incs {
+	for _, in := range res.Incidents {
 		if in.OccurredAt.IsZero() {
 			continue
 		}
@@ -263,6 +372,7 @@ func (s *server) handleReliabilityTrends(w http.ResponseWriter, r *http.Request)
 		"window_seconds": since,
 		"bucket_seconds": bucket,
 		"buckets":        rows,
+		"source":         res.Source,
 	})
 }
 
@@ -277,13 +387,14 @@ func (s *server) handleReliabilityChronicOffenders(w http.ResponseWriter, r *htt
 	}
 	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
 	topN := intQuery(r, "top", 10, 1, 100)
-	incs, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
+	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"window_seconds": since,
-		"offenders":      timeintel.ChronicOffenders(incs, topN),
+		"offenders":      timeintel.ChronicOffenders(res.Incidents, topN),
+		"source":         res.Source,
 	})
 }
