@@ -126,7 +126,7 @@ func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
 	// ids, ENIs, hosts) and the signal kinds (seam-lane kinds route the issue
 	// to a seam, §4a).
 	if list := sqlList(ids); list != "" {
-		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(cloudSignalWindowHours, list, overviewMaxIssueSignals, scope)) {
+		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(cloudSignalWindowHours, list, "", overviewMaxIssueSignals, scope)) {
 			i, ok := byID[row.CorrelationID]
 			if !ok {
 				continue

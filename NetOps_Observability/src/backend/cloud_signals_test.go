@@ -41,9 +41,9 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 			}
 			queries := []string{
 				cloudHealthSQL(24, "", 100, scope),
-				cloudChangesSQL(24, "", 100, scope),
+				cloudChangesSQL(24, "", "", 100, scope),
 				cloudEvidenceObjectsSQL(24, "", scope),
-				cloudEvidenceSignalsSQL(24, "'id'", 100, scope),
+				cloudEvidenceSignalsSQL(24, "'id'", "", 100, scope),
 			}
 			for _, q := range queries {
 				if !strings.Contains(q, "SETTINGS tenant_scope = '"+tc.want+"'") {
@@ -75,7 +75,7 @@ func TestCloudEvidenceQueriesFollowHotReadContract(t *testing.T) {
 	if strings.Contains(obj, "netops.hypotheses") {
 		t.Fatalf("object read must never touch hypotheses near a fold:\n%s", obj)
 	}
-	sig := cloudEvidenceSignalsSQL(24, "'a','b'", 50, "acme")
+	sig := cloudEvidenceSignalsSQL(24, "'a','b'", "", 50, "acme")
 	if !strings.Contains(sig, "archived_for IN ('a','b')") {
 		t.Fatalf("archive read must be prefiltered by the picked ids:\n%s", sig)
 	}
@@ -147,9 +147,9 @@ func TestClampWindowHours(t *testing.T) {
 func TestSignalQueriesCarryWindow(t *testing.T) {
 	for _, q := range []string{
 		cloudHealthSQL(168, "", 100, "acme"),
-		cloudChangesSQL(168, "", 100, "acme"),
+		cloudChangesSQL(168, "", "", 100, "acme"),
 		cloudEvidenceObjectsSQL(168, "", "acme"),
-		cloudEvidenceSignalsSQL(168, "'id'", 100, "acme"),
+		cloudEvidenceSignalsSQL(168, "'id'", "", 100, "acme"),
 		cloudOpenObjectCountSQL(168, "", "acme"),
 		cloudArchivedSignalCountSQL(168, "'id'", "acme"),
 	} {

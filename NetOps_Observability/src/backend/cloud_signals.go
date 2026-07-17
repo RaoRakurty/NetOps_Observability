@@ -32,6 +32,7 @@ package main
 // corr_objects FORCE row policies enforce in the database itself.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +101,150 @@ func safeScopeLiteral(scope string) string {
 		}
 	}
 	return scope
+}
+
+// ── #10 scale-out: free-text search + keyset cursor for the signal surfaces ──
+
+// cloudSignalQueryMaxLen bounds the caller's free-text ?q= term (it is embedded,
+// escaped, in a CH string literal — a bounded needle, never a pattern).
+const cloudSignalQueryMaxLen = 128
+
+// signalCursorVersion tags the opaque page-cursor wire format.
+const signalCursorVersion = "s1"
+
+var errBadSignalCursor = errors.New("invalid cursor")
+
+// escapeCHString escapes a value for embedding inside a single-quoted
+// ClickHouse string literal (backslash first, then the quote).
+func escapeCHString(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s)
+}
+
+// clampSignalQuery normalizes the free-text search term: trimmed, control
+// characters stripped, length-capped. Empty means "no search".
+func clampSignalQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	var b strings.Builder
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	q := b.String()
+	if len(q) > cloudSignalQueryMaxLen {
+		q = q[:cloudSignalQueryMaxLen]
+	}
+	return strings.TrimSpace(q)
+}
+
+// signalSearchSQL is the server-side free-text predicate: one case-insensitive
+// needle across the fields the operator can actually see in the table. The
+// needle is escaped and the fragment stays inside the bounded, scoped query.
+func signalSearchSQL(q string) string {
+	if q == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		" AND positionCaseInsensitive(concat(entity_id, ' ', kind, ' ', metric_name, ' ', attrs), '%s') > 0",
+		escapeCHString(q))
+}
+
+// encodeSignalCursor packs the keyset position (last row's ts + signal id in
+// the newest-first order) into an opaque page token.
+func encodeSignalCursor(ts, id string) string {
+	return base64.URLEncoding.EncodeToString([]byte(signalCursorVersion + "|" + ts + "|" + id))
+}
+
+// decodeSignalCursor unpacks + validates a caller-supplied cursor. Both fields
+// are charset-checked BEFORE they may reach a SQL literal; anything off fails
+// closed (handler → 400), mirroring the resources surface's errBadCursor.
+func decodeSignalCursor(raw string) (ts, id string, err error) {
+	b, err := base64.URLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return "", "", errBadSignalCursor
+	}
+	parts := strings.SplitN(string(b), "|", 3)
+	if len(parts) != 3 || parts[0] != signalCursorVersion {
+		return "", "", errBadSignalCursor
+	}
+	ts, id = parts[1], parts[2]
+	if ts == "" || len(ts) > 40 || !tsLiteralOK(ts) || id == "" || len(id) > 80 || !idTokenOK(id) {
+		return "", "", errBadSignalCursor
+	}
+	return ts, id, nil
+}
+
+// tsLiteralOK admits only characters a ClickHouse datetime rendering contains.
+func tsLiteralOK(s string) bool {
+	for _, c := range s {
+		ok := c >= '0' && c <= '9' || c == '-' || c == ':' || c == ' ' || c == '.' ||
+			c == 'T' || c == 'Z' || c == '+'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// idTokenOK admits opaque signal-id tokens (uuid/hash charset) — the same
+// closed-charset idea as safeScopeLiteral.
+func idTokenOK(s string) bool {
+	for _, c := range s {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '_' || c == '-' || c == '.' || c == ':'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// signalCursorPredSQL is the keyset WHERE fragment for the flat ts-ordered
+// reads (health, evidence): strictly older than the cursor position, with the
+// signal id as the total-order tie-breaker.
+func signalCursorPredSQL(ts, id string) string {
+	if ts == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		" AND (ts < parseDateTime64BestEffort('%[1]s') OR (ts = parseDateTime64BestEffort('%[1]s') AND toString(signal_id) < '%[2]s'))",
+		ts, id)
+}
+
+// changesCursorHavingSQL is the same keyset for the change rollup, applied
+// AFTER the one-row-per-signal_id collapse (min(ts) is the row's time).
+func changesCursorHavingSQL(ts, id string) string {
+	if ts == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"HAVING min(ts) < parseDateTime64BestEffort('%[1]s') OR (min(ts) = parseDateTime64BestEffort('%[1]s') AND toString(signal_id) < '%[2]s')\n ",
+		ts, id)
+}
+
+// parseSignalPage reads the shared ?q= / ?cursor= params for the signal
+// surfaces. A malformed cursor fails the request (400), never a silent
+// first-page reset — the caller would misread the result as "no more rows".
+func parseSignalPage(w http.ResponseWriter, r *http.Request) (q, curTS, curID string, ok bool) {
+	q = clampSignalQuery(r.URL.Query().Get("q"))
+	if c := strings.TrimSpace(r.URL.Query().Get("cursor")); c != "" {
+		var err error
+		if curTS, curID, err = decodeSignalCursor(c); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return "", "", "", false
+		}
+	}
+	return q, curTS, curID, true
+}
+
+// nextSignalCursor emits the follow-page token: only when the page came back
+// full (len == limit) is there plausibly more to read.
+func nextSignalCursor(ts, id string, got, limit int) string {
+	if got == 0 || got < limit || ts == "" || id == "" {
+		return ""
+	}
+	return encodeSignalCursor(ts, id)
 }
 
 // cloudHealthState maps a signal severity onto the UI's health state. A cloud
@@ -577,6 +722,7 @@ func providerOf(a signalAttrs) string {
 func cloudHealthSQL(windowHours int, appFilter string, limit int, scope string) string {
 	return fmt.Sprintf(`
 SELECT toString(ts)            AS ts_s,
+       toString(signal_id)     AS signal_id_s,
        kind                    AS kind,
        toString(entity_type)   AS entity_type_s,
        entity_id               AS entity_id,
@@ -591,7 +737,7 @@ SELECT toString(ts)            AS ts_s,
  WHERE source = 'cloud'
    AND kind IN ('cloud_health','cloud_resource_health')
    AND ts > now() - INTERVAL %d HOUR%s
- ORDER BY ts DESC
+ ORDER BY ts DESC, signal_id DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
  FORMAT JSONEachRow`, windowHours, appFilter, limit, scope)
@@ -603,12 +749,15 @@ SELECT toString(ts)            AS ts_s,
 // read 33 for 2 real events). The evidence store is append-only by design, so
 // the READ must collapse the re-emissions: one row per signal_id, keeping the
 // earliest observation of it (when the change actually happened).
-func cloudChangesSQL(windowHours int, appFilter string, limit int, scope string) string {
+func cloudChangesSQL(windowHours int, appFilter, having string, limit int, scope string) string {
 	// The filter runs in a subquery: an output alias that shadows a source column
 	// (any(kind) AS kind) is substituted into WHERE by ClickHouse and throws
 	// ILLEGAL_AGGREGATION — the exact bug that made this endpoint answer 0.
+	// `having` carries the keyset-cursor fragment (#10): it must run AFTER the
+	// GROUP BY collapse because the row's time IS min(ts).
 	return fmt.Sprintf(`
 SELECT toString(min(ts))          AS ts_s,
+       toString(signal_id)        AS signal_id_s,
        any(kind)                  AS kind,
        toString(any(entity_type)) AS entity_type_s,
        any(entity_id)             AS entity_id,
@@ -626,10 +775,10 @@ SELECT toString(min(ts))          AS ts_s,
           AND ts > now() - INTERVAL %d HOUR%s
   )
  GROUP BY signal_id
- ORDER BY ts_s DESC
+ %sORDER BY ts_s DESC, signal_id_s DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, windowHours, appFilter, limit, scope)
+ FORMAT JSONEachRow`, windowHours, appFilter, having, limit, scope)
 }
 
 func cloudEvidenceObjectsSQL(windowHours int, appPred, scope string) string {
@@ -657,7 +806,8 @@ SELECT toString(correlation_id)  AS cid,
  FORMAT JSONEachRow`, windowHours, appPred, cloudEvidenceMaxObjects, scope)
 }
 
-func cloudEvidenceSignalsSQL(windowHours int, idList string, limit int, scope string) string {
+func cloudEvidenceSignalsSQL(windowHours int, idList, extra string, limit int, scope string) string {
+	// `extra` carries the optional free-text + keyset-cursor fragments (#10).
 	return fmt.Sprintf(`
 SELECT toString(archived_for)   AS cid,
        toString(signal_id)      AS signal_id_s,
@@ -672,11 +822,11 @@ SELECT toString(archived_for)   AS cid,
   FROM netops.corr_signals_archive
  WHERE source = 'cloud'
    AND ts > now() - INTERVAL %d HOUR
-   AND archived_for IN (%s)
- ORDER BY ts DESC
+   AND archived_for IN (%s)%s
+ ORDER BY ts DESC, signal_id DESC
  LIMIT %d
  SETTINGS tenant_scope = '%s'
- FORMAT JSONEachRow`, windowHours, idList, limit, scope)
+ FORMAT JSONEachRow`, windowHours, idList, extra, limit, scope)
 }
 
 // cloudOpenObjectCountSQL counts ALL open cloud objects — the Active-RCA tile
@@ -757,12 +907,17 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
 	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	q, curTS, curID, ok := parseSignalPage(w, r)
+	if !ok {
+		return
+	}
 	// Resolve each signal's raw resource id → the clean resource NAME + its owning
 	// app from the tenant-scoped inventory, exactly like handleCloudChanges. Health
 	// signals are stamped on a raw provider id (an ARM path, an instance id); the
 	// operator reads a name, not a path.
 	inv := s.cloudResourceIndex(r)
-	rows := chJSONRows[chSignalRow](cloudHealthSQL(window, appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
+	pred := appFilterSQL(app) + signalSearchSQL(q) + signalCursorPredSQL(curTS, curID)
+	rows := chJSONRows[chSignalRow](cloudHealthSQL(window, pred, limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudHealthSignal, 0, len(rows))
 	for _, row := range rows {
 		a := parseAttrs(row.Attrs)
@@ -804,7 +959,14 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 			Reason: strings.TrimSpace(a.Reason),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"signals": out, "count": len(out), "window_hours": window})
+	next := ""
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		next = nextSignalCursor(last.TS, last.SignalID, len(rows), limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"signals": out, "count": len(out), "window_hours": window, "next_cursor": next,
+	})
 }
 
 // handleCloudChanges serves GET /api/cloud/changes — the provider-audited change
@@ -821,6 +983,10 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
 	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	q, curTS, curID, ok := parseSignalPage(w, r)
+	if !ok {
+		return
+	}
 
 	// resource → (app, name, confidence) from the tenant-scoped cloud inventory,
 	// keyed by every handle a signal can carry (id, ENI, IP).
@@ -844,7 +1010,9 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows := chJSONRows[chSignalRow](cloudChangesSQL(window, filter, limit, safeScopeLiteral(chTenantScope(r))))
+	filter += signalSearchSQL(q)
+	rows := chJSONRows[chSignalRow](cloudChangesSQL(window, filter,
+		changesCursorHavingSQL(curTS, curID), limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudChangeEvent, 0, len(rows))
 	for _, row := range rows {
 		a := parseAttrs(row.Attrs)
@@ -886,7 +1054,14 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 			CloudRef:        ref,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"changes": out, "count": len(out), "window_hours": window})
+	next := ""
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		next = nextSignalCursor(last.TS, last.SignalID, len(rows), limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"changes": out, "count": len(out), "window_hours": window, "next_cursor": next,
+	})
 }
 
 // handleCloudEvidence serves GET /api/cloud/evidence — the evidence ledger of the
@@ -907,6 +1082,10 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
 	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	q, curTS, curID, pok := parseSignalPage(w, r)
+	if !pok {
+		return
+	}
 	scope := safeScopeLiteral(chTenantScope(r))
 
 	appPred := ""
@@ -940,9 +1119,16 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 
 	evidence := make([]cloudEvidenceRow, 0, limit)
 	totalGrounded := 0
+	nextCursor := ""
 	if list := sqlList(ids); list != "" {
 		totalGrounded = chScalarInt(cloudArchivedSignalCountSQL(window, list, scope))
-		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(window, list, limit, scope)) {
+		extra := signalSearchSQL(q) + signalCursorPredSQL(curTS, curID)
+		grounded := chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(window, list, extra, limit, scope))
+		if len(grounded) > 0 {
+			last := grounded[len(grounded)-1]
+			nextCursor = nextSignalCursor(last.TS, last.SignalID, len(grounded), limit)
+		}
+		for _, row := range grounded {
 			o := byID[row.CorrelationID]
 			a := parseAttrs(row.Attrs)
 			ref := enrichCloudRef(cloudEvidenceRef{
@@ -972,7 +1158,12 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The engine's OWN gaps — the only "missing" evidence we are entitled to show.
+	// They are object-level (not ts-ordered), so they ride the FIRST page only; a
+	// cursor-following page would otherwise repeat every gap row.
 	gaps := 0
+	if curTS != "" {
+		objRows = nil
+	}
 	for _, o := range objRows {
 		apps := affectedApps(o.Affected)
 		appName := "—"
@@ -980,6 +1171,11 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 			appName = apps[0]
 		}
 		for _, gap := range missingEvidence(o.EvidenceMissing) {
+			// A search narrows the ledger; a gap row only qualifies when the
+			// term matches what the operator would read on it.
+			if q != "" && !strings.Contains(strings.ToLower(gap+" "+appName), strings.ToLower(q)) {
+				continue
+			}
 			gaps++
 			evidence = append(evidence, cloudEvidenceRow{
 				Time:        isoTS(o.WindowStart),
@@ -1010,6 +1206,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		"open_object_count": openCount,
 		"objects_truncated": openCount > len(objects),
 		"window_hours":      window,
+		"next_cursor":       nextCursor,
 	})
 }
 
