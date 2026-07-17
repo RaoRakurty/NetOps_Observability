@@ -66,8 +66,6 @@ docker compose logs -f
 docker compose restart api
 docker compose down            # stop, keep data
 ```
-Tests present: `src/backend/{jwt,users,password}_test.go`,
-`src/backend/alerts/parse_test.go`, `src/correlation/test_anomaly.py`.
 
 ### Conventions & gotchas
 - **Backend defaults to the standard library; third-party Go modules are

@@ -1,3 +1,8 @@
+---
+name: topology-ui
+description: Use this skill for any Correlix topology, network map, path analysis, RCA canvas, dependency graph, or digital twin UI work.
+---
+
 # Correlix Topology UI Skill
 
 Use this skill for any Correlix topology, network map, path analysis, RCA canvas, dependency graph, or digital twin UI work.
