@@ -7,7 +7,7 @@
 // arrive with cloud_health/cloud_flow/cloud_change in P3B–P3D), so this layer
 // marks them NOT_MEASURED and the UI renders "—" — never a fabricated 0.
 
-import { api } from "../../services/api";
+import { api, cloudSignalExportPath, getActiveScope, getToken } from "../../services/api";
 import type {
   CloudAppRow, CloudResourceRow, CloudCoverageReport, CloudConfidence, CloudSource,
   CloudHealthSignalRow, CloudChangeRow, CloudEvidenceRow, CloudRcaObjectRow, CloudRefWire,
@@ -433,6 +433,55 @@ export async function loadChangeEvents(app?: string, windowHours?: number): Prom
   return (r.changes ?? []).map(toChangeEvent);
 }
 
+// ── Wave 3 #10: paged/searchable reads + export download ─────────────────────
+// One page of a signal surface: rows + the keyset cursor for the NEXT page
+// ("" = no more). `q` narrows the SERVER read (cloud_signals.go ?q=), so a
+// search can surface rows the LIMIT-bounded first page never loaded.
+
+export type SignalPage<T> = { rows: T[]; nextCursor: string };
+
+export async function loadHealthPage(
+  app: string | undefined, windowHours: number, q: string, cursor: string,
+): Promise<SignalPage<HealthSignal>> {
+  const r = await api.cloudHealth(app, undefined, windowHours, { q, cursor });
+  return { rows: (r.signals ?? []).map(toHealthSignal), nextCursor: r.next_cursor ?? "" };
+}
+
+export async function loadChangesPage(
+  app: string | undefined, windowHours: number, q: string, cursor: string,
+): Promise<SignalPage<ChangeEvent>> {
+  const r = await api.cloudChanges(app, undefined, windowHours, { q, cursor });
+  return { rows: (r.changes ?? []).map(toChangeEvent), nextCursor: r.next_cursor ?? "" };
+}
+
+// Export download: fetches the server-rendered CSV/JSON WITH the auth headers
+// (a bare <a href> arrives tokenless → 401) and hands the bytes to the browser
+// as a normal download. The server names the file (Content-Disposition).
+export async function downloadCloudExport(
+  surface: "health" | "changes" | "evidence", format: "csv" | "json",
+  app: string | undefined, windowHours: number, q: string,
+): Promise<void> {
+  const path = cloudSignalExportPath(surface, format, app, windowHours, q ? { q } : undefined);
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const scope = getActiveScope();
+  if (scope) headers["X-Acting-Tenant"] = scope;
+  const res = await fetch(path, { headers });
+  if (!res.ok) throw new Error(`export failed: ${res.status} ${res.statusText}`);
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `cloud-${surface}.${format}`;
+  const url = URL.createObjectURL(await res.blob());
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export type EvidenceBundle = {
   objects: CloudRcaObject[];
   rows: EvidenceRow[];
@@ -442,10 +491,15 @@ export type EvidenceBundle = {
   openCount: number;
   total: number;
   objectsTruncated: boolean;
+  // Wave 3 #10: keyset cursor for the next evidence page ("" = no more).
+  nextCursor: string;
 };
 
-export async function loadEvidence(app?: string, windowHours?: number): Promise<EvidenceBundle> {
-  const r = await api.cloudEvidence(app, undefined, windowHours);
+export async function loadEvidence(
+  app?: string, windowHours?: number, q?: string, cursor?: string,
+): Promise<EvidenceBundle> {
+  const r = await api.cloudEvidence(app, undefined, windowHours,
+    q || cursor ? { q, cursor } : undefined);
   const rows = (r.evidence ?? []).map(toEvidenceRow);
   // Origin + fallback identity come from the evidence already in this response —
   // one join, no extra request, and nothing claimed that the engine did not ground.
@@ -462,5 +516,6 @@ export async function loadEvidence(app?: string, windowHours?: number): Promise<
       : objects.filter((o) => o.state === "open").length,
     total: typeof r.count === "number" ? r.count : (r.evidence ?? []).length,
     objectsTruncated: !!r.objects_truncated,
+    nextCursor: r.next_cursor ?? "",
   };
 }
