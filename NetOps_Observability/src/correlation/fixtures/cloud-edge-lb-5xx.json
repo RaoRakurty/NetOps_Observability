@@ -1,0 +1,12 @@
+{
+  "name": "LB 5xx on the app edge: app degraded + ALB emitting 5xx, no competing story",
+  "signals": [
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "store-api",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 4.0},
+    {"kind": "cloud_lb_log", "entity_type": "cloud_resource", "entity_id": "app/store-alb/50dc6c495c0c9188",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "passive_flow", "collection_path": "via_cloud_api", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.app.edge-lb-5xx", "tier": "suspected", "owner": "app_team"}
+}
