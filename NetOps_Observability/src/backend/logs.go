@@ -214,16 +214,29 @@ func openSearch(method, path string, body any) (*http.Response, error) {
 	return client.Do(req)
 }
 
-// parseTimeFlexible accepts RFC3339, Unix seconds, or Unix nanoseconds.
+// parseTimeFlexible accepts RFC3339 (offset required — a zoneless string is
+// ambiguous and rejected on purpose) or a Unix epoch in seconds, milliseconds,
+// microseconds, or nanoseconds. The unit is inferred from magnitude: each
+// threshold below is the given unit's value at 1971-01-01, so every instant
+// from 1971 through year 5138 resolves to exactly one unit. The previous
+// heuristic (only s vs ns, split at 1e15) silently misread the epoch-ms
+// timestamps this codebase itself emits (collectors use UnixMilli) as seconds
+// — producing year-55000 query windows with no error.
 func parseTimeFlexible(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
+		return t.UTC(), nil
 	}
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		if n > 1_000_000_000_000_000 {
+		switch {
+		case n >= 100_000_000_000_000_000: // ≥ 1e17 → nanoseconds  (1e17 ns ≈ 1973)
 			return time.Unix(0, n).UTC(), nil
+		case n >= 100_000_000_000_000: // ≥ 1e14 → microseconds (1e14 µs ≈ 1973)
+			return time.Unix(0, n*1_000).UTC(), nil
+		case n >= 100_000_000_000: // ≥ 1e11 → milliseconds (1e11 ms ≈ 1973)
+			return time.Unix(0, n*1_000_000).UTC(), nil
+		default: // seconds (1e11 s ≈ year 5138)
+			return time.Unix(n, 0).UTC(), nil
 		}
-		return time.Unix(n, 0).UTC(), nil
 	}
 	return time.Time{}, fmt.Errorf("unrecognized time format: %q", s)
 }

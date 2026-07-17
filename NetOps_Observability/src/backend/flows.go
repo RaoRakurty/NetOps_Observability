@@ -17,6 +17,12 @@ import (
 // from the SPA and makes it cheap to swap the implementation for a
 // materialized view or a dedicated rollup table later.
 
+// Timezone note for the WHERE clauses below: `ts >= now() - INTERVAL n
+// SECOND` is instant-based — ClickHouse DateTime values are epoch seconds
+// internally, so the comparison is timezone-safe regardless of server TZ.
+// Timezone only matters when a timestamp is RENDERED (toString/formatting)
+// or BUCKETED (toStartOfInterval/toYYYYMMDD) — those must be explicit; see
+// chTsUTC and handleFlowsTimeseries.
 func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
 	limit := intQuery(r, "limit", 20, 1, 500)
 	since := durationQuery(r, "since", time.Hour)
@@ -54,8 +60,13 @@ SELECT proto,
 func (s *server) handleFlowsTimeseries(w http.ResponseWriter, r *http.Request) {
 	since := durationQuery(r, "since", time.Hour)
 	step := durationQuery(r, "step", time.Minute)
+	// bucket is epoch milliseconds (UTC by construction): a zoneless
+	// "YYYY-MM-DD HH:MM:SS" string in the server timezone was previously
+	// returned here, which JS Date / ECharts re-interpret as viewer-LOCAL
+	// time — shifting the whole chart by the viewer's UTC offset. The
+	// bucketing itself is pinned to UTC so day/hour edges are stable.
 	sql := `
-SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` SECOND) AS bucket,
+SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` SECOND, 'UTC')) * 1000 AS bucket,
        sum(bytes * if(sampling_rate = 0, 1, sampling_rate))   AS bytes_total,
        sum(packets * if(sampling_rate = 0, 1, sampling_rate)) AS packets_total
   FROM netops.flows
@@ -74,7 +85,7 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		where = " WHERE severity = '" + strings.ReplaceAll(sev, "'", "") + "' "
 	}
 	sql := `
-SELECT toString(ts) AS ts, id, kind, severity, score, device,
+SELECT ` + chTsUTC("ts") + ` AS ts, id, kind, severity, score, device,
        component, summary, description
   FROM netops.findings
 ` + where + `
@@ -82,6 +93,16 @@ SELECT toString(ts) AS ts, id, kind, severity, score, device,
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	proxyClickHouse(w, sql)
+}
+
+// chTsUTC renders a ClickHouse DateTime/DateTime64 column as an RFC 3339 UTC
+// string with an explicit "Z" suffix (e.g. "2026-07-17T12:34:56.789Z").
+// A bare toString(ts) yields "YYYY-MM-DD HH:MM:SS[.fff]" in the ClickHouse
+// SERVER timezone with no offset marker — which JS `new Date()` then parses
+// as viewer-local time, silently shifting every rendered timestamp.
+// Every query that returns a timestamp column to the SPA must use this.
+func chTsUTC(col string) string {
+	return `concat(replaceOne(toString(` + col + `, 'UTC'), ' ', 'T'), 'Z')`
 }
 
 // handleTunnels returns the latest sample for each overlay tunnel (IPsec /
@@ -98,7 +119,7 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	sql := `
 SELECT id, type, local_device, local_addr, remote_device, remote_addr,
        status, latency_ms, jitter_ms, loss_pct, qoe, uptime_s,
-       toString(ts) AS ts
+       ` + chTsUTC("ts") + ` AS ts
   FROM netops.tunnels
 ` + where + `
  ORDER BY ts DESC

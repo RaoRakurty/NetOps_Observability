@@ -369,7 +369,15 @@ func tunnelType(f *iface, e *endpoint) string {
 // tunnelRow mirrors the netops.tunnels schema. Latency/jitter/loss/QoE are 0
 // at this layer — IF-MIB carries none of those (they come from the SD-WAN
 // controller layer), so we leave them honestly empty rather than fabricate.
+//
+// Ts is the SNMP poll instant as fractional Unix epoch seconds (UTC by
+// definition of the epoch). ClickHouse JSONEachRow parses a numeric value
+// for a DateTime64(3) column as epoch seconds, so this is unambiguous
+// regardless of server timezone. Previously the field was omitted and the
+// column's DEFAULT now64(3) stamped the row with the ClickHouse server's
+// INSERT time — the actual measurement time was discarded.
 type tunnelRow struct {
+	Ts           float64 `json:"ts"`
 	ID           string  `json:"id"`
 	Type         string  `json:"type"`
 	LocalDevice  string  `json:"local_device"`
@@ -384,9 +392,17 @@ type tunnelRow struct {
 	UptimeS      uint64  `json:"uptime_s"`
 }
 
+// epochSeconds renders t as fractional Unix seconds with millisecond
+// precision — the timezone-unambiguous wire form for ClickHouse
+// DateTime64(3) columns over JSONEachRow.
+func epochSeconds(t time.Time) float64 {
+	return float64(t.UnixMilli()) / 1000.0
+}
+
 // insertTunnels writes rows to ClickHouse via the HTTP interface using
-// JSONEachRow (ts uses the column DEFAULT now64(3)). Best-effort, like the
-// VictoriaMetrics emit in poller.go.
+// JSONEachRow. Each row carries its own ts (the poll instant, epoch
+// seconds); the column DEFAULT now64(3) is only a fallback for legacy
+// writers. Best-effort, like the VictoriaMetrics emit in poller.go.
 func insertTunnels(rows []tunnelRow) {
 	base := chEnv("CLICKHOUSE_URL", "http://clickhouse:8123")
 	if base == "" || len(rows) == 0 {
@@ -510,6 +526,7 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 				name = "if" + idx
 			}
 			row := tunnelRow{
+				Ts:          epochSeconds(start),
 				ID:          tg.ID + "/" + name,
 				Type:        tunnelType(f, ep),
 				LocalDevice: tg.ID,
