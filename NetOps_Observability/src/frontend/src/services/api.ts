@@ -642,7 +642,9 @@ export type FeedItem = {
   signal_id: string; ts: string; source: string; kind: string; severity: string;
   entity_type: string; entity_id: string; site: string; title: string; correlation_id: string | null;
 };
-export type EventsFeedResp = { items: FeedItem[]; next_cursor: string; facets: Record<string, Record<string, number>> };
+// `total` is the TRUE window count (real COUNT over the same filters; -1 =
+// unknown); next_cursor is set only when a full page was returned.
+export type EventsFeedResp = { items: FeedItem[]; next_cursor: string; total?: number; facets: Record<string, Record<string, number>> };
 export type CorrStats = {
   open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
   actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;

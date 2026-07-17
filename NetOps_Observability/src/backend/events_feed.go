@@ -234,7 +234,9 @@ SELECT toString(signal_id) AS signal_id,
 		row["correlation_id"] = nil // best-effort link is a follow-up (Explorer wiring)
 		items = append(items, row)
 	}
-	if n := len(rows); n > 0 {
+	// next_cursor only on a FULL page (house style, cloud_signals.go): a short
+	// page IS the end of the window — never dangle a cursor that returns nothing.
+	if n := len(rows); n == limit {
 		last := rows[n-1]
 		msStr := fmt.Sprintf("%v", last["ts_ms"])
 		ms, _ := strconv.ParseInt(msStr, 10, 64)
@@ -244,12 +246,36 @@ SELECT toString(signal_id) AS signal_id,
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":       items,
 		"next_cursor": nextCursor,
+		// TRUE window total (cursor-independent, owner directive: DON'T HIDE) —
+		// the real COUNT of matching events, never the capped page length.
+		"total": s.feedTotal(r, where),
 		"facets": map[string]any{
 			"source":   s.feedFacet(r, where, "source"),
 			"severity": s.feedFacet(r, where, "severity"),
 			"kind":     s.feedFacet(r, where, "kind"),
 		},
 	})
+}
+
+// feedTotalSQL builds the true-window-count query. Pure so its bounded,
+// filter-carrying shape is unit-testable.
+func feedTotalSQL(where string) string {
+	return `SELECT count() AS c FROM netops.corr_signals WHERE ` + where + ` FORMAT JSON`
+}
+
+// feedTotal returns the exact number of events matching the filtered window
+// (cursor-independent). Tenant-scoped like every feed read (chRows). -1 when
+// the count read fails — the UI treats it as "unknown", never as zero.
+func (s *server) feedTotal(r *http.Request, where string) int64 {
+	rows, err := s.chRows(r, feedTotalSQL(where))
+	if err != nil || len(rows) == 0 {
+		return -1
+	}
+	c, err := strconv.ParseInt(fmt.Sprintf("%v", rows[0]["c"]), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return c
 }
 
 // feedFacet returns {value: count} for one dimension over the filtered window
