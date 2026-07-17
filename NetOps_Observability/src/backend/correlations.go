@@ -152,11 +152,37 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 		}
 		latestConds = append(latestConds, "verdict_tier = '"+tier+"'")
 	}
+	// Keyset pagination (owner directive: DON'T HIDE — a capped list must offer
+	// the rest). The cursor is the house (ts DESC, id DESC) keyset over
+	// (created_at, correlation_id), same wire form as the events feed cursor.
+	// An invalid cursor is ignored (first page) — fail-open to page 1, never 500.
+	if cur := strings.TrimSpace(r.URL.Query().Get("cursor")); cur != "" {
+		if ms, cid, ok := decodeFeedCursor(cur); ok {
+			ets := time.UnixMilli(ms).UTC().Format("2006-01-02 15:04:05.000")
+			latestConds = append(latestConds,
+				"(created_at < '"+ets+"' OR (created_at = '"+ets+"' AND toString(correlation_id) < '"+cid+"'))")
+		}
+	}
 	// Triage enrichment (left-table badges): edge count + grounding kinds from
 	// corr_edges; the top hypothesis's verdict coverage (planes / owner /
 	// low-authority / debug-excluded) comes from the projection's narrow badge
 	// columns, written by the engine at persist time. All read-only.
-	proxyClickHouse(w, r, correlationsListSQL(sinceCond, latestConds, limit))
+	rows, err := s.chRows(r, correlationsListSQL(sinceCond, latestConds, limit))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	// next_cursor only on a FULL page (house style, cloud_signals.go): a short
+	// page IS the end of the window — never dangle a cursor that returns nothing.
+	next := ""
+	if len(rows) == limit {
+		last := rows[len(rows)-1]
+		ms, _ := strconv.ParseInt(fmt.Sprintf("%v", last["created_at_ms"]), 10, 64)
+		if cid := fmt.Sprintf("%v", last["correlation_id"]); ms > 0 && isUUIDToken(cid) {
+			next = encodeFeedCursor(ms, cid)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows, "next_cursor": next})
 }
 
 // correlationsListSQL builds the Command Center correlation list query. Pure so
@@ -184,7 +210,7 @@ WITH picked AS (
        FROM netops.corr_current FINAL
       WHERE ` + sinceCond + `
         AND ` + strings.Join(latestConds, " AND ") + `
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC, correlation_id DESC
       LIMIT ` + intToString(limit) + `
 )
 SELECT toString(c.correlation_id)  AS correlation_id,
@@ -203,6 +229,7 @@ SELECT toString(c.correlation_id)  AS correlation_id,
        c.engine_version             AS engine_version,
        c.catalog_version            AS catalog_version,
        ` + chISO("c.created_at") + ` AS created_at,
+       toUnixTimestamp64Milli(c.created_at) AS created_at_ms,
        coalesce(e.edge_count, 0)    AS edge_count,
        coalesce(e.grounding, 'none') AS grounding,
        c.plane_count                AS plane_count,
@@ -225,7 +252,7 @@ SELECT toString(c.correlation_id)  AS correlation_id,
           AND (correlation_id, version) IN (SELECT correlation_id, version FROM picked)
   ) AS a ON a.correlation_id = c.correlation_id AND a.version = c.version
  WHERE (c.correlation_id, c.version) IN (SELECT correlation_id, version FROM picked)
- ORDER BY c.created_at DESC
+ ORDER BY c.created_at DESC, c.correlation_id DESC
  FORMAT JSON`
 	// NOTE: ORDER BY must qualify c.created_at — the SELECT aliases
 	// toString(c.created_at) AS created_at, and a bare created_at would hit
@@ -298,6 +325,78 @@ SELECT countIf(state='open')                                          AS open,
 		"total_window":       totalWin,
 		"signatures_matched": num("signatures_seen"),
 		"window_days":        int(since.Hours() / 24),
+	})
+}
+
+// correlationsSummarySQL builds the tenant-scoped window rollup behind the
+// Correlations page stat-chip row: REAL COUNTs over corr_current (never the
+// capped list length) — total in window, split by verdict tier and by state.
+// Pure so its bounded shape is unit-testable. extraConds are pre-validated
+// (allowlisted) filter clauses; pass nil for the unfiltered rollup.
+func correlationsSummarySQL(sinceCond string, extraConds []string) string {
+	conds := append([]string{sinceCond}, extraConds...)
+	return `
+SELECT count()                                AS total,
+       countIf(verdict_tier = 'confirmed')    AS confirmed,
+       countIf(verdict_tier = 'suspected')    AS suspected,
+       countIf(verdict_tier = 'undetermined') AS undetermined,
+       countIf(state = 'open')                AS open,
+       countIf(state != 'open')               AS closed
+  FROM netops.corr_current FINAL
+ WHERE ` + strings.Join(conds, " AND ") + `
+ FORMAT JSON`
+}
+
+// handleCorrelationsSummary serves GET /api/correlations/summary — the honest
+// companion to the capped /api/correlations list (owner directive: the page must
+// show how many objects EXIST, not how many one page holds). Same bounded window
+// + optional state filter as the list; tenant isolation via the corr_current row
+// policy (chRows → chTenantScope), identical to every other correlations read.
+func (s *server) handleCorrelationsSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+		return
+	}
+	since := durationQuery(r, "since", 24*time.Hour)
+	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
+	var extra []string
+	if st := strings.TrimSpace(r.URL.Query().Get("state")); st != "" {
+		if !isAlphaToken(st) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid state"))
+			return
+		}
+		extra = append(extra, "state = '"+st+"'")
+	}
+	rows, err := s.chRows(r, correlationsSummarySQL(sinceCond, extra))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	row := map[string]any{}
+	if len(rows) > 0 {
+		row = rows[0]
+	}
+	num := func(k string) int64 {
+		switch v := row[k].(type) {
+		case float64:
+			return int64(v)
+		case string:
+			n, _ := strconv.ParseInt(v, 10, 64)
+			return n
+		}
+		return 0
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":          num("total"),
+		"confirmed":      num("confirmed"),
+		"suspected":      num("suspected"),
+		"undetermined":   num("undetermined"),
+		"open":           num("open"),
+		"closed":         num("closed"),
+		"window_seconds": int(since.Seconds()),
 	})
 }
 

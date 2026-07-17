@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, OSHit, ExportFmt } from "../services/api";
+import { api, OSHit, ExportFmt, LogRetention, LogSearchOpts } from "../services/api";
 import { severityColor, severityRank } from "../theme/severity";
 import { LogTime, LogSource, LogLevel, LogMessage, LogJson } from "../lib/logfmt";
 import DataTable, { Column } from "../components/DataTable";
@@ -71,6 +71,12 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const [hits, setHits] = useState<OSHit[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // The exact request the current result set came from — "Load more" re-issues
+  // it with an offset so the appended page belongs to the SAME window/query.
+  const lastRun = useRef<LogSearchOpts | null>(null);
+  // Retention floor: how far back the visible store goes + exact total stored.
+  const [retention, setRetention] = useState<LogRetention | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -98,13 +104,15 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       const effQuery = sig === "firewall"
         ? (q && q.trim() && q.trim() !== "*" ? `(${q}) AND ${FIREWALL_FILTER}` : FIREWALL_FILTER)
         : q;
-      const r = await api.searchLogs({
+      const opts: LogSearchOpts = {
         query: effQuery,
         from: start.toISOString(),
         to: end.toISOString(),
         size: sz,
         signal: backendSignal,
-      });
+      };
+      const r = await api.searchLogs(opts);
+      lastRun.current = opts;
       setHits(r?.hits?.hits ?? []);
       setTotal(r?.hits?.total?.value ?? null);
       setSelected(new Set()); // a new result set invalidates row indices
@@ -139,6 +147,38 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     run(query, minutes, signal, size);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal, size]);
+
+  // Retention floor (owner directive: "how long back can I go?"). Re-read when
+  // the signal changes — each signal is its own store with its own retention.
+  useEffect(() => {
+    let alive = true;
+    const backendSignal = signal === "firewall" ? "syslog" : signal;
+    api.logsRetention(backendSignal)
+      .then((r) => { if (alive) setRetention(r ?? null); })
+      .catch(() => { if (alive) setRetention(null); });
+    return () => { alive = false; };
+  }, [signal]);
+
+  // "Load more" — append the next page of the SAME result set (same query +
+  // frozen time window) via the server-bounded offset. OpenSearch's paging
+  // window ends at 10k rows; past that the export path serves the full set.
+  const OS_PAGE_WINDOW = 10000;
+  const canLoadMore = total !== null && hits.length < total && hits.length < OS_PAGE_WINDOW && !!lastRun.current;
+  const loadMore = async () => {
+    const base = lastRun.current;
+    if (!base || loadingMore) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const r = await api.searchLogs({ ...base, offset: hits.length });
+      setHits((h) => h.concat(r?.hits?.hits ?? []));
+      setTotal(r?.hits?.total?.value ?? total);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const saveSearch = async () => {
     const name = window.prompt("Name this saved search:", query === "*" ? "All logs" : query);
@@ -343,6 +383,20 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             ★ Save
           </button>
         </form>
+        {/* Retention floor (owner directive: DON'T HIDE how far back logs go). */}
+        {retention && (
+          <p style={{ color: "var(--muted)", fontSize: 12.5, marginTop: 10, marginBottom: 0 }}>
+            {retention.total > 0 && retention.oldest ? (
+              <>
+                This store holds <strong style={{ color: "var(--fg)" }}>{retention.total.toLocaleString()}</strong> logs —
+                going back to <strong style={{ color: "var(--fg)" }}>{fmtDateTime(retention.oldest)}</strong>
+                {" "}({retention.days < 1 ? "less than a day" : `${retention.days} day${retention.days === 1 ? "" : "s"}`} of history).
+              </>
+            ) : (
+              "No logs stored yet for this signal."
+            )}
+          </p>
+        )}
         {error && (
           <p style={{ color: "var(--bad)", marginTop: 10, fontSize: 13 }}>
             <strong>Error:</strong> {error}
@@ -353,8 +407,9 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <h2 style={{ margin: 0 }}>
-            Results ({lines.length}
-            {total !== null && total > lines.length ? ` / ${total} matched` : ""})
+            {total !== null && total > lines.length
+              ? `Results — showing ${lines.length.toLocaleString()} of ${total.toLocaleString()} matched`
+              : `Results (${lines.length.toLocaleString()}${total !== null ? " — all matches" : ""})`}
           </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {selected.size > 0 && (
@@ -405,6 +460,23 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             rowClassName={(l) => (detailId === l.id ? "dtv-selected" : "")}
             empty="No results."
           />
+        )}
+        {/* Every truncated list SAYS it's truncated and offers the rest. */}
+        {canLoadMore && (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+            <button type="button" className="chip" onClick={loadMore} disabled={loadingMore}
+              title="Fetch the next page of this result set">
+              {loadingMore
+                ? "Loading…"
+                : `Load ${Math.min(size, (total ?? 0) - hits.length).toLocaleString()} more (${hits.length.toLocaleString()} of ${(total ?? 0).toLocaleString()} loaded)`}
+            </button>
+          </div>
+        )}
+        {total !== null && total > lines.length && !canLoadMore && lines.length > 0 && (
+          <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 8, textAlign: "center" }}>
+            Interactive paging ends at {(10000).toLocaleString()} rows — use “Export all” above to get the
+            full {total.toLocaleString()}-row result set.
+          </p>
         )}
         {detailLine && (
           <div style={{ marginTop: 12, borderTop: "1px solid var(--border, #2a2f3a)", paddingTop: 12 }}>

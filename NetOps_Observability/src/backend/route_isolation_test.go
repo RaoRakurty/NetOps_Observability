@@ -63,6 +63,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/correlations":                        "scoped",
 	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/stats":                  "scoped",
+	"/api/correlations/summary":                "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
+	// Per-tenant display preference (a281c7a): GET/PUT always the CALLER's own
+	// tenant record (principalTenant; PUT behind requireAdmin, audited) — the
+	// tenant id never comes from the request (tenant_display_test.go).
+	"/api/settings/display": "scoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
 	"/api/rca/":                                "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
@@ -133,6 +138,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/logs/export":            "scoped",
 	"/api/logs/export/rows":       "scoped",
 	"/api/logs/indices":           "scoped",
+	"/api/logs/retention":         "scoped", // retention floor over the SAME logsScope surface as search: tenant index pattern + osTenantFilter + applogs owner gate (logs_retention_test.go)
 	"/api/logs/search":            "scoped",
 	"/api/metrics":                "scoped",
 	"/api/metrics/forecast":       "scoped",

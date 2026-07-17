@@ -295,7 +295,13 @@ export type LogSearchOpts = {
   to?: string;
   size?: number;
   signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
+  // Paging offset ("Load more"); server-clamped to the engine's result window.
+  offset?: number;
 };
+
+// Retention floor for the caller's visible log store: exact doc count + oldest
+// timestamp ("logs go back to <date>, N days"). Tenant-scoped server-side.
+export type LogRetention = { signal: string; total: number; oldest: string | null; days: number };
 
 export type ExportFmt = "csv" | "json" | "ndjson" | "xlsx";
 
@@ -636,10 +642,18 @@ export type FeedItem = {
   signal_id: string; ts: string; source: string; kind: string; severity: string;
   entity_type: string; entity_id: string; site: string; title: string; correlation_id: string | null;
 };
-export type EventsFeedResp = { items: FeedItem[]; next_cursor: string; facets: Record<string, Record<string, number>> };
+// `total` is the TRUE window count (real COUNT over the same filters; -1 =
+// unknown); next_cursor is set only when a full page was returned.
+export type EventsFeedResp = { items: FeedItem[]; next_cursor: string; total?: number; facets: Record<string, Record<string, number>> };
 export type CorrStats = {
   open: number; open_confirmed: number; open_suspected: number; open_undetermined: number;
   actionable_pct: number; confirmed_7d_pct: number; total_window: number; signatures_matched: number; window_days: number;
+};
+// True tenant-scoped window counts for the Correlations page (never the capped
+// list length): total objects, split by verdict tier and by state.
+export type CorrSummary = {
+  total: number; confirmed: number; suspected: number; undetermined: number;
+  open: number; closed: number; window_seconds: number;
 };
 // #80 — recurring undetermined gap-shapes (which signature to write/strengthen next).
 export type UndeterminedGap = { clause: string; count: number };
@@ -1723,6 +1737,10 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
+  // Retention floor: how far back the caller's visible log store goes + exact
+  // total stored (tenant-scoped server-side; owner directive: DON'T HIDE).
+  logsRetention: (signal = "") =>
+    request<LogRetention>(`/api/logs/retention${signal ? `?signal=${encodeURIComponent(signal)}` : ""}`),
 
   // Flows (ClickHouse). `type` filters by source family (netflow|ipfix|sflow);
   // empty = all sources. `filters` narrows by the dashboard filter bar
@@ -1827,12 +1845,22 @@ export const api = {
     if (severity) p.set("severity", severity);
     return request<ClickHouseResponse<Finding>>(`/api/findings?${p}`);
   },
-  // Correlation Engine v2 objects (read-only inspector).
-  correlations: (limit = 100, sinceSeconds = 86400, state?: string, tier?: string) => {
+  // Correlation Engine v2 objects (read-only inspector). `cursor` is the house
+  // keyset cursor — the response's next_cursor (set only when a full page was
+  // returned) fetches the next page of the same window.
+  correlations: (limit = 100, sinceSeconds = 86400, state?: string, tier?: string, cursor?: string) => {
     const p = new URLSearchParams({ limit: String(limit), since: `${sinceSeconds}s` });
     if (state) p.set("state", state);
     if (tier) p.set("tier", tier);
-    return request<ClickHouseResponse<CorrObject>>(`/api/correlations?${p}`);
+    if (cursor) p.set("cursor", cursor);
+    return request<ClickHouseResponse<CorrObject> & { next_cursor?: string }>(`/api/correlations?${p}`);
+  },
+  // True window counts behind the Correlations stat chips — real COUNTs, never
+  // the capped list length (owner directive: DON'T HIDE).
+  correlationsSummary: (sinceSeconds = 86400, state?: string) => {
+    const p = new URLSearchParams({ since: `${sinceSeconds}s` });
+    if (state) p.set("state", state);
+    return request<CorrSummary>(`/api/correlations/summary?${p}`);
   },
   correlationDetail: (id: string) =>
     request<{ object: CorrObject; edges: CorrEdge[] }>(`/api/correlations/${encodeURIComponent(id)}`),

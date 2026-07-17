@@ -82,6 +82,54 @@ type logSearchReq struct {
 	To     string `json:"to,omitempty"`
 	Size   int    `json:"size,omitempty"`
 	Signal string `json:"signal,omitempty"`
+	// Offset pages through the result set ("Load more"): OpenSearch `from`.
+	// Bounded server-side to the engine's result window (see logsMaxWindow).
+	Offset int `json:"offset,omitempty"`
+}
+
+// logsMaxWindow is OpenSearch's default max_result_window: from+size may not
+// exceed it. The offset is clamped so a deep "Load more" degrades to the last
+// reachable page instead of a 500 from the engine.
+const logsMaxWindow = 10000
+
+// logsScope resolves the caller's tenant-scoped OpenSearch read surface for one
+// signal — the SINGLE scoping path shared by the interactive search and the
+// retention-floor read, so isolation (#20 Phase 3 + the applogs platform
+// boundary + operator restrictions) is enforced identically on both:
+//   index    — the caller's index pattern (never names another tenant's indices)
+//   filters  — per-doc tenant filter (osTenantFilter; defense in depth)
+//   mustNot  — restricted-tenant exclusions for the operator's Global view
+//   denyAll  — the caller is scoped into a restricted tenant: match nothing
+//   forbidden— platform-only signal (applogs) requested by a non-owner
+func (s *server) logsScope(r *http.Request, signal string) (index string, filters, mustNot []any, denyAll, forbidden bool) {
+	claims, authed := userFrom(r.Context())
+	tenant, cross := "", true
+	if authed {
+		tenant, cross = principalTenant(claims)
+		keys, _ := s.visibleDeviceKeys(claims)
+		addrs, _ := s.visibleDeviceAddrs(claims)
+		if f := osTenantFilter(tenant, cross, keys, addrs); f != nil {
+			filters = append(filters, f)
+		}
+	}
+	// App logs are the platform's OWN container/API logs — platform owner only
+	// (identity gate, not the cross flag; see handleLogsSearch's original note).
+	if sig := strings.ToLower(strings.TrimSpace(signal)); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
+		return "", nil, nil, false, true
+	}
+	index = tenantIndexPattern(signal, tenant, cross)
+	// Defense-in-depth chokepoint: fail CLOSED if a non-owner's resolved pattern
+	// ever references an applogs index.
+	if !appLogPatternAllowed(index, claims) {
+		return "", nil, nil, false, true
+	}
+	// Compliance: per-tenant operator-visibility (Tenant.OperatorRestricted).
+	if exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+		denyAll = true
+	} else if len(exclude) > 0 {
+		mustNot = append(mustNot, map[string]any{"terms": map[string]any{"tenant_id": exclude}})
+	}
+	return index, filters, mustNot, denyAll, false
 }
 
 func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
@@ -106,9 +154,19 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(q.Get("size")); err == nil {
 			req.Size = n
 		}
+		if n, err := strconv.Atoi(q.Get("offset")); err == nil {
+			req.Offset = n
+		}
 	}
 	if req.Size <= 0 || req.Size > 5000 {
 		req.Size = 200
+	}
+	// Bound the paging offset to the engine's result window (never trust input).
+	if req.Offset < 0 {
+		req.Offset = 0
+	}
+	if req.Offset+req.Size > logsMaxWindow {
+		req.Offset = logsMaxWindow - req.Size
 	}
 
 	end := time.Now().UTC()
@@ -132,7 +190,16 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	// range-filter on that. unmapped_type keeps the sort from failing on any
 	// index whose mapping happens to lack the field rather than erroring the
 	// whole multi-index search.
-	filters := []any{
+	// Tenant isolation (#20 Phase 3): index pattern + per-doc filter + platform
+	// applogs boundary + operator restrictions all resolve through the shared
+	// logsScope path (identical for search and retention reads).
+	index, scopeFilters, mustNot, denyAll, forbidden := s.logsScope(r, req.Signal)
+	if forbidden {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+
+	filters := append([]any{
 		map[string]any{
 			"range": map[string]any{
 				"timestamp": map[string]string{
@@ -141,45 +208,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		},
-	}
-
-	// Tenant isolation (#20 Phase 3). The caller may only read its own tenant's
-	// indices (tenantIndexPattern names nothing else) and, within them, only its
-	// own tagged docs plus untagged docs from its own devices (osTenantFilter,
-	// mirroring the ClickHouse row policy). The platform owner is unrestricted.
-	claims, authed := userFrom(r.Context())
-	tenant, cross := "", true
-	if authed {
-		tenant, cross = principalTenant(claims)
-		keys, _ := s.visibleDeviceKeys(claims)
-		addrs, _ := s.visibleDeviceAddrs(claims)
-		if f := osTenantFilter(tenant, cross, keys, addrs); f != nil {
-			filters = append(filters, f)
-		}
-	}
-
-	// App logs are the platform's OWN container/API logs (netops-applogs-untagged-*),
-	// not customer telemetry. They expose infra-stack internals, so only the
-	// platform owner may read them — a scoped tenant is refused even if it names the
-	// signal directly. Gate on identity (isPlatformOwner), not on the cross flag, so
-	// the owner keeps infra access while narrowed to a tenant/Global via the switcher.
-	// (UI also hides the option; this is the enforced boundary per the zero-trust rule.)
-	if sig := strings.ToLower(strings.TrimSpace(req.Signal)); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
-		return
-	}
-
-	index := tenantIndexPattern(req.Signal, tenant, cross)
-
-	// Guardrail (defense-in-depth, zero-leak bar): app logs are the platform's own
-	// internals. Even if a future change to signal/index logic let an applogs index
-	// into a non-owner's resolved pattern, fail CLOSED here — the platform↔tenant
-	// boundary can never be silently reopened by a refactor. (Layered UNDER the
-	// explicit signal gate above and the per-doc osTenantFilter below.)
-	if !appLogPatternAllowed(index, claims) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
-		return
-	}
+	}, scopeFilters...)
 
 	boolQuery := map[string]any{
 		"must": []any{
@@ -192,20 +221,23 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		},
 		"filter": filters,
 	}
-	// Compliance: enforce per-tenant operator-visibility (Tenant.OperatorRestricted).
-	// A restricted tenant's telemetry is excluded from the operator's Global view,
-	// and the operator is denied if it scoped into one. No-op for a tenant's own
-	// users and when nothing is restricted.
-	if exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross); deny {
+	if denyAll {
 		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
-	} else if len(exclude) > 0 {
-		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": exclude}}}
+	} else if len(mustNot) > 0 {
+		boolQuery["must_not"] = mustNot
 	}
 
 	body := map[string]any{
-		"size":  req.Size,
-		"sort":  []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
-		"query": map[string]any{"bool": boolQuery},
+		"size": req.Size,
+		// Exact totals, always (owner directive: DON'T HIDE). Without this,
+		// OpenSearch caps hits.total at 10k and the UI would understate how many
+		// logs actually matched.
+		"track_total_hits": true,
+		"sort":             []any{map[string]any{"timestamp": map[string]string{"order": "desc", "unmapped_type": "date"}}},
+		"query":            map[string]any{"bool": boolQuery},
+	}
+	if req.Offset > 0 {
+		body["from"] = req.Offset
 	}
 
 	resp, err := openSearch("POST", "/"+index+"/_search", body)
@@ -220,6 +252,90 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		log.Printf("logs: copy response: %v", err)
 	}
+}
+
+// handleLogsRetention serves GET /api/logs/retention?signal=… — the retention
+// floor for the caller's visible log store (owner directive: "I should know how
+// long back I can go"). One cheap size:0 aggregation: exact doc count
+// (track_total_hits) + min(timestamp) over the SAME tenant-scoped surface the
+// search reads (logsScope), so a tenant's floor never reflects another
+// tenant's older docs. Response: { signal, total, oldest, days }.
+func (s *server) handleLogsRetention(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	signal := r.URL.Query().Get("signal")
+	index, filters, mustNot, denyAll, forbidden := s.logsScope(r, signal)
+	if forbidden {
+		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
+		return
+	}
+	if denyAll {
+		writeJSON(w, http.StatusOK, map[string]any{"signal": signal, "total": 0, "oldest": nil, "days": 0})
+		return
+	}
+	boolQuery := map[string]any{
+		"must":   []any{map[string]any{"match_all": map[string]any{}}},
+		"filter": filters,
+	}
+	if len(mustNot) > 0 {
+		boolQuery["must_not"] = mustNot
+	}
+	body := map[string]any{
+		"size":             0,
+		"track_total_hits": true, // exact count — never the 10k estimate cap
+		"query":            map[string]any{"bool": boolQuery},
+		"aggs": map[string]any{
+			"oldest_ts": map[string]any{"min": map[string]any{"field": "timestamp"}},
+		},
+	}
+	resp, err := openSearch("POST", "/"+index+"/_search?ignore_unavailable=true", body)
+	if err != nil {
+		logError("logs", "opensearch retention query failed", map[string]any{"err": err.Error()})
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if resp.StatusCode >= 300 {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("opensearch: %s", strings.TrimSpace(string(raw))))
+		return
+	}
+	var parsed struct {
+		Hits struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+		} `json:"hits"`
+		Aggregations struct {
+			OldestTs struct {
+				Value *float64 `json:"value"` // epoch millis; null when no docs
+			} `json:"oldest_ts"`
+		} `json:"aggregations"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	var oldest any
+	days := 0
+	if v := parsed.Aggregations.OldestTs.Value; v != nil {
+		t := time.UnixMilli(int64(*v)).UTC()
+		oldest = t.Format(time.RFC3339)
+		days = int(time.Since(t).Hours() / 24)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"signal": signal,
+		"total":  parsed.Hits.Total.Value,
+		"oldest": oldest,
+		"days":   days,
+	})
 }
 
 func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
