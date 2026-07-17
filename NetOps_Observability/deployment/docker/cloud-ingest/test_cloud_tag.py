@@ -116,3 +116,48 @@ def test_change_log_doc():
     assert "deployer" in doc["message"]
     # No tenant → no doc.
     assert cloud_tag.change_log_doc("", resource_id="sg-1", event_name="X") is None
+
+
+def test_clock_skew_stamped_only_beyond_family_tolerance():
+    # ALB event at 00:00, ingested 00:07 → 7 min lag, inside the lb envelope
+    # (15 min): NO stamp — batch delivery lag is legitimate, not a finding.
+    doc = cloud_tag.cloud_log_doc("aws-alb-access.alb", ALB_LINE, "acme",
+                                  timestamp="2026-07-15T00:07:00Z")
+    assert "clock_skew_s" not in doc
+    # Ingested 40 min later → beyond the lb envelope: stamped, signed negative
+    # (delivery lag), and the event timestamp itself is NEVER rewritten (R2).
+    late = cloud_tag.cloud_log_doc("aws-alb-access.alb", ALB_LINE, "acme",
+                                   timestamp="2026-07-15T00:40:00Z")
+    assert late["clock_skew_s"] == -2400.0
+    assert late["timestamp"] == "2026-07-15T00:00:00.000Z"
+    assert late["ingested_at"] == "2026-07-15T00:40:00Z"
+
+
+def test_clock_skew_positive_for_future_event_time():
+    # A record claiming a FUTURE event time (wrong source clock) skews positive.
+    future_line = ALB_LINE.replace("2026-07-15T00:00:00.000000Z",
+                                   "2026-07-15T01:00:00.000000Z")
+    doc = cloud_tag.cloud_log_doc("aws-alb-access.alb", future_line, "acme",
+                                  timestamp="2026-07-15T00:00:00Z")
+    assert doc["clock_skew_s"] == 3600.0
+
+
+def test_clock_skew_never_guessed_without_both_stamps():
+    # No parseable event time → timestamp falls back to ingest → no skew claim.
+    doc = cloud_tag.cloud_log_doc("aws-waf.waf", WAF_LINE, "acme",
+                                  timestamp="2026-07-15T00:40:00Z")
+    assert "clock_skew_s" not in doc
+    # No ingest stamp at all → nothing to compare against.
+    doc2 = cloud_tag.cloud_log_doc("aws-alb-access.alb", ALB_LINE, "acme")
+    assert "clock_skew_s" not in doc2
+    # Direct helper: unparseable/naive stamps abstain, never raise.
+    assert cloud_tag.clock_skew_s("lb", "garbage", "2026-07-15T00:00:00Z") is None
+    assert cloud_tag.clock_skew_s("lb", "2026-07-15T00:00:00", "2026-07-15T01:00:00Z") is None
+
+
+def test_clock_skew_family_tolerances_are_batch_aware():
+    # The same 20-minute lag is a finding on the near-real-time WAF lane but
+    # legitimate on the VPC-flow lane (30 min envelope) — per-family by design.
+    ev, ing = "2026-07-15T00:00:00Z", "2026-07-15T00:20:00Z"
+    assert cloud_tag.clock_skew_s("waf", ev, ing) == -1200.0
+    assert cloud_tag.clock_skew_s("flow", ev, ing) is None

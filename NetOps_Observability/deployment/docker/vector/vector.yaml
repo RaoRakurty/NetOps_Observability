@@ -303,6 +303,17 @@ transforms:
       eff = if embedded_sev < sysint { embedded_sev } else { sysint }
       .normalized_severity = if eff <= 2 { "critical" } else if eff == 3 { "error" } else if eff == 4 { "warning" } else if eff == 5 { "notice" } else { "info" }
 
+      # Clock-skew flagging (log-time standard S5/R5): compare the ORIGIN
+      # timestamp (parsed from the syslog frame; UTC) against this aggregator's
+      # receive clock. |skew| > 300s ⇒ stamp clock_skew_s (signed seconds,
+      # positive = device clock ahead) so the record is searchable in
+      # OpenSearch and the correlation service raises a per-device finding off
+      # the bus copy. The timestamp itself is NEVER rewritten (R2: origin time
+      # preserved; R3: receive time alongside).
+      ots = to_unix_timestamp(to_timestamp(.timestamp) ?? now())
+      skew_s = ots - to_unix_timestamp(now())
+      if abs(skew_s) > 300 { .clock_skew_s = skew_s }
+
   # SNMP traps — the receiver already decoded the PDU into structured fields
   # (trap_oid, trap_name, severity, varbinds, snmp_version, device/host). Here we
   # just stamp the tenant the same way syslog does: match the device id (or the

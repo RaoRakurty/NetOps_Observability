@@ -67,6 +67,12 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     # evidence_class + the provider-native ids (tunnel IP, VIF, peer, circuit).
     # `ts` is the provider's OWN observation time; a state past its freshness
     # budget arrives as cloud_state_unknown, never as an eternal "up".
+    # clock-skew meta-finding (log-time standard S5/R5): an ingest LANE whose
+    # records' own event time lags/leads the poller's receive clock beyond the
+    # family tolerance (cloud_tag.FAMILY_SKEW_TOLERANCE_S). The entity is the
+    # lane (provider/family), the platform is the witness; INTENTIONAL_BLIND —
+    # main.py records it but never buffers it into the engine window.
+    "clock_skew":             (ModalityClass.MANAGEMENT_PLANE, ObserverType.PLATFORM, EntityType.SERVICE),
     "cloud_bgp_session_down": (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_bgp_session_up":   (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_bgp_flap":         (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),

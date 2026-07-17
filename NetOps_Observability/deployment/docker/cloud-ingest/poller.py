@@ -198,6 +198,40 @@ def _now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+# Clock-skew finding throttle (log-time standard S5): one clock_skew event per
+# ingest lane per cooldown window — a lagging lane tags every record, and the
+# finding must summarize, never firehose. Per-record clock_skew_s stays on each
+# cloudlogs doc regardless (searchable data-quality flag).
+CLOCK_SKEW_EVENT_COOLDOWN_S = float(os.environ.get("CLOCK_SKEW_EVENT_COOLDOWN_S", "1800"))
+_SKEW_EVENT_LAST: dict = {}
+
+
+def _emit_clock_skew_event(producer, doc: dict) -> None:
+    """Raise the per-lane clock_skew finding on netops.cloud for a cloudlogs doc
+    that carries a beyond-tolerance skew stamp. Throttled per (provider, family);
+    best-effort — a bus hiccup must never take the poll lane down."""
+    family = str(doc.get("cloud_family") or "")
+    provider = str(doc.get("cloud_provider") or "")
+    key = f"{provider}/{family}"
+    now = time.time()
+    last = _SKEW_EVENT_LAST.get(key, 0.0)
+    if now - last < CLOCK_SKEW_EVENT_COOLDOWN_S:
+        return
+    _SKEW_EVENT_LAST[key] = now
+    try:
+        producer.send("netops.cloud", cloud_events.clock_skew_event(
+            provider=provider, tenant=TENANT, family=family, region=REGION,
+            skew_s=float(doc["clock_skew_s"]),
+            tolerance_s=cloud_tag.FAMILY_SKEW_TOLERANCE_S.get(
+                family, cloud_tag.DEFAULT_SKEW_TOLERANCE_S),
+            ts=_now_iso(), account=ACCOUNT,
+            sample_resource=str(doc.get("resource_id") or ""),
+        ))
+        jlog("clock-skew finding raised", lane=key, skew_s=doc["clock_skew_s"])
+    except Exception:  # noqa: BLE001 — best-effort, never fatal
+        pass
+
+
 def emit_cloud_log(producer, out_name: str, line: str, sent_so_far: int) -> int:
     """Tag one raw cloud log line and produce it to the cloudlogs topic. Returns 1
     when emitted, 0 otherwise. Bounded per scan (CLOUDLOGS_MAX_PER_SCAN) so raw
@@ -213,6 +247,8 @@ def emit_cloud_log(producer, out_name: str, line: str, sent_so_far: int) -> int:
         if doc is None:
             return 0
         producer.send(CLOUDLOGS_TOPIC, doc)
+        if "clock_skew_s" in doc:
+            _emit_clock_skew_event(producer, doc)
         return 1
     except Exception:  # noqa: BLE001 — tagging is best-effort, never fatal
         return 0
