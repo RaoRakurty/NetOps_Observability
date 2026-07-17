@@ -2993,6 +2993,18 @@ CLOUD_EDGE_ATTRIBUTION_TEMPLATES: list[dict] = [
             # the cloud-only suspected ceiling to CONFIRMED via the independence gate).
             {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|synthetic_http_fail|synthetic_timeout", "optional": True},
         ],
+        # Look-alike killer: a DX/VPN/route state change (cloud_change on a cloud
+        # resource) in the window means the boundary REJECT is the private-
+        # connectivity outage's SYMPTOM — routes withdrew, so the boundary drops
+        # what it can no longer deliver — not an SG/NACL misconfiguration. That
+        # story belongs to private-connectivity-down (same guard app-dependency-
+        # down carries): this template is contradicted and the connectivity
+        # signature is scored as the forced competitor.
+        "discriminators": [
+            {"absent": {"kind": "cloud_change|cloud_audit", "entity_type": "cloud_resource"},
+             "within_s": 600,
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+        ],
         "direction_expect": "firewall/subnet -> application -> users",
         "verdict": {
             "owner": "netops", "layer": "L3/L4 (security group / NACL)",

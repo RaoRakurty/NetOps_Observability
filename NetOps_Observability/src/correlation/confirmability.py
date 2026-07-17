@@ -124,6 +124,18 @@ APP_GROUNDABLE_KINDS: frozenset[str] = frozenset(
     # with app:<slug> tokens by construction.
     "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
     "lb_4xx_high",
+    # cloud lane (Wave 3 #9): cloud_health is emitted ON the app entity
+    # (cloud_signal: entity_type=app), and the edge-device fault kinds (LB access
+    # 5xx / WAF block / SG-NACL reject / DNS failure) reach the app through the
+    # Service Dependency Map — cloud_dependency.py builds tier→app RouteRelations
+    # + flow-observed PathObservations that main.path_graph_inventory() merges
+    # into the grounding view, so the device fault and the app symptom share ONE
+    # object (plus cloud_signal's own app entity_tokens when the ingest event
+    # names the app). Grounding-gated exactly like flow_volume_anomaly above: a
+    # device fault with no dependency edge to the app stays resource-grounded and
+    # does not count toward app confirmation.
+    "cloud_health", "cloud_lb_log", "cloud_waf_log", "cloud_dns_log",
+    "cloud_flow_log",
 })
 
 # App-impact domains whose objects ground on app/service entities, so a second

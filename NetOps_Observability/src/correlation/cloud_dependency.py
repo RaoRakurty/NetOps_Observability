@@ -172,10 +172,12 @@ def _observed_at(dep: ServiceDependency) -> datetime:
     return dep.observed_at or datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-def _talks_to(flows: tuple[FlowEdge, ...], tenant: str, min_bytes: float) -> dict[frozenset[str], float]:
-    """Volume-weighted directed adjacency for ONE tenant: {(src,dst) -> bytes}
-    for every flow at/above the volume floor. Keyed as an unordered pair is wrong
-    (direction matters), so we key on an ordered tuple wrapped for hashing."""
+def _talks_to(flows: tuple[FlowEdge, ...], tenant: str, min_bytes: float) -> dict[tuple[str, str], float]:
+    """Volume-weighted directed adjacency for ONE tenant: {(src, dst) -> bytes}
+    for every flow at/above the volume floor. The key is the ORDERED (src, dst)
+    tuple — direction matters, and a plain tuple can never collide the way an
+    unordered/sentinel key could (a frozenset both loses order and would collide
+    with an endpoint literally named like the sentinel)."""
     out: dict[tuple[str, str], float] = {}
     for f in flows:
         if f.tenant_id != tenant or not f.src or not f.dst:
@@ -184,20 +186,15 @@ def _talks_to(flows: tuple[FlowEdge, ...], tenant: str, min_bytes: float) -> dic
             continue
         key = (f.src, f.dst)
         out[key] = out.get(key, 0.0) + float(f.byte_count)
-    # normalise to a lookup that accepts either endpoint id form
-    return {frozenset(("dir", *k)): v for k, v in out.items()}  # type: ignore[misc]
+    return out
 
 
-def _edge_observed(a: DependencyTier, b: DependencyTier, talks: dict) -> bool:
+def _edge_observed(a: DependencyTier, b: DependencyTier, talks: dict[tuple[str, str], float]) -> bool:
     """Did flow telemetry witness traffic from tier a to tier b? Matches by either
     resource id or address (a flow record may carry either)."""
     a_ids = {x for x in (a.resource_id, a.address) if x}
     b_ids = {x for x in (b.resource_id, b.address) if x}
-    for sa in a_ids:
-        for sb in b_ids:
-            if frozenset(("dir", sa, sb)) in talks:
-                return True
-    return False
+    return any((sa, sb) in talks for sa in a_ids for sb in b_ids)
 
 
 def _build_endpoints(dep: ServiceDependency) -> dict[str, Endpoint]:
