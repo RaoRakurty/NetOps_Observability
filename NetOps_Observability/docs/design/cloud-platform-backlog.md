@@ -85,6 +85,19 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
 8. **Service catalog UI + Overview impact rework** (rev #12 + #22). CRUD over
    `business-services` (criticality/owner/description); Services tab joins catalog +
    derived apps; Overview degraded-services strip replaces the permanent-dash cards. **M.**
+   — **SHIPPED 2026-07-17** (`56434c3` + `5df055a`): backend `owner` column
+   (migration 0026, bounded validation, isolation-test round-trip); Services →
+   **Catalog** sub-tab = full CRUD UI (create/edit/delete, criticality/owner/
+   description, required-field legend, delete confirm discloses the mapping
+   revert, 501 = the API's real reason); Applications joins the catalog by name
+   (criticality badge + catalog owner precedence); Overview: the two permanent-
+   dash cards ("Network Impact", "Deploy-linked Incidents") moved to a roadmap-
+   honest "Coming soon" footnote, replaced by the worst-first **Degraded
+   services** strip (name · duration from the first degraded signal · catalog
+   criticality · blast radius from signal-named resources · owner) with honest
+   "duration unknown"/"extent not measured"; Services-Degraded card trend says
+   "N business-critical". Live-verified rendering on real data (correlix-faultlab
+   DOWN · business-critical · 7h45m · 1 of 2 resources).
 9. **Service dependency map from flow telemetry** (rev #15). `talks_to` edges from the
    live `cloud_flow_*` signals, volume-weighted — the map's own caption already
    promises this. *Benefits from #1.* **M–L.**

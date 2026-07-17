@@ -109,6 +109,20 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
+## #108 — Cloud platform backlog Wave 3 (2026-07-17) — 🟡 #8 SHIPPED, #9/#10 next
+
+- ✅ **#8 Service catalog UI + Overview impact rework** (`56434c3` `5df055a`,
+  applied to the stack + render-verified live): backend `owner` on
+  business_services (migration 0026, bounded validation, isolation test);
+  Services → Catalog sub-tab = full CRUD over the previously UI-less
+  business-services API; Applications joins the catalog (criticality/owner);
+  Overview swaps the two permanent-dash cards for a "Coming soon" footnote +
+  worst-first Degraded-services strip (name · duration · criticality · blast
+  radius · owner, honest unknowns). Verified rendering on real data
+  (correlix-faultlab DOWN · business-critical · 7h45m · 1 of 2 resources).
+- 🔜 **#9 service dependency map from flow telemetry** · **#10 scale-out the
+  tables** (pagination cursors in UI, server-side search, export, saved views).
+
 ## #107 — Cloud platform backlog Wave 2 (2026-07-16) — ✅ SHIPPED (all 4 items, CI green at `a15f1ee`, stack rebuilt 2026-07-17)
 
 Backlog `docs/design/cloud-platform-backlog.md` Wave 2 "make telemetry
