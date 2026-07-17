@@ -53,6 +53,30 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
 | **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
 
+## #109 — Don't-hide: true counts + honest pagination (owner task 2, 2026-07-17) — ✅ SHIPPED + DEPLOYED
+
+Correlations: tenant-scoped `GET /api/correlations/summary` (real COUNTs:
+total/confirmed/suspected/undetermined/open/closed), clickable tier chips,
+keyset Load-more surviving auto-refresh. Logs: `GET /api/logs/retention`
+(oldest visible log + exact doc count via shared `logsScope`), exact totals
+(`track_total_hits`), bounded offset paging + explicit 10k-window note →
+Export-all. Events: real filtered-window `total` (−1 = unknown, never 0),
+cursor only on full pages. Isolation tests on every new read; route ledger
+updated. Merged + live on the stack 2026-07-17 eve.
+
+## #97 addendum — packaging lockstep completed on-host (2026-07-17 eve)
+
+Owner goal: demo-ready customer artifacts at all times. (a) `make` absent on
+this host — bundle-autoupdate.sh calls make-installer.sh directly; (b) daily
+03:30 cron installed: staleness-gated bundle rebuild + prune-to-2 + ntfy on
+success/failure (dist/ hoarding 3 bundle generations = the 96%-disk root
+cause, fixed); (c) **VM appliance leg NEW**: `make-vm-image.sh` — qcow2/vmdk/
+vhdx first-boot self-installing appliance (Ubuntu 24.04 + archive docker,
+containerized libguestfs toolchain, secrets first-boot only, disk preflight,
+keep-1 prune) chained into the nightly cron (VM_IMAGES=0 opts out). Deploy
+check also caught+fixed 2 VRL boot failures (vector-router/aggregator) the
+log-time merge shipped. Remaining: GPG-sign SHA256SUMS (owner key).
+
 > **#84 docs page ✅ DONE 2026-07-17** — operator-facing RCA time-intelligence
 > page shipped (`docs-portal/docs/incident-response/rca-time-intelligence.md`,
 > mirrored to the AI corpus; written from the shipped code). Two code
