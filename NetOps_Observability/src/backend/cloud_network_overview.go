@@ -58,7 +58,7 @@ SELECT toString(correlation_id)  AS cid,
        top_hypothesis            AS top_hypothesis,
        signal_count              AS signal_count,
        toString(state)           AS state_s,
-       toString(window_start)    AS window_start_s,
+       `+chISO("window_start")+` AS window_start_s,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL

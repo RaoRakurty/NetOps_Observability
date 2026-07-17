@@ -81,6 +81,17 @@ INTENTIONAL_BLIND: dict[str, dict] = {
                   "the runtime attributor, not a catalog signature",
         "owner": "correlix", "date_added": "2026-07-16",
     },
+    "clock_skew": {
+        "reason": "clock-skew meta-finding (log-time standard S5/R5): a device "
+                  "whose syslog origin time disagrees with the pipeline receive "
+                  "clock, or a cloud ingest lane delivering beyond its expected "
+                  "lag. Operator-facing data-quality evidence (events feed / "
+                  "cloud signals) — deliberately NOT an RCA corroborator: it is "
+                  "never buffered into the engine window, so a wrong clock can't "
+                  "lend a fake modality plane to a real fault. Candidate for a "
+                  "future device-clock-misconfigured signature.",
+        "owner": "correlix", "date_added": "2026-07-17",
+    },
 }
 INTENTIONAL_BLIND_KINDS: frozenset[str] = frozenset(INTENTIONAL_BLIND)
 

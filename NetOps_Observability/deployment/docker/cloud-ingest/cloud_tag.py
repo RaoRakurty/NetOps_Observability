@@ -38,6 +38,23 @@ FAMILY_BY_EXT: dict[str, str] = {
 
 _KNOWN_PROVIDERS = ("aws", "azure", "gcp")
 
+# Clock-skew tolerance per family, in SECONDS (log-time standard S5/R5).
+# Batch-delivered lanes legitimately lag their event time — ALB access logs
+# arrive ~5 min behind, VPC flow logs up to ~10 min (arbitrarily more on
+# backfill) — so the tolerance is per-family, sized ~2–3× the documented
+# delivery lag. Only |event − ingest| BEYOND the tolerance stamps
+# `clock_skew_s` (signed seconds, positive = event time ahead of ingest —
+# i.e. a future-stamped record; negative = delivery/backfill lag beyond the
+# expected envelope). The stamp is a data-quality flag: the timestamp itself
+# is never rewritten (R2), and ingested_at is always kept alongside (R3).
+FAMILY_SKEW_TOLERANCE_S: dict[str, float] = {
+    "lb":   900.0,   # ALB/NLB access logs: ~5 min S3 delivery → 15 min envelope
+    "flow": 1800.0,  # VPC flow logs: up to ~10 min delivery → 30 min envelope
+    "waf":  600.0,   # WAF logs: near-real-time Firehose → 10 min envelope
+    "dns":  900.0,   # Resolver query logs: batch delivery → 15 min envelope
+}
+DEFAULT_SKEW_TOLERANCE_S = 300.0  # any other family: the syslog default
+
 
 def family_for(out_name: str) -> str:
     """Log family for a lane file name (by extension); "" when unrecognized."""
@@ -218,7 +235,32 @@ def cloud_log_doc(
         doc["timestamp"] = timestamp
     if timestamp:
         doc["ingested_at"] = timestamp
+    # Clock-skew flagging (S5/R5): stamp clock_skew_s only when the record's
+    # own event time and the ingest stamp disagree beyond the family tolerance
+    # (batch delivery lag inside the envelope is legitimate, not a finding).
+    skew = clock_skew_s(family, event_ts, timestamp)
+    if skew is not None:
+        doc["clock_skew_s"] = skew
     return doc
+
+
+def clock_skew_s(family: str, event_ts: str, ingested_at: str) -> float | None:
+    """Signed skew (event − ingest, seconds) when it exceeds the family
+    tolerance; None when in-tolerance or either stamp is missing/unparseable.
+    Positive = the record claims a FUTURE event time (a wrong source clock);
+    negative = delivery/backfill lag beyond the family's expected envelope."""
+    if not event_ts or not ingested_at:
+        return None
+    try:
+        ev = _dt.datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
+        ing = _dt.datetime.fromisoformat(ingested_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ev.tzinfo is None or ing.tzinfo is None:
+        return None
+    skew = (ev - ing).total_seconds()
+    tolerance = FAMILY_SKEW_TOLERANCE_S.get(family, DEFAULT_SKEW_TOLERANCE_S)
+    return skew if abs(skew) > tolerance else None
 
 
 def change_log_doc(

@@ -18,6 +18,8 @@ import json
 import pathlib
 import unittest
 
+import cloud_events
+
 from cloud_events import (CHANGE_EVENT_FIELDS, HEALTH_EVENT_FIELDS,
                           METRIC_EVENT_FIELDS, change_event, health_event,
                           metric_event)
@@ -193,6 +195,32 @@ class TestNoHandRolledEvents(unittest.TestCase):
             for lit in ('"kind": "cloud_change"', '"kind": "cloud_resource_health"'):
                 self.assertNotIn(lit, src,
                                  f"{fn} hand-rolls {lit} — route it through cloud_events.change_event/health_event")
+
+
+class TestClockSkewEvent(unittest.TestCase):
+    def test_clock_skew_event_shape(self):
+        ev = cloud_events.clock_skew_event(
+            provider="aws", tenant="acme", family="lb", region="us-east-1",
+            skew_s=-2400.0, tolerance_s=900.0, ts="2026-07-17T00:00:00Z",
+            account="123456789012", sample_resource="app/billing-alb/0a1b2c",
+        )
+        self.assertEqual(ev["kind"], "clock_skew")
+        self.assertEqual(ev["resource_id"], "aws/lb")   # the LANE, never a guessed device
+        self.assertEqual(ev["severity"], "warn")
+        self.assertEqual(ev["value"], -2400.0)
+        self.assertEqual(ev["metric_name"], "clock_skew_s")
+        self.assertEqual(ev["attrs"]["direction"], "behind")
+        self.assertEqual(ev["attrs"]["tolerance_s"], 900.0)
+        self.assertEqual(ev["attrs"]["sample_resource"], "app/billing-alb/0a1b2c")
+        # Routing fields are top-level like every other netops.cloud event.
+        self.assertEqual(ev["provider"], "aws")
+        self.assertEqual(ev["tenant_id"], "acme")
+
+    def test_clock_skew_event_requires_family(self):
+        with self.assertRaises(ValueError):
+            cloud_events.clock_skew_event(
+                provider="aws", tenant="acme", family=" ", region="r",
+                skew_s=1.0, tolerance_s=1.0, ts="2026-07-17T00:00:00Z")
 
 
 if __name__ == "__main__":

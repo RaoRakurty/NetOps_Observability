@@ -6,7 +6,7 @@
 import { ReactNode, createContext, useContext, useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../../services/api";
-import { chartBase, axisStyle, paletteColor, colorForMetric, hexToRgba } from "../../theme/charts";
+import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../../theme/charts";
 import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
 import { Modal, Stat, StatTone } from "../ui";
@@ -195,7 +195,7 @@ export function MetricLine({ title, query, minutes, fmtY, height = 240, labelKey
             // containLabel so formatted y-axis ticks ("1.5 Gbps", "100 %") are never
             // clipped regardless of width, and the last x-tick isn't cut (#71 ⑧).
             grid: { left: 6, right: 16, top: series.length > 1 ? 30 : 12, bottom: 6, containLabel: true },
-            xAxis: { type: "time", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, hideOverlap: true } },
+            xAxis: { type: "time", ...axisStyle, ...timeAxisTicks() },
             yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtY(v) } },
             series: series.slice(0, 14).map((s, i) => {
               // single-series → colour by what the metric MEANS (consistent app-wide);

@@ -195,6 +195,21 @@ export function fmtDate(v: string | number | Date | null | undefined, opts: FmtO
   return `${MONTHS[f.month]} ${p2(f.day)}, ${f.year}`;
 }
 
+// fmtAxisTick — ECharts time-axis label, obeying the Local/UTC knob (S6).
+// Tiered like ECharts' own defaults so zoomed-out axes show dates and
+// zoomed-in axes show clocks: midnight ⇒ "Jul 16", whole minute ⇒ "14:56",
+// otherwise "14:56:03". Unlabeled by design (axis ticks are dense); the
+// chart's tooltip/crosshair carries the fully labeled rendering.
+export function fmtAxisTick(v: string | number | Date | null | undefined, opts: FmtOpts = {}): string {
+  const d = parseTs(v);
+  if (!d) return "";
+  const m = opts.mode ?? mode;
+  const f = fields(d, m);
+  if (f.h === 0 && f.m === 0 && f.s === 0 && f.ms === 0) return `${MONTHS[f.month]} ${p2(f.day)}`;
+  if (f.s === 0 && f.ms === 0) return `${p2(f.h)}:${p2(f.m)}`;
+  return `${p2(f.h)}:${p2(f.m)}:${p2(f.s)}`;
+}
+
 // isoUTC — canonical RFC 3339 UTC string (tooltips, exports, copy/paste).
 export function isoUTC(v: string | number | Date | null | undefined): string {
   const d = parseTs(v);

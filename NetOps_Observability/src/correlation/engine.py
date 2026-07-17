@@ -1046,8 +1046,11 @@ class ObjectSnapshot:
         return rows
 
 
-def _ch_dt(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+def _ch_dt(dt: datetime) -> int:
+    """UTC epoch milliseconds — DateTime64(3) scaled-integer insert (S4/R1);
+    integers can never be re-interpreted in the ClickHouse server timezone."""
+    dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp()) * 1000 + dt.microsecond // 1000
 
 
 # ── union-find components → objects ───────────────────────────────────────────

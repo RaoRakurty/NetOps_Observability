@@ -9,7 +9,7 @@ import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Alert, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
-import { chartBase, axisStyle, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
+import { chartBase, axisStyle, timeAxisTicks, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import { severityClass, SEVERITY_COLOR, severityKey, SeverityKey } from "../theme/severity";
 import { usePrefs } from "../theme/prefs";
@@ -246,7 +246,7 @@ function MetricArea({
           grid: { left: 2, right: 8, top: 6, bottom: 2, containLabel: true },
           tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtv(v) },
           legend: { show: false },
-          xAxis: { type: "time", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, fontSize: 11 } },
+          xAxis: { type: "time", ...axisStyle, ...timeAxisTicks(), axisLabel: { ...timeAxisTicks().axisLabel, fontSize: 11 } },
           yAxis: {
             type: "value",
             ...axisStyle,
@@ -456,7 +456,7 @@ function TrafficInOut() {
           grid: { left: 6, right: 14, top: 28, bottom: 6, containLabel: true },
           tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
           legend: { ...chartBase.legend, top: 0, data: ["In", "Out"] },
-          xAxis: { type: "time", ...axisStyle },
+          xAxis: { type: "time", ...axisStyle, ...timeAxisTicks() },
           yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBps(v) } },
           series: [
             { name: "In", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(0), width: 2 }, itemStyle: { color: paletteColor(0) }, areaStyle: { color: areaGradient(0) }, data: inS },
@@ -558,7 +558,7 @@ function WanInterfaces() {
               grid: { left: 6, right: 12, top: 8, bottom: 6, containLabel: true },
               tooltip: { ...chartBase.tooltip, trigger: "axis", valueFormatter: (v: number) => fmtBps(v) },
               legend: { show: false },
-              xAxis: { type: "time", ...axisStyle },
+              xAxis: { type: "time", ...axisStyle, ...timeAxisTicks() },
               yAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBps(v) } },
               series: [
                 { name: "In", type: "line", smooth: true, showSymbol: false, lineStyle: { color: paletteColor(0), width: 2 }, itemStyle: { color: paletteColor(0) }, areaStyle: { color: areaGradient(0) }, data: inS },

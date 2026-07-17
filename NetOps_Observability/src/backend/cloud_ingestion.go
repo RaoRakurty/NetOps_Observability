@@ -106,7 +106,7 @@ func (s *server) handleCloudIngestion(w http.ResponseWriter, r *http.Request) {
 	globalKind := map[string]kindStat{}            // any provider
 	sql := fmt.Sprintf(`
 SELECT JSONExtractString(attrs,'provider') AS prov, kind,
-       count() AS volume, toString(max(ts)) AS last_seen
+       count() AS volume, `+chISO("max(ts)")+` AS last_seen
   FROM netops.corr_signals
  WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
  GROUP BY prov, kind
@@ -123,8 +123,8 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 		if err != nil {
 			continue
 		}
-		ts, err := time.Parse("2006-01-02 15:04:05", strings.TrimSpace(f[3]))
-		if err != nil {
+		ts := parseCHTime(strings.TrimSpace(f[3]))
+		if ts.IsZero() {
 			continue
 		}
 		g := globalKind[kind]

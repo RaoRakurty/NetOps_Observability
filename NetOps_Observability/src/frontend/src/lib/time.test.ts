@@ -4,7 +4,7 @@
 // viewer's UTC offset. parseTs must pin zone-less strings to UTC regardless
 // of the environment's timezone (vitest runs under TZ set per-suite below).
 import { describe, expect, it, beforeEach } from "vitest";
-import { parseTs, fmtDateTime, fmtTime, fmtDate, isoUTC, tzLabel, setTzMode } from "./time";
+import { parseTs, fmtDateTime, fmtTime, fmtDate, fmtAxisTick, isoUTC, tzLabel, setTzMode } from "./time";
 
 beforeEach(() => {
   setTzMode("utc"); // deterministic rendering for assertions
@@ -104,5 +104,36 @@ describe("rendering — labeled, mode-aware", () => {
 describe("fmtDate", () => {
   it("renders date only", () => {
     expect(fmtDate("2026-07-16 21:56:03")).toBe("Jul 16, 2026");
+  });
+});
+
+describe("fmtAxisTick — chart axes obey the Local/UTC knob (S6)", () => {
+  it("UTC mode: tiered granularity like ECharts defaults", () => {
+    setTzMode("utc");
+    expect(fmtAxisTick(Date.UTC(2026, 6, 16, 0, 0, 0))).toBe("Jul 16");   // midnight → date
+    expect(fmtAxisTick(Date.UTC(2026, 6, 16, 14, 56, 0))).toBe("14:56"); // whole minute → clock
+    expect(fmtAxisTick(Date.UTC(2026, 6, 16, 14, 56, 3))).toBe("14:56:03");
+  });
+  it("UTC mode renders the UTC clock face regardless of host zone", () => {
+    setTzMode("utc");
+    expect(fmtAxisTick("2026-07-16 21:56:00")).toBe("21:56");
+  });
+  it("local mode renders the viewer's clock face for the same instant", () => {
+    setTzMode("local");
+    const t = Date.UTC(2026, 6, 16, 21, 56, 0);
+    const d = new Date(t);
+    const want =
+      d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0
+        ? undefined // midnight locally → date tier; covered below
+        : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    if (want) expect(fmtAxisTick(t)).toBe(want);
+  });
+  it("mode override beats the global knob (pure part)", () => {
+    setTzMode("local");
+    expect(fmtAxisTick("2026-07-16 21:56:00", { mode: "utc" })).toBe("21:56");
+  });
+  it("garbage renders empty, never 'Invalid Date'", () => {
+    expect(fmtAxisTick("not a time")).toBe("");
+    expect(fmtAxisTick(null)).toBe("");
   });
 });

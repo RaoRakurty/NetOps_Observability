@@ -67,6 +67,7 @@ from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
 from controller_events import controller_event_to_signal
 from producers import (
+    clock_skew_signal,
     episode_signal,
     flow_sample,
     parse_event_ts,
@@ -247,6 +248,30 @@ PROBES_RECEIVED = 0           # consumed from netops.probes (the 24/7 heartbeat 
 APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
 APP_EDGE_SIGNALS = 0          # canonical app-edge signals written + buffered
 APP_EDGE_DROPPED = 0          # dropped: no tenant (default-closed) / unclassifiable
+CLOCK_SKEW_SIGNALS = 0        # clock_skew meta-findings written (S5 — never buffered)
+
+# Clock-skew finding cooldown (log-time standard S5): one clock_skew signal per
+# (tenant, entity) per window — a device with a wrong clock logs continuously,
+# and the finding must not become a firehose. Bounded map (see _clock_skew_due).
+CLOCK_SKEW_COOLDOWN_S = float(os.environ.get("CLOCK_SKEW_COOLDOWN_S", "900"))
+_CLOCK_SKEW_LAST: Dict[tuple, float] = {}
+_CLOCK_SKEW_LAST_CAP = 4096
+
+
+def _clock_skew_due(tenant: str, entity_id: str) -> bool:
+    """True when no clock_skew signal was emitted for (tenant, entity) within
+    the cooldown. Bounded: at cap, the oldest entries are dropped (worst case a
+    repeat finding — never unbounded growth, §9 bounded queues)."""
+    now = time.monotonic()
+    key = (tenant, entity_id)
+    last = _CLOCK_SKEW_LAST.get(key)
+    if last is not None and (now - last) < CLOCK_SKEW_COOLDOWN_S:
+        return False
+    if len(_CLOCK_SKEW_LAST) >= _CLOCK_SKEW_LAST_CAP:
+        for old_key, _ in sorted(_CLOCK_SKEW_LAST.items(), key=lambda kv: kv[1])[:_CLOCK_SKEW_LAST_CAP // 4]:
+            _CLOCK_SKEW_LAST.pop(old_key, None)
+    _CLOCK_SKEW_LAST[key] = now
+    return True
 
 # Maximum clock skew (seconds) tolerated on a metric event timestamp. A future
 # stamp beyond this, or a stamp older than the correlation window, is dropped
@@ -397,7 +422,8 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
         top_entity = wa["entities"].most_common(1)
         rows.append({
             "tenant_id": tenant,
-            "window_start": window_start.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            # Epoch-ms scaled-integer insert (S4/R1) — never server-TZ dependent.
+            "window_start": int(window_start.timestamp()) * 1000 + window_start.microsecond // 1000,
             "window_s": int(elapsed),
             "raw_seen": wa["raw_seen"],
             "persisted": wa["persisted"],
@@ -1892,6 +1918,17 @@ async def handle_cloud(ev: dict) -> None:
         CLOUD_DROPPED += 1
         log.warning("dead-letter (cloud): %s", exc)
         return
+    if sig.kind == "clock_skew":
+        # META finding (S5): recorded for operators, never engine-buffered (it
+        # must not lend a modality plane to a fault) and cooldown-guarded here
+        # too — defense in depth against a chatty poller.
+        global CLOCK_SKEW_SIGNALS
+        if _clock_skew_due(tenant, sig.entity_id):
+            await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+            CLOCK_SKEW_SIGNALS += 1
+            log.info("clock-skew signal (cloud lane): %s skew=%.0fs",
+                     sig.entity_id, float(sig.value))
+        return
     await ch.insert("netops.corr_signals", [sig.to_ch_row()])
     CLOUD_SIGNALS += 1
     buffer_signal(sig)
@@ -2002,6 +2039,26 @@ async def handle_syslog(ev: dict) -> None:
             await ch.insert("netops.corr_signals", [pe_sig.to_ch_row()])
             buffer_signal(pe_sig)
             log.info("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
+        # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
+        # clock_skew_s on the event when the origin timestamp disagrees with the
+        # receive clock beyond tolerance; here it becomes a per-device signal.
+        # META evidence: persisted for operators (events feed / evidence store)
+        # but NEVER buffer_signal()ed — a wrong clock must not lend an extra
+        # modality plane to a real fault. Cooldown-guarded per (tenant, device)
+        # so a misconfigured device logging at volume yields one finding per
+        # window, not a firehose.
+        try:
+            skew_sig = clock_skew_signal(ev, cp_tenant, datetime.now(timezone.utc))
+        except DeadLetter as exc:
+            DEADLETTER_COUNT += 1
+            log.warning("dead-letter (clock-skew): %s", exc)
+            skew_sig = None
+        if skew_sig is not None and _clock_skew_due(cp_tenant, skew_sig.entity_id):
+            global CLOCK_SKEW_SIGNALS
+            await ch.insert("netops.corr_signals", [skew_sig.to_ch_row()])
+            CLOCK_SKEW_SIGNALS += 1
+            log.info("clock-skew signal: %s skew=%.0fs", skew_sig.entity_id,
+                     float(skew_sig.value))
 
     host = str(ev.get("hostname") or "unknown")
     sev  = str(ev.get("severity") or "info").lower()
@@ -2313,8 +2370,11 @@ async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
         # honors backslash escapes. An out-of-shape value is ignored (no filter).
         if severity.isalpha():
             where = f"WHERE severity = '{severity.lower()}'"
+    # RFC 3339 UTC on the wire (log-time standard S3/R1): zone-less
+    # toString(DateTime64) strings parse as browser-local in JS consumers.
     sql = f"""
-      SELECT toString(ts) AS ts, id, kind, severity, score, device,
+      SELECT concat(replaceOne(toString(ts, 'UTC'), ' ', 'T'), 'Z') AS ts,
+             id, kind, severity, score, device,
              component, summary, description
         FROM netops.findings
         {where}

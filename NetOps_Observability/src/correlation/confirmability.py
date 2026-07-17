@@ -110,6 +110,10 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "controller_control_connection_loss": ModalityClass.MANAGEMENT_PLANE,
     "controller_device_unreachable": ModalityClass.MANAGEMENT_PLANE,
     "controller_policy_change": ModalityClass.MANAGEMENT_PLANE,
+    # clock-skew meta-finding (log-time standard S5/R5): the PLATFORM is the
+    # witness (it compared origin vs receive clocks) — management-plane, and
+    # never engine-buffered, so it cannot lend a confirming plane to a fault.
+    "clock_skew": ModalityClass.MANAGEMENT_PLANE,
 }
 
 # Kinds whose PRODUCTION signals can ground on an application/service entity

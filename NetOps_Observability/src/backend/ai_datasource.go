@@ -53,7 +53,7 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
        top_hypothesis, top_confidence, verdict_tier,
        evidence_missing, affected, hypotheses,
        signal_count, node_count,
-       toString(created_at) AS created_at
+       ` + chISO("created_at") + ` AS created_at
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'
  ORDER BY version DESC

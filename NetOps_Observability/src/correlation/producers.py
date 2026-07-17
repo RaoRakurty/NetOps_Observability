@@ -150,6 +150,13 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "controller_tunnel_state", "controller_bfd_down",
     "controller_control_connection_loss", "controller_device_unreachable",
     "controller_policy_change",
+    # clock-skew meta-finding (log-time standard S5/R5): origin timestamp vs
+    # receive time beyond tolerance — a device with a wrong clock (syslog lane,
+    # clock_skew_signal below) or an ingest lane delivering beyond its expected
+    # lag (cloud poller). Deliberately a META finding: recorded to corr_signals
+    # for operators, NEVER buffered into the engine window (it must not lend an
+    # extra modality plane to a real fault) → INTENTIONAL_BLIND in coverage.py.
+    "clock_skew",
 })
 
 
@@ -975,3 +982,64 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> "Signal | N
             attrs={"interface": port, "port_event": kind, "message": msg[:240]},
         )
     return None
+
+
+# ── clock-skew meta-finding (log-time standard S5 / rule R5) ──────────────────
+
+# |origin − receive| beyond this many seconds on the syslog lane flags the
+# device clock (Vector stamps clock_skew_s past the same tolerance; this guard
+# re-checks so a stray/garbage field can never fabricate a finding).
+SYSLOG_CLOCK_SKEW_TOLERANCE_S = 300.0
+
+
+def clock_skew_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
+    """A syslog event whose origin timestamp disagrees with the pipeline's
+    receive clock beyond tolerance → one per-device `clock_skew` META signal.
+
+    The skew is measured at the ingest edge (Vector's normalize remap compares
+    the parsed origin timestamp against now() and stamps `clock_skew_s`, signed
+    seconds, positive = device clock ahead). This producer only VALIDATES and
+    shapes it — no re-measurement, no guessing. Returns None when the event
+    carries no (or an in-tolerance) skew stamp.
+
+    MANAGEMENT_PLANE + platform observer by design: the platform is the witness
+    (it compared the clocks), and the kind is INTENTIONAL_BLIND — the caller
+    records it for operators but never buffers it into the engine window, so a
+    wrong clock can't lend a fake corroborating plane to a real fault."""
+    raw = ev.get("clock_skew_s")
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    skew = float(raw)
+    if abs(skew) <= SYSLOG_CLOCK_SKEW_TOLERANCE_S:
+        return None
+    host = str(ev.get("hostname") or "")
+    if not host or host == "unknown":
+        return None
+    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    direction = "ahead" if skew > 0 else "behind"
+    return Signal(
+        tenant_id=tenant,
+        ts=ts,
+        source=Source.SYSLOG,
+        kind="clock_skew",
+        observer=Observer(
+            observer_id="log-pipeline",
+            observer_type=ObserverType.PLATFORM,
+            collection_path="syslog",
+            clock_quality="ntp",   # the pipeline host is NTP-synced; the device is suspect
+        ),
+        modality_class=ModalityClass.MANAGEMENT_PLANE,
+        entity_type=EntityType.DEVICE,
+        entity_id=host,
+        severity=Severity.WARN,
+        native_id=f"{host}|clock_skew|{int(ts.timestamp() * 1000)}",
+        entity_tokens=(host,),
+        metric_name="clock_skew_s",
+        value=skew,
+        attrs={
+            "clock_skew_s": skew,
+            "tolerance_s": SYSLOG_CLOCK_SKEW_TOLERANCE_S,
+            "direction": direction,
+            "lane": "syslog",
+        },
+    )

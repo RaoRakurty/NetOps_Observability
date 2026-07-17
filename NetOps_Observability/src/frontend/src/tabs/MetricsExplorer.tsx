@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, PromSeries } from "../services/api";
-import { chartBase, axisStyle, paletteColor, colorForMetric } from "../theme/charts";
+import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric } from "../theme/charts";
 
 // Native Metrics Explorer — a Grafana-style surface that renders charts
 // in-app (ECharts) over the Go /api/metrics/* proxy. Instead of leading with
@@ -240,7 +240,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
         valueFormatter: (v: number) => fmtVal(v, unit),
       },
       legend: { ...chartBase.legend, type: "scroll", top: 0 },
-      xAxis: { type: "time", ...axisStyle },
+      xAxis: { type: "time", ...axisStyle, ...timeAxisTicks() },
       yAxis: {
         type: "value",
         ...axisStyle,

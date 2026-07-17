@@ -151,3 +151,32 @@ def health_event(*, provider: str, tenant: str, resource_id: str, region: str,
                            ts=ts, account=account, attrs=attrs)
     ev["state"] = state
     return ev
+
+
+def clock_skew_event(*, provider: str, tenant: str, family: str, region: str,
+                     skew_s: float, tolerance_s: float, ts: str,
+                     account: str = "", sample_resource: str = "") -> dict:
+    """A clock-skew meta-finding (kind=clock_skew, log-time standard S5/R5):
+    an ingest LANE whose records' own event time disagrees with the poller's
+    receive clock beyond the family tolerance. The entity is the lane
+    (provider/family), never a guessed device; the sample resource_id of the
+    triggering record rides in attrs for the investigation. The POLLER
+    throttles emission per lane — this builder is pure."""
+    if not family.strip():
+        raise ValueError("clock_skew event: missing family")
+    direction = "ahead" if skew_s > 0 else "behind"
+    ev = _base_cloud_event(
+        "clock_skew", provider=provider, tenant=tenant,
+        resource_id=f"{provider or 'cloud'}/{family}", region=region,
+        severity="warn", ts=ts, account=account,
+        attrs={
+            "clock_skew_s": skew_s,
+            "tolerance_s": tolerance_s,
+            "direction": direction,
+            "lane": family,
+            "sample_resource": sample_resource,
+        },
+    )
+    ev["metric_name"] = "clock_skew_s"
+    ev["value"] = skew_s
+    return ev

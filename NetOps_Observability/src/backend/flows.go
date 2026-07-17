@@ -384,7 +384,7 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
 	sql := `
-SELECT toString(ts) AS ts, id, kind, severity, score, device,
+SELECT ` + chISO("ts") + ` AS ts, id, kind, severity, score, device,
        component, summary, description
   FROM netops.findings
 ` + where + `
@@ -569,7 +569,7 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	sql := `
 SELECT id, type, local_device, local_addr, remote_device, remote_addr,
        status, latency_ms, jitter_ms, loss_pct, qoe, uptime_s,
-       toString(ts) AS ts
+       ` + chISO("ts") + ` AS ts
   FROM netops.tunnels
 ` + where + `
  ORDER BY ts DESC

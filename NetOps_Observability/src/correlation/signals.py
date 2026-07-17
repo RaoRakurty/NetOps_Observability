@@ -422,13 +422,29 @@ class Signal:
         )
 
 
-def _parse_ch_dt(s: str) -> datetime:
-    """Parse a ClickHouse DateTime64(3) string back to tz-aware UTC."""
-    s = s.strip().replace("T", " ")
+def _parse_ch_dt(s) -> datetime:
+    """Parse a ClickHouse DateTime64(3) value back to tz-aware UTC. Accepts the
+    zone-less SELECT string ("2026-07-16 21:56:03.562", UTC by contract), the
+    RFC 3339 wire form (S3), and the scaled-integer epoch-ms insert form (S4) —
+    so from_ch_row round-trips rows read from ClickHouse AND rows built
+    in-process by to_ch_row."""
+    if isinstance(s, (int, float)):
+        ms = int(s)
+        return datetime.fromtimestamp(ms // 1000, tz=timezone.utc).replace(
+            microsecond=(ms % 1000) * 1000)
+    s = str(s).strip()
+    if s.lstrip("-").isdigit():
+        return _parse_ch_dt(int(s))
+    s = s.replace("T", " ").rstrip("Z")
     fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in s else "%Y-%m-%d %H:%M:%S"
     return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
 
 
-def _ch_dt(dt: datetime) -> str:
-    """ClickHouse DateTime64(3) literal, millisecond precision, UTC."""
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+def _ch_dt(dt: datetime) -> int:
+    """UTC epoch **milliseconds** for a DateTime64(3) insert (log-time standard
+    S4/R1). ClickHouse treats an inserted integer as an appropriately *scaled*
+    Unix timestamp in UTC, so unlike a zone-less string the value can never be
+    re-interpreted in the server/column timezone. Truncates to ms exactly like
+    the old strftime()[:-3] string form."""
+    dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp()) * 1000 + dt.microsecond // 1000

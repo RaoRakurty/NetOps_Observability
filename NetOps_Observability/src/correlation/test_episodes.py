@@ -76,7 +76,9 @@ def test_ch_row_shape_matches_frozen_schema():
         "value", "baseline", "deviation", "attrs",
     }
     assert set(row) == frozen_columns
-    assert row["ts"] == "2026-06-11 12:00:00.000"
+    # Epoch-ms scaled-integer insert (log-time standard S4): DateTime64(3)
+    # reads an integer as a scaled UTC Unix timestamp — never server-TZ bound.
+    assert row["ts"] == 1781179200000  # 2026-06-11T12:00:00.000Z
     assert row["source"] == "metric" and row["severity"] == "warn"
 
 

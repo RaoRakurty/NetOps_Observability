@@ -203,7 +203,7 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 
 	itemSQL := `
 SELECT toString(signal_id) AS signal_id,
-       ts,
+       ` + chISO("ts") + ` AS ts_iso,
        toUnixTimestamp64Milli(ts) AS ts_ms,
        source, kind, severity, entity_type, entity_id, site,
        observer_type, modality_class, metric_name, value, deviation
@@ -224,6 +224,12 @@ SELECT toString(signal_id) AS signal_id,
 		kind := fmt.Sprintf("%v", row["kind"])
 		entity := fmt.Sprintf("%v", row["entity_id"])
 		src := fmt.Sprintf("%v", row["source"])
+		// De-shadowed RFC 3339 alias (chISO) → wire name. Selecting it AS ts
+		// would shadow the DateTime column the WHERE/ORDER BY cursor needs.
+		if v, ok := row["ts_iso"]; ok {
+			row["ts"] = v
+			delete(row, "ts_iso")
+		}
 		row["title"] = feedTitle(kind, entity, src)
 		row["correlation_id"] = nil // best-effort link is a follow-up (Explorer wiring)
 		items = append(items, row)

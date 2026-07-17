@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, FlowFilters } from "../services/api";
-import { chartBase, axisStyle, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
+import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
@@ -298,7 +298,7 @@ function FlowsSection({ q }: { q: FlowQuery }) {
               tooltip: { ...chartBase.tooltip, trigger: "axis" },
               legend: { ...chartBase.legend, data: ["Bytes", "Packets"], top: 0, right: 0 },
               grid: { left: 64, right: 64, top: 36, bottom: 28 },
-              xAxis: { type: "time", ...axisStyle },
+              xAxis: { type: "time", ...axisStyle, ...timeAxisTicks() },
               yAxis: [
                 { type: "value", name: "bytes", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBytes(v) } },
                 { type: "value", name: "packets", ...axisStyle, splitLine: { show: false } },

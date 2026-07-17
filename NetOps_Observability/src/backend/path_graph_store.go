@@ -574,7 +574,7 @@ func (s *pgchPathGraphStore) ListObservations(ctx context.Context, tenant string
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	sql := `SELECT observation_id, path_id, toString(observed_at) AS observed_at, method, vantage_id,
+	sql := `SELECT observation_id, path_id, ` + chISO("observed_at") + ` AS observed_at, method, vantage_id,
        status, hop_count, tenant_id, data_class, environment, scenario_id, run_id, producer_id, provenance_id
   FROM netops.path_observations FINAL
  WHERE ` + strings.Join(conds, " AND ") + `
@@ -608,7 +608,7 @@ func (s *pgchPathGraphStore) hopsOf(ctx context.Context, tenant string, cross bo
 	}
 	sql := `SELECT hop_index, state, observed_address, resolved_entity_ref, resolution_method, confidence,
        kind, network_context, seam_id, rtt_ms, loss_pct, transformation, candidate_ref, evidence_ref,
-       toString(observed_at) AS observed_at, tenant_id, data_class
+       ` + chISO("observed_at") + ` AS observed_at, tenant_id, data_class
   FROM netops.path_hops FINAL
  WHERE observation_id = '` + observationID + `'
  ORDER BY hop_index ASC
@@ -720,7 +720,10 @@ func chScopeFor(tenant string, cross bool) string {
 	return t
 }
 
-func chTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000") }
+// chTime renders a DateTime64(3) insert value as UTC epoch milliseconds — a
+// scaled-integer Unix timestamp ClickHouse can never re-interpret in the
+// server/column timezone (log-time standard S4/R1).
+func chTime(t time.Time) int64 { return t.UTC().UnixMilli() }
 
 func chStringList(vals []string) string {
 	out := make([]string, 0, len(vals))

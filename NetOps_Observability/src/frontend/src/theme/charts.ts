@@ -48,6 +48,7 @@ export function colorForMetric(name: string): string {
 }
 
 import { cssVar } from "./tokens";
+import { fmtAxisTick, fmtDateTime } from "../lib/time";
 
 // Axis/grid chrome resolves from the semantic tokens at chart-build time, so
 // charts follow [data-theme] (light/dark/oled) instead of assuming light.
@@ -102,6 +103,20 @@ export const axisStyle = {
   get nameTextStyle() { return { color: axisColor(), fontSize: 12, fontWeight: 600, padding: [0, 0, 0, 4] }; },
   get splitLine() { return { lineStyle: { color: gridColor() } }; },
 };
+
+// Time-axis fragments (log-time standard S6): axis tick labels and the
+// crosshair pill obey the top-bar Local/UTC knob via lib/time — ECharts'
+// built-in time-axis labels always render browser-local, which contradicted
+// every other timestamp on the page when the knob was on UTC. Spread INTO the
+// axis object AFTER axisStyle so the formatter wins:
+//   xAxis: { type: "time", ...axisStyle, ...timeAxisTicks }
+// (Charts rebuild on toggle — the page remounts — so the mode is re-read.)
+export function timeAxisTicks() {
+  return {
+    axisLabel: { ...axisStyle.axisLabel, formatter: (v: number) => fmtAxisTick(v) },
+    axisPointer: { label: { formatter: (p: { value: number | string | Date }) => fmtDateTime(p.value) } },
+  };
+}
 
 // Translucent top-to-bottom gradient fill for an area/line series, keyed to
 // the palette so each series gets its own hue.
