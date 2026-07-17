@@ -37,6 +37,12 @@ func bizSvcName(s string) bool {
 	return true
 }
 
+// bizSvcOwner bounds the optional owner label (a team or person). Empty means
+// unset; non-empty follows the same printable single-line ≤128 rule as names.
+func bizSvcOwner(s string) bool {
+	return strings.TrimSpace(s) == "" || bizSvcName(s)
+}
+
 func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) {
 	if s.bizServices == nil {
 		writeError(w, http.StatusNotImplemented, errBizSvcStoreOff)
@@ -73,6 +79,11 @@ func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, errors.New("invalid criticality"))
 			return
 		}
+		if !bizSvcOwner(in.Owner) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid owner"))
+			return
+		}
+		in.Owner = strings.TrimSpace(in.Owner)
 		tenant, cross := principalTenant(claims)
 		if !cross {
 			in.TenantID = tenant // scoped principal owns what it creates
@@ -122,6 +133,11 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, errors.New("invalid criticality"))
 			return
 		}
+		if !bizSvcOwner(in.Owner) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid owner"))
+			return
+		}
+		in.Owner = strings.TrimSpace(in.Owner)
 		tenant, cross := principalTenant(claims)
 		found, err := s.bizServices.UpdateService(r.Context(), tenant, cross, id, in)
 		if errors.Is(err, errConflict) {
