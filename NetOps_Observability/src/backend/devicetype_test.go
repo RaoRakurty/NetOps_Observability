@@ -20,6 +20,8 @@ func TestInferDeviceType(t *testing.T) {
 		{"f5 bigip → load-balancer", models.Device{Vendor: "f5", Model: "BIG-IP i4800"}, "load-balancer"},
 		{"catalyst 9800 → wlc", models.Device{Vendor: "cisco", Model: "Catalyst 9800-CL"}, "wlc"},
 		{"aironet → ap", models.Device{Vendor: "cisco", Model: "AIR-AP2802"}, "ap"},
+		{"ruckus wireless ap → ap", models.Device{Vendor: "ruckus", OS: "Ruckus R610 Multimedia Hotzone Wireless AP"}, "ap"},
+		{"unifi uap → ap", models.Device{Vendor: "ubiquiti", Model: "UAP-AC-Pro"}, "ap"},
 		{"tgw → cloud-gw", models.Device{Name: "aws-transit gateway"}, "cloud-gw"},
 		{"juniper mx → router", models.Device{Vendor: "juniper", Model: "MX240"}, "router"},
 		{"unknown → generic", models.Device{Vendor: "acme", Model: "widget"}, "generic"},

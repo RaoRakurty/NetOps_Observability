@@ -245,6 +245,18 @@ func builtinSNMPProfiles() []SNMPProfile {
 			Description: "Versa FlexVNF SD-WAN/NGFW box monitoring via standard MIBs. Deep SD-WAN telemetry (path SLA, traffic steering, overlay/tunnel state) is controller-API-sourced (Versa Director + Analytics), NOT box SNMP — see docs/design/multi-vendor-wifi-expansion.md.",
 			Metrics:     std(blkHost())},
 
+		// ---- wireless (identification + port floor ONLY) ----
+		// Scope guard (#94): these profiles exist so APs are correctly IDENTIFIED
+		// (vendor/model/serial) and their wired ports render with full IF-MIB
+		// fidelity. The wireless metric family (client counts, RF/radio health,
+		// roaming) is a separate owner-authored design — deliberately NOT here.
+		{ID: "aruba-wireless", Vendor: "Aruba Networks (APs / mobility controllers)", Category: "wireless", SysObjectIDPrefix: "1.3.6.1.4.1.14823", Builtin: true,
+			Description: "Aruba wireless (Instant/campus APs, mobility controllers). Standard MIBs cover the wired uplink ports, inventory and host resources. RF/client telemetry (AI-MON/WLSX MIBs or controller API) is a separate wireless metric family — add once that design lands.",
+			Metrics:     std(blkHost())},
+		{ID: "ruckus-wireless", Vendor: "Ruckus Wireless (APs / SmartZone)", Category: "wireless", SysObjectIDPrefix: "1.3.6.1.4.1.25053", Builtin: true,
+			Description: "Ruckus wireless (standalone/Unleashed APs, ZoneDirector/SmartZone). Standard MIBs cover wired ports, inventory and host resources. RF/client telemetry (RUCKUS-* MIBs or SmartZone API) is a separate wireless metric family — add once that design lands.",
+			Metrics:     std(blkHost())},
+
 		// ---- servers / hosts ----
 		{ID: "server-host", Vendor: "Server / Host (net-snmp, Windows)", Category: "server", Builtin: true,
 			Metrics: append(append(append([]SNMPMetric{}, blkSystem()...), blkInterface()...), blkHost()...)},

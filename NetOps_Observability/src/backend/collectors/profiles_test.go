@@ -54,11 +54,40 @@ func TestSelectProfiles(t *testing.T) {
 	for ent, name := range map[int]string{
 		12356: "fortinet", 2620: "checkpoint", 14988: "mikrotik", 21067: "sophos",
 		41112: "ubiquiti", 2011: "huawei", 1916: "extreme", 30065: "arista", 674: "dell",
+		// Wireless AP vendors (#94): registered for labelling + the generic
+		// port floor; wireless metric family is a separate owner-gated design.
+		14823: "aruba", 25053: "ruckus",
 	} {
 		if got = names(selectProfiles(profs, ent, true)); !reflect.DeepEqual(got, []string{"generic", name}) {
 			t.Errorf("%s (ent %d) selection=%v", name, ent, got)
 		}
 	}
+	// PoE port status (RFC 3621) rides the GENERIC floor — switch-side port
+	// enrichment for powered endpoints (APs/phones). Table metrics, standard MIB.
+	for _, p := range profs {
+		if p.Name != "generic" {
+			continue
+		}
+		poe := map[string]bool{
+			"device_poe_port_detection_status": false,
+			"device_poe_port_power_class":      false,
+			"device_poe_pse_consumption_watts": false,
+		}
+		for _, m := range p.Metrics {
+			if _, ok := poe[m.Name]; ok {
+				poe[m.Name] = true
+				if !m.Table {
+					t.Errorf("%s must be a table walk", m.Name)
+				}
+			}
+		}
+		for name, found := range poe {
+			if !found {
+				t.Errorf("generic profile missing %s", name)
+			}
+		}
+	}
+
 	// F5 trunk (LAG) membership — the Port-Intelligence lane: the profile must
 	// carry trunk status + configured/working member counts, all trunk-indexed
 	// tables (a working<configured delta is a degraded bundle).

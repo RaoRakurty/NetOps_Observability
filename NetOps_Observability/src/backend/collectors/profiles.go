@@ -111,6 +111,15 @@ func builtinProfiles() []SNMPProfile {
 				// not OSPF). IndexLabel "neighbor" is the canonical adjacency identity.
 				{Name: "device_ospf_nbr_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 10, 1, 6}, Table: true, IndexLabel: "neighbor"}, // ospfNbrState
 				{Name: "device_ospf_if_state", OID: []int{1, 3, 6, 1, 2, 1, 14, 7, 1, 12}, Table: true},                          // ospfIfState
+				// POWER-ETHERNET-MIB (RFC 3621) — PoE port status on the SWITCH side,
+				// the port-intelligence lane for powered endpoints (APs, phones,
+				// cameras): deliveringPower vs fault/otherFault localizes an AP outage
+				// to its feed port. Rows exist only on PSE-capable switches; a walk on
+				// anything else returns nothing (a cheap no-op). Index is
+				// pethPsePortGroupIndex.pethPsePortIndex (group.port).
+				{Name: "device_poe_port_detection_status", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 6}, Table: true},  // pethPsePortDetectionStatus
+				{Name: "device_poe_port_power_class", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 10}, Table: true},      // pethPsePortPowerClassifications
+				{Name: "device_poe_pse_consumption_watts", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 3, 1, 1, 4}, Table: true}, // pethMainPseConsumptionPower (per PSE group)
 			},
 		},
 		{
@@ -227,6 +236,25 @@ func builtinProfiles() []SNMPProfile {
 		{
 			Name:       "ubiquiti",
 			Enterprise: 41112,
+			Metrics:    []SNMPMetric{},
+		},
+		// Aruba Networks (wireless: IAP/campus APs + mobility controllers, ent
+		// 14823). Registered for LABELLING + the generic IF-MIB/HOST-RESOURCES
+		// floor (port intelligence #94: an AP's wired uplink port renders like
+		// any other port). Wireless-side metrics (clients, RF/radio health,
+		// roaming) are a SEPARATE metric family under owner design — do not add
+		// them here.
+		{
+			Name:       "aruba",
+			Enterprise: 14823,
+			Metrics:    []SNMPMetric{},
+		},
+		// Ruckus Wireless (APs + ZoneDirector/SmartZone, ent 25053). Registered
+		// for LABELLING + the generic floor, same rationale as Aruba: port-level
+		// visibility now, wireless metric family deferred to the owner's design.
+		{
+			Name:       "ruckus",
+			Enterprise: 25053,
 			Metrics:    []SNMPMetric{},
 		},
 		// Huawei VRP (HUAWEI-ENTITY-EXTENT-MIB, hwEntityStateTable). Per-entity
