@@ -53,6 +53,16 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
 | **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
 
+> **#84 docs page ✅ DONE 2026-07-17** — operator-facing RCA time-intelligence
+> page shipped (`docs-portal/docs/incident-response/rca-time-intelligence.md`,
+> mirrored to the AI corpus; written from the shipped code). Two code
+> follow-ups the doc audit surfaced: (a) fleet rollups derive with empty ITSM
+> facts + no manual overlay, so TTA/TTM/recovery/resolution percentiles never
+> populate from snapshots even with ticketing live — wire itsm/manual facts
+> into `backfillIncidentTimeMetrics` if rollup-level workflow timing is
+> wanted; (b) `reliabilityFilters.Severity` is parsed but never applied in
+> either read path (dead filter — apply or drop).
+
 **Parking lot (not streams):** #73 (telemetry re-run, owner go) · #53/#44 (event pipeline / AIOps grouping, discuss-first) · #82 (VXLAN overlay, gated on real gear) · #36 (reports contact points **P4 only** — P3 secure-link shipped via #37). _(#5 vendor syslog + #60 BGP/OSPF boards verified DONE 2026-06-30 — removed from parking lot.)_
 
 > **Owner detailed-instruction slots** (fill in as provided):

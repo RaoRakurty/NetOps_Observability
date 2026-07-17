@@ -1,7 +1,7 @@
 # RCA Time Intelligence — Incident Time Decomposition
 
 **Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 + P3 + **ITSM phase-link** SHIPPED & live ·
-P1d (persistence/RLS/manual-edit/backfill) REMAINING · docs page ✅ DONE 2026-07-17
+P1d ✅ DONE (persistence `timeintel_store.go` + audited manual edits `timeintel_manual.go` + backfill `timeintel_backfill.go` + migration 0017/0027, reconciled 2026-07-17) · docs page ✅ DONE 2026-07-17
 (`docs-portal/docs/incident-response/rca-time-intelligence.md`).
 **Owner spec:** 2026-06-24 (chat). **This doc** is the durable design of record.
 
