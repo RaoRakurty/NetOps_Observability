@@ -29,12 +29,15 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Deque, Dict, Iterable
 
 import httpx
 from aiokafka import AIOKafkaConsumer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from timenorm import ResolvedTime, SkewTracker, resolve_event_time
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -47,6 +50,21 @@ CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
 TOPICS = ["netops.syslog", "netops.flows", "netops.metrics"]
+
+# Timezone resolution config (docs/design/log-time-standard.md). Events
+# normalized upstream (Vector stamps event_time/tz_assumed) pass through;
+# these settings only govern events whose timestamps still need a zone:
+#   DEVICE_TZ_MAP   — JSON object {"hostname": "America/Chicago" | "+05:30"}
+#                     (per-device stage of the hierarchy; a settings UI and
+#                     bulk import are tracked follow-ups)
+#   SITE_DEFAULT_TZ — site/collector default stage; default "UTC"
+try:
+    DEVICE_TZ_MAP: dict[str, str] = json.loads(os.environ.get("DEVICE_TZ_MAP", "{}"))
+    if not isinstance(DEVICE_TZ_MAP, dict):
+        DEVICE_TZ_MAP = {}
+except ValueError:
+    DEVICE_TZ_MAP = {}
+SITE_DEFAULT_TZ = os.environ.get("SITE_DEFAULT_TZ", "UTC")
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -167,21 +185,70 @@ async def consume() -> None:
         await consumer.stop()
 
 
+# Per-device skew stats over ingest−event: stable whole/quarter-hour
+# offsets are flagged as probable timezone misconfiguration (distinct
+# from clock drift) and surfaced as data-quality findings. Event times
+# are never rewritten.
+SKEW = SkewTracker()
+
+
 async def handle(topic: str, event: dict | None) -> None:
     if not event or ch is None:
         return
 
+    # One receive stamp per event; resolution of the event's source time
+    # happens here, once — downstream handlers only consume the result.
+    when = resolve_event_time(
+        event,
+        received_at=datetime.now(timezone.utc),
+        device_tz_map=DEVICE_TZ_MAP,
+        default_tz=SITE_DEFAULT_TZ,
+    )
+    await watch_skew(event, when)
+
     if topic == "netops.metrics":
-        await handle_metric(event)
+        await handle_metric(event, when)
     elif topic == "netops.syslog":
-        await handle_syslog(event)
+        await handle_syslog(event, when)
     elif topic == "netops.flows":
-        await handle_flow(event)
+        await handle_flow(event, when)
 
 
-async def handle_metric(ev: dict) -> None:
+def event_device(ev: dict) -> str:
+    return str(ev.get("hostname") or ev.get("device") or ev.get("agent_host") or "")
+
+
+async def watch_skew(ev: dict, when: ResolvedTime) -> None:
+    """Feed the skew tracker; emit a data-quality finding on a verdict."""
+    verdict = SKEW.observe(event_device(ev), when)
+    if verdict is None:
+        return
+    SKEW.reset(verdict.device)  # don't re-report every subsequent event
+    await emit(
+        kind="data_quality",
+        severity="warning" if verdict.kind == "tz_misconfig" else "info",
+        device=verdict.device,
+        component="time",
+        summary=verdict.summary(),
+        description=(
+            f"Median ingest−event skew {verdict.median_skew_s:+.0f}s over "
+            f"{verdict.sample_count} events. Timestamps are reported as "
+            f"received — never auto-corrected. Fix the device clock/zone "
+            f"or set its timezone in DEVICE_TZ_MAP."
+        ),
+        score=abs(verdict.median_skew_s) / 60.0,
+        labels={
+            "device": verdict.device,
+            "skew_kind": verdict.kind,
+            "median_skew_s": f"{verdict.median_skew_s:.0f}",
+        },
+        when=when,
+    )
+
+
+async def handle_metric(ev: dict, when: ResolvedTime) -> None:
     """Score numeric metric samples for anomalies."""
-    device = str(ev.get("hostname") or ev.get("agent_host") or "unknown")
+    device = event_device(ev) or "unknown"
     name = str(ev.get("name") or ev.get("metric") or "")
     if not name:
         return
@@ -204,6 +271,7 @@ async def handle_metric(ev: dict) -> None:
         description=f"Rolling z-score over last {WINDOW_SIZE} samples exceeded threshold.",
         score=float(z),
         labels={"metric": name, "device": device},
+        when=when,
     )
 
 
@@ -215,12 +283,14 @@ SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
 
 
-async def handle_syslog(ev: dict) -> None:
-    host = str(ev.get("hostname") or "unknown")
+async def handle_syslog(ev: dict, when: ResolvedTime) -> None:
+    host = event_device(ev) or "unknown"
     sev  = str(ev.get("severity") or "info").lower()
     weight = SEVERITY_WEIGHT.get(sev, 0)
     if weight == 0:
         return
+    # The burst window is relative bookkeeping — the monotonic-ish wall
+    # clock is fine here; event_time is what gets PERSISTED (see emit).
     now = time.time()
     bucket = SYSLOG_BUCKET.setdefault(host, [])
     bucket.append((now, weight))
@@ -238,17 +308,34 @@ async def handle_syslog(ev: dict) -> None:
             description=f"≥{SYSLOG_THRESHOLD} severity-points within {int(SYSLOG_WINDOW)}s window.",
             score=float(total),
             labels={"host": host},
+            when=when,
         )
         SYSLOG_BUCKET[host] = []   # reset so we don't spam
 
 
-async def handle_flow(_ev: dict) -> None:
+async def handle_flow(_ev: dict, _when: ResolvedTime) -> None:
     # Placeholder: NetFlow correlation (DDoS detection, top-talker
     # sudden shift, port-scan signatures) goes here.
     return
 
 
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 async def emit(**kwargs) -> None:
+    """Write one finding row.
+
+    `when` (ResolvedTime) stamps the row's ts with the triggering event's
+    SOURCE time as fractional epoch seconds — unambiguous for ClickHouse
+    DateTime64(3) regardless of server timezone. Previously ts was
+    omitted and the column DEFAULT now64(3) recorded the INSERT time,
+    discarding the event's real occurrence time entirely. The full time
+    provenance (event_time / ingest_time / tz_assumed) rides in labels —
+    the findings schema needs no migration.
+    """
+    when: ResolvedTime | None = kwargs.get("when")
+    labels = dict(kwargs.get("labels", {}))
     row = {
         "id":          str(uuid.uuid4()),
         "kind":        kwargs["kind"],
@@ -258,8 +345,15 @@ async def emit(**kwargs) -> None:
         "component":   kwargs.get("component", ""),
         "summary":     kwargs.get("summary", ""),
         "description": kwargs.get("description", ""),
-        "labels":      kwargs.get("labels", {}),
     }
+    if when is not None:
+        row["ts"] = round(when.event_time.timestamp(), 3)
+        labels["event_time"] = _iso_utc(when.event_time)
+        labels["ingest_time"] = _iso_utc(when.ingest_time)
+        labels["tz_assumed"] = "true" if when.tz_assumed else "false"
+        if when.raw_timestamp:
+            labels["raw_timestamp"] = when.raw_timestamp[:128]
+    row["labels"] = labels
     assert ch is not None
     await ch.insert("netops.findings", [row])
     log.info("finding: %s %s %s", row["severity"], row["kind"], row["summary"])
@@ -311,8 +405,12 @@ async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
     if severity:
         sev = severity.replace("'", "")
         where = f"WHERE severity = '{sev}'"
+    # ts is rendered timezone-EXPLICIT: RFC 3339 UTC with a Z suffix.
+    # A bare toString(ts) yields a zoneless server-timezone string that
+    # JS clients then re-interpret as viewer-local time.
     sql = f"""
-      SELECT toString(ts) AS ts, id, kind, severity, score, device,
+      SELECT concat(replaceOne(toString(ts, 'UTC'), ' ', 'T'), 'Z') AS ts,
+             id, kind, severity, score, device,
              component, summary, description
         FROM netops.findings
         {where}
