@@ -6,12 +6,29 @@ name: release-bundle
 # install preflight), and attach it to the GitHub Release. Manual dispatch runs
 # the same build + smoke and uploads a workflow artifact instead (no release).
 #
+# BUNDLE LOCKSTEP (#97, owner 2026-07-17): the customer package must track the
+# code automatically. Three legs, cheapest always-on:
+#   1. Local: scripts/bundle-staleness.sh warns on EVERY `git push` (pre-push
+#      hook) when the newest dist/ bundle lags shippable code; `make bundle`
+#      rebuilds in one command. (Dev happens on a feature branch and bundles
+#      are built/shipped from the dev host — this is the loop that matters.)
+#   2. This workflow also fires on every push to main — every merge to the
+#      default branch yields a verified, downloadable bundle artifact. (No
+#      paths filter: mixing paths with the tag trigger risks skipped tag
+#      runs, and main merges are infrequent ship-worthy events anyway.)
+#   3. Tag v*.*.* → customer release with attached assets (unchanged).
+# The smoke below asserts the bundle is stamped with the EXACT commit built
+# (git_sha lockstep) and contains no removed components (redpanda/redis/
+# prometheus).
+#
 # NOT here (documented limits, not oversights):
 #   - Full-stack boot smoke (`install.py --bundle` bringing 17 services up):
 #     the standard runner (2 vCPU / 7 GB on private repos) is below the 8 GB
 #     evaluation floor — the static preflight + image round-trip cover the
 #     bundle mechanics; boot coverage stays with fresh-install-integrity.
-#   - GPG signing of SHA256SUMS: needs the product signing key (owner-held).
+#   - TODO(#97, owner-gated): GPG signing of SHA256SUMS — needs the product
+#     signing key (owner-held secret). Seam: sign right after the smoke step,
+#     upload SHA256SUMS.asc next to SHA256SUMS. Do NOT generate a key in CI.
 #
 # GitHub Releases cap assets at 2 GiB per file; any larger bundle member is
 # split into .partNN pieces (client: `cat <name>.part* > <name>`, then verify
@@ -20,6 +37,7 @@ name: release-bundle
 on:
   push:
     tags: ['v*.*.*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -78,12 +96,20 @@ jobs:
           sha256sum -c SHA256SUMS
           zstd -t ./*.tar.zst
 
+          # Lockstep stamp (#97): the bundle must carry the EXACT commit this
+          # run built — a mismatch means the packaging script and checkout
+          # drifted apart, which is the failure this workflow exists to catch.
+          grep -q "^git_sha:  $(git rev-parse --short HEAD)\$" MANIFEST
+
           # Licensing/broker assertions (#97): the customer bundle ships
           # Apache Kafka + Valkey and must not contain Redpanda anywhere a
           # customer looks — manifest, compose, or the bundle-root docs.
+          # Redis (RSAL) and Prometheus are removed components and must never
+          # reappear in the image set either.
           grep -q '^  - apache/kafka:' MANIFEST
           grep -q '^  - valkey/valkey:' MANIFEST
           ! grep -qi 'redpanda' MANIFEST
+          ! grep -Eqi 'redis|prometheus' MANIFEST
           ! grep -qi 'redpanda' README.md ADVANCED.md TROUBLESHOOTING.md
           test -x install-correlix.sh
 

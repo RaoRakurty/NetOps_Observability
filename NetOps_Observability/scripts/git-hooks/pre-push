@@ -10,4 +10,10 @@ if echo "$changed" | grep -q 'NetOps_Observability/src/backend/.*\.go$'; then
   bash "$root/NetOps_Observability/scripts/ci-backend-guard.sh" || {
     echo "✗ PUSH BLOCKED: backend-ci gate failed locally. Fix, then push."; exit 1; }
 fi
+
+# #97 customer-bundle lockstep: WARN (never block) when the newest offline
+# bundle in dist/ lags the shippable code being pushed. Rebuild: make bundle
+if ! bash "$root/NetOps_Observability/scripts/bundle-staleness.sh" --quiet; then
+  echo "⚠ pre-push: customer bundle is STALE (details above) — push continues; rebuild with 'make bundle'"
+fi
 exit 0

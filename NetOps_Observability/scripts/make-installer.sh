@@ -99,15 +99,20 @@ COUNT="$(printf '%s\n' "$IMAGES" | grep -c .)"
 echo "   $COUNT base images"
 
 # 3a. LICENSING GUARDS (#97): a customer bundle must never ship Redpanda (BSL)
-#     and must ship Apache Kafka (bus) + Valkey (cache). Hard build failures.
+#     and must ship Apache Kafka (bus) + Valkey (cache). Redis (RSAL) and
+#     Prometheus are REMOVED components — permanently out of the product —
+#     and must never reappear in any bundle. Hard build failures.
 if printf '%s\n' "$IMAGES" | grep -qi 'redpanda'; then
   echo "FATAL: redpanda image in bundle set — BSL-licensed, not redistributable" >&2; exit 1
+fi
+if printf '%s\n' "$IMAGES" | grep -Eqi 'redis|prometheus'; then
+  echo "FATAL: redis/prometheus image in bundle set — removed components (#97) must not ship" >&2; exit 1
 fi
 printf '%s\n' "$IMAGES" | grep -q '^apache/kafka:' \
   || { echo "FATAL: apache/kafka missing from bundle image set" >&2; exit 1; }
 printf '%s\n' "$IMAGES" | grep -q '^valkey/valkey:' \
   || { echo "FATAL: valkey missing from bundle image set" >&2; exit 1; }
-echo "   licensing guards passed (kafka+valkey in, redpanda out)"
+echo "   licensing guards passed (kafka+valkey in; redpanda/redis/prometheus out)"
 
 # 3b. Ensure every bundled image exists locally. App images were just built;
 #     third-party ones are digest-pinned pulls that a dev host has but a fresh
@@ -158,8 +163,8 @@ for spec in $ADDONS; do
   name="${spec%%:*}"; prof="${spec##*:}"
   PACK_IMAGES="$(cd "$COMPOSE_DIR" && docker compose "${BASE_PROFILES[@]}" --profile "$prof" config --images | sort -u | comm -13 <(printf '%s\n' "$IMAGES") -)"
   [ -n "$PACK_IMAGES" ] || { echo "FATAL: addon $name resolved no images" >&2; exit 1; }
-  if printf '%s\n' "$PACK_IMAGES" | grep -qi 'redpanda'; then
-    echo "FATAL: redpanda image in addon $name" >&2; exit 1
+  if printf '%s\n' "$PACK_IMAGES" | grep -Eqi 'redpanda|redis|prometheus'; then
+    echo "FATAL: forbidden image (redpanda/redis/prometheus — removed components) in addon $name" >&2; exit 1
   fi
   for img in $PACK_IMAGES; do
     docker image inspect "$img" >/dev/null 2>&1 || { echo "-- pulling $img"; docker pull -q "$img"; }
@@ -361,6 +366,11 @@ if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDL
 fi
 
 (cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh > SHA256SUMS)
+
+# TODO(#97, owner-gated): GPG-sign SHA256SUMS with the product signing key —
+#   gpg --batch --detach-sign --armor -o SHA256SUMS.asc SHA256SUMS
+# install-correlix.sh should verify SHA256SUMS.asc when present. The key is
+# owner-held; NEVER generate or embed a signing key in this script or CI.
 
 echo "== done"
 du -sh "$BUNDLE_DIR"/* | sed 's/^/   /'

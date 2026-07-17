@@ -1,6 +1,20 @@
 # NetOps_Observability — developer make targets.
 .PHONY: test-correlation-e2e mib-index test-ticketing-unit test-servicenow-mock \
-        release-gate release-gate-live
+        release-gate release-gate-live bundle bundle-core bundle-status
+
+# #97 packaging — customer-bundle lockstep. `bundle` builds the offline
+# installer bundle at HEAD (scripts/make-installer.sh: images + source +
+# MANIFEST/SHA256SUMS, forbidden-image guards baked in); `bundle-status`
+# FAILS when the newest built bundle in dist/ lags shippable code (the same
+# check runs warn-only on every `git push` via scripts/git-hooks/pre-push).
+bundle:
+	bash scripts/make-installer.sh
+
+bundle-core:
+	bash scripts/make-installer.sh --core
+
+bundle-status:
+	bash scripts/bundle-staleness.sh
 
 # #101 release-gate storm SLOs — the shippable-lane contract. Every NEW signal
 # lane must pass this BEFORE it ships (docs/design/correlation-data-contract.md
