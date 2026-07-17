@@ -393,6 +393,18 @@ def _lane_log(msg: str, **kw) -> None:
                       "msg": msg, **kw}), flush=True)
 
 
+# Peer-pair volume bound (#9 service dependency map) — shared knob name across
+# the AWS/Azure/GCP flow lanes.
+FLOW_PAIR_TOP_K = int(os.environ.get("CLOUD_FLOW_PAIR_TOP_K", "20"))
+
+
+def flow_pair_rollup(entries: list[dict], project: str) -> list[dict]:
+    """Named lane adapter: the pure pair rollup with the env-tuned top-K bound
+    (lane functions share the (entries, project) signature; __name__ feeds the
+    truncation log line)."""
+    return gcp_log_lanes.flow_pair_rollup(entries, project, top_k=FLOW_PAIR_TOP_K)
+
+
 def _log_lanes() -> list[tuple]:
     """(state_key, filter, rollup functions) per ENABLED lane. Computed per call
     so tests can flip the module gates."""
@@ -400,7 +412,7 @@ def _log_lanes() -> list[tuple]:
     if GCP_VPC_FLOW_LOGS:
         lanes.append(("gcp_flow",
                       f'logName="projects/{PROJECT}/logs/compute.googleapis.com%2Fvpc_flows"',
-                      (gcp_log_lanes.flow_volume_rollup,)))
+                      (gcp_log_lanes.flow_volume_rollup, flow_pair_rollup)))
     if GCP_FIREWALL_LOGS:
         lanes.append(("gcp_fw",
                       f'logName="projects/{PROJECT}/logs/compute.googleapis.com%2Ffirewall"',

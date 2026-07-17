@@ -60,7 +60,8 @@ from routing_direction import forwarding_pairs, routing_direction_source
 from episodes import EpisodeDetector
 from cloud_log_parsers import (
     cloud_log_event, dns_error_rollup, parse_aws_waf_log, parse_r53_dns_log,
-    parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal, waf_block_rollup,
+    parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal, vpc_pair_rollup,
+    waf_block_rollup,
 )
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
@@ -115,6 +116,10 @@ TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "n
 CLOUD_LOGS_DIR = os.environ.get("CLOUD_LOGS_DIR", "")
 CLOUD_LOGS_TENANT = os.environ.get("CLOUD_LOGS_TENANT", "")
 CLOUD_LOGS_REFRESH_S = float(os.environ.get("CLOUD_LOGS_REFRESH_S", "30"))
+# Bound for the peer-pair volume rollup (cloud-platform-backlog #9): at most this
+# many (src,dst) ACCEPT pairs per scan cycle (largest bytes win). Shared knob name
+# across the AWS/Azure/GCP flow lanes.
+CLOUD_FLOW_PAIR_TOP_K = int(os.environ.get("CLOUD_FLOW_PAIR_TOP_K", "20"))
 _cloud_log_offsets: dict[str, int] = {}  # path → bytes consumed (tail-style; in-memory)
 
 # Cloud inventory topology snapshots (deployment/docker/cloud-fixtures/*-topology.json)
@@ -1418,9 +1423,10 @@ async def _scan_cloud_logs() -> int:
             fed += 1
         # Batch rollups — one signal per aggregation key per scan, never a
         # per-record firehose (audit P1-6 discipline, applied to every lane):
-        # ACCEPT flows → per-ENI volume; WAF BLOCKs → per (ACL, rule);
-        # DNS errors → per (query name, rcode).
+        # ACCEPT flows → per-ENI volume + top-K (src,dst) pairs (#9 talks_to
+        # edges); WAF BLOCKs → per (ACL, rule); DNS errors → per (name, rcode).
         for ev in (vpc_accept_rollup(accept_recs)
+                   + vpc_pair_rollup(accept_recs, CLOUD_FLOW_PAIR_TOP_K)
                    + waf_block_rollup(waf_recs)
                    + dns_error_rollup(dns_recs)):
             ev["tenant_id"] = CLOUD_LOGS_TENANT

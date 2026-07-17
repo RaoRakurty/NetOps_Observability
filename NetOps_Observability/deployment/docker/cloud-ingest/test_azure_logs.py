@@ -20,8 +20,8 @@ T = "2026-07-15T09:00:00Z"
 # Kinds declared in src/correlation/cloud_producers.py CLOUD_KINDS. The Azure
 # lanes reuse the canonical (provider-blind) kinds — if this set ever needs a
 # NEW member, it must be declared there first.
-CONTRACT_KINDS = {"cloud_flow_log", "cloud_flow_volume", "cloud_lb_log",
-                  "cloud_waf_log", "cloud_dns_log"}
+CONTRACT_KINDS = {"cloud_flow_log", "cloud_flow_volume", "cloud_flow_pair",
+                  "cloud_lb_log", "cloud_waf_log", "cloud_dns_log"}
 
 
 # ── incremental JSON record extraction ───────────────────────────────────────
@@ -91,7 +91,7 @@ END = "1768467660000,10.0.0.6,52.239.184.180,23956,443,6,O,E,NX,3,767,2,1580"
 def test_vnet_deny_and_accept_rollups():
     evs = azure_logs.vnet_flow_rollups([_flow_record([DENY, DENY, BEGIN, END])])
     by_kind = {e["kind"]: e for e in evs}
-    assert set(by_kind) == {"cloud_flow_log", "cloud_flow_volume"}
+    assert set(by_kind) == {"cloud_flow_log", "cloud_flow_volume", "cloud_flow_pair"}
 
     deny = by_kind["cloud_flow_log"]
     assert deny["value"] == 2.0                       # rolled up, not per-record
@@ -113,6 +113,31 @@ def test_vnet_deny_and_accept_rollups():
     # grounding tokens carry NIC + target VNet
     assert "000D3AF87856" in vol["entity_tokens"]
     assert any("virtualNetworks/vnet1" in t for t in vol["entity_tokens"])
+
+    # the peer-preserving pair rollup (#9 talks_to edges): src→dst kept, denied
+    # tuples excluded, bytes both directions summed onto the pair
+    pair = by_kind["cloud_flow_pair"]
+    assert pair["resource_id"] == "10.0.0.6->52.239.184.180"
+    assert pair["value"] == float(767 + 1580)
+    assert pair["metric_name"] == "flow_pair_bytes"
+    assert pair["attrs"]["srcaddr"] == "10.0.0.6"
+    assert pair["attrs"]["dstaddr"] == "52.239.184.180"
+    assert pair["attrs"]["action"] == "ACCEPT" and pair["attrs"]["flows"] == "2"
+    assert pair["severity"] == "info"
+    assert "000D3AF87856" in pair["entity_tokens"]
+    assert "10.0.0.6" in pair["entity_tokens"] and "52.239.184.180" in pair["entity_tokens"]
+
+
+def test_vnet_pair_rollup_is_topk_bounded(monkeypatch):
+    # 50 distinct destinations from one NIC, volume descending — only the K
+    # largest pairs survive (bounded per cycle, never one signal per tuple).
+    monkeypatch.setattr(azure_logs, "PAIR_TOP_K", 5)
+    tuples = [f"1768467600000,10.0.0.6,10.0.1.{i},1000,443,6,O,E,NX,1,{2000 - i},0,0"
+              for i in range(50)]
+    pairs = [e for e in azure_logs.vnet_flow_rollups([_flow_record(tuples)])
+             if e["kind"] == "cloud_flow_pair"]
+    assert len(pairs) == 5
+    assert [p["value"] for p in pairs] == [2000.0, 1999.0, 1998.0, 1997.0, 1996.0]
 
 
 def test_vnet_malformed_tuples_and_records_skipped():

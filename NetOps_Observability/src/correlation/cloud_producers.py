@@ -52,6 +52,11 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     # Aggregated ACCEPT-flow volume per ENI / NIC (audit P1-6): observed traffic
     # as evidence, one rollup per interface per scan — never per-flow firehose.
     "cloud_flow_volume":      (ModalityClass.PASSIVE_FLOW,     ObserverType.FLOW_EXPORTER, EntityType.CLOUD_RESOURCE),
+    # Top-K (src,dst) ACCEPT-pair volume per scan (cloud-platform-backlog #9):
+    # the peer-preserving rollup the service dependency map's talks_to edges
+    # read (/api/cloud/service-map). Entity is the pair itself ("src->dst");
+    # bounded by the producers (top-K by bytes per cycle), never per-flow.
+    "cloud_flow_pair":        (ModalityClass.PASSIVE_FLOW,     ObserverType.FLOW_EXPORTER, EntityType.CLOUD_RESOURCE),
     # WAF BLOCKs aggregated per (web ACL, rule) — the "our own WAF rule is
     # eating legitimate traffic" evidence class; joins CloudTrail rule changes.
     "cloud_waf_log":          (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),

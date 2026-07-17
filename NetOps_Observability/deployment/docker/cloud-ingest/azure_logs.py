@@ -15,6 +15,8 @@ Lanes (each env-gated, off when unconfigured — honest, never fabricated):
              parsed) → the SAME canonical kinds the AWS VPC flow lane emits:
                flowState D  → cloud_flow_log   (bounded deny rollup)
                B/C/E bytes  → cloud_flow_volume (per-NIC accept volume rollup)
+                            → cloud_flow_pair   (top-K (src,dst) accept pairs,
+                              #9 service-dependency talks_to edges)
   lb_access  ApplicationGatewayAccessLog / FrontDoorAccessLog containers
              → cloud_lb_log — LB-plane 5xx rollup (mirror of the ALB lane)
   waf        ApplicationGatewayFirewallLog / FrontDoorWebApplicationFirewallLog
@@ -93,6 +95,10 @@ SUBSCRIPTION = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
 # per scan; when exceeded the LARGEST counts win and the drop is reported by
 # the caller's log line, never silent.
 MAX_ROLLUP_KEYS = 200
+# Peer-pair volume bound (#9 service dependency map): at most this many
+# (src,dst) ACCEPT pairs per scan cycle, largest bytes win. Shared knob name
+# across the AWS/Azure/GCP flow lanes.
+PAIR_TOP_K = int(os.environ.get("CLOUD_FLOW_PAIR_TOP_K", "20"))
 _LIST_PAGE = 500       # maxresults per list call
 _LIST_MAX_PAGES = 8    # listing ceiling per container per cycle (bounded IO)
 _READ_MAX_BYTES = 32 * 1024 * 1024  # per-blob per-cycle read ceiling
@@ -304,6 +310,9 @@ def vnet_flow_rollups(records: list[dict]) -> list[dict]:
         honest magnitude; the AWS lane's per-record value is its bytes field).
       * allowed tuples (B/C/E)      → cloud_flow_volume, one per NIC MAC;
         value = total bytes both directions (mirror of vpc_accept_rollup).
+      * allowed tuples, peer kept   → cloud_flow_pair, top PAIR_TOP_K (src,dst)
+        pairs by bytes per scan (#9 talks_to edges — mirror of vpc_pair_rollup;
+        the per-NIC volume rollup deliberately loses who talks to whom).
 
     Entity is the NIC (macAddress — the blob's own partition key, the ENI
     analog); the target VNet/subnet ARM id rides attrs + entity_tokens for
@@ -311,6 +320,7 @@ def vnet_flow_rollups(records: list[dict]) -> list[dict]:
     """
     deny: dict[tuple[str, str], dict] = {}
     accept: dict[str, dict] = {}
+    pair: dict[tuple[str, str], dict] = {}
     for rec in records:
         flows_obj = rec.get("flowRecords")
         if not isinstance(flows_obj, dict):
@@ -342,15 +352,28 @@ def vnet_flow_rollups(records: list[dict]) -> list[dict]:
                             a["dstport"] = f[4]
                             a["proto"] = _PROTO_NAME.get(f[5], f[5])
                     elif state in ("B", "C", "E"):
+                        tup_bytes = (_int0(f[10]) if len(f) > 10 else 0) + (_int0(f[12]) if len(f) > 12 else 0)
+                        tup_pkts = (_int0(f[9]) if len(f) > 9 else 0) + (_int0(f[11]) if len(f) > 11 else 0)
                         a = accept.setdefault(mac, {
                             "bytes": 0, "packets": 0, "flows": 0,
                             "ts_ms": 0, "target": target,
                         })
-                        a["bytes"] += _int0(f[10]) + (_int0(f[12]) if len(f) > 12 else 0)
-                        a["packets"] += _int0(f[9]) + (_int0(f[11]) if len(f) > 11 else 0)
+                        a["bytes"] += tup_bytes
+                        a["packets"] += tup_pkts
                         a["flows"] += 1
                         if ts_ms > a["ts_ms"]:
                             a["ts_ms"] = ts_ms
+                        src, dst = f[1].strip(), f[2].strip()
+                        if src and dst and src != dst:
+                            p = pair.setdefault((src, dst), {
+                                "bytes": 0, "packets": 0, "flows": 0,
+                                "ts_ms": 0, "mac": mac, "target": target,
+                            })
+                            p["bytes"] += tup_bytes
+                            p["packets"] += tup_pkts
+                            p["flows"] += 1
+                            if ts_ms > p["ts_ms"]:
+                                p["ts_ms"] = ts_ms
     out: list[dict] = []
     for (mac, rule), a in _cap(deny):
         out.append({
@@ -394,6 +417,29 @@ def vnet_flow_rollups(records: list[dict]) -> list[dict]:
                 "action": "ACCEPT",
                 "flows": str(a["flows"]),
                 "packets": str(a["packets"]),
+                "target_resource_id": a["target"],
+            },
+        })
+    kept_pairs = sorted(pair.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))[:max(1, PAIR_TOP_K)]
+    for (src, dst), a in kept_pairs:
+        out.append({
+            "kind": "cloud_flow_pair",
+            "resource_id": f"{src}->{dst}",
+            "account": SUBSCRIPTION,
+            "region": REGION,
+            "severity": "info",
+            "metric_name": "flow_pair_bytes",
+            "value": float(a["bytes"]),
+            "ts": _iso_from_ms(a["ts_ms"]),
+            "entity_tokens": [t for t in (a["mac"], a["target"], src, dst) if t],
+            "attrs": {
+                "provider": "azure",
+                "srcaddr": src,
+                "dstaddr": dst,
+                "action": "ACCEPT",
+                "flows": str(a["flows"]),
+                "packets": str(a["packets"]),
+                "interface": a["mac"],
                 "target_resource_id": a["target"],
             },
         })

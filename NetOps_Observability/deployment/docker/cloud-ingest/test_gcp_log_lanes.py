@@ -135,6 +135,51 @@ def test_flow_rollup_empty_batch_is_empty():
     assert lanes.flow_volume_rollup([], PROJECT) == []
 
 
+# ── flow PAIR lane (#9 service dependency map talks_to edges) ─────────────────
+
+
+def test_flow_pair_rollup_keeps_the_peer():
+    entries = [
+        _flow_entry(bytes_sent="1000", packets="10", insert_id="a"),
+        _flow_entry(bytes_sent="500", packets="5", ts="2026-07-15T10:02:00Z", insert_id="b"),
+    ]
+    out = lanes.flow_pair_rollup(entries, PROJECT)
+    assert len(out) == 1                                  # one signal per pair, not per record
+    pair = out[0]
+    assert pair["kind"] == "cloud_flow_pair"
+    assert pair["resource_id"] == "10.0.0.5->10.0.1.9"
+    assert pair["value"] == 1500.0
+    assert pair["metric_name"] == "flow_pair_bytes"
+    assert pair["attrs"]["srcaddr"] == "10.0.0.5"
+    assert pair["attrs"]["dstaddr"] == "10.0.1.9"
+    assert pair["attrs"]["action"] == "ACCEPT" and pair["attrs"]["flows"] == "2"
+    assert pair["attrs"]["provider"] == "gcp"
+    assert pair["ts"] == "2026-07-15T10:02:00Z"           # newest window end
+    assert f"projects/{PROJECT}/zones/us-central1-a/instances/web-1" in pair["entity_tokens"]
+    assert "10.0.0.5" in pair["entity_tokens"] and "10.0.1.9" in pair["entity_tokens"]
+
+
+def test_flow_pair_rollup_is_topk_bounded_and_stamped():
+    entries = []
+    for i in range(30):
+        e = _flow_entry(bytes_sent=str(5000 - i), insert_id=str(i))
+        e["jsonPayload"]["connection"]["dest_ip"] = f"10.0.9.{i}"
+        entries.append(e)
+    out = lanes.flow_pair_rollup(entries, PROJECT, top_k=4)
+    assert len(out) == 4                                  # bounded, largest bytes win
+    assert [e["value"] for e in out] == [5000.0, 4999.0, 4998.0, 4997.0]
+    # truncation is observable, never silent (§10)
+    assert all(e["attrs"]["rollup_truncated"] == "26" for e in out)
+
+
+def test_flow_pair_rollup_skips_missing_or_self_peers():
+    no_conn = _flow_entry(insert_id="a")
+    del no_conn["jsonPayload"]["connection"]
+    self_talk = _flow_entry(insert_id="b")
+    self_talk["jsonPayload"]["connection"]["dest_ip"] = "10.0.0.5"
+    assert lanes.flow_pair_rollup([no_conn, self_talk], PROJECT) == []
+
+
 # ── firewall lane (the GCP REJECT lane) ───────────────────────────────────────
 
 
@@ -370,6 +415,19 @@ def test_poll_log_lanes_lb_batch_feeds_both_rollups(monkeypatch):
     assert n == 2
     kinds = {ev["kind"] for _, ev in prod.sent}
     assert kinds == {"cloud_lb_log", "cloud_waf_log"}    # one fetch, two matrix rows
+
+
+def test_poll_log_lanes_flow_batch_feeds_volume_and_pairs(monkeypatch):
+    monkeypatch.setattr(gcp, "GCP_VPC_FLOW_LOGS", True)
+    monkeypatch.setattr(gcp, "PROJECT", PROJECT)
+    entries = [_flow_entry(insert_id="a")]
+    monkeypatch.setattr(gcp, "list_log_entries",
+                        lambda *a, **k: (entries, "2026-07-15T10:01:00Z", ["a"]))
+    prod, st = _FakeProducer(), {}
+    n = gcp.poll_log_lanes("tok", prod, "t1", st, "2026-07-15T09:45:00Z")
+    assert n == 2
+    kinds = {ev["kind"] for _, ev in prod.sent}
+    assert kinds == {"cloud_flow_volume", "cloud_flow_pair"}  # one fetch, peer kept (#9)
 
 
 def test_poll_log_lanes_one_bad_lane_never_kills_the_rest(monkeypatch):
