@@ -720,7 +720,10 @@ func chScopeFor(tenant string, cross bool) string {
 	return t
 }
 
-func chTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000") }
+// chTime renders a DateTime64(3) insert value as UTC epoch milliseconds — a
+// scaled-integer Unix timestamp ClickHouse can never re-interpret in the
+// server/column timezone (log-time standard S4/R1).
+func chTime(t time.Time) int64 { return t.UTC().UnixMilli() }
 
 func chStringList(vals []string) string {
 	out := make([]string, 0, len(vals))

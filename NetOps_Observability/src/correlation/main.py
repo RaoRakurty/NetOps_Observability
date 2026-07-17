@@ -392,7 +392,8 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
         top_entity = wa["entities"].most_common(1)
         rows.append({
             "tenant_id": tenant,
-            "window_start": window_start.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            # Epoch-ms scaled-integer insert (S4/R1) — never server-TZ dependent.
+            "window_start": int(window_start.timestamp()) * 1000 + window_start.microsecond // 1000,
             "window_s": int(elapsed),
             "raw_seen": wa["raw_seen"],
             "persisted": wa["persisted"],

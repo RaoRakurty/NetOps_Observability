@@ -112,7 +112,7 @@ func insertObservations(ctx context.Context, obs []appid.ApplicationObservation)
 	for _, o := range obs {
 		rows = append(rows, map[string]any{
 			"tenant_id": o.TenantID, "observation_id": o.ObservationID,
-			"event_time":  o.EventTime.UTC().Format("2006-01-02 15:04:05.000"),
+			"event_time":  o.EventTime.UTC().UnixMilli(), // epoch-ms scaled insert (S4/R1)
 			"source_type": o.SourceType, "vendor": o.Vendor, "product": o.Product, "device": o.Device,
 			"parser_version": o.ParserVersion, "flow_id": o.FlowID, "session_id": o.SessionID,
 			"src_ip": o.SrcIP, "dst_ip": o.DstIP, "src_port": o.SrcPort, "dst_port": o.DstPort, "proto": o.Proto,
@@ -159,7 +159,7 @@ func insertIdentities(ctx context.Context, ids []appid.FusedIdentity) error {
 		alts, _ := json.Marshal(fi.Alternatives)
 		rows = append(rows, map[string]any{
 			"tenant_id": fi.TenantID, "fusion_id": fi.FusionID,
-			"fused_at": fi.FusedAt.UTC().Format("2006-01-02 15:04:05.000"),
+			"fused_at": fi.FusedAt.UTC().UnixMilli(), // epoch-ms scaled insert (S4/R1)
 			"flow_id":  fi.Scope.FlowID, "session_id": fi.Scope.SessionID, "workload_id": fi.Scope.WorkloadID,
 			"correlation_id": fi.Scope.CorrelationID, "src_ip": fi.Scope.SrcIP, "dst_ip": fi.Scope.DstIP,
 			"dst_port": fi.Scope.DstPort, "proto": fi.Scope.Proto,
