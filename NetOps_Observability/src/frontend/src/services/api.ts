@@ -2389,18 +2389,18 @@ export const api = {
   // #81 P3H — the REAL cloud health / change / evidence surfaces (corr_signals +
   // the cloud correlation objects), tenant-scoped and bounded to a 24h window.
   // Empty lists when nothing landed — the UI shows its honest empty state.
-  cloudHealth: (app?: string, limit?: number, windowHours?: number) =>
-    request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number }>(`/api/cloud/health${cloudQS(app, limit, windowHours)}`),
-  cloudChanges: (app?: string, limit?: number, windowHours?: number) =>
-    request<{ changes: CloudChangeRow[]; count: number; window_hours: number }>(`/api/cloud/changes${cloudQS(app, limit, windowHours)}`),
-  cloudEvidence: (app?: string, limit?: number, windowHours?: number) =>
+  cloudHealth: (app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage) =>
+    request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number; next_cursor?: string }>(`/api/cloud/health${cloudQS(app, limit, windowHours, extra)}`),
+  cloudChanges: (app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage) =>
+    request<{ changes: CloudChangeRow[]; count: number; window_hours: number; next_cursor?: string }>(`/api/cloud/changes${cloudQS(app, limit, windowHours, extra)}`),
+  cloudEvidence: (app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage) =>
     request<{
       objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[];
       // count = the TRUE ledger size; returned = this page; open_object_count =
       // a dedicated COUNT of open investigations (audit D-P1-7 / D-P2-13).
       count: number; returned?: number; open_object_count?: number;
-      objects_truncated?: boolean; window_hours: number;
-    }>(`/api/cloud/evidence${cloudQS(app, limit, windowHours)}`),
+      objects_truncated?: boolean; window_hours: number; next_cursor?: string;
+    }>(`/api/cloud/evidence${cloudQS(app, limit, windowHours, extra)}`),
 
   // ---- Cloud Connectors: the done 7-step onboarding API (Wave 1 #3) ----
   // Every call is tenant-scoped server-side (owner from the token, never the body).
@@ -2439,7 +2439,7 @@ export const api = {
 };
 
 // shared query string for the cloud signal surfaces (optional app + limit).
-function cloudQS(app?: string, limit?: number, windowHours?: number): string {
+function cloudQS(app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage): string {
   const p = new URLSearchParams();
   if (app) p.set("app", app);
   if (limit) p.set("limit", String(limit));
@@ -2447,8 +2447,27 @@ function cloudQS(app?: string, limit?: number, windowHours?: number): string {
   // honored value back in window_hours. Only sent when it differs from the 24h
   // default, so existing callers keep byte-identical requests.
   if (windowHours && windowHours !== 24) p.set("window_hours", String(windowHours));
+  // Scale-out (Wave 3 #10): server-side search + keyset cursor. Both optional
+  // and omitted when empty, so existing callers keep byte-identical requests.
+  if (extra?.q) p.set("q", extra.q);
+  if (extra?.cursor) p.set("cursor", extra.cursor);
   const qs = p.toString();
   return qs ? `?${qs}` : "";
+}
+
+// Wave 3 #10 — the shared paging/search params of the three signal surfaces.
+export type CloudSignalPage = { q?: string; cursor?: string };
+
+// The relative export path for a signal surface (?format=csv|json) — the SAME
+// query the table read uses (tenant scope enforced server-side), so an export
+// can never show more than the table could. Fetched with the auth header by
+// downloadCloudExport (a bare <a href> would arrive tokenless and 401).
+export function cloudSignalExportPath(
+  surface: "health" | "changes" | "evidence", format: "csv" | "json",
+  app?: string, windowHours?: number, extra?: CloudSignalPage,
+): string {
+  const base = cloudQS(app, undefined, windowHours, extra);
+  return `/api/cloud/${surface}${base ? base + "&" : "?"}format=${format}`;
 }
 
 // Multi-value server-side scope filters for /api/cloud/resources (Wave 2 #5 —

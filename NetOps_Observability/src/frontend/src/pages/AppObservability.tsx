@@ -48,8 +48,11 @@ import type {
 } from "./appobs/types";
 import {
   loadApps, loadResources, loadCoverage, loadHealthSignals, loadChangeEvents, loadEvidence,
+  loadHealthPage, loadChangesPage, downloadCloudExport,
   invalidateCloudInventory, NOT_MEASURED,
 } from "./appobs/api";
+import { sqFromHash, hashWithSq, listViews, saveView, deleteView } from "./appobs/signalPage";
+import { getActiveScope } from "../services/api";
 import type { CloudRcaObject } from "./appobs/api";
 import { signatureNocTitle } from "../components/rca/labels";
 import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES } from "./appobs/attribution";
@@ -1003,20 +1006,17 @@ function HCTimeline({ health, changes, minutes, staleHint }: {
   );
 }
 
-async function loadHealthChanges(windowHours: number): Promise<{ health: HealthSignal[]; changes: ChangeEvent[] }> {
-  const [health, changes] = await Promise.all([
-    loadHealthSignals(undefined, windowHours), loadChangeEvents(undefined, windowHours),
-  ]);
-  return { health, changes };
-}
-
 // The cloud signal feed with an explicit freshness stamp + an operator refresh.
 // `loadedAt` is what makes the "live · updated Ns ago" cue truthful: it is set
 // only on a SUCCESSFUL fetch, so a failing refresh can never age-reset the label
 // and make stale data look fresh. `windowHours` is the REAL server read window
 // (Wave 2 #5): changing it refetches — never a re-labeled stale set.
-function useCloudFeed(windowHours: number) {
+// Wave 3 #10: `q` narrows the SERVER read (?q=), and each surface pages by its
+// keyset cursor — "Load more" APPENDS the next page; changing window/search
+// resets to page one.
+function useCloudFeed(windowHours: number, q: string) {
   const [data, setData] = useState<{ health: HealthSignal[]; changes: ChangeEvent[] } | null>(null);
+  const [cursors, setCursors] = useState({ health: "", changes: "" });
   const [status, setStatus] = useState<LoadState>("loading");
   const [loadedAt, setLoadedAt] = useState<number>(() => Date.now());
   const [busy, setBusy] = useState(false);
@@ -1024,20 +1024,164 @@ function useCloudFeed(windowHours: number) {
   useEffect(() => {
     let live = true;
     if (nonce > 0) setBusy(true);
-    loadHealthChanges(windowHours).then(
-      (d) => { if (!live) return; setData(d); setStatus("ready"); setLoadedAt(Date.now()); setBusy(false); },
+    Promise.all([
+      loadHealthPage(undefined, windowHours, q, ""),
+      loadChangesPage(undefined, windowHours, q, ""),
+    ]).then(
+      ([h, c]) => {
+        if (!live) return;
+        setData({ health: h.rows, changes: c.rows });
+        setCursors({ health: h.nextCursor, changes: c.nextCursor });
+        setStatus("ready"); setLoadedAt(Date.now()); setBusy(false);
+      },
       () => { if (!live) return; setStatus("error"); setBusy(false); },
     );
     return () => { live = false; };
-  }, [nonce, windowHours]);
-  return { data, status, loadedAt, busy, refresh: () => setNonce((n) => n + 1) };
+  }, [nonce, windowHours, q]);
+  const loadMore = async () => {
+    setBusy(true);
+    try {
+      const [h, c] = await Promise.all([
+        cursors.health ? loadHealthPage(undefined, windowHours, q, cursors.health) : Promise.resolve(null),
+        cursors.changes ? loadChangesPage(undefined, windowHours, q, cursors.changes) : Promise.resolve(null),
+      ]);
+      setData((d) => d && {
+        health: h ? [...d.health, ...h.rows] : d.health,
+        changes: c ? [...d.changes, ...c.rows] : d.changes,
+      });
+      setCursors((cur) => ({
+        health: h ? h.nextCursor : cur.health,
+        changes: c ? c.nextCursor : cur.changes,
+      }));
+      setLoadedAt(Date.now());
+    } catch {
+      // the loaded pages stay; the operator can retry — never silently reset
+    } finally {
+      setBusy(false);
+    }
+  };
+  return {
+    data, status, loadedAt, busy, loadMore,
+    hasMore: !!(cursors.health || cursors.changes),
+    refresh: () => setNonce((n) => n + 1),
+  };
+}
+
+// ── Wave 3 #10 toolbar: server-side search · export · saved views ────────────
+
+// The `sq` search term, URL-backed like every other filter on this page: a
+// pasted link reproduces the same narrowed table, and hashchange (scope bar,
+// saved views) is the single source of truth.
+function useSignalSearch(): [string, (t: string) => void] {
+  const [sq, setSqState] = useState(() => sqFromHash(window.location.hash));
+  useEffect(() => {
+    const on = () => setSqState(sqFromHash(window.location.hash));
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return [sq, (t: string) => { window.location.hash = hashWithSq(window.location.hash, t); }];
+}
+
+// Debounced search input: local echo types instantly, the URL (and so the
+// server read) commits 400ms after the operator stops typing.
+function SignalSearchInput({ value, onCommit }: { value: string; onCommit: (t: string) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => { setText(value); }, [value]);
+  useEffect(() => {
+    if (text === value) return;
+    const t = setTimeout(() => onCommit(text.trim()), 400);
+    return () => clearTimeout(t);
+  }, [text, value, onCommit]);
+  return (
+    <input className="ao-search" type="search" value={text} placeholder="Search signals (server-side)…"
+      aria-label="Search signals" onChange={(e) => setText(e.target.value)} />
+  );
+}
+
+// Named saved views: the current hash query (scope + range + search + drawer)
+// under a name, per tenant scope (signalPage.ts). Applying one restores the
+// exact URL state; every consumer re-reads via hashchange.
+function SavedViewsControl() {
+  const scope = getActiveScope();
+  const [views, setViews] = useState(() => listViews(localStorage, scope));
+  const [sel, setSel] = useState("");
+  const apply = (name: string) => {
+    setSel(name);
+    const v = listViews(localStorage, scope).find((x) => x.name === name);
+    if (!v) return;
+    const path = window.location.hash.split("?")[0];
+    window.location.hash = v.query ? `${path}?${v.query}` : path;
+  };
+  const save = () => {
+    const name = window.prompt("Save the current filters + search as a view named:");
+    if (!name) return;
+    setViews(saveView(localStorage, scope, name, window.location.hash.split("?")[1] ?? ""));
+    setSel(name.trim().slice(0, 60));
+  };
+  const remove = () => {
+    if (!sel) return;
+    setViews(deleteView(localStorage, scope, sel));
+    setSel("");
+  };
+  return (
+    <span className="ao-savedviews">
+      <select className="ao-select" aria-label="Saved views" value={sel} onChange={(e) => apply(e.target.value)}>
+        <option value="">Saved views…</option>
+        {views.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+      </select>
+      <button className="ao-btn" onClick={save} title="Save the current filters + search as a named view">Save view</button>
+      {sel && <button className="ao-btn" onClick={remove} title={`Delete the saved view "${sel}"`}>Delete</button>}
+    </span>
+  );
+}
+
+// Export buttons: the download is the SAME tenant-scoped, filtered server read
+// as the table (?format= on the signal surface), capped server-side at 5000
+// rows — never a client-side dump of whatever happened to be loaded.
+function ExportButtons({ surfaces, windowHours, q }: {
+  surfaces: ("health" | "changes" | "evidence")[]; windowHours: number; q: string;
+}) {
+  const [err, setErr] = useState("");
+  const run = (surface: "health" | "changes" | "evidence", format: "csv" | "json") =>
+    downloadCloudExport(surface, format, undefined, windowHours, q)
+      .then(() => setErr(""), (e: unknown) => setErr(e instanceof Error ? e.message : "export failed"));
+  return (
+    <span className="ao-export">
+      {surfaces.map((s) => (
+        <span key={s} className="ao-export-g">
+          <button className="ao-btn" onClick={() => run(s, "csv")} title={`Download the ${s} table (current search + window, server-side, up to 5000 rows) as CSV`}>
+            {surfaces.length > 1 ? `${s} CSV` : "Export CSV"}
+          </button>
+          <button className="ao-btn" onClick={() => run(s, "json")} title={`Download the ${s} table (current search + window, server-side, up to 5000 rows) as JSON`}>
+            {surfaces.length > 1 ? `${s} JSON` : "JSON"}
+          </button>
+        </span>
+      ))}
+      {err && <span className="ao-muted" role="alert">{err}</span>}
+    </span>
+  );
+}
+
+function SignalToolbar({ surfaces, windowHours, sq, setSq }: {
+  surfaces: ("health" | "changes" | "evidence")[]; windowHours: number;
+  sq: string; setSq: (t: string) => void;
+}) {
+  return (
+    <div className="ao-signal-toolbar" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <SignalSearchInput value={sq} onCommit={setSq} />
+      <ExportButtons surfaces={surfaces} windowHours={windowHours} q={sq} />
+      <SavedViewsControl />
+    </div>
+  );
 }
 
 function HealthChanges({ view, ctl }: { view: "timeline" | "alerts" | "changes"; ctl: CloudScopeControl }) {
   // The GLOBAL range (URL-backed, Wave 2 #5): sub-24h ranges narrow client-side
   // inside the fetched window; >24h changes the server read (windowHoursFor).
   const minutes = ctl.scope.rangeMinutes;
-  const feed = useCloudFeed(windowHoursFor(minutes));
+  // Wave 3 #10: URL-backed server-side search narrows the read for all views.
+  const [sq, setSq] = useSignalSearch();
+  const feed = useCloudFeed(windowHoursFor(minutes), sq);
   // The unfiltered inventory backs the signal→scope join (account/region/env
   // live on the resource, not the signal). Shared 30s-TTL read — no new fetch
   // beyond what the shell already did.
@@ -1087,6 +1231,8 @@ function HealthChanges({ view, ctl }: { view: "timeline" | "alerts" | "changes";
       <FeedBar minutes={minutes} onRange={ctl.setRangeMinutes} count={count}
         loadedAt={feed.loadedAt} onRefresh={feed.refresh} busy={feed.busy}
         label={`${view === "alerts" ? "Alerts" : view === "changes" ? "Changes" : "Timeline"} time range`} />
+      <SignalToolbar windowHours={windowHoursFor(minutes)} sq={sq} setSq={setSq}
+        surfaces={view === "alerts" ? ["health"] : view === "changes" ? ["changes"] : ["health", "changes"]} />
       {view === "timeline" && <HCTimeline health={health} changes={changes} minutes={minutes} staleHint={emptyHint("cloud events")} />}
       {view === "alerts" && (
         <div className="ao-panel">
@@ -1132,6 +1278,15 @@ function HealthChanges({ view, ctl }: { view: "timeline" | "alerts" | "changes";
               { key: "sym", header: "Related symptoms", width: 180, sortValue: (r) => r.relatedSymptoms.length, render: (r) => r.relatedSymptoms.length ? r.relatedSymptoms.join(", ") : DASH },
             ]} />
           )}
+        </div>
+      )}
+      {/* Keyset pagination (#10): the server said there are more rows in the
+          window than the loaded pages — APPEND the next page, never re-read. */}
+      {feed.hasMore && (
+        <div className="ao-panel-meta" style={{ textAlign: "center" }}>
+          <button className="ao-btn" onClick={feed.loadMore} disabled={feed.busy}>
+            {feed.busy ? "Loading…" : "Load more"}
+          </button>
         </div>
       )}
       {alertSel && <HealthSignalDrawer s={alertSel} onClose={() => setAlertSel(null)} sevTone={sevTone} />}
@@ -1345,17 +1500,41 @@ function Evidence({ openInvestigation, ctl }: {
   // REAL range window (Wave 2 #5): the ledger read carries ?window_hours=.
   const minutes = ctl.scope.rangeMinutes;
   const wh = windowHoursFor(minutes);
-  const { data, status } = useAsync(() => loadEvidence(undefined, wh), [wh]);
+  // Wave 3 #10: URL-backed server-side search + keyset "Load more". Follow-on
+  // pages APPEND under the first (gap rows ride the first page only, server-
+  // side); changing window/search resets the accumulation.
+  const [sq, setSq] = useSignalSearch();
+  const { data, status } = useAsync(() => loadEvidence(undefined, wh, sq), [wh, sq]);
+  const [more, setMore] = useState<{ rows: EvidenceRow[]; cursor: string } | null>(null);
+  const [moreBusy, setMoreBusy] = useState(false);
+  useEffect(() => { setMore(null); }, [wh, sq]);
   // unfiltered inventory backs the finding→scope join (see scope.ts header).
   const invq = useAsync(() => loadResources(), []);
   if (status === "loading") return <TableSkeleton />;
   if (status === "error" || !data) return <LoadError what="the evidence ledger" />;
-  const all = data.rows;
+  const all = [...data.rows, ...(more?.rows ?? [])];
+  const nextCursor = more ? more.cursor : data.nextCursor;
+  const loadMore = async () => {
+    setMoreBusy(true);
+    try {
+      const b = await loadEvidence(undefined, wh, sq, nextCursor);
+      setMore((m) => ({ rows: [...(m?.rows ?? []), ...b.rows], cursor: b.nextCursor }));
+    } catch {
+      // loaded pages stay; the operator can retry
+    } finally {
+      setMoreBusy(false);
+    }
+  };
   if (all.length === 0) {
     return (
-      <div className="ao-panel">
-        <EmptyState title={`No findings in the ${rangeWords(wh * 60)}`}
-          hint="findings appear when the engine grounds a cloud signal into an investigation — check Data sources if no cloud signals are landing at all" />
+      <div className="ao-stack">
+        <SignalToolbar surfaces={["evidence"]} windowHours={wh} sq={sq} setSq={setSq} />
+        <div className="ao-panel">
+          <EmptyState title={sq ? `No findings match “${sq}” in the ${rangeWords(wh * 60)}` : `No findings in the ${rangeWords(wh * 60)}`}
+            hint={sq
+              ? "the search runs server-side over the full window — clear it to see every finding"
+              : "findings appear when the engine grounds a cloud signal into an investigation — check Data sources if no cloud signals are landing at all"} />
+        </div>
       </div>
     );
   }
@@ -1384,6 +1563,7 @@ function Evidence({ openInvestigation, ctl }: {
     (!f.app || e.app === f.app));
   return (
     <div className="ao-stack">
+      <SignalToolbar surfaces={["evidence"]} windowHours={wh} sq={sq} setSq={setSq} />
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
           { key: "app", label: "Service", options: [...new Set(inScope.map((e) => e.app))].map((a) => ({ value: a, label: a })) },
@@ -1415,6 +1595,13 @@ function Evidence({ openInvestigation, ctl }: {
                 onClick={(e) => { e.stopPropagation(); openInvestigation(r.rcaGroup); }}>Open</button>
             ) : DASH },
           ]} />
+        {nextCursor && (
+          <div className="ao-panel-meta" style={{ textAlign: "center", marginTop: 6 }}>
+            <button className="ao-btn" onClick={loadMore} disabled={moreBusy}>
+              {moreBusy ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        )}
       </div>
       {sel && (
         <EvidenceDrawer title={`${sel.signalType} · ${sel.app}`} subtitle={<span className="ao-drawer-badges"><EvidenceCategoryBadge category={sel.category} /><ConfidenceBadge level={sel.confidence} /></span>} onClose={() => setSel(null)}>

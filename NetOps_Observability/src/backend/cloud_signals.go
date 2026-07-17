@@ -911,6 +911,15 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	format, ferr := exportFormat(r)
+	if ferr != nil {
+		writeError(w, http.StatusBadRequest, ferr)
+		return
+	}
+	if format != "" {
+		// An export means "everything in the filter", bounded — not one page.
+		limit = clampExportLimit(r.URL.Query().Get("limit"))
+	}
 	// Resolve each signal's raw resource id → the clean resource NAME + its owning
 	// app from the tenant-scoped inventory, exactly like handleCloudChanges. Health
 	// signals are stamped on a raw provider id (an ARM path, an instance id); the
@@ -964,9 +973,12 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 		last := rows[len(rows)-1]
 		next = nextSignalCursor(last.TS, last.SignalID, len(rows), limit)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"signals": out, "count": len(out), "window_hours": window, "next_cursor": next,
-	})
+	body := map[string]any{"signals": out, "count": len(out), "window_hours": window, "next_cursor": next}
+	if format != "" {
+		writeSignalExport(w, "health", format, healthExportHeader, healthExportRows(out), body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleCloudChanges serves GET /api/cloud/changes — the provider-audited change
@@ -986,6 +998,14 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 	q, curTS, curID, ok := parseSignalPage(w, r)
 	if !ok {
 		return
+	}
+	format, ferr := exportFormat(r)
+	if ferr != nil {
+		writeError(w, http.StatusBadRequest, ferr)
+		return
+	}
+	if format != "" {
+		limit = clampExportLimit(r.URL.Query().Get("limit"))
 	}
 
 	// resource → (app, name, confidence) from the tenant-scoped cloud inventory,
@@ -1059,9 +1079,12 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		last := rows[len(rows)-1]
 		next = nextSignalCursor(last.TS, last.SignalID, len(rows), limit)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"changes": out, "count": len(out), "window_hours": window, "next_cursor": next,
-	})
+	body := map[string]any{"changes": out, "count": len(out), "window_hours": window, "next_cursor": next}
+	if format != "" {
+		writeSignalExport(w, "changes", format, changeExportHeader, changeExportRows(out), body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleCloudEvidence serves GET /api/cloud/evidence — the evidence ledger of the
@@ -1085,6 +1108,14 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	q, curTS, curID, pok := parseSignalPage(w, r)
 	if !pok {
 		return
+	}
+	format, ferr := exportFormat(r)
+	if ferr != nil {
+		writeError(w, http.StatusBadRequest, ferr)
+		return
+	}
+	if format != "" {
+		limit = clampExportLimit(r.URL.Query().Get("limit"))
 	}
 	scope := safeScopeLiteral(chTenantScope(r))
 
@@ -1198,7 +1229,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 	// object count is a dedicated COUNT so the Active tile can never be capped
 	// by the 10-object evidence join (audit D-P1-7).
 	openCount := chScalarInt(cloudOpenObjectCountSQL(window, appPred, scope))
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"objects":           objects,
 		"evidence":          evidence,
 		"count":             totalGrounded + gaps,
@@ -1207,7 +1238,12 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		"objects_truncated": openCount > len(objects),
 		"window_hours":      window,
 		"next_cursor":       nextCursor,
-	})
+	}
+	if format != "" {
+		writeSignalExport(w, "evidence", format, evidenceExportHeader, evidenceExportRows(evidence), body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // cloudAppsForObject names the applications an object affects. The engine names

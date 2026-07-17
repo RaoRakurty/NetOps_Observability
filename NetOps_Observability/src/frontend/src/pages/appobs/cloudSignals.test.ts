@@ -171,13 +171,13 @@ describe("loadEvidence", () => {
     const { objects, rows } = await loadEvidence("store-api");
     expect(objects).toEqual([]);
     expect(rows).toEqual([]);
-    expect(cloudEvidence).toHaveBeenCalledWith("store-api", undefined, undefined);
+    expect(cloudEvidence).toHaveBeenCalledWith("store-api", undefined, undefined, undefined);
   });
 
   it("threads the REAL range window to the ledger read (Wave 2 #5)", async () => {
     cloudEvidence.mockResolvedValue({ objects: [], evidence: [] });
     await loadEvidence(undefined, 168);
-    expect(cloudEvidence).toHaveBeenCalledWith(undefined, undefined, 168);
+    expect(cloudEvidence).toHaveBeenCalledWith(undefined, undefined, 168, undefined);
   });
 });
 
