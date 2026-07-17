@@ -131,6 +131,7 @@ type server struct {
 	aiToolBudget        *aiDailyBudget           // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg          *copilotConfigStore
 	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
+	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
@@ -565,6 +566,7 @@ func newServer() *server {
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
+	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
@@ -1056,6 +1058,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/copilot/config", s.handleCopilotConfig)
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
+	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
 	mux.HandleFunc("/api/ai/tenant-config", s.handleAITenantConfig)
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)

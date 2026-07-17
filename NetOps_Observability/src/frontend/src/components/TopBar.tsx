@@ -3,7 +3,8 @@ import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../servic
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import { usePrefs } from "../theme/prefs";
-import { useTzMode, setTzMode, tzLabel } from "../lib/time";
+import { BRAND } from "../brand";
+import eyeIris from "../assets/brand/eye-iris.webp";
 import Icon from "./Icon";
 import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
@@ -42,7 +43,6 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
   const { appearance, setAppearance } = usePrefs();
-  const tz = useTzMode();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
@@ -135,6 +135,13 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
   return (
     <header className="topbar">
+      {/* Brand wordmark (owner 2026-07-17): the login screen's C[iris]RRELIX,
+          compact, anchoring the product identity top-left on every page. */}
+      <div className="topbar-brand" aria-label={BRAND} role="img">
+        <span aria-hidden="true">C</span>
+        <span aria-hidden="true" className="topbar-brand-eye"><img src={eyeIris} alt="" /></span>
+        <span aria-hidden="true">RRELIX</span>
+      </div>
       <div className="topbar-right">
         <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
           <span className="omni-icon"><Icon name="search" size={14} /></span>
@@ -200,29 +207,9 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
           <option value="__add">＋ Add preset…</option>
         </select>
 
-        {/* Time-display knob — every timestamp in the product renders in the
-            zone chosen here and is labeled with it ("PDT (UTC−7)" vs "UTC").
-            Persisted in localStorage (lib/time.ts); storage stays UTC. */}
-        <div className="mode-toggle" role="group" aria-label="Time display">
-          <button
-            type="button"
-            className={tz === "local" ? "on" : ""}
-            aria-pressed={tz === "local"}
-            onClick={() => setTzMode("local")}
-            title={`Show times in your local time — ${tzLabel("local")}`}
-          >
-            {tzLabel("local")}
-          </button>
-          <button
-            type="button"
-            className={tz === "utc" ? "on" : ""}
-            aria-pressed={tz === "utc"}
-            onClick={() => setTzMode("utc")}
-            title="Show times in Coordinated Universal Time"
-          >
-            UTC
-          </button>
-        </div>
+        {/* Time display (Local/UTC) moved to Settings → a per-TENANT persisted
+            preference (owner 2026-07-17): every user of the tenant reads the
+            same zone; storage stays UTC (lib/time.ts still renders it). */}
 
         {/* Appearance knob — mirrors the login page's Dark/Light pill; both
             read/write the same preference so the two screens stay in sync. */}

@@ -1475,6 +1475,14 @@ const ccnPath = (id: string, action = ""): string =>
   `/api/cloud/connectors/${encodeURIComponent(id)}${action ? "/" + action : ""}`;
 
 export const api = {
+  // ---- tenant display preferences (Wave 4 #11: time display, per-tenant) ----
+  getDisplaySettings: () =>
+    request<{ tenant_id: string; time_display: "local" | "utc" }>("/api/settings/display"),
+  setDisplaySettings: (timeDisplay: "local" | "utc") =>
+    request<{ tenant_id: string; time_display: "local" | "utc" }>("/api/settings/display", {
+      method: "PUT", body: JSON.stringify({ time_display: timeDisplay }),
+    }),
+
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
   // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin.

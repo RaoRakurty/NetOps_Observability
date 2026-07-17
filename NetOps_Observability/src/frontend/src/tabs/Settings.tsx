@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ExportPolicyForm, LANDING_OPTIONS } from "./admin";
 import { api } from "../services/api";
 import Icon from "../components/Icon";
+import { setTzMode, tzLabel } from "../lib/time";
 import { useAuth } from "../hooks/useAuth";
 import SystemNetworkCard from "../pages/SystemNetwork";
 
@@ -63,6 +64,67 @@ function DefaultLandingCard() {
   );
 }
 
+// Time display — the Local/UTC rendering mode, moved here off the top bar
+// (owner 2026-07-17): a per-TENANT persisted, audited preference. Every user
+// of the tenant reads timestamps in the zone chosen here; storage stays UTC.
+// Applies immediately (setTzMode) — no reload, every rendered time re-labels.
+function TimeDisplayCard() {
+  const [mode, setMode] = useState<"local" | "utc">("local");
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+
+  useEffect(() => {
+    api.getDisplaySettings()
+      .then((r) => setMode(r.time_display === "utc" ? "utc" : "local"))
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  const onChange = async (next: "local" | "utc") => {
+    setErr(null); setSaved(false);
+    const prev = mode;
+    setMode(next); // optimistic
+    try {
+      await api.setDisplaySettings(next);
+      setTzMode(next); // re-render every timestamp now
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setMode(prev);
+      setErr((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--surface-2)", display: "grid", placeItems: "center" }}>
+        <Icon name="sliders" size={20} />
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700 }}>Time display</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          How every timestamp renders for this tenant — your local zone ({tzLabel("local")}) or UTC.
+          Storage is always UTC; only display changes. Admin-set, applies to all of the tenant&apos;s users.
+          {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+          {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+        </div>
+      </div>
+      <select
+        className="app-select"
+        value={mode}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value as "local" | "utc")}
+        aria-label="Time display"
+        style={{ minWidth: 200 }}
+      >
+        <option value="local">Local — {tzLabel("local")}</option>
+        <option value="utc">UTC</option>
+      </select>
+    </div>
+  );
+}
+
 // Administration → Settings. Trimmed (C1/C2/C3):
 //   - the redundant per-integration credentials table is gone — each connector
 //     shows its own status under Integrations / Notifications;
@@ -86,6 +148,9 @@ export default function Settings() {
 
       {/* Default landing page — the platform-wide post-login page. */}
       <DefaultLandingCard />
+
+      {/* Time display (Local/UTC) — per-tenant, persisted, audited. */}
+      <TimeDisplayCard />
 
       {/* DNS + NTP — two boxes (Configure → popup), platform-owner only. */}
       {platformAdmin && <SystemNetworkCard />}
