@@ -211,6 +211,26 @@ func builtinSNMPProfiles() []SNMPProfile {
 			})},
 		paloAltoCloudGenix(),
 
+		// ---- load balancers ----
+		// F5 BIG-IP (F5-BIGIP-SYSTEM-MIB + F5-BIGIP-LOCAL-MIB). BIG-IP serves the
+		// full standard IF-MIB/ENTITY floor (std blocks cover ports/inventory);
+		// the enterprise OIDs add LB health (pool/member/VIP availability,
+		// connections, memory) + trunk (LAG) membership for the Port-Intelligence
+		// lane. Transceiver DOM is NOT exposed via BIG-IP SNMP (tmsh/iHealth
+		// only) — a known, honest gap. Verify enterprise OIDs against a live
+		// BIG-IP MIB dump before production trust (no F5 in the lab).
+		{ID: "f5-bigip", Vendor: "F5 BIG-IP", Category: "load_balancer", SysObjectIDPrefix: "1.3.6.1.4.1.3375", Builtin: true,
+			Description: "F5 BIG-IP (LTM). Standard MIBs cover interfaces/inventory; enterprise OIDs add pool/member/virtual-server availability, client connections, memory, and trunk (LAG) membership. Transceiver DOM is not exposed via SNMP on BIG-IP.",
+			Metrics: std([]SNMPMetric{
+				mc("sysStatClientCurConns", "1.3.6.1.4.1.3375.2.1.1.2.1.8.0", "gauge", "connections", "F5-BIGIP-SYSTEM-MIB", "Capacity"),
+				mc("sysStatMemoryTotal", "1.3.6.1.4.1.3375.2.1.1.2.1.44.0", "gauge", "bytes", "F5-BIGIP-SYSTEM-MIB", "Memory"),
+				mc("sysStatMemoryUsed", "1.3.6.1.4.1.3375.2.1.1.2.1.45.0", "gauge", "bytes", "F5-BIGIP-SYSTEM-MIB", "Memory"),
+				mc("sysTrunkTable", "1.3.6.1.4.1.3375.2.1.2.12.1.2", "table", "", "F5-BIGIP-SYSTEM-MIB", "Capacity"),
+				mc("ltmPoolStatServerCurConns", "1.3.6.1.4.1.3375.2.2.5.2.3.1.8", "table", "connections", "F5-BIGIP-LOCAL-MIB", "Capacity"),
+				mc("ltmPoolMbrStatusAvailState", "1.3.6.1.4.1.3375.2.2.5.5.2.1.5", "table", "", "F5-BIGIP-LOCAL-MIB", "System"),
+				mc("ltmVsStatusAvailState", "1.3.6.1.4.1.3375.2.2.10.13.2.1.2", "table", "", "F5-BIGIP-LOCAL-MIB", "System"),
+			})},
+
 		// ---- additional switch / router / SD-WAN vendors ----
 		// Standard-MIB-safe baseline (IF-MIB/ENTITY-SENSOR/HOST-RESOURCES cover
 		// interfaces/CPU/mem/sensors on all three); enterprise + controller-API

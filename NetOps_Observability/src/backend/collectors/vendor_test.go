@@ -30,7 +30,9 @@ func TestVendorFromDescr(t *testing.T) {
 		"FortiGate-100F v7.2.5":                    "fortinet",
 		"Palo Alto Networks PA-3260 series PAN-OS": "paloalto",
 		"Nokia 7750 SR TiMOS-B-22.10":              "nokia",
-		"Linux fw01 5.15.0":                        "linux",
+		// BIG-IP embeds "Linux" in sysDescr — must resolve f5, not linux.
+		"BIG-IP Virtual Edition : Linux 3.10.0 : Product BIG-IP": "f5",
+		"Linux fw01 5.15.0": "linux",
 		"Some unknown widget":                      "",
 	}
 	for descr, want := range cases {

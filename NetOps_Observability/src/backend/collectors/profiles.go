@@ -145,6 +145,15 @@ func builtinProfiles() []SNMPProfile {
 				{Name: "device_lb_pool_member_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 5, 2, 1, 5}, Table: true, IndexLabel: "pool_member"}, // ltmPoolMbrStatusAvailState
 				{Name: "device_lb_pool_cur_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 2, 3, 1, 8}, Table: true, IndexLabel: "pool"},          // ltmPoolStatServerCurConns
 				{Name: "device_lb_vs_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 10, 13, 2, 1, 2}, Table: true, IndexLabel: "virtual_server"},    // ltmVsStatusAvailState
+				// Trunk (LAG) membership — the Port-Intelligence lane (#94): a trunk
+				// whose working-member count drops below its configured count is a
+				// degraded port bundle even while the trunk stays "up". sysTrunkTable
+				// (F5-BIGIP-SYSTEM-MIB, sysTrunks .12.1.2, indexed by trunk name).
+				// Member-count column indices transcribed from the published MIB —
+				// verify against a live BIG-IP MIB dump before production trust.
+				{Name: "device_lb_trunk_status", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 2, 12, 1, 2, 1, 2}, Table: true, IndexLabel: "trunk"},          // sysTrunkStatus
+				{Name: "device_lb_trunk_cfg_members", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 2, 12, 1, 2, 1, 4}, Table: true, IndexLabel: "trunk"},     // sysTrunkCfgMbrCount
+				{Name: "device_lb_trunk_working_members", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 2, 12, 1, 2, 1, 5}, Table: true, IndexLabel: "trunk"}, // sysTrunkWorkingMbrCount
 			},
 		},
 		// Palo Alto (PAN-COMMON-MIB). NGFW health — the session table + dataplane

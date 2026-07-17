@@ -10,6 +10,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   universal: "Universal (standard MIBs)",
   router_switch: "Routers / Switches",
   firewall: "Firewalls",
+  load_balancer: "Load Balancers",
   wireless: "Wireless",
   voip: "VoIP",
   printer: "Printers",

@@ -59,6 +59,33 @@ func TestSelectProfiles(t *testing.T) {
 			t.Errorf("%s (ent %d) selection=%v", name, ent, got)
 		}
 	}
+	// F5 trunk (LAG) membership — the Port-Intelligence lane: the profile must
+	// carry trunk status + configured/working member counts, all trunk-indexed
+	// tables (a working<configured delta is a degraded bundle).
+	for _, p := range profs {
+		if p.Name != "f5" {
+			continue
+		}
+		want := map[string]bool{
+			"device_lb_trunk_status":          false,
+			"device_lb_trunk_cfg_members":     false,
+			"device_lb_trunk_working_members": false,
+		}
+		for _, m := range p.Metrics {
+			if _, ok := want[m.Name]; ok {
+				want[m.Name] = true
+				if !m.Table || m.IndexLabel != "trunk" {
+					t.Errorf("%s: Table=%v IndexLabel=%q, want table indexed by trunk", m.Name, m.Table, m.IndexLabel)
+				}
+			}
+		}
+		for name, found := range want {
+			if !found {
+				t.Errorf("f5 profile missing %s", name)
+			}
+		}
+	}
+
 	// Unknown enterprise / detection failed: generic only (the floor covers it).
 	if got = names(selectProfiles(profs, 99999, true)); !reflect.DeepEqual(got, []string{"generic"}) {
 		t.Errorf("unknown enterprise selection=%v", got)
