@@ -394,26 +394,22 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// STRICT policy (the corr_current model): an untagged path edge is
 		// platform-only, never shared into every tenant's view.
-		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_path_edges ON netops.corr_path_edges
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
-    TO ALL`,
+		chStrictRowPolicyDDL("corr_path_edges"),
 
-		chRowPolicyDDL("corr_signals"),
-		chRowPolicyDDL("corr_signals_archive"),
-		chRowPolicyDDL("corr_objects"),
-		chRowPolicyDDL("corr_edges"),
-		chRowPolicyDDL("corr_evidence"),
-		// STRICT policy (2026-07-02 model, matching init.sql's corr policies): NO
-		// untagged-shared clause — correlation intel is platform-only when
+		// STRICT policies (2026-07-02 model, matching init.sql's corr policies):
+		// NO untagged-shared clause — correlation intel is platform-only when
 		// untagged. The generic chRowPolicyDDL is the loose telemetry variant and
 		// would leak platform-global objects into every tenant's Command Center.
-		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
-    TO ALL`,
+		// CREATE OR REPLACE (not IF NOT EXISTS) so deployments that first booted
+		// before the strict init.sql are UPGRADED in place on next boot.
+		chStrictRowPolicyDDL("corr_signals"),
+		chStrictRowPolicyDDL("corr_signals_archive"),
+		chStrictRowPolicyDDL("corr_objects"),
+		chStrictRowPolicyDDL("corr_edges"),
+		chStrictRowPolicyDDL("corr_evidence"),
+		chStrictRowPolicyDDL("corr_current"),
 		// Same strict model for the write-amp rollup: a tenant may see its own
 		// storm accounting; platform-global (untagged '') rows are platform-only.
-		`CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_tenant_write_amp ON netops.corr_tenant_write_amp
-    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
-    TO ALL`,
+		chStrictRowPolicyDDL("corr_tenant_write_amp"),
 	}
 }

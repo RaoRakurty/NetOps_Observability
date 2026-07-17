@@ -23,17 +23,32 @@ import (
 // inserting connection's context, where `tenant_scope` is unset → the insert
 // ERRORS, breaking ingestion). See deployment/docker/clickhouse/init.sql.
 
+// chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = '')
+// rows are shared into every tenant's view. Correct ONLY for the shared
+// telemetry tables (flows, findings, tunnels) whose data model depends on
+// untagged rows. NEVER use it for the correlation family — see
+// chStrictRowPolicyDDL.
 func chRowPolicyDDL(table string) string {
 	return "CREATE ROW POLICY IF NOT EXISTS tenant_iso_" + table + " ON netops." + table +
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = '' TO ALL"
 }
 
-// ensureCHRowPolicies converges the telemetry row policies in the background.
-func ensureCHRowPolicies() {
-	base := envOr("CLICKHOUSE_URL", "")
-	if base == "" {
-		return // no ClickHouse configured (file/dev backend)
-	}
+// chStrictRowPolicyDDL is the STRICT tenant policy (the 2026-07-02 init.sql
+// model): NO untagged-shared clause — an untagged row is platform-only, never
+// leaked into every tenant's view. It deliberately uses CREATE OR REPLACE
+// (atomic in ClickHouse: no policyless window, unlike DROP+CREATE) so boot
+// convergence UPGRADES a pre-2026-07-02 lenient policy in place instead of
+// no-opping past it, and re-heals if /var/lib/clickhouse/access is ever reset.
+func chStrictRowPolicyDDL(table string) string {
+	return "CREATE OR REPLACE ROW POLICY tenant_iso_" + table + " ON netops." + table +
+		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
+}
+
+// chConvergeStmts is the complete, ordered boot-convergence DDL list. No
+// network IO (env-only inputs) so tests can assert over the exact statements
+// the boot path emits — e.g. that no correlation-family row policy carries
+// the lenient untagged-shared escape.
+func chConvergeStmts() []string {
 	stmts := []string{
 		"DROP VIEW IF EXISTS netops.flows_hourly",
 		// Build-order #7: tcpControlBits (IPFIX IE6) from goflow2. Vector's
@@ -66,6 +81,16 @@ func ensureCHRowPolicies() {
 	// converge-on-boot contract; init.sql carries the identical DDL for fresh
 	// installs.
 	stmts = append(stmts, pathSchemaDDL()...)
+	return stmts
+}
+
+// ensureCHRowPolicies converges the telemetry row policies in the background.
+func ensureCHRowPolicies() {
+	base := envOr("CLICKHOUSE_URL", "")
+	if base == "" {
+		return // no ClickHouse configured (file/dev backend)
+	}
+	stmts := chConvergeStmts()
 	go func() {
 		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {
