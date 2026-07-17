@@ -207,6 +207,64 @@ def vpc_flow_signal(rec: dict) -> dict | None:
     }
 
 
+def vpc_pair_rollup(records: list[dict], top_k: int = 20) -> list[dict]:
+    """ACCEPT flows from one scan batch → the top-K (src, dst) PAIR volumes
+    (cloud-platform-backlog #9): the peer-preserving sibling of vpc_accept_rollup,
+    which deliberately collapses to per-ENI totals and loses who talks to whom.
+    These pairs are what the service dependency map's talks_to edges are built
+    from — observed traffic between two addresses, volume-weighted.
+
+    BOUNDED always (P1-6 law): one signal per (src, dst) pair per batch, capped
+    at top_k pairs by bytes (largest win, deterministic order) — never one
+    signal per flow record. Entity is the pair itself ("src->dst", the probe
+    "vantage->target" convention) so every pair keeps a distinct identity;
+    tokens carry the observing ENI + both addresses for grounding. Pure: the
+    tailer owns IO, tenancy and the env-tunable top_k."""
+    agg: dict[tuple[str, str], dict] = {}
+    for rec in records:
+        if str(rec.get("action") or "").upper() != "ACCEPT":
+            continue
+        src = str(rec.get("srcaddr") or "")
+        dst = str(rec.get("dstaddr") or "")
+        if not src or not dst or src == dst:
+            continue
+        a = agg.setdefault((src, dst), {
+            "bytes": 0, "packets": 0, "flows": 0,
+            "eni": str(rec.get("interface-id") or ""),
+            "account": str(rec.get("account-id") or ""), "end": "",
+        })
+        a["bytes"] += int(str(rec.get("bytes") or "0") or 0)
+        a["packets"] += int(str(rec.get("packets") or "0") or 0)
+        a["flows"] += 1
+        end = str(rec.get("end") or "")
+        if end.isdigit() and end > a["end"]:
+            a["end"] = end
+    kept = sorted(agg.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))[:max(1, int(top_k))]
+    out: list[dict] = []
+    for (src, dst), a in kept:
+        out.append({
+            "kind": "cloud_flow_pair",
+            "resource_id": f"{src}->{dst}",
+            "account": a["account"],
+            "region": "",
+            "severity": "info",
+            "metric_name": "flow_pair_bytes",
+            "value": float(a["bytes"]),
+            "ts": _flow_ts({"end": a["end"]}),
+            "entity_tokens": [t for t in (a["eni"], src, dst) if t],
+            "attrs": {
+                "provider": "aws",
+                "srcaddr": src,
+                "dstaddr": dst,
+                "action": "ACCEPT",
+                "flows": str(a["flows"]),
+                "packets": str(a["packets"]),
+                "interface": a["eni"],
+            },
+        })
+    return out
+
+
 def vpc_accept_rollup(records: list[dict]) -> list[dict]:
     """ACCEPT flows from one scan batch → AT MOST one cloud_flow_volume signal per
     ENI (audit P1-6: discarding them made observed traffic structurally invisible).

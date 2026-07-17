@@ -8,6 +8,8 @@ same event shapes, same anti-firehose law (audit P1-6: never one event per
 record; a rollup per aggregation key per batch):
 
   vpc_flows           → cloud_flow_volume  per local instance (ACCEPT volume)
+                      → cloud_flow_pair    top-K (src,dst) pairs by bytes (#9
+                        service-dependency talks_to edges; peer kept)
   firewall DENIED     → cloud_flow_log     per (rule, disposition) — the REJECT lane
   LB `requests` 5xx   → cloud_lb_log       per (lb, status)
   LB `requests` Armor → cloud_waf_log      per (policy, rule priority) DENY
@@ -138,6 +140,68 @@ def flow_volume_rollup(entries: list[dict], project: str) -> list[dict]:
                 "action": "ACCEPT",
                 "subnetwork": a["subnet"],
                 "vpc": a["vpc"],
+            }, dropped),
+        })
+    return out
+
+
+def flow_pair_rollup(entries: list[dict], project: str, top_k: int = 20) -> list[dict]:
+    """VPC flow entries from one batch → the top-K (src, dst) PAIR volumes
+    (cloud-platform-backlog #9): the peer-preserving sibling of
+    flow_volume_rollup, which collapses to per-instance totals and loses who
+    talks to whom. GCP flow records carry the 5-tuple in
+    jsonPayload.connection (src_ip/dest_ip) — real peer data, so the GCP lane
+    emits pairs like AWS/Azure. ALL GCP flow records are accepted traffic (no
+    deny records exist — module header), so every record qualifies.
+
+    BOUNDED always: one signal per (src, dst) pair per batch, capped at top_k
+    pairs by bytes (largest win, deterministic order). Entity is the pair
+    itself ("src->dst"); tokens carry the reporter-side instance + both
+    addresses for grounding. Pure — gcp.py owns fetch, tenancy and the
+    env-tunable top_k."""
+    agg: dict[tuple[str, str], dict] = {}
+    for e in entries:
+        p = _payload(e)
+        conn = p.get("connection") or {}
+        src = str(conn.get("src_ip") or "")
+        dst = str(conn.get("dest_ip") or "")
+        if not src or not dst or src == dst:
+            continue
+        a = agg.setdefault((src, dst), {
+            "bytes": 0, "packets": 0, "flows": 0, "ts": "",
+            "region": _region(e),
+            "entity": _flow_local_entity(p, project),
+        })
+        a["bytes"] += _int(p.get("bytes_sent"))
+        a["packets"] += _int(p.get("packets_sent"))
+        a["flows"] += 1
+        end = str(p.get("end_time") or e.get("timestamp") or "")
+        if end > a["ts"]:
+            a["ts"] = end
+    kept = sorted(agg.items(), key=lambda kv: (-kv[1]["bytes"], kv[0]))[:max(1, int(top_k))]
+    dropped = max(0, len(agg) - len(kept))
+    out: list[dict] = []
+    for (src, dst), a in kept:
+        out.append({
+            "kind": "cloud_flow_pair",
+            "provider": "gcp",
+            "resource_id": f"{src}->{dst}",
+            "account": project,
+            "region": a["region"],
+            "severity": "info",
+            "metric_name": "flow_pair_bytes",
+            "value": float(a["bytes"]),
+            "ts": a["ts"],
+            "entity_tokens": [t for t in (a["entity"], src, dst) if t],
+            "attrs": _attrs({
+                "provider": "gcp",
+                "srcaddr": src,
+                "dstaddr": dst,
+                # GCP flow logs carry accepted traffic ONLY (a format fact).
+                "action": "ACCEPT",
+                "flows": str(a["flows"]),
+                "packets": str(a["packets"]),
+                "interface": a["entity"],
             }, dropped),
         })
     return out

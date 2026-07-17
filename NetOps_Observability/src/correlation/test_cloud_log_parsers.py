@@ -21,6 +21,7 @@ from cloud_log_parsers import (
     parse_vpc_flow_log,
     vpc_accept_rollup,
     vpc_flow_signal,
+    vpc_pair_rollup,
     waf_block_rollup,
 )
 from cloud_producers import cloud_signal_from_event
@@ -153,6 +154,49 @@ def test_vpc_accept_rollup_aggregates_per_eni():
 
 def test_vpc_accept_rollup_empty_batch_is_empty():
     assert vpc_accept_rollup([]) == []
+
+
+# ── (src,dst) pair rollup — #9 service dependency map talks_to edges ──────────
+
+def test_vpc_pair_rollup_aggregates_per_pair_and_round_trips():
+    recs = [parse_vpc_flow_log(VPC_ACCEPT) for _ in range(3)]
+    recs.append(parse_vpc_flow_log(VPC_ACCEPT.replace("10.0.1.20", "10.0.2.9")))
+    recs.append(parse_vpc_flow_log(VPC_REJECT))  # REJECT never enters the pair lane
+    out = vpc_pair_rollup(recs)
+    assert [e["resource_id"] for e in out] == [
+        "203.0.113.55->10.0.1.20", "203.0.113.55->10.0.2.9"]
+    first = out[0]
+    assert first["kind"] == "cloud_flow_pair" and first["severity"] == "info"
+    assert first["value"] == 3 * 480.0                    # volume-weighted, summed
+    assert first["metric_name"] == "flow_pair_bytes"
+    assert first["attrs"]["srcaddr"] == "203.0.113.55"
+    assert first["attrs"]["dstaddr"] == "10.0.1.20"
+    assert first["attrs"]["action"] == "ACCEPT" and first["attrs"]["flows"] == "3"
+    assert first["attrs"]["provider"] == "aws"
+    assert first["ts"] == "2024-06-25T22:00:30Z"          # the record's own 'end'
+    assert set(first["entity_tokens"]) == {"eni-0abc123", "203.0.113.55", "10.0.1.20"}
+    sig = cloud_signal_from_event(first, "acme", TS)
+    assert sig.kind == "cloud_flow_pair"
+    assert sig.entity_id == "203.0.113.55->10.0.1.20"
+    assert sig.modality_class is ModalityClass.PASSIVE_FLOW
+
+
+def test_vpc_pair_rollup_is_topk_bounded():
+    # 50 distinct pairs, byte volume descending by src octet — only the K
+    # largest survive; never one signal per flow record.
+    recs = []
+    for i in range(50):
+        line = VPC_ACCEPT.replace("203.0.113.55", f"10.9.{i}.1").replace(" 480 ", f" {1000 - i} ")
+        recs.append(parse_vpc_flow_log(line))
+    out = vpc_pair_rollup(recs, top_k=5)
+    assert len(out) == 5
+    assert [e["value"] for e in out] == [1000.0, 999.0, 998.0, 997.0, 996.0]
+
+
+def test_vpc_pair_rollup_skips_self_talk_and_empty_peers():
+    self_talk = parse_vpc_flow_log(VPC_ACCEPT.replace("203.0.113.55", "10.0.1.20"))
+    assert vpc_pair_rollup([self_talk]) == []
+    assert vpc_pair_rollup([]) == []
 
 
 # ── WAF + DNS lanes (log-fidelity program) ────────────────────────────────────

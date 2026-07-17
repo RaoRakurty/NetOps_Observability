@@ -30,7 +30,7 @@ const (
 // Kinds come from the correlation contract (cloud_producers.CLOUD_KINDS); a source
 // with no kind here has no producer today and is reported "off".
 var cloudSourceKinds = map[string][]string{
-	"flow_logs":     {"cloud_flow_log", "cloud_flow_volume"},
+	"flow_logs":     {"cloud_flow_log", "cloud_flow_volume", "cloud_flow_pair"},
 	"lb_logs":       {"cloud_lb_log"},
 	"metrics":       {"cloud_metric", "database_metric", "cloud_resource_anomaly"},
 	"cloud_health":  {"cloud_health", "cloud_resource_health"},
