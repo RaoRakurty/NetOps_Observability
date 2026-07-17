@@ -30,7 +30,7 @@ func TestDeriveIncidentTimeMetricRow(t *testing.T) {
 	facts := backfillFacts()
 	group := map[string]string{"provider": "isp", "device": "wan-r2"}
 
-	row := deriveIncidentTimeMetricRow("ACME", "corr-1", "ti-1", facts, group, "DIA", now)
+	row := deriveIncidentTimeMetricRow("ACME", "corr-1", "ti-1", facts, group, "DIA", "OPEN", now)
 
 	if row.TenantID != "acme" { // normalized
 		t.Errorf("tenant not normalized: %q", row.TenantID)
@@ -54,6 +54,21 @@ func TestDeriveIncidentTimeMetricRow(t *testing.T) {
 	}
 	if row.Bottleneck == "" {
 		t.Error("expected a current-bottleneck driver")
+	}
+	// Rollup-source fields (migration 0027): the snapshot must carry everything
+	// the reliability rollups need to read it instead of a live scan.
+	if row.Owner != "isp" {
+		t.Errorf("owner = %q, want isp", row.Owner)
+	}
+	if row.State != "open" { // normalized lowercase
+		t.Errorf("state = %q, want open", row.State)
+	}
+	_, wantInternal := timeintel.ClassifyOwnerDomain(facts.Owner, group)
+	if row.Internal != wantInternal {
+		t.Errorf("internal = %v, want %v (must match live classification)", row.Internal, wantInternal)
+	}
+	if row.Group["device"] != "wan-r2" || row.Group["provider"] != "isp" {
+		t.Errorf("group keys not persisted: %+v", row.Group)
 	}
 	// Snapshot is JSON-serializable and never leaks the tenant id.
 	b, err := json.Marshal(row)

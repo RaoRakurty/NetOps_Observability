@@ -126,8 +126,10 @@ context, low risk, reversible):
 are empty today** (per-correlation ticket linkage is #78, not wired) → those metrics
 read INCOMPLETE, honestly.
 
-Tenancy: per-incident + rollup reads go through `chRows` (`chTenantScope`), so a
-tenant only ever sees/aggregates its own incidents (cross-tenant id → 404, no leak).
+Tenancy: per-incident reads go through `chRows` (`chTenantScope`); rollup reads go
+through the persisted `incident_time_metrics` snapshot store (`ListWindow` —
+tenant_iso FORCE-RLS on PG, tenant filter in the mem store), so a tenant only ever
+sees/aggregates its own incidents (cross-tenant id → 404, no leak).
 
 ---
 
@@ -186,6 +188,13 @@ idempotent + retry-safe; PII/secrets redacted from ITSM/source payloads.
   trend chart, chronic-offenders table, filters) + `GET /api/reliability/trends`.
 - **P1d ⏳** — migration 0014 + persistence + audited manual edits + backfill + RLS
   isolation test.
+- **Rollup snapshot read (final tail) ✅** — `/api/reliability/*` reads the persisted
+  `incident_time_metrics` snapshots (`ListWindow`: DB-side window + one-row-per-
+  incident calc-version dedupe + 20000 bound; migration 0027 adds the rollup facts
+  owner/state/internal/group_keys). The old 5000-row live ClickHouse scan — which
+  silently under-reported once history exceeded the cap — survives only as a
+  cold-start fallback (before the first backfill pass) and the response discloses
+  `source: snapshots|live_scan` plus the honest `scan_cap`/`capped`.
 - **Docs page ⏳** — operator-facing definitions + formulas (this doc is the design;
   a UI/help page is separate).
 
