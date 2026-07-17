@@ -217,6 +217,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/health":    "scoped",
 	"/api/cloud/changes":   "scoped",
 	"/api/cloud/evidence":  "scoped",
+	// Service dependency map (#9): both CH reads carry the caller's tenant_scope
+	// (corr_signals FORCE row policy); endpoint resolution uses only the caller's
+	// principalTenant-scoped identity map + inventory. Isolation contract proven
+	// by cloud_service_map_test.go (scope literal + fail-closed cases).
+	"/api/cloud/service-map": "scoped",
 
 	// ── Cloud Connector framework ──
 	// Connectors are per-tenant DATA (each tenant's cloud connections); scoped +
