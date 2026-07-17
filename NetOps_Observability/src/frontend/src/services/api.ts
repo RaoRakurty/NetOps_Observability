@@ -1735,6 +1735,10 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   logIndices: () => request<Record<string, any>[]>("/api/logs/indices"),
+  // Retention floor: how far back the caller's visible log store goes + exact
+  // total stored (tenant-scoped server-side; owner directive: DON'T HIDE).
+  logsRetention: (signal = "") =>
+    request<LogRetention>(`/api/logs/retention${signal ? `?signal=${encodeURIComponent(signal)}` : ""}`),
 
   // Flows (ClickHouse). `type` filters by source family (netflow|ipfix|sflow);
   // empty = all sources. `filters` narrows by the dashboard filter bar
