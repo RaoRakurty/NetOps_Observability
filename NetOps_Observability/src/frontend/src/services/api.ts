@@ -2340,11 +2340,23 @@ export const api = {
   // graph inference on the Resources surface (backend overlayManualMappings).
   cloudBusinessServices: () =>
     request<{ business_services: BusinessServiceRow[]; count: number }>("/api/cloud/business-services"),
-  cloudCreateBusinessService: (name: string, criticality?: string) =>
+  cloudCreateBusinessService: (body: BusinessServiceInput) =>
     request<BusinessServiceRow>("/api/cloud/business-services", {
       method: "POST",
-      body: JSON.stringify({ name, ...(criticality ? { criticality } : {}) }),
+      body: JSON.stringify(body),
     }),
+  cloudUpdateBusinessService: (id: string, body: BusinessServiceInput) =>
+    request<{ updated: string }>(`/api/cloud/business-services/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  cloudDeleteBusinessService: (id: string) =>
+    request<{ deleted: string }>(`/api/cloud/business-services/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  // The resource→service override ledger (catalog UI shows per-service counts).
+  cloudResourceMappings: () =>
+    request<{ resource_mappings: ResourceMappingRow[]; count: number }>("/api/cloud/resource-mappings"),
   cloudAssignResources: (body: { business_service_id?: string; service_name?: string; resource_ids: string[] }) =>
     request<{ assigned: number }>("/api/cloud/resource-mappings", {
       method: "PUT",
@@ -3211,6 +3223,30 @@ export type BusinessServiceRow = {
   name: string;
   description: string;
   criticality: string; // critical | high | normal | low | ""
+  owner: string;       // accountable team/person label ("" = unset)
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+// The editable catalog fields (the id/tenant/audit stamps are server-owned).
+export type BusinessServiceInput = {
+  name: string;
+  description?: string;
+  criticality?: string;
+  owner?: string;
+};
+
+// One resource_id → service binding (backend ResourceMapping).
+export type ResourceMappingRow = {
+  tenant_id: string;
+  resource_id: string;
+  business_service_id?: string;
+  service_name: string;
+  source: string;
+  confidence: string;
+  basis: string;
+  is_manual_override: boolean;
   created_by: string;
   created_at: string;
   updated_at: string;

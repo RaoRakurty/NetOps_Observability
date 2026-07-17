@@ -37,6 +37,11 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
+import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
+import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
+import { buildDegradedRows, fmtDuration } from "./appobs/impact";
+import type { DegradedServiceRow } from "./appobs/impact";
+import type { BusinessServiceRow } from "../services/api";
 import { toggleSelection, toggleAllVisible } from "./appobs/assign";
 import type {
   App, ChangeEvent, CloudResource, Confidence, Coverage, EvidenceRow, HealthSignal, UnknownContributor,
@@ -166,6 +171,7 @@ const TAB_LABEL: Record<Tab, string> = {
 };
 const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
   applications: { tab: "services", sub: "applications" },
+  catalog: { tab: "services", sub: "catalog" },
   appmap: { tab: "services", sub: "map" },
   attribution: { tab: "resources", sub: "mapping" },
   unknowns: { tab: "resources", sub: "untagged" },
@@ -268,16 +274,23 @@ function SubTabs<T extends string>({ value, onChange, items }: {
   );
 }
 
-// ── Services (Applications + Service map) ────────────────────────────────────
+// ── Services (Applications + Catalog + Service map) ──────────────────────────
 function Services({ initialSub, onOpen, ctl }: {
   initialSub: string; onOpen: (a: App) => void; ctl: CloudScopeControl;
 }) {
-  const [sub, setSub] = useState<"applications" | "map">(initialSub === "map" ? "map" : "applications");
+  const [sub, setSub] = useState<"applications" | "catalog" | "map">(
+    initialSub === "map" ? "map" : initialSub === "catalog" ? "catalog" : "applications");
   return (
     <div className="ao-stack">
       <SubTabs value={sub} onChange={setSub}
-        items={[{ key: "applications", label: "Applications" }, { key: "map", label: "Service map" }]} />
-      {sub === "applications" ? <Applications onOpen={onOpen} ctl={ctl} /> : <AppMap ctl={ctl} />}
+        items={[
+          { key: "applications", label: "Applications" },
+          { key: "catalog", label: "Catalog" },
+          { key: "map", label: "Service map" },
+        ]} />
+      {sub === "applications" && <Applications onOpen={onOpen} ctl={ctl} />}
+      {sub === "catalog" && <ServiceCatalog />}
+      {sub === "map" && <AppMap ctl={ctl} />}
     </div>
   );
 }
@@ -339,6 +352,8 @@ interface OverviewData {
   objectsTruncated: boolean;
   /** rows the ACTIVE scope filtered away (drives "no matches in scope"). */
   hadObjects: boolean;
+  /** operator catalog (criticality/owner for the degraded strip); [] on 501. */
+  catalog: BusinessServiceRow[];
 }
 
 async function loadOverview(scope: CloudScopeState): Promise<OverviewData> {
@@ -347,7 +362,7 @@ async function loadOverview(scope: CloudScopeState): Promise<OverviewData> {
   // the real range window. Signals/apps/objects are then narrowed CLIENT-side —
   // these sets are already loaded and LIMIT-bounded, and the signal store has no
   // provider/account columns to filter on server-side (see scope.ts header).
-  const [apps, resources, cov, health, changes, ev, allRes] = await Promise.all([
+  const [apps, resources, cov, health, changes, ev, allRes, catalog] = await Promise.all([
     loadApps(), loadResources(scope), loadCoverage(),
     loadHealthSignals(undefined, wh), loadChangeEvents(undefined, wh), loadEvidence(undefined, wh),
     // The UNFILTERED inventory backs the signal→scope join: a signal on an
@@ -355,6 +370,9 @@ async function loadOverview(scope: CloudScopeState): Promise<OverviewData> {
     // as "unresolvable". Same shared 30s-TTL cache — no extra request when the
     // scope is empty, one when it is not.
     loadResources(),
+    // catalog = enrichment for the degraded strip (criticality/owner); a
+    // deployment without the catalog store still renders the strip un-ranked.
+    api.cloudBusinessServices().then((r) => r.business_services ?? [], () => [] as BusinessServiceRow[]),
   ]);
   const idx = buildScopeIndex(allRes);
   const minutes = scope.rangeMinutes;
@@ -368,6 +386,7 @@ async function loadOverview(scope: CloudScopeState): Promise<OverviewData> {
     openCount: ev.openCount,
     objectsTruncated: ev.objectsTruncated,
     hadObjects: ev.objects.length > 0,
+    catalog,
   };
 }
 
@@ -401,7 +420,7 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
     return <div className="ao-panel"><EmptyState title="Unable to load the Service View summary" hint="retry, or check the cloud connector status in Settings" /></div>;
   }
 
-  const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated, hadObjects } = data;
+  const { apps, resources, coverage, health, changes, objects, openCount, objectsTruncated, hadObjects, catalog } = data;
   // Degraded = health-signal verdicts ∪ live measured app health (provider status
   // checks + probe outcomes). A dead health feed must never render as "0 degraded"
   // = "all healthy": with nothing measured at all we say "—", not 0.
@@ -410,6 +429,10 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
     ...apps.filter((a) => a.health === "degraded" || a.health === "down").map((a) => a.name),
   ])];
   const healthMeasured = health.length > 0 || apps.some((a) => a.health !== "unknown");
+  // The worst-first strip rows (rev #22): name · duration · criticality · blast
+  // radius, joined with the operator catalog for criticality/owner.
+  const degradedRows = buildDegradedRows(apps, health, resources, catalog, Date.now());
+  const bizCritical = degradedRows.filter((r) => r.criticality === "critical").length;
   const openRca = objects.filter((o) => o.state === "open");
   const unknownPct = coverage.total ? Math.round((coverage.unknown / coverage.total) * 100) : NOT_MEASURED;
   const scoped = isScopeActive(scope);
@@ -429,7 +452,11 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
       <div className="ao-groups">
         <CardGroup title="Impact">
           <MetricCard label="Services Degraded" value={healthMeasured ? degraded.length : DASH}
-            trend={healthMeasured ? `provider status + health signals · ${rangeText}` : "no health feed measured"}
+            trend={healthMeasured
+              ? (bizCritical
+                ? `${bizCritical} business-critical · ${rangeText}`
+                : `provider status + health signals · ${rangeText}`)
+              : "no health feed measured"}
             tone={!healthMeasured ? undefined : degraded.length ? "warn" : "good"} />
           {/* scoped: the count is of the investigations IN scope (the tenant-wide
               dedicated count stays visible in the trend, never silently replaced) */}
@@ -437,7 +464,6 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
             value={scoped ? openRca.length : openCount}
             trend={scoped ? `in scope · ${openCount} open tenant-wide` : "engine-formed · dedicated count"}
             tone={(scoped ? openRca.length : openCount) ? "warn" : "good"} />
-          <MetricCard label="Network Impact" value={DASH} trend="service→connection correlation not ingested" />
         </CardGroup>
         <CardGroup title="Coverage">
           <MetricCard label="Services Observed" value={apps.length.toLocaleString()} trend="current inventory" tone="accent" />
@@ -449,8 +475,52 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
         </CardGroup>
         <CardGroup title="Change">
           <MetricCard label="Recent Cloud Changes" value={changes.length} trend={`provider audit log · ${rangeText}`} />
-          <MetricCard label="Deploy-linked Incidents" value={DASH} trend="deploy events not ingested" />
         </CardGroup>
+      </div>
+      {/* Roadmap honesty (rev #22): the two impact metrics we do NOT measure yet
+          moved out of the cards — a permanent "—" card reads as broken, a
+          footnote reads as a roadmap. They return as cards when their feeds land. */}
+      <div className="ao-muted" style={{ fontSize: 12 }}>
+        Coming soon: network impact (service→connection correlation) · deploy-linked incidents (deploy events)
+      </div>
+
+      {/* A2. worst-first degraded services (rev #22): name · duration ·
+          criticality · blast radius — the "what do I act on" answer. */}
+      <div className="ao-panel">
+        <div className="ao-panel-h">Degraded services
+          <span className="ao-panel-meta">worst first · duration from the first degraded signal in the {rangeText}</span></div>
+        {!healthMeasured ? (
+          <EmptyState title="No health feed measured"
+            hint="provider status checks and health signals light this up — check Data sources"
+            action={<button className="ao-btn ao-btn--primary" onClick={() => goTab("datasources")}>Check data sources</button>} />
+        ) : degradedRows.length === 0 ? (
+          <EmptyState title={`No degraded services in the ${rangeText}`}
+            hint="every service with measured health is healthy in this window" />
+        ) : (
+          <DataTable<DegradedServiceRow> rows={degradedRows} rowKey={(r) => r.name}
+            height={Math.min(300, 56 + degradedRows.length * 34)} ariaLabel="Degraded services"
+            onRowClick={() => goTab("services", "applications")}
+            columns={[
+              { key: "name", header: "Service", width: 200, text: (r) => r.name,
+                render: (r) => <strong>{r.name}</strong> },
+              { key: "state", header: "Health", width: 110,
+                render: (r) => <HealthBadge status={r.state} /> },
+              { key: "crit", header: "Criticality", width: 175,
+                sortValue: (r) => criticalityRank(r.criticality),
+                render: (r) => <CriticalityBadge value={r.criticality} /> },
+              { key: "dur", header: "Duration", width: 130, sortValue: (r) => r.durationMs,
+                render: (r) => r.sinceIso
+                  ? <span title={`first degraded signal ${fmtDateTime(r.sinceIso)}`}>{fmtDuration(r.durationMs)}</span>
+                  : <span className="ao-muted" title="live provider status says degraded; no timestamped signal in the window">duration unknown</span> },
+              { key: "blast", header: "Blast radius", width: 180,
+                sortValue: (r) => r.affected,
+                render: (r) => r.affected
+                  ? <span>{r.affected}{r.total ? ` of ${r.total}` : ""} resource{(r.total || r.affected) === 1 ? "" : "s"}</span>
+                  : <span className="ao-muted" title="the signals did not name specific resources">extent not measured</span> },
+              { key: "owner", header: "Owner", width: 140,
+                render: (r) => r.owner === "—" ? <span className="ao-muted">—</span> : r.owner },
+            ]} />
+        )}
       </div>
 
       {/* B. the REAL investigations the engine formed — no heuristic verdicts. */}
@@ -506,13 +576,22 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
   );
 }
 
-// ── Applications (LIVE: /api/cloud/apps) ─────────────────────────────────────
+// ── Applications (LIVE: /api/cloud/apps, joined with the operator catalog) ───
 function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudScopeControl }) {
   const [f, setF] = useState<Record<string, string>>({});
-  const { data, status } = useAsync(loadApps);
+  // The catalog join is enrichment: a deployment without the catalog store
+  // (501) still renders the derived apps — criticality shows "—".
+  const { data, status } = useAsync(async () => {
+    const [apps, cat] = await Promise.all([
+      loadApps(),
+      api.cloudBusinessServices().then((r) => r.business_services ?? [], () => [] as BusinessServiceRow[]),
+    ]);
+    return { apps, cat };
+  });
   if (status === "loading") return <TableSkeleton />;
   if (status === "error") return <LoadError what="applications" />;
-  const all = data ?? [];
+  const all = data?.apps ?? [];
+  const catalog = catalogByName(data?.cat ?? []);
   if (all.length === 0) return <CloudEmpty />;
   // Global scope first (client-side: apps are DERIVED rows the tab already
   // loaded whole — there is no server filter on /api/cloud/apps), then the
@@ -545,7 +624,14 @@ function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudSco
           columns={[
             { key: "name", header: "Service", width: 160, sortable: true, text: (a) => a.name, render: (a) => <strong>{a.name}</strong> },
             { key: "health", header: "Health", width: 100, sortValue: (a) => healthRank(a.health), render: (a) => <HealthBadge status={a.health} /> },
-            { key: "owner", header: "Owner", width: 100, sortValue: (a) => a.owner, render: (a) => a.owner },
+            // Criticality is the operator catalog's word (Services → Catalog);
+            // an app not in the catalog shows "—", never an assumed tier.
+            { key: "crit", header: "Criticality", width: 175,
+              sortValue: (a) => criticalityRank(catalog.get(nameKey(a.name))?.criticality ?? ""),
+              render: (a) => <CriticalityBadge value={catalog.get(nameKey(a.name))?.criticality ?? ""} /> },
+            { key: "owner", header: "Owner", width: 100,
+              sortValue: (a) => catalog.get(nameKey(a.name))?.owner || a.owner,
+              render: (a) => catalog.get(nameKey(a.name))?.owner || a.owner },
             { key: "env", header: "Env", width: 60, sortValue: (a) => a.env, render: (a) => a.env },
             { key: "conf", header: "Confidence", width: 110, sortValue: (a) => confidenceRank(a.confidence), render: (a) => <ConfidenceBadge level={a.confidence} /> },
             { key: "src", header: "Mapped by", width: 120, sortValue: (a) => MAPPED_BY[a.source] ?? a.source, render: (a) => MAPPED_BY[a.source] ?? a.source },
