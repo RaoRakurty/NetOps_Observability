@@ -169,14 +169,27 @@ class Node:
         WHERE it appears as a vantage — the `A->B` probe prefix and declared
         entity_tokens — but never stripped from the entity's structural identity
         (its id and `device:iface` device-part), where the same name can legitimately
-        be the SUBJECT (a device reporting its own interface)."""
+        be the SUBJECT (a device reporting its own interface).
+
+        A cloud REGION/SITE is likewise NOT a grounding subject for a cloud-plane
+        node. `site` = the region for every cloud signal, so two UNRELATED cloud
+        resources in the same region (a different app's LB and this app's health)
+        would weld on the region token alone — the coincidence detector the Service
+        Path Graph contract exists to reject (a region is even coarser than a shared
+        address). A cloud app/resource/service node therefore excludes `site`; it
+        reaches its real edge devices through the dependency graph (routes/paths on
+        its structural identity), never through 'same region'. Network nodes keep
+        `site` (a physical site is a legitimate locality subject)."""
         observers = {s.observer.observer_id for s in self.signals if s.observer.observer_id}
+        # Cloud-plane nodes: region/site is a coarse locality, not a topology subject.
+        site_is_subject = self.entity_type not in (
+            EntityType.APP, EntityType.CLOUD_RESOURCE, EntityType.SERVICE)
         toks = {self.entity_id}
         for s in self.signals:
             # entity_tokens can carry the measuring vantage (a probe's (prober, host));
             # the vantage is not a topology subject, the destination is.
             toks.update(t for t in s.entity_tokens if t not in observers)
-            if s.site:
+            if s.site and site_is_subject:
                 toks.add(s.site)
         if ":" in self.entity_id:
             toks.add(self.entity_id.split(":", 1)[0])  # device-part is always a subject

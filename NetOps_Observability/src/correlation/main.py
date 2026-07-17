@@ -40,6 +40,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from catalog import builtin_catalog
+from cloud_dependency import build_from_records, merge_path_views
 from directed_topology import DirectedTopology
 from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
 from path_assembly import (
@@ -487,6 +488,17 @@ TOPO_LINKS_FILE = os.environ.get("TOPO_LINKS_FILE", "/data/enrichment/topology_l
 # seam / adjacency, and token overlap still forms a CANDIDATE (never authoritative)
 # edge — honest degradation, never a relaxed gate.
 PATH_GRAPH_FILE = os.environ.get("PATH_GRAPH_FILE", "/data/enrichment/path_graph.json")
+# Cloud service dependency map (Wave 3 #9, cloud_dependency.py): per-service
+# end-user→DNS→WAF→LB→firewall→app tier chains + volume-weighted flow edges,
+# exported as enrichment JSON ({"services": [...], "flows": [...]}). Built into
+# path-graph objects (Endpoints / ServiceBindings / inferred RouteRelations /
+# flow-observed PathObservations) and MERGED into the Service Path Graph view the
+# grounding gate reads — this is what welds an edge-device fault (LB 5xx / WAF
+# block / SG-NACL reject / DNS failure) and the app's cloud_health symptom into
+# ONE object so the sig.ent.app.edge-* signatures can NAME the tier. Absent file
+# = empty view: no cloud dependency records ⇒ no edges, never fabricated.
+CLOUD_DEPENDENCY_FILE = os.environ.get(
+    "CLOUD_DEPENDENCY_FILE", "/data/enrichment/cloud_dependency.json")
 # corr_edges v2 (typed edges + evidence columns) is a ClickHouse migration owned by the
 # backend. Until it lands the typed rows are computed and embedded in the snapshot
 # (hypotheses.grounding_context.path_graph) but not written to their own table.
@@ -531,6 +543,8 @@ _seam_cache: tuple[SeamView, ...] = ()
 _seam_mtime: float = -1.0
 _path_graph_cache: PathGraphView = PathGraphView()
 _path_graph_mtime: float = -1.0
+_cloud_dep_cache: PathGraphView = PathGraphView()
+_cloud_dep_mtime: float = -1.0
 _adj_cache: dict[str, list[dict]] = {}
 _adj_mtime: float = -1.0
 
@@ -716,27 +730,60 @@ def seam_inventory() -> tuple[SeamView, ...]:
     return _seam_cache
 
 
+def cloud_dependency_inventory() -> PathGraphView:
+    """The cloud service dependency view (cloud_dependency.py) built from the
+    enrichment export at CLOUD_DEPENDENCY_FILE. mtime-cached like seam_inventory();
+    absent file = the empty view (no cloud dependency records ⇒ no edges — the
+    builder fails closed and fabricates nothing), unreadable file = the last good
+    view (never a silently emptied one mid-incident). Tenancy rides each emitted
+    object (build_from_records drops tenant-less records), so run_window's
+    for_tenant() scoping applies to these edges exactly as to the Go-exported ones."""
+    global _cloud_dep_cache, _cloud_dep_mtime
+    try:
+        mt = os.path.getmtime(CLOUD_DEPENDENCY_FILE)
+    except OSError:
+        return _cloud_dep_cache
+    if mt != _cloud_dep_mtime:
+        _cloud_dep_mtime = mt
+        try:
+            with open(CLOUD_DEPENDENCY_FILE) as f:
+                raw = json.load(f)
+            _cloud_dep_cache = build_from_records(raw if isinstance(raw, dict) else {})
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            log.warning("cloud dependency map unreadable (%s); keeping previous view", exc)
+    return _cloud_dep_cache
+
+
 def path_graph_inventory() -> PathGraphView:
-    """The Service Path Graph view for the grounding gate (contract §2), exported by
-    the Go API. mtime-cached like seam_inventory(); absent/unreadable file = the last
-    good view (never a silently emptied one mid-incident). Tenant scoping happens in
-    run_window(), which calls PathGraphView.for_tenant() before ANY lookup — a path
-    object with no tenant_id is reachable by nobody (fail-closed: unlike seams, there
-    are no platform-scoped path relationships)."""
+    """The Service Path Graph view for the grounding gate (contract §2): the
+    Go-exported inventory MERGED with the cloud service dependency view
+    (cloud_dependency_inventory() above) — one graph, so an app's edge devices
+    (DNS/WAF/LB/firewall) ground into the app's object. mtime-cached like
+    seam_inventory(); absent/unreadable file = the last good view (never a
+    silently emptied one mid-incident). Tenant scoping happens in run_window(),
+    which calls PathGraphView.for_tenant() before ANY lookup — a path object with
+    no tenant_id is reachable by nobody (fail-closed: unlike seams, there are no
+    platform-scoped path relationships)."""
     global _path_graph_cache, _path_graph_mtime
     try:
         mt = os.path.getmtime(PATH_GRAPH_FILE)
     except OSError:
+        pass
+    else:
+        if mt != _path_graph_mtime:
+            _path_graph_mtime = mt
+            try:
+                with open(PATH_GRAPH_FILE) as f:
+                    raw = json.load(f)
+                _path_graph_cache = PathGraphView.from_dict(raw if isinstance(raw, dict) else {})
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log.warning("path graph unreadable (%s); keeping previous view", exc)
+    dep = cloud_dependency_inventory()
+    if not (dep.endpoints or dep.observations or dep.service_bindings or dep.routes):
+        # No cloud dependency records ⇒ the Go view unchanged (an empty merge must
+        # not touch the base view's freshness budget).
         return _path_graph_cache
-    if mt != _path_graph_mtime:
-        _path_graph_mtime = mt
-        try:
-            with open(PATH_GRAPH_FILE) as f:
-                raw = json.load(f)
-            _path_graph_cache = PathGraphView.from_dict(raw if isinstance(raw, dict) else {})
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            log.warning("path graph unreadable (%s); keeping previous view", exc)
-    return _path_graph_cache
+    return merge_path_views(_path_graph_cache, dep)
 
 
 def cloud_topology_snapshots() -> dict[str, dict]:

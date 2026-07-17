@@ -2898,6 +2898,160 @@ APP_EXPERIENCE_TEMPLATES: list[dict] = [
 BUILTIN_TEMPLATES.extend(APP_EXPERIENCE_TEMPLATES)
 
 
+# ── cloud edge dependency attribution (Wave 3 #9) ─────────────────────────────
+# The Service Dependency Map (cloud_dependency.py) ties each edge device — DNS,
+# WAF, LB, firewall/subnet — to the application in ONE request path. When an
+# app-experience symptom (cloud_health) grounds TOGETHER with an on-path edge
+# device's fault (they now share one correlation object via the dependency edge),
+# these templates NAME the responsible tier as the probable cause — instead of the
+# generic app-dependency-down. They out-rank the generic signature because they
+# explain MORE of the evidence (two matched clauses vs one; the scorer's
+# specificity tie-break). They fire ONLY when both the impact AND the on-path
+# device fault are present in the same object — an OFF-path device fault never
+# grounds into the app's object, so it is never (falsely) attributed here.
+#
+# Honesty of the verdict is delegated to the existing gate, NOT asserted here:
+#   * inventory-only dependency edge → rank-6 inferred → object has no
+#     authoritative edge → run_window caps the tier at SUSPECTED (named, not
+#     confirmed): config says the device fronts the app, but we did not OBSERVE it.
+#   * flow-observed dependency edge (authoritative) + an INDEPENDENT witness (a
+#     customer/synthetic probe — the cloud API is a single vantage) → CONFIRMED.
+# DNS is a NAME dependency, never a data-path hop, so a DNS-attributed verdict
+# only leaves 'suspected' when an independent DNS probe corroborates.
+CLOUD_EDGE_ATTRIBUTION_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.app.edge-lb-5xx",
+        "title": "Load balancer returning 5xx on the application's edge",
+        "domain": "ent.app",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            # the impact: the application's experience is degraded.
+            {"kind": "cloud_health"},
+            # the on-path cause: the LB in front of this app is emitting 5xx.
+            {"kind": "cloud_lb_log"},
+            # an INDEPENDENT customer/synthetic witness (the cloud API is a single
+            # vantage — this second, independent observer is what lifts the verdict off
+            # the cloud-only suspected ceiling to CONFIRMED via the independence gate).
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|synthetic_http_fail|synthetic_timeout", "optional": True},
+        ],
+        "direction_expect": "load-balancer -> application -> users",
+        "verdict": {
+            "owner": "app_team", "layer": "L7 (load balancer / app edge)",
+            "first_steps": [
+                "Check the load balancer's target group — are any targets healthy, or are all failing health checks?",
+                "Read the LB access logs for the 5xx reason (503 no healthy targets vs 504 target timeout)",
+                "Confirm the app instances behind the LB are up and passing the LB's health probe",
+            ],
+        },
+        "operator_phrase": "The load balancer on this application's edge is returning 5xx, and it sits on the application's request path — the LB (or its targets) is the probable cause of the degraded experience.",
+        "manager_phrase": "The gateway that routes users to this application is failing, so users are seeing errors; we have localised it to the load-balancer tier.",
+        "blast_radius": "All users reaching the application through this load balancer",
+        "false_positives": ("a brief target-group flap during a deploy", "a single unhealthy target with the rest serving"),
+    },
+    {
+        "id": "sig.ent.app.edge-waf-block",
+        "title": "WAF blocking legitimate traffic to the application",
+        "domain": "ent.app",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "cloud_health"},
+            # the on-path cause: the web ACL in front of this app is BLOCKing.
+            {"kind": "cloud_waf_log"},
+            # an INDEPENDENT customer/synthetic witness (the cloud API is a single
+            # vantage — this second, independent observer is what lifts the verdict off
+            # the cloud-only suspected ceiling to CONFIRMED via the independence gate).
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|synthetic_http_fail|synthetic_timeout", "optional": True},
+        ],
+        "direction_expect": "waf -> application -> users",
+        "verdict": {
+            "owner": "netops", "layer": "L7 (WAF / app edge)",
+            "first_steps": [
+                "Identify the terminating WAF rule driving the blocks (rule id + sample URI on the evidence)",
+                "Check CloudTrail / change history for a recent WAF rule or rule-group change in the window",
+                "Move the offending rule to COUNT to confirm it is eating legitimate traffic, then tune it",
+            ],
+        },
+        "operator_phrase": "The web application firewall on this application's edge is blocking requests on the app's request path — a WAF rule is the probable cause of the degraded experience.",
+        "manager_phrase": "A security filter in front of this application is rejecting legitimate users; we have localised it to the WAF tier.",
+        "blast_radius": "Users whose requests match the blocking WAF rule",
+        "false_positives": ("a genuine attack the WAF is correctly blocking", "a noisy scanner inflating block counts"),
+    },
+    {
+        "id": "sig.ent.app.edge-firewall-reject",
+        "title": "Security group / NACL rejecting traffic to the application",
+        "domain": "ent.app",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "cloud_health"},
+            # the on-path cause: a boundary REJECT (SG/NACL drop) into the app.
+            {"kind": "cloud_flow_log"},
+            # an INDEPENDENT customer/synthetic witness (the cloud API is a single
+            # vantage — this second, independent observer is what lifts the verdict off
+            # the cloud-only suspected ceiling to CONFIRMED via the independence gate).
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|synthetic_http_fail|synthetic_timeout", "optional": True},
+        ],
+        # Look-alike killer: a DX/VPN/route state change (cloud_change on a cloud
+        # resource) in the window means the boundary REJECT is the private-
+        # connectivity outage's SYMPTOM — routes withdrew, so the boundary drops
+        # what it can no longer deliver — not an SG/NACL misconfiguration. That
+        # story belongs to private-connectivity-down (same guard app-dependency-
+        # down carries): this template is contradicted and the connectivity
+        # signature is scored as the forced competitor.
+        "discriminators": [
+            {"absent": {"kind": "cloud_change|cloud_audit", "entity_type": "cloud_resource"},
+             "within_s": 600,
+             "else_prefer": "sig.ent.cloud.private-connectivity-down"},
+        ],
+        "direction_expect": "firewall/subnet -> application -> users",
+        "verdict": {
+            "owner": "netops", "layer": "L3/L4 (security group / NACL)",
+            "first_steps": [
+                "Check the security group / NACL on the app's subnet for a recent rule change in the window",
+                "Confirm the rejected 5-tuple (src/dst/port) on the flow evidence is the app's ingress, not an unrelated port",
+                "Verify the ingress rule allows the LB/health-check source ranges to the app port",
+            ],
+        },
+        "operator_phrase": "The security group / NACL on this application's subnet is rejecting traffic on the app's request path — a boundary rule is the probable cause of the degraded experience.",
+        "manager_phrase": "A network access rule in front of this application is dropping traffic; we have localised it to the firewall/subnet tier.",
+        "blast_radius": "Traffic to the application through the affected subnet boundary",
+        "false_positives": ("expected rejects of scanner / out-of-scope traffic", "a health-check source that was never allowed"),
+    },
+    {
+        "id": "sig.ent.app.edge-dns-failure",
+        "title": "DNS resolution failing for a name the application depends on",
+        "domain": "ent.app",
+        "seams": ["CLOUD_APP"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "cloud_health"},
+            # the on-path cause: NXDOMAIN/SERVFAIL for a name the app depends on.
+            {"kind": "cloud_dns_log"},
+            # an INDEPENDENT customer/synthetic witness (the cloud API is a single
+            # vantage — this second, independent observer is what lifts the verdict off
+            # the cloud-only suspected ceiling to CONFIRMED via the independence gate).
+            {"kind": "probe_loss|probe_rtt_anomaly|synthetic_icmp_loss|synthetic_http_fail|synthetic_timeout", "optional": True},
+        ],
+        "direction_expect": "dns-name -> application -> users",
+        "verdict": {
+            "owner": "netops", "layer": "L7 (DNS)",
+            "first_steps": [
+                "Identify the failing name + rcode (NXDOMAIN / SERVFAIL) on the DNS evidence",
+                "Check the hosted zone / record and any recent failover or record change in the window",
+                "Resolve the name from an independent vantage to confirm it is broken everywhere, not one resolver",
+            ],
+        },
+        "operator_phrase": "DNS resolution is failing for a name this application depends on, on the app's request path — a DNS record / zone fault is the probable cause of the degraded experience.",
+        "manager_phrase": "The naming lookup this application relies on is failing, so users cannot reach it; we have localised it to the DNS tier.",
+        "blast_radius": "Users resolving the affected name for this application",
+        "false_positives": ("a client-side resolver problem at one site", "a name deliberately retired but still queried"),
+    },
+]
+BUILTIN_TEMPLATES.extend(CLOUD_EDGE_ATTRIBUTION_TEMPLATES)
+
+
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here
     are a build break, not a runtime surprise (guarded by test)."""

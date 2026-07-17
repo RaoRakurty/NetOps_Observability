@@ -56,12 +56,12 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # passive-flow lane
     "flow_volume_anomaly": ModalityClass.PASSIVE_FLOW,
     "cloud_flow_log": ModalityClass.PASSIVE_FLOW,
-    # cloud-edge fault lane (path-causality RCA P2). Each mirrors the ModalityClass
-    # its producer stamps (cloud_producers.CLOUD_KINDS): LB 5xx, WAF block, DNS
-    # NXDOMAIN are PASSIVE_FLOW cloud-API observations. They are the on-path
-    # app-witness kinds the P2 attributor admits; registered here so the audit's
-    # independence math counts a cloud-edge fault as a real (passive_flow) witness
-    # rather than an unclassified kind.
+    # cloud-edge fault lane: LB 5xx, WAF block, DNS NXDOMAIN are PASSIVE_FLOW
+    # cloud-API observations (mirrors cloud_producers.CLOUD_KINDS). Consumed by
+    # the P2 path-causality attributor AND the dependency-graph attribution
+    # signatures (sig.ent.app.edge-*); registered here so the audit's
+    # independence math counts a cloud-edge fault as a real (passive_flow)
+    # witness rather than an unclassified kind.
     "cloud_lb_log": ModalityClass.PASSIVE_FLOW,
     "cloud_waf_log": ModalityClass.PASSIVE_FLOW,
     "cloud_dns_log": ModalityClass.PASSIVE_FLOW,
@@ -132,13 +132,20 @@ APP_GROUNDABLE_KINDS: frozenset[str] = frozenset(
     # with app:<slug> tokens by construction.
     "lb_5xx", "lb_target_unhealthy", "app_error_rate_high", "app_latency_high",
     "lb_4xx_high",
-    # cloud-edge fault lane (path-causality RCA P2): the kinds whose production
-    # signals ground on an app/service entity (cloud_producers.CLOUD_KINDS):
-    # cloud_lb_log/cloud_flow_log carry EntityType.APP, cloud_dns_log the resolved
-    # SERVICE name — so a cloud-edge fault can co-locate on an app-impact object and
-    # count toward app-domain confirmation. cloud_waf_log grounds on the web-ACL
-    # CLOUD_RESOURCE (not an app entity) and is deliberately NOT listed here.
-    "cloud_lb_log", "cloud_dns_log", "cloud_flow_log",
+    # cloud lane: cloud_health is emitted ON the app entity (cloud_signal:
+    # entity_type=app), and the edge-device fault kinds (LB access 5xx / WAF
+    # block / SG-NACL reject / DNS failure) reach the app through the Service
+    # Dependency Map — cloud_dependency.py builds tier→app RouteRelations +
+    # flow-observed PathObservations that main.path_graph_inventory() merges
+    # into the grounding view, so the device fault and the app symptom share ONE
+    # object (plus cloud_signal's own app entity_tokens when the ingest event
+    # names the app). This supersedes the earlier cloud_waf_log exclusion (the
+    # web ACL grounds on a CLOUD_RESOURCE): the dependency edge is what carries
+    # it to the app now, grounding-gated exactly like flow_volume_anomaly above —
+    # a device fault with no dependency edge to the app stays resource-grounded
+    # and does not count toward app confirmation.
+    "cloud_health", "cloud_lb_log", "cloud_waf_log", "cloud_dns_log",
+    "cloud_flow_log",
 })
 
 # App-impact domains whose objects ground on app/service entities, so a second

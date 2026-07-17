@@ -1,0 +1,12 @@
+{
+  "name": "WAF blocking the app edge: app degraded + web ACL terminating requests",
+  "signals": [
+    {"kind": "cloud_health", "entity_type": "app", "entity_id": "store-api",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "device_telemetry", "collection_path": "via_cloud_api", "deviation": 4.0},
+    {"kind": "cloud_waf_log", "entity_type": "cloud_resource", "entity_id": "webacl/store-acl/7f1c",
+     "observer_id": "cloud:945714973156:us-west-2", "observer_type": "cloud_api",
+     "modality": "passive_flow", "collection_path": "via_cloud_api", "deviation": 5.0}
+  ],
+  "expect": {"top": "sig.ent.app.edge-waf-block", "tier": "suspected", "owner": "netops"}
+}

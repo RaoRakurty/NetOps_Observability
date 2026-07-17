@@ -120,10 +120,11 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "flow_volume_anomaly",
     # cloud lane (#81 P3G — handle_cloud emits these; consumed by the cloud signatures)
     "cloud_change", "cloud_audit", "cloud_flow_log", "cloud_health",
-    # cloud-edge fault lane (path-causality RCA P2 — cloud_producers.cloud_signal
-    # emits these off the netops.cloud lane; they are the on-path app-witness kinds
-    # path_attribution.CLOUD_EDGE_FAULT_KINDS admits at runtime. Consumed by the P2
-    # attributor, not a catalog signature → declared INTENTIONAL_BLIND in coverage.py.
+    # cloud edge-device logs (cloud_log_parsers → netops.cloud → cloud_signal_from_event):
+    # the LB 5xx / WAF block / DNS failure lanes consumed BOTH by the P2 path-causality
+    # attributor (path_attribution.CLOUD_EDGE_FAULT_KINDS) and by the dependency-graph
+    # attribution signatures (sig.ent.app.edge-*). cloud_flow_log (above) is the
+    # SG/NACL reject lane.
     "cloud_lb_log", "cloud_waf_log", "cloud_dns_log",
     # IPsec/IKE tunnel state from the enterprise VPN gateway (cloud_signal_from_event
     # kind=ipsec_tunnel_status; observer ipsec:<gw>, independent of the cloud API).
