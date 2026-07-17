@@ -42,7 +42,17 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
 4. **Data Sources = connectors + health** (rev #10 + #11 + missing #9/#10). Accounts
    from connectors not discovered resources; identity-vs-telemetry health split; red
    rows for silent accounts; pollers emit `permission_denied`/`misconfigured` into
-   ingestion status ("IAM denied X since Tuesday"). *Blocked by #2, #3.* **M.**
+   ingestion status ("IAM denied X since Tuesday"). *Blocked by #2, #3.* **M.** —
+   **SHIPPED 2026-07-16** (`067a50d` `38d22cb` `364b761`): poller classifies
+   provider errors (`source_status.py`, 403-class → `permission_denied`,
+   400/404-class → `misconfigured`, first-seen `since_iso` preserved) →
+   `PUT /api/cloud/ingest/source-status` (service-gated, error-only vocabulary,
+   records expire with the stale window so an error can't outlive the poller) →
+   overlaid on `/api/cloud/ingestion` (an IAM-denied account is forced into the
+   matrix even with zero landed data). Accounts table merges the connector store
+   FIRST (`mergeAccounts`), discovered-only accounts shown as "Platform managed";
+   separate "Connection health" vs "Data delivery" columns; connected-but-silent
+   is never green (red attention row, "No data arriving").
 5. **Interactive scope bar + real time-range** (rev #6). Provider/account/region/env
    global filters feeding all tabs; real 1h/24h/7d param through signal endpoints
    (kills the dishonest "Last 1h" label). *Blocked by #1.* **M.** — **SHIPPED
@@ -55,10 +65,21 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
    empty-scope states with Clear-filters everywhere.
 6. **Alert episode grouping + triage** (rev #7 + missing #4). Collapse repeated
    (resource, signal, state) into episodes w/ first/last/count + flap detection;
-   ack/assign/mute/snooze/notes with audit trail. **M.**
+   ack/assign/mute/snooze/notes with audit trail. **M.** — **SHIPPED 2026-07-16**
+   (`3c01fe3` `c1bb18e` `36cae97` `0ea0cb2`): episode fold/close/flap store +
+   engine transition seams + notification suppression; tenant-scoped triage API
+   (ack/assign/mute/snooze/notes) with audit trail + isolation test
+   (`alert_episodes_isolation_test.go`); Active Alerts grouped by episode with
+   triage panel; episode times render via the shared labeled-time authority.
 7. **Embedded investigation view + verification loop** (rev #8 + #20). Open the
    correlation object in a drawer/split-pane inside Service View (no context-losing
    jump); close requires/records "signal clear for N min" → recovery banner. **M.**
+   — **SHIPPED 2026-07-16** (`9fda4fd` `15c1b78`): `InvestigationDrawer` embeds
+   the correlation object in-place (URL-persisted via `investigationUrl.ts`);
+   close is verification-gated — time-events read-back with labeled close states
+   ("signal clear for N min") on the backend (`timeintel_manual.go`).
+
+**Wave 2 COMPLETE 2026-07-16 → Wave 3 next.**
 
 ## WAVE 3 — Service model & impact (P1/P2)
 8. **Service catalog UI + Overview impact rework** (rev #12 + #22). CRUD over

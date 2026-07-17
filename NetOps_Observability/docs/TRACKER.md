@@ -1,6 +1,6 @@
 # NetOps_Observability — Consolidated Work Tracker
 
-> Branch: `feat/observability-platform` · Last updated: 2026-07-16
+> Branch: `feat/observability-platform` · Last updated: 2026-07-17
 > Single source of truth for remaining work. Reconciled against the git history
 > on this branch and the roadmap memories. Update status here as items land.
 
@@ -108,6 +108,30 @@ transient attribution); Vector buffer/batch sizing after outage benchmark
 B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
+
+## #107 — Cloud platform backlog Wave 2 (2026-07-16) — ✅ SHIPPED (all 4 items, CI green at `a15f1ee`, stack rebuilt 2026-07-17)
+
+Backlog `docs/design/cloud-platform-backlog.md` Wave 2 "make telemetry
+answerable" — COMPLETE → Wave 3 next.
+- ✅ **#4 Data Sources = connectors + health** (`067a50d` `38d22cb` `364b761`):
+  poller error classification (`permission_denied`/`misconfigured`, first-seen
+  `since_iso`) → `PUT /api/cloud/ingest/source-status` → overlaid on
+  `/api/cloud/ingestion` (IAM-denied accounts forced into the matrix);
+  connector-first Accounts merge, identity-vs-telemetry column split, red rows
+  for connected-but-silent accounts.
+- ✅ **#5 Scope bar + real time-range** (`db394cf` `6f7bf75` `e388f76`):
+  URL-backed multi-select provider/account/region scope feeding all tabs;
+  `?window_hours=` (1..168) honored by `/api/cloud/health|changes|evidence`;
+  killed the dishonest "Last 1h" label.
+- ✅ **#6 Alert episodes + triage** (`3c01fe3`→`0ea0cb2`): fold/close/flap
+  store, tenant-scoped triage API (ack/assign/mute/snooze/notes) w/ audit +
+  isolation test, Active Alerts grouped by episode w/ triage panel.
+- ✅ **#7 Embedded investigation + verification loop** (`9fda4fd` `15c1b78`):
+  InvestigationDrawer in Service View (URL-persisted), verification-gated close
+  via time-events read-back.
+- Live-verified 2026-07-17: `/api/alerts/episodes` returns real grouped
+  episodes (first/last/count/flap); `/api/cloud/ingestion` shows per-provider
+  source health aws/azure/gcp; api+frontend images rebuilt 01:16Z.
 
 ## #106 — Cloud Network Overview + Connector Wave 1 close-out (2026-07-16, four parallel subagents) — ✅ SHIPPED (`d80f21c`, backend-ci green)
 
