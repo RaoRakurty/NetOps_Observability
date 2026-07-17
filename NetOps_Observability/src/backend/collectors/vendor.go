@@ -53,6 +53,8 @@ var enterpriseVendor = map[int]string{
 	21067: "sophos", // Sophos Ltd (SFOS / XG firewall)
 	9789:  "sophos", // Astaro GmbH (legacy Sophos UTM) — same vendor label
 	41112: "ubiquiti",
+	14823: "aruba",  // Aruba Networks (wireless: IAP/campus APs, mobility controllers)
+	25053: "ruckus", // Ruckus Wireless (APs, ZoneDirector/SmartZone)
 	8072:  "net-snmp",
 }
 
@@ -118,6 +120,14 @@ func vendorFromDescr(d string) string {
 		return "ubiquiti"
 	case strings.Contains(s, "check point"), strings.Contains(s, "gaia"), strings.Contains(s, "checkpoint"):
 		return "checkpoint"
+	// BIG-IP sysDescr embeds "Linux" ("BIG-IP … : Linux 3.10…"), so this case
+	// must stay ABOVE the generic linux backstop.
+	case strings.Contains(s, "big-ip"), strings.Contains(s, "bigip"), strings.Contains(s, "f5 networks"):
+		return "f5"
+	case strings.Contains(s, "arubaos"), strings.Contains(s, "aruba"):
+		return "aruba"
+	case strings.Contains(s, "ruckus"):
+		return "ruckus"
 	case strings.Contains(s, "linux"):
 		return "linux"
 	}

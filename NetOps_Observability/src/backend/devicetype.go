@@ -27,7 +27,9 @@ func inferDeviceType(d models.Device) string {
 		return "load-balancer"
 	case hasAny(h, "wlc", "wireless lan controller", "wism", "9800", "mobility express", "wireless controller"):
 		return "wlc"
-	case hasAny(h, "aironet", "access point", "accesspoint", "air-ap", "air-cap", "meraki mr", "wifi"):
+	// "wireless ap" catches Ruckus standalone AP banners ("… Wireless AP");
+	// "uap-" catches Ubiquiti UniFi AP model strings (UAP-AC-Pro, UAP-nanoHD).
+	case hasAny(h, "aironet", "access point", "accesspoint", "air-ap", "air-cap", "meraki mr", "wifi", "wireless ap", "uap-"):
 		return "ap"
 	case hasAny(h, "vgw", "tgw", "transit gateway", "vpn gateway", "cloud gateway", "cloudgw", "cloud-gw", "csr1000v", "c8000v cloud", "vmx cloud"):
 		return "cloud-gw"

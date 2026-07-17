@@ -66,7 +66,7 @@ type SNMPProfile struct {
 	ID                string       `json:"id"`          // stable key, e.g. "cisco-ios"
 	Vendor            string       `json:"vendor"`      // display name
 	Description       string       `json:"description,omitempty"`
-	Category          string       `json:"category"` // universal | router_switch | firewall | wireless | voip | printer | ups | server
+	Category          string       `json:"category"` // universal | router_switch | firewall | load_balancer | wireless | voip | printer | ups | server
 	SysObjectIDPrefix string       `json:"sysobjectid_prefix,omitempty"`
 	Builtin           bool         `json:"builtin"`
 	// Overlay marks a persistence-only record carrying an operator's metric

@@ -21,6 +21,11 @@ func TestSNMPProfileStoreSeedAndExtend(t *testing.T) {
 	if !ok || len(cisco.Metrics) == 0 || !cisco.Builtin {
 		t.Fatal("cisco-ios built-in profile missing/empty")
 	}
+	// F5 BIG-IP built-in (#94 vendor profiles): std port floor + LB/trunk OIDs.
+	f5, ok := s.Get("f5-bigip")
+	if !ok || !f5.Builtin || f5.Category != "load_balancer" || len(f5.Metrics) == 0 {
+		t.Fatalf("f5-bigip built-in profile missing/wrong: %+v (ok=%v)", f5, ok)
+	}
 
 	// Add a custom metric; duplicate OID is skipped.
 	before := len(cisco.Metrics)
