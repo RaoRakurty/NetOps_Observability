@@ -190,8 +190,8 @@ WITH picked AS (
 SELECT toString(c.correlation_id)  AS correlation_id,
        c.version                    AS version,
        c.state                      AS state,
-       toString(c.window_start)     AS window_start,
-       toString(c.window_end)       AS window_end,
+       ` + chISO("c.window_start") + ` AS window_start,
+       ` + chISO("c.window_end") + `   AS window_end,
        c.top_hypothesis             AS top_hypothesis,
        c.top_confidence             AS top_confidence,
        c.verdict_tier               AS verdict_tier,
@@ -202,7 +202,7 @@ SELECT toString(c.correlation_id)  AS correlation_id,
        c.node_count                 AS node_count,
        c.engine_version             AS engine_version,
        c.catalog_version            AS catalog_version,
-       toString(c.created_at)       AS created_at,
+       ` + chISO("c.created_at") + ` AS created_at,
        coalesce(e.edge_count, 0)    AS edge_count,
        coalesce(e.grounding, 'none') AS grounding,
        c.plane_count                AS plane_count,
@@ -355,7 +355,7 @@ func isDatetimeToken(s string) bool {
 	}
 	for _, c := range s {
 		switch {
-		case c >= '0' && c <= '9', c == '-', c == ':', c == '.', c == ' ':
+		case c >= '0' && c <= '9', c == '-', c == ':', c == '.', c == ' ', c == 'T', c == 'Z':
 		default:
 			return false
 		}
@@ -420,8 +420,8 @@ func (s *server) loadCorrSlice(ctx context.Context, scope, id string, version in
 	metaSQL := `
 SELECT version, tenant_id, state,
        coalesce(toString(merged_into), '') AS merged_into,
-       toString(window_start)   AS window_start,
-       toString(window_end)     AS window_end,
+       ` + chISO("window_start") + ` AS window_start,
+       ` + chISO("window_end") + `   AS window_end,
        toString(trigger_signal) AS trigger_signal,
        verdict_tier, top_hypothesis, top_confidence, evidence_missing,
        hypotheses, affected, layer_coverage, app_impact, attribution
@@ -444,6 +444,16 @@ SELECT version, tenant_id, state,
 	if !isDatetimeToken(ws) || !isDatetimeToken(we) {
 		return nil, nil, nil, nil, http.StatusBadGateway, errors.New("malformed object window")
 	}
+	// The window bounds arrive RFC 3339 UTC on the wire (chISO, S3); re-render
+	// them as ClickHouse-native zone-less UTC literals for the range filter
+	// below — the `ts` there must stay the raw DateTime column (pruning + no
+	// dependence on how CH resolves alias-vs-column in WHERE).
+	wsT, weT := parseCHTime(ws), parseCHTime(we)
+	if wsT.IsZero() || weT.IsZero() {
+		return nil, nil, nil, nil, http.StatusBadGateway, errors.New("malformed object window")
+	}
+	wsQ := wsT.UTC().Format("2006-01-02 15:04:05.000")
+	weQ := weT.UTC().Format("2006-01-02 15:04:05.000")
 
 	// 1b) Resolve the archive slice version. The object's `version` increments on
 	// every persist, but each window slice is archived under its own
@@ -479,8 +489,8 @@ SELECT version, tenant_id, state,
 	// 2) Full window slice (attached or not), ordered by event time = the cascade.
 	sigSQL := `
 SELECT toString(signal_id)  AS signal_id,
-       toString(ts)         AS ts,
-       toString(ingest_ts)  AS ingest_ts,
+       ` + chISO("ts") + `         AS ts_iso,
+       ` + chISO("ingest_ts") + `  AS ingest_ts_iso,
        source, kind, observer_type, observer_id, collection_path, modality_class,
        source_clock_quality AS clock_quality,
        entity_type, entity_id, entity_tokens, severity,
@@ -493,12 +503,24 @@ SELECT toString(signal_id)  AS signal_id,
        JSONExtractString(attrs, 'classification_source') AS classification_source
   FROM netops.corr_signals_archive
  WHERE archived_for = '` + id + `' AND archived_version = ` + intToString(archiveVer) + `
-   AND ts >= '` + ws + `' AND ts <= '` + we + `'
+   AND ts >= '` + wsQ + `' AND ts <= '` + weQ + `'
  ORDER BY ts ASC, signal_id ASC
  FORMAT JSON`
 	sigRows, err := s.chRowsScope(ctx, scope, sigSQL)
 	if err != nil {
 		return nil, nil, nil, nil, http.StatusBadGateway, err
+	}
+	// De-shadowed aliases (see the SELECT): expose them under their wire names.
+	// Conditional so stores that already return `ts` directly stay untouched.
+	for _, row := range sigRows {
+		if v, ok := row["ts_iso"]; ok {
+			row["ts"] = v
+			delete(row, "ts_iso")
+		}
+		if v, ok := row["ingest_ts_iso"]; ok {
+			row["ingest_ts"] = v
+			delete(row, "ingest_ts_iso")
+		}
 	}
 
 	// 3) Evidence rows for this version (signal → role/subject); joined in Go so
@@ -803,14 +825,14 @@ func (s *server) serveCorrelationDetail(w http.ResponseWriter, r *http.Request, 
 	objSQL := `
 SELECT toString(correlation_id)  AS correlation_id,
        version, state,
-       toString(window_start)    AS window_start,
-       toString(window_end)      AS window_end,
+       ` + chISO("window_start") + ` AS window_start,
+       ` + chISO("window_end") + `   AS window_end,
        toString(trigger_signal)  AS trigger_signal,
        top_hypothesis, top_confidence, verdict_tier,
        hypotheses, evidence_missing, affected,
        signal_count, node_count,
        engine_version, topology_version, catalog_version,
-       toString(created_at)      AS created_at
+       ` + chISO("created_at") + `   AS created_at
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'` + verCond + `
  ORDER BY version DESC

@@ -576,7 +576,7 @@ func providerOf(a signalAttrs) string {
 
 func cloudHealthSQL(windowHours int, appFilter string, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT toString(ts)            AS ts_s,
+SELECT `+chISO("ts")+`         AS ts_s,
        kind                    AS kind,
        toString(entity_type)   AS entity_type_s,
        entity_id               AS entity_id,
@@ -608,7 +608,7 @@ func cloudChangesSQL(windowHours int, appFilter string, limit int, scope string)
 	// (any(kind) AS kind) is substituted into WHERE by ClickHouse and throws
 	// ILLEGAL_AGGREGATION — the exact bug that made this endpoint answer 0.
 	return fmt.Sprintf(`
-SELECT toString(min(ts))          AS ts_s,
+SELECT `+chISO("min(ts)")+`       AS ts_s,
        any(kind)                  AS kind,
        toString(any(entity_type)) AS entity_type_s,
        any(entity_id)             AS entity_id,
@@ -645,7 +645,7 @@ SELECT toString(correlation_id)  AS cid,
        top_hypothesis            AS top_hypothesis,
        signal_count              AS signal_count,
        toString(state)           AS state_s,
-       toString(window_start)    AS window_start_s,
+       `+chISO("window_start")+` AS window_start_s,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
@@ -661,7 +661,7 @@ func cloudEvidenceSignalsSQL(windowHours int, idList string, limit int, scope st
 	return fmt.Sprintf(`
 SELECT toString(archived_for)   AS cid,
        toString(signal_id)      AS signal_id_s,
-       toString(ts)             AS ts_s,
+       `+chISO("ts")+`          AS ts_s,
        kind                     AS kind,
        toString(entity_type)    AS entity_type_s,
        entity_id                AS entity_id,

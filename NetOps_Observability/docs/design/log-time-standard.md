@@ -156,6 +156,7 @@ parsed with a configured/implicit zone.
 | D3 (F3): ClickHouse flow `ts` = insert time | router `flows_decoded` sets `ts` from `time_received_ns` | `vector validate` green (pure VRL; no test harness for configs) |
 | D4 (F2): syslog-ng RFC 3164 zone assumption implicit (container-local) | `recv-time-zone("UTC")` + `keep-timestamp(yes)` pinned with rationale | `syslog-ng --syntax-only` green |
 | D5 (F10): CH server TZ unpinned while writers insert zone-less strings | `<timezone>UTC</timezone>` in `clickhouse/custom-settings.xml` | config-only; verified live server already UTC |
+| S3 (F11, shipped 2026-07-17): API wire format — every CH-backed SELECT returned zone-less `toString()` datetime strings | `chISO()` (`src/backend/ch_time_wire.go`) renders `concat(replaceOne(toString(x,'UTC'),' ','T'),'Z')` — RFC 3339 UTC — across all Go API CH SELECTs (findings/tunnels, correlations list + timeline slice + graph, timeintel, cloud signals/handlers/overview/ingestion, events feed, path graph, AI datasource, health score) **and** the correlation service `/findings`. Timeline window round-trip de-shadowed (`ts_iso` aliases + CH-native WHERE literals); `isDatetimeToken` accepts RFC 3339; the one strict server-side parser (`cloud_ingestion.go`) moved to dual-format `parseCHTime` (parseChTS / timeintel / ticketing / report parsers were already dual-format) | `ch_time_wire_test.go`: fragment pin, dual-format parser matrix, `isoTS` passthrough, plus a source-wide regression guard failing any new zone-less datetime `toString()`; `correlations_test.go` token contract updated deliberately |
 
 ### Follow-up slices (designed, not built)
 
@@ -168,11 +169,6 @@ parsed with a configured/implicit zone.
   `time_flow_end_ns` to the goflow2 formatter fields, CH columns + router
   mapping, and use flow-start as the analytic time axis. Schema migration →
   own slice.
-* **S3 — API wire format to RFC 3339.** Replace `toString(ts)` with an
-  explicit UTC RFC 3339 rendering in every CH-backed SELECT (Go API +
-  correlation `/findings`). The client already tolerates both; migrating
-  removes the naive string class entirely. Coordinate with any non-SPA
-  consumers (report renderer, notifiers).
 * **S4 — Epoch inserts.** Correlation service + Vector CH sinks insert epoch
   numbers instead of zone-less strings, removing the server-TZ dependency R1
   notes.

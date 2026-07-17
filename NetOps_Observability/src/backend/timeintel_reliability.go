@@ -64,8 +64,8 @@ func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f rel
 	// storm size.
 	sql := `
 SELECT toString(o.correlation_id) AS correlation_id,
-       toString(o.window_start)   AS window_start,
-       toString(o.created_at)     AS created_at,
+       ` + chISO("o.window_start") + ` AS window_start,
+       ` + chISO("o.created_at") + `   AS created_at,
        o.verdict_tier             AS verdict_tier,
        o.top_confidence           AS top_confidence,
        o.top_hypothesis           AS top_hypothesis,

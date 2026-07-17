@@ -2307,8 +2307,11 @@ async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
         # honors backslash escapes. An out-of-shape value is ignored (no filter).
         if severity.isalpha():
             where = f"WHERE severity = '{severity.lower()}'"
+    # RFC 3339 UTC on the wire (log-time standard S3/R1): zone-less
+    # toString(DateTime64) strings parse as browser-local in JS consumers.
     sql = f"""
-      SELECT toString(ts) AS ts, id, kind, severity, score, device,
+      SELECT concat(replaceOne(toString(ts, 'UTC'), ' ', 'T'), 'Z') AS ts,
+             id, kind, severity, score, device,
              component, summary, description
         FROM netops.findings
         {where}
