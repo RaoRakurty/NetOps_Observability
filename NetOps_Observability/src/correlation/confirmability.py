@@ -56,6 +56,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # passive-flow lane
     "flow_volume_anomaly": ModalityClass.PASSIVE_FLOW,
     "cloud_flow_log": ModalityClass.PASSIVE_FLOW,
+    # cloud edge-device logs (LB access / WAF / DNS) — passive observations of the
+    # app's edge devices, consumed by the dependency-graph attribution signatures.
+    "cloud_lb_log": ModalityClass.PASSIVE_FLOW,
+    "cloud_waf_log": ModalityClass.PASSIVE_FLOW,
+    "cloud_dns_log": ModalityClass.PASSIVE_FLOW,
     # control-plane lane (syslog/trap/route events)
     "bgp_adjacency_change": ModalityClass.CONTROL_PLANE,
     "ospf_adjacency_change": ModalityClass.CONTROL_PLANE,
