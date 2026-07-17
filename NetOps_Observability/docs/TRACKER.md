@@ -120,8 +120,31 @@ tenant-quota governance is a SEPARATE lane (design §9); default-on
   worst-first Degraded-services strip (name · duration · criticality · blast
   radius · owner, honest unknowns). Verified rendering on real data
   (correlix-faultlab DOWN · business-critical · 7h45m · 1 of 2 resources).
-- 🔜 **#9 service dependency map from flow telemetry** · **#10 scale-out the
-  tables** (pagination cursors in UI, server-side search, export, saved views).
+- 🟡 **#9 service dependency map from flow telemetry** — Phases A+B BUILT but
+  UNMERGED (recovered 2026-07-17 from interrupted subagent session): branch
+  `worktree-agent-a91c0e87e91243350` (pushed to origin) carries `67d14d1`
+  cloud_flow_pair peer-pair volume rollups (all 3 flow lanes) + `387fe58`
+  `GET /api/cloud/service-map` observed dependency graph. Needs review → merge
+  → UI map rendering.
+- 🟡 **#10 scale-out the tables** — backend half SHIPPED `9c6efdb` (2026-07-17):
+  bounded free-text `?q=` + opaque keyset `?cursor=`/`next_cursor` on
+  `/api/cloud/health|changes|evidence` (charset-validated cursor fields,
+  malformed cursor → 400 fail-closed; changes keyset runs post-GROUP-BY via
+  HAVING; evidence gap-rows ride first page only), `cloud_scaleout_test.go`.
+  Remaining = UI half: pagination controls, CSV/JSON export honoring
+  filters+tenancy, URL-persist filter/drawer state, saved views.
+
+**⚠️ Recovered-branch inventory (2026-07-17, session broke overnight):** all
+local-only subagent branches pushed to origin for safekeeping. Unmerged work
+awaiting review/merge into `feat/observability-platform`:
+`…a91c0e87` (#9 A+B, above) · `…ac76e5b` (WIP `81c5322` correlation
+cloud_dependency catalog + engine/producer wiring, 614 lines, uncommitted at
+break — committed as recovered WIP) · `…a987a91d` (#94 F5 + wireless-AP vendor
+profiles, 3 commits) · `…ad0e43e2` (log-time standard S3–S6, 6 commits) ·
+`…a5926741` (tz-aware findings/pipeline/backend timestamps, 3 commits —
+OVERLAPS ad0e43e2, reconcile before merging) · `…a2fd23c8` (#84 tail:
+reliability rollups read persisted snapshots) · `…afd92e9b` (security: atomic
+CREATE OR REPLACE for strict corr RLS policies).
 
 ## #107 — Cloud platform backlog Wave 2 (2026-07-16) — ✅ SHIPPED (all 4 items, CI green at `a15f1ee`, stack rebuilt 2026-07-17)
 
