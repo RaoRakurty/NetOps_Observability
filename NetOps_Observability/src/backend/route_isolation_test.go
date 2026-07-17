@@ -134,6 +134,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/logs/export":            "scoped",
 	"/api/logs/export/rows":       "scoped",
 	"/api/logs/indices":           "scoped",
+	"/api/logs/retention":         "scoped", // retention floor over the SAME logsScope surface as search: tenant index pattern + osTenantFilter + applogs owner gate (logs_retention_test.go)
 	"/api/logs/search":            "scoped",
 	"/api/metrics":                "scoped",
 	"/api/metrics/forecast":       "scoped",

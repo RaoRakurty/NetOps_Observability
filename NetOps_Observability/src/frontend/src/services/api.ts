@@ -295,7 +295,13 @@ export type LogSearchOpts = {
   to?: string;
   size?: number;
   signal?: "applogs" | "syslog" | "snmptrap" | "flows" | "cloud" | "";
+  // Paging offset ("Load more"); server-clamped to the engine's result window.
+  offset?: number;
 };
+
+// Retention floor for the caller's visible log store: exact doc count + oldest
+// timestamp ("logs go back to <date>, N days"). Tenant-scoped server-side.
+export type LogRetention = { signal: string; total: number; oldest: string | null; days: number };
 
 export type ExportFmt = "csv" | "json" | "ndjson" | "xlsx";
 
