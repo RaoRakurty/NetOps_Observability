@@ -100,10 +100,19 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
    DOWN · business-critical · 7h45m · 1 of 2 resources).
 9. **Service dependency map from flow telemetry** (rev #15). `talks_to` edges from the
    live `cloud_flow_*` signals, volume-weighted — the map's own caption already
-   promises this. *Benefits from #1.* **M–L.**
+   promises this. *Benefits from #1.* **M–L.** — **BACKEND SHIPPED 2026-07-17**
+   (`6696bae`): `cloud_flow_pair` rollups (all 3 lanes) + tenant-scoped
+   `GET /api/cloud/service-map` (volume-weighted talks_to, REJECT-marked
+   blocked edges, honest UNATTRIBUTED). Plus the correlation-side dependency
+   graph + `sig.ent.app.edge-*` attribution signatures (`5dfc28c`).
+   *Remaining: UI map rendering.*
 10. **Scale-out the tables** (rev #16/#24/#25/#17 + missing #25/#26). Findings/health
     pagination cursors in UI, free-text server-side search, CSV/JSON export honoring
     filters+tenancy, URL-persist filter/drawer state, saved views. *Blocked by #1.* **M.**
+    — **SHIPPED 2026-07-17** (`9c6efdb` backend + `f7ffd52` UI): server-side `?q=`
+    + keyset cursors + `?format=csv|json` export on all three signal surfaces
+    (same scoped builders, 5000-row cap); UI search (URL-backed `sq`), Load-more,
+    export buttons, per-scope saved views.
 
 ## WAVE 4 — Governance + detection→resolution (P2)
 11. **Real Settings editors** (rev #9 + missing #12/#29). Required-tags editor (drives
