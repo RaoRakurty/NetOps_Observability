@@ -1,7 +1,8 @@
 # RCA Time Intelligence — Incident Time Decomposition
 
 **Tracker:** #84 · **Status:** P1a + P1b + P1c + P2 + P3 + **ITSM phase-link** SHIPPED & live ·
-P1d (persistence/RLS/manual-edit/backfill) + docs page REMAINING.
+P1d (persistence/RLS/manual-edit/backfill) REMAINING · docs page ✅ DONE 2026-07-17
+(`docs-portal/docs/incident-response/rca-time-intelligence.md`).
 **Owner spec:** 2026-06-24 (chat). **This doc** is the durable design of record.
 
 > **ITSM phase-link (2026-06-29) — the human-response phases now derive from #78.**
@@ -195,8 +196,13 @@ idempotent + retry-safe; PII/secrets redacted from ITSM/source payloads.
   silently under-reported once history exceeded the cap — survives only as a
   cold-start fallback (before the first backfill pass) and the response discloses
   `source: snapshots|live_scan` plus the honest `scan_cap`/`capped`.
-- **Docs page ⏳** — operator-facing definitions + formulas (this doc is the design;
-  a UI/help page is separate).
+- **Docs page ✅** 2026-07-17 — operator-facing definitions + formulas shipped at
+  `docs-portal/docs/incident-response/rca-time-intelligence.md` (mirrored into the
+  AI corpus at `src/backend/ai/docs_corpus/incident-response/rca-time-intelligence.md`
+  via `scripts/sync-docs-corpus.sh`). Documents what SHIPPED: per-event sources of
+  truth, the eight phase formulas, the phase-consistent current-bottleneck walk,
+  fleet rollup rules, snapshots vs live-scan provenance, and the honesty rules.
+  (This doc remains the design of record.)
 
 ---
 
