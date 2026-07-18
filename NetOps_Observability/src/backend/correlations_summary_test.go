@@ -63,8 +63,15 @@ func TestCorrelationsSummaryCarriesTenantScope(t *testing.T) {
 	}
 	sql := (*sqls)[0]
 	for _, must := range []string{
-		"count()", "countIf(verdict_tier = 'confirmed')", "countIf(verdict_tier = 'suspected')",
-		"countIf(verdict_tier = 'undetermined')", "countIf(state = 'open')",
+		// #111 display honesty: merged tombstones are excluded from total/tier/
+		// closed and surfaced as their own count — never silently mixed in.
+		"countIf(state != 'merged')                                     AS total",
+		"countIf(verdict_tier = 'confirmed' AND state != 'merged')",
+		"countIf(verdict_tier = 'suspected' AND state != 'merged')",
+		"countIf(verdict_tier = 'undetermined' AND state != 'merged')",
+		"countIf(state = 'open')",
+		"countIf(state NOT IN ('open', 'merged'))                       AS closed",
+		"countIf(state = 'merged')                                      AS merged",
 		"FROM netops.corr_current FINAL",
 		"created_at >= now() - INTERVAL 86400 SECOND", // bounded window
 	} {
@@ -72,11 +79,14 @@ func TestCorrelationsSummaryCarriesTenantScope(t *testing.T) {
 			t.Errorf("summary SQL missing %q:\n%s", must, sql)
 		}
 	}
+	if strings.Contains(sql, "count() ") {
+		t.Errorf("summary total must not be a bare count() (would re-include merged tombstones):\n%s", sql)
+	}
 	var body map[string]any
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, k := range []string{"total", "confirmed", "suspected", "undetermined", "open", "closed", "window_seconds"} {
+	for _, k := range []string{"total", "confirmed", "suspected", "undetermined", "open", "closed", "merged", "window_seconds"} {
 		if _, ok := body[k]; !ok {
 			t.Errorf("summary response missing %q: %v", k, body)
 		}

@@ -410,7 +410,7 @@ export default function Correlations() {
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
             <TierChip label="total" n={trueTotal} tone="var(--accent, #2563EB)"
               active={tier === ""} onClick={() => setTier("")}
-              title="All correlation objects in the last 24h — click to clear the status filter" />
+              title="All candidates in the last 24h (merged duplicates excluded) — click to clear the status filter" />
             <TierChip label="confirmed" n={summary?.confirmed ?? null} tone="#E11D48"
               active={tier === "confirmed"} onClick={() => setTier(tier === "confirmed" ? "" : "confirmed")}
               title="Confirmed root causes — click to show only these" />
@@ -423,6 +423,11 @@ export default function Correlations() {
             {summary && (
               <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>
                 {summary.open} open · {summary.closed} resolved
+                {/* #111 don't-hide: engine merge tombstones are excluded from the
+                    headline counts but disclosed, muted, never silently dropped. */}
+                {(summary.merged ?? 0) > 0 && (
+                  <span style={{ opacity: 0.7 }}> · {summary.merged.toLocaleString()} merged duplicates</span>
+                )}
               </span>
             )}
           </div>

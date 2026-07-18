@@ -652,8 +652,10 @@ export type CorrStats = {
 // True tenant-scoped window counts for the Correlations page (never the capped
 // list length): total objects, split by verdict tier and by state.
 export type CorrSummary = {
+  // total/tier/closed EXCLUDE state='merged' engine tombstones (#111); merged
+  // is the separately disclosed duplicate count (don't-hide).
   total: number; confirmed: number; suspected: number; undetermined: number;
-  open: number; closed: number; window_seconds: number;
+  open: number; closed: number; merged: number; window_seconds: number;
 };
 // #80 — recurring undetermined gap-shapes (which signature to write/strengthen next).
 export type UndeterminedGap = { clause: string; count: number };
