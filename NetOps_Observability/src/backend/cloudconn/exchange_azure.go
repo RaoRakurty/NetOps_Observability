@@ -90,7 +90,7 @@ func (x *AzureEntraExchanger) Exchange(ctx context.Context, req ExchangeRequest)
 		if audience == "" {
 			audience = azureDefaultFederationAud
 		}
-		assertion, err := x.Assertions.Assertion(ctx, audience)
+		assertion, err := x.Assertions.Assertion(ctx, audience, WorkloadSubject(req.Identity))
 		if err != nil {
 			return ScopedToken{}, err
 		}

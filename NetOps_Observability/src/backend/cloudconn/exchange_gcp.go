@@ -163,7 +163,7 @@ func (x *GCPSTSExchanger) exchangeWIF(ctx context.Context, req ExchangeRequest) 
 	audience := "//iam.googleapis.com/projects/" + id.ProjectNumber +
 		"/locations/global/workloadIdentityPools/" + id.WorkloadPool +
 		"/providers/" + id.WorkloadProvider
-	subjectToken, err := x.Assertions.Assertion(ctx, audience)
+	subjectToken, err := x.Assertions.Assertion(ctx, audience, WorkloadSubject(req.Identity))
 	if err != nil {
 		return ScopedToken{}, err
 	}

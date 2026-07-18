@@ -20,11 +20,11 @@ import (
 
 type wifAssertion struct{ token string }
 
-func (s wifAssertion) Assertion(context.Context, string) (string, error) { return s.token, nil }
+func (s wifAssertion) Assertion(context.Context, string, string) (string, error) { return s.token, nil }
 
 type noAssertion struct{}
 
-func (noAssertion) Assertion(context.Context, string) (string, error) {
+func (noAssertion) Assertion(context.Context, string, string) (string, error) {
 	return "", ErrWorkloadAssertionMissing
 }
 

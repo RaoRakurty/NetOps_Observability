@@ -21,16 +21,18 @@ import (
 type staticAssertion struct {
 	jwt          string
 	lastAudience string
+	lastSubject  string
 }
 
-func (s *staticAssertion) Assertion(_ context.Context, audience string) (string, error) {
+func (s *staticAssertion) Assertion(_ context.Context, audience, subject string) (string, error) {
 	s.lastAudience = audience
+	s.lastSubject = subject
 	return s.jwt, nil
 }
 
 type missingAssertion struct{}
 
-func (missingAssertion) Assertion(context.Context, string) (string, error) {
+func (missingAssertion) Assertion(context.Context, string, string) (string, error) {
 	return "", ErrWorkloadAssertionMissing
 }
 

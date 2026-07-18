@@ -103,7 +103,7 @@ func (x *AWSSTSExchanger) Exchange(ctx context.Context, req ExchangeRequest) (Sc
 		if x.Assertions == nil {
 			return ScopedToken{}, ErrWorkloadAssertionMissing
 		}
-		assertion, err := x.Assertions.Assertion(ctx, strings.TrimSpace(req.Identity.Audience))
+		assertion, err := x.Assertions.Assertion(ctx, strings.TrimSpace(req.Identity.Audience), WorkloadSubject(req.Identity))
 		if err != nil {
 			return ScopedToken{}, err
 		}

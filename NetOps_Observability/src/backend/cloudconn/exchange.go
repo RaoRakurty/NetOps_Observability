@@ -37,9 +37,27 @@ type AWSPlatformCredentialSource interface {
 
 // WorkloadAssertionSource supplies Correlix's own signed OIDC workload
 // assertion (a JWT) for federated exchanges (Azure Entra WIF client_assertion,
-// GCP STS subject_token). audience is the value the relying provider expects.
+// GCP STS subject_token, AWS AssumeRoleWithWebIdentity). audience is the value
+// the relying provider expects; subject is the per-connector identity the
+// customer's trust policy names (see WorkloadSubject). A source with a fixed,
+// externally-minted token (EnvWorkloadAssertionSource) may ignore both.
 type WorkloadAssertionSource interface {
-	Assertion(ctx context.Context, audience string) (string, error)
+	Assertion(ctx context.Context, audience, subject string) (string, error)
+}
+
+// WorkloadSubject is the subject Correlix presents in its workload assertion
+// for a connector — the value the customer's trust policy / federated
+// credential must reference. Precedence: the connector's explicit federated
+// subject (Azure FIC), then the platform trust-anchor subject, then the
+// documented default the setup instructions render.
+func WorkloadSubject(id IdentityConfig) string {
+	if s := strings.TrimSpace(id.FederatedSubject); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(id.Anchor.OIDCSubject); s != "" {
+		return s
+	}
+	return "correlix:connector:" + strings.TrimSpace(id.ConnectorID)
 }
 
 // Deferral sentinels: these mean "the platform identity is not configured in
@@ -75,12 +93,13 @@ func (EnvAWSCredentialSource) Credentials(context.Context) (AWSCredentials, erro
 // EnvWorkloadAssertionSource reads Correlix's workload OIDC assertion from a
 // projected token file (CLOUD_CONNECTOR_WORKLOAD_JWT_FILE — the K8s/CI pattern)
 // or, as a fallback, directly from CLOUD_CONNECTOR_WORKLOAD_JWT. Returns
-// ErrWorkloadAssertionMissing when neither is set. The audience argument is
-// unused here: a mounted token is minted for a fixed audience by the platform.
+// ErrWorkloadAssertionMissing when neither is set. The audience and subject
+// arguments are unused here: a mounted token is minted for a fixed audience
+// and subject by the platform that projected it.
 type EnvWorkloadAssertionSource struct{}
 
 // Assertion implements WorkloadAssertionSource.
-func (EnvWorkloadAssertionSource) Assertion(_ context.Context, _ string) (string, error) {
+func (EnvWorkloadAssertionSource) Assertion(_ context.Context, _, _ string) (string, error) {
 	if path := strings.TrimSpace(os.Getenv("CLOUD_CONNECTOR_WORKLOAD_JWT_FILE")); path != "" {
 		b, err := os.ReadFile(path) // #nosec G304 -- operator-configured token path
 		if err != nil {

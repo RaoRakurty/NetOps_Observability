@@ -96,6 +96,7 @@ type server struct {
 	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
 	cloudConn           cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
 	cloudBroker         *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer      *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
 	cloudIngestInv      *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
 	cloudSourceStatus   *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
 	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
@@ -517,6 +518,9 @@ func newServer() *server {
 			srv.audit.Record(e)
 		}
 	})
+	// Platform workload OIDC issuer (Wave 4 #13): minted federated assertions
+	// when CLOUD_WORKLOAD_ISSUER_URL is set; dormant (env-token fallback) otherwise.
+	srv.bootstrapWorkloadIssuer(vault, os.Getenv("CLOUD_WORKLOAD_ISSUER_URL"))
 	srv.cloudIngestInv = newCloudIngestInventory() // per-tenant ingestion (Wave 1 #2)
 	srv.cloudSourceStatus = newCloudSourceStatusStore() // poller-reported source errors (Wave 2 #4)
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
@@ -992,6 +996,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
 	// correlation engine pulls ?state=active as its grounding targets.
 	// Correlation Engine v2 objects — read-only inspector + replay proxy (#67).
+	// Workload OIDC issuer trust material (Wave 4 #13) — anonymous BY DESIGN:
+	// AWS/Azure/GCP fetch these to verify minted assertions; public keys +
+	// static metadata only, never tenant data. 404 while the issuer is dormant.
+	mux.HandleFunc("/.well-known/openid-configuration", s.handleWorkloadOIDCDiscovery)
+	mux.HandleFunc("/.well-known/jwks.json", s.handleWorkloadJWKS)
 	mux.HandleFunc("/api/correlations", s.handleCorrelations)
 	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
 	mux.HandleFunc("/api/correlations/summary", s.handleCorrelationsSummary)                  // true window counts (total / tier / state) behind the page's stat chips
