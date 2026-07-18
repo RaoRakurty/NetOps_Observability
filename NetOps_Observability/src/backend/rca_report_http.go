@@ -121,7 +121,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(html)
+		_, _ = w.Write(html) // #nosec G705 -- html/template output (auto-escaped) served under a default-src 'none' CSP
 	case "pdf":
 		html, err := renderRcaReportHTML(rep)
 		if err != nil {

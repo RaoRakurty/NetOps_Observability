@@ -158,7 +158,7 @@ func TestJWKSRoundTripsPublicKey(t *testing.T) {
 	}
 	n := new(big.Int).SetBytes(nb)
 	e := new(big.Int).SetBytes(eb)
-	if n.Cmp(key.PublicKey.N) != 0 || e.Int64() != int64(key.PublicKey.E) {
+	if n.Cmp(key.N) != 0 || e.Int64() != int64(key.E) {
 		t.Fatal("JWKS (n,e) does not round-trip the public key")
 	}
 	// No private material anywhere in the document.
