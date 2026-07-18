@@ -210,13 +210,16 @@ func TestAzureExchangeDeferrals(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Certificate: customer-held key → deferred.
+	// Certificate without uploaded material → request_invalid, never the wire
+	// (the live cert path itself is covered in exchange_azure_cert_test.go).
 	x := &AzureEntraExchanger{Client: ts.Client(), BaseURL: ts.URL}
 	req := azureSecretRequest()
 	req.Identity.Method = AuthMethodCertificate
 	req.Identity.CertThumbprint = "AABBCC"
-	if _, err := x.Exchange(context.Background(), req); !errors.Is(err, ErrProviderExchangeDeferred) {
-		t.Fatalf("certificate: want deferred, got %v", err)
+	req.LegacySecret = ""
+	var xe *ExchangeError
+	if _, err := x.Exchange(context.Background(), req); !errors.As(err, &xe) || xe.Code != "request_invalid" {
+		t.Fatalf("certificate without material: want request_invalid, got %v", err)
 	}
 
 	// WIF without an assertion source → assertion-missing deferral.

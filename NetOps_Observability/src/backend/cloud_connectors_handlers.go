@@ -625,6 +625,35 @@ func (s *server) serveConnectorSecret(w http.ResponseWriter, r *http.Request, id
 		writeJSONError(w, http.StatusBadRequest, "root/admin credentials are rejected — use a dedicated least-privilege identity", "ROOT_REJECTED")
 		return
 	}
+	// Certificate method: validate the PEM bundle structurally BEFORE encrypting
+	// (parseable, key matches cert, within validity) and cross-check/auto-fill
+	// the configured thumbprint — a bad bundle fails at upload, not at the first
+	// exchange. The thumbprint is non-secret (it's what the Azure portal shows).
+	if c.AuthMethod == cloudconn.AuthMethodCertificate {
+		thumb, terr := cloudconn.AzureCertBundleThumbprint(req.Secret, time.Now().UTC())
+		if terr != nil {
+			msg := "certificate bundle invalid"
+			var xe *cloudconn.ExchangeError
+			if errors.As(terr, &xe) && xe.Msg != "" {
+				msg = "certificate bundle invalid: " + xe.Msg
+			}
+			writeJSONError(w, http.StatusBadRequest, msg, "CERT_BUNDLE_INVALID")
+			return
+		}
+		if cfg := cloudconn.NormalizeAzureThumbprint(c.Identity.CertThumbprint); cfg != "" && cfg != thumb {
+			writeJSONError(w, http.StatusBadRequest, "certificate bundle does not match the configured thumbprint", "CERT_THUMBPRINT_MISMATCH")
+			return
+		}
+		if strings.TrimSpace(c.Identity.CertThumbprint) == "" {
+			c.Identity.CertThumbprint = thumb
+		}
+		if strings.TrimSpace(req.KeyHint) == "" {
+			req.KeyHint = thumb // non-secret display/age hint
+		}
+		if strings.TrimSpace(req.Kind) == "" {
+			req.Kind = "certificate"
+		}
+	}
 	tenant, _ := principalTenant(claims)
 	ref, err := s.cloudBroker.StoreSecret(r.Context(), tenant, c.ConnectorID, c.Provider, strings.TrimSpace(req.Kind), strings.TrimSpace(req.KeyHint), req.Secret)
 	if err != nil {

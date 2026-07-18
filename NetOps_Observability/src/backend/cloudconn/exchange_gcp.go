@@ -318,9 +318,23 @@ func parseRSAPrivateKeyPEM(pemStr string) (*rsa.PrivateKey, error) {
 // signRS256JWT mints a compact JWS (RS256) over the given claims. kid is
 // optional. The signature is PKCS#1 v1.5 over SHA-256 per RFC 7518 §3.3.
 func signRS256JWT(priv *rsa.PrivateKey, kid string, claims map[string]any) (string, error) {
-	header := map[string]any{"alg": "RS256", "typ": "JWT"}
+	var extra map[string]any
 	if kid != "" {
-		header["kid"] = kid
+		extra = map[string]any{"kid": kid}
+	}
+	return signRS256JWTHeader(priv, extra, claims)
+}
+
+// signRS256JWTHeader is signRS256JWT with caller-supplied extra header fields
+// (e.g. the x5t certificate thumbprint an Entra client assertion carries).
+// alg/typ are always pinned by this function and cannot be overridden.
+func signRS256JWTHeader(priv *rsa.PrivateKey, extra map[string]any, claims map[string]any) (string, error) {
+	header := map[string]any{"alg": "RS256", "typ": "JWT"}
+	for k, v := range extra {
+		if k == "alg" || k == "typ" {
+			continue
+		}
+		header[k] = v
 	}
 	hb, err := json.Marshal(header)
 	if err != nil {

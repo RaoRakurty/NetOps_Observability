@@ -7,8 +7,10 @@ package cloudconn
 //     the customer app registration's federated credential). No stored secret.
 //   - client_secret (legacy) → client-credentials grant with the Vault-
 //     decrypted client secret.
-//   - certificate → deferred: the customer certificate is held BY REFERENCE
-//     (thumbprint only); Correlix has no private key to sign a client JWT with.
+//   - certificate → client-credentials grant with a client_assertion signed by
+//     the customer app certificate's private key (Vault-stored PEM bundle,
+//     decrypted only at exchange time; x5t thumbprint header — see
+//     exchange_azure_cert.go).
 //
 // Endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
 // (form-encoded POST). Scope defaults to ARM (.default) — the audience the
@@ -64,6 +66,16 @@ func (x *AzureEntraExchanger) Exchange(ctx context.Context, req ExchangeRequest)
 		scope = azureDefaultScope
 	}
 
+	base := x.BaseURL
+	if base == "" {
+		base = azureLoginBase
+	}
+	endpoint := base + "/" + url.PathEscape(tenant) + "/oauth2/v2.0/token"
+	now := time.Now().UTC()
+	if x.Now != nil {
+		now = x.Now().UTC()
+	}
+
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", clientID)
@@ -90,18 +102,26 @@ func (x *AzureEntraExchanger) Exchange(ctx context.Context, req ExchangeRequest)
 		}
 		form.Set("client_secret", req.LegacySecret)
 	case AuthMethodCertificate:
-		// The certificate is customer-held (thumbprint reference only); minting a
-		// client JWT requires its private key, which Correlix never stores.
-		return ScopedToken{}, ErrProviderExchangeDeferred
+		if strings.TrimSpace(req.LegacySecret) == "" {
+			return ScopedToken{}, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "certificate credential material missing — upload the certificate PEM bundle"}
+		}
+		material, cerr := parseAzureCertBundle(req.LegacySecret, now)
+		if cerr != nil {
+			return ScopedToken{}, cerr
+		}
+		if !azureThumbprintMatches(req.Identity.CertThumbprint, material) {
+			return ScopedToken{}, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "uploaded certificate does not match the configured thumbprint"}
+		}
+		assertion, aerr := azureCertClientAssertion(material, clientID, endpoint, now)
+		if aerr != nil {
+			return ScopedToken{}, aerr
+		}
+		form.Set("client_assertion_type", azureClientAssertionType)
+		form.Set("client_assertion", assertion)
 	default:
 		return ScopedToken{}, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "auth method " + string(req.Identity.Method) + " has no Azure exchange path"}
 	}
 
-	base := x.BaseURL
-	if base == "" {
-		base = azureLoginBase
-	}
-	endpoint := base + "/" + url.PathEscape(tenant) + "/oauth2/v2.0/token"
 	payload := form.Encode()
 
 	status, body, attempts, err := doExchangeHTTP(ctx, x.Client, ProviderAzure, func() (*http.Request, error) {
@@ -114,10 +134,6 @@ func (x *AzureEntraExchanger) Exchange(ctx context.Context, req ExchangeRequest)
 	})
 	if err != nil {
 		return ScopedToken{}, err
-	}
-	now := time.Now().UTC()
-	if x.Now != nil {
-		now = x.Now().UTC()
 	}
 	if status != http.StatusOK {
 		return ScopedToken{}, azureTokenError(status, body, attempts)

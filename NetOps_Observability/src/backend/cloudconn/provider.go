@@ -50,6 +50,9 @@ const (
 	AuthMethodCloudRole AuthMethod = "cloud_role"
 
 	// AuthMethodCertificate — customer certificate credential (Azure app cert).
+	// Correlix stores the certificate + private key PEM bundle Vault-encrypted
+	// (like a legacy secret) and signs a per-exchange client-assertion JWT with
+	// it; the assertion is short-lived even though the key material is stored.
 	AuthMethodCertificate AuthMethod = "certificate"
 
 	// AuthMethodClientSecret — rotatable client secret (Azure app secret). LEGACY.
@@ -93,10 +96,12 @@ func (m AuthMethod) IsLegacy() bool {
 func (m AuthMethod) IsProhibited() bool { return m == AuthMethodProhibited }
 
 // HoldsStoredSecret reports whether choosing the method means Correlix must store
-// a reusable provider secret (→ Vault-encrypted, audited, rotatable). Federated,
-// cloud-role and certificate-by-reference do not.
+// reusable provider credential material (→ Vault-encrypted, audited, rotatable).
+// Federated and cloud-role do not. Certificate does: minting the client-assertion
+// JWT requires the certificate's private key (uploaded as a PEM bundle, encrypted
+// at rest, decrypted only by the broker at exchange time).
 func (m AuthMethod) HoldsStoredSecret() bool {
-	return m == AuthMethodClientSecret || m == AuthMethodStaticKey
+	return m == AuthMethodClientSecret || m == AuthMethodStaticKey || m == AuthMethodCertificate
 }
 
 // ParseAuthMethod normalizes a free-form method token.

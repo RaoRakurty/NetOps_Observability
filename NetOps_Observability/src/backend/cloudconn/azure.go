@@ -54,6 +54,9 @@ func (a azureAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult
 		if strings.TrimSpace(cfg.CertThumbprint) == "" {
 			r.Add(SeverityError, "cert_thumbprint_missing", "the certificate thumbprint is required", "Upload the certificate to the app registration and paste its thumbprint.")
 		}
+		if cfg.LegacySecretRef == "" {
+			r.Add(SeverityError, "cert_material_missing", "the certificate + private key bundle has not been uploaded", "Upload the certificate PEM bundle (certificate + private key); it is encrypted immediately and never re-displayed.")
+		}
 	case AuthMethodClientSecret:
 		r.Add(SeverityWarning, "legacy_method", "a client secret is a legacy credential — not recommended", "Prefer Workload Identity Federation: no stored secret, short-lived tokens.")
 		if cfg.LegacySecretRef == "" {
