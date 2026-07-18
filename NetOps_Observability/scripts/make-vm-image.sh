@@ -39,7 +39,7 @@ BASE_URL="${UBUNTU_CLOUD_IMG_URL:-https://cloud-images.ubuntu.com/releases/noble
 APPLIANCE_DISK_GB="${APPLIANCE_DISK_GB:-80}"
 MIN_FREE_GB="${MIN_FREE_GB:-25}"
 VM_FORMATS="${VM_FORMATS:-qcow2 vmdk vhdx}"
-KEEP_VM_IMAGES="${KEEP_VM_IMAGES:-1}"
+KEEP_VM_IMAGES="${KEEP_VM_IMAGES:-2}"
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
@@ -114,6 +114,7 @@ docker run --rm -v "$ROOT/dist:/dist" -v "$work:/work" -v "$CACHE:/cache" "$BUIL
     --hostname correlix \
     --run-command 'growpart /dev/sda 1 || true' \
     --run-command 'resize2fs /dev/sda1 || true' \
+    --run-command 'apt-get update' \
     --install docker.io,docker-compose-v2,zstd \
     --mkdir /opt/correlix/bundle \
     --copy-in '/dist/$(basename "$bundle_dir")':/opt/correlix/ \
@@ -139,16 +140,29 @@ for fmt in $VM_FORMATS; do
   esac
   say "built $fmt"
 done
-(cd "$OUT" && sha256sum correlix-"$version".* > "SHA256SUMS.correlix-$version")
-
-# ── prune older image sets ───────────────────────────────────────────────────
-mapfile -t sets < <(ls -1t "$OUT"/SHA256SUMS.correlix-* 2>/dev/null)
-if [ "${#sets[@]}" -gt "$KEEP_VM_IMAGES" ]; then
-  for oldsum in "${sets[@]:$KEEP_VM_IMAGES}"; do
-    oldver="${oldsum##*SHA256SUMS.correlix-}"
-    say "pruning VM image set $oldver"
-    rm -f "$OUT"/correlix-"$oldver".* "$oldsum"
-  done
-fi
+# Per-file checksums + PER-FORMAT pruning: nightly runs build only qcow2, the
+# weekly run builds all three — pruning by set would delete the still-current
+# vmdk/vhdx the morning after the weekly build. Keeping the newest
+# KEEP_VM_IMAGES of EACH format preserves every format's latest artifact.
+for f in "$OUT"/correlix-"$version".*; do
+  case "$f" in *.sha256) continue ;; esac
+  (cd "$OUT" && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+done
+# Retention (owner policy 2026-07-18): 2 newest of each format stay LOCAL;
+# older ones move to archive-outbox/ for cloud archive (Google Drive) instead
+# of deletion. The uploader drains the outbox when the Drive destination is
+# configured (owner to provide) — until then the outbox is the archive, and
+# it still counts toward disk, so the uploader should land soon.
+outbox="$OUT/archive-outbox"
+for fmt in qcow2 vmdk vhdx; do
+  mapfile -t have < <(ls -1t "$OUT"/correlix-*."$fmt" 2>/dev/null)
+  if [ "${#have[@]}" -gt "$KEEP_VM_IMAGES" ]; then
+    mkdir -p "$outbox"
+    for old in "${have[@]:$KEEP_VM_IMAGES}"; do
+      say "archiving $(basename "$old") → archive-outbox/ (cloud upload pending)"
+      mv "$old" "$old.sha256" "$outbox/" 2>/dev/null || true
+    done
+  fi
+done
 
 say "OK — dist/vm/correlix-$version.{$(echo "$VM_FORMATS" | tr ' ' ',')} ready (first boot self-installs, generates secrets on the appliance)"

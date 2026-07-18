@@ -53,6 +53,17 @@ if bash "$DIR/bundle-staleness.sh" >/dev/null 2>&1; then
   exit 0
 fi
 
+# Disk preflight BEFORE any build: artifacts are bounded by the prune policy,
+# but a build needs transient scratch — refusing loudly beats dying halfway
+# (this 80G host has no free LVM extents; growth = hypervisor disk resize).
+MIN_FREE_GB="${MIN_FREE_GB:-15}"
+free_gb=$(( $(df -Pk "$ROOT/dist" | awk 'NR==2{print $4}') / 1024 / 1024 ))
+if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
+  say "bundle-autoupdate: SKIPPED — only ${free_gb}GiB free (< ${MIN_FREE_GB}GiB)"
+  notify "Correlix bundle auto-update SKIPPED: ${free_gb}GiB free — clean disk or grow the VM disk"
+  exit 1
+fi
+
 head_sha="$(git -C "$ROOT" rev-parse --short HEAD)"
 say "bundle-autoupdate: stale — rebuilding customer bundle at $head_sha"
 # Call the installer script directly, not `make bundle` — make is not
@@ -78,10 +89,17 @@ newest="$(ls -1dt "$ROOT"/dist/correlix-*/ 2>/dev/null | head -1)"
 say "bundle-autoupdate: OK — $(basename "${newest%/}") now matches $head_sha"
 notify "Correlix customer bundle auto-updated to $head_sha"
 
-# VM appliance images (qcow2/vmdk/vhdx) ride the same lockstep: rebuild them
-# from the fresh bundle so a demo always has a bootable image. VM_IMAGES=0
-# opts out; make-vm-image.sh preflights disk and fails loudly, never halfway.
+# VM appliance images ride the same lockstep: rebuild from the fresh bundle so
+# a demo always has a bootable image. Disk-growth policy on this 80G host:
+# NIGHTLY = qcow2 only (the demo default, ~⅓ the footprint and scratch);
+# SUNDAYS = the full qcow2/vmdk/vhdx set, so VMware/Hyper-V artifacts are
+# never more than a week old (or on demand: VM_FORMATS="..." make-vm-image.sh).
+# VM_IMAGES=0 opts out; make-vm-image.sh preflights disk and fails loudly.
 if [ "${VM_IMAGES:-1}" = 1 ]; then
+  if [ -z "${VM_FORMATS:-}" ]; then
+    if [ "$(date +%u)" = 7 ]; then VM_FORMATS="qcow2 vmdk vhdx"; else VM_FORMATS="qcow2"; fi
+  fi
+  export VM_FORMATS
   if bash "$DIR/make-vm-image.sh" >>"$DIR/bundle-autoupdate.build.log" 2>&1; then
     say "bundle-autoupdate: VM images rebuilt for $head_sha"
     notify "Correlix VM images (qcow2/vmdk/vhdx) updated to $head_sha"
