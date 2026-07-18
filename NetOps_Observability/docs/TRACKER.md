@@ -53,7 +53,24 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
 | **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
 
-## #113 — RCA quality directive: seam ownership · causality render · creation policy (owner 2026-07-18) — ⏳ OPEN (design first)
+## #113 — RCA quality directive: seam ownership · causality render · creation policy (owner 2026-07-18) — ✅ SHIPPED (all 4 points, 2026-07-18)
+
+All four owner points closed same-day: (1) seam ownership slices 1–2
+(`3417fc8` engine attribution replaces "NOC", `4501510` per-tenant
+seam-owner registry → actual responsible party). (2) causality render —
+root cause was the global-tenant spelling split ("" vs "global") breaking
+the incident↔path-observation join (`19f4df1` canon_tenant; verified live:
+post-restart signals + path edges all "global", discovery yields typed
+paths); report now LEADS with "Incident at a glance" (where · what possibly
+happened · possible owner(s) · measured path SVG, broken hops RED)
+(`4adaaf4a`). (3) promotion policy — RCA html/pdf documents 403 unless
+promoted (auto: production + confirmed verdict + confirmed impact +
+≥5 min; or audited manual POST/DELETE `/api/correlations/{id}/rca-promotion`,
+tenant-scoped, isolation-tested); candidates stay a separate tier
+(`e77ceac6`). ⚠️ auto-promotion thresholds are an interpretation — owner
+may want to tune. (4) cause honesty — "possibly because of X (unconfirmed)"
++ evidence known/missing rows replace every bare "not identified"
+(`71ef7a99`). Original directive below for reference.
 
 Owner feedback on the last two days of RCA candidates: (1) **owner="NOC" is
 too generic** — dissect to the SEAM (access / middle-mile / cloud edge / SaaS
@@ -82,7 +99,17 @@ administrator users" phrasing): server-side per-user theme an admin can set
 in Settings → Users (today it's a per-browser localStorage pref) — NOT built,
 ask before building.
 
-## #111 — RCA correlation-object churn + honest candidate counts (filed 2026-07-18) — ⏳ OPEN
+## #111 — RCA correlation-object churn + honest candidate counts (filed 2026-07-18) — ✅ SHIPPED (all 3 steps, 2026-07-18)
+
+Step 1 display honesty: summary excludes `merged` from headline/tier
+counts, disclosed as its own "N merged duplicates" count (`8c7bd2fb`).
+Step 2 churn root cause: `engine.find_continuation` — an ongoing condition
+now ADOPTS and versions its open object instead of create-then-merge each
+sweep (uuid5 onset aging out of the 900s window was the trigger); ~13
+tombstones/min → 0, cutting ~90% of daily corr writes (`fde382b1`, 11 new
+tests, replay contract preserved via trigger-signal matching). Step 3
+tenant canonicalization: same root cause as #113 point 2 → `19f4df1`.
+Original diagnosis below.
 
 Owner asked why the Correlations page showed **22,560 RCA candidates**.
 Diagnosis (live CH, 24h window): only **59 open** candidates (37 suspected ·
@@ -109,7 +136,17 @@ Fix plan (in order):
    20:13) — empty tenant is ALL-tenant-visible under the CH row policy;
    canonicalize the CH write path like the PG leg (#78 `canonicalCorrTenant`).
 
-## #110 — Cloud platform backlog Wave 4 (2026-07-17→18) — 🟡 #11+#12 SHIPPED, #13 next
+## #110 — Cloud platform backlog Wave 4 (2026-07-17→18) — 🟡 #11+#12 SHIPPED, #13 integrated (see below)
+
+**#13 status 2026-07-18:** overnight worktree slices reconciled into the
+branch (duplicate Azure-cert implementation dropped in favor of `584bd19`):
+live permission validation + scope discovery (`990c6e4`), keyless AWS
+AssumeRoleWithWebIdentity (`820ff46`), per-exchange metrics — Go broker
+(`b35e931`) + poller wiring/scrape/tests (`b5ed266`). Workload-assertion
+minting: platform OIDC issuer (`CLOUD_WORKLOAD_ISSUER_URL` + vault-sealed
+RSA key, `/.well-known/openid-configuration` + `jwks.json`, broker adapters
+mint per-connector subjects; dormant unless configured). Remaining #13
+tail: live-network validation against a real cloud account (needs infra).
 
 - ✅ **#11 Real Settings editors** (merge `897e517`): per-tenant required-tags
   governance (store, GET/PUT, coverage wiring `3b13872` + editor `c7bf569`),
