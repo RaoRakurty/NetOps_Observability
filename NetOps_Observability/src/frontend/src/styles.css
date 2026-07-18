@@ -4537,6 +4537,40 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-appmap-cat { display: flex; flex-direction: column; gap: 4px; }
 .ao-appmap-cat-l { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-subtle); }
 
+/* service map — observed talks_to dependency canvas (tracker #110) */
+.ao-svcmap-stage { position: relative; height: 540px; border: 1px solid var(--panel-border);
+  border-radius: var(--r-2); overflow: hidden; background: var(--panel); }
+.ao-svcmap-node { display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding: 6px 10px; border: 1px solid var(--accent); border-left-width: 3px; border-radius: var(--r-2);
+  background: var(--panel); box-sizing: border-box; }
+.ao-svcmap-node--endpoint { border: 1px dashed var(--fg-subtle); background: transparent; }
+.ao-svcmap-node-l { font-weight: 650; font-size: 12px; color: var(--fg); line-height: 1.2;
+  overflow-wrap: anywhere; }
+.ao-svcmap-node--endpoint .ao-svcmap-node-l { font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 500; color: var(--fg-muted); }
+.ao-svcmap-node-s { font-size: 10.5px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+.ao-svcmap-handle { width: 6px; height: 6px; background: var(--border); border: none; }
+.ao-svcmap-cap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  font-size: var(--fs-micro, 12px); color: var(--fg-subtle); }
+.ao-svcmap-tenantwide { color: var(--warn); font-weight: 650; }
+.ao-svcmap-legend { display: flex; flex-wrap: wrap; gap: var(--sp-4); font-size: var(--fs-micro, 12px);
+  color: var(--fg-subtle); align-items: center; }
+.ao-svcmap-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ao-svcmap-key { display: inline-block; width: 14px; height: 10px; border-radius: 3px; }
+.ao-svcmap-key--svc { border: 1px solid var(--accent); border-left-width: 3px; background: var(--panel); }
+.ao-svcmap-key--ep { border: 1px dashed var(--fg-subtle); }
+.ao-svcmap-key--talks { height: 0; border-top: 3px solid var(--accent); border-radius: 0; }
+.ao-svcmap-key--blocked { height: 0; border-top: 2px dashed var(--crit); border-radius: 0; }
+.ao-svcmap-strip { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 6;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 10px;
+  font-size: 11.5px; color: var(--fg); background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-2); }
+.ao-svcmap-cell { display: inline-flex; align-items: baseline; gap: 5px; }
+.ao-svcmap-cell-k { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-subtle); }
+.ao-svcmap-blocked-note { color: var(--crit); font-weight: 650; }
+.ao-svcmap-strip-x { margin-left: auto; cursor: pointer; background: transparent; border: none;
+  color: var(--fg-subtle); font-weight: 800; font-size: 13px; }
+
 /* KPI cards — same left-accent idea as Stat */
 .ao-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-3); }
 .ao-card { background: var(--panel); border: 1px solid var(--panel-border); border-left: 3px solid var(--border);

@@ -19,6 +19,7 @@ import type {
 } from "./types";
 import { deriveObjectOrigins, EMPTY_ORIGIN } from "./origin";
 import type { ObjectOrigin } from "./origin";
+import type { ServiceMapWire } from "./serviceMap";
 
 // Sentinel for a numeric metric the platform does not measure yet (P3B–D).
 // The UI renders any value < 0 as "—" so it reads as "not measured", not "zero".
@@ -519,6 +520,28 @@ export async function downloadCloudExport(
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// ── Service map (Wave 3 #9 carried — tracker #110) ───────────────────────────
+// GET /api/cloud/service-map: the OBSERVED talks_to dependency graph over the
+// requested window. services/api.ts has no wrapper for this endpoint (its
+// `request` helper is module-private), so this read uses the same authed-fetch
+// pattern as downloadCloudExport above: Bearer token + X-Acting-Tenant —
+// tenant scope is enforced server-side exactly like every other cloud read.
+// window_hours mirrors cloudQS: only sent when it differs from the 24h default;
+// the server clamps 1..168 and echoes what it honored in meta.window_hours.
+export async function loadServiceMap(windowHours?: number): Promise<ServiceMapWire> {
+  const p = new URLSearchParams();
+  if (windowHours && windowHours !== 24) p.set("window_hours", String(windowHours));
+  const qs = p.toString();
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const scope = getActiveScope();
+  if (scope) headers["X-Acting-Tenant"] = scope;
+  const res = await fetch(`/api/cloud/service-map${qs ? `?${qs}` : ""}`, { headers });
+  if (!res.ok) throw new Error(`service map read failed: ${res.status} ${res.statusText}`);
+  return await res.json() as ServiceMapWire;
 }
 
 export type EvidenceBundle = {
