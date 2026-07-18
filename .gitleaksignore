@@ -37,3 +37,19 @@ d608591bfe492ef64a161e3c40a6f1a816ab7dbb:NetOps_Observability/src/backend/ai/doc
 4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:39
 4535a7588651b7666def75c7a1090780a43635e1:NetOps_Observability/docs-portal/docs/administration/api-access.md:curl-auth-header:82
 f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/mock-servicenow/README.md:curl-auth-user:58
+#
+# cloudconn/testdata/sigv4/* — false positives: these are the OFFICIAL AWS
+# SigV4 test-vector files (AWS's published signing test suite), carrying the
+# documented example credentials (AKIDEXAMPLE / the public example secret and
+# session token). Public by definition; never live credentials.
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-canonical-request.txt:generic-api-key:6
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/context.json:generic-api-key:5
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-signed-request.txt:generic-api-key:3
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/get-vanilla-with-session-token/header-signed-request.txt:generic-api-key:5
+346f24b799779f89418a20fd9973d93eb9152285:NetOps_Observability/src/backend/cloudconn/testdata/sigv4/post-sts-header-before/header-signed-request.txt:generic-api-key:5
+#
+# exchange_azure_cert_test.go — false positive: the flagged "secret" is the
+# literal PEM header string "-----BEGIN PRIVATE KEY-----" used as a splice
+# marker in the key/cert-mismatch test case; all key material in that test is
+# generated at runtime. No secret.
+584bd19fcc2d5403c4d6e3795042c540325a1a27:NetOps_Observability/src/backend/cloudconn/exchange_azure_cert_test.go:private-key:199
