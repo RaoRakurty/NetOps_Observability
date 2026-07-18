@@ -60,18 +60,6 @@ func newAWSProbeFixture(t *testing.T, allowed map[string]bool) *httptest.Server 
 	}))
 }
 
-func itoaTest(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
-}
-
 // wireProbeBroker wires the broker to the REAL AWS adapter with both the
 // exchanger and the probe client pointed at the fixture.
 func wireProbeBroker(s *server, fixture *httptest.Server) {
