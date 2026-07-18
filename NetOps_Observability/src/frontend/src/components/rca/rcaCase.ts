@@ -1,5 +1,5 @@
 import { CorrTimeline, CorrObject, Seam } from "../../services/api";
-import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE } from "./labels";
+import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph } from "./topoGraph";
 import { readServicePath } from "./servicePath";
@@ -660,12 +660,20 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     observedAt: (timeline.window_start || "").replace("T", " ").slice(0, 19) + " UTC",
     rcaId: obj.correlation_id.slice(0, 13),
     aside: [
-      // "Root cause" only names an object when the analysis CONFIRMED one; a
-      // suspected localization renders as evidence, never as the root cause.
+      // "Root cause" only names an object when CONFIRMED; a suspected case pairs
+      // the honest "Not identified" with the best hypothesis so the reader gets
+      // "possibly because of X", not a dead end (#113 owner directive).
       { k: "Root cause", v: confirmed && device ? `${device}${peer ? ` ↔ ${peer}` : ""}` : "Not identified" },
       ...(!confirmed && device ? [{ k: "Evidence localizes to", v: `${device}${peer ? ` ↔ ${peer}` : ""}`, mono: true }] : []),
-      { k: "Triage owner", v: "NOC" },
-      ...(confirmed && owner ? [{ k: "Escalation owner", v: owner }] : []),
+      // Ownership names the SEAM's responsible party from the matched signature
+      // (isp / carrier / cloud provider / app team) — never a generic "NOC"
+      // catch-all when the engine has an attribution. NOC appears only when the
+      // seam has not been narrowed at all (#113).
+      ...(owner
+        ? [confirmed
+          ? { k: "Owner", v: ownerLabel(owner) }
+          : { k: "Possible owner", v: `${ownerLabel(owner)} — unconfirmed` }]
+        : [{ k: "Possible owner", v: "Not yet narrowed — NOC triage" }]),
       { k: "Signals", v: `${attachedCount} tied to this case (${obj.signal_count ?? attachedCount} in window)` },
       { k: "Suggested ticket", v: confirmed ? "Open P2" : "Hold — policy threshold not met" },
     ],
@@ -673,11 +681,11 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
       callout: confirmed ? { tone: "red", strong: "Open incident:", text: "Customer impact is confirmed." } : { tone: "", strong: "Not opened —", text: "impact not confirmed. Auto-ticketing holds until independent evidence confirms customer impact." },
-      rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: owner || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],
+      rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: ownerLabel(owner) || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],
     },
     nextActions,
     assistant: {
-      questions: ["Why is this not confirmed?", "What would confirm it?", `What should ${owner || "the team"} check first?`, "Why were active checks ignored?", "Should a ticket be opened?"],
+      questions: ["Why is this not confirmed?", "What would confirm it?", `What should ${ownerLabel(owner) || "the team"} check first?`, "Why were active checks ignored?", "Should a ticket be opened?"],
       sampleAnswer: confirmed ? "Independent evidence aligns in the same window and scope, so customer impact is confirmed." : "This rests on a single observation; independent evidence (peer-side routing, traffic-flow loss, downstream impact, or an active check) is needed before confirming customer impact.",
     },
     cloud,

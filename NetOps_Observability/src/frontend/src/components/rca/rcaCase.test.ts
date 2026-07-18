@@ -136,6 +136,48 @@ describe("buildRcaCase — confirmed multi-plane object", () => {
   });
 });
 
+// #113 (owner directive 2026-07-18): ownership must name the seam's responsible
+// party from the matched signature — never a hardcoded "NOC" catch-all. NOC
+// appears only when the engine has no attribution at all.
+describe("buildRcaCase — seam ownership attribution (#113)", () => {
+  const suspectedTl = timeline({
+    verdict_tier: "suspected",
+    top_hypothesis: "undetermined",
+    signals: [signal({ kind: "probe_loss", modality_class: "active_probe", entity_id: "site-a>saas", attached: true })],
+  });
+  const suspectedObj = corrObject({ verdict_tier: "suspected", state: "open", signal_count: 1 });
+
+  it("suspected + engine attribution → 'Possible owner: <label> — unconfirmed', no hardcoded NOC", () => {
+    const c = buildRcaCase(suspectedTl, suspectedObj, {}, "isp", []);
+    const possible = c.aside.find((r) => r.k === "Possible owner");
+    expect(possible?.v).toBe("ISP / carrier — unconfirmed");
+    expect(c.aside.some((r) => r.v === "NOC")).toBe(false);
+    expect(c.aside.some((r) => r.k === "Owner")).toBe(false); // unconfirmed never claims "Owner"
+  });
+
+  it("suspected + no attribution → honest 'Not yet narrowed — NOC triage'", () => {
+    const c = buildRcaCase(suspectedTl, suspectedObj, {}, "", []);
+    expect(c.aside.find((r) => r.k === "Possible owner")?.v).toBe("Not yet narrowed — NOC triage");
+  });
+
+  it("confirmed + attribution → 'Owner: <label>' and ticket assignment uses the label", () => {
+    const tl = timeline({
+      verdict_tier: "confirmed",
+      top_hypothesis: "bgp-flap",
+      signals: [
+        signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}', ts: "2026-06-16 19:25:06" }),
+        signal({ kind: "device_resource_anomaly", modality_class: "device_telemetry", entity_id: "wan-r2", ts: "2026-06-16 19:25:10", is_trigger: false }),
+        signal({ kind: "flow_volume_anomaly", modality_class: "passive_flow", entity_id: "wan-r2", ts: "2026-06-16 19:25:20", is_trigger: false }),
+      ],
+    });
+    const obj = corrObject({ verdict_tier: "confirmed", top_hypothesis: "bgp-flap", state: "open", signal_count: 3 });
+    const c = buildRcaCase(tl, obj, {}, "cloud_provider", []);
+    expect(c.aside.find((r) => r.k === "Owner")?.v).toBe("Cloud provider");
+    expect(c.aside.some((r) => r.k === "Possible owner")).toBe(false);
+    expect(c.ticket.rows.find((r) => r.k === "Assignment")?.v).toBe("Cloud provider");
+  });
+});
+
 describe("buildRcaCase — copy guards (operator view)", () => {
   const tl = timeline({ signals: [signal({ entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}' })] });
   const obj = corrObject();
