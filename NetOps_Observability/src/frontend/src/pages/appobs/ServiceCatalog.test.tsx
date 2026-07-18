@@ -11,7 +11,7 @@ const h = vi.hoisted(() => {
   const svc = (over: Partial<BusinessServiceRow> = {}): BusinessServiceRow => ({
     business_service_id: "b1", tenant_id: "t", name: "payments",
     description: "card processing", criticality: "critical", owner: "payments-sre",
-    created_by: "u", created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-15T00:00:00Z",
+    runbook_url: "", created_by: "u", created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-15T00:00:00Z",
     ...over,
   });
   return {
@@ -55,9 +55,11 @@ describe("ServiceCatalog", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g. payments"), { target: { value: "checkout" } });
     fireEvent.change(screen.getByLabelText("Criticality"), { target: { value: "high" } });
     fireEvent.change(screen.getByPlaceholderText(/accountable/), { target: { value: "web-team" } });
+    fireEvent.change(screen.getByPlaceholderText(/operational runbook/), { target: { value: "https://runbooks.example.com/checkout" } });
     fireEvent.click(screen.getByRole("button", { name: "Create service" }));
     await waitFor(() => expect(mock.cloudCreateBusinessService).toHaveBeenCalledWith({
       name: "checkout", description: "", criticality: "high", owner: "web-team",
+      runbook_url: "https://runbooks.example.com/checkout",
     }));
   });
 

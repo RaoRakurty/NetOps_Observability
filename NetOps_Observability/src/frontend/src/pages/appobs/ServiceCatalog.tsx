@@ -15,7 +15,7 @@ import { Chip } from "../../components/noc";
 import DataTable from "../../components/DataTable";
 import { EmptyState, EvidenceDrawer } from "./badges";
 import { assignErrorMessage } from "./assign";
-import { CRITICALITY_META, CRITICALITY_ORDER, criticalityRank, mappingCounts, validateServiceForm } from "./catalog";
+import { CRITICALITY_META, CRITICALITY_ORDER, criticalityRank, mappingCounts, safeRunbookUrl, validateServiceForm } from "./catalog";
 import { fmtDateTime } from "../../lib/time";
 
 export function CriticalityBadge({ value }: { value: string }) {
@@ -24,8 +24,8 @@ export function CriticalityBadge({ value }: { value: string }) {
   return <Chip label={meta.label} tone={meta.tone} />;
 }
 
-type FormState = { id: string; name: string; description: string; criticality: string; owner: string };
-const EMPTY_FORM: FormState = { id: "", name: "", description: "", criticality: "normal", owner: "" };
+type FormState = { id: string; name: string; description: string; criticality: string; owner: string; runbook: string };
+const EMPTY_FORM: FormState = { id: "", name: "", description: "", criticality: "normal", owner: "", runbook: "" };
 
 function CatalogForm({ initial, busy, error, onSubmit, onClose }: {
   initial: FormState; busy: boolean; error: string;
@@ -65,6 +65,11 @@ function CatalogForm({ initial, busy, error, onSubmit, onClose }: {
           <span className="ccw-label">Owner</span>
           <input className="ccw-input" type="text" value={f.owner} maxLength={128}
             placeholder="team or person accountable, e.g. payments-sre" onChange={set("owner")} />
+        </label>
+        <label className="ccw-field">
+          <span className="ccw-label">Runbook URL</span>
+          <input className="ccw-input" type="url" value={f.runbook} maxLength={512}
+            placeholder="https:// link to this service's operational runbook" onChange={set("runbook")} />
         </label>
         <label className="ccw-field">
           <span className="ccw-label">Description</span>
@@ -114,7 +119,7 @@ export default function ServiceCatalog() {
     setFormErr("");
     const body: BusinessServiceInput = {
       name: f.name.trim(), description: f.description.trim(),
-      criticality: f.criticality, owner: f.owner.trim(),
+      criticality: f.criticality, owner: f.owner.trim(), runbook_url: f.runbook.trim(),
     };
     try {
       if (f.id) await api.cloudUpdateBusinessService(f.id, body);
@@ -179,6 +184,15 @@ export default function ServiceCatalog() {
                 render: (s) => <CriticalityBadge value={s.criticality} /> },
               { key: "owner", header: "Owner", width: 160, sortValue: (s) => s.owner,
                 render: (s) => s.owner || <span className="ao-muted">—</span> },
+              { key: "runbook", header: "Runbook", width: 80, align: "center",
+                sortValue: (s) => (safeRunbookUrl(s.runbook_url) ? 0 : 1),
+                render: (s) => {
+                  const href = safeRunbookUrl(s.runbook_url);
+                  return href
+                    ? <a className="ao-console-link" href={href} target="_blank" rel="noopener noreferrer"
+                        title={href} onClick={(e) => e.stopPropagation()}>open ↗</a>
+                    : <span className="ao-muted">—</span>;
+                } },
               { key: "desc", header: "Description", width: 280, sortValue: (s) => s.description,
                 render: (s) => s.description
                   ? <span className="ao-why" title={s.description}>{s.description}</span>
@@ -193,7 +207,7 @@ export default function ServiceCatalog() {
                   <button className="ao-rowaction" onClick={(e) => {
                     e.stopPropagation();
                     setFormErr("");
-                    setForm({ id: s.business_service_id, name: s.name, description: s.description, criticality: s.criticality || "normal", owner: s.owner });
+                    setForm({ id: s.business_service_id, name: s.name, description: s.description, criticality: s.criticality || "normal", owner: s.owner, runbook: s.runbook_url || "" });
                   }}>Edit</button>
                   <button className="ao-rowaction" onClick={(e) => {
                     e.stopPropagation();

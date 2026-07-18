@@ -4,11 +4,11 @@
 
 import { describe, it, expect } from "vitest";
 import type { BusinessServiceRow, ResourceMappingRow } from "../../services/api";
-import { criticalityRank, mappingCounts, catalogByName, nameKey, validateServiceForm } from "./catalog";
+import { criticalityRank, mappingCounts, catalogByName, nameKey, safeRunbookUrl, validateServiceForm } from "./catalog";
 
 const svc = (over: Partial<BusinessServiceRow>): BusinessServiceRow => ({
   business_service_id: "b1", tenant_id: "t", name: "payments", description: "",
-  criticality: "normal", owner: "", created_by: "u", created_at: "", updated_at: "",
+  criticality: "normal", owner: "", runbook_url: "", created_by: "u", created_at: "", updated_at: "",
   ...over,
 });
 const map = (over: Partial<ResourceMappingRow>): ResourceMappingRow => ({
@@ -59,5 +59,27 @@ describe("validateServiceForm", () => {
     expect(validateServiceForm({ name: "two\nlines", owner: "" })).toMatch(/single line/);
     expect(validateServiceForm({ name: "ok", owner: "two\nlines" })).toMatch(/owner/);
     expect(validateServiceForm({ name: "ok", owner: "a".repeat(129) })).toMatch(/owner/);
+  });
+  it("accepts an empty or https runbook link, rejects anything else", () => {
+    expect(validateServiceForm({ name: "ok", owner: "", runbook: "" })).toBe("");
+    expect(validateServiceForm({ name: "ok", owner: "", runbook: "https://wiki.corp/runbooks/pay" })).toBe("");
+    expect(validateServiceForm({ name: "ok", owner: "", runbook: "http://wiki.corp/pay" })).toMatch(/https/);
+    expect(validateServiceForm({ name: "ok", owner: "", runbook: "not a url" })).toMatch(/https/);
+  });
+});
+
+describe("safeRunbookUrl (zero-trust href gate)", () => {
+  it("passes only bounded absolute https URLs", () => {
+    expect(safeRunbookUrl("https://runbooks.example.com/payments")).toBe("https://runbooks.example.com/payments");
+    expect(safeRunbookUrl(" https://runbooks.example.com/x ")).toBe("https://runbooks.example.com/x");
+  });
+  it("drops unset, non-https, script schemes, relative and oversized values", () => {
+    expect(safeRunbookUrl(undefined)).toBe("");
+    expect(safeRunbookUrl("")).toBe("");
+    expect(safeRunbookUrl("http://runbooks.example.com/x")).toBe("");
+    expect(safeRunbookUrl("javascript:alert(1)")).toBe("");
+    expect(safeRunbookUrl("data:text/html,x")).toBe("");
+    expect(safeRunbookUrl("/relative/runbook")).toBe("");
+    expect(safeRunbookUrl("https://runbooks.example.com/" + "a".repeat(512))).toBe("");
   });
 });

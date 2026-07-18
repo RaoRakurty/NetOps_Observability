@@ -55,7 +55,7 @@ function printableLine(s: string): boolean {
   return true;
 }
 
-export function validateServiceForm(f: { name: string; owner: string }): string {
+export function validateServiceForm(f: { name: string; owner: string; runbook?: string }): string {
   const name = f.name.trim();
   if (!name) return "a service name is required";
   if (name.length > 128) return "the service name must be 128 characters or fewer";
@@ -63,5 +63,30 @@ export function validateServiceForm(f: { name: string; owner: string }): string 
   const owner = f.owner.trim();
   if (owner.length > 128) return "the owner must be 128 characters or fewer";
   if (!printableLine(owner)) return "the owner must be a single line of printable text";
+  const runbook = (f.runbook ?? "").trim();
+  if (runbook && !isSafeRunbookUrl(runbook)) {
+    return "the runbook link must be an absolute https:// URL (512 characters or fewer)";
+  }
   return "";
+}
+
+// client-side mirror of the backend bizSvcRunbookURL bounds (Wave 4 #12):
+// empty = unset; otherwise an absolute https:// URL with a host, ≤512 chars.
+// Also the zero-trust gate before a stored runbook_url ever reaches an
+// <a href> — never render javascript:/data:/http: as a click-through.
+export function isSafeRunbookUrl(raw: string): boolean {
+  const s = raw.trim();
+  if (!s || s.length > 512 || !printableLine(s)) return false;
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" && u.hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+// safeRunbookUrl returns the renderable href ("" when unset or unsafe).
+export function safeRunbookUrl(raw: string | undefined): string {
+  const s = (raw ?? "").trim();
+  return isSafeRunbookUrl(s) ? s : "";
 }

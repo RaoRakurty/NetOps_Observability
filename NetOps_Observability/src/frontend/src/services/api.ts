@@ -3282,6 +3282,7 @@ export type BusinessServiceRow = {
   description: string;
   criticality: string; // critical | high | normal | low | ""
   owner: string;       // accountable team/person label ("" = unset)
+  runbook_url: string; // https-only operational runbook link ("" = unset)
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -3293,6 +3294,7 @@ export type BusinessServiceInput = {
   description?: string;
   criticality?: string;
   owner?: string;
+  runbook_url?: string;
 };
 
 // One resource_id → service binding (backend ResourceMapping).
