@@ -5133,3 +5133,20 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .inv-verify-closed { font-size: 12.5px; color: var(--fg); border-top: 1px dashed var(--border); padding-top: 7px; }
 .inv-verify-note { color: var(--fg-muted, var(--muted)); margin-top: 3px; }
 .inv-verify-err { color: var(--crit); font-size: 12.5px; }
+
+/* resolution actions row (Wave 4 #12 — console / ITSM ticket / runbook) */
+.inv-actions { border: 1px solid var(--border); border-radius: var(--r-2, 8px);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.inv-actions-h { font-weight: 700; font-size: 12.5px; }
+.inv-actions-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.inv-actions-label { min-width: 110px; color: var(--fg-muted, var(--muted)); font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: .04em; }
+
+/* change→incident correlation card (Wave 4 #12 slice 3) */
+.inv-changes { border: 1px solid var(--border); border-radius: var(--r-2, 8px);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.inv-changes-h { font-weight: 700; font-size: 12.5px; display: flex; align-items: baseline; gap: 8px; }
+.inv-changes-meta { color: var(--fg-muted, var(--muted)); font-size: 11.5px; font-weight: 400; }
+.inv-changes-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.inv-changes-when { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; white-space: nowrap; }
+.inv-changes-actor { color: var(--fg-muted, var(--muted)); }

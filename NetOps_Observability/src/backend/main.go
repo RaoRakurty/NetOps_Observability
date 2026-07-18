@@ -721,6 +721,20 @@ func main() {
 		go newTicketStateSyncer(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
 		logInfo("ticketing", "RCA auto-ticketing enabled", nil)
 	}
+	// Cloud signal notifications (Wave 4 #12 slice 1): page/message the owning
+	// tenant when a cloud correlation object OPENS, through that tenant's OWN
+	// RCA Slack/PagerDuty lanes (itsmConfigStore). Opt-in + default-off; a
+	// tenant with no configured lane is an honest no-op.
+	if os.Getenv("FEATURE_CLOUD_SIGNAL_NOTIFICATIONS") == "true" {
+		resolveNotify := func(tenant string) []cloudNotifyTarget {
+			if srv.itsmCfg == nil {
+				return nil
+			}
+			return srv.itsmCfg.rcaNotifyTargets(tenant)
+		}
+		go newCloudNotifySweeper(srv, resolveNotify).Run(ctx, durationOr("CLOUD_NOTIFY_INTERVAL", 60*time.Second))
+		logInfo("cloud", "cloud signal notifications enabled", nil)
+	}
 	// NMS controller polling (#95 P3b): each enabled integration polls on its
 	// own interval; the tick only re-evaluates due-ness. Non-nil only when
 	// FEATURE_NMS_INTEGRATIONS=true.
@@ -1019,6 +1033,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
 	mux.HandleFunc("/api/cloud/changes", s.handleCloudChanges)
 	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
+	mux.HandleFunc("/api/cloud/investigations/", s.handleCloudInvestigationChanges) // {id}/changes — change→incident correlation (Wave 4 #12)
 	mux.HandleFunc("/api/cloud/service-map", s.handleCloudServiceMap)
 	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
 	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)

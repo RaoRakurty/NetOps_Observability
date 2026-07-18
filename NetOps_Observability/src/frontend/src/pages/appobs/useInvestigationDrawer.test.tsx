@@ -18,6 +18,14 @@ vi.mock("../../services/api", () => ({
 vi.mock("../../tabs/Correlations", () => ({
   CorrelationDetail: ({ id }: { id: string }) => <div data-testid="corr-detail">{id}</div>,
 }));
+// the resolution action row has its own test file (ResolutionActions.test.tsx).
+vi.mock("./ResolutionActions", () => ({
+  default: ({ id }: { id: string }) => <div data-testid="resolution-actions">{id}</div>,
+}));
+// so does the change→incident card (InvestigationChanges.test.tsx).
+vi.mock("./InvestigationChanges", () => ({
+  default: ({ id }: { id: string }) => <div data-testid="investigation-changes">{id}</div>,
+}));
 
 import { useInvestigationDrawer } from "./useInvestigationDrawer";
 

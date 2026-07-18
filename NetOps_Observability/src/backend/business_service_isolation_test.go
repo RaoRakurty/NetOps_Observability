@@ -35,7 +35,8 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 
 	// acme creates a named service and maps a resource to it.
 	svc, err := st.CreateService(ctx, "acme", false,
-		BusinessService{TenantID: "acme", Name: "payments", Owner: "payments-sre", CreatedBy: "u-acme"})
+		BusinessService{TenantID: "acme", Name: "payments", Owner: "payments-sre",
+			RunbookURL: "https://runbooks.acme.example/payments", CreatedBy: "u-acme"})
 	if err != nil {
 		t.Fatalf("acme CreateService: %v", err)
 	}
@@ -49,6 +50,8 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("acme should see exactly its own service, got %d", len(svcs))
 	} else if svcs[0].Owner != "payments-sre" {
 		t.Fatalf("owner should round-trip, got %q", svcs[0].Owner)
+	} else if svcs[0].RunbookURL != "https://runbooks.acme.example/payments" {
+		t.Fatalf("runbook_url should round-trip, got %q", svcs[0].RunbookURL)
 	}
 	if maps, _ := st.ListMappings(ctx, "acme", false); len(maps) != 1 {
 		t.Fatalf("acme should see exactly its own mapping, got %d", len(maps))

@@ -480,11 +480,14 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
           <MetricCard label="Recent Cloud Changes" value={changes.length} trend={`provider audit log · ${rangeText}`} />
         </CardGroup>
       </div>
-      {/* Roadmap honesty (rev #22): the two impact metrics we do NOT measure yet
-          moved out of the cards — a permanent "—" card reads as broken, a
-          footnote reads as a roadmap. They return as cards when their feeds land. */}
+      {/* Roadmap honesty (rev #22): the impact metric we do NOT measure yet
+          stays out of the cards — a permanent "—" card reads as broken, a
+          footnote reads as a roadmap. Deploy-linked change correlation shipped
+          per-investigation (Wave 4 #12: the "Changes near onset" card in the
+          investigation drawer); an Overview-level aggregate returns here when
+          its feed lands. */}
       <div className="ao-muted" style={{ fontSize: 12 }}>
-        Coming soon: network impact (service→connection correlation) · deploy-linked incidents (deploy events)
+        Coming soon: network impact (service→connection correlation)
       </div>
 
       {/* A2. worst-first degraded services (rev #22): name · duration ·

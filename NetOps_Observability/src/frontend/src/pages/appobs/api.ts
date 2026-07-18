@@ -433,6 +433,28 @@ export async function loadChangeEvents(app?: string, windowHours?: number): Prom
   return (r.changes ?? []).map(toChangeEvent);
 }
 
+// Change→incident correlation (Wave 4 #12): ONE investigation's changes in the
+// onset-anchored window, with the onset-relative offset the card renders.
+export type InvestigationChange = ChangeEvent & { offsetSeconds: number };
+export type InvestigationChanges = {
+  changes: InvestigationChange[];
+  onset: string;
+  basis: "affected_scope" | "no_affected_resources" | "onset_unknown";
+  lookbackHours: number;
+};
+export async function loadInvestigationChanges(id: string): Promise<InvestigationChanges> {
+  const r = await api.cloudInvestigationChanges(id);
+  return {
+    changes: (r.changes ?? []).map((c) => ({
+      ...toChangeEvent(c),
+      offsetSeconds: typeof c.offset_seconds === "number" ? c.offset_seconds : 0,
+    })),
+    onset: r.onset ?? "",
+    basis: r.basis ?? "affected_scope",
+    lookbackHours: r.lookback_hours ?? 6,
+  };
+}
+
 // ── Wave 3 #10: paged/searchable reads + export download ─────────────────────
 // One page of a signal surface: rows + the keyset cursor for the NEXT page
 // ("" = no more). `q` narrows the SERVER read (cloud_signals.go ?q=), so a

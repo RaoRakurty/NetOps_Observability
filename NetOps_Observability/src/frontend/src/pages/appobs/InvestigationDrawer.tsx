@@ -15,6 +15,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api, RcaReportJson, TimeEventRow } from "../../services/api";
 import { CorrelationDetail } from "../../tabs/Correlations";
 import { friendlyProblemId } from "../../components/rca/labels";
+import ResolutionActions from "./ResolutionActions";
+import InvestigationChanges from "./InvestigationChanges";
 
 // ── recovery-verification derivation (pure — unit-tested) ────────────────────
 
@@ -234,6 +236,8 @@ export default function InvestigationDrawer({ id }: { id: string }) {
         </a>
       </div>
       <InvestigationVerification id={id} />
+      <ResolutionActions id={id} />
+      <InvestigationChanges id={id} />
       <CorrelationDetail id={id} />
     </div>
   );
