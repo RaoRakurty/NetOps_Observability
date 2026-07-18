@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"netops/backend/appid"
 	"netops/backend/cloud"
 )
 
@@ -42,6 +43,10 @@ type tenantGovernanceConfig struct {
 	// RcaWindowHours: default read window for the tenant-scoped cloud signal /
 	// RCA surfaces when a request names none. 0 = unset → platform default.
 	RcaWindowHours int `json:"rca_window_hours,omitempty"`
+	// AttributionPrecedence: tenant ordering of the appid precedence classes
+	// (a validated permutation of appid.PrecedenceClasses). nil = unset →
+	// the intrinsic default ladder.
+	AttributionPrecedence []string `json:"attribution_precedence,omitempty"`
 }
 
 // tenantGovernanceStore is a file-backed per-tenant map, keyed by tenant in the
@@ -217,6 +222,103 @@ func (s *server) handleRcaWindowSettings(w http.ResponseWriter, r *http.Request)
 				Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
 				Remote: auditClientIP(r),
 				Detail: map[string]any{"action": "set_rca_window", "rca_window_hours": hours, "reset": body.Reset},
+			})
+		}
+		writeState(tenant)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+	}
+}
+
+// attributionPrecedence returns the tenant's precedence order and whether it
+// is a custom override. nil order (default) makes the resolver use the
+// intrinsic ladder — exactly the pre-editor behavior. A stored order that no
+// longer validates (e.g. after a class-vocabulary change) reads as default
+// rather than being trusted (§3: never trust cached data without validation).
+// Nil-safe.
+func (s *tenantGovernanceStore) attributionPrecedence(tenant string) ([]string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.cfgs[tenant]; ok && len(c.AttributionPrecedence) > 0 {
+		if order, err := appid.NormalizePrecedence(c.AttributionPrecedence); err == nil {
+			return order, true
+		}
+	}
+	return nil, false
+}
+
+// setAttributionPrecedence stamps the tenant FROM THE PRINCIPAL and persists.
+// order==nil resets the tenant to the default ladder.
+func (s *tenantGovernanceStore) setAttributionPrecedence(tenant string, order []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.cfgs[tenant]
+	c.TenantID = tenant
+	c.AttributionPrecedence = order
+	s.cfgs[tenant] = c
+	s.saveLocked()
+}
+
+// handleAttributionPrecedenceSettings serves GET/PUT /api/settings/attribution-precedence.
+func (s *server) handleAttributionPrecedenceSettings(w http.ResponseWriter, r *http.Request) {
+	writeState := func(tenant string) {
+		order, custom := s.governance.attributionPrecedence(tenant)
+		if !custom {
+			order = appid.PrecedenceClasses()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":              tenant,
+			"attribution_precedence": order,
+			"is_default":             !custom,
+			"default_precedence":     appid.PrecedenceClasses(),
+		})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		tenant, _ := principalTenant(claims)
+		writeState(tenant)
+	case http.MethodPut:
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			AttributionPrecedence []string `json:"attribution_precedence"`
+			Reset                 bool     `json:"reset,omitempty"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+			return
+		}
+		var order []string
+		if !body.Reset {
+			var err error
+			// Closed vocabulary: must be a PERMUTATION of the known classes.
+			if order, err = appid.NormalizePrecedence(body.AttributionPrecedence); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if appid.IsDefaultPrecedence(order) {
+				order = nil // storing the default order IS the default — one truth
+			}
+		}
+		tenant, cross := principalTenant(claims)
+		s.governance.setAttributionPrecedence(tenant, order)
+		if s.audit != nil {
+			s.audit.Record(AuditEvent{
+				Actor: claims.Sub, Tenant: tenant, Cross: cross,
+				Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+				Remote: auditClientIP(r),
+				Detail: map[string]any{"action": "set_attribution_precedence", "attribution_precedence": order, "reset": body.Reset || order == nil},
 			})
 		}
 		writeState(tenant)

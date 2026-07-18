@@ -37,7 +37,7 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
-import { RequiredTagsCard, RcaWindowCard } from "./appobs/GovernanceSettings";
+import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
@@ -1660,7 +1660,6 @@ function Settings() {
       cta: "Connect a cloud account",
       onClick: openCloudAccounts,
     },
-    { t: "Attribution Rules", d: "Source precedence when signals disagree (platform default — not yet editable).", value: "cloud tag → resource graph → firewall App-ID → domain → IP catalog" },
   ];
   return (
     <div className="ao-settings">
@@ -1675,6 +1674,7 @@ function Settings() {
         </div>
       ))}
       {/* Wave 4 #11: REAL per-tenant editors (persisted, audited, admin-gated). */}
+      <AttributionPrecedenceCard />
       <RequiredTagsCard />
       <RcaWindowCard />
     </div>

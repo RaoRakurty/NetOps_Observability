@@ -1,6 +1,6 @@
 // Wave 4 #11 — governance Settings editors: pure-helper contracts.
 import { describe, expect, it } from "vitest";
-import { normalizeTagKey } from "./GovernanceSettings";
+import { moveItem, normalizeTagKey } from "./GovernanceSettings";
 import { missingTags, DEFAULT_REQUIRED_TAGS } from "./api";
 
 describe("normalizeTagKey (mirror of tenant_governance.go validation)", () => {
@@ -15,6 +15,20 @@ describe("normalizeTagKey (mirror of tenant_governance.go validation)", () => {
     expect(normalizeTagKey("has space")).toBeNull();
     expect(normalizeTagKey("quote'")).toBeNull();
     expect(normalizeTagKey("x".repeat(65))).toBeNull();
+  });
+});
+
+describe("moveItem (precedence up/down reorder)", () => {
+  const abc = ["a", "b", "c"];
+  it("swaps neighbours immutably", () => {
+    expect(moveItem(abc, 1, -1)).toEqual(["b", "a", "c"]);
+    expect(moveItem(abc, 1, +1)).toEqual(["a", "c", "b"]);
+    expect(abc).toEqual(["a", "b", "c"]); // untouched
+  });
+  it("returns the same array at the edges (no-op)", () => {
+    expect(moveItem(abc, 0, -1)).toBe(abc);
+    expect(moveItem(abc, 2, +1)).toBe(abc);
+    expect(moveItem(abc, 5, +1)).toBe(abc);
   });
 });
 

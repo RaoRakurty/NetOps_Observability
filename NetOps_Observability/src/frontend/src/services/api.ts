@@ -1520,6 +1520,18 @@ export const api = {
     request<RcaWindowSettings>("/api/settings/rca-window", {
       method: "PUT", body: JSON.stringify({ reset: true }),
     }),
+  // Attribution precedence — tenant ordering of the resolver's precedence
+  // classes (must be a permutation of the server's known classes).
+  getAttributionPrecedence: () =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence"),
+  setAttributionPrecedence: (order: string[]) =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
+      method: "PUT", body: JSON.stringify({ attribution_precedence: order }),
+    }),
+  resetAttributionPrecedence: () =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
 
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
@@ -3313,6 +3325,14 @@ export type RcaWindowSettings = {
   is_default: boolean;
   default_hours: number;
   max_hours: number;
+};
+
+// Per-tenant attribution-precedence ordering (Wave 4 #11 slice 3).
+export type AttributionPrecedenceSettings = {
+  tenant_id: string;
+  attribution_precedence: string[];
+  is_default: boolean;
+  default_precedence: string[];
 };
 
 // Required-tag compliance over the tenant's inventory (coverage response).

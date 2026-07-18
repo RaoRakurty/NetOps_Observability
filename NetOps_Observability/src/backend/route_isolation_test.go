@@ -74,6 +74,7 @@ var routeIsolationLedger = map[string]string{
 	// (tenant_governance_test.go).
 	"/api/settings/required-tags": "scoped",
 	"/api/settings/rca-window":    "scoped",
+	"/api/settings/attribution-precedence": "scoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
 	"/api/rca/":                                "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's

@@ -168,7 +168,11 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		signals = append(signals, s.appCatalog.domains().SignalsFor(domain)...)
 		signals = append(signals, ov.domains.SignalsFor(domain)...)
 	}
-	writeJSON(w, http.StatusOK, appid.Fuse(signals))
+	// Per-tenant attribution precedence (Wave 4 #11 slice 3): a tenant's
+	// governed class order decides winner selection among competing signals;
+	// nil (unconfigured) keeps the intrinsic ladder — bit-identical to before.
+	order, _ := s.governance.attributionPrecedence(tenant)
+	writeJSON(w, http.StatusOK, appid.FuseWithPrecedence(signals, order))
 }
 
 func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
@@ -182,10 +186,18 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, cross := principalTenant(claims)
 	ov := s.overridesFor(r.Context(), tenant, cross)
+	// The tenant's ACTIVE precedence order (default ladder when unset) — the
+	// status surface stays inspectable after the editor ships.
+	order, customOrder := s.governance.attributionPrecedence(tenant)
+	if !customOrder {
+		order = appid.PrecedenceClasses()
+	}
 	// The engine's coverage at a glance (the design's "coverage is INSPECTABLE"):
 	// global vendor catalog + domain matcher (shared), the firewall app-id overlay,
 	// and THIS tenant's operator overrides.
 	writeJSON(w, http.StatusOK, map[string]any{
+		"attribution_precedence":    order,
+		"precedence_is_default":     !customOrder,
 		"feeds_configured":    s.appCatalog.feedsDir != "",
 		"catalog_prefixes":    s.appCatalog.get().Size(),
 		"catalog_domains":     s.appCatalog.domains().Size(),

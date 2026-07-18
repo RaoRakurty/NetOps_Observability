@@ -219,6 +219,108 @@ func TestRcaWindowHandlerIsolation(t *testing.T) {
 	}
 }
 
+func TestGovernanceStorePrecedenceDefaultsAndKeying(t *testing.T) {
+	st := newTenantGovernanceStore("")
+	if order, custom := st.attributionPrecedence("t-a"); custom || order != nil {
+		t.Fatalf("unconfigured tenant = (%v,%v), want default", order, custom)
+	}
+	reordered := []string{"firewall_appid", "operator", "cloud_tag", "cloud_graph", "domain", "ip_catalog"}
+	st.setAttributionPrecedence("t-a", reordered)
+	if order, custom := st.attributionPrecedence("t-a"); !custom || !reflect.DeepEqual(order, reordered) {
+		t.Fatalf("t-a = (%v,%v)", order, custom)
+	}
+	// §3a: keyed per tenant.
+	if _, custom := st.attributionPrecedence("t-b"); custom {
+		t.Fatal("t-b must stay default — cross-tenant bleed")
+	}
+	// A stored order that no longer validates reads as default, never trusted.
+	st.setAttributionPrecedence("t-a", []string{"bogus"})
+	if _, custom := st.attributionPrecedence("t-a"); custom {
+		t.Fatal("invalid stored order must fall back to default")
+	}
+	var nilStore *tenantGovernanceStore
+	if order, custom := nilStore.attributionPrecedence("t-a"); custom || order != nil {
+		t.Fatalf("nil store = (%v,%v)", order, custom)
+	}
+}
+
+func TestAttributionPrecedenceHandlerIsolation(t *testing.T) {
+	s := governanceTestServer(t)
+	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
+	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
+	viewerA := jwtClaims{Role: "viewer", Tenant: "t-a", Sub: "user-a"}
+
+	put := func(c jwtClaims, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/settings/attribution-precedence", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.handleAttributionPrecedenceSettings(rec, claimsCtx(r, c))
+		return rec
+	}
+	get := func(c jwtClaims) (order []string, isDefault bool, tenant string) {
+		r := httptest.NewRequest(http.MethodGet, "/api/settings/attribution-precedence", nil)
+		rec := httptest.NewRecorder()
+		s.handleAttributionPrecedenceSettings(rec, claimsCtx(r, c))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET = %d", rec.Code)
+		}
+		var out struct {
+			TenantID              string   `json:"tenant_id"`
+			AttributionPrecedence []string `json:"attribution_precedence"`
+			IsDefault             bool     `json:"is_default"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.AttributionPrecedence, out.IsDefault, out.TenantID
+	}
+
+	reordered := `["firewall_appid","operator","cloud_tag","cloud_graph","domain","ip_catalog"]`
+	// Tenant admin sets its OWN tenant — a tenant_id in the body is IGNORED.
+	if rec := put(admA, `{"attribution_precedence":`+reordered+`,"tenant_id":"t-b"}`); rec.Code != http.StatusOK {
+		t.Fatalf("admin PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	if order, isDef, tenant := get(admA); tenant != "t-a" || isDef || order[0] != "firewall_appid" {
+		t.Fatalf("t-a sees (%v,%v,%q)", order, isDef, tenant)
+	}
+	// §3a: tenant B is untouched by A's write.
+	if _, isDef, _ := get(admB); !isDef {
+		t.Fatal("t-b must stay default — cross-tenant write leak")
+	}
+	// Viewer reads, cannot write.
+	if order, _, _ := get(viewerA); order[0] != "firewall_appid" {
+		t.Fatalf("viewer of t-a sees %v", order)
+	}
+	if rec := put(viewerA, `{"attribution_precedence":`+reordered+`}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer PUT = %d, want 403", rec.Code)
+	}
+	// NOT a permutation → 400 (missing class / duplicate / unknown class).
+	for _, bad := range []string{
+		`{"attribution_precedence":["operator"]}`,
+		`{"attribution_precedence":["operator","operator","cloud_tag","firewall_appid","cloud_graph","domain"]}`,
+		`{"attribution_precedence":["operator","cloud_tag","firewall_appid","cloud_graph","domain","asn"]}`,
+	} {
+		if rec := put(admA, bad); rec.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %s = %d, want 400", bad, rec.Code)
+		}
+	}
+	// Reset restores the default; the write is audited.
+	if rec := put(admA, `{"reset":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("reset PUT = %d", rec.Code)
+	}
+	if _, isDef, _ := get(admA); !isDef {
+		t.Fatal("reset must restore the default order")
+	}
+	found := false
+	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+		if e.Detail["action"] == "set_attribution_precedence" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("precedence change must be audited")
+	}
+}
+
 func TestRequiredTagsHandlerIsolation(t *testing.T) {
 	s := governanceTestServer(t)
 	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}

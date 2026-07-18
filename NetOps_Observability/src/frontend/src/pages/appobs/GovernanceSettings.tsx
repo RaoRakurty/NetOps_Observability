@@ -21,6 +21,102 @@ export function normalizeTagKey(raw: string): string | null {
   return /^[a-z0-9._:/-]+$/.test(tag) ? tag : null;
 }
 
+// moveItem returns a copy of arr with the item at i moved by delta (clamped).
+export function moveItem<T>(arr: T[], i: number, delta: number): T[] {
+  const j = i + delta;
+  if (i < 0 || i >= arr.length || j < 0 || j >= arr.length) return arr;
+  const out = [...arr];
+  [out[i], out[j]] = [out[j], out[i]];
+  return out;
+}
+
+// Human labels for the resolver's precedence classes (closed server vocabulary;
+// an unknown class renders its raw name rather than being hidden).
+export const PRECEDENCE_LABELS: Record<string, string> = {
+  operator: "Operator catalog / Source of Truth",
+  cloud_tag: "Cloud tags + workload identity",
+  firewall_appid: "Firewall App-ID (NGFW / IPFIX)",
+  cloud_graph: "Cloud resource graph",
+  domain: "Domain (DNS / TLS SNI)",
+  ip_catalog: "Vendor IP catalog",
+};
+
+// ── Attribution precedence editor ────────────────────────────────────────────
+
+export function AttributionPrecedenceCard() {
+  const [order, setOrder] = useState<string[]>([]);
+  const [isDefault, setIsDefault] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.getAttributionPrecedence()
+      .then((r) => { setOrder(r.attribution_precedence); setIsDefault(r.is_default); })
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  const move = (i: number, delta: number) => {
+    setErr(null);
+    const next = moveItem(order, i, delta);
+    if (next !== order) { setOrder(next); setDirty(true); }
+  };
+
+  const persist = async (call: () => Promise<{ attribution_precedence: string[]; is_default: boolean }>) => {
+    setErr(null); setSaved(false); setSaving(true);
+    try {
+      const r = await call();
+      setOrder(r.attribution_precedence); setIsDefault(r.is_default); setDirty(false);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ao-panel">
+      <div className="ao-panel-h">Attribution Precedence{" "}
+        <span className="ao-panel-meta">{isDefault ? "platform default" : "tenant override"} · admin-set, audited</span>
+      </div>
+      <p className="ao-set-d">
+        Which source wins when identification signals disagree — top outranks bottom. Reordering
+        changes the winner only: a weak source can never become &quot;confirmed&quot; by ranking it higher,
+        and disagreements between trusted sources still surface as contradictions.
+        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+        {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+      </p>
+      <ol style={{ listStyle: "none", margin: "0 0 10px", padding: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        {order.map((cls, i) => (
+          <li key={cls} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13,
+            padding: "4px 8px", background: "var(--panel-2, rgba(127,127,127,0.06))", borderRadius: 6 }}>
+            <span className="ao-muted" style={{ width: 16, textAlign: "right" }}>{i + 1}.</span>
+            <span style={{ flex: 1 }}>{PRECEDENCE_LABELS[cls] ?? cls}</span>
+            <button className="ao-rowaction" aria-label={`Move ${cls} up`} disabled={busy || saving || i === 0}
+              onClick={() => move(i, -1)}>↑</button>
+            <button className="ao-rowaction" aria-label={`Move ${cls} down`} disabled={busy || saving || i === order.length - 1}
+              onClick={() => move(i, +1)}>↓</button>
+          </li>
+        ))}
+      </ol>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="ao-btn ao-btn--primary" disabled={busy || saving || !dirty}
+          onClick={() => persist(() => api.setAttributionPrecedence(order))}>
+          {saving ? "Saving…" : "Save order"}
+        </button>
+        {!isDefault && (
+          <button className="ao-btn" disabled={busy || saving}
+            onClick={() => persist(() => api.resetAttributionPrecedence())}>Reset to default</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Window presets the picker offers (all within the server's 1..168 clamp).
 export const RCA_WINDOW_PRESETS = [
   { hours: 1, label: "1 hour" },
