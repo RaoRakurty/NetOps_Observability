@@ -152,6 +152,15 @@ function TierChip({ label, n, tone, active, onClick, title }: {
   );
 }
 
+// #113: which rows are PROMOTED (in the RCA library) — one endpoint fetch, a
+// client-side membership cross-reference, never a per-row evaluation. Pure and
+// unit-tested: `only` narrows to library members, otherwise rows pass through.
+export function filterPromoted<T extends { correlation_id: string }>(
+  rows: T[], promoted: Set<string>, only: boolean,
+): T[] {
+  return only ? rows.filter((r) => promoted.has(r.correlation_id)) : rows;
+}
+
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
   // True window totals (server COUNTs) + keyset paging: baseCursor continues
@@ -168,6 +177,9 @@ export default function Correlations() {
   // the target is always present and the auto-select below can find it.
   const deepId = useMemo(idFromHash, []);
   const [showInternal, setShowInternal] = useState(false);
+  // #113: the promoted (RCA library) id set + the client-side "Promoted" filter.
+  const [promotedIds, setPromotedIds] = useState<Set<string>>(new Set());
+  const [promotedOnly, setPromotedOnly] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   // corr id → external destinations it was filed to (#103 UX-1 "Notified via").
   const [notified, setNotified] = useState<Record<string, TicketLinkRow[]>>({});
@@ -178,11 +190,20 @@ export default function Correlations() {
 
   // Hide internal-stack/self-monitoring objects by default — RCA is for customer
   // networks (decision #76). The toggle reveals them for platform debugging.
-  const visible = useMemo(
+  const nonInternal = useMemo(
     () => (showInternal ? merged : merged.filter((o) => !isInternalStackObject(o))),
     [merged, showInternal],
   );
-  const hiddenInternal = merged.length - visible.length;
+  // #113: optional client-side narrowing to promoted (RCA library) rows.
+  const visible = useMemo(
+    () => filterPromoted(nonInternal, promotedIds, promotedOnly),
+    [nonInternal, promotedIds, promotedOnly],
+  );
+  const hiddenInternal = merged.length - nonInternal.length;
+  const promotedVisible = useMemo(
+    () => merged.filter((o) => promotedIds.has(o.correlation_id)).length,
+    [merged, promotedIds],
+  );
 
   const columns = useMemo<Column<CorrObject>[]>(() => [
     // UX-2: the human incident handle (same P-XXXXXX id the Inspector, Iris AI
@@ -195,6 +216,14 @@ export default function Correlations() {
       render: (o) => <span style={mono}>{fmtDateTime(o.created_at)}</span> },
     { key: "verdict_tier", header: "Status", width: 116, sortable: true, text: (o) => o.verdict_tier,
       render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</span> },
+    // #113: promoted tier badge — this row has a management RCA document (in
+    // the RCA Reports library). Membership check only; never re-evaluated here.
+    { key: "promoted", header: "RCA doc", width: 84, sortable: true,
+      sortValue: (o) => (promotedIds.has(o.correlation_id) ? 1 : 0),
+      text: (o) => (promotedIds.has(o.correlation_id) ? "promoted" : ""),
+      render: (o) => promotedIds.has(o.correlation_id)
+        ? <span title="Promoted real outage — its RCA document is in the RCA Reports library">{pill("Promoted", "#16A34A", true)}</span>
+        : <span style={{ color: "var(--muted)" }}>—</span> },
     { key: "quality", header: "Quality", width: 90, sortable: true,
       sortValue: (o) => (o.chaos_fixture ? -1 : QUAL_RANK[qualityOf(o)]),
       // A named chaos fixture is an INTENTIONAL storm source (planned platform
@@ -246,7 +275,17 @@ export default function Correlations() {
     { key: "shape", header: "Signals", width: 88, align: "right", sortable: true,
       sortValue: (o) => Number(o.signal_count ?? 0),
       render: (o) => <span style={mono} title={`${o.signal_count} signals`}>{o.signal_count}</span> },
-  ], [notified]);
+  ], [notified, promotedIds]);
+
+  // #113: ONE library fetch — the promoted set for the row badge + filter chip.
+  // Best-effort: the candidates table renders fully without it.
+  useEffect(() => {
+    let alive = true;
+    api.rcaLibrary(30)
+      .then((r) => { if (alive) setPromotedIds(new Set((r?.reports ?? []).map((x) => x.correlation_id))); })
+      .catch(() => { /* badge column shows "—" */ });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -420,6 +459,10 @@ export default function Correlations() {
             <TierChip label="not confirmed" n={summary?.undetermined ?? null} tone="#8A93A6"
               active={tier === "undetermined"} onClick={() => setTier(tier === "undetermined" ? "" : "undetermined")}
               title="Undetermined — still gathering evidence; click to show only these" />
+            {/* #113: narrow (client-side) to rows with a promoted RCA document */}
+            <TierChip label="promoted" n={promotedVisible} tone="#16A34A"
+              active={promotedOnly} onClick={() => setPromotedOnly((v) => !v)}
+              title="Promoted real outages — rows whose RCA document is in the RCA Reports library; click to show only these" />
             {summary && (
               <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>
                 {summary.open} open · {summary.closed} resolved
