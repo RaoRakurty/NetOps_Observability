@@ -1,5 +1,5 @@
 import { CorrTimeline, CorrObject, Seam } from "../../services/api";
-import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel } from "./labels";
+import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
@@ -176,6 +176,9 @@ export interface RcaCase {
   ruledOut: string[];
   // Why the verdict is not stronger (engine gate reasons), operator language.
   whyNot: string[];
+  // The verbatim engine verdict reasons — shown only behind the "How was this
+  // verified?" disclosure (owner 2026-07-18: honesty stays, jargon moves).
+  verifyDetail?: string[];
   observedAt: string;
   rcaId: string;
   aside: KV[];
@@ -430,6 +433,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // pills/decision the workspace + tests rely on.
   let ruledOut: string[] = [];
   let whyNot: string[] = [];
+  let rawReasons: string[] = [];
   let contradicted = false;
   let cascade: CascadeStage[] | undefined;
   try {
@@ -439,7 +443,12 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       contradicted = !!top.contradicted;
       if (Array.isArray(top.contradictions)) ruledOut = top.contradictions.map((c: string) => kindLabel(c));
       const reasons: string[] = top?.verdict?.reasons ?? [];
-      if (!confirmed && reasons.length) whyNot = reasons;
+      // Operator register (owner 2026-07-18): the consequence, not the taxonomy —
+      // the verbatim engine reasons stay behind "How was this verified?".
+      if (!confirmed && reasons.length) {
+        whyNot = reasons.map(nocVerdictReason);
+        rawReasons = reasons;
+      }
       // Propagation ladder: carried verbatim from the signature (engine already
       // marked witnessed/unobserved); only the raw kinds are humanized here —
       // Operator View never shows schema tokens.
@@ -449,7 +458,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
           root: !!s.root,
           witnessed: !!s.witnessed,
           kinds: (Array.isArray(s.kinds) ? s.kinds : []).map((k: string) => kindLabel(k)),
-          note: String(s.note ?? ""),
+          // catalog notes speak engine ("No routing-protocol signals seen") —
+          // operator text never says "signals" (2026-07-18 terminology rule)
+          note: String(s.note ?? "").replace(/\bsignals?\b/g, "evidence").replace(/\bSignals?\b/g, "Evidence"),
         }));
       }
     }
@@ -496,7 +507,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   const DECISION_TEXT: Record<typeof decisionKind, string> = {
     open: "OPEN INCIDENT — customer impact is confirmed by independent evidence. Assign ownership and begin restoration workflow.",
     investigate: "INVESTIGATE — evidence is aligned but not sufficient to confirm customer impact. Validate the missing evidence before opening a customer incident.",
-    monitor: "MONITOR — the triggering signal has cleared and no customer-impacting evidence was observed within available telemetry coverage. Auto-closes after the monitoring window if there is no recurrence and no customer-impact evidence.",
+    monitor: "MONITOR — the triggering anomaly has cleared and no customer-impacting evidence was observed within available telemetry coverage. Auto-closes after the monitoring window if there is no recurrence and no customer-impact evidence.",
     hold: "HOLD — suspected only. Customer impact is not confirmed. Auto-ticketing remains on hold until independent evidence confirms impact.",
   };
 
@@ -521,7 +532,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   else why.push({
     tone: "green", label: "Why not confirmed",
     text: attachedCount <= 1
-      ? "This issue currently rests on a single observed signal. Independent evidence is needed before confirming customer impact."
+      ? "This issue currently rests on a single observation. Independent evidence is needed before confirming customer impact."
       : `The supporting observations come from the ${modalityLabel(dominant).toLowerCase()} evidence class. No independent routing, device, traffic-flow, or application evidence confirmed the same failure.`,
   });
   why.push({
@@ -572,7 +583,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // confidence ladder
   const reached = confirmed ? 4 : suspected ? 2 : 1;
   const ladder: LadderStep[] = [
-    { state: "done", label: "✓ Observed", caption: "Signal observed" },
+    { state: "done", label: "✓ Observed", caption: "Anomaly observed" },
     { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to a device area" },
     { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent network evidence aligned" },
     { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Customer impact confirmed" : "Independent evidence missing" },
@@ -599,7 +610,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
 
   // hypotheses
   const conf: RcaPill = { tone: confirmed ? "green" : "gray", text: confidence };
-  const hypotheses: HypothesisRow[] = [{ rank: "#1", hypo: title, sub: device ? `${device}${peer ? ` → ${peer}` : ""}` : "primary", conf, reason: confirmed ? "Independent evidence aligns in the same window and scope." : "Primary signal observed; independent confirmation still missing." }];
+  const hypotheses: HypothesisRow[] = [{ rank: "#1", hypo: title, sub: device ? `${device}${peer ? ` → ${peer}` : ""}` : "primary", conf, reason: confirmed ? "Independent evidence aligns in the same window and scope." : "Primary evidence observed; independent confirmation still missing." }];
   if (!confirmed) {
     if (hasDevice) hypotheses.push({ rank: `#${hypotheses.length + 1}`, hypo: "Isolated device-health change", sub: device || "device", conf: { tone: "gray", text: "Low" }, reason: "Device metric changed, but no traffic-flow or path impact is confirmed." });
     if (hasRouting) hypotheses.push({ rank: `#${hypotheses.length + 1}`, hypo: "Customer-impacting routing issue", sub: device || "routing", conf: { tone: "gray", text: "Low" }, reason: "Possible, but peer-side or downstream evidence is missing." });
@@ -647,7 +658,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     if (device) {
       const di = addNode(device, {
         kind: confirmed ? "bad" : "warn", shape: kindForRole(device),
-        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "signal observed",
+        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly observed",
         tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
       });
       if (peer) addEdge(di, addNode(peer, { kind: "info", shape: kindForRole(peer), meta: "adjacency peer" }), hasRouting ? kindLabel(routeKind) : "evidence");
@@ -780,6 +791,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     verdictState, ruledOut, whyNot,
+    verifyDetail: rawReasons.length ? rawReasons : undefined,
     observedAt: (timeline.window_start || "").replace("T", " ").slice(0, 19) + " UTC",
     rcaId: obj.correlation_id.slice(0, 13),
     aside: [
@@ -834,7 +846,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "customer-impact tied to scope" },
         { k: "Verdict tier", v: timeline.verdict_tier }, { k: "Attached observers", v: String(timeline.signals.filter((s) => s.attached).length) },
       ],
-      reasoning: confirmed ? "Promoted to confirmed: independent customer-impact evidence tied to the network path event." : "Held at suspected: a single device-area signal cannot confirm customer impact without an independent observer.",
+      reasoning: confirmed ? "Promoted to confirmed: independent customer-impact evidence tied to the network path event." : "Held at suspected: a single device-area source cannot confirm customer impact without an independent observer.",
       model: { correlation_id: obj.correlation_id, verdict_tier: timeline.verdict_tier, top_hypothesis: timeline.top_hypothesis, signal_count: obj.signal_count },
     },
   };

@@ -805,13 +805,22 @@ func providerChangeNoun(p string) string {
 	return "A " + p
 }
 
+// rcaSignalWordSweep rewrites the engine noun "signal(s)" into the operator
+// noun wherever data-carried prose (catalog notes) reaches a rendered document.
+var rcaSignalWordSweep = strings.NewReplacer(
+	"signals", "evidence", "Signals", "Evidence", "signal", "evidence", "Signal", "Evidence",
+)
+
 func cascadeStages(hb rcaHypBlob) []rcaCascadeStage {
 	if len(hb.Ranking.Hypotheses) == 0 {
 		return nil
 	}
 	var out []rcaCascadeStage
 	for _, c := range hb.Ranking.Hypotheses[0].CausalChain {
-		note := c.Note
+		// Catalog notes speak engine ("No routing-protocol signals seen") — the
+		// rendered document speaks operator (2026-07-18 terminology rule: the
+		// word "signals" reads as independent clues and never reaches the UI).
+		note := rcaSignalWordSweep.Replace(c.Note)
 		if note == "" && len(c.Kinds) > 0 {
 			parts := make([]string, 0, len(c.Kinds))
 			for _, k := range c.Kinds {

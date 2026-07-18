@@ -418,12 +418,12 @@ export default function Correlations() {
     <div className="dm-board cc-board">
       <NocHeader
         title="RCA Candidates"
-        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when independent evidence agrees across at least two signal classes — weaker candidates say exactly what's missing."
+        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when two independent sources agree — weaker candidates say exactly what's missing."
         chips={<><Chip label={`${trueTotal ?? visible.length} candidates · 24h`} /><LiveChip detail="correlation engine" /></>}
       >
         <NocKpis cols={4}>
           <NocKpi n={trueTotal ?? visible.length} label="Candidates" interp="in the last 24h" />
-          <NocKpi n={rConfirmed} label="Confirmed" interp="≥2 evidence streams" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={rConfirmed} label="Confirmed" interp="two independent sources agree" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
           <NocKpi n={rSuspected} label="Suspected" interp="impact not confirmed" tone={rSuspected ? "var(--warn)" : undefined} />
           <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
         </NocKpis>
