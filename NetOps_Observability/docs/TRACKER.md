@@ -53,6 +53,24 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
 | **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
 
+## #113 — RCA quality directive: seam ownership · causality render · creation policy (owner 2026-07-18) — ⏳ OPEN (design first)
+
+Owner feedback on the last two days of RCA candidates: (1) **owner="NOC" is
+too generic** — dissect to the SEAM (access / middle-mile / cloud edge / SaaS
+side) and make the seam's responsible party the owner; "possible owner(s)"
+when unconfirmed. (2) **"No discovered path for this incident"** — causality
+path frequently fails to render; the RCA's first section must show where ·
+what possibly happened · possible owner(s) · the network causality path with
+broken areas in RED. (3) **RCA creation policy**: RCA = management/C-suite
+artifact for real outages (primary network failure hitting user app access);
+NOT every middle-mile latency blip — define promotion criteria (impact ·
+duration · confirmed tier · manual promote) or the section is "a bunch of RCA
+PDFs for nothing". Candidates (#111) and RCA docs are different tiers. (4)
+**Cause honesty**: replace bare "not identified" with best-hypothesis
+"possibly because of X" + evidence state. Plan: short design note → engine
+seam-attribution slice → path-render fix (find why paths don't resolve) →
+promotion policy + UI. Related: #111, seam_type (#84), path_assembly.
+
 ## #112 — Theme placement: login-screen only + account-menu setting (owner directive 2026-07-18) — ✅ SHIPPED + LIVE
 
 Dark/Light is chosen on the **login screen** and carries into the app (both
