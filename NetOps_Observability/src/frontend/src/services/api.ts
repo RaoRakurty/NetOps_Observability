@@ -1509,6 +1509,17 @@ export const api = {
     request<RequiredTagsSettings>("/api/settings/required-tags", {
       method: "PUT", body: JSON.stringify({ reset: true }),
     }),
+  // RCA window — the tenant's default read window (hours) for the cloud
+  // signal/RCA surfaces when a view names none. Server clamps to 1..168.
+  getRcaWindow: () => request<RcaWindowSettings>("/api/settings/rca-window"),
+  setRcaWindow: (hours: number) =>
+    request<RcaWindowSettings>("/api/settings/rca-window", {
+      method: "PUT", body: JSON.stringify({ rca_window_hours: hours }),
+    }),
+  resetRcaWindow: () =>
+    request<RcaWindowSettings>("/api/settings/rca-window", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
 
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
@@ -3293,6 +3304,15 @@ export type RequiredTagsSettings = {
   required_tags: string[];
   is_default: boolean;
   default_tags: string[];
+};
+
+// Per-tenant RCA/signal read-window default (Wave 4 #11 slice 2).
+export type RcaWindowSettings = {
+  tenant_id: string;
+  rca_window_hours: number;
+  is_default: boolean;
+  default_hours: number;
+  max_hours: number;
 };
 
 // Required-tag compliance over the tenant's inventory (coverage response).

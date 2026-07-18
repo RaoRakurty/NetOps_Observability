@@ -39,6 +39,9 @@ const (
 type tenantGovernanceConfig struct {
 	TenantID     string   `json:"tenant_id"`
 	RequiredTags []string `json:"required_tags,omitempty"`
+	// RcaWindowHours: default read window for the tenant-scoped cloud signal /
+	// RCA surfaces when a request names none. 0 = unset → platform default.
+	RcaWindowHours int `json:"rca_window_hours,omitempty"`
 }
 
 // tenantGovernanceStore is a file-backed per-tenant map, keyed by tenant in the
@@ -118,6 +121,108 @@ func (s *tenantGovernanceStore) setRequiredTags(tenant string, tags []string) {
 	c.RequiredTags = tags
 	s.cfgs[tenant] = c
 	s.saveLocked()
+}
+
+// rcaWindowHours returns the tenant's EFFECTIVE default read window (hours)
+// for the cloud signal surfaces and whether it is a custom override. The
+// platform default is cloudSignalWindowHours — exactly the pre-editor
+// behavior. Values are clamped defensively on read too (safety on a hand-
+// edited store file). Nil-safe.
+func (s *tenantGovernanceStore) rcaWindowHours(tenant string) (int, bool) {
+	if s == nil {
+		return cloudSignalWindowHours, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.cfgs[tenant]; ok && c.RcaWindowHours > 0 {
+		if c.RcaWindowHours > cloudSignalWindowMaxHours {
+			return cloudSignalWindowMaxHours, true
+		}
+		return c.RcaWindowHours, true
+	}
+	return cloudSignalWindowHours, false
+}
+
+// setRcaWindowHours stamps the tenant FROM THE PRINCIPAL and persists.
+// hours==0 resets the tenant to the platform default.
+func (s *tenantGovernanceStore) setRcaWindowHours(tenant string, hours int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.cfgs[tenant]
+	c.TenantID = tenant
+	c.RcaWindowHours = hours
+	s.cfgs[tenant] = c
+	s.saveLocked()
+}
+
+// normalizeRcaWindowHours validates a caller's window: a whole number of hours
+// within the same safe bounds the signal surfaces clamp to (1..168). Off-bounds
+// fails the request — the editor never silently stores a window the read path
+// would refuse to honor.
+func normalizeRcaWindowHours(n int) (int, error) {
+	if n < 1 || n > cloudSignalWindowMaxHours {
+		return 0, fmt.Errorf("rca_window_hours must be 1..%d", cloudSignalWindowMaxHours)
+	}
+	return n, nil
+}
+
+// handleRcaWindowSettings serves GET/PUT /api/settings/rca-window.
+func (s *server) handleRcaWindowSettings(w http.ResponseWriter, r *http.Request) {
+	writeState := func(tenant string) {
+		hours, custom := s.governance.rcaWindowHours(tenant)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":        tenant,
+			"rca_window_hours": hours,
+			"is_default":       !custom,
+			"default_hours":    cloudSignalWindowHours,
+			"max_hours":        cloudSignalWindowMaxHours,
+		})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		tenant, _ := principalTenant(claims)
+		writeState(tenant)
+	case http.MethodPut:
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			RcaWindowHours int  `json:"rca_window_hours"`
+			Reset          bool `json:"reset,omitempty"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+			return
+		}
+		hours := 0
+		if !body.Reset {
+			var err error
+			if hours, err = normalizeRcaWindowHours(body.RcaWindowHours); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		tenant, cross := principalTenant(claims)
+		s.governance.setRcaWindowHours(tenant, hours)
+		if s.audit != nil {
+			s.audit.Record(AuditEvent{
+				Actor: claims.Sub, Tenant: tenant, Cross: cross,
+				Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+				Remote: auditClientIP(r),
+				Detail: map[string]any{"action": "set_rca_window", "rca_window_hours": hours, "reset": body.Reset},
+			})
+		}
+		writeState(tenant)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+	}
 }
 
 // normalizeRequiredTags validates a caller's list: 1..32 entries, each a

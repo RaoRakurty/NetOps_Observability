@@ -79,6 +79,146 @@ func TestNormalizeRequiredTags(t *testing.T) {
 	}
 }
 
+func TestGovernanceStoreRcaWindowDefaultsAndKeying(t *testing.T) {
+	st := newTenantGovernanceStore("")
+	if h, custom := st.rcaWindowHours("t-a"); custom || h != cloudSignalWindowHours {
+		t.Fatalf("unconfigured tenant = (%d,%v), want default %d", h, custom, cloudSignalWindowHours)
+	}
+	st.setRcaWindowHours("t-a", 72)
+	if h, custom := st.rcaWindowHours("t-a"); !custom || h != 72 {
+		t.Fatalf("t-a = (%d,%v), want 72", h, custom)
+	}
+	// §3a: keyed per tenant — t-b keeps the default.
+	if h, custom := st.rcaWindowHours("t-b"); custom || h != cloudSignalWindowHours {
+		t.Fatalf("t-b = (%d,%v) — cross-tenant bleed", h, custom)
+	}
+	// Reset (0) restores the default; an off-bounds stored value clamps on read.
+	st.setRcaWindowHours("t-a", 0)
+	if _, custom := st.rcaWindowHours("t-a"); custom {
+		t.Fatal("reset tenant must read as default")
+	}
+	st.setRcaWindowHours("t-a", 10_000)
+	if h, _ := st.rcaWindowHours("t-a"); h != cloudSignalWindowMaxHours {
+		t.Fatalf("oversize stored window must clamp on read, got %d", h)
+	}
+	var nilStore *tenantGovernanceStore
+	if h, _ := nilStore.rcaWindowHours("t-a"); h != cloudSignalWindowHours {
+		t.Fatalf("nil store must serve the default, got %d", h)
+	}
+}
+
+func TestNormalizeRcaWindowHours(t *testing.T) {
+	for _, ok := range []int{1, 24, 168} {
+		if got, err := normalizeRcaWindowHours(ok); err != nil || got != ok {
+			t.Errorf("normalizeRcaWindowHours(%d) = (%d,%v)", ok, got, err)
+		}
+	}
+	for _, bad := range []int{0, -1, 169, 100000} {
+		if _, err := normalizeRcaWindowHours(bad); err == nil {
+			t.Errorf("normalizeRcaWindowHours(%d) must fail — clamped bounds", bad)
+		}
+	}
+}
+
+// tenantWindowHours: an explicit ?window_hours= wins (clamped); absent/junk
+// falls back to the CALLER's tenant default, never another tenant's.
+func TestTenantWindowHours(t *testing.T) {
+	s := governanceTestServer(t)
+	s.governance.setRcaWindowHours("t-a", 72)
+	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
+	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
+
+	at := func(c jwtClaims, url string) int {
+		r := httptest.NewRequest(http.MethodGet, url, nil)
+		return s.tenantWindowHours(claimsCtx(r, c))
+	}
+	if got := at(admA, "/api/cloud/health"); got != 72 {
+		t.Fatalf("t-a default window = %d, want its governed 72", got)
+	}
+	if got := at(admB, "/api/cloud/health"); got != cloudSignalWindowHours {
+		t.Fatalf("t-b default window = %d — cross-tenant bleed", got)
+	}
+	if got := at(admA, "/api/cloud/health?window_hours=6"); got != 6 {
+		t.Fatalf("explicit window = %d, want 6 (caller wins)", got)
+	}
+	if got := at(admA, "/api/cloud/health?window_hours=9999"); got != cloudSignalWindowMaxHours {
+		t.Fatalf("oversize explicit window = %d, want clamp %d", got, cloudSignalWindowMaxHours)
+	}
+	if got := at(admA, "/api/cloud/health?window_hours=junk"); got != 72 {
+		t.Fatalf("junk window = %d, want tenant default 72", got)
+	}
+}
+
+func TestRcaWindowHandlerIsolation(t *testing.T) {
+	s := governanceTestServer(t)
+	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
+	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
+	viewerA := jwtClaims{Role: "viewer", Tenant: "t-a", Sub: "user-a"}
+
+	put := func(c jwtClaims, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/settings/rca-window", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.handleRcaWindowSettings(rec, claimsCtx(r, c))
+		return rec
+	}
+	get := func(c jwtClaims) (hours int, isDefault bool, tenant string) {
+		r := httptest.NewRequest(http.MethodGet, "/api/settings/rca-window", nil)
+		rec := httptest.NewRecorder()
+		s.handleRcaWindowSettings(rec, claimsCtx(r, c))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET = %d", rec.Code)
+		}
+		var out struct {
+			TenantID       string `json:"tenant_id"`
+			RcaWindowHours int    `json:"rca_window_hours"`
+			IsDefault      bool   `json:"is_default"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.RcaWindowHours, out.IsDefault, out.TenantID
+	}
+
+	// Tenant admin sets its OWN tenant — a tenant_id in the body is IGNORED.
+	if rec := put(admA, `{"rca_window_hours":72,"tenant_id":"t-b"}`); rec.Code != http.StatusOK {
+		t.Fatalf("admin PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	if h, isDef, tenant := get(admA); tenant != "t-a" || isDef || h != 72 {
+		t.Fatalf("t-a sees (%d,%v,%q), want its own 72", h, isDef, tenant)
+	}
+	// §3a: tenant B is untouched by A's write.
+	if h, isDef, _ := get(admB); !isDef || h != cloudSignalWindowHours {
+		t.Fatalf("t-b sees (%d,%v) — cross-tenant write leak", h, isDef)
+	}
+	// Viewer reads, cannot write (governance PUT = administration:admin).
+	if h, _, _ := get(viewerA); h != 72 {
+		t.Fatalf("viewer of t-a sees %d", h)
+	}
+	if rec := put(viewerA, `{"rca_window_hours":24}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer PUT = %d, want 403", rec.Code)
+	}
+	// Off-bounds → 400, never a silent clamp on write.
+	if rec := put(admA, `{"rca_window_hours":999}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversize PUT = %d, want 400", rec.Code)
+	}
+	// Reset restores the default; the write is audited.
+	if rec := put(admA, `{"reset":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("reset PUT = %d", rec.Code)
+	}
+	if _, isDef, _ := get(admA); !isDef {
+		t.Fatal("reset must restore the default window")
+	}
+	found := false
+	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+		if e.Detail["action"] == "set_rca_window" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("rca-window change must be audited")
+	}
+}
+
 func TestRequiredTagsHandlerIsolation(t *testing.T) {
 	s := governanceTestServer(t)
 	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}

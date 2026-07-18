@@ -21,6 +21,70 @@ export function normalizeTagKey(raw: string): string | null {
   return /^[a-z0-9._:/-]+$/.test(tag) ? tag : null;
 }
 
+// Window presets the picker offers (all within the server's 1..168 clamp).
+export const RCA_WINDOW_PRESETS = [
+  { hours: 1, label: "1 hour" },
+  { hours: 6, label: "6 hours" },
+  { hours: 24, label: "24 hours" },
+  { hours: 72, label: "3 days" },
+  { hours: 168, label: "7 days" },
+];
+
+// ── RCA window editor ────────────────────────────────────────────────────────
+
+export function RcaWindowCard() {
+  const [hours, setHours] = useState(24);
+  const [isDefault, setIsDefault] = useState(true);
+  const [defaultHours, setDefaultHours] = useState(24);
+  const [busy, setBusy] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.getRcaWindow()
+      .then((r) => { setHours(r.rca_window_hours); setIsDefault(r.is_default); setDefaultHours(r.default_hours); })
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  const persist = async (call: () => Promise<{ rca_window_hours: number; is_default: boolean }>) => {
+    setErr(null); setSaved(false);
+    try {
+      const r = await call();
+      setHours(r.rca_window_hours); setIsDefault(r.is_default);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="ao-panel">
+      <div className="ao-panel-h">RCA Window{" "}
+        <span className="ao-panel-meta">{isDefault ? "platform default" : "tenant override"} · admin-set, audited</span>
+      </div>
+      <p className="ao-set-d">
+        Default read window for this tenant&apos;s cloud RCA surfaces (health signals, change events,
+        evidence ledger, service map) when a view hasn&apos;t picked a range. An explicit range selection
+        always wins per request; the server bounds every read to 7 days.
+        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+        {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select className="app-select" value={hours} disabled={busy} aria-label="Default RCA window"
+          onChange={(e) => persist(() => api.setRcaWindow(Number(e.target.value)))}>
+          {RCA_WINDOW_PRESETS.map((p) => <option key={p.hours} value={p.hours}>{p.label}</option>)}
+          {!RCA_WINDOW_PRESETS.some((p) => p.hours === hours) && <option value={hours}>{hours} hours</option>}
+        </select>
+        {!isDefault && (
+          <button className="ao-btn" disabled={busy}
+            onClick={() => persist(() => api.resetRcaWindow())}>Reset to default ({defaultHours}h)</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Required tags editor ─────────────────────────────────────────────────────
 
 export function RequiredTagsCard() {
