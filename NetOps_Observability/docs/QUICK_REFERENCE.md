@@ -141,6 +141,38 @@ SNS_TOPIC_ARN=arn:aws:sns:us-east-1:123456789012:netops-alerts
 The Settings tab in the dashboard shows which integrations the API
 sees as configured — useful for sanity-checking after editing `.env`.
 
+## Cloud connector runtime (Wave 4 #13)
+
+```
+# Platform OIDC issuer for KEYLESS cloud federation. Set to the public
+# https URL customers' clouds reach this appliance at; the backend then
+# serves /.well-known/openid-configuration + /.well-known/jwks.json and
+# the Identity Broker MINTS a short-lived per-connector assertion for
+# every federated exchange (AWS AssumeRoleWithWebIdentity, Azure Entra
+# WIF, GCP STS). Unset = dormant: the broker falls back to a projected
+# token (CLOUD_CONNECTOR_WORKLOAD_JWT[_FILE]). Signing key is generated
+# on first boot and Vault-sealed.
+CLOUD_WORKLOAD_ISSUER_URL=https://correlix.example.com
+
+# cloud-ingest poller self-metrics (/metrics, Prometheus text): per-
+# provider credential-exchange counters + latency. "off" disables.
+CLOUD_INGEST_METRICS_PORT=9109
+```
+
+## RCA document promotion (#113)
+
+Every correlation case is fully analyzed and visible in Correlations —
+but the formal RCA **document** (`?format=html|pdf`) renders only for a
+PROMOTED real outage: auto (production + confirmed verdict + confirmed
+user/app impact + duration ≥ 2 min) or an audited manual decision:
+
+```
+# promote (note optional, ≤500 chars) / inspect / revoke
+curl -X POST   .../api/correlations/<id>/rca-promotion -d '{"note":"mgmt request"}'
+curl           .../api/correlations/<id>/rca-promotion
+curl -X DELETE .../api/correlations/<id>/rca-promotion
+```
+
 ## Receiving device telemetry
 
 Vector and goflow2 listen for device-side traffic on these host ports
