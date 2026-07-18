@@ -41,6 +41,13 @@ type rcaReport struct {
 	Validation  bool   `json:"validation"`
 	GeneratedAt string `json:"generated_at"` // UTC, canonical
 
+	// AtAGlance (#113 point 2): the document's FIRST section — where it
+	// happened · what possibly happened · possible owner(s) — rendered above
+	// the management summary together with the causality path (broken areas
+	// red). Composed from fault localization / scope / hypotheses / ownership;
+	// it never introduces a claim those sections don't already make.
+	AtAGlance rcaAtAGlance `json:"at_a_glance"`
+
 	States rcaReportStates `json:"states"`
 	Times  rcaReportTimes  `json:"times"`
 	Scope  rcaReportScope  `json:"scope"`
@@ -454,6 +461,23 @@ type rcaRootCause struct {
 type rcaOwnerCandidate struct {
 	Team   string `json:"team"`
 	Reason string `json:"reason"`
+}
+
+// rcaAtAGlance — the owner-mandated first section (#113 point 2): where · what
+// possibly happened · possible owner(s). The causality path renders alongside it
+// from rcaReport.Topology (broken areas red, rcaPathGraphSVG). Wording rules:
+// "possible owner(s)" whenever the root cause is unconfirmed; "possibly because
+// of X" for an unconfirmed best hypothesis — never a bare claim, never a bare
+// "not identified".
+type rcaAtAGlance struct {
+	Where      string `json:"where"`
+	WhereBasis string `json:"where_basis,omitempty"` // localization | scope | none
+	What       string `json:"what"`                  // what (possibly) happened
+	// OwnersLabel: "Owner" only when the root cause is identified with an
+	// owner; otherwise "Possible owner(s)".
+	OwnersLabel  string   `json:"owners_label"`
+	Owners       []string `json:"owners"`
+	OwnersReason string   `json:"owners_reason,omitempty"`
 }
 
 type rcaOwnership struct {
@@ -1527,6 +1551,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			SeverityBasis: sevBasis, SeverityIncidentBasis: sevIncidentBasis, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},
+		AtAGlance:         buildAtAGlance(loc, scope, hyps, ownership, root, analysis),
 		Times:             times,
 		Scope:             scope,
 		IssueContext:      ictx,

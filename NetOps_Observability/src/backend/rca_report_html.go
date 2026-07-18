@@ -375,6 +375,24 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 {{end}}
 
+<!-- #113 point 2 — the FIRST section: where · what possibly happened ·
+     possible owner(s) · the causality path with broken areas in red. -->
+<section>
+  <h2>Incident at a glance</h2>
+  <div class="kv">
+    <span class="k">Where it happened</span><span class="v">{{.AtAGlance.Where}}</span>
+    <span class="k">What possibly happened</span><span class="v">{{.AtAGlance.What}}</span>
+    <span class="k">{{.AtAGlance.OwnersLabel}}</span><span class="v">{{range $i, $o := .AtAGlance.Owners}}{{if $i}} · {{end}}{{$o}}{{end}}</span>
+    {{if .AtAGlance.OwnersReason}}<span class="k">Why</span><span class="v" style="font-weight:400">{{.AtAGlance.OwnersReason}}</span>{{end}}
+  </div>
+  {{if .Topology.Available}}
+  {{pathGraph .Topology}}
+  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; detail on page 2.</div>
+  {{else}}
+  <div class="note">{{.Topology.Reason}}</div>
+  {{end}}
+</section>
+
 <section>
   <h2>Management summary</h2>
   <div class="mgmt">{{.Summary.Management}}</div>
