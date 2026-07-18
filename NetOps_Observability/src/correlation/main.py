@@ -30,7 +30,7 @@ import time
 import uuid
 from collections import Counter, deque
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from typing import Deque, Dict, Iterable
 
@@ -148,16 +148,31 @@ _tenant_map: Dict[str, str] = {}
 _tenant_mtime: float = -1.0
 
 
+def canon_tenant(t: str) -> str:
+    """Canonical spelling of the platform-global tenant (#113 slice 3 root cause).
+
+    The platform has TWO historical spellings of the same principal: "" (this
+    engine's old convention) and "global" (the Go side's canonicalCorrTenant,
+    the path-observation exporter, the ClickHouse row policies). The mixed
+    spelling split corr objects across two tenants AND broke every per-tenant
+    join — most visibly path-attribution discovery, where tenant-"" incidents
+    could never match the "global"-stamped path observations, so NO live object
+    ever got a causality path. One spelling everywhere: "global". Never
+    collapses two real tenant ids (opaque t_… ids pass through untouched)."""
+    return "global" if t in ("", "global") else t
+
+
 def tenant_for(device: str) -> str:
-    """Resolve a device name/id to its tenant id ("" = global). Cheap: re-reads
-    the CSV only when its mtime changes."""
+    """Resolve a device name/id to its canonical tenant id ("global" = the
+    platform-global tenant — see canon_tenant). Cheap: re-reads the CSV only
+    when its mtime changes."""
     global _tenant_map, _tenant_mtime
     if not device:
-        return ""
+        return canon_tenant("")
     try:
         mt = os.path.getmtime(TENANT_ENRICHMENT_FILE)
     except OSError:
-        return _tenant_map.get(device, "")
+        return canon_tenant(_tenant_map.get(device, ""))
     if mt != _tenant_mtime:
         _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
         fresh: Dict[str, str] = {}
@@ -174,7 +189,7 @@ def tenant_for(device: str) -> str:
             # (platform-only). Fail-closed but NOT silent — this exact failure
             # (0600 perms across uids) once disabled tenancy stamping unnoticed.
             log.warning("tenant enrichment file unreadable, tenant map stale/empty: %s", exc)
-    return _tenant_map.get(device, "")
+    return canon_tenant(_tenant_map.get(device, ""))
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -945,7 +960,7 @@ def discovery_paths_for(tenant: str, view: PathGraphView,
         # -- feed 1: MEASURED (the live source; groups by observed endpoints) --------
         measured_groups: Dict[tuple[str, str], list] = {}
         try:
-            for o in (o for o in view.observations if o.tenant_id == tenant and o.hops):
+            for o in (o for o in view.observations if canon_tenant(o.tenant_id) == canon_tenant(tenant) and o.hops):
                 run = measured_run_from_observation(o)
                 responding = [h.address for h in run.hops if h.responding]
                 if len(responding) < 2:
@@ -1021,6 +1036,14 @@ def buffer_signal(sig: Signal) -> None:
     # Health watches the platform separately and does not read corr_objects.)
     if sig.attrs.get("probe_scope") == ProbeScope.INTERNAL_SELF_PROBE.value:
         return
+    # Canonical global-tenant spelling at the SINGLE live window-entry chokepoint
+    # (#113): ""-stamped signals become "global" so objects, write-amp buckets and
+    # every per-tenant join (path discovery above all) agree with the Go side and
+    # the path-observation exporter. Replay is untouched — it reconstructs archived
+    # signals directly into run_window, never through here, so per-object replay
+    # of pre-fix objects stays bit-perfect (#101 contract).
+    if sig.tenant_id != canon_tenant(sig.tenant_id):
+        sig = dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id))
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
         return  # at-least-once redelivery — the window already holds it
