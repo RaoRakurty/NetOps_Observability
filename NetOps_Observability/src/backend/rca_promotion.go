@@ -9,7 +9,7 @@ package main
 //     always readable (same permission/tenant gates as before);
 //   · the DOCUMENT renders (?format=html|pdf) only for a PROMOTED case:
 //       auto-promoted   — production incident AND confirmed verdict AND
-//                         confirmed user/application impact AND duration ≥ 5m;
+//                         confirmed user/application impact AND duration ≥ 2m;
 //       manually promoted — an explicit, audited operator decision
 //                           (POST /api/correlations/{id}/rca-promotion).
 //
@@ -32,7 +32,10 @@ import (
 
 // rcaPromotionMinDuration — the shortest incident an AUTO-promotion accepts. A
 // blip shorter than this never self-promotes; a human may still promote it.
-const rcaPromotionMinDuration = 5 * time.Minute
+// 2m (owner decision 2026-07-18, was 5m): in a single-WAN-link deployment a
+// total loss of app access is an outage well before 5 minutes; 2m still keeps
+// sub-minute reconvergence blips out of the management tier.
+const rcaPromotionMinDuration = 2 * time.Minute
 
 // ---- interfaces / model -----------------------------------------------------
 

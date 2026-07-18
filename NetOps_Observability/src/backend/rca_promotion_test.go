@@ -37,7 +37,7 @@ func TestPromotionAutoRequiresAllCriteria(t *testing.T) {
 	for name, r := range map[string]rcaReport{
 		"unconfirmed verdict": promoReport("suspected", "confirmed", 10*time.Minute, false),
 		"no user impact":      promoReport("confirmed", "detected", 10*time.Minute, false),
-		"blip duration":       promoReport("confirmed", "confirmed", 2*time.Minute, false),
+		"blip duration":       promoReport("confirmed", "confirmed", 90*time.Second, false),
 		"validation scenario": promoReport("confirmed", "confirmed", 10*time.Minute, true),
 	} {
 		rr := r

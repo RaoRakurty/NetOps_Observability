@@ -65,10 +65,12 @@ paths); report now LEADS with "Incident at a glance" (where · what possibly
 happened · possible owner(s) · measured path SVG, broken hops RED)
 (`4adaaf4a`). (3) promotion policy — RCA html/pdf documents 403 unless
 promoted (auto: production + confirmed verdict + confirmed impact +
-≥5 min; or audited manual POST/DELETE `/api/correlations/{id}/rca-promotion`,
-tenant-scoped, isolation-tested); candidates stay a separate tier
-(`e77ceac6`). ⚠️ auto-promotion thresholds are an interpretation — owner
-may want to tune. (4) cause honesty — "possibly because of X (unconfirmed)"
+≥2 min [owner-tuned 2026-07-18 from the initial 5 min — single-WAN-link
+total-loss reasoning]; or audited manual POST/DELETE
+`/api/correlations/{id}/rca-promotion`, tenant-scoped, isolation-tested);
+candidates stay a separate tier (`e77ceac6`). Possible follow-up discussed,
+not built: "brief disruption" middle tier + blast-radius-aware
+(single-homed total loss) promotion + single-point-of-failure risk finding. (4) cause honesty — "possibly because of X (unconfirmed)"
 + evidence known/missing rows replace every bare "not identified"
 (`71ef7a99`). Original directive below for reference.
 
