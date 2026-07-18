@@ -68,7 +68,7 @@ func TestNormalizeRequiredTags(t *testing.T) {
 		make([]string, 33),           // too many
 	}
 	for i := range bad {
-		if bad[i] != nil && len(bad[i]) == 33 {
+		if len(bad[i]) == 33 {
 			for j := range bad[i] {
 				bad[i][j] = "t" + strings.Repeat("x", j%3)
 			}

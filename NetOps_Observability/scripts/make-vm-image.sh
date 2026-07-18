@@ -108,14 +108,27 @@ UNIT
 # ── assemble the appliance qcow2 ─────────────────────────────────────────────
 say "building appliance image (this takes a while — libguestfs without kvm)"
 img="$work/correlix-$version.qcow2.raw"
-docker run --rm -v "$ROOT/dist:/dist" -v "$work:/work" -v "$CACHE:/cache" "$BUILDER_TAG" bash -euo pipefail -c "
+# --dns: the appliance's user-net DNS forwards to the CONTAINER's resolver;
+# docker's default 127.0.0.11 loopback is unreachable from the qemu guest, so
+# the guest's apt could not resolve (caught 2026-07-18). Real resolvers fix it.
+docker run --rm --dns 1.1.1.1 --dns 8.8.8.8 -v "$ROOT/dist:/dist" -v "$work:/work" -v "$CACHE:/cache" "$BUILDER_TAG" bash -euo pipefail -c "
+  # OFFLINE guest install: the libguestfs appliance has no reliable DNS (slirp
+  # cannot reach docker's loopback resolver — three failed attempts 2026-07-18),
+  # and the guest should not need internet anyway. Resolve + download the full
+  # .deb closure HERE in the container (same noble/amd64 archive) and dpkg it
+  # into the guest — deterministic, and matches the platform's offline ethos.
+  apt-get -q update
+  apt-get -q -y --download-only --no-install-recommends install docker.io docker-compose-v2 zstd
+  mkdir -p /work/debs && cp /var/cache/apt/archives/*.deb /work/debs/
+
   qemu-img create -f qcow2 -F qcow2 -b /cache/$(basename "$base") /work/overlay.qcow2 ${APPLIANCE_DISK_GB}G
   virt-customize -a /work/overlay.qcow2 \
     --hostname correlix \
     --run-command 'growpart /dev/sda 1 || true' \
     --run-command 'resize2fs /dev/sda1 || true' \
-    --run-command 'apt-get update' \
-    --install docker.io,docker-compose-v2,zstd \
+    --mkdir /opt/correlix-staging \
+    --copy-in /work/debs:/opt/correlix-staging \
+    --run-command 'DEBIAN_FRONTEND=noninteractive dpkg -i /opt/correlix-staging/debs/*.deb && dpkg -s docker.io docker-compose-v2 zstd >/dev/null && rm -rf /opt/correlix-staging' \
     --mkdir /opt/correlix/bundle \
     --copy-in '/dist/$(basename "$bundle_dir")':/opt/correlix/ \
     --run-command 'mv /opt/correlix/$(basename "$bundle_dir")/* /opt/correlix/bundle/ && rmdir /opt/correlix/$(basename "$bundle_dir")' \
@@ -125,6 +138,9 @@ docker run --rm -v "$ROOT/dist:/dist" -v "$work:/work" -v "$CACHE:/cache" "$BUIL
   # flatten overlay -> standalone compressed qcow2
   qemu-img convert -O qcow2 -c /work/overlay.qcow2 '/work/$(basename "$img" .raw)'
   rm -f /work/overlay.qcow2
+  # container runs as root — hand the scratch dir back to the invoking user so
+  # the host-side trap cleanup can remove it (exit-1-after-successful-build bug)
+  chown -R $(id -u):$(id -g) /work
 "
 
 # ── emit requested formats + checksums ───────────────────────────────────────
