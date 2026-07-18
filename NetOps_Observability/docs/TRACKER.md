@@ -1,6 +1,6 @@
 # NetOps_Observability — Consolidated Work Tracker
 
-> Branch: `feat/observability-platform` · Last updated: 2026-07-17
+> Branch: `feat/observability-platform` · Last updated: 2026-07-18
 > Single source of truth for remaining work. Reconciled against the git history
 > on this branch and the roadmap memories. Update status here as items land.
 
@@ -52,6 +52,61 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 | **4 — Engine Maturation (calibration)** | engine calibrated vs real incident history; grows own signature coverage | #67 P4 (replay calibration) + ~~#80 (undetermined-frequency feed)~~ ✅ | ⏳ later — **#80 feed DONE 2026-06-30** (`corr_undetermined.go`, live); remaining = #67 P4 replay calibration, which needs the incident history Stream 1 generates |
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
 | **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
+
+## #112 — Theme placement: login-screen only + account-menu setting (owner directive 2026-07-18) — ✅ SHIPPED + LIVE
+
+Dark/Light is chosen on the **login screen** and carries into the app (both
+surfaces share `netops.theme`); the only explicit in-app control is the
+account menu's Appearance card (Theme row added above Density, both shells).
+Topbar pill + ⌘K theme command removed (`2b704c3`). Build + 663 vitest green;
+frontend container rebuilt + serving. Optional follow-up (owner's "in
+administrator users" phrasing): server-side per-user theme an admin can set
+in Settings → Users (today it's a per-browser localStorage pref) — NOT built,
+ask before building.
+
+## #111 — RCA correlation-object churn + honest candidate counts (filed 2026-07-18) — ⏳ OPEN
+
+Owner asked why the Correlations page showed **22,560 RCA candidates**.
+Diagnosis (live CH, 24h window): only **59 open** candidates (37 suspected ·
+21 undetermined · 1 confirmed) + ~330 closed; **21,388 are `state='merged'`
+tombstones** counted by `/api/correlations/summary` `total`, which the page
+headline renders. 83% traces to ONE signature — `sig.ent.app.saas-experience-
+degraded` (18,820 merged objects, ~13/min since 2026-07-17 05:18, ~140
+signals each): the engine re-detects the ongoing condition every sweep,
+mints a NEW corr object, merges it into the open one, tombstone counts.
+Storage: the 22.5k current rows ≈ 1.4 MiB (trivial) but the churn writes
+~20M `corr_signals_archive` rows/day (~88 MiB/day compressed, ~9 GiB/day
+uncompressed; 18.3M/day = synthetic probe-loss/timeout/DNS rows feeding that
+signature). Bounded by 45-day TTLs (~4 GiB steady state) but trending up
+(5.2M rows 7/11 → ~19M/day) and burns merge/`FINAL` CPU.
+
+Fix plan (in order):
+1. **Display honesty (S):** exclude `merged` from the "Candidates" headline/
+   chips; disclose merged count separately (don't-hide).
+2. **Engine churn root cause (M):** correlation service should UPDATE/extend
+   the existing open object for an ongoing condition instead of
+   create-then-merge each sweep — cuts ~90% of daily corr writes.
+3. **Tenant canonicalization tail (S):** CH corr writes still emit
+   `tenant_id=''` rows (17.8k/24h; `global` variant stopped 2026-07-17
+   20:13) — empty tenant is ALL-tenant-visible under the CH row policy;
+   canonicalize the CH write path like the PG leg (#78 `canonicalCorrTenant`).
+
+## #110 — Cloud platform backlog Wave 4 (2026-07-17→18) — 🟡 #11+#12 SHIPPED, #13 next
+
+- ✅ **#11 Real Settings editors** (merge `897e517`): per-tenant required-tags
+  governance (store, GET/PUT, coverage wiring `3b13872` + editor `c7bf569`),
+  per-tenant RCA-window editor (`0df66c3`), attribution-precedence editor —
+  reorderable resolver classes (`cdad7a2`), governance change-log view +
+  fake-CTA truth-up (`7820c87`). Staticcheck fix `a087c10`.
+- ✅ **#12 Detection→resolution** (merge `1251c01`): cloud-signal notification
+  routing behind `FEATURE_CLOUD_SIGNAL_NOTIFICATIONS` (`64b6521`), resolution
+  actions v1 — console/ITSM/runbook row + catalog `runbook_url` (migration
+  0028) (`f949a02` `ff0ad9f`), real change→incident card via
+  `/api/cloud/investigations/{id}/changes` (`a1e3d76`).
+- 🔜 **#13 Connector runtime hardening**: Azure certificate auth, keyless AWS
+  `AssumeRoleWithWebIdentity`, workload-assertion minting (platform OIDC
+  issuer), live permission validation / scope discovery, per-exchange metrics.
+- Carried follow-up from Wave 3 #9: UI rendering of `/api/cloud/service-map`.
 
 ## #109 — Don't-hide: true counts + honest pagination (owner task 2, 2026-07-17) — ✅ SHIPPED + DEPLOYED
 
@@ -143,7 +198,7 @@ B10; K8s/Helm emitter when K8s lands (reads the same resource-plan.json);
 tenant-quota governance is a SEPARATE lane (design §9); default-on
 --plan-resources for dev installs next release (bundle is default-on now).
 
-## #108 — Cloud platform backlog Wave 3 (2026-07-17) — 🟡 #8 SHIPPED, #9/#10 next
+## #108 — Cloud platform backlog Wave 3 (2026-07-17) — ✅ SHIPPED (#8/#9/#10; #9 UI map render carried into #110)
 
 - ✅ **#8 Service catalog UI + Overview impact rework** (`56434c3` `5df055a`,
   applied to the stack + render-verified live): backend `owner` on
