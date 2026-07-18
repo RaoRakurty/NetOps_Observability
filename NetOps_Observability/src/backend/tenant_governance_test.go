@@ -321,6 +321,63 @@ func TestAttributionPrecedenceHandlerIsolation(t *testing.T) {
 	}
 }
 
+// The governance audit view: admin-gated, scoped to the caller's audit
+// visibility, and filtered to the settings actions only (§3a: a tenant admin
+// never sees another tenant's governance changes).
+func TestGovernanceAuditViewScopedAndFiltered(t *testing.T) {
+	s := governanceTestServer(t)
+	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
+	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
+	viewerA := jwtClaims{Role: "viewer", Tenant: "t-a", Sub: "user-a"}
+
+	put := func(c jwtClaims, path, body string, h http.HandlerFunc) {
+		r := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h(rec, claimsCtx(r, c))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("seed PUT %s = %d: %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// Seed: governance writes in BOTH tenants + a non-governance event in t-a.
+	put(admA, "/api/settings/required-tags", `{"required_tags":["app","cost_center"]}`, s.handleRequiredTagsSettings)
+	put(admA, "/api/settings/rca-window", `{"rca_window_hours":72}`, s.handleRcaWindowSettings)
+	put(admB, "/api/settings/rca-window", `{"rca_window_hours":6}`, s.handleRcaWindowSettings)
+	s.audit.Record(AuditEvent{Actor: "adm-a", Tenant: "t-a", Method: "POST", Path: "/api/devices", Status: 200, Decision: "allow"})
+
+	get := func(c jwtClaims) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/settings/governance-audit", nil)
+		rec := httptest.NewRecorder()
+		s.handleGovernanceAudit(rec, claimsCtx(r, c))
+		return rec
+	}
+	rec := get(admA)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin GET = %d", rec.Code)
+	}
+	var out struct {
+		Events []AuditEvent `json:"events"`
+		Count  int          `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 2 || len(out.Events) != 2 {
+		t.Fatalf("t-a admin sees %d events, want exactly its 2 governance writes: %+v", out.Count, out.Events)
+	}
+	for _, e := range out.Events {
+		if e.Tenant != "t-a" {
+			t.Fatalf("cross-tenant audit leak: %+v", e)
+		}
+		if !isGovernanceAuditAction(e.Detail["action"]) {
+			t.Fatalf("non-governance event leaked into the view: %+v", e)
+		}
+	}
+	// Non-admin → 403 (audit visibility is admin-gated like /api/audit).
+	if rec := get(viewerA); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer GET = %d, want 403", rec.Code)
+	}
+}
+
 func TestRequiredTagsHandlerIsolation(t *testing.T) {
 	s := governanceTestServer(t)
 	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}

@@ -1532,6 +1532,11 @@ export const api = {
     request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
       method: "PUT", body: JSON.stringify({ reset: true }),
     }),
+  // Recent governance-settings changes (who/when/what) — admin-gated,
+  // scoped server-side to the caller's audit visibility.
+  getGovernanceAudit: (limit = 50) =>
+    request<{ events: GovernanceAuditEvent[]; count: number }>(
+      `/api/settings/governance-audit?limit=${limit}`),
 
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
@@ -3333,6 +3338,20 @@ export type AttributionPrecedenceSettings = {
   attribution_precedence: string[];
   is_default: boolean;
   default_precedence: string[];
+};
+
+// One governance-settings audit event (backend AuditEvent, filtered to the
+// settings actions by /api/settings/governance-audit).
+export type GovernanceAuditEvent = {
+  id: string;
+  time: string;
+  actor: string;
+  tenant?: string;
+  method: string;
+  path: string;
+  status: number;
+  decision: string;
+  detail?: Record<string, unknown>;
 };
 
 // Required-tag compliance over the tenant's inventory (coverage response).

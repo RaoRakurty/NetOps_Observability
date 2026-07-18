@@ -7,6 +7,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../services/api";
+import type { GovernanceAuditEvent } from "../../services/api";
+import { fmtDateTime } from "../../lib/time";
 import { invalidateCloudInventory } from "./api";
 
 // ── pure helpers (unit-tested in governanceSettings.test.ts) ─────────────────
@@ -40,6 +42,102 @@ export const PRECEDENCE_LABELS: Record<string, string> = {
   domain: "Domain (DNS / TLS SNI)",
   ip_catalog: "Vendor IP catalog",
 };
+
+// ── Governance change log (read-only) ────────────────────────────────────────
+
+// describeGovernanceChange turns an audit event's action detail into the
+// operator-readable "what changed" cell. Pure — unit-tested.
+export function describeGovernanceChange(e: GovernanceAuditEvent): { setting: string; change: string } {
+  const d = e.detail ?? {};
+  const list = (v: unknown): string => Array.isArray(v) ? v.map(String).join(" → ") : "";
+  switch (d.action) {
+    case "set_required_tags":
+      return {
+        setting: "Required tags",
+        change: d.reset || !Array.isArray(d.required_tags) || d.required_tags.length === 0
+          ? "reset to default" : (d.required_tags as unknown[]).map(String).join(", "),
+      };
+    case "set_rca_window":
+      return {
+        setting: "RCA window",
+        change: d.reset || !d.rca_window_hours ? "reset to default" : `${d.rca_window_hours} hours`,
+      };
+    case "set_attribution_precedence":
+      return {
+        setting: "Attribution precedence",
+        change: d.reset || !list(d.attribution_precedence) ? "reset to default" : list(d.attribution_precedence),
+      };
+    case "set_time_display":
+      return { setting: "Time display", change: String(d.time_display ?? "") };
+    default:
+      return { setting: String(d.action ?? "settings change"), change: "" };
+  }
+}
+
+export function GovernanceAuditCard() {
+  const [events, setEvents] = useState<GovernanceAuditEvent[]>([]);
+  const [busy, setBusy] = useState(true);
+  const [denied, setDenied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getGovernanceAudit()
+      .then((r) => setEvents(r.events ?? []))
+      .catch((e) => {
+        const msg = (e as Error).message;
+        // Non-admins are refused server-side — say so instead of failing vaguely.
+        if (/403|forbidden/i.test(msg)) setDenied(true);
+        else setErr(msg);
+      })
+      .finally(() => setBusy(false));
+  }, []);
+
+  return (
+    <div className="ao-panel">
+      <div className="ao-panel-h">Recent Governance Changes{" "}
+        <span className="ao-panel-meta">read-only · from the audit trail</span>
+      </div>
+      <p className="ao-set-d">
+        Who changed which governance setting, and when — required tags, RCA window, attribution
+        precedence, time display. Every save on this page lands here.
+        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+      </p>
+      {busy ? (
+        <div className="ao-muted" style={{ fontSize: 12 }}>Loading…</div>
+      ) : denied ? (
+        <div className="ao-muted" style={{ fontSize: 12 }}>Visible to tenant admins only.</div>
+      ) : events.length === 0 ? (
+        <div className="ao-muted" style={{ fontSize: 12 }}>No governance changes recorded yet.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="ao-kv" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--fg-muted)" }}>
+                <th style={{ padding: "4px 8px" }}>When</th>
+                <th style={{ padding: "4px 8px" }}>Who</th>
+                <th style={{ padding: "4px 8px" }}>Setting</th>
+                <th style={{ padding: "4px 8px" }}>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e) => {
+                const { setting, change } = describeGovernanceChange(e);
+                return (
+                  <tr key={e.id}>
+                    <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{fmtDateTime(e.time)}</td>
+                    <td style={{ padding: "4px 8px" }}>{e.actor || "—"}</td>
+                    <td style={{ padding: "4px 8px" }}>{setting}</td>
+                    <td style={{ padding: "4px 8px" }} className="ao-mono">{change || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Attribution precedence editor ────────────────────────────────────────────
 

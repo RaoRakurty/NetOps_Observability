@@ -37,7 +37,7 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
-import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard } from "./appobs/GovernanceSettings";
+import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
@@ -1638,18 +1638,22 @@ function Evidence({ openInvestigation, ctl }: {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
-// Advanced configuration + the effective defaults the resolver actually runs.
+// Advanced configuration — REAL per-tenant editors (Wave 4 #11).
 //
-// Owner review #3/#4: EVERY card here rendered the same button, and that button
-// opened the ITSM Integrations page (ServiceNow / Jira). So "Cloud Connectors →
-// Open Integrations" sent an operator trying to connect AWS to a ticketing
-// gallery, and four other cards promised editors that do not exist. A button is
-// now rendered ONLY where it has a real destination:
-//   · Cloud Connectors → Data sources → Accounts → "Connect a cloud account",
-//     the live 7-step connector wizard (ConnectorWizard over /api/cloud/*).
-//   · The rest are platform-effective values with no editor built yet, so they
-//     read as the values they are. A button that goes nowhere it names is worse
-//     than no button — the same honesty rule the rest of this page follows.
+// History: owner review #3/#4 found every card here rendered one button that
+// opened the ITSM ticketing gallery, and four cards promised editors that did
+// not exist (the backlog's "fake CTAs"). Those placeholders are now the real
+// thing — each editor below persists an audited, admin-gated tenant setting
+// that its surface actually reads:
+//   · Cloud Connectors → Data sources → Accounts (live connector wizard).
+//   · Attribution Precedence → /api/settings/attribution-precedence, consumed
+//     by the appid resolver (/api/appid/resolve fusion order).
+//   · Required Tags → /api/settings/required-tags, drives missing-tags +
+//     the coverage compliance report.
+//   · RCA Window → /api/settings/rca-window, the default read window for the
+//     cloud signal surfaces.
+// Catalog Sources stays a value row: it states what the platform ships, and
+// feed refresh is an out-of-band operator job — no button pretends otherwise.
 function Settings() {
   const sections: { t: string; d: string; value: string; cta?: string; onClick?: () => void }[] = [
     { t: "Catalog Sources", d: "Managed vendor IP/domain feeds used for catalog-based attribution.", value: "AWS · Azure · GCP · Microsoft 365 (refreshed every 6h)" },
@@ -1677,6 +1681,8 @@ function Settings() {
       <AttributionPrecedenceCard />
       <RequiredTagsCard />
       <RcaWindowCard />
+      {/* Read-only change log: every save above is audited and listed here. */}
+      <GovernanceAuditCard />
     </div>
   );
 }

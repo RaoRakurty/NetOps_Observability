@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -325,6 +326,60 @@ func (s *server) handleAttributionPrecedenceSettings(w http.ResponseWriter, r *h
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
 	}
+}
+
+// isGovernanceAuditAction reports whether an audit Detail action is one of the
+// tenant-governance settings writes this view surfaces (closed list — the
+// audit trail itself stays admin-visible in full at /api/audit).
+func isGovernanceAuditAction(action any) bool {
+	switch action {
+	case "set_required_tags", "set_rca_window", "set_attribution_precedence", "set_time_display":
+		return true
+	}
+	return false
+}
+
+const governanceAuditDefaultLimit = 50
+
+// handleGovernanceAudit serves GET /api/settings/governance-audit — the
+// read-only "who changed which governance setting, when" view (Wave 4 #11
+// slice 5). Reuses auditScopedList, so visibility is exactly the caller's
+// audit scope (§3a: tenant admin → own tenant; org admin → its org's tenants;
+// platform owner → all) filtered to the governance actions. Bounded: scans at
+// most one max-size audit page, returns at most ?limit= (default 50) events.
+func (s *server) handleGovernanceAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	limit := governanceAuditDefaultLimit
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > auditDefaultLimit {
+		limit = auditDefaultLimit
+	}
+	// One bounded page of the caller-visible trail, newest-first, then filter.
+	// If governance writes are older than the newest auditMaxQueryLimit events
+	// the view is honest about being a recent-changes window, not an archive.
+	events := s.auditScopedList(claims, auditQuery{Limit: auditMaxQueryLimit})
+	out := make([]AuditEvent, 0, limit)
+	for _, e := range events {
+		if e.Detail == nil || !isGovernanceAuditAction(e.Detail["action"]) {
+			continue
+		}
+		out = append(out, e)
+		if len(out) >= limit {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out, "count": len(out)})
 }
 
 // normalizeRequiredTags validates a caller's list: 1..32 entries, each a

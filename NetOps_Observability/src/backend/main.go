@@ -1066,6 +1066,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
+	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)
 	mux.HandleFunc("/api/ai/tenant-config", s.handleAITenantConfig)
 	mux.HandleFunc("/api/ai/tenants", s.handleAITenants)
 	mux.HandleFunc("/api/ai/tenants/", s.handleAITenants)

@@ -75,6 +75,10 @@ var routeIsolationLedger = map[string]string{
 	"/api/settings/required-tags": "scoped",
 	"/api/settings/rca-window":    "scoped",
 	"/api/settings/attribution-precedence": "scoped",
+	// Read-only recent-changes view over the governance settings writes:
+	// requireAdmin + auditScopedList (the same scoping as /api/audit), filtered
+	// to the settings actions (tenant_governance_test.go).
+	"/api/settings/governance-audit": "adminScoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
 	"/api/rca/":                                "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's

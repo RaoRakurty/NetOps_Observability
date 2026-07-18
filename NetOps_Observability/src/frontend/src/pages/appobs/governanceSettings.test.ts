@@ -1,6 +1,7 @@
 // Wave 4 #11 — governance Settings editors: pure-helper contracts.
 import { describe, expect, it } from "vitest";
-import { moveItem, normalizeTagKey } from "./GovernanceSettings";
+import { describeGovernanceChange, moveItem, normalizeTagKey } from "./GovernanceSettings";
+import type { GovernanceAuditEvent } from "../../services/api";
 import { missingTags, DEFAULT_REQUIRED_TAGS } from "./api";
 
 describe("normalizeTagKey (mirror of tenant_governance.go validation)", () => {
@@ -29,6 +30,28 @@ describe("moveItem (precedence up/down reorder)", () => {
     expect(moveItem(abc, 0, -1)).toBe(abc);
     expect(moveItem(abc, 2, +1)).toBe(abc);
     expect(moveItem(abc, 5, +1)).toBe(abc);
+  });
+});
+
+describe("describeGovernanceChange (audit view rows)", () => {
+  const ev = (detail: Record<string, unknown>): GovernanceAuditEvent => ({
+    id: "1", time: "2026-07-18T00:00:00Z", actor: "adm", method: "PUT",
+    path: "/api/settings/x", status: 200, decision: "allow", detail,
+  });
+  it("renders each settings action readably", () => {
+    expect(describeGovernanceChange(ev({ action: "set_required_tags", required_tags: ["app", "cost_center"] })))
+      .toEqual({ setting: "Required tags", change: "app, cost_center" });
+    expect(describeGovernanceChange(ev({ action: "set_rca_window", rca_window_hours: 72 })))
+      .toEqual({ setting: "RCA window", change: "72 hours" });
+    expect(describeGovernanceChange(ev({ action: "set_attribution_precedence", attribution_precedence: ["firewall_appid", "operator"] })))
+      .toEqual({ setting: "Attribution precedence", change: "firewall_appid → operator" });
+    expect(describeGovernanceChange(ev({ action: "set_time_display", time_display: "utc" })))
+      .toEqual({ setting: "Time display", change: "utc" });
+  });
+  it("labels resets and never invents a change", () => {
+    expect(describeGovernanceChange(ev({ action: "set_required_tags", reset: true })).change).toBe("reset to default");
+    expect(describeGovernanceChange(ev({ action: "set_rca_window", rca_window_hours: 0, reset: true })).change).toBe("reset to default");
+    expect(describeGovernanceChange(ev({ action: "something_else" })).change).toBe("");
   });
 });
 
