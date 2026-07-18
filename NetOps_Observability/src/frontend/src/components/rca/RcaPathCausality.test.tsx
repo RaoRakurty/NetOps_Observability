@@ -1,8 +1,11 @@
-// RcaPathCausality.test.tsx — the path-first RCA render (design §5/§5a). Asserts the
-// discovered typed path draws as customer-labeled segments, the attributed cause is
-// highlighted as the broken link, opaque segments render greyed WITH their reason, a
-// capped verdict never over-claims, cloud devices deep-link into Cloud Logs, and the
-// absent case renders an honest "no discovered path" note (never a fabricated path).
+// RcaPathCausality.test.tsx — the path-first RCA render (design §5/§5a, reworked
+// per the owner directive 2026-07-18). Asserts: ONE clean left-to-right chain of
+// small nodes; the attributed cause is the RED hero ("Break here" / "Possible
+// break here"); unknown/opaque spans collapse to a dotted connector with a count
+// (reason behind hover, never a grey box); healthy hops carry NO state chips; a
+// capped verdict never over-claims; cloud devices deep-link into Cloud Logs; and
+// the no-path / no-break cases each render one honest sentence (never a
+// fabricated path or break).
 
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup, within } from "@testing-library/react";
@@ -68,8 +71,8 @@ describe("RcaPathCausality", () => {
     render(<RcaPathCausality data={confirmed} />);
     // the named cause reads as path causality in the headline.
     expect(screen.getByText(/broke at/i)).toBeTruthy();
-    // the cause device carries the broken-link tag.
-    expect(screen.getByText("Broke here")).toBeTruthy();
+    // the cause device is the hero: break tag, definitive on a confirmed verdict.
+    expect(screen.getByText("Break here")).toBeTruthy();
     // verdict LIFT: confirmed now, suspected baseline.
     expect(screen.getByText("Confirmed")).toBeTruthy();
     expect(screen.getByText("Suspected")).toBeTruthy();
@@ -78,6 +81,30 @@ describe("RcaPathCausality", () => {
     expect(screen.getByText("Downstream")).toBeTruthy();
     // discounted off-path fault is listed as ruled-out.
     expect(screen.getByText(/Ruled out \(off-path\)/i)).toBeTruthy();
+  });
+
+  it("healthy hops are minimal — no state chips, no confidence footers (owner 2026-07-18)", () => {
+    render(<RcaPathCausality data={confirmed} />);
+    // no per-segment "Classified · <confidence>" footers on the chain
+    expect(screen.queryByText(/^Classified ·/)).toBeNull();
+    // no observed/none state chips anywhere in the default view
+    expect(screen.queryByText(/observed/i)).toBeNull();
+    expect(screen.queryByText(/no data/i)).toBeNull();
+  });
+
+  it("draws the chain with NO break + one clean sentence when no break is attributable", () => {
+    const noBreak: RcaPathAttribution = {
+      ...confirmed, attributed: null, explained_away: [], discounted: [],
+      verdict_tier: "suspected", baseline_verdict_tier: "suspected", confidence_lifted: false,
+    };
+    render(<RcaPathCausality data={noBreak} />);
+    // the chain still draws (never hidden just because no cause is named)…
+    expect(screen.getByText("Client")).toBeTruthy();
+    expect(screen.getAllByText("Load Balancer").length).toBeGreaterThan(0);
+    // …with no break invented…
+    expect(screen.queryByText(/break here/i)).toBeNull();
+    // …and the one clean sentence.
+    expect(screen.getByText(/no break point is attributable/i)).toBeTruthy();
   });
 
   it("deep-links a cloud device on the path into the family-tagged Cloud Logs", () => {
@@ -112,13 +139,36 @@ describe("RcaPathCausality", () => {
       },
     };
     render(<RcaPathCausality data={capped} />);
-    // the opaque segment shows its reason, not a fabricated device.
-    expect(screen.getByText("Unknown segment")).toBeTruthy();
-    expect(screen.getByText(/no telemetry crosses this provider backbone/i)).toBeTruthy();
+    // the opaque span collapses to a dotted connector (no grey box); its
+    // classification reason stays reachable behind hover (title/aria).
+    expect(screen.queryByText("Unknown segment")).toBeNull();
+    expect(screen.getByText("unknown span")).toBeTruthy();
+    const gap = screen.getByLabelText(/no telemetry crosses this provider backbone/i);
+    expect(gap.getAttribute("title")).toMatch(/no telemetry crosses this provider backbone/i);
+    // an unconfirmed verdict reads "Possible break here", never definitive.
+    expect(screen.getByText("Possible break here")).toBeTruthy();
     // the honesty cap is surfaced — reads suspected, never confirmed.
     expect(screen.getByText(/Verdict capped/i)).toBeTruthy();
     expect(screen.getByText(/unknown\/opaque/i)).toBeTruthy();
     expect(screen.queryByText("Confirmed")).toBeNull();
+  });
+
+  it("collapses a counted unknown-hop run to '· · · N hops'", () => {
+    const withRun: RcaPathAttribution = {
+      ...confirmed,
+      path: {
+        ...confirmed.path!,
+        segments: [
+          confirmed.path!.segments![0],
+          { index: 1, segment_type: "unknown", ambiguous: false, unknown_hops: [4, 5, 6],
+            reason: "3 hops did not respond" },
+          confirmed.path!.segments![1],
+        ],
+      },
+    };
+    render(<RcaPathCausality data={withRun} />);
+    expect(screen.getByText("3 hops")).toBeTruthy();
+    expect(screen.queryByText("Unknown segment")).toBeNull();
   });
 
   it("marks an ambiguous (ECMP) segment", () => {
