@@ -2429,6 +2429,14 @@ export const api = {
     request<{ signals: CloudHealthSignalRow[]; count: number; window_hours: number; next_cursor?: string }>(`/api/cloud/health${cloudQS(app, limit, windowHours, extra)}`),
   cloudChanges: (app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage) =>
     request<{ changes: CloudChangeRow[]; count: number; window_hours: number; next_cursor?: string }>(`/api/cloud/changes${cloudQS(app, limit, windowHours, extra)}`),
+  // Change→incident correlation (Wave 4 #12): the change events recorded in the
+  // onset-anchored window on ONE investigation's own affected resources/apps.
+  cloudInvestigationChanges: (id: string) =>
+    request<{
+      changes: (CloudChangeRow & { offset_seconds: number })[]; count: number;
+      onset: string; basis: "affected_scope" | "no_affected_resources" | "onset_unknown";
+      lookback_hours: number;
+    }>(`/api/cloud/investigations/${encodeURIComponent(id)}/changes`),
   cloudEvidence: (app?: string, limit?: number, windowHours?: number, extra?: CloudSignalPage) =>
     request<{
       objects: CloudRcaObjectRow[]; evidence: CloudEvidenceRow[];
