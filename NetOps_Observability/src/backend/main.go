@@ -1360,6 +1360,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.tlsSrv != nil {
 		s.tlsSrv.writeTLSMetrics(w)
 	}
+	if s.cloudBroker != nil {
+		s.cloudBroker.metrics.write(w)
+	}
 	fmt.Fprintf(w, "# HELP netops_ticketing_policy_conflicts_total Policy enables rejected because another policy is enabled for the tenant+system.\n")
 	fmt.Fprintf(w, "# TYPE netops_ticketing_policy_conflicts_total counter\n")
 	fmt.Fprintf(w, "netops_ticketing_policy_conflicts_total %d\n", s.tktPolicyConflicts.Load())

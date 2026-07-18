@@ -115,6 +115,7 @@ type cloudIdentityBroker struct {
 	auditFn func(AuditEvent)                                         // nil = no audit sink
 	now     func() time.Time
 	maxLife time.Duration
+	metrics *cloudExchangeMetrics // per-provider exchange counters (/metrics)
 
 	mu    sync.Mutex
 	cache map[string]cachedToken
@@ -128,6 +129,7 @@ func newCloudIdentityBroker(store cloudConnRepo, vault *Vault, auditFn func(Audi
 		auditFn: auditFn,
 		now:     func() time.Time { return time.Now().UTC() },
 		maxLife: brokerMaxTokenLifetime,
+		metrics: newCloudExchangeMetrics(),
 		cache:   map[string]cachedToken{},
 	}
 }
@@ -249,6 +251,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 	if ct, ok := b.cache[key]; ok && ct.fresh(b.now()) {
 		tok := ct.token
 		b.mu.Unlock()
+		b.metrics.recordCacheHit(c.Provider)
 		return tok, nil
 	}
 	b.mu.Unlock()
@@ -275,7 +278,9 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 		exReq.LegacySecret = secret
 	}
 
+	exStart := b.now()
 	tok, err := adapter.ExchangeCredential(ctx, exReq)
+	b.metrics.recordExchange(c.Provider, err, b.now().Sub(exStart))
 	if err != nil {
 		// Observable failure: structured log + audit, NEVER any secret material
 		// (ExchangeError is sanitized by contract; deferral sentinels are static).
