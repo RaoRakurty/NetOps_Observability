@@ -619,6 +619,49 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 	return own
 }
 
+// ---- cause honesty (#113 point 4) -------------------------------------------------------------
+
+// firstLiveCauseHypothesis picks the best hypothesis that may honestly be named
+// as a POSSIBLE cause: highest-ranked, not contradicted, and an actual cause
+// candidate (a symptom classification names what was seen, never why). nil when
+// no hypothesis qualifies — the caller states the absence, it never invents.
+func firstLiveCauseHypothesis(hyps []rcaHypothesis) *rcaHypothesis {
+	for i := range hyps {
+		if !hyps[i].Contradicted && hyps[i].Type != "symptom classification" {
+			return &hyps[i]
+		}
+	}
+	return nil
+}
+
+// decodeEvidenceMissing reads the engine's own evidence_missing shortfalls off
+// the object row (JSON array column) — honest, machine-written gaps like
+// "path hop 10.0.0.9 did not respond". Malformed/absent → empty, never a guess.
+func decodeEvidenceMissing(meta map[string]any) []string {
+	raw := asString(meta["evidence_missing"])
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// appendUnique appends s unless already present (order-preserving).
+func appendUnique(ss []string, s string) []string {
+	if s == "" {
+		return ss
+	}
+	for _, x := range ss {
+		if x == s {
+			return ss
+		}
+	}
+	return append(ss, s)
+}
+
 // ---- at a glance (#113 point 2) ---------------------------------------------------------------
 
 // buildAtAGlance composes the document's FIRST section — where it happened ·
@@ -662,13 +705,7 @@ func buildAtAGlance(loc rcaFaultLocalization, scope rcaReportScope, hyps []rcaHy
 	}
 
 	// WHAT (possibly) HAPPENED — best live hypothesis, honestly qualified.
-	var top *rcaHypothesis
-	for i := range hyps {
-		if !hyps[i].Contradicted && hyps[i].Type != "symptom classification" {
-			top = &hyps[i]
-			break
-		}
-	}
+	top := firstLiveCauseHypothesis(hyps)
 	switch {
 	case root.Identified:
 		g.What = root.Statement

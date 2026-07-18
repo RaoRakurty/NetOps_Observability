@@ -450,12 +450,20 @@ type rcaFaultLocalization struct {
 // confirmed signature, seam grounding or high confidence never set it.
 type rcaRootCause struct {
 	Identified bool     `json:"identified"`
-	Statement  string   `json:"statement"` // "Root cause has not been identified." when false
+	Statement  string   `json:"statement"` // best-hypothesis "possibly because of X" wording when false
 	Mechanism  string   `json:"mechanism,omitempty"`
 	Object     string   `json:"object,omitempty"`
 	ObjectType string   `json:"object_type,omitempty"`
 	Owner      string   `json:"owner,omitempty"`
 	Evidence   []string `json:"evidence,omitempty"`
+	// #113 point 4 cause honesty: an unidentified root cause never renders as a
+	// bare "not identified" — the best live hypothesis is named as "possibly
+	// because of X" together with its evidence STATE: what is in hand and what
+	// is still missing (hypothesis gaps + the object's own evidence_missing).
+	// All empty when no hypothesis has supporting evidence (honest absence).
+	PossibleCause   string   `json:"possible_cause,omitempty"`
+	EvidenceKnown   []string `json:"evidence_known,omitempty"`
+	EvidenceMissing []string `json:"evidence_missing,omitempty"`
 }
 
 type rcaOwnerCandidate struct {
@@ -1467,6 +1475,26 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
+	// #113 point 4 cause honesty: pair every unidentified root cause with the
+	// best live hypothesis ("possibly because of X") and its evidence state —
+	// what is in hand, what is still missing (hypothesis gaps + the object's own
+	// evidence_missing shortfalls). A bare "not identified" is a dead end for the
+	// reader; an honest hypothesis with named gaps is actionable. When NO
+	// hypothesis has evidence, the absence itself is stated — never a guess.
+	if top := firstLiveCauseHypothesis(hyps); top != nil {
+		root.PossibleCause = orDefault(top.Problem, top.Title)
+		root.EvidenceKnown = firstN(top.Supporting, 4)
+		root.EvidenceMissing = firstN(top.Missing, 4)
+		for _, m := range decodeEvidenceMissing(meta) {
+			if len(root.EvidenceMissing) >= 6 {
+				break
+			}
+			root.EvidenceMissing = appendUnique(root.EvidenceMissing, m)
+		}
+		root.Statement = fmt.Sprintf(
+			"Root cause has not been identified — possibly because of %s (unconfirmed best hypothesis).",
+			strings.TrimRight(root.PossibleCause, "."))
+	}
 	switch {
 	case analysis == "confirmed" && loc.Localized:
 		root.Statement = fmt.Sprintf("The fault condition is confirmed and localized to %s. The underlying root cause — the causal mechanism and originating object — remains under investigation.", loc.Object)

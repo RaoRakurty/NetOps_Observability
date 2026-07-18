@@ -117,8 +117,13 @@ func TestRcaReportActiveCheckOnlyRecovered(t *testing.T) {
 	if rep.RootCause.Identified {
 		t.Fatal("root cause must not be identified")
 	}
-	if rep.RootCause.Statement != "Root cause has not been identified." {
+	// #113 point 4: an unidentified root cause with a live hypothesis reads
+	// "possibly because of X" — never a bare dead-end "not identified".
+	if !strings.HasPrefix(rep.RootCause.Statement, "Root cause has not been identified — possibly because of ") {
 		t.Fatalf("root cause statement = %q", rep.RootCause.Statement)
+	}
+	if rep.RootCause.PossibleCause == "" || len(rep.RootCause.EvidenceKnown) == 0 {
+		t.Fatalf("possible cause/evidence state missing: %+v", rep.RootCause)
 	}
 	if !rep.Times.RecoveredCaptured || !strings.Contains(rep.Times.RecoveredAt, "18:15:15") {
 		t.Fatalf("recovered_at = %+v", rep.Times)

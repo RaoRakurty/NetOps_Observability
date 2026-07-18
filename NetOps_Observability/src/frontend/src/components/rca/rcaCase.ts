@@ -370,6 +370,18 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         : contradicted ? "contradicted"
           : suspected ? "suspected"
             : "undetermined";
+  // #113 point 4 — cause honesty: an unconfirmed case names its best hypothesis
+  // as "possibly because of X" plus the evidence STATE (what's missing: the
+  // engine's verdict reasons + the object's own evidence_missing shortfalls).
+  // No hypothesis with evidence → the absence is stated, never guessed.
+  const possiblyCause = !confirmed && !contradicted && timeline.top_hypothesis !== "undetermined" ? title : "";
+  const evidenceGaps: string[] = (() => {
+    try {
+      const a = JSON.parse(obj.evidence_missing || "[]");
+      return Array.isArray(a) ? a.map(String) : [];
+    } catch { return []; }
+  })();
+  const evidenceState = [...whyNot, ...evidenceGaps].slice(0, 3).join(" · ");
   const verdictTone: Tone = confirmed ? "green" : verdictState === "recovered" ? "blue" : verdictState === "contradicted" ? "gray" : suspected ? "orange" : "gray";
 
   // ticket decision → exact global NOC phrase (consistent wording across the app).
@@ -668,9 +680,16 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     rcaId: obj.correlation_id.slice(0, 13),
     aside: [
       // "Root cause" only names an object when CONFIRMED; a suspected case pairs
-      // the honest "Not identified" with the best hypothesis so the reader gets
-      // "possibly because of X", not a dead end (#113 owner directive).
-      { k: "Root cause", v: confirmed && device ? `${device}${peer ? ` ↔ ${peer}` : ""}` : "Not identified" },
+      // the honest non-claim with the best hypothesis so the reader gets
+      // "possibly because of X" + the evidence state, never a bare dead-end
+      // "Not identified" (#113 point 4 — cause honesty).
+      {
+        k: "Root cause",
+        v: confirmed && device ? `${device}${peer ? ` ↔ ${peer}` : ""}`
+          : possiblyCause ? `Not confirmed — possibly because of ${possiblyCause}`
+            : "Not identified — no cause hypothesis has supporting evidence yet",
+      },
+      ...(!confirmed && evidenceState ? [{ k: "Evidence state", v: evidenceState }] : []),
       ...(!confirmed && device ? [{ k: "Evidence localizes to", v: `${device}${peer ? ` ↔ ${peer}` : ""}`, mono: true }] : []),
       // Ownership names the SEAM's responsible party from the matched signature
       // (isp / carrier / cloud provider / app team) — never a generic "NOC"
