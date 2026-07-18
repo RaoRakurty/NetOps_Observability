@@ -65,6 +65,13 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 
+  # cloud-ingest poller (lab-site sidecar): per-provider credential-exchange
+  # counters (Wave 4 #13). Absent when the sidecar isn't deployed — silent
+  # no-op under suppressScrapeErrors, same as the other optional targets.
+  - job_name: 'cloud-ingest'
+    static_configs:
+      - targets: ['cloud-ingest:9109']
+
   - job_name: 'grafana'
     static_configs:
       - targets: ['grafana:3000']

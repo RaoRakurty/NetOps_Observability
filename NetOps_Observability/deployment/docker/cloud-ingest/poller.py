@@ -25,6 +25,7 @@ import cloud_tag
 import cloudmetrics
 import discover
 import gcp
+import ingest_metrics
 import seam_aws
 import source_status
 import trail_state
@@ -639,7 +640,15 @@ def connector_cycle(producer, st: dict) -> dict:
         cst = st.setdefault("connectors", {}).setdefault(cid, {})
         acct, reg = _connector_scope(conn)
         try:
-            creds = broker_client.credentials(cid)  # short-lived; memory only
+            ex_start = time.time()
+            try:
+                creds = broker_client.credentials(cid)  # short-lived; memory only
+            except Exception as exc:
+                ingest_metrics.record_exchange(
+                    provider, ingest_metrics.classify_error(exc), time.time() - ex_start)
+                raise
+            ingest_metrics.record_exchange(
+                provider, ingest_metrics.OUTCOME_SUCCESS, time.time() - ex_start)
             counts = lane(conn, creds, producer, cst) or {}
             ok += 1
             source_status.clear(provider, "inventory", tenant=conn["tenant"],
@@ -678,6 +687,9 @@ def main():
     # polling driven by the platform's connector store via the token broker.
     connector_mode = broker_client.configured()
     jlog("ingestion modes", ambient=True, connectors=connector_mode)
+    metrics_srv = ingest_metrics.serve()
+    if metrics_srv is not None:
+        jlog("metrics serving", port=metrics_srv.server_address[1])
     last_connectors = 0.0
     st = load_state()
     last_discover = 0.0
