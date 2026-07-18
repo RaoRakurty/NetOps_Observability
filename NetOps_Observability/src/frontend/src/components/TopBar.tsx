@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
-import { usePrefs } from "../theme/prefs";
 import { BRAND } from "../brand";
 import eyeIris from "../assets/brand/eye-iris.webp";
 import Icon from "./Icon";
@@ -42,7 +41,6 @@ const KIND_LABEL: Record<GlobalResultKind, string> = {
 // so it behaves like a true global search, not just a log query.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
-  const { appearance, setAppearance } = usePrefs();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
@@ -211,26 +209,10 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
             preference (owner 2026-07-17): every user of the tenant reads the
             same zone; storage stays UTC (lib/time.ts still renders it). */}
 
-        {/* Appearance knob — mirrors the login page's Dark/Light pill; both
-            read/write the same preference so the two screens stay in sync. */}
-        <div className="mode-toggle" role="group" aria-label="Appearance">
-          <button
-            type="button"
-            className={appearance === "dark" ? "on" : ""}
-            aria-pressed={appearance === "dark"}
-            onClick={() => setAppearance("dark")}
-          >
-            Dark
-          </button>
-          <button
-            type="button"
-            className={appearance === "light" ? "on" : ""}
-            aria-pressed={appearance === "light"}
-            onClick={() => setAppearance("light")}
-          >
-            Light
-          </button>
-        </div>
+        {/* Appearance knob removed from the topbar (owner 2026-07-18): theme is
+            chosen on the login screen and carries over (shared netops.theme
+            pref); an explicit Theme control lives in the account menu's
+            Appearance settings (AppearanceControls). */}
 
         <button
           className="help-btn"

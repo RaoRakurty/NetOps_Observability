@@ -40,7 +40,7 @@ const KIND_LABEL: Record<Cmd["kind"], string> = {
 
 export default function CommandPalette({ nav }: { nav: NavSection[] }) {
   const { navigate, setQuery, setCopilotOpen } = useShell();
-  const { appearance, setAppearance, density, setDensity } = usePrefs();
+  const { density, setDensity } = usePrefs();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -108,14 +108,9 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
       sub: d.section,
       run: () => (d.action === "copilot" ? (setCopilotOpen(true), setOpen(false)) : go(d.route)),
     }));
+    // Theme command removed (owner 2026-07-18): theme is set on the login
+    // screen or in the account menu's Appearance settings only.
     const actions: Cmd[] = [
-      {
-        id: "act:theme",
-        kind: "action",
-        title: `Switch to ${appearance === "dark" ? "light" : "dark"} theme`,
-        sub: "Appearance",
-        run: () => setAppearance(appearance === "dark" ? "light" : "dark"),
-      },
       {
         id: "act:density",
         kind: "action",
@@ -136,7 +131,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     ];
     return [...navCmds, ...actions];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appearance, density, nav]);
+  }, [density, nav]);
 
   // Combine: filtered static commands + live search results.
   const cmds = useMemo<Cmd[]>(() => {
