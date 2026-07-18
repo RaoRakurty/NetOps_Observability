@@ -14,6 +14,7 @@ import (
 // the injected TokenExchanger (GCPSTSExchanger in production).
 type gcpAdapter struct {
 	exchange TokenExchanger
+	probe    *GCPProbeClient
 }
 
 func (gcpAdapter) Provider() Provider { return ProviderGCP }
@@ -171,12 +172,58 @@ func (a gcpAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest)
 	return a.exchange.Exchange(ctx, req)
 }
 
-func (a gcpAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {
-	return nil, ErrProviderExchangeDeferred
+// DiscoverScopes lists the ACTIVE projects the exchanged token can reach —
+// also the live identity proof for the token.
+func (a gcpAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
+	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
+		return nil, ErrProviderExchangeDeferred
+	}
+	projects, err := a.probe.Projects(ctx, req.Token.Value)
+	if err != nil {
+		return nil, err
+	}
+	scopes := make([]Scope, 0, len(projects))
+	for _, p := range projects {
+		scopes = append(scopes, Scope{
+			Type: ScopeProject, Ref: p.ProjectID, Display: p.Name, Discovered: true,
+		})
+	}
+	return scopes, nil
 }
 
-func (a gcpAdapter) ValidateCapabilities(_ context.Context, _ CapabilityCheckRequest) (CapabilityReport, error) {
-	return CapabilityReport{}, ErrProviderExchangeDeferred
+// ValidateCapabilities runs projects.testIamPermissions — GCP's canonical dry
+// permission check — grading every pack permission at the project scope.
+func (a gcpAdapter) ValidateCapabilities(ctx context.Context, req CapabilityCheckRequest) (CapabilityReport, error) {
+	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
+		return CapabilityReport{}, ErrProviderExchangeDeferred
+	}
+	project := strings.TrimSpace(req.Scope.Ref)
+	if project == "" {
+		return CapabilityReport{}, &ExchangeError{Provider: ProviderGCP, Code: "request_invalid", Msg: "a project scope is required for the permission check"}
+	}
+	perms := req.Pack.AllPermissions()
+	granted, err := a.probe.TestPermissions(ctx, req.Token.Value, project, perms)
+	if err != nil {
+		return CapabilityReport{}, err
+	}
+	report := CapabilityReport{Pack: req.Pack.FullID(), AllGranted: true}
+	for _, perm := range perms {
+		ok := granted[perm]
+		detail := ""
+		if !ok {
+			report.AllGranted = false
+			detail = "not granted at project " + project
+		}
+		report.Permissions = append(report.Permissions, PermissionStatus{Permission: perm, Granted: ok, Detail: detail})
+	}
+	if !report.AllGranted {
+		report.Findings = append(report.Findings, Finding{
+			Severity: SeverityWarning, Code: "permissions_missing",
+			Message:     "some declared pack permissions are not granted at the project scope",
+			Remediation: "Grant the read-only viewer roles from the setup template, then re-run the permission check.",
+		})
+	}
+	return report, nil
 }
 
 func (a gcpAdapter) Revoke(_ context.Context, _ RevokeRequest) error {

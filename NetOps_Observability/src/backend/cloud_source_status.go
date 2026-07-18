@@ -71,7 +71,17 @@ type cloudSourceStatusRecord struct {
 	SinceISO    string    `json:"since_iso,omitempty"` // poller-observed first failure
 	since       time.Time // resolved server-side
 	reported    time.Time
+	// origin separates the two producers writing into this store: "poller"
+	// (full-set replace semantics per flush) and "validate" (the connector
+	// wizard's live permission check, upserted per connector). Replace only
+	// swaps the poller's records so a validate result survives poller flushes.
+	origin string
 }
+
+const (
+	srcStatusOriginPoller   = "poller"
+	srcStatusOriginValidate = "validate"
+)
 
 func (r cloudSourceStatusRecord) key() string {
 	return strings.Join([]string{r.Tenant, r.Provider, r.AccountID, r.Region, r.SourceType}, "|")
@@ -90,12 +100,21 @@ func newCloudSourceStatusStore() *cloudSourceStatusStore {
 // Replace swaps in the poller's CURRENT error set (full-set semantics: a lane
 // that recovered simply stops being reported and its record disappears). The
 // first-failure time is preserved across re-reports so "since Tuesday" stays
-// Tuesday — the earliest of the stored and incoming `since` wins.
+// Tuesday — the earliest of the stored and incoming `since` wins. Records the
+// VALIDATE surface upserted are retained (a poller flush must not erase a live
+// permission-check result); a poller record for the same key overrides it —
+// the poller's runtime observation is fresher truth than a wizard snapshot.
 func (st *cloudSourceStatusStore) Replace(records []cloudSourceStatusRecord, now time.Time) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	next := make(map[string]cloudSourceStatusRecord, len(records))
+	for k, prev := range st.recs {
+		if prev.origin == srcStatusOriginValidate {
+			next[k] = prev
+		}
+	}
 	for _, r := range records {
+		r.origin = srcStatusOriginPoller
 		r.reported = now
 		if r.since.IsZero() {
 			r.since = now
@@ -107,6 +126,36 @@ func (st *cloudSourceStatusStore) Replace(records []cloudSourceStatusRecord, now
 		next[k] = r
 	}
 	st.recs = next
+}
+
+// UpsertValidate merges the live permission-check results for one connector's
+// scope into the store (origin "validate"), preserving first-seen times.
+func (st *cloudSourceStatusStore) UpsertValidate(records []cloudSourceStatusRecord, now time.Time) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, r := range records {
+		r.origin = srcStatusOriginValidate
+		r.reported = now
+		if r.since.IsZero() {
+			r.since = now
+		}
+		k := r.key()
+		if prev, ok := st.recs[k]; ok && !prev.since.IsZero() && prev.since.Before(r.since) {
+			r.since = prev.since
+		}
+		st.recs[k] = r
+	}
+}
+
+// ClearValidate drops a validate-origin record (the permission is granted
+// again). Poller-origin records are never touched here.
+func (st *cloudSourceStatusStore) ClearValidate(rec cloudSourceStatusRecord) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	k := rec.key()
+	if prev, ok := st.recs[k]; ok && prev.origin == srcStatusOriginValidate {
+		delete(st.recs, k)
+	}
 }
 
 // ForTenant returns the caller-visible records, default-closed (§3a.1): a

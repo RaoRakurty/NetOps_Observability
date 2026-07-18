@@ -16,6 +16,7 @@ import (
 // (AzureEntraExchanger in production).
 type azureAdapter struct {
 	exchange TokenExchanger
+	probe    *AzureARMProbeClient
 }
 
 func (azureAdapter) Provider() Provider { return ProviderAzure }
@@ -144,12 +145,58 @@ func (a azureAdapter) ExchangeCredential(ctx context.Context, req ExchangeReques
 	return a.exchange.Exchange(ctx, req)
 }
 
-func (a azureAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {
-	return nil, ErrProviderExchangeDeferred
+// DiscoverScopes lists the subscriptions the exchanged token can reach — the
+// cheapest authenticated ARM read, doubling as the live identity proof.
+func (a azureAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
+	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
+		return nil, ErrProviderExchangeDeferred
+	}
+	subs, err := a.probe.Subscriptions(ctx, req.Token.Value)
+	if err != nil {
+		return nil, err
+	}
+	scopes := make([]Scope, 0, len(subs))
+	for _, sub := range subs {
+		scopes = append(scopes, Scope{
+			Type: ScopeSubscription, Ref: sub.SubscriptionID, Display: sub.DisplayName, Discovered: true,
+		})
+	}
+	return scopes, nil
 }
 
-func (a azureAdapter) ValidateCapabilities(_ context.Context, _ CapabilityCheckRequest) (CapabilityReport, error) {
-	return CapabilityReport{}, ErrProviderExchangeDeferred
+// ValidateCapabilities reads the principal's granted RBAC permission sets at
+// the subscription scope and grades every pack permission against them with
+// Azure wildcard semantics. Read-only; no target API is invoked.
+func (a azureAdapter) ValidateCapabilities(ctx context.Context, req CapabilityCheckRequest) (CapabilityReport, error) {
+	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
+		return CapabilityReport{}, ErrProviderExchangeDeferred
+	}
+	sub := strings.TrimSpace(req.Scope.Ref)
+	if sub == "" {
+		return CapabilityReport{}, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "a subscription scope is required for the permission check"}
+	}
+	perms, err := a.probe.Permissions(ctx, req.Token.Value, sub)
+	if err != nil {
+		return CapabilityReport{}, err
+	}
+	report := CapabilityReport{Pack: req.Pack.FullID(), AllGranted: true}
+	for _, required := range req.Pack.AllPermissions() {
+		granted := AzureActionGranted(perms, required)
+		detail := ""
+		if !granted {
+			report.AllGranted = false
+			detail = "not covered by the granted RBAC actions at subscription " + sub
+		}
+		report.Permissions = append(report.Permissions, PermissionStatus{Permission: required, Granted: granted, Detail: detail})
+	}
+	if !report.AllGranted {
+		report.Findings = append(report.Findings, Finding{
+			Severity: SeverityWarning, Code: "permissions_missing",
+			Message:     "some declared pack permissions are not granted at the subscription scope",
+			Remediation: "Assign the built-in Reader + Monitoring Reader roles at the subscription scope, then re-run the permission check.",
+		})
+	}
+	return report, nil
 }
 
 func (a azureAdapter) Revoke(_ context.Context, _ RevokeRequest) error {

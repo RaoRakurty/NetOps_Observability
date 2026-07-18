@@ -64,18 +64,23 @@ type ScopedToken struct {
 	AWS *AWSCredentials `json:"-"`
 }
 
-// DiscoverRequest asks a provider adapter to enumerate reachable scopes.
+// DiscoverRequest asks a provider adapter to enumerate reachable scopes. Token
+// is the broker-minted scoped credential the probe authenticates with — the
+// adapter itself holds no credentials (zero trust).
 type DiscoverRequest struct {
 	Identity IdentityConfig
 	Root     Scope // optional starting scope (org/mgmt-group/folder)
+	Token    ScopedToken
 }
 
 // CapabilityCheckRequest asks a provider adapter to verify the granted permissions
-// against a capability pack.
+// against a capability pack. Token is the broker-minted scoped credential the
+// probe authenticates with.
 type CapabilityCheckRequest struct {
 	Identity IdentityConfig
 	Pack     CapabilityPack
 	Scope    Scope
+	Token    ScopedToken
 }
 
 // PermissionStatus is the granted/denied status of one required permission.
@@ -123,8 +128,13 @@ type SetupBundle struct {
 // SetupInstructions. ExchangeCredential is LIVE (delegated to the provider's
 // TokenExchanger — AWS STS AssumeRole/GetSessionToken, Azure Entra client
 // credentials/WIF assertion, GCP assertion grant/STS exchange+impersonation).
-// The remaining live-network methods (DiscoverScopes, ValidateCapabilities,
-// Revoke) still return ErrProviderExchangeDeferred (documented follow-up).
+// DiscoverScopes and ValidateCapabilities are LIVE (delegated to the provider's
+// probe client — AWS GetCallerIdentity + IAM policy simulation, Azure
+// subscriptions + RBAC permissions, GCP projects + testIamPermissions) and
+// authenticate with a broker-minted ScopedToken carried on the request; an
+// adapter without a probe client (or a request without a token) returns
+// ErrProviderExchangeDeferred. Revoke still returns ErrProviderExchangeDeferred
+// (documented follow-up).
 type CloudIdentityProvider interface {
 	Provider() Provider
 
@@ -151,16 +161,16 @@ type CloudIdentityProvider interface {
 }
 
 // AdapterFor returns the provider adapter for p wired to its LIVE production
-// token exchanger (real endpoints, env-backed platform identity), or nil if
-// unknown.
+// token exchanger AND probe client (real endpoints, env-backed platform
+// identity), or nil if unknown.
 func AdapterFor(p Provider) CloudIdentityProvider {
 	switch p {
 	case ProviderAWS:
-		return awsAdapter{exchange: NewAWSSTSExchanger()}
+		return awsAdapter{exchange: NewAWSSTSExchanger(), probe: NewAWSProbeClient()}
 	case ProviderAzure:
-		return azureAdapter{exchange: NewAzureEntraExchanger()}
+		return azureAdapter{exchange: NewAzureEntraExchanger(), probe: NewAzureARMProbeClient()}
 	case ProviderGCP:
-		return gcpAdapter{exchange: NewGCPSTSExchanger()}
+		return gcpAdapter{exchange: NewGCPSTSExchanger(), probe: NewGCPProbeClient()}
 	default:
 		return nil
 	}
@@ -168,7 +178,8 @@ func AdapterFor(p Provider) CloudIdentityProvider {
 
 // NewAdapterWithExchanger returns the provider adapter wired to an injected
 // TokenExchanger — the DI seam tests and alternative deployments use (e.g. an
-// httptest server standing in for STS/Entra/Google endpoints).
+// httptest server standing in for STS/Entra/Google endpoints). No probe client
+// is wired: DiscoverScopes/ValidateCapabilities defer.
 func NewAdapterWithExchanger(p Provider, x TokenExchanger) CloudIdentityProvider {
 	switch p {
 	case ProviderAWS:
@@ -180,4 +191,20 @@ func NewAdapterWithExchanger(p Provider, x TokenExchanger) CloudIdentityProvider
 	default:
 		return nil
 	}
+}
+
+// NewAWSAdapter returns the AWS adapter with fully injected seams (tests /
+// alternative deployments). Either seam may be nil → that surface defers.
+func NewAWSAdapter(x TokenExchanger, probe *AWSProbeClient) CloudIdentityProvider {
+	return awsAdapter{exchange: x, probe: probe}
+}
+
+// NewAzureAdapter returns the Azure adapter with fully injected seams.
+func NewAzureAdapter(x TokenExchanger, probe *AzureARMProbeClient) CloudIdentityProvider {
+	return azureAdapter{exchange: x, probe: probe}
+}
+
+// NewGCPAdapter returns the GCP adapter with fully injected seams.
+func NewGCPAdapter(x TokenExchanger, probe *GCPProbeClient) CloudIdentityProvider {
+	return gcpAdapter{exchange: x, probe: probe}
 }

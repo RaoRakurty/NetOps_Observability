@@ -2,6 +2,7 @@ package cloudconn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -13,6 +14,7 @@ import (
 // injected TokenExchanger (AWSSTSExchanger in production).
 type awsAdapter struct {
 	exchange TokenExchanger
+	probe    *AWSProbeClient
 }
 
 func (awsAdapter) Provider() Provider { return ProviderAWS }
@@ -269,12 +271,103 @@ func (a awsAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest)
 	return a.exchange.Exchange(ctx, req)
 }
 
-func (a awsAdapter) DiscoverScopes(_ context.Context, _ DiscoverRequest) ([]Scope, error) {
-	return nil, ErrProviderExchangeDeferred
+// DiscoverScopes proves the exchanged credential live (sts:GetCallerIdentity)
+// and returns the account it reaches as a discovered scope. LIVE-network,
+// read-only, authenticated with the broker-minted token on the request.
+func (a awsAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
+	if a.probe == nil || req.Token.AWS == nil {
+		return nil, ErrProviderExchangeDeferred
+	}
+	ident, err := a.probe.CallerIdentity(ctx, *req.Token.AWS, "")
+	if err != nil {
+		return nil, err
+	}
+	return []Scope{{
+		Type: ScopeAccount, Ref: ident.Account, Display: ident.ARN, Discovered: true,
+	}}, nil
 }
 
-func (a awsAdapter) ValidateCapabilities(_ context.Context, _ CapabilityCheckRequest) (CapabilityReport, error) {
-	return CapabilityReport{}, ErrProviderExchangeDeferred
+// ValidateCapabilities runs the LIVE per-permission dry check: GetCallerIdentity
+// establishes the principal, then ONE iam:SimulatePrincipalPolicy evaluation
+// grades every pack permission (via its concrete probe action). No target API
+// is ever invoked. When the simulator itself is denied to the principal, every
+// permission is honestly reported UNVERIFIED (never guessed granted/denied).
+func (a awsAdapter) ValidateCapabilities(ctx context.Context, req CapabilityCheckRequest) (CapabilityReport, error) {
+	if a.probe == nil || req.Token.AWS == nil {
+		return CapabilityReport{}, ErrProviderExchangeDeferred
+	}
+	report := CapabilityReport{Pack: req.Pack.FullID()}
+	ident, err := a.probe.CallerIdentity(ctx, *req.Token.AWS, "")
+	if err != nil {
+		return CapabilityReport{}, err
+	}
+	report.Findings = append(report.Findings, Finding{
+		Severity: SeverityInfo, Code: "caller_identity",
+		Message: "authenticated to account " + ident.Account + " as " + ident.ARN,
+	})
+
+	perms := req.Pack.AllPermissions()
+	actions := make([]string, 0, len(perms))
+	actionFor := make(map[string]string, len(perms))
+	for _, perm := range perms {
+		if act := AWSProbeActionFor(perm); act != "" {
+			actions = append(actions, act)
+			actionFor[perm] = act
+		}
+	}
+	principal := IAMPrincipalFromCallerARN(ident.ARN)
+	decisions, simErr := a.probe.SimulatePermissions(ctx, *req.Token.AWS, principal, actions)
+	var xe *ExchangeError
+	if simErr != nil && errors.As(simErr, &xe) && xe.Denied() {
+		// The observer role lacks iam:SimulatePrincipalPolicy — an expected,
+		// least-privilege condition. Report every permission unverified.
+		report.Findings = append(report.Findings, Finding{
+			Severity: SeverityWarning, Code: "simulation_denied",
+			Message:     "the principal may not run iam:SimulatePrincipalPolicy — per-permission results are unverifiable",
+			Remediation: "Optionally grant iam:SimulatePrincipalPolicy (read-only, self-scoped) to enable live permission validation.",
+		})
+		for _, perm := range perms {
+			report.Permissions = append(report.Permissions, PermissionStatus{
+				Permission: perm, Granted: false, Detail: "unverified: policy simulation denied",
+			})
+		}
+		return report, nil
+	}
+	if simErr != nil {
+		return CapabilityReport{}, simErr
+	}
+	report.AllGranted = true
+	for _, perm := range perms {
+		act, ok := actionFor[perm]
+		if !ok {
+			report.AllGranted = false
+			report.Permissions = append(report.Permissions, PermissionStatus{
+				Permission: perm, Granted: false, Detail: "unverified: no concrete probe action mapped for this wildcard",
+			})
+			continue
+		}
+		granted := decisions[act]
+		detail := ""
+		if act != perm {
+			detail = "probed as " + act
+		}
+		if !granted {
+			report.AllGranted = false
+			if detail != "" {
+				detail += "; "
+			}
+			detail += "denied by IAM policy simulation"
+		}
+		report.Permissions = append(report.Permissions, PermissionStatus{Permission: perm, Granted: granted, Detail: detail})
+	}
+	if !report.AllGranted {
+		report.Findings = append(report.Findings, Finding{
+			Severity: SeverityWarning, Code: "permissions_missing",
+			Message:     "some declared pack permissions are not granted to the connector principal",
+			Remediation: "Re-apply the setup template's least-privilege policy, then re-run the permission check.",
+		})
+	}
+	return report, nil
 }
 
 func (a awsAdapter) Revoke(_ context.Context, _ RevokeRequest) error {

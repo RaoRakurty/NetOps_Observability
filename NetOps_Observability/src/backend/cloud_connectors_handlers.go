@@ -525,11 +525,40 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 	return liveCheck, saved
 }
 
-// serveConnectorPermissions is the live permission validation — deferred to the
-// provider-runtime phase. Returns the pack's declared required permissions and a
-// clear deferral marker so the wizard can render the remediation surface.
+// connectorProbeToken mints (or serves cached) the broker token a live probe
+// authenticates with, bounded to 20s. The deferral sentinels come back as
+// ("deferred", reason); a provider refusal comes back as an error.
+func (s *server) connectorProbeToken(r *http.Request, tenant string, c cloudConnector) (cloudconn.ScopedToken, string, string, string, error) {
+	account, region := connectorDefaultScope(c)
+	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
+	defer cancel()
+	tok, err := s.cloudBroker.TokenFor(ctx, scopedTokenRequest{
+		Tenant:          tenant,
+		ConnectorID:     c.ConnectorID,
+		ProviderAccount: account,
+		Region:          region,
+		CapabilitySetID: c.PackFullID,
+	})
+	if err != nil {
+		if errors.Is(err, cloudconn.ErrPlatformCredentialsMissing) ||
+			errors.Is(err, cloudconn.ErrWorkloadAssertionMissing) ||
+			errors.Is(err, cloudconn.ErrProviderExchangeDeferred) {
+			return cloudconn.ScopedToken{}, account, region, err.Error(), nil
+		}
+		return cloudconn.ScopedToken{}, account, region, "", err
+	}
+	return tok, account, region, "", nil
+}
+
+// serveConnectorPermissions is the LIVE permission validation (Wave 4 #13): it
+// mints a scoped token through the Identity Broker and runs the provider's
+// cheapest identity + per-permission dry probes (AWS GetCallerIdentity + IAM
+// policy simulation, Azure RBAC permissions read, GCP testIamPermissions).
+// Per-capability denials are recorded into the source-status surface the
+// Ingestion Status page renders (permission_denied, per account/region scope).
+// Deployments without a platform identity get an HONEST "deferred" marker.
 func (s *server) serveConnectorPermissions(w http.ResponseWriter, r *http.Request, id string) {
-	c, _, ok := s.loadConnector(w, r, id, LevelWrite)
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
 	if !ok {
 		return
 	}
@@ -538,26 +567,173 @@ func (s *server) serveConnectorPermissions(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusBadRequest, "no capability pack selected", "PACK_MISSING")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	base := map[string]any{
 		"capability_pack":      pack.FullID(),
 		"required_permissions": pack.AllPermissions(),
-		"live_check":           "deferred",
-		"note":                 "Live permission validation against the provider is a follow-up phase; the required permissions are enforced by the setup templates.",
+	}
+	if s.cloudBroker == nil {
+		base["live_check"] = "deferred"
+		base["note"] = "the identity broker is not available in this deployment"
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	tok, account, region, deferReason, err := s.connectorProbeToken(r, tenant, c)
+	if err != nil {
+		// ExchangeError is sanitized by contract — safe to surface, never a secret.
+		base["live_check"] = "failed"
+		base["error"] = err.Error()
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	if deferReason != "" {
+		base["live_check"] = "deferred"
+		base["note"] = deferReason
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	adapter := s.cloudBroker.adapter(c.Provider)
+	if adapter == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("no adapter for provider"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
+	defer cancel()
+	report, err := adapter.ValidateCapabilities(ctx, cloudconn.CapabilityCheckRequest{
+		Identity: c.Identity,
+		Pack:     pack,
+		Scope:    cloudconn.Scope{Ref: account},
+		Token:    tok,
 	})
+	switch {
+	case errors.Is(err, cloudconn.ErrProviderExchangeDeferred):
+		base["live_check"] = "deferred"
+		base["note"] = "the live permission probe is not wired in this deployment"
+	case err != nil:
+		base["live_check"] = "failed"
+		base["error"] = err.Error()
+	default:
+		base["live_check"] = "ok"
+		base["report"] = report
+		s.recordPermissionSourceStatus(c, pack, report, account, region)
+		s.recordConnectorEvent(r, claims, "PERMISSIONS_VALIDATED", c,
+			"pack="+pack.FullID()+" all_granted="+boolStr(report.AllGranted))
+	}
+	writeJSON(w, http.StatusOK, base)
 }
 
-// serveConnectorDiscover is live scope discovery — deferred. Returns any operator-
-// entered scopes plus a deferral marker.
+// recordPermissionSourceStatus folds the per-permission report into the
+// source-status store: each pack capability whose permissions include a denial
+// becomes a permission_denied record on ITS source chip (per account/region
+// scope detail); a fully-granted capability clears its record. Tenant and
+// provider are stamped from the CONNECTOR ROW (§3a.2).
+func (s *server) recordPermissionSourceStatus(c cloudConnector, pack cloudconn.CapabilityPack, report cloudconn.CapabilityReport, account, region string) {
+	if s.cloudSourceStatus == nil {
+		return
+	}
+	granted := make(map[string]bool, len(report.Permissions))
+	verified := make(map[string]bool, len(report.Permissions))
+	for _, p := range report.Permissions {
+		granted[p.Permission] = p.Granted
+		verified[p.Permission] = !strings.HasPrefix(p.Detail, "unverified")
+	}
+	now := time.Now().UTC()
+	var denied []cloudSourceStatusRecord
+	for _, capa := range pack.Capabilities {
+		var missing []string
+		unverified := false
+		for _, perm := range capa.Permissions {
+			if !verified[perm] {
+				unverified = true
+				continue
+			}
+			if !granted[perm] {
+				missing = append(missing, perm)
+			}
+		}
+		rec := cloudSourceStatusRecord{
+			Tenant:      c.TenantID,
+			ConnectorID: c.ConnectorID,
+			Provider:    strings.ToLower(string(c.Provider)),
+			AccountID:   account,
+			Region:      region,
+			SourceType:  capa.Key,
+		}
+		if len(missing) == 0 {
+			// Fully granted, or unverifiable — either way we may not claim a
+			// denial. Unverified stays silent (unknown ≠ broken).
+			_ = unverified
+			s.cloudSourceStatus.ClearValidate(rec)
+			continue
+		}
+		rec.Status = "permission_denied"
+		rec.Detail = "denied: " + strings.Join(missing, ", ")
+		if len(rec.Detail) > srcStatusDetailMax {
+			rec.Detail = rec.Detail[:srcStatusDetailMax]
+		}
+		denied = append(denied, rec)
+	}
+	if len(denied) > 0 {
+		s.cloudSourceStatus.UpsertValidate(denied, now)
+	}
+}
+
+// serveConnectorDiscover is LIVE scope discovery (Wave 4 #13): the broker mints
+// a scoped token and the provider probe enumerates the reachable scopes (AWS
+// caller account, Azure subscriptions, GCP projects). Operator-entered scopes
+// are always returned; discovery never silently widens the collection scope —
+// the operator still selects what to observe.
 func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, id string) {
-	c, _, ok := s.loadConnector(w, r, id, LevelWrite)
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"scopes":     c.Scopes,
+	base := map[string]any{
+		"scopes":      c.Scopes,
 		"scope_types": cloudconn.ScopeTypesForProvider(c.Provider),
-		"live_check": "deferred",
+	}
+	if s.cloudBroker == nil {
+		base["live_check"] = "deferred"
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	tok, account, _, deferReason, err := s.connectorProbeToken(r, tenant, c)
+	if err != nil {
+		base["live_check"] = "failed"
+		base["error"] = err.Error()
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	if deferReason != "" {
+		base["live_check"] = "deferred"
+		base["note"] = deferReason
+		writeJSON(w, http.StatusOK, base)
+		return
+	}
+	adapter := s.cloudBroker.adapter(c.Provider)
+	if adapter == nil {
+		writeError(w, http.StatusInternalServerError, errors.New("no adapter for provider"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
+	defer cancel()
+	discovered, err := adapter.DiscoverScopes(ctx, cloudconn.DiscoverRequest{
+		Identity: c.Identity,
+		Root:     cloudconn.Scope{Ref: account},
+		Token:    tok,
 	})
+	switch {
+	case errors.Is(err, cloudconn.ErrProviderExchangeDeferred):
+		base["live_check"] = "deferred"
+	case err != nil:
+		base["live_check"] = "failed"
+		base["error"] = err.Error()
+	default:
+		base["live_check"] = "ok"
+		base["discovered"] = discovered
+	}
+	writeJSON(w, http.StatusOK, base)
 }
 
 func (s *server) serveConnectorTransition(w http.ResponseWriter, r *http.Request, id string, target cloudconn.LifecycleState, event string) {
