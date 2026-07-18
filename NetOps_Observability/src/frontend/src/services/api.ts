@@ -1497,6 +1497,19 @@ export const api = {
       method: "PUT", body: JSON.stringify({ time_display: timeDisplay }),
     }),
 
+  // ---- tenant governance settings (Wave 4 #11: real Settings editors) ----
+  // Required tags — the per-tenant list that drives missingTags + the coverage
+  // compliance report. PUT is admin-gated + audited server-side.
+  getRequiredTags: () => request<RequiredTagsSettings>("/api/settings/required-tags"),
+  setRequiredTags: (tags: string[]) =>
+    request<RequiredTagsSettings>("/api/settings/required-tags", {
+      method: "PUT", body: JSON.stringify({ required_tags: tags }),
+    }),
+  resetRequiredTags: () =>
+    request<RequiredTagsSettings>("/api/settings/required-tags", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
+
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
   // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin.

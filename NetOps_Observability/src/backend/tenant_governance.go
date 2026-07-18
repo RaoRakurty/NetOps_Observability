@@ -1,0 +1,215 @@
+package main
+
+// tenant_governance.go — per-tenant GOVERNANCE settings (Wave 4 #11, the real
+// Settings editors). Sibling of tenant_display.go: the same file-backed,
+// tenant-keyed store pattern (§3a for file/kv stores — the record read or
+// written is ALWAYS the caller's principal tenant; no unscoped listing exists),
+// holding the cloud-governance knobs the backlog names:
+//
+//   required tags           — drives missingTags + the coverage/compliance report
+//   RCA read window         — default window_hours for the cloud signal surfaces
+//   attribution precedence  — per-tenant ordering of the appid resolver classes
+//
+//   GET /api/settings/required-tags — any authenticated user (the UI renders it)
+//   PUT /api/settings/required-tags — administration:admin (tenant admin), audited
+//
+// All PUTs are governance writes: requireAdmin (administration:admin) — never a
+// weaker permission — tenant stamped from the principal, bounded body, closed
+// validation, audited with a distinct action per setting.
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+
+	"netops/backend/cloud"
+)
+
+const (
+	requiredTagsMax   = 32 // bounded list — a governance list, not a dumping ground
+	requiredTagMaxLen = 64
+)
+
+// tenantGovernanceConfig is one tenant's governance record. Zero values mean
+// "unset → platform default" (the exact behavior that predates the editors).
+type tenantGovernanceConfig struct {
+	TenantID     string   `json:"tenant_id"`
+	RequiredTags []string `json:"required_tags,omitempty"`
+}
+
+// tenantGovernanceStore is a file-backed per-tenant map, keyed by tenant in the
+// store itself (§3a). Mirrors tenantDisplayStore — nothing here is a secret.
+type tenantGovernanceStore struct {
+	mu   sync.RWMutex
+	cfgs map[string]tenantGovernanceConfig
+	path string
+}
+
+func newTenantGovernanceStore(path string) *tenantGovernanceStore {
+	s := &tenantGovernanceStore{cfgs: map[string]tenantGovernanceConfig{}, path: path}
+	s.load()
+	return s
+}
+
+// tenantGovernancePath resolves the store's kv key (env-overridable like every
+// other file-backed store; blank env keeps the default).
+func tenantGovernancePath() string {
+	if p := strings.TrimSpace(os.Getenv("TENANT_GOVERNANCE_PATH")); p != "" {
+		return p
+	}
+	return "tenant_governance.json"
+}
+
+func (s *tenantGovernanceStore) load() {
+	b, err := kvLoad(s.path)
+	if err != nil || len(b) == 0 {
+		return
+	}
+	var m map[string]tenantGovernanceConfig
+	if json.Unmarshal(b, &m) != nil {
+		return
+	}
+	for id, c := range m {
+		c.TenantID = id
+		m[id] = c
+	}
+	s.cfgs = m
+}
+
+// saveLocked persists the map. Caller holds s.mu. Blank path = in-memory only.
+func (s *tenantGovernanceStore) saveLocked() {
+	if s.path == "" {
+		return
+	}
+	if b, err := json.MarshalIndent(s.cfgs, "", "  "); err == nil {
+		if err := kvSave(s.path, b); err != nil {
+			logWarn("settings", "persist tenant governance failed", map[string]any{"err": err.Error()})
+		}
+	}
+}
+
+// requiredTags returns the tenant's EFFECTIVE required-tag list and whether it
+// is a custom (tenant-set) list. Unconfigured tenants — and a server built
+// without the store — get the platform default (nil-safe).
+func (s *tenantGovernanceStore) requiredTags(tenant string) ([]string, bool) {
+	if s == nil {
+		return cloud.DefaultRequiredTags(), false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if c, ok := s.cfgs[tenant]; ok && len(c.RequiredTags) > 0 {
+		return append([]string(nil), c.RequiredTags...), true
+	}
+	return cloud.DefaultRequiredTags(), false
+}
+
+// setRequiredTags stamps the tenant FROM THE PRINCIPAL (callers pass the
+// principalTenant result, never body input) and persists. tags==nil resets the
+// tenant to the platform default.
+func (s *tenantGovernanceStore) setRequiredTags(tenant string, tags []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.cfgs[tenant]
+	c.TenantID = tenant
+	c.RequiredTags = tags
+	s.cfgs[tenant] = c
+	s.saveLocked()
+}
+
+// normalizeRequiredTags validates a caller's list: 1..32 entries, each a
+// bounded tag key (lowercased; letters/digits/._:/- like real cloud tag keys),
+// de-duplicated preserving order. Anything off-spec fails the request — never a
+// silent trim to something the caller didn't say.
+func normalizeRequiredTags(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("required_tags must list at least one tag")
+	}
+	if len(raw) > requiredTagsMax {
+		return nil, fmt.Errorf("required_tags: at most %d tags", requiredTagsMax)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		tag := strings.ToLower(strings.TrimSpace(t))
+		if tag == "" || len(tag) > requiredTagMaxLen {
+			return nil, fmt.Errorf("required_tags: each tag must be 1..%d characters", requiredTagMaxLen)
+		}
+		for _, c := range tag {
+			ok := c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+				c == '.' || c == '_' || c == ':' || c == '/' || c == '-'
+			if !ok {
+				return nil, fmt.Errorf("required_tags: invalid tag key %q (letters, digits, . _ : / - only)", tag)
+			}
+		}
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	return out, nil
+}
+
+// handleRequiredTagsSettings serves GET/PUT /api/settings/required-tags.
+func (s *server) handleRequiredTagsSettings(w http.ResponseWriter, r *http.Request) {
+	writeState := func(tenant string) {
+		tags, custom := s.governance.requiredTags(tenant)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":     tenant,
+			"required_tags": tags,
+			"is_default":    !custom,
+			"default_tags":  cloud.DefaultRequiredTags(),
+		})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		tenant, _ := principalTenant(claims)
+		writeState(tenant)
+	case http.MethodPut:
+		// Governance write → scope-aware admin gate (§3a rule 3): a tenant admin
+		// sets its OWN tenant's requirement, never another tenant's by id.
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			RequiredTags []string `json:"required_tags"`
+			Reset        bool     `json:"reset,omitempty"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+			return
+		}
+		var tags []string
+		if !body.Reset {
+			var err error
+			if tags, err = normalizeRequiredTags(body.RequiredTags); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		tenant, cross := principalTenant(claims)
+		s.governance.setRequiredTags(tenant, tags)
+		if s.audit != nil {
+			s.audit.Record(AuditEvent{
+				Actor: claims.Sub, Tenant: tenant, Cross: cross,
+				Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+				Remote: auditClientIP(r),
+				Detail: map[string]any{"action": "set_required_tags", "required_tags": tags, "reset": body.Reset},
+			})
+		}
+		writeState(tenant)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+	}
+}
