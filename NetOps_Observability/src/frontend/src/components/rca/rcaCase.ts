@@ -268,7 +268,14 @@ const PLANE_TITLE: Record<string, string> = {
   device_telemetry: "Device health", control_plane: "Routing / link", passive_flow: "Traffic flow", active_probe: "Active checks",
 };
 
-export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[]): RcaCase {
+export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[], seamOwners?: Record<string, { name: string; contact?: string }>): RcaCase {
+  // #113 slice 2: the tenant's seam-ownership registry turns an owner CLASS
+  // into the actual responsible party — "Lumen (DIA #12345) · ISP / carrier"
+  // instead of the bare class label. Absent registry → class label only.
+  const ownerDisplay = (cls: string): string => {
+    const entry = seamOwners?.[cls];
+    return entry?.name ? `${entry.name} · ${ownerLabel(cls)}` : ownerLabel(cls);
+  };
   // display-plane counts (routing kinds read as routing/link in operator view)
   const att: Record<string, number> = {};
   for (const s of timeline.signals) {
@@ -671,8 +678,8 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       // seam has not been narrowed at all (#113).
       ...(owner
         ? [confirmed
-          ? { k: "Owner", v: ownerLabel(owner) }
-          : { k: "Possible owner", v: `${ownerLabel(owner)} — unconfirmed` }]
+          ? { k: "Owner", v: ownerDisplay(owner) }
+          : { k: "Possible owner", v: `${ownerDisplay(owner)} — unconfirmed` }]
         : [{ k: "Possible owner", v: "Not yet narrowed — NOC triage" }]),
       { k: "Signals", v: `${attachedCount} tied to this case (${obj.signal_count ?? attachedCount} in window)` },
       { k: "Suggested ticket", v: confirmed ? "Open P2" : "Hold — policy threshold not met" },
@@ -681,7 +688,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
       callout: confirmed ? { tone: "red", strong: "Open incident:", text: "Customer impact is confirmed." } : { tone: "", strong: "Not opened —", text: "impact not confirmed. Auto-ticketing holds until independent evidence confirms customer impact." },
-      rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: ownerLabel(owner) || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],
+      rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: ownerDisplay(owner) || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],
     },
     nextActions,
     assistant: {

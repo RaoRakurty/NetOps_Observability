@@ -69,6 +69,12 @@ export function describeGovernanceChange(e: GovernanceAuditEvent): { setting: st
       };
     case "set_time_display":
       return { setting: "Time display", change: String(d.time_display ?? "") };
+    case "set_seam_owners":
+      return {
+        setting: "Seam owners",
+        change: d.reset || !Array.isArray(d.classes) || d.classes.length === 0
+          ? "reset to default" : `set for: ${(d.classes as unknown[]).map(String).sort().join(", ")}`,
+      };
     default:
       return { setting: String(d.action ?? "settings change"), change: "" };
   }
@@ -273,6 +279,107 @@ export function RcaWindowCard() {
         {!isDefault && (
           <button className="ao-btn" disabled={busy}
             onClick={() => persist(() => api.resetRcaWindow())}>Reset to default ({defaultHours}h)</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Seam-ownership registry (#113 slice 2) ───────────────────────────────────
+
+// Human labels for the RCA owner classes (mirrors rca/labels.ts OWNER_LABEL —
+// the closed signature-catalog vocabulary the server enforces).
+export const SEAM_OWNER_CLASS_LABELS: Record<string, string> = {
+  netops: "NetOps (internal)", isp: "ISP / carrier (DIA, internet egress)", carrier: "Carrier (private connectivity)",
+  cloud_provider: "Cloud provider", app_team: "App team", colo_provider: "Colo provider", sdwan_vendor: "SD-WAN vendor",
+};
+
+export function SeamOwnersCard() {
+  const [rows, setRows] = useState<Record<string, { name: string; contact?: string }>>({});
+  const [classes, setClasses] = useState<string[]>([]);
+  const [isDefault, setIsDefault] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.getSeamOwners()
+      .then((r) => { setRows(r.seam_owners); setClasses(r.classes); setIsDefault(r.is_default); })
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  }, []);
+
+  const edit = (cls: string, field: "name" | "contact", v: string) => {
+    setRows((prev) => {
+      const cur = prev[cls] ?? { name: "", contact: "" };
+      return { ...prev, [cls]: { ...cur, [field]: v } };
+    });
+    setDirty(true);
+  };
+
+  const save = async () => {
+    setSaving(true); setErr(null); setSaved(false);
+    try {
+      // Only non-empty names are sent; an all-empty registry = reset.
+      const out: Record<string, { name: string; contact?: string }> = {};
+      for (const [k, v] of Object.entries(rows)) {
+        if (v.name.trim()) out[k] = { name: v.name.trim(), ...(v.contact?.trim() ? { contact: v.contact.trim() } : {}) };
+      }
+      const r = Object.keys(out).length ? await api.setSeamOwners(out) : await api.resetSeamOwners();
+      setRows(r.seam_owners); setIsDefault(r.is_default); setDirty(false);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    setSaving(true); setErr(null);
+    try {
+      const r = await api.resetSeamOwners();
+      setRows(r.seam_owners); setIsDefault(r.is_default); setDirty(false);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ao-panel">
+      <div className="ao-panel-h">Seam Owners{" "}
+        <span className="ao-panel-meta">{isDefault ? "not set — class labels only" : "tenant registry"} · admin-set, audited</span>
+      </div>
+      <p className="ao-set-d">
+        Who actually owns each seam for this tenant. RCA ownership then names the real party —
+        &ldquo;Lumen (DIA #12345) · ISP / carrier&rdquo; instead of the generic class. Leave a row empty to
+        keep the class label.
+        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+        {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+      </p>
+      <div style={{ display: "grid", gap: 6 }}>
+        {classes.map((cls) => (
+          <div key={cls} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ minWidth: 220, fontSize: 12.5, color: "var(--muted)" }}>{SEAM_OWNER_CLASS_LABELS[cls] ?? cls}</span>
+            <input className="app-input" style={{ flex: "1 1 180px" }} placeholder="Responsible party (e.g. Lumen — DIA #12345)"
+              value={rows[cls]?.name ?? ""} disabled={busy || saving} maxLength={120}
+              aria-label={`${cls} owner name`} onChange={(e) => edit(cls, "name", e.target.value)} />
+            <input className="app-input" style={{ flex: "1 1 160px" }} placeholder="Contact (email / phone / portal)"
+              value={rows[cls]?.contact ?? ""} disabled={busy || saving} maxLength={200}
+              aria-label={`${cls} owner contact`} onChange={(e) => edit(cls, "contact", e.target.value)} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button className="ao-btn primary" disabled={busy || saving || !dirty} onClick={save}>
+          {saving ? "Saving…" : "Save registry"}
+        </button>
+        {!isDefault && (
+          <button className="ao-btn" disabled={busy || saving} onClick={reset}>Clear registry</button>
         )}
       </div>
     </div>

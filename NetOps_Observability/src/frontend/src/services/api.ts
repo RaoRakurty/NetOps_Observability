@@ -1532,6 +1532,17 @@ export const api = {
     request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
       method: "PUT", body: JSON.stringify({ reset: true }),
     }),
+  // Seam-ownership registry (#113) — owner class → the tenant's actual
+  // responsible party, joined into RCA ownership + ticket assignment.
+  getSeamOwners: () => request<SeamOwnersSettings>("/api/settings/seam-owners"),
+  setSeamOwners: (owners: Record<string, SeamOwnerEntry>) =>
+    request<SeamOwnersSettings>("/api/settings/seam-owners", {
+      method: "PUT", body: JSON.stringify({ seam_owners: owners }),
+    }),
+  resetSeamOwners: () =>
+    request<SeamOwnersSettings>("/api/settings/seam-owners", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
   // Recent governance-settings changes (who/when/what) — admin-gated,
   // scoped server-side to the caller's audit visibility.
   getGovernanceAudit: (limit = 50) =>
@@ -3346,6 +3357,16 @@ export type AttributionPrecedenceSettings = {
   attribution_precedence: string[];
   is_default: boolean;
   default_precedence: string[];
+};
+
+// Per-tenant seam-ownership registry (#113 slice 2): owner CLASS (isp /
+// carrier / cloud_provider / …) → the tenant's actual responsible party.
+export type SeamOwnerEntry = { name: string; contact?: string };
+export type SeamOwnersSettings = {
+  tenant_id: string;
+  seam_owners: Record<string, SeamOwnerEntry>;
+  is_default: boolean;
+  classes: string[];
 };
 
 // One governance-settings audit event (backend AuditEvent, filtered to the

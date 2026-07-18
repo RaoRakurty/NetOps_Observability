@@ -155,6 +155,11 @@ describe("buildRcaCase — seam ownership attribution (#113)", () => {
     expect(c.aside.some((r) => r.k === "Owner")).toBe(false); // unconfirmed never claims "Owner"
   });
 
+  it("registry entry upgrades the class label to the tenant's actual party (#113 slice 2)", () => {
+    const c = buildRcaCase(suspectedTl, suspectedObj, {}, "isp", [], { isp: { name: "Lumen (DIA #12345)", contact: "noc@lumen.example" } });
+    expect(c.aside.find((r) => r.k === "Possible owner")?.v).toBe("Lumen (DIA #12345) · ISP / carrier — unconfirmed");
+  });
+
   it("suspected + no attribution → honest 'Not yet narrowed — NOC triage'", () => {
     const c = buildRcaCase(suspectedTl, suspectedObj, {}, "", []);
     expect(c.aside.find((r) => r.k === "Possible owner")?.v).toBe("Not yet narrowed — NOC triage");

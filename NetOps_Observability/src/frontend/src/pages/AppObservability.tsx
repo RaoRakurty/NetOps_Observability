@@ -37,7 +37,7 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
-import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard } from "./appobs/GovernanceSettings";
+import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard, SeamOwnersCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
@@ -1684,6 +1684,7 @@ function Settings() {
       <AttributionPrecedenceCard />
       <RequiredTagsCard />
       <RcaWindowCard />
+      <SeamOwnersCard />
       {/* Read-only change log: every save above is audited and listed here. */}
       <GovernanceAuditCard />
     </div>

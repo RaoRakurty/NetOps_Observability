@@ -48,6 +48,35 @@ type tenantGovernanceConfig struct {
 	// (a validated permutation of appid.PrecedenceClasses). nil = unset →
 	// the intrinsic default ladder.
 	AttributionPrecedence []string `json:"attribution_precedence,omitempty"`
+	// SeamOwners: owner-class → the tenant's ACTUAL responsible party (#113
+	// slice 2). Keys are the closed signature-catalog owner vocabulary
+	// (seamOwnerClasses); values name the real provider/team so RCA ownership
+	// reads "Lumen (DIA circuit #12345)" instead of the generic class label.
+	// nil = unset → class labels only.
+	SeamOwners map[string]seamOwnerEntry `json:"seam_owners,omitempty"`
+}
+
+// seamOwnerEntry is one registry row: who the class resolves to for this
+// tenant, plus an optional escalation contact. Non-secret display data.
+type seamOwnerEntry struct {
+	Name    string `json:"name"`              // e.g. "Lumen (DIA circuit #12345)"
+	Contact string `json:"contact,omitempty"` // email / phone / portal — free text, bounded
+}
+
+// seamOwnerClasses is the CLOSED owner-class vocabulary — exactly the
+// signature catalog's owner Literal (catalog.py) that corr objects carry in
+// corr_current.owner. A registry key outside this list is refused.
+var seamOwnerClasses = []string{
+	"netops", "carrier", "cloud_provider", "app_team", "colo_provider", "isp", "sdwan_vendor",
+}
+
+func isSeamOwnerClass(c string) bool {
+	for _, k := range seamOwnerClasses {
+		if k == c {
+			return true
+		}
+	}
+	return false
 }
 
 // tenantGovernanceStore is a file-backed per-tenant map, keyed by tenant in the
@@ -328,12 +357,154 @@ func (s *server) handleAttributionPrecedenceSettings(w http.ResponseWriter, r *h
 	}
 }
 
+// seamOwners returns the tenant's registry (nil when unset) and whether it is
+// a custom override. A stored key outside today's class vocabulary is dropped
+// on read rather than trusted (§3: never trust cached data without validation).
+// Nil-safe.
+func (s *tenantGovernanceStore) seamOwners(tenant string) (map[string]seamOwnerEntry, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.cfgs[tenant]
+	if !ok || len(c.SeamOwners) == 0 {
+		return nil, false
+	}
+	out := make(map[string]seamOwnerEntry, len(c.SeamOwners))
+	for k, v := range c.SeamOwners {
+		if isSeamOwnerClass(k) && strings.TrimSpace(v.Name) != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// setSeamOwners stamps the tenant FROM THE PRINCIPAL and persists. owners==nil
+// resets the tenant to class-label-only display.
+func (s *tenantGovernanceStore) setSeamOwners(tenant string, owners map[string]seamOwnerEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.cfgs[tenant]
+	c.TenantID = tenant
+	c.SeamOwners = owners
+	s.cfgs[tenant] = c
+	s.saveLocked()
+}
+
+const (
+	seamOwnerNameMaxLen    = 120
+	seamOwnerContactMaxLen = 200
+)
+
+// normalizeSeamOwners validates a caller's registry: closed class vocabulary,
+// bounded non-empty names, bounded contacts, empty-name rows dropped. Anything
+// off-spec fails the request.
+func normalizeSeamOwners(raw map[string]seamOwnerEntry) (map[string]seamOwnerEntry, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("seam_owners must map at least one owner class")
+	}
+	out := make(map[string]seamOwnerEntry, len(raw))
+	for k, v := range raw {
+		class := strings.ToLower(strings.TrimSpace(k))
+		if !isSeamOwnerClass(class) {
+			return nil, fmt.Errorf("seam_owners: unknown owner class %q (valid: %s)", k, strings.Join(seamOwnerClasses, ", "))
+		}
+		name := strings.TrimSpace(v.Name)
+		contact := strings.TrimSpace(v.Contact)
+		if name == "" {
+			continue // an empty row means "no override for this class"
+		}
+		if len(name) > seamOwnerNameMaxLen {
+			return nil, fmt.Errorf("seam_owners.%s: name must be at most %d characters", class, seamOwnerNameMaxLen)
+		}
+		if len(contact) > seamOwnerContactMaxLen {
+			return nil, fmt.Errorf("seam_owners.%s: contact must be at most %d characters", class, seamOwnerContactMaxLen)
+		}
+		out[class] = seamOwnerEntry{Name: name, Contact: contact}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("seam_owners: every row was empty")
+	}
+	return out, nil
+}
+
+// handleSeamOwnersSettings serves GET/PUT /api/settings/seam-owners (#113
+// slice 2): the per-tenant registry that turns an RCA owner CLASS (isp /
+// carrier / cloud_provider / …) into the tenant's actual responsible party.
+func (s *server) handleSeamOwnersSettings(w http.ResponseWriter, r *http.Request) {
+	writeState := func(tenant string) {
+		owners, custom := s.governance.seamOwners(tenant)
+		if owners == nil {
+			owners = map[string]seamOwnerEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tenant_id":   tenant,
+			"seam_owners": owners,
+			"is_default":  !custom,
+			"classes":     seamOwnerClasses,
+		})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := userFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		tenant, _ := principalTenant(claims)
+		writeState(tenant)
+	case http.MethodPut:
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			SeamOwners map[string]seamOwnerEntry `json:"seam_owners"`
+			Reset      bool                      `json:"reset,omitempty"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid body: %w", err))
+			return
+		}
+		var owners map[string]seamOwnerEntry
+		if !body.Reset {
+			var err error
+			if owners, err = normalizeSeamOwners(body.SeamOwners); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		tenant, cross := principalTenant(claims)
+		s.governance.setSeamOwners(tenant, owners)
+		if s.audit != nil {
+			classes := make([]string, 0, len(owners))
+			for k := range owners {
+				classes = append(classes, k)
+			}
+			s.audit.Record(AuditEvent{
+				Actor: claims.Sub, Tenant: tenant, Cross: cross,
+				Method: r.Method, Path: r.URL.Path, Status: http.StatusOK, Decision: "allow",
+				Remote: auditClientIP(r),
+				Detail: map[string]any{"action": "set_seam_owners", "classes": classes, "reset": body.Reset},
+			})
+		}
+		writeState(tenant)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))
+	}
+}
+
 // isGovernanceAuditAction reports whether an audit Detail action is one of the
 // tenant-governance settings writes this view surfaces (closed list — the
 // audit trail itself stays admin-visible in full at /api/audit).
 func isGovernanceAuditAction(action any) bool {
 	switch action {
-	case "set_required_tags", "set_rca_window", "set_attribution_precedence", "set_time_display":
+	case "set_required_tags", "set_rca_window", "set_attribution_precedence", "set_time_display", "set_seam_owners":
 		return true
 	}
 	return false

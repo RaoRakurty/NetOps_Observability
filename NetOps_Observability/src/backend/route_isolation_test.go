@@ -75,6 +75,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/settings/required-tags": "scoped",
 	"/api/settings/rca-window":    "scoped",
 	"/api/settings/attribution-precedence": "scoped",
+	"/api/settings/seam-owners":            "scoped",
 	// Read-only recent-changes view over the governance settings writes:
 	// requireAdmin + auditScopedList (the same scoping as /api/audit), filtered
 	// to the settings actions (tenant_governance_test.go).

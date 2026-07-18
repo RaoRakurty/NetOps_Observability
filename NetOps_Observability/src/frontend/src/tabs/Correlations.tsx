@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaPathAttribution, Seam, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaPathAttribution, Seam, SeamOwnerEntry, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -586,6 +586,8 @@ export function CorrelationDetail({ id }: { id: string }) {
   // empty note so it shows only after the fetch settles, never mid-load.
   const [pathAttr, setPathAttr] = useState<RcaPathAttribution | null>(null);
   const [pathLoaded, setPathLoaded] = useState(false);
+  // Seam-ownership registry (#113): owner class → the tenant's actual party.
+  const [seamOwners, setSeamOwners] = useState<Record<string, SeamOwnerEntry>>({});
 
   useEffect(() => {
     let alive = true;
@@ -604,6 +606,10 @@ export function CorrelationDetail({ id }: { id: string }) {
     api.seams("active")
       .then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } })
       .catch(() => { /* seam inventory optional */ });
+    // Tenant seam-ownership registry (#113) — best-effort; class labels render without it.
+    api.getSeamOwners()
+      .then((r) => { if (alive) setSeamOwners(r.seam_owners ?? {}); })
+      .catch(() => { /* registry optional */ });
     // NOTE: hop order comes from the BACKEND's service-path spine (contract §7).
     // The UI no longer joins traceroutes or device inventory client-side to guess
     // a path — that inference now lives server-side, with evidence per hop.
@@ -632,11 +638,11 @@ export function CorrelationDetail({ id }: { id: string }) {
   // keeps the print to the loss-only labels (the STAMP overlay is interactive-only).
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
-    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps);
+    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners);
     const graph = buildTopoGraph(timeline, seams, view, false);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners]);
 
   if (err) return <div className="empty">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty">Loading…</div>;

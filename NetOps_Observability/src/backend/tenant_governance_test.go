@@ -456,3 +456,140 @@ func TestRequiredTagsHandlerIsolation(t *testing.T) {
 		t.Fatal("required-tags change must be audited")
 	}
 }
+
+// ── #113 slice 2: seam-ownership registry ─────────────────────────────────────
+
+func TestGovernanceStoreSeamOwnersDefaultsAndKeying(t *testing.T) {
+	st := newTenantGovernanceStore("")
+	if owners, custom := st.seamOwners("t-a"); custom || owners != nil {
+		t.Fatalf("unconfigured tenant = (%v,%v), want no registry", owners, custom)
+	}
+	st.setSeamOwners("t-a", map[string]seamOwnerEntry{"isp": {Name: "Lumen (DIA #12345)", Contact: "noc@lumen.example"}})
+	owners, custom := st.seamOwners("t-a")
+	if !custom || owners["isp"].Name != "Lumen (DIA #12345)" {
+		t.Fatalf("t-a = (%v,%v)", owners, custom)
+	}
+	// §3a: another tenant reads its own (empty) registry.
+	if o, c := st.seamOwners("t-b"); c || o != nil {
+		t.Fatalf("t-b = (%v,%v) — cross-tenant bleed", o, c)
+	}
+	// A stored key outside the class vocabulary is dropped on read, not trusted.
+	st.setSeamOwners("t-a", map[string]seamOwnerEntry{"martians": {Name: "X"}})
+	if o, c := st.seamOwners("t-a"); c || o != nil {
+		t.Fatalf("invalid stored class must read as default, got (%v,%v)", o, c)
+	}
+	st.setSeamOwners("t-a", nil)
+	if _, c := st.seamOwners("t-a"); c {
+		t.Fatal("reset tenant must read as default")
+	}
+	var nilStore *tenantGovernanceStore
+	if o, c := nilStore.seamOwners("t-a"); c || o != nil {
+		t.Fatal("nil store must serve the default")
+	}
+}
+
+func TestNormalizeSeamOwners(t *testing.T) {
+	got, err := normalizeSeamOwners(map[string]seamOwnerEntry{
+		" ISP ":   {Name: "  Lumen  ", Contact: " noc@lumen.example "},
+		"carrier": {Name: ""}, // empty row = no override, dropped
+	})
+	if err != nil || got["isp"].Name != "Lumen" || got["isp"].Contact != "noc@lumen.example" {
+		t.Fatalf("normalize = (%v, %v)", got, err)
+	}
+	if _, ok := got["carrier"]; ok {
+		t.Fatal("empty-name row must be dropped")
+	}
+	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"martians": {Name: "X"}}); err == nil {
+		t.Fatal("unknown class must fail")
+	}
+	if _, err := normalizeSeamOwners(nil); err == nil {
+		t.Fatal("empty registry must fail")
+	}
+	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: strings.Repeat("x", 121)}}); err == nil {
+		t.Fatal("over-long name must fail")
+	}
+	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: "ok", Contact: strings.Repeat("x", 201)}}); err == nil {
+		t.Fatal("over-long contact must fail")
+	}
+}
+
+func TestSeamOwnersHandlerIsolation(t *testing.T) {
+	s := governanceTestServer(t)
+	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
+	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
+	viewerA := jwtClaims{Role: "viewer", Tenant: "t-a", Sub: "user-a"}
+
+	put := func(c jwtClaims, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/settings/seam-owners", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.handleSeamOwnersSettings(rec, claimsCtx(r, c))
+		return rec
+	}
+	get := func(c jwtClaims) (owners map[string]seamOwnerEntry, isDefault bool, tenant string) {
+		r := httptest.NewRequest(http.MethodGet, "/api/settings/seam-owners", nil)
+		rec := httptest.NewRecorder()
+		s.handleSeamOwnersSettings(rec, claimsCtx(r, c))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET = %d", rec.Code)
+		}
+		var out struct {
+			TenantID   string                    `json:"tenant_id"`
+			SeamOwners map[string]seamOwnerEntry `json:"seam_owners"`
+			IsDefault  bool                      `json:"is_default"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.SeamOwners, out.IsDefault, out.TenantID
+	}
+
+	// Tenant admin writes its OWN registry — a tenant_id in the body is IGNORED.
+	if rec := put(admA, `{"seam_owners":{"isp":{"name":"Lumen (DIA #12345)","contact":"noc@lumen.example"}},"tenant_id":"t-b"}`); rec.Code != http.StatusOK {
+		t.Fatalf("admin PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	if owners, isDef, tenant := get(admA); tenant != "t-a" || isDef || owners["isp"].Name != "Lumen (DIA #12345)" {
+		t.Fatalf("t-a sees (%v,%v,%q)", owners, isDef, tenant)
+	}
+	// §3a: tenant B untouched.
+	if owners, isDef, _ := get(admB); !isDef || len(owners) != 0 {
+		t.Fatalf("t-b sees (%v,%v) — cross-tenant write leak", owners, isDef)
+	}
+	// Viewer of the tenant reads, cannot write.
+	if owners, _, _ := get(viewerA); owners["isp"].Name != "Lumen (DIA #12345)" {
+		t.Fatalf("viewer of t-a sees %v", owners)
+	}
+	if rec := put(viewerA, `{"seam_owners":{"isp":{"name":"x"}}}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer PUT = %d, want 403", rec.Code)
+	}
+	// Closed validation → 400.
+	if rec := put(admA, `{"seam_owners":{"martians":{"name":"x"}}}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown class PUT = %d, want 400", rec.Code)
+	}
+	// Reset restores the default.
+	if rec := put(admA, `{"reset":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("reset PUT = %d", rec.Code)
+	}
+	if _, isDef, _ := get(admA); !isDef {
+		t.Fatal("reset must restore the default")
+	}
+	// Unauthenticated GET → 401.
+	r := httptest.NewRequest(http.MethodGet, "/api/settings/seam-owners", nil)
+	rec := httptest.NewRecorder()
+	s.handleSeamOwnersSettings(rec, r)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anon GET = %d, want 401", rec.Code)
+	}
+	// Audited with its own action, surfaced by the governance-audit filter.
+	found := false
+	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+		if e.Detail["action"] == "set_seam_owners" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("seam-owners change must be audited")
+	}
+	if !isGovernanceAuditAction("set_seam_owners") {
+		t.Fatal("set_seam_owners must appear in the governance audit view")
+	}
+}
