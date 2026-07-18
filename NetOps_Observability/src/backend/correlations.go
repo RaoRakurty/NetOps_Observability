@@ -426,6 +426,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleCorrelationTickets(w, r, id, sub)
 		return
 	}
+	// RCA-document promotion (#113 point 3) — GET status / POST promote /
+	// DELETE revoke; own auth (read/write) + audit inside the handler.
+	if sub == "rca-promotion" {
+		s.handleRcaPromotion(w, r, id)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return

@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaPathAttribution, Seam, SeamOwnerEntry, TicketLinkRow, UndeterminedCluster } from "../services/api";
+import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaNotPromotedError, RcaPathAttribution, Seam, SeamOwnerEntry, TicketLinkRow, UndeterminedCluster } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
@@ -654,12 +654,29 @@ export function CorrelationDetail({ id }: { id: string }) {
 
   const exportPdf = () => {
     if (!rcaCase) return;
+    const id = obj.correlation_id || "";
     // Canonical server-side report first (typed states, controlled PDF headers,
     // no browser print chrome). The legacy client-side print doc remains only
     // as the last-resort fallback when the backend render fails entirely.
-    api.downloadRcaReport(obj.correlation_id || "", friendlyProblemId(obj.correlation_id || ""))
-      .catch(() => {
-        const ok = exportRcaPdf(rcaCase, obj.correlation_id || "");
+    api.downloadRcaReport(id, friendlyProblemId(id))
+      .catch(async (e) => {
+        // #113 point 3 — RCA promotion gate. An un-promoted CANDIDATE never
+        // becomes a document through any path (the browser-print fallback
+        // included): offer the explicit, audited manual promotion instead.
+        if (e instanceof RcaNotPromotedError) {
+          const promote = window.confirm(
+            `This candidate is not promoted to an RCA document.\n\n${e.reason}\n\nPromote it now? The promotion is recorded under your name and audited.`,
+          );
+          if (!promote) return;
+          try {
+            await api.promoteRca(id);
+            await api.downloadRcaReport(id, friendlyProblemId(id));
+          } catch {
+            alert("Promotion or export failed — promoting requires write permission.");
+          }
+          return;
+        }
+        const ok = exportRcaPdf(rcaCase, id);
         if (!ok) alert("Could not generate the incident report.");
       });
   };

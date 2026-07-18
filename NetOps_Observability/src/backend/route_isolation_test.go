@@ -61,7 +61,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/alerts/episodes/":                    "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
 	"/api/compliance":                          "scoped",
 	"/api/correlations":                        "scoped",
-	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
+	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/stats":                  "scoped",
 	"/api/correlations/summary":                "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
 	// Per-tenant display preference (a281c7a): GET/PUT always the CALLER's own

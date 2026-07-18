@@ -81,6 +81,11 @@ type rcaReport struct {
 	Ownership         rcaOwnership         `json:"ownership"`
 	Decision          rcaDecision          `json:"decision"`
 	Actions           []rcaAction          `json:"next_actions"`
+	// Promotion (#113 point 3): whether this case is a PROMOTED real outage —
+	// only then does the endpoint render the html/pdf DOCUMENT. Set by the HTTP
+	// layer (it owns the manual-promotion store); candidates keep full JSON
+	// access, so the workspace tier is unaffected.
+	Promotion rcaPromotionStatus `json:"promotion"`
 	// Quality: the StateConsistencyValidator's record for this document. Errors
 	// downgrade the report type — a contradictory document never ships as final.
 	Quality rcaReportQuality `json:"quality"`

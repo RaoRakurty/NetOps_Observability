@@ -133,6 +133,7 @@ type server struct {
 	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
 	governance          *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
+	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
@@ -569,6 +570,8 @@ func newServer() *server {
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
 	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
+	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
+
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
 	srv.discoveryCfg = discoveryCfg
