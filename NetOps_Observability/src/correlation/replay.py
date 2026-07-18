@@ -52,11 +52,16 @@ class StoredObject:
     node_count: int
     signal_count: int
     edges: tuple[dict, ...] = ()          # stored corr_edges rows for this version
+    # #111 identity adoption: a version persisted for an ongoing incident keeps
+    # the ORIGINAL open object's correlation_id while run_window over its window
+    # derives the raw windowed id — the trigger signal re-identifies it exactly.
+    trigger_signal: str = ""
 
     @classmethod
     def from_rows(cls, obj_row: dict, edge_rows: list[dict]) -> "StoredObject":
         return cls(
             correlation_id=str(obj_row["correlation_id"]),
+            trigger_signal=str(obj_row.get("trigger_signal", "")),
             tenant_id=str(obj_row.get("tenant_id", "")),
             version=int(obj_row["version"]),
             top_hypothesis=str(obj_row["top_hypothesis"]),
@@ -171,6 +176,16 @@ def replay(
                            topology_stale=topo_stale, storm_mode=storm,
                            directed=stored.directed())
     match = next((s for s in snapshots if s.correlation_id == stored.correlation_id), None)
+    if match is None and stored.trigger_signal:
+        # #111 identity adoption (main.engine_cycle + engine.find_continuation):
+        # an ongoing incident whose earliest signal aged out of the window keeps
+        # its ORIGINAL correlation_id, so a fresh run_window over the archived
+        # window derives the raw windowed id instead. The trigger signal is
+        # unique per component (components partition the window's signals), so
+        # it re-identifies the adopted object exactly — the drift diff then
+        # compares full content as usual, nothing is weakened.
+        match = next((s for s in snapshots
+                      if s.trigger_signal == stored.trigger_signal), None)
     if match is None:
         report.note(
             f"recomputation produced {len(snapshots)} object(s), none with the stored id "

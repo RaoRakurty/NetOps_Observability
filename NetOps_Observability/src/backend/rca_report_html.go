@@ -375,6 +375,24 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 {{end}}
 
+<!-- #113 point 2 — the FIRST section: where · what possibly happened ·
+     possible owner(s) · the causality path with broken areas in red. -->
+<section>
+  <h2>Incident at a glance</h2>
+  <div class="kv">
+    <span class="k">Where it happened</span><span class="v">{{.AtAGlance.Where}}</span>
+    <span class="k">What possibly happened</span><span class="v">{{.AtAGlance.What}}</span>
+    <span class="k">{{.AtAGlance.OwnersLabel}}</span><span class="v">{{range $i, $o := .AtAGlance.Owners}}{{if $i}} · {{end}}{{$o}}{{end}}</span>
+    {{if .AtAGlance.OwnersReason}}<span class="k">Why</span><span class="v" style="font-weight:400">{{.AtAGlance.OwnersReason}}</span>{{end}}
+  </div>
+  {{if .Topology.Available}}
+  {{pathGraph .Topology}}
+  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; detail on page 2.</div>
+  {{else}}
+  <div class="note">{{.Topology.Reason}}</div>
+  {{end}}
+</section>
+
 <section>
   <h2>Management summary</h2>
   <div class="mgmt">{{.Summary.Management}}</div>
@@ -392,7 +410,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{if .Times.MonitoringUntil}}<span class="k">Monitoring until</span><span class="v">{{.Times.MonitoringUntil}}</span>{{end}}
     {{if .Scope.Services}}<span class="k">Service / application</span><span class="v">{{range $i, $s := .Scope.Services}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{if .Scope.Regions}}<span class="k">Region</span><span class="v">{{range $i, $s := .Scope.Regions}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else}}Not identified{{end}}</span>
+    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else if .RootCause.PossibleCause}}Not confirmed — possibly because of {{.RootCause.PossibleCause}}{{else}}Not identified — no cause hypothesis has supporting evidence yet{{end}}</span>
   </div>
 </section>
 
@@ -609,6 +627,14 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{if .RootCause.Owner}}<span class="k">Owner</span><span class="v">{{.RootCause.Owner}}</span>{{end}}
   </div>
   {{if .RootCause.Evidence}}<div class="note">Causality evidence: {{range $i, $s := .RootCause.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
+  {{else if .RootCause.PossibleCause}}
+  <!-- #113 point 4 — cause honesty: the best hypothesis and its evidence STATE,
+       never a bare "not identified". -->
+  <div class="kv">
+    <span class="k">Possible cause (unconfirmed)</span><span class="v">{{.RootCause.PossibleCause}}</span>
+    {{if .RootCause.EvidenceKnown}}<span class="k">Evidence in hand</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceKnown}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
+    {{if .RootCause.EvidenceMissing}}<span class="k">Evidence still missing</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceMissing}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
+  </div>
   {{end}}
 </section>
 

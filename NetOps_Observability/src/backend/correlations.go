@@ -331,17 +331,22 @@ SELECT countIf(state='open')                                          AS open,
 // correlationsSummarySQL builds the tenant-scoped window rollup behind the
 // Correlations page stat-chip row: REAL COUNTs over corr_current (never the
 // capped list length) — total in window, split by verdict tier and by state.
+// state='merged' rows are engine tombstones (an ongoing condition re-detected
+// and folded into its open object, #111) — NOT candidates. They are excluded
+// from total/tier/closed and disclosed separately as `merged` (don't-hide:
+// the page shows "N merged duplicates" instead of silently dropping them).
 // Pure so its bounded shape is unit-testable. extraConds are pre-validated
 // (allowlisted) filter clauses; pass nil for the unfiltered rollup.
 func correlationsSummarySQL(sinceCond string, extraConds []string) string {
 	conds := append([]string{sinceCond}, extraConds...)
 	return `
-SELECT count()                                AS total,
-       countIf(verdict_tier = 'confirmed')    AS confirmed,
-       countIf(verdict_tier = 'suspected')    AS suspected,
-       countIf(verdict_tier = 'undetermined') AS undetermined,
-       countIf(state = 'open')                AS open,
-       countIf(state != 'open')               AS closed
+SELECT countIf(state != 'merged')                                     AS total,
+       countIf(verdict_tier = 'confirmed' AND state != 'merged')      AS confirmed,
+       countIf(verdict_tier = 'suspected' AND state != 'merged')      AS suspected,
+       countIf(verdict_tier = 'undetermined' AND state != 'merged')   AS undetermined,
+       countIf(state = 'open')                                        AS open,
+       countIf(state NOT IN ('open', 'merged'))                       AS closed,
+       countIf(state = 'merged')                                      AS merged
   FROM netops.corr_current FINAL
  WHERE ` + strings.Join(conds, " AND ") + `
  FORMAT JSON`
@@ -396,6 +401,7 @@ func (s *server) handleCorrelationsSummary(w http.ResponseWriter, r *http.Reques
 		"undetermined":   num("undetermined"),
 		"open":           num("open"),
 		"closed":         num("closed"),
+		"merged":         num("merged"),
 		"window_seconds": int(since.Seconds()),
 	})
 }
@@ -418,6 +424,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 	// own auth (read/write) inside the handler since they mix GET + POST.
 	if sub == "tickets" || sub == "ticket" || sub == "ticket/sync" {
 		s.handleCorrelationTickets(w, r, id, sub)
+		return
+	}
+	// RCA-document promotion (#113 point 3) — GET status / POST promote /
+	// DELETE revoke; own auth (read/write) + audit inside the handler.
+	if sub == "rca-promotion" {
+		s.handleRcaPromotion(w, r, id)
 		return
 	}
 	if r.Method != http.MethodGet {

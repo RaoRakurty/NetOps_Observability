@@ -41,6 +41,13 @@ type rcaReport struct {
 	Validation  bool   `json:"validation"`
 	GeneratedAt string `json:"generated_at"` // UTC, canonical
 
+	// AtAGlance (#113 point 2): the document's FIRST section — where it
+	// happened · what possibly happened · possible owner(s) — rendered above
+	// the management summary together with the causality path (broken areas
+	// red). Composed from fault localization / scope / hypotheses / ownership;
+	// it never introduces a claim those sections don't already make.
+	AtAGlance rcaAtAGlance `json:"at_a_glance"`
+
 	States rcaReportStates `json:"states"`
 	Times  rcaReportTimes  `json:"times"`
 	Scope  rcaReportScope  `json:"scope"`
@@ -74,6 +81,11 @@ type rcaReport struct {
 	Ownership         rcaOwnership         `json:"ownership"`
 	Decision          rcaDecision          `json:"decision"`
 	Actions           []rcaAction          `json:"next_actions"`
+	// Promotion (#113 point 3): whether this case is a PROMOTED real outage —
+	// only then does the endpoint render the html/pdf DOCUMENT. Set by the HTTP
+	// layer (it owns the manual-promotion store); candidates keep full JSON
+	// access, so the workspace tier is unaffected.
+	Promotion rcaPromotionStatus `json:"promotion"`
 	// Quality: the StateConsistencyValidator's record for this document. Errors
 	// downgrade the report type — a contradictory document never ships as final.
 	Quality rcaReportQuality `json:"quality"`
@@ -443,17 +455,42 @@ type rcaFaultLocalization struct {
 // confirmed signature, seam grounding or high confidence never set it.
 type rcaRootCause struct {
 	Identified bool     `json:"identified"`
-	Statement  string   `json:"statement"` // "Root cause has not been identified." when false
+	Statement  string   `json:"statement"` // best-hypothesis "possibly because of X" wording when false
 	Mechanism  string   `json:"mechanism,omitempty"`
 	Object     string   `json:"object,omitempty"`
 	ObjectType string   `json:"object_type,omitempty"`
 	Owner      string   `json:"owner,omitempty"`
 	Evidence   []string `json:"evidence,omitempty"`
+	// #113 point 4 cause honesty: an unidentified root cause never renders as a
+	// bare "not identified" — the best live hypothesis is named as "possibly
+	// because of X" together with its evidence STATE: what is in hand and what
+	// is still missing (hypothesis gaps + the object's own evidence_missing).
+	// All empty when no hypothesis has supporting evidence (honest absence).
+	PossibleCause   string   `json:"possible_cause,omitempty"`
+	EvidenceKnown   []string `json:"evidence_known,omitempty"`
+	EvidenceMissing []string `json:"evidence_missing,omitempty"`
 }
 
 type rcaOwnerCandidate struct {
 	Team   string `json:"team"`
 	Reason string `json:"reason"`
+}
+
+// rcaAtAGlance — the owner-mandated first section (#113 point 2): where · what
+// possibly happened · possible owner(s). The causality path renders alongside it
+// from rcaReport.Topology (broken areas red, rcaPathGraphSVG). Wording rules:
+// "possible owner(s)" whenever the root cause is unconfirmed; "possibly because
+// of X" for an unconfirmed best hypothesis — never a bare claim, never a bare
+// "not identified".
+type rcaAtAGlance struct {
+	Where      string `json:"where"`
+	WhereBasis string `json:"where_basis,omitempty"` // localization | scope | none
+	What       string `json:"what"`                  // what (possibly) happened
+	// OwnersLabel: "Owner" only when the root cause is identified with an
+	// owner; otherwise "Possible owner(s)".
+	OwnersLabel  string   `json:"owners_label"`
+	Owners       []string `json:"owners"`
+	OwnersReason string   `json:"owners_reason,omitempty"`
 }
 
 type rcaOwnership struct {
@@ -1443,6 +1480,26 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 	}
 	root := rcaRootCause{Identified: false, Statement: "Root cause has not been identified."}
+	// #113 point 4 cause honesty: pair every unidentified root cause with the
+	// best live hypothesis ("possibly because of X") and its evidence state —
+	// what is in hand, what is still missing (hypothesis gaps + the object's own
+	// evidence_missing shortfalls). A bare "not identified" is a dead end for the
+	// reader; an honest hypothesis with named gaps is actionable. When NO
+	// hypothesis has evidence, the absence itself is stated — never a guess.
+	if top := firstLiveCauseHypothesis(hyps); top != nil {
+		root.PossibleCause = orDefault(top.Problem, top.Title)
+		root.EvidenceKnown = firstN(top.Supporting, 4)
+		root.EvidenceMissing = firstN(top.Missing, 4)
+		for _, m := range decodeEvidenceMissing(meta) {
+			if len(root.EvidenceMissing) >= 6 {
+				break
+			}
+			root.EvidenceMissing = appendUnique(root.EvidenceMissing, m)
+		}
+		root.Statement = fmt.Sprintf(
+			"Root cause has not been identified — possibly because of %s (unconfirmed best hypothesis).",
+			strings.TrimRight(root.PossibleCause, "."))
+	}
 	switch {
 	case analysis == "confirmed" && loc.Localized:
 		root.Statement = fmt.Sprintf("The fault condition is confirmed and localized to %s. The underlying root cause — the causal mechanism and originating object — remains under investigation.", loc.Object)
@@ -1527,6 +1584,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 			SeverityBasis: sevBasis, SeverityIncidentBasis: sevIncidentBasis, Monitoring: monitoring,
 			Confidence: confidence, ConfidenceBasis: basis,
 		},
+		AtAGlance:         buildAtAGlance(loc, scope, hyps, ownership, root, analysis),
 		Times:             times,
 		Scope:             scope,
 		IssueContext:      ictx,

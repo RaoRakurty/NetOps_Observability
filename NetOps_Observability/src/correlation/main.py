@@ -42,7 +42,7 @@ from pydantic import BaseModel
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
 from directed_topology import DirectedTopology
-from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_merges, run_window
+from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_continuation, find_merges, run_window
 from path_assembly import (
     AssembledPath,
     DiscoveredEdge,
@@ -1201,9 +1201,9 @@ async def engine_cycle() -> None:
     for s in WINDOW_BUFFER:
         by_tenant.setdefault(s.tenant_id, []).append(s)
 
-    seen_this_cycle: set[str] = set()
     gap_hints = 0
     adj_by_tenant = topology_links_by_tenant()  # L2/L3 links for the adjacency rung (G1)
+    evaluated: list[tuple[str, list[Signal], list[ObjectSnapshot]]] = []
     for tenant in sorted(by_tenant):
         window = by_tenant[tenant]
         seams = tuple(s for s in seam_inventory() if s.tenant_id in (tenant, ""))
@@ -1239,10 +1239,37 @@ async def engine_cycle() -> None:
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue
+        evaluated.append((tenant, window, snapshots))
+
+    # #111 churn fix — know every id that MATERIALIZED this cycle before deciding
+    # whether an unknown id is a genuinely new incident or an ongoing one re-keyed
+    # by windowing (correlation_id derives from the earliest node + onset, so when
+    # an incident's first signal ages out of the sliding window the same condition
+    # returns under a new id every sweep). Pre-fix that minted a new object and
+    # tombstoned the old one into it (create-then-merge: ~13/min of state='merged'
+    # tombstones, ~20M archive rows/day on one sustained signature). Now the new
+    # snapshot ADOPTS the open object's identity (find_continuation: same
+    # entity-overlap + window-overlap criterion as find_merges, tenant-guarded)
+    # and versions it — one object with version bumps, no tombstone. Only an open
+    # object whose own id did NOT materialize may be adopted, and at most once per
+    # cycle — two live components can never collapse into one identity.
+    materialized = {s.correlation_id for _, _, snaps in evaluated for s in snaps}
+    seen_this_cycle: set[str] = set()
+    for tenant, window, snapshots in evaluated:
         for snap in snapshots:
             gap_hints += snap.gap_hints
-            seen_this_cycle.add(snap.correlation_id)
             reg = OPEN_OBJECTS.get(snap.correlation_id)
+            if reg is None:
+                cont = find_continuation(snap, [
+                    r["snapshot"] for c, r in OPEN_OBJECTS.items()
+                    if c not in materialized and c not in seen_this_cycle
+                ])
+                if cont:
+                    snap = dc_replace(snap, correlation_id=cont)
+                    reg = OPEN_OBJECTS[cont]
+                    log.info("corr-object %s continued under re-keyed window (identity adopted, no tombstone)",
+                             cont[:8])
+            seen_this_cycle.add(snap.correlation_id)
             chash = snap.content_hash()
             if reg is None:
                 OPEN_OBJECTS[snap.correlation_id] = {

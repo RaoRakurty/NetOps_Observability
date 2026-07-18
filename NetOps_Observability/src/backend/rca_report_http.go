@@ -76,7 +76,24 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
 	stampTopologyTemporalRole(&rep)
 
-	switch strings.ToLower(r.URL.Query().Get("format")) {
+	// #113 point 3 — RCA creation policy. Candidates and RCA documents are
+	// different tiers: JSON (the workspace's data) stays fully readable, but the
+	// DOCUMENT (html/pdf) renders only for a promoted real outage — auto
+	// (confirmed verdict + confirmed user/app impact + duration) or an explicit,
+	// audited manual promotion. The refusal names the unmet criteria.
+	var manual *rcaPromotionRecord
+	if rec, has := s.rcaPromotions.get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
+		manual = &rec
+	}
+	rep.Promotion = evaluateRcaPromotion(&rep, manual)
+
+	format := strings.ToLower(r.URL.Query().Get("format"))
+	if (format == "html" || format == "pdf") && !rep.Promotion.Promoted {
+		writeError(w, http.StatusForbidden, errors.New(rep.Promotion.Reason))
+		return
+	}
+
+	switch format {
 	case "", "json":
 		writeJSON(w, http.StatusOK, rep)
 	case "html":

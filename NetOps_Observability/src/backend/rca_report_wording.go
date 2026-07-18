@@ -619,6 +619,143 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 	return own
 }
 
+// ---- cause honesty (#113 point 4) -------------------------------------------------------------
+
+// firstLiveCauseHypothesis picks the best hypothesis that may honestly be named
+// as a POSSIBLE cause: highest-ranked, not contradicted, and an actual cause
+// candidate (a symptom classification names what was seen, never why). nil when
+// no hypothesis qualifies — the caller states the absence, it never invents.
+func firstLiveCauseHypothesis(hyps []rcaHypothesis) *rcaHypothesis {
+	for i := range hyps {
+		if !hyps[i].Contradicted && hyps[i].Type != "symptom classification" {
+			return &hyps[i]
+		}
+	}
+	return nil
+}
+
+// decodeEvidenceMissing reads the engine's own evidence_missing shortfalls off
+// the object row (JSON array column) — honest, machine-written gaps like
+// "path hop 10.0.0.9 did not respond". Malformed/absent → empty, never a guess.
+func decodeEvidenceMissing(meta map[string]any) []string {
+	raw := asString(meta["evidence_missing"])
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// appendUnique appends s unless already present (order-preserving).
+func appendUnique(ss []string, s string) []string {
+	if s == "" {
+		return ss
+	}
+	for _, x := range ss {
+		if x == s {
+			return ss
+		}
+	}
+	return append(ss, s)
+}
+
+// ---- at a glance (#113 point 2) ---------------------------------------------------------------
+
+// buildAtAGlance composes the document's FIRST section — where it happened ·
+// what possibly happened · possible owner(s) — strictly from claims the report
+// already makes (localization, scope, hypotheses, ownership). Unconfirmed
+// causes read "possibly because of X"; unconfirmed owners read "Possible
+// owner(s)". It invents nothing and hides nothing: absent evidence renders as
+// an honest absence sentence, never as a guess.
+func buildAtAGlance(loc rcaFaultLocalization, scope rcaReportScope, hyps []rcaHypothesis, own rcaOwnership, root rcaRootCause, analysis string) rcaAtAGlance {
+	g := rcaAtAGlance{}
+
+	// WHERE — localization first (the strongest claim), then observed scope.
+	switch {
+	case loc.Localized:
+		g.Where = loc.Object
+		if loc.ObjectType != "" {
+			g.Where += " (" + loc.ObjectType + ")"
+		}
+		g.WhereBasis = "localization"
+	default:
+		var parts []string
+		if len(scope.Services) > 0 {
+			parts = append(parts, "service "+strings.Join(firstN(scope.Services, 2), ", "))
+		}
+		if len(scope.Sites) > 0 {
+			parts = append(parts, "site "+strings.Join(firstN(scope.Sites, 2), ", "))
+		}
+		if len(scope.Regions) > 0 {
+			parts = append(parts, "region "+strings.Join(firstN(scope.Regions, 2), ", "))
+		}
+		if len(parts) == 0 && len(scope.Devices) > 0 {
+			parts = append(parts, strings.Join(firstN(scope.Devices, 3), ", "))
+		}
+		if len(parts) > 0 {
+			g.Where = strings.Join(parts, " · ") + " — observed scope; the fault is not localized to a single object"
+			g.WhereBasis = "scope"
+		} else {
+			g.Where = "Not localized — the evidence does not support a single location"
+			g.WhereBasis = "none"
+		}
+	}
+
+	// WHAT (possibly) HAPPENED — best live hypothesis, honestly qualified.
+	top := firstLiveCauseHypothesis(hyps)
+	switch {
+	case root.Identified:
+		g.What = root.Statement
+	case top != nil && analysis == "confirmed":
+		g.What = fmt.Sprintf("%s — the fault condition is confirmed; the underlying root cause is still under investigation.",
+			orDefault(top.Problem, top.Title))
+	case top != nil:
+		g.What = fmt.Sprintf("Possibly because of %s — unconfirmed. %s",
+			strings.TrimRight(orDefault(top.Problem, top.Title), "."),
+			"The evidence supports this as the best current hypothesis, not a conclusion.")
+	default:
+		g.What = "No cause hypothesis has supporting evidence yet — the anomaly is recorded without a claimed cause."
+	}
+
+	// POSSIBLE OWNER(S) — seam ownership when confirmed, candidates otherwise.
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		for _, o := range g.Owners {
+			if o == name {
+				return
+			}
+		}
+		g.Owners = append(g.Owners, name)
+	}
+	if root.Identified && root.Owner != "" {
+		g.OwnersLabel = "Owner"
+		add(root.Owner)
+		g.OwnersReason = "the identified root cause places accountability with this party"
+		return g
+	}
+	g.OwnersLabel = "Possible owner(s)"
+	add(own.TechnicalOwner)
+	if own.ExternalCandidate != "" {
+		add(own.ExternalCandidate + " (candidate — demarcation " + strings.ReplaceAll(orDefault(own.Demarcation, "not_started"), "_", " ") + ")")
+	}
+	for _, c := range own.Candidates {
+		add(c.Team)
+	}
+	if len(g.Owners) == 0 {
+		add("Not yet narrowed — NOC triage")
+		g.OwnersReason = own.TriageReason
+	} else if len(own.Candidates) > 0 {
+		g.OwnersReason = own.Candidates[0].Reason
+	}
+	g.Owners = firstN(g.Owners, 4)
+	return g
+}
+
 // ---- decision --------------------------------------------------------------------------------
 
 func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {

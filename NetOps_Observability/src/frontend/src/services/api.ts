@@ -614,10 +614,28 @@ export type RcaReportTimesLite = {
   component_recovered_at?: string; monitoring_until?: string;
   [k: string]: unknown;
 };
+export type RcaPromotionStatus = {
+  promoted: boolean;
+  basis: "auto" | "manual" | "not_promoted";
+  reason: string;
+  criteria?: Array<{ name: string; met: boolean; detail: string }>;
+  manual?: { promoted_by: string; promoted_at: string; note?: string };
+};
+
+// #113 point 3 — thrown when the server refuses the RCA DOCUMENT because the
+// candidate is not a promoted real outage (the JSON/workspace tier stays open).
+export class RcaNotPromotedError extends Error {
+  constructor(public reason: string) {
+    super(reason);
+    this.name = "RcaNotPromotedError";
+  }
+}
+
 export type RcaReportJson = {
   path_attribution?: RcaPathAttribution | null;
   states?: RcaReportStatesLite;
   times?: RcaReportTimesLite;
+  promotion?: RcaPromotionStatus;
   [k: string]: unknown;
 };
 
@@ -652,8 +670,10 @@ export type CorrStats = {
 // True tenant-scoped window counts for the Correlations page (never the capped
 // list length): total objects, split by verdict tier and by state.
 export type CorrSummary = {
+  // total/tier/closed EXCLUDE state='merged' engine tombstones (#111); merged
+  // is the separately disclosed duplicate count (don't-hide).
   total: number; confirmed: number; suspected: number; undetermined: number;
-  open: number; closed: number; window_seconds: number;
+  open: number; closed: number; merged: number; window_seconds: number;
 };
 // #80 — recurring undetermined gap-shapes (which signature to write/strengthen next).
 export type UndeterminedGap = { clause: string; count: number };
@@ -1937,6 +1957,12 @@ export const api = {
       await downloadResponse(pdf, `incident-report-${displayId || id.slice(0, 8)}.pdf`);
       return "pdf";
     }
+    if (pdf.status === 403) {
+      // #113 point 3 — RCA promotion gate: the candidate is not a promoted real
+      // outage; surface the policy reason so the caller can offer manual promote.
+      const j = await pdf.json().catch(() => null) as { error?: string } | null;
+      throw new RcaNotPromotedError(j?.error || "This candidate is not promoted to an RCA document.");
+    }
     const html = await fetch(`${base}?format=html`, { headers });
     if (!html.ok) throw new Error(`report render failed (${html.status})`);
     const blob = await html.blob();
@@ -1950,6 +1976,15 @@ export const api = {
   // read is tenant-scoped + permission-gated identically to every correlation read.
   rcaReportJson: (id: string) =>
     request<RcaReportJson>(`/api/correlations/${encodeURIComponent(id)}/rca-report?format=json`),
+  // #113 point 3 — manual RCA promotion (audited, write-gated server-side).
+  // Candidates and RCA documents are different tiers: only a promoted case
+  // renders the html/pdf document.
+  promoteRca: (id: string, note?: string) =>
+    request<{ manually_promoted: boolean }>(`/api/correlations/${encodeURIComponent(id)}/rca-promotion`, {
+      method: "POST", body: JSON.stringify(note ? { note } : {}),
+    }),
+  unpromoteRca: (id: string) =>
+    request<{ manually_promoted: boolean }>(`/api/correlations/${encodeURIComponent(id)}/rca-promotion`, { method: "DELETE" }),
   // Full window signal slice (attached + concurrent-unattached) for the RCA timeline.
   correlationTimeline: (id: string) =>
     request<CorrTimeline>(`/api/correlations/${encodeURIComponent(id)}/timeline`),

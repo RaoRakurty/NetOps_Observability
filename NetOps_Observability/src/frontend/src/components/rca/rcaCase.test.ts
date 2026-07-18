@@ -165,6 +165,29 @@ describe("buildRcaCase — seam ownership attribution (#113)", () => {
     expect(c.aside.find((r) => r.k === "Possible owner")?.v).toBe("Not yet narrowed — NOC triage");
   });
 
+  it("unconfirmed with a hypothesis reads 'possibly because of X' + evidence state — never a bare 'Not identified' (#113 point 4)", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      top_hypothesis: "sig.ent.wan-edge.bgp-peer-down",
+      signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}', attached: true })],
+    });
+    const obj = corrObject({
+      verdict_tier: "suspected", state: "open", top_hypothesis: "sig.ent.wan-edge.bgp-peer-down",
+      evidence_missing: '["peer-side routing evidence not observed"]',
+    });
+    const c = buildRcaCase(tl, obj, {}, "isp", []);
+    const root = c.aside.find((r) => r.k === "Root cause");
+    expect(root?.v).toMatch(/^Not confirmed — possibly because of .+/);
+    expect(root?.v).not.toBe("Not identified");
+    expect(c.aside.find((r) => r.k === "Evidence state")?.v).toContain("peer-side routing evidence not observed");
+  });
+
+  it("no supported hypothesis → honest absence wording, no invented cause (#113 point 4)", () => {
+    const c = buildRcaCase(suspectedTl, suspectedObj, {}, "", []);
+    const root = c.aside.find((r) => r.k === "Root cause");
+    expect(root?.v).toBe("Not identified — no cause hypothesis has supporting evidence yet");
+  });
+
   it("confirmed + attribution → 'Owner: <label>' and ticket assignment uses the label", () => {
     const tl = timeline({
       verdict_tier: "confirmed",

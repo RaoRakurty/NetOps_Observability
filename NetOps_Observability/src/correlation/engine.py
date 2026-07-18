@@ -1355,3 +1355,51 @@ def find_merges(
         if best_cid:
             pairs.append((cand.correlation_id, best_cid))
     return sorted(pairs)
+
+
+def find_continuation(
+    snap: ObjectSnapshot,
+    open_snaps: list[ObjectSnapshot] | tuple[ObjectSnapshot, ...],
+    min_overlap: float = 0.4,
+) -> str:
+    """Which existing OPEN object `snap` CONTINUES, if any (#111 churn fix).
+
+    The persistence-side twin of find_merges. correlation_id derives from the
+    component's earliest node + onset, so when an ongoing incident's earliest
+    signal ages out of the sliding window the SAME condition re-keys under a new
+    id every sweep. Pre-fix the caller minted the new object and tombstoned the
+    old one into it (create-then-merge: one state='merged' tombstone per sweep —
+    ~13/min on a sustained condition, ~20M corr_signals_archive rows/day). The
+    caller instead ADOPTS the existing open object's identity and versions it.
+
+    Same criterion as find_merges — entity-set Jaccard >= min_overlap AND time-
+    window overlap IS one incident re-identified across windowing — and the same
+    deterministic choice: strongest overlap, tie -> earliest window_start, then
+    lexical cid. Tenant-guarded (§3a default-closed): a snapshot can never adopt
+    another tenant's object, whatever the entity overlap. Returns the open
+    object's correlation_id, or '' when snap is a genuinely new incident.
+
+    Pure and deterministic; run_window itself is untouched (it has no memory),
+    so replay — which re-runs run_window — still derives the raw windowed id;
+    replay.py matches an adopted version by its trigger signal.
+    """
+    ce = _entity_ids(snap)
+    if not ce:
+        return ""
+    best: tuple[float, datetime, str] | None = None
+    best_cid = ""
+    for s in open_snaps:
+        if (s.tenant_id != snap.tenant_id
+                or s.correlation_id == snap.correlation_id
+                or not _windows_overlap(snap, s)):
+            continue
+        se = _entity_ids(s)
+        union = ce | se
+        jac = len(ce & se) / len(union) if union else 0.0
+        if jac < min_overlap:
+            continue
+        # Strongest overlap wins; tie -> earliest window_start, then lexical cid.
+        if (best is None or jac > best[0]
+                or (jac == best[0] and (s.window_start, s.correlation_id) < (best[1], best[2]))):
+            best, best_cid = (jac, s.window_start, s.correlation_id), s.correlation_id
+    return best_cid
