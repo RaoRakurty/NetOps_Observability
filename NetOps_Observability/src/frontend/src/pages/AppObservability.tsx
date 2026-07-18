@@ -39,6 +39,7 @@ import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
 import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard, SeamOwnersCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
+import ServiceMap from "./appobs/ServiceMap";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
 import type { DegradedServiceRow } from "./appobs/impact";
@@ -294,7 +295,7 @@ function Services({ initialSub, onOpen, ctl }: {
         ]} />
       {sub === "applications" && <Applications onOpen={onOpen} ctl={ctl} />}
       {sub === "catalog" && <ServiceCatalog />}
-      {sub === "map" && <AppMap ctl={ctl} />}
+      {sub === "map" && <MapView ctl={ctl} />}
     </div>
   );
 }
@@ -651,6 +652,24 @@ function Applications({ onOpen, ctl }: { onOpen: (a: App) => void; ctl: CloudSco
             { key: "p95", header: "P95", width: 70, align: "right", sortValue: (a) => a.p95ms, render: (a) => NM(a.p95ms, (n) => `${n}ms`) },
           ]} />
       </div>
+    </div>
+  );
+}
+
+// ── Service map group (tracker #110, Wave 3 #9 carried) ──────────────────────
+// The OBSERVED talks_to dependency graph (/api/cloud/service-map — cloud flow
+// pairs + REJECT evidence) is the default view; the inventory-derived
+// structural map below stays one click away — two honest views, never merged
+// into one map that would mix observed traffic with static structure.
+function MapView({ ctl }: { ctl: CloudScopeControl }) {
+  const [mode, setMode] = useState<"observed" | "structure">("observed");
+  return (
+    <div className="ao-stack">
+      <SubTabs value={mode} onChange={setMode} items={[
+        { key: "observed", label: "Observed dependencies" },
+        { key: "structure", label: "Structure" },
+      ]} />
+      {mode === "observed" ? <ServiceMap ctl={ctl} /> : <AppMap ctl={ctl} />}
     </div>
   );
 }
