@@ -124,12 +124,22 @@ func unknown(missing []string, signals []Signal) Verdict {
 // medium-or-stronger signal) contradicts → demote + penalty; coarse-only or
 // below-floor → undetermined ("unknown" is first class, never a guessed app).
 func Fuse(signals []Signal) Verdict {
+	return fuseRanked(signals, Source.strength)
+}
+
+// fuseRanked is the fusion core with the WINNER-SELECTION rank injectable
+// (Wave 4 #11: per-tenant precedence, precedence.go). rank decides only which
+// app wins among competing claims; tier, contradiction and confidence stay on
+// the intrinsic trust ladder (strength/baseConfidence) — reordering precedence
+// never inflates how sure we claim to be.
+func fuseRanked(signals []Signal, rank func(Source) int) Verdict {
 	// Index candidates by app, tracking the strongest backing per app.
 	type cand struct {
-		app     string
-		best    int     // max source strength backing this app
-		conf    float64 // max base/own confidence backing this app
-		sources int     // distinct contributing signals
+		app      string
+		best     int     // max INTRINSIC source strength backing this app (tier/contradiction)
+		bestRank int     // max caller-rank backing this app (winner selection)
+		conf     float64 // max base/own confidence backing this app
+		sources  int     // distinct contributing signals
 	}
 	byApp := map[string]*cand{}
 	var order []string
@@ -139,13 +149,16 @@ func Fuse(signals []Signal) Verdict {
 		}
 		c := byApp[sig.App]
 		if c == nil {
-			c = &cand{app: sig.App}
+			c = &cand{app: sig.App, bestRank: minRank}
 			byApp[sig.App] = c
 			order = append(order, sig.App)
 		}
 		c.sources++
 		if st := sig.Source.strength(); st > c.best {
 			c.best = st
+		}
+		if rk := rank(sig.Source); rk > c.bestRank {
+			c.bestRank = rk
 		}
 		cf := sig.Confidence
 		if cf <= 0 {
@@ -161,11 +174,11 @@ func Fuse(signals []Signal) Verdict {
 		return unknown(missing, signals)
 	}
 
-	// Winner: strongest backing, then highest confidence, then stable by first-seen.
+	// Winner: highest rank, then highest confidence, then stable by first-seen.
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := byApp[order[i]], byApp[order[j]]
-		if a.best != b.best {
-			return a.best > b.best
+		if a.bestRank != b.bestRank {
+			return a.bestRank > b.bestRank
 		}
 		return a.conf > b.conf
 	})

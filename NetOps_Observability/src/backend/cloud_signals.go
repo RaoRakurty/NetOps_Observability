@@ -86,6 +86,27 @@ func clampWindowHours(raw string) int {
 	return n
 }
 
+// tenantWindowHours resolves the read window for a tenant-scoped cloud signal
+// surface (Wave 4 #11 slice 2): an explicit, valid ?window_hours= wins (clamped
+// exactly as before); absent/junk falls back to the TENANT's governed default
+// (/api/settings/rca-window) instead of the fixed 24h. The handler still
+// reports the honored value, so the UI label never claims a range the data
+// doesn't cover. Platform-global engine tuning is untouched — this only shapes
+// per-tenant reads.
+func (s *server) tenantWindowHours(r *http.Request) int {
+	raw := strings.TrimSpace(r.URL.Query().Get("window_hours"))
+	if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+		if n > cloudSignalWindowMaxHours {
+			return cloudSignalWindowMaxHours
+		}
+		return n
+	}
+	claims, _ := userFrom(r.Context())
+	tenant, _ := principalTenant(claims)
+	hours, _ := s.governance.rcaWindowHours(tenant)
+	return hours
+}
+
 // safeScopeLiteral is the caller's tenant_scope, guarded before it is embedded in
 // a SQL literal. Claims-derived ids are opaque tokens; anything else fails closed
 // to the non-matching sentinel rather than reaching the DB.
@@ -906,7 +927,7 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	window := s.tenantWindowHours(r)
 	q, curTS, curID, ok := parseSignalPage(w, r)
 	if !ok {
 		return
@@ -994,7 +1015,7 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	window := s.tenantWindowHours(r)
 	q, curTS, curID, ok := parseSignalPage(w, r)
 	if !ok {
 		return
@@ -1104,7 +1125,7 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	window := s.tenantWindowHours(r)
 	q, curTS, curID, pok := parseSignalPage(w, r)
 	if !pok {
 		return

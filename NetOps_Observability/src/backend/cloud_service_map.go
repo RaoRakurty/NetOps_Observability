@@ -407,7 +407,7 @@ func (s *server) handleCloudServiceMap(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	window := clampWindowHours(r.URL.Query().Get("window_hours"))
+	window := s.tenantWindowHours(r)
 	scope := safeScopeLiteral(chTenantScope(r))
 	pairs := chJSONRows[chPairRow](cloudPairSQL(window, serviceMapMaxPairRows, scope))
 	rejects := chJSONRows[chPairRow](cloudRejectPairSQL(window, serviceMapMaxRejectRows, scope))

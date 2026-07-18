@@ -1497,6 +1497,47 @@ export const api = {
       method: "PUT", body: JSON.stringify({ time_display: timeDisplay }),
     }),
 
+  // ---- tenant governance settings (Wave 4 #11: real Settings editors) ----
+  // Required tags — the per-tenant list that drives missingTags + the coverage
+  // compliance report. PUT is admin-gated + audited server-side.
+  getRequiredTags: () => request<RequiredTagsSettings>("/api/settings/required-tags"),
+  setRequiredTags: (tags: string[]) =>
+    request<RequiredTagsSettings>("/api/settings/required-tags", {
+      method: "PUT", body: JSON.stringify({ required_tags: tags }),
+    }),
+  resetRequiredTags: () =>
+    request<RequiredTagsSettings>("/api/settings/required-tags", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
+  // RCA window — the tenant's default read window (hours) for the cloud
+  // signal/RCA surfaces when a view names none. Server clamps to 1..168.
+  getRcaWindow: () => request<RcaWindowSettings>("/api/settings/rca-window"),
+  setRcaWindow: (hours: number) =>
+    request<RcaWindowSettings>("/api/settings/rca-window", {
+      method: "PUT", body: JSON.stringify({ rca_window_hours: hours }),
+    }),
+  resetRcaWindow: () =>
+    request<RcaWindowSettings>("/api/settings/rca-window", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
+  // Attribution precedence — tenant ordering of the resolver's precedence
+  // classes (must be a permutation of the server's known classes).
+  getAttributionPrecedence: () =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence"),
+  setAttributionPrecedence: (order: string[]) =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
+      method: "PUT", body: JSON.stringify({ attribution_precedence: order }),
+    }),
+  resetAttributionPrecedence: () =>
+    request<AttributionPrecedenceSettings>("/api/settings/attribution-precedence", {
+      method: "PUT", body: JSON.stringify({ reset: true }),
+    }),
+  // Recent governance-settings changes (who/when/what) — admin-gated,
+  // scoped server-side to the caller's audit visibility.
+  getGovernanceAudit: (limit = 50) =>
+    request<{ events: GovernanceAuditEvent[]; count: number }>(
+      `/api/settings/governance-audit?limit=${limit}`),
+
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
   // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin.
@@ -2368,10 +2409,10 @@ export const api = {
   // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
-  cloudResources: (q?: CloudResourceQuery) => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number }>(`/api/cloud/resources${cloudResourceQS(q)}`),
+  cloudResources: (q?: CloudResourceQuery) => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number; required_tags?: string[] }>(`/api/cloud/resources${cloudResourceQS(q)}`),
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
-  cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
+  cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[]; required_tags?: string[]; tag_compliance?: CloudTagCompliance }>("/api/cloud/attribution/coverage"),
   // Business services + manual resource→service assignment (2026-07 review #5:
   // these endpoints shipped with the Azure optional-tags epic but had NO UI —
   // the untagged remediation queue dead-ended at the provider console). The
@@ -3280,6 +3321,53 @@ export type CloudCoverageReport = {
   suspected_domain_ip: number;
   unknown: number;
   total: number;
+};
+
+// Per-tenant required-tags governance setting (Wave 4 #11 slice 1).
+export type RequiredTagsSettings = {
+  tenant_id: string;
+  required_tags: string[];
+  is_default: boolean;
+  default_tags: string[];
+};
+
+// Per-tenant RCA/signal read-window default (Wave 4 #11 slice 2).
+export type RcaWindowSettings = {
+  tenant_id: string;
+  rca_window_hours: number;
+  is_default: boolean;
+  default_hours: number;
+  max_hours: number;
+};
+
+// Per-tenant attribution-precedence ordering (Wave 4 #11 slice 3).
+export type AttributionPrecedenceSettings = {
+  tenant_id: string;
+  attribution_precedence: string[];
+  is_default: boolean;
+  default_precedence: string[];
+};
+
+// One governance-settings audit event (backend AuditEvent, filtered to the
+// settings actions by /api/settings/governance-audit).
+export type GovernanceAuditEvent = {
+  id: string;
+  time: string;
+  actor: string;
+  tenant?: string;
+  method: string;
+  path: string;
+  status: number;
+  decision: string;
+  detail?: Record<string, unknown>;
+};
+
+// Required-tag compliance over the tenant's inventory (coverage response).
+export type CloudTagCompliance = {
+  required_tags: string[];
+  total: number;
+  fully_tagged: number;
+  missing_by_tag: Record<string, number>;
 };
 
 // A named business service (backend business_service_store.go BusinessService).
