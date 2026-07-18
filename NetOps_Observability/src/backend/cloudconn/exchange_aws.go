@@ -3,9 +3,16 @@ package cloudconn
 // exchange_aws.go — LIVE AWS credential exchange via the STS Query API,
 // stdlib-only (SigV4 signing from sigv4.go + encoding/xml parsing).
 //
-//   - cloud_role / workload_identity_federation → sts:AssumeRole into the
-//     customer's observer role, gated by the per-tenant+connector ExternalId
-//     (confused-deputy protection), signed with the broker's PLATFORM identity.
+//   - workload_identity_federation → sts:AssumeRoleWithWebIdentity into the
+//     customer's observer role: Correlix presents its OWN signed OIDC workload
+//     assertion (projected token file / env — the platform-issuer seam) as the
+//     WebIdentityToken. KEYLESS: the call is UNSIGNED by design (the web
+//     identity token IS the credential) — no long-lived AWS key exists
+//     anywhere on the platform for this mode. Trust is anchored on the role's
+//     OIDC-provider trust policy (aud/sub conditions), not an ExternalId.
+//   - cloud_role → sts:AssumeRole into the customer's observer role, gated by
+//     the per-tenant+connector ExternalId (confused-deputy protection), signed
+//     with the broker's PLATFORM identity.
 //   - static_key (legacy) → sts:GetSessionToken signed with the Vault-decrypted
 //     access key, so even the legacy path hands collectors only SHORT-LIVED
 //     session credentials, never the stored key itself.
@@ -32,20 +39,22 @@ const (
 // All fields are injectable; the zero value of Endpoint/Client uses the real
 // regional STS endpoint and a bounded default client.
 type AWSSTSExchanger struct {
-	Client   *http.Client
-	Endpoint string                      // override for tests (httptest server URL)
-	Region   string                      // signing/endpoint region when the request has none
-	Platform AWSPlatformCredentialSource // broker platform identity (signs AssumeRole)
-	Now      func() time.Time
+	Client     *http.Client
+	Endpoint   string                      // override for tests (httptest server URL)
+	Region     string                      // signing/endpoint region when the request has none
+	Platform   AWSPlatformCredentialSource // broker platform identity (signs AssumeRole)
+	Assertions WorkloadAssertionSource     // Correlix workload OIDC assertion (AssumeRoleWithWebIdentity)
+	Now        func() time.Time
 }
 
 // NewAWSSTSExchanger returns the production exchanger: regional STS endpoint,
-// bounded HTTP client, env-backed platform credentials.
+// bounded HTTP client, env-backed platform credentials + workload assertion.
 func NewAWSSTSExchanger() *AWSSTSExchanger {
 	return &AWSSTSExchanger{
-		Client:   newExchangeHTTPClient(),
-		Platform: EnvAWSCredentialSource{},
-		Now:      func() time.Time { return time.Now().UTC() },
+		Client:     newExchangeHTTPClient(),
+		Platform:   EnvAWSCredentialSource{},
+		Assertions: EnvWorkloadAssertionSource{},
+		Now:        func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -81,8 +90,29 @@ func (x *AWSSTSExchanger) Exchange(ctx context.Context, req ExchangeRequest) (Sc
 	form.Set("DurationSeconds", strconv.Itoa(durationSeconds))
 
 	var signWith AWSCredentials
+	signed := true
 	switch req.Identity.Method {
-	case AuthMethodCloudRole, AuthMethodWorkloadFederation:
+	case AuthMethodWorkloadFederation:
+		// KEYLESS path: AssumeRoleWithWebIdentity is deliberately UNSIGNED —
+		// the workload OIDC assertion is the credential. No platform AWS key
+		// is required (or used) in this mode.
+		roleARN := strings.TrimSpace(req.Identity.RoleARN)
+		if roleARN == "" {
+			return ScopedToken{}, &ExchangeError{Provider: ProviderAWS, Code: "request_invalid", Msg: "role ARN missing"}
+		}
+		if x.Assertions == nil {
+			return ScopedToken{}, ErrWorkloadAssertionMissing
+		}
+		assertion, err := x.Assertions.Assertion(ctx, strings.TrimSpace(req.Identity.Audience))
+		if err != nil {
+			return ScopedToken{}, err
+		}
+		form.Set("Action", "AssumeRoleWithWebIdentity")
+		form.Set("RoleArn", roleARN)
+		form.Set("RoleSessionName", awsRoleSessionName(req.Identity.ConnectorID))
+		form.Set("WebIdentityToken", assertion)
+		signed = false
+	case AuthMethodCloudRole:
 		roleARN := strings.TrimSpace(req.Identity.RoleARN)
 		if roleARN == "" {
 			return ScopedToken{}, &ExchangeError{Provider: ProviderAWS, Code: "request_invalid", Msg: "role ARN missing"}
@@ -123,7 +153,9 @@ func (x *AWSSTSExchanger) Exchange(ctx context.Context, req ExchangeRequest) (Sc
 			return nil, err
 		}
 		hreq.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-		signAWSRequest(hreq, payload, signWith, region, "sts", now)
+		if signed {
+			signAWSRequest(hreq, payload, signWith, region, "sts", now)
+		}
 		return hreq, nil
 	})
 	if err != nil {
@@ -166,6 +198,9 @@ type stsResponseEnvelope struct {
 	AssumeRoleResult struct {
 		Credentials stsCredentials `xml:"Credentials"`
 	} `xml:"AssumeRoleResult"`
+	AssumeRoleWithWebIdentityResult struct {
+		Credentials stsCredentials `xml:"Credentials"`
+	} `xml:"AssumeRoleWithWebIdentityResult"`
 	GetSessionTokenResult struct {
 		Credentials stsCredentials `xml:"Credentials"`
 	} `xml:"GetSessionTokenResult"`
@@ -179,6 +214,9 @@ func awsParseSTSCredentials(body []byte, attempts int) (ScopedToken, error) {
 		return ScopedToken{}, &ExchangeError{Provider: ProviderAWS, Code: "malformed_response", Msg: "STS response is not parseable XML", Attempts: attempts}
 	}
 	creds := env.AssumeRoleResult.Credentials
+	if creds.AccessKeyID == "" {
+		creds = env.AssumeRoleWithWebIdentityResult.Credentials
+	}
 	if creds.AccessKeyID == "" {
 		creds = env.GetSessionTokenResult.Credentials
 	}
@@ -217,7 +255,8 @@ func awsSTSError(status int, body []byte, attempts int) error {
 	_ = xml.Unmarshal(body, &env) // best-effort: fall through to status mapping
 	code := "provider_error"
 	switch env.Error.Code {
-	case "AccessDenied", "AccessDeniedException", "ExpiredToken", "InvalidClientTokenId", "SignatureDoesNotMatch", "MissingAuthenticationToken":
+	case "AccessDenied", "AccessDeniedException", "ExpiredToken", "InvalidClientTokenId", "SignatureDoesNotMatch", "MissingAuthenticationToken",
+		"InvalidIdentityToken", "ExpiredTokenException", "IDPRejectedClaim":
 		code = "denied"
 	case "Throttling", "ThrottlingException", "RequestLimitExceeded":
 		code = "throttled"

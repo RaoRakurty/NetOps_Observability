@@ -39,19 +39,49 @@ func (a awsAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {
 	}
 
 	switch cfg.Method {
-	case AuthMethodCloudRole, AuthMethodWorkloadFederation:
+	case AuthMethodCloudRole:
 		validateAWSRole(&r, cfg)
+	case AuthMethodWorkloadFederation:
+		validateAWSWebIdentity(&r, cfg)
 	case AuthMethodStaticKey:
 		validateAWSStaticKey(&r, cfg)
 	}
 	return r
 }
 
+// validateAWSWebIdentity checks the KEYLESS AssumeRoleWithWebIdentity trust:
+// same role-ARN hygiene as the cross-account role, but NO ExternalId — that
+// parameter does not exist on AssumeRoleWithWebIdentity; the confused-deputy
+// protection is the role trust policy's aud/sub conditions on the OIDC
+// provider (rendered by the setup template).
+func validateAWSWebIdentity(r *ValidationResult, cfg IdentityConfig) {
+	validateAWSRoleARN(r, cfg)
+	if strings.TrimSpace(cfg.Audience) == "" {
+		r.Add(SeverityWarning, "audience_default", "no audience set; the STS default sts.amazonaws.com will be expected by the role trust condition", "")
+	}
+}
+
 func validateAWSRole(r *ValidationResult, cfg IdentityConfig) {
+	if !validateAWSRoleARN(r, cfg) {
+		return
+	}
+	// ExternalId: mandatory + must look minted (unpredictable). A missing/derived
+	// value defeats confused-deputy protection.
+	if strings.TrimSpace(cfg.ExternalID) == "" {
+		r.Add(SeverityError, "external_id_missing", "a per-connector ExternalId is required (confused-deputy protection)", "Regenerate trust; the framework mints the ExternalId — do not set it by hand.")
+	} else if !ValidExternalID(cfg.ExternalID) {
+		r.Add(SeverityError, "external_id_weak", "the ExternalId is not a framework-minted random value", "Never derive the ExternalId from tenant/account/email; let the framework mint it.")
+	}
+}
+
+// validateAWSRoleARN applies the shared role-ARN hygiene (well-formed, no root,
+// no wildcard, not the Correlix principal). Returns false when the ARN is
+// absent (nothing further can be checked).
+func validateAWSRoleARN(r *ValidationResult, cfg IdentityConfig) bool {
 	arn := strings.TrimSpace(cfg.RoleARN)
 	if arn == "" {
 		r.Add(SeverityError, "role_arn_missing", "role ARN is required for cross-account role", "Deploy the provided CloudFormation/Terraform, then paste the created role ARN.")
-		return
+		return false
 	}
 	if !strings.HasPrefix(arn, "arn:aws:iam::") || !strings.Contains(arn, ":role/") {
 		r.Add(SeverityError, "role_arn_malformed", "role ARN is not a valid iam role ARN", "Expected arn:aws:iam::<account-id>:role/<name>.")
@@ -65,13 +95,7 @@ func validateAWSRole(r *ValidationResult, cfg IdentityConfig) {
 	if strings.EqualFold(cfg.RoleARN, cfg.Anchor.AWSPrincipalARN) {
 		r.Add(SeverityError, "principal_confusion", "the customer role must not be the Correlix principal itself", "Use the role created in the customer account.")
 	}
-	// ExternalId: mandatory + must look minted (unpredictable). A missing/derived
-	// value defeats confused-deputy protection.
-	if strings.TrimSpace(cfg.ExternalID) == "" {
-		r.Add(SeverityError, "external_id_missing", "a per-connector ExternalId is required (confused-deputy protection)", "Regenerate trust; the framework mints the ExternalId — do not set it by hand.")
-	} else if !ValidExternalID(cfg.ExternalID) {
-		r.Add(SeverityError, "external_id_weak", "the ExternalId is not a framework-minted random value", "Never derive the ExternalId from tenant/account/email; let the framework mint it.")
-	}
+	return true
 }
 
 func validateAWSStaticKey(r *ValidationResult, cfg IdentityConfig) {
@@ -112,6 +136,9 @@ func (a awsAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (
 	if pack.Provider != ProviderAWS {
 		return SetupBundle{}, &ContractError{Code: "pack_provider_mismatch", Msg: "capability pack is not an AWS pack"}
 	}
+	if cfg.Method == AuthMethodWorkloadFederation {
+		return awsWebIdentitySetup(cfg, pack), nil
+	}
 	trusted := cfg.Anchor.AWSPrincipalARN
 	if strings.TrimSpace(trusted) == "" {
 		trusted = "arn:aws:iam::<CORRELIX_ACCOUNT_ID>:role/correlix-connector"
@@ -138,6 +165,62 @@ func (a awsAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (
 		},
 	}
 	return bundle, nil
+}
+
+// awsWebIdentitySetup renders the KEYLESS trust artifacts: an IAM OIDC identity
+// provider for the Correlix workload issuer plus an observer role whose trust
+// policy allows sts:AssumeRoleWithWebIdentity gated on the exact aud + sub —
+// the web-identity equivalent of the ExternalId condition. Pure; no secrets.
+func awsWebIdentitySetup(cfg IdentityConfig, pack CapabilityPack) SetupBundle {
+	issuer := orPlaceholder(cfg.Anchor.OIDCIssuer, "https://<correlix-issuer>")
+	subject := orPlaceholder(cfg.Anchor.OIDCSubject, "correlix:connector:<connector-id>")
+	audience := orPlaceholder(cfg.Audience, orPlaceholder(cfg.Anchor.OIDCAudience, "sts.amazonaws.com"))
+	issuerHost := strings.TrimPrefix(strings.TrimPrefix(issuer, "https://"), "http://")
+	perms := pack.AllPermissions()
+
+	trust := `{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Federated": "arn:aws:iam::<YOUR_ACCOUNT_ID>:oidc-provider/` + issuerHost + `" },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "` + issuerHost + `:aud": "` + audience + `",
+        "` + issuerHost + `:sub": "` + subject + `"
+      }
+    }
+  }]
+}`
+	var manual strings.Builder
+	manual.WriteString("Keyless setup (AssumeRoleWithWebIdentity) for " + pack.FullID() + ":\n\n")
+	manual.WriteString("1. IAM → Identity providers → Add provider → OpenID Connect:\n")
+	manual.WriteString("   Provider URL: " + issuer + "\n")
+	manual.WriteString("   Audience:     " + audience + "\n\n")
+	manual.WriteString("2. IAM → Roles → Create role → Web identity, using the trust policy artifact\n")
+	manual.WriteString("   (aud AND sub are pinned to this exact connector — the confused-deputy\n")
+	manual.WriteString("   protection on the web-identity path).\n\n")
+	manual.WriteString("3. Attach an inline least-privilege policy allowing ONLY these actions on Resource \"*\":\n")
+	for _, p := range perms {
+		manual.WriteString("     - " + p + "\n")
+	}
+	manual.WriteString("\n4. Set Maximum session duration = 1 hour. Copy the role ARN back into Correlix.\n")
+	manual.WriteString("\nNo AWS access key is created, stored, or used anywhere in this mode.\n")
+
+	return SetupBundle{
+		Provider: ProviderAWS,
+		Method:   AuthMethodWorkloadFederation,
+		Summary:  fmt.Sprintf("Create an IAM OIDC provider for the Correlix issuer and a read-only observer role assumed KEYLESSLY via sts:AssumeRoleWithWebIdentity, granting the %s permissions.", pack.FullID()),
+		Steps: []string{
+			"Register the Correlix workload issuer as an IAM OIDC identity provider.",
+			"Create the observer role with the web-identity trust policy below (aud + sub pinned to this connector).",
+			"Attach the least-privilege read-only permissions and paste the role ARN back into Correlix, then run Validate Trust.",
+		},
+		Artifacts: []SetupArtifact{
+			{Kind: "manual", Title: "IAM OIDC provider + web-identity role trust policy", Format: "json", Content: trust},
+			{Kind: "manual", Title: "Manual setup steps (keyless)", Format: "text", Content: manual.String()},
+		},
+	}
 }
 
 func awsPolicyStatements(perms []string) string {
@@ -257,10 +340,11 @@ func awsManual(trusted, extID string, pack CapabilityPack, perms []string) strin
 
 // ── live-network methods ──────────────────────────────────────────────────────
 
-// ExchangeCredential mints short-lived STS session credentials: sts:AssumeRole
-// (RoleArn + ExternalId, DurationSeconds ≤ MaxLifetime) for role identities,
-// sts:GetSessionToken for legacy static keys. The configuration is re-validated
-// first — an invalid trust config never reaches the wire (zero trust).
+// ExchangeCredential mints short-lived STS session credentials:
+// sts:AssumeRoleWithWebIdentity (keyless, workload OIDC assertion) for
+// federated identities, sts:AssumeRole (RoleArn + ExternalId) for cross-account
+// roles, sts:GetSessionToken for legacy static keys. The configuration is
+// re-validated first — an invalid trust config never reaches the wire.
 func (a awsAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest) (ScopedToken, error) {
 	if a.exchange == nil {
 		return ScopedToken{}, ErrProviderExchangeDeferred

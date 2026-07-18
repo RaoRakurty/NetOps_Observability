@@ -327,7 +327,10 @@ func (s *server) serveConnectorAuth(w http.ResponseWriter, r *http.Request, id s
 
 	// AWS cross-account role: mint a per-tenant+connector ExternalId if absent
 	// (confused-deputy). Never derived — always framework-minted randomness.
-	if c.Provider == cloudconn.ProviderAWS && (method == cloudconn.AuthMethodCloudRole || method == cloudconn.AuthMethodWorkloadFederation) && c.Identity.ExternalID == "" {
+	// Workload federation does NOT use one: AssumeRoleWithWebIdentity has no
+	// ExternalId parameter; its confused-deputy protection is the role trust
+	// policy's aud/sub pin on the OIDC provider.
+	if c.Provider == cloudconn.ProviderAWS && method == cloudconn.AuthMethodCloudRole && c.Identity.ExternalID == "" {
 		c.Identity.ExternalID = cloudconn.NewExternalID()
 	}
 	s.saveConnectorAndRespond(w, r, claims, c)
