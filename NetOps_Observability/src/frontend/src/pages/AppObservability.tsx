@@ -37,6 +37,7 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
+import { RequiredTagsCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import { catalogByName, nameKey, criticalityRank } from "./appobs/catalog";
 import { buildDegradedRows, fmtDuration } from "./appobs/impact";
@@ -1660,7 +1661,6 @@ function Settings() {
       onClick: openCloudAccounts,
     },
     { t: "Attribution Rules", d: "Source precedence when signals disagree (platform default — not yet editable).", value: "cloud tag → resource graph → firewall App-ID → domain → IP catalog" },
-    { t: "Required Tags", d: "Tags an org requires — drives the coverage report (platform default — not yet editable).", value: "app · owner · env (case-insensitive)" },
     { t: "RCA Windows", d: "Deploy-to-degradation correlation window + verdict thresholds (platform default — not yet editable).", value: "Default deploy→degradation window: 30 minutes" },
   ];
   return (
@@ -1675,6 +1675,8 @@ function Settings() {
           )}
         </div>
       ))}
+      {/* Wave 4 #11: REAL per-tenant editors (persisted, audited, admin-gated). */}
+      <RequiredTagsCard />
     </div>
   );
 }

@@ -2381,10 +2381,10 @@ export const api = {
   // The IDENTITY surfaces are live from the cloud inventory; health/change/flow
   // telemetry arrive in later phases (UI shows those as "not measured"). Shapes
   // mirror src/backend/cloud/{model,derive}.go.
-  cloudResources: (q?: CloudResourceQuery) => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number }>(`/api/cloud/resources${cloudResourceQS(q)}`),
+  cloudResources: (q?: CloudResourceQuery) => request<{ resources: CloudResourceRow[]; console_urls?: Record<string, string>; connectors?: CloudConnectorInfo[]; count: number; required_tags?: string[] }>(`/api/cloud/resources${cloudResourceQS(q)}`),
   cloudApps: () => request<{ apps: CloudAppRow[]; count: number; live?: Record<string, CloudAppLive> }>("/api/cloud/apps"),
   cloudIdentityMap: () => request<{ mappings: CloudIdentityMappingRow[]; count: number }>("/api/cloud/identity-map"),
-  cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[] }>("/api/cloud/attribution/coverage"),
+  cloudCoverage: () => request<{ coverage: CloudCoverageReport; top_unknown: CloudResourceRow[]; required_tags?: string[]; tag_compliance?: CloudTagCompliance }>("/api/cloud/attribution/coverage"),
   // Business services + manual resource→service assignment (2026-07 review #5:
   // these endpoints shipped with the Azure optional-tags epic but had NO UI —
   // the untagged remediation queue dead-ended at the provider console). The
@@ -3285,6 +3285,22 @@ export type CloudCoverageReport = {
   suspected_domain_ip: number;
   unknown: number;
   total: number;
+};
+
+// Per-tenant required-tags governance setting (Wave 4 #11 slice 1).
+export type RequiredTagsSettings = {
+  tenant_id: string;
+  required_tags: string[];
+  is_default: boolean;
+  default_tags: string[];
+};
+
+// Required-tag compliance over the tenant's inventory (coverage response).
+export type CloudTagCompliance = {
+  required_tags: string[];
+  total: number;
+  fully_tagged: number;
+  missing_by_tag: Record<string, number>;
 };
 
 // A named business service (backend business_service_store.go BusinessService).

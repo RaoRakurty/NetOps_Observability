@@ -53,23 +53,37 @@ function shortType(t: string): string {
   return parts[parts.length - 1] || t;
 }
 
-const APP_KEYS = ["app", "application", "app_name", "app-name", "service", "workload"];
+// Accepted key spellings per canonical category — kept in lockstep with the
+// backend conventions (cloud/resolve.go appTagKeys/ownerTagKeys/envTagKeys).
+const APP_KEYS = [
+  "app", "application", "app_id", "app-id", "appid",
+  "app_name", "app-name", "service", "workload", "component", "awsapplication",
+];
 const OWNER_KEYS = ["owner", "team", "owner_team", "managed_by"];
 const ENV_KEYS = ["env", "environment", "stage", "tier"];
 
-// Which of app/owner/env tags are absent (mirrors backend resolve.go tag keys),
-// so the coverage "fix list" tells operators exactly what to add.
-function missingTags(tags?: Record<string, string>): string[] {
+// The pre-editor default requirement (backend cloud.DefaultRequiredTags).
+export const DEFAULT_REQUIRED_TAGS = ["app", "owner", "env"];
+
+function tagAliases(name: string): string[] {
+  switch (name) {
+    case "app": return APP_KEYS;
+    case "owner": return OWNER_KEYS;
+    case "env": return ENV_KEYS;
+    default: return [name];
+  }
+}
+
+// Which REQUIRED tags are absent — driven by the tenant's governance list
+// (Wave 4 #11: /api/settings/required-tags rides along on the resources /
+// coverage responses). Canonical app/owner/env accept the same alias keys the
+// backend attribution reads; custom keys match themselves (case-insensitive).
+export function missingTags(tags?: Record<string, string>, required: string[] = DEFAULT_REQUIRED_TAGS): string[] {
   const lower: Record<string, string> = {};
   for (const [k, v] of Object.entries(tags ?? {})) {
     if (v && v.trim()) lower[k.trim().toLowerCase()] = v;
   }
-  const has = (keys: string[]) => keys.some((k) => lower[k]);
-  const out: string[] = [];
-  if (!has(APP_KEYS)) out.push("app");
-  if (!has(OWNER_KEYS)) out.push("owner");
-  if (!has(ENV_KEYS)) out.push("env");
-  return out;
+  return required.filter((req) => !tagAliases(req.toLowerCase()).some((k) => lower[k]));
 }
 
 // ── App (Applications tab) ───────────────────────────────────────────────────
@@ -127,7 +141,7 @@ function mergeApps(rows: App[]): App[] {
 }
 
 // ── CloudResource (Cloud Resources tab) ──────────────────────────────────────
-function toResource(r: CloudResourceRow): CloudResource {
+function toResource(r: CloudResourceRow, required: string[] = DEFAULT_REQUIRED_TAGS): CloudResource {
   return {
     id: r.resource_id,
     name: r.resource_name || r.resource_id,
@@ -144,7 +158,7 @@ function toResource(r: CloudResourceRow): CloudResource {
     powerState: r.power_state || "—", // provider lifecycle; stopped ≠ broken
     trafficBps: NOT_MEASURED,    // not measured (P3B)
     lastSeen: r.last_seen_at,
-    missingTags: missingTags(r.tags),
+    missingTags: missingTags(r.tags, required),
     tags: r.tags ?? {},
     resourceId: r.resource_id,
   };
@@ -153,9 +167,10 @@ function toResource(r: CloudResourceRow): CloudResource {
 // ── UnknownContributor (Attribution + Unknowns tabs) ─────────────────────────
 // Built from an unattributed resource (app_id == ""). Traffic/flows/errors are
 // NOT_MEASURED until cloud_flow lands — the recommendation is the actionable bit.
-function toUnknown(r: CloudResourceRow): UnknownContributor {
+function toUnknown(r: CloudResourceRow, required: string[] = DEFAULT_REQUIRED_TAGS): UnknownContributor {
   const ip = r.private_ips?.[0] ?? "";
   const label = r.resource_name || r.resource_id;
+  const missing = missingTags(r.tags, required);
   return {
     entity: ip ? `${label} (${ip})` : label,
     name: label,
@@ -170,8 +185,8 @@ function toUnknown(r: CloudResourceRow): UnknownContributor {
     errors: NOT_MEASURED,
     // name-first, never the raw handle as the human answer (audit C):
     likelyResource: `${label} (${shortType(r.resource_type)})`,
-    missingFields: missingTags(r.tags),
-    recommendation: `Tag ${label} with app/owner/env`,
+    missingFields: missing,
+    recommendation: `Tag ${label} with ${(missing.length ? missing : required).join("/")}`,
   };
 }
 
@@ -263,8 +278,9 @@ export async function loadResources(scope?: {
       : undefined;
   const r = await fetchCloudInventory(q);
   const consoleUrls = r.console_urls ?? {};
+  const required = r.required_tags?.length ? r.required_tags : DEFAULT_REQUIRED_TAGS;
   const out = (r.resources ?? []).map((row) => ({
-    ...toResource(row),
+    ...toResource(row, required),
     consoleUrl: safeConsoleUrl(consoleUrls[row.resource_id]),
   }));
   const envs = scope?.envs ?? [];
@@ -298,9 +314,10 @@ export type CoverageBundle = { coverage: Coverage; unknowns: UnknownContributor[
 
 export async function loadCoverage(): Promise<CoverageBundle> {
   const r = await api.cloudCoverage();
+  const required = r.required_tags?.length ? r.required_tags : DEFAULT_REQUIRED_TAGS;
   return {
     coverage: toCoverage(r.coverage),
-    unknowns: (r.top_unknown ?? []).map(toUnknown),
+    unknowns: (r.top_unknown ?? []).map((row) => toUnknown(row, required)),
   };
 }
 
