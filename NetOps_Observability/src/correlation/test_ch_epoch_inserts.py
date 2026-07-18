@@ -9,7 +9,6 @@ form, and (c) the to_ch_row/from_ch_row round trip stays byte-faithful.
 from datetime import datetime, timezone
 
 import engine
-import signals
 from signals import (EntityType, ModalityClass, Observer, ObserverType,
                      Severity, Signal, Source, _ch_dt, _parse_ch_dt)
 
