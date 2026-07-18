@@ -385,3 +385,97 @@ describe("buildRcaCase — canonical 5-state verdict (convergence)", () => {
     expect(c.whyNot).toContain("routing remained stable");
   });
 });
+
+// ── Evidence summary (owner directive 2026-07-18, rca-evidence-summary.md) ────
+// Symptoms · independent sources · duration replace the raw "Signals: N" line;
+// repetition renders as per-symptom time density, never as a count posing as
+// evidence; the verdict names its reason in words (never a percentage); the raw
+// observation total trails, de-emphasized. The word "Signals" never reaches
+// operator-facing text.
+import { buildEvidenceSummary, bucketTimes, EVIDENCE_BUCKETS } from "./rcaCase";
+
+describe("bucketTimes — render-side density bucketing", () => {
+  it("distributes and clamps timestamps into n buckets", () => {
+    const start = Date.parse("2026-06-16T19:00:00Z");
+    const end = start + 20 * 60_000;
+    const got = bucketTimes(
+      [start, start + 10 * 60_000, end, start - 60_000, end + 60_000],
+      start, end, 4,
+    );
+    expect(got).toEqual([2, 0, 1, 2]);
+    expect(got.reduce((a, b) => a + b, 0)).toBe(5); // nothing dropped, nothing invented
+  });
+});
+
+describe("buildEvidenceSummary — repeats collapse into one symptom's density", () => {
+  const sigs = [
+    ...Array.from({ length: 5 }, (_, i) => signal({
+      kind: "probe_loss", modality_class: "active_probe",
+      ts: `2026-06-16 19:25:${String(10 + i * 10).padStart(2, "0")}`, attached: true,
+    })),
+    signal({ kind: "bgp_adjacency_change", modality_class: "control_plane", ts: "2026-06-16 19:25:30", attached: true }),
+    signal({ kind: "probe_loss_clear", modality_class: "active_probe", ts: "2026-06-16 19:26:00", attached: false }),
+  ];
+  const es = buildEvidenceSummary(sigs, "2026-06-16 19:25:00", "2026-06-16 19:26:15",
+    true, ["Active checks", "Routing / link"], "suspected", 300);
+
+  it("counts distinct symptoms, not raw repeats", () => {
+    expect(es.symptoms).toBe(2);
+    expect(es.rows).toHaveLength(2);
+    const loss = es.rows.find((r) => r.observations === 5);
+    expect(loss).toBeTruthy();
+    expect(loss!.buckets).toHaveLength(EVIDENCE_BUCKETS);
+    expect(loss!.buckets.reduce((a, b) => a + b, 0)).toBe(5);
+  });
+
+  it("orders symptoms by onset (earliest first) and keeps the raw total as a trailing fact", () => {
+    expect(es.rows[0].observations).toBe(5); // probe_loss started 19:25:10, bgp at 19:25:30
+    expect(es.observations).toBe(300);
+  });
+
+  it("verdict reason is words, never a percentage, and never says 'signal'", () => {
+    expect(es.verdictReason.length).toBeGreaterThan(0);
+    expect(es.verdictReason).not.toMatch(/%/);
+    expect(es.verdictReason).not.toMatch(/\bsignals?\b/i);
+  });
+
+  it("a single-source case reads honestly weak and names the solo source", () => {
+    const solo = buildEvidenceSummary(
+      [signal({ kind: "probe_loss", modality_class: "active_probe", ts: "2026-06-16 19:25:10", attached: true })],
+      "2026-06-16 19:25:00", "2026-06-16 19:26:15", true, ["Active checks"], "suspected", 240);
+    expect(solo.verdictReason).toMatch(/only active checks saw this/i);
+    expect(solo.verdictReason).toMatch(/second independent source/i);
+  });
+});
+
+describe("evidence summary in the workspace aside (no 'Signals' line)", () => {
+  const tl = timeline({
+    verdict_tier: "suspected", top_hypothesis: "undetermined",
+    signals: [
+      signal({ kind: "probe_loss", modality_class: "active_probe", ts: "2026-06-16 19:25:10", attached: true }),
+      signal({ kind: "probe_loss", modality_class: "active_probe", ts: "2026-06-16 19:25:40", attached: true, signal_id: "s2" }),
+    ],
+    counts: {
+      total: 240, attached: 2, unattached: 0, recovery: 0, unlinked: 0, attached_observers: 1,
+      by_modality: { active_probe: 240 }, attached_by_modality: { active_probe: 2 },
+      by_role: {}, by_grounding: {}, by_status: {},
+    } as any,
+  });
+  const c = buildRcaCase(tl, corrObject({ verdict_tier: "suspected", state: "open", signal_count: 240 }), {}, "NetOps", []);
+
+  it("the aside headlines evidence quality and demotes the raw count", () => {
+    const keys = c.aside.map((r) => r.k);
+    expect(keys).not.toContain("Signals");
+    const ev = c.aside.find((r) => r.k === "Evidence");
+    expect(ev?.v).toMatch(/1 symptom · 1 independent source/);
+    const obs = c.aside.find((r) => r.k === "Observations");
+    expect(obs?.v).toBe("240 collected");
+    // raw volume trails the quality line
+    expect(keys.indexOf("Observations")).toBeGreaterThan(keys.indexOf("Evidence"));
+  });
+
+  it("carries the render-ready summary for the density bars", () => {
+    expect(c.evidenceSummary?.rows.length).toBe(1);
+    expect(c.evidenceSummary?.verdictReason).toMatch(/only active checks saw this/i);
+  });
+});

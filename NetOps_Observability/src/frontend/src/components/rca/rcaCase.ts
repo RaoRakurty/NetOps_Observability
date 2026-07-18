@@ -1,6 +1,7 @@
 import { CorrTimeline, CorrObject, Seam } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
+import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
 import { readServicePath } from "./servicePath";
 
@@ -76,6 +77,92 @@ export interface RcaAppImpact {
 // was ruled OUT by discriminating evidence; `recovered` = the incident has cleared.
 export type VerdictState = "confirmed" | "suspected" | "undetermined" | "contradicted" | "recovered";
 
+// ── Evidence summary (owner directive 2026-07-18, rca-evidence-summary.md) ────
+// The NOC evidence read: distinct SYMPTOMS · INDEPENDENT SOURCES · duration are
+// the headline; each symptom carries a time-density series (repetition rendered
+// as ink, never counted as evidence); the raw observation total is a muted
+// trailing fact. The word "signals" never reaches the UI.
+export interface EvidenceSymptom {
+  label: string;        // NOC name of the manifestation
+  source: string;       // which evidence class saw it (operator label)
+  since: string;        // onset, HH:MM
+  buckets: number[];    // observation density over the case window
+  observations: number;
+}
+export interface EvidenceSummary {
+  symptoms: number;
+  sources: number;         // independent evidence streams (the confirm rule's count)
+  durationLabel: string;   // "22m, ongoing" / "22m"
+  verdictReason: string;   // names the reason — never a percentage
+  rows: EvidenceSymptom[];
+  observations: number;    // raw rows collected — muted, collapsed
+}
+
+// bucketTimes — pure render-side density bucketing (design §9: the only new
+// computation; everything else the engine already derived).
+export function bucketTimes(times: number[], start: number, end: number, n: number): number[] {
+  const out = new Array<number>(n).fill(0);
+  const span = Math.max(end - start, 1);
+  for (const t of times) {
+    const idx = Math.min(n - 1, Math.max(0, Math.floor(((t - start) / span) * n)));
+    out[idx]++;
+  }
+  return out;
+}
+
+export const EVIDENCE_BUCKETS = 24;
+
+// buildEvidenceSummary — pure: derives the summary from the timeline the
+// workspace already holds. `sources` is the SAME independent-stream count the
+// confirm rule uses (streamCount), so the headline can never out-claim the verdict.
+export function buildEvidenceSummary(
+  signals: CorrTimeline["signals"], windowStart: string, windowEnd: string,
+  open: boolean, streams: string[], verdict: VerdictState, rawTotal: number,
+): EvidenceSummary {
+  const anomalous = signals.filter((s) => s.attached && !s.kind.endsWith("_clear"));
+  const byKind = new Map<string, { source: string; times: number[] }>();
+  for (const s of anomalous) {
+    const g = byKind.get(s.kind) ?? { source: modalityLabel(s.modality_class), times: [] };
+    const t = parseTs(s.ts)?.getTime();
+    if (t) g.times.push(t);
+    byKind.set(s.kind, g);
+  }
+  const start = parseTs(windowStart)?.getTime() ?? 0;
+  const end = parseTs(windowEnd)?.getTime() ?? start;
+  const rows: EvidenceSymptom[] = [...byKind.entries()]
+    .map(([kind, g]) => ({
+      label: kindLabel(kind),
+      source: g.source,
+      since: g.times.length ? new Date(Math.min(...g.times)).toISOString().slice(11, 16) : "",
+      buckets: bucketTimes(g.times, start, end, EVIDENCE_BUCKETS),
+      observations: g.times.length,
+      _first: g.times.length ? Math.min(...g.times) : Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((a, b) => (a as any)._first - (b as any)._first)
+    .map(({ _first, ...r }: any) => r);
+
+  const durMin = Math.max(0, Math.round((end - start) / 60000));
+  const durationLabel = `${durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin}m`}${open ? ", ongoing" : ""}`;
+
+  const pair = streams.length >= 2 ? ` (${streams.slice(0, 3).join(" + ")})` : "";
+  let verdictReason: string;
+  if (verdict === "confirmed") {
+    verdictReason = `Confirmed — cross-checked by ${streams.length} independent sources${pair}.`;
+  } else if (verdict === "contradicted") {
+    verdictReason = "The leading cause was ruled out by the evidence — see the reasoning below.";
+  } else if (streams.length === 1) {
+    verdictReason = `Only ${streams[0].toLowerCase()} saw this — a second independent source is needed to confirm.`;
+  } else if (verdict === "suspected" || verdict === "recovered") {
+    verdictReason = "Sources agree, but no independent pair confirms customer impact yet.";
+  } else {
+    verdictReason = "Not confirmed — no cause has enough supporting evidence yet.";
+  }
+  return {
+    symptoms: byKind.size, sources: streams.length, durationLabel,
+    verdictReason, rows, observations: rawTotal,
+  };
+}
+
 export interface RcaCase {
   synthetic: boolean;             // true → show the "synthetic / example" watermark
   title: string;
@@ -92,6 +179,9 @@ export interface RcaCase {
   observedAt: string;
   rcaId: string;
   aside: KV[];
+  // Evidence summary (owner 2026-07-18): symptom density bars + verdict reason
+  // for the workspace aside — quality-first, raw volume demoted.
+  evidenceSummary?: EvidenceSummary;
   summary: string;
   why: WhyLine[];
   impact: KV[];
@@ -168,7 +258,7 @@ export const EXAMPLE_CASE: RcaCase = {
   },
   evidence: [
     { variant: "main", dot: "orange", title: "Routing / BGP", pill: { tone: "orange", text: "Main evidence" }, desc: "BGP state, route updates, peer adjacency", finding: "Neighbor 192.168.100.5 changed state on wan-r2.", foot: "1 event used · no conflicting peer record yet" },
-    { variant: "confirm", dot: "green", title: "SD-WAN telemetry", pill: { tone: "green", text: "Confirms" }, desc: "Tunnel SLA, loss, jitter, failover", finding: "Primary DIA tunnel loss reached 18.4%; SLA fail triggered.", foot: "3 signals used · aligned within +7s" },
+    { variant: "confirm", dot: "green", title: "SD-WAN telemetry", pill: { tone: "green", text: "Confirms" }, desc: "Tunnel SLA, loss, jitter, failover", finding: "Primary DIA tunnel loss reached 18.4%; SLA fail triggered.", foot: "3 observations used · aligned within +7s" },
     { variant: "confirm", dot: "green", title: "Traffic flow", pill: { tone: "green", text: "Confirms" }, desc: "NetFlow/IPFIX, retransmits, traffic shift", finding: "Checkout flows dropped 42%; TCP retransmits increased 6.2×.", foot: "5-min baseline · Dallas scope only" },
     { variant: "confirm", dot: "green", title: "Active checks", pill: { tone: "green", text: "Confirms" }, desc: "ICMP, HTTP, STAMP from independent vantage", finding: "Dallas probe to Checkout API hit 920 ms p95 and 3 HTTP failures.", foot: "Independent vantage confirmed" },
     { variant: "confirm", dot: "green", title: "Application logs", pill: { tone: "green", text: "Confirms impact" }, desc: "5xx, timeout, regional user errors", finding: "Checkout API 5xx increased 12.8% for Dallas source NAT range.", foot: "Tied to affected branch users" },
@@ -245,7 +335,7 @@ export const EXAMPLE_CASE: RcaCase = {
     ],
     promotion: [
       { k: "Observed threshold", v: "1 trusted event" }, { k: "Suspected threshold", v: "localized routing object" },
-      { k: "Probable threshold", v: "2 independent network signals" }, { k: "Confirmed threshold", v: "customer-impact evidence tied to same scope" },
+      { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "customer-impact evidence tied to same scope" },
       { k: "Current score", v: "0.92 / 1.00" }, { k: "Conflict penalty", v: "0.00" },
     ],
     reasoning: "The RCA promoted to confirmed because the application impact was independently observed and temporally/spatially tied to the network path event.",
@@ -370,6 +460,20 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
         : contradicted ? "contradicted"
           : suspected ? "suspected"
             : "undetermined";
+  // Evidence summary (owner 2026-07-18): the headline numbers reuse the SAME
+  // independent-stream components the confirm rule counts, so the summary can
+  // never out-claim the verdict; streams are named in operator labels.
+  const streamLabels = [
+    ...(hasRouting || hasDevice ? [modalityLabel(hasRouting ? "control_plane" : "device_telemetry")] : []),
+    ...((att.passive_flow ?? 0) > 0 ? [modalityLabel("passive_flow")] : []),
+    ...((att.active_probe ?? 0) > 0 ? [modalityLabel("active_probe")] : []),
+  ];
+  const evidenceSummary = buildEvidenceSummary(
+    timeline.signals, timeline.window_start, timeline.window_end,
+    obj.state === "open", streamLabels, verdictState,
+    obj.signal_count ?? attachedCount,
+  );
+
   // #113 point 4 — cause honesty: an unconfirmed case names its best hypothesis
   // as "possibly because of X" plus the evidence STATE (what's missing: the
   // engine's verdict reasons + the object's own evidence_missing shortfalls).
@@ -391,7 +495,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     confirmed ? "open" : lifecycle === "recovered" ? "monitor" : streamCount >= 2 ? "investigate" : "hold";
   const DECISION_TEXT: Record<typeof decisionKind, string> = {
     open: "OPEN INCIDENT — customer impact is confirmed by independent evidence. Assign ownership and begin restoration workflow.",
-    investigate: "INVESTIGATE — evidence is aligned but not sufficient to confirm customer impact. Validate missing signals before opening a customer incident.",
+    investigate: "INVESTIGATE — evidence is aligned but not sufficient to confirm customer impact. Validate the missing evidence before opening a customer incident.",
     monitor: "MONITOR — the triggering signal has cleared and no customer-impacting evidence was observed within available telemetry coverage. Auto-closes after the monitoring window if there is no recurrence and no customer-impact evidence.",
     hold: "HOLD — suspected only. Customer impact is not confirmed. Auto-ticketing remains on hold until independent evidence confirms impact.",
   };
@@ -460,7 +564,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     return {
       variant: main ? "main" : n > 0 ? "confirm" : "missing", dot: main ? "orange" : n > 0 ? "green" : "gray",
       title: PLANE_TITLE[p] ?? modalityLabel(p), pill: main ? { tone: "orange", text: "Main evidence" } : n > 0 ? { tone: "green", text: "Used" } : { tone: "gray", text: "No data" },
-      desc: PLANE_DESC[p] ?? "", finding: n > 0 ? `${n} ${n === 1 ? "signal" : "signals"} used.` : "No telemetry from this evidence class reached the platform in this window — unavailable or not configured.",
+      desc: PLANE_DESC[p] ?? "", finding: n > 0 ? `${n} ${n === 1 ? "observation" : "observations"} used.` : "No telemetry from this evidence class reached the platform in this window — unavailable or not configured.",
       foot: n > 0 ? (main ? "Primary evidence for this issue" : "Supports the case") : "Coverage gap — absence is not evidence of health",
     };
   });
@@ -700,9 +804,16 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
           ? { k: "Owner", v: ownerDisplay(owner) }
           : { k: "Possible owner", v: `${ownerDisplay(owner)} — unconfirmed` }]
         : [{ k: "Possible owner", v: "Not yet narrowed — NOC triage" }]),
-      { k: "Signals", v: `${attachedCount} tied to this case (${obj.signal_count ?? attachedCount} in window)` },
+      // Evidence quality, not volume (owner 2026-07-18): symptoms · independent
+      // sources · duration ARE the evidence; the raw count trails, de-emphasized.
+      {
+        k: "Evidence",
+        v: `${evidenceSummary.symptoms} symptom${evidenceSummary.symptoms === 1 ? "" : "s"} · ${evidenceSummary.sources} independent source${evidenceSummary.sources === 1 ? "" : "s"} · ${evidenceSummary.durationLabel}`,
+      },
       { k: "Suggested ticket", v: confirmed ? "Open P2" : "Hold — policy threshold not met" },
+      { k: "Observations", v: `${evidenceSummary.observations} collected` },
     ],
+    evidenceSummary,
     summary, why, impact, topology,
     evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
@@ -720,7 +831,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       accounting: timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).slice(0, 8).map((s) => ({ signal: kindLabel(s.kind), used: { tone: "green", text: "Used" }, weight: "—", reason: `Attached ${isRoutingKind(s.kind) ? "routing/link" : modalityLabel(s.modality_class).toLowerCase()} evidence.` })),
       promotion: [
         { k: "Observed threshold", v: "1 trusted event" }, { k: "Suspected threshold", v: "localized object" },
-        { k: "Probable threshold", v: "2 independent signals" }, { k: "Confirmed threshold", v: "customer-impact tied to scope" },
+        { k: "Probable threshold", v: "2 independent sources" }, { k: "Confirmed threshold", v: "customer-impact tied to scope" },
         { k: "Verdict tier", v: timeline.verdict_tier }, { k: "Attached observers", v: String(timeline.signals.filter((s) => s.attached).length) },
       ],
       reasoning: confirmed ? "Promoted to confirmed: independent customer-impact evidence tied to the network path event." : "Held at suspected: a single device-area signal cannot confirm customer impact without an independent observer.",

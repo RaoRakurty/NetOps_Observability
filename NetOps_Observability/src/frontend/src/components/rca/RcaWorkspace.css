@@ -88,6 +88,16 @@
 .rca-ws .rw-metric span { color: var(--rw-muted); }
 .rca-ws .rw-metric b { font-family: var(--rw-mono); font-weight: 800; text-align: right; }
 
+/* Evidence summary (owner 2026-07-18): verdict reason + per-symptom density
+   bars. Neutral ink only — observation volume is never a health color. */
+.rca-ws .rw-evsum { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--rw-line); }
+.rca-ws .rw-evsum-verdict { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.rca-ws .rw-evsum-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 11.5px; }
+.rca-ws .rw-evsum-label { flex: 0 0 96px; color: var(--rw-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rca-ws .rw-evsum-bar { display: inline-flex; gap: 1px; flex: 1; }
+.rca-ws .rw-evsum-cell { width: 5px; height: 10px; border-radius: 1px; background: var(--rw-muted2, #64748b); }
+.rca-ws .rw-evsum-since { flex: none; color: var(--rw-muted2, #8a94a6); font-size: 10.5px; }
+
 /* pills */
 .rca-ws .rw-pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 7px; padding: 3px 8px;
   font-weight: 800; font-size: 12px; letter-spacing: .01em; border: 1px solid transparent; }

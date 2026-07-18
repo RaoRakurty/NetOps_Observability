@@ -45,6 +45,7 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 		}[rel]
 	},
 	"pathGraph":      rcaPathGraphSVG,
+	"densityBar":     rcaDensityBarHTML,
 	"respondingMark": rcaHopRespondingWithMark,
 	"commaJoin":      func(ss []string) string { return strings.Join(ss, ", ") },
 	// coverage-assessment renderers (Phase D) — the table consumes the canonical
@@ -77,6 +78,38 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 		return "unknown"
 	},
 }).Parse(rcaReportTmplSrc))
+
+// rcaDensityBarHTML renders one symptom's bucketed observation density as a
+// print-safe inline bar: NEUTRAL ink whose opacity tracks recurrence — volume
+// is never a health state (design §7) and never a number posing as evidence.
+func rcaDensityBarHTML(buckets []int) template.HTML {
+	max := 0
+	for _, b := range buckets {
+		if b > max {
+			max = b
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString(`<span style="display:inline-flex;gap:1px;vertical-align:middle" role="img" aria-label="observation recurrence over the incident window">`)
+	for _, b := range buckets {
+		bg := "#e9edf3" // empty bucket — visibly quiet, never invisible
+		if max > 0 && b > 0 {
+			switch q := float64(b) / float64(max); {
+			case q > 0.75:
+				bg = "#334155"
+			case q > 0.5:
+				bg = "#64748b"
+			case q > 0.25:
+				bg = "#94a3b8"
+			default:
+				bg = "#cbd5e1"
+			}
+		}
+		fmt.Fprintf(&sb, `<span style="width:6px;height:10px;border-radius:1px;background:%s"></span>`, bg)
+	}
+	sb.WriteString(`</span>`)
+	return template.HTML(sb.String()) // #nosec G203 — built above from constants only
+}
 
 // rcaPathGraphSVG draws the measured path as the same causal picture the
 // workspace canvas shows — nodes left→right, provider boundaries named, the
@@ -471,11 +504,29 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 
 <section>
-  <h2>Signal measurements</h2>
-  <div class="kv">
-    <span class="k">Observations (window)</span><span class="v">{{.Signals.Total}} total · {{.Signals.Attached}} tied to this case · {{.Signals.Clears}} recovery signals</span>
-    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} (derived signals from one measurement source count once)</span>
-    <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
+  <h2>Evidence summary</h2>
+  <!-- Owner directive 2026-07-18 (rca-evidence-summary.md): symptoms ·
+       independent sources · duration are THE evidence headline; repetition
+       renders as per-symptom time density, never as a count posing as
+       evidence; the raw observation total is the muted last line. -->
+  <div style="display:flex;gap:26px;align-items:baseline;margin:2px 0 8px">
+    <span style="font-size:17px;font-weight:800">{{.Evidence.SymptomCount}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">distinct symptom{{if ne .Evidence.SymptomCount 1}}s{{end}}</span></span>
+    <span style="font-size:17px;font-weight:800">{{.Evidence.IndependentSources}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">independent source{{if ne .Evidence.IndependentSources 1}}s{{end}}</span></span>
+    {{if .Times.DurationMS}}<span style="font-size:17px;font-weight:800">{{dur .Times.DurationMS}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">{{if eq .Times.DurationBasis "elapsed_still_active"}}ongoing{{else}}duration{{end}}</span></span>{{end}}
+  </div>
+  <div class="note" style="color:#172033;font-weight:600;margin-bottom:6px">{{.Evidence.VerdictReason}}</div>
+  {{if .Evidence.Symptoms}}
+  <table><thead><tr><th style="width:24%">Symptom</th><th style="width:20%">Seen by</th><th style="width:12%">First</th><th style="width:13%">Latest</th><th>Recurrence over the window</th></tr></thead><tbody>
+  {{range .Evidence.Symptoms}}<tr>
+    <td><b>{{.Label}}</b></td>
+    <td>{{.Source}}</td>
+    <td style="font-family:ui-monospace,monospace">{{.First}}</td>
+    <td>{{.Last}}</td>
+    <td>{{densityBar .Buckets}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  {{end}}
+  <div class="kv" style="margin-top:6px">
     {{with .Signals.Probe}}
     <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
     {{if .AffectedVantages}}<span class="k">Reporting sources</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
@@ -492,12 +543,13 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{end}}
   </div>
   <div class="note">Only measured values are shown; an absent metric was not observed — it is not zero.</div>
+  <div class="note" style="color:#94a3b8">{{.Evidence.Observations}} raw observations collected{{if .Evidence.LastObservation}} · last {{.Evidence.LastObservation}}{{end}} · repetition shows persistence, not additional evidence</div>
 </section>
 
 <section>
   <h2>Evidence accounting</h2>
   <div class="kv">
-    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many kinds from one source count once</span></span>
+    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many observations from one source count once</span></span>
     <span class="k">Logical vantages</span><span class="v">{{if .Accounting.LogicalVantages}}{{commaJoin .Accounting.LogicalVantages}}{{else}}none classified{{end}}</span>
     <span class="k">Control-plane sources</span><span class="v">{{if .Accounting.ControlPlaneSources}}{{commaJoin .Accounting.ControlPlaneSources}}{{else}}none{{end}}</span>
     {{if .Accounting.Collectors}}<span class="k">Collectors (not vantages)</span><span class="v">{{commaJoin .Accounting.Collectors}}</span>{{end}}

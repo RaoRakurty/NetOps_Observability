@@ -56,6 +56,10 @@ type rcaReport struct {
 	IssueContext rcaIssueContext    `json:"issue_context"`
 	Summary      rcaReportSummaries `json:"summary"`
 	Signals      rcaSignalSummary   `json:"signal_summary"`
+	// Evidence: the NOC evidence read (owner directive 2026-07-18) — symptoms ·
+	// independent sources · density, verdict reason in operator words; the raw
+	// observation count demoted to a muted trailing fact.
+	Evidence rcaEvidenceSummary `json:"evidence_summary"`
 	// Accounting: the derived evidence-accounting presentation block (Phase D) —
 	// canonical evidence groups, classified sources, independent confirming
 	// sources, and the operator lineage ladder. Derived once from the Phase B
@@ -317,6 +321,34 @@ type rcaCascadeStage struct {
 type rcaKV struct {
 	K string `json:"k"`
 	V string `json:"v"`
+}
+
+// rcaEvidenceSummary — the NOC evidence read (docs/design/rca-evidence-summary.md):
+// distinct SYMPTOMS · INDEPENDENT SOURCES · duration are the headline; each
+// symptom carries a render-side time-density series (repetition made visible,
+// never counted as evidence); the verdict names its reason in operator words;
+// the raw observation total is the LAST, muted line. A raw count never appears
+// without its unit of meaning, and the word "signals" never reaches the UI.
+type rcaEvidenceSummary struct {
+	SymptomCount       int             `json:"symptom_count"`
+	IndependentSources int             `json:"independent_sources"`
+	SourceNames        []string        `json:"source_names,omitempty"`
+	VerdictReason      string          `json:"verdict_reason"`
+	Symptoms           []rcaSymptomRow `json:"symptoms"`
+	Observations       int             `json:"observations"`     // raw rows collected — muted, collapsed
+	LastObservation    string          `json:"last_observation"` // freshness, e.g. "18s ago"
+}
+
+// rcaSymptomRow is one distinct manifestation: NOC label + which source class
+// saw it + onset/latest + a bucketed observation-density series for the bar.
+type rcaSymptomRow struct {
+	Label        string `json:"label"`
+	Kind         string `json:"kind"`
+	Source       string `json:"source"`
+	First        string `json:"first"`
+	Last         string `json:"last"`
+	Observations int    `json:"observations"`
+	Buckets      []int  `json:"buckets"`
 }
 
 type rcaSignalSummary struct {
@@ -980,7 +1012,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	case ra.Confirmed:
 		recoveryState = "explicitly_confirmed"
 		recoveryBasis = fmt.Sprintf("%s; last recovery evidence observed %s, at/after the final qualifying anomaly in every participating scope.",
-			countNoun(len(clears), "recovery signal"), fmtUTC(ra.At))
+			countNoun(len(clears), "recovery observation"), fmtUTC(ra.At))
 	case ra.Service.State == "failed_validation":
 		recoveryState = "failed_validation"
 		recoveryBasis = ra.Service.Basis
@@ -1010,7 +1042,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		// specific basis; pure silence is stated as inference.
 		if recoveryState == "not_observed" {
 			recoveryState = "inferred"
-			recoveryBasis = "Inferred from quiescence: anomalous signals stopped and the window closed; no explicit recovery evidence was captured."
+			recoveryBasis = "Inferred from quiescence: the anomalous observations stopped and the window closed; no explicit recovery evidence was captured."
 		}
 	case ra.Confirmed:
 		incident = "recovering"
@@ -1126,7 +1158,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 				mix = append(mix, fmt.Sprintf("%d %s", sevCounts[lv], lv))
 			}
 		}
-		sevBasis = fmt.Sprintf("peak of the attached evidence, carried by %s (%s of %d anomalous signals)",
+		sevBasis = fmt.Sprintf("peak of the attached evidence, carried by %s (%s of %d anomalous observations)",
 			strings.ReplaceAll(peakSevKind, "_", " "), strings.Join(mix, " / "), len(anomalous))
 	}
 	if validation {
@@ -1590,6 +1622,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		IssueContext:      ictx,
 		Summary:           rcaReportSummaries{Management: mgmt, Noc: noc, WhySuspected: whySusp, WhyNotConfirmed: whyNot, RequiredConfirm: required},
 		Signals:           sigSummary,
+		Evidence:          buildEvidenceSummary(anomalous, laneAnomalous, accountingView, analysis, sigSummary, firstObs, lastObs, in.Now),
 		Accounting:        accountingView,
 		Coverage:          coverage,
 		CloudChanges:      changes,

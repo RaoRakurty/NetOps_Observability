@@ -450,9 +450,9 @@ func clauseCaseEvidence(clause string, kindCounts map[string]int, kindObservers 
 		obs := len(kindObservers[k])
 		label := kindNoc(k)
 		if obs > 1 {
-			parts = append(parts, fmt.Sprintf("%s (%d signals from %d observers)", label, n, obs))
+			parts = append(parts, fmt.Sprintf("%s (%d observations from %d sources)", label, n, obs))
 		} else {
-			parts = append(parts, fmt.Sprintf("%s (%s)", label, strings.ToLower(countNoun(n, "signal"))))
+			parts = append(parts, fmt.Sprintf("%s (%s)", label, strings.ToLower(countNoun(n, "observation"))))
 		}
 	}
 	if len(parts) == 0 {
@@ -754,6 +754,146 @@ func buildAtAGlance(loc rcaFaultLocalization, scope rcaReportScope, hyps []rcaHy
 	}
 	g.Owners = firstN(g.Owners, 4)
 	return g
+}
+
+// ---- evidence summary (owner directive 2026-07-18, docs/design/rca-evidence-summary.md) -------
+
+// rcaSymptomBuckets — density-series resolution per symptom row (render-side
+// bucketing of observation timestamps; repetition shown as ink, never counted).
+const rcaSymptomBuckets = 24
+
+// agoShort renders freshness the way a NOC reads it ("18s ago", "9m ago").
+func agoShort(now, t time.Time) string {
+	if t.IsZero() || now.Before(t) {
+		return ""
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh %dm ago", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
+// bucketObservationTimes buckets timestamps across [start,end] into n slots —
+// the per-symptom time-density series. Pure; out-of-range values clamp.
+func bucketObservationTimes(times []time.Time, start, end time.Time, n int) []int {
+	out := make([]int, n)
+	span := end.Sub(start)
+	if span <= 0 {
+		span = time.Second
+	}
+	for _, t := range times {
+		idx := int(float64(t.Sub(start)) / float64(span) * float64(n))
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		out[idx]++
+	}
+	return out
+}
+
+// buildEvidenceSummary derives the NOC evidence read from data the engine
+// already computed: distinct symptoms (kind groups over the ATTACHED anomalous
+// evidence), independent sources (the accounting model's confirm-eligible
+// groups), a verdict reason in operator words that NAMES the independent pair
+// (never a percentage), per-symptom density series, and the raw observation
+// total demoted to a muted trailing fact.
+func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]int,
+	acct rcaAccountingView, analysis string, sig rcaSignalSummary,
+	firstObs, lastObs, now time.Time) rcaEvidenceSummary {
+
+	type agg struct {
+		lane  string
+		first time.Time
+		last  time.Time
+		times []time.Time
+		n     int
+	}
+	byKind := map[string]*agg{}
+	var order []string
+	for _, s := range anomalous {
+		kind := fmt.Sprintf("%v", s["kind"])
+		a := byKind[kind]
+		if a == nil {
+			a = &agg{lane: fmt.Sprintf("%v", s["modality_class"])}
+			byKind[kind] = a
+			order = append(order, kind)
+		}
+		a.n++
+		if ts, ok := parseChTS(fmt.Sprintf("%v", s["ts"])); ok {
+			if a.first.IsZero() || ts.Before(a.first) {
+				a.first = ts
+			}
+			if ts.After(a.last) {
+				a.last = ts
+			}
+			a.times = append(a.times, ts)
+		}
+	}
+	// onset order — the earliest symptom leads (it is where to look first).
+	sort.SliceStable(order, func(i, j int) bool {
+		ai, aj := byKind[order[i]], byKind[order[j]]
+		if !ai.first.Equal(aj.first) {
+			return ai.first.Before(aj.first)
+		}
+		return order[i] < order[j]
+	})
+
+	es := rcaEvidenceSummary{
+		SymptomCount:       len(order),
+		IndependentSources: acct.IndependentConfirmingSources,
+		SourceNames:        firstN(acct.IndependentSourceIDs, 4),
+		Observations:       sig.Total,
+		LastObservation:    agoShort(now, lastObs),
+	}
+	for _, k := range order {
+		a := byKind[k]
+		row := rcaSymptomRow{
+			Label: kindNoc(k), Kind: k,
+			Source:       orDefault(rcaLaneLabel[a.lane], rcaTitleCase(a.lane)),
+			Observations: a.n,
+			Buckets:      bucketObservationTimes(a.times, firstObs, lastObs, rcaSymptomBuckets),
+		}
+		if !a.first.IsZero() {
+			row.First = a.first.UTC().Format("15:04") + " UTC"
+			row.Last = agoShort(now, a.last)
+		}
+		es.Symptoms = append(es.Symptoms, row)
+	}
+
+	// The verdict names its reason — which independent pair, or what is still
+	// missing — in operator language. Honest weak reads weak (§2 of the design).
+	pair := ""
+	if len(acct.IndependentSourceIDs) >= 2 {
+		pair = " (" + strings.Join(firstN(acct.IndependentSourceIDs, 3), " + ") + ")"
+	}
+	soloLane := ""
+	if len(laneAnomalous) == 1 {
+		for lane := range laneAnomalous {
+			soloLane = strings.ToLower(orDefault(rcaLaneLabel[lane], lane))
+		}
+	}
+	switch {
+	case analysis == "confirmed" && acct.IndependentConfirmingSources >= 2:
+		es.VerdictReason = fmt.Sprintf("Confirmed — cross-checked by %d independent sources%s.",
+			acct.IndependentConfirmingSources, pair)
+	case analysis == "confirmed":
+		es.VerdictReason = "Confirmed by independent evidence."
+	case (analysis == "suspected" || analysis == "probable") && soloLane != "":
+		es.VerdictReason = fmt.Sprintf("Suspected — only %s saw this; a second independent source is needed to confirm.", soloLane)
+	case analysis == "suspected" || analysis == "probable":
+		es.VerdictReason = "Suspected — sources agree, but no independent pair confirms customer impact yet."
+	default:
+		es.VerdictReason = "Not confirmed — no cause has enough supporting evidence yet."
+	}
+	return es
 }
 
 // ---- decision --------------------------------------------------------------------------------
@@ -1058,7 +1198,7 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 		if last == "" {
 			last = times.WindowEnd + " UTC"
 		}
-		addP(fmt.Sprintf("Anomalous signals were last observed at %s; no recovery evidence was captured, so recovery is NOT confirmed.", last))
+		addP(fmt.Sprintf("The anomaly was last observed at %s; no recovery evidence was captured, so recovery is NOT confirmed.", last))
 	case incident == "recovered" || incident == "closed":
 		addP("The condition is no longer observed; the exact recovery time was not captured.")
 	case times.DurationBasis == "elapsed_still_active" && times.DurationMS > 0:
@@ -1191,7 +1331,7 @@ func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU
 	if times.RecoveredCaptured {
 		kv = append(kv, rcaKV{K: "Recovered at", V: times.RecoveredAt})
 	} else if incident == "no_longer_observed" {
-		kv = append(kv, rcaKV{K: "Recovered at", V: "Not confirmed — signals stopped; no recovery evidence"})
+		kv = append(kv, rcaKV{K: "Recovered at", V: "Not confirmed — the reports stopped; no recovery evidence"})
 	} else if incident == "recovered" || incident == "closed" {
 		kv = append(kv, rcaKV{K: "Recovered at", V: "Not captured"})
 	}
