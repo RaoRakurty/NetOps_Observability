@@ -31,6 +31,7 @@ type BusinessService struct {
 	Description       string    `json:"description"`
 	Criticality       string    `json:"criticality"`
 	Owner             string    `json:"owner"`
+	RunbookURL        string    `json:"runbook_url"`
 	CreatedBy         string    `json:"created_by"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
@@ -69,7 +70,7 @@ func (st *pgBusinessServiceStore) ListServices(ctx context.Context, tenant strin
 	out := make([]BusinessService, 0)
 	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT business_service_id, tenant_id, name, description,
-		        criticality, owner, created_by, created_at, updated_at
+		        criticality, owner, runbook_url, created_by, created_at, updated_at
 		    FROM business_services ORDER BY created_at DESC`)
 		if err != nil {
 			return err
@@ -78,7 +79,7 @@ func (st *pgBusinessServiceStore) ListServices(ctx context.Context, tenant strin
 		for rows.Next() {
 			var b BusinessService
 			if err := rows.Scan(&b.BusinessServiceID, &b.TenantID, &b.Name, &b.Description,
-				&b.Criticality, &b.Owner, &b.CreatedBy, &b.CreatedAt, &b.UpdatedAt); err != nil {
+				&b.Criticality, &b.Owner, &b.RunbookURL, &b.CreatedBy, &b.CreatedAt, &b.UpdatedAt); err != nil {
 				return err
 			}
 			out = append(out, b)
@@ -101,9 +102,9 @@ func (st *pgBusinessServiceStore) CreateService(ctx context.Context, tenant stri
 	}
 	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `INSERT INTO business_services
-		        (business_service_id, tenant_id, name, description, criticality, owner, created_by)
-		    VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING created_at, updated_at`,
-			in.BusinessServiceID, in.TenantID, in.Name, in.Description, in.Criticality, in.Owner, in.CreatedBy)
+		        (business_service_id, tenant_id, name, description, criticality, owner, runbook_url, created_by)
+		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at, updated_at`,
+			in.BusinessServiceID, in.TenantID, in.Name, in.Description, in.Criticality, in.Owner, in.RunbookURL, in.CreatedBy)
 		return row.Scan(&in.CreatedAt, &in.UpdatedAt)
 	})
 	if isUniqueViolation(err) {
@@ -122,8 +123,8 @@ func (st *pgBusinessServiceStore) UpdateService(ctx context.Context, tenant stri
 			crit = "normal"
 		}
 		ct, e := tx.Exec(ctx, `UPDATE business_services
-		    SET name = $2, description = $3, criticality = $4, owner = $5, updated_at = now()
-		    WHERE business_service_id = $1`, id, in.Name, in.Description, crit, in.Owner)
+		    SET name = $2, description = $3, criticality = $4, owner = $5, runbook_url = $6, updated_at = now()
+		    WHERE business_service_id = $1`, id, in.Name, in.Description, crit, in.Owner, in.RunbookURL)
 		if e != nil {
 			return e
 		}

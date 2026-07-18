@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -41,6 +42,28 @@ func bizSvcName(s string) bool {
 // unset; non-empty follows the same printable single-line ≤128 rule as names.
 func bizSvcOwner(s string) bool {
 	return strings.TrimSpace(s) == "" || bizSvcName(s)
+}
+
+// bizSvcRunbookURL bounds the optional per-service runbook link (Wave 4 #12
+// resolution actions). Empty means unset; non-empty must be an absolute
+// https:// URL with a host, ≤512 chars, no control chars — the UI renders it
+// as a click-through action, so only a scheme a browser can safely open is
+// accepted (no javascript:, data:, http:, or relative URLs).
+func bizSvcRunbookURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return true
+	}
+	if len(s) > 512 {
+		return false
+	}
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
 func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +107,11 @@ func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		in.Owner = strings.TrimSpace(in.Owner)
+		if !bizSvcRunbookURL(in.RunbookURL) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid runbook_url (absolute https:// URL, max 512 chars)"))
+			return
+		}
+		in.RunbookURL = strings.TrimSpace(in.RunbookURL)
 		tenant, cross := principalTenant(claims)
 		if !cross {
 			in.TenantID = tenant // scoped principal owns what it creates
@@ -138,6 +166,11 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		in.Owner = strings.TrimSpace(in.Owner)
+		if !bizSvcRunbookURL(in.RunbookURL) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid runbook_url (absolute https:// URL, max 512 chars)"))
+			return
+		}
+		in.RunbookURL = strings.TrimSpace(in.RunbookURL)
 		tenant, cross := principalTenant(claims)
 		found, err := s.bizServices.UpdateService(r.Context(), tenant, cross, id, in)
 		if errors.Is(err, errConflict) {
