@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +113,23 @@ func (s *rcaPromotionStore) get(tenant, id string) (rcaPromotionRecord, bool) {
 	defer s.mu.RUnlock()
 	rec, ok := s.m[tenant][id]
 	return rec, ok
+}
+
+// list returns ONE tenant's manually promoted correlation ids, sorted for
+// determinism. §3a rule 4: the only listing is tenant-keyed — no cross-tenant
+// or unscoped enumeration exists on this store. Nil-safe.
+func (s *rcaPromotionStore) list(tenant string) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make([]string, 0, len(s.m[tenant]))
+	for id := range s.m[tenant] {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (s *rcaPromotionStore) set(tenant, id string, rec rcaPromotionRecord) {
