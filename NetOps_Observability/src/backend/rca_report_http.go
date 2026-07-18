@@ -23,17 +23,18 @@ import (
 	"time"
 )
 
-func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id string) {
-	claims, ok := userFrom(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
-		return
-	}
-	version := intQuery(r, "version", 0, 0, 1<<30)
+// buildRcaReportForID is THE shared report-build path: tenant-scoped slice load
+// → timeline-evidence merge → ticket/policy → path block → merge-chain →
+// buildRcaReport → promotion evaluation (#113 point 3). Both the per-case
+// endpoint (serveRcaReport) and the RCA-reports library list call it — the
+// pipeline exists exactly once. Every ClickHouse read runs under the CALLER's
+// chTenantScope (row policies), every store read is RLS/tenant-scoped. On
+// failure it returns the HTTP status to answer with (404 for an invisible or
+// absent id — never revealing whether it exists elsewhere).
+func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id string, version int) (rcaReport, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
-		writeError(w, status, err)
-		return
+		return rcaReport{}, status, err
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// stamps attached/link_status onto sigRows (the same derivation the timeline uses)
@@ -86,6 +87,21 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		manual = &rec
 	}
 	rep.Promotion = evaluateRcaPromotion(&rep, manual)
+	return rep, http.StatusOK, nil
+}
+
+func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id string) {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	version := intQuery(r, "version", 0, 0, 1<<30)
+	rep, status, err := s.buildRcaReportForID(r, claims, id, version)
+	if err != nil {
+		writeError(w, status, err)
+		return
+	}
 
 	format := strings.ToLower(r.URL.Query().Get("format"))
 	if (format == "html" || format == "pdf") && !rep.Promotion.Promoted {

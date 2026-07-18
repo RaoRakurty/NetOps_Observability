@@ -14,6 +14,7 @@ import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
 import Events from "./pages/Events";
 import Correlations from "./tabs/Correlations";
+import RcaReports from "./pages/RcaReports";
 import AppObservability from "./pages/AppObservability";
 import ReliabilityScorecard from "./pages/ReliabilityScorecard";
 import Quality from "./pages/Quality";
@@ -146,6 +147,9 @@ export const NAV: NavSection[] = [
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
       { id: "anomalies", label: "Anomalies", group: "Event Management", render: () => <Findings /> },
       { id: "correlations", label: "Correlations", group: "Event Management", render: () => <Correlations /> },
+      // #113: the management library — ONLY promoted real outages + documents.
+      // Correlations above stays the full engineer surface (every candidate).
+      { id: "rca-reports", label: "RCA Reports", group: "Event Management", render: () => <RcaReports /> },
       // Sub-items mirror the page's REAL 5-tab IA (2026-07 review: the flyout
       // still advertised the retired 11-tab vocabulary — two names for one view).
       { id: "appobs", label: "Service View", group: "Event Management", render: () => <AppObservability />, subItems: [

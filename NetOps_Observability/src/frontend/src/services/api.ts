@@ -639,6 +639,31 @@ export type RcaReportJson = {
   [k: string]: unknown;
 };
 
+// #113 — the management RCA library: promoted real outages only. Rows are
+// projections of the BUILT server report (never re-derived client-side).
+export type RcaLibraryReport = {
+  correlation_id: string;
+  display_id: string;
+  report_type: string;
+  title: string;
+  at_a_glance: {
+    where: string; where_basis?: string; what: string;
+    owners_label: string; owners: string[]; owners_reason?: string;
+  };
+  states: { incident: string; analysis: string; impact: string };
+  times: { start: string; end: string; duration_ms: number };
+  promotion: RcaPromotionStatus;
+  validation: boolean;
+};
+export type RcaLibraryResponse = {
+  reports: RcaLibraryReport[];
+  // no silent caps: how many candidates were evaluated, whether the prefilter
+  // page was full (older promoted outages may exist beyond it), and the window.
+  evaluated: number;
+  truncated: boolean;
+  window_days: number;
+};
+
 // Manual incident lifecycle events (#84 P1d / #7 investigation close): the
 // caller-tenant's operator-entered timestamps for one correlation object.
 export type TimeEventRow = {
@@ -1976,6 +2001,9 @@ export const api = {
   // read is tenant-scoped + permission-gated identically to every correlation read.
   rcaReportJson: (id: string) =>
     request<RcaReportJson>(`/api/correlations/${encodeURIComponent(id)}/rca-report?format=json`),
+  // #113 — the management RCA library: promoted outages only (auto + manual).
+  rcaLibrary: (days = 30) =>
+    request<RcaLibraryResponse>(`/api/correlations/rca-reports?days=${encodeURIComponent(days)}`),
   // #113 point 3 — manual RCA promotion (audited, write-gated server-side).
   // Candidates and RCA documents are different tiers: only a promoted case
   // renders the html/pdf document.
