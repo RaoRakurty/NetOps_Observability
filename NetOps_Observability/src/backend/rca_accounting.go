@@ -440,7 +440,7 @@ func deriveConfiguredTests(in accountingInput) accountedCount {
 func deriveExecutions(in accountingInput) (total, failed accountedCount) {
 	if len(in.ProbeExecutions) == 0 {
 		reason := "per-execution lineage not joined at the report layer for this case " +
-			"(derived anomaly signals carry no execution_id; counts are not fabricated)"
+			"(derived anomaly observations carry no execution_id; counts are not fabricated)"
 		return unavailableCount(reason), unavailableCount(reason)
 	}
 	seen := map[string]bool{}
@@ -463,8 +463,8 @@ func deriveExecutions(in accountingInput) (total, failed accountedCount) {
 func (a EvidenceAccounting) buildLadder() ReconciliationLadder {
 	rungs := []ladderRung{
 		{Layer: "window_total", Label: "Window observations (all lanes)", Count: a.WindowObservationCount()},
-		{Layer: "case_linked", Label: "Case-linked signals", Count: a.CaseLinkedSignalCount()},
-		{Layer: "anomalous", Label: "Anomalous signals", Count: a.AnomalousSignalCount()},
+		{Layer: "case_linked", Label: "Case-linked observations", Count: a.CaseLinkedSignalCount()},
+		{Layer: "anomalous", Label: "Anomalous observations", Count: a.AnomalousSignalCount()},
 		{Layer: "evidence_groups", Label: "Deduplicated evidence groups", Count: a.CaseLinkedEvidenceGroupCount()},
 		{Layer: "anomaly_observers", Label: "Distinct anomaly observers", Count: a.AnomalyObserverCount()},
 		{Layer: "independence_groups", Label: "Independence groups (fate-deduped)", Count: a.IndependenceGroupCount()},

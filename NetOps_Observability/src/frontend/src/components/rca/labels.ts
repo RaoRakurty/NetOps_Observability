@@ -278,22 +278,67 @@ export function kindLabel(kind: string): string {
 export function signalClassKey(s: { kind: string; modality_class: string }): string {
   return isRoutingKind(s.kind.replace(/_clear$/, "")) ? "control_plane" : s.modality_class;
 }
-// class key → the "<Class> signal:" prefix used on the selected-evidence panel.
+// class key → the "<Class> evidence:" prefix used on the selected-evidence panel.
+// ("signal" is engine vocabulary — a NOC reads it as an independent clue, so the
+// word never reaches operator text; see rca-evidence-summary.md §3.)
 const CLASS_SIGNAL_LABEL: Record<string, string> = {
-  control_plane: "Routing/link signal",
-  device_telemetry: "Device-health signal",
-  passive_flow: "Traffic-flow signal",
-  active_probe: "Active-check signal",
+  control_plane: "Routing/link evidence",
+  device_telemetry: "Device-health evidence",
+  passive_flow: "Traffic-flow evidence",
+  active_probe: "Active-check evidence",
 };
 // class key → short noun for inline prose ("supporting routing/link evidence").
 export const CLASS_NOUN: Record<string, string> = {
   control_plane: "routing/link", device_telemetry: "device-health",
   passive_flow: "traffic-flow", active_probe: "active-check",
 };
-// "Routing/link signal: BGP state change" — the operator title for one signal.
+// "Routing/link evidence: BGP state change" — the operator title for one signal.
 export function signalClassTitle(s: { kind: string; modality_class: string }): string {
   const key = signalClassKey(s);
-  return `${CLASS_SIGNAL_LABEL[key] ?? "Signal"}: ${kindLabel(s.kind)}`;
+  return `${CLASS_SIGNAL_LABEL[key] ?? "Evidence"}: ${kindLabel(s.kind)}`;
+}
+
+// ── Verdict-reason wording (owner directive 2026-07-18) ──────────────────────
+// The engine's verdict reasons are precise but speak engine ("single modality
+// class (active_probe); need ≥2 — every modality has a blind spot"). A NOC admin
+// needs the OPERATIONAL consequence, not the taxonomy lecture. This rewrites the
+// known reason shapes into operator language; unrecognized reasons pass through
+// with raw tokens humanized. Honesty is preserved — only the register changes;
+// the verbatim engine reasons stay available behind "How was this verified?".
+const REASON_TOKEN_LABEL: Record<string, string> = {
+  active_probe: "probes", control_plane: "routing/link events",
+  device_telemetry: "device health", passive_flow: "traffic flow",
+  internal_self_probe: "an internal self-check", customer_path: "a customer-path probe",
+  synthetic_lab_probe: "a lab probe",
+};
+export function nocVerdictReason(r: string): string {
+  let m = r.match(/single modality class \((\w+)\)/i);
+  if (m) {
+    const who = REASON_TOKEN_LABEL[m[1]] ?? m[1].replace(/_/g, " ");
+    return `Only ${who} saw this — a second independent source is needed to confirm.`;
+  }
+  m = r.match(/no independent cross-modality pair(?: \(fate-shared: ([^)]+)\))?/i);
+  if (m) {
+    return m[1]
+      ? `The sources that saw this share a failure point (${m[1].replace(/_/g, " ")}), so they cannot confirm each other independently.`
+      : "The sources that saw this share a failure point, so they cannot confirm each other independently.";
+  }
+  m = r.match(/required modality (\w+) present but only low-authority/i);
+  if (m) {
+    const who = REASON_TOKEN_LABEL[m[1]] ?? m[1].replace(/_/g, " ");
+    return `Only low-trust ${who} saw this — not enough on their own to confirm.`;
+  }
+  m = r.match(/required modality missing[^:]*:\s*(\w+)/i);
+  if (m) {
+    const who = REASON_TOKEN_LABEL[m[1]] ?? m[1].replace(/_/g, " ");
+    return `No trusted ${who} evidence in this window.`;
+  }
+  if (/cannot confirm without an independent trusted modality/i.test(r))
+    return "A second independent source is needed to confirm.";
+  // fallback: humanize raw tokens, drop ≥ notation
+  let out = r;
+  for (const [tok, label] of Object.entries(REASON_TOKEN_LABEL)) out = out.split(tok).join(label);
+  return out.replace(/≥\s*(\d+)/g, "$1 or more").replace(/\bmodality\b/gi, "source");
 }
 
 // Probe authority model (Step 3) — operator labels + colors.

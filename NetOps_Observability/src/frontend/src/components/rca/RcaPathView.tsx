@@ -201,10 +201,21 @@ export default function RcaPathView({ timeline, seams, owner }: {
         })}
       </div>
 
-      {/* evidence status across the path (NOC language, ● observed / ○ missing) */}
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>Evidence along the path</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: "2px 12px", fontSize: 12.5 }}>
+      {/* The default view stays a clean path + break + ownership boundary (owner
+          directive 2026-07-18: no observed/none box parade). The per-source
+          evidence checklist is real information for the verifying engineer, so
+          it lives behind a disclosure instead of the primary read. */}
+      {seam && (
+        <div style={{ fontSize: 12.5, color: ownerColor, fontWeight: 600 }}>
+          {SYM.boundary} {seamOwnerLabel(seam.control_plane_owner)} boundary
+          {visLimited ? ` · ${SYM.unknown} ${visibilityLabel(seam.visibility)}` : ""}
+        </div>
+      )}
+      <details style={{ fontSize: 12.5 }}>
+        <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: C.muted }}>
+          How was this verified?
+        </summary>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: "2px 12px", marginTop: 4 }}>
           {MODALITY_ORDER.map((m) => {
             const seen = planes[m];
             return (
@@ -214,14 +225,8 @@ export default function RcaPathView({ timeline, seams, owner }: {
               </div>
             );
           })}
-          {seam && (
-            <div style={{ color: ownerColor, fontWeight: 600 }}>
-              {SYM.boundary} {seamOwnerLabel(seam.control_plane_owner)} boundary
-              {visLimited ? ` · ${SYM.unknown} ${visibilityLabel(seam.visibility)}` : ""}
-            </div>
-          )}
         </div>
-      </div>
+      </details>
     </div>
   );
 }

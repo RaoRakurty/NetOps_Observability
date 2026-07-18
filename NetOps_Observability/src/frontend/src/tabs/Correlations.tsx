@@ -272,9 +272,12 @@ export default function Correlations() {
         : o.low_authority ? pill("weak", "#D97706")
         : o.top_hypothesis !== "undetermined" ? pill("trusted", "#16A34A")
         : <span style={{ color: "var(--muted)" }}>—</span> },
-    { key: "shape", header: "Signals", width: 88, align: "right", sortable: true,
+    // Evidence-quality directive (2026-07-18): raw volume is honest but muted —
+    // the column is "observations collected", never "signals" (a NOC reads
+    // signals as independent clues; these are raw repeats).
+    { key: "shape", header: "Obs.", width: 88, align: "right", sortable: true,
       sortValue: (o) => Number(o.signal_count ?? 0),
-      render: (o) => <span style={mono} title={`${o.signal_count} signals`}>{o.signal_count}</span> },
+      render: (o) => <span style={mono} title={`${o.signal_count} raw observations collected — repetition shows persistence, not additional evidence`}>{o.signal_count}</span> },
   ], [notified, promotedIds]);
 
   // #113: ONE library fetch — the promoted set for the row badge + filter chip.
@@ -415,12 +418,12 @@ export default function Correlations() {
     <div className="dm-board cc-board">
       <NocHeader
         title="RCA Candidates"
-        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when independent evidence agrees across at least two signal classes — weaker candidates say exactly what's missing."
+        subtitle="Evidence-linked correlation groups. A root cause is confirmed only when two independent sources agree — weaker candidates say exactly what's missing."
         chips={<><Chip label={`${trueTotal ?? visible.length} candidates · 24h`} /><LiveChip detail="correlation engine" /></>}
       >
         <NocKpis cols={4}>
           <NocKpi n={trueTotal ?? visible.length} label="Candidates" interp="in the last 24h" />
-          <NocKpi n={rConfirmed} label="Confirmed" interp="≥2 evidence streams" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
+          <NocKpi n={rConfirmed} label="Confirmed" interp="two independent sources agree" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
           <NocKpi n={rSuspected} label="Suspected" interp="impact not confirmed" tone={rSuspected ? "var(--warn)" : undefined} />
           <NocKpi n={rUndet} label="Not confirmed" interp="gathering evidence" />
         </NocKpis>
@@ -602,7 +605,7 @@ function SignatureGaps() {
                   </div>
                   <span style={{ fontSize: 11, color: "var(--fg-subtle, var(--muted))", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}
                     title={c.last_seen ? fmtDateTime(c.last_seen) : ""}>
-                    {Number.isFinite(c.avg_signals) ? `${c.avg_signals.toFixed(1)} sig/incident` : ""}
+                    {Number.isFinite(c.avg_signals) ? `${c.avg_signals.toFixed(1)} obs/incident` : ""}
                   </span>
                 </div>
               ))}

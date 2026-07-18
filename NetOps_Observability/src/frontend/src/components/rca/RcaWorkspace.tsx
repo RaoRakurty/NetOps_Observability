@@ -192,6 +192,27 @@ export default function RcaWorkspace({
         <aside className="rw-aside">
           {data.aside.map((m, i) => <div key={i} className="rw-metric"><span>{m.k}</span><b>{m.v}</b></div>)}
         </aside>
+        {/* Evidence summary (owner 2026-07-18): verdict reason in operator words
+            + one time-density bar per symptom — repetition rendered as ink,
+            never as a count posing as evidence. Spans the full card width so the
+            two columns above stay balanced (no dead space under either). */}
+        {data.evidenceSummary && data.evidenceSummary.rows.length > 0 && (
+          <div className="rw-evsum" aria-label="Evidence summary">
+            <div className="rw-evsum-verdict">{data.evidenceSummary.verdictReason}</div>
+            {data.evidenceSummary.rows.map((r, i) => (
+              <div key={i} className="rw-evsum-row" title={`${r.label} — seen by ${r.source}; ${r.observations} observations`}>
+                <span className="rw-evsum-label">{r.label}</span>
+                <span className="rw-evsum-bar" aria-hidden="true">
+                  {r.buckets.map((b, j) => {
+                    const max = Math.max(...r.buckets, 1);
+                    return <span key={j} className="rw-evsum-cell" style={{ opacity: b > 0 ? 0.25 + 0.75 * (b / max) : 0.08 }} />;
+                  })}
+                </span>
+                <span className="rw-evsum-since">{r.since ? `since ${r.since}` : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {view === "operator" ? (
@@ -223,6 +244,18 @@ export default function RcaWorkspace({
                   {data.ruledOut.join(" · ")}
                   <div className="rw-ruledout-note">Competing causes the evidence does not support.</div>
                 </div>
+              )}
+              {/* "How was this verified?" (owner 2026-07-18): the verbatim engine
+                  gate reasons live HERE, behind a disclosure — the page prose above
+                  stays in operator language, the audit detail stays reachable. */}
+              {data.verifyDetail && data.verifyDetail.length > 0 && (
+                <details className="rw-verify">
+                  <summary>How was this verified?</summary>
+                  <div className="rw-verify-body">
+                    <div>The engine's verbatim verdict gates for this case:</div>
+                    <ul>{data.verifyDetail.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                  </div>
+                </details>
               )}
             </div>
             <div className="rw-panel">
@@ -281,7 +314,7 @@ export default function RcaWorkspace({
                     <span className="rw-cloud-meta">
                       {data.cloud.account && <span>Account {data.cloud.account}</span>}
                       {data.cloud.region && <span>{data.cloud.region}</span>}
-                      <span>{data.cloud.signalCount} cloud {data.cloud.signalCount === 1 ? "signal" : "signals"}</span>
+                      <span>{data.cloud.signalCount} cloud {data.cloud.signalCount === 1 ? "observation" : "observations"}</span>
                     </span>
                   </div>
                   <Pill p={data.cloud.crossPlane ? { tone: "green", text: "Corroborated cross-plane" } : { tone: "orange", text: "Single-plane · suspected" }} />
@@ -382,7 +415,7 @@ export default function RcaWorkspace({
             <div className="rw-timeline-wrap">
               <div className="rw-timeline">
                 <div className="rw-thead">
-                  <div className="rw-tlabel">Signal group</div>
+                  <div className="rw-tlabel">Evidence lane</div>
                   <div className="rw-ttrack">{data.timelineTicks.map((t, i) => <span key={i}>{t}</span>)}</div>
                 </div>
                 {data.timeline.map((lane, li) => (
@@ -423,13 +456,13 @@ export default function RcaWorkspace({
                           {s.root && s.witnessed && <Pill p={{ tone: "red", text: "Likely origin" }} />}
                           {!s.witnessed && <Pill p={{ tone: "gray", text: "Not observed" }} />}
                         </div>
-                        <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "No signals seen")}</div>
+                        <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "Not observed in this window")}</div>
                       </div>
                     </div>
                   ))}
                 </div>
                 <div className="rw-tdetail">
-                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the signals that saw it; a stage marked Not observed is part of the known propagation path but has no evidence in this window and is not claimed.
+                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a stage marked Not observed is part of the known propagation path but has no evidence in this window and is not claimed.
                 </div>
               </section>
             </>
@@ -482,10 +515,10 @@ export default function RcaWorkspace({
             <div className="rw-panel">
               <h3>Evidence accounting</h3>
               <table>
-                <thead><tr><th>Signal</th><th>Used?</th><th>Weight</th><th>Reason</th></tr></thead>
+                <thead><tr><th>Observation</th><th>Used?</th><th>Weight</th><th>Reason</th></tr></thead>
                 <tbody>
                   {data.debug.accounting.length === 0 ? (
-                    <tr><td colSpan={4} className="rw-small">No attached signals recorded for this object.</td></tr>
+                    <tr><td colSpan={4} className="rw-small">No attached observations recorded for this object.</td></tr>
                   ) : data.debug.accounting.map((r, i) => (
                     <tr key={i}><td>{r.signal}</td><td><Pill p={r.used} /></td><td className="rw-value mono">{r.weight}</td><td>{r.reason}</td></tr>
                   ))}
