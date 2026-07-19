@@ -147,7 +147,13 @@ func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Reques
 	}
 	provider, valid := cloudconn.ParseProvider(req.Provider)
 	if !valid {
-		writeJSONError(w, http.StatusBadRequest, "unknown provider (aws|azure|gcp)", "PROVIDER_INVALID")
+		// Registry-driven message: names exactly the providers this build offers.
+		known := cloudconn.RegisteredProviders()
+		toks := make([]string, 0, len(known))
+		for _, p := range known {
+			toks = append(toks, string(p))
+		}
+		writeJSONError(w, http.StatusBadRequest, "unknown provider ("+strings.Join(toks, "|")+")", "PROVIDER_INVALID")
 		return
 	}
 	c := cloudConnector{
@@ -978,19 +984,34 @@ func (s *server) handleCloudProviderCatalog(w http.ResponseWriter, r *http.Reque
 		Recommended bool                `json:"recommended"`
 	}
 	type providerView struct {
-		Provider   cloudconn.Provider     `json:"provider"`
-		Methods    []methodView           `json:"methods"`
-		ScopeTypes []cloudconn.ScopeType  `json:"scope_types"`
-		Packs      []cloudconn.CapabilityPack `json:"capability_packs"`
+		Provider        cloudconn.Provider         `json:"provider"`
+		DisplayName     string                     `json:"display_name"`
+		ShortLabel      string                     `json:"short_label"`
+		SetupDocKey     string                     `json:"setup_doc_key,omitempty"`
+		HasFlowLogs     bool                       `json:"has_flow_logs"`
+		HasHealthLane   bool                       `json:"has_health_lane"`
+		Methods         []methodView               `json:"methods"`
+		ScopeTypes      []cloudconn.ScopeType      `json:"scope_types"`
+		OrgScopeTypes   []cloudconn.ScopeType      `json:"org_scope_types,omitempty"`
+		MemberScopeType cloudconn.ScopeType        `json:"member_scope_type,omitempty"`
+		Packs           []cloudconn.CapabilityPack `json:"capability_packs"`
 	}
-	out := make([]providerView, 0, 3)
-	for _, p := range []cloudconn.Provider{cloudconn.ProviderAWS, cloudconn.ProviderAzure, cloudconn.ProviderGCP} {
-		methods := cloudconn.ProviderMethods(p)
-		mv := make([]methodView, 0, len(methods))
-		for i, m := range methods {
+	// Registry-driven: every registered provider descriptor is served — adding a
+	// provider never edits this handler.
+	descs := cloudconn.Descriptors()
+	out := make([]providerView, 0, len(descs))
+	for _, d := range descs {
+		mv := make([]methodView, 0, len(d.AuthMethods))
+		for i, m := range d.AuthMethods {
 			mv = append(mv, methodView{Method: m, Rank: m.Rank(), Federated: m.IsFederated(), Legacy: m.IsLegacy(), Recommended: i == 0})
 		}
-		out = append(out, providerView{Provider: p, Methods: mv, ScopeTypes: cloudconn.ScopeTypesForProvider(p), Packs: cloudconn.PacksForProvider(p)})
+		out = append(out, providerView{
+			Provider: d.ID, DisplayName: d.DisplayName, ShortLabel: d.ShortLabel,
+			SetupDocKey: d.SetupDocKey, HasFlowLogs: d.HasFlowLogs, HasHealthLane: d.HasHealthLane,
+			Methods: mv, ScopeTypes: cloudconn.ScopeTypesForProvider(d.ID),
+			OrgScopeTypes: append([]cloudconn.ScopeType(nil), d.OrgScopeTypes...), MemberScopeType: d.MemberScopeType,
+			Packs: cloudconn.PacksForProvider(d.ID),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
 }

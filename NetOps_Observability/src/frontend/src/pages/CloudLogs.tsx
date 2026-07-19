@@ -5,6 +5,7 @@ import { severityColor } from "../theme/severity";
 import { LogTime, LogMessage } from "../lib/logfmt";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
+import { listProviders, providerShort } from "./appobs/providers";
 
 // ── Unified Cloud Logs ──────────────────────────────────────────────────────
 // One screen showing every cloud log family together, a lane per family. The raw
@@ -30,11 +31,11 @@ const LANES: Lane[] = [
   { id: "host", label: "Host", source: "log", family: "host" },
 ];
 
+// Registry-driven (appobs/providers.tsx): the filter offers every registered
+// provider — adding a provider needs no edit here.
 const PROVIDERS = [
   { id: "", label: "All providers" },
-  { id: "aws", label: "AWS" },
-  { id: "azure", label: "Azure" },
-  { id: "gcp", label: "GCP" },
+  ...listProviders().map((d) => ({ id: d.id, label: d.short })),
 ];
 
 const RANGES = [
@@ -44,7 +45,8 @@ const RANGES = [
   { label: "Last 7d", minutes: 10080 },
 ];
 
-const PROVIDER_LABEL: Record<string, string> = { aws: "AWS", azure: "Azure", gcp: "GCP" };
+// Short display label for a provider token — registry-backed, "" stays "".
+const providerShortLabel = (p: string): string => (p ? providerShort(p) : "");
 
 // A single normalized row every lane maps onto, so one DataTable renders them all.
 type CloudRow = {
@@ -211,7 +213,7 @@ export default function CloudLogs() {
     if (ws.enabled) {
       ws.openInspector(<CloudRowDetail row={r} />, {
         title: r.resource || lane.label,
-        subtitle: `${PROVIDER_LABEL[r.provider] || r.provider || "cloud"}${r.ts ? " · " + fmtDateTime(r.ts) : ""}`,
+        subtitle: `${providerShortLabel(r.provider) || r.provider || "cloud"}${r.ts ? " · " + fmtDateTime(r.ts) : ""}`,
       });
     }
   };
@@ -227,7 +229,7 @@ export default function CloudLogs() {
       {
         key: "provider", header: "Provider", width: 96, sortable: true, text: (r) => r.provider,
         render: (r) => (
-          <span className="clog-badge">{PROVIDER_LABEL[r.provider] || r.provider || "—"}</span>
+          <span className="clog-badge">{providerShortLabel(r.provider) || r.provider || "—"}</span>
         ),
       },
       {
@@ -359,7 +361,7 @@ export function CloudRowDetail({ row }: { row: CloudRow }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-        <span><span style={{ color: "var(--muted)" }}>Provider </span>{PROVIDER_LABEL[row.provider] || row.provider || "—"}</span>
+        <span><span style={{ color: "var(--muted)" }}>Provider </span>{providerShortLabel(row.provider) || row.provider || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Account </span>{row.account || "—"}</span>
         <span><span style={{ color: "var(--muted)" }}>Resource </span>{row.resource || "—"}</span>
         {row.ts && <span><span style={{ color: "var(--muted)" }}>Time </span>{fmtDateTime(row.ts)}</span>}

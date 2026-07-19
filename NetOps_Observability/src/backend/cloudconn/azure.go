@@ -19,6 +19,36 @@ type azureAdapter struct {
 	probe    *AzureARMProbeClient
 }
 
+// init registers Azure in the ONE provider registry (registry.go).
+func init() {
+	RegisterProvider(ProviderDescriptor{
+		ID:          ProviderAzure,
+		DisplayName: "Microsoft Azure",
+		ShortLabel:  "Azure",
+		AuthMethods: []AuthMethod{AuthMethodWorkloadFederation, AuthMethodCertificate, AuthMethodClientSecret},
+		ScopeTypes: []ScopeType{
+			ScopeOrg, ScopeMgmtGroup, ScopeSubscription, ScopeResourceGrp, ScopeVNet, ScopeRegion, ScopeExplicit,
+		},
+		OrgScopeTypes:   []ScopeType{ScopeOrg, ScopeMgmtGroup},
+		MemberScopeType: ScopeSubscription,
+		SetupDocKey:     "cloud-connector-azure",
+		HasFlowLogs:     false, // honest: no VNet flow-log capability in azure-observer-v1
+		HasHealthLane:   false, // honest: no Azure Service Health lane built yet
+		IdentityRef:     func(cfg IdentityConfig) string { return cfg.ClientID },
+		NewAdapter: func() CloudIdentityProvider {
+			return azureAdapter{exchange: NewAzureEntraExchanger(), probe: NewAzureARMProbeClient()}
+		},
+		NewAdapterWithExchanger: func(x TokenExchanger) CloudIdentityProvider {
+			return azureAdapter{exchange: x}
+		},
+		NewAdapterWithAssertions: func(src WorkloadAssertionSource) CloudIdentityProvider {
+			x := NewAzureEntraExchanger()
+			x.Assertions = src
+			return azureAdapter{exchange: x, probe: NewAzureARMProbeClient()}
+		},
+	})
+}
+
 func (azureAdapter) Provider() Provider { return ProviderAzure }
 
 func (a azureAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {

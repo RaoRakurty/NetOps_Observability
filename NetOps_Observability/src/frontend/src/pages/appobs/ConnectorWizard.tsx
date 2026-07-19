@@ -21,22 +21,16 @@ import {
   api, CloudProvider, CloudAuthMethod, CloudConnectorView, CloudProviderCatalogEntry,
   CloudCapabilityPack, CloudSetupBundle, CloudScope,
 } from "../../services/api";
-import { AwsLogo, AzureLogo, GcpLogo } from "../../components/ConnectorLogos";
 import { invalidateCloudInventory } from "./api";
+import { providerIds, providerLabel, providerBlurb, ProviderIcon } from "./providers";
 import {
-  WizardStep, STEPS, STEP_LABEL, stepIndex, PROVIDERS, PROVIDER_LABEL, PROVIDER_BLURB,
+  WizardStep, STEPS, STEP_LABEL, stepIndex,
   primaryScopeType, primaryScopeLabel, primaryScopePlaceholder,
   METHOD_LABEL, METHOD_BLURB, methodHoldsSecret, authFields, AuthFieldKey,
   secretConfig, buildAuthInput, authFieldsComplete, packFullId, packPermissions,
   findingTone, findingIcon, liveCheckDisplay, healthTone, healthLabel, canActivate, isActive,
   errText, resumeStep, resumePrimaryRef, resumeRegions, hydrateAuthValues,
 } from "./connectorWizard";
-
-function ProviderMark({ provider, size = 40 }: { provider: CloudProvider; size?: number }) {
-  if (provider === "aws") return <AwsLogo size={size} />;
-  if (provider === "azure") return <AzureLogo size={size} />;
-  return <GcpLogo size={size} />;
-}
 
 // Red asterisk + legend for required fields (the admin.tsx config-form convention).
 function ReqLegend() {
@@ -247,8 +241,8 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
             <div className="ccw-eyebrow">{resume ? "Resume cloud onboarding" : "Cloud onboarding"}</div>
             <h2 className="ccw-title" id="ccw-title">
               {resume
-                ? `Finish setting up ${resume.display_name || (provider ? PROVIDER_LABEL[provider] : "this connection")}`
-                : provider ? `Connect ${PROVIDER_LABEL[provider]}` : "Connect a cloud account"}
+                ? `Finish setting up ${resume.display_name || (provider ? providerLabel(provider) : "this connection")}`
+                : provider ? `Connect ${providerLabel(provider)}` : "Connect a cloud account"}
             </h2>
           </div>
           <button className="ao-x" onClick={onClose} aria-label="Close wizard">×</button>
@@ -364,11 +358,16 @@ function ProviderStep({ catalog, selected, onSelect }: {
   onSelect: (p: CloudProvider) => void;
 }) {
   const available = new Set((catalog ?? []).map((c) => c.provider));
+  // Registry ∪ catalog: every registered descriptor renders a tile, and a
+  // provider the BACKEND offers renders even without a frontend descriptor
+  // (generic label fallback) — adding a provider needs zero edits here.
+  const tiles = [...providerIds()];
+  for (const p of available) if (!tiles.includes(p)) tiles.push(p);
   return (
     <div className="ccw-stack">
       <p className="ccw-lead">Pick the cloud you want Correlix to observe. Every connector is read-only and least-privilege.</p>
       <div className="ccw-tiles" role="radiogroup" aria-label="Cloud provider">
-        {PROVIDERS.map((p) => {
+        {tiles.map((p) => {
           const ready = catalog === null || available.has(p);
           return (
             <button
@@ -377,9 +376,9 @@ function ProviderStep({ catalog, selected, onSelect }: {
               disabled={!ready}
               onClick={() => onSelect(p)}
             >
-              <ProviderMark provider={p} size={44} />
-              <span className="ccw-tile-t">{PROVIDER_LABEL[p]}</span>
-              <span className="ccw-tile-d">{PROVIDER_BLURB[p]}</span>
+              <ProviderIcon provider={p} size={44} />
+              <span className="ccw-tile-t">{providerLabel(p)}</span>
+              <span className="ccw-tile-d">{providerBlurb(p)}</span>
             </button>
           );
         })}

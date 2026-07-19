@@ -17,6 +17,41 @@ type gcpAdapter struct {
 	probe    *GCPProbeClient
 }
 
+// init registers GCP in the ONE provider registry (registry.go).
+func init() {
+	RegisterProvider(ProviderDescriptor{
+		ID:          ProviderGCP,
+		DisplayName: "Google Cloud",
+		ShortLabel:  "GCP",
+		AuthMethods: []AuthMethod{AuthMethodWorkloadFederation, AuthMethodStaticKey},
+		ScopeTypes: []ScopeType{
+			ScopeOrg, ScopeFolder, ScopeProject, ScopeVPC, ScopeRegion, ScopeExplicit,
+		},
+		OrgScopeTypes:   []ScopeType{ScopeOrg, ScopeFolder},
+		MemberScopeType: ScopeProject,
+		SetupDocKey:     "cloud-connector-gcp",
+		HasFlowLogs:     true,  // VPC flow-log lane (gcp-observer pack flow_logs capability)
+		HasHealthLane:   false, // honest: no GCP incident lane built yet
+		IdentityRef: func(cfg IdentityConfig) string {
+			if cfg.ServiceAccount != "" {
+				return cfg.ServiceAccount
+			}
+			return cfg.WorkloadProvider
+		},
+		NewAdapter: func() CloudIdentityProvider {
+			return gcpAdapter{exchange: NewGCPSTSExchanger(), probe: NewGCPProbeClient()}
+		},
+		NewAdapterWithExchanger: func(x TokenExchanger) CloudIdentityProvider {
+			return gcpAdapter{exchange: x}
+		},
+		NewAdapterWithAssertions: func(src WorkloadAssertionSource) CloudIdentityProvider {
+			x := NewGCPSTSExchanger()
+			x.Assertions = src
+			return gcpAdapter{exchange: x, probe: NewGCPProbeClient()}
+		},
+	})
+}
+
 func (gcpAdapter) Provider() Provider { return ProviderGCP }
 
 func (a gcpAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {

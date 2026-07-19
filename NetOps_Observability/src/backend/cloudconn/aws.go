@@ -17,6 +17,38 @@ type awsAdapter struct {
 	probe    *AWSProbeClient
 }
 
+// init registers AWS in the ONE provider registry (registry.go). Everything
+// provider-neutral code knows about AWS — offer, scopes, org shape, flags,
+// adapter construction — is declared here and nowhere else.
+func init() {
+	RegisterProvider(ProviderDescriptor{
+		ID:          ProviderAWS,
+		DisplayName: "Amazon Web Services",
+		ShortLabel:  "AWS",
+		AuthMethods: []AuthMethod{AuthMethodWorkloadFederation, AuthMethodCloudRole, AuthMethodStaticKey},
+		ScopeTypes: []ScopeType{
+			ScopeOrg, ScopeOU, ScopeAccount, ScopeVPC, ScopeRegion, ScopeExplicit,
+		},
+		OrgScopeTypes:   []ScopeType{ScopeOrg, ScopeOU},
+		MemberScopeType: ScopeAccount,
+		SetupDocKey:     "cloud-connector-aws",
+		HasFlowLogs:     true, // VPC flow-log lane (aws-observer pack flow_logs capability)
+		HasHealthLane:   true, // AWS Health incident/maintenance lane
+		IdentityRef:     func(cfg IdentityConfig) string { return cfg.RoleARN },
+		NewAdapter: func() CloudIdentityProvider {
+			return awsAdapter{exchange: NewAWSSTSExchanger(), probe: NewAWSProbeClient()}
+		},
+		NewAdapterWithExchanger: func(x TokenExchanger) CloudIdentityProvider {
+			return awsAdapter{exchange: x}
+		},
+		NewAdapterWithAssertions: func(src WorkloadAssertionSource) CloudIdentityProvider {
+			x := NewAWSSTSExchanger()
+			x.Assertions = src
+			return awsAdapter{exchange: x, probe: NewAWSProbeClient()}
+		},
+	})
+}
+
 func (awsAdapter) Provider() Provider { return ProviderAWS }
 
 // ValidateConfiguration enforces the AWS trust security rules with NO network:

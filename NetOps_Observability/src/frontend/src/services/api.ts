@@ -1447,7 +1447,11 @@ export interface CloudAppLive {
 // ---- Cloud Connectors (onboarding wizard, backlog Wave 1 #3) ----
 // Trust-metadata projections of the done 7-step connector API — NEVER a secret.
 // Mirrors src/backend/cloud_connectors_handlers.go + cloudconn/*.go.
-export type CloudProvider = "aws" | "azure" | "gcp";
+// CloudProvider is an OPEN token (Wave 5 #17 extensibility): the provider set
+// comes from the backend registry via /api/cloud/providers, and the frontend
+// resolves display metadata through pages/appobs/providers.tsx — so a newly
+// registered provider needs no type edit here. "aws" | "azure" | "gcp" today.
+export type CloudProvider = string;
 export type CloudAuthMethod =
   | "workload_identity_federation"
   | "cloud_role"

@@ -23,41 +23,29 @@ const (
 	ScopeExplicit     ScopeType = "explicit"      // an explicit list of resource ids
 )
 
-var scopeByProvider = map[Provider]map[ScopeType]bool{
-	ProviderAWS: {
-		ScopeOrg: true, ScopeOU: true, ScopeAccount: true, ScopeRegion: true,
-		ScopeVPC: true, ScopeExplicit: true,
-	},
-	ProviderAzure: {
-		ScopeOrg: true, ScopeMgmtGroup: true, ScopeSubscription: true, ScopeRegion: true,
-		ScopeResourceGrp: true, ScopeVNet: true, ScopeExplicit: true,
-	},
-	ProviderGCP: {
-		ScopeOrg: true, ScopeFolder: true, ScopeProject: true, ScopeRegion: true,
-		ScopeVPC: true, ScopeExplicit: true,
-	},
-}
-
 // ValidForProvider reports whether a scope type is meaningful for a provider.
+// The valid set is declared on the provider's registered descriptor (registry.go).
 func (st ScopeType) ValidForProvider(p Provider) bool {
-	return scopeByProvider[p][st]
-}
-
-// ScopeTypesForProvider lists the scope types a provider supports (unordered set
-// materialized in a stable order for the UI).
-func ScopeTypesForProvider(p Provider) []ScopeType {
-	// deterministic order: broad → narrow
-	order := []ScopeType{
-		ScopeOrg, ScopeMgmtGroup, ScopeOU, ScopeFolder, ScopeAccount, ScopeSubscription,
-		ScopeProject, ScopeResourceGrp, ScopeVPC, ScopeVNet, ScopeRegion, ScopeExplicit,
+	d, ok := providerRegistry[p]
+	if !ok {
+		return false
 	}
-	out := make([]ScopeType, 0, len(order))
-	for _, st := range order {
-		if st.ValidForProvider(p) {
-			out = append(out, st)
+	for _, s := range d.ScopeTypes {
+		if s == st {
+			return true
 		}
 	}
-	return out
+	return false
+}
+
+// ScopeTypesForProvider lists the scope types a provider supports in the
+// descriptor's declared broad → narrow order (a copy — never the registry slice).
+func ScopeTypesForProvider(p Provider) []ScopeType {
+	d, ok := providerRegistry[p]
+	if !ok {
+		return nil
+	}
+	return append([]ScopeType(nil), d.ScopeTypes...)
 }
 
 // Scope is one collection-scope binding: a scope type plus the provider-native id
@@ -75,7 +63,7 @@ type Scope struct {
 // ParseScopeType normalizes a free-form scope token.
 func ParseScopeType(s string) (ScopeType, bool) {
 	st := ScopeType(strings.ToLower(strings.TrimSpace(s)))
-	for p := range scopeByProvider {
+	for p := range providerRegistry {
 		if st.ValidForProvider(p) {
 			return st, true
 		}

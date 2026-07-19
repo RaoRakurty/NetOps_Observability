@@ -13,6 +13,13 @@ import type {
   CloudProvider, CloudAuthMethod, CloudAuthInput, CloudConnectorView,
   CloudCapabilityPack, CloudConnFinding,
 } from "../../services/api";
+import {
+  providerDescriptor, providerIds,
+  type AuthField, type AuthFieldKey, type SecretConfig,
+} from "./providers";
+
+// Re-exported so existing importers keep one import site for the field model.
+export type { AuthField, AuthFieldKey, SecretConfig };
 
 // Customer-facing text for an API error thrown by services/api's request()
 // ("<status> <text>: <body>"). The 501 case is the honest "this deployment has
@@ -46,30 +53,23 @@ export function stepIndex(step: WizardStep): number {
 }
 
 // ── Providers ───────────────────────────────────────────────────────────────
-export const PROVIDERS: CloudProvider[] = ["aws", "azure", "gcp"];
-
-export const PROVIDER_LABEL: Record<CloudProvider, string> = {
-  aws: "Amazon Web Services",
-  azure: "Microsoft Azure",
-  gcp: "Google Cloud",
-};
-
-export const PROVIDER_BLURB: Record<CloudProvider, string> = {
-  aws: "Cross-account IAM role, read-only. Inventory, CloudWatch, CloudTrail and VPC flow logs.",
-  azure: "Entra workload identity, read-only. Resource inventory, Azure Monitor and activity logs.",
-  gcp: "Workload Identity Federation, read-only. Compute inventory, Cloud Monitoring and flow logs.",
-};
+// Registry-driven (providers.tsx): the id list, labels, blurbs, scope fields
+// and per-method auth fields all come from the ONE descriptor module. Adding a
+// provider is a registerProvider() call — nothing here changes.
+// NOTE: PROVIDERS is a snapshot taken at module import (compat export); live
+// surfaces (the wizard tile list) call providerIds() directly so providers
+// registered later still render.
+export const PROVIDERS: CloudProvider[] = providerIds();
 
 // The provider-native id an operator names first (the primary collection scope).
 export function primaryScopeType(p: CloudProvider): string {
-  return p === "aws" ? "account" : p === "azure" ? "subscription" : "project";
+  return providerDescriptor(p).primaryScope.type;
 }
 export function primaryScopeLabel(p: CloudProvider): string {
-  return p === "aws" ? "Account ID" : p === "azure" ? "Subscription ID" : "Project ID";
+  return providerDescriptor(p).primaryScope.label;
 }
 export function primaryScopePlaceholder(p: CloudProvider): string {
-  return p === "aws" ? "123456789012" : p === "azure"
-    ? "00000000-0000-0000-0000-000000000000" : "my-project-123";
+  return providerDescriptor(p).primaryScope.placeholder;
 }
 
 // ── Auth methods ──────────────────────────────────────────────────────────────
@@ -102,128 +102,14 @@ export function methodHoldsSecret(m: CloudAuthMethod): boolean {
 }
 
 // ── Identity fields per provider × method (mirrors cloudconn ValidateConfiguration) ──
-export type AuthFieldKey =
-  | "role_arn" | "azure_tenant_id" | "client_id" | "audience"
-  | "issuer" | "federated_subject" | "cert_thumbprint"
-  | "project_number" | "workload_pool" | "workload_provider" | "service_account";
-
-export interface AuthField {
-  key: AuthFieldKey;
-  label: string;
-  placeholder: string;
-  required: boolean;
-  mono?: boolean;
-  hint?: string;
-}
-
-const F = {
-  role_arn: (required: boolean): AuthField => ({
-    key: "role_arn", label: "Role ARN", required, mono: true,
-    placeholder: "arn:aws:iam::123456789012:role/correlix-observer",
-    hint: "Deploy the trust setup on the next step, then paste the created role ARN here.",
-  }),
-  azure_tenant_id: (): AuthField => ({
-    key: "azure_tenant_id", label: "Directory (tenant) ID", required: true, mono: true,
-    placeholder: "00000000-0000-0000-0000-000000000000",
-  }),
-  client_id: (): AuthField => ({
-    key: "client_id", label: "Application (client) ID", required: true, mono: true,
-    placeholder: "00000000-0000-0000-0000-000000000000",
-  }),
-  audience: (): AuthField => ({
-    key: "audience", label: "Audience", required: false, mono: true,
-    placeholder: "api://AzureADTokenExchange",
-    hint: "Optional — Entra's default is used when blank.",
-  }),
-  issuer: (): AuthField => ({
-    key: "issuer", label: "Federation issuer", required: true, mono: true,
-    placeholder: "https://token.correlix…/oidc",
-    hint: "From the trust setup — the Correlix issuer your federated credential trusts.",
-  }),
-  federated_subject: (): AuthField => ({
-    key: "federated_subject", label: "Federation subject", required: true, mono: true,
-    placeholder: "correlix:connector:…",
-    hint: "From the trust setup — the subject your federated credential trusts.",
-  }),
-  cert_thumbprint: (): AuthField => ({
-    key: "cert_thumbprint", label: "Certificate thumbprint", required: true, mono: true,
-    placeholder: "A1B2C3…",
-  }),
-  project_number: (): AuthField => ({
-    key: "project_number", label: "Project number", required: true, mono: true,
-    placeholder: "123456789012",
-    hint: "The numeric project number (not the project ID).",
-  }),
-  workload_pool: (): AuthField => ({
-    key: "workload_pool", label: "Workload identity pool", required: true, mono: true,
-    placeholder: "correlix-pool",
-    hint: "From the trust setup — created by the deployed template.",
-  }),
-  workload_provider: (): AuthField => ({
-    key: "workload_provider", label: "Pool provider", required: true, mono: true,
-    placeholder: "correlix-provider",
-  }),
-  service_account_opt: (): AuthField => ({
-    key: "service_account", label: "Impersonated service account", required: false, mono: true,
-    placeholder: "observer@my-project.iam.gserviceaccount.com",
-    hint: "Optional — the least-privilege SA Correlix impersonates.",
-  }),
-  service_account_req: (): AuthField => ({
-    key: "service_account", label: "Service account", required: true, mono: true,
-    placeholder: "observer@my-project.iam.gserviceaccount.com",
-  }),
-};
-
+// Both surfaces resolve through the provider descriptor (providers.tsx).
 export function authFields(provider: CloudProvider, method: CloudAuthMethod): AuthField[] {
-  if (provider === "aws") {
-    if (method === "workload_identity_federation" || method === "cloud_role") return [F.role_arn(true)];
-    return []; // static_key → only the stored secret
-  }
-  if (provider === "azure") {
-    const base = [F.azure_tenant_id(), F.client_id()];
-    if (method === "workload_identity_federation") return [...base, F.issuer(), F.federated_subject(), F.audience()];
-    if (method === "certificate") return [...base, F.cert_thumbprint()];
-    return base; // client_secret → base + stored secret
-  }
-  // gcp
-  if (method === "workload_identity_federation") {
-    return [F.project_number(), F.workload_pool(), F.workload_provider(), F.service_account_opt()];
-  }
-  return [F.project_number(), F.service_account_req()]; // static_key → + stored secret
+  return providerDescriptor(provider).authFields(method);
 }
 
-// The stored-secret input shown only for legacy methods.
-export interface SecretConfig {
-  kind: string;
-  keyHintLabel: string;
-  keyHintPlaceholder: string;
-  secretLabel: string;
-  secretPlaceholder: string;
-  multiline: boolean;
-}
 export function secretConfig(provider: CloudProvider, method: CloudAuthMethod): SecretConfig | null {
   if (!methodHoldsSecret(method)) return null;
-  if (provider === "aws" && method === "static_key") {
-    return {
-      kind: "access_key",
-      keyHintLabel: "Access key ID", keyHintPlaceholder: "AKIA…",
-      secretLabel: "Secret access key", secretPlaceholder: "…", multiline: false,
-    };
-  }
-  if (provider === "azure" && method === "client_secret") {
-    return {
-      kind: "client_secret",
-      keyHintLabel: "Secret name / ID", keyHintPlaceholder: "correlix-observer-secret",
-      secretLabel: "Client secret value", secretPlaceholder: "…", multiline: false,
-    };
-  }
-  // gcp static_key
-  return {
-    kind: "sa_key",
-    keyHintLabel: "Key ID (optional)", keyHintPlaceholder: "key-1",
-    secretLabel: "Service-account JSON key", secretPlaceholder: "{ \"type\": \"service_account\", … }",
-    multiline: true,
-  };
+  return providerDescriptor(provider).secretConfig(method);
 }
 
 // buildAuthInput assembles the auth POST body from the collected values. The

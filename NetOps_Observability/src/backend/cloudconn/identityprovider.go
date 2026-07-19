@@ -162,35 +162,28 @@ type CloudIdentityProvider interface {
 
 // AdapterFor returns the provider adapter for p wired to its LIVE production
 // token exchanger AND probe client (real endpoints, env-backed platform
-// identity), or nil if unknown.
+// identity), or nil if unknown. Resolution goes through the provider registry
+// (registry.go) — AdapterFor stays the adapter seam; the descriptor owns how
+// its adapter is constructed.
 func AdapterFor(p Provider) CloudIdentityProvider {
-	switch p {
-	case ProviderAWS:
-		return awsAdapter{exchange: NewAWSSTSExchanger(), probe: NewAWSProbeClient()}
-	case ProviderAzure:
-		return azureAdapter{exchange: NewAzureEntraExchanger(), probe: NewAzureARMProbeClient()}
-	case ProviderGCP:
-		return gcpAdapter{exchange: NewGCPSTSExchanger(), probe: NewGCPProbeClient()}
-	default:
+	d, ok := providerRegistry[p]
+	if !ok {
 		return nil
 	}
+	return d.NewAdapter()
 }
 
 // NewAdapterWithExchanger returns the provider adapter wired to an injected
 // TokenExchanger — the DI seam tests and alternative deployments use (e.g. an
 // httptest server standing in for STS/Entra/Google endpoints). No probe client
-// is wired: DiscoverScopes/ValidateCapabilities defer.
+// is wired: DiscoverScopes/ValidateCapabilities defer. Unknown provider (or a
+// descriptor without the injection hook) → nil.
 func NewAdapterWithExchanger(p Provider, x TokenExchanger) CloudIdentityProvider {
-	switch p {
-	case ProviderAWS:
-		return awsAdapter{exchange: x}
-	case ProviderAzure:
-		return azureAdapter{exchange: x}
-	case ProviderGCP:
-		return gcpAdapter{exchange: x}
-	default:
+	d, ok := providerRegistry[p]
+	if !ok || d.NewAdapterWithExchanger == nil {
 		return nil
 	}
+	return d.NewAdapterWithExchanger(x)
 }
 
 // NewAWSAdapter returns the AWS adapter with fully injected seams (tests /

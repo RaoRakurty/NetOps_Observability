@@ -327,20 +327,10 @@ func (b *cloudIdentityBroker) Invalidate(connectorID string) {
 
 // connectorIdentityRef returns the provider-native identity reference used in the
 // cache key (role ARN / client id / SA email). Never used as a cache key ALONE.
+// Resolution is registry-driven (cloudconn.ProviderDescriptor.IdentityRef) — no
+// per-provider switch to extend when a provider is added.
 func connectorIdentityRef(c cloudConnector) string {
-	switch c.Provider {
-	case cloudconn.ProviderAWS:
-		return c.Identity.RoleARN
-	case cloudconn.ProviderAzure:
-		return c.Identity.ClientID
-	case cloudconn.ProviderGCP:
-		if c.Identity.ServiceAccount != "" {
-			return c.Identity.ServiceAccount
-		}
-		return c.Identity.WorkloadProvider
-	default:
-		return ""
-	}
+	return cloudconn.IdentityRefFor(c.Provider, c.Identity)
 }
 
 func (b *cloudIdentityBroker) audit(event, tenant, connectorID, provider, decision, detail string) {
