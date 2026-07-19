@@ -112,7 +112,7 @@ func TestAtAGlanceHTMLIsFirstSectionWithRedPath(t *testing.T) {
 	if glance < 0 || mgmt < 0 || glance > mgmt {
 		t.Fatalf("at-a-glance must be the FIRST section (glance@%d mgmt@%d)", glance, mgmt)
 	}
-	firstPage := doc[:strings.Index(doc, `<div class="pagebreak"`)]
+	firstPage := doc[:strings.Index(doc, `<div class="divider"`)]
 	if !strings.Contains(firstPage, "<svg") {
 		t.Fatal("the causality path graph must render on page 1")
 	}

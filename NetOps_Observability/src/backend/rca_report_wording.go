@@ -662,6 +662,30 @@ func appendUnique(ss []string, s string) []string {
 	return append(ss, s)
 }
 
+// rcaMidSentence lowercases the first rune of a clause being embedded
+// mid-sentence ("possibly because of The IPsec tunnel…" → "…the IPsec
+// tunnel…"). It only touches a plain sentence-cased word: if any later letter
+// of the first word is uppercase (BGP, IPsec, IKE_SA) the word is a proper
+// name/acronym and is left alone.
+func rcaMidSentence(s string) string {
+	if s == "" {
+		return s
+	}
+	first := s
+	if i := strings.IndexAny(s, " \t"); i > 0 {
+		first = s[:i]
+	}
+	if first[0] < 'A' || first[0] > 'Z' {
+		return s
+	}
+	for i := 1; i < len(first); i++ {
+		if first[i] >= 'A' && first[i] <= 'Z' {
+			return s // acronym / camel-cased proper name — keep as written
+		}
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
 // ---- at a glance (#113 point 2) ---------------------------------------------------------------
 
 // buildAtAGlance composes the document's FIRST section — where it happened ·
@@ -714,7 +738,7 @@ func buildAtAGlance(loc rcaFaultLocalization, scope rcaReportScope, hyps []rcaHy
 			orDefault(top.Problem, top.Title))
 	case top != nil:
 		g.What = fmt.Sprintf("Possibly because of %s — unconfirmed. %s",
-			strings.TrimRight(orDefault(top.Problem, top.Title), "."),
+			rcaMidSentence(strings.TrimRight(orDefault(top.Problem, top.Title), ".")),
 			"The evidence supports this as the best current hypothesis, not a conclusion.")
 	default:
 		g.What = "No cause hypothesis has supporting evidence yet — the anomaly is recorded without a claimed cause."

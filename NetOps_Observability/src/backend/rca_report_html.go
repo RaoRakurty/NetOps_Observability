@@ -1,8 +1,11 @@
 package main
 
 // rca_report_html.go — server-side HTML rendering of the canonical RCA report
-// (rca_report.go). Two layers (§17): page 1 = management & decision view,
-// page 2+ = NOC & technical view. Print-safe: A4, grayscale-legible (state is
+// (rca_report.go). Three layers (§17), flowing continuously with labeled
+// dividers (never forced page breaks — those left half-empty pages):
+// management & decision brief first, then the NOC/analyst view (reasoning →
+// causality → root cause → ownership → actions, the SRE-postmortem order),
+// then the evidence appendix. Print-safe: A4, grayscale-legible (state is
 // always carried by a WORD, colour only reinforces), no scripts, no external
 // resources (renders identically under the Gotenberg sidecar's Chromium and in
 // a browser tab). Colour rules (§18): green = healthy/recovered, amber =
@@ -22,6 +25,7 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 	"humanState": func(v string) string { return strings.ReplaceAll(v, "_", " ") },
 	"upper":      strings.ToUpper,
 	"title":      rcaTitleCase,
+	"midSent":    rcaMidSentence,
 	"dur":        func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
 	"f1": func(f *float64) string {
 		if f == nil {
@@ -373,12 +377,16 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   table { width:100%; border-collapse:collapse; font-size:11.5px; table-layout:fixed; }
   th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
   th { color:#64748b; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:#f8fafc; }
-  .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; break-inside: avoid; page-break-inside: avoid; }
+  /* kv grids may be tall (NOC quick read); they MUST be allowed to fragment
+     between rows — an atomic kv block taller than the space left on a page
+     pushes wholesale and leaves the page half-empty. */
+  .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; }
   .kv .k { color:#64748b; }
   .kv .v { color:#172033; font-weight:600; }
   .note { font-size:11px; color:#64748b; margin-top:4px; }
   ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; break-inside: avoid; page-break-inside: avoid; }
-  .pagebreak { break-before: page; page-break-before: always; }
+  .divider { display:flex; align-items:center; gap:12px; margin:26px 0 4px; color:#94a3b8; font-size:9.5px; font-weight:800; letter-spacing:1.4px; text-transform:uppercase; break-after: avoid; page-break-after: avoid; }
+  .divider::before, .divider::after { content:""; flex:1; border-top:1px solid #d5dce6; }
   .why b { font-size:11.5px; }
   footer.doc-end { margin-top:18px; border-top:1px solid #e2e8f0; padding-top:7px; font-size:10px; color:#94a3b8; display:flex; justify-content:space-between; }
 </style></head><body><div class="doc">
@@ -432,7 +440,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   </div>
   {{if .Topology.Available}}
   {{pathGraph .Topology}}
-  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; detail on page 2.</div>
+  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; hop-by-hop detail in the evidence appendix.</div>
   {{else}}
   <div class="note">{{.Topology.Reason}}</div>
   {{end}}
@@ -455,7 +463,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{if .Times.MonitoringUntil}}<span class="k">Monitoring until</span><span class="v">{{.Times.MonitoringUntil}}</span>{{end}}
     {{if .Scope.Services}}<span class="k">Service / application</span><span class="v">{{range $i, $s := .Scope.Services}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{if .Scope.Regions}}<span class="k">Region</span><span class="v">{{range $i, $s := .Scope.Regions}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else if .RootCause.PossibleCause}}Not confirmed — possibly because of {{.RootCause.PossibleCause}}{{else}}Not identified — no cause hypothesis has supporting evidence yet{{end}}</span>
+    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else if .RootCause.PossibleCause}}Not confirmed — possibly because of {{midSent .RootCause.PossibleCause}}{{else}}Not identified — no cause hypothesis has supporting evidence yet{{end}}</span>
   </div>
 </section>
 
@@ -498,8 +506,11 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 {{end}}
 
-<!-- ============================ PAGE 2 — NOC & TECHNICAL ============================ -->
-<div class="pagebreak"></div>
+<!-- ============================ TECHNICAL LAYER — NOC & ANALYST ============================ -->
+<!-- A labeled divider, NOT a forced page break: a hard break after a short
+     management layer left a half-empty page mid-document (the owner's "giant
+     gaps"). The layer boundary stays visible; the paper stays dense. -->
+<div class="divider">Technical detail — NOC &amp; analyst view</div>
 <section>
   <h2>NOC quick read</h2>
   <div class="kv">
@@ -514,6 +525,100 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{range .Summary.WhyNotConfirmed}}<p><b style="color:#475467">Why not confirmed:</b> {{.}}</p>{{end}}
   {{if .Summary.RequiredConfirm}}<p><b style="color:#1d4ed8">Required confirmation:</b> {{.Summary.RequiredConfirm}}</p>{{end}}
 </section>
+
+<section>
+  {{if .Cascade}}
+  <h2>How the failure propagated</h2>
+  <table><thead><tr><th style="width:26%">Stage</th><th style="width:16%">Observed</th><th>Evidence</th></tr></thead><tbody>
+  {{range .Cascade}}<tr{{if not .Witnessed}} style="opacity:.62"{{end}}>
+    <td><b>{{.Stage}}</b>{{if .Root}} <span class="pill red">likely origin</span>{{end}}</td>
+    <td>{{if .Witnessed}}<span class="pill green">witnessed</span>{{else}}<span class="pill gray">not observed</span>{{end}}</td>
+    <td>{{.Note}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  <div class="note">A failure at the highlighted origin propagates downward. A stage marked
+  not observed is part of the known propagation path but carried no evidence in this window
+  and is not claimed.</div>
+  {{end}}
+  <h2>{{if .SingleHypothesis}}Current hypothesis{{else}}Hypothesis ranking{{end}}</h2>
+  {{if .Hypotheses}}
+  <table><thead><tr><th style="width:4%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:27%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
+  {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.62"{{end}}>
+    <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
+    <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
+        {{if .Problem}}<div class="note" style="color:#334155">{{.Problem}}</div>{{end}}
+        <div class="note">condition: {{humanState .ObservationState}} · causal role: {{humanState .CausalRole}}</div>
+        {{if .Owner}}<div class="note">candidate owner: {{.Owner}}</div>{{end}}</td>
+    <td>{{title .Label}}</td>
+    <td>{{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}{{if .Contradicting}}<div class="note">contradicted by: {{range $i, $s := .Contradicting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}</td>
+    <td>{{range $i, $s := .ConfirmWhen}}{{if $i}}; {{end}}{{$s}}{{end}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  {{else}}<div class="note">No hypothesis has evidence in this window.</div>{{end}}
+</section>
+
+<section>
+  <h2>Fault localization</h2>
+  <p>{{.FaultLocalization.Statement}}</p>
+  {{if .FaultLocalization.Localized}}
+  <div class="kv">
+    <span class="k">Localization boundary</span><span class="v" style="font-family:ui-monospace,monospace">{{.FaultLocalization.Object}}</span>
+    <span class="k">Boundary type</span><span class="v">{{.FaultLocalization.ObjectType}}</span>
+  </div>
+  {{if .FaultLocalization.Evidence}}<div class="note">Localizing evidence: {{range $i, $s := .FaultLocalization.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
+  {{end}}
+</section>
+
+<section>
+  <h2>Root cause</h2>
+  <p>{{.RootCause.Statement}}</p>
+  {{if .RootCause.Identified}}
+  <div class="kv">
+    <span class="k">Mechanism</span><span class="v">{{.RootCause.Mechanism}}</span>
+    <span class="k">Object</span><span class="v" style="font-family:ui-monospace,monospace">{{.RootCause.Object}}</span>
+    {{if .RootCause.Owner}}<span class="k">Owner</span><span class="v">{{.RootCause.Owner}}</span>{{end}}
+  </div>
+  {{if .RootCause.Evidence}}<div class="note">Causality evidence: {{range $i, $s := .RootCause.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
+  {{else if .RootCause.PossibleCause}}
+  <!-- #113 point 4 — cause honesty: the best hypothesis and its evidence STATE,
+       never a bare "not identified". -->
+  <div class="kv">
+    <span class="k">Possible cause (unconfirmed)</span><span class="v">{{.RootCause.PossibleCause}}</span>
+    {{if .RootCause.EvidenceKnown}}<span class="k">Evidence in hand</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceKnown}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
+    {{if .RootCause.EvidenceMissing}}<span class="k">Evidence still missing</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceMissing}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
+  </div>
+  {{end}}
+</section>
+
+<section>
+  <h2>Ownership</h2>
+  <div class="kv">
+    <span class="k">Triage owner</span><span class="v">{{.Ownership.TriageOwner}}</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.TriageReason}}</span>
+    <span class="k">Suspected fault domain</span><span class="v">{{.Ownership.SuspectedDomain}}</span>
+    {{if .Ownership.TechnicalOwner}}<span class="k">Technical owner</span><span class="v">{{.Ownership.TechnicalOwner}}</span>{{end}}
+    {{if .Ownership.ExternalCandidate}}<span class="k">External provider candidate</span><span class="v">{{.Ownership.ExternalCandidate}} — accountability pending demarcation</span>
+    <span class="k">Demarcation</span><span class="v">{{title (humanState .Ownership.Demarcation)}}</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.DemarcationBasis}}</span>{{end}}
+    <span class="k">Escalation owner</span><span class="v">{{.Ownership.EscalationOwner}}</span>
+    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.EscalationReason}}</span>
+  </div>
+  {{if .Ownership.Candidates}}
+  <table style="margin-top:6px"><thead><tr><th>Candidate team</th><th>Basis</th></tr></thead><tbody>
+  {{range .Ownership.Candidates}}<tr><td>{{.Team}}</td><td>{{.Reason}}</td></tr>{{end}}
+  </tbody></table>{{end}}
+</section>
+
+<section>
+  <h2>Next actions</h2>
+  <ol class="actions">
+  {{range .Actions}}<li><span class="pill {{if eq .OperationalPriority "P1"}}red{{else}}blue{{end}}" style="font-size:9px">{{.OperationalPriority}}</span> <b>{{.Action}}</b> — owner: {{.Owner}}{{if .ExpectedResult}}<div class="note">Expected output: {{.ExpectedResult}}</div>{{end}}{{if .EscalateWhen}}<div class="note">Escalate when: {{.EscalateWhen}}</div>{{end}}</li>
+  {{end}}
+  </ol>
+</section>
+
+<!-- ============================ EVIDENCE APPENDIX ============================ -->
+<div class="divider">Evidence appendix — measurements &amp; coverage</div>
 
 <section>
   <h2>Evidence summary</h2>
@@ -637,96 +742,5 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <div class="note">A change is never labelled the root cause from timing alone (correlated is not caused).</div>
 </section>
 {{end}}
-
-<section>
-  {{if .Cascade}}
-  <h2>How the failure propagated</h2>
-  <table><thead><tr><th style="width:26%">Stage</th><th style="width:16%">Observed</th><th>Evidence</th></tr></thead><tbody>
-  {{range .Cascade}}<tr{{if not .Witnessed}} style="opacity:.62"{{end}}>
-    <td><b>{{.Stage}}</b>{{if .Root}} <span class="pill red">likely origin</span>{{end}}</td>
-    <td>{{if .Witnessed}}<span class="pill green">witnessed</span>{{else}}<span class="pill gray">not observed</span>{{end}}</td>
-    <td>{{.Note}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  <div class="note">A failure at the highlighted origin propagates downward. A stage marked
-  not observed is part of the known propagation path but carried no evidence in this window
-  and is not claimed.</div>
-  {{end}}
-  <h2>{{if .SingleHypothesis}}Current hypothesis{{else}}Hypothesis ranking{{end}}</h2>
-  {{if .Hypotheses}}
-  <table><thead><tr><th style="width:4%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:27%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
-  {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.62"{{end}}>
-    <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
-    <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
-        {{if .Problem}}<div class="note" style="color:#334155">{{.Problem}}</div>{{end}}
-        <div class="note">condition: {{humanState .ObservationState}} · causal role: {{humanState .CausalRole}}</div>
-        {{if .Owner}}<div class="note">candidate owner: {{.Owner}}</div>{{end}}</td>
-    <td>{{title .Label}}</td>
-    <td>{{range $i, $s := .Supporting}}{{if $i}}; {{end}}{{$s}}{{end}}{{if .Contradicting}}<div class="note">contradicted by: {{range $i, $s := .Contradicting}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}</td>
-    <td>{{range $i, $s := .ConfirmWhen}}{{if $i}}; {{end}}{{$s}}{{end}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  {{else}}<div class="note">No hypothesis has evidence in this window.</div>{{end}}
-</section>
-
-<section>
-  <h2>Fault localization</h2>
-  <p>{{.FaultLocalization.Statement}}</p>
-  {{if .FaultLocalization.Localized}}
-  <div class="kv">
-    <span class="k">Localization boundary</span><span class="v" style="font-family:ui-monospace,monospace">{{.FaultLocalization.Object}}</span>
-    <span class="k">Boundary type</span><span class="v">{{.FaultLocalization.ObjectType}}</span>
-  </div>
-  {{if .FaultLocalization.Evidence}}<div class="note">Localizing evidence: {{range $i, $s := .FaultLocalization.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
-  {{end}}
-</section>
-
-<section>
-  <h2>Root cause</h2>
-  <p>{{.RootCause.Statement}}</p>
-  {{if .RootCause.Identified}}
-  <div class="kv">
-    <span class="k">Mechanism</span><span class="v">{{.RootCause.Mechanism}}</span>
-    <span class="k">Object</span><span class="v" style="font-family:ui-monospace,monospace">{{.RootCause.Object}}</span>
-    {{if .RootCause.Owner}}<span class="k">Owner</span><span class="v">{{.RootCause.Owner}}</span>{{end}}
-  </div>
-  {{if .RootCause.Evidence}}<div class="note">Causality evidence: {{range $i, $s := .RootCause.Evidence}}{{if $i}}; {{end}}{{$s}}{{end}}</div>{{end}}
-  {{else if .RootCause.PossibleCause}}
-  <!-- #113 point 4 — cause honesty: the best hypothesis and its evidence STATE,
-       never a bare "not identified". -->
-  <div class="kv">
-    <span class="k">Possible cause (unconfirmed)</span><span class="v">{{.RootCause.PossibleCause}}</span>
-    {{if .RootCause.EvidenceKnown}}<span class="k">Evidence in hand</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceKnown}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
-    {{if .RootCause.EvidenceMissing}}<span class="k">Evidence still missing</span><span class="v" style="font-weight:400">{{range $i, $s := .RootCause.EvidenceMissing}}{{if $i}}; {{end}}{{$s}}{{end}}</span>{{end}}
-  </div>
-  {{end}}
-</section>
-
-<section>
-  <h2>Ownership</h2>
-  <div class="kv">
-    <span class="k">Triage owner</span><span class="v">{{.Ownership.TriageOwner}}</span>
-    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.TriageReason}}</span>
-    <span class="k">Suspected fault domain</span><span class="v">{{.Ownership.SuspectedDomain}}</span>
-    {{if .Ownership.TechnicalOwner}}<span class="k">Technical owner</span><span class="v">{{.Ownership.TechnicalOwner}}</span>{{end}}
-    {{if .Ownership.ExternalCandidate}}<span class="k">External provider candidate</span><span class="v">{{.Ownership.ExternalCandidate}} — accountability pending demarcation</span>
-    <span class="k">Demarcation</span><span class="v">{{title (humanState .Ownership.Demarcation)}}</span>
-    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.DemarcationBasis}}</span>{{end}}
-    <span class="k">Escalation owner</span><span class="v">{{.Ownership.EscalationOwner}}</span>
-    <span class="k">Why</span><span class="v" style="font-weight:400">{{.Ownership.EscalationReason}}</span>
-  </div>
-  {{if .Ownership.Candidates}}
-  <table style="margin-top:6px"><thead><tr><th>Candidate team</th><th>Basis</th></tr></thead><tbody>
-  {{range .Ownership.Candidates}}<tr><td>{{.Team}}</td><td>{{.Reason}}</td></tr>{{end}}
-  </tbody></table>{{end}}
-</section>
-
-<section>
-  <h2>Next actions</h2>
-  <ol class="actions">
-  {{range .Actions}}<li><span class="pill {{if eq .OperationalPriority "P1"}}red{{else}}blue{{end}}" style="font-size:9px">{{.OperationalPriority}}</span> <b>{{.Action}}</b> — owner: {{.Owner}}{{if .ExpectedResult}}<div class="note">Expected output: {{.ExpectedResult}}</div>{{end}}{{if .EscalateWhen}}<div class="note">Escalate when: {{.EscalateWhen}}</div>{{end}}</li>
-  {{end}}
-  </ol>
-</section>
 
 </div></body></html>`
