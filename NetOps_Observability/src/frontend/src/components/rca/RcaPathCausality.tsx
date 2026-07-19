@@ -1,10 +1,10 @@
 import { useMemo } from "react";
 import type { CorrTimeline, RcaPathAttribution, RcaTypedSegment, RcaPathKeyDevice } from "../../services/api";
 import {
-  segmentLabel, segmentMeta, isOpaqueSegment, roleLabel, roleAbbr, roleCloudFamily,
+  segmentLabel, segmentMeta, roleLabel, roleAbbr, roleCloudFamily,
   tierLabel, tierTone, confidenceLabel, kindLabel,
 } from "./labels";
-import { derivePathModel, type PathModel } from "./pathModel";
+import { derivePathModel, type PathModel, type PathSegmentView, type PathBoundary } from "./pathModel";
 
 // RcaPathCausality — THE single RCA case path view (owner P1 2026-07-19: the
 // former "Path causality" + "Network path & causal topology" renders are merged
@@ -43,12 +43,19 @@ function cloudLogsHref(role: string, provider: string, resourceId: string): stri
   return `#/logs/cloud?${p.toString()}`;
 }
 
+// The display role: the discovery-driven canonical role when the backend
+// classifier placed the device (device_role), else the legacy path role.
+function displayRole(dev: RcaPathKeyDevice): string {
+  return dev.device_role || dev.role;
+}
+
 // Everything an operator may want per hop, behind hover — never on the chain.
 function devTooltip(dev: RcaPathKeyDevice, seg: RcaTypedSegment, causeKind?: string): string {
-  const parts = [roleLabel(dev.role)];
+  const parts = [roleLabel(displayRole(dev))];
   if (dev.label) parts.push(dev.label);
   if (dev.address && dev.address !== dev.label) parts.push(dev.address);
   parts.push(`${segmentLabel(seg.segment_type)} segment${seg.provider ? ` · ${seg.provider.toUpperCase()}` : ""}`);
+  if (dev.device_role && dev.role_confidence) parts.push(`role from discovery · ${dev.role_confidence}`);
   if (seg.confidence) parts.push(`classified · ${confidenceLabel(seg.confidence).toLowerCase()}`);
   if (causeKind) parts.push(`evidence: ${kindLabel(causeKind)}`);
   return parts.join(" — ");
@@ -65,16 +72,16 @@ function DeviceNode({
   const cls = `rpc-dev${mark === "cause" ? " cause" : mark === "downstream" ? " downstream" : ""}`;
   const inner = (
     <>
-      <span className="rpc-dev-abbr" aria-hidden="true">{mark === "cause" ? "✕" : roleAbbr(dev.role)}</span>
+      <span className="rpc-dev-abbr" aria-hidden="true">{mark === "cause" ? "✕" : roleAbbr(displayRole(dev))}</span>
       <span className="rpc-dev-body">
-        <span className="rpc-dev-role">{roleLabel(dev.role)}</span>
+        <span className="rpc-dev-role">{roleLabel(displayRole(dev))}</span>
         {dev.label && <span className="rpc-dev-name">{dev.label}</span>}
         {mark === "cause" && <span className="rpc-dev-tag cause">{breakText}</span>}
         {mark === "downstream" && <span className="rpc-dev-tag down">Downstream</span>}
       </span>
     </>
   );
-  const aria = `${roleLabel(dev.role)}${dev.label ? ` ${dev.label}` : ""}${mark === "cause" ? `, ${breakText.toLowerCase()}` : mark === "downstream" ? ", downstream" : ""}`;
+  const aria = `${roleLabel(displayRole(dev))}${dev.label ? ` ${dev.label}` : ""}${mark === "cause" ? `, ${breakText.toLowerCase()}` : mark === "downstream" ? ", downstream" : ""}`;
   if (href) {
     return (
       <a className={cls} href={href} title={`${devTooltip(dev, seg, causeKind)} — open logs`}
@@ -110,6 +117,40 @@ function GapConnector({ seg }: { seg: RcaTypedSegment }) {
   );
 }
 
+// A visible vertical boundary between adjacent segments (owner directive
+// 2026-07-19: "clean segmentation with visible borders between seams"). Every
+// adjacent pair gets the divider; the seam is labeled when OWNERSHIP changes
+// ("enterprise ↔ carrier"). When the seam itself is the suspect, the red break
+// hero sits ON this boundary (never also on a device — one hero).
+function BoundaryMark({ b, breakText }: { b: PathBoundary; breakText: string }) {
+  if (b.suspected) {
+    const text = breakText === "Break here" ? "Break at this handoff" : "Possible break at this handoff";
+    return (
+      <span className="rpc-boundary suspected" role="img"
+        aria-label={`${text}${b.seamLabel ? ` — ${b.seamLabel}` : ""}`}>
+        <span className="rpc-boundary-x" aria-hidden="true">✕</span>
+        <span className="rpc-boundary-rule" aria-hidden="true" />
+        <span className="rpc-boundary-label">{text}{b.seamLabel ? ` · ${b.seamLabel}` : ""}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="rpc-boundary" aria-hidden={b.seamLabel ? undefined : true}>
+      <span className="rpc-boundary-rule" aria-hidden="true" />
+      {b.seamLabel && <span className="rpc-boundary-label">{b.seamLabel}</span>}
+    </span>
+  );
+}
+
+// An INFERRED segment (topological completeness): the path class implies this
+// construct exists (site LAN never reaches cloud/DC without a WAN), but no hop
+// in it responded. Dotted body, honest wording — never dressed as measured.
+function inferredBodyText(seg: PathSegmentView): string {
+  const name = seg.canonical === "carrier" ? "carrier path"
+    : seg.canonical === "dc_wan_edge" ? "DC WAN edge" : "WAN edge";
+  return `no responding hops — ${name} inferred`;
+}
+
 // The seam-ownership + "possibly because of X" line — one plain sentence under
 // the headline (never a chip grid). Rendered only from real case data.
 function OwnershipLine({ ownership, possibleCause }: { ownership?: string; possibleCause?: string }) {
@@ -131,9 +172,11 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
   const model: PathModel = useMemo(() => derivePathModel(data, timeline), [data, timeline]);
   const cause = model.cause;
 
+  // When the SEAM is the suspect (model.causeBoundary), the hero renders on the
+  // boundary and no device is marked — one hero, never two.
   const causeKey = useMemo(
-    () => (cause ? devKey(cause.device.segment_index, cause.device) : ""),
-    [cause],
+    () => (cause && model.causeBoundary === null ? devKey(cause.device.segment_index, cause.device) : ""),
+    [cause, model.causeBoundary],
   );
   const downstreamKeys = useMemo(() => {
     const s = new Set<string>();
@@ -242,7 +285,15 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
             </span>
           )}
         </div>
-        {cause ? (
+        {cause && model.causeBoundary !== null ? (
+          <div className="rpc-claim">
+            <b>Client → {dstName}</b> broke at the{" "}
+            <span className="rpc-claim-seg">
+              {model.boundaries[model.causeBoundary]?.seamLabel || "segment"} handoff
+            </span>
+            {" — the parties' seam is the suspect, not a device inside either side."}
+          </div>
+        ) : cause ? (
           <div className="rpc-claim">
             <b>Client → {dstName}</b> broke at <span className="rpc-claim-seg">{segmentLabel(cause.device.segment_type)}</span>
             {" · "}<b className="rpc-claim-dev">{roleLabel(cause.device.role)}{(cause.device.label || cause.device.address) ? ` ${cause.device.label || cause.device.address}` : ""}</b>
@@ -276,7 +327,10 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
               </>
             )}
             {segments.map((seg, i) => {
-              const opaque = (isOpaqueSegment(seg.segment_type) || !!seg.reason) && !(seg.key_devices?.length);
+              // Only a segment we could not place on the canonical taxonomy AT
+              // ALL collapses to a bare gap; a known-but-inferred construct keeps
+              // its identity (owner: measurement absence ≠ topological absence).
+              const opaque = seg.canonical === "unknown" && !(seg.key_devices?.length);
               const meta = segmentMeta(seg.segment_type);
               const health = model.segmentHealth[seg.index];
               return (
@@ -284,12 +338,13 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
                   {opaque ? (
                     <GapConnector seg={seg} />
                   ) : (
-                    <div className={`rpc-seg${(seg.key_devices ?? []).some((d) => devKey(seg.index, d) === causeKey) ? " has-cause" : ""}`}
+                    <div className={`rpc-seg${(seg.key_devices ?? []).some((d) => devKey(seg.index, d) === causeKey) ? " has-cause" : ""}${seg.inferred ? " inferred" : ""}`}
                       style={{ ["--seg-color" as string]: meta.color }}>
                       <div className="rpc-seg-cap" title={seg.confidence ? `Classified · ${confidenceLabel(seg.confidence)}` : undefined}>
                         <span className="rpc-seg-tick" aria-hidden="true" />
                         <span className="rpc-seg-name">{segmentLabel(seg.segment_type)}</span>
                         {seg.provider && <span className="rpc-seg-provider">{seg.provider.toUpperCase()}</span>}
+                        {seg.attachmentText && <span className="rpc-seg-provider" title="Cloud attachment type (from backend connectivity data)">{seg.attachmentText}</span>}
                         {seg.ambiguous && <span className="rpc-seg-flag" title="Multiple equal-cost paths (ECMP) — the exact hop is ambiguous">ECMP</span>}
                         {health && (
                           <span className={`rpc-seg-health ${health}`}>
@@ -307,15 +362,25 @@ export default function RcaPathCausality({ data, timeline, ownership, possibleCa
                               causeKind={k === causeKey ? cause?.kind : undefined} />
                           );
                         })}
-                        {(!seg.key_devices || seg.key_devices.length === 0) && (
+                        {seg.inferred && (!seg.key_devices || seg.key_devices.length === 0) && (seg.unknown_hops?.length ?? 0) === 0 && (
+                          <span className="rpc-seg-inferred-body" title={seg.reason || undefined}>
+                            {inferredBodyText(seg)}
+                            {/* Mirror a carried-over measurement reason for screen readers
+                                (1.4.13); the default inference wording is already the
+                                visible body text, so it is not duplicated. */}
+                            {seg.reason && !/inferred/i.test(seg.reason) && <span className="sr-only"> — {seg.reason}</span>}
+                          </span>
+                        )}
+                        {!seg.inferred && (!seg.key_devices || seg.key_devices.length === 0) && (seg.unknown_hops?.length ?? 0) === 0 && (
                           <span className="rpc-seg-empty" title={seg.reason || undefined}>no device identified</span>
                         )}
-                        {seg.unknown_hops && seg.unknown_hops.length > 0 && (seg.key_devices?.length ?? 0) > 0 &&
+                        {seg.unknown_hops && seg.unknown_hops.length > 0 &&
                           <GapConnector seg={{ ...seg, reason: seg.reason || `${seg.unknown_hops.length} hop(s) inside this segment did not respond — not visible from here.` }} />}
                       </div>
                     </div>
                   )}
-                  {i < segments.length - 1 && <span className="rpc-arrow" aria-hidden="true">→</span>}
+                  {i < segments.length - 1 && model.boundaries[i] &&
+                    <BoundaryMark b={model.boundaries[i]} breakText={breakText} />}
                 </div>
               );
             })}
@@ -422,6 +487,29 @@ a.rpc-dev:focus-visible { outline: 2px solid var(--rw-blue, #2563eb); outline-of
 .rpc-dev-tag { align-self: flex-start; margin-top: 2px; font-size: 9.5px; font-weight: 800; border-radius: 5px; padding: 1px 5px; }
 .rpc-dev-tag.cause { color: #fff; background: var(--rw-red, #dc2626); }
 .rpc-dev-tag.down { color: var(--rw-muted, #6a7384); border: 1px solid var(--rw-line, #dce3ee); }
+
+/* visible vertical boundary between adjacent segments — the seam. Labeled when
+   ownership changes; the RED variant is the break hero ON the seam. */
+.rpc-boundary { display: inline-flex; flex-direction: column; align-items: center; align-self: stretch;
+  justify-content: flex-end; gap: 3px; padding: 0 4px; position: relative; }
+.rpc-boundary-rule { width: 2px; flex: 1; min-height: 30px; border-radius: 1px;
+  background: var(--rw-line, var(--border, #dce3ee)); }
+.rpc-boundary-label { font-size: 9px; font-weight: 700; letter-spacing: .03em; white-space: nowrap;
+  color: var(--rw-muted2, #8a94a6); text-transform: uppercase; }
+.rpc-boundary.suspected .rpc-boundary-rule { background: var(--rw-red, #dc2626); width: 3px; }
+.rpc-boundary.suspected .rpc-boundary-label { color: var(--rw-red, #dc2626); }
+.rpc-boundary-x { color: #fff; background: var(--rw-red, #dc2626); border-radius: 50%;
+  width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rw-red, #dc2626) 18%, transparent); }
+
+/* an INFERRED segment — topologically required, zero responding hops. Dotted
+   identity, never dressed as measured. */
+.rpc-seg.inferred .rpc-seg-tick { background: transparent; border-bottom: 3px dotted var(--seg-color, #8a94a6); height: 0; }
+.rpc-seg.inferred .rpc-seg-name { color: var(--rw-muted2, #8a94a6); }
+.rpc-seg-inferred-body { font-size: 11px; color: var(--rw-muted2, #8a94a6); font-style: italic;
+  align-self: center; padding: 4px 8px; border: 1px dotted var(--rw-muted2, #8a94a6);
+  border-radius: 8px; cursor: help; white-space: nowrap; }
 
 /* collapsed unknown span — dotted absence with a count, detail on hover */
 .rpc-gap { display: inline-flex; flex-direction: column; align-items: center; justify-content: center;

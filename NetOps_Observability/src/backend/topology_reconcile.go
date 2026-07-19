@@ -91,7 +91,7 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 	}
 
 	var g topology.GraphRecords
-	for _, f := range toDeviceFacts(devs, nil, nil) { // cpu/mem nil — structural only
+	for _, f := range toDeviceFacts(devs, nil, nil, nil) { // cpu/mem/links nil — structural only
 		g.Nodes = append(g.Nodes, topology.NodeRecord{
 			TenantID: tenantByDev[f.ID],
 			ID:       f.ID,

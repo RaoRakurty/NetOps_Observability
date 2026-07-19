@@ -643,12 +643,24 @@ export function appIdSourceLabel(s?: string): string {
 // Tone maps to the rw-pill palette (green/orange/blue/red/gray/purple). Accent is a
 // concrete color (fallbacks legible on both the light report surface and dark app).
 export const SEGMENT_META: Record<string, { label: string; short: string; tone: Tone; color: string }> = {
-  cloud:    { label: "Cloud",        short: "CLOUD", tone: "purple", color: C.discriminates },
-  lan:      { label: "LAN",          short: "LAN",   tone: "blue",   color: C.info },
-  dc:       { label: "Data Center",  short: "DC",    tone: "green",  color: C.flow },
-  wan:      { label: "WAN",          short: "WAN",   tone: "orange", color: C.warn },
+  // ── canonical segment taxonomy (owner directive 2026-07-19): the enterprise
+  // connectivity chain a NOC operator recognizes. Every rendered path segment
+  // canonicalizes onto one of these (pathModel.ts canonicalSegment).
+  site_lan:      { label: "Site LAN",             short: "LAN",  tone: "blue",   color: C.info },
+  edge_security: { label: "Edge security",        short: "SEC",  tone: "orange", color: C.caution },
+  wan_edge:      { label: "WAN edge",             short: "WAN",  tone: "orange", color: C.warn },
+  carrier:       { label: "Carrier / middle mile", short: "CARR", tone: "gray",  color: C.faint },
+  dc_wan_edge:   { label: "DC WAN edge",          short: "DCWAN", tone: "orange", color: "#C2410C" },
+  dc_fabric:     { label: "DC fabric",            short: "DC",   tone: "green",  color: C.flow },
+  cloud_edge:    { label: "Cloud edge",           short: "CEDGE", tone: "purple", color: "#7C3AED" },
+  cloud:         { label: "Cloud",                short: "CLOUD", tone: "purple", color: C.discriminates },
+  // ── legacy engine vocabulary (typed-path blobs / spine boundaries still emit
+  // these; pathModel canonicalizes them, but any direct render keeps a label).
+  lan:      { label: "Site LAN",     short: "LAN",   tone: "blue",   color: C.info },
+  dc:       { label: "DC fabric",    short: "DC",    tone: "green",  color: C.flow },
+  wan:      { label: "WAN edge",     short: "WAN",   tone: "orange", color: C.warn },
   wan_seam: { label: "WAN Seam",     short: "SEAM",  tone: "orange", color: "#C2410C" },
-  internet: { label: "Internet",     short: "NET",   tone: "gray",   color: C.faint },
+  internet: { label: "Carrier / middle mile", short: "CARR", tone: "gray", color: C.faint },
   unknown:  { label: "Unknown segment", short: "?",  tone: "gray",   color: C.faint },
 };
 export function segmentLabel(t?: string): string {
@@ -673,6 +685,11 @@ export const ROLE_LABEL: Record<string, string> = {
   edge: "Edge router", router: "Router", switch: "Switch",
   nva: "Network appliance", tunnel: "Tunnel", gateway: "Gateway", proxy: "Proxy",
   unknown: "Device",
+  // canonical discovery-driven device roles (backend topology/roles.go)
+  access_switch: "Access switch", distribution_switch: "Distribution switch",
+  core_router: "Core router", wan_edge: "WAN edge router", carrier_hop: "Carrier hop",
+  dc_wan_edge: "DC WAN edge", dc_leaf: "Leaf switch", dc_spine: "Spine switch",
+  cloud_edge: "Cloud edge gateway",
 };
 export function roleLabel(r?: string): string {
   const k = (r || "").toLowerCase();
@@ -685,6 +702,10 @@ export const ROLE_ABBR: Record<string, string> = {
   app: "APP", application: "APP", host: "HOST", server: "SRV", client: "USER",
   leaf: "LEAF", spine: "SPN", edge: "EDGE", router: "RTR", switch: "SW",
   nva: "NVA", tunnel: "TUN", gateway: "GW", proxy: "PXY", unknown: "•",
+  // canonical discovery-driven device roles
+  access_switch: "SW", distribution_switch: "DIST", core_router: "CORE",
+  wan_edge: "WAN", carrier_hop: "CARR", dc_wan_edge: "DCW",
+  dc_leaf: "LEAF", dc_spine: "SPN", cloud_edge: "CGW",
 };
 export function roleAbbr(r?: string): string {
   const k = (r || "").toLowerCase();

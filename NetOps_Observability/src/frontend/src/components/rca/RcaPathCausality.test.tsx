@@ -54,10 +54,20 @@ const confirmed: RcaPathAttribution = {
 describe("RcaPathCausality", () => {
   it("renders the discovered path as customer-labeled typed segments", () => {
     render(<RcaPathCausality data={confirmed} />);
-    // segment types use customer labels — never the raw tokens. "Cloud" appears
-    // both in the headline claim and as the segment name — both are customer text.
+    // segment types use the canonical NOC labels — never the raw tokens. "Cloud"
+    // appears both in the headline claim and as the segment name.
     expect(screen.getAllByText("Cloud").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("LAN").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Site LAN").length).toBeGreaterThan(0);
+    // TOPOLOGICAL COMPLETENESS (owner 2026-07-19): a LAN→cloud path ALWAYS
+    // renders the WAN constructs between them, inferred (dotted) when silent —
+    // never a bare "LAN … CLOUD".
+    expect(screen.getAllByText("WAN edge").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Carrier / middle mile").length).toBeGreaterThan(0);
+    expect(screen.getByText(/WAN edge inferred/i)).toBeTruthy();
+    expect(screen.getByText(/carrier path inferred/i)).toBeTruthy();
+    // visible seam labels where ownership changes between adjacent segments.
+    expect(screen.getByText("enterprise ↔ carrier")).toBeTruthy();
+    expect(screen.getByText("carrier ↔ provider")).toBeTruthy();
     // role labels are customer-facing (no schema kinds).
     expect(screen.getAllByText("Load Balancer").length).toBeGreaterThan(0);
     expect(screen.getByText("Client")).toBeTruthy();
@@ -140,16 +150,18 @@ describe("RcaPathCausality", () => {
       },
     };
     render(<RcaPathCausality data={capped} />);
-    // the opaque span collapses to a dotted connector (no grey box); its
-    // classification reason stays reachable on hover (title) AND as
-    // screen-reader-only text (a11y pass: aria-label on a role-less span is
-    // unreliably exposed, so the reason is mirrored as .sr-only text).
+    // an unknown span BETWEEN the site LAN and the cloud is the WAN/carrier leg
+    // topologically (owner 2026-07-19: measurement absence ≠ topological
+    // absence): it renders as an INFERRED carrier segment — identity kept, body
+    // dotted, never a bare grey box. Its original classification reason stays
+    // reachable on hover (title) AND as screen-reader-only text.
     expect(screen.queryByText("Unknown segment")).toBeNull();
-    expect(screen.getByText("unknown span")).toBeTruthy();
+    expect(screen.getAllByText("Carrier / middle mile").length).toBeGreaterThan(0);
+    const inferredBody = screen.getByText(/carrier path inferred/i);
+    expect(inferredBody.className).toContain("rpc-seg-inferred-body");
+    expect(inferredBody.getAttribute("title")).toMatch(/no telemetry crosses this provider backbone/i);
     const srReason = screen.getByText(/no telemetry crosses this provider backbone/i);
     expect(srReason.className).toContain("sr-only");
-    const gap = srReason.closest(".rpc-gap") as HTMLElement;
-    expect(gap.getAttribute("title")).toMatch(/no telemetry crosses this provider backbone/i);
     // an unconfirmed verdict reads "Possible break here", never definitive.
     expect(screen.getByText("Possible break here")).toBeTruthy();
     // the honesty cap is surfaced — reads suspected, never confirmed.
@@ -238,12 +250,23 @@ describe("RcaPathCausality — merged fallback chain (pathModel.ts)", () => {
 
   it("derives connected boundary segments + the red break from the measured spine when no typed path exists", () => {
     render(<RcaPathCausality data={null} timeline={spineTimeline()} />);
-    // boundary segments in customer labels: LAN → Internet (carrier) → Cloud
-    expect(screen.getAllByText("LAN").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Internet").length).toBeGreaterThan(0);
+    // canonical boundary segments: Site LAN → WAN edge (the responding SD-WAN/
+    // ISP edge device answers from the carrier-boundary span, so the span IS the
+    // WAN edge construct) → Carrier (inferred — its hops are silent) → Cloud.
+    expect(screen.getAllByText("Site LAN").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("WAN edge").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Carrier / middle mile").length).toBeGreaterThan(0);
+    expect(screen.getByText(/carrier path inferred/i)).toBeTruthy();
     expect(screen.getAllByText("Cloud").length).toBeGreaterThan(0);
-    // the backend's fault mark is the hero break — suspected verdict, never definitive
-    expect(screen.getByText("Possible break here")).toBeTruthy();
+    // the fault mark sits on the LAST responding device before a dark carrier
+    // leg across an ownership change — so the red hero sits ON the seam (owner
+    // 2026-07-19: boundary break when the parties' handoff is the suspect), one
+    // hero, suspected verdict, never definitive.
+    expect(screen.getByText(/Possible break at this handoff/)).toBeTruthy();
+    expect(screen.getAllByText(/enterprise ↔ carrier/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/broke at the/i)).toBeTruthy();
+    // the last-responding device itself is NOT blamed (no device break tag)…
+    expect(screen.queryByText("Possible break here")).toBeNull();
     expect(screen.getByText("isp-edge")).toBeTruthy();
     // health overlay per segment — toned words, never grey chips
     expect(screen.getByText("suspected down")).toBeTruthy();

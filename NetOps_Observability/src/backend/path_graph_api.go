@@ -515,6 +515,13 @@ func (s *server) rcaPathBlock(ctx context.Context, r *http.Request, correlationI
 		return nil
 	}
 	stampSpineFault(resp.Spine, verdictTier, topHyp)
+	// Discovery-driven canonical device roles on the hops that resolve to a
+	// CALLER-VISIBLE managed device (tenant-scoped index; device_roles.go). The
+	// path view uses these to place devices into canonical segments; hops that
+	// resolve to nothing stay role-less (unknown stays absent).
+	if resp.Spine != nil && len(resp.Spine.Spine) > 0 {
+		stampSpineRoles(resp.Spine.Spine, s.deviceRoleIndex(ctx, claims))
+	}
 	return resp
 }
 

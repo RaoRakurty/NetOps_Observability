@@ -53,6 +53,10 @@ export interface SpineNode {
   // Cloud provider whose DECLARED inventory claims this hop's address
   // (aws | azure | gcp) — stamped by the backend, never guessed client-side.
   provider?: string;
+  // Discovery-driven device role (backend role classifier), stamped only when the
+  // hop resolves to a managed device the classifier could place. Absent = unknown.
+  device_role?: string;
+  role_confidence?: string; // strong | medium | weak
   rtt_ms?: number;
   // repeat_count > 1: this node stands for that many CONSECUTIVE measured TTLs
   // with the identical answer (a dying path answers every remaining TTL from the
@@ -158,6 +162,8 @@ function readNode(v: unknown): SpineNode | null {
     transformation: oneOf(o.transformation, TRANSFORMS),
     seam_id: str(o.seam_id) || undefined,
     provider: str(o.provider) || undefined,
+    device_role: str(o.device_role) || undefined,
+    role_confidence: oneOf(o.role_confidence, ["strong", "medium", "weak"] as const),
     rtt_ms: num(o.rtt_ms),
     repeat_count: num(o.repeat_count),
     fault: oneOf(o.fault, ["broken", "suspected", "possible", "last_response"] as const),
