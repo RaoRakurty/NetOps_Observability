@@ -36,6 +36,8 @@ import {
 import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
+import Security from "./appobs/Security";
+import { ProviderIncidentsPanel, SeamHealthStrip } from "./appobs/ProviderIncidents";
 import AssignServiceDrawer from "./appobs/AssignService";
 import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
 import MonitorsSettings from "./appobs/MonitorsSettings";
@@ -59,7 +61,8 @@ import { sqFromHash, hashWithSq, listViews, saveView, deleteView } from "./appob
 import { getActiveScope } from "../services/api";
 import type { CloudRcaObject } from "./appobs/api";
 import { signatureNocTitle } from "../components/rca/labels";
-import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES } from "./appobs/attribution";
+import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES, WORKLOAD_CLASSES, WORKLOAD_CLASS_META, workloadClass } from "./appobs/attribution";
+import type { WorkloadClass } from "./appobs/attribution";
 import { useCloudShell } from "./appobs/useCloudShell";
 import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell";
 import { SOURCE_LABEL } from "./appobs/readiness";
@@ -170,10 +173,11 @@ function CurrentNote() {
 // 5-tab IA (audit C): Overview | Services | Investigations | Resources |
 // Data sources (+ Settings). The old 11 tab ids stay valid as deep-link
 // aliases so every existing bookmark/flyout link lands on the right sub-view.
-const TABS = ["overview", "services", "investigations", "resources", "datasources", "settings"] as const;
+const TABS = ["overview", "services", "investigations", "security", "resources", "datasources", "settings"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
   overview: "Overview", services: "Services", investigations: "Investigations",
+  security: "Security",
   resources: "Resources", datasources: "Data sources", settings: "Settings",
 };
 const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
@@ -252,6 +256,7 @@ export default function AppObservability() {
       {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} ctl={scopeCtl} />}
       {tab === "services" && <Services initialSub={sub} onOpen={setSel} ctl={scopeCtl} />}
       {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} ctl={scopeCtl} />}
+      {tab === "security" && <Security windowHours={windowHoursFor(scopeCtl.scope.rangeMinutes)} />}
       {tab === "resources" && <ResourcesGroup initialSub={sub} ctl={scopeCtl} />}
       {tab === "datasources" && <Ingestion initialSub={sub} scope={scopeCtl.scope} onClearScope={scopeCtl.clearFilters} />}
       {tab === "settings" && <Settings />}
@@ -533,6 +538,11 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
         )}
       </div>
 
+      {/* A3. the provider's own incident/maintenance lane + the hybrid-seam
+          gateway plane (Wave 5 #16) — both honest about absence. */}
+      <ProviderIncidentsPanel windowHours={windowHoursFor(scope.rangeMinutes)} />
+      <SeamHealthStrip windowHours={windowHoursFor(scope.rangeMinutes)} />
+
       {/* B. the REAL investigations the engine formed — no heuristic verdicts. */}
       <div className="ao-panel">
         <div className="ao-panel-h">Open investigations
@@ -741,9 +751,15 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
   const rows = all.filter((r) =>
     (!f.missing || r.missingTags.includes(f.missing)) &&
     (!f.unknown || (f.unknown === "yes") === (r.app === "")) &&
-    (!f.provider || r.provider === f.provider));
+    (!f.provider || r.provider === f.provider) &&
+    (!f.class || workloadClass(r.type) === f.class));
   const providerOpts = [...new Set(all.map((r) => r.provider))]
     .filter((p) => p !== "—").map((p) => ({ value: p, label: p.toUpperCase() }));
+  // Workload classes (Wave 5 #15): always offered — an empty class renders its
+  // honest "nothing discovered + needed permission" state, never a bare table.
+  const classOpts = WORKLOAD_CLASSES.map((c) => ({ value: c, label: WORKLOAD_CLASS_META[c].label }));
+  const classEmpty = f.class && rows.length === 0
+    ? WORKLOAD_CLASS_META[f.class as WorkloadClass] : null;
   const visibleIds = rows.map((r) => r.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => picked.has(id));
   // After a write the cached inventory is stale — drop it and refetch so the
@@ -754,6 +770,7 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
           { key: "provider", label: "Provider", options: providerOpts },
+          { key: "class", label: "Workload class", options: classOpts },
           { key: "missing", label: "Missing tag", options: [{ value: "app", label: "app" }, { value: "owner", label: "owner" }, { value: "env", label: "env" }] },
           { key: "unknown", label: "Untagged service", options: [{ value: "yes", label: "yes" }] },
         ]} />
@@ -765,7 +782,10 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
         </div>
       )}
       {notice && <div className="ao-selbar-note" role="status">{notice}</div>}
-      <div className="ao-panel">
+      {classEmpty && (
+        <EmptyState title={classEmpty.emptyTitle} hint={classEmpty.emptyHint} />
+      )}
+      {!classEmpty && <div className="ao-panel">
         {/* range-less honesty: inventory is the current state, not a window */}
         <div className="ao-panel-h">Resources <CurrentNote /></div>
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
@@ -793,7 +813,7 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
             { key: "traffic", header: "Traffic", width: 95, align: "right", sortValue: (r) => r.trafficBps, render: (r) => NM(r.trafficBps, fmtBps) },
             { key: "tags", header: "Missing tags", width: 130, sortValue: (r) => r.missingTags.length, render: (r) => r.missingTags.length ? <Chip label={r.missingTags.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
           ]} />
-      </div>
+      </div>}
       {sel && <ResourceDrawer r={sel} onClose={() => setSel(null)} />}
       {assigning && (
         <AssignServiceDrawer

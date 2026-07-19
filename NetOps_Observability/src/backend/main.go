@@ -1077,6 +1077,11 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
 	mux.HandleFunc("/api/cloud/changes", s.handleCloudChanges)
 	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
+	// Wave 5 #16: security-findings over the fidelity rollups, provider
+	// incident/maintenance events, and the hybrid-seam telemetry read.
+	mux.HandleFunc("/api/cloud/security", s.handleCloudSecurity)
+	mux.HandleFunc("/api/cloud/provider-events", s.handleCloudProviderEvents)
+	mux.HandleFunc("/api/cloud/seam-telemetry", s.handleCloudSeamTelemetry)
 	mux.HandleFunc("/api/cloud/costs", s.handleCloudCosts) // daily provider-billed cost records (Wave 5 #18)
 	mux.HandleFunc("/api/cloud/investigations/", s.handleCloudInvestigationChanges) // {id}/changes — change→incident correlation (Wave 4 #12)
 	mux.HandleFunc("/api/cloud/service-map", s.handleCloudServiceMap)

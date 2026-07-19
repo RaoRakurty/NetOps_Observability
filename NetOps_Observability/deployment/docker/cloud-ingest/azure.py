@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 
 import azure_components
+import azure_workloads
 import cloud_events
 import service_infer
 import trail_state
@@ -392,6 +393,18 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
         print(json.dumps({"service": "cloud-ingest",
                           "msg": "azure component families degraded",
                           "errors": comp_errors}), flush=True)
+
+    # Workload breadth (Wave 5 #15): AKS clusters/pools, App Service plans +
+    # sites (incl. Function apps), SQL servers/databases — same per-family
+    # isolation; permission denials surface as source-status records.
+    wl_rows, wl_errors = azure_workloads.collect(
+        lambda url: _get_json(url, tok), SUBSCRIPTION, REGION,
+        tenant=os.environ.get("CLOUD_TENANT", "global"))
+    resources.extend(wl_rows)
+    if wl_errors:
+        print(json.dumps({"service": "cloud-ingest",
+                          "msg": "azure workload families degraded",
+                          "errors": wl_errors}), flush=True)
 
     # Live-poller provenance stamp — same contract as discover.py/gcp.py
     # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.

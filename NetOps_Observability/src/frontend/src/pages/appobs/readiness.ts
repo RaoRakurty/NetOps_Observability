@@ -14,10 +14,12 @@ import type { Health, Provider } from "./types";
 // is display order in the Sources / Ingestion-Status matrices.
 export type SourceType =
   | "inventory"
+  | "workloads"
   | "flow_logs"
   | "lb_logs"
   | "metrics"
   | "cloud_health"
+  | "provider_health"
   | "change_audit"
   | "traces"
   | "dns_logs"
@@ -26,16 +28,19 @@ export type SourceType =
   | "seam_data";
 
 export const SOURCE_TYPES: SourceType[] = [
-  "inventory", "flow_logs", "lb_logs", "metrics", "cloud_health",
-  "change_audit", "traces", "dns_logs", "firewall_logs", "nat_logs", "seam_data",
+  "inventory", "workloads", "flow_logs", "lb_logs", "metrics", "cloud_health",
+  "provider_health", "change_audit", "traces", "dns_logs", "firewall_logs",
+  "nat_logs", "seam_data",
 ];
 
 export const SOURCE_LABEL: Record<SourceType, string> = {
   inventory: "Inventory",
+  workloads: "Workload Inventory", // K8s / serverless / managed DB classes (Wave 5 #15)
   flow_logs: "Flow Logs",
   lb_logs: "Load Balancer Logs",
   metrics: "Metrics",
   cloud_health: "Cloud Health",
+  provider_health: "Provider Incidents", // AWS Health lane (Wave 5 #16)
   change_audit: "Change / Audit",
   traces: "Traces",
   dns_logs: "DNS Logs",

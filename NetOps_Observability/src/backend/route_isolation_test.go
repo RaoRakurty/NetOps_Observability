@@ -249,6 +249,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/health":    "scoped",
 	"/api/cloud/changes":   "scoped",
 	"/api/cloud/evidence":  "scoped",
+	// Wave 5 #16: security rollup / provider-incident / seam-telemetry reads —
+	// every query carries the caller's tenant_scope (corr_signals FORCE row
+	// policy); scope-clause + bounded-read contract proven by cloud_security_test.go.
+	"/api/cloud/security":        "scoped",
+	"/api/cloud/provider-events": "scoped",
+	"/api/cloud/seam-telemetry":  "scoped",
 	// Daily provider-billed cost records (Wave 5 #18): the one query carries the
 	// caller's tenant_scope, enforced by the STRICT tenant_iso_cloud_costs row
 	// policy (cloud_costs.go; isolation contract proven by cloud_costs_test.go).

@@ -25,6 +25,7 @@ import os
 import boto3
 
 import aws_components
+import aws_workloads
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 # Live snapshots belong in a RUNTIME dir (a gitignored data/ mount), never the
@@ -240,6 +241,18 @@ def run() -> tuple[int, int]:
         print(json.dumps({"service": "cloud-ingest",
                           "msg": "aws component families degraded",
                           "errors": comp_errors}), flush=True)
+    # Workload breadth (Wave 5 #15): the K8s + serverless/PaaS layer
+    # (EKS clusters/nodegroups, Lambda, RDS) — same per-family isolation;
+    # a permission-denied family surfaces as a source-status record.
+    wl_rows, wl_errors = aws_workloads.collect(
+        session, REGION,
+        tenant=os.environ.get("CLOUD_TENANT", "global"),
+        account=inventory.get("account_id", ""))
+    inventory["resources"].extend(wl_rows)
+    if wl_errors:
+        print(json.dumps({"service": "cloud-ingest",
+                          "msg": "aws workload families degraded",
+                          "errors": wl_errors}), flush=True)
     write_json(os.path.join(FIXTURES_DIR, "aws.json"), inventory)
     write_json(os.path.join(FIXTURES_DIR, "aws-topology.json"), topology)
     return len(inventory["resources"]), len(topology["edges"])

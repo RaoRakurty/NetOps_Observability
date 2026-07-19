@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 const (
@@ -37,12 +39,18 @@ var cloudSourceKinds = map[string][]string{
 	"change_audit":  {"cloud_change", "cloud_audit", "security_policy_change"},
 	"firewall_logs": {"cloud_waf_log"}, // WAF BLOCK rollups (log-fidelity lane)
 	"dns_logs":      {"cloud_dns_log"}, // resolver failure rollups
+	// Provider incident/maintenance declarations (Wave 5 #16, AWS Health lane).
+	// Its own chip: the poller reports this lane's denial as source_type
+	// "provider_health" ("requires AWS support plan"), and the proof-of-life
+	// signal is kind=provider_event.
+	"provider_health": {"provider_event"},
 }
 
 // cloudSourceOrder is the display order the UI expects (readiness.SOURCE_TYPES).
 var cloudSourceOrder = []string{
-	"inventory", "flow_logs", "lb_logs", "metrics", "cloud_health",
-	"change_audit", "traces", "dns_logs", "firewall_logs", "nat_logs", "seam_data",
+	"inventory", "workloads", "flow_logs", "lb_logs", "metrics", "cloud_health",
+	"provider_health", "change_audit", "traces", "dns_logs", "firewall_logs",
+	"nat_logs", "seam_data",
 }
 
 type cloudSourceStatus struct {
@@ -153,10 +161,20 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 	// Inventory per provider (declared resources).
 	invByProv := map[string]int64{}
 	var invTotal int64
+	// Workload-class rows (Wave 5 #15/#16): the "workloads" source's proof is
+	// K8s / serverless / managed-db inventory actually discovered — its denial
+	// record ("IAM denied EKS reads") must not hide behind a flowing VM count.
+	wlByProv := map[string]int64{}
+	var wlTotal int64
 	if res, _, _, err := s.cloudResources(r); err == nil {
 		invTotal = int64(len(res))
 		for _, rs := range res {
 			invByProv[strings.ToLower(string(rs.Provider))]++
+			switch cloud.ComponentFamily(rs.ResourceType) {
+			case cloud.FamilyK8s, cloud.FamilyServerless, cloud.FamilyDatabase:
+				wlByProv[strings.ToLower(string(rs.Provider))]++
+				wlTotal++
+			}
 		}
 	}
 
@@ -175,11 +193,12 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 		provSet[strings.ToLower(p)] = true
 	}
 
-	buildRows := func(kinds map[string]kindStat, inv int64, provider string) []cloudSourceStatus {
+	buildRows := func(kinds map[string]kindStat, inv, wl int64, provider string) []cloudSourceStatus {
 		rows := make([]cloudSourceStatus, 0, len(cloudSourceOrder))
 		for _, src := range cloudSourceOrder {
 			st := cloudSourceStatus{SourceType: src, Status: "off", Capability: "available"}
-			if _, hasProducer := cloudSourceKinds[src]; !hasProducer && src != "inventory" && src != "seam_data" {
+			if _, hasProducer := cloudSourceKinds[src]; !hasProducer &&
+				src != "inventory" && src != "workloads" && src != "seam_data" {
 				st.Capability = "planned" // no producer ships these kinds today
 			}
 			switch src {
@@ -187,6 +206,13 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 				if inv > 0 {
 					st.Status = "flowing"
 					st.Volume = inv
+				}
+			case "workloads":
+				// proof = workload-class resources actually discovered (Wave 5
+				// #15); zero stays "off" — the denial overlay says why.
+				if wl > 0 {
+					st.Status = "flowing"
+					st.Volume = wl
 				}
 			case "seam_data":
 				// Network seam data = the ACTIVE seam inventory the engine grounds
@@ -255,11 +281,11 @@ SELECT JSONExtractString(attrs,'provider') AS prov, kind,
 
 	providers := map[string][]cloudSourceStatus{}
 	for p := range provSet {
-		providers[p] = overlaySourceStatus(buildRows(byProvKind[p], invByProv[p], p), errRecs, p)
+		providers[p] = overlaySourceStatus(buildRows(byProvKind[p], invByProv[p], wlByProv[p], p), errRecs, p)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sources":      overlaySourceStatus(buildRows(globalKind, invTotal, ""), errRecs, ""),
+		"sources":      overlaySourceStatus(buildRows(globalKind, invTotal, wlTotal, ""), errRecs, ""),
 		"providers":    providers,
 		"generated_at": now.Format(time.RFC3339),
 	})

@@ -38,6 +38,7 @@ import urllib.request
 import cloud_events
 import gcp_components
 import gcp_log_lanes
+import gcp_workloads
 import trail_state
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
@@ -209,6 +210,16 @@ def write_inventory(tok: str, fixtures_dir: str) -> int:
     resources.extend(comp_rows)
     if comp_errors:
         _lane_log("gcp component families degraded", errors=comp_errors)
+
+    # Workload breadth (Wave 5 #15): GKE clusters/node pools, Cloud Run
+    # services, Cloud SQL instances — same per-family isolation; permission
+    # denials surface as source-status records.
+    wl_rows, wl_errors = gcp_workloads.collect(
+        lambda url: _get_json(url, tok), PROJECT,
+        tenant=os.environ.get("CLOUD_TENANT", "global"))
+    resources.extend(wl_rows)
+    if wl_errors:
+        _lane_log("gcp workload families degraded", errors=wl_errors)
 
     # Live-poller provenance stamp — same contract as discover.py/azure.py
     # (pinned by cloud/provider_test.go); drives the UI's honest data-mode badge.

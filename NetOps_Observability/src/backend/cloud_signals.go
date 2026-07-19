@@ -611,6 +611,20 @@ type signalAttrs struct {
 	// Provider-declared cause of a health STATE event (Azure Resource Health
 	// reasonType, emitted by cloud-ingest/azure.py poll_resource_health).
 	Reason string `json:"reason"`
+	// Security-lane rollup facts (Wave 5 #16): only the producer that measured
+	// them sets them — absence stays absence.
+	Rule          string `json:"rule"`            // WAF rule that blocked
+	Action        string `json:"action"`          // WAF action (BLOCK)
+	Rcode         string `json:"rcode"`           // DNS response code
+	QueryType     string `json:"query_type"`      // DNS query type
+	ElbStatusCode string `json:"elb_status_code"` // LB-plane HTTP status
+	Domain        string `json:"domain"`          // LB host header / domain
+	// Provider incident/maintenance facts (kind=provider_event, AWS Health).
+	Service       string `json:"service"`  // provider service affected (EC2, …)
+	Category      string `json:"category"` // issue | scheduledChange | accountNotification
+	Status        string `json:"status"`   // provider's own lifecycle status
+	Summary       string `json:"summary"`  // bounded human description
+	EvidenceClass string `json:"evidence_class"`
 }
 
 func parseAttrs(raw string) signalAttrs {

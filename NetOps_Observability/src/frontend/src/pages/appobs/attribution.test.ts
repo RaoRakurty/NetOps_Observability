@@ -2,7 +2,7 @@
 // (#81 P3F+1 gap close). All derivable from identity alone, no telemetry.
 
 import { describe, it, expect } from "vitest";
-import { resourceCategory, coverageByScope, funnelSteps, groupByApp, isAttributed } from "./attribution";
+import { resourceCategory, coverageByScope, funnelSteps, groupByApp, isAttributed, workloadClass, WORKLOAD_CLASSES, WORKLOAD_CLASS_META } from "./attribution";
 import type { CloudResource, Coverage } from "./types";
 
 function res(p: Partial<CloudResource>): CloudResource {
@@ -25,6 +25,47 @@ describe("resourceCategory", () => {
     expect(resourceCategory("Microsoft.Sql/databases")).toBe("Data");
     expect(resourceCategory("virtualMachines")).toBe("Compute");
     expect(resourceCategory("SomethingWeird")).toBe("Other");
+  });
+
+  it("buckets the Wave 5 #15 workload types", () => {
+    expect(resourceCategory("run:service")).toBe("Compute");
+    expect(resourceCategory("web:site")).toBe("Compute");
+    expect(resourceCategory("web:serverFarm")).toBe("Compute");
+    expect(resourceCategory("containerservice:agentPool")).toBe("Compute");
+    expect(resourceCategory("sqladmin:instance")).toBe("Data");
+  });
+});
+
+describe("workloadClass (Wave 5 #15)", () => {
+  it("maps the discovery lanes' exact types, case-insensitively", () => {
+    expect(workloadClass("eks:cluster")).toBe("k8s");
+    expect(workloadClass("eks:nodegroup")).toBe("k8s");
+    expect(workloadClass("containerservice:managedCluster")).toBe("k8s");
+    expect(workloadClass("container:nodePool")).toBe("k8s");
+    expect(workloadClass("lambda:function")).toBe("serverless");
+    expect(workloadClass("web:serverFarm")).toBe("serverless");
+    expect(workloadClass("run:service")).toBe("serverless");
+    expect(workloadClass("rds:instance")).toBe("db");
+    expect(workloadClass("sql:database")).toBe("db");
+    expect(workloadClass("sqladmin:instance")).toBe("db");
+  });
+
+  it("returns null for non-workload types — never guesses a class", () => {
+    expect(workloadClass("ec2:instance")).toBeNull();
+    expect(workloadClass("elbv2:loadbalancer")).toBeNull();
+    expect(workloadClass("")).toBeNull();
+  });
+
+  it("every class carries an honest empty state naming the needed permission", () => {
+    for (const c of WORKLOAD_CLASSES) {
+      const meta = WORKLOAD_CLASS_META[c];
+      expect(meta.label.length).toBeGreaterThan(0);
+      expect(meta.emptyTitle).toMatch(/^No /);
+      expect(meta.emptyHint).toContain("the poller needs");
+    }
+    expect(WORKLOAD_CLASS_META.k8s.emptyHint).toContain("eks:ListClusters");
+    expect(WORKLOAD_CLASS_META.serverless.emptyHint).toContain("lambda:ListFunctions");
+    expect(WORKLOAD_CLASS_META.db.emptyHint).toContain("rds:DescribeDBInstances");
   });
 });
 

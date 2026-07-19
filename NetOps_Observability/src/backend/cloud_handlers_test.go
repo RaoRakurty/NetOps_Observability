@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 // isCloudAppToken bounds the app id embedded in the app-rca SQL literal (#81 P3G).
@@ -67,5 +69,46 @@ func TestParseCloudResourceFilterMultiValue(t *testing.T) {
 	bad := httptest.NewRequest(http.MethodGet, "/api/cloud/resources?provider=aws,nonsense", nil)
 	if _, err := parseCloudResourceFilter(bad); err == nil {
 		t.Fatal("an unknown provider inside a multi-value list must be rejected")
+	}
+}
+
+// Wave 5 #15: ?family= is a CLASS filter over the kinds.go vocabulary —
+// validated at the boundary (typo = 400) and applied via ComponentFamily in
+// both store backends (matchCloudResource here; buildCloudWhere mirrors it).
+func TestParseCloudResourceFilterFamily(t *testing.T) {
+	ok := httptest.NewRequest(http.MethodGet, "/api/cloud/resources?family=K8s", nil)
+	f, err := parseCloudResourceFilter(ok)
+	if err != nil {
+		t.Fatalf("family filter rejected: %v", err)
+	}
+	if f.Family != "k8s" {
+		t.Fatalf("family not normalized: %+v", f)
+	}
+	bad := httptest.NewRequest(http.MethodGet, "/api/cloud/resources?family=containers", nil)
+	if _, err := parseCloudResourceFilter(bad); err == nil {
+		t.Fatal("an unknown family must be rejected")
+	}
+}
+
+func TestMatchCloudResourceFamily(t *testing.T) {
+	cases := []struct {
+		typ, family string
+		want        bool
+	}{
+		{"eks:cluster", "k8s", true},
+		{"containerservice:managedCluster", "k8s", true}, // case-insensitive bucketing
+		{"lambda:function", "serverless", true},
+		{"run:service", "serverless", true},
+		{"rds:instance", "db", true},
+		{"sqladmin:instance", "db", true},
+		{"ec2:instance", "k8s", false},
+		{"acme:quantum-router", "other", true}, // unknown types stay reachable
+		{"eks:cluster", "other", false},
+	}
+	for _, c := range cases {
+		r := cloud.CloudResource{ResourceType: c.typ}
+		if got := matchCloudResource(r, cloudResourceFilter{Family: c.family}); got != c.want {
+			t.Errorf("family=%q type=%q: got %v want %v", c.family, c.typ, got, c.want)
+		}
 	}
 }
