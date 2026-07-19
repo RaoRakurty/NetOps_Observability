@@ -18,7 +18,7 @@ import (
 
 func validItem() rcaActionItem {
 	return rcaActionItem{
-		Action: "Add an independent second vantage for the affected service checks",
+		Action:   "Add an independent second vantage for the affected service checks",
 		Category: "detect", Source: "human_created", Status: "proposed",
 	}
 }

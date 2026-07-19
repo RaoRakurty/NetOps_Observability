@@ -246,15 +246,15 @@ type rcaSemantics struct {
 	// distinguish it from the earliest symptom today — always "not determined"
 	// in Phase 1. The triggering OBSERVATION (the signal that opened the case)
 	// is a different, genuinely-known detection fact and is carried separately.
-	Trigger               rcaSemanticClaim       `json:"trigger"`
-	TriggeringObservation *rcaDetectionMilestone `json:"triggering_observation,omitempty"`
-	RootCause             rcaSemanticClaim       `json:"root_cause"`
-	ContributingFactors   []rcaContributingFactor `json:"contributing_factors"`
-	ContributingNote      string                  `json:"contributing_note"`
-	Symptoms              []rcaSemanticSymptom    `json:"symptoms"`
-	Impact                rcaSemanticClaim        `json:"impact"`
-	Milestones            []rcaDetectionMilestone `json:"detection_milestones"`
-	MilestonesAbsent      []string                `json:"detection_milestones_absent,omitempty"`
+	Trigger               rcaSemanticClaim         `json:"trigger"`
+	TriggeringObservation *rcaDetectionMilestone   `json:"triggering_observation,omitempty"`
+	RootCause             rcaSemanticClaim         `json:"root_cause"`
+	ContributingFactors   []rcaContributingFactor  `json:"contributing_factors"`
+	ContributingNote      string                   `json:"contributing_note"`
+	Symptoms              []rcaSemanticSymptom     `json:"symptoms"`
+	Impact                rcaSemanticClaim         `json:"impact"`
+	Milestones            []rcaDetectionMilestone  `json:"detection_milestones"`
+	MilestonesAbsent      []string                 `json:"detection_milestones_absent,omitempty"`
 	Comparisons           []rcaMilestoneComparison `json:"comparisons,omitempty"`
 }
 
