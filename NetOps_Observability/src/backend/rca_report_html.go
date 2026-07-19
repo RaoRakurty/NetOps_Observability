@@ -328,6 +328,11 @@ func rcaTitleCase(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+// rcaReportTemplateVersion identifies the document template for the
+// immutability block (postmortem Phase 1): bump on ANY change to
+// rcaReportTmplSrc so a stored revision names the template that rendered it.
+const rcaReportTemplateVersion = "tmpl-2026.07.19-p1"
+
 func renderRcaReportHTML(rep rcaReport) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := rcaReportTmpl.Execute(&buf, rep); err != nil {
@@ -400,6 +405,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <h1>{{.Title}}</h1>
 <div class="badges">
   {{if .Validation}}<span class="pill red" style="font-weight:800;letter-spacing:.4px">VALIDATION SCENARIO — NOT A PRODUCTION INCIDENT</span>{{end}}
+  <span class="pill {{if .Maturity.Watermark}}red{{else}}blue{{end}}">Artifact class: {{.Maturity.Label}}</span>
   {{if .Merge}}<span class="pill blue" style="font-weight:800">Incident: Merged{{if .Merge.SurvivorResolved}} into {{.Merge.SurvivingDisplayID}}{{end}}</span>{{else}}<span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>{{end}}
   <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
   <span class="pill {{stateTone "analysis" .States.FaultDomain}}">Fault domain: {{title (humanState .States.FaultDomain)}}</span>
@@ -410,6 +416,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <span class="pill {{stateTone "severity" .States.SeverityIncident}}">Severity: {{upper (humanState .States.SeverityIncident)}}</span>
 </div>
 <div class="meta">Report <b>{{.ReportID}}</b> · Case <b>{{.DisplayID}}</b> · Generated <b>{{.GeneratedAt}}</b>{{if .Subtitle}} · {{.Subtitle}}{{end}}</div>
+{{if .Maturity.WithheldSections}}<div class="note">Withheld for this artifact class ({{.Maturity.Label}}): {{range $i, $s := .Maturity.WithheldSections}}{{if $i}} · {{end}}{{humanState $s}}{{end}}. {{.Maturity.Basis}}</div>{{end}}
 
 {{if .Merge}}
 <section>
@@ -741,6 +748,13 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   </tbody></table>
   <div class="note">A change is never labelled the root cause from timing alone (correlated is not caused).</div>
 </section>
+{{end}}
+
+{{if .Integrity}}
+<footer class="doc-end">
+  <span>Analysis snapshot {{.Integrity.AnalysisSnapshotHash}} · policy {{.Integrity.PolicyVersion}} · template {{.Integrity.TemplateVersion}}</span>
+  <span>Status as of generation: {{.Integrity.StatusAsOf}}</span>
+</footer>
 {{end}}
 
 </div></body></html>`

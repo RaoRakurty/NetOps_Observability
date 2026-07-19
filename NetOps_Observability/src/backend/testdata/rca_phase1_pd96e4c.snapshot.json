@@ -1,0 +1,773 @@
+{
+  "report_id": "rr-d96e4caa2222-v3",
+  "correlation_id": "d96e4caa-2222-4333-8444-000000000002",
+  "display_id": "P-D96E4C",
+  "version": 3,
+  "report_type": "Validation Incident Assessment — Nonproduction",
+  "title": "Validation scenario — IPsec tunnel down — cloud private path — lab-svc",
+  "subtitle": "Leading hypothesis; see analysis state for certainty",
+  "validation": true,
+  "generated_at": "2026-07-12 20:00:00 UTC",
+  "maturity": {
+    "class": "validation_assessment",
+    "label": "Validation incident assessment — nonproduction",
+    "basis": "every anomalous observation declares a non-production purpose — this artifact documents a validation scenario and must never resemble a production postmortem",
+    "watermark": true,
+    "lessons_editable": false,
+    "withheld_sections": [
+      "lessons_learned",
+      "production_severity",
+      "corrective_action_commitments"
+    ]
+  },
+  "semantics": {
+    "trigger": {
+      "determined": false,
+      "statement": "Not determined. The engine does not distinguish the incident trigger (the event or change that set the failure off) from the earliest observed symptom, and no trigger has been causally established."
+    },
+    "root_cause": {
+      "determined": false,
+      "statement": "The fault condition is confirmed. The underlying root cause remains under investigation."
+    },
+    "contributing_factors": [],
+    "contributing_note": "Not determined. The engine does not yet separate contributing factors from alternative hypotheses; alternatives are listed under hypotheses and are never relabeled as contributing factors.",
+    "symptoms": [
+      {
+        "label": "Ipsec tunnel status",
+        "kind": "ipsec_tunnel_status",
+        "source_lineage": "observed by Routing \u0026 link events (evidence summary)",
+        "first": "18:00 UTC",
+        "last": "2h 0m ago"
+      },
+      {
+        "label": "Packet loss",
+        "kind": "probe_loss",
+        "source_lineage": "observed by Active checks (evidence summary)",
+        "first": "18:01 UTC",
+        "last": "1h 59m ago"
+      }
+    ],
+    "impact": {
+      "determined": true,
+      "statement": "Synthetic-transaction impact confirmed: the configured checks failed from their vantages. Real-user impact is a separate axis (not observable) and is never derived from synthetic failures.",
+      "source_lineage": "customer-path synthetic check failures (impact provenance block)"
+    },
+    "detection_milestones": [
+      {
+        "key": "first_credible_failure",
+        "label": "First credible failure",
+        "ts": "2026-07-12 18:00:00 UTC",
+        "source_lineage": "earliest attached anomalous observation in the correlation window (observed)"
+      }
+    ],
+    "detection_milestones_absent": [
+      "first_service_impact",
+      "first_correlix_detection",
+      "first_alert",
+      "first_acknowledgement",
+      "first_user_report",
+      "first_mitigation",
+      "service_restoration",
+      "recovery_validation"
+    ]
+  },
+  "impact_provenance": {
+    "rule": "Impact values carry provenance and are never derived across evidence classes: synthetic failures, flow-volume changes and network events are never converted into affected-user counts without a valid identity or transaction mapping. A missing measure is stated as not measured — never zero.",
+    "measures": [
+      {
+        "measure": "affected_applications",
+        "label": "Affected applications",
+        "status": "not_measured",
+        "basis": "Not measured — no evidence source for this measure took part in the case."
+      },
+      {
+        "measure": "affected_sites",
+        "label": "Affected sites",
+        "status": "not_measured",
+        "basis": "Not measured — no evidence source for this measure took part in the case."
+      },
+      {
+        "measure": "active_users",
+        "label": "Active users affected",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "sessions",
+        "label": "Sessions affected",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "transactions",
+        "label": "Transactions affected",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "user_minutes",
+        "label": "User-minutes lost",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "site_minutes",
+        "label": "Site-minutes lost",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "transaction_failures",
+        "label": "Transaction failures (real users)",
+        "status": "not_measured",
+        "basis": "No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events."
+      },
+      {
+        "measure": "synthetic_failure_rate",
+        "label": "Synthetic failure rate",
+        "status": "measured",
+        "value": 100,
+        "unit": "%",
+        "scope": "the configured synthetic checks that took part in this case",
+        "denominator": "1 synthetic check observations in the window",
+        "source": "active-probe observers (customer-path checks)",
+        "coverage": "the configured check targets and vantages only — a synthetic failure proves the configured transaction failed from that vantage, nothing more",
+        "confidence": "High",
+        "basis": "1 of 1 synthetic check observations failed (directly measured). Validation scenario: the value describes the injected/validation condition, never production impact."
+      },
+      {
+        "measure": "flow_volume_change",
+        "label": "Flow-volume change",
+        "status": "not_measured",
+        "basis": "Not measured — no evidence source for this measure took part in the case."
+      },
+      {
+        "measure": "voice_impairment",
+        "label": "Voice impairment",
+        "status": "not_measured",
+        "basis": "No voice-quality telemetry (MOS/jitter/loss scoring) is attached to this case."
+      },
+      {
+        "measure": "slo_error_budget",
+        "label": "SLO / error-budget consumption",
+        "status": "not_measured",
+        "basis": "No SLO is linked to this incident; error-budget consumption is not measured."
+      }
+    ]
+  },
+  "lessons_learned": {
+    "editable": false,
+    "note": "Lessons learned belong to the promoted postmortem workflow (preliminary/interim/final) — not editable on a validation assessment."
+  },
+  "at_a_glance": {
+    "where": "Not localized — the evidence does not support a single location",
+    "where_basis": "none",
+    "what": "The IPsec tunnel's IKE/DPD keepalives failed, so every application behind the tunnel lost its private path. — the fault condition is confirmed; the underlying root cause is still under investigation.",
+    "owners_label": "Possible owner(s)",
+    "owners": [
+      "NetOps"
+    ],
+    "owners_reason": "named by the \"IPsec tunnel down — cloud private path\" hypothesis (confirmed)"
+  },
+  "states": {
+    "incident": "active",
+    "lifecycle": "active",
+    "recovery": "not_observed",
+    "recovery_basis": "No recovery evidence was captured.",
+    "recovery_component": {
+      "state": "not_observed",
+      "basis": "No component recovery evidence was captured."
+    },
+    "recovery_service": {
+      "state": "not_observed",
+      "basis": "No service-level recovery evidence was captured."
+    },
+    "analysis": "confirmed",
+    "symptom": "confirmed",
+    "fault_domain": "confirmed",
+    "mechanism": "under_investigation",
+    "root_cause_state": "under_investigation",
+    "impact": "detected",
+    "impact_synthetic": "confirmed",
+    "impact_real_user": "not_observable",
+    "ticket": "held",
+    "severity": "crit",
+    "severity_incident": "not_applicable",
+    "severity_reason_codes": [
+      "validation_scenario_production_severity_suppressed"
+    ],
+    "severity_basis": "peak of the attached evidence, carried by ipsec tunnel status (2 crit of 2 anomalous observations); validation scenario — production severity not applicable",
+    "severity_incident_basis": "Validation scenario — production severity not applicable; simulated severity reflects the injected condition only.",
+    "monitoring": "not_started",
+    "confidence": "High",
+    "confidence_basis": "independent confirmation across 1 evidence classes and 1 observers"
+  },
+  "times": {
+    "first_observed": "2026-07-12 18:00:00 UTC",
+    "last_anomalous": "2026-07-12 18:01:00 UTC",
+    "recovered_captured": false,
+    "duration_ms": 7200000,
+    "duration_basis": "elapsed_still_active",
+    "window_start": "2026-07-12 18:10:00",
+    "window_end": "2026-07-12 18:30:00"
+  },
+  "scope": {
+    "targets": [
+      "lab-svc"
+    ],
+    "vantages": [
+      "prober-lab"
+    ]
+  },
+  "issue_context": {
+    "issue_family": "cloud",
+    "active_failure_stage": "Packet loss",
+    "participating_modalities": [
+      "control_plane",
+      "active_probe"
+    ],
+    "path_type": "customer_path",
+    "environment": "validation",
+    "prohibited_claims": [
+      "root_cause_identified",
+      "recovery_claim",
+      "customer_impact_confirmed",
+      "no_customer_impact",
+      "production_severity"
+    ],
+    "applicable_actions": [
+      "ipsec",
+      "interface",
+      "path"
+    ]
+  },
+  "summary": {
+    "management": "At 2026-07-12 18:00:00 UTC, One automated check detected a condition of “ipsec tunnel down — cloud private path” affecting lab-svc. The condition is ongoing (2h 00m elapsed). Synthetic path impact is confirmed; actual real-user impact was not confirmed because relevant real-traffic telemetry was insufficient. The fault condition is confirmed and the affected domain has been localized; the underlying root cause remains under investigation. Decision: Open incident — Customer impact and fault are confirmed by independent evidence; restoration workflow should begin. Escalation follows the policy thresholds stated in the decision section.",
+    "noc": [
+      {
+        "k": "Incident",
+        "v": "active"
+      },
+      {
+        "k": "Recovery",
+        "v": "not observed"
+      },
+      {
+        "k": "Component recovery",
+        "v": "not observed"
+      },
+      {
+        "k": "Service recovery",
+        "v": "not observed"
+      },
+      {
+        "k": "Analysis",
+        "v": "confirmed"
+      },
+      {
+        "k": "Impact",
+        "v": "detected"
+      },
+      {
+        "k": "Synthetic impact",
+        "v": "confirmed"
+      },
+      {
+        "k": "Real-user impact",
+        "v": "not observable"
+      },
+      {
+        "k": "Ticket",
+        "v": "held"
+      },
+      {
+        "k": "First observed",
+        "v": "2026-07-12 18:00:00 UTC"
+      },
+      {
+        "k": "Last anomalous",
+        "v": "2026-07-12 18:01:00 UTC"
+      },
+      {
+        "k": "Duration",
+        "v": "2h 00m (elapsed, still active)"
+      },
+      {
+        "k": "Affected targets",
+        "v": "lab-svc"
+      },
+      {
+        "k": "Checks failing",
+        "v": "1 of 1 observations"
+      },
+      {
+        "k": "Reporting sources",
+        "v": "prober-lab"
+      },
+      {
+        "k": "Failure symptoms",
+        "v": "Packet loss"
+      },
+      {
+        "k": "Peak severity",
+        "v": "crit"
+      },
+      {
+        "k": "Evidence present",
+        "v": "Routing \u0026 link events, Active checks"
+      },
+      {
+        "k": "Evidence missing",
+        "v": "Device health, Traffic flow"
+      },
+      {
+        "k": "Triage owner",
+        "v": "NOC"
+      },
+      {
+        "k": "Next action",
+        "v": "[P1] Check the tunnel's IKE_SA on the VPN gateway"
+      }
+    ],
+    "why_suspected": "Anomalies in routing \u0026 link events, active checks align in the same time window and scope."
+  },
+  "signal_summary": {
+    "total": 2,
+    "attached": 2,
+    "anomalous": 2,
+    "clears": 0,
+    "evidence_group_count": 2,
+    "unique_observers": 2,
+    "peak_severity": "crit",
+    "probe": {
+      "observations": 1,
+      "failed": 1,
+      "affected_vantages": [
+        "prober-lab"
+      ],
+      "failure_stages": [
+        "Packet loss"
+      ],
+      "first_failed": "2026-07-12 18:01:00 UTC",
+      "last_failed": "2026-07-12 18:01:00 UTC"
+    }
+  },
+  "evidence_summary": {
+    "symptom_count": 2,
+    "independent_sources": 1,
+    "source_names": [
+      "gw-lab-1"
+    ],
+    "verdict_reason": "Confirmed by independent evidence.",
+    "symptoms": [
+      {
+        "label": "Ipsec tunnel status",
+        "kind": "ipsec_tunnel_status",
+        "source": "Routing \u0026 link events",
+        "first": "18:00 UTC",
+        "last": "2h 0m ago",
+        "observations": 1,
+        "buckets": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "label": "Packet loss",
+        "kind": "probe_loss",
+        "source": "Active checks",
+        "first": "18:01 UTC",
+        "last": "1h 59m ago",
+        "observations": 1,
+        "buckets": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    ],
+    "observations": 2,
+    "last_observation": "1h 59m ago"
+  },
+  "evidence_accounting": {
+    "evidence_groups": 2,
+    "control_plane_sources": [
+      "gw-lab-1"
+    ],
+    "unknown_sources": [
+      "prober-lab"
+    ],
+    "independent_confirming_sources": 1,
+    "independent_source_ids": [
+      "gw-lab-1"
+    ],
+    "configured_tests": "Unavailable — configured-test inventory not stored for this case (predates the accounting model; the prober schedule registry is current-state only)",
+    "test_executions": "Unavailable — per-execution lineage not joined at the report layer for this case (derived anomaly observations carry no execution_id; counts are not fabricated)",
+    "failed_executions": "Unavailable — per-execution lineage not joined at the report layer for this case (derived anomaly observations carry no execution_id; counts are not fabricated)",
+    "reconciliation_ladder": [
+      {
+        "label": "Window observations (all lanes)",
+        "value": "2"
+      },
+      {
+        "label": "Case-linked observations",
+        "value": "2"
+      },
+      {
+        "label": "Anomalous observations",
+        "value": "2"
+      },
+      {
+        "label": "Deduplicated evidence groups",
+        "value": "2"
+      },
+      {
+        "label": "Distinct anomaly observers",
+        "value": "2"
+      },
+      {
+        "label": "Independence groups (fate-deduped)",
+        "value": "2"
+      },
+      {
+        "label": "Independent confirming sources",
+        "value": "1"
+      },
+      {
+        "label": "Confidence-eligible evidence classes",
+        "value": "2"
+      },
+      {
+        "label": "Impact-eligible evidence classes",
+        "value": "2"
+      },
+      {
+        "label": "Recovery observations",
+        "value": "0"
+      }
+    ]
+  },
+  "evidence_coverage": [
+    {
+      "class": "device_telemetry",
+      "label": "Device health",
+      "availability": "no_data",
+      "state": "no_data",
+      "observations": 0,
+      "anomalous": 0,
+      "finding": "No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health.",
+      "coverage": "none",
+      "counts_toward_confidence": false,
+      "assessment": {
+        "class": "device_telemetry",
+        "strategy": "continuous",
+        "quality": "unavailable",
+        "coverage_ratio": 0,
+        "ratio_known": false,
+        "cadence_known": false,
+        "cadence_source": "unknown",
+        "freshness_known": false,
+        "scope_relevance": "unknown",
+        "collector_health": "unknown",
+        "sampled": "unknown",
+        "baseline_present": "unknown",
+        "observer_can_observe": "unknown",
+        "confidence_eligible": false,
+        "impact_eligible": false,
+        "normality_eligible": false,
+        "confidence_reasons": [
+          "coverage_below_substantial"
+        ],
+        "impact_reasons": [
+          "coverage_incomplete_for_negative_claim"
+        ],
+        "normality_reasons": [
+          "coverage_incomplete"
+        ]
+      }
+    },
+    {
+      "class": "control_plane",
+      "label": "Routing \u0026 link events",
+      "availability": "available",
+      "state": "anomalous",
+      "observations": 1,
+      "anomalous": 1,
+      "finding": "1 anomalous state transition(s) in this window tied to this case — a point-in-time control-plane event, not a continuous-coverage lane.",
+      "from": "2026-07-12 18:00:00 UTC",
+      "to": "2026-07-12 18:00:00 UTC",
+      "coverage": "point_in_time",
+      "counts_toward_confidence": false,
+      "assessment": {
+        "class": "control_plane",
+        "strategy": "event_based",
+        "quality": "point_in_time",
+        "overlap_start": "2026-07-12 18:00:00 UTC",
+        "overlap_end": "2026-07-12 18:00:00 UTC",
+        "coverage_ratio": 0,
+        "ratio_known": false,
+        "cadence_known": false,
+        "cadence_source": "unknown",
+        "freshness_known": false,
+        "scope_relevance": "unknown",
+        "collector_health": "unknown",
+        "sampled": "unknown",
+        "baseline_present": "unknown",
+        "observer_can_observe": "unknown",
+        "confidence_eligible": true,
+        "impact_eligible": true,
+        "normality_eligible": false,
+        "normality_reasons": [
+          "point_in_time_only",
+          "anomaly_present"
+        ]
+      }
+    },
+    {
+      "class": "passive_flow",
+      "label": "Traffic flow",
+      "availability": "no_data",
+      "state": "no_data",
+      "observations": 0,
+      "anomalous": 0,
+      "finding": "No telemetry from this evidence class reached the platform in this window — unavailable or not configured. This absence is not evidence of health.",
+      "coverage": "none",
+      "counts_toward_confidence": false,
+      "assessment": {
+        "class": "passive_flow",
+        "strategy": "continuous",
+        "quality": "unavailable",
+        "coverage_ratio": 0,
+        "ratio_known": false,
+        "cadence_known": false,
+        "cadence_source": "unknown",
+        "freshness_known": false,
+        "scope_relevance": "unknown",
+        "collector_health": "unknown",
+        "sampled": "unknown",
+        "baseline_present": "unknown",
+        "observer_can_observe": "unknown",
+        "confidence_eligible": false,
+        "impact_eligible": false,
+        "normality_eligible": false,
+        "confidence_reasons": [
+          "coverage_below_substantial"
+        ],
+        "impact_reasons": [
+          "coverage_incomplete_for_negative_claim"
+        ],
+        "normality_reasons": [
+          "coverage_incomplete"
+        ]
+      }
+    },
+    {
+      "class": "active_probe",
+      "label": "Active checks",
+      "availability": "available",
+      "state": "anomalous",
+      "observations": 1,
+      "anomalous": 1,
+      "finding": "1 of 1 observations in this window are anomalous and tied to this case.",
+      "from": "2026-07-12 18:01:00 UTC",
+      "to": "2026-07-12 18:01:00 UTC",
+      "coverage": "none",
+      "missing_interval": "2026-07-12 18:00:00 UTC–2026-07-12 18:01:00 UTC",
+      "counts_toward_confidence": true,
+      "assessment": {
+        "class": "active_probe",
+        "strategy": "continuous",
+        "quality": "unavailable",
+        "overlap_start": "2026-07-12 18:01:00 UTC",
+        "overlap_end": "2026-07-12 18:01:00 UTC",
+        "coverage_ratio": 0,
+        "ratio_known": true,
+        "leading_gap": "1m 00s",
+        "missing_interval": "2026-07-12 18:00:00 UTC–2026-07-12 18:01:00 UTC",
+        "cadence_known": false,
+        "cadence_source": "unknown",
+        "freshness_known": false,
+        "scope_relevance": "unknown",
+        "collector_health": "unknown",
+        "sampled": "unknown",
+        "baseline_present": "unknown",
+        "observer_can_observe": "unknown",
+        "confidence_eligible": true,
+        "impact_eligible": true,
+        "normality_eligible": false,
+        "normality_reasons": [
+          "coverage_incomplete",
+          "anomaly_present"
+        ]
+      }
+    }
+  ],
+  "hypotheses": [
+    {
+      "type": "causal hypothesis",
+      "observation_state": "confirmed",
+      "causal_role": "probable_origin",
+      "candidacy_state": "active",
+      "rank": 1,
+      "id": "sig.ent.cloud.ipsec-tunnel-down",
+      "title": "IPsec tunnel down — cloud private path",
+      "problem": "The IPsec tunnel's IKE/DPD keepalives failed, so every application behind the tunnel lost its private path.",
+      "confidence": 0.9,
+      "label": "confirmed",
+      "supporting": [
+        "Ipsec tunnel status (one observation)"
+      ],
+      "contradicted": false,
+      "owner": "NetOps"
+    }
+  ],
+  "single_hypothesis": true,
+  "phases": [
+    {
+      "type": "detection",
+      "start_at": "2026-07-12 18:00:00 UTC",
+      "summary": "First anomalous evidence observed."
+    },
+    {
+      "type": "degradation",
+      "start_at": "2026-07-12 18:00:00 UTC",
+      "end_at": "2026-07-12 18:01:00 UTC",
+      "summary": "Anomalous evidence persisted across the participating evidence classes."
+    }
+  ],
+  "fault_localization": {
+    "localized": false,
+    "statement": "The fault condition is confirmed, but the evidence does not converge on a single fault object."
+  },
+  "root_cause": {
+    "identified": false,
+    "statement": "The fault condition is confirmed. The underlying root cause remains under investigation.",
+    "possible_cause": "The IPsec tunnel's IKE/DPD keepalives failed, so every application behind the tunnel lost its private path.",
+    "evidence_known": [
+      "Ipsec tunnel status (one observation)"
+    ]
+  },
+  "ownership": {
+    "triage_owner": "NOC",
+    "triage_reason": "Default triage owner until the failure stage and fault domain are identified.",
+    "suspected_domain": "NetOps",
+    "candidates": [
+      {
+        "team": "NetOps",
+        "reason": "named by the \"IPsec tunnel down — cloud private path\" hypothesis (confirmed)"
+      }
+    ],
+    "escalation_owner": "Pending localization",
+    "escalation_reason": "NetOps is the leading candidate domain; the fault is not yet localized to a specific component"
+  },
+  "decision": {
+    "decision": "Open incident",
+    "reason": "Customer impact and fault are confirmed by independent evidence; restoration workflow should begin.",
+    "policy_id": "default",
+    "policy_name": "Default ServiceNow incident policy (platform default — no tenant policy configured)",
+    "open_threshold": "verdict ≥ suspected, customer-facing evidence required, suspected additionally requires critical severity",
+    "monitoring_window": "30m 00s after recovery",
+    "auto_close_when": "no recurrence and no NEW customer-impact evidence arising within the monitoring window (impact already recorded for this incident stays recorded and does not block a clean close)",
+    "reopen_when": "the same condition recurs within 30m 00s (flap suppression)",
+    "escalate_when": "customer impact is confirmed, or a second independent evidence class corroborates the fault",
+    "escalation_state": "triggered",
+    "escalation_at": "2026-07-12 20:00:00 UTC",
+    "auto_close_eligible": false,
+    "ticket_recommended": "hold",
+    "ticket_recommend_reason": "validation scenario — production ticket side effects suppressed",
+    "ticket_execution_note": "Escalation conditions are met while the ticket is held: validation scenario — production ticket side effects suppressed."
+  },
+  "next_actions": [
+    {
+      "priority": 1,
+      "action": "Check the tunnel's IKE_SA on the VPN gateway",
+      "owner": "NOC",
+      "operational_priority": "P1",
+      "purpose": "restoration",
+      "expected_result": "IKE/child-SA state, last DPD result, and rekey timestamps from the gateway"
+    },
+    {
+      "priority": 2,
+      "action": "Inspect the most recent failed check transaction",
+      "owner": "NOC",
+      "operational_priority": "P1",
+      "purpose": "discrimination",
+      "expected_result": "DNS result, resolved IP, TCP status, TLS status, HTTP status, response time, and the failure stage"
+    },
+    {
+      "priority": 3,
+      "action": "Compare real traffic, load-balancer target health and application errors during the incident window",
+      "owner": "NOC",
+      "operational_priority": "P2",
+      "purpose": "discrimination",
+      "expected_result": "request volume, completion rate, load-balancer target health, application error rate",
+      "escalate_when": "real-user impact, flow loss, or application errors corroborate the checks"
+    },
+    {
+      "priority": 4,
+      "action": "Run the same check from an independent vantage (only prober-lab has reported this)",
+      "owner": "NOC",
+      "operational_priority": "P2",
+      "purpose": "discrimination",
+      "expected_result": "the same target's result from a second vantage — fails there too (target side) or only here (local side)"
+    }
+  ],
+  "promotion": {
+    "promoted": false,
+    "basis": "",
+    "reason": "",
+    "criteria": null
+  },
+  "quality": {
+    "quality_gate_passed": true,
+    "model_version": "rca-consistency/1",
+    "evaluated_at": "2026-07-12 20:00:00 UTC"
+  },
+  "topology": {
+    "available": false,
+    "stale": false
+  }
+}

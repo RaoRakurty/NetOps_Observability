@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/timeintel"
 )
 
 // ---- typed view model --------------------------------------------------------
@@ -40,6 +42,28 @@ type rcaReport struct {
 	// the document watermarks itself and claims no production severity (§11/§24).
 	Validation  bool   `json:"validation"`
 	GeneratedAt string `json:"generated_at"` // UTC, canonical
+
+	// Maturity — the postmortem spec's explicit ARTIFACT CLASS (operational /
+	// validation / preliminary / interim / final), derived honestly and
+	// re-stamped once promotion is known (stampReportMaturity). Independent of
+	// ReportType, which stays about evidence maturity.
+	Maturity rcaReportMaturity `json:"maturity"`
+	// Semantics — trigger, root cause, contributing factors, symptoms and
+	// impact as SEPARATE concepts + the detection-milestone set with source
+	// lineage (spec §1). "Not determined" is stated, never filled.
+	Semantics rcaSemantics `json:"semantics"`
+	// ImpactProvenance — every impact value with value/unit/scope/denominator/
+	// source/coverage/confidence/basis (spec §2). Missing = "not measured",
+	// never zero; user counts are never derived from synthetic/flow evidence.
+	ImpactProvenance rcaImpactProvenance `json:"impact_provenance"`
+	// LessonsLearned — spec-§6 schema; editing exists only for promoted
+	// classes (Phase 3 workflow). Correlix never authors subjective lessons.
+	LessonsLearned rcaLessonsLearned `json:"lessons_learned"`
+	// Integrity — the immutability block (analysis snapshot hash, policy +
+	// template versions, status-as-of; content hash lives in the revision
+	// register). Set by the HTTP layer at generation time; a published
+	// document embeds it and never mutates.
+	Integrity *rcaReportIntegrity `json:"integrity,omitempty"`
 
 	// AtAGlance (#113 point 2): the document's FIRST section — where it
 	// happened · what possibly happened · possible owner(s) — rendered above
@@ -115,6 +139,10 @@ type rcaReport struct {
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
 	mgmtTrimmed bool
+
+	// ownerTenant: the OBJECT's owning tenant (canonical), stamped by the HTTP
+	// layer for tenant-keyed store writes (revision register). Never serialized.
+	ownerTenant string
 
 	// accounting: the canonical EvidenceAccounting for this case (Phase B). Not
 	// rendered this phase — Phases D/E consume it (presentation + quality gate).
@@ -860,6 +888,10 @@ type rcaReportInput struct {
 	// surviving correlation id the handler resolved (resolveMergeChain, tenant-
 	// scoped). Empty in unit tests → the builder falls back to meta["merged_into"].
 	SurvivingIncidentID string
+	// Lifecycle: the caller-tenant's manual/ITSM lifecycle stamps (acknowledged,
+	// mitigation, recovered …) loaded by the HTTP layer. nil = none — the
+	// corresponding detection milestones stay honestly absent.
+	Lifecycle timeintel.Lifecycle
 }
 
 func buildRcaReport(in rcaReportInput) rcaReport {
@@ -887,6 +919,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		// Phase C coverage engine's rich path (internal-gap + inter-arrival cadence).
 		laneObs                 = map[string][]time.Time{}
 		firstObs, lastObs       time.Time
+		firstRealUserTS         time.Time
 		peakSevRank             int
 		peakSev                 = "unknown"
 		peakSevKind             string
@@ -961,6 +994,9 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		case rcaIsRealUserImpactKind(kind, entityType):
 			impactAnomalies++
 			impactRealUser++
+			if tsOK && (firstRealUserTS.IsZero() || ts.Before(firstRealUserTS)) {
+				firstRealUserTS = ts
+			}
 		case rcaIsRealUserIndicatorKind(kind):
 			impactAnomalies++
 			impactRealUserIndicator++
@@ -1586,6 +1622,11 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 
 	// ---- wording ----------------------------------------------------------------------------------
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
+	if validation {
+		// Postmortem spec: a validation artifact must never resemble a
+		// production postmortem — the TITLE carries the class, not just a pill.
+		title = "Validation scenario — " + title
+	}
 	whySusp, whyNot, required := buildWhyWording(analysis, hb, sigSummary, laneAnomalous)
 
 	mgmt, mgmtTrimmed := buildManagementSummary(problemNoun, scope, times, incident, analysis, impact, impactSyn, impactRU, monitoring, decision, sigSummary, monitorWindow, ra, merge)
@@ -1607,7 +1648,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		CorrelationID: in.ID,
 		DisplayID:     problemDisplayID(in.ID),
 		Version:       version,
-		ReportType:    reportTypeFor(rootState, analysis, incident),
+		ReportType:    reportTypeFor(rootState, analysis, incident, validation),
 		Title:         title,
 		Subtitle:      subtitle,
 		Validation:    validation,
@@ -1655,6 +1696,29 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// on-path cause was attributed, so the section is omitted, never invented.
 	rep.PathAttribution = decodePathAttribution(meta)
 
+	// ---- Phase 1 postmortem semantics (spec §1/§2) ------------------------------
+	// Separated concepts + detection milestones, projected from the SAME derived
+	// locals — no re-decision, "not determined" stated rather than filled.
+	rep.Semantics = buildRcaSemantics(rcaSemanticsInput{
+		Root: root, Evidence: rep.Evidence, Impact: impact, ImpactSyn: impactSyn, ImpactRU: impactRU,
+		FirstObs: firstObs, FirstRealUserTS: firstRealUserTS,
+		TriggerSignalID: asString(meta["trigger_signal"]), Signals: in.Signals,
+		Times: times, Monitoring: monitoring, Lifecycle: in.Lifecycle,
+	})
+	// Provenance-carrying impact values (spec §2): real-user counts are never
+	// derived from synthetic/flow evidence; missing = "not measured", never zero.
+	rep.ImpactProvenance = buildImpactProvenance(rcaImpactInput{
+		Scope: scope, Probe: sigSummary.Probe, SyntheticFailures: impactSynthetic,
+		FlowAnomalies:   maxInt(laneAnomalous["passive_flow"], impactRealUserIndicator),
+		RealUserSignals: impactRealUser,
+		ImpactRU:        impactRU, Validation: validation,
+	})
+	// Artifact-class pre-stamp: promotion is unknown at build time (the HTTP
+	// layer re-stamps once evaluated) — the honest default is unpromoted, which
+	// yields operational assessment (or validation assessment for a validation
+	// scenario, promotion-independent).
+	stampReportMaturity(&rep, "")
+
 	// ReportQualityGate: the StateConsistencyValidator runs on the FINISHED
 	// document. Errors downgrade the report type — a contradictory document is
 	// never emitted as a final assessment (P1 gate).
@@ -1672,7 +1736,13 @@ func maxInt(a, b int) int {
 // reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE
 // actually concluded (mechanism + causal object, P1.3). A confirmed fault
 // condition alone yields a fault-confirmed incident analysis, never an "RCA".
-func reportTypeFor(rootState, analysis, incident string) string {
+// A validation scenario never carries a production artifact type (postmortem
+// spec: it must never resemble a production postmortem — type, title and
+// watermark all say so).
+func reportTypeFor(rootState, analysis, incident string, validation bool) string {
+	if validation {
+		return "Validation Incident Assessment — Nonproduction"
+	}
 	if incident == "merged" || incident == "superseded" {
 		// A merged source report is an incident analysis handed to the survivor —
 		// it names the merge in its type so the state is unmissable (P1 header).

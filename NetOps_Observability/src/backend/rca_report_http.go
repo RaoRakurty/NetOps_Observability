@@ -21,6 +21,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"netops/backend/timeintel"
 )
 
 // buildRcaReportForID is THE shared report-build path: tenant-scoped slice load
@@ -67,12 +69,19 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first)
 		}
 	}
+	// Manual/ITSM lifecycle stamps (tenant-scoped store) feed the detection
+	// milestones (postmortem spec §1) — absent events stay absent milestones.
+	lc := timeintel.Lifecycle{}
+	if !s.manualLifecycle(r, claims, id, lc) {
+		lc = nil
+	}
 	rep := buildRcaReport(rcaReportInput{
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,
 		Path:                pathBlock,
 		Now:                 time.Now().UTC(),
 		SurvivingIncidentID: survivingID,
+		Lifecycle:           lc,
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
 	stampTopologyTemporalRole(&rep)
@@ -87,6 +96,11 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 		manual = &rec
 	}
 	rep.Promotion = evaluateRcaPromotion(&rep, manual)
+	// Artifact class depends on promotion — re-stamp now that it is known
+	// (postmortem spec: operational/validation/preliminary; interim/final are
+	// Phase 3 human lifecycle advances, none recorded yet).
+	stampReportMaturity(&rep, "")
+	rep.ownerTenant = canonicalCorrTenant(asString(meta["tenant_id"]))
 	return rep, http.StatusOK, nil
 }
 
@@ -109,6 +123,18 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
+	// Immutability (postmortem Phase 1): every response embeds the integrity
+	// block — analysis snapshot hash, policy + template versions, status-as-of.
+	// A rendered DOCUMENT additionally lands in the tenant-scoped revision
+	// register with its content hash; an identical regeneration reuses the
+	// existing (immutable) revision.
+	integ, ierr := computeReportIntegrity(rep)
+	if ierr != nil {
+		writeError(w, http.StatusInternalServerError, ierr)
+		return
+	}
+	rep.Integrity = &integ
+
 	switch format {
 	case "", "json":
 		writeJSON(w, http.StatusOK, rep)
@@ -118,6 +144,8 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		integ.ContentHash = hashContent(html)
+		s.recordReportRevision(claims, rep.ownerTenant, id, rep, integ, "html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
 		w.WriteHeader(http.StatusOK)
@@ -136,6 +164,8 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 				fmt.Errorf("pdf renderer unavailable: %w (fetch ?format=html and print, or start the pdf sidecar)", err))
 			return
 		}
+		integ.ContentHash = hashContent(pdf)
+		s.recordReportRevision(claims, rep.ownerTenant, id, rep, integ, "pdf")
 		fname := fmt.Sprintf("%s-%s.pdf", strings.ToLower(strings.ReplaceAll(rep.ReportType, " ", "-")), rep.DisplayID)
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)

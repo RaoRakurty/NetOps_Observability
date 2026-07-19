@@ -438,6 +438,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleCorrelationVerify(w, r, id)
 		return
 	}
+	// Postmortem action items (Phase 1, spec §3/§7) — tenant-scoped register;
+	// own auth (read/write) + audit inside the handler (mixed methods).
+	if sub == "actions" || strings.HasPrefix(sub, "actions/") {
+		s.handleRcaActionItems(w, r, id, strings.TrimPrefix(strings.TrimPrefix(sub, "actions"), "/"))
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
@@ -454,6 +460,9 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.serveRcaPathView(w, r, id)
 	case "rca-report":
 		s.serveRcaReport(w, r, id)
+	case "rca-revisions":
+		// Postmortem Phase 1 immutability: the per-case report revision register.
+		s.serveRcaRevisions(w, r, id)
 	case "time-metrics":
 		s.serveCorrelationTimeMetrics(w, r, id)
 	case "replay":
