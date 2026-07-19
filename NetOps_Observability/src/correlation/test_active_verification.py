@@ -99,6 +99,28 @@ def test_refutes_vocabulary_is_closed():
     assert sig.attrs.get("refutes_kinds") == ["bgp_adjacency_change"]
 
 
+def test_module_check_kinds_are_admissible():
+    # Troubleshooting-module vocabulary (verify_modules.go): interface deep-dive
+    # and recent-change claims pass the closed-vocabulary gate; junk still drops.
+    sig = verification_signal_from_event(
+        wire_event(check="ssh_iface_deep", command="show interfaces",
+                   observed="interface deep-dive faults: Gi0/0: 34 CRC errors (cumulative)",
+                   corroborates_kinds=["link_state_change", "if_errors", "if_crc", "made_up"]),
+        TS,
+    )
+    assert sig is not None
+    assert sig.attrs["corroborates_kinds"] == ["if_crc", "if_errors", "link_state_change"]
+
+    chg = verification_signal_from_event(
+        wire_event(check="ssh_config_change", command="show system commit",
+                   status="pass", refutes_kinds=["config_change"]),
+        TS,
+    )
+    assert chg is not None
+    assert chg.kind == VERIFICATION_HEALTHY_KIND
+    assert chg.attrs["refutes_kinds"] == ["config_change"]
+
+
 def test_fail_closed_drops():
     assert verification_signal_from_event(wire_event(tenant_id=""), TS) is None
     assert verification_signal_from_event(wire_event(status="skipped"), TS) is None

@@ -248,6 +248,7 @@ type verifyRunRecord struct {
 	FinishedAt    time.Time           `json:"finished_at,omitempty"`
 	Status        string              `json:"status"` // running | completed
 	Devices       []string            `json:"devices"`
+	Modules       []string            `json:"modules,omitempty"` // seam/fault-fired troubleshooting modules
 	Results       []verifyCheckResult `json:"results,omitempty"`
 }
 
@@ -330,6 +331,21 @@ type verifyCaseRow struct {
 	State    string
 	Verdict  string
 	Devices  []string
+	// Module-trigger context (verify_modules.go): seam owner badge, winning
+	// hypothesis id and incident window start.
+	Owner       string
+	TopHyp      string
+	WindowStart time.Time
+}
+
+// caseContext projects the row into the module-trigger/parser context.
+func (r verifyCaseRow) caseContext() verifyCaseContext {
+	return verifyCaseContext{
+		Owner:         r.Owner,
+		TopHypothesis: r.TopHyp,
+		VerdictTier:   r.Verdict,
+		WindowStart:   r.WindowStart,
+	}
 }
 
 // verifyCaseLookup fetches the case from the corr_current hot projection under
@@ -340,21 +356,26 @@ func (s *server) verifyCaseLookup(ctx context.Context, scope, caseID string) (ve
 		return verifyCaseRow{}, false
 	}
 	sql := fmt.Sprintf(`SELECT tenant_id, toString(state) AS state,
-       toString(verdict_tier) AS verdict, affected
+       toString(verdict_tier) AS verdict, affected,
+       toString(owner) AS owner, top_hypothesis,
+       %s AS window_start
   FROM netops.corr_current FINAL
  WHERE correlation_id = toUUID('%s')
  LIMIT 1
-FORMAT JSONEachRow`, caseID)
+FORMAT JSONEachRow`, chISO("window_start"), caseID)
 	rows, err := s.chRowsScope(ctx, scope, sql, "verify_case_lookup")
 	if err != nil || len(rows) == 0 {
 		return verifyCaseRow{}, false
 	}
 	row := rows[0]
 	return verifyCaseRow{
-		TenantID: asStr(row["tenant_id"]),
-		State:    asStr(row["state"]),
-		Verdict:  asStr(row["verdict"]),
-		Devices:  affectedDevices(row["affected"]),
+		TenantID:    asStr(row["tenant_id"]),
+		State:       asStr(row["state"]),
+		Verdict:     asStr(row["verdict"]),
+		Devices:     affectedDevices(row["affected"]),
+		Owner:       asStr(row["owner"]),
+		TopHyp:      asStr(row["top_hypothesis"]),
+		WindowStart: parseCHTime(row["window_start"]),
 	}, true
 }
 
@@ -410,7 +431,7 @@ var errVerifyNoTargets = errors.New("no verifiable devices resolved from the cas
 // startVerificationRun validates, records and launches one bounded run for the
 // case. Async: returns the RUNNING record immediately; the engine's run budget
 // bounds the background work. Every run is audited with who/what/why.
-func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string, devices []string) (verifyRunRecord, error) {
+func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string, devices []string, cc verifyCaseContext) (verifyRunRecord, error) {
 	if !s.verifyEnabledFor(tenant) {
 		return verifyRunRecord{}, errVerifyDisabled
 	}
@@ -422,12 +443,14 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 	if len(targets) == 0 {
 		return verifyRunRecord{}, errVerifyNoTargets
 	}
+	// The battery this case earns: core checks + seam/fault-fired modules.
+	battery := verifyActiveBattery(cc)
 	devIDs := make([]string, 0, len(targets))
 	cmds := map[string]any{}
 	for _, t := range targets {
 		devIDs = append(devIDs, t.Device.ID)
 		if t.SSH != nil {
-			for _, spec := range groupSpecs("ssh") {
+			for _, spec := range groupSpecsIn(battery, "ssh") {
 				if cmd, ok := verifyCommandFor(t.Device.Vendor, spec.ID); ok {
 					cmds[t.Device.ID+"/"+spec.ID] = cmd
 				}
@@ -443,13 +466,14 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		StartedAt:     time.Now().UTC(),
 		Status:        "running",
 		Devices:       devIDs,
+		Modules:       verifyModulesFor(cc),
 	}
 	s.verifyRuns.put(rec)
 	s.auditVerifyRun(rec, "start", why, cmds)
 
 	go func(rec verifyRunRecord) { // own copy — the caller returns the RUNNING record
 		// Bounded by the engine's own run budget; independent of the request.
-		engine := newVerifyEngine(s.newVerifyDialers())
+		engine := newVerifyEngineForCase(s.newVerifyDialers(), cc)
 		results := engine.run(context.Background(), targets)
 		rec.Results = results
 		rec.FinishedAt = time.Now().UTC()
@@ -479,6 +503,7 @@ func (s *server) auditVerifyRun(rec verifyRunRecord, phase, why string, cmds map
 		"trigger":        rec.Trigger,
 		"why":            why,
 		"devices":        rec.Devices,
+		"modules":        rec.Modules,
 	}
 	if len(cmds) > 0 {
 		detail["commands"] = cmds

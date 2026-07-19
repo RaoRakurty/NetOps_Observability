@@ -88,6 +88,9 @@ type verifyCheckResult struct {
 type verifyCheckSpec struct {
 	ID     string
 	Method string // tcp | snmp | ssh
+	// Module names the seam/fault-conditional trigger gate (verify_modules.go)
+	// that must fire for the check to run. Empty ⇒ core battery, always runs.
+	Module string
 	// Evidence semantics: what a FAILING check corroborates and what a HEALTHY
 	// one refutes. Mirrored by the correlation producer's closed vocabulary
 	// (verification_producer.py REFUTABLE_KINDS) — the scorer only ever matches
@@ -145,19 +148,20 @@ var verifyCommandTable = map[string]map[string]string{
 	},
 }
 
-// verifyCommandFor resolves (vendor, check) → the allowlisted command.
-// Unknown vendor or check ⇒ no command (the check is skipped, never guessed).
+// verifyCommandFor resolves (vendor, check) → the allowlisted command from the
+// core table, then the module table (verify_modules.go). Unknown vendor or
+// check ⇒ no command (the check is skipped, never guessed).
 func verifyCommandFor(vendor, checkID string) (string, bool) {
-	fam, ok := verifyCommandTable[strings.ToLower(strings.TrimSpace(vendor))]
-	if !ok {
-		return "", false
+	if fam, ok := verifyCommandTable[strings.ToLower(strings.TrimSpace(vendor))]; ok {
+		if cmd, ok := fam[checkID]; ok {
+			return cmd, true
+		}
 	}
-	cmd, ok := fam[checkID]
-	return cmd, ok
+	return verifyModuleCommandFor(vendor, checkID)
 }
 
 // verifyCommandAllowed reports whether cmd appears VERBATIM in the closed
-// table — the SSH runner's defense-in-depth gate.
+// core or module table — the SSH runner's defense-in-depth gate.
 func verifyCommandAllowed(cmd string) bool {
 	for _, fam := range verifyCommandTable {
 		for _, c := range fam {
@@ -166,7 +170,7 @@ func verifyCommandAllowed(cmd string) bool {
 			}
 		}
 	}
-	return false
+	return verifyModuleCommandAllowed(cmd)
 }
 
 // ---- targets & executor seams (interfaces for tests, §5 injectable deps) ----
@@ -215,6 +219,12 @@ type verifyEngine struct {
 	checkTimeout time.Duration
 	runBudget    time.Duration
 	maxConc      int
+	// battery is the check set this run executes (core + fired modules);
+	// caseCtx feeds the module parsers' window-relative verdicts; now is the
+	// injectable clock (§5) so parser recency math is testable.
+	battery []verifyCheckSpec
+	caseCtx verifyCaseContext
+	now     func() time.Time
 }
 
 func newVerifyEngine(d verifyDialers) *verifyEngine {
@@ -223,7 +233,18 @@ func newVerifyEngine(d verifyDialers) *verifyEngine {
 		checkTimeout: verifyCheckTimeout(),
 		runBudget:    verifyRunBudget(),
 		maxConc:      verifyMaxConcurrent(),
+		battery:      verifyBattery(),
+		now:          time.Now,
 	}
+}
+
+// newVerifyEngineForCase builds an engine whose battery is the core set plus
+// the modules the case context fires (verify_modules.go trigger gates).
+func newVerifyEngineForCase(d verifyDialers, cc verifyCaseContext) *verifyEngine {
+	e := newVerifyEngine(d)
+	e.battery = verifyActiveBattery(cc)
+	e.caseCtx = cc
+	return e
 }
 
 // run executes the battery against every target: parallel across devices and
@@ -253,7 +274,7 @@ func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verify
 	for i := range targets {
 		t := targets[i]
 		for _, group := range []string{"tcp", "snmp", "ssh"} {
-			specs := groupSpecs(group)
+			specs := groupSpecsIn(e.battery, group)
 			if len(specs) == 0 {
 				continue
 			}
@@ -286,7 +307,7 @@ func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verify
 
 	// Deterministic ordering: device order as given, then battery order.
 	order := map[string]int{}
-	for i, s := range verifyBattery() {
+	for i, s := range e.battery {
 		order[s.ID] = i
 	}
 	devOrder := map[string]int{}
@@ -302,9 +323,10 @@ func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verify
 	return out
 }
 
-func groupSpecs(method string) []verifyCheckSpec {
+// groupSpecsIn filters a battery down to one method group.
+func groupSpecsIn(battery []verifyCheckSpec, method string) []verifyCheckSpec {
 	var out []verifyCheckSpec
-	for _, s := range verifyBattery() {
+	for _, s := range battery {
 		if s.Method == method {
 			out = append(out, s)
 		}
@@ -467,7 +489,11 @@ func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verif
 			r.Status = verifyStatusUnreachable
 			r.Observed = "ssh exec failed: " + sanitizeObserved(res.Err.Error())
 		default:
-			r.Status, r.Observed = parseVerifyOutput(spec.ID, res.Output)
+			if spec.Module != "" {
+				r.Status, r.Observed = parseVerifyModuleOutput(spec.ID, t.Device.Vendor, res.Output, e.now().UTC(), e.caseCtx)
+			} else {
+				r.Status, r.Observed = parseVerifyOutput(spec.ID, res.Output)
+			}
 		}
 		out = append(out, finalize(r, spec, cstart))
 	}

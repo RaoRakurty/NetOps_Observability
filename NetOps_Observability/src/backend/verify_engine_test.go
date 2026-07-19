@@ -26,14 +26,20 @@ import (
 // ---- allowlist: the closed table ------------------------------------------
 
 func TestVerifyCommandTableReadOnly(t *testing.T) {
-	for vendor, fam := range verifyCommandTable {
-		for check, cmd := range fam {
-			if !strings.HasPrefix(cmd, "show ") && !strings.HasPrefix(cmd, "display ") {
-				t.Fatalf("%s/%s: command %q is not a read-only show/display command", vendor, check, cmd)
-			}
-			for _, forbidden := range []string{";", "|", "&", "`", "$", "\n", "reload", "config", "write", "copy", "delete", "clear", "request"} {
-				if strings.Contains(cmd, forbidden) {
-					t.Fatalf("%s/%s: command %q contains forbidden token %q", vendor, check, cmd, forbidden)
+	// "configure" (the config-MODE verb) is forbidden; reading configuration
+	// state ("show running-config", "display configuration commit list") is
+	// exactly what the recent-change module exists to do and stays legal.
+	forbidden := []string{";", "|", "&", "`", "$", "\n", "reload", "configure", "write ", "copy ", "delete", "clear ", "request ", "rollback "}
+	for _, table := range []map[string]map[string]string{verifyCommandTable, verifyModuleCommandTable} {
+		for vendor, fam := range table {
+			for check, cmd := range fam {
+				if !strings.HasPrefix(cmd, "show ") && !strings.HasPrefix(cmd, "display ") {
+					t.Fatalf("%s/%s: command %q is not a read-only show/display command", vendor, check, cmd)
+				}
+				for _, tok := range forbidden {
+					if strings.Contains(cmd, tok) {
+						t.Fatalf("%s/%s: command %q contains forbidden token %q", vendor, check, cmd, tok)
+					}
 				}
 			}
 		}

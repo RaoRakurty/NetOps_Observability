@@ -11,3 +11,27 @@ definitions are compiled directly from the vendors' published SNMP MIBs and the
 relevant IETF RFC MIBs (IF-MIB, HOST-RESOURCES-MIB, ENTITY-MIB, BGP4-MIB,
 OSPF-MIB, and per-vendor enterprise MIBs). OIDs are factual identifiers defined
 in those MIBs. No third-party profile catalog is bundled.
+
+--------------------------------------------------------------------------------
+Active Verification troubleshooting modules — knowledge mined from NetClaw
+--------------------------------------------------------------------------------
+
+The troubleshooting KNOWLEDGE behind the Active Verification modules
+(src/backend/verify_modules.go — per-vendor read-only command selection and the
+fault indicators the deterministic parsers look for: CRC/input-error semantics,
+duplex-mismatch and interface-flap indicators, BGP session-reset / prefix-
+collapse diagnosis, and config-change-before-incident causality) is derived
+from the skill procedures of the NetClaw project:
+
+  Project : NetClaw, by John Capobianco
+  Source  : https://github.com/automateyournetwork/netclaw
+  License : Apache License 2.0
+  Pinned  : commit 49332542f43390955e758b69855a111b5ba0ff4c
+  Skills  : pyats-troubleshoot, pyats-health-check, pyats-routing,
+            pyats-junos-interfaces, pyats-junos-routing, junos-network
+
+No NetClaw code, agent runtime, or LLM component is bundled or executed — only
+the distilled troubleshooting procedures, re-expressed as this project's own
+closed command tables and deterministic parsers. The Arista EOS, Nokia SR OS
+and Huawei VRP command profiles are original to this project (NetClaw does not
+cover those CLIs).

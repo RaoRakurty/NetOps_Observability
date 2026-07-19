@@ -47,7 +47,9 @@ func (s *server) verifyTickOnce(ctx context.Context) {
 		}
 		// Tenant-scoped read of the hot projection (row policies enforce the
 		// scope server-side as well).
-		sql := `SELECT toString(correlation_id) AS cid, affected
+		sql := `SELECT toString(correlation_id) AS cid, affected,
+       toString(owner) AS owner, top_hypothesis,
+       ` + chISO("window_start") + ` AS window_start
   FROM netops.corr_current FINAL
  WHERE state = 'open' AND verdict_tier = 'suspected'
  ORDER BY window_end DESC
@@ -75,8 +77,15 @@ FORMAT JSONEachRow`
 			if len(devices) == 0 {
 				continue // localization unknown — nothing to interrogate
 			}
+			// Module-trigger context: the scan itself guarantees the tier.
+			cc := verifyCaseContext{
+				Owner:         asStr(row["owner"]),
+				TopHypothesis: asStr(row["top_hypothesis"]),
+				VerdictTier:   "suspected",
+				WindowStart:   parseCHTime(row["window_start"]),
+			}
 			rec, err := s.startVerificationRun(tenant, cid, "auto", "system:verify",
-				"suspected-tier case — probing for an independent second source", devices)
+				"suspected-tier case — probing for an independent second source", devices, cc)
 			switch {
 			case err == nil:
 				launched++
