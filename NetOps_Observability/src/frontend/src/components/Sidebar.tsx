@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { NavLeaf, NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { BRAND } from "../brand";
+import { CorrelixEyeO } from "./brand/CorrelixLogo";
 import Icon from "./Icon";
 
 type Props = {
@@ -105,7 +106,7 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       <button className="rail-brand" onClick={() => navigate(homeRoute ?? routeFor(main[0]))} title={BRAND}>
-        <span className="rail-brand-mark"><Icon name="logo" size={20} /></span>
+        <span className="rail-brand-mark" aria-hidden="true"><CorrelixEyeO size={20} /></span>
         {!collapsed && <span className="rail-brand-name">{BRAND}</span>}
       </button>
       <nav className="nav-main" aria-label="Primary">{main.map(item)}</nav>

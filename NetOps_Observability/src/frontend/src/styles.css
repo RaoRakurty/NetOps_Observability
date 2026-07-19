@@ -414,8 +414,9 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   box-shadow: inset 0 1px 0 var(--rail-sheen);
 }
 .shell-v2 .rail-icon { color: var(--mod, var(--rail-accent)); width: 22px; }
-/* bolder stroke so the colourful glyphs read crisply at rail size */
-.shell-v2 .rail-icon svg, .shell-v2 .rail-brand-mark svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
+/* bolder stroke so the colourful glyphs read crisply at rail size
+   (nav/util glyphs only — the brand eye-O carries its own tuned strokes) */
+.shell-v2 .rail-icon svg, .shell-v2 .rail-util-icon svg { stroke-width: 2; }
 /* One diagonal reflection streak across the glass (kept faint on purpose). */
 .shell-v2 .rail::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -443,6 +444,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 .shell-v2 .rail-label, .shell-v2 .rail-group-label, .shell-v2 .rail-brand-name,
 .shell-v2 .rail-account-id, .shell-v2 .rail-util-icon span { display: none; }
 .shell-v2 .rail-main { padding: var(--sp-1) 0; }
+/* Owner ask (2026-07-19): the head belongs to the brand — the nav keys ride
+   LOW in the pane. 2:1 flex spacers bias the group cluster toward the foot
+   (centered-low, not hard-pinned, so it never fuses with the util zone).
+   flex-basis 0 means the spacers collapse first on short viewports, so the
+   rail scrolls exactly as it did before — nothing is ever pushed out of view. */
+.shell-v2 .rail-main::before { content: ""; flex: 2 1 0; }
+.shell-v2 .rail-main::after { content: ""; flex: 1 1 0; }
 .shell-v2 .rail-group { align-items: center; }
 /* Zone dividers become short centered fades — etched marks in the glass, not
    full-width rules (those read as frames and widen the pane visually). Every
@@ -466,13 +474,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   width: 22px; height: 1px; background: var(--rail-etch);
 }
 /* Brand head — quiet halo behind the glyph; same etched-fade divider. */
-.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 2px 0 var(--sp-2); border-bottom: 0; position: relative; }
+.shell-v2 .rail-brand { justify-content: center; margin: 0 7px var(--sp-2); padding: 6px 0 10px; border-bottom: 0; position: relative; }
 .shell-v2 .rail-brand::after {
   content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 22px; height: 1px; background: var(--rail-etch);
 }
 .shell-v2 .rail-brand-mark { position: relative; }
-.rail-brand-mark img { display: block; width: 22px; height: 22px; object-fit: contain; }
+.rail-brand-mark svg { display: block; }
 .shell-v2 .rail-brand-mark::before {
   content: ""; position: absolute; inset: -9px; border-radius: 50%;
   background: radial-gradient(circle, var(--rail-glass), transparent 70%);
@@ -1254,17 +1262,34 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-radius: 5px; padding: 2px 6px;
 }
 
-/* Compact brand wordmark, top-left: the login page's C[iris]RRELIX at header
-   scale. Color rides the theme (currentColor via --fg) so it reads on the
-   light topbar and every dark variant alike. */
-.topbar-brand {
-  display: flex; align-items: center; gap: 0.03em; user-select: none;
+/* Brand wordmark (owner 2026-07-19): CORRELIX with the O as the signature
+   eye — deep-space iris holding a miniature device constellation, rendered by
+   components/brand/CorrelixLogo (inline SVG eye + real text so the letters
+   always match the login wordmark's Space Grotesk — no raster assets).
+   Letters ride var(--fg); the eye ring's gradient stops come from the
+   per-surface tokens below. */
+.cx-logo {
+  display: inline-flex; align-items: center; gap: 0.05em; user-select: none;
   font-family: "Space Grotesk", var(--font-sans, sans-serif);
-  font-size: 17px; font-weight: 700; line-height: 1; letter-spacing: 0.06em;
+  font-weight: 700; line-height: 1; letter-spacing: 0.06em;
   color: var(--fg, #1e2233);
 }
-.topbar-brand-eye { display: inline-flex; align-items: center; justify-content: center; margin: 0 0.03em; }
-.topbar-brand-eye img { width: 1.06em; height: 1.06em; display: block; border-radius: 50%; }
+.cx-logo svg { display: block; margin: 0 0.06em; }
+/* Eye-ring gradient stops — deep tones on light chrome (≥3:1 on white)… */
+:root { --brand-ring-a: #4f46e5; --brand-ring-b: #0e7490; --brand-ring-c: #047857; }
+/* …and the luminous login-artwork sweep on dark surfaces: the dark theme
+   family, plus the rail column whenever its chrome preset is dark (the navy
+   default and graphite). The element-scoped rail rule wins var() resolution
+   over :root, so a navy rail under a light theme still gets luminous stops. */
+:root[data-theme="dark"], :root[data-theme="oled"],
+:root[data-theme="indigo"], :root[data-theme="graphite"],
+.rail, .sidebar {
+  --brand-ring-a: #818cf8; --brand-ring-b: #22d3ee; --brand-ring-c: #34d399;
+}
+/* The white chrome preset lightens the rail — back to the deep stops there. */
+:root[data-chrome="white"] .rail, :root[data-chrome="white"] .sidebar {
+  --brand-ring-a: #4f46e5; --brand-ring-b: #0e7490; --brand-ring-c: #047857;
+}
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
