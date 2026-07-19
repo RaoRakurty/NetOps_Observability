@@ -454,9 +454,11 @@ export default function RcaWorkspace({
                         <div className="rw-cascade-head">
                           <span className="rw-cascade-label">{s.stage}</span>
                           {s.root && s.witnessed && <Pill p={{ tone: "red", text: "Likely origin" }} />}
-                          {!s.witnessed && <Pill p={{ tone: "gray", text: "Not observed" }} />}
                         </div>
-                        <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "Not observed in this window")}</div>
+                        {/* owner 2026-07-19: no grey observed/not-observed box per rung —
+                            an unwitnessed stage reads muted (rail dot + dim label) and the
+                            ladder explainer below covers the semantics once. */}
+                        <div className="rw-small">{s.witnessed ? s.kinds.join(" · ") : (s.note || "")}</div>
                       </div>
                     </div>
                   ))}
