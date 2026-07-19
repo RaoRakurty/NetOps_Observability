@@ -77,7 +77,7 @@ export default function ResourceDetail({ kind, id }: { kind: string; id: string 
 
   if (state === "loading") {
     return (
-      <div className="resource-page" data-testid="resource-loading">
+      <div className="resource-page" data-testid="resource-loading" role="status" aria-label="Loading resource">
         <Skeleton w="40%" h={28} />
         <Skeleton w="60%" h={16} style={{ marginTop: 8 }} />
         <Skeleton w="100%" h={220} style={{ marginTop: 16 }} />
@@ -191,7 +191,7 @@ function OverviewTab({ d }: { d: CloudResourceDetailResponse }) {
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <tr>
-      <td>{k}</td>
+      <th scope="row">{k}</th>
       <td>{v}</td>
     </tr>
   );
@@ -257,13 +257,13 @@ function FlowsTab({ r }: { r: CloudResourceRow }) {
   }
   return (
     <div className="ao-table-wrap">
-      <table className="ds-table">
+      <table className="ds-table" aria-label="Flow conversations">
         <thead>
           <tr>
-            <th>Peer</th>
-            <th>Direction</th>
-            <th>Bytes (24h)</th>
-            <th>Flows</th>
+            <th scope="col">Peer</th>
+            <th scope="col">Direction</th>
+            <th scope="col">Bytes (24h)</th>
+            <th scope="col">Flows</th>
           </tr>
         </thead>
         <tbody>
@@ -311,13 +311,13 @@ function EventsTab({ r }: { r: CloudResourceRow }) {
   }
   return (
     <div className="ao-table-wrap">
-      <table className="ds-table">
+      <table className="ds-table" aria-label="Recent events">
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Severity</th>
-            <th>Event</th>
-            <th>Source</th>
+            <th scope="col">Time</th>
+            <th scope="col">Severity</th>
+            <th scope="col">Event</th>
+            <th scope="col">Source</th>
           </tr>
         </thead>
         <tbody>

@@ -479,12 +479,12 @@ export default function Correlations() {
             )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <select value={state} onChange={(e) => setState(e.target.value)}>
+            <select value={state} onChange={(e) => setState(e.target.value)} aria-label="Filter by state">
               <option value="">All states</option>
               <option value="open">Open</option>
               <option value="closed">Resolved</option>
             </select>
-            <select value={tier} onChange={(e) => setTier(e.target.value)}>
+            <select value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Filter by status">
               <option value="">All statuses</option>
               <option value="confirmed">Confirmed</option>
               <option value="suspected">Suspected</option>
@@ -511,6 +511,7 @@ export default function Correlations() {
               resizable
               onRowClick={select}
               rowClassName={(o) => (sel === o.correlation_id ? "dtv-selected" : "")}
+              rowSelected={(o) => sel === o.correlation_id}
               initialSort={{ key: "created_at", dir: "desc" }}
             />
           )}
@@ -696,8 +697,8 @@ export function CorrelationDetail({ id }: { id: string }) {
     return c;
   }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners]);
 
-  if (err) return <div className="empty">{err}</div>;
-  if (!obj || !timeline || !rcaCase) return <div className="empty">Loading…</div>;
+  if (err) return <div className="empty" role="alert">{err}</div>;
+  if (!obj || !timeline || !rcaCase) return <div className="empty" role="status">Loading…</div>;
 
   const exportPdf = () => {
     if (!rcaCase) return;

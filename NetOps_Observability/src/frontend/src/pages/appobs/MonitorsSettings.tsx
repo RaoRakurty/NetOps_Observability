@@ -68,10 +68,12 @@ export default function MonitorsSettings() {
       <p className="ao-set-d">
         A monitor watches one cloud metric across your inventory (or one resource)
         and notifies on the configured contact points when it fires.
-        {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
+        {/* role=alert announces the failure; the wording (not only the color)
+            identifies it as an error (3.3.1/1.4.1). */}
+        {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
       </p>
 
-      {busy ? <div className="ao-muted">Loading…</div> : (
+      {busy ? <div className="ao-muted" role="status">Loading…</div> : (
         <>
           {rows.length === 0 && !adding && (
             <EmptyState title="No cloud monitors defined"
@@ -143,7 +145,7 @@ export default function MonitorsSettings() {
               <input className="ao-input" placeholder="resource id (optional — blank = all)"
                 aria-label="Resource id" value={draft.resourceId}
                 onChange={(e) => set("resourceId", e.target.value)} />
-              <button className="ao-btn ao-btn--primary" disabled={saving} onClick={create}>
+              <button className="ao-btn ao-btn--primary" disabled={saving} aria-busy={saving} onClick={create}>
                 {saving ? "Saving…" : "Create"}
               </button>
               <button className="ao-btn" disabled={saving}

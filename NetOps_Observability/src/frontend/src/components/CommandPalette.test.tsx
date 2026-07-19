@@ -68,7 +68,7 @@ describe("CommandPalette unified search", () => {
     globalSearch.mockResolvedValue({ query: "checkout", results: [] });
 
     openPalette();
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "checkout" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "checkout" } });
     vi.advanceTimersByTime(250);
     await waitFor(() => expect(screen.getByText("checkout-web-1")).toBeInTheDocument());
 
@@ -89,7 +89,7 @@ describe("CommandPalette unified search", () => {
     });
 
     openPalette();
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "cpu high" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "cpu high" } });
     vi.advanceTimersByTime(250);
     await waitFor(() => expect(screen.getByText("CPU high on edge-1")).toBeInTheDocument());
     expect(screen.getByText("Alerts")).toBeInTheDocument();
@@ -100,7 +100,7 @@ describe("CommandPalette unified search", () => {
     globalSearch.mockRejectedValue(new Error("500"));
 
     openPalette();
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "devices" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "devices" } });
     vi.advanceTimersByTime(250);
     // nav destinations still filter/match; the logs handoff row is present
     await waitFor(() => expect(screen.getByText(/Search logs for/)).toBeInTheDocument());

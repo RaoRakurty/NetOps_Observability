@@ -15,6 +15,15 @@ import gcpMark from "../../assets/cloud/gcp.svg";
 // (contract §2.4: unknown hops are preserved, never dropped, never bridged).
 // "evidence" is an off-spine evidence branch (metrics/logs/flows/alerts/traces),
 // deliberately NOT a device shape so it never reads as part of the path.
+// WCAG 2.3.3 / reduced-motion: the fault-ring pulse is SVG SMIL, which the
+// global CSS `prefers-reduced-motion` guard cannot reach — gate it in JS
+// (same pattern as FlowEdge).
+export function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
+
 export type ShapeKind =
   | "core" | "router" | "switch" | "firewall" | "gateway" | "access"
   | "cloud" | "server" | "vantage" | "target" | "unknown" | "evidence";
@@ -134,10 +143,16 @@ export function ShapeSVG({ kind, tone, size = 56, glyph = true, pulse = false, p
           <stop offset="100%" stopColor={tone} stopOpacity={0.07} />
         </radialGradient>
       </defs>
+      {/* Fault ring: static under prefers-reduced-motion (SMIL isn't covered by
+          the CSS reduced-motion guard), breathing otherwise. */}
       {pulse && (
         <circle cx="50" cy="50" r="44" fill="none" stroke={tone} strokeWidth={3} opacity={0.5}>
-          <animate attributeName="r" values="40;52;40" dur="1.8s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.6;0;0.6" dur="1.8s" repeatCount="indefinite" />
+          {!prefersReducedMotion() && (
+            <>
+              <animate attributeName="r" values="40;52;40" dur="1.8s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.6;0;0.6" dur="1.8s" repeatCount="indefinite" />
+            </>
+          )}
         </circle>
       )}
       {shapeEls(kind, tone, `url(#${gid})`)}

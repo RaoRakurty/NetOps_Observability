@@ -51,9 +51,21 @@ export default function Inspector() {
             className="inspector-resize"
             role="separator"
             aria-orientation="vertical"
+            aria-label="Resize inspector"
+            tabIndex={0}
             onMouseDown={() => {
               dragging.current = true;
               document.body.style.userSelect = "none";
+            }}
+            onKeyDown={(e) => {
+              // Keyboard resize (2.1.1): arrows nudge the pane 24px per press.
+              if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                ws.setInspectorWidth(clampW(ws.inspectorWidth + 24));
+              } else if (e.key === "ArrowRight") {
+                e.preventDefault();
+                ws.setInspectorWidth(clampW(ws.inspectorWidth - 24));
+              }
             }}
             title="Drag to resize"
           />
@@ -66,11 +78,12 @@ export default function Inspector() {
               className={`inspector-btn${ws.inspectorPinned ? " active" : ""}`}
               onClick={ws.toggleInspectorPin}
               title={ws.inspectorPinned ? "Unpin (Esc closes)" : "Pin (keep open)"}
+              aria-label={ws.inspectorPinned ? "Unpin inspector" : "Pin inspector"}
               aria-pressed={ws.inspectorPinned}
             >
               <Icon name="pin" size={14} />
             </button>
-            <button className="inspector-btn" onClick={ws.closeInspector} title="Close (Esc)">
+            <button className="inspector-btn" onClick={ws.closeInspector} title="Close (Esc)" aria-label="Close inspector">
               <Icon name="close" size={15} />
             </button>
           </div>

@@ -30,14 +30,15 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
     <div className="card" style={{ borderColor: "var(--accent)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <Icon name="copilot" size={15} /> Iris AI
+          <span aria-hidden="true"><Icon name="copilot" size={15} /></span> Iris AI
         </h3>
-        <button className="btn-accent" onClick={ask} disabled={busy}>
+        <button className="btn-accent" onClick={ask} disabled={busy} aria-busy={busy}>
           {busy ? "Thinking…" : ans ? "Re-ask" : "Explain this problem"}
         </button>
       </div>
 
-      {err && <p style={{ color: "var(--bad)", fontSize: 13, marginBottom: 0 }}>Iris AI: {err}</p>}
+      {/* Announce the async error (4.1.3). */}
+      {err && <p role="alert" style={{ color: "var(--bad)", fontSize: 13, marginBottom: 0 }}>Iris AI: {err}</p>}
 
       {!ans && !busy && !err && (
         <p className="mini-meta" style={{ marginTop: 8, marginBottom: 0 }}>
@@ -46,8 +47,9 @@ export default function RcaAskAi({ correlationId }: { correlationId: string }) {
         </p>
       )}
 
+      {/* Live region (4.1.3): the grounded answer is announced when it lands. */}
       {ans && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 10 }} role="status" aria-live="polite">
           {/* Grounded narrative (escaped text only). */}
           <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--fg)", whiteSpace: "pre-wrap", margin: "0 0 10px" }}>
             {ans.text || "No answer."}

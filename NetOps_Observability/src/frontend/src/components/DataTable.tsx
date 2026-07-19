@@ -16,6 +16,7 @@ import {
   ReactNode,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -57,6 +58,12 @@ export interface DataTableProps<T> {
   rowAccent?: (row: T) => string | undefined;
   /** Optional extra class per row (e.g. a selected/master-detail highlight). */
   rowClassName?: (row: T) => string;
+  /**
+   * Marks a row as the current selection for assistive tech (aria-selected).
+   * Pair it with the rowClassName visual highlight so selection is never
+   * conveyed by color alone (WCAG 1.4.1 / 4.1.2).
+   */
+  rowSelected?: (row: T) => boolean;
   /** Hover/active-revealed, right-docked per-row actions. */
   rowActions?: (row: T) => ReactNode;
   empty?: ReactNode;
@@ -90,6 +97,7 @@ export default function DataTable<T>({
   onRowClick,
   rowAccent,
   rowClassName,
+  rowSelected,
   rowActions,
   empty,
   ariaLabel,
@@ -98,6 +106,9 @@ export default function DataTable<T>({
   renderExpanded,
 }: DataTableProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Stable per-instance id prefix so the active row can be exposed to AT via
+  // aria-activedescendant (the keyboard-nav highlight was previously visual-only).
+  const gridId = useId();
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(typeof height === "number" ? height : 480);
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(initialSort ?? null);
@@ -280,6 +291,7 @@ export default function DataTable<T>({
       role="grid"
       aria-label={ariaLabel}
       aria-rowcount={view.length}
+      aria-activedescendant={view.length ? `${gridId}-r${active}` : undefined}
       tabIndex={0}
       style={{ height, ["--dtv-row" as string]: `${rowHeight}px` }}
       onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
@@ -300,6 +312,19 @@ export default function DataTable<T>({
               className={`dtv-th${sortable ? " sortable" : ""}${sorted ? " sorted" : ""}`}
               style={{ textAlign: c.align ?? "left", position: resizable ? "relative" : undefined }}
               onClick={sortable ? () => toggleSort(c.key) : undefined}
+              // Sorting was pointer-only (2.1.1): sortable headers are now
+              // focusable and toggle on Enter/Space.
+              tabIndex={sortable ? 0 : undefined}
+              onKeyDown={
+                sortable
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleSort(c.key);
+                      }
+                    }
+                  : undefined
+              }
             >
               {c.header}
               {sortable && (
@@ -336,8 +361,10 @@ export default function DataTable<T>({
             return (
               <Fragment key={rowKey(row)}>
                 <div
+                  id={`${gridId}-r${idx}`}
                   role="row"
                   aria-rowindex={idx + 1}
+                  aria-selected={rowSelected ? rowSelected(row) : undefined}
                   aria-expanded={renderExpanded ? isExpanded : undefined}
                   className={`dtv-row${idx === active ? " active" : ""}${onRowClick ? " clickable" : ""}${isExpanded ? " dtv-expanded" : ""}${rowClassName ? " " + rowClassName(row) : ""}`}
                   style={{

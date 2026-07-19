@@ -108,7 +108,9 @@ describe("RcaWorkspace — view toggle + export wiring", () => {
 
   it("clicking Debug View requests the view change", () => {
     const { onView } = renderWS();
-    fireEvent.click(screen.getByRole("tab", { name: "Debug View" }));
+    // a11y pass: the view switch is a toggle-button group (aria-pressed), not
+    // an ARIA tablist (no tabpanel/roving-focus wiring exists here).
+    fireEvent.click(screen.getByRole("button", { name: "Debug View" }));
     expect(onView).toHaveBeenCalledWith("debug");
   });
 

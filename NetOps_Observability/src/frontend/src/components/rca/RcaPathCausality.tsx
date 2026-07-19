@@ -84,7 +84,9 @@ function DeviceNode({
       </a>
     );
   }
-  return <div className={cls} title={devTooltip(dev, seg, causeKind)} aria-label={aria}>{inner}</div>;
+  // No aria-label on a role-less div (unreliably exposed) — the inner text
+  // already reads as "{role} {name} {tag}".
+  return <div className={cls} title={devTooltip(dev, seg, causeKind)}>{inner}</div>;
 }
 
 // Stable identity for a key device within a segment, to match the attributed cause
@@ -100,11 +102,11 @@ function GapConnector({ seg }: { seg: RcaTypedSegment }) {
   const n = seg.unknown_hops?.length ?? 0;
   const reason = seg.reason || "This span could not be classified from the available telemetry — shown as a gap, not guessed.";
   return (
-    <span className="rpc-gap" role="listitem"
-      title={reason}
-      aria-label={`${n > 0 ? `${n} unclassified hops` : "unclassified span"} — ${reason}`}>
+    <span className="rpc-gap" title={reason}>
       <span className="rpc-gap-dots" aria-hidden="true">· · ·</span>
       <span className="rpc-gap-count">{n > 0 ? `${n} hop${n === 1 ? "" : "s"}` : "unknown span"}</span>
+      {/* Tooltip-only reason mirrored for screen readers (1.4.13). */}
+      <span className="sr-only"> — {reason}</span>
     </span>
   );
 }
@@ -203,13 +205,12 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
               const opaque = (isOpaqueSegment(seg.segment_type) || !!seg.reason) && !(seg.key_devices?.length);
               const meta = segmentMeta(seg.segment_type);
               return (
-                <div className="rpc-seg-wrap" key={`${seg.index ?? "s"}-${i}`}>
+                <div className="rpc-seg-wrap" role="listitem" key={`${seg.index ?? "s"}-${i}`}>
                   {opaque ? (
                     <GapConnector seg={seg} />
                   ) : (
                     <div className={`rpc-seg${(seg.key_devices ?? []).some((d) => devKey(seg.index, d) === causeKey) ? " has-cause" : ""}`}
-                      style={{ ["--seg-color" as string]: meta.color }} role="listitem"
-                      aria-label={`${segmentLabel(seg.segment_type)} segment`}>
+                      style={{ ["--seg-color" as string]: meta.color }}>
                       <div className="rpc-seg-cap" title={seg.confidence ? `Classified · ${confidenceLabel(seg.confidence)}` : undefined}>
                         <span className="rpc-seg-tick" aria-hidden="true" />
                         <span className="rpc-seg-name">{segmentLabel(seg.segment_type)}</span>

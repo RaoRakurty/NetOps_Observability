@@ -26,6 +26,7 @@ export default function HelpDrawer() {
       <div
         className={`help-scrim${helpOpen ? " open" : ""}`}
         onClick={() => setHelpOpen(false)}
+        aria-hidden="true"
       />
       <aside
         className={`help-panel${helpOpen ? " open" : ""}`}

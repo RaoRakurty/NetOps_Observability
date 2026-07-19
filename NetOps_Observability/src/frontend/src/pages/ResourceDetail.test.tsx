@@ -91,7 +91,7 @@ describe("ResourceDetail", () => {
     cloudResource.mockResolvedValue(detail());
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Metrics" }));
+    fireEvent.click(screen.getByRole("button", { name: "Metrics" }));
     expect(screen.getByTestId("metrics-panel")).toHaveTextContent("checkout-web-1");
   });
 
@@ -100,7 +100,7 @@ describe("ResourceDetail", () => {
     eventsFeed.mockResolvedValue({ items: [], next_cursor: "", facets: {} });
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Events" }));
+    fireEvent.click(screen.getByRole("button", { name: "Events" }));
     expect(await screen.findByText("No recent events")).toBeInTheDocument();
     expect(eventsFeed).toHaveBeenCalledWith({ q: "checkout-web-1", from: "168h", limit: "50" });
   });
@@ -109,7 +109,7 @@ describe("ResourceDetail", () => {
     cloudResource.mockResolvedValue(detail({ private_ips: [], public_ips: [] }));
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Flows" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flows" }));
     expect(await screen.findByText("No IP addresses recorded")).toBeInTheDocument();
     expect(topTalkers).not.toHaveBeenCalled();
   });
@@ -121,7 +121,7 @@ describe("ResourceDetail", () => {
       .mockResolvedValueOnce({ data: [{ src: "10.8.8.8", dst: "10.50.1.10", bytes_total: "2000", flows: "5" }] });
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Flows" }));
+    fireEvent.click(screen.getByRole("button", { name: "Flows" }));
     expect(await screen.findByText("10.9.9.9")).toBeInTheDocument();
     expect(screen.getByText("10.8.8.8")).toBeInTheDocument();
     // biggest conversation first regardless of direction
@@ -135,7 +135,7 @@ describe("ResourceDetail", () => {
     cloudResource.mockResolvedValue(detail());
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Service" }));
+    fireEvent.click(screen.getByRole("button", { name: "Service" }));
     expect(screen.getAllByText("Checkout").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/cloud_tag · confirmed/).length).toBeGreaterThan(0);
     cleanup();
@@ -143,7 +143,7 @@ describe("ResourceDetail", () => {
     cloudResource.mockResolvedValue(detail({ app_id: "", app_name: "", confidence: "unknown" }));
     render(<ResourceDetail kind="cloud" id="i-0abc123" />);
     await screen.findByRole("heading", { name: "checkout-web-1" });
-    fireEvent.click(screen.getByRole("tab", { name: "Service" }));
+    fireEvent.click(screen.getByRole("button", { name: "Service" }));
     expect(await screen.findByText("Not attributed to a service")).toBeInTheDocument();
   });
 });

@@ -205,6 +205,18 @@ export default function App() {
     <ShellContext.Provider value={shell}>
      <WorkspaceProvider enabled={shellV2}>
       <div className={`shell${collapsed ? " collapsed" : ""}${shellV2 ? " shell-v2" : ""}`}>
+        {/* Skip link (WCAG 2.4.1). Routing owns location.hash, so an href jump
+            would navigate — focus the main region programmatically instead. */}
+        <a
+          className="skip-link"
+          href="#main-content"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("main-content")?.focus();
+          }}
+        >
+          Skip to main content
+        </a>
         <ShellGridSizing />
         <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} hideUserMenu={shellV2} />
         {shellV2 ? (
@@ -219,7 +231,7 @@ export default function App() {
             homeRoute={homeRoute}
           />
         )}
-        <main className="main">
+        <main className="main" id="main-content" tabIndex={-1}>
           <div className="main-head">
             <div className="crumbs">
               {resourceRoute ? (

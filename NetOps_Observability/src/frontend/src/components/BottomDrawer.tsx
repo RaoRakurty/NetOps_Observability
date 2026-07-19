@@ -51,15 +51,27 @@ export default function BottomDrawer() {
             className="bottom-drawer-resize"
             role="separator"
             aria-orientation="horizontal"
+            aria-label="Resize console"
+            tabIndex={0}
             onMouseDown={() => {
               dragging.current = true;
               document.body.style.userSelect = "none";
+            }}
+            onKeyDown={(e) => {
+              // Keyboard resize (2.1.1): arrows nudge the pane 24px per press.
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                ws.setDrawerHeight(clampH(ws.drawerHeight + 24));
+              } else if (e.key === "ArrowDown") {
+                e.preventDefault();
+                ws.setDrawerHeight(clampH(ws.drawerHeight - 24));
+              }
             }}
             title="Drag to resize"
           />
           <div className="bottom-drawer-head">
             <strong>{d?.title ?? "Console"}</strong>
-            <button className="inspector-btn" onClick={ws.closeDrawer} title="Close (Esc)">
+            <button className="inspector-btn" onClick={ws.closeDrawer} title="Close (Esc)" aria-label="Close console">
               <Icon name="close" size={15} />
             </button>
           </div>

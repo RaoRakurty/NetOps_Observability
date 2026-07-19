@@ -17,6 +17,24 @@ import { useShell } from "../context/shell";
 import { setDrill } from "../theme/drill";
 import TopologyCanvas from "../features/topology/renderers/react-flow/TopologyCanvas";
 
+// pressable — shared keyboard-activation props for click-to-navigate tiles that
+// are not <button>s (stat grids, KPI tiles, mini-rows). Gives every role="button"
+// a tab stop and Enter/Space activation (WCAG 2.1.1).
+function pressable(fn: () => void) {
+  return {
+    role: "button" as const,
+    tabIndex: 0,
+    onClick: fn,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fn();
+      }
+    },
+  };
+}
+
+
 // ---- shared helpers --------------------------------------------------------
 
 function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): T | undefined {
@@ -357,7 +375,7 @@ function StatusGrid({
       </div>
       <div className="status-grid">
         {cells.map((c, i) => (
-          <span key={`${c.name}-${i}`} className={`sgc ${c.st}`} title={`${c.name} — ${c.st === "ok" ? okLabel : c.st === "bad" ? "down" : "transient"}`} />
+          <span key={`${c.name}-${i}`} className={`sgc ${c.st}`} role="img" aria-label={`${c.name} — ${c.st === "ok" ? okLabel : c.st === "bad" ? "down" : "transient"}`} title={`${c.name} — ${c.st === "ok" ? okLabel : c.st === "bad" ? "down" : "transient"}`} />
         ))}
       </div>
     </div>
@@ -383,9 +401,8 @@ function AlertsSeverity() {
           key={k}
           className="sev-count"
           style={{ borderLeftColor: SEVERITY_COLOR[k], cursor: "pointer" }}
-          role="button"
           title={`View ${k} alerts`}
-          onClick={() => navigate("alerts/active")}
+          {...pressable(() => navigate("alerts/active"))}
         >
           <div className="n" style={{ color: SEVERITY_COLOR[k] }}>
             {counts[k] ?? 0}
@@ -408,9 +425,8 @@ function ActiveAlerts() {
           className="mini-row"
           key={a.id ?? i}
           style={{ cursor: "pointer" }}
-          role="button"
           title="Open in Alerts"
-          onClick={() => navigate("alerts/active")}
+          {...pressable(() => navigate("alerts/active"))}
         >
           <span className={`badge ${severityClass(a.severity)}`}>{a.severity || "info"}</span>
           <div className="mini-body">
@@ -543,7 +559,7 @@ function WanInterfaces() {
         <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
           <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
-            title="WAN device pattern (regex on device name)" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
+            aria-label="WAN device name pattern (regex)" title="WAN device pattern (regex on device name)" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
           <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12 }} onClick={applyPattern}>Apply</button>
         </span>
       </div>
@@ -570,7 +586,8 @@ function WanInterfaces() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.k}>
-                  <td><span className="dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: r.up ? "var(--good)" : "var(--bad)", marginRight: 6 }} />
+                  <td><span className="dot" aria-hidden="true" style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: r.up ? "var(--good)" : "var(--bad)", marginRight: 6 }} />
+                    <span className="sr-only">{r.up ? "up" : "down"} </span>
                     <span className="mono">{r.device}</span> <span className="mini-meta">{r.ifx}</span></td>
                   <td style={{ textAlign: "right" }} className="mono">↓ {fmtBps(r.inb)}</td>
                   <td style={{ textAlign: "right" }} className="mono">↑ {fmtBps(r.outb)}</td>
@@ -601,7 +618,7 @@ function TopHosts() {
     <table className="mini-table">
       <tbody>
         {rows.map((r, i) => (
-          <tr key={i} style={{ cursor: "pointer" }} title="View in Flows" onClick={() => navigate("explore/flows")}>
+          <tr key={i} style={{ cursor: "pointer" }} title="View in Flows" tabIndex={0} onClick={() => navigate("explore/flows")} onKeyDown={(e) => { if (e.key === "Enter") navigate("explore/flows"); }}>
             <td className="mono">{r.src}</td>
             <td className="mono">{r.dst}</td>
             <td style={{ textAlign: "right" }}>{Number(r.bytes_total).toLocaleString()} B</td>
@@ -627,7 +644,7 @@ function SiteAvailability() {
   const pct = targets > 0 ? Math.round((reachable / targets) * 100) : null;
   const cls = pct === null ? "s-muted" : pct >= 99 ? "s-good" : pct >= 90 ? "s-warn" : "s-bad";
   return (
-    <div className={`stat ${cls}`} style={{ border: 0, padding: 0, cursor: "pointer" }} role="button" title="View devices" onClick={() => navigate("infrastructure/devices")}>
+    <div className={`stat ${cls}`} style={{ border: 0, padding: 0, cursor: "pointer" }} title="View devices" {...pressable(() => navigate("infrastructure/devices"))}>
       <span className="stat-value">{pct === null ? "—" : `${pct}%`}</span>
       <span className="stat-sub">{reachable}/{targets} targets reachable</span>
     </div>
@@ -644,7 +661,7 @@ function StackPerformance() {
       ? Math.round(cols.reduce((n, c) => n + (c.last_poll_ms ?? 0), 0) / cols.length)
       : null;
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} role="button" title="View metrics" onClick={() => navigate("explore/metrics")}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View metrics" {...pressable(() => navigate("explore/metrics"))}>
       <div className={`stat ${enabled.length && healthy === enabled.length ? "s-good" : "s-bad"}`}>
         <span className="stat-label">Collectors healthy</span>
         <span className="stat-value">{healthy}/{enabled.length}</span>
@@ -753,7 +770,7 @@ function KpiTiles() {
       {(computed ?? []).map(({ spec, latest, spark }) => {
         const band: Band = latest == null ? "accent" : spec.band(latest);
         return (
-          <div key={spec.key} className={`kpi k-${band} kpi-link`} role="button" title="View details" onClick={go(spec.drill)}>
+          <div key={spec.key} className={`kpi k-${band} kpi-link`} title="View details" {...pressable(go(spec.drill))}>
             <span className="kpi-label">{spec.label}</span>
             <span className="kpi-num">{latest == null ? "—" : spec.fmt(latest)}</span>
             <Spark data={spark} color={BAND_HEX[band]} />
@@ -762,7 +779,7 @@ function KpiTiles() {
       })}
       {/* tenant-scoped count tiles */}
       {counts.map((c) => (
-        <div key={c.key} className={`kpi k-${c.band} kpi-link`} role="button" title="View details" onClick={go(c.dest.route, c.dest.drill)}>
+        <div key={c.key} className={`kpi k-${c.band} kpi-link`} title="View details" {...pressable(go(c.dest.route, c.dest.drill))}>
           <span className="kpi-label">{c.label}</span>
           <span className="kpi-num">{c.value}</span>
           <div style={{ height: 26 }} />
@@ -846,7 +863,7 @@ function TunnelsHealth() {
   const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : null;
   const worst = lats.length ? Math.round(Math.max(...lats)) : null;
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} role="button" title="View tunnels" onClick={() => navigate("topology/tunnels")}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("topology/tunnels"))}>
       <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
       <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
       <div className="stat s-accent"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
@@ -865,7 +882,7 @@ function RecentIncidents() {
   return (
     <div className="alerts-scroll">
       {rows.map((f, i) => (
-        <div className="mini-row" key={f.id ?? i} style={{ cursor: "pointer" }} title="Open in Incidents" onClick={() => navigate("alerts/incidents")}>
+        <div className="mini-row" key={f.id ?? i} style={{ cursor: "pointer" }} title="Open in Incidents" {...pressable(() => navigate("alerts/incidents"))}>
           <span className={`badge ${severityClass(f.severity)}`}>{f.severity || "info"}</span>
           <div className="mini-body">
             <div className="mini-title">{f.summary || f.kind || "(incident)"}</div>

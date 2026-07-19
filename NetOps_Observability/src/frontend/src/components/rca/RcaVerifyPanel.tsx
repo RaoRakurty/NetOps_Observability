@@ -75,18 +75,20 @@ export default function RcaVerifyPanel({ correlationId, suspected }: {
 
   return (
     <div className="rw-verify" style={{ display: "grid", gap: 8 }}>
-      <div className="rw-section-title">Active verification</div>
+      <h3 className="rw-section-title">Active verification</h3>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <span style={{ flex: 1, minWidth: 220 }}>{summary}</span>
+        {/* Live region (4.1.3): announces run start/finish after "Verify now". */}
+        <span style={{ flex: 1, minWidth: 220 }} role="status" aria-live="polite">{summary}</span>
         {canWrite && (
           <button className="rw-btn" onClick={trigger}
             disabled={busy || run?.status === "running"}
+            aria-busy={busy || run?.status === "running"}
             title="Run the bounded read-only check battery (ping / SNMP / show commands) against the implicated devices">
             {run?.status === "running" ? "Verifying…" : "Verify now"}
           </button>
         )}
       </div>
-      {message && <div className="rw-note">{message}</div>}
+      {message && <div className="rw-note" role="status" aria-live="polite">{message}</div>}
       {results.length > 0 && (
         <details>
           <summary style={{ cursor: "pointer" }}>
@@ -96,7 +98,7 @@ export default function RcaVerifyPanel({ correlationId, suspected }: {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ textAlign: "left", opacity: 0.7 }}>
-                  <th>Check</th><th>Device</th><th>Result</th><th>Observed</th>
+                  <th scope="col">Check</th><th scope="col">Device</th><th scope="col">Result</th><th scope="col">Observed</th>
                 </tr>
               </thead>
               <tbody>

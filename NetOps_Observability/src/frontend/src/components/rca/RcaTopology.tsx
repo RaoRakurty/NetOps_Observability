@@ -224,8 +224,20 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
   const methods = path ? [...new Set(path.edges.map((e) => e.evidence?.method).filter(Boolean) as string[])] : [];
   const nonLive = path ? [...new Set(path.edges.concat(path.spine as any).map((x: any) => x.evidence?.data_class).filter((c: string) => c && c !== "live"))] as string[] : [];
 
+  // Text alternative for the canvas (1.1.1): the hop chain in path order. The
+  // pointer-only node/edge evidence stays a progressive enhancement.
+  const chainText = graph.nodes
+    .filter((n) => n.data.hopIndex !== undefined)
+    .sort((a, b) => (a.data.hopIndex ?? 0) - (b.data.hopIndex ?? 0))
+    .map((n) => n.data.label)
+    .join(" → ");
+
   return (
-    <div style={{ position: "relative", height, borderRadius: 10, overflow: "hidden", border: "1px solid var(--border,#2a2f3a)", background: "radial-gradient(120% 120% at 0% 0%, rgba(40,52,74,0.35), var(--bg,#0e1320) 60%)" }}>
+    <div
+      role="group"
+      aria-label={`Network path graph — ${m.word}${graph.mode === "spine" ? `, measured path with ${path?.spine.length ?? 0} hops` : ""}`}
+      style={{ position: "relative", height, borderRadius: 10, overflow: "hidden", border: "1px solid var(--border,#2a2f3a)", background: "radial-gradient(120% 120% at 0% 0%, rgba(40,52,74,0.35), var(--bg,#0e1320) 60%)" }}>
+      {chainText && <span className="sr-only">Path: {chainText}</span>}
       <ReactFlow
         nodes={rfNodes} edges={rfEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
         fitView fitViewOptions={{ padding: 0.28, maxZoom: 1.05 }} proOptions={{ hideAttribution: true }}
@@ -278,6 +290,7 @@ export default function RcaTopology({ timeline, seams, view = "operator", height
       {model.hasStamp && (
         <button
           onClick={() => setShowStamp((v) => !v)}
+          aria-pressed={showStamp}
           title="Show per-path active-measurement (STAMP) metrics — loss · RTT · jitter"
           style={{
             position: "absolute", right: 10, top: 10, zIndex: 5, cursor: "pointer",

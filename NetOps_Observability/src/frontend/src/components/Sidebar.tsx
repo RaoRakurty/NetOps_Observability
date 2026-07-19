@@ -31,6 +31,7 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
       <button
         key={leaf.id}
         className={`nav-sub${active ? " active" : ""}`}
+        aria-current={active ? "page" : undefined}
         onClick={() => navigate(`${s.id}/${leaf.id}`)}
       >
         <span className="nav-label">{leaf.label}</span>
@@ -59,15 +60,19 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
         <button
           className={`nav-item${active ? " active" : ""}`}
           title={collapsed ? s.label : undefined}
+          aria-current={!isCopilot && active ? "page" : undefined}
+          aria-expanded={grouped ? open : undefined}
           onClick={onClick}
         >
           <span className="nav-icon"><Icon name={s.icon} size={18} /></span>
           {!collapsed && <span className="nav-label">{s.label}</span>}
           {grouped && (
+            // Mouse-only fine-grained collapse; a nested interactive control
+            // inside a <button> is invalid HTML and unreachable by keyboard, so
+            // the caret is decorative — the parent button carries aria-expanded.
             <span
               className="nav-caret"
-              role="button"
-              aria-label={open ? "Collapse" : "Expand"}
+              aria-hidden="true"
               onClick={(e) => { e.stopPropagation(); toggle(s.id); }}
             >
               <Icon name={open ? "chevron-down" : "chevron-right"} size={14} />
@@ -103,7 +108,7 @@ export default function Sidebar({ nav, activeSection, activeLeaf, collapsed, onT
         <span className="rail-brand-mark"><Icon name="logo" size={20} /></span>
         {!collapsed && <span className="rail-brand-name">{BRAND}</span>}
       </button>
-      <nav className="nav-main">{main.map(item)}</nav>
+      <nav className="nav-main" aria-label="Primary">{main.map(item)}</nav>
       <div className="nav-footer">
         {footer.map(item)}
         <button className="nav-item nav-collapse" onClick={onToggle} title="Collapse sidebar">
