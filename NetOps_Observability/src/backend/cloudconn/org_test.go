@@ -99,8 +99,8 @@ func TestAWSOrgSetupArtifacts(t *testing.T) {
 	cfgWIF := IdentityConfig{
 		Provider: ProviderAWS, Method: AuthMethodWorkloadFederation,
 		RoleARN: cfg.RoleARN,
-		Anchor: TrustAnchor{OIDCIssuer: "https://token.correlix.example/oidc", OIDCSubject: "correlix:connector:ccn_1"},
-		Org:    &OrgScopeAnchor{Type: ScopeOrg, Ref: "o-abc123"},
+		Anchor:  TrustAnchor{OIDCIssuer: "https://token.correlix.example/oidc", OIDCSubject: "correlix:connector:ccn_1"},
+		Org:     &OrgScopeAnchor{Type: ScopeOrg, Ref: "o-abc123"},
 	}
 	bundleWIF, err := AdapterFor(ProviderAWS).SetupInstructions(cfgWIF, pack)
 	if err != nil {
