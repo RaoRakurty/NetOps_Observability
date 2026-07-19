@@ -83,12 +83,17 @@ class Witness:
     probe_authority: ProbeAuthority | None = None  # set for active_probe witnesses
     fate: ProbeFate | None = None                  # measurement fate fingerprint (any modality)
     probe_scope: ProbeScope | None = None          # UI projection
+    support_only: bool = False                     # may support, never anchor confirm
 
     @property
     def trusted(self) -> bool:
         """May this witness anchor a confirmed verdict? Non-probe evidence is
         trusted; a probe is trusted only at HIGH/MEDIUM authority. LOW/DEBUG
-        probes SUPPORT (→ suspected) but never CONFIRM."""
+        probes SUPPORT (→ suspected) but never CONFIRM. A support-only witness
+        (e.g. a platform-executed verification reach probe) likewise never
+        confirms."""
+        if self.support_only:
+            return False
         if self.probe_authority is None:
             return True
         return self.probe_authority in CONFIRM_AUTHORITIES
@@ -154,6 +159,17 @@ def witness_of(sig: Signal) -> Witness:
     if sig.modality_class is ModalityClass.ACTIVE_PROBE:
         probe_authority = _enum_attr(sig.attrs, "probe_authority", ProbeAuthority, ProbeAuthority.LOW)
         probe_scope = _enum_attr(sig.attrs, "probe_scope", ProbeScope, ProbeScope.UNKNOWN)
+    support_only = False
+    if sig.modality_class is ModalityClass.ACTIVE_VERIFICATION:
+        # Trust marking (RCA spec item 8): a device's own answer over its
+        # management channel (verify_method ssh/snmp) is authoritative-leaning
+        # for its OWN state and may anchor a confirming pair — the observer_id
+        # (the device) still blocks pairing with the device's other telemetry.
+        # A platform-executed reachability probe (tcp) is a weak platform
+        # vantage: support-only, mirroring the low-authority probe rule.
+        # Fail-closed: an unknown/missing method never confirms.
+        method = str(sig.attrs.get("verify_method", "")) if isinstance(sig.attrs, dict) else ""
+        support_only = method not in ("ssh", "snmp")
     fate = _fate_of(sig)
 
     path = sig.observer.collection_path or "direct"
@@ -174,6 +190,7 @@ def witness_of(sig: Signal) -> Witness:
         probe_authority=probe_authority,
         fate=fate,
         probe_scope=probe_scope,
+        support_only=support_only,
     )
 
 

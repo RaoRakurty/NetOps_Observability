@@ -114,6 +114,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # witness (it compared origin vs receive clocks) — management-plane, and
     # never engine-buffered, so it cannot lend a confirming plane to a fault.
     "clock_skew": ModalityClass.MANAGEMENT_PLANE,
+    # active-verification lane (RCA spec item 8 — the verify engine's bounded
+    # read-only check battery; verification_producer.py). Its own modality so
+    # a device answer can be the independence gate's second source.
+    "active_verification_result": ModalityClass.ACTIVE_VERIFICATION,
+    "active_verification_healthy": ModalityClass.ACTIVE_VERIFICATION,
 }
 
 # Kinds whose PRODUCTION signals can ground on an application/service entity

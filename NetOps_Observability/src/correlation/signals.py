@@ -44,6 +44,7 @@ class Source(str, Enum):
     CLOUD = "cloud"  # #81 P3G: Cloud App Observability plane (cloud APIs + cloud logs)
     APP_IDENTITY = "app_identity"  # #81 P5: fused application identity (enrichment, not a fault)
     CONTROLLER = "controller"  # NMS: vendor-controller intelligence (Meraki/vManage/Catalyst/…)
+    VERIFICATION = "verification"  # RCA spec item 8: active-verification check battery results
 
 
 class ObserverType(str, Enum):
@@ -63,6 +64,13 @@ class ModalityClass(str, Enum):
     # NMS: a distinct modality so the independence gate treats a controller as a
     # corroborating-but-not-confirming plane (controller-alone caps at suspected).
     MANAGEMENT_PLANE = "management_plane"
+    # Active Verification (RCA spec item 8): the platform interrogates an
+    # implicated device with a bounded READ-ONLY check battery and the device's
+    # own answer enters as evidence. A DISTINCT modality so the independence
+    # gate can count a device answer as a second source against a probe/flow —
+    # while observer identity (the answering device itself) still blocks a
+    # device from corroborating its own passive telemetry.
+    ACTIVE_VERIFICATION = "active_verification"
 
 
 class EntityType(str, Enum):
@@ -243,7 +251,9 @@ def classify_observer_kind(
     mod = modality.value if isinstance(modality, ModalityClass) else str(modality or "").strip().lower()
     if mod in ("control_plane", "management_plane"):
         return OBSERVER_KIND_CONTROL_PLANE
-    if mod in ("device_telemetry", "passive_flow"):
+    if mod in ("device_telemetry", "passive_flow", "active_verification"):
+        # active_verification: the witness is the answering device (or the
+        # platform executor for reach probes) — never a logical vantage.
         return OBSERVER_KIND_COLLECTOR
     if mod == "active_probe":
         if _is_never_vantage(observer_id):

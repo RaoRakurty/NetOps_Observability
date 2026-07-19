@@ -67,6 +67,7 @@ from cloud_log_parsers import (
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
 from controller_events import controller_event_to_signal
+from verification_producer import verification_signal_from_event
 from producers import (
     clock_skew_signal,
     episode_signal,
@@ -107,7 +108,7 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification"]
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -259,6 +260,9 @@ APP_ID_SIGNALS = 0            # source=app_identity enrichment signals written +
 CONTROLLER_EVENTS_RECEIVED = 0  # consumed from netops.controller_events (#95 NMS lane)
 CONTROLLER_EVENTS_SIGNALS = 0   # source=controller signals written to corr_signals + buffered
 CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-closed)
+VERIFICATION_RECEIVED = 0       # consumed from netops.verification (RCA spec item 8 lane)
+VERIFICATION_SIGNALS = 0        # source=verification signals written to corr_signals + buffered
+VERIFICATION_DROPPED = 0        # dropped: no tenant/device identity or skipped (default-closed)
 APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
 PROBES_RECEIVED = 0           # consumed from netops.probes (the 24/7 heartbeat lane — R6 flatline alert)
 APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
@@ -1657,6 +1661,8 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_controller_event(event)
     elif topic == "netops.app.edge":
         await handle_app_edge(event)
+    elif topic == "netops.verification":
+        await handle_verification(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -1989,6 +1995,30 @@ async def handle_controller_event(ev: dict) -> None:
     CONTROLLER_EVENTS_SIGNALS += 1
     buffer_signal(sig)
     log.info("controller signal %s: %s", sig.kind, sig.entity_id)
+
+
+async def handle_verification(ev: dict) -> None:
+    """Active-verification check results (netops.verification, the Go verify
+    engine — RCA spec item 8) → active_verification-modality signals on the
+    SAME spine. A failing check corroborates (attrs.corroborates_kinds feeds
+    scoring's clause matching); a healthy battery REFUTES
+    (attrs.refutes_kinds → scoring's contradiction path). Because
+    active_verification is its own modality class, the independence gate can
+    count a device answer as a second source — while the device-as-observer
+    identity blocks it from corroborating the same device's passive telemetry.
+    Fail-closed: an untenanted, unbindable or skipped result is dropped."""
+    global VERIFICATION_RECEIVED, VERIFICATION_SIGNALS, VERIFICATION_DROPPED
+    VERIFICATION_RECEIVED += 1
+    if not CORR_SIGNALS_ENABLED or ch is None:
+        return
+    sig = verification_signal_from_event(ev, datetime.now(timezone.utc))
+    if sig is None:
+        VERIFICATION_DROPPED += 1  # no tenant/device identity or skipped — default-closed
+        return
+    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    VERIFICATION_SIGNALS += 1
+    buffer_signal(sig)
+    log.info("verification signal %s %s: %s", sig.kind, sig.attrs.get("check", ""), sig.entity_id)
 
 
 async def handle_cloud(ev: dict) -> None:
@@ -2438,6 +2468,10 @@ async def health() -> dict:
             "controller_events_received": CONTROLLER_EVENTS_RECEIVED,
             "controller_events_signals": CONTROLLER_EVENTS_SIGNALS,
             "controller_events_dropped": CONTROLLER_EVENTS_DROPPED,
+            # RCA spec item 8: proves netops.verification is consumed.
+            "verification_received": VERIFICATION_RECEIVED,
+            "verification_signals": VERIFICATION_SIGNALS,
+            "verification_dropped": VERIFICATION_DROPPED,
         },
     }
 

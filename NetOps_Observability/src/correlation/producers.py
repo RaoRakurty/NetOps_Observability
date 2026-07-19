@@ -158,6 +158,12 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # for operators, NEVER buffered into the engine window (it must not lend an
     # extra modality plane to a real fault) → INTENTIONAL_BLIND in coverage.py.
     "clock_skew",
+    # active-verification lane (RCA spec item 8 — verification_producer.py,
+    # netops.verification): the verify engine's bounded READ-ONLY check battery
+    # against implicated devices. Consumed at RUNTIME by scoring's
+    # corroborates_kinds/refutes_kinds matching, not by a catalog clause
+    # vocabulary → INTENTIONAL_BLIND in coverage.py.
+    "active_verification_result", "active_verification_healthy",
 })
 
 

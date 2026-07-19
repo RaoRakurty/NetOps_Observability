@@ -248,6 +248,9 @@ var defaultStrategyByClass = map[string]evidenceStrategy{
 	"active_probe":     strategyContinuous,
 	"control_plane":    strategyEventBased,
 	"management_plane": strategyEventBased,
+	// RCA spec item 8: verification runs are on-demand check batteries —
+	// event-based by nature, never a continuous lane with expected cadence.
+	"active_verification": strategyEventBased,
 }
 
 // newCoverageEngine builds the engine. `perTenant` is the canonical per-tenant
