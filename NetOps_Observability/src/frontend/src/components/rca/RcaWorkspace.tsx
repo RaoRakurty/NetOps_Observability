@@ -139,7 +139,7 @@ function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[]
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, topologySlot, timeImpactSlot, ticketSlot, aiSlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, topologySlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -152,6 +152,7 @@ export default function RcaWorkspace({
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
   aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
+  verifySlot?: ReactNode;     // Active Verification (spec #8) — read-only device interrogation card
 }) {
   const [detail, setDetail] = useState<string>("");
 
@@ -274,6 +275,11 @@ export default function RcaWorkspace({
               <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
             </>
           )}
+
+          {/* Active Verification (spec #8) — read-only device interrogation. The
+              panel renders nothing (incl. its own section title) unless the
+              feature + tenant opt-in are on, so no orphan heading appears. */}
+          {verifySlot && <section style={{ marginBottom: 4 }}>{verifySlot}</section>}
 
           {/* RCA auto-ticketing (#78) — live external ticket status + Create/Sync. */}
           {ticketSlot && (

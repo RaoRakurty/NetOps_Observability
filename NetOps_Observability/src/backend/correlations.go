@@ -432,6 +432,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleRcaPromotion(w, r, id)
 		return
 	}
+	// Active Verification (RCA spec item 8) — GET latest run / POST "Verify
+	// now"; own auth (read/write), rate-limited + audited inside the handler.
+	if sub == "verify" {
+		s.handleCorrelationVerify(w, r, id)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return

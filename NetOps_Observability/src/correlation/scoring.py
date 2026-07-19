@@ -38,6 +38,32 @@ OPTIONAL_BONUS_CAP = 0.1
 CONFIDENCE_FLOOR = 0.3   # rank-1 below this ⇒ object outcome 'undetermined'
 TOP_K = 4
 
+# Active-verification lane (RCA spec item 8). The verify engine's producer
+# (verification_producer.py) emits exactly these two kinds; the backend stamps
+# corroborates_kinds / refutes_kinds from its CLOSED check table — the scorer
+# only ever matches those declarations against clause vocabulary, it never
+# invents a mapping.
+VERIFICATION_RESULT_KIND = "active_verification_result"
+VERIFICATION_HEALTHY_KIND = "active_verification_healthy"
+
+
+def _attr_kinds(sig: Signal, key: str) -> frozenset[str]:
+    """Bounded, fail-closed read of a kinds list from attrs (zero-trust: the
+    wire value is validated for shape; anything malformed is empty)."""
+    attrs = sig.attrs if isinstance(sig.attrs, dict) else {}
+    raw = attrs.get(key, ())
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    return frozenset(str(k) for k in raw[:16] if isinstance(k, str) and k)
+
+
+def _same_entity(a: Signal, b: Signal) -> bool:
+    """Entity co-identity for verification matching: same entity_id or any
+    shared grounding token. Absence of overlap never fabricates a match."""
+    if a.entity_id and a.entity_id == b.entity_id:
+        return True
+    return bool(set(a.entity_tokens) & set(b.entity_tokens))
+
 
 def clause_matches(clause: Clause, sig: Signal) -> bool:
     """Total predicate: signal vs one clause. Role constraints need topology
@@ -53,12 +79,28 @@ def clause_matches(clause: Clause, sig: Signal) -> bool:
     return True
 
 
+def _verification_corroborates(clause: Clause, sig: Signal) -> bool:
+    """Active-verification corroboration (spec item 8): a FAILING read-only
+    check names the kinds it corroborates in attrs.corroborates_kinds (stamped
+    backend-side from the closed check table). It satisfies a clause when those
+    kinds intersect the clause vocabulary — the device's own answer stands in
+    as a witness for the phenomenon the clause names. entity_type is still
+    enforced; min_deviation is a metric-lane constraint and does not apply to a
+    state observation."""
+    if sig.kind != VERIFICATION_RESULT_KIND:
+        return False
+    if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
+        return False
+    return bool(_attr_kinds(sig, "corroborates_kinds") & clause.kinds())
+
+
 def _satisfying(clause: Clause, evidence: tuple[Signal, ...]) -> tuple[Signal, ...]:
     # Decision #1: a debug_only / lab probe can never satisfy a clause — it must
     # not attach as supporting evidence nor drive a customer-facing hypothesis.
     return tuple(
         s for s in evidence
-        if clause_matches(clause, s) and probe_authority_of(s) is not ProbeAuthority.DEBUG_ONLY
+        if (clause_matches(clause, s) or _verification_corroborates(clause, s))
+        and probe_authority_of(s) is not ProbeAuthority.DEBUG_ONLY
     )
 
 
@@ -179,6 +221,32 @@ def score_template(
         if _satisfying(disc.absent, evidence):
             contradictions.append(disc.absent.kind)
             forced.append(disc.else_prefer)
+
+    # Active-verification refutation (spec item 8): a HEALTHY read-only check
+    # battery on an implicated entity is REFUTING evidence. The producer stamps
+    # attrs.refutes_kinds from the closed check table; when those kinds
+    # intersect a satisfied required clause AND the healthy answer came from
+    # the same entity that satisfied it, the template is contradicted through
+    # the SAME penalty path as a discriminator — explained-away, never silently
+    # dropped (the contradiction string names the verification). Deterministic:
+    # signals ordered by signal_id, refuted kinds sorted.
+    for ver in sorted(
+        (s for s in evidence if s.kind == VERIFICATION_HEALTHY_KIND),
+        key=lambda s: str(s.signal_id),
+    ):
+        refutes = _attr_kinds(ver, "refutes_kinds")
+        if not refutes:
+            continue
+        for clause in required:
+            hit_kinds = clause.kinds() & refutes
+            if not hit_kinds:
+                continue
+            hits = _satisfying(clause, evidence)
+            if hits and any(_same_entity(h, ver) for h in hits):
+                for k in sorted(hit_kinds):
+                    tag = f"{VERIFICATION_HEALTHY_KIND}:{k}"
+                    if tag not in contradictions:
+                        contradictions.append(tag)
 
     # Propagation ladder: mark each declared rung witnessed/unobserved from the
     # SAME evidence pool (and the same probe-authority filter) the clauses use.

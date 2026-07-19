@@ -92,6 +92,27 @@ INTENTIONAL_BLIND: dict[str, dict] = {
                   "future device-clock-misconfigured signature.",
         "owner": "correlix", "date_added": "2026-07-17",
     },
+    # active-verification lane (RCA spec item 8). Both kinds are consumed at
+    # RUNTIME by the scorer, not by a catalog signature clause: a failing check
+    # satisfies clauses via its attrs.corroborates_kinds declaration
+    # (scoring._verification_corroborates) and a healthy battery contradicts a
+    # satisfied template via attrs.refutes_kinds (scoring's contradiction
+    # path) — so the static coverage gate sees them as intentional blind spots,
+    # exactly like the cloud-edge runtime-attributor kinds above.
+    "active_verification_result": {
+        "reason": "active-verification failing/unreachable check (RCA spec "
+                  "item 8) — corroborating device answer, consumed at runtime "
+                  "by scoring's corroborates_kinds clause matching, not by a "
+                  "catalog signature clause",
+        "owner": "correlix", "date_added": "2026-07-19",
+    },
+    "active_verification_healthy": {
+        "reason": "active-verification healthy check (RCA spec item 8) — "
+                  "REFUTING evidence, consumed at runtime by scoring's "
+                  "refutes_kinds contradiction path, never by a catalog "
+                  "signature clause",
+        "owner": "correlix", "date_added": "2026-07-19",
+    },
 }
 INTENTIONAL_BLIND_KINDS: frozenset[str] = frozenset(INTENTIONAL_BLIND)
 

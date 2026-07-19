@@ -215,7 +215,10 @@ func (r *observerRegistry) structuralKind(f observerFacts) observerKind {
 	switch strings.ToLower(strings.TrimSpace(f.Modality)) {
 	case "control_plane", "management_plane":
 		return observerControlPlaneSource
-	case "device_telemetry", "passive_flow":
+	case "device_telemetry", "passive_flow", "active_verification":
+		// active_verification (RCA spec item 8): the witness is the answering
+		// device (or the platform executor for reach probes) — never a
+		// logical vantage.
 		return observerCollector
 	case "active_probe":
 		if r.isNeverVantage(f.ObserverID) {
