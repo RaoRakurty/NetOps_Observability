@@ -47,6 +47,7 @@ export default function OpsisDrawer() {
       <div
         className={`op-scrim${copilotOpen && !split ? " open" : ""}`}
         onClick={() => setCopilotOpen(false)}
+        aria-hidden="true"
       />
       <aside
         className={`op-panel${copilotOpen ? " open" : ""}${split ? " split" : ""}`}
