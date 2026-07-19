@@ -43,12 +43,19 @@ function cloudLogsHref(role: string, provider: string, resourceId: string): stri
   return `#/logs/cloud?${p.toString()}`;
 }
 
+// The display role: the discovery-driven canonical role when the backend
+// classifier placed the device (device_role), else the legacy path role.
+function displayRole(dev: RcaPathKeyDevice): string {
+  return dev.device_role || dev.role;
+}
+
 // Everything an operator may want per hop, behind hover — never on the chain.
 function devTooltip(dev: RcaPathKeyDevice, seg: RcaTypedSegment, causeKind?: string): string {
-  const parts = [roleLabel(dev.role)];
+  const parts = [roleLabel(displayRole(dev))];
   if (dev.label) parts.push(dev.label);
   if (dev.address && dev.address !== dev.label) parts.push(dev.address);
   parts.push(`${segmentLabel(seg.segment_type)} segment${seg.provider ? ` · ${seg.provider.toUpperCase()}` : ""}`);
+  if (dev.device_role && dev.role_confidence) parts.push(`role from discovery · ${dev.role_confidence}`);
   if (seg.confidence) parts.push(`classified · ${confidenceLabel(seg.confidence).toLowerCase()}`);
   if (causeKind) parts.push(`evidence: ${kindLabel(causeKind)}`);
   return parts.join(" — ");
@@ -65,16 +72,16 @@ function DeviceNode({
   const cls = `rpc-dev${mark === "cause" ? " cause" : mark === "downstream" ? " downstream" : ""}`;
   const inner = (
     <>
-      <span className="rpc-dev-abbr" aria-hidden="true">{mark === "cause" ? "✕" : roleAbbr(dev.role)}</span>
+      <span className="rpc-dev-abbr" aria-hidden="true">{mark === "cause" ? "✕" : roleAbbr(displayRole(dev))}</span>
       <span className="rpc-dev-body">
-        <span className="rpc-dev-role">{roleLabel(dev.role)}</span>
+        <span className="rpc-dev-role">{roleLabel(displayRole(dev))}</span>
         {dev.label && <span className="rpc-dev-name">{dev.label}</span>}
         {mark === "cause" && <span className="rpc-dev-tag cause">{breakText}</span>}
         {mark === "downstream" && <span className="rpc-dev-tag down">Downstream</span>}
       </span>
     </>
   );
-  const aria = `${roleLabel(dev.role)}${dev.label ? ` ${dev.label}` : ""}${mark === "cause" ? `, ${breakText.toLowerCase()}` : mark === "downstream" ? ", downstream" : ""}`;
+  const aria = `${roleLabel(displayRole(dev))}${dev.label ? ` ${dev.label}` : ""}${mark === "cause" ? `, ${breakText.toLowerCase()}` : mark === "downstream" ? ", downstream" : ""}`;
   if (href) {
     return (
       <a className={cls} href={href} title={`${devTooltip(dev, seg, causeKind)} — open logs`}

@@ -685,6 +685,11 @@ export const ROLE_LABEL: Record<string, string> = {
   edge: "Edge router", router: "Router", switch: "Switch",
   nva: "Network appliance", tunnel: "Tunnel", gateway: "Gateway", proxy: "Proxy",
   unknown: "Device",
+  // canonical discovery-driven device roles (backend topology/roles.go)
+  access_switch: "Access switch", distribution_switch: "Distribution switch",
+  core_router: "Core router", wan_edge: "WAN edge router", carrier_hop: "Carrier hop",
+  dc_wan_edge: "DC WAN edge", dc_leaf: "Leaf switch", dc_spine: "Spine switch",
+  cloud_edge: "Cloud edge gateway",
 };
 export function roleLabel(r?: string): string {
   const k = (r || "").toLowerCase();
@@ -697,6 +702,10 @@ export const ROLE_ABBR: Record<string, string> = {
   app: "APP", application: "APP", host: "HOST", server: "SRV", client: "USER",
   leaf: "LEAF", spine: "SPN", edge: "EDGE", router: "RTR", switch: "SW",
   nva: "NVA", tunnel: "TUN", gateway: "GW", proxy: "PXY", unknown: "•",
+  // canonical discovery-driven device roles
+  access_switch: "SW", distribution_switch: "DIST", core_router: "CORE",
+  wan_edge: "WAN", carrier_hop: "CARR", dc_wan_edge: "DCW",
+  dc_leaf: "LEAF", dc_spine: "SPN", cloud_edge: "CGW",
 };
 export function roleAbbr(r?: string): string {
   const k = (r || "").toLowerCase();
