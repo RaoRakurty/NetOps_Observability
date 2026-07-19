@@ -38,6 +38,7 @@ import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
 import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
+import MonitorsSettings from "./appobs/MonitorsSettings";
 import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard, SeamOwnersCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import ServiceMap from "./appobs/ServiceMap";
@@ -1715,6 +1716,8 @@ function Settings() {
       <RequiredTagsCard />
       <RcaWindowCard />
       <SeamOwnersCard />
+      {/* Wave 5 #14: per-tenant cloud monitor authoring (threshold/anomaly). */}
+      <MonitorsSettings />
       {/* Read-only change log: every save above is audited and listed here. */}
       <GovernanceAuditCard />
     </div>

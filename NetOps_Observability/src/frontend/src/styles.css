@@ -4686,6 +4686,15 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-metrics-panel { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); }
 .ao-metrics-ctl { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 
+/* ── Cloud monitors editor (Wave 5 #14 slice 3) ── */
+.ao-mon-list { list-style: none; margin: 0 0 var(--sp-3); padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.ao-mon-row { display: flex; justify-content: space-between; gap: var(--sp-3); align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3); background: var(--panel-2, rgba(127,127,127,0.06)); border-radius: var(--r-2); }
+.ao-mon-main { min-width: 0; }
+.ao-mon-reason { font-size: var(--fs-micro, 12px); }
+.ao-mon-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
+.ao-mon-form { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
 /* ── App Observability — Overview pass (#81 P3F) ──────────────────────────────
    NOC polish: prominent numerals, small uppercase labels, grouped cards, explicit
    underlay, RCA drawer. All tokens — overrides the earlier card rules (later wins). */

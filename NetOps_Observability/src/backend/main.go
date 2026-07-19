@@ -135,6 +135,7 @@ type server struct {
 	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
 	governance          *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
 	cloudSLOs           *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
+	cloudMonitors       *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
 	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
@@ -576,6 +577,7 @@ func newServer() *server {
 	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
 	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
+	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -633,6 +635,10 @@ func main() {
 	}
 	srv.alerts.Start(ctx)
 	srv.loadUserRules() // re-feed persisted operator-created monitors (rules_user.go)
+	// Per-tenant cloud monitor evaluation (Wave 5 #14 slice 3): a bounded poll
+	// loop over each tenant's OWN inventory scope. CLOUD_MONITOR_EVAL_SECONDS=0
+	// opts out.
+	newCloudMonitorEvaluator(srv, cloudMonitorEvalInterval()).Start(ctx)
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
 	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
 	srv.startTenantEnrichment(ctx)
@@ -1058,6 +1064,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Per-tenant SLOs / error budgets (Wave 5 #14 slice 2): defs in a tenant-
 	// keyed file store, actuals measured from the status-check lane.
 	mux.HandleFunc("/api/cloud/slos", s.handleCloudSLOs)
+	// Per-tenant cloud monitor authoring (Wave 5 #14 slice 3).
+	mux.HandleFunc("/api/cloud/monitors", s.handleCloudMonitors)
+	mux.HandleFunc("/api/cloud/monitors/", s.handleCloudMonitorByID)
 	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
 	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)
 	mux.HandleFunc("/api/cloud/connectors", s.handleCloudConnectors)

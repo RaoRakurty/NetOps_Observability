@@ -252,6 +252,11 @@ var routeIsolationLedger = map[string]string{
 	// Per-tenant SLOs (Wave 5 #14 slice 2): tenant-keyed file store, PUT is
 	// requireAdmin + principal-stamped. Cross-org proof in cloud_slo_isolation_test.go.
 	"/api/cloud/slos": "scoped",
+	// Per-tenant cloud monitors (Wave 5 #14 slice 3): tenant-keyed store,
+	// alerts:write CRUD, id resolved inside the caller's bucket only (foreign
+	// id → 404). Cross-org proof in cloud_monitors_isolation_test.go.
+	"/api/cloud/monitors":  "scoped",
+	"/api/cloud/monitors/": "scoped",
 
 	// ── Cloud Connector framework ──
 	// Connectors are per-tenant DATA (each tenant's cloud connections); scoped +

@@ -2163,6 +2163,19 @@ export const api = {
   resetCloudSlos: () =>
     request<CloudSloResponse>("/api/cloud/slos", { method: "PUT", body: JSON.stringify({ reset: true }) }),
 
+  // Per-tenant cloud monitors (Wave 5 #14 slice 3): threshold/anomaly rules on
+  // the closed cloud-metric catalog, evaluated by the backend's bounded loop.
+  cloudMonitors: () =>
+    request<{ monitors: CloudMonitorRow[]; count: number; max_monitors: number }>("/api/cloud/monitors"),
+  createCloudMonitor: (m: CloudMonitorInput) =>
+    request<CloudMonitorRow>("/api/cloud/monitors", { method: "POST", body: JSON.stringify(m) }),
+  updateCloudMonitor: (id: string, m: CloudMonitorInput) =>
+    request<CloudMonitorRow>(`/api/cloud/monitors/${encodeURIComponent(id)}`, {
+      method: "PUT", body: JSON.stringify(m),
+    }),
+  deleteCloudMonitor: (id: string) =>
+    request<{ deleted: string }>(`/api/cloud/monitors/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   // Saved objects (searches / dashboards / reports) — Postgres-swappable
   // file-backed store on the API.
   listSaved: (type?: string) =>
@@ -3398,6 +3411,31 @@ export type CloudSloResponse = {
   slos: CloudSloRow[];
   count: number;
   max_slos: number;
+};
+
+// Per-tenant cloud monitors (Wave 5 #14 slice 3) — /api/cloud/monitors shapes
+// (src/backend/cloud_monitors.go). last_* fields are evaluator-written.
+export type CloudMonitorMode = "threshold" | "anomaly";
+export type CloudMonitorState =
+  | "never_evaluated" | "ok" | "firing" | "no_data" | "error" | "disabled";
+export type CloudMonitorInput = {
+  name: string;
+  metric: string;
+  resource_id?: string; // "" = every cloud resource in the tenant inventory
+  mode: CloudMonitorMode;
+  condition?: "above" | "below"; // threshold mode only
+  threshold?: number;            // threshold mode only
+  enabled: boolean;
+};
+export type CloudMonitorRow = CloudMonitorInput & {
+  id: string;
+  tenant_id: string;
+  created_at?: string;
+  updated_at?: string;
+  last_state: CloudMonitorState;
+  last_value?: number;
+  last_reason?: string;
+  last_eval_at?: string;
 };
 
 // Instant query — one sample per matching series.
