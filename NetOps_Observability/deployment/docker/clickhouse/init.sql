@@ -699,3 +699,42 @@ CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_current ON netops.corr_current
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_corr_tenant_write_amp ON netops.corr_tenant_write_amp
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- Cloud cost records (Wave 5 #18 — cost ingestion).
+--
+-- One row per (tenant, provider, account, service, day): the provider-billed
+-- DAILY cost as reported by the provider's own cost API (AWS Cost Explorer /
+-- Azure Cost Management; GCP requires the BigQuery billing export — that lane
+-- is honestly absent until built). Written by vector-router from the poller's
+-- netops.cloudcosts topic. ReplacingMergeTree(ts): providers restate recent
+-- days and the poller re-reads a trailing window, so re-emits REPLACE the row
+-- for the same key instead of duplicating it. `amount` may be negative
+-- (credits/refunds are real records). The API boot converge
+-- (src/backend/cloud_costs.go) carries the identical DDL for existing installs.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.cloud_costs
+(
+    ts              DateTime64(3) DEFAULT now64(3),    -- emit time (poller clock)
+    day             Date,                              -- the billed usage day (UTC)
+    tenant_id       LowCardinality(String) DEFAULT '', -- '' = platform-only (strict policy)
+    provider        LowCardinality(String),            -- aws | azure | gcp
+    account         String,                            -- AWS account / Azure subscription / GCP project
+    service         String,                            -- the provider's own billing service name
+    amount          Float64,                           -- daily cost; negative = credit/refund
+    currency        LowCardinality(String),
+    granularity     LowCardinality(String) DEFAULT 'daily',
+    collection_path LowCardinality(String) DEFAULT ''  -- which provider API produced it
+)
+ENGINE = ReplacingMergeTree(ts)
+PARTITION BY (tenant_id, toYYYYMM(day))
+ORDER BY (tenant_id, provider, account, service, day)
+TTL day + INTERVAL 400 DAY                             -- ~13 months: year-over-year cost context
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+-- STRICT: billing data is per-tenant financial data — no untagged-shared
+-- clause; untagged rows are PLATFORM-ONLY (strict tenancy model).
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_cloud_costs ON netops.cloud_costs
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;

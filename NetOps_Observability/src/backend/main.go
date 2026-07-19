@@ -1048,6 +1048,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/health", s.handleCloudHealth)
 	mux.HandleFunc("/api/cloud/changes", s.handleCloudChanges)
 	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
+	mux.HandleFunc("/api/cloud/costs", s.handleCloudCosts) // daily provider-billed cost records (Wave 5 #18)
 	mux.HandleFunc("/api/cloud/investigations/", s.handleCloudInvestigationChanges) // {id}/changes — change→incident correlation (Wave 4 #12)
 	mux.HandleFunc("/api/cloud/service-map", s.handleCloudServiceMap)
 	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
