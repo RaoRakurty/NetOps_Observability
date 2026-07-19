@@ -59,7 +59,8 @@ import { sqFromHash, hashWithSq, listViews, saveView, deleteView } from "./appob
 import { getActiveScope } from "../services/api";
 import type { CloudRcaObject } from "./appobs/api";
 import { signatureNocTitle } from "../components/rca/labels";
-import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES } from "./appobs/attribution";
+import { funnelSteps, coverageByScope, groupByApp, RESOURCE_CATEGORIES, WORKLOAD_CLASSES, WORKLOAD_CLASS_META, workloadClass } from "./appobs/attribution";
+import type { WorkloadClass } from "./appobs/attribution";
 import { useCloudShell } from "./appobs/useCloudShell";
 import { CloudScopeBar, ReadinessStrip, SourceStatusBadge } from "./appobs/shell";
 import { SOURCE_LABEL } from "./appobs/readiness";
@@ -741,9 +742,15 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
   const rows = all.filter((r) =>
     (!f.missing || r.missingTags.includes(f.missing)) &&
     (!f.unknown || (f.unknown === "yes") === (r.app === "")) &&
-    (!f.provider || r.provider === f.provider));
+    (!f.provider || r.provider === f.provider) &&
+    (!f.class || workloadClass(r.type) === f.class));
   const providerOpts = [...new Set(all.map((r) => r.provider))]
     .filter((p) => p !== "—").map((p) => ({ value: p, label: p.toUpperCase() }));
+  // Workload classes (Wave 5 #15): always offered — an empty class renders its
+  // honest "nothing discovered + needed permission" state, never a bare table.
+  const classOpts = WORKLOAD_CLASSES.map((c) => ({ value: c, label: WORKLOAD_CLASS_META[c].label }));
+  const classEmpty = f.class && rows.length === 0
+    ? WORKLOAD_CLASS_META[f.class as WorkloadClass] : null;
   const visibleIds = rows.map((r) => r.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => picked.has(id));
   // After a write the cached inventory is stale — drop it and refetch so the
@@ -754,6 +761,7 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
       <FilterBar value={f} onChange={(k, v) => setF((p) => ({ ...p, [k]: v }))}
         filters={[
           { key: "provider", label: "Provider", options: providerOpts },
+          { key: "class", label: "Workload class", options: classOpts },
           { key: "missing", label: "Missing tag", options: [{ value: "app", label: "app" }, { value: "owner", label: "owner" }, { value: "env", label: "env" }] },
           { key: "unknown", label: "Untagged service", options: [{ value: "yes", label: "yes" }] },
         ]} />
@@ -765,7 +773,10 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
         </div>
       )}
       {notice && <div className="ao-selbar-note" role="status">{notice}</div>}
-      <div className="ao-panel">
+      {classEmpty && (
+        <EmptyState title={classEmpty.emptyTitle} hint={classEmpty.emptyHint} />
+      )}
+      {!classEmpty && <div className="ao-panel">
         {/* range-less honesty: inventory is the current state, not a window */}
         <div className="ao-panel-h">Resources <CurrentNote /></div>
         <DataTable<CloudResource> rows={rows} rowKey={(r) => r.id} height={Math.min(520, 44 + rows.length * 30)} ariaLabel="Cloud resources" onRowClick={setSel}
@@ -793,7 +804,7 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
             { key: "traffic", header: "Traffic", width: 95, align: "right", sortValue: (r) => r.trafficBps, render: (r) => NM(r.trafficBps, fmtBps) },
             { key: "tags", header: "Missing tags", width: 130, sortValue: (r) => r.missingTags.length, render: (r) => r.missingTags.length ? <Chip label={r.missingTags.join(", ")} tone="var(--warn)" /> : <span className="ao-muted">—</span> },
           ]} />
-      </div>
+      </div>}
       {sel && <ResourceDrawer r={sel} onClose={() => setSel(null)} />}
       {assigning && (
         <AssignServiceDrawer
