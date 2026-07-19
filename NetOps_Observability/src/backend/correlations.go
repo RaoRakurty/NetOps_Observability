@@ -432,6 +432,12 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleRcaPromotion(w, r, id)
 		return
 	}
+	// Postmortem action items (Phase 1, spec §3/§7) — tenant-scoped register;
+	// own auth (read/write) + audit inside the handler (mixed methods).
+	if sub == "actions" || strings.HasPrefix(sub, "actions/") {
+		s.handleRcaActionItems(w, r, id, strings.TrimPrefix(strings.TrimPrefix(sub, "actions"), "/"))
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return

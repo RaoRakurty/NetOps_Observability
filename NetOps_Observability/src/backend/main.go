@@ -137,6 +137,7 @@ type server struct {
 	cloudSLOs           *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
 	cloudMonitors       *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
 	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
+	rcaActionItems      *rcaActionItemStore  // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
@@ -579,6 +580,7 @@ func newServer() *server {
 	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
+	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg
