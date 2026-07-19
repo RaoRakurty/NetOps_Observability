@@ -2609,6 +2609,26 @@ export const api = {
       count: number; returned?: number; open_object_count?: number;
       objects_truncated?: boolean; window_hours: number; next_cursor?: string;
     }>(`/api/cloud/evidence${cloudQS(app, limit, windowHours, extra)}`),
+  // Wave 5 #16 — security-relevant rollups from the fidelity lanes (WAF blocks /
+  // LB-plane 5xx / DNS failures), tenant-scoped and bounded. lane_counts backs
+  // the surface's per-lane coverage note.
+  cloudSecurity: (app?: string, limit?: number, windowHours?: number) =>
+    request<{
+      findings: CloudSecurityFindingRow[]; count: number; window_hours: number;
+      lane_counts: Record<string, number>;
+    }>(`/api/cloud/security${cloudQS(app, limit, windowHours)}`),
+  // Wave 5 #16 — provider-declared incidents/maintenance (AWS Health lane);
+  // one row per event, latest observation. Empty = the provider reported
+  // nothing (or the lane needs an AWS support plan — see ingestion status).
+  cloudProviderEvents: (windowHours?: number, limit?: number) =>
+    request<{ events: CloudProviderEventRow[]; count: number; window_hours: number }>(
+      `/api/cloud/provider-events${cloudQS(undefined, limit, windowHours)}`),
+  // Wave 5 #16 — hybrid-seam telemetry: latest measured state per seam
+  // endpoint (#105 lanes). Empty = the seam lanes have observed nothing in the
+  // window (the UI renders "awaiting telemetry", never a green guess).
+  cloudSeamTelemetry: (windowHours?: number, limit?: number) =>
+    request<{ seams: CloudSeamTelemetryRow[]; count: number; window_hours: number }>(
+      `/api/cloud/seam-telemetry${cloudQS(undefined, limit, windowHours)}`),
 
   // ---- Cloud Connectors: the done 7-step onboarding API (Wave 1 #3) ----
   // Every call is tenant-scoped server-side (owner from the token, never the body).
@@ -2668,6 +2688,42 @@ function cloudQS(app?: string, limit?: number, windowHours?: number, extra?: Clo
 
 // Wave 3 #10 — the shared paging/search params of the three signal surfaces.
 export type CloudSignalPage = { q?: string; cursor?: string };
+
+// Wave 5 #16 — wire rows of the security / provider-event / seam-telemetry reads
+// (shapes mirror src/backend/cloud_security.go).
+export interface CloudSecurityFindingRow {
+  time: string;
+  lane: "waf" | "lb" | "dns" | "other";
+  signal: string;
+  app: string;
+  resource: string;
+  source: string; // provider (aws|azure|gcp) or "cloud"
+  severity: string;
+  count: number;
+  detail: string;
+}
+
+export interface CloudProviderEventRow {
+  time: string;
+  provider: string;
+  service: string;
+  region: string;
+  category: string; // issue | scheduledChange | accountNotification
+  status: string;   // the provider's own lifecycle status
+  summary: string;
+  severity: string;
+}
+
+export interface CloudSeamTelemetryRow {
+  seam_id: string;
+  state: "up" | "down" | "degraded" | "unknown";
+  kind: string;
+  severity: string;
+  last_seen: string;
+  events: number;
+  provider: string;
+  evidence_class: string;
+}
 
 // The relative export path for a signal surface (?format=csv|json) — the SAME
 // query the table read uses (tenant scope enforced server-side), so an export

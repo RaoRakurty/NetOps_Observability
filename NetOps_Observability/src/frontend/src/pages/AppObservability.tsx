@@ -36,6 +36,8 @@ import {
 import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
+import Security from "./appobs/Security";
+import { ProviderIncidentsPanel, SeamHealthStrip } from "./appobs/ProviderIncidents";
 import AssignServiceDrawer from "./appobs/AssignService";
 import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
 import MonitorsSettings from "./appobs/MonitorsSettings";
@@ -171,10 +173,11 @@ function CurrentNote() {
 // 5-tab IA (audit C): Overview | Services | Investigations | Resources |
 // Data sources (+ Settings). The old 11 tab ids stay valid as deep-link
 // aliases so every existing bookmark/flyout link lands on the right sub-view.
-const TABS = ["overview", "services", "investigations", "resources", "datasources", "settings"] as const;
+const TABS = ["overview", "services", "investigations", "security", "resources", "datasources", "settings"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
   overview: "Overview", services: "Services", investigations: "Investigations",
+  security: "Security",
   resources: "Resources", datasources: "Data sources", settings: "Settings",
 };
 const TAB_ALIAS: Record<string, { tab: Tab; sub?: string }> = {
@@ -253,6 +256,7 @@ export default function AppObservability() {
       {tab === "overview" && <Overview goTab={(t, s) => { setTab(t); setSub(s ?? ""); }} summary={shell.summary} openInvestigation={inv.open} ctl={scopeCtl} />}
       {tab === "services" && <Services initialSub={sub} onOpen={setSel} ctl={scopeCtl} />}
       {tab === "investigations" && <Investigations initialSub={sub} goDataSources={() => { setTab("datasources"); setSub(""); }} openInvestigation={inv.open} ctl={scopeCtl} />}
+      {tab === "security" && <Security windowHours={windowHoursFor(scopeCtl.scope.rangeMinutes)} />}
       {tab === "resources" && <ResourcesGroup initialSub={sub} ctl={scopeCtl} />}
       {tab === "datasources" && <Ingestion initialSub={sub} scope={scopeCtl.scope} onClearScope={scopeCtl.clearFilters} />}
       {tab === "settings" && <Settings />}
@@ -533,6 +537,11 @@ function Overview({ goTab, summary, openInvestigation, ctl }: {
             ]} />
         )}
       </div>
+
+      {/* A3. the provider's own incident/maintenance lane + the hybrid-seam
+          gateway plane (Wave 5 #16) — both honest about absence. */}
+      <ProviderIncidentsPanel windowHours={windowHoursFor(scope.rangeMinutes)} />
+      <SeamHealthStrip windowHours={windowHoursFor(scope.rangeMinutes)} />
 
       {/* B. the REAL investigations the engine formed — no heuristic verdicts. */}
       <div className="ao-panel">
