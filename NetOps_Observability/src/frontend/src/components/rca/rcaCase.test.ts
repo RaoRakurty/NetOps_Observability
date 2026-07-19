@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRcaCase, EXAMPLE_CASE } from "./rcaCase";
+import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE } from "./rcaCase";
 import { signal, timeline, corrObject } from "../../test/factories";
 
 // These tests pin the ADAPTER (buildRcaCase) — the wiring between a real
@@ -477,5 +477,67 @@ describe("evidence summary in the workspace aside (no 'Signals' line)", () => {
   it("carries the render-ready summary for the density bars", () => {
     expect(c.evidenceSummary?.rows.length).toBe(1);
     expect(c.evidenceSummary?.verdictReason).toMatch(/only active checks saw this/i);
+  });
+});
+
+describe("buildCaseEvents — chronological event timeline (owner P1 2026-07-19)", () => {
+  const tl = timeline({
+    verdict_tier: "suspected",
+    signals: [
+      signal({ ts: "2026-06-16 19:25:06", kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", is_trigger: true }),
+      signal({ ts: "2026-06-16 19:25:31", kind: "packet_loss_anomaly", modality_class: "active_probe", entity_id: "probe-dallas", is_trigger: false }),
+      // later repeat of an already-seen symptom — must NOT create a second entry
+      signal({ ts: "2026-06-16 19:25:52", kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", is_trigger: false }),
+      // recovery clear
+      signal({ ts: "2026-06-16 19:29:10", kind: "bgp_state_anomaly_clear", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", is_trigger: false, attached: false }),
+    ],
+  });
+  const obj = corrObject({ created_at: "2026-06-16 19:25:40" } as never);
+  const events = buildCaseEvents(tl, obj, {
+    times: { recovered_at: "2026-06-16 19:31:02" },
+    promotion: { manual: { promoted_by: "rao", promoted_at: "2026-06-16 19:30:00" } },
+    verification: {
+      run_id: "r1", correlation_id: tl.correlation_id, trigger: "manual", actor: "rao",
+      started_at: "2026-06-16 19:27:00", status: "completed", devices: ["wan-r2"],
+      results: [{ check: "iface", device_id: "wan-r2", target: "wan-r2", method: "snmp",
+        status: "pass", ts: "2026-06-16 19:27:04", duration_ms: 90, refutes_kinds: ["bgp_state_anomaly"] }],
+    },
+  });
+
+  it("is sorted ascending and every entry carries a real payload timestamp", () => {
+    const ts = events.map((e) => Date.parse(e.ts.replace(" ", "T") + "Z"));
+    expect([...ts].sort((a, b) => a - b)).toEqual(ts);
+    expect(events.every((e) => !Number.isNaN(Date.parse(e.ts.replace(" ", "T") + "Z")))).toBe(true);
+  });
+
+  it("first sighting per symptom only — repeats collapse; the first is marked First symptom", () => {
+    const bgp = events.filter((e) => /BGP state change on wan-r2/i.test(e.label) && !/cleared/i.test(e.label));
+    expect(bgp).toHaveLength(1);
+    expect(events[0].label).toMatch(/^First symptom — /);
+    expect(events[0].detail).toContain("detection trigger");
+  });
+
+  it("a second independent source is called out in plain language", () => {
+    const spread = events.find((e) => /probe-dallas/.test(e.label));
+    expect(spread?.detail).toContain("independent source joined");
+  });
+
+  it("includes case-opened, promotion, verification and recovery milestones", () => {
+    const labels = events.map((e) => e.label);
+    expect(labels).toContain("Case opened — related evidence grouped into one case");
+    expect(labels).toContain("Promoted to RCA case by rao");
+    expect(labels.some((l) => l.startsWith("Verification battery run — devices healthy — refuting"))).toBe(true);
+    expect(labels).toContain("Service recovery confirmed");
+    expect(labels.some((l) => /cleared on wan-r2/.test(l))).toBe(true);
+  });
+
+  it("never invents timestamps — no extras ⇒ only signal + case events", () => {
+    const bare = buildCaseEvents(tl, corrObject(), undefined);
+    expect(bare.some((e) => /Promoted|Verification|recovery confirmed/i.test(e.label))).toBe(false);
+  });
+
+  it("buildRcaCase carries the events on the case", () => {
+    const c = buildRcaCase(tl, obj, {}, "isp", []);
+    expect((c.events ?? []).length).toBeGreaterThan(0);
   });
 });

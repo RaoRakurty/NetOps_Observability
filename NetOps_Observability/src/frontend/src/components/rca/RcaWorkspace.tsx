@@ -1,8 +1,9 @@
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
 import { api } from "../../services/api";
-import type { RcaCase, RcaPill, KV, TopoNode, TopoEdge } from "./rcaCase";
+import type { RcaCase, RcaPill, KV, CaseEvent, TopoNode, TopoEdge } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
+import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -111,6 +112,41 @@ function KeyVal({ rows }: { rows: KV[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// EventTimeline — the chronological "what happened when" list (owner P1
+// 2026-07-19: timelines of events with timestamps are RCA basics). Every entry
+// is a REAL recorded timestamp (see buildCaseEvents); rendered as an ordered
+// list (list semantics for AT), collapsible via native <details> (keyboard
+// operable), times carry <time dateTime> and the date appears whenever an event
+// falls on a different day than the first (crossing midnight stays readable).
+function EventTimeline({ events }: { events: CaseEvent[] }) {
+  const firstDay = fmtDate(events[0]?.ts);
+  return (
+    <details className="rw-events" open>
+      <summary className="rw-events-summary">
+        <span className="rw-events-count">{events.length} event{events.length === 1 ? "" : "s"} · oldest first</span>
+      </summary>
+      <ol className="rw-events-list">
+        {events.map((e, i) => {
+          const iso = parseTs(e.ts)?.toISOString();
+          const sameDay = fmtDate(e.ts) === firstDay;
+          return (
+            <li key={i} className="rw-event">
+              <time className="rw-event-time" dateTime={iso}>
+                {sameDay ? fmtTime(e.ts) : fmtDateTime(e.ts)}
+              </time>
+              <span className={`rw-event-dot ${e.tone}`} aria-hidden="true" />
+              <span className="rw-event-text">
+                {e.label}
+                {e.detail && <span className="rw-event-detail"> · {e.detail}</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </details>
   );
 }
 
@@ -269,6 +305,17 @@ export default function RcaWorkspace({
               <KeyVal rows={data.impact} />
             </div>
           </section>
+
+          {/* Event timeline — chronological, timestamped case events (RCA
+              basics). Sits right after "what happened", before the evidence. */}
+          {data.events && data.events.length > 0 && (
+            <>
+              <h3 className="rw-section-title">Event timeline</h3>
+              <section className="rw-panel rw-events-panel" style={{ marginBottom: 4 }}>
+                <EventTimeline events={data.events} />
+              </section>
+            </>
+          )}
 
           {/* Iris AI — grounded, cited "Ask AI" explanation of this RCA. */}
           {aiSlot && <section style={{ marginBottom: 4 }}>{aiSlot}</section>}

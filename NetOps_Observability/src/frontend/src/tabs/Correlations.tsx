@@ -10,7 +10,7 @@ import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
-import { buildRcaCase } from "../components/rca/rcaCase";
+import { buildRcaCase, type CaseEventExtras } from "../components/rca/rcaCase";
 import { buildTopoGraph } from "../components/rca/topoGraph";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
@@ -639,16 +639,35 @@ export function CorrelationDetail({ id }: { id: string }) {
   // empty note so it shows only after the fetch settles, never mid-load.
   const [pathAttr, setPathAttr] = useState<RcaPathAttribution | null>(null);
   const [pathLoaded, setPathLoaded] = useState(false);
+  // Event-timeline extras: recorded report times/promotion + the latest
+  // verification run — real recorded milestones only (never fabricated).
+  const [caseExtras, setCaseExtras] = useState<CaseEventExtras>({});
   // Seam-ownership registry (#113): owner class → the tenant's actual party.
   const [seamOwners, setSeamOwners] = useState<Record<string, SeamOwnerEntry>>({});
 
   useEffect(() => {
     let alive = true;
     setObj(null); setTimeline(null); setReplay(null); setErr("");
-    setPathAttr(null); setPathLoaded(false);
+    setPathAttr(null); setPathLoaded(false); setCaseExtras({});
     api.rcaReportJson(id)
-      .then((r) => { if (alive) { setPathAttr(r.path_attribution ?? null); setPathLoaded(true); } })
+      .then((r) => {
+        if (!alive) return;
+        setPathAttr(r.path_attribution ?? null);
+        setPathLoaded(true);
+        setCaseExtras((x) => ({
+          ...x,
+          times: {
+            recovered_at: r.times?.recovered_at,
+            component_recovered_at: r.times?.component_recovered_at,
+          },
+          promotion: r.promotion?.manual ? { manual: r.promotion.manual } : undefined,
+        }));
+      })
       .catch(() => { if (alive) setPathLoaded(true); }); // report JSON is best-effort; the rest of the inspector still renders
+    // Latest verification run (best-effort) — feeds the event timeline.
+    api.verificationStatus(id)
+      .then((s) => { if (alive && s?.run) setCaseExtras((x) => ({ ...x, verification: s.run })); })
+      .catch(() => { /* verification dormant / not visible — no event */ });
     api.correlationDetail(id)
       .then((r) => { if (alive) setObj(r.object); })
       .catch((e) => { if (alive) setErr(String(e?.message ?? e)); });
@@ -691,11 +710,11 @@ export function CorrelationDetail({ id }: { id: string }) {
   // keeps the print to the loss-only labels (the STAMP overlay is interactive-only).
   const rcaCase = useMemo(() => {
     if (!timeline || !obj) return null;
-    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners);
+    const c = buildRcaCase(timeline, obj, seams, recommendedOwner, recommendedSteps, seamOwners, caseExtras);
     const graph = buildTopoGraph(timeline, seams, view, false);
     if (!graph.internal && (graph.nodes.length > 0 || graph.edges.length > 0)) c.topoGraph = graph;
     return c;
-  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners]);
+  }, [timeline, obj, seams, recommendedOwner, recommendedSteps, view, seamOwners, caseExtras]);
 
   if (err) return <div className="empty" role="alert">{err}</div>;
   if (!obj || !timeline || !rcaCase) return <div className="empty" role="status">Loading…</div>;

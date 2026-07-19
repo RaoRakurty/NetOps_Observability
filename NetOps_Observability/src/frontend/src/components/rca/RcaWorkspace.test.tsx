@@ -99,6 +99,30 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   });
 });
 
+describe("RcaWorkspace — event timeline (owner P1 2026-07-19)", () => {
+  it("renders chronological events with real timestamps as an accessible collapsible list", () => {
+    const { container } = renderWS();
+    expect(screen.getByText("Event timeline")).toBeInTheDocument();
+    // first symptom entry, derived from the signal's real timestamp
+    expect(screen.getByText(/First symptom — /)).toBeInTheDocument();
+    // native <details> (keyboard-operable collapse), open by default
+    const details = container.querySelector("details.rw-events") as HTMLDetailsElement;
+    expect(details).toBeTruthy();
+    expect(details.open).toBe(true);
+    // list semantics + machine-readable <time dateTime>
+    const items = details.querySelectorAll("ol.rw-events-list > li");
+    expect(items.length).toBeGreaterThan(0);
+    const time = details.querySelector("time") as HTMLTimeElement;
+    expect(time.getAttribute("dateTime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("renders no event panel when the case has no events", () => {
+    const data = { ...suspectedCase(), events: [] };
+    renderWS(data);
+    expect(screen.queryByText("Event timeline")).not.toBeInTheDocument();
+  });
+});
+
 describe("RcaWorkspace — view toggle + export wiring", () => {
   it("Export PDF button invokes the callback", () => {
     const { onExportPdf } = renderWS();
