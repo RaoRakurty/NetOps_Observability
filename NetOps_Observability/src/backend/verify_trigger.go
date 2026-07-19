@@ -1,0 +1,94 @@
+package main
+
+// verify_trigger.go — the Active Verification auto-trigger (RCA spec item 8).
+// A bounded background loop that watches the corr_current hot projection for
+// OPEN cases sitting at the SUSPECTED tier ("needs a second independent
+// source") in tenants that opted in, and launches at most a few bounded
+// verification runs per tick, deduped per case by the cooldown window.
+//
+// nms_scheduler.go loop idiom: the ticker re-evaluates due-ness; the per-case
+// cooldown (default 15 m) is the actual pacing. Everything is bounded: cases
+// per tenant per scan, auto runs per tick, devices per run, run budget.
+
+import (
+	"context"
+	"time"
+)
+
+func verifyScanInterval() time.Duration {
+	return secEnvDuration("VERIFY_SCAN_INTERVAL_SEC", 60, 15, 3600)
+}
+func verifyAutoPerTick() int { return clampInt(envInt("VERIFY_AUTO_PER_TICK", 3), 1, 10) }
+
+// verifyLoop runs until ctx is done. Started from main only when
+// FEATURE_ACTIVE_VERIFICATION=true.
+func (s *server) verifyLoop(ctx context.Context, tick time.Duration) {
+	s.verifyTickOnce(ctx)
+	t := time.NewTicker(tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.verifyTickOnce(ctx)
+		}
+	}
+}
+
+// verifyTickOnce scans every opted-in tenant for suspected open cases and
+// launches cooled-down runs, bounded per tick.
+func (s *server) verifyTickOnce(ctx context.Context) {
+	launched := 0
+	for _, tenant := range s.verifyCfg.enabledTenants() {
+		if ctx.Err() != nil || launched >= verifyAutoPerTick() {
+			return
+		}
+		// Tenant-scoped read of the hot projection (row policies enforce the
+		// scope server-side as well).
+		sql := `SELECT toString(correlation_id) AS cid, affected
+  FROM netops.corr_current FINAL
+ WHERE state = 'open' AND verdict_tier = 'suspected'
+ ORDER BY window_end DESC
+ LIMIT 25
+FORMAT JSONEachRow`
+		rows, err := s.chRowsScope(ctx, tenant, sql, "verify_scan")
+		if err != nil {
+			logWarn("verify", "suspected-case scan failed", map[string]any{"tenant": tenant, "err": err.Error()})
+			continue
+		}
+		for _, row := range rows {
+			if launched >= verifyAutoPerTick() {
+				break
+			}
+			cid := asStr(row["cid"])
+			if cid == "" || !isUUIDToken(cid) {
+				continue
+			}
+			// Dedupe: at most one run per case per cooldown window.
+			if last, ok := s.verifyRuns.latest(tenant, cid); ok &&
+				time.Since(last.StartedAt) < verifyCooldown() {
+				continue
+			}
+			devices := affectedDevices(row["affected"])
+			if len(devices) == 0 {
+				continue // localization unknown — nothing to interrogate
+			}
+			rec, err := s.startVerificationRun(tenant, cid, "auto", "system:verify",
+				"suspected-tier case — probing for an independent second source", devices)
+			switch err {
+			case nil:
+				launched++
+				logInfo("verify", "auto verification launched", map[string]any{
+					"tenant": tenant, "correlation_id": cid, "run_id": rec.RunID,
+				})
+			case errVerifyNoTargets, errVerifyRunning, errVerifyDisabled:
+				// expected paces/gates — quiet skip
+			default:
+				logWarn("verify", "auto verification failed to start", map[string]any{
+					"tenant": tenant, "correlation_id": cid, "err": err.Error(),
+				})
+			}
+		}
+	}
+}

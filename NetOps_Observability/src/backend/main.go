@@ -133,6 +133,9 @@ type server struct {
 	copilotCfg          *copilotConfigStore
 	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
+	verifyCfg           *verifyConfigStore   // spec #8: per-tenant active-verification opt-in + SSH credential
+	verifyRuns          *verifyRunStore      // spec #8: latest verification run per case (bounded)
+	verifyLimiter       *tenantRateLimiter   // spec #8: manual-verify per-tenant rate limit
 	governance          *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
 	cloudSLOs           *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
 	cloudMonitors       *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
@@ -575,6 +578,11 @@ func newServer() *server {
 	srv.copilotCfg = newCopilotConfigStore(envOr("COPILOT_CONFIG_FILE", "/data/copilot_config.json"), vault)
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
 	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
+	// Active Verification (RCA spec item 8): per-tenant opt-in config (SSH
+	// secrets vault-sealed), bounded run store, per-tenant rate limiter.
+	srv.verifyCfg = newVerifyConfigStore(verifyConfigPath(), vault)
+	srv.verifyRuns = newVerifyRunStore(envOr("VERIFY_RUNS_FILE", "/data/verify_runs.json"))
+	srv.verifyLimiter = newTenantRateLimiter()
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
 	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
@@ -758,6 +766,12 @@ func main() {
 	if srv.nms != nil {
 		go srv.nms.Run(ctx, durationOr("NMS_POLL_TICK", 30*time.Second))
 		logInfo("nms", "NMS integration scheduler enabled", nil)
+	}
+	// Active Verification auto-trigger (RCA spec item 8): watches suspected-tier
+	// cases in opted-in tenants; bounded per tick, deduped per case (cooldown).
+	if srv.verifyFeatureOn() {
+		go srv.verifyLoop(ctx, verifyScanInterval())
+		logInfo("verify", "active-verification trigger enabled", nil)
 	}
 	go srv.startBroadcaster(ctx.Done())
 	go srv.watchAlertsForBroadcast(ctx)
@@ -1109,6 +1123,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Iris AI — application-aware NOC assistant (orchestrator + governed tools).
 	mux.HandleFunc("/api/ai/ask", s.handleAIAsk)
 	mux.HandleFunc("/api/settings/display", s.handleDisplaySettings)
+	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
@@ -1358,6 +1373,8 @@ func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
 		// is on, then prompts in-panel for an API key (env or UI-stored) if missing.
 		"copilot":    os.Getenv("FEATURE_COPILOT") == "true",
 		"device_ssh": os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		// Global gate only — the per-tenant opt-in rides GET /api/settings/verification.
+		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
 	})
 }
 
