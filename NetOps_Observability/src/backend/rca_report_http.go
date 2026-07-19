@@ -21,6 +21,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"netops/backend/timeintel"
 )
 
 // buildRcaReportForID is THE shared report-build path: tenant-scoped slice load
@@ -67,12 +69,19 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first)
 		}
 	}
+	// Manual/ITSM lifecycle stamps (tenant-scoped store) feed the detection
+	// milestones (postmortem spec §1) — absent events stay absent milestones.
+	lc := timeintel.Lifecycle{}
+	if !s.manualLifecycle(r, claims, id, lc) {
+		lc = nil
+	}
 	rep := buildRcaReport(rcaReportInput{
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,
 		Path:                pathBlock,
 		Now:                 time.Now().UTC(),
 		SurvivingIncidentID: survivingID,
+		Lifecycle:           lc,
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
 	stampTopologyTemporalRole(&rep)
@@ -87,6 +96,10 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 		manual = &rec
 	}
 	rep.Promotion = evaluateRcaPromotion(&rep, manual)
+	// Artifact class depends on promotion — re-stamp now that it is known
+	// (postmortem spec: operational/validation/preliminary; interim/final are
+	// Phase 3 human lifecycle advances, none recorded yet).
+	stampReportMaturity(&rep, "")
 	return rep, http.StatusOK, nil
 }
 

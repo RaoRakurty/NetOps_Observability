@@ -400,6 +400,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <h1>{{.Title}}</h1>
 <div class="badges">
   {{if .Validation}}<span class="pill red" style="font-weight:800;letter-spacing:.4px">VALIDATION SCENARIO — NOT A PRODUCTION INCIDENT</span>{{end}}
+  <span class="pill {{if .Maturity.Watermark}}red{{else}}blue{{end}}">Artifact class: {{.Maturity.Label}}</span>
   {{if .Merge}}<span class="pill blue" style="font-weight:800">Incident: Merged{{if .Merge.SurvivorResolved}} into {{.Merge.SurvivingDisplayID}}{{end}}</span>{{else}}<span class="pill {{stateTone "incident" .States.Incident}}">Incident: {{title (humanState .States.Incident)}}</span>{{end}}
   <span class="pill {{stateTone "recovery" .States.Recovery}}">Recovery: {{title (humanState .States.Recovery)}}</span>
   <span class="pill {{stateTone "analysis" .States.FaultDomain}}">Fault domain: {{title (humanState .States.FaultDomain)}}</span>
@@ -410,6 +411,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   <span class="pill {{stateTone "severity" .States.SeverityIncident}}">Severity: {{upper (humanState .States.SeverityIncident)}}</span>
 </div>
 <div class="meta">Report <b>{{.ReportID}}</b> · Case <b>{{.DisplayID}}</b> · Generated <b>{{.GeneratedAt}}</b>{{if .Subtitle}} · {{.Subtitle}}{{end}}</div>
+{{if .Maturity.WithheldSections}}<div class="note">Withheld for this artifact class ({{.Maturity.Label}}): {{range $i, $s := .Maturity.WithheldSections}}{{if $i}} · {{end}}{{humanState $s}}{{end}}. {{.Maturity.Basis}}</div>{{end}}
 
 {{if .Merge}}
 <section>
