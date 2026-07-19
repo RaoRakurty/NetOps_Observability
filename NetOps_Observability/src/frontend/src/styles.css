@@ -361,7 +361,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   margin: 0 8px var(--sp-2); padding: 2px 8px var(--sp-3);
   border-bottom: 1px solid var(--rail-border);
 }
-.rail-brand-mark { color: var(--rail-accent); display: inline-flex; }
+.rail-brand-mark { color: var(--rail-fg); display: inline-flex; }
 .rail-brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: 0.01em; }
 
 /* Rail item — icon BEFORE label, horizontal, small font. */
@@ -481,11 +481,6 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 .shell-v2 .rail-brand-mark { position: relative; }
 .rail-brand-mark svg { display: block; }
-.shell-v2 .rail-brand-mark::before {
-  content: ""; position: absolute; inset: -9px; border-radius: 50%;
-  background: radial-gradient(circle, var(--rail-glass), transparent 70%);
-  pointer-events: none;
-}
 /* Foot cluster in the 52px pane: everything stacks as centered 36px keys —
    the v1 side-by-side Support/Help row is 68px wide and would overflow the
    pane, shoving Help onto the right light seam. Zones pin to the pane width
@@ -1269,32 +1264,34 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    Letters ride var(--fg); the eye ring's gradient stops come from the
    per-surface tokens below. */
 .cx-logo {
-  display: inline-flex; align-items: center; gap: 0.05em; user-select: none;
+  display: inline-flex; align-items: center; gap: 0.02em; user-select: none;
   font-family: "Space Grotesk", var(--font-sans, sans-serif);
-  font-weight: 700; line-height: 1; letter-spacing: 0.06em;
+  font-weight: 700; line-height: 1; letter-spacing: 0.05em;
   color: var(--fg, #1e2233);
 }
-.cx-logo svg { display: block; margin: 0 0.04em; }
-/* Eye-ring gradient stops — deep tones on light chrome (≥3:1 on white)… */
-:root { --brand-ring-a: #4f46e5; --brand-ring-b: #0e7490; --brand-ring-c: #047857; }
-/* …and the luminous login-artwork sweep on dark surfaces: the dark theme
-   family, plus the rail column whenever its chrome preset is dark (the navy
-   default and graphite). The element-scoped rail rule wins var() resolution
-   over :root, so a navy rail under a light theme still gets luminous stops. */
+.cx-logo svg { display: block; margin: 0 0.015em; }
+/* Iris accent — the ONE brand colour in the mark (ring + pupil are ink, from
+   currentColor). Confident indigo on light chrome (≥4.5:1 on white), a brighter
+   periwinkle on dark surfaces and on the rail column whenever its chrome preset
+   is dark (navy default + graphite). `-hi` is the iris centre highlight for the
+   soft radial falloff. The element-scoped rail rule wins var() resolution over
+   :root, so a navy rail under a light app theme still gets the luminous iris. */
+:root { --brand-iris: #4f46e5; --brand-iris-hi: #6366f1; }
 :root[data-theme="dark"], :root[data-theme="oled"],
 :root[data-theme="indigo"], :root[data-theme="graphite"],
 .rail, .sidebar {
-  --brand-ring-a: #818cf8; --brand-ring-b: #22d3ee; --brand-ring-c: #34d399;
+  --brand-iris: #6366f1; --brand-iris-hi: #818cf8;
 }
-/* The white chrome preset lightens the rail — back to the deep stops there. */
+/* The white chrome preset lightens the rail — back to the deep iris there. */
 :root[data-chrome="white"] .rail, :root[data-chrome="white"] .sidebar {
-  --brand-ring-a: #4f46e5; --brand-ring-b: #0e7490; --brand-ring-c: #047857;
+  --brand-iris: #4f46e5; --brand-iris-hi: #6366f1;
 }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-/* The Correlix wordmark was removed from the top bar (it duplicated the rail's
-   eye-in-O brand mark + name); the rail remains the single brand surface. */
+/* The topbar carries the full CORRELIX wordmark (the authoritative lockup, with
+   horizontal room); the narrow rail head carries the eye-O logomark alone. Two
+   lockups of one mark — standard product-brand practice. */
 
 /* Brand-mark slot in the rail head (final logo pending — see brand board).
    The span just sizes + colours whatever mark sits inside. */
@@ -1579,7 +1576,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   padding: var(--sp-2) var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2);
   border-bottom: 1px solid var(--rail-border);
 }
-.rail-brand-mark { color: var(--rail-accent); display: inline-flex; }
+.rail-brand-mark { color: var(--rail-fg); display: inline-flex; }
 .rail-brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: 0.01em; }
 .collapsed .rail-brand { justify-content: center; padding: var(--sp-2) 0 var(--sp-3); }
 

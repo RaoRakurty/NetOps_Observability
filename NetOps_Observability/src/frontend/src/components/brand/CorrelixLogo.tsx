@@ -1,30 +1,33 @@
 import { useId } from "react";
 import { BRAND } from "../../brand";
 
-// Correlix brand mark (owner directive 2026-07-19).
+// Correlix brand mark (owner directive 2026-07-19, redesign 2 — "authoritative,
+// like a real product logo; O looks like an eye; drop the loud colours and the
+// decorative circle").
 //
-// CorrelixEyeO — the signature glyph: the letter O as a wide-open eye. A
-// gradient ring (the eye outline, indigo→cyan→emerald — the same sweep as the
-// login artwork and BrandMark) around a deep-space iris: a near-black radial
-// field with an indigo rim glow, holding a miniature network constellation —
-// six device nodes joined by hairline links around one brighter cyan hub.
-// Entirely hand-crafted inline SVG: no raster assets, no filters, no
-// animation (static by design — prefers-reduced-motion safe); the "glow" is
-// layered low-opacity circles.
+// CorrelixEyeO — the signature glyph: the letter O rendered as a calm, watchful
+// eye. It is built to read as a LETTER first (a ring at Space Grotesk 700's O
+// weight) and an eye second (a single-tone iris, a deep pupil, one small
+// catchlight). Deliberately restrained: ONE accent colour for the iris, ink for
+// everything else — no gradient sweep, no constellation of coloured nodes, no
+// glow. That restraint is what makes it read as an enterprise product mark
+// rather than an illustration. Entirely inline SVG: no raster, no filters, no
+// animation (static by design → prefers-reduced-motion safe).
 //
-// The ring's gradient stops read theme tokens (--brand-ring-a/b/c, defined in
-// styles.css): deep tones on light chrome, luminous tones on dark surfaces —
-// ≥3:1 against the rail/topbar in both themes. The iris interior stays deep
-// space in every theme; that darkness IS the brand.
+// Colour discipline: the ring + pupil ride `currentColor` (the wordmark's ink,
+// or the rail's foreground), so the eye is the SAME ink as the letters around
+// it. Only the iris carries brand colour, from the single `--brand-iris` token
+// (styles.css) — one confident indigo, tuned per surface for contrast.
 //
-// CorrelixLogo — the full wordmark: C‹eye›RRELIX. The letters are real text
-// in the login wordmark's face (Space Grotesk 700, bundled) so app-shell and
+// CorrelixLogo — the full wordmark: C‹eye›RRELIX. The letters are real text in
+// the login wordmark's face (Space Grotesk 700, bundled) so the app-shell and
 // login typography can never drift apart; the eye is sized in em so the whole
-// lockup scales off one font-size. Screen readers get the brand name exactly
-// once (role="img" + aria-label); the split glyphs are decorative.
+// lockup scales off one font-size and the O sits on the same baseline as the
+// caps. Screen readers get the brand name exactly once (role="img" +
+// aria-label); the split glyphs are decorative.
 
 type EyeProps = {
-  /** Rendered box (px number or any CSS length, e.g. "1.16em"). */
+  /** Rendered box (px number or any CSS length, e.g. "1.03em"). */
   size?: number | string;
   /** Accessible name. Omit (default) to render as a decorative glyph. */
   label?: string;
@@ -32,8 +35,7 @@ type EyeProps = {
 
 export function CorrelixEyeO({ size = 24, label }: EyeProps) {
   const uid = useId().replace(/:/g, "");
-  const ring = `${uid}-cxring`;
-  const space = `${uid}-cxspace`;
+  const iris = `${uid}-iris`;
   return (
     <svg
       viewBox="0 0 48 48"
@@ -45,58 +47,31 @@ export function CorrelixEyeO({ size = 24, label }: EyeProps) {
       aria-hidden={label ? undefined : true}
     >
       <defs>
-        <linearGradient id={ring} x1="6" y1="8" x2="42" y2="40" gradientUnits="userSpaceOnUse">
-          {/* stop-color can't resolve var() as an attribute — style works. */}
-          <stop offset="0%" style={{ stopColor: "var(--brand-ring-a, #818cf8)" }} />
-          <stop offset="55%" style={{ stopColor: "var(--brand-ring-b, #22d3ee)" }} />
-          <stop offset="100%" style={{ stopColor: "var(--brand-ring-c, #34d399)" }} />
-        </linearGradient>
-        <radialGradient id={space} cx="0.5" cy="0.46" r="0.56">
-          <stop offset="0%" stopColor="#04050e" />
-          <stop offset="55%" stopColor="#0a0f24" />
-          <stop offset="85%" stopColor="#1e1b4b" />
-          <stop offset="100%" stopColor="#312e81" />
+        <radialGradient id={iris} cx="0.42" cy="0.4" r="0.72">
+          {/* A single hue with a soft centre-to-rim falloff — depth without a
+              multi-colour sweep. stop-color needs style to resolve var(). */}
+          <stop offset="0%" style={{ stopColor: "var(--brand-iris-hi, #6366f1)" }} />
+          <stop offset="100%" style={{ stopColor: "var(--brand-iris, #4f46e5)" }} />
         </radialGradient>
       </defs>
 
-      {/* Deep-space iris. */}
-      <circle cx="24" cy="24" r="18.2" fill={`url(#${space})`} />
+      {/* Iris — the one coloured element. */}
+      <circle cx="24" cy="24" r="8.6" fill={`url(#${iris})`} />
+      {/* Limbal ring — a real eye's darker iris edge; adds authority, no colour. */}
+      <circle cx="24" cy="24" r="8.6" stroke="#05060d" strokeOpacity="0.22" strokeWidth="1" />
+      {/* Pupil — deep, fixed (must stay dark in both themes). */}
+      <circle cx="24" cy="24" r="3.9" fill="#05060d" />
+      {/* Catchlight — the glint that makes it read as a living eye, not a target. */}
+      <circle cx="21.2" cy="21.1" r="1.5" fill="#f8fafc" opacity="0.92" />
 
-      {/* Constellation links — hairlines out of the hub + two rim ties. */}
-      <g stroke="#7dd3fc" strokeWidth="1" strokeLinecap="round">
-        <line x1="25.5" y1="21.5" x2="15.5" y2="13.5" opacity="0.55" />
-        <line x1="25.5" y1="21.5" x2="31.5" y2="12.8" opacity="0.45" />
-        <line x1="25.5" y1="21.5" x2="35.5" y2="27" opacity="0.5" />
-        <line x1="25.5" y1="21.5" x2="28" y2="34.5" opacity="0.5" />
-        <line x1="25.5" y1="21.5" x2="14" y2="30" opacity="0.4" />
-        <line x1="15.5" y1="13.5" x2="11.5" y2="20" opacity="0.35" />
-        <line x1="14" y1="30" x2="11.5" y2="20" opacity="0.4" />
-        <line x1="35.5" y1="27" x2="28" y2="34.5" opacity="0.35" />
-      </g>
-
-      {/* Device nodes (layered circles = static glow, no filters). */}
-      <circle cx="15.5" cy="13.5" r="3" fill="#e0e7ff" opacity="0.14" />
-      <circle cx="15.5" cy="13.5" r="1.5" fill="#e0e7ff" opacity="0.92" />
-      <circle cx="31.5" cy="12.8" r="1.3" fill="#a5b4fc" opacity="0.85" />
-      <circle cx="35.5" cy="27" r="2.8" fill="#fbbf24" opacity="0.16" />
-      <circle cx="35.5" cy="27" r="1.4" fill="#fbbf24" opacity="0.9" />
-      <circle cx="28" cy="34.5" r="3" fill="#67e8f9" opacity="0.14" />
-      <circle cx="28" cy="34.5" r="1.5" fill="#67e8f9" opacity="0.9" />
-      <circle cx="14" cy="30" r="1.3" fill="#e0e7ff" opacity="0.8" />
-      <circle cx="11.5" cy="20" r="1.1" fill="#a5b4fc" opacity="0.75" />
-      {/* The hub — the one slightly brighter accent node. */}
-      <circle cx="25.5" cy="21.5" r="6.5" fill="#22d3ee" opacity="0.09" />
-      <circle cx="25.5" cy="21.5" r="4.2" fill="#22d3ee" opacity="0.22" />
-      <circle cx="25.5" cy="21.5" r="1.9" fill="#22d3ee" opacity="0.98" />
-
-      {/* Eye outline — the O's ring. Stroke weight tuned so at wordmark scale
-          it matches Space Grotesk 700's letter stroke. */}
-      <circle cx="24" cy="24" r="20.4" stroke={`url(#${ring})`} strokeWidth="5.2" />
+      {/* The O — eye outline at Space Grotesk 700's stroke weight, in the ink
+          of the surrounding letters (currentColor). */}
+      <circle cx="24" cy="24" r="19.4" stroke="currentColor" strokeWidth="5.4" />
     </svg>
   );
 }
 
-export default function CorrelixLogo({ size = 17, className }: { size?: number; className?: string }) {
+export default function CorrelixLogo({ size = 18, className }: { size?: number; className?: string }) {
   return (
     <span
       className={className ? `cx-logo ${className}` : "cx-logo"}
@@ -104,11 +79,11 @@ export default function CorrelixLogo({ size = 17, className }: { size?: number; 
       aria-label={BRAND}
       style={{ fontSize: size }}
     >
-      {/* 1.08em ≈ the login artwork's O-to-letter proportion (1.04em there,
-          1.06em in the old topbar) — the eye stands a touch taller than the
-          caps, which is the established brand look. */}
+      {/* 1.03em: a circle set at exactly cap height reads slightly small next to
+          flat-topped caps, so the eye is nudged up a hair to sit optically level
+          with the C·R·R·E·L·I·X — standard wordmark practice. */}
       <span aria-hidden="true">C</span>
-      <CorrelixEyeO size="1.08em" />
+      <CorrelixEyeO size="1.03em" />
       <span aria-hidden="true">RRELIX</span>
     </span>
   );
