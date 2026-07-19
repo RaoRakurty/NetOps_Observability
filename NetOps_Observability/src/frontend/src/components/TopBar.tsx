@@ -139,6 +139,14 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     }
   };
 
+  // Close the account menu on Escape and return focus to its trigger.
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setMenuOpen(false);
+      (menuRef.current?.querySelector(".user-btn") as HTMLElement | null)?.focus();
+    }
+  };
+
   return (
     <header className="topbar">
       {/* Brand wordmark (owner 2026-07-17): the login screen's C[iris]RRELIX,
@@ -150,7 +158,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
       </div>
       <div className="topbar-right">
         <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
-          <span className="omni-icon"><Icon name="search" size={14} /></span>
+          <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -158,15 +166,25 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
             onKeyDown={onKeyDown}
             placeholder="Search…"
             spellCheck={false}
+            role="combobox"
+            aria-label="Search devices, resources, and logs"
+            aria-expanded={open && rows.length > 0}
+            aria-controls="omni-results"
+            aria-autocomplete="list"
+            aria-activedescendant={open && active >= 0 ? `omni-opt-${active}` : undefined}
           />
-          <kbd className="omni-kbd" title="Command palette">⌘K</kbd>
+          <kbd className="omni-kbd" title="Command palette" aria-hidden="true">⌘K</kbd>
           {open && rows.length > 0 && (
-            <div className="omni-pop">
+            <div className="omni-pop" id="omni-results" role="listbox" aria-label="Search results">
               {rows.map(({ hit: g, header }, i) => (
                 <div key={`${g.kind}:${g.id}:${i}`}>
-                  {header && <div className="omni-group">{header}</div>}
+                  {header && <div className="omni-group" role="presentation">{header}</div>}
                   <button
                     type="button"
+                    id={`omni-opt-${i}`}
+                    role="option"
+                    aria-selected={i === active}
+                    tabIndex={-1}
                     className={`omni-item${i === active ? " active" : ""}`}
                     onMouseEnter={() => setActive(i)}
                     onClick={() => choose(g)}
@@ -202,6 +220,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
             setRange(rangeFromMinutes(Number(e.target.value)));
           }}
           title="Time range (remembered per section)"
+          aria-label="Time range"
         >
           {/* If the current range isn't in the preset list (a one-off), show it. */}
           {!ranges.some((r) => r.minutes === range.minutes) && (
@@ -234,17 +253,17 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
           <Icon name="help" size={16} />
         </button>
 
-        <span className={`health${ok ? "" : " bad"}`} title={ok ? `v${health?.version}` : "Disconnected"}>
-          <span className="dot" />
+        <span className={`health${ok ? "" : " bad"}`} role="status" title={ok ? `v${health?.version}` : "Disconnected"}>
+          <span className="dot" aria-hidden="true" />
           {ok ? "Healthy" : "Disconnected"}
         </span>
 
         {!hideUserMenu && (
-        <div className="user-menu" ref={menuRef}>
-          <button className="user-btn" onClick={() => setMenuOpen((o) => !o)}>
-            <span className="avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+        <div className="user-menu" ref={menuRef} onKeyDown={onMenuKeyDown}>
+          <button className="user-btn" onClick={() => setMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={menuOpen}>
+            <span className="avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>
             <span className="user-name">{user.username}</span>
-            <span style={{ opacity: 0.6, fontSize: 10 }}>▾</span>
+            <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
           </button>
           {menuOpen && (
             <div className="menu-pop">

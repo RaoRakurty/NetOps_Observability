@@ -17,7 +17,7 @@ export default function SubNav({ section, activeLeaf }: Props) {
   if (!section.children) return null;
   let lastGroup: string | undefined;
   return (
-    <div className="subnav">
+    <nav className="subnav" aria-label={`${section.label} views`}>
       {section.children.map((leaf: NavLeaf) => {
         const header = leaf.group && leaf.group !== lastGroup ? leaf.group : null;
         lastGroup = leaf.group;
@@ -26,6 +26,7 @@ export default function SubNav({ section, activeLeaf }: Props) {
             {header && <span className="subnav-group">{header}</span>}
             <button
               className={leaf.id === activeLeaf ? "active" : ""}
+              aria-current={leaf.id === activeLeaf ? "page" : undefined}
               onClick={() => navigate(`${section.id}/${leaf.id}`)}
             >
               {leaf.label}
@@ -33,6 +34,6 @@ export default function SubNav({ section, activeLeaf }: Props) {
           </span>
         );
       })}
-    </div>
+    </nav>
   );
 }

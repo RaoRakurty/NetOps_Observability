@@ -84,17 +84,32 @@ export default function ScopeSelector() {
   }
 
   return (
-    <div className="scope-sel" ref={ref}>
-      <button className="scope-btn" onClick={() => setOpen((o) => !o)} title="Switch organization / tenant">
+    <div
+      className="scope-sel"
+      ref={ref}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && open) {
+          setOpen(false);
+          (ref.current?.querySelector(".scope-btn") as HTMLElement | null)?.focus();
+        }
+      }}
+    >
+      <button
+        className="scope-btn"
+        onClick={() => setOpen((o) => !o)}
+        title="Switch organization / tenant"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         <Icon name="infrastructure" size={13} />
         <span className="scope-btn-text">{label}</span>
         {region && region !== "all" && <span className="scope-region">{region}</span>}
-        <span style={{ opacity: 0.6, fontSize: 10 }}>▾</span>
+        <span style={{ opacity: 0.6, fontSize: 10 }} aria-hidden="true">▾</span>
       </button>
       {open && (
         <div className="scope-pop">
           {allTenants && (
-            <button className={`scope-opt${!active ? " on" : ""}`} onClick={() => pick("")}>
+            <button className={`scope-opt${!active ? " on" : ""}`} aria-current={!active ? "true" : undefined} onClick={() => pick("")}>
               <span className="scope-opt-title">All organizations</span>
               <span className="scope-opt-sub">Platform-wide view</span>
             </button>
@@ -103,7 +118,7 @@ export default function ScopeSelector() {
             <div key={orgId} className="scope-group">
               <div className="scope-group-head">{og.name}</div>
               {og.tenants.map((t) => (
-                <button key={t.tenant_id} className={`scope-opt${active === t.tenant_id ? " on" : ""}`} onClick={() => pick(t.tenant_id)}>
+                <button key={t.tenant_id} className={`scope-opt${active === t.tenant_id ? " on" : ""}`} aria-current={active === t.tenant_id ? "true" : undefined} onClick={() => pick(t.tenant_id)}>
                   <span className="scope-opt-title">{t.tenant_name}</span>
                   <span className="scope-opt-sub">{t.region}</span>
                 </button>

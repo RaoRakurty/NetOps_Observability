@@ -7,10 +7,13 @@ type Props = {
   hue: string;
   activeSection: string;
   activeLeaf?: string;
+  /** Opened via keyboard (ArrowRight on the rail item): focus the first item. */
+  autoFocus?: boolean;
   onEnter: () => void;
   onLeave: () => void;
   onNavigate: (route: string) => void;
-  onClose: () => void;
+  /** restoreFocus=true when closed via keyboard — caller refocuses the trigger. */
+  onClose: (restoreFocus?: boolean) => void;
 };
 
 // NavFlyout — the hover panel that lists a section's children to the right of
@@ -22,6 +25,7 @@ export default function NavFlyout({
   hue,
   activeSection,
   activeLeaf,
+  autoFocus,
   onEnter,
   onLeave,
   onNavigate,
@@ -40,11 +44,33 @@ export default function NavFlyout({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onClose(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Keyboard-opened (rail ArrowRight): move focus onto the first menu item.
+  useEffect(() => {
+    if (autoFocus) {
+      ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }
+  }, [autoFocus, section.id]);
+
+  // Menu keyboard pattern: ArrowUp/Down move between items, Home/End jump.
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    if (items.length === 0) return;
+    e.preventDefault();
+    const cur = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "Home" ? 0 :
+      e.key === "End" ? items.length - 1 :
+      e.key === "ArrowDown" ? (cur + 1) % items.length :
+      cur <= 0 ? items.length - 1 : cur - 1;
+    items[next]?.focus();
+  };
 
   // Current route path (sans leading #/ and ?query), tracked so the active
   // sub-item highlights — and updates if a sub-item is clicked while open.
@@ -66,6 +92,14 @@ export default function NavFlyout({
       style={{ top: topPx, ["--mod" as string]: hue } as React.CSSProperties}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onKeyDown={onMenuKeyDown}
+      // Focus moving from the rail item into the flyout fires the rail item's
+      // blur-close timer — cancel it while focus lives here; resume when focus
+      // leaves the flyout entirely (2.1.1: no keyboard-unreachable menu).
+      onFocus={onEnter}
+      onBlur={(e) => {
+        if (!ref.current?.contains(e.relatedTarget as Node)) onLeave();
+      }}
     >
       <div className="nav-flyout-head">{section.label}</div>
       <div className="nav-flyout-body">
@@ -87,7 +121,7 @@ export default function NavFlyout({
               lastGroup = leaf.group;
               return (
                 <Fragment key={leaf.id}>
-                  {header && <div className="nav-flyout-group">{header}</div>}
+                  {header && <div className="nav-flyout-group" role="presentation">{header}</div>}
                   <button
                     type="button"
                     role="menuitem"

@@ -166,9 +166,11 @@
   --border:       #e4e7ec;
   --border-strong:#cdd4e0;
 
-  /* — neutral text ramp (tuned ≥4.5:1 body / ≥3:1 large on --surface) — */
+  /* — neutral text ramp (tuned ≥4.5:1 body / ≥3:1 large on --surface) —
+     fg-subtle darkened for WCAG AA: #8a93a6 was 3.09:1 on white / 2.78:1 on
+     surface-2; #646e80 is 5.14:1 / 4.63:1. */
   --fg-muted:  #586173;
-  --fg-subtle: #8a93a6;
+  --fg-subtle: #646e80;
 
   /* — severity (sacred; --warn lives in the legacy block above and is reused) — */
   --ok:   #059669;
@@ -237,6 +239,33 @@ body {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ----- Accessibility primitives (WCAG 2.2 AA pass, Wave 6 #19) ----- */
+/* Skip link (2.4.1): visually hidden until keyboard-focused, then a pill over
+   the top-left of the shell. */
+.skip-link {
+  position: fixed; top: -100px; left: 12px; z-index: 200;
+  padding: 8px 14px; border-radius: 8px;
+  background: var(--accent); color: #fff; font-size: var(--fs-sm); font-weight: 600;
+  text-decoration: none; box-shadow: var(--shadow-pop);
+  transition: top .12s ease;
+}
+.skip-link:focus-visible { top: 12px; outline: 2px solid #fff; outline-offset: 2px; }
+/* Programmatic focus target for the skip link — no ring on the region itself. */
+main.main:focus { outline: none; }
+/* Global keyboard-focus fallback (2.4.7/2.4.13): any interactive element that a
+   component style doesn't already cover gets a visible 2px ring. Component-level
+   :focus/:focus-visible rules below override this where they exist. */
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent-ring, var(--accent));
+  outline-offset: 1px;
+}
+/* Visually-hidden utility for screen-reader-only text (labels, live regions). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
 /* ----- Typography scale — elegant, modern, consistent ----- */
@@ -2693,7 +2722,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   --border:       #2a3455;
   --border-strong:#3a4671;
   --fg-muted:  #a8b5cf;
-  --fg-subtle: #717a95;
+  /* fg-subtle lifted for WCAG AA: #717a95 was 4.14:1 on surface / 3.70:1 on
+     surface-2; #848ea8 is 5.40:1 / 4.82:1. */
+  --fg-subtle: #848ea8;
   --ok:   #10b981;
   --crit: #f4506b;
   --info: #60a5fa;

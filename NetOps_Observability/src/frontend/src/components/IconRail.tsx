@@ -62,7 +62,7 @@ type Props = {
   homeRoute?: string;
 };
 
-type OpenState = { id: string; top: number } | null;
+type OpenState = { id: string; top: number; focus?: boolean } | null;
 
 // IconRail — the persistent labeled rail (icon before name, small font). Hovering
 // or focusing a section opens a flyout of its children to the right; the rail
@@ -79,6 +79,8 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   const closeTimer = useRef<number | undefined>(undefined);
   const acctCloseTimer = useRef<number | undefined>(undefined);
   const acctRef = useRef<HTMLDivElement | null>(null);
+  // The rail item that opened the current flyout — focus returns here on Escape.
+  const flyoutTrigger = useRef<HTMLElement | null>(null);
 
   // Account/preferences opens on hover-intent like the rail items (flyout to the
   // right), with a close grace so the diagonal path into it doesn't dismiss.
@@ -96,8 +98,17 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
   const scheduleOpen = useCallback((id: string, el: HTMLElement) => {
     window.clearTimeout(closeTimer.current);
     window.clearTimeout(openTimer.current);
+    flyoutTrigger.current = el;
     const top = el.getBoundingClientRect().top;
     openTimer.current = window.setTimeout(() => setOpen({ id, top }), 80);
+  }, []);
+  // Keyboard path (2.1.1): ArrowRight on a rail item opens its flyout at once
+  // and moves focus onto the first menu item.
+  const keyboardOpen = useCallback((id: string, el: HTMLElement) => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    flyoutTrigger.current = el;
+    setOpen({ id, top: el.getBoundingClientRect().top, focus: true });
   }, []);
   const scheduleClose = useCallback(() => {
     window.clearTimeout(openTimer.current);
@@ -125,8 +136,16 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         className={`rail-item${active ? " active" : ""}`}
         style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
         aria-current={active ? "page" : undefined}
+        aria-haspopup={!isCopilot ? "menu" : undefined}
+        aria-expanded={!isCopilot ? open?.id === s.id : undefined}
         title={s.label}
         onClick={onActivate}
+        onKeyDown={(e) => {
+          if (!isCopilot && e.key === "ArrowRight") {
+            e.preventDefault();
+            keyboardOpen(s.id, e.currentTarget);
+          }
+        }}
         onMouseEnter={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
         onFocus={(e) => !isCopilot && scheduleOpen(s.id, e.currentTarget)}
         onMouseLeave={scheduleClose}
@@ -205,6 +224,12 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           ref={acctRef}
           onMouseEnter={openAcct}
           onMouseLeave={closeAcct}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && acctOpen) {
+              setAcctOpen(false);
+              (acctRef.current?.querySelector(".rail-account-btn") as HTMLElement | null)?.focus();
+            }
+          }}
         >
           <button
             className="rail-util-item rail-account-btn"
@@ -244,10 +269,14 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           hue={hueFor(openSection.id)}
           activeSection={activeSection}
           activeLeaf={activeLeaf}
+          autoFocus={open.focus}
           onEnter={cancelClose}
           onLeave={scheduleClose}
           onNavigate={navigate}
-          onClose={() => setOpen(null)}
+          onClose={(restoreFocus) => {
+            setOpen(null);
+            if (restoreFocus) flyoutTrigger.current?.focus();
+          }}
         />
       )}
       {/* PORTALED to <body>: the rail's backdrop-filter makes it the containing

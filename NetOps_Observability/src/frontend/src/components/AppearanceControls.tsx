@@ -20,9 +20,9 @@ export default function AppearanceControls() {
       </div>
       <div className="pref-row">
         <span className="pref-label">Density</span>
-        <span className="pref-seg">
-          <button className={density === "comfortable" ? "on" : ""} onClick={() => setDensity("comfortable")}>Cozy</button>
-          <button className={density === "compact" ? "on" : ""} onClick={() => setDensity("compact")}>Compact</button>
+        <span className="pref-seg" role="group" aria-label="Density">
+          <button className={density === "comfortable" ? "on" : ""} aria-pressed={density === "comfortable"} onClick={() => setDensity("comfortable")}>Cozy</button>
+          <button className={density === "compact" ? "on" : ""} aria-pressed={density === "compact"} onClick={() => setDensity("compact")}>Compact</button>
         </span>
       </div>
     </div>

@@ -56,14 +56,19 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Reset + focus when opened.
+  // Reset + focus when opened; restore focus to the opener on close (2.4.3).
+  const restoreRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (open) {
+      restoreRef.current = document.activeElement as HTMLElement | null;
       setQ("");
       setActive(0);
       setResults([]);
       // focus after paint
       requestAnimationFrame(() => inputRef.current?.focus());
+    } else {
+      restoreRef.current?.focus?.();
+      restoreRef.current = null;
     }
   }, [open]);
 
@@ -190,9 +195,9 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
 
   return (
     <div className="cmdk-backdrop" onMouseDown={() => setOpen(false)}>
-      <div className="cmdk" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="cmdk" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
         <div className="cmdk-input">
-          <Icon name="search" size={16} />
+          <span aria-hidden="true"><Icon name="search" size={16} /></span>
           <input
             ref={inputRef}
             value={q}
@@ -200,15 +205,25 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
             onKeyDown={onKeyDown}
             placeholder="Jump to a section, run an action, or search…"
             spellCheck={false}
+            role="combobox"
+            aria-label="Jump to a section, run an action, or search"
+            aria-expanded={cmds.length > 0}
+            aria-controls="cmdk-list"
+            aria-autocomplete="list"
+            aria-activedescendant={cmds.length > 0 ? `cmdk-opt-${active}` : undefined}
           />
-          <kbd className="cmdk-kbd">esc</kbd>
+          <kbd className="cmdk-kbd" aria-hidden="true">esc</kbd>
         </div>
-        <div className="cmdk-list">
-          {cmds.length === 0 && <div className="cmdk-empty">No matches.</div>}
+        <div className="cmdk-list" id="cmdk-list" role="listbox" aria-label="Commands and results">
+          {cmds.length === 0 && <div className="cmdk-empty" role="status">No matches.</div>}
           {cmds.map((c, i) => (
             <div key={c.id}>
-              {c.header && <div className="cmdk-group">{c.header}</div>}
+              {c.header && <div className="cmdk-group" role="presentation">{c.header}</div>}
               <button
+                id={`cmdk-opt-${i}`}
+                role="option"
+                aria-selected={i === active}
+                tabIndex={-1}
                 className={`cmdk-item${i === active ? " active" : ""}`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => c.run()}
