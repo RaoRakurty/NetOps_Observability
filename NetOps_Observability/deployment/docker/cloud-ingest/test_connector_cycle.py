@@ -183,7 +183,7 @@ def test_aws_lane_tags_with_connector_tenant(monkeypatch):
         def __init__(self, **kw):
             sessions.append(kw)
 
-        def client(self, name):
+        def client(self, name, **kw):
             return f"client:{name}"
 
     monkeypatch.setattr(poller.boto3, "Session", FakeSession)
@@ -201,6 +201,12 @@ def test_aws_lane_tags_with_connector_tenant(monkeypatch):
                             "region": region, "connector_id": connector_id})
 
     monkeypatch.setattr(poller, "poll_cloudtrail", fake_trail)
+    health_calls = []
+    monkeypatch.setattr(
+        poller.aws_health, "run",
+        lambda client, producer, tenant, account, cst, connector_id="":
+        health_calls.append({"tenant": tenant, "account": account,
+                             "connector_id": connector_id}) or 0)
 
     out = poller.poll_connector_aws(conn, creds, producer=object(), cst={})
     assert out == {"resources": 1}
@@ -212,6 +218,9 @@ def test_aws_lane_tags_with_connector_tenant(monkeypatch):
     # bus evidence carries the CONNECTOR's tenant + id (server truth)
     assert trail_calls == [{"tenant": "t_customer", "account": "111",
                             "region": "eu-west-1", "connector_id": "ccn_a"}]
+    # the provider-incident lane runs under the CONNECTOR's tenant too (Wave 5 #16)
+    assert health_calls == [{"tenant": "t_customer", "account": "111",
+                             "connector_id": "ccn_a"}]
 
 
 def test_scoped_inventory_doc_swaps_and_restores_scope(monkeypatch, tmp_path):

@@ -92,6 +92,13 @@ CLOUD_KINDS: dict[str, tuple[ModalityClass, ObserverType, EntityType]] = {
     "cloud_nat_port_exhaustion":    (ModalityClass.DEVICE_TELEMETRY, ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_state_unknown":    (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_lb_log":           (ModalityClass.PASSIVE_FLOW,     ObserverType.CLOUD_API, EntityType.APP),
+    # Provider-declared incident/maintenance events (Wave 5 #16: the AWS
+    # Health lane; Azure Service Health / GCP incidents join when their lanes
+    # exist). Entity is the affected provider surface keyed by the provider's
+    # own event id (arn) — stable across updates, so re-emissions of the same
+    # incident fold to one signal whose LATEST observation carries the current
+    # status (attrs: service/category/status/summary).
+    "provider_event":         (ModalityClass.MANAGEMENT_PLANE, ObserverType.CLOUD_API, EntityType.SERVICE),
     "cloud_change":           (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "cloud_audit":            (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),
     "security_policy_change": (ModalityClass.CONTROL_PLANE,    ObserverType.CLOUD_API, EntityType.CLOUD_RESOURCE),

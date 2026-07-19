@@ -153,6 +153,46 @@ def health_event(*, provider: str, tenant: str, resource_id: str, region: str,
     return ev
 
 
+PROVIDER_EVENT_CATEGORIES = frozenset(
+    ("issue", "scheduledChange", "accountNotification"))
+
+
+def provider_event(*, provider: str, tenant: str, event_arn: str, region: str,
+                   service: str, category: str, status: str, summary: str,
+                   ts: str, account: str = "",
+                   attrs: dict | None = None) -> dict:
+    """A provider-declared incident/maintenance event (kind=provider_event,
+    Wave 5 #16 — the AWS Health lane; other providers' service-health lanes
+    emit the same shape). The provider's OWN event id (arn) is the resource
+    identity — stable across updates, so a status change (open→closed) folds
+    onto the same signal downstream and the latest observation wins.
+
+    severity derives from the provider's category: an active issue is high,
+    a scheduled change warns, an account notification informs."""
+    if not event_arn.strip():
+        raise ValueError("provider_event: missing event_arn")
+    if not service.strip():
+        raise ValueError("provider_event: missing service")
+    cat = category if category in PROVIDER_EVENT_CATEGORIES else "issue"
+    severity = {"issue": "high", "scheduledChange": "warn",
+                "accountNotification": "info"}[cat]
+    dims = dict(attrs or {})
+    dims.update({
+        "service": service,
+        "category": cat,
+        "status": status,
+        "summary": summary[:300],
+        "event_arn": event_arn,
+    })
+    ev = _base_cloud_event("provider_event", provider=provider, tenant=tenant,
+                           resource_id=event_arn, region=region,
+                           severity=severity, ts=ts, account=account,
+                           attrs=dims)
+    ev["metric_name"] = "provider_event"
+    ev["value"] = 1.0
+    return ev
+
+
 def clock_skew_event(*, provider: str, tenant: str, family: str, region: str,
                      skew_s: float, tolerance_s: float, ts: str,
                      account: str = "", sample_resource: str = "") -> dict:

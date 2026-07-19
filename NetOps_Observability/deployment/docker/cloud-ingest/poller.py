@@ -16,6 +16,7 @@ import time
 import boto3
 from kafka import KafkaProducer
 
+import aws_health
 import azure
 import azure_logs
 import azure_topology
@@ -110,6 +111,11 @@ AWS_METERED_METRICS = os.environ.get("AWS_METERED_METRICS", "on").lower() != "of
 # the per-provider metered toggles above.
 CLOUD_SEAM_TELEMETRY = os.environ.get("CLOUD_SEAM_TELEMETRY", "on").lower() != "off"
 SEAM_EVERY_S = int(os.environ.get("SEAM_EVERY_S", "120"))
+# Provider incident/maintenance lane (Wave 5 #16): AWS Health DescribeEvents is
+# free but needs a Business/Enterprise support plan — a Basic account's denial
+# becomes an explicit "requires AWS support plan" status, never silence.
+# Provider incidents update on the minutes scale; 5 min is plenty.
+HEALTH_EVERY_S = int(os.environ.get("HEALTH_EVERY_S", "300"))
 GCP_METERED_METRICS = os.environ.get("GCP_METERED_METRICS", "on").lower() != "off"
 # GCP log-fidelity lanes (#105 parity: vpc_flows / firewall / LB+Armor / DNS).
 # Per-lane opt-in gates live in gcp.py (GCP_VPC_FLOW_LOGS etc.); this is the
@@ -583,6 +589,14 @@ def poll_connector_aws(conn: dict, creds: dict, producer, cst: dict) -> dict:
                 raise
             jlog("connector change_audit " + status, connector=conn["id"],
                  error=str(exc)[:200])
+        # Provider incidents where the connector's account is entitled (Wave 5
+        # #16): run() isolates its own failures — a Basic-support account gets
+        # a "requires AWS support plan" status on the CONNECTOR's tenant.
+        nh = aws_health.run(
+            session.client("health", region_name=aws_health.HEALTH_REGION),
+            producer, conn["tenant"], acct, cst, connector_id=conn["id"])
+        if nh:
+            jlog("connector health events", connector=conn["id"], count=nh)
     return {"resources": len(inventory.get("resources", []))}
 
 
@@ -696,6 +710,7 @@ def main():
     st = load_state()
     last_discover = 0.0
     last_metrics = 0.0
+    last_health = 0.0
     last_az_metrics = 0.0
     last_az_health = 0.0
     last_az_inventory = 0.0
@@ -747,6 +762,15 @@ def main():
                 except Exception as exc:  # noqa: BLE001 - lane isolation
                     jlog("aws seam error", error=str(exc)[:200])
                 last_seam = time.time()
+            # Provider incident lane (Wave 5 #16) — own guard; run() never
+            # raises (Basic-support denial becomes a structured status).
+            if time.time() - last_health >= HEALTH_EVERY_S:
+                n = aws_health.run(
+                    session.client("health", region_name=aws_health.HEALTH_REGION),
+                    producer, TENANT, ACCOUNT, st)
+                if n:
+                    jlog("aws health events", count=n)
+                last_health = time.time()
             save_state(st)
         except Exception as exc:  # noqa: BLE001 - poller must survive transient API errors
             jlog("poll cycle error", error=str(exc)[:200])
