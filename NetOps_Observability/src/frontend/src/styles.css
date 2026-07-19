@@ -5184,3 +5184,13 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .inv-changes-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
 .inv-changes-when { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; white-space: nowrap; }
 .inv-changes-actor { color: var(--fg-muted, var(--muted)); }
+
+/* service cost context card (Wave 5 #18 slice 3) */
+.inv-costctx { border: 1px solid var(--border); border-radius: var(--r-2, 8px);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.inv-costctx-h { font-weight: 700; font-size: 12.5px; display: flex; align-items: baseline; gap: 8px; }
+.inv-costctx-meta { color: var(--fg-muted, var(--muted)); font-size: 11.5px; font-weight: 400; }
+.inv-costctx-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.inv-costctx-svc { font-weight: 600; }
+.inv-costctx-foot { font-size: 11.5px; }
