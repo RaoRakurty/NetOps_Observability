@@ -27,7 +27,7 @@ describe("CorrelixLogo wordmark", () => {
     const logo = screen.getByRole("img", { name: "Correlix" }) as HTMLElement;
     expect(logo.style.fontSize).toBe("28px");
     // The eye is em-sized, so it rides the same font-size.
-    expect(logo.querySelector("svg")?.getAttribute("width")).toBe("1.16em");
+    expect(logo.querySelector("svg")?.getAttribute("width")).toBe("1.08em");
   });
 });
 

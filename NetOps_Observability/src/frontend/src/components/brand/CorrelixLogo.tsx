@@ -104,8 +104,11 @@ export default function CorrelixLogo({ size = 17, className }: { size?: number; 
       aria-label={BRAND}
       style={{ fontSize: size }}
     >
+      {/* 1.08em ≈ the login artwork's O-to-letter proportion (1.04em there,
+          1.06em in the old topbar) — the eye stands a touch taller than the
+          caps, which is the established brand look. */}
       <span aria-hidden="true">C</span>
-      <CorrelixEyeO size="1.16em" />
+      <CorrelixEyeO size="1.08em" />
       <span aria-hidden="true">RRELIX</span>
     </span>
   );
