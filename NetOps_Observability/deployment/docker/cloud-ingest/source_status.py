@@ -97,10 +97,23 @@ def note(provider: str, source_type: str, exc: BaseException, *, tenant: str = "
     """Record one lane's current failure IF it classifies. Returns the status
     ("permission_denied"/"misconfigured") or None when the error is not ours to
     report. First-seen is preserved across repeats so "since Tuesday" holds."""
-    global _dirty
     status = classify(exc)
     if status is None:
         return None
+    return note_status(provider, source_type, status, str(exc)[:DETAIL_MAX],
+                       tenant=tenant, account=account, region=region,
+                       connector_id=connector_id)
+
+
+def note_status(provider: str, source_type: str, status: str, detail: str, *,
+                tenant: str = "", account: str = "", region: str = "",
+                connector_id: str = "") -> str:
+    """Record a lane state with an EXPLICIT status — for lanes whose failure is
+    a known structural fact rather than an exception (e.g. the GCP cost lane:
+    daily spend requires the BigQuery billing export — "not enabled" is the
+    honest, renderable truth, not a caught error). Same record shape, same
+    first-seen preservation, same full-set-replace flush."""
+    global _dirty
     key = (tenant, provider, account, region, source_type)
     prev = _active.get(key)
     _active[key] = {
@@ -111,7 +124,7 @@ def note(provider: str, source_type: str, exc: BaseException, *, tenant: str = "
         "region": region,
         "source_type": source_type,
         "status": status,
-        "detail": str(exc)[:DETAIL_MAX],
+        "detail": detail[:DETAIL_MAX],
         "since_iso": prev["since_iso"] if prev else _iso(time.time()),
     }
     if prev != _active[key]:

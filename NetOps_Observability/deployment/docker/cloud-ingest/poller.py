@@ -23,6 +23,7 @@ import broker_client
 import cloud_events
 import cloud_tag
 import cloudmetrics
+import cost
 import discover
 import gcp
 import ingest_metrics
@@ -691,6 +692,7 @@ def main():
     if metrics_srv is not None:
         jlog("metrics serving", port=metrics_srv.server_address[1])
     last_connectors = 0.0
+    last_cost = 0.0
     st = load_state()
     last_discover = 0.0
     last_metrics = 0.0
@@ -889,6 +891,21 @@ def main():
             except Exception as exc:  # noqa: BLE001 — lane isolation
                 jlog("connector cycle error", error=str(exc)[:200])
             last_connectors = time.time()
+
+        # ── COST (Wave 5 #18 slice 1) ───────────────────────────────────────
+        # Daily-granularity billing data on its own slow cadence (COST_EVERY_S,
+        # default 6h — AWS Cost Explorer READS are metered, see cost.py) and its
+        # OWN failure domain: a billing-API hiccup must never roll back the
+        # telemetry checkpoints above. Ambient lanes + per-connector pass, each
+        # isolated inside cost.run.
+        if cost.COST_LANES and time.time() - last_cost >= cost.COST_EVERY_S:
+            try:
+                counts = cost.run(producer, st, session=session)
+                save_state(st)
+                jlog("cloud costs", **counts)
+            except Exception as exc:  # noqa: BLE001 — lane isolation
+                jlog("cost cycle error", error=str(exc)[:200])
+            last_cost = time.time()
 
         # Structured error reporting (Wave 2 #4): ship the CURRENT permission/
         # misconfiguration set to the platform once per loop. Best-effort and
