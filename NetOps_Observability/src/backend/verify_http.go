@@ -85,7 +85,7 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 			caseTenant = tenant
 		}
 		why := fmt.Sprintf("manual verify (case verdict %s)", row.Verdict)
-		rec, err := s.startVerificationRun(caseTenant, id, "manual", claims.Sub, why, row.Devices)
+		rec, err := s.startVerificationRun(caseTenant, id, "manual", claims.Sub, why, row.Devices, row.caseContext())
 		switch {
 		case errors.Is(err, errVerifyDisabled):
 			writeError(w, http.StatusForbidden, errors.New("active verification is not enabled for this tenant — opt in under Settings"))
