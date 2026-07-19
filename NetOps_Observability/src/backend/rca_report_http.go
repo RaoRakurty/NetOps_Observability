@@ -170,10 +170,13 @@ func (s *server) rcaReportPDF(ctx context.Context, rep rcaReport, html []byte) (
 	}
 	// Gotenberg header/footer documents: only inline styles; special classes
 	// pageNumber/totalPages are substituted by Chromium's print engine.
-	head := fmt.Sprintf(`<html><head></head><body><div style="font:9px -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#667085;width:100%%;padding:0 14mm;display:flex;justify-content:space-between"><span>CORRELIX · %s</span><span>%s</span></div></body></html>`,
-		htmlEscape(rep.ReportType), htmlEscape(rep.DisplayID))
-	foot := fmt.Sprintf(`<html><head></head><body><div style="font:9px -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#667085;width:100%%;padding:0 14mm;display:flex;justify-content:space-between"><span>Generated %s · Confidential</span><span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span></div></body></html>`,
-		htmlEscape(rep.GeneratedAt))
+	// The running HEADER is intentionally empty: page 1 already carries the
+	// document masthead (CORRELIX · report type · display id), and a running
+	// header repeating the same words directly above it read as a defect.
+	// Every page-level identifier lives in the running FOOTER instead.
+	head := `<html><head></head><body><div style="font:9px sans-serif"></div></body></html>`
+	foot := fmt.Sprintf(`<html><head></head><body><div style="font:9px -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#667085;width:100%%;padding:0 14mm;display:flex;justify-content:space-between"><span>CORRELIX · %s · %s · Generated %s · Confidential</span><span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span></div></body></html>`,
+		htmlEscape(rep.ReportType), htmlEscape(rep.DisplayID), htmlEscape(rep.GeneratedAt))
 	if err := addFile("header.html", []byte(head)); err != nil {
 		return nil, err
 	}
@@ -181,7 +184,7 @@ func (s *server) rcaReportPDF(ctx context.Context, rep rcaReport, html []byte) (
 		return nil, err
 	}
 	for k, v := range map[string]string{
-		"marginTop": "0.55", "marginBottom": "0.55", "marginLeft": "0.4", "marginRight": "0.4",
+		"marginTop": "0.45", "marginBottom": "0.55", "marginLeft": "0.4", "marginRight": "0.4",
 		"printBackground": "true", "preferCssPageSize": "false", "paperWidth": "8.27", "paperHeight": "11.7",
 	} {
 		if err := mw.WriteField(k, v); err != nil {

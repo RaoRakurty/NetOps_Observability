@@ -131,7 +131,7 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 		}
 		return s
 	}
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %d 128" width="100%%" style="max-width:%dpx;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality">`, w, min(w, 760))
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %d 132" width="100%%" style="max-width:%dpx;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality">`, w, min(w, 760))
 	// edges first (under the nodes); an edge into/after a dark hop is dashed.
 	for i := 1; i < n; i++ {
 		x1, x2 := x0+step*(i-1), x0+step*i
@@ -175,8 +175,11 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 			if h.Fault == "suspected" || h.Fault == "last_response" {
 				bcolor, blabel = "#b45309", "✕ visibility boundary"
 			}
-			fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1.8" stroke-dasharray="4 3"/>`, bx, cy-11, bx, cy+11, bcolor)
-			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="8" font-weight="800" fill="%s">%s</text>`, bx, cy+24, bcolor, blabel)
+			// The tick drops into the empty bottom band and carries its label
+			// there — the label row (y=122) is otherwise unused, so it can never
+			// collide with the hop name/address/seam rows (y=82/94/106).
+			fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1.8" stroke-dasharray="4 3"/>`, bx, cy-11, bx, 112, bcolor)
+			fmt.Fprintf(&b, `<text x="%d" y="122" text-anchor="middle" font-size="8" font-weight="800" fill="%s">%s</text>`, bx, bcolor, blabel)
 		case faultedFailedNode:
 			// a genuinely non-responding hop the case blames — red is warranted.
 			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="13" font-weight="800" fill="%s">✕</text>`, x, cy+5, stroke)
@@ -332,7 +335,7 @@ func renderRcaReportHTML(rep rcaReport) ([]byte, error) {
 const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <title>{{.ReportType}} — {{.Title}}</title>
 <style>
-  @page { size: A4; margin: 16mm 12mm; }
+  @page { size: A4; margin: 14mm 12mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   /* This is a light paper document: pin the color-scheme + canvas so a dark
      browser/OS preference (or a dark-themed embedder) can never restyle it. */
@@ -342,9 +345,18 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #172033; padding-bottom:9px; margin-bottom:14px; }
   header.rpt .brand { font-weight:800; letter-spacing:.5px; font-size:13px; color:#334155; }
   header.rpt .doctype { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#64748b; text-align:right; }
-  h1 { font-size:20px; margin:0 0 8px; }
-  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:#64748b; margin:0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; }
-  section { margin: 12px 0; break-inside: avoid; }
+  h1 { font-size:20px; margin:0 0 8px; break-after: avoid; page-break-after: avoid; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:#64748b; margin:0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; break-after: avoid; page-break-after: avoid; }
+  /* a second heading inside one section (cascade → hypotheses) needs air above */
+  table + h2, div + h2, p + h2, ol + h2 { margin-top: 16px; }
+  /* Print hygiene: long sections are ALLOWED to break across pages — a blanket
+     break-inside:avoid on <section> pushed whole sections to the next page and
+     left half-empty pages behind. Instead the atomic units (heading+first rows
+     via break-after on h2, each row, each card) stay whole. */
+  section { margin: 14px 0; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  svg { break-inside: avoid; page-break-inside: avoid; }
   .badges { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
   .pill { font-size:10.5px; font-weight:800; padding:3px 9px; border-radius:7px; border:1px solid; white-space:nowrap; }
   .pill.green { color:#0f7a3d; background:#eafaf1; border-color:#bfeccf; }
@@ -354,18 +366,18 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   .pill.gray  { color:#475467; background:#eef1f6; border-color:#d8dee8; }
   .meta { font-size:11px; color:#64748b; margin-bottom:10px; }
   .meta b { color:#172033; font-family: ui-monospace, monospace; }
-  .mgmt { border:1px solid #e2e8f0; border-left:3px solid #2563eb; border-radius:6px; padding:10px 13px; background:#f8fafc; }
-  .decision { border:1px solid #fed7aa; border-left:3px solid #b45309; border-radius:6px; padding:9px 12px; background:#fff7ed; margin-bottom:6px; }
+  .mgmt { border:1px solid #e2e8f0; border-left:3px solid #2563eb; border-radius:6px; padding:10px 13px; background:#f8fafc; break-inside: avoid; page-break-inside: avoid; }
+  .decision { border:1px solid #fed7aa; border-left:3px solid #b45309; border-radius:6px; padding:9px 12px; background:#fff7ed; margin-bottom:6px; break-inside: avoid; page-break-inside: avoid; }
   .decision.green { border-color:#bfeccf; border-left-color:#0f7a3d; background:#f2fbf6; }
   .decision.red   { border-color:#ffd0cc; border-left-color:#b42318; background:#fff5f4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; table-layout:fixed; }
   th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
   th { color:#64748b; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:#f8fafc; }
-  .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; }
+  .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; break-inside: avoid; page-break-inside: avoid; }
   .kv .k { color:#64748b; }
   .kv .v { color:#172033; font-weight:600; }
   .note { font-size:11px; color:#64748b; margin-top:4px; }
-  ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; }
+  ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; break-inside: avoid; page-break-inside: avoid; }
   .pagebreak { break-before: page; page-break-before: always; }
   .why b { font-size:11.5px; }
   footer.doc-end { margin-top:18px; border-top:1px solid #e2e8f0; padding-top:7px; font-size:10px; color:#94a3b8; display:flex; justify-content:space-between; }
@@ -566,16 +578,16 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 
 <section>
   <h2>Evidence coverage</h2>
-  <table><thead><tr><th style="width:19%">Evidence class</th><th>Quality</th><th>State</th><th>Obs.</th><th>Coverage &amp; gaps</th><th>Contributes</th></tr></thead><tbody>
+  <table><thead><tr><th style="width:15%">Evidence class</th><th style="width:12%">Quality</th><th style="width:15%">State</th><th style="width:10%">Obs.</th><th>Coverage &amp; gaps</th><th style="width:15%">Contributes</th></tr></thead><tbody>
   {{range .Coverage}}<tr>
     <td><b>{{.Label}}</b>{{with .Assessment}}<div class="note">{{covStrategy .}}</div>{{end}}</td>
     <td>{{covQuality .Assessment}}{{with .Assessment}}{{if .RatioKnown}}<div class="note">{{covPct .}} covered</div>{{end}}{{end}}</td>
-    <td><span class="pill {{stateTone "lane" .State}}">{{title .State}}</span></td>
+    <td><span class="pill {{stateTone "lane" .State}}" style="font-size:10px">{{title .State}}</span></td>
     <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}{{if .Anomalous}}<div class="note">{{.Anomalous}} anomalous</div>{{end}}</td>
     <td>{{.Finding}}
       {{if .From}}<div class="note">observed {{.From}} → {{.To}}</div>{{end}}
       {{with .Assessment}}{{if .LeadingGap}}<div class="note" style="color:#b45309">leading gap: {{.LeadingGap}}</div>{{end}}{{if .TrailingGap}}<div class="note" style="color:#b45309">trailing gap: {{.TrailingGap}}</div>{{end}}{{if .InternalGapTotal}}<div class="note" style="color:#b45309">internal gaps: {{.InternalGapTotal}}</div>{{end}}{{end}}
-      {{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}</td>
+      {{if not .Assessment}}{{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}{{end}}</td>
     <td>{{with .Assessment}}<div class="note">confidence: {{if .ConfidenceEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
       <div class="note">impact: {{if .ImpactEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
       <div class="note">scope: {{triLabel .Scope}}</div>{{end}}
@@ -611,7 +623,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 {{if .CloudChanges}}
 <section>
   <h2>Cloud change events</h2>
-  <table><thead><tr><th>When</th><th>Provider / source</th><th>Resource</th><th>Actor</th><th>Δ vs onset</th><th>Relationship</th><th>In case</th></tr></thead><tbody>
+  <table><thead><tr><th style="width:14%">When</th><th style="width:18%">Provider / source</th><th style="width:18%">Resource</th><th style="width:13%">Actor</th><th style="width:12%">Δ vs onset</th><th>Relationship</th><th style="width:8%">In case</th></tr></thead><tbody>
   {{range .CloudChanges}}<tr>
     <td>{{.At}}</td>
     <td>{{if .Provider}}{{.Provider}}{{end}}{{if .EventSource}} · {{.EventSource}}{{end}}</td>
@@ -642,7 +654,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{end}}
   <h2>{{if .SingleHypothesis}}Current hypothesis{{else}}Hypothesis ranking{{end}}</h2>
   {{if .Hypotheses}}
-  <table><thead><tr><th>#</th><th>Hypothesis</th><th>Confidence</th><th>Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
+  <table><thead><tr><th style="width:4%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:27%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
   {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.62"{{end}}>
     <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
     <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
