@@ -483,6 +483,38 @@ export type CorrelationTickets = {
 // plus the correlation it belongs to.
 export type TicketLinkRow = TicketStatus & { corr_object_id: string };
 
+// Active Verification (RCA spec item 8): one normalized read-only check result
+// and the latest run per case. Statuses: pass | fail | unreachable | skipped.
+export type VerificationCheckResult = {
+  check: string;
+  device_id: string;
+  device_name?: string;
+  target: string;
+  method: string; // tcp | snmp | ssh
+  status: "pass" | "fail" | "unreachable" | "skipped";
+  observed?: string;
+  command?: string; // the exact allowlisted read-only command executed
+  ts: string;
+  duration_ms: number;
+  corroborates_kinds?: string[];
+  refutes_kinds?: string[];
+};
+export type VerificationRun = {
+  run_id: string;
+  correlation_id: string;
+  trigger: "manual" | "auto";
+  actor: string;
+  started_at: string;
+  finished_at?: string;
+  status: "running" | "completed";
+  devices: string[];
+  results?: VerificationCheckResult[];
+};
+export type VerificationStatus = {
+  enabled: boolean; // global feature AND this tenant's opt-in
+  run: VerificationRun | null;
+};
+
 // Incident policy (#78) — decides when an RCA object opens an external ticket.
 export type IncidentPolicy = {
   id: string;
@@ -2062,6 +2094,13 @@ export const api = {
   correlationTicketSync: (id: string) =>
     request<{ enqueued: string; corr_object_id: string; system: string }>(
       `/api/correlations/${encodeURIComponent(id)}/ticket/sync`, { method: "POST", body: "{}" }),
+  // Active Verification (RCA spec item 8): latest run for a case + manual
+  // "Verify now". 404 = feature dormant or case not visible to this tenant.
+  verificationStatus: (id: string) =>
+    request<VerificationStatus>(`/api/correlations/${encodeURIComponent(id)}/verify`),
+  verificationRun: (id: string) =>
+    request<{ run_id: string; status: string; devices: string[] }>(
+      `/api/correlations/${encodeURIComponent(id)}/verify`, { method: "POST", body: "{}" }),
   // Incident-policy CRUD + pure simulator (#78). Per-tenant: the backend scopes
   // by the caller and stamps the owner from the token.
   incidentPolicies: () => request<{ policies: IncidentPolicy[] }>("/api/incident-policies"),

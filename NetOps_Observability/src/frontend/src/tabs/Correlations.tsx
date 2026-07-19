@@ -4,6 +4,7 @@ import { api, CorrObject, CorrReplay, CorrSummary, CorrTimeline, RcaNotPromotedE
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
+import RcaVerifyPanel from "../components/rca/RcaVerifyPanel";
 import RcaTopology from "../components/rca/RcaTopology";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaAskAi from "../components/rca/RcaAskAi";
@@ -769,6 +770,9 @@ export function CorrelationDetail({ id }: { id: string }) {
         <RcaTopology timeline={timeline} seams={seams} view={view} height={300} />
       }
       aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
+      verifySlot={obj.correlation_id
+        ? <RcaVerifyPanel correlationId={obj.correlation_id} suspected={rcaCase.verdictState === "suspected"} />
+        : null}
       timeImpactSlot={obj.correlation_id ? <RcaTimeImpact correlationId={obj.correlation_id} /> : null}
       ticketSlot={obj.correlation_id ? <RcaTicketCard correlationId={obj.correlation_id} /> : null}
     />
