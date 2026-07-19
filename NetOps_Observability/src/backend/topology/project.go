@@ -135,6 +135,13 @@ func Project(in Input) View {
 			Resolved:    true,
 			GroupID:     groupID(d.Site),
 		}
+		// Discovery-driven canonical role (roles.go) — stamped only when the
+		// facts establish one; unknown stays absent, never guessed.
+		if rr := ClassifyDeviceRole(d); rr.Role != DevRoleUnknown {
+			n.DeviceRole = rr.Role
+			n.RoleConfidence = rr.Confidence
+			n.RoleEvidence = rr.EvidenceStrings()
+		}
 		nodes = append(nodes, n)
 	}
 

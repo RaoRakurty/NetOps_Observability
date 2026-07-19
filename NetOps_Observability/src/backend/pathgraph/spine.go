@@ -61,6 +61,12 @@ type SpineNode struct {
 	// the cloud resource store, never guessed from names. Empty = not a known
 	// cloud address; the UI renders the provider mark only when this is set.
 	Provider string `json:"provider,omitempty"`
+	// DeviceRole/RoleConfidence — the discovery-driven canonical device role
+	// (topology/roles.go), stamped by the API layer ONLY when the hop resolves
+	// to a managed device the classifier could place (tenant-scoped resolution).
+	// Absent = unknown; the renderer falls back to boundary grouping.
+	DeviceRole     string `json:"device_role,omitempty"`
+	RoleConfidence string `json:"role_confidence,omitempty"` // strong|medium|weak
 	// Fault marks the RCA drop point (broken|suspected) — stamped by the API
 	// layer ONLY when a partial observation embeds in a suspected/confirmed
 	// path-family verdict. Absent ⇒ the renderer marks no fault (§2.4).

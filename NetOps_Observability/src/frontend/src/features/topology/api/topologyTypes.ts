@@ -109,6 +109,15 @@ export type TopologyNode = {
   label: string;
   kind: NodeKind;
   role?: string;
+  /** Discovery-driven canonical device role (backend topology/roles.go):
+   *  access_switch | distribution_switch | core_router | firewall |
+   *  load_balancer | wan_edge | carrier_hop | dc_wan_edge | dc_leaf |
+   *  dc_spine | cloud_edge. Absent when the classifier left it unknown. */
+  device_role?: string;
+  /** strong | medium | weak — words, never percentages. */
+  role_confidence?: string;
+  /** "signal: detail" evidence lines behind device_role. */
+  role_evidence?: string[];
   vendor?: string;
   model?: string;
   site?: string;

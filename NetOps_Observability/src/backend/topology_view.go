@@ -144,7 +144,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Now:      time.Now(),
 		SrcID:    strings.TrimSpace(r.URL.Query().Get("src")),
 		DstID:    strings.TrimSpace(r.URL.Query().Get("dst")),
-		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem),
+		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links),
 		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
 	}
@@ -210,7 +210,15 @@ func (s *server) projectGeoView(ctx context.Context, claims jwtClaims, tenant st
 
 // toDeviceFacts translates inventory + metric vectors into projection input. The
 // metric vectors are keyed by device id (the "device" label = inventory id).
-func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64) []topology.DeviceFact {
+// links (may be nil) adds the LLDP/CDP/BGP-LS adjacency shape the role
+// classifier consumes (device_roles.go); absent links simply leave those facts
+// zero — the classifier treats that as absence of evidence, never a signal.
+func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64, links []topoLink) []topology.DeviceFact {
+	typeByID := make(map[string]string, len(devs))
+	for _, d := range devs {
+		typeByID[d.ID] = inferDeviceType(d)
+	}
+	adj := adjacencySummaries(links, typeByID)
 	out := make([]topology.DeviceFact, 0, len(devs))
 	for _, d := range devs {
 		f := topology.DeviceFact{
@@ -218,9 +226,16 @@ func toDeviceFacts(devs []models.Device, cpu, mem map[string]float64) []topology
 			Name:     d.Name,
 			Vendor:   d.Vendor,
 			Model:    d.Model,
-			Type:     inferDeviceType(d),
+			Type:     typeByID[d.ID],
 			MgmtIP:   d.Address,
 			LastSeen: d.LastSeen,
+			SysDescr: d.OS, // discovery stores the (truncated) sysDescr as OS
+		}
+		if a := adj[d.ID]; a != nil {
+			f.NeighborCount = a.total
+			f.SwitchNeighborCount = a.switches
+			f.RouterNeighborCount = a.routers
+			f.HasIGPAdjacency = a.igp
 		}
 		// Operator overrides / enrichment from labels (best-effort).
 		if d.Labels != nil {

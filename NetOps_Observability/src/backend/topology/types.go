@@ -111,6 +111,14 @@ type Node struct {
 	Label       string             `json:"label"`
 	Kind        string             `json:"kind"`
 	Role        string             `json:"role,omitempty"`
+	// DeviceRole — discovery-driven canonical role (roles.go): access_switch |
+	// distribution_switch | core_router | firewall | load_balancer | wan_edge |
+	// carrier_hop | dc_wan_edge | dc_leaf | dc_spine | cloud_edge. Omitted when
+	// the classifier could not establish one (unknown stays unknown). Additive:
+	// existing consumers of Role/Kind are untouched.
+	DeviceRole     string   `json:"device_role,omitempty"`
+	RoleConfidence string   `json:"role_confidence,omitempty"` // strong|medium|weak (words)
+	RoleEvidence   []string `json:"role_evidence,omitempty"`   // "signal: detail" lines
 	Vendor      string             `json:"vendor,omitempty"`
 	Model       string             `json:"model,omitempty"`
 	Site        string             `json:"site,omitempty"`
@@ -236,6 +244,16 @@ type DeviceFact struct {
 	HasCPU bool
 	MemPct float64
 	HasMem bool
+	// ── role-classifier facts (roles.go) — gathered tenant-scoped by the caller;
+	// zero values mean "not collected", which the classifier treats as absence
+	// of evidence (default-closed), never as a negative signal.
+	SysDescr            string // raw SNMP sysDescr when discovery stored it
+	NeighborCount       int    // distinct LLDP/CDP/BGP-LS neighbors
+	SwitchNeighborCount int    // neighbors whose inferred type is switch
+	RouterNeighborCount int    // neighbors whose inferred type is router
+	HasIGPAdjacency     bool   // appears in the BGP-LS/IGP topology
+	TunnelCount         int    // discovered tunnel interfaces terminating here
+	HasCloudTunnel      bool   // ≥1 tunnel remote end in published cloud space
 }
 
 // LinkFact is one deduped, undirected adjacency (output of the link normalizer).

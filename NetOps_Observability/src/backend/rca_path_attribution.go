@@ -62,6 +62,10 @@ type rcaPathKeyDevice struct {
 	Role       string `json:"role"`
 	Label      string `json:"label,omitempty"`
 	Confidence string `json:"confidence,omitempty"`
+	// Discovery-driven canonical device role + word-tier confidence
+	// (topology/roles.go vocabulary) — passthrough when the engine stamped it.
+	DeviceRole     string `json:"device_role,omitempty"`
+	RoleConfidence string `json:"role_confidence,omitempty"`
 }
 
 type rcaTypedSegment struct {
@@ -74,6 +78,9 @@ type rcaTypedSegment struct {
 	UnknownHops []int              `json:"unknown_hops,omitempty"`
 	Ambiguous   bool               `json:"ambiguous"`
 	Reason      string             `json:"reason,omitempty"`
+	// Cloud attachment flavor (dia | direct_connect | expressroute | ipsec_vpn)
+	// — passthrough only; the UI renders it verbatim-mapped, never guesses.
+	Attachment string `json:"attachment,omitempty"`
 }
 
 type rcaPathHead struct {
