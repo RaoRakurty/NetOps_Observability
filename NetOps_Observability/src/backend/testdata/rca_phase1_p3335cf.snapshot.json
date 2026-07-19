@@ -157,6 +157,67 @@
     "editable": false,
     "note": "Lessons learned belong to the promoted postmortem workflow (preliminary/interim/final) — not editable on a operational assessment."
   },
+  "causal_chain": {
+    "available": false,
+    "note": "No causal sequence is proposed for this case — the engine has not matched a propagation pattern, and none is invented.",
+    "branch_note": "No alternative hypothesis carries evidence in this window."
+  },
+  "detailed_timeline": [
+    {
+      "ts": "2026-07-12 18:12:00 UTC",
+      "event": "First credible failure",
+      "source": "earliest attached anomalous observation in the correlation window (observed)"
+    },
+    {
+      "ts": "2026-07-12 18:12:00 UTC",
+      "event": "Phase begins: degradation — Anomalous evidence persisted across the participating evidence classes.",
+      "source": "derived from the observed evidence timeline (recovery reconciliation)"
+    },
+    {
+      "ts": "2026-07-12 18:12:00 UTC",
+      "event": "Phase begins: detection — First anomalous evidence observed.",
+      "source": "derived from the observed evidence timeline (recovery reconciliation)"
+    },
+    {
+      "ts": "2026-07-12 18:16:00 UTC",
+      "event": "Phase ends: degradation",
+      "source": "derived from the observed evidence timeline (recovery reconciliation)"
+    }
+  ],
+  "glossary": [
+    {
+      "term": "observed",
+      "definition": "Directly measured by an attached telemetry source inside this incident's window. An observed statement is a fact about what a source recorded — not an interpretation."
+    },
+    {
+      "term": "confirmed",
+      "definition": "Established by independent, agreeing evidence sources — never by one source repeating, and never by timing alone."
+    },
+    {
+      "term": "suspected",
+      "definition": "Supported by some evidence but not independently confirmed; alternative explanations remain open."
+    },
+    {
+      "term": "independent evidence",
+      "definition": "Evidence from measurement systems with no shared failure mode (for example an active check, a routing-plane event and a traffic measurement). Their agreement is information; one system repeating is not."
+    },
+    {
+      "term": "synthetic check",
+      "definition": "A scripted test transaction run from a monitoring vantage. A failed synthetic check proves the configured transaction failed from that vantage — it is never converted into a count of affected real users."
+    },
+    {
+      "term": "real-user impact",
+      "definition": "Effect on actual user traffic, shown only by evidence from real sessions or the serving infrastructure itself. It is a separate question from synthetic-check failures and is never derived from them."
+    },
+    {
+      "term": "not measured",
+      "definition": "No telemetry with valid provenance quantifies this value for this case. Not measured is stated as such — it is never rendered as zero, and it is not evidence of no impact."
+    },
+    {
+      "term": "coverage gap",
+      "definition": "An interval where a telemetry class produced no data. A gap is absence of measurement, not evidence of health — nothing is concluded from it."
+    }
+  ],
   "at_a_glance": {
     "where": "Not localized — the evidence does not support a single location",
     "where_basis": "none",
