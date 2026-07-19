@@ -124,42 +124,42 @@
   <tr>
     <td><b>Affected applications</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>Not measured — no evidence source for this measure took part in the case.</td>
   </tr><tr>
     <td><b>Affected sites</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>Not measured — no evidence source for this measure took part in the case.</td>
   </tr><tr>
     <td><b>Active users affected</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>Sessions affected</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>Transactions affected</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>User-minutes lost</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>Site-minutes lost</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>Transaction failures (real users)</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No identity or transaction mapping exists for this case; this value is not measured. It is never derived from synthetic failures, flow deltas or network events.</td>
   </tr><tr>
     <td><b>Synthetic failure rate</b><div class="note">the configured synthetic checks that took part in this case</div></td>
@@ -169,17 +169,17 @@
   </tr><tr>
     <td><b>Flow-volume change</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>Not measured — no evidence source for this measure took part in the case.</td>
   </tr><tr>
     <td><b>Voice impairment</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No voice-quality telemetry (MOS/jitter/loss scoring) is attached to this case.</td>
   </tr><tr>
     <td><b>SLO / error-budget consumption</b></td>
     <td><b>Not measured</b></td>
-    <td>Not measured</td>
+    <td>—</td>
     <td>No SLO is linked to this incident; error-budget consumption is not measured.</td>
   </tr>
   </tbody></table>

@@ -518,7 +518,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{range .ImpactProvenance.Measures}}<tr>
     <td><b>{{.Label}}</b>{{if .Scope}}<div class="note">{{.Scope}}</div>{{end}}</td>
     <td>{{if eq .Status "not_measured"}}<b>Not measured</b>{{else}}<b>{{impactVal .}}</b>{{end}}{{if .Denominator}}<div class="note">of {{.Denominator}}</div>{{end}}</td>
-    <td>{{title (humanState .Status)}}{{if .Confidence}}<div class="note">confidence: {{.Confidence}}</div>{{end}}</td>
+    <td>{{if eq .Status "not_measured"}}—{{else}}{{title (humanState .Status)}}{{end}}{{if .Confidence}}<div class="note">confidence: {{.Confidence}}</div>{{end}}</td>
     <td>{{if .Source}}{{.Source}}{{if .Coverage}}<div class="note">coverage: {{.Coverage}}</div>{{end}}<div class="note">{{.Basis}}</div>{{else}}{{.Basis}}{{end}}</td>
   </tr>{{end}}
   </tbody></table>
