@@ -85,3 +85,36 @@ describe("Explain/Stack → Administration move", () => {
     expect(adminNav.find((s) => s.id === "stack")).toBeUndefined();
   });
 });
+
+// resolveResourceRoute — the permanent #/resource/{kind}/{id} URL space
+// (Wave 6 #20). Matched BEFORE the section/leaf router; null = not a resource
+// URL. The id is the canonical opaque id, URL-decoded.
+import { resolveResourceRoute, resourceRouteFor } from "./nav";
+
+describe("resolveResourceRoute", () => {
+  it("parses kind + id", () => {
+    expect(resolveResourceRoute("#/resource/cloud/i-0abc123")).toEqual({ kind: "cloud", id: "i-0abc123" });
+  });
+
+  it("URL-decodes the id (ARNs and slashes survive)", () => {
+    const id = "arn:aws:elasticloadbalancing:us-east-1:1111:loadbalancer/app/web/50d";
+    const route = resourceRouteFor("cloud", id);
+    expect(resolveResourceRoute(`#/${route}`)).toEqual({ kind: "cloud", id });
+  });
+
+  it("ignores query params", () => {
+    expect(resolveResourceRoute("#/resource/cloud/i-1?tab=metrics")).toEqual({ kind: "cloud", id: "i-1" });
+  });
+
+  it("returns null for non-resource routes and incomplete paths", () => {
+    expect(resolveResourceRoute("#/monitoring/correlations?id=x")).toBeNull();
+    expect(resolveResourceRoute("#/resource")).toBeNull();
+    expect(resolveResourceRoute("#/resource/cloud")).toBeNull();
+    expect(resolveResourceRoute("#/resource/cloud/")).toBeNull();
+    expect(resolveResourceRoute("#/dashboards/home")).toBeNull();
+  });
+
+  it("round-trips resourceRouteFor for plain ids", () => {
+    expect(resourceRouteFor("cloud", "vm-1")).toBe("resource/cloud/vm-1");
+  });
+});
