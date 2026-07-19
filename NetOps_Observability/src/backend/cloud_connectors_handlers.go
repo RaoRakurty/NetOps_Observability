@@ -65,6 +65,9 @@ type cloudConnIdentityView struct {
 	ServiceAccount   string `json:"service_account,omitempty"`
 	HasLegacySecret  bool   `json:"has_legacy_secret"` // a secret is stored (never the value)
 	LegacyKeyHint    string `json:"legacy_key_hint,omitempty"`
+	// Org is the org-level (multi-account) enrollment anchor — non-secret
+	// deployment metadata (Wave 5 #17 slice 2). nil = single-account connector.
+	Org *cloudconn.OrgScopeAnchor `json:"org,omitempty"`
 }
 
 func toConnectorView(c cloudConnector) cloudConnectorView {
@@ -80,6 +83,7 @@ func toConnectorView(c cloudConnector) cloudConnectorView {
 			ProjectNumber: c.Identity.ProjectNumber, WorkloadPool: c.Identity.WorkloadPool,
 			WorkloadProvider: c.Identity.WorkloadProvider, ServiceAccount: c.Identity.ServiceAccount,
 			HasLegacySecret: c.Identity.LegacySecretRef != "", LegacyKeyHint: c.Identity.LegacyKeyID,
+			Org:             c.Identity.Org,
 		},
 		Scopes: c.Scopes, IdentityHealth: c.IdentityHealth, TelemetryHealth: c.TelemetryHealth,
 		LastValidation: c.LastValidation, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
@@ -147,7 +151,13 @@ func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Reques
 	}
 	provider, valid := cloudconn.ParseProvider(req.Provider)
 	if !valid {
-		writeJSONError(w, http.StatusBadRequest, "unknown provider (aws|azure|gcp)", "PROVIDER_INVALID")
+		// Registry-driven message: names exactly the providers this build offers.
+		known := cloudconn.RegisteredProviders()
+		toks := make([]string, 0, len(known))
+		for _, p := range known {
+			toks = append(toks, string(p))
+		}
+		writeJSONError(w, http.StatusBadRequest, "unknown provider ("+strings.Join(toks, "|")+")", "PROVIDER_INVALID")
 		return
 	}
 	c := cloudConnector{
@@ -193,6 +203,8 @@ func (s *server) handleCloudConnectorByID(w http.ResponseWriter, r *http.Request
 		s.serveConnectorAuth(w, r, id)
 	case "scopes":
 		s.serveConnectorScopes(w, r, id)
+	case "org":
+		s.serveConnectorOrg(w, r, id)
 	case "capabilities":
 		s.serveConnectorCapabilities(w, r, id)
 	case "setup":
@@ -360,6 +372,53 @@ func (s *server) serveConnectorScopes(w http.ResponseWriter, r *http.Request, id
 	}
 	c.Scopes = req.Scopes
 	s.recordConnectorEvent(r, claims, evScopeChanged, c, "scopes updated")
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+// ── org-level (multi-account) enrollment: POST /{id}/org ─────────────────────
+
+// orgScopeReq sets or clears the connector's org anchor. An empty type clears
+// org mode (back to single-account). The TENANT never travels here (§3a.2):
+// the anchor lives on the tenant-owned connector row, and every member scope
+// discovered or selected under it inherits that row's tenant.
+type orgScopeReq struct {
+	Type         string `json:"type"` // org | ou | mgmt_group | folder — "" clears
+	Ref          string `json:"ref"`
+	RoleTemplate string `json:"role_template"`
+}
+
+func (s *server) serveConnectorOrg(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	var req orgScopeReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		c.Identity.Org = nil
+		s.recordConnectorEvent(r, claims, evScopeChanged, c, "org anchor cleared")
+		s.saveConnectorAndRespond(w, r, claims, c)
+		return
+	}
+	st, _ := cloudconn.ParseScopeType(req.Type)
+	anchor := cloudconn.OrgScopeAnchor{
+		Type:         st,
+		Ref:          strings.TrimSpace(req.Ref),
+		RoleTemplate: strings.TrimSpace(req.RoleTemplate),
+	}
+	if err := cloudconn.ValidateOrgAnchor(c.Provider, anchor); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error(), "ORG_SCOPE_INVALID")
+		return
+	}
+	c.Identity.Org = &anchor
+	s.recordConnectorEvent(r, claims, evScopeChanged, c, "org anchor set: "+string(anchor.Type)+"="+anchor.Ref)
 	s.saveConnectorAndRespond(w, r, claims, c)
 }
 
@@ -695,6 +754,13 @@ func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, 
 		"scopes":      c.Scopes,
 		"scope_types": cloudconn.ScopeTypesForProvider(c.Provider),
 	}
+	// ORG connector: enumeration runs against the org anchor; the discovered
+	// member scopes inherit the CONNECTOR's tenant by construction (§3a — the
+	// response is data on this tenant-owned row, nothing is persisted here).
+	if c.Identity.Org != nil {
+		base["org_scope"] = c.Identity.Org
+		base["member_scope_type"] = cloudconn.MemberScopeTypeForProvider(c.Provider)
+	}
 	if s.cloudBroker == nil {
 		base["live_check"] = "deferred"
 		writeJSON(w, http.StatusOK, base)
@@ -721,9 +787,13 @@ func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
+	root := cloudconn.Scope{Ref: account}
+	if org := c.Identity.Org; org != nil {
+		root = cloudconn.Scope{Type: org.Type, Ref: org.Ref}
+	}
 	discovered, err := adapter.DiscoverScopes(ctx, cloudconn.DiscoverRequest{
 		Identity: c.Identity,
-		Root:     cloudconn.Scope{Ref: account},
+		Root:     root,
 		Token:    tok,
 	})
 	switch {
@@ -978,19 +1048,34 @@ func (s *server) handleCloudProviderCatalog(w http.ResponseWriter, r *http.Reque
 		Recommended bool                `json:"recommended"`
 	}
 	type providerView struct {
-		Provider   cloudconn.Provider     `json:"provider"`
-		Methods    []methodView           `json:"methods"`
-		ScopeTypes []cloudconn.ScopeType  `json:"scope_types"`
-		Packs      []cloudconn.CapabilityPack `json:"capability_packs"`
+		Provider        cloudconn.Provider         `json:"provider"`
+		DisplayName     string                     `json:"display_name"`
+		ShortLabel      string                     `json:"short_label"`
+		SetupDocKey     string                     `json:"setup_doc_key,omitempty"`
+		HasFlowLogs     bool                       `json:"has_flow_logs"`
+		HasHealthLane   bool                       `json:"has_health_lane"`
+		Methods         []methodView               `json:"methods"`
+		ScopeTypes      []cloudconn.ScopeType      `json:"scope_types"`
+		OrgScopeTypes   []cloudconn.ScopeType      `json:"org_scope_types,omitempty"`
+		MemberScopeType cloudconn.ScopeType        `json:"member_scope_type,omitempty"`
+		Packs           []cloudconn.CapabilityPack `json:"capability_packs"`
 	}
-	out := make([]providerView, 0, 3)
-	for _, p := range []cloudconn.Provider{cloudconn.ProviderAWS, cloudconn.ProviderAzure, cloudconn.ProviderGCP} {
-		methods := cloudconn.ProviderMethods(p)
-		mv := make([]methodView, 0, len(methods))
-		for i, m := range methods {
+	// Registry-driven: every registered provider descriptor is served — adding a
+	// provider never edits this handler.
+	descs := cloudconn.Descriptors()
+	out := make([]providerView, 0, len(descs))
+	for _, d := range descs {
+		mv := make([]methodView, 0, len(d.AuthMethods))
+		for i, m := range d.AuthMethods {
 			mv = append(mv, methodView{Method: m, Rank: m.Rank(), Federated: m.IsFederated(), Legacy: m.IsLegacy(), Recommended: i == 0})
 		}
-		out = append(out, providerView{Provider: p, Methods: mv, ScopeTypes: cloudconn.ScopeTypesForProvider(p), Packs: cloudconn.PacksForProvider(p)})
+		out = append(out, providerView{
+			Provider: d.ID, DisplayName: d.DisplayName, ShortLabel: d.ShortLabel,
+			SetupDocKey: d.SetupDocKey, HasFlowLogs: d.HasFlowLogs, HasHealthLane: d.HasHealthLane,
+			Methods: mv, ScopeTypes: cloudconn.ScopeTypesForProvider(d.ID),
+			OrgScopeTypes: append([]cloudconn.ScopeType(nil), d.OrgScopeTypes...), MemberScopeType: d.MemberScopeType,
+			Packs: cloudconn.PacksForProvider(d.ID),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
 }

@@ -7,38 +7,36 @@
 
 import { ReactNode, useEffect } from "react";
 import { Chip } from "../../components/noc";
-import { AwsLogo, AzureLogo, GcpLogo } from "../../components/ConnectorLogos";
-import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory, Provider } from "./types";
+import { providerDescriptor, providerConsoleName, ProviderIcon } from "./providers";
+import type { Confidence, Health, RootDomain, AttrSource, UnderlayState, RcaDrawerModel, EvidenceCategory } from "./types";
 
 // ── Origin (which cloud an investigation comes from) ─────────────────────────
-// Reuses the SAME vendor marks as the connector gallery + wizard
-// (components/ConnectorLogos), so a provider looks identical everywhere in the
-// product. The mark is decorative; the adjacent text carries the meaning, so a
-// screen reader hears the provider name once rather than twice.
-export const PROVIDER_LABEL: Record<Provider, string> = {
-  aws: "AWS", azure: "Azure", gcp: "Google Cloud", "—": "—",
-};
-
-// Short forms for space-constrained multi-cloud cells (same vocabulary the
-// Accounts table already uses). Full names stay on single-provider badges and
-// in every tooltip.
-export const PROVIDER_SHORT: Record<Provider, string> = {
-  aws: "AWS", azure: "Azure", gcp: "GCP", "—": "—",
-};
-
-export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
-  if (provider === "aws") return <AwsLogo size={size} />;
-  if (provider === "azure") return <AzureLogo size={size} />;
-  if (provider === "gcp") return <GcpLogo size={size} />;
-  return null;
+// Registry-driven (providers.tsx): the SAME descriptor serves the connector
+// gallery, the wizard and every origin cell, so a provider looks identical
+// everywhere in the product — and a newly registered provider renders here
+// with zero edits. The mark is decorative; the adjacent text carries the
+// meaning, so a screen reader hears the provider name once rather than twice.
+// originName keeps the pre-registry origin vocabulary: AWS, Azure, Google Cloud
+// (short form for the compact clouds, full name for Google Cloud — the exact
+// labels these cells always used).
+function originName(p: string): string {
+  const d = providerDescriptor(p);
+  return p === "gcp" ? d.label : d.short;
 }
 
-export function ProviderBadge({ provider, compact = false }: { provider: Provider; compact?: boolean }) {
+const originShort = (p: string): string => (p === "—" ? "—" : providerDescriptor(p).short);
+
+export function ProviderMark({ provider, size = 14 }: { provider: string; size?: number }) {
+  if (provider === "—") return null;
+  return <ProviderIcon provider={provider} size={size} />;
+}
+
+export function ProviderBadge({ provider, compact = false }: { provider: string; compact?: boolean }) {
   if (provider === "—") return null;
   return (
-    <span className="ao-prov" title={PROVIDER_LABEL[provider]}>
+    <span className="ao-prov" title={originName(provider)}>
       <span className="ao-prov-mark" aria-hidden="true"><ProviderMark provider={provider} /></span>
-      <span className="ao-prov-l">{(compact ? PROVIDER_SHORT : PROVIDER_LABEL)[provider]}</span>
+      <span className="ao-prov-l">{compact ? originShort(provider) : originName(provider)}</span>
     </span>
   );
 }
@@ -56,7 +54,7 @@ const ORIGIN_MAX_BADGES = 2;
 // says so, with a tooltip explaining that the evidence carried no cloud signal.
 // Multi-cloud cells use the short provider names (AWS · Azure · GCP — the same
 // vocabulary as the Accounts table) so two clouds fit on ONE line.
-export function OriginCell({ providers }: { providers: Provider[] }) {
+export function OriginCell({ providers }: { providers: string[] }) {
   if (!providers.length) {
     return (
       <span className="ao-muted" title="No cloud signal is attached to this investigation — its evidence is network / on-premises telemetry.">
@@ -64,7 +62,7 @@ export function OriginCell({ providers }: { providers: Provider[] }) {
       </span>
     );
   }
-  const full = providers.map((p) => PROVIDER_LABEL[p]).join(" + ");
+  const full = providers.map((p) => originName(p)).join(" + ");
   const compact = providers.length > 1;
   const shown = providers.slice(0, ORIGIN_MAX_BADGES);
   const extra = providers.length - shown.length;
@@ -168,12 +166,7 @@ export function UnderlayCell({ u }: { u: UnderlayState }) {
 // (safeConsoleUrl); an empty href renders nothing rather than a dead link.
 // stopPropagation keeps the row's drawer from opening under the click.
 export function consoleName(provider: string): string {
-  switch (provider.toLowerCase()) {
-    case "aws": return "AWS Console";
-    case "azure": return "Azure Portal";
-    case "gcp": return "Google Cloud Console";
-    default: return "cloud console";
-  }
+  return providerConsoleName(provider);
 }
 
 export function ConsoleLink({ href, label, compact }: { href: string; label: string; compact?: boolean }) {

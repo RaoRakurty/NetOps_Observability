@@ -13,14 +13,10 @@ const (
 	ProviderGCP   Provider = "gcp"
 )
 
-// Valid reports whether p is a known provider.
+// Valid reports whether p is a registered provider (registry.go).
 func (p Provider) Valid() bool {
-	switch p {
-	case ProviderAWS, ProviderAzure, ProviderGCP:
-		return true
-	default:
-		return false
-	}
+	_, ok := providerRegistry[p]
+	return ok
 }
 
 // ParseProvider normalizes a free-form provider token.
@@ -111,18 +107,15 @@ func ParseAuthMethod(s string) (AuthMethod, bool) {
 }
 
 // ProviderMethods returns the auth methods a provider supports, preference-ordered
-// (index 0 = most preferred). AuthMethodProhibited is never offered.
+// (index 0 = most preferred). AuthMethodProhibited is never offered. The offer
+// comes from the provider's registered descriptor (registry.go); a copy is
+// returned so callers can never mutate the registry.
 func ProviderMethods(p Provider) []AuthMethod {
-	switch p {
-	case ProviderAWS:
-		return []AuthMethod{AuthMethodWorkloadFederation, AuthMethodCloudRole, AuthMethodStaticKey}
-	case ProviderAzure:
-		return []AuthMethod{AuthMethodWorkloadFederation, AuthMethodCertificate, AuthMethodClientSecret}
-	case ProviderGCP:
-		return []AuthMethod{AuthMethodWorkloadFederation, AuthMethodStaticKey}
-	default:
+	d, ok := providerRegistry[p]
+	if !ok {
 		return nil
 	}
+	return append([]AuthMethod(nil), d.AuthMethods...)
 }
 
 // MethodAllowed reports whether p offers method m at all.

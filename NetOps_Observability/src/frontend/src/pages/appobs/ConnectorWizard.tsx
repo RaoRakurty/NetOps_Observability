@@ -21,22 +21,16 @@ import {
   api, CloudProvider, CloudAuthMethod, CloudConnectorView, CloudProviderCatalogEntry,
   CloudCapabilityPack, CloudSetupBundle, CloudScope,
 } from "../../services/api";
-import { AwsLogo, AzureLogo, GcpLogo } from "../../components/ConnectorLogos";
 import { invalidateCloudInventory } from "./api";
+import { providerIds, providerLabel, providerBlurb, providerDescriptor, ProviderIcon, OrgScopeField } from "./providers";
 import {
-  WizardStep, STEPS, STEP_LABEL, stepIndex, PROVIDERS, PROVIDER_LABEL, PROVIDER_BLURB,
+  WizardStep, STEPS, STEP_LABEL, stepIndex,
   primaryScopeType, primaryScopeLabel, primaryScopePlaceholder,
   METHOD_LABEL, METHOD_BLURB, methodHoldsSecret, authFields, AuthFieldKey,
   secretConfig, buildAuthInput, authFieldsComplete, packFullId, packPermissions,
   findingTone, findingIcon, liveCheckDisplay, healthTone, healthLabel, canActivate, isActive,
   errText, resumeStep, resumePrimaryRef, resumeRegions, hydrateAuthValues,
 } from "./connectorWizard";
-
-function ProviderMark({ provider, size = 40 }: { provider: CloudProvider; size?: number }) {
-  if (provider === "aws") return <AwsLogo size={size} />;
-  if (provider === "azure") return <AzureLogo size={size} />;
-  return <GcpLogo size={size} />;
-}
 
 // Red asterisk + legend for required fields (the admin.tsx config-form convention).
 function ReqLegend() {
@@ -62,7 +56,15 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
 
   // draft form
   const [displayName, setDisplayName] = useState(resume?.display_name ?? "");
-  const [accountId, setAccountId] = useState(() => (resume ? resumePrimaryRef(resume) : ""));
+  const [accountId, setAccountId] = useState(
+    () => (resume ? (resume.identity?.org?.ref || resumePrimaryRef(resume)) : ""),
+  );
+
+  // org-level (multi-account) mode — Wave 5 #17 slice 2. In org mode the
+  // target field IS the org anchor ref (org / management-group / folder id).
+  const [orgMode, setOrgMode] = useState(() => !!resume?.identity?.org);
+  const [orgType, setOrgType] = useState<string>(() => resume?.identity?.org?.type ?? "");
+  const [orgRole, setOrgRole] = useState(() => resume?.identity?.org?.role_template ?? "");
 
   // auth form
   const [method, setMethod] = useState<CloudAuthMethod | null>(resume?.auth_method || null);
@@ -115,6 +117,15 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
   const observerPack: CloudCapabilityPack | undefined = entry?.capability_packs?.[0];
   const methods = entry?.methods ?? [];
 
+  // Org-mode surface (registry-driven): the provider's org anchor choices and
+  // the effective target field (org anchor in org mode, else primary scope).
+  const orgOptions = providerDescriptor(provider).orgScopes;
+  const orgOption: OrgScopeField | undefined =
+    orgOptions.find((o) => o.type === orgType) ?? orgOptions[0];
+  const orgActive = orgMode && !!orgOption;
+  const scopeLabel = orgActive ? orgOption.label : provider ? primaryScopeLabel(provider) : "";
+  const scopePlaceholder = orgActive ? orgOption.placeholder : provider ? primaryScopePlaceholder(provider) : "";
+
   const goStep = useCallback((s: WizardStep) => {
     setError("");
     setStep(s);
@@ -134,6 +145,16 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
       // (setup templates, validate live-check, requested permissions) has it.
       if (observerPack && c.capability_pack !== packFullId(observerPack)) {
         c = await api.cloudConnectorCapabilities(c.id, packFullId(observerPack));
+      }
+      // Org mode: anchor the connector on the org container so the trust step
+      // renders the org-level artifacts and discovery enumerates members. The
+      // tenant is NEVER sent — member scopes inherit the connector's owner.
+      if (orgActive) {
+        c = await api.cloudConnectorOrg(c.id, {
+          type: orgOption.type, ref: accountId.trim(), role_template: orgRole.trim(),
+        });
+      } else if (c.identity?.org) {
+        c = await api.cloudConnectorOrg(c.id, { type: "" }); // back to single-account
       }
       setConnector(c);
       goStep("auth");
@@ -181,7 +202,9 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
     try {
       const regionList = regions.split(",").map((s) => s.trim()).filter(Boolean);
       const scopes: CloudScope[] = [{
-        type: primaryScopeType(provider),
+        // Org mode: the collection scope is the org anchor itself; member
+        // accounts arrive via Discover Scopes and operator selection.
+        type: orgActive ? orgOption.type : primaryScopeType(provider),
         ref: accountId.trim(),
         ...(regionList.length ? { regions: regionList } : {}),
       }];
@@ -247,8 +270,8 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
             <div className="ccw-eyebrow">{resume ? "Resume cloud onboarding" : "Cloud onboarding"}</div>
             <h2 className="ccw-title" id="ccw-title">
               {resume
-                ? `Finish setting up ${resume.display_name || (provider ? PROVIDER_LABEL[provider] : "this connection")}`
-                : provider ? `Connect ${PROVIDER_LABEL[provider]}` : "Connect a cloud account"}
+                ? `Finish setting up ${resume.display_name || (provider ? providerLabel(provider) : "this connection")}`
+                : provider ? `Connect ${providerLabel(provider)}` : "Connect a cloud account"}
             </h2>
           </div>
           <button className="ao-x" onClick={onClose} aria-label="Close wizard">×</button>
@@ -273,6 +296,10 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
                   provider={provider} nameLocked={!!connector}
                   displayName={displayName} onName={setDisplayName}
                   accountId={accountId} onAccount={setAccountId}
+                  scopeLabel={scopeLabel} scopePlaceholder={scopePlaceholder}
+                  orgOptions={orgOptions} orgMode={orgMode} onOrgMode={setOrgMode}
+                  orgType={orgOption?.type ?? ""} onOrgType={setOrgType}
+                  orgRole={orgRole} onOrgRole={setOrgRole}
                 />
               )}
               {step === "auth" && provider && (
@@ -291,9 +318,11 @@ export default function ConnectorWizard({ onClose, onCreated, resume }: {
               )}
               {step === "scopes" && provider && (
                 <ScopeStep
-                  provider={provider} accountId={accountId} onAccount={setAccountId}
+                  accountId={accountId} onAccount={setAccountId}
                   regions={regions} onRegions={setRegions}
                   pack={observerPack}
+                  scopeLabel={scopeLabel} scopePlaceholder={scopePlaceholder}
+                  orgActive={orgActive}
                 />
               )}
               {step === "validate" && (
@@ -364,11 +393,16 @@ function ProviderStep({ catalog, selected, onSelect }: {
   onSelect: (p: CloudProvider) => void;
 }) {
   const available = new Set((catalog ?? []).map((c) => c.provider));
+  // Registry ∪ catalog: every registered descriptor renders a tile, and a
+  // provider the BACKEND offers renders even without a frontend descriptor
+  // (generic label fallback) — adding a provider needs zero edits here.
+  const tiles = [...providerIds()];
+  for (const p of available) if (!tiles.includes(p)) tiles.push(p);
   return (
     <div className="ccw-stack">
       <p className="ccw-lead">Pick the cloud you want Correlix to observe. Every connector is read-only and least-privilege.</p>
       <div className="ccw-tiles" role="radiogroup" aria-label="Cloud provider">
-        {PROVIDERS.map((p) => {
+        {tiles.map((p) => {
           const ready = catalog === null || available.has(p);
           return (
             <button
@@ -377,9 +411,9 @@ function ProviderStep({ catalog, selected, onSelect }: {
               disabled={!ready}
               onClick={() => onSelect(p)}
             >
-              <ProviderMark provider={p} size={44} />
-              <span className="ccw-tile-t">{PROVIDER_LABEL[p]}</span>
-              <span className="ccw-tile-d">{PROVIDER_BLURB[p]}</span>
+              <ProviderIcon provider={p} size={44} />
+              <span className="ccw-tile-t">{providerLabel(p)}</span>
+              <span className="ccw-tile-d">{providerBlurb(p)}</span>
             </button>
           );
         })}
@@ -389,13 +423,21 @@ function ProviderStep({ catalog, selected, onSelect }: {
 }
 
 // ── Step 2: draft ─────────────────────────────────────────────────────────────
-function DraftStep({ provider, nameLocked, displayName, onName, accountId, onAccount }: {
+function DraftStep({ provider, nameLocked, displayName, onName, accountId, onAccount,
+  scopeLabel, scopePlaceholder, orgOptions, orgMode, onOrgMode, orgType, onOrgType, orgRole, onOrgRole }: {
   provider: CloudProvider; nameLocked: boolean; displayName: string; onName: (v: string) => void;
   accountId: string; onAccount: (v: string) => void;
+  scopeLabel: string; scopePlaceholder: string;
+  orgOptions: OrgScopeField[]; orgMode: boolean; onOrgMode: (v: boolean) => void;
+  orgType: string; onOrgType: (v: string) => void;
+  orgRole: string; onOrgRole: (v: string) => void;
 }) {
+  const orgAvailable = orgOptions.length > 0;
+  const orgActive = orgMode && orgAvailable;
+  const selected = orgOptions.find((o) => o.type === orgType) ?? orgOptions[0];
   return (
     <div className="ccw-stack">
-      <p className="ccw-lead">Name this connection and tell us which {primaryScopeLabel(provider).toLowerCase()} it targets.</p>
+      <p className="ccw-lead">Name this connection and tell us what it targets.</p>
       <label className="ccw-field">
         <span className="ccw-label">Connection name <span className="ccw-req" aria-hidden="true">*</span></span>
         <input className="ccw-input" value={displayName} maxLength={128}
@@ -403,13 +445,57 @@ function DraftStep({ provider, nameLocked, displayName, onName, accountId, onAcc
           onChange={(e) => onName(e.target.value)} aria-required="true" />
         {nameLocked && <span className="ccw-hint">The name was set when this connection was created and can't be changed here.</span>}
       </label>
+
+      {orgAvailable && (
+        <div className="ccw-field" role="radiogroup" aria-label="Enrollment mode">
+          <span className="ccw-label">Enrollment mode</span>
+          <div className="ccw-methods">
+            <button type="button" role="radio" aria-checked={!orgActive}
+              className={`ccw-method${!orgActive ? " is-sel" : ""}`}
+              onClick={() => onOrgMode(false)}>
+              <span className="ccw-method-h"><span className="ccw-method-t">Single {primaryScopeLabel(provider).replace(/ ID$/, "").toLowerCase()}</span></span>
+              <span className="ccw-method-d">Observe one {primaryScopeLabel(provider).toLowerCase().replace(/ id$/, "")}.</span>
+            </button>
+            <button type="button" role="radio" aria-checked={orgActive}
+              className={`ccw-method${orgActive ? " is-sel" : ""}`}
+              onClick={() => onOrgMode(true)}>
+              <span className="ccw-method-h"><span className="ccw-method-t">Organization (multi-account)</span></span>
+              <span className="ccw-method-d">Deploy trust once at the org level; member accounts are enumerated for selection and inherit this connection's workspace.</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {orgActive && orgOptions.length > 1 && (
+        <label className="ccw-field">
+          <span className="ccw-label">Enroll at</span>
+          <select className="ccw-input" value={selected?.type ?? ""} onChange={(e) => onOrgType(e.target.value)} aria-label="Org anchor kind">
+            {orgOptions.map((o) => <option key={o.type} value={o.type}>{o.label}</option>)}
+          </select>
+        </label>
+      )}
+
       <label className="ccw-field">
-        <span className="ccw-label">{primaryScopeLabel(provider)} <span className="ccw-req" aria-hidden="true">*</span></span>
+        <span className="ccw-label">{scopeLabel} <span className="ccw-req" aria-hidden="true">*</span></span>
         <input className="ccw-input ccw-mono" value={accountId} maxLength={200}
-          placeholder={primaryScopePlaceholder(provider)}
+          placeholder={scopePlaceholder}
           onChange={(e) => onAccount(e.target.value)} aria-required="true" />
-        <span className="ccw-hint">The primary collection scope. You can narrow to regions on the Scope step.</span>
+        <span className="ccw-hint">
+          {orgActive
+            ? (selected?.hint ?? "The org-level container Correlix anchors trust on.")
+            : "The primary collection scope. You can narrow to regions on the Scope step."}
+        </span>
       </label>
+
+      {orgActive && (
+        <label className="ccw-field">
+          <span className="ccw-label">Member role name (optional)</span>
+          <input className="ccw-input ccw-mono" value={orgRole} maxLength={64}
+            placeholder="correlix-observer"
+            onChange={(e) => onOrgRole(e.target.value)} />
+          <span className="ccw-hint">The read-only observer role the org-level deployment creates in every member account.</span>
+        </label>
+      )}
       <ReqLegend />
     </div>
   );
@@ -539,10 +625,11 @@ function TrustStep({ setup, connector }: { setup: CloudSetupBundle | null; conne
 }
 
 // ── Step 5: scope + requested permissions ─────────────────────────────────────
-function ScopeStep({ provider, accountId, onAccount, regions, onRegions, pack }: {
-  provider: CloudProvider; accountId: string; onAccount: (v: string) => void;
+function ScopeStep({ accountId, onAccount, regions, onRegions, pack, scopeLabel, scopePlaceholder, orgActive }: {
+  accountId: string; onAccount: (v: string) => void;
   regions: string; onRegions: (v: string) => void;
   pack: CloudCapabilityPack | undefined;
+  scopeLabel: string; scopePlaceholder: string; orgActive: boolean;
 }) {
   const perms = packPermissions(pack);
   return (
@@ -551,17 +638,22 @@ function ScopeStep({ provider, accountId, onAccount, regions, onRegions, pack }:
       <div className="ccw-panel">
         <div className="ccw-panel-h">Collection scope</div>
         <label className="ccw-field">
-          <span className="ccw-label">{primaryScopeLabel(provider)} <span className="ccw-req" aria-hidden="true">*</span></span>
+          <span className="ccw-label">{scopeLabel} <span className="ccw-req" aria-hidden="true">*</span></span>
           <input className="ccw-input ccw-mono" value={accountId} maxLength={200}
-            placeholder={primaryScopePlaceholder(provider)}
+            placeholder={scopePlaceholder}
             onChange={(e) => onAccount(e.target.value)} aria-required="true" />
+          {orgActive && (
+            <span className="ccw-hint">
+              Organization mode: member accounts are enumerated after validation (Discover Scopes) and inherit this connection's workspace — enumeration never widens collection by itself.
+            </span>
+          )}
         </label>
         <label className="ccw-field">
           <span className="ccw-label">Regions (optional)</span>
           <input className="ccw-input ccw-mono" value={regions}
             placeholder="us-east-1, eu-west-1"
             onChange={(e) => onRegions(e.target.value)} />
-          <span className="ccw-hint">Comma-separated. Leave blank to observe all regions in the {primaryScopeLabel(provider).toLowerCase()}.</span>
+          <span className="ccw-hint">Comma-separated. Leave blank to observe all regions in the {scopeLabel.toLowerCase()}.</span>
         </label>
         <ReqLegend />
       </div>

@@ -1447,7 +1447,11 @@ export interface CloudAppLive {
 // ---- Cloud Connectors (onboarding wizard, backlog Wave 1 #3) ----
 // Trust-metadata projections of the done 7-step connector API — NEVER a secret.
 // Mirrors src/backend/cloud_connectors_handlers.go + cloudconn/*.go.
-export type CloudProvider = "aws" | "azure" | "gcp";
+// CloudProvider is an OPEN token (Wave 5 #17 extensibility): the provider set
+// comes from the backend registry via /api/cloud/providers, and the frontend
+// resolves display metadata through pages/appobs/providers.tsx — so a newly
+// registered provider needs no type edit here. "aws" | "azure" | "gcp" today.
+export type CloudProvider = string;
 export type CloudAuthMethod =
   | "workload_identity_federation"
   | "cloud_role"
@@ -1481,9 +1485,22 @@ export interface CloudProviderMethod {
 }
 export interface CloudProviderCatalogEntry {
   provider: CloudProvider;
+  display_name?: string;
+  short_label?: string;
+  setup_doc_key?: string;
+  has_flow_logs?: boolean;
+  has_health_lane?: boolean;
   methods: CloudProviderMethod[];
   scope_types: string[];
+  org_scope_types?: string[];   // org-level anchor kinds (Wave 5 #17)
+  member_scope_type?: string;   // what org enumeration yields
   capability_packs: CloudCapabilityPack[];
+}
+// Org-level (multi-account) enrollment anchor — non-secret deployment metadata.
+export interface CloudOrgScope {
+  type: string;           // org | ou | mgmt_group | folder
+  ref: string;            // org / management-group / folder id
+  role_template?: string; // member-account role name (default correlix-observer)
 }
 export interface CloudConnHealth { state: string; detail?: string; checked?: string; }
 export interface CloudConnFinding {
@@ -1496,6 +1513,7 @@ export interface CloudConnIdentity {
   audience?: string; issuer?: string; federated_subject?: string; cert_thumbprint?: string;
   project_number?: string; workload_pool?: string; workload_provider?: string;
   service_account?: string; has_legacy_secret: boolean; legacy_key_hint?: string;
+  org?: CloudOrgScope | null;
 }
 export interface CloudConnectorView {
   id: string; provider: CloudProvider; display_name: string;
@@ -2617,6 +2635,9 @@ export const api = {
     }),
   cloudConnectorScopes: (id: string, scopes: CloudScope[]) =>
     request<CloudConnectorView>(ccnPath(id, "scopes"), { method: "POST", body: JSON.stringify({ scopes }) }),
+  // Org-level (multi-account) anchor — {type:""} clears back to single-account.
+  cloudConnectorOrg: (id: string, org: { type: string; ref?: string; role_template?: string }) =>
+    request<CloudConnectorView>(ccnPath(id, "org"), { method: "POST", body: JSON.stringify(org) }),
   cloudConnectorSetup: (id: string) => request<CloudSetupBundle>(ccnPath(id, "setup")),
   // The HONEST trust proof: config validation + a LIVE broker credential exchange.
   cloudConnectorValidate: (id: string) =>

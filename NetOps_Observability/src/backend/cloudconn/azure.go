@@ -19,6 +19,36 @@ type azureAdapter struct {
 	probe    *AzureARMProbeClient
 }
 
+// init registers Azure in the ONE provider registry (registry.go).
+func init() {
+	RegisterProvider(ProviderDescriptor{
+		ID:          ProviderAzure,
+		DisplayName: "Microsoft Azure",
+		ShortLabel:  "Azure",
+		AuthMethods: []AuthMethod{AuthMethodWorkloadFederation, AuthMethodCertificate, AuthMethodClientSecret},
+		ScopeTypes: []ScopeType{
+			ScopeOrg, ScopeMgmtGroup, ScopeSubscription, ScopeResourceGrp, ScopeVNet, ScopeRegion, ScopeExplicit,
+		},
+		OrgScopeTypes:   []ScopeType{ScopeOrg, ScopeMgmtGroup},
+		MemberScopeType: ScopeSubscription,
+		SetupDocKey:     "cloud-connector-azure",
+		HasFlowLogs:     false, // honest: no VNet flow-log capability in azure-observer-v1
+		HasHealthLane:   false, // honest: no Azure Service Health lane built yet
+		IdentityRef:     func(cfg IdentityConfig) string { return cfg.ClientID },
+		NewAdapter: func() CloudIdentityProvider {
+			return azureAdapter{exchange: NewAzureEntraExchanger(), probe: NewAzureARMProbeClient()}
+		},
+		NewAdapterWithExchanger: func(x TokenExchanger) CloudIdentityProvider {
+			return azureAdapter{exchange: x}
+		},
+		NewAdapterWithAssertions: func(src WorkloadAssertionSource) CloudIdentityProvider {
+			x := NewAzureEntraExchanger()
+			x.Assertions = src
+			return azureAdapter{exchange: x, probe: NewAzureARMProbeClient()}
+		},
+	})
+}
+
 func (azureAdapter) Provider() Provider { return ProviderAzure }
 
 func (a azureAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {
@@ -92,7 +122,43 @@ func (a azureAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack)
 			{Kind: "manual", Title: "Admin-consent OAuth (Connect with Microsoft)", Format: "text", Content: azureAdminConsent(pack)},
 		},
 	}
+	appendAzureOrgArtifacts(&bundle, cfg, pack)
 	return bundle, nil
+}
+
+// appendAzureOrgArtifacts adds the ORG-LEVEL (management-group) trust artifact
+// when the connector carries an org anchor: ONE role assignment at the
+// management-group scope, inherited by every member subscription (current and
+// future). Pure — no secrets, no network.
+func appendAzureOrgArtifacts(bundle *SetupBundle, cfg IdentityConfig, pack CapabilityPack) {
+	if cfg.Org == nil {
+		return
+	}
+	group := orPlaceholder(cfg.Org.Ref, "<MANAGEMENT_GROUP_ID>")
+	bundle.Summary += " ORG MODE: one role assignment at management group " + group + " covers every member subscription."
+	bundle.Steps = append(bundle.Steps,
+		"Organization (multi-account): assign the read-only roles ONCE at the management-group scope below — Azure RBAC inheritance grants them in every current and future member subscription.",
+		"Correlix enumerates the member subscriptions on Discover Scopes (a read-only management-group descendants listing); you still select which subscriptions to observe.",
+	)
+	bundle.Artifacts = append(bundle.Artifacts, SetupArtifact{
+		Kind: "azure_cli", Format: "text",
+		Title:   "Azure CLI — management-group role assignment (inherited by all subscriptions)",
+		Content: azureOrgCLI(group, pack),
+	})
+}
+
+func azureOrgCLI(group string, pack CapabilityPack) string {
+	var b strings.Builder
+	b.WriteString("# Org-level enrollment (" + pack.FullID() + ", read-only): one assignment at the\n")
+	b.WriteString("# management group inherits to every member subscription.\n")
+	b.WriteString("MG=" + group + "\n")
+	b.WriteString("SCOPE=/providers/Microsoft.Management/managementGroups/$MG\n")
+	b.WriteString("az role assignment create --assignee \"$APP_ID\" --role \"Reader\" --scope \"$SCOPE\"\n")
+	b.WriteString("az role assignment create --assignee \"$APP_ID\" --role \"Monitoring Reader\" --scope \"$SCOPE\"\n")
+	b.WriteString("# Enumeration (Discover Scopes) additionally reads the group's descendants:\n")
+	b.WriteString("az role assignment create --assignee \"$APP_ID\" --role \"Management Group Reader\" --scope \"$SCOPE\"\n")
+	b.WriteString("# All three roles are read-only. Never grant Owner/Contributor at any scope.\n")
+	return b.String()
 }
 
 func azureFederatedCredential(issuer, subject, audience string) string {
@@ -147,11 +213,21 @@ func (a azureAdapter) ExchangeCredential(ctx context.Context, req ExchangeReques
 
 // DiscoverScopes lists the subscriptions the exchanged token can reach — the
 // cheapest authenticated ARM read, doubling as the live identity proof.
+//
+// ORG connectors are ENUMERABLE (Wave 5 #17): rooted on a management-group
+// anchor, the probe lists the group's member subscriptions (descendants read,
+// Management Group Reader role). Discovery never widens collection by itself.
 func (a azureAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
 	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
 		return nil, ErrProviderExchangeDeferred
 	}
-	subs, err := a.probe.Subscriptions(ctx, req.Token.Value)
+	var subs []AzureSubscription
+	var err error
+	if org := orgAnchorFor(req, ProviderAzure); org != nil {
+		subs, err = a.probe.ManagementGroupSubscriptions(ctx, req.Token.Value, org.Ref)
+	} else {
+		subs, err = a.probe.Subscriptions(ctx, req.Token.Value)
+	}
 	if err != nil {
 		return nil, err
 	}

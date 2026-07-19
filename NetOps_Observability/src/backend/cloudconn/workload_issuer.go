@@ -113,23 +113,18 @@ func b64BigInt(n *big.Int) string {
 
 // AdapterForWithAssertions is AdapterFor with every exchanger's assertion
 // source replaced by src — the wiring the backend uses once the platform
-// issuer is configured, so all three federated paths mint instead of reading
-// a projected token. Probe clients stay live, identical to AdapterFor.
+// issuer is configured, so all federated paths mint instead of reading a
+// projected token. Probe clients stay live, identical to AdapterFor.
+// Resolution goes through the provider registry; a descriptor without the
+// assertion hook falls back to its plain live adapter (no assertion minting,
+// which that provider then simply does not use).
 func AdapterForWithAssertions(p Provider, src WorkloadAssertionSource) CloudIdentityProvider {
-	switch p {
-	case ProviderAWS:
-		x := NewAWSSTSExchanger()
-		x.Assertions = src
-		return awsAdapter{exchange: x, probe: NewAWSProbeClient()}
-	case ProviderAzure:
-		x := NewAzureEntraExchanger()
-		x.Assertions = src
-		return azureAdapter{exchange: x, probe: NewAzureARMProbeClient()}
-	case ProviderGCP:
-		x := NewGCPSTSExchanger()
-		x.Assertions = src
-		return gcpAdapter{exchange: x, probe: NewGCPProbeClient()}
-	default:
+	d, ok := providerRegistry[p]
+	if !ok {
 		return nil
 	}
+	if d.NewAdapterWithAssertions == nil {
+		return d.NewAdapter()
+	}
+	return d.NewAdapterWithAssertions(src)
 }

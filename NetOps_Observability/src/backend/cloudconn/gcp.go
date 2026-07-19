@@ -17,6 +17,41 @@ type gcpAdapter struct {
 	probe    *GCPProbeClient
 }
 
+// init registers GCP in the ONE provider registry (registry.go).
+func init() {
+	RegisterProvider(ProviderDescriptor{
+		ID:          ProviderGCP,
+		DisplayName: "Google Cloud",
+		ShortLabel:  "GCP",
+		AuthMethods: []AuthMethod{AuthMethodWorkloadFederation, AuthMethodStaticKey},
+		ScopeTypes: []ScopeType{
+			ScopeOrg, ScopeFolder, ScopeProject, ScopeVPC, ScopeRegion, ScopeExplicit,
+		},
+		OrgScopeTypes:   []ScopeType{ScopeOrg, ScopeFolder},
+		MemberScopeType: ScopeProject,
+		SetupDocKey:     "cloud-connector-gcp",
+		HasFlowLogs:     true,  // VPC flow-log lane (gcp-observer pack flow_logs capability)
+		HasHealthLane:   false, // honest: no GCP incident lane built yet
+		IdentityRef: func(cfg IdentityConfig) string {
+			if cfg.ServiceAccount != "" {
+				return cfg.ServiceAccount
+			}
+			return cfg.WorkloadProvider
+		},
+		NewAdapter: func() CloudIdentityProvider {
+			return gcpAdapter{exchange: NewGCPSTSExchanger(), probe: NewGCPProbeClient()}
+		},
+		NewAdapterWithExchanger: func(x TokenExchanger) CloudIdentityProvider {
+			return gcpAdapter{exchange: x}
+		},
+		NewAdapterWithAssertions: func(src WorkloadAssertionSource) CloudIdentityProvider {
+			x := NewGCPSTSExchanger()
+			x.Assertions = src
+			return gcpAdapter{exchange: x, probe: NewGCPProbeClient()}
+		},
+	})
+}
+
 func (gcpAdapter) Provider() Provider { return ProviderGCP }
 
 func (a gcpAdapter) ValidateConfiguration(cfg IdentityConfig) ValidationResult {
@@ -91,7 +126,50 @@ func (a gcpAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (
 			{Kind: "terraform", Title: "Terraform — workload identity pool + observer SA", Format: "hcl", Content: gcpTerraform(project, issuer, pack)},
 		},
 	}
+	appendGCPOrgArtifacts(&bundle, cfg, pack)
 	return bundle, nil
+}
+
+// appendGCPOrgArtifacts adds the ORG-LEVEL (folder/organization) trust
+// artifact when the connector carries an org anchor: the viewer roles bound
+// ONCE at the folder/org node, inherited by every member project. Pure — no
+// secrets, no network.
+func appendGCPOrgArtifacts(bundle *SetupBundle, cfg IdentityConfig, pack CapabilityPack) {
+	if cfg.Org == nil {
+		return
+	}
+	node := orPlaceholder(cfg.Org.Ref, "<FOLDER_OR_ORG_ID>")
+	kind := "folders"
+	if cfg.Org.Type == ScopeOrg {
+		kind = "organizations"
+	}
+	bundle.Summary += " ORG MODE: the folder/org-level bindings below cover every member project under " + kind + "/" + node + "."
+	bundle.Steps = append(bundle.Steps,
+		"Organization (multi-account): bind the observer SA's viewer roles ONCE at the "+kind+" node below — GCP IAM inheritance grants them in every current and future member project.",
+		"Correlix enumerates member projects on Discover Scopes (a read-only parent-filtered projects listing); you still select which projects to observe.",
+	)
+	bundle.Artifacts = append(bundle.Artifacts, SetupArtifact{
+		Kind: "gcloud", Format: "text",
+		Title:   "gcloud — " + strings.TrimSuffix(kind, "s") + "-level IAM bindings (inherited by all projects)",
+		Content: gcpOrgGcloud(kind, node, pack),
+	})
+}
+
+func gcpOrgGcloud(kind, node string, pack CapabilityPack) string {
+	var b strings.Builder
+	b.WriteString("# Org-level enrollment (" + pack.FullID() + ", read-only): bindings at the\n")
+	b.WriteString("# " + strings.TrimSuffix(kind, "s") + " node inherit to every member project.\n")
+	b.WriteString("NODE=" + node + "\n")
+	b.WriteString("SA=correlix-observer@$PROJECT.iam.gserviceaccount.com\n")
+	for _, role := range gcpRoles(pack) {
+		b.WriteString("gcloud resource-manager " + kind + " add-iam-policy-binding $NODE \\\n")
+		b.WriteString("  --member=\"serviceAccount:$SA\" --role=\"" + role + "\"\n")
+	}
+	b.WriteString("# Enumeration (Discover Scopes) additionally lists projects under the node:\n")
+	b.WriteString("gcloud resource-manager " + kind + " add-iam-policy-binding $NODE \\\n")
+	b.WriteString("  --member=\"serviceAccount:$SA\" --role=\"roles/browser\"\n")
+	b.WriteString("# viewer/browser roles are read-only. Never grant roles/owner or roles/editor.\n")
+	return b.String()
 }
 
 func gcpRoles(pack CapabilityPack) []string {
@@ -174,11 +252,25 @@ func (a gcpAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest)
 
 // DiscoverScopes lists the ACTIVE projects the exchanged token can reach —
 // also the live identity proof for the token.
+//
+// ORG connectors are ENUMERABLE (Wave 5 #17): rooted on a folder/organization
+// anchor, the probe lists the projects under that node (parent-filtered,
+// read-only). Discovery never widens collection by itself.
 func (a gcpAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
 	if a.probe == nil || strings.TrimSpace(req.Token.Value) == "" {
 		return nil, ErrProviderExchangeDeferred
 	}
-	projects, err := a.probe.Projects(ctx, req.Token.Value)
+	var projects []GCPProject
+	var err error
+	if org := orgAnchorFor(req, ProviderGCP); org != nil {
+		parentType := "folder"
+		if org.Type == ScopeOrg {
+			parentType = "organization"
+		}
+		projects, err = a.probe.ProjectsUnder(ctx, req.Token.Value, parentType, org.Ref)
+	} else {
+		projects, err = a.probe.Projects(ctx, req.Token.Value)
+	}
 	if err != nil {
 		return nil, err
 	}
