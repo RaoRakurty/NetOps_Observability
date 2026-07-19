@@ -14,7 +14,7 @@
 import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { NocHeader, Chip } from "../components/noc";
-import { Skeleton } from "../components/ui";
+import { Segmented, Skeleton } from "../components/ui";
 import DataTable from "../components/DataTable";
 import {
   ConfidenceBadge, HealthBadge, AppIdentityPill, MetricCard,
@@ -37,6 +37,8 @@ import type { ScopeIndex } from "./appobs/scope";
 import AppDetail from "./appobs/AppDetail";
 import Ingestion from "./appobs/Ingestion";
 import AssignServiceDrawer from "./appobs/AssignService";
+import ResourceMetricsPanel from "./appobs/ResourceMetricsPanel";
+import MonitorsSettings from "./appobs/MonitorsSettings";
 import { RequiredTagsCard, RcaWindowCard, AttributionPrecedenceCard, GovernanceAuditCard, SeamOwnersCard } from "./appobs/GovernanceSettings";
 import ServiceCatalog, { CriticalityBadge } from "./appobs/ServiceCatalog";
 import ServiceMap from "./appobs/ServiceMap";
@@ -811,13 +813,22 @@ function Resources({ ctl }: { ctl: CloudScopeControl }) {
 
 // Cloud Resource detail drawer — identity, attribution provenance, tags, and the
 // honest not-measured signals (health/traffic arrive with cloud telemetry).
+// The Metrics tab (Wave 5 #14) charts this resource's provider metric lane.
 function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void }) {
   const tags = r.tags ?? {};
   const tagKeys = Object.keys(tags);
+  const [view, setView] = useState<"details" | "metrics">("details");
   return (
     <EvidenceDrawer title={r.name}
       subtitle={<span className="ao-drawer-badges"><AppIdentityPill app={r.app} source={r.source} confidence={r.confidence} /><ConfidenceBadge level={r.confidence} /></span>}
       onClose={onClose}>
+      <Segmented value={view} onChange={(v) => setView(v as "details" | "metrics")}
+        ariaLabel={`${r.name} drawer view`}
+        options={[{ value: "details", label: "Details" }, { value: "metrics", label: "Metrics" }]} />
+      {view === "metrics" && (
+        <ResourceMetricsPanel targets={[{ id: r.id, name: r.name }]} subject={r.name} />
+      )}
+      {view === "details" && (<>
       <table className="ao-kv"><tbody>
         <tr><td>Type</td><td>{r.type}</td></tr>
         <tr><td>Resource id</td><td>
@@ -840,6 +851,7 @@ function ResourceDrawer({ r, onClose }: { r: CloudResource; onClose: () => void 
       {r.missingTags.length > 0 && (<>
         <div className="ao-ev-h">Recommended action</div>
         <div className="ao-next-v">Tag {r.name} with {r.missingTags.join(", ")} to lift attribution coverage.</div>
+      </>)}
       </>)}
     </EvidenceDrawer>
   );
@@ -1704,6 +1716,8 @@ function Settings() {
       <RequiredTagsCard />
       <RcaWindowCard />
       <SeamOwnersCard />
+      {/* Wave 5 #14: per-tenant cloud monitor authoring (threshold/anomaly). */}
+      <MonitorsSettings />
       {/* Read-only change log: every save above is audited and listed here. */}
       <GovernanceAuditCard />
     </div>

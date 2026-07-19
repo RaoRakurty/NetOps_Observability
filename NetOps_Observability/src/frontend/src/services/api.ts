@@ -2145,6 +2145,37 @@ export const api = {
   metricsQuery: (query: string) =>
     request<PromInstantResponse>(`/api/metrics/query?${new URLSearchParams({ query })}`),
 
+  // Cloud metric charts (Wave 5 #14): tenant-scoped, bounded series for the
+  // resource drawer / App Detail. The backend refuses ids outside the caller's
+  // inventory (404) and builds the PromQL itself — no raw query surface here.
+  cloudMetricSeries: (resources: string[], metric: string, windowMinutes: number) => {
+    const p = new URLSearchParams({ metric, window_minutes: String(windowMinutes) });
+    for (const r of resources) p.append("resource", r);
+    return request<CloudMetricSeriesResponse>(`/api/cloud/metrics/series?${p.toString()}`);
+  },
+
+  // Per-tenant SLOs / error budgets (Wave 5 #14 slice 2). GET returns defs +
+  // MEASURED status (absent data = "not measurable", never a fake 100%);
+  // PUT replaces the tenant's list (admin-gated, tenant stamped server-side).
+  cloudSlos: () => request<CloudSloResponse>("/api/cloud/slos"),
+  setCloudSlos: (slos: CloudSloDef[]) =>
+    request<CloudSloResponse>("/api/cloud/slos", { method: "PUT", body: JSON.stringify({ slos }) }),
+  resetCloudSlos: () =>
+    request<CloudSloResponse>("/api/cloud/slos", { method: "PUT", body: JSON.stringify({ reset: true }) }),
+
+  // Per-tenant cloud monitors (Wave 5 #14 slice 3): threshold/anomaly rules on
+  // the closed cloud-metric catalog, evaluated by the backend's bounded loop.
+  cloudMonitors: () =>
+    request<{ monitors: CloudMonitorRow[]; count: number; max_monitors: number }>("/api/cloud/monitors"),
+  createCloudMonitor: (m: CloudMonitorInput) =>
+    request<CloudMonitorRow>("/api/cloud/monitors", { method: "POST", body: JSON.stringify(m) }),
+  updateCloudMonitor: (id: string, m: CloudMonitorInput) =>
+    request<CloudMonitorRow>(`/api/cloud/monitors/${encodeURIComponent(id)}`, {
+      method: "PUT", body: JSON.stringify(m),
+    }),
+  deleteCloudMonitor: (id: string) =>
+    request<{ deleted: string }>(`/api/cloud/monitors/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   // Saved objects (searches / dashboards / reports) — Postgres-swappable
   // file-backed store on the API.
   listSaved: (type?: string) =>
@@ -3331,6 +3362,80 @@ export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };
   error?: string;
+};
+
+// Cloud metric charts (Wave 5 #14) — GET /api/cloud/metrics/series. Points are
+// [unix_seconds, value] (Prometheus convention; the chart multiplies by 1000).
+// An empty points array is an HONEST "nothing ingested", never a flatline.
+export type CloudMetricPoint = [number, number];
+export type CloudMetricSeriesEntry = {
+  resource_id: string;
+  resource_name?: string;
+  points: CloudMetricPoint[];
+};
+export type CloudMetricCatalogEntry = { name: string; label: string; unit: string };
+export type CloudMetricSeriesResponse = {
+  metric: string;
+  label: string;
+  unit: string; // percent | bytes | count
+  window_minutes: number;
+  step_seconds: number;
+  start: number;
+  end: number;
+  series: CloudMetricSeriesEntry[];
+  catalog: CloudMetricCatalogEntry[];
+};
+
+// Per-tenant SLOs (Wave 5 #14 slice 2) — /api/cloud/slos shapes
+// (src/backend/cloud_slo.go). status is computed at read time; measurable=false
+// carries a basis naming exactly what is missing.
+export type CloudSloDef = {
+  app_name: string;
+  target_pct: number;
+  window_days: number;
+  description?: string;
+};
+export type CloudSloStatus = {
+  measurable: boolean;
+  actual_pct?: number;
+  budget_pct: number;
+  budget_remaining_pct?: number;
+  burn_ratio?: number;
+  resources_total: number;
+  resources_reporting: number;
+  basis: string;
+};
+export type CloudSloRow = CloudSloDef & { status?: CloudSloStatus };
+export type CloudSloResponse = {
+  tenant_id: string;
+  slos: CloudSloRow[];
+  count: number;
+  max_slos: number;
+};
+
+// Per-tenant cloud monitors (Wave 5 #14 slice 3) — /api/cloud/monitors shapes
+// (src/backend/cloud_monitors.go). last_* fields are evaluator-written.
+export type CloudMonitorMode = "threshold" | "anomaly";
+export type CloudMonitorState =
+  | "never_evaluated" | "ok" | "firing" | "no_data" | "error" | "disabled";
+export type CloudMonitorInput = {
+  name: string;
+  metric: string;
+  resource_id?: string; // "" = every cloud resource in the tenant inventory
+  mode: CloudMonitorMode;
+  condition?: "above" | "below"; // threshold mode only
+  threshold?: number;            // threshold mode only
+  enabled: boolean;
+};
+export type CloudMonitorRow = CloudMonitorInput & {
+  id: string;
+  tenant_id: string;
+  created_at?: string;
+  updated_at?: string;
+  last_state: CloudMonitorState;
+  last_value?: number;
+  last_reason?: string;
+  last_eval_at?: string;
 };
 
 // Instant query — one sample per matching series.
