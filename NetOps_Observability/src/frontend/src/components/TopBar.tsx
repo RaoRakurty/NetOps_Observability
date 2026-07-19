@@ -3,8 +3,7 @@ import { AuthUser, Health } from "../services/api";
 import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
-import { BRAND } from "../brand";
-import eyeIris from "../assets/brand/eye-iris.webp";
+import CorrelixLogo from "./brand/CorrelixLogo";
 import Icon from "./Icon";
 import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
@@ -149,13 +148,11 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
   return (
     <header className="topbar">
-      {/* Brand wordmark (owner 2026-07-17): the login screen's C[iris]RRELIX,
-          compact, anchoring the product identity top-left on every page. */}
-      <div className="topbar-brand" aria-label={BRAND} role="img">
-        <span aria-hidden="true">C</span>
-        <span aria-hidden="true" className="topbar-brand-eye"><img src={eyeIris} alt="" /></span>
-        <span aria-hidden="true">RRELIX</span>
-      </div>
+      {/* Brand wordmark (owner 2026-07-19): CORRELIX with the O as the
+          signature eye — inline SVG mark (brand/CorrelixLogo), same Space
+          Grotesk face as the login wordmark, no raster assets. Anchors the
+          product identity top-left on every page. */}
+      <CorrelixLogo />
       <div className="topbar-right">
         <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
           <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>

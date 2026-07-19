@@ -4,7 +4,7 @@ import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
 import { BRAND } from "../brand";
-import eyeRail from "../assets/brand/eye-rail.webp";
+import { CorrelixEyeO } from "./brand/CorrelixLogo";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
@@ -183,10 +183,12 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         title={BRAND}
         aria-label={BRAND}
       >
-        {/* Owner-supplied eye mark (2026-07-12, brand program) at the
-            nav-glyph scale so the rail head stays quiet and slim. */}
+        {/* The Correlix eye-O (owner 2026-07-19): the wordmark's O standing
+            alone as the brand glyph — the rail is icon-only-narrow, so the
+            full CORRELIX lockup lives in the topbar; the button's aria-label
+            still names the brand. Inline SVG, no raster assets. */}
         <span className="rail-brand-mark" aria-hidden="true">
-          <img src={eyeRail} alt="" width={22} height={22} />
+          <CorrelixEyeO size={26} />
         </span>
         <span className="rail-brand-name">{BRAND}</span>
       </button>
