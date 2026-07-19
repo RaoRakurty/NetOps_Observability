@@ -1,8 +1,11 @@
 package main
 
 // rca_report_html.go — server-side HTML rendering of the canonical RCA report
-// (rca_report.go). Two layers (§17): page 1 = management & decision view,
-// page 2+ = NOC & technical view. Print-safe: A4, grayscale-legible (state is
+// (rca_report.go). Three layers (§17), flowing continuously with labeled
+// dividers (never forced page breaks — those left half-empty pages):
+// management & decision brief first, then the NOC/analyst view (reasoning →
+// causality → root cause → ownership → actions, the SRE-postmortem order),
+// then the evidence appendix. Print-safe: A4, grayscale-legible (state is
 // always carried by a WORD, colour only reinforces), no scripts, no external
 // resources (renders identically under the Gotenberg sidecar's Chromium and in
 // a browser tab). Colour rules (§18): green = healthy/recovered, amber =
@@ -22,6 +25,7 @@ var rcaReportTmpl = template.Must(template.New("rca-report").Funcs(template.Func
 	"humanState": func(v string) string { return strings.ReplaceAll(v, "_", " ") },
 	"upper":      strings.ToUpper,
 	"title":      rcaTitleCase,
+	"midSent":    rcaMidSentence,
 	"dur":        func(ms int64) string { return fmtDur(time.Duration(ms) * time.Millisecond) },
 	"f1": func(f *float64) string {
 		if f == nil {
@@ -131,7 +135,7 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 		}
 		return s
 	}
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %d 128" width="100%%" style="max-width:%dpx;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality">`, w, min(w, 760))
+	fmt.Fprintf(&b, `<svg viewBox="0 0 %d 132" width="100%%" style="max-width:%dpx;display:block;margin:8px auto 2px" role="img" aria-label="Network path causality">`, w, min(w, 760))
 	// edges first (under the nodes); an edge into/after a dark hop is dashed.
 	for i := 1; i < n; i++ {
 		x1, x2 := x0+step*(i-1), x0+step*i
@@ -175,8 +179,11 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 			if h.Fault == "suspected" || h.Fault == "last_response" {
 				bcolor, blabel = "#b45309", "✕ visibility boundary"
 			}
-			fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1.8" stroke-dasharray="4 3"/>`, bx, cy-11, bx, cy+11, bcolor)
-			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="8" font-weight="800" fill="%s">%s</text>`, bx, cy+24, bcolor, blabel)
+			// The tick drops into the empty bottom band and carries its label
+			// there — the label row (y=122) is otherwise unused, so it can never
+			// collide with the hop name/address/seam rows (y=82/94/106).
+			fmt.Fprintf(&b, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1.8" stroke-dasharray="4 3"/>`, bx, cy-11, bx, 112, bcolor)
+			fmt.Fprintf(&b, `<text x="%d" y="122" text-anchor="middle" font-size="8" font-weight="800" fill="%s">%s</text>`, bx, bcolor, blabel)
 		case faultedFailedNode:
 			// a genuinely non-responding hop the case blames — red is warranted.
 			fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" font-size="13" font-weight="800" fill="%s">✕</text>`, x, cy+5, stroke)
@@ -332,7 +339,7 @@ func renderRcaReportHTML(rep rcaReport) ([]byte, error) {
 const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 <title>{{.ReportType}} — {{.Title}}</title>
 <style>
-  @page { size: A4; margin: 16mm 12mm; }
+  @page { size: A4; margin: 14mm 12mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   /* This is a light paper document: pin the color-scheme + canvas so a dark
      browser/OS preference (or a dark-themed embedder) can never restyle it. */
@@ -342,9 +349,18 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   header.rpt { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #172033; padding-bottom:9px; margin-bottom:14px; }
   header.rpt .brand { font-weight:800; letter-spacing:.5px; font-size:13px; color:#334155; }
   header.rpt .doctype { font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#64748b; text-align:right; }
-  h1 { font-size:20px; margin:0 0 8px; }
-  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:#64748b; margin:0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; }
-  section { margin: 12px 0; break-inside: avoid; }
+  h1 { font-size:20px; margin:0 0 8px; break-after: avoid; page-break-after: avoid; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.7px; color:#64748b; margin:0 0 6px; border-bottom:1px solid #e2e8f0; padding-bottom:3px; break-after: avoid; page-break-after: avoid; }
+  /* a second heading inside one section (cascade → hypotheses) needs air above */
+  table + h2, div + h2, p + h2, ol + h2 { margin-top: 16px; }
+  /* Print hygiene: long sections are ALLOWED to break across pages — a blanket
+     break-inside:avoid on <section> pushed whole sections to the next page and
+     left half-empty pages behind. Instead the atomic units (heading+first rows
+     via break-after on h2, each row, each card) stay whole. */
+  section { margin: 14px 0; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  svg { break-inside: avoid; page-break-inside: avoid; }
   .badges { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
   .pill { font-size:10.5px; font-weight:800; padding:3px 9px; border-radius:7px; border:1px solid; white-space:nowrap; }
   .pill.green { color:#0f7a3d; background:#eafaf1; border-color:#bfeccf; }
@@ -354,19 +370,23 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   .pill.gray  { color:#475467; background:#eef1f6; border-color:#d8dee8; }
   .meta { font-size:11px; color:#64748b; margin-bottom:10px; }
   .meta b { color:#172033; font-family: ui-monospace, monospace; }
-  .mgmt { border:1px solid #e2e8f0; border-left:3px solid #2563eb; border-radius:6px; padding:10px 13px; background:#f8fafc; }
-  .decision { border:1px solid #fed7aa; border-left:3px solid #b45309; border-radius:6px; padding:9px 12px; background:#fff7ed; margin-bottom:6px; }
+  .mgmt { border:1px solid #e2e8f0; border-left:3px solid #2563eb; border-radius:6px; padding:10px 13px; background:#f8fafc; break-inside: avoid; page-break-inside: avoid; }
+  .decision { border:1px solid #fed7aa; border-left:3px solid #b45309; border-radius:6px; padding:9px 12px; background:#fff7ed; margin-bottom:6px; break-inside: avoid; page-break-inside: avoid; }
   .decision.green { border-color:#bfeccf; border-left-color:#0f7a3d; background:#f2fbf6; }
   .decision.red   { border-color:#ffd0cc; border-left-color:#b42318; background:#fff5f4; }
   table { width:100%; border-collapse:collapse; font-size:11.5px; table-layout:fixed; }
   th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:break-word; word-break:break-word; }
   th { color:#64748b; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:.5px; background:#f8fafc; }
+  /* kv grids may be tall (NOC quick read); they MUST be allowed to fragment
+     between rows — an atomic kv block taller than the space left on a page
+     pushes wholesale and leaves the page half-empty. */
   .kv { display:grid; grid-template-columns: 190px 1fr; gap:2px 12px; }
   .kv .k { color:#64748b; }
   .kv .v { color:#172033; font-weight:600; }
   .note { font-size:11px; color:#64748b; margin-top:4px; }
-  ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; }
-  .pagebreak { break-before: page; page-break-before: always; }
+  ol.actions { margin:4px 0; padding-left:20px; } ol.actions li { margin:5px 0; break-inside: avoid; page-break-inside: avoid; }
+  .divider { display:flex; align-items:center; gap:12px; margin:26px 0 4px; color:#94a3b8; font-size:9.5px; font-weight:800; letter-spacing:1.4px; text-transform:uppercase; break-after: avoid; page-break-after: avoid; }
+  .divider::before, .divider::after { content:""; flex:1; border-top:1px solid #d5dce6; }
   .why b { font-size:11.5px; }
   footer.doc-end { margin-top:18px; border-top:1px solid #e2e8f0; padding-top:7px; font-size:10px; color:#94a3b8; display:flex; justify-content:space-between; }
 </style></head><body><div class="doc">
@@ -420,7 +440,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   </div>
   {{if .Topology.Available}}
   {{pathGraph .Topology}}
-  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; detail on page 2.</div>
+  <div class="note">Network causality path (measured) — a red boundary or hop marks where the path broke; hop-by-hop detail in the evidence appendix.</div>
   {{else}}
   <div class="note">{{.Topology.Reason}}</div>
   {{end}}
@@ -443,7 +463,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
     {{if .Times.MonitoringUntil}}<span class="k">Monitoring until</span><span class="v">{{.Times.MonitoringUntil}}</span>{{end}}
     {{if .Scope.Services}}<span class="k">Service / application</span><span class="v">{{range $i, $s := .Scope.Services}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
     {{if .Scope.Regions}}<span class="k">Region</span><span class="v">{{range $i, $s := .Scope.Regions}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else if .RootCause.PossibleCause}}Not confirmed — possibly because of {{.RootCause.PossibleCause}}{{else}}Not identified — no cause hypothesis has supporting evidence yet{{end}}</span>
+    <span class="k">Root cause</span><span class="v">{{if .RootCause.Identified}}{{.RootCause.Object}}{{else if .RootCause.PossibleCause}}Not confirmed — possibly because of {{midSent .RootCause.PossibleCause}}{{else}}Not identified — no cause hypothesis has supporting evidence yet{{end}}</span>
   </div>
 </section>
 
@@ -486,8 +506,11 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
 </section>
 {{end}}
 
-<!-- ============================ PAGE 2 — NOC & TECHNICAL ============================ -->
-<div class="pagebreak"></div>
+<!-- ============================ TECHNICAL LAYER — NOC & ANALYST ============================ -->
+<!-- A labeled divider, NOT a forced page break: a hard break after a short
+     management layer left a half-empty page mid-document (the owner's "giant
+     gaps"). The layer boundary stays visible; the paper stays dense. -->
+<div class="divider">Technical detail — NOC &amp; analyst view</div>
 <section>
   <h2>NOC quick read</h2>
   <div class="kv">
@@ -502,129 +525,6 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{range .Summary.WhyNotConfirmed}}<p><b style="color:#475467">Why not confirmed:</b> {{.}}</p>{{end}}
   {{if .Summary.RequiredConfirm}}<p><b style="color:#1d4ed8">Required confirmation:</b> {{.Summary.RequiredConfirm}}</p>{{end}}
 </section>
-
-<section>
-  <h2>Evidence summary</h2>
-  <!-- Owner directive 2026-07-18 (rca-evidence-summary.md): symptoms ·
-       independent sources · duration are THE evidence headline; repetition
-       renders as per-symptom time density, never as a count posing as
-       evidence; the raw observation total is the muted last line. -->
-  <div style="display:flex;gap:26px;align-items:baseline;margin:2px 0 8px">
-    <span style="font-size:17px;font-weight:800">{{.Evidence.SymptomCount}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">distinct symptom{{if ne .Evidence.SymptomCount 1}}s{{end}}</span></span>
-    <span style="font-size:17px;font-weight:800">{{.Evidence.IndependentSources}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">independent source{{if ne .Evidence.IndependentSources 1}}s{{end}}</span></span>
-    {{if .Times.DurationMS}}<span style="font-size:17px;font-weight:800">{{dur .Times.DurationMS}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">{{if eq .Times.DurationBasis "elapsed_still_active"}}ongoing{{else}}duration{{end}}</span></span>{{end}}
-  </div>
-  <div class="note" style="color:#172033;font-weight:600;margin-bottom:6px">{{.Evidence.VerdictReason}}</div>
-  {{if .Evidence.Symptoms}}
-  <table><thead><tr><th style="width:24%">Symptom</th><th style="width:20%">Seen by</th><th style="width:12%">First</th><th style="width:13%">Latest</th><th>Recurrence over the window</th></tr></thead><tbody>
-  {{range .Evidence.Symptoms}}<tr>
-    <td><b>{{.Label}}</b></td>
-    <td>{{.Source}}</td>
-    <td style="font-family:ui-monospace,monospace">{{.First}}</td>
-    <td>{{.Last}}</td>
-    <td>{{densityBar .Buckets}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  {{end}}
-  <div class="kv" style="margin-top:6px">
-    {{with .Signals.Probe}}
-    <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
-    {{if .AffectedVantages}}<span class="k">Reporting sources</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    {{with .LastTransaction}}
-    <span class="k">Last failed check</span><span class="v">{{if .Method}}{{.Method}} {{end}}{{.Target}}{{if .StatusCode}} → HTTP {{.StatusCode}}{{end}}{{if .FailClass}} ({{.FailClass}}){{end}} · {{.At}}</span>
-    <span class="k">Phase timings</span><span class="v">{{if .DNSMs}}DNS {{f1 .DNSMs}} ms · {{end}}{{if .TCPMs}}TCP {{f1 .TCPMs}} ms · {{end}}{{if .TLSMs}}TLS {{f1 .TLSMs}} ms · {{end}}{{if .TTFBMs}}TTFB {{f1 .TTFBMs}} ms · {{end}}{{if .TotalMs}}total {{f1 .TotalMs}} ms{{end}}</span>
-    {{end}}
-    {{if .FailureStages}}<span class="k">Failure stages / symptoms</span><span class="v">{{range $i, $s := .FailureStages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
-    {{if .PeakLossPct}}<span class="k">Packet loss (peak)</span><span class="v">{{f1 .PeakLossPct}}%</span>{{end}}
-    {{if .PeakRttMs}}<span class="k">Latency</span><span class="v">{{if .BaselineRttMs}}baseline {{f1 .BaselineRttMs}} ms · {{end}}peak {{f1 .PeakRttMs}} ms</span>{{end}}
-    {{if .FirstFailed}}<span class="k">First failed sample</span><span class="v">{{.FirstFailed}}</span>{{end}}
-    {{if .LastFailed}}<span class="k">Last failed sample</span><span class="v">{{.LastFailed}}</span>{{end}}
-    {{if .IndependenceNote}}<span class="k">Vantage independence</span><span class="v">{{.IndependenceNote}}</span>{{end}}
-    {{end}}
-  </div>
-  <div class="note">Only measured values are shown; an absent metric was not observed — it is not zero.</div>
-  <div class="note" style="color:#94a3b8">{{.Evidence.Observations}} raw observations collected{{if .Evidence.LastObservation}} · last {{.Evidence.LastObservation}}{{end}} · repetition shows persistence, not additional evidence</div>
-</section>
-
-<section>
-  <h2>Evidence accounting</h2>
-  <div class="kv">
-    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many observations from one source count once</span></span>
-    <span class="k">Logical vantages</span><span class="v">{{if .Accounting.LogicalVantages}}{{commaJoin .Accounting.LogicalVantages}}{{else}}none classified{{end}}</span>
-    <span class="k">Control-plane sources</span><span class="v">{{if .Accounting.ControlPlaneSources}}{{commaJoin .Accounting.ControlPlaneSources}}{{else}}none{{end}}</span>
-    {{if .Accounting.Collectors}}<span class="k">Collectors (not vantages)</span><span class="v">{{commaJoin .Accounting.Collectors}}</span>{{end}}
-    {{if .Accounting.UnknownSources}}<span class="k">Unclassified sources</span><span class="v">{{commaJoin .Accounting.UnknownSources}} <span style="font-weight:400;color:#64748b">— kind not established; never counted as a vantage</span></span>{{end}}
-    <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
-    <span class="k">Configured tests</span><span class="v">{{.Accounting.ConfiguredTests}}</span>
-    <span class="k">Test executions</span><span class="v">{{.Accounting.TestExecutions}}{{if .Accounting.FailedExecutionsBrief}} · {{.Accounting.FailedExecutionsBrief}} failed{{end}}</span>
-  </div>
-  <div class="note">Reconciliation (operator detail) — each layer is a subset of the one above; the verdict rests on the bottom rows.</div>
-  <table><thead><tr><th style="width:58%">Layer</th><th>Count</th></tr></thead><tbody>
-  {{range .Accounting.Ladder}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{end}}
-  </tbody></table>
-</section>
-
-<section>
-  <h2>Evidence coverage</h2>
-  <table><thead><tr><th style="width:19%">Evidence class</th><th>Quality</th><th>State</th><th>Obs.</th><th>Coverage &amp; gaps</th><th>Contributes</th></tr></thead><tbody>
-  {{range .Coverage}}<tr>
-    <td><b>{{.Label}}</b>{{with .Assessment}}<div class="note">{{covStrategy .}}</div>{{end}}</td>
-    <td>{{covQuality .Assessment}}{{with .Assessment}}{{if .RatioKnown}}<div class="note">{{covPct .}} covered</div>{{end}}{{end}}</td>
-    <td><span class="pill {{stateTone "lane" .State}}">{{title .State}}</span></td>
-    <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}{{if .Anomalous}}<div class="note">{{.Anomalous}} anomalous</div>{{end}}</td>
-    <td>{{.Finding}}
-      {{if .From}}<div class="note">observed {{.From}} → {{.To}}</div>{{end}}
-      {{with .Assessment}}{{if .LeadingGap}}<div class="note" style="color:#b45309">leading gap: {{.LeadingGap}}</div>{{end}}{{if .TrailingGap}}<div class="note" style="color:#b45309">trailing gap: {{.TrailingGap}}</div>{{end}}{{if .InternalGapTotal}}<div class="note" style="color:#b45309">internal gaps: {{.InternalGapTotal}}</div>{{end}}{{end}}
-      {{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}</td>
-    <td>{{with .Assessment}}<div class="note">confidence: {{if .ConfidenceEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
-      <div class="note">impact: {{if .ImpactEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
-      <div class="note">scope: {{triLabel .Scope}}</div>{{end}}
-      {{if .CountsTowardConfidence}}<div class="note">counts toward confidence</div>{{end}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  <div class="note">“No data” is a coverage gap, not evidence of health. A lane reads full/Normal only when its covered intervals span the incident at the expected cadence; a point-in-time control-plane event is never scored as continuous coverage. Missing telemetry never supports or contradicts a hypothesis.</div>
-</section>
-
-<section>
-  <h2>Network path &amp; causality (measured)</h2>
-  {{if .Topology.Available}}
-  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.RelationToIncident}} · temporal role: <b>{{humanState .Topology.RelationToIncident}}</b>{{end}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
-  {{if .Topology.TemporalNote}}<div class="note" style="color:#b45309;font-weight:600">{{.Topology.TemporalNote}}</div>{{end}}
-  {{pathGraph .Topology}}
-  <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
-  {{range .Topology.Hops}}<tr>
-    <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
-    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if respondingMark .}} <span class="pill gray">◍ last responding hop — boundary after</span>{{else if eq .Fault "broken"}} <span class="pill red">✕ failed hop</span>{{else if eq .Fault "suspected"}} <span class="pill amber">✕ suspected failed hop</span>{{end}}</td>
-    <td style="font-family:ui-monospace,monospace">{{.Address}}</td>
-    <td>{{title .Kind}}</td>
-    <td><span class="pill {{if eq .State "down"}}red{{else if eq .State "degraded"}}amber{{else if eq .State "unknown"}}gray{{else}}green{{end}}">{{title .State}}</span></td>
-    <td>{{if .SeamID}}provider boundary ({{.Boundary}}){{else}}{{.Boundary}}{{end}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  {{if .Topology.DropPoint}}<div class="note" style="font-weight:600">{{.Topology.DropPoint}}</div>{{end}}
-  <div class="note">Only the measured path is drawn. An unknown hop is preserved as unknown — never bridged. A probe source→target relationship does not by itself imply physical causality.</div>
-  {{else}}
-  <div class="note">{{.Topology.Reason}}</div>
-  {{end}}
-</section>
-
-{{if .CloudChanges}}
-<section>
-  <h2>Cloud change events</h2>
-  <table><thead><tr><th>When</th><th>Provider / source</th><th>Resource</th><th>Actor</th><th>Δ vs onset</th><th>Relationship</th><th>In case</th></tr></thead><tbody>
-  {{range .CloudChanges}}<tr>
-    <td>{{.At}}</td>
-    <td>{{if .Provider}}{{.Provider}}{{end}}{{if .EventSource}} · {{.EventSource}}{{end}}</td>
-    <td style="font-family:ui-monospace,monospace">{{.Resource}}{{if .Region}}<div class="note">{{.Region}}{{if .Account}} · {{.Account}}{{end}}</div>{{end}}</td>
-    <td>{{if .Actor}}{{.Actor}}{{else}}—{{end}}</td>
-    <td>{{deltaHuman .DeltaSeconds}}</td>
-    <td>{{relLabel .Relationship}}</td>
-    <td>{{if .Attached}}yes{{else}}no{{end}}</td>
-  </tr>{{end}}
-  </tbody></table>
-  <div class="note">A change is never labelled the root cause from timing alone (correlated is not caused).</div>
-</section>
-{{end}}
 
 <section>
   {{if .Cascade}}
@@ -642,7 +542,7 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{end}}
   <h2>{{if .SingleHypothesis}}Current hypothesis{{else}}Hypothesis ranking{{end}}</h2>
   {{if .Hypotheses}}
-  <table><thead><tr><th>#</th><th>Hypothesis</th><th>Confidence</th><th>Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
+  <table><thead><tr><th style="width:4%">#</th><th style="width:32%">Hypothesis</th><th style="width:13%">Confidence</th><th style="width:27%">Supporting</th><th>Missing / to confirm</th></tr></thead><tbody>
   {{range .Hypotheses}}<tr{{if .Contradicted}} style="opacity:.62"{{end}}>
     <td style="font-family:ui-monospace,monospace;font-weight:800">{{.Rank}}</td>
     <td><b>{{.Title}}</b> <span class="pill {{if eq .Type "symptom classification"}}gray{{else}}blue{{end}}" style="font-size:9px">{{.Type}}</span>{{if .Contradicted}} <span class="pill gray">ruled out</span>{{end}}
@@ -716,5 +616,131 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   {{end}}
   </ol>
 </section>
+
+<!-- ============================ EVIDENCE APPENDIX ============================ -->
+<div class="divider">Evidence appendix — measurements &amp; coverage</div>
+
+<section>
+  <h2>Evidence summary</h2>
+  <!-- Owner directive 2026-07-18 (rca-evidence-summary.md): symptoms ·
+       independent sources · duration are THE evidence headline; repetition
+       renders as per-symptom time density, never as a count posing as
+       evidence; the raw observation total is the muted last line. -->
+  <div style="display:flex;gap:26px;align-items:baseline;margin:2px 0 8px">
+    <span style="font-size:17px;font-weight:800">{{.Evidence.SymptomCount}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">distinct symptom{{if ne .Evidence.SymptomCount 1}}s{{end}}</span></span>
+    <span style="font-size:17px;font-weight:800">{{.Evidence.IndependentSources}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">independent source{{if ne .Evidence.IndependentSources 1}}s{{end}}</span></span>
+    {{if .Times.DurationMS}}<span style="font-size:17px;font-weight:800">{{dur .Times.DurationMS}} <span style="font-size:10.5px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px">{{if eq .Times.DurationBasis "elapsed_still_active"}}ongoing{{else}}duration{{end}}</span></span>{{end}}
+  </div>
+  <div class="note" style="color:#172033;font-weight:600;margin-bottom:6px">{{.Evidence.VerdictReason}}</div>
+  {{if .Evidence.Symptoms}}
+  <table><thead><tr><th style="width:24%">Symptom</th><th style="width:20%">Seen by</th><th style="width:12%">First</th><th style="width:13%">Latest</th><th>Recurrence over the window</th></tr></thead><tbody>
+  {{range .Evidence.Symptoms}}<tr>
+    <td><b>{{.Label}}</b></td>
+    <td>{{.Source}}</td>
+    <td style="font-family:ui-monospace,monospace">{{.First}}</td>
+    <td>{{.Last}}</td>
+    <td>{{densityBar .Buckets}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  {{end}}
+  <div class="kv" style="margin-top:6px">
+    {{with .Signals.Probe}}
+    <span class="k">Check observations</span><span class="v">{{.Failed}} failed of {{.Observations}}</span>
+    {{if .AffectedVantages}}<span class="k">Reporting sources</span><span class="v">{{range $i, $s := .AffectedVantages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
+    {{with .LastTransaction}}
+    <span class="k">Last failed check</span><span class="v">{{if .Method}}{{.Method}} {{end}}{{.Target}}{{if .StatusCode}} → HTTP {{.StatusCode}}{{end}}{{if .FailClass}} ({{.FailClass}}){{end}} · {{.At}}</span>
+    <span class="k">Phase timings</span><span class="v">{{if .DNSMs}}DNS {{f1 .DNSMs}} ms · {{end}}{{if .TCPMs}}TCP {{f1 .TCPMs}} ms · {{end}}{{if .TLSMs}}TLS {{f1 .TLSMs}} ms · {{end}}{{if .TTFBMs}}TTFB {{f1 .TTFBMs}} ms · {{end}}{{if .TotalMs}}total {{f1 .TotalMs}} ms{{end}}</span>
+    {{end}}
+    {{if .FailureStages}}<span class="k">Failure stages / symptoms</span><span class="v">{{range $i, $s := .FailureStages}}{{if $i}}, {{end}}{{$s}}{{end}}</span>{{end}}
+    {{if .PeakLossPct}}<span class="k">Packet loss (peak)</span><span class="v">{{f1 .PeakLossPct}}%</span>{{end}}
+    {{if .PeakRttMs}}<span class="k">Latency</span><span class="v">{{if .BaselineRttMs}}baseline {{f1 .BaselineRttMs}} ms · {{end}}peak {{f1 .PeakRttMs}} ms</span>{{end}}
+    {{if .FirstFailed}}<span class="k">First failed sample</span><span class="v">{{.FirstFailed}}</span>{{end}}
+    {{if .LastFailed}}<span class="k">Last failed sample</span><span class="v">{{.LastFailed}}</span>{{end}}
+    {{if .IndependenceNote}}<span class="k">Vantage independence</span><span class="v">{{.IndependenceNote}}</span>{{end}}
+    {{end}}
+  </div>
+  <div class="note">Only measured values are shown; an absent metric was not observed — it is not zero.</div>
+  <div class="note" style="color:#94a3b8">{{.Evidence.Observations}} raw observations collected{{if .Evidence.LastObservation}} · last {{.Evidence.LastObservation}}{{end}} · repetition shows persistence, not additional evidence</div>
+</section>
+
+<section>
+  <h2>Evidence accounting</h2>
+  <div class="kv">
+    <span class="k">Evidence groups</span><span class="v">{{.Accounting.EvidenceGroups}} <span style="font-weight:400;color:#64748b">— distinct measurement source × entity; many observations from one source count once</span></span>
+    <span class="k">Logical vantages</span><span class="v">{{if .Accounting.LogicalVantages}}{{commaJoin .Accounting.LogicalVantages}}{{else}}none classified{{end}}</span>
+    <span class="k">Control-plane sources</span><span class="v">{{if .Accounting.ControlPlaneSources}}{{commaJoin .Accounting.ControlPlaneSources}}{{else}}none{{end}}</span>
+    {{if .Accounting.Collectors}}<span class="k">Collectors (not vantages)</span><span class="v">{{commaJoin .Accounting.Collectors}}</span>{{end}}
+    {{if .Accounting.UnknownSources}}<span class="k">Unclassified sources</span><span class="v">{{commaJoin .Accounting.UnknownSources}} <span style="font-weight:400;color:#64748b">— kind not established; never counted as a vantage</span></span>{{end}}
+    <span class="k">Independent confirming sources</span><span class="v">{{.Accounting.IndependentConfirmingSources}}{{if .Accounting.IndependentSourceIDs}} ({{commaJoin .Accounting.IndependentSourceIDs}}){{end}}</span>
+    <span class="k">Configured tests</span><span class="v">{{.Accounting.ConfiguredTests}}</span>
+    <span class="k">Test executions</span><span class="v">{{.Accounting.TestExecutions}}{{if .Accounting.FailedExecutionsBrief}} · {{.Accounting.FailedExecutionsBrief}} failed{{end}}</span>
+  </div>
+  <div class="note">Reconciliation (operator detail) — each layer is a subset of the one above; the verdict rests on the bottom rows.</div>
+  <table><thead><tr><th style="width:58%">Layer</th><th>Count</th></tr></thead><tbody>
+  {{range .Accounting.Ladder}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{end}}
+  </tbody></table>
+</section>
+
+<section>
+  <h2>Evidence coverage</h2>
+  <table><thead><tr><th style="width:15%">Evidence class</th><th style="width:12%">Quality</th><th style="width:15%">State</th><th style="width:10%">Obs.</th><th>Coverage &amp; gaps</th><th style="width:15%">Contributes</th></tr></thead><tbody>
+  {{range .Coverage}}<tr>
+    <td><b>{{.Label}}</b>{{with .Assessment}}<div class="note">{{covStrategy .}}</div>{{end}}</td>
+    <td>{{covQuality .Assessment}}{{with .Assessment}}{{if .RatioKnown}}<div class="note">{{covPct .}} covered</div>{{end}}{{end}}</td>
+    <td><span class="pill {{stateTone "lane" .State}}" style="font-size:10px">{{title .State}}</span></td>
+    <td>{{if .Observations}}{{.Observations}}{{else}}—{{end}}{{if .Anomalous}}<div class="note">{{.Anomalous}} anomalous</div>{{end}}</td>
+    <td>{{.Finding}}
+      {{if .From}}<div class="note">observed {{.From}} → {{.To}}</div>{{end}}
+      {{with .Assessment}}{{if .LeadingGap}}<div class="note" style="color:#b45309">leading gap: {{.LeadingGap}}</div>{{end}}{{if .TrailingGap}}<div class="note" style="color:#b45309">trailing gap: {{.TrailingGap}}</div>{{end}}{{if .InternalGapTotal}}<div class="note" style="color:#b45309">internal gaps: {{.InternalGapTotal}}</div>{{end}}{{end}}
+      {{if not .Assessment}}{{if .MissingInterval}}<div class="note" style="color:#b45309">missing: {{.MissingInterval}}</div>{{end}}{{end}}</td>
+    <td>{{with .Assessment}}<div class="note">confidence: {{if .ConfidenceEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
+      <div class="note">impact: {{if .ImpactEligible}}<b style="color:#0f7a3d">yes</b>{{else}}<b style="color:#b45309">no</b>{{end}}</div>
+      <div class="note">scope: {{triLabel .Scope}}</div>{{end}}
+      {{if .CountsTowardConfidence}}<div class="note">counts toward confidence</div>{{end}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  <div class="note">“No data” is a coverage gap, not evidence of health. A lane reads full/Normal only when its covered intervals span the incident at the expected cadence; a point-in-time control-plane event is never scored as continuous coverage. Missing telemetry never supports or contradicts a hypothesis.</div>
+</section>
+
+<section>
+  <h2>Network path &amp; causality (measured)</h2>
+  {{if .Topology.Available}}
+  <div class="note" style="margin-bottom:4px">Vantage {{.Topology.VantageID}} · observed {{.Topology.ObservedAt}}{{if .Topology.RelationToIncident}} · temporal role: <b>{{humanState .Topology.RelationToIncident}}</b>{{end}}{{if .Topology.Stale}} · <b style="color:#b45309">STALE — measured before/after the incident window; treat as context, not live state</b>{{end}}</div>
+  {{if .Topology.TemporalNote}}<div class="note" style="color:#b45309;font-weight:600">{{.Topology.TemporalNote}}</div>{{end}}
+  {{pathGraph .Topology}}
+  <table><thead><tr><th style="width:32px">#</th><th>Hop</th><th>Address</th><th>Zone</th><th>State</th><th>Boundary</th></tr></thead><tbody>
+  {{range .Topology.Hops}}<tr>
+    <td style="font-family:ui-monospace,monospace">{{.Index}}</td>
+    <td><b>{{if .Label}}{{.Label}}{{else}}(no response — unknown hop){{end}}</b>{{if .Provider}} <span class="pill blue" style="font-size:9px">{{upper .Provider}}</span>{{end}}{{if respondingMark .}} <span class="pill gray">◍ last responding hop — boundary after</span>{{else if eq .Fault "broken"}} <span class="pill red">✕ failed hop</span>{{else if eq .Fault "suspected"}} <span class="pill amber">✕ suspected failed hop</span>{{end}}</td>
+    <td style="font-family:ui-monospace,monospace">{{.Address}}</td>
+    <td>{{title .Kind}}</td>
+    <td><span class="pill {{if eq .State "down"}}red{{else if eq .State "degraded"}}amber{{else if eq .State "unknown"}}gray{{else}}green{{end}}">{{title .State}}</span></td>
+    <td>{{if .SeamID}}provider boundary ({{.Boundary}}){{else}}{{.Boundary}}{{end}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  {{if .Topology.DropPoint}}<div class="note" style="font-weight:600">{{.Topology.DropPoint}}</div>{{end}}
+  <div class="note">Only the measured path is drawn. An unknown hop is preserved as unknown — never bridged. A probe source→target relationship does not by itself imply physical causality.</div>
+  {{else}}
+  <div class="note">{{.Topology.Reason}}</div>
+  {{end}}
+</section>
+
+{{if .CloudChanges}}
+<section>
+  <h2>Cloud change events</h2>
+  <table><thead><tr><th style="width:14%">When</th><th style="width:18%">Provider / source</th><th style="width:18%">Resource</th><th style="width:13%">Actor</th><th style="width:12%">Δ vs onset</th><th>Relationship</th><th style="width:8%">In case</th></tr></thead><tbody>
+  {{range .CloudChanges}}<tr>
+    <td>{{.At}}</td>
+    <td>{{if .Provider}}{{.Provider}}{{end}}{{if .EventSource}} · {{.EventSource}}{{end}}</td>
+    <td style="font-family:ui-monospace,monospace">{{.Resource}}{{if .Region}}<div class="note">{{.Region}}{{if .Account}} · {{.Account}}{{end}}</div>{{end}}</td>
+    <td>{{if .Actor}}{{.Actor}}{{else}}—{{end}}</td>
+    <td>{{deltaHuman .DeltaSeconds}}</td>
+    <td>{{relLabel .Relationship}}</td>
+    <td>{{if .Attached}}yes{{else}}no{{end}}</td>
+  </tr>{{end}}
+  </tbody></table>
+  <div class="note">A change is never labelled the root cause from timing alone (correlated is not caused).</div>
+</section>
+{{end}}
 
 </div></body></html>`

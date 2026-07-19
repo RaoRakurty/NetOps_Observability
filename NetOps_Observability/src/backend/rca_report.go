@@ -1539,7 +1539,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		}
 		root.Statement = fmt.Sprintf(
 			"Root cause has not been identified — possibly because of %s (unconfirmed best hypothesis).",
-			strings.TrimRight(root.PossibleCause, "."))
+			rcaMidSentence(strings.TrimRight(root.PossibleCause, ".")))
 	}
 	switch {
 	case analysis == "confirmed" && loc.Localized:
