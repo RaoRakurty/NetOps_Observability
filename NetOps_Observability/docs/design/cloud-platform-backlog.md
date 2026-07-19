@@ -132,10 +132,24 @@ inventory read (rev #14). Log-family lanes live on all 3 clouds (#105).
     cloud monitor authoring (thresholds/anomaly toggles).
 15. **Workload breadth** (missing #20/#21). K8s/container layer (EKS/AKS/GKE inventory
     + health); serverless/PaaS classes (Lambda/Functions/Cloud Run, RDS/SQL/Cloud SQL) —
-    inventory is VM-only today.
+    inventory is VM-only today. — **SHIPPED 2026-07-19**: workload collector triad
+    (`aws_workloads`/`azure_workloads`/`gcp_workloads` — EKS/AKS/GKE clusters+pools,
+    Lambda/App Service+Functions/Cloud Run, RDS/Azure SQL/Cloud SQL; describe-level,
+    component_row shape, per-family isolation, permission denials → `workloads`
+    source-status); backend `FamilyK8s/Serverless/Database` + `?family=` class filter
+    on `/api/cloud/resources` (both store backends, boundary-validated); Resources UI
+    workload-class filter with honest per-class empty states naming the needed reads.
 16. **Security & provider-event lanes** (missing #22/#30/#31). LB/WAF/DNS security-findings
     view over the built rollup lanes; provider incident/maintenance lane (AWS Health free);
-    hybrid-seam gateway telemetry rendered (built, awaiting infra).
+    hybrid-seam gateway telemetry rendered (built, awaiting infra). — **SHIPPED
+    2026-07-19**: tenant-scoped `/api/cloud/security` (cloud_waf_log / cloud_lb_log +
+    lb_5xx / cloud_dns_log, lane counts) + appobs **Security** tab with per-lane
+    coverage chips (flowing vs not configured vs denied); AWS Health poller lane →
+    normalized `provider_event` on netops.cloud (checkpointed on lastUpdatedTime;
+    Basic support plan → explicit "requires Business/Enterprise support plan" status)
+    → `/api/cloud/provider-events` (latest observation per event) + Overview
+    "Provider incidents" panel; `/api/cloud/seam-telemetry` (latest state per seam,
+    default-closed) + Overview seam health strip with "awaiting telemetry" honesty.
 17. **Extensibility & org onboarding** (rev #23 + missing #15). Provider
     enums/labels/allowlists from one registry (Oracle/Alibaba/vSphere = adapter work,
     not UI surgery); org-level multi-account onboarding (AWS Orgs / mgmt groups / folders).
