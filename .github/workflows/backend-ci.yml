@@ -62,12 +62,14 @@ jobs:
         # Also runs every Fuzz* target against its SEED corpus deterministically
         # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the
         # parsers' regression coverage is here — no flaky live fuzzing needed.
-        run: go test ./...
+        run: go test -timeout 20m ./...
       - name: go test -race
         # The data-race detector needs cgo (gcc is present on ubuntu-latest).
+        # The main package suite runs ~6m plain; the race detector multiplies
+        # that well past go test's 10m default timeout on 2-core runners.
         env:
           CGO_ENABLED: '1'
-        run: go test -race ./...
+        run: go test -race -timeout 40m ./...
       # NOTE: live fuzzing (`-fuzz -fuzztime`) is intentionally NOT a blocking
       # per-PR gate — its worker-coordination times out flakily on 2-core runners
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
