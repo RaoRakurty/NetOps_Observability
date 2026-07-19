@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { AuthUser, Health, api, GlobalResult, GlobalResultKind } from "../services/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AuthUser, Health } from "../services/api";
+import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
 import { BRAND } from "../brand";
@@ -21,31 +22,26 @@ type Props = {
   hideUserMenu?: boolean;
 };
 
-const KIND_ICON: Record<GlobalResultKind, string> = {
-  device: "datasets",
-  alert: "alerts",
-  saved: "dashboards",
-  logs: "search",
-};
-const KIND_LABEL: Record<GlobalResultKind, string> = {
-  device: "Device",
-  alert: "Alert",
-  saved: "Saved",
-  logs: "Logs",
-};
+// A dropdown row: a typed unified-search hit, or the raw log-search handoff.
+type TopHit = { kind: OmniKind | "logs"; id: string; label: string; sublabel?: string; href: string };
+
+const hitIcon = (k: TopHit["kind"]): string => (k === "logs" ? "search" : OMNI_KIND_ICON[k]);
+const hitTag = (k: TopHit["kind"]): string => (k === "logs" ? "Logs" : OMNI_KIND_TAG[k]);
 
 // Global top bar: brand · omni-search · time range · health · user menu.
 // The search box and time picker drive every section through ShellContext.
-// The omni-search shows a live results dropdown (devices, alerts, saved
-// objects) backed by /api/search/global, plus a raw log-search handoff —
-// so it behaves like a true global search, not just a log query.
+// The omni-search shows a live, kind-grouped results dropdown (devices ·
+// resources · services · accounts · cases · alerts · saved) backed by the
+// tenant-scoped unified search (lib/omniSearch), plus a raw log-search
+// handoff — a true global search, not just a log query. Each row navigates
+// to the entity's permanent URL.
 export default function TopBar({ health, user, onLogout, onChangePassword, hideUserMenu }: Props) {
   const { range, setRange, query, setQuery, navigate, setHelpOpen } = useShell();
   // "*" is the match-all sentinel for the query; don't surface it literally in
   // the search box (it reads as a stray asterisk). Empty submit re-applies "*".
   const [draft, setDraft] = useState(query === "*" ? "" : query);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [results, setResults] = useState<GlobalResult[]>([]);
+  const [results, setResults] = useState<OmniHit[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [ranges, setRanges] = useState(() => allRanges());
@@ -63,7 +59,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  // Debounced live search against the global resolver.
+  // Debounced live search against the unified (tenant-scoped) resolver.
   useEffect(() => {
     const q = draft.trim();
     if (q.length < 2) {
@@ -72,11 +68,10 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      api
-        .globalSearch(q)
-        .then((r) => {
+      omniSearch(q)
+        .then((hits) => {
           if (cancelled) return;
-          setResults(r.results);
+          setResults(hits);
           setActive(-1); // nothing preselected: Enter runs the log search
           setOpen(true);
         })
@@ -90,20 +85,33 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     };
   }, [draft]);
 
+  // Flat display rows in group order: each group's first row carries the
+  // header label; a raw log-search handoff row closes the list.
+  const rows = useMemo<{ hit: TopHit; header?: string }[]>(() => {
+    const out: { hit: TopHit; header?: string }[] = [];
+    for (const group of groupHits(results)) {
+      group.hits.forEach((h, i) => out.push({ hit: h, header: i === 0 ? OMNI_KIND_LABEL[group.kind] : undefined }));
+    }
+    if (draft.trim().length >= 2) {
+      out.push({ hit: { kind: "logs", id: "logs", label: `Search logs for "${draft.trim()}"`, sublabel: "OpenSearch", href: "" } });
+    }
+    return out;
+  }, [results, draft]);
+
   const ok = health?.status === "healthy";
 
   const runLogSearch = () => {
     setQuery(draft.trim() || "*");
-    navigate("explore/logs");
+    navigate("logs/logs");
     setOpen(false);
   };
 
-  const choose = (g: GlobalResult) => {
-    if (g.kind === "logs") {
+  const choose = (h: TopHit) => {
+    if (h.kind === "logs") {
       runLogSearch();
       return;
     }
-    navigate(g.route);
+    navigate(h.href);
     setOpen(false);
   };
 
@@ -111,21 +119,21 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
     e.preventDefault();
     // Enter runs the log search by default; only jump to a result the user
     // has explicitly highlighted with the arrow keys.
-    if (open && active >= 0 && results[active]) {
-      choose(results[active]);
+    if (open && active >= 0 && rows[active]) {
+      choose(rows[active].hit);
     } else {
       runLogSearch();
     }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!open || results.length === 0) return;
+    if (!open || rows.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => (a + 1) % results.length);
+      setActive((a) => (a + 1) % rows.length);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => (a <= 0 ? results.length - 1 : a - 1));
+      setActive((a) => (a <= 0 ? rows.length - 1 : a - 1));
     } else if (e.key === "Escape") {
       setOpen(false);
     }
@@ -146,31 +154,33 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => results.length && setOpen(true)}
+            onFocus={() => rows.length > 0 && setOpen(true)}
             onKeyDown={onKeyDown}
             placeholder="Search…"
             spellCheck={false}
           />
           <kbd className="omni-kbd" title="Command palette">⌘K</kbd>
-          {open && results.length > 0 && (
+          {open && rows.length > 0 && (
             <div className="omni-pop">
-              {results.map((g, i) => (
-                <button
-                  type="button"
-                  key={`${g.kind}:${g.id}:${i}`}
-                  className={`omni-item${i === active ? " active" : ""}`}
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => choose(g)}
-                >
-                  <span className={`omni-kind k-${g.kind}`}>
-                    <Icon name={KIND_ICON[g.kind]} size={13} />
-                  </span>
-                  <span className="omni-text">
-                    <span className="omni-title">{g.title}</span>
-                    {g.sub && <span className="omni-sub">{g.sub}</span>}
-                  </span>
-                  <span className="omni-tag">{KIND_LABEL[g.kind]}</span>
-                </button>
+              {rows.map(({ hit: g, header }, i) => (
+                <div key={`${g.kind}:${g.id}:${i}`}>
+                  {header && <div className="omni-group">{header}</div>}
+                  <button
+                    type="button"
+                    className={`omni-item${i === active ? " active" : ""}`}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => choose(g)}
+                  >
+                    <span className={`omni-kind k-${g.kind}`}>
+                      <Icon name={hitIcon(g.kind)} size={13} />
+                    </span>
+                    <span className="omni-text">
+                      <span className="omni-title">{g.label}</span>
+                      {g.sublabel && <span className="omni-sub">{g.sublabel}</span>}
+                    </span>
+                    <span className="omni-tag">{hitTag(g.kind)}</span>
+                  </button>
+                </div>
               ))}
             </div>
           )}

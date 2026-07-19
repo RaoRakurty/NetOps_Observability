@@ -322,6 +322,35 @@ export type Resolved = {
   leaf?: NavLeaf;
 };
 
+// ── Permanent resource URLs (Wave 6 #20) ─────────────────────────────────────
+// #/resource/{kind}/{id} is a first-class route OUTSIDE the section/leaf nav
+// tree: a stable, shareable page per resource. The id is the canonical opaque
+// id (URL-encoded; may itself contain "/" once encoded — everything after the
+// kind segment is the id). resolveResourceRoute is checked BEFORE resolveRoute
+// in the shell; a null means "not a resource URL, use the nav router".
+export type ResourceRoute = { kind: string; id: string };
+
+export function resolveResourceRoute(hash: string): ResourceRoute | null {
+  const path = hash.replace(/^#\/?/, "").split("?")[0];
+  const segs = path.split("/");
+  if (segs[0] !== "resource" || segs.length < 3) return null;
+  const kind = segs[1];
+  const rawID = segs.slice(2).join("/");
+  if (!kind || !rawID) return null;
+  let id = rawID;
+  try {
+    id = decodeURIComponent(rawID);
+  } catch {
+    // malformed escapes: keep the raw form — the backend will honestly 404
+  }
+  return { kind, id };
+}
+
+/** The hash route (no leading "#/") for a resource's permanent page. */
+export function resourceRouteFor(kind: string, id: string): string {
+  return `resource/${kind}/${encodeURIComponent(id)}`;
+}
+
 // filteredNav drops platform-owner-only sections/leaves for tenant-scoped users.
 // The platform owner sees the full tree. This is UX gating; the backend enforces
 // the boundary independently (e.g. /api/stack/health returns 403).
