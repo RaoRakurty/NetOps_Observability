@@ -2209,6 +2209,15 @@ export const api = {
   // (devices, alerts, saved objects) plus a raw log-search handoff.
   globalSearch: (q: string) =>
     request<GlobalSearchResponse>(`/api/search/global?q=${encodeURIComponent(q)}`),
+  // Unified search (Wave 6 #20) — typed, tenant-scoped, bounded results across
+  // devices · cloud resources · services · accounts · correlation cases
+  // (P-XXXXXX), each carrying its permanent deep-link href.
+  unifiedSearch: (q: string) =>
+    request<UnifiedSearchResponse>(`/api/search?q=${encodeURIComponent(q)}`),
+  // Permanent per-resource read (Wave 6 #20) behind #/resource/cloud/{id}.
+  // A cross-tenant or unknown id is an indistinguishable 404.
+  cloudResource: (id: string) =>
+    request<CloudResourceDetailResponse>(`/api/cloud/resources/${encodeURIComponent(id)}`),
 
   // Reports — saved objects (type=report) delivered on a schedule by the
   // server-side scheduler via the notify dispatcher.
@@ -3072,6 +3081,29 @@ export type GlobalResult = {
   route: string;
 };
 export type GlobalSearchResponse = { query: string; results: GlobalResult[] };
+
+// Unified search (Wave 6 #20): typed results with a permanent deep-link href
+// (hash route without the leading "#/"). The id is the canonical opaque id.
+export type SearchHitKind = "device" | "resource" | "app" | "account" | "case";
+export type SearchHit = {
+  kind: SearchHitKind;
+  id: string;
+  label: string;
+  sublabel?: string;
+  href: string;
+};
+export type UnifiedSearchResponse = { query: string; results: SearchHit[] };
+
+// Single-resource read behind the permanent #/resource/cloud/{id} page.
+// Live fields are present only when actually measured — absence is honest.
+export type CloudResourceDetailResponse = {
+  resource: CloudResourceRow;
+  health?: string;
+  health_basis?: string;
+  traffic_bytes?: number;
+  cpu_pct?: number;
+  console_url?: string;
+};
 
 export type SavedType = "saved_search" | "dashboard" | "report";
 export type SavedObject = {

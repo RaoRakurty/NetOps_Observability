@@ -1,42 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, GlobalResult } from "../services/api";
 import { useShell } from "../context/shell";
 import { usePrefs } from "../theme/prefs";
 import { navDestinations, NavSection } from "../nav";
+import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
 import Icon from "./Icon";
 
 // CommandPalette — a ⌘K / Ctrl-K overlay that turns the omni-search into a
 // keyboard-first command bar (Linear/VS Code style). It unifies three
 // kinds of entries:
 //   · navigation — jump to any nav destination (built from nav.tsx)
-//   · actions    — toggle theme/density, open Copilot
-//   · search     — live device/alert/saved results (debounced /api/search/global)
+//   · actions    — toggle density, open Copilot
+//   · search     — live, tenant-scoped results from the unified search
+//     (devices · resources · services · accounts · cases · alerts · saved),
+//     grouped by kind, each row deep-linking to its permanent URL
 // Arrow keys move, Enter runs the highlighted row, Esc closes.
+
+type CmdKind = "nav" | "action" | "logs" | OmniKind;
 
 type Cmd = {
   id: string;
-  kind: "nav" | "action" | "device" | "alert" | "saved" | "logs";
+  kind: CmdKind;
   title: string;
   sub?: string;
+  /** group header rendered above this row (first row of each group only). */
+  header?: string;
   run: () => void;
 };
 
-const KIND_ICON: Record<Cmd["kind"], string> = {
-  nav: "overview",
-  action: "settings",
-  device: "datasets",
-  alert: "alerts",
-  saved: "dashboards",
-  logs: "search",
-};
-const KIND_LABEL: Record<Cmd["kind"], string> = {
-  nav: "Go to",
-  action: "Action",
-  device: "Device",
-  alert: "Alert",
-  saved: "Saved",
-  logs: "Logs",
-};
+const BASE_ICON: Record<string, string> = { nav: "overview", action: "settings", logs: "search" };
+const BASE_LABEL: Record<string, string> = { nav: "Go to", action: "Action", logs: "Logs" };
+
+const kindIcon = (k: CmdKind): string => BASE_ICON[k] ?? OMNI_KIND_ICON[k as OmniKind] ?? "search";
+const kindTag = (k: CmdKind): string => BASE_LABEL[k] ?? OMNI_KIND_TAG[k as OmniKind] ?? k;
 
 export default function CommandPalette({ nav }: { nav: NavSection[] }) {
   const { navigate, setQuery, setCopilotOpen } = useShell();
@@ -44,7 +39,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
-  const [results, setResults] = useState<GlobalResult[]>([]);
+  const [results, setResults] = useState<OmniHit[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Global hotkey: ⌘K / Ctrl-K toggles the palette.
@@ -72,7 +67,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     }
   }, [open]);
 
-  // Debounced global search for the search-kind rows.
+  // Debounced unified search for the result rows.
   useEffect(() => {
     if (!open) return;
     const term = q.trim();
@@ -82,9 +77,8 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      api
-        .globalSearch(term)
-        .then((r) => !cancelled && setResults(r.results.filter((x) => x.kind !== "logs")))
+      omniSearch(term)
+        .then((hits) => !cancelled && setResults(hits))
         .catch(() => !cancelled && setResults([]));
     }, 180);
     return () => {
@@ -133,19 +127,27 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [density, nav]);
 
-  // Combine: filtered static commands + live search results.
+  // Combine: filtered static commands + grouped live search results.
   const cmds = useMemo<Cmd[]>(() => {
     const term = q.trim().toLowerCase();
     const filteredStatic = term
       ? staticCmds.filter((c) => c.title.toLowerCase().includes(term) || (c.sub ?? "").toLowerCase().includes(term))
       : staticCmds;
-    const searchCmds: Cmd[] = results.map((r, i) => ({
-      id: `s:${r.kind}:${r.id}:${i}`,
-      kind: r.kind as Cmd["kind"],
-      title: r.title,
-      sub: r.sub,
-      run: () => go(r.route),
-    }));
+    // Group by kind (devices · resources · services · accounts · cases ·
+    // alerts · saved); the first row of each group carries the header.
+    const searchCmds: Cmd[] = [];
+    for (const group of groupHits(results)) {
+      group.hits.forEach((h, i) => {
+        searchCmds.push({
+          id: `s:${h.kind}:${h.id}:${i}`,
+          kind: h.kind,
+          title: h.label,
+          sub: h.sublabel,
+          header: i === 0 ? OMNI_KIND_LABEL[group.kind] : undefined,
+          run: () => go(h.href),
+        });
+      });
+    }
     // Always offer a raw log-search handoff when there's a query.
     const logsCmd: Cmd[] = term
       ? [
@@ -156,7 +158,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
             sub: "OpenSearch",
             run: () => {
               setQuery(q.trim());
-              go("explore/logs");
+              go("logs/logs");
             },
           },
         ]
@@ -204,21 +206,23 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
         <div className="cmdk-list">
           {cmds.length === 0 && <div className="cmdk-empty">No matches.</div>}
           {cmds.map((c, i) => (
-            <button
-              key={c.id}
-              className={`cmdk-item${i === active ? " active" : ""}`}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => c.run()}
-            >
-              <span className={`cmdk-kind k-${c.kind}`}>
-                <Icon name={KIND_ICON[c.kind]} size={13} />
-              </span>
-              <span className="cmdk-text">
-                <span className="cmdk-title">{c.title}</span>
-                {c.sub && <span className="cmdk-sub">{c.sub}</span>}
-              </span>
-              <span className="cmdk-tag">{KIND_LABEL[c.kind]}</span>
-            </button>
+            <div key={c.id}>
+              {c.header && <div className="cmdk-group">{c.header}</div>}
+              <button
+                className={`cmdk-item${i === active ? " active" : ""}`}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => c.run()}
+              >
+                <span className={`cmdk-kind k-${c.kind}`}>
+                  <Icon name={kindIcon(c.kind)} size={13} />
+                </span>
+                <span className="cmdk-text">
+                  <span className="cmdk-title">{c.title}</span>
+                  {c.sub && <span className="cmdk-sub">{c.sub}</span>}
+                </span>
+                <span className="cmdk-tag">{kindTag(c.kind)}</span>
+              </button>
+            </div>
           ))}
         </div>
       </div>

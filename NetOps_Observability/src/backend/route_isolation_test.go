@@ -172,6 +172,10 @@ var routeIsolationLedger = map[string]string{
 	"/api/saved":                  "scoped",
 	"/api/saved/":                 "scoped",
 	"/api/search/global":          "scoped",
+	// Wave 6 #20 unified search: every sub-search re-scopes to the principal
+	// (visibleDevices, tenant-keyed cloud/connector stores, chTenantScope for
+	// cases) — proven by search_unified_isolation_test.go.
+	"/api/search": "scoped",
 	"/api/seams":                  "scoped",
 	"/api/seams/":                 "scoped",
 	"/api/seams/groups":           "scoped",
@@ -215,6 +219,9 @@ var routeIsolationLedger = map[string]string{
 	"/api/flows/apps":                 "scoped",
 	"/api/cloud/apps":                 "scoped",
 	"/api/cloud/resources":            "scoped",
+	// Wave 6 #20 permanent resource page read: store-scoped GetResource,
+	// cross-tenant / unknown id → identical 404 (search_unified_isolation_test.go).
+	"/api/cloud/resources/":           "scoped",
 	"/api/cloud/identity-map":         "scoped",
 	"/api/cloud/attribution/coverage": "scoped",
 	"/api/cloud/app-rca":              "scoped",

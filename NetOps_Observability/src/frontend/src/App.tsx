@@ -4,7 +4,8 @@ import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { useTzMode, setTzMode } from "./lib/time";
-import { resolveRoute, filteredNav, landingResolves, routeFor } from "./nav";
+import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor } from "./nav";
+import ResourceDetail from "./pages/ResourceDetail";
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
@@ -188,7 +189,17 @@ export default function App() {
 
   const { section, leaf } = resolveRoute(hash, nav);
   const ctx: SectionCtx = { rangeMinutes: range.minutes, query };
-  const view = leaf ? leaf.render(ctx) : section.render ? section.render(ctx) : null;
+  // Permanent resource URLs (#/resource/{kind}/{id}, Wave 6 #20) live OUTSIDE
+  // the section/leaf nav tree — matched first, rendered as a full page in the
+  // same shell. The id stays canonical/opaque; the page itself answers 404.
+  const resourceRoute = resolveResourceRoute(hash);
+  const view = resourceRoute ? (
+    <ResourceDetail key={`${resourceRoute.kind}:${resourceRoute.id}`} kind={resourceRoute.kind} id={resourceRoute.id} />
+  ) : leaf ? (
+    leaf.render(ctx)
+  ) : section.render ? (
+    section.render(ctx)
+  ) : null;
 
   return (
     <ShellContext.Provider value={shell}>
@@ -197,12 +208,12 @@ export default function App() {
         <ShellGridSizing />
         <TopBar health={health} user={user} onLogout={logout} onChangePassword={onChangePassword} hideUserMenu={shellV2} />
         {shellV2 ? (
-          <IconRail nav={nav} activeSection={section.id} activeLeaf={leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} homeRoute={homeRoute} />
+          <IconRail nav={nav} activeSection={resourceRoute ? "" : section.id} activeLeaf={resourceRoute ? undefined : leaf?.id} user={user} onLogout={logout} onChangePassword={onChangePassword} homeRoute={homeRoute} />
         ) : (
           <Sidebar
             nav={nav}
-            activeSection={section.id}
-            activeLeaf={leaf?.id}
+            activeSection={resourceRoute ? "" : section.id}
+            activeLeaf={resourceRoute ? undefined : leaf?.id}
             collapsed={collapsed}
             onToggle={() => setCollapsed((c) => !c)}
             homeRoute={homeRoute}
@@ -211,11 +222,21 @@ export default function App() {
         <main className="main">
           <div className="main-head">
             <div className="crumbs">
-              <span className="crumb-section">{section.label}</span>
-              {leaf && leaf.label !== section.label && <span className="crumb-sep">/</span>}
-              {leaf && leaf.label !== section.label && <span className="crumb-leaf">{leaf.label}</span>}
+              {resourceRoute ? (
+                <>
+                  <span className="crumb-section">Resource</span>
+                  <span className="crumb-sep">/</span>
+                  <span className="crumb-leaf">{resourceRoute.id}</span>
+                </>
+              ) : (
+                <>
+                  <span className="crumb-section">{section.label}</span>
+                  {leaf && leaf.label !== section.label && <span className="crumb-sep">/</span>}
+                  {leaf && leaf.label !== section.label && <span className="crumb-leaf">{leaf.label}</span>}
+                </>
+              )}
             </div>
-            <SubNav section={section} activeLeaf={leaf?.id} />
+            {!resourceRoute && <SubNav section={section} activeLeaf={leaf?.id} />}
           </div>
           <div className="page" key={tz}>
             {/* Administration acts on config — always state the acting scope
