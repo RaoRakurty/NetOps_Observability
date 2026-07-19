@@ -328,6 +328,11 @@ func rcaTitleCase(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+// rcaReportTemplateVersion identifies the document template for the
+// immutability block (postmortem Phase 1): bump on ANY change to
+// rcaReportTmplSrc so a stored revision names the template that rendered it.
+const rcaReportTemplateVersion = "tmpl-2026.07.19-p1"
+
 func renderRcaReportHTML(rep rcaReport) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := rcaReportTmpl.Execute(&buf, rep); err != nil {
@@ -743,6 +748,13 @@ const rcaReportTmplSrc = `<!doctype html><html><head><meta charset="utf-8">
   </tbody></table>
   <div class="note">A change is never labelled the root cause from timing alone (correlated is not caused).</div>
 </section>
+{{end}}
+
+{{if .Integrity}}
+<footer class="doc-end">
+  <span>Analysis snapshot {{.Integrity.AnalysisSnapshotHash}} · policy {{.Integrity.PolicyVersion}} · template {{.Integrity.TemplateVersion}}</span>
+  <span>Status as of generation: {{.Integrity.StatusAsOf}}</span>
+</footer>
 {{end}}
 
 </div></body></html>`

@@ -138,6 +138,7 @@ type server struct {
 	cloudMonitors       *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
 	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	rcaActionItems      *rcaActionItemStore  // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
+	rcaRevisions        *rcaRevisionStore    // report revision register, tenant-keyed (postmortem Phase 1 immutability)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
 	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
@@ -581,6 +582,7 @@ func newServer() *server {
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 	srv.rcaActionItems = newRcaActionItemStore(rcaActionItemsPath())
+	srv.rcaRevisions = newRcaRevisionStore(rcaRevisionsPath())
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
 	srv.netboxCfg = netboxCfg

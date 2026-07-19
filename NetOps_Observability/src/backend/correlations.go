@@ -454,6 +454,9 @@ func (s *server) handleCorrelationByID(w http.ResponseWriter, r *http.Request) {
 		s.serveRcaPathView(w, r, id)
 	case "rca-report":
 		s.serveRcaReport(w, r, id)
+	case "rca-revisions":
+		// Postmortem Phase 1 immutability: the per-case report revision register.
+		s.serveRcaRevisions(w, r, id)
 	case "time-metrics":
 		s.serveCorrelationTimeMetrics(w, r, id)
 	case "replay":

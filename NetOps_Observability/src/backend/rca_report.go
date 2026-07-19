@@ -59,6 +59,11 @@ type rcaReport struct {
 	// LessonsLearned — spec-§6 schema; editing exists only for promoted
 	// classes (Phase 3 workflow). Correlix never authors subjective lessons.
 	LessonsLearned rcaLessonsLearned `json:"lessons_learned"`
+	// Integrity — the immutability block (analysis snapshot hash, policy +
+	// template versions, status-as-of; content hash lives in the revision
+	// register). Set by the HTTP layer at generation time; a published
+	// document embeds it and never mutates.
+	Integrity *rcaReportIntegrity `json:"integrity,omitempty"`
 
 	// AtAGlance (#113 point 2): the document's FIRST section — where it
 	// happened · what possibly happened · possible owner(s) — rendered above
@@ -134,6 +139,10 @@ type rcaReport struct {
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
 	mgmtTrimmed bool
+
+	// ownerTenant: the OBJECT's owning tenant (canonical), stamped by the HTTP
+	// layer for tenant-keyed store writes (revision register). Never serialized.
+	ownerTenant string
 
 	// accounting: the canonical EvidenceAccounting for this case (Phase B). Not
 	// rendered this phase — Phases D/E consume it (presentation + quality gate).
