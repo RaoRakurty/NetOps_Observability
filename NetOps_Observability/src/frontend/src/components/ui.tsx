@@ -31,7 +31,25 @@ export function Modal({ title, subtitle, logo, onClose, children, wide }: {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseRef.current(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onCloseRef.current(); return; }
+      // Focus containment (2.4.3): Tab cycles within the dialog — the page
+      // behind stays rendered, so without this focus walks out of the modal.
+      if (e.key === "Tab") {
+        const root = ref.current;
+        if (!root) return;
+        const els = root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (els.length === 0) return;
+        const first = els[0];
+        const last = els[els.length - 1];
+        const active = document.activeElement;
+        if (!root.contains(active)) { e.preventDefault(); first.focus(); }
+        else if (e.shiftKey && (active === first || active === root)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -83,7 +101,10 @@ export function Stat({ label, value, tone = "" }: { label: string; value: ReactN
   );
 }
 
-// Segmented — a soft segmented control for view/mode switches (tab semantics).
+// Segmented — a soft segmented control for view/mode switches. Exposed as a
+// toggle-button group (aria-pressed), NOT an ARIA tablist: consumers render
+// plain view swaps without tabpanel/roving-focus wiring, and plain buttons
+// are fully keyboard operable as-is (4.1.2).
 export function Segmented<T extends string>({
   value,
   options,
@@ -96,12 +117,11 @@ export function Segmented<T extends string>({
   ariaLabel?: string;
 }) {
   return (
-    <div className="ds-seg" role="tablist" aria-label={ariaLabel}>
+    <div className="ds-seg" role="group" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
-          role="tab"
-          aria-selected={value === o.value}
+          aria-pressed={value === o.value}
           title={o.title}
           className={value === o.value ? "active" : ""}
           onClick={() => onChange(o.value)}

@@ -5,6 +5,7 @@ import Icon from "../components/Icon";
 import { setTzMode, tzLabel } from "../lib/time";
 import { useAuth } from "../hooks/useAuth";
 import SystemNetworkCard from "../pages/SystemNetwork";
+import { Modal } from "../components/ui";
 
 // Default landing page — the platform-wide page users land on after sign-in.
 // Stored on the global tenant (the platform default); individual tenants can
@@ -42,11 +43,11 @@ function DefaultLandingCard() {
         <Icon name="overview" size={20} />
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700 }}>Default landing page</div>
+        <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Default landing page</h3>
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           The page everyone lands on after sign-in. Tenants can override this in Identity &amp; Access.
-          {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
-          {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
+          <span role="status">{saved ? " · saved" : ""}</span>
         </div>
       </div>
       <select
@@ -102,12 +103,12 @@ function TimeDisplayCard() {
         <Icon name="sliders" size={20} />
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700 }}>Time display</div>
+        <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Time display</h3>
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           How every timestamp renders for this tenant — your local zone ({tzLabel("local")}) or UTC.
           Storage is always UTC; only display changes. Admin-set, applies to all of the tenant&apos;s users.
-          {err && <span style={{ color: "var(--crit)" }}> · {err}</span>}
-          {saved && <span style={{ color: "var(--ok)" }}> · saved</span>}
+          {err && <span role="alert" style={{ color: "var(--crit)" }}> · Error: {err}</span>}
+          <span role="status">{saved ? " · saved" : ""}</span>
         </div>
       </div>
       <select
@@ -170,7 +171,7 @@ export default function Settings() {
           <Icon name="external" size={20} />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700 }}>Log export limits</div>
+          <h3 style={{ fontWeight: 700, fontSize: "inherit", margin: 0 }}>Log export limits</h3>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
             Anti-exfiltration guardrails for log exports — rate, row/size caps, runtime, link TTL.
           </div>
@@ -180,28 +181,17 @@ export default function Settings() {
         </button>
       </div>
 
+      {/* Shared Modal (a11y): role=dialog + aria-modal, Escape close, focus
+          moved in / restored and trapped — the hand-rolled overlay had none. */}
       {showExport && (
-        <div
-          onClick={() => setShowExport(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(10,10,20,.45)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 50,
-            padding: 16,
-          }}
-        >
-          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, width: "100%", maxHeight: "86vh", overflow: "auto" }}>
-            <ExportPolicyForm />
-            <div style={{ textAlign: "right", marginTop: 8 }}>
-              <button className="btn" onClick={() => setShowExport(false)}>
-                Close
-              </button>
-            </div>
+        <Modal title="Log export limits" onClose={() => setShowExport(false)}>
+          <ExportPolicyForm />
+          <div style={{ textAlign: "right", marginTop: 8 }}>
+            <button className="btn" onClick={() => setShowExport(false)}>
+              Close
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
     </>
   );

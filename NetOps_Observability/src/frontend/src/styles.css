@@ -2442,8 +2442,12 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 }
 .panel-tools h3 { margin: 0; }
 /* Drillable panel title — reveals an "open detail" cue that warms to accent on hover. */
-.panel-title-link { display: inline-flex; align-items: center; gap: 5px; transition: color .12s ease; }
-.panel-title-link:hover { color: var(--accent); }
+.panel-title-link { display: inline-flex; align-items: center; gap: 5px; transition: color .12s ease;
+  /* now a real <button> inside the <h3> (keyboard-operable drill) — strip
+     button chrome so it still reads as the heading */
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+  cursor: pointer; letter-spacing: inherit; }
+.panel-title-link:hover, .panel-title-link:focus-visible { color: var(--accent); }
 .panel-drill-icon { color: var(--muted); opacity: 0.55; transition: color .12s ease, opacity .12s ease; }
 .panel-title-link:hover .panel-drill-icon { color: var(--accent); opacity: 1; }
 .panel-tools-btns { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }

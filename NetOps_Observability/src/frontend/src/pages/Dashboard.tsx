@@ -83,14 +83,24 @@ export default function Dashboard() {
                 return (
                   <div className={`panel col-${span}`} key={`${type}-${i}`}>
                     <div className="panel-tools">
-                      <h3
-                        className={def.drill ? "panel-title-link" : undefined}
-                        onClick={def.drill ? () => navigate(def.drill!) : undefined}
-                        style={def.drill ? { cursor: "pointer" } : undefined}
-                        title={def.drill ? "Open detail view" : undefined}
-                      >
-                        {def.title}
-                        {def.drill && <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />}
+                      {/* Drill affordance is a real button INSIDE the heading —
+                          a clickable <h3> is neither focusable nor keyboard
+                          operable (2.1.1/4.1.2). */}
+                      <h3>
+                        {def.drill ? (
+                          <button
+                            type="button"
+                            className="panel-title-link"
+                            onClick={() => navigate(def.drill!)}
+                            title="Open detail view"
+                            aria-label={`${def.title} — open detail view`}
+                          >
+                            {def.title}
+                            <Icon name="arrow-up-right" size={13} className="panel-drill-icon" />
+                          </button>
+                        ) : (
+                          def.title
+                        )}
                       </h3>
                       <div className="panel-tools-btns">
                         <button onClick={() => setZoom(type)} title="Enlarge" aria-label="Enlarge panel">⤢</button>

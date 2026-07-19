@@ -511,6 +511,7 @@ export default function Correlations() {
               resizable
               onRowClick={select}
               rowClassName={(o) => (sel === o.correlation_id ? "dtv-selected" : "")}
+              rowSelected={(o) => sel === o.correlation_id}
               initialSort={{ key: "created_at", dir: "desc" }}
             />
           )}

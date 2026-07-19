@@ -31,9 +31,11 @@ function AdminHead({ title, sub }: { title: string; sub: string }) {
   );
 }
 
+// role=alert announces the failure to assistive tech when it appears (WCAG
+// 3.3.1/4.1.3) — used by every admin form, so the fix lands everywhere at once.
 function ErrLine({ msg }: { msg: string | null }) {
   if (!msg) return null;
-  return <p style={{ color: "var(--bad)", fontSize: "var(--fs-meta)", margin: "0 0 var(--sp-2)" }}>{msg}</p>;
+  return <p role="alert" style={{ color: "var(--bad)", fontSize: "var(--fs-meta)", margin: "0 0 var(--sp-2)" }}>{msg}</p>;
 }
 
 // useReload gives a [data, error, reload, setError] tuple over an async loader.
@@ -2192,7 +2194,9 @@ function TestResult({ r }: { r: AuthTestResult | null }) {
   if (!r) return null;
   const color = r.ok ? "var(--good)" : "var(--bad)";
   return (
-    <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, border: `1px solid ${color}`, background: "var(--panel)", fontSize: 13 }}>
+    // role=status: the async "Test connection" outcome is announced (4.1.3);
+    // the OK/FAIL badge text (not only the color) carries the verdict.
+    <div role="status" style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, border: `1px solid ${color}`, background: "var(--panel)", fontSize: 13 }}>
       <span className={`badge ${r.ok ? "good" : "bad"}`}>{r.ok ? "OK" : "FAIL"}</span>{" "}
       <span className="mini-meta">[{r.stage}]</span> {r.message}
       {r.resolved_dn && <div className="mono mini-meta" style={{ marginTop: 4 }}>DN: {r.resolved_dn}</div>}
@@ -2368,8 +2372,8 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
               <>
                 {cfg.role_mappings.map((m, i) => (
                   <div key={i} className="admin-form" style={{ marginBottom: 6 }}>
-                    <input value={m.group} placeholder="cn=netops-admins,ou=groups,dc=example,dc=com" onChange={(e) => setMapping(i, { group: e.target.value })} />
-                    <select value={m.role} onChange={(e) => setMapping(i, { role: e.target.value })}>
+                    <input value={m.group} aria-label="Directory group DN" placeholder="cn=netops-admins,ou=groups,dc=example,dc=com" onChange={(e) => setMapping(i, { group: e.target.value })} />
+                    <select value={m.role} aria-label="Mapped role" onChange={(e) => setMapping(i, { role: e.target.value })}>
                       {roleIds.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                     <button onClick={() => set({ role_mappings: cfg.role_mappings.filter((_, j) => j !== i) })}>Remove</button>
@@ -2377,8 +2381,8 @@ function LdapAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embed
                 ))}
                 <button onClick={() => set({ role_mappings: [...cfg.role_mappings, { group: "", role: roleIds[0] || "read-only" }] })}>+ Add mapping</button>
                 <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
-                  <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+                  <input aria-label="Test username (optional)" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+                  <input type="password" aria-label="Test password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
                   <button disabled={busy} onClick={test}>Test connection</button>
                 </div>
                 <TestResult r={result} />
@@ -2476,8 +2480,8 @@ function TacacsAdminForm({ roleIds, embedded = false }: { roleIds: string[]; emb
                   <LabeledInput label="Default tenant" value={cfg.default_tenant} onChange={(v) => set({ default_tenant: v })} />
                 </div>
                 <div style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <input placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
-                  <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
+                  <input aria-label="Test username (optional)" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} style={{ padding: 6 }} />
+                  <input type="password" aria-label="Test password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} style={{ padding: 6 }} />
                   <button disabled={busy} onClick={test}>Test connection</button>
                 </div>
                 <TestResult r={result} />
@@ -3940,7 +3944,17 @@ export function IncidentPoliciesAdmin() {
           <tbody>
             {policies.map((p) => (
               <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setSel(p)}>
-                <td><b>{p.name || "(unnamed)"}</b></td>
+                {/* Row click is a pointer shortcut; the name button is the
+                    keyboard-operable way in (2.1.1). */}
+                <td>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setSel(p); }}
+                    style={{ background: "none", border: 0, padding: 0, font: "inherit", color: "inherit", cursor: "pointer" }}
+                  >
+                    <b>{p.name || "(unnamed)"}</b>
+                  </button>
+                </td>
                 <td>
                   {p.enabled && conflictSystems.has(p.external_system || "servicenow")
                     ? <span className="badge bad">Conflict — ticketing held</span>

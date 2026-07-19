@@ -79,10 +79,14 @@ export default function Security({ windowHours = 24 }: { windowHours?: number })
   }, [windowHours]);
 
   if (status === "loading") {
-    return <div className="ao-panel"><Skeleton w={200} h={14} /><div style={{ marginTop: 12 }}><Skeleton h={220} /></div></div>;
+    return (
+      <div className="ao-panel" role="status" aria-label="Loading security findings">
+        <Skeleton w={200} h={14} /><div style={{ marginTop: 12 }}><Skeleton h={220} /></div>
+      </div>
+    );
   }
   if (status === "error" || findings === null) {
-    return <div className="ao-panel"><EmptyState title="Unable to load security findings" hint="retry, or check the cloud connector status in Settings" /></div>;
+    return <div className="ao-panel" role="alert"><EmptyState title="Unable to load security findings" hint="retry, or check the cloud connector status in Settings" /></div>;
   }
 
   const coverage = laneCoverage(sources);
@@ -111,10 +115,12 @@ export default function Security({ windowHours = 24 }: { windowHours?: number })
           <span className="ao-panel-meta">
             WAF blocks · LB-plane errors · DNS failures — rollups from the ingested provider logs
           </span></div>
-        <div className="ao-chips" style={{ marginBottom: 8 }} role="tablist" aria-label="Lane filter">
-          <button className={`ao-btn${lane === "" ? " ao-btn--primary" : ""}`} onClick={() => setLane("")}>All lanes</button>
+        {/* Toggle filters, not tabs: aria-pressed carries the active state so
+            selection isn't conveyed by the highlight color alone (1.4.1/4.1.2). */}
+        <div className="ao-chips" style={{ marginBottom: 8 }} role="group" aria-label="Lane filter">
+          <button className={`ao-btn${lane === "" ? " ao-btn--primary" : ""}`} aria-pressed={lane === ""} onClick={() => setLane("")}>All lanes</button>
           {SECURITY_LANES.map((l) => (
-            <button key={l.lane} className={`ao-btn${lane === l.lane ? " ao-btn--primary" : ""}`}
+            <button key={l.lane} className={`ao-btn${lane === l.lane ? " ao-btn--primary" : ""}`} aria-pressed={lane === l.lane}
               onClick={() => setLane(lane === l.lane ? "" : l.lane)}>{l.label}</button>
           ))}
         </div>

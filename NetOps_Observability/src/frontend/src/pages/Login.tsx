@@ -233,7 +233,6 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
                 onClick={() => setShowPw((s) => !s)}
                 aria-label={showPw ? "Hide password" : "Show password"}
                 aria-pressed={showPw}
-                tabIndex={-1}
               >
                 <Icon name={showPw ? "eye-off" : "eye"} size={16} />
               </button>
