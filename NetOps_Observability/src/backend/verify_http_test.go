@@ -105,6 +105,21 @@ func setupVerifyServer(t *testing.T) (*httptest.Server, *server, map[string]*ver
 	return srv, s, fix
 }
 
+// waitVerifyDone blocks until the case's latest run completes, so the async
+// run goroutine (which persists into the test's TempDir) cannot race the test
+// cleanup. Bounded: fails the test rather than hanging.
+func waitVerifyDone(t *testing.T, s *server, tenant, caseID string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec, ok := s.verifyRuns.latest(tenant, caseID); ok && rec.Status == "completed" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("verification run did not complete in time")
+}
+
 func caseRow(tenant, device, verdict string) map[string]any {
 	return map[string]any{
 		"tenant_id": tenant,
@@ -162,6 +177,7 @@ func TestVerifyCrossTenantIsolation(t *testing.T) {
 	if st, _ = do(t, srv, "GET", "/api/correlations/"+caseA+"/verify", fix["B"].token, nil); st != 404 {
 		t.Fatalf("cross-tenant GET after run: want 404, got %d", st)
 	}
+	waitVerifyDone(t, s, fix["A"].tenantID, caseA)
 }
 
 func TestVerifyTenantFlagRespectedAndFeatureGate(t *testing.T) {
@@ -254,6 +270,7 @@ func TestVerifyManualRateLimited(t *testing.T) {
 	if st, _ := do(t, srv, "POST", "/api/correlations/"+caseA+"/verify", fix["A"].token, nil); st != 429 {
 		t.Fatalf("second verify inside the window: want 429, got %d", st)
 	}
+	waitVerifyDone(t, s, fix["A"].tenantID, caseA)
 }
 
 func TestVerifyTriggerCooldownDedupe(t *testing.T) {
@@ -295,6 +312,7 @@ func TestVerifyTriggerCooldownDedupe(t *testing.T) {
 	if rec.Trigger != "auto" || rec.Actor != "system:verify" {
 		t.Fatalf("auto run attribution: %+v", rec)
 	}
+	waitVerifyDone(t, s, fix["A"].tenantID, caseA)
 }
 
 func boolPtr(b bool) *bool { return &b }

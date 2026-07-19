@@ -33,9 +33,10 @@ func verifyCooldown() time.Duration {
 // ---- per-tenant config (opt-in flag + read-only SSH credential) -------------
 
 const (
-	verifyFieldPassword   = "verify_ssh_password"
-	verifyFieldKey        = "verify_ssh_key"
-	verifyFieldPassphrase = "verify_ssh_passphrase"
+	// Vault FIELD IDENTIFIERS (envelope AAD labels), not credential values.
+	verifyFieldPassword   = "verify_ssh_password"   // #nosec G101 -- field id, not a credential
+	verifyFieldKey        = "verify_ssh_key"        // #nosec G101 -- field id, not a credential
+	verifyFieldPassphrase = "verify_ssh_passphrase" // #nosec G101 -- field id, not a credential
 )
 
 type verifyTenantConfig struct {
@@ -446,7 +447,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 	s.verifyRuns.put(rec)
 	s.auditVerifyRun(rec, "start", why, cmds)
 
-	go func() {
+	go func(rec verifyRunRecord) { // own copy — the caller returns the RUNNING record
 		// Bounded by the engine's own run budget; independent of the request.
 		engine := newVerifyEngine(s.newVerifyDialers())
 		results := engine.run(context.Background(), targets)
@@ -460,7 +461,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 			"tenant": tenant, "correlation_id": caseID, "run_id": rec.RunID,
 			"trigger": trigger, "devices": len(targets), "results": len(results),
 		})
-	}()
+	}(rec)
 	return rec, nil
 }
 
