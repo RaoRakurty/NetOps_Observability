@@ -15,8 +15,9 @@ import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 //    dangerouslySetInnerHTML; every value is rendered as escaped React text.
 //  · Scoped — all styles live under `.rca-ws` (RcaWorkspace.css), isolated from
 //    the app's dark theme in both directions.
-//  · Honest — a suspected single-signal case renders sparse ("Not observed",
-//    locked ladder steps); nothing is promoted to confirmed by the view.
+//  · Honest — a suspected single-signal case renders sparse (locked ladder
+//    steps, muted unwitnessed rungs); nothing is promoted to confirmed by the
+//    view, and epistemic state is never a grey chip (owner 2026-07-19).
 
 const Pill = ({ p }: { p: RcaPill }) => <span className={`rw-pill ${p.tone}`}>{p.text}</span>;
 
@@ -205,7 +206,7 @@ export default function RcaWorkspace({
               <strong>Decision:</strong><span>{data.decision.text}</span>
             </div>
           )}
-          <div className="rw-note">Observed at: <b>{data.observedAt}</b> · RCA ID: <b>{data.rcaId}</b></div>
+          <div className="rw-note">Detected at: <b>{data.observedAt}</b> · RCA ID: <b>{data.rcaId}</b></div>
         </div>
         <aside className="rw-aside">
           {data.aside.map((m, i) => <div key={i} className="rw-metric"><span>{m.k}</span><b className={m.mono ? "mono" : undefined}>{m.v}</b></div>)}
@@ -453,8 +454,8 @@ export default function RcaWorkspace({
           </section>
 
           {/* failure-propagation ladder (owner directive 2026-07-13): how one
-              failure caused the next; unwitnessed rungs stay visible but are
-              marked Not observed — the ladder never claims without evidence */}
+              failure caused the next; unwitnessed rungs stay visible but read
+              muted — the ladder never claims without evidence */}
           {data.cascade && data.cascade.length > 0 && (
             <>
               <h3 className="rw-section-title">How the failure propagated</h3>
@@ -480,7 +481,7 @@ export default function RcaWorkspace({
                   ))}
                 </div>
                 <div className="rw-tdetail">
-                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a stage marked Not observed is part of the known propagation path but has no evidence in this window and is not claimed.
+                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a dimmed stage is part of the known propagation path but has no evidence in this window and is not claimed.
                 </div>
               </section>
             </>

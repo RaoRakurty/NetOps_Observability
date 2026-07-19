@@ -57,7 +57,9 @@ describe("buildRcaCase — suspected single-signal routing object", () => {
 
   it("confidence ladder stops at Suspected (Probable/Confirmed locked)", () => {
     expect(c.ladder).toHaveLength(4);
-    expect(c.ladder[0].state).toBe("done");      // Observed
+    expect(c.ladder[0].state).toBe("done");      // Detected
+    // owner 2026-07-19: no "Observed" epistemic label anywhere in operator UI
+    expect(c.ladder[0].label).toBe("✓ Detected");
     expect(c.ladder[1].state).toBe("active");     // Suspected
     expect(c.ladder[2].state).toBe("next");       // Probable (locked)
     expect(c.ladder[3].state).toBe("next");       // Confirmed (locked)

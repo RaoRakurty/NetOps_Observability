@@ -351,7 +351,7 @@ function reportHtml(d: RcaCase, objId: string): string {
   <header class="rpt"><span class="brand">CORRELIX</span><span class="doctype">Root Cause Analysis Report</span></header>
   <h1>${esc(d.title)}</h1>
   <div class="badges">${d.pills.map(pill).join("")}</div>
-  <div class="meta">Observed at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
+  <div class="meta">Detected at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
 
   ${d.decision.text ? block("Decision", `<div class="decision"${d.decision.tone === "confirmed" ? ' style="border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7"' : ""}>${esc(d.decision.text)}</div>`) : ""}
   ${block("Case", kvRows(d.aside))}

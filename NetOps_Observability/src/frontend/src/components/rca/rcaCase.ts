@@ -376,7 +376,7 @@ export const EXAMPLE_CASE: RcaCase = {
     { variant: "missing", dot: "gray", title: "Similar incidents", pill: { tone: "gray", text: "1 match" }, desc: "History, change window, known signatures", finding: "Similar ISP loss signature seen 21 days ago on same underlay.", foot: "Not used as confirmation alone" },
   ],
   ladder: [
-    { state: "done", label: "✓ Observed", caption: "BGP event happened" },
+    { state: "done", label: "✓ Detected", caption: "BGP event detected" },
     { state: "done", label: "✓ Suspected", caption: "Localized to wan-r2 adjacency" },
     { state: "done", label: "✓ Probable", caption: "Independent network evidence aligned" },
     { state: "active", label: "✓ Confirmed", caption: "Application impact confirmed" },
@@ -721,7 +721,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // confidence ladder
   const reached = confirmed ? 4 : suspected ? 2 : 1;
   const ladder: LadderStep[] = [
-    { state: "done", label: "✓ Observed", caption: "Anomaly observed" },
+    { state: "done", label: "✓ Detected", caption: "Anomaly detected" },
     { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to a device area" },
     { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent network evidence aligned" },
     { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Customer impact confirmed" : "Independent evidence missing" },
@@ -796,7 +796,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     if (device) {
       const di = addNode(device, {
         kind: confirmed ? "bad" : "warn", shape: kindForRole(device),
-        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly observed",
+        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly detected",
         tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
       });
       if (peer) addEdge(di, addNode(peer, { kind: "info", shape: kindForRole(peer), meta: "adjacency peer" }), hasRouting ? kindLabel(routeKind) : "evidence");
@@ -925,7 +925,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       },
       { tone: "blue", text: `Confidence: ${confidence}` },
       { tone: "orange", text: `Incident: ${lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : "Active"}` },
-      { tone: "purple", text: `Analysis: ${confirmed ? "Confirmed" : contradicted ? "Inconclusive" : suspected ? "Suspected" : "Observed"}` },
+      { tone: "purple", text: `Analysis: ${confirmed ? "Confirmed" : contradicted ? "Inconclusive" : suspected ? "Suspected" : "Detected"}` },
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     verdictState, ruledOut, whyNot,
