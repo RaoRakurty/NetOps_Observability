@@ -52,6 +52,11 @@ REFUTABLE_KINDS: frozenset[str] = frozenset({
     "bgp_state_anomaly",
     "device_restart",
     "device_alarm",
+    # Troubleshooting modules (verify_modules.go): interface deep-dive
+    # (if_errors/if_crc) and the recent-change detector (config_change).
+    "if_errors",
+    "if_crc",
+    "config_change",
 })
 CORROBORABLE_KINDS: frozenset[str] = REFUTABLE_KINDS
 
