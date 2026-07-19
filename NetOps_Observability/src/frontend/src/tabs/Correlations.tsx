@@ -5,7 +5,6 @@ import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
 import RcaWorkspace from "../components/rca/RcaWorkspace";
 import RcaVerifyPanel from "../components/rca/RcaVerifyPanel";
-import RcaTopology from "../components/rca/RcaTopology";
 import RcaTimeImpact from "../components/rca/RcaTimeImpact";
 import RcaAskAi from "../components/rca/RcaAskAi";
 import RcaTicketCard from "../components/rca/RcaTicketCard";
@@ -785,10 +784,10 @@ export function CorrelationDetail({ id }: { id: string }) {
       onExportPdf={exportPdf}
       exportDisabled={!timeline}
       debugExtra={replayPanel}
-      pathSlot={pathLoaded ? <RcaPathCausality data={pathAttr} /> : null}
-      topologySlot={
-        <RcaTopology timeline={timeline} seams={seams} view={view} height={300} />
-      }
+      pathSlot={pathLoaded ? (
+        <RcaPathCausality data={pathAttr} timeline={timeline}
+          ownership={rcaCase.ownershipLabel} possibleCause={rcaCase.possiblyCause} />
+      ) : null}
       aiSlot={obj.correlation_id ? <RcaAskAi correlationId={obj.correlation_id} /> : null}
       verifySlot={obj.correlation_id
         ? <RcaVerifyPanel correlationId={obj.correlation_id} suspected={rcaCase.verdictState === "suspected"} />

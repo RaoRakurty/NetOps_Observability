@@ -1,7 +1,7 @@
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
 import { api } from "../../services/api";
-import type { RcaCase, RcaPill, KV, CaseEvent, TopoNode, TopoEdge } from "./rcaCase";
+import type { RcaCase, RcaPill, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 
@@ -150,35 +150,8 @@ function EventTimeline({ events }: { events: CaseEvent[] }) {
   );
 }
 
-function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[] }) {
-  // No role="img" on the chain: it would collapse the node/edge text out of
-  // the a11y tree — the chain reads naturally as text (1.1.1).
-  return (
-    <div className="rw-topo">
-      {nodes.map((n, i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <div className={`rw-node ${n.kind}`}>
-            <div className="circle">{n.abbr}</div>
-            <div className="name">{n.name}</div>
-            <div className="meta">{n.meta}</div>
-            {n.tag && <div className="tag"><Pill p={n.tag} /></div>}
-          </div>
-          {i < nodes.length - 1 && (
-            <div className="rw-edge-wrap">
-              <div className={`rw-edge ${edges[i]?.state ?? "good"}`} />
-              {edges[i]?.label && (
-                <span className={`rw-edge-label ${edges[i]?.state ?? ""}${edges[i]?.side === 1 ? " side1" : ""}`}>{edges[i]?.label}</span>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, topologySlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -186,8 +159,11 @@ export default function RcaWorkspace({
   onExportPdf: () => void;
   exportDisabled?: boolean;
   debugExtra?: ReactNode;
-  pathSlot?: ReactNode;       // path-causality RCA (design §5/§5a) — the discovered typed SRC→DST path is the HERO
-  topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
+  // THE single network-path & causality render (RcaPathCausality over
+  // pathModel.ts — owner P1 2026-07-19: one path view, one logic). The
+  // component owns its own honest fallbacks (spine / adjacency / not
+  // discovered), so no second topology section exists.
+  pathSlot?: ReactNode;
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
   aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
@@ -259,13 +235,13 @@ export default function RcaWorkspace({
 
       {view === "operator" ? (
         <>
-          {/* PATH-FIRST (design §5a: the path is the hero). The discovered typed
-              SRC→DST path with the broken link highlighted + the named cause leads
-              the operator view. Absent → the component renders an honest "no
-              discovered path" note; a report without path attribution is unchanged. */}
+          {/* PATH-FIRST (design §5a: the path is the hero). The ONE merged
+              network-path & causality view: typed SRC→DST path with the broken
+              link highlighted, measured-spine fallback, routing-adjacency
+              fallback, honest "path not fully discovered" otherwise. */}
           {pathSlot && (
             <>
-              <h3 className="rw-section-title">Path causality</h3>
+              <h3 className="rw-section-title">Network path &amp; causality</h3>
               <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
             </>
           )}
@@ -339,24 +315,6 @@ export default function RcaWorkspace({
               <h3 className="rw-section-title">External ticket</h3>
               <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
             </>
-          )}
-
-          {/* causal topology — advanced Network-Path graphics (RcaTopology) when
-              provided, with the data-driven chain / placement card as fallback */}
-          <h3 className="rw-section-title">Network path &amp; causal topology</h3>
-          {topologySlot ? (
-            <section style={{ marginBottom: 4 }}>{topologySlot}</section>
-          ) : (
-            <section className="rw-panel" style={{ padding: 10 }}>
-              {data.topology && data.topology.nodes.length > 0 ? (
-                <CausalTopology nodes={data.topology.nodes} edges={data.topology.edges} />
-              ) : (
-                <div style={{ padding: "14px 6px", color: "var(--rw-muted)" }}>
-                  <b style={{ color: "var(--rw-text)" }}>Path location not placed yet.</b> There isn&apos;t enough routing or path
-                  evidence to place this issue on a specific link or device chain.
-                </div>
-              )}
-            </section>
           )}
 
           {/* cloud application & resources (#81 P3G 1c) — additive; only present

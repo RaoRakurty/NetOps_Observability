@@ -21,7 +21,7 @@ function renderWS(data = suspectedCase(), view: "operator" | "debug" = "operator
   const onExportPdf = vi.fn();
   const utils = render(
     <RcaWorkspace data={data} view={view} onView={onView} onExportPdf={onExportPdf}
-      topologySlot={<div data-testid="topo-slot">TOPOLOGY</div>}
+      pathSlot={<div data-testid="path-slot">PATH</div>}
       debugExtra={<div data-testid="replay">REPLAY</div>} />,
   );
   return { ...utils, onView, onExportPdf, data };
@@ -47,14 +47,17 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
     data.impact.forEach((r) => expect(screen.getAllByText(r.v).length).toBeGreaterThan(0));
   });
 
-  it("uses the topology slot when provided", () => {
+  it("renders ONE merged path section (owner P1: no duplicate topology section)", () => {
     renderWS();
-    expect(screen.getByTestId("topo-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("path-slot")).toBeInTheDocument();
+    expect(screen.getByText("Network path & causality")).toBeInTheDocument();
+    // the old duplicate section is gone
+    expect(screen.queryByText("Network path & causal topology")).not.toBeInTheDocument();
+    expect(screen.queryByText("Path causality")).not.toBeInTheDocument();
   });
 
   it("renders one evidence card per plane with its finding", () => {
     const { data } = renderWS();
-    expect(screen.getByText("Network path & causal topology")).toBeInTheDocument();
     // plane names (e.g. "Device health") appear in both the matrix and the
     // timeline lane labels — assert presence, not uniqueness.
     data.evidence.forEach((e) => expect(screen.getAllByText(e.title).length).toBeGreaterThan(0));
