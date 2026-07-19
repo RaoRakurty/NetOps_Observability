@@ -245,6 +245,10 @@ var routeIsolationLedger = map[string]string{
 	// principalTenant-scoped identity map + inventory. Isolation contract proven
 	// by cloud_service_map_test.go (scope literal + fail-closed cases).
 	"/api/cloud/service-map": "scoped",
+	// Cloud metric charts (Wave 5 #14): PromQL selector built server-side from
+	// the caller's principalTenant inventory ids only; cross-tenant id → 404.
+	// Cross-org proof in cloud_metrics_series_isolation_test.go.
+	"/api/cloud/metrics/series": "scoped",
 
 	// ── Cloud Connector framework ──
 	// Connectors are per-tenant DATA (each tenant's cloud connections); scoped +

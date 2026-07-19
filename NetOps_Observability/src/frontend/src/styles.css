@@ -4682,6 +4682,10 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .ao-set-v { font-size: var(--fs-micro, 12px); color: var(--fg); font-weight: 600; margin: 0 0 var(--sp-3);
   padding: var(--sp-2) var(--sp-3); background: var(--panel-2, rgba(127,127,127,0.06)); border-radius: var(--r-2); }
 
+/* ── Cloud metric charts (Wave 5 #14) ── */
+.ao-metrics-panel { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); }
+.ao-metrics-ctl { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+
 /* ── App Observability — Overview pass (#81 P3F) ──────────────────────────────
    NOC polish: prominent numerals, small uppercase labels, grouped cards, explicit
    underlay, RCA drawer. All tokens — overrides the earlier card rules (later wins). */

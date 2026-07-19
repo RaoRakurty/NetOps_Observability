@@ -26,12 +26,13 @@ import { isStateEvent, stateLabel, stateReason, cleanVal } from "./timeline";
 import { DEFAULT_CLOUD_RANGE, filterByRange, newestIso, rangeWords } from "./range";
 import { FeedBar } from "./FeedBar";
 import { feedCount } from "./range";
+import ResourceMetricsPanel from "./ResourceMetricsPanel";
 import { lbTraffic, isLbErrorSignal } from "./traffic";
 import {
   healthMetricCell, healthCurrentCell, healthBaselineCell, healthReasonCell,
 } from "./healthCells";
 
-type DetailTab = "overview" | "identity" | "health" | "changes" | "traffic" | "dependencies" | "underlay" | "evidence";
+type DetailTab = "overview" | "identity" | "health" | "metrics" | "changes" | "traffic" | "dependencies" | "underlay" | "evidence";
 
 // a metric with no ingested source renders "—", never a fabricated 0.
 const NM = (v: number, fmt: (n: number) => string): ReactNode =>
@@ -157,7 +158,8 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
         ariaLabel="App detail view"
         options={[
           { value: "overview", label: "Overview" }, { value: "identity", label: "Identity" },
-          { value: "health", label: "Health" }, { value: "changes", label: "Changes" },
+          { value: "health", label: "Health" }, { value: "metrics", label: "Metrics" },
+          { value: "changes", label: "Changes" },
           { value: "traffic", label: "Traffic" }, { value: "dependencies", label: "Dependencies" },
           { value: "underlay", label: "Underlay" }, { value: "evidence", label: "Evidence" },
         ]}
@@ -253,6 +255,16 @@ export default function AppDetail({ app, onBack }: { app: App; onBack: () => voi
               { key: "health", header: "Health", width: 110, sortValue: (r) => healthRank(r.health), render: (r) => <HealthBadge status={r.health} /> },
             ]} />
           )}
+        </div>
+      )}
+
+      {tab === "metrics" && (
+        <div className="ao-panel">
+          <div className="ao-panel-h">Cloud metrics
+            <span className="ao-panel-meta">provider metric lane · measured values, never simulated</span></div>
+          <ResourceMetricsPanel
+            targets={resources.map((r) => ({ id: r.id, name: r.name }))}
+            subject={app.name} />
         </div>
       )}
 

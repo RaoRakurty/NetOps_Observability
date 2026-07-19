@@ -2145,6 +2145,15 @@ export const api = {
   metricsQuery: (query: string) =>
     request<PromInstantResponse>(`/api/metrics/query?${new URLSearchParams({ query })}`),
 
+  // Cloud metric charts (Wave 5 #14): tenant-scoped, bounded series for the
+  // resource drawer / App Detail. The backend refuses ids outside the caller's
+  // inventory (404) and builds the PromQL itself — no raw query surface here.
+  cloudMetricSeries: (resources: string[], metric: string, windowMinutes: number) => {
+    const p = new URLSearchParams({ metric, window_minutes: String(windowMinutes) });
+    for (const r of resources) p.append("resource", r);
+    return request<CloudMetricSeriesResponse>(`/api/cloud/metrics/series?${p.toString()}`);
+  },
+
   // Saved objects (searches / dashboards / reports) — Postgres-swappable
   // file-backed store on the API.
   listSaved: (type?: string) =>
@@ -3331,6 +3340,28 @@ export type PromRangeResponse = {
   status: string;
   data?: { resultType: string; result: PromSeries[] };
   error?: string;
+};
+
+// Cloud metric charts (Wave 5 #14) — GET /api/cloud/metrics/series. Points are
+// [unix_seconds, value] (Prometheus convention; the chart multiplies by 1000).
+// An empty points array is an HONEST "nothing ingested", never a flatline.
+export type CloudMetricPoint = [number, number];
+export type CloudMetricSeriesEntry = {
+  resource_id: string;
+  resource_name?: string;
+  points: CloudMetricPoint[];
+};
+export type CloudMetricCatalogEntry = { name: string; label: string; unit: string };
+export type CloudMetricSeriesResponse = {
+  metric: string;
+  label: string;
+  unit: string; // percent | bytes | count
+  window_minutes: number;
+  step_seconds: number;
+  start: number;
+  end: number;
+  series: CloudMetricSeriesEntry[];
+  catalog: CloudMetricCatalogEntry[];
 };
 
 // Instant query — one sample per matching series.

@@ -1050,6 +1050,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/evidence", s.handleCloudEvidence)
 	mux.HandleFunc("/api/cloud/investigations/", s.handleCloudInvestigationChanges) // {id}/changes — change→incident correlation (Wave 4 #12)
 	mux.HandleFunc("/api/cloud/service-map", s.handleCloudServiceMap)
+	// Cloud metric charts (Wave 5 #14 slice 1): bounded VM query_range over the
+	// caller's OWN inventory ids only (cross-tenant id → 404).
+	mux.HandleFunc("/api/cloud/metrics/series", s.handleCloudMetricSeries)
 	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
 	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)
 	mux.HandleFunc("/api/cloud/connectors", s.handleCloudConnectors)
