@@ -1,31 +1,30 @@
 import { useMemo } from "react";
-import type { RcaPathAttribution, RcaTypedSegment, RcaPathKeyDevice } from "../../services/api";
+import type { CorrTimeline, RcaPathAttribution, RcaTypedSegment, RcaPathKeyDevice } from "../../services/api";
 import {
   segmentLabel, segmentMeta, isOpaqueSegment, roleLabel, roleAbbr, roleCloudFamily,
   tierLabel, tierTone, confidenceLabel, kindLabel,
 } from "./labels";
+import { derivePathModel, type PathModel } from "./pathModel";
 
-// RcaPathCausality — the PATH-FIRST render of the discovered SRC→DST typed path
-// (path-causality RCA, design §5/§5a; reworked per the owner directive
-// 2026-07-18: "the path, drawn correctly with perfect broken links, will talk a
-// million words"). It consumes the `path_attribution` render contract exactly as
-// the engine decoded it (rca_path_attribution.go) — the engine already made the
-// causal decision and applied the honesty caps; this view NEVER re-decides:
+// RcaPathCausality — THE single RCA case path view (owner P1 2026-07-19: the
+// former "Path causality" + "Network path & causal topology" renders are merged
+// into this one component over ONE derivation, pathModel.ts). It draws:
 //
-//  · ONE clean left-to-right chain — DNS head, then every known device as a
-//    small node + label. Healthy hops carry NO state chips, no confidence
-//    footers, no "observed" boxes: a hop that isn't implicated just IS.
-//  · the RED break is the hero — the attributed device carries the break glyph
+//  · ONE clean left-to-right chain — the end-to-end network path as connected
+//    typed segments (client → site → ISP/middle-mile → provider/SaaS as
+//    applicable). Healthy hops carry NO state chips, no confidence footers, no
+//    "observed" boxes: a hop that isn't implicated just IS.
+//  · a health overlay per segment (degraded / down) ONLY where the backend
+//    measured it — never a grey "unknown" chip.
+//  · the RED break as the hero — the attributed device carries the break glyph
 //    and "Possible break here" (or "Break here" when the verdict is confirmed).
+//  · the seam-ownership label ("who to engage") and the honest "possibly
+//    because of X" phrasing, when the case carries them.
 //  · unknown/opaque spans collapse to a dotted "· · · N hops" connector; the
-//    classification reason moves into its tooltip — absence drawn as absence,
-//    never a grey box lecturing about telemetry.
-//  · per-hop evidence (role, address, classification, confidence) lives behind
-//    hover (title) / click (cloud devices deep-link into Cloud Logs).
-//  · honesty unchanged — a capped verdict shows its cap reason; discounted
-//    off-path faults are listed as ruled-out; and when no break is attributable
-//    the chain draws WITHOUT a break plus one clean sentence saying so. No hop
-//    and no break is ever invented.
+//    reason moves into its tooltip — absence drawn as absence, never a grey box.
+//  · honest degradation — no typed path → the backend's measured spine; no
+//    spine → the named routing adjacency; nothing → "path not fully
+//    discovered". No hop and no break is ever invented.
 //
 // Customer-facing labels only (no schema kinds / backend names). Renders inside
 // the RcaWorkspace light report surface; tokens carry dark-safe fallbacks.
@@ -111,8 +110,26 @@ function GapConnector({ seg }: { seg: RcaTypedSegment }) {
   );
 }
 
-export default function RcaPathCausality({ data }: { data: RcaPathAttribution | null | undefined }) {
-  const cause = data?.attributed ?? null;
+// The seam-ownership + "possibly because of X" line — one plain sentence under
+// the headline (never a chip grid). Rendered only from real case data.
+function OwnershipLine({ ownership, possibleCause }: { ownership?: string; possibleCause?: string }) {
+  if (!ownership && !possibleCause) return null;
+  return (
+    <div className="rpc-ownerline">
+      {possibleCause && <>Possibly because of <b>{possibleCause}</b>. </>}
+      {ownership && <>To engage: <b className="rpc-owner-name">{ownership}</b>.</>}
+    </div>
+  );
+}
+
+export default function RcaPathCausality({ data, timeline, ownership, possibleCause }: {
+  data: RcaPathAttribution | null | undefined;
+  timeline?: CorrTimeline | null;   // fallback derivation (measured spine / routing adjacency)
+  ownership?: string;               // seam-ownership display ("Lumen (DIA #12345) · ISP / carrier")
+  possibleCause?: string;           // honest "possibly because of X" phrase (unconfirmed cases only)
+}) {
+  const model: PathModel = useMemo(() => derivePathModel(data, timeline), [data, timeline]);
+  const cause = model.cause;
 
   const causeKey = useMemo(
     () => (cause ? devKey(cause.device.segment_index, cause.device) : ""),
@@ -120,31 +137,86 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
   );
   const downstreamKeys = useMemo(() => {
     const s = new Set<string>();
-    for (const e of data?.explained_away ?? []) s.add(devKey(e.device.segment_index, e.device));
+    for (const e of model.explainedAway) s.add(devKey(e.device.segment_index, e.device));
     return s;
-  }, [data]);
+  }, [model.explainedAway]);
 
-  const path = data?.path ?? null;
-  const segments = path?.segments ?? [];
+  const segments = model.segments;
 
-  // Honest empty state — nothing to draw at all. One clean sentence, never a
-  // fabricated path.
-  if (!data || (!cause && segments.length === 0)) {
+  // The platform observing itself — never dressed as a customer path.
+  if (model.mode === "internal") {
     return (
       <div className="rpc rpc-empty" role="note">
         <style>{RPC_CSS}</style>
-        <span className="rpc-empty-mark" aria-hidden="true">↳</span>
-        No discovered path for this incident — the evidence did not place an on-path
-        device between a source and a destination, so no path-causality attribution is drawn.
+        <span className="rpc-empty-mark" aria-hidden="true">◎</span>
+        Internal monitoring path — this case is the platform observing itself
+        (monitoring agents / platform services), not a customer network path.
       </div>
     );
   }
 
-  const head = path?.head ?? null;
-  const dstName = head?.query_name || "application";
-  const verdict = data.verdict_tier;
-  const baseline = data.baseline_verdict_tier;
-  const lifted = data.confidence_lifted && baseline && baseline !== verdict;
+  // The named routing adjacency — the honest middle ground: the adjacency is
+  // known, the path is not. One two-node chain + one plain sentence.
+  if (model.mode === "adjacency" && model.adjacency) {
+    const { device, peer, kindText } = model.adjacency;
+    return (
+      <div className="rpc">
+        <style>{RPC_CSS}</style>
+        <div className="rpc-headline">
+          <div className="rpc-verdict">
+            <span className={`rpc-pill ${tierTone(model.verdict)}`}>{tierLabel(model.verdict)}</span>
+          </div>
+          <div className="rpc-claim">
+            A <b>{kindText}</b> was seen on <b>{device}</b>{peer ? <> with peer <b>{peer}</b></> : null} —
+            the issue localizes to this routing adjacency; the full end-to-end path is not discovered,
+            so no break point beyond it is claimed.
+          </div>
+          <OwnershipLine ownership={ownership} possibleCause={possibleCause} />
+        </div>
+        <div className="rpc-ribbon-wrap">
+          <div className="rpc-ribbon" role="list" aria-label="Routing adjacency">
+            <div className="rpc-dev" role="listitem" title={`Router ${device} — routing adjacency`}>
+              <span className="rpc-dev-abbr" aria-hidden="true">RTR</span>
+              <span className="rpc-dev-body">
+                <span className="rpc-dev-role">Router</span>
+                <span className="rpc-dev-name">{device}</span>
+              </span>
+            </div>
+            {peer && (
+              <>
+                <span className="rpc-arrow" aria-hidden="true">→</span>
+                <div className="rpc-dev" role="listitem" title={`Peer ${peer} — adjacency peer`}>
+                  <span className="rpc-dev-abbr" aria-hidden="true">PEER</span>
+                  <span className="rpc-dev-body">
+                    <span className="rpc-dev-role">Adjacency peer</span>
+                    <span className="rpc-dev-name">{peer}</span>
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Honest empty state — nothing to draw at all. One clean sentence, never a
+  // fabricated path and never a grey box.
+  if (model.mode === "none" || (!cause && segments.length === 0)) {
+    return (
+      <div className="rpc rpc-empty" role="note">
+        <style>{RPC_CSS}</style>
+        <span className="rpc-empty-mark" aria-hidden="true">↳</span>
+        Path not fully discovered for this incident — the evidence did not place an
+        on-path device between a source and a destination, so no path is drawn and
+        no break point is claimed.
+      </div>
+    );
+  }
+
+  const head = model.head;
+  const dstName = model.dstName;
+  const verdict = model.verdict;
   const breakText = verdict === "confirmed" ? "Break here" : "Possible break here";
 
   return (
@@ -152,19 +224,19 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
       <style>{RPC_CSS}</style>
 
       {/* honesty cap — a partial/opaque span keeps the verdict at suspected */}
-      {data.capped && data.cap_reason && (
+      {model.capped && model.capReason && (
         <div className="rpc-cap" role="note">
-          <b>Verdict capped:</b> {data.cap_reason} — the path is partly opaque, so this reads as suspected, not confirmed.
+          <b>Verdict capped:</b> {model.capReason} — the path is partly opaque, so this reads as suspected, not confirmed.
         </div>
       )}
 
-      {/* path-causality headline + verdict lift */}
+      {/* path-causality headline + verdict lift + ownership */}
       <div className="rpc-headline">
         <div className="rpc-verdict">
           <span className={`rpc-pill ${tierTone(verdict)}`}>{tierLabel(verdict)}</span>
-          {lifted && (
+          {model.lifted && (
             <span className="rpc-lift" title="On-path evidence lifted the verdict above the symptom-only baseline">
-              <span className={`rpc-pill ${tierTone(baseline)} ghost`}>{tierLabel(baseline)}</span>
+              <span className={`rpc-pill ${tierTone(model.baseline)} ghost`}>{tierLabel(model.baseline)}</span>
               <span className="rpc-lift-arrow" aria-hidden="true">↑</span>
               <span className="rpc-lift-note">lifted by on-path evidence</span>
             </span>
@@ -181,10 +253,12 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
             from the current evidence, so no device is blamed.
           </div>
         )}
+        <OwnershipLine ownership={ownership} possibleCause={possibleCause} />
       </div>
 
       {/* ONE clean left-to-right chain. Known devices are small nodes; unknown
-          spans are dotted gaps; the attributed cause is the red hero. */}
+          spans are dotted gaps; the attributed cause is the red hero; measured
+          segment health is a toned word on the segment cap, never a grey chip. */}
       {segments.length > 0 ? (
         <div className="rpc-ribbon-wrap">
           <div className="rpc-ribbon" role="list" aria-label="Discovered path, source to destination">
@@ -204,6 +278,7 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
             {segments.map((seg, i) => {
               const opaque = (isOpaqueSegment(seg.segment_type) || !!seg.reason) && !(seg.key_devices?.length);
               const meta = segmentMeta(seg.segment_type);
+              const health = model.segmentHealth[seg.index];
               return (
                 <div className="rpc-seg-wrap" role="listitem" key={`${seg.index ?? "s"}-${i}`}>
                   {opaque ? (
@@ -216,6 +291,11 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
                         <span className="rpc-seg-name">{segmentLabel(seg.segment_type)}</span>
                         {seg.provider && <span className="rpc-seg-provider">{seg.provider.toUpperCase()}</span>}
                         {seg.ambiguous && <span className="rpc-seg-flag" title="Multiple equal-cost paths (ECMP) — the exact hop is ambiguous">ECMP</span>}
+                        {health && (
+                          <span className={`rpc-seg-health ${health}`}>
+                            {health === "down" ? (verdict === "confirmed" ? "down" : "suspected down") : "degraded"}
+                          </span>
+                        )}
                       </div>
                       <div className="rpc-seg-devs">
                         {(seg.key_devices ?? []).map((d, j) => {
@@ -230,7 +310,8 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
                         {(!seg.key_devices || seg.key_devices.length === 0) && (
                           <span className="rpc-seg-empty" title={seg.reason || undefined}>no device identified</span>
                         )}
-                        {seg.unknown_hops && seg.unknown_hops.length > 0 && <GapConnector seg={{ ...seg, reason: seg.reason || `${seg.unknown_hops.length} hop(s) inside this segment did not respond — not visible from here.` }} />}
+                        {seg.unknown_hops && seg.unknown_hops.length > 0 && (seg.key_devices?.length ?? 0) > 0 &&
+                          <GapConnector seg={{ ...seg, reason: seg.reason || `${seg.unknown_hops.length} hop(s) inside this segment did not respond — not visible from here.` }} />}
                       </div>
                     </div>
                   )}
@@ -239,12 +320,12 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
               );
             })}
           </div>
-          {path?.ambiguous && (
+          {model.ambiguous && (
             <div className="rpc-path-note">
               This path has ambiguous hops (ECMP / failover) — the segment sequence is the stable essence; exact hops vary per flow.
             </div>
           )}
-          {(path?.notes ?? []).map((n, i) => <div key={i} className="rpc-path-note">{n}</div>)}
+          {model.notes.map((n, i) => <div key={i} className="rpc-path-note">{n}</div>)}
         </div>
       ) : (
         <div className="rpc-path-note">
@@ -253,11 +334,11 @@ export default function RcaPathCausality({ data }: { data: RcaPathAttribution | 
       )}
 
       {/* off-path faults the engine ruled out — severity is not causality */}
-      {data.discounted && data.discounted.length > 0 && (
+      {model.discounted.length > 0 && (
         <div className="rpc-discounted">
           <span className="rpc-discounted-label">Ruled out (off-path):</span>{" "}
-          {data.discounted.map((d, i) => (
-            <span key={i} className="rpc-discounted-item" title={d.reason}>{roleLabel(d.kind)}{i < data.discounted!.length - 1 ? " · " : ""}</span>
+          {model.discounted.map((d, i) => (
+            <span key={i} className="rpc-discounted-item" title={d.reason}>{roleLabel(d.kind)}{i < model.discounted.length - 1 ? " · " : ""}</span>
           ))}
           <div className="rpc-discounted-note">These changed in the same window but are not on the affected source→destination path, so they are not the cause.</div>
         </div>
@@ -288,6 +369,9 @@ const RPC_CSS = `
 .rpc-claim b { color: var(--rw-text, var(--fg, #172033)); }
 .rpc-claim-seg { font-weight: 800; }
 .rpc-claim-dev { color: var(--rw-red, #dc2626); }
+.rpc-ownerline { font-size: 13px; line-height: 1.5; color: var(--rw-muted, var(--muted, #6a7384)); }
+.rpc-ownerline b { color: var(--rw-text, var(--fg, #172033)); }
+.rpc-owner-name { font-weight: 800; }
 
 .rpc-pill { display: inline-flex; align-items: center; border-radius: 7px; padding: 2px 9px;
   font-size: 11.5px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent; text-transform: uppercase; }
@@ -311,6 +395,9 @@ const RPC_CSS = `
 .rpc-seg-name { font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .rpc-seg-provider { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
 .rpc-seg-flag { font-weight: 700; border: 1px solid var(--rw-line, #dce3ee); border-radius: 5px; padding: 0 4px; }
+.rpc-seg-health { font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.rpc-seg-health.down { color: var(--rw-red, #dc2626); }
+.rpc-seg-health.degraded { color: var(--rw-orange, #d66a00); }
 .rpc-seg-devs { display: flex; align-items: stretch; gap: 6px; }
 .rpc-seg-empty { font-size: 11px; color: var(--rw-muted2, #8a94a6); font-style: italic; align-self: center; }
 

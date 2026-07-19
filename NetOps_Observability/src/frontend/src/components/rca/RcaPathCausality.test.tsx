@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup, within } from "@testing-library/react";
 import type { RcaPathAttribution } from "../../services/api";
 import RcaPathCausality from "./RcaPathCausality";
+import { signal, timeline } from "../../test/factories";
 
 afterEach(cleanup);
 
@@ -193,7 +194,7 @@ describe("RcaPathCausality", () => {
 
   it("renders an honest empty note when no path was attributed", () => {
     const { container } = render(<RcaPathCausality data={null} />);
-    expect(screen.getByText(/No discovered path for this incident/i)).toBeTruthy();
+    expect(screen.getByText(/Path not fully discovered/i)).toBeTruthy();
     // never a fabricated segment / device.
     expect(within(container).queryByText("Broke here")).toBeNull();
   });
@@ -203,6 +204,86 @@ describe("RcaPathCausality", () => {
       verdict_tier: "suspected", baseline_verdict_tier: "suspected",
       confidence_lifted: false, capped: false, on_path_device_count: 0, attributed: null,
     }} />);
-    expect(screen.getByText(/No discovered path for this incident/i)).toBeTruthy();
+    expect(screen.getByText(/Path not fully discovered/i)).toBeTruthy();
+  });
+
+  it("renders the seam-ownership label and the honest 'possibly because of X' phrasing", () => {
+    render(<RcaPathCausality data={confirmed}
+      ownership="Lumen (DIA #12345) · ISP / carrier"
+      possibleCause="packet loss on the ISP / middle-mile path" />);
+    expect(screen.getByText(/Possibly because of/i)).toBeTruthy();
+    expect(screen.getByText("packet loss on the ISP / middle-mile path")).toBeTruthy();
+    expect(screen.getByText(/To engage:/i)).toBeTruthy();
+    expect(screen.getByText("Lumen (DIA #12345) · ISP / carrier")).toBeTruthy();
+  });
+});
+
+// ── merged single-logic fallbacks (owner P1 2026-07-19: one path view) ────────
+describe("RcaPathCausality — merged fallback chain (pathModel.ts)", () => {
+  const spineTimeline = () => {
+    const tl = timeline({ verdict_tier: "suspected", signals: [] }) as ReturnType<typeof timeline> & { path?: unknown };
+    tl.path = {
+      spine: [
+        { index: 0, kind: "client", label: "client-01", boundary: "LAN", state: "responding" },
+        { index: 1, kind: "lan_gateway", label: "lan-gw", boundary: "LAN", state: "responding" },
+        { index: 2, kind: "transit", boundary: "CARRIER", state: "missing" },
+        { index: 3, kind: "wan_edge", label: "isp-edge", boundary: "CARRIER", state: "responding", fault: "suspected" },
+        { index: 4, kind: "application", label: "app.example", boundary: "CLOUD", state: "responding", provider: "aws" },
+      ],
+      edges: [{ from: 3, to: 4, type: "PATH_HAS_HOP", state: "degraded", evidence: { ref: "ev1", method: "traceroute_icmp" } }],
+      boundaries: [], evidence_branches: [],
+    };
+    return tl;
+  };
+
+  it("derives connected boundary segments + the red break from the measured spine when no typed path exists", () => {
+    render(<RcaPathCausality data={null} timeline={spineTimeline()} />);
+    // boundary segments in customer labels: LAN → Internet (carrier) → Cloud
+    expect(screen.getAllByText("LAN").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Internet").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Cloud").length).toBeGreaterThan(0);
+    // the backend's fault mark is the hero break — suspected verdict, never definitive
+    expect(screen.getByText("Possible break here")).toBeTruthy();
+    expect(screen.getByText("isp-edge")).toBeTruthy();
+    // health overlay per segment — toned words, never grey chips
+    expect(screen.getByText("suspected down")).toBeTruthy();
+    expect(screen.getByText("degraded")).toBeTruthy();
+    // the silent hop collapses to a counted gap
+    expect(screen.getByText("1 hop")).toBeTruthy();
+    // still no observed/not-observed boxes in any mode
+    expect(screen.queryByText(/observed/i)).toBeNull();
+  });
+
+  it("falls back to the named routing adjacency when no path exists at all", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [signal({ kind: "bgp_state_anomaly", modality_class: "control_plane", entity_id: "wan-r2:192.168.100.5", attrs: '{"peer":"192.168.100.5"}' })],
+    });
+    render(<RcaPathCausality data={null} timeline={tl} />);
+    expect(screen.getByText(/localizes to this routing adjacency/i)).toBeTruthy();
+    expect(screen.getAllByText("wan-r2").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("192.168.100.5").length).toBeGreaterThan(0);
+    // no break invented, no observed boxes
+    expect(screen.queryByText(/break here/i)).toBeNull();
+    expect(screen.queryByText(/observed/i)).toBeNull();
+  });
+
+  it("says 'Internal monitoring path' for a platform self-probe object", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [signal({ kind: "probe_loss", modality_class: "active_probe", entity_id: "netops-probe", probe_scope: "internal_self_probe", probe_authority: "debug_only" })],
+    });
+    render(<RcaPathCausality data={null} timeline={tl} />);
+    expect(screen.getByText(/Internal monitoring path/i)).toBeTruthy();
+  });
+
+  it("degrades to the honest 'path not fully discovered' sentence — no grey boxes", () => {
+    const tl = timeline({
+      verdict_tier: "suspected",
+      signals: [signal({ kind: "if_errors", modality_class: "device_telemetry", entity_id: "sw-3" })],
+    });
+    const { container } = render(<RcaPathCausality data={null} timeline={tl} />);
+    expect(screen.getByText(/Path not fully discovered/i)).toBeTruthy();
+    expect(container.querySelectorAll(".rpc-dev").length).toBe(0);
   });
 });

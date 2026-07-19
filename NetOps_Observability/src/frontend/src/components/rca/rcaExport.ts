@@ -1,6 +1,7 @@
-import type { RcaCase, RcaPill, KV, Tone } from "./rcaCase";
+import type { RcaCase, RcaPill, KV, Tone, CaseEvent } from "./rcaCase";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import type { TopoGraph, TopoGraphNode, EdgeState } from "./topoGraph";
+import { fmtDateTime } from "../../lib/time";
 
 // rcaExport — generates an elegant, light-themed, print-ready RCA report and
 // opens it for the browser's "Save as PDF". No PDF dependency: a self-contained
@@ -41,6 +42,15 @@ const kvRows = (rows: KV[]) => rows.map((r) =>
 const block = (label: string, body: string) => body ? `<section><h2>${esc(label)}</h2>${body}</section>` : "";
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+// Event timeline (owner P1 2026-07-19) — the chronological timestamped case
+// events, printed as a two-column table. UTC (documents are timezone-pinned).
+const eventsTable = (evs?: CaseEvent[]): string => !evs || evs.length === 0 ? "" :
+  `<table><thead><tr><th style="width:158px">Time</th><th>Event</th></tr></thead><tbody>` +
+  evs.map((e) =>
+    `<tr><td style="font-family:ui-monospace,monospace;white-space:nowrap">${esc(fmtDateTime(e.ts, { mode: "utc" }))}</td>` +
+    `<td>${esc(e.label)}${e.detail ? ` <span style="color:#64748b">· ${esc(e.detail)}</span>` : ""}</td></tr>`).join("") +
+  `</tbody></table>`;
 
 // shapeInner — the device-type geometry in a 0 0 100 100 box, mirroring the
 // on-screen shape kit (shapes.tsx): device TYPE = shape, health = colour. Light
@@ -341,12 +351,13 @@ function reportHtml(d: RcaCase, objId: string): string {
   <header class="rpt"><span class="brand">CORRELIX</span><span class="doctype">Root Cause Analysis Report</span></header>
   <h1>${esc(d.title)}</h1>
   <div class="badges">${d.pills.map(pill).join("")}</div>
-  <div class="meta">Observed at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
+  <div class="meta">Detected at: <b>${esc(d.observedAt)}</b> &middot; RCA ID: <b>${esc(d.rcaId)}</b></div>
 
   ${d.decision.text ? block("Decision", `<div class="decision"${d.decision.tone === "confirmed" ? ' style="border-left-color:#0f9f4f;background:#f2fbf6;border-color:#b9e5c7"' : ""}>${esc(d.decision.text)}</div>`) : ""}
   ${block("Case", kvRows(d.aside))}
   ${block("Executive summary", `<p class="body">${esc(d.summary)}</p>${why}`)}
   ${block("Impact & blast radius", kvRows(d.impact))}
+  ${block("Event timeline", eventsTable(d.events))}
   ${block("Network path & causal topology", d.topoGraph ? topoGraphSvg(d.topoGraph) : topoSvg(d.topology))}
   ${block("Evidence matrix", evidence)}
   ${block("Confidence ladder", ladder)}

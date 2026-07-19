@@ -1,8 +1,9 @@
 import { useState, ReactNode } from "react";
 import "./RcaWorkspace.css";
 import { api } from "../../services/api";
-import type { RcaCase, RcaPill, KV, TopoNode, TopoEdge } from "./rcaCase";
+import type { RcaCase, RcaPill, KV, CaseEvent } from "./rcaCase";
 import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
+import { fmtTime, fmtDateTime, fmtDate, parseTs } from "../../lib/time";
 
 // RcaWorkspace — the production RCA detail view, organized after the reference
 // template (light, single-column report). PURE PRESENTATION: it renders an
@@ -14,8 +15,9 @@ import { bandLabel, bandTone, appIdSourceLabel } from "./labels";
 //    dangerouslySetInnerHTML; every value is rendered as escaped React text.
 //  · Scoped — all styles live under `.rca-ws` (RcaWorkspace.css), isolated from
 //    the app's dark theme in both directions.
-//  · Honest — a suspected single-signal case renders sparse ("Not observed",
-//    locked ladder steps); nothing is promoted to confirmed by the view.
+//  · Honest — a suspected single-signal case renders sparse (locked ladder
+//    steps, muted unwitnessed rungs); nothing is promoted to confirmed by the
+//    view, and epistemic state is never a grey chip (owner 2026-07-19).
 
 const Pill = ({ p }: { p: RcaPill }) => <span className={`rw-pill ${p.tone}`}>{p.text}</span>;
 
@@ -114,35 +116,43 @@ function KeyVal({ rows }: { rows: KV[] }) {
   );
 }
 
-function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[] }) {
-  // No role="img" on the chain: it would collapse the node/edge text out of
-  // the a11y tree — the chain reads naturally as text (1.1.1).
+// EventTimeline — the chronological "what happened when" list (owner P1
+// 2026-07-19: timelines of events with timestamps are RCA basics). Every entry
+// is a REAL recorded timestamp (see buildCaseEvents); rendered as an ordered
+// list (list semantics for AT), collapsible via native <details> (keyboard
+// operable), times carry <time dateTime> and the date appears whenever an event
+// falls on a different day than the first (crossing midnight stays readable).
+function EventTimeline({ events }: { events: CaseEvent[] }) {
+  const firstDay = fmtDate(events[0]?.ts);
   return (
-    <div className="rw-topo">
-      {nodes.map((n, i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <div className={`rw-node ${n.kind}`}>
-            <div className="circle">{n.abbr}</div>
-            <div className="name">{n.name}</div>
-            <div className="meta">{n.meta}</div>
-            {n.tag && <div className="tag"><Pill p={n.tag} /></div>}
-          </div>
-          {i < nodes.length - 1 && (
-            <div className="rw-edge-wrap">
-              <div className={`rw-edge ${edges[i]?.state ?? "good"}`} />
-              {edges[i]?.label && (
-                <span className={`rw-edge-label ${edges[i]?.state ?? ""}${edges[i]?.side === 1 ? " side1" : ""}`}>{edges[i]?.label}</span>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
+    <details className="rw-events" open>
+      <summary className="rw-events-summary">
+        <span className="rw-events-count">{events.length} event{events.length === 1 ? "" : "s"} · oldest first</span>
+      </summary>
+      <ol className="rw-events-list">
+        {events.map((e, i) => {
+          const iso = parseTs(e.ts)?.toISOString();
+          const sameDay = fmtDate(e.ts) === firstDay;
+          return (
+            <li key={i} className="rw-event">
+              <time className="rw-event-time" dateTime={iso}>
+                {sameDay ? fmtTime(e.ts) : fmtDateTime(e.ts)}
+              </time>
+              <span className={`rw-event-dot ${e.tone}`} aria-hidden="true" />
+              <span className="rw-event-text">
+                {e.label}
+                {e.detail && <span className="rw-event-detail"> · {e.detail}</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </details>
   );
 }
 
 export default function RcaWorkspace({
-  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, topologySlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
+  data, view, onView, onExportPdf, exportDisabled, debugExtra, pathSlot, timeImpactSlot, ticketSlot, aiSlot, verifySlot,
 }: {
   data: RcaCase;
   view: "operator" | "debug";
@@ -150,8 +160,11 @@ export default function RcaWorkspace({
   onExportPdf: () => void;
   exportDisabled?: boolean;
   debugExtra?: ReactNode;
-  pathSlot?: ReactNode;       // path-causality RCA (design §5/§5a) — the discovered typed SRC→DST path is the HERO
-  topologySlot?: ReactNode;   // advanced Network-Path topology (RcaTopology); falls back to the data chain
+  // THE single network-path & causality render (RcaPathCausality over
+  // pathModel.ts — owner P1 2026-07-19: one path view, one logic). The
+  // component owns its own honest fallbacks (spine / adjacency / not
+  // discovered), so no second topology section exists.
+  pathSlot?: ReactNode;
   timeImpactSlot?: ReactNode; // RCA Time Intelligence — incident time decomposition card
   ticketSlot?: ReactNode;     // RCA auto-ticketing (#78) — live external ticket status + actions
   aiSlot?: ReactNode;         // Iris AI — grounded "Ask AI" RCA explanation card
@@ -193,7 +206,7 @@ export default function RcaWorkspace({
               <strong>Decision:</strong><span>{data.decision.text}</span>
             </div>
           )}
-          <div className="rw-note">Observed at: <b>{data.observedAt}</b> · RCA ID: <b>{data.rcaId}</b></div>
+          <div className="rw-note">Detected at: <b>{data.observedAt}</b> · RCA ID: <b>{data.rcaId}</b></div>
         </div>
         <aside className="rw-aside">
           {data.aside.map((m, i) => <div key={i} className="rw-metric"><span>{m.k}</span><b className={m.mono ? "mono" : undefined}>{m.v}</b></div>)}
@@ -223,13 +236,13 @@ export default function RcaWorkspace({
 
       {view === "operator" ? (
         <>
-          {/* PATH-FIRST (design §5a: the path is the hero). The discovered typed
-              SRC→DST path with the broken link highlighted + the named cause leads
-              the operator view. Absent → the component renders an honest "no
-              discovered path" note; a report without path attribution is unchanged. */}
+          {/* PATH-FIRST (design §5a: the path is the hero). The ONE merged
+              network-path & causality view: typed SRC→DST path with the broken
+              link highlighted, measured-spine fallback, routing-adjacency
+              fallback, honest "path not fully discovered" otherwise. */}
           {pathSlot && (
             <>
-              <h3 className="rw-section-title">Path causality</h3>
+              <h3 className="rw-section-title">Network path &amp; causality</h3>
               <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
             </>
           )}
@@ -270,6 +283,17 @@ export default function RcaWorkspace({
             </div>
           </section>
 
+          {/* Event timeline — chronological, timestamped case events (RCA
+              basics). Sits right after "what happened", before the evidence. */}
+          {data.events && data.events.length > 0 && (
+            <>
+              <h3 className="rw-section-title">Event timeline</h3>
+              <section className="rw-panel rw-events-panel" style={{ marginBottom: 4 }}>
+                <EventTimeline events={data.events} />
+              </section>
+            </>
+          )}
+
           {/* Iris AI — grounded, cited "Ask AI" explanation of this RCA. */}
           {aiSlot && <section style={{ marginBottom: 4 }}>{aiSlot}</section>}
 
@@ -292,24 +316,6 @@ export default function RcaWorkspace({
               <h3 className="rw-section-title">External ticket</h3>
               <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
             </>
-          )}
-
-          {/* causal topology — advanced Network-Path graphics (RcaTopology) when
-              provided, with the data-driven chain / placement card as fallback */}
-          <h3 className="rw-section-title">Network path &amp; causal topology</h3>
-          {topologySlot ? (
-            <section style={{ marginBottom: 4 }}>{topologySlot}</section>
-          ) : (
-            <section className="rw-panel" style={{ padding: 10 }}>
-              {data.topology && data.topology.nodes.length > 0 ? (
-                <CausalTopology nodes={data.topology.nodes} edges={data.topology.edges} />
-              ) : (
-                <div style={{ padding: "14px 6px", color: "var(--rw-muted)" }}>
-                  <b style={{ color: "var(--rw-text)" }}>Path location not placed yet.</b> There isn&apos;t enough routing or path
-                  evidence to place this issue on a specific link or device chain.
-                </div>
-              )}
-            </section>
           )}
 
           {/* cloud application & resources (#81 P3G 1c) — additive; only present
@@ -448,8 +454,8 @@ export default function RcaWorkspace({
           </section>
 
           {/* failure-propagation ladder (owner directive 2026-07-13): how one
-              failure caused the next; unwitnessed rungs stay visible but are
-              marked Not observed — the ladder never claims without evidence */}
+              failure caused the next; unwitnessed rungs stay visible but read
+              muted — the ladder never claims without evidence */}
           {data.cascade && data.cascade.length > 0 && (
             <>
               <h3 className="rw-section-title">How the failure propagated</h3>
@@ -475,7 +481,7 @@ export default function RcaWorkspace({
                   ))}
                 </div>
                 <div className="rw-tdetail">
-                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a stage marked Not observed is part of the known propagation path but has no evidence in this window and is not claimed.
+                  <b>Reading this ladder:</b> a failure at the highlighted origin propagates downward — each witnessed stage carries the evidence that saw it; a dimmed stage is part of the known propagation path but has no evidence in this window and is not claimed.
                 </div>
               </section>
             </>

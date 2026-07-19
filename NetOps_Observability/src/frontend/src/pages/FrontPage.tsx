@@ -1,8 +1,8 @@
 import { Component, CSSProperties, ReactNode, useEffect, useState } from "react";
-import { api, CorrObject, FeedItem, CorrTimeline, Seam } from "../services/api";
+import { api, CorrObject, FeedItem, CorrTimeline } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
-import RcaPathView from "../components/rca/RcaPathView";
+import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected, mentionsInternal } from "../components/rca/labels";
 import { CorrSignal } from "../services/api";
 
@@ -390,7 +390,6 @@ function TelemetryCoverage() {
 function RcaPathPanel() {
   const { data, err } = usePoll(() => api.correlations(80, 2592000, "open"));
   const [tl, setTl] = useState<CorrTimeline | null>(null);
-  const [seams, setSeams] = useState<Record<string, Seam>>({});
   const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
   const top = objs.find((o) => o.verdict_tier === "confirmed") ?? objs[0];
   const topId = top?.correlation_id;
@@ -398,7 +397,6 @@ function RcaPathPanel() {
     if (!topId) { setTl(null); return; }
     let alive = true;
     api.correlationTimeline(topId).then((t) => { if (alive) setTl(t); }).catch(() => { if (alive) setTl(null); });
-    api.seams("active").then((list) => { if (alive) { const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); } }).catch(() => { /* seams optional */ });
     return () => { alive = false; };
   }, [topId]);
   if (err) return <Panel title="RCA path view" state="degraded" />;
@@ -406,7 +404,11 @@ function RcaPathPanel() {
     hint="When an issue is suspected or confirmed, its path and likely fault location appear here." />;
   return (
     <Panel title="RCA path view" to="monitoring/correlations">
-      <RcaPathView timeline={tl} seams={seams} owner={top.owner} />
+      {/* The merged single path view (pathModel.ts): the front page has no
+          decoded attribution, so it renders the honest fallback chain —
+          measured spine → routing adjacency → "path not fully discovered". */}
+      <RcaPathCausality data={null} timeline={tl}
+        ownership={top.owner ? ownerLabel(top.owner) : undefined} />
     </Panel>
   );
 }

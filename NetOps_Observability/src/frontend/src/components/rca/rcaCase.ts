@@ -1,4 +1,4 @@
-import { CorrTimeline, CorrObject, Seam } from "../../services/api";
+import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason } from "./labels";
 import { kindForRole, type ShapeKind } from "../graph/shapes";
 import { parseTs } from "../../lib/time";
@@ -163,6 +163,105 @@ export function buildEvidenceSummary(
   };
 }
 
+// ── Event timeline (owner P1 2026-07-19: "RCA basics") ────────────────────────
+// One chronological list of REAL, timestamped case events in NOC language: first
+// sighting of each symptom, detection trigger, case milestones, verification
+// runs, symptom clears and recorded recovery. Every entry carries a timestamp
+// that exists in the payload — nothing is fabricated or interpolated.
+export interface CaseEvent {
+  ts: string;        // raw timestamp as received (formatted at render time)
+  label: string;     // plain-language NOC event
+  detail?: string;   // secondary context (evidence source, trigger, …)
+  tone: Tone;
+}
+
+// Optional slices of the canonical RCA report JSON + the latest verification run
+// — used ONLY to add honestly-recorded milestones to the event timeline.
+export interface CaseEventExtras {
+  times?: { recovered_at?: string; component_recovered_at?: string };
+  promotion?: { manual?: { promoted_by: string; promoted_at: string } };
+  verification?: VerificationRun | null;
+}
+
+// buildCaseEvents — pure derivation of the chronological event list from data
+// the workspace already holds. Only timestamps present in the payload are used.
+export function buildCaseEvents(timeline: CorrTimeline, obj: CorrObject, extras?: CaseEventExtras): CaseEvent[] {
+  const out: CaseEvent[] = [];
+  const t = (v: string | undefined): number | null => {
+    const d = v ? parseTs(v) : null;
+    return d ? d.getTime() : null;
+  };
+  const push = (ts: string | undefined, label: string, tone: Tone, detail?: string) => {
+    if (ts && t(ts) !== null) out.push({ ts, label, tone, detail });
+  };
+
+  // First sighting of each distinct symptom (attached anomalous evidence only;
+  // internal/platform entities never appear) + first clear per symptom.
+  const firstByKind = new Map<string, CorrSignal>();
+  const clearByKind = new Map<string, CorrSignal>();
+  for (const s of timeline.signals) {
+    if (mentionsInternal(s.entity_id)) continue;
+    if (s.kind.endsWith("_clear")) {
+      const k = s.kind.replace(/_clear$/, "");
+      const prev = clearByKind.get(k);
+      if (!prev || (t(s.ts) ?? 0) < (t(prev.ts) ?? 0)) clearByKind.set(k, s);
+      continue;
+    }
+    if (!s.attached) continue;
+    const prev = firstByKind.get(s.kind);
+    if (!prev || (t(s.ts) ?? 0) < (t(prev.ts) ?? 0)) firstByKind.set(s.kind, s);
+  }
+  const firsts = [...firstByKind.values()]
+    .sort((a, b) => (t(a.ts) ?? 0) - (t(b.ts) ?? 0))
+    .slice(0, 10);
+  const seenSources = new Set<string>();
+  firsts.forEach((s, i) => {
+    const entity = entityLabel(s.entity_id.split(":")[0]);
+    const source = modalityLabel(isRoutingKind(s.kind) ? "control_plane" : s.modality_class);
+    const newSource = !seenSources.has(source);
+    seenSources.add(source);
+    const detail = [
+      source,
+      i > 0 && newSource ? "independent source joined" : "",
+      s.is_trigger ? "detection trigger" : "",
+    ].filter(Boolean).join(" · ");
+    push(s.ts, `${i === 0 ? "First symptom — " : ""}${kindLabel(s.kind)} on ${entity}`, i === 0 ? "red" : "orange", detail);
+  });
+
+  // Case milestones recorded by the platform.
+  push(obj.created_at, "Case opened — related evidence grouped into one case", "blue");
+  const promo = extras?.promotion?.manual;
+  if (promo?.promoted_at) push(promo.promoted_at, `Promoted to RCA case${promo.promoted_by ? ` by ${promo.promoted_by}` : ""}`, "blue");
+
+  // Verification battery (read-only device interrogation), when one was run.
+  const run = extras?.verification;
+  if (run?.started_at) {
+    const results = run.results ?? [];
+    const fails = results.filter((r) => r.status === "fail").length;
+    const corroborating = results.some((r) => (r.corroborates_kinds ?? []).length > 0 && r.status === "fail");
+    const refuting = fails === 0 && results.some((r) => (r.refutes_kinds ?? []).length > 0 && r.status === "pass");
+    const outcome = run.status === "running" ? "in progress"
+      : results.length === 0 ? "completed"
+        : fails > 0 ? `${fails} fault${fails === 1 ? "" : "s"} found${corroborating ? " — corroborating" : ""}`
+          : `devices healthy${refuting ? " — refuting" : ""}`;
+    push(run.started_at, `Verification battery run — ${outcome}`, fails > 0 ? "orange" : "blue", "read-only device checks");
+  }
+
+  // Recovery: per-symptom clears (only for symptoms actually seen), then the
+  // recorded recovery times off the report.
+  for (const [k, s] of clearByKind) {
+    if (!firstByKind.has(k)) continue;
+    push(s.ts, `${kindLabel(k)} cleared on ${entityLabel(s.entity_id.split(":")[0])}`, "green");
+  }
+  const times = extras?.times ?? {};
+  if (times.component_recovered_at && times.component_recovered_at !== times.recovered_at) {
+    push(times.component_recovered_at, "Component recovery seen", "green");
+  }
+  if (times.recovered_at) push(times.recovered_at, "Service recovery confirmed", "green");
+
+  return out.sort((a, b) => (t(a.ts) ?? 0) - (t(b.ts) ?? 0));
+}
+
 export interface RcaCase {
   synthetic: boolean;             // true → show the "synthetic / example" watermark
   title: string;
@@ -196,6 +295,13 @@ export interface RcaCase {
   topoGraph?: TopoGraph;
   evidence: EvidenceCard[];
   ladder: LadderStep[];
+  // Chronological event timeline (real timestamps only) — the NOC "what
+  // happened when" read; rendered as a collapsible list near the summary.
+  events?: CaseEvent[];
+  // Seam-ownership display ("Lumen (DIA #12345) · ISP / carrier") + the honest
+  // "possibly because of X" phrase — surfaced by the merged network-path view.
+  ownershipLabel?: string;
+  possiblyCause?: string;
   timelineTicks: string[];
   timeline: TimelineLane[];
   hypotheses: HypothesisRow[];
@@ -270,7 +376,7 @@ export const EXAMPLE_CASE: RcaCase = {
     { variant: "missing", dot: "gray", title: "Similar incidents", pill: { tone: "gray", text: "1 match" }, desc: "History, change window, known signatures", finding: "Similar ISP loss signature seen 21 days ago on same underlay.", foot: "Not used as confirmation alone" },
   ],
   ladder: [
-    { state: "done", label: "✓ Observed", caption: "BGP event happened" },
+    { state: "done", label: "✓ Detected", caption: "BGP event detected" },
     { state: "done", label: "✓ Suspected", caption: "Localized to wan-r2 adjacency" },
     { state: "done", label: "✓ Probable", caption: "Independent network evidence aligned" },
     { state: "active", label: "✓ Confirmed", caption: "Application impact confirmed" },
@@ -361,7 +467,7 @@ const PLANE_TITLE: Record<string, string> = {
   device_telemetry: "Device health", control_plane: "Routing / link", passive_flow: "Traffic flow", active_probe: "Active checks",
 };
 
-export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[], seamOwners?: Record<string, { name: string; contact?: string }>): RcaCase {
+export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Record<string, Seam>, owner: string, steps: string[], seamOwners?: Record<string, { name: string; contact?: string }>, extras?: CaseEventExtras): RcaCase {
   // #113 slice 2: the tenant's seam-ownership registry turns an owner CLASS
   // into the actual responsible party — "Lumen (DIA #12345) · ISP / carrier"
   // instead of the bare class label. Absent registry → class label only.
@@ -615,7 +721,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // confidence ladder
   const reached = confirmed ? 4 : suspected ? 2 : 1;
   const ladder: LadderStep[] = [
-    { state: "done", label: "✓ Observed", caption: "Anomaly observed" },
+    { state: "done", label: "✓ Detected", caption: "Anomaly detected" },
     { state: reached >= 2 ? (confirmed ? "done" : "active") : "next", label: (reached >= 2 ? "✓ " : "") + "Suspected", caption: device ? `Localized to ${device}` : "Localized to a device area" },
     { state: confirmed ? "done" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Probable", caption: "Independent network evidence aligned" },
     { state: confirmed ? "active" : "next", label: (confirmed ? "✓ " : "🔒 ") + "Confirmed", caption: confirmed ? "Customer impact confirmed" : "Independent evidence missing" },
@@ -690,7 +796,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     if (device) {
       const di = addNode(device, {
         kind: confirmed ? "bad" : "warn", shape: kindForRole(device),
-        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly observed",
+        meta: hasRouting ? "routing/link change" : hasDevice ? "device-health change" : "anomaly detected",
         tag: { tone: confirmed ? "red" : "orange", text: confirmed ? "ROOT CAUSE" : "SUSPECTED" },
       });
       if (peer) addEdge(di, addNode(peer, { kind: "info", shape: kindForRole(peer), meta: "adjacency peer" }), hasRouting ? kindLabel(routeKind) : "evidence");
@@ -819,7 +925,7 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
       },
       { tone: "blue", text: `Confidence: ${confidence}` },
       { tone: "orange", text: `Incident: ${lifecycle === "recovered" ? "Recovered" : lifecycle === "recovering" ? "Recovering" : "Active"}` },
-      { tone: "purple", text: `Analysis: ${confirmed ? "Confirmed" : contradicted ? "Inconclusive" : suspected ? "Suspected" : "Observed"}` },
+      { tone: "purple", text: `Analysis: ${confirmed ? "Confirmed" : contradicted ? "Inconclusive" : suspected ? "Suspected" : "Detected"}` },
     ],
     decision: { tone: confirmed ? "confirmed" : "", text: DECISION_TEXT[decisionKind] },
     verdictState, ruledOut, whyNot,
@@ -859,7 +965,11 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     ],
     evidenceSummary,
     summary, why, impact, topology,
-    evidence, ladder, timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
+    evidence, ladder,
+    events: buildCaseEvents(timeline, obj, extras),
+    ownershipLabel: owner ? ownerDisplay(owner) : "",
+    possiblyCause,
+    timelineTicks: ticks, timeline: timelineLanes, hypotheses, cascade,
     ticket: {
       callout: confirmed ? { tone: "red", strong: "Open incident:", text: "Customer impact is confirmed." } : { tone: "", strong: "Not opened —", text: "impact not confirmed. Auto-ticketing holds until independent evidence confirms customer impact." },
       rows: confirmed ? [{ k: "Ticket state", v: "Recommend open" }, { k: "Priority", v: "P2" }, { k: "Assignment", v: ownerDisplay(owner) || "NetOps" }] : [{ k: "Ticket state", v: "Not opened" }, { k: "Reason", v: "RCA not confirmed" }],

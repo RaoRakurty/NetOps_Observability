@@ -21,7 +21,7 @@ function renderWS(data = suspectedCase(), view: "operator" | "debug" = "operator
   const onExportPdf = vi.fn();
   const utils = render(
     <RcaWorkspace data={data} view={view} onView={onView} onExportPdf={onExportPdf}
-      topologySlot={<div data-testid="topo-slot">TOPOLOGY</div>}
+      pathSlot={<div data-testid="path-slot">PATH</div>}
       debugExtra={<div data-testid="replay">REPLAY</div>} />,
   );
   return { ...utils, onView, onExportPdf, data };
@@ -47,14 +47,17 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
     data.impact.forEach((r) => expect(screen.getAllByText(r.v).length).toBeGreaterThan(0));
   });
 
-  it("uses the topology slot when provided", () => {
+  it("renders ONE merged path section (owner P1: no duplicate topology section)", () => {
     renderWS();
-    expect(screen.getByTestId("topo-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("path-slot")).toBeInTheDocument();
+    expect(screen.getByText("Network path & causality")).toBeInTheDocument();
+    // the old duplicate section is gone
+    expect(screen.queryByText("Network path & causal topology")).not.toBeInTheDocument();
+    expect(screen.queryByText("Path causality")).not.toBeInTheDocument();
   });
 
   it("renders one evidence card per plane with its finding", () => {
     const { data } = renderWS();
-    expect(screen.getByText("Network path & causal topology")).toBeInTheDocument();
     // plane names (e.g. "Device health") appear in both the matrix and the
     // timeline lane labels — assert presence, not uniqueness.
     data.evidence.forEach((e) => expect(screen.getAllByText(e.title).length).toBeGreaterThan(0));
@@ -96,6 +99,30 @@ describe("RcaWorkspace — operator view renders every widget from the data", ()
   it("does not render the debug JSON model in operator view", () => {
     renderWS();
     expect(screen.queryByText("Correlation data model")).not.toBeInTheDocument();
+  });
+});
+
+describe("RcaWorkspace — event timeline (owner P1 2026-07-19)", () => {
+  it("renders chronological events with real timestamps as an accessible collapsible list", () => {
+    const { container } = renderWS();
+    expect(screen.getByText("Event timeline")).toBeInTheDocument();
+    // first symptom entry, derived from the signal's real timestamp
+    expect(screen.getByText(/First symptom — /)).toBeInTheDocument();
+    // native <details> (keyboard-operable collapse), open by default
+    const details = container.querySelector("details.rw-events") as HTMLDetailsElement;
+    expect(details).toBeTruthy();
+    expect(details.open).toBe(true);
+    // list semantics + machine-readable <time dateTime>
+    const items = details.querySelectorAll("ol.rw-events-list > li");
+    expect(items.length).toBeGreaterThan(0);
+    const time = details.querySelector("time") as HTMLTimeElement;
+    expect(time.getAttribute("dateTime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("renders no event panel when the case has no events", () => {
+    const data = { ...suspectedCase(), events: [] };
+    renderWS(data);
+    expect(screen.queryByText("Event timeline")).not.toBeInTheDocument();
   });
 });
 

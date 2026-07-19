@@ -15,7 +15,7 @@ import { api, type VerificationCheckResult } from "../../services/api";
 import { useVerification } from "./useVerification";
 
 const STATUS_LABEL: Record<string, string> = {
-  pass: "healthy", fail: "fault observed", unreachable: "unreachable", skipped: "skipped",
+  pass: "healthy", fail: "fault found", unreachable: "unreachable", skipped: "skipped",
 };
 const STATUS_COLOR: Record<string, string> = {
   pass: "var(--ok, #2e9e5b)", fail: "var(--bad, #d64545)",
@@ -98,7 +98,7 @@ export default function RcaVerifyPanel({ correlationId, suspected }: {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ textAlign: "left", opacity: 0.7 }}>
-                  <th scope="col">Check</th><th scope="col">Device</th><th scope="col">Result</th><th scope="col">Observed</th>
+                  <th scope="col">Check</th><th scope="col">Device</th><th scope="col">Result</th><th scope="col">Device response</th>
                 </tr>
               </thead>
               <tbody>
