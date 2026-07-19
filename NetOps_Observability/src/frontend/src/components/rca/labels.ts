@@ -643,12 +643,24 @@ export function appIdSourceLabel(s?: string): string {
 // Tone maps to the rw-pill palette (green/orange/blue/red/gray/purple). Accent is a
 // concrete color (fallbacks legible on both the light report surface and dark app).
 export const SEGMENT_META: Record<string, { label: string; short: string; tone: Tone; color: string }> = {
-  cloud:    { label: "Cloud",        short: "CLOUD", tone: "purple", color: C.discriminates },
-  lan:      { label: "LAN",          short: "LAN",   tone: "blue",   color: C.info },
-  dc:       { label: "Data Center",  short: "DC",    tone: "green",  color: C.flow },
-  wan:      { label: "WAN",          short: "WAN",   tone: "orange", color: C.warn },
+  // ── canonical segment taxonomy (owner directive 2026-07-19): the enterprise
+  // connectivity chain a NOC operator recognizes. Every rendered path segment
+  // canonicalizes onto one of these (pathModel.ts canonicalSegment).
+  site_lan:      { label: "Site LAN",             short: "LAN",  tone: "blue",   color: C.info },
+  edge_security: { label: "Edge security",        short: "SEC",  tone: "orange", color: C.caution },
+  wan_edge:      { label: "WAN edge",             short: "WAN",  tone: "orange", color: C.warn },
+  carrier:       { label: "Carrier / middle mile", short: "CARR", tone: "gray",  color: C.faint },
+  dc_wan_edge:   { label: "DC WAN edge",          short: "DCWAN", tone: "orange", color: "#C2410C" },
+  dc_fabric:     { label: "DC fabric",            short: "DC",   tone: "green",  color: C.flow },
+  cloud_edge:    { label: "Cloud edge",           short: "CEDGE", tone: "purple", color: "#7C3AED" },
+  cloud:         { label: "Cloud",                short: "CLOUD", tone: "purple", color: C.discriminates },
+  // ── legacy engine vocabulary (typed-path blobs / spine boundaries still emit
+  // these; pathModel canonicalizes them, but any direct render keeps a label).
+  lan:      { label: "Site LAN",     short: "LAN",   tone: "blue",   color: C.info },
+  dc:       { label: "DC fabric",    short: "DC",    tone: "green",  color: C.flow },
+  wan:      { label: "WAN edge",     short: "WAN",   tone: "orange", color: C.warn },
   wan_seam: { label: "WAN Seam",     short: "SEAM",  tone: "orange", color: "#C2410C" },
-  internet: { label: "Internet",     short: "NET",   tone: "gray",   color: C.faint },
+  internet: { label: "Carrier / middle mile", short: "CARR", tone: "gray", color: C.faint },
   unknown:  { label: "Unknown segment", short: "?",  tone: "gray",   color: C.faint },
 };
 export function segmentLabel(t?: string): string {

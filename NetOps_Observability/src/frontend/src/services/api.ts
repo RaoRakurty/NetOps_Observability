@@ -607,10 +607,21 @@ export type RcaAttributedFault = {
   device: RcaOnPathDevice; kind: string; modality?: string; headline?: string;
 };
 export type RcaDiscountedFault = { identity: string; kind: string; reason: string };
-export type RcaPathKeyDevice = { address?: string; role: string; label?: string; confidence?: string };
+export type RcaPathKeyDevice = {
+  address?: string; role: string; label?: string; confidence?: string;
+  // Discovery-driven device role (backend classifier, roles.go): access_switch |
+  // distribution_switch | core_router | firewall | load_balancer | wan_edge |
+  // carrier_hop | dc_wan_edge | dc_leaf | dc_spine | cloud_edge | unknown.
+  // Absent when discovery couldn't classify — never guessed.
+  device_role?: string;
+  role_confidence?: string; // strong | medium | weak (words, never percentages)
+};
 export type RcaTypedSegment = {
   index: number; segment_type: string; boundary?: string; provider?: string; confidence?: string;
   key_devices?: RcaPathKeyDevice[]; unknown_hops?: number[]; ambiguous: boolean; reason?: string;
+  // Cloud attachment flavor when the backend derived one (dia | direct_connect |
+  // expressroute | ipsec_vpn). Absent = not derivable; the UI must not guess.
+  attachment?: string;
 };
 export type RcaPathHead = { query_name?: string; resolved_address?: string };
 export type RcaTypedPath = {
