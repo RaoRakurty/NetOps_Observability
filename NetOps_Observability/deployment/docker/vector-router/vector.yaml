@@ -58,6 +58,17 @@ sources:
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
 
+  # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
+  # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
+  # Management). Routed to ClickHouse netops.cloud_costs (analytics; tenant
+  # row policy) — cost is not a log, so no OpenSearch index.
+  kafka_cloudcosts:
+    type: kafka
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.cloudcosts"]
+    group_id: "netops-router-cloudcosts"
+    decoding: { codec: json }
+
 transforms:
   # #20 Phase 3 — per-tenant OpenSearch index routing (at-rest separation).
   # Each event already carries .tenant_id (stamped at the aggregator from the
@@ -157,6 +168,30 @@ transforms:
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
 
+  # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
+  # the bus payload: only kind=cloud_cost with a well-formed day passes; the
+  # amount is coerced to a float so a string-typed value can't 400 the whole
+  # insert batch (the flows proto lesson). `ts` is converted to epoch-ms
+  # (log-time standard S4/R1 — an integer can never be re-interpreted in the
+  # server timezone); an unparseable ts is dropped so the column DEFAULT
+  # (insert time) applies rather than failing the batch.
+  cloudcosts_normalized:
+    type: remap
+    inputs: [kafka_cloudcosts]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      if (to_string(.kind) ?? "") != "cloud_cost" { abort }
+      if !match(to_string(.day) ?? "", r'^\d{4}-\d{2}-\d{2}$') { abort }
+      .amount = to_float(.amount) ?? 0.0
+      .tenant_id = to_string(.tenant_id) ?? ""
+      tsp, terr = parse_timestamp(to_string(.ts) ?? "", format: "%+")
+      if terr == null {
+        .ts = to_unix_timestamp(tsp, unit: "milliseconds")
+      } else {
+        del(.ts)
+      }
+
   # OS gets a 1-in-50 SAMPLE of flows — ClickHouse is the canonical flow store.
   # An unsampled mirror at generator/production fps wrote ~4 GB/day into one
   # index, hit the disk flood-stage watermark, and turned EVERY log index
@@ -238,6 +273,22 @@ sinks:
     endpoint: "http://clickhouse:8123"
     database: netops
     table: flows
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    skip_unknown_fields: true
+    healthcheck: { enabled: false }
+
+  # Daily cloud cost records → ClickHouse (Wave 5 #18). skip_unknown_fields
+  # drops the record's `kind` routing field; schema growth is a plain
+  # ALTER TABLE ADD COLUMN, same contract as flows.
+  clickhouse_cloudcosts:
+    type: clickhouse
+    inputs: [cloudcosts_normalized]
+    endpoint: "http://clickhouse:8123"
+    database: netops
+    table: cloud_costs
     auth:
       strategy: basic
       user: "${CLICKHOUSE_USER}"

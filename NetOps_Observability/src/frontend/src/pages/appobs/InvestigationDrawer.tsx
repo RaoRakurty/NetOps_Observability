@@ -17,6 +17,7 @@ import { CorrelationDetail } from "../../tabs/Correlations";
 import { friendlyProblemId } from "../../components/rca/labels";
 import ResolutionActions from "./ResolutionActions";
 import InvestigationChanges from "./InvestigationChanges";
+import CostContext from "./CostContext";
 
 // ── recovery-verification derivation (pure — unit-tested) ────────────────────
 
@@ -238,6 +239,7 @@ export default function InvestigationDrawer({ id }: { id: string }) {
       <InvestigationVerification id={id} />
       <ResolutionActions id={id} />
       <InvestigationChanges id={id} />
+      <CostContext id={id} />
       <CorrelationDetail id={id} />
     </div>
   );

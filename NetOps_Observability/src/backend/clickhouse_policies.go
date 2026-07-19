@@ -81,6 +81,9 @@ func chConvergeStmts() []string {
 	// converge-on-boot contract; init.sql carries the identical DDL for fresh
 	// installs.
 	stmts = append(stmts, pathSchemaDDL()...)
+	// Cloud cost store (Wave 5 #18) — table + STRICT tenant row policy
+	// (cloud_costs.go). Billing data is per-tenant financial data.
+	stmts = append(stmts, cloudCostsSchemaDDL()...)
 	return stmts
 }
 
