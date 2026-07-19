@@ -1040,6 +1040,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/appid/catalog/", s.handleAppIDCatalogByID)
 	mux.HandleFunc("/api/flows/apps", s.handleFlowsApps)
 	mux.HandleFunc("/api/cloud/resources", s.handleCloudResources)
+	// Wave 6 #20: single-resource read behind the permanent #/resource/cloud/{id}
+	// detail page (cross-tenant / unknown id → the same 404).
+	mux.HandleFunc("/api/cloud/resources/", s.handleCloudResourceByID)
 	mux.HandleFunc("/api/cloud/identity-map", s.handleCloudIdentityMap)
 	mux.HandleFunc("/api/cloud/apps", s.handleCloudApps)
 	mux.HandleFunc("/api/cloud/attribution/coverage", s.handleCloudCoverage)
@@ -1085,6 +1088,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/saved", s.handleSaved)
 	mux.HandleFunc("/api/saved/", s.handleSavedByID)
 	mux.HandleFunc("/api/search/global", s.handleGlobalSearch)
+	// Wave 6 #20: the typed, tenant-scoped unified search (devices · cloud
+	// resources · apps · accounts · correlation cases) behind the topbar/⌘K.
+	mux.HandleFunc("/api/search", s.handleUnifiedSearch)
 	mux.HandleFunc("/api/reports/runs", s.handleReportRuns)
 	mux.HandleFunc("/api/reports/run", s.handleReportRunNow)
 	mux.HandleFunc("/api/reports/channels", s.handleReportChannels)
