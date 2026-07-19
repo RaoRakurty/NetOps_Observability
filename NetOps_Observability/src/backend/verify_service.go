@@ -358,11 +358,11 @@ func (s *server) verifyCaseLookup(ctx context.Context, scope, caseID string) (ve
 	sql := fmt.Sprintf(`SELECT tenant_id, toString(state) AS state,
        toString(verdict_tier) AS verdict, affected,
        toString(owner) AS owner, top_hypothesis,
-       toString(window_start) AS window_start
+       %s AS window_start
   FROM netops.corr_current FINAL
  WHERE correlation_id = toUUID('%s')
  LIMIT 1
-FORMAT JSONEachRow`, caseID)
+FORMAT JSONEachRow`, chISO("window_start"), caseID)
 	rows, err := s.chRowsScope(ctx, scope, sql, "verify_case_lookup")
 	if err != nil || len(rows) == 0 {
 		return verifyCaseRow{}, false
