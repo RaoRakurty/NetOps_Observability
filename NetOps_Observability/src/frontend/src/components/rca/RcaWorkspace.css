@@ -87,14 +87,21 @@
 .rca-ws .rw-statusline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .rca-ws .rw-note { color: var(--rw-muted); font-size: 13px; margin-top: 10px; }
 .rca-ws .rw-note b { color: var(--rw-text); font-family: var(--rw-mono); font-weight: 700; }
-.rca-ws .rw-aside { min-width: 0; border-left: 1px solid var(--rw-line); padding-left: 16px; align-self: stretch; }
-/* key left, value right — but values WRAP (grid, not single-line flex), so a
-   long "possibly because of …" fact folds instead of stretching the column. */
-.rca-ws .rw-metric { display: grid; grid-template-columns: minmax(84px, auto) 1fr; gap: 2px 14px;
-  margin: 5px 0; align-items: baseline; }
-.rca-ws .rw-metric span { color: var(--rw-muted); }
-.rca-ws .rw-metric b { font-family: var(--rw-mono); font-weight: 800; text-align: right;
-  overflow-wrap: anywhere; min-width: 0; }
+/* Right-side summary (owner P1 2026-07-19): ONE shared two-column grid for the
+   whole aside — every row was previously its own grid, so the label column
+   width varied per row and values started at different x positions (the
+   misalignment). display:contents lifts each row's cells into the shared
+   columns; labels stay one line, values are LEFT-aligned normal text that
+   wraps cleanly (right-aligned bold mono reads broken the moment a sentence
+   wraps). Mono is reserved for genuinely mono facts (ids, device pairs). */
+.rca-ws .rw-aside { min-width: 0; border-left: 1px solid var(--rw-line); padding-left: 16px; align-self: stretch;
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px; align-content: start; }
+.rca-ws .rw-metric { display: contents; }
+.rca-ws .rw-metric span { color: var(--rw-muted); font-size: 12.5px; white-space: nowrap; line-height: 1.45; }
+.rca-ws .rw-metric b { font-weight: 650; text-align: left; overflow-wrap: anywhere; min-width: 0;
+  font-size: 13px; line-height: 1.45; }
+.rca-ws .rw-metric b.mono { font-family: var(--rw-mono); font-weight: 700; }
 
 /* Evidence summary (owner 2026-07-18): verdict reason + per-symptom density
    bars. Neutral ink only — observation volume is never a health color. Spans

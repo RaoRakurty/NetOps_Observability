@@ -190,7 +190,7 @@ export default function RcaWorkspace({
           <div className="rw-note">Observed at: <b>{data.observedAt}</b> · RCA ID: <b>{data.rcaId}</b></div>
         </div>
         <aside className="rw-aside">
-          {data.aside.map((m, i) => <div key={i} className="rw-metric"><span>{m.k}</span><b>{m.v}</b></div>)}
+          {data.aside.map((m, i) => <div key={i} className="rw-metric"><span>{m.k}</span><b className={m.mono ? "mono" : undefined}>{m.v}</b></div>)}
         </aside>
         {/* Evidence summary (owner 2026-07-18): verdict reason in operator words
             + one time-density bar per symptom — repetition rendered as ink,
