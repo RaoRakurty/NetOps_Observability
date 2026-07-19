@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -76,13 +77,13 @@ FORMAT JSONEachRow`
 			}
 			rec, err := s.startVerificationRun(tenant, cid, "auto", "system:verify",
 				"suspected-tier case — probing for an independent second source", devices)
-			switch err {
-			case nil:
+			switch {
+			case err == nil:
 				launched++
 				logInfo("verify", "auto verification launched", map[string]any{
 					"tenant": tenant, "correlation_id": cid, "run_id": rec.RunID,
 				})
-			case errVerifyNoTargets, errVerifyRunning, errVerifyDisabled:
+			case errors.Is(err, errVerifyNoTargets), errors.Is(err, errVerifyRunning), errors.Is(err, errVerifyDisabled):
 				// expected paces/gates — quiet skip
 			default:
 				logWarn("verify", "auto verification failed to start", map[string]any{
