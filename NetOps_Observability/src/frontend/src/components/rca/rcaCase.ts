@@ -485,18 +485,50 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     obj.signal_count ?? attachedCount,
   );
 
-  // #113 point 4 — cause honesty: an unconfirmed case names its best hypothesis
-  // as "possibly because of X" plus the evidence STATE (what's missing: the
-  // engine's verdict reasons + the object's own evidence_missing shortfalls).
-  // No hypothesis with evidence → the absence is stated, never guessed.
-  const possiblyCause = !confirmed && !contradicted && timeline.top_hypothesis !== "undetermined" ? title : "";
+  // #113 point 4 — cause honesty, owner register (2026-07-19): the possible
+  // cause names the UPSTREAM explanation — the observed fault on the seam the
+  // engine attributed ("packet loss on the ISP / middle-mile path") — never the
+  // symptom restated back at itself. Built only from what was actually seen
+  // (fault kinds in this window + the attributed owner class); nothing there →
+  // the absence is stated, never guessed.
+  const SEAM_PHRASE: Record<string, string> = {
+    isp: "the ISP / middle-mile path", carrier: "the carrier segment",
+    cloud_provider: "the cloud provider's edge", colo_provider: "the colo provider's network",
+    sdwan_vendor: "the SD-WAN overlay", app_team: "the application/SaaS provider's side",
+    netops: "the internal network",
+  };
+  const kindsSeen = new Set(timeline.signals.filter((s) => s.attached && !s.kind.endsWith("_clear")).map((s) => s.kind));
+  const faultPhrases: string[] = [];
+  if ([...kindsSeen].some((k) => k.includes("loss"))) faultPhrases.push("packet loss");
+  if ([...kindsSeen].some((k) => k.includes("latency") || k.includes("rtt") || k.includes("timeout"))) faultPhrases.push("latency");
+  if (hasRouting) faultPhrases.push("routing instability");
+  if ([...kindsSeen].some((k) => k.includes("dns"))) faultPhrases.push("DNS trouble");
+  const seamWhere = SEAM_PHRASE[owner] ?? (owner ? `the ${ownerLabel(owner).toLowerCase()} side` : "");
+  const possiblyCause = !confirmed && !contradicted && timeline.top_hypothesis !== "undetermined"
+    ? (faultPhrases.length
+      ? `${faultPhrases.slice(0, 2).join(" or ")} on ${seamWhere || "the network path"}`
+      : seamWhere ? `an issue on ${seamWhere}` : "")
+    : "";
+  // Evidence state, one plain sentence (owner: no signature ids, no rule text —
+  // the verbatim engine reasons stay behind "How was this verified?"): what saw
+  // it, and what would confirm it. evidence_missing rows arrive prefixed with
+  // the engine signature id — strip that and translate like the verdict reasons.
   const evidenceGaps: string[] = (() => {
     try {
       const a = JSON.parse(obj.evidence_missing || "[]");
       return Array.isArray(a) ? a.map(String) : [];
     } catch { return []; }
   })();
-  const evidenceState = [...whyNot, ...evidenceGaps].slice(0, 3).join(" · ");
+  const evidenceState = (() => {
+    const translated = [...whyNot, ...evidenceGaps.map((g) => nocVerdictReason(g.replace(/^sig[\w.-]*:\s*/i, "")))]
+      .map((s) => s.trim()).filter(Boolean);
+    const seen = new Set<string>(); const out: string[] = [];
+    for (const t of translated) {
+      const k = t.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(t); }
+    }
+    return out.slice(0, 2).join(" ");
+  })();
   const verdictTone: Tone = confirmed ? "green" : verdictState === "recovered" ? "blue" : verdictState === "contradicted" ? "gray" : suspected ? "orange" : "gray";
 
   // ticket decision → exact global NOC phrase (consistent wording across the app).
