@@ -249,6 +249,9 @@ var routeIsolationLedger = map[string]string{
 	// the caller's principalTenant inventory ids only; cross-tenant id → 404.
 	// Cross-org proof in cloud_metrics_series_isolation_test.go.
 	"/api/cloud/metrics/series": "scoped",
+	// Per-tenant SLOs (Wave 5 #14 slice 2): tenant-keyed file store, PUT is
+	// requireAdmin + principal-stamped. Cross-org proof in cloud_slo_isolation_test.go.
+	"/api/cloud/slos": "scoped",
 
 	// ── Cloud Connector framework ──
 	// Connectors are per-tenant DATA (each tenant's cloud connections); scoped +

@@ -2154,6 +2154,15 @@ export const api = {
     return request<CloudMetricSeriesResponse>(`/api/cloud/metrics/series?${p.toString()}`);
   },
 
+  // Per-tenant SLOs / error budgets (Wave 5 #14 slice 2). GET returns defs +
+  // MEASURED status (absent data = "not measurable", never a fake 100%);
+  // PUT replaces the tenant's list (admin-gated, tenant stamped server-side).
+  cloudSlos: () => request<CloudSloResponse>("/api/cloud/slos"),
+  setCloudSlos: (slos: CloudSloDef[]) =>
+    request<CloudSloResponse>("/api/cloud/slos", { method: "PUT", body: JSON.stringify({ slos }) }),
+  resetCloudSlos: () =>
+    request<CloudSloResponse>("/api/cloud/slos", { method: "PUT", body: JSON.stringify({ reset: true }) }),
+
   // Saved objects (searches / dashboards / reports) — Postgres-swappable
   // file-backed store on the API.
   listSaved: (type?: string) =>
@@ -3362,6 +3371,33 @@ export type CloudMetricSeriesResponse = {
   end: number;
   series: CloudMetricSeriesEntry[];
   catalog: CloudMetricCatalogEntry[];
+};
+
+// Per-tenant SLOs (Wave 5 #14 slice 2) — /api/cloud/slos shapes
+// (src/backend/cloud_slo.go). status is computed at read time; measurable=false
+// carries a basis naming exactly what is missing.
+export type CloudSloDef = {
+  app_name: string;
+  target_pct: number;
+  window_days: number;
+  description?: string;
+};
+export type CloudSloStatus = {
+  measurable: boolean;
+  actual_pct?: number;
+  budget_pct: number;
+  budget_remaining_pct?: number;
+  burn_ratio?: number;
+  resources_total: number;
+  resources_reporting: number;
+  basis: string;
+};
+export type CloudSloRow = CloudSloDef & { status?: CloudSloStatus };
+export type CloudSloResponse = {
+  tenant_id: string;
+  slos: CloudSloRow[];
+  count: number;
+  max_slos: number;
 };
 
 // Instant query — one sample per matching series.

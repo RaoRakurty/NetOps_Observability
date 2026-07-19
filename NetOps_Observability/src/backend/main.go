@@ -134,6 +134,7 @@ type server struct {
 	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
 	governance          *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
+	cloudSLOs           *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
 	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	portStore           portStore            // Port Intelligence physical-layer store (#94)
 	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
@@ -574,6 +575,7 @@ func newServer() *server {
 	srv.aiTenantCfg = newAITenantConfigStore(aiTenantConfigPath(), vault)
 	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
+	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
 	srv.rcaPromotions = newRcaPromotionStore(rcaPromotionsPath()) // #113 point 3
 
 	srv.portStore = newPortStore() // Port Intelligence #94 P5
@@ -1053,6 +1055,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Cloud metric charts (Wave 5 #14 slice 1): bounded VM query_range over the
 	// caller's OWN inventory ids only (cross-tenant id → 404).
 	mux.HandleFunc("/api/cloud/metrics/series", s.handleCloudMetricSeries)
+	// Per-tenant SLOs / error budgets (Wave 5 #14 slice 2): defs in a tenant-
+	// keyed file store, actuals measured from the status-check lane.
+	mux.HandleFunc("/api/cloud/slos", s.handleCloudSLOs)
 	// Cloud Connector framework (provider-neutral onboarding + lifecycle).
 	mux.HandleFunc("/api/cloud/providers", s.handleCloudProviderCatalog)
 	mux.HandleFunc("/api/cloud/connectors", s.handleCloudConnectors)
