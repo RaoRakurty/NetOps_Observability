@@ -59,6 +59,17 @@ type rcaReport struct {
 	// LessonsLearned — spec-§6 schema; editing exists only for promoted
 	// classes (Phase 3 workflow). Correlix never authors subjective lessons.
 	LessonsLearned rcaLessonsLearned `json:"lessons_learned"`
+	// CausalChain — Phase 2 (spec §4): the internal causal graph rendered as a
+	// numbered primary sequence + alternative-hypothesis branches, every step
+	// carrying claim, causal role, interval, epistemic state, evidence and
+	// contradictions. Temporal language only where only timing connects steps.
+	CausalChain rcaCausalChainView `json:"causal_chain"`
+	// Timeline — Phase 2: the detailed chronological merge of every stamp that
+	// has BOTH a timestamp and source lineage. Nothing unsourced ever lands here.
+	Timeline []rcaTimelineEntry `json:"detailed_timeline"`
+	// Glossary — Phase 2 (spec §5): dynamic — only terms this report instance
+	// actually uses; report-semantics terms always defined when present.
+	Glossary []rcaGlossaryEntry `json:"glossary"`
 	// Integrity — the immutability block (analysis snapshot hash, policy +
 	// template versions, status-as-of; content hash lives in the revision
 	// register). Set by the HTTP layer at generation time; a published
@@ -1713,6 +1724,15 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		RealUserSignals: impactRealUser,
 		ImpactRU:        impactRU, Validation: validation,
 	})
+	// ---- Phase 2 postmortem rendering blocks (spec §1/§4/§5) --------------------
+	// Causal chain: numbered primary sequence + branches, epistemic state per
+	// step — a projection of the SAME ranking blob and classified observations.
+	rep.CausalChain = buildCausalChainView(hb, hyps, anomalous)
+	// Detailed timeline: chronological merge of every stamp that carries both a
+	// timestamp and source lineage (milestones, phases, symptom onsets, changes).
+	rep.Timeline = buildDetailedTimeline(&rep)
+	// Glossary: dynamic — derived from what THIS report actually uses.
+	rep.Glossary = buildRcaGlossary(&rep)
 	// Artifact-class pre-stamp: promotion is unknown at build time (the HTTP
 	// layer re-stamps once evaluated) — the honest default is unpromoted, which
 	// yields operational assessment (or validation assessment for a validation
