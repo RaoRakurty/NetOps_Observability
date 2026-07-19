@@ -95,6 +95,30 @@ func (p *GCPProbeClient) Projects(ctx context.Context, bearer string) ([]GCPProj
 	return resp.Projects, nil
 }
 
+// ProjectsUnder lists the ACTIVE projects directly under a folder or
+// organization node (org-level onboarding, Wave 5 #17): one bounded page,
+// parent-filtered, read-only. parentType is "folder" or "organization".
+func (p *GCPProbeClient) ProjectsUnder(ctx context.Context, bearer, parentType, parentID string) ([]GCPProject, error) {
+	pt := strings.TrimSpace(parentType)
+	pid := strings.TrimSpace(parentID)
+	if (pt != "folder" && pt != "organization") || pid == "" {
+		return nil, &ExchangeError{Provider: ProviderGCP, Code: "request_invalid", Msg: "a folder/organization parent and its id are required for the org enumeration probe"}
+	}
+	filter := "lifecycleState:ACTIVE parent.type:" + pt + " parent.id:" + pid
+	body, err := p.doCRM(ctx, http.MethodGet,
+		"/v1/projects?pageSize=100&filter="+url.QueryEscape(filter), bearer, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Projects []GCPProject `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, &ExchangeError{Provider: ProviderGCP, Code: "malformed_response", Msg: "parent-filtered projects response unparseable"}
+	}
+	return resp.Projects, nil
+}
+
 // TestPermissions runs projects.testIamPermissions for the given permission set
 // and returns permission → granted (absent from the response = not granted).
 func (p *GCPProbeClient) TestPermissions(ctx context.Context, bearer, projectID string, permissions []string) (map[string]bool, error) {

@@ -65,6 +65,9 @@ type cloudConnIdentityView struct {
 	ServiceAccount   string `json:"service_account,omitempty"`
 	HasLegacySecret  bool   `json:"has_legacy_secret"` // a secret is stored (never the value)
 	LegacyKeyHint    string `json:"legacy_key_hint,omitempty"`
+	// Org is the org-level (multi-account) enrollment anchor — non-secret
+	// deployment metadata (Wave 5 #17 slice 2). nil = single-account connector.
+	Org *cloudconn.OrgScopeAnchor `json:"org,omitempty"`
 }
 
 func toConnectorView(c cloudConnector) cloudConnectorView {
@@ -80,6 +83,7 @@ func toConnectorView(c cloudConnector) cloudConnectorView {
 			ProjectNumber: c.Identity.ProjectNumber, WorkloadPool: c.Identity.WorkloadPool,
 			WorkloadProvider: c.Identity.WorkloadProvider, ServiceAccount: c.Identity.ServiceAccount,
 			HasLegacySecret: c.Identity.LegacySecretRef != "", LegacyKeyHint: c.Identity.LegacyKeyID,
+			Org:             c.Identity.Org,
 		},
 		Scopes: c.Scopes, IdentityHealth: c.IdentityHealth, TelemetryHealth: c.TelemetryHealth,
 		LastValidation: c.LastValidation, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
@@ -199,6 +203,8 @@ func (s *server) handleCloudConnectorByID(w http.ResponseWriter, r *http.Request
 		s.serveConnectorAuth(w, r, id)
 	case "scopes":
 		s.serveConnectorScopes(w, r, id)
+	case "org":
+		s.serveConnectorOrg(w, r, id)
 	case "capabilities":
 		s.serveConnectorCapabilities(w, r, id)
 	case "setup":
@@ -366,6 +372,53 @@ func (s *server) serveConnectorScopes(w http.ResponseWriter, r *http.Request, id
 	}
 	c.Scopes = req.Scopes
 	s.recordConnectorEvent(r, claims, evScopeChanged, c, "scopes updated")
+	s.saveConnectorAndRespond(w, r, claims, c)
+}
+
+// ── org-level (multi-account) enrollment: POST /{id}/org ─────────────────────
+
+// orgScopeReq sets or clears the connector's org anchor. An empty type clears
+// org mode (back to single-account). The TENANT never travels here (§3a.2):
+// the anchor lives on the tenant-owned connector row, and every member scope
+// discovered or selected under it inherits that row's tenant.
+type orgScopeReq struct {
+	Type         string `json:"type"` // org | ou | mgmt_group | folder — "" clears
+	Ref          string `json:"ref"`
+	RoleTemplate string `json:"role_template"`
+}
+
+func (s *server) serveConnectorOrg(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
+		return
+	}
+	c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
+	if !ok {
+		return
+	}
+	var req orgScopeReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		c.Identity.Org = nil
+		s.recordConnectorEvent(r, claims, evScopeChanged, c, "org anchor cleared")
+		s.saveConnectorAndRespond(w, r, claims, c)
+		return
+	}
+	st, _ := cloudconn.ParseScopeType(req.Type)
+	anchor := cloudconn.OrgScopeAnchor{
+		Type:         st,
+		Ref:          strings.TrimSpace(req.Ref),
+		RoleTemplate: strings.TrimSpace(req.RoleTemplate),
+	}
+	if err := cloudconn.ValidateOrgAnchor(c.Provider, anchor); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error(), "ORG_SCOPE_INVALID")
+		return
+	}
+	c.Identity.Org = &anchor
+	s.recordConnectorEvent(r, claims, evScopeChanged, c, "org anchor set: "+string(anchor.Type)+"="+anchor.Ref)
 	s.saveConnectorAndRespond(w, r, claims, c)
 }
 
@@ -701,6 +754,13 @@ func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, 
 		"scopes":      c.Scopes,
 		"scope_types": cloudconn.ScopeTypesForProvider(c.Provider),
 	}
+	// ORG connector: enumeration runs against the org anchor; the discovered
+	// member scopes inherit the CONNECTOR's tenant by construction (§3a — the
+	// response is data on this tenant-owned row, nothing is persisted here).
+	if c.Identity.Org != nil {
+		base["org_scope"] = c.Identity.Org
+		base["member_scope_type"] = cloudconn.MemberScopeTypeForProvider(c.Provider)
+	}
 	if s.cloudBroker == nil {
 		base["live_check"] = "deferred"
 		writeJSON(w, http.StatusOK, base)
@@ -727,9 +787,13 @@ func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
+	root := cloudconn.Scope{Ref: account}
+	if org := c.Identity.Org; org != nil {
+		root = cloudconn.Scope{Type: org.Type, Ref: org.Ref}
+	}
 	discovered, err := adapter.DiscoverScopes(ctx, cloudconn.DiscoverRequest{
 		Identity: c.Identity,
-		Root:     cloudconn.Scope{Ref: account},
+		Root:     root,
 		Token:    tok,
 	})
 	switch {

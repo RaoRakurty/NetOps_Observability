@@ -99,6 +99,12 @@ type ingestConnectorView struct {
 	DisplayName    string             `json:"display_name"`
 	CapabilityPack string             `json:"capability_pack"`
 	Scopes         []cloudconn.Scope  `json:"scopes"` // provider accounts/regions to poll
+	// Org marks an ENUMERABLE org-level connector (Wave 5 #17 slice 2): the
+	// poller may re-run member enumeration through the connector's
+	// discover-scopes surface, but it POLLS ONLY the operator-approved Scopes —
+	// enumeration never silently widens collection. Member scopes inherit the
+	// connector row's tenant (§3a; the stamping source stays this row).
+	Org *cloudconn.OrgScopeAnchor `json:"org,omitempty"`
 }
 
 func (s *server) handleCloudIngestConnectors(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +138,7 @@ func (s *server) handleCloudIngestConnectors(w http.ResponseWriter, r *http.Requ
 		views = append(views, ingestConnectorView{
 			ID: c.ConnectorID, Tenant: c.TenantID, Provider: c.Provider,
 			DisplayName: c.DisplayName, CapabilityPack: c.PackFullID, Scopes: scopes,
+			Org: c.Identity.Org,
 		})
 	}
 	sort.Slice(views, func(i, j int) bool {

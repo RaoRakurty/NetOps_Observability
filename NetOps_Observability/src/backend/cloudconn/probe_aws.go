@@ -15,6 +15,7 @@ package cloudconn
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"net/url"
@@ -27,6 +28,16 @@ const (
 	awsIAMEndpoint   = "https://iam.amazonaws.com"
 	awsIAMVersion    = "2010-05-08"
 	awsIAMSignRegion = "us-east-1" // IAM is a global service signed as us-east-1
+
+	// AWS Organizations (org-level onboarding, Wave 5 #17): JSON-1.1 protocol,
+	// global endpoint signed as us-east-1.
+	awsOrgsEndpoint   = "https://organizations.us-east-1.amazonaws.com"
+	awsOrgsSignRegion = "us-east-1"
+	awsOrgsTarget     = "AWSOrganizationsV20161128."
+	// One bounded enumeration page — the discover probe answers "what members
+	// are reachable", not an exhaustive crawl (§9 bounded IO; same contract as
+	// the GCP projects probe).
+	awsOrgAccountsPageSize = 20
 )
 
 // awsProbeActionFor maps a pack permission to the CONCRETE action name the IAM
@@ -60,11 +71,12 @@ type AWSCallerIdentity struct {
 // AWSProbeClient performs the live AWS probes. All fields injectable; zero
 // values use the real endpoints and a bounded default client.
 type AWSProbeClient struct {
-	Client      *http.Client
-	STSEndpoint string // override for tests
-	IAMEndpoint string // override for tests
-	Region      string // STS signing/endpoint region when the request has none
-	Now         func() time.Time
+	Client       *http.Client
+	STSEndpoint  string // override for tests
+	IAMEndpoint  string // override for tests
+	OrgsEndpoint string // override for tests (AWS Organizations)
+	Region       string // STS signing/endpoint region when the request has none
+	Now          func() time.Time
 }
 
 // NewAWSProbeClient returns the production probe client.
@@ -195,6 +207,80 @@ func (p *AWSProbeClient) SimulatePermissions(ctx context.Context, creds AWSCrede
 	out := make(map[string]bool, len(actions))
 	for _, m := range env.SimulatePrincipalPolicyResult.EvaluationResults.Members {
 		out[m.EvalActionName] = strings.EqualFold(m.EvalDecision, "allowed")
+	}
+	return out, nil
+}
+
+// ── AWS Organizations enumeration (org-level onboarding, Wave 5 #17) ─────────
+
+// AWSOrgAccount is one member account of the organization/OU. Non-secret.
+type AWSOrgAccount struct {
+	ID     string `json:"Id"`
+	Name   string `json:"Name"`
+	Status string `json:"Status"`
+}
+
+// jsonAWS runs one signed JSON-1.1 call (the Organizations wire protocol) and
+// returns the 200 body; non-200 maps through the shared sanitized error mapper.
+func (p *AWSProbeClient) jsonAWS(ctx context.Context, endpoint, region, service, target string, payload []byte, creds AWSCredentials) ([]byte, error) {
+	now := p.now()
+	status, body, attempts, err := doExchangeHTTP(ctx, p.Client, ProviderAWS, func() (*http.Request, error) {
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/", strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, err
+		}
+		hreq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+		hreq.Header.Set("X-Amz-Target", target)
+		signAWSRequest(hreq, payload, creds, region, service, now)
+		return hreq, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, awsSTSError(status, body, attempts)
+	}
+	return body, nil
+}
+
+// OrganizationAccounts lists the ACTIVE member accounts of the organization
+// (parentRef == "" or the org id) or of one OU (parentRef "ou-…"), signed with
+// the exchanged MANAGEMENT-account credentials. One bounded page, read-only.
+// This is the live half of "an org connector is enumerable"; deployments
+// without live credentials never reach here (the adapter defers first).
+func (p *AWSProbeClient) OrganizationAccounts(ctx context.Context, creds AWSCredentials, parentRef string) ([]AWSOrgAccount, error) {
+	if creds.Empty() {
+		return nil, &ExchangeError{Provider: ProviderAWS, Code: "request_invalid", Msg: "no AWS credentials to probe with"}
+	}
+	endpoint := p.OrgsEndpoint
+	if endpoint == "" {
+		endpoint = awsOrgsEndpoint
+	}
+	action := "ListAccounts"
+	req := map[string]any{"MaxResults": awsOrgAccountsPageSize}
+	if ref := strings.TrimSpace(parentRef); strings.HasPrefix(ref, "ou-") {
+		action = "ListAccountsForParent"
+		req["ParentId"] = ref
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, &ExchangeError{Provider: ProviderAWS, Code: "request_invalid", Msg: "organizations request unserializable"}
+	}
+	body, err := p.jsonAWS(ctx, endpoint, awsOrgsSignRegion, "organizations", awsOrgsTarget+action, payload, creds)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Accounts []AWSOrgAccount `json:"Accounts"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, &ExchangeError{Provider: ProviderAWS, Code: "malformed_response", Msg: action + " response unparseable"}
+	}
+	out := make([]AWSOrgAccount, 0, len(resp.Accounts))
+	for _, a := range resp.Accounts {
+		if a.Status == "" || strings.EqualFold(a.Status, "ACTIVE") {
+			out = append(out, a)
+		}
 	}
 	return out, nil
 }

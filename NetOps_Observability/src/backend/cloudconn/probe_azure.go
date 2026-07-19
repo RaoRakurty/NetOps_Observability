@@ -26,6 +26,9 @@ const (
 	azureARMBase                = "https://management.azure.com"
 	azureSubscriptionsAPIVer    = "2022-12-01"
 	azureAuthPermissionsAPIVer  = "2022-04-01"
+	azureMgmtGroupsAPIVer       = "2020-05-01"
+	// One bounded enumeration page (§9) — same contract as the other probes.
+	azureMgmtGroupDescendantsTop = 100
 )
 
 // AzureSubscription is one reachable subscription scope. Non-secret.
@@ -119,6 +122,42 @@ func (p *AzureARMProbeClient) Permissions(ctx context.Context, bearer, subscript
 		return nil, &ExchangeError{Provider: ProviderAzure, Code: "malformed_response", Msg: "permissions response unparseable"}
 	}
 	return resp.Value, nil
+}
+
+// ManagementGroupSubscriptions lists the member SUBSCRIPTIONS under a
+// management group (org-level onboarding, Wave 5 #17): one bounded page of the
+// group's descendants, filtered to subscription entries. Read-only; requires
+// the Management Group Reader role at the group scope.
+func (p *AzureARMProbeClient) ManagementGroupSubscriptions(ctx context.Context, bearer, groupID string) ([]AzureSubscription, error) {
+	g := strings.TrimSpace(groupID)
+	if g == "" {
+		return nil, &ExchangeError{Provider: ProviderAzure, Code: "request_invalid", Msg: "management group id required for the org enumeration probe"}
+	}
+	path := "/providers/Microsoft.Management/managementGroups/" + url.PathEscape(g) +
+		"/descendants?api-version=" + azureMgmtGroupsAPIVer + "&%24top=" + strconv.Itoa(azureMgmtGroupDescendantsTop)
+	body, err := p.getARM(ctx, path, bearer)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Value []struct {
+			Name       string `json:"name"` // subscription id for subscription entries
+			Type       string `json:"type"`
+			Properties struct {
+				DisplayName string `json:"displayName"`
+			} `json:"properties"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, &ExchangeError{Provider: ProviderAzure, Code: "malformed_response", Msg: "management-group descendants response unparseable"}
+	}
+	subs := make([]AzureSubscription, 0, len(resp.Value))
+	for _, v := range resp.Value {
+		if strings.EqualFold(v.Type, "Microsoft.Management/managementGroups/subscriptions") {
+			subs = append(subs, AzureSubscription{SubscriptionID: v.Name, DisplayName: v.Properties.DisplayName, State: "Enabled"})
+		}
+	}
+	return subs, nil
 }
 
 // AzureActionGranted evaluates one required RBAC action against the granted

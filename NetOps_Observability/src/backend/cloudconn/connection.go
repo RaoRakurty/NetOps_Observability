@@ -105,6 +105,13 @@ type IdentityConfig struct {
 	LegacySecretRef string `json:"legacy_secret_ref,omitempty"` // csr_ handle into the Vault
 	LegacyKeyID     string `json:"legacy_key_id,omitempty"`     // AWS AccessKeyId / GCP SA key id — non-secret, for age tracking
 
+	// Org is the OPTIONAL org-level (multi-account) enrollment anchor (org.go).
+	// Non-secret deployment metadata, persisted with the identity config: it
+	// shapes the rendered trust artifacts (StackSet / management-group role /
+	// folder binding) and makes DiscoverScopes enumerate member accounts. nil =
+	// single-account connector.
+	Org *OrgScopeAnchor `json:"org,omitempty"`
+
 	// Anchor is Correlix's own side of the trust (its AWS principal / OIDC issuer
 	// + subject the customer's trust policy must reference). It is populated by the
 	// framework from PLATFORM config when rendering setup templates — NEVER from a

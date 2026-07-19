@@ -169,7 +169,9 @@ func (a awsAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (
 		return SetupBundle{}, &ContractError{Code: "pack_provider_mismatch", Msg: "capability pack is not an AWS pack"}
 	}
 	if cfg.Method == AuthMethodWorkloadFederation {
-		return awsWebIdentitySetup(cfg, pack), nil
+		bundle := awsWebIdentitySetup(cfg, pack)
+		appendAWSOrgArtifacts(&bundle, cfg, pack)
+		return bundle, nil
 	}
 	trusted := cfg.Anchor.AWSPrincipalARN
 	if strings.TrimSpace(trusted) == "" {
@@ -196,7 +198,133 @@ func (a awsAdapter) SetupInstructions(cfg IdentityConfig, pack CapabilityPack) (
 			{Kind: "manual", Title: "Manual IAM setup", Format: "text", Content: awsManual(trusted, extID, pack, perms)},
 		},
 	}
+	appendAWSOrgArtifacts(&bundle, cfg, pack)
 	return bundle, nil
+}
+
+// appendAWSOrgArtifacts adds the ORG-LEVEL (multi-account) trust artifacts when
+// the connector carries an org anchor: a service-managed CloudFormation
+// StackSet that deploys the SAME observer role (and, for workload federation,
+// the OIDC provider) into every member account of the organization/OU, plus
+// the management-account enumeration permission note. Pure — no secrets, no
+// network. The member-role trust mirrors the connector's auth method exactly.
+func appendAWSOrgArtifacts(bundle *SetupBundle, cfg IdentityConfig, pack CapabilityPack) {
+	if cfg.Org == nil {
+		return
+	}
+	target := strings.TrimSpace(cfg.Org.Ref)
+	if target == "" {
+		target = "<ORG_ROOT_OR_OU_ID>"
+	}
+	role := cfg.Org.RoleTemplateOrDefault()
+	bundle.Summary += " ORG MODE: the StackSet below deploys the same role (" + role + ") into every member account under " + target + "."
+	bundle.Steps = append(bundle.Steps,
+		"Organization (multi-account): deploy the StackSet from the MANAGEMENT account with service-managed permissions targeting "+target+" — every current and future member account gets the observer role automatically.",
+		"Grant the management-account observer role organizations:ListAccounts + organizations:ListAccountsForParent (read-only) so Correlix can enumerate member accounts on Discover Scopes.",
+	)
+	bundle.Artifacts = append(bundle.Artifacts,
+		SetupArtifact{
+			Kind: "cloudformation", Format: "yaml",
+			Title:   "CloudFormation StackSet — observer role in every member account",
+			Content: awsOrgStackSet(target, role, cfg, pack),
+		},
+		SetupArtifact{
+			Kind: "manual", Format: "text",
+			Title:   "Management-account enumeration permission",
+			Content: awsOrgEnumerationNote(target),
+		},
+	)
+}
+
+// awsOrgStackSet renders the StackSet template. The per-member trust follows
+// the connector's auth method: cross-account role (AWS principal + ExternalId)
+// or web identity (per-account OIDC provider + aud/sub-pinned trust).
+func awsOrgStackSet(target, role string, cfg IdentityConfig, pack CapabilityPack) string {
+	perms := pack.AllPermissions()
+	var resources string
+	if cfg.Method == AuthMethodWorkloadFederation {
+		issuer := orPlaceholder(cfg.Anchor.OIDCIssuer, "https://<correlix-issuer>")
+		subject := orPlaceholder(cfg.Anchor.OIDCSubject, "correlix:connector:<connector-id>")
+		audience := orPlaceholder(cfg.Audience, orPlaceholder(cfg.Anchor.OIDCAudience, "sts.amazonaws.com"))
+		issuerHost := strings.TrimPrefix(strings.TrimPrefix(issuer, "https://"), "http://")
+		resources = `  CorrelixOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: '` + issuer + `'
+      ClientIdList: ['` + audience + `']
+  CorrelixObserverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ` + role + `
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref CorrelixOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                '` + issuerHost + `:aud': '` + audience + `'
+                '` + issuerHost + `:sub': '` + subject + `'`
+	} else {
+		trusted := orPlaceholder(cfg.Anchor.AWSPrincipalARN, "arn:aws:iam::<CORRELIX_ACCOUNT_ID>:role/correlix-connector")
+		extID := orPlaceholder(cfg.ExternalID, "<EXTERNAL_ID_FROM_CORRELIX>")
+		resources = `  CorrelixObserverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ` + role + `
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '` + trusted + `'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: '` + extID + `'`
+	}
+	return `# Deploy from the MANAGEMENT account (CloudFormation → StackSets →
+# service-managed permissions). Target: ` + target + `
+# Creates the '` + role + `' observer role in EVERY member account; accounts that
+# join the organization later receive it automatically (auto-deployment).
+#
+#   aws cloudformation create-stack-set \
+#     --stack-set-name correlix-observer \
+#     --permission-model SERVICE_MANAGED \
+#     --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
+#     --template-body file://correlix-observer.yaml
+#   aws cloudformation create-stack-instances \
+#     --stack-set-name correlix-observer \
+#     --deployment-targets OrganizationalUnitIds=` + target + ` \
+#     --regions us-east-1
+#
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Correlix read-only observer role (` + pack.FullID() + `), org-wide via StackSet. Identical least-privilege trust in every member account.
+Resources:
+` + resources + `
+      Policies:
+        - PolicyName: correlix-observer-readonly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ` + awsPolicyStatements(perms) + `
+                Resource: '*'
+`
+}
+
+func awsOrgEnumerationNote(target string) string {
+	return "Member-account enumeration (Discover Scopes) is read-only and needs ONE extra\n" +
+		"permission on the role Correlix assumes in the MANAGEMENT account:\n\n" +
+		"  { \"Effect\": \"Allow\", \"Action\": [\"organizations:ListAccounts\",\n" +
+		"    \"organizations:ListAccountsForParent\"], \"Resource\": \"*\" }\n\n" +
+		"Correlix lists the accounts under " + target + " and shows them for selection —\n" +
+		"discovery never widens the collection scope by itself; you choose what to observe.\n" +
+		"Without this permission, Discover Scopes reports the honest deferred/denied state.\n"
 }
 
 // awsWebIdentitySetup renders the KEYLESS trust artifacts: an IAM OIDC identity
@@ -390,6 +518,12 @@ func (a awsAdapter) ExchangeCredential(ctx context.Context, req ExchangeRequest)
 // DiscoverScopes proves the exchanged credential live (sts:GetCallerIdentity)
 // and returns the account it reaches as a discovered scope. LIVE-network,
 // read-only, authenticated with the broker-minted token on the request.
+//
+// ORG connectors are ENUMERABLE (Wave 5 #17): when the request is rooted on an
+// org anchor (org/OU), the probe additionally lists the member accounts via
+// AWS Organizations (management-account credentials required). Discovery never
+// widens collection by itself — the operator still selects what to observe.
+// Without live credentials the honest deferral sentinel is returned.
 func (a awsAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]Scope, error) {
 	if a.probe == nil || req.Token.AWS == nil {
 		return nil, ErrProviderExchangeDeferred
@@ -398,9 +532,22 @@ func (a awsAdapter) DiscoverScopes(ctx context.Context, req DiscoverRequest) ([]
 	if err != nil {
 		return nil, err
 	}
-	return []Scope{{
+	scopes := []Scope{{
 		Type: ScopeAccount, Ref: ident.Account, Display: ident.ARN, Discovered: true,
-	}}, nil
+	}}
+	if org := orgAnchorFor(req, ProviderAWS); org != nil {
+		accounts, err := a.probe.OrganizationAccounts(ctx, *req.Token.AWS, org.Ref)
+		if err != nil {
+			return nil, err
+		}
+		for _, acct := range accounts {
+			if acct.ID == ident.Account {
+				continue // already listed as the proven caller account
+			}
+			scopes = append(scopes, Scope{Type: ScopeAccount, Ref: acct.ID, Display: acct.Name, Discovered: true})
+		}
+	}
+	return scopes, nil
 }
 
 // ValidateCapabilities runs the LIVE per-permission dry check: GetCallerIdentity
