@@ -46,6 +46,23 @@ func TestComponentFamily_MapsEveryEmittedType(t *testing.T) {
 		"compute:vpnGateway":            FamilySeam,
 		"compute:vpnTunnel":             FamilySeam,
 		"compute:vpcPeering":            FamilySeam,
+		// k8s layer (Wave 5 #15)
+		"eks:cluster":                     FamilyK8s,
+		"eks:nodegroup":                   FamilyK8s,
+		"containerservice:managedCluster": FamilyK8s,
+		"containerservice:agentPool":      FamilyK8s,
+		"container:cluster":               FamilyK8s,
+		"container:nodePool":              FamilyK8s,
+		// serverless / PaaS (Wave 5 #15)
+		"lambda:function": FamilyServerless,
+		"web:site":        FamilyServerless,
+		"web:serverFarm":  FamilyServerless,
+		"run:service":     FamilyServerless,
+		// managed databases (Wave 5 #15)
+		"rds:instance":      FamilyDatabase,
+		"sql:server":        FamilyDatabase,
+		"sql:database":      FamilyDatabase,
+		"sqladmin:instance": FamilyDatabase,
 	}
 	for typ, want := range cases {
 		if got := ComponentFamily(typ); got != want {

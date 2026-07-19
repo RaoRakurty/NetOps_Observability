@@ -312,6 +312,17 @@ func buildCloudWhere(f cloudResourceFilter) ([]string, []any) {
 	if f.Type != "" {
 		add("resource_type = $%d", f.Type)
 	}
+	// Family / resource CLASS (Wave 5 #15): expressed over the SAME kinds.go
+	// vocabulary matchCloudResource uses. A named family is its (lowercased)
+	// type set; "other" is the complement of every known type.
+	if f.Family != "" {
+		if f.Family == cloud.FamilyOther {
+			args = append(args, cloud.KnownComponentTypes())
+			where = append(where, fmt.Sprintf("NOT (lower(resource_type) = ANY($%d))", len(args)))
+		} else {
+			add("lower(resource_type) = ANY($%d)", cloud.FamilyTypes(f.Family))
+		}
+	}
 	switch f.Attribution {
 	case "":
 		// no filter

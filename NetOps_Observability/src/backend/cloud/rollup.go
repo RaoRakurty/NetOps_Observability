@@ -442,7 +442,7 @@ func rollupPerformance(components []CloudResource, limit int) []PerformanceMetri
 
 // familyOrder is the render order of the component families (entry points first,
 // workloads last) — stable, not alphabetical, so the UI dots don't reshuffle.
-var familyOrder = []string{FamilyLB, FamilyWAF, FamilyFirewall, FamilyDNS, FamilyGateway, FamilyInstance, FamilyOther}
+var familyOrder = []string{FamilyLB, FamilyWAF, FamilyFirewall, FamilyDNS, FamilyGateway, FamilyK8s, FamilyServerless, FamilyDatabase, FamilyInstance, FamilyOther}
 
 func rollupFamilies(components []CloudResource) []FamilyRollup {
 	accs := map[string]*statusAcc{}

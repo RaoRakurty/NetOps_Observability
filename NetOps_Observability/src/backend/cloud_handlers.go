@@ -158,6 +158,17 @@ func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
 	if f.Type, err = get("type"); err != nil {
 		return f, err
 	}
+	if f.Family, err = get("family"); err != nil {
+		return f, err
+	}
+	// family is a CLASS filter over the kinds.go vocabulary; a typo is a clean
+	// 400, never a silently-empty result.
+	if f.Family != "" {
+		f.Family = strings.ToLower(f.Family)
+		if !cloud.ValidComponentFamily(f.Family) {
+			return f, errors.New("invalid family (want instance|lb|waf|firewall|dns|gateway|seam|k8s|serverless|db|other)")
+		}
+	}
 	if f.Tag, err = get("tag"); err != nil {
 		return f, err
 	}

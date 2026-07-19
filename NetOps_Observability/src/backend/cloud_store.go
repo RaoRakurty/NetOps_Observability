@@ -54,6 +54,7 @@ type cloudResourceFilter struct {
 	Account     string // account_id | subscription_id | project_id (exact, comma-separated)
 	Region      string // exact, comma-separated
 	Type        string // resource_type (exact)
+	Family      string // component family / resource CLASS (k8s|serverless|db|instance|lb|…, Wave 5 #15)
 	Tag         string // "key" (has tag) or "key=value" (exact value)
 	Attribution string // confidence bucket (confirmed|strong|suspected|weak|unknown) or attributed|unattributed
 	Limit       int    // page size (0 → cloudPageDefault)
@@ -156,6 +157,9 @@ func matchCloudResource(r cloud.CloudResource, f cloudResourceFilter) bool {
 		return false
 	}
 	if f.Type != "" && r.ResourceType != f.Type {
+		return false
+	}
+	if f.Family != "" && cloud.ComponentFamily(r.ResourceType) != f.Family {
 		return false
 	}
 	if f.Attribution != "" && !attributionMatches(f.Attribution, r.Confidence) {
