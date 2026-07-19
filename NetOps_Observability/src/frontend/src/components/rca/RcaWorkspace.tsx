@@ -87,7 +87,8 @@ function AskRcaPanel({ data }: { data: RcaCase }) {
           {busy ? "Asking…" : "Ask"}
         </button>
       </div>
-      <div className="rw-tdetail" style={{ marginTop: 10 }}>
+      {/* Live region (4.1.3): the async answer is announced when it arrives. */}
+      <div className="rw-tdetail" style={{ marginTop: 10 }} role="status" aria-live="polite" aria-busy={busy}>
         {answer ? (
           <><b>Iris AI:</b> {answer}</>
         ) : offline ? (
@@ -114,8 +115,10 @@ function KeyVal({ rows }: { rows: KV[] }) {
 }
 
 function CausalTopology({ nodes, edges }: { nodes: TopoNode[]; edges: TopoEdge[] }) {
+  // No role="img" on the chain: it would collapse the node/edge text out of
+  // the a11y tree — the chain reads naturally as text (1.1.1).
   return (
-    <div className="rw-topo" role="img" aria-label="Causal topology">
+    <div className="rw-topo">
       {nodes.map((n, i) => (
         <div key={i} style={{ display: "contents" }}>
           <div className={`rw-node ${n.kind}`}>
@@ -163,7 +166,7 @@ export default function RcaWorkspace({
         <div className="rw-brand">
           <div className="rw-logo">RCA</div>
           <div>
-            <div className="rw-h1">Root cause analysis</div>
+            <h1 className="rw-h1">Root cause analysis</h1>
             <div className="rw-sub">{data.subtitle}</div>
           </div>
         </div>
@@ -171,9 +174,11 @@ export default function RcaWorkspace({
           {data.synthetic && <span className="rw-watermark">Synthetic data · example case</span>}
           <button className="rw-btn" onClick={onExportPdf} disabled={exportDisabled}
             title="Download the incident report as a PDF document">⤓ Export PDF</button>
-          <div className="rw-tabs" role="tablist" aria-label="View">
-            <button role="tab" aria-selected={view === "operator"} className={`rw-tab${view === "operator" ? " active" : ""}`} onClick={() => onView("operator")}>Operator View</button>
-            <button role="tab" aria-selected={view === "debug"} className={`rw-tab${view === "debug" ? " active" : ""}`} onClick={() => onView("debug")}>Debug View</button>
+          {/* View switch as a toggle group (not ARIA tabs: no tabpanel/roving-
+              focus wiring here, and plain buttons are fully keyboard operable). */}
+          <div className="rw-tabs" role="group" aria-label="View">
+            <button aria-pressed={view === "operator"} className={`rw-tab${view === "operator" ? " active" : ""}`} onClick={() => onView("operator")}>Operator View</button>
+            <button aria-pressed={view === "debug"} className={`rw-tab${view === "debug" ? " active" : ""}`} onClick={() => onView("debug")}>Debug View</button>
           </div>
         </div>
       </div>
@@ -224,7 +229,7 @@ export default function RcaWorkspace({
               discovered path" note; a report without path attribution is unchanged. */}
           {pathSlot && (
             <>
-              <div className="rw-section-title">Path causality</div>
+              <h3 className="rw-section-title">Path causality</h3>
               <section className="rw-panel" style={{ marginBottom: 4 }}>{pathSlot}</section>
             </>
           )}
@@ -271,7 +276,7 @@ export default function RcaWorkspace({
           {/* RCA Time Intelligence — where this incident's time was spent. */}
           {timeImpactSlot && (
             <>
-              <div className="rw-section-title">Time impact</div>
+              <h3 className="rw-section-title">Time impact</h3>
               <section style={{ marginBottom: 4 }}>{timeImpactSlot}</section>
             </>
           )}
@@ -284,14 +289,14 @@ export default function RcaWorkspace({
           {/* RCA auto-ticketing (#78) — live external ticket status + Create/Sync. */}
           {ticketSlot && (
             <>
-              <div className="rw-section-title">External ticket</div>
+              <h3 className="rw-section-title">External ticket</h3>
               <section style={{ marginBottom: 4 }}>{ticketSlot}</section>
             </>
           )}
 
           {/* causal topology — advanced Network-Path graphics (RcaTopology) when
               provided, with the data-driven chain / placement card as fallback */}
-          <div className="rw-section-title">Network path &amp; causal topology</div>
+          <h3 className="rw-section-title">Network path &amp; causal topology</h3>
           {topologySlot ? (
             <section style={{ marginBottom: 4 }}>{topologySlot}</section>
           ) : (
@@ -312,7 +317,7 @@ export default function RcaWorkspace({
               identically when this is absent. */}
           {data.cloud && (
             <>
-              <div className="rw-section-title">Cloud application &amp; resources</div>
+              <h3 className="rw-section-title">Cloud application &amp; resources</h3>
               <section className="rw-panel rw-cloud">
                 <div className="rw-cloud-head">
                   <div className="rw-cloud-id">
@@ -367,7 +372,7 @@ export default function RcaWorkspace({
               affects, with provenance; absent → network RCA renders identically. */}
           {data.appImpact && data.appImpact.apps.length > 0 && (
             <>
-              <div className="rw-section-title">Application impact</div>
+              <h3 className="rw-section-title">Application impact</h3>
               <section className="rw-panel rw-appimpact">
                 <div className="rw-appimpact-grid">
                   {data.appImpact.apps.map((a, i) => (
@@ -389,7 +394,7 @@ export default function RcaWorkspace({
           )}
 
           {/* evidence matrix */}
-          <div className="rw-section-title">Evidence matrix</div>
+          <h3 className="rw-section-title">Evidence matrix</h3>
           <section className="rw-evidence-grid">
             {data.evidence.map((e, i) => (
               <div key={i} className={`rw-ecard ${e.variant}`}>
@@ -405,7 +410,7 @@ export default function RcaWorkspace({
           </section>
 
           {/* confidence ladder */}
-          <div className="rw-section-title">Confidence ladder</div>
+          <h3 className="rw-section-title">Confidence ladder</h3>
           <section className="rw-panel">
             <div className="rw-ladder-row">
               {data.ladder.map((s, i) => <div key={i} className={`rw-ladder-step ${s.state}`}>{s.label}</div>)}
@@ -416,7 +421,7 @@ export default function RcaWorkspace({
           </section>
 
           {/* evidence timeline */}
-          <div className="rw-section-title">Evidence timeline</div>
+          <h3 className="rw-section-title">Evidence timeline</h3>
           <section className="rw-panel">
             <div className="rw-timeline-wrap">
               <div className="rw-timeline">
@@ -437,7 +442,7 @@ export default function RcaWorkspace({
                 ))}
               </div>
             </div>
-            <div className="rw-tdetail">
+            <div className="rw-tdetail" role="status" aria-live="polite">
               {detail ? <><b>Marker detail:</b> {detail}</> : <><b>Tip:</b> Click any marker to see why it was counted as evidence.</>}
             </div>
           </section>
@@ -447,7 +452,7 @@ export default function RcaWorkspace({
               marked Not observed — the ladder never claims without evidence */}
           {data.cascade && data.cascade.length > 0 && (
             <>
-              <div className="rw-section-title">How the failure propagated</div>
+              <h3 className="rw-section-title">How the failure propagated</h3>
               <section className="rw-panel">
                 <div className="rw-cascade">
                   {data.cascade.map((s, i) => (

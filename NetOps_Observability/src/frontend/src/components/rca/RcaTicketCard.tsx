@@ -62,8 +62,8 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
     }
   };
 
-  if (err) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note">Ticket status unavailable.</div></div>;
-  if (!data) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note">Loading ticket status…</div></div>;
+  if (err) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note" role="status">Ticket status unavailable.</div></div>;
+  if (!data) return <div className="rw-panel"><h3>External ticket</h3><div className="rw-note" role="status">Loading ticket status…</div></div>;
 
   const st: TicketStatus = data.status ?? { state: "not_created" };
   const created = st.state && st.state !== "not_created";
@@ -92,7 +92,7 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
               <span className={`rw-pill ${ticketStateTone(d.state)}`}>{ticketStateLabel(d.state)}</span>
               {d.ticket_number && (
                 d.url
-                  ? <a className="rw-value mono" href={d.url} target="_blank" rel="noreferrer" style={{ color: "var(--rw-blue)" }}>{d.ticket_number} ↗</a>
+                  ? <a className="rw-value mono" href={d.url} target="_blank" rel="noreferrer" aria-label={`${d.ticket_number}, opens in new tab`} style={{ color: "var(--rw-blue)" }}>{d.ticket_number} <span aria-hidden="true">↗</span></a>
                   : <span className="rw-value mono">{d.ticket_number}</span>
               )}
               {d.system && <span className="rw-note" style={{ margin: 0 }}>in {SYSTEM_LABEL[d.system] ?? d.system}</span>}
@@ -114,10 +114,10 @@ export default function RcaTicketCard({ correlationId }: { correlationId: string
               {busy ? "Queuing…" : created ? "Retry create" : "Create ticket"}
             </button>
           )}
-          {queued && <span className="rw-note" style={{ margin: 0 }}>{queued}</span>}
+          {queued && <span className="rw-note" role="status" aria-live="polite" style={{ margin: 0 }}>{queued}</span>}
         </div>
       )}
-      {!canWrite && queued && <div className="rw-note">{queued}</div>}
+      {!canWrite && queued && <div className="rw-note" role="status" aria-live="polite">{queued}</div>}
 
       {/* Action history — the compliance trail (most recent first). */}
       {audit.length > 0 && (

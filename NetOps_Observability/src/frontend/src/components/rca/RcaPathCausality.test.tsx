@@ -140,10 +140,14 @@ describe("RcaPathCausality", () => {
     };
     render(<RcaPathCausality data={capped} />);
     // the opaque span collapses to a dotted connector (no grey box); its
-    // classification reason stays reachable behind hover (title/aria).
+    // classification reason stays reachable on hover (title) AND as
+    // screen-reader-only text (a11y pass: aria-label on a role-less span is
+    // unreliably exposed, so the reason is mirrored as .sr-only text).
     expect(screen.queryByText("Unknown segment")).toBeNull();
     expect(screen.getByText("unknown span")).toBeTruthy();
-    const gap = screen.getByLabelText(/no telemetry crosses this provider backbone/i);
+    const srReason = screen.getByText(/no telemetry crosses this provider backbone/i);
+    expect(srReason.className).toContain("sr-only");
+    const gap = srReason.closest(".rpc-gap") as HTMLElement;
     expect(gap.getAttribute("title")).toMatch(/no telemetry crosses this provider backbone/i);
     // an unconfirmed verdict reads "Possible break here", never definitive.
     expect(screen.getByText("Possible break here")).toBeTruthy();

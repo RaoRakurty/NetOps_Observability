@@ -104,8 +104,8 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
     return () => { alive = false; };
   }, [correlationId]);
 
-  if (err) return <div className="ti-card ti-empty">Time Impact unavailable.</div>;
-  if (!d) return <div className="ti-card ti-empty">Loading time impact…</div>;
+  if (err) return <div className="ti-card ti-empty" role="status">Time Impact unavailable.</div>;
+  if (!d) return <div className="ti-card ti-empty" role="status">Loading time impact…</div>;
 
   const at = new Map<string, TimeIntelLifecycleRow>(d.lifecycle.map((l) => [l.event_type, l]));
   const impact = at.get("impact_started") ?? at.get("first_signal");
@@ -218,7 +218,14 @@ export default function RcaTimeImpact({ correlationId }: { correlationId: string
             <div key={st.key} className={`ti-stage ${cls}${st.hero ? " ti-stage-hero" : ""}`}
               title={`${st.label} — ${st.tip}${row ? ` · ${fmtDateTime(row.at)}${row.timestamp_source !== "observed" ? ` (${row.timestamp_source})` : ""}` : notMeasured ? " · not measured (workflow not connected)" : reached ? "" : " · not reached"}`}>
               <span className="ti-dot" aria-hidden="true" />
-              <span className="ti-stage-label">{st.label}</span>
+              <span className="ti-stage-label">
+                {st.label}
+                {/* State is color-coded on the dot (1.4.1) and detailed only in
+                    the title tooltip (1.4.13) — mirror it as SR-readable text. */}
+                <span className="sr-only">
+                  {row ? ` — ${fmtDateTime(row.at)}` : notMeasured ? " — not measured" : reached ? "" : " — not reached"}
+                </span>
+              </span>
             </div>
           );
         })}
