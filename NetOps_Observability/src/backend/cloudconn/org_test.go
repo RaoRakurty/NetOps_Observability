@@ -9,6 +9,7 @@ package cloudconn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -371,7 +372,7 @@ func TestOrgDiscoverDefersWithoutLiveWiring(t *testing.T) {
 		{"gcp no token", NewGCPAdapter(nil, &GCPProbeClient{}), DiscoverRequest{Root: Scope{Type: ScopeFolder, Ref: "1"}}},
 	}
 	for _, c := range cases {
-		if _, err := c.adapter.DiscoverScopes(context.Background(), c.req); err != ErrProviderExchangeDeferred {
+		if _, err := c.adapter.DiscoverScopes(context.Background(), c.req); !errors.Is(err, ErrProviderExchangeDeferred) {
 			t.Errorf("%s: err = %v, want ErrProviderExchangeDeferred", c.name, err)
 		}
 	}
