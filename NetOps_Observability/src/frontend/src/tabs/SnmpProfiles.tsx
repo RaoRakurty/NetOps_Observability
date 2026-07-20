@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, SnmpProfile, SnmpMetric } from "../services/api";
+import { capitalize } from "../lib/text";
 
 // SNMP Profiles — the vendor OID/metric library (vendor "device profiles"
 // pattern): profiles grouped by category on the left, the selected profile's
@@ -140,7 +141,7 @@ export default function SnmpProfiles() {
                 style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between" }}
                 onClick={() => setSelected(p.id)}
               >
-                <span>{p.vendor}</span>
+                <span>{capitalize(p.vendor)}</span>
                 <span style={{ color: "var(--muted)", fontSize: 11 }}>{p.metrics.length}</span>
               </button>
             ))}
@@ -156,7 +157,7 @@ export default function SnmpProfiles() {
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <h3 style={{ margin: 0 }}>
-                {current.vendor} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 13 }}>· {current.metrics.length} metrics</span>
+                {capitalize(current.vendor)} <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 13 }}>· {current.metrics.length} metrics</span>
               </h3>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button className="btn" onClick={() => setShowUpload((v) => !v)}>Upload OIDs</button>

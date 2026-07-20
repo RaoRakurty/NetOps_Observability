@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, SnmpGenResult } from "../services/api";
+import { capitalize } from "../lib/text";
 
 // SnmpConfigGenerator — onboarding automation UI. Pick a vendor + version;
 // Correlix generates the credentials, provisions the matching profile, and
@@ -52,7 +53,7 @@ export default function SnmpConfigGenerator() {
         <label style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 4 }}>
           Vendor
           <select value={vendor} onChange={(e) => setVendor(e.target.value)}>
-            {VENDORS.map((v) => <option key={v} value={v}>{v}</option>)}
+            {VENDORS.map((v) => <option key={v} value={v}>{capitalize(v)}</option>)}
           </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 4 }}>
@@ -83,13 +84,13 @@ export default function SnmpConfigGenerator() {
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              Paste on the {res.vendor} device{" "}
+              Paste on the {capitalize(res.vendor)} device{" "}
               {res.templated ? "" : "(generic guidance — adapt to your CLI)"}
               {res.profile_id && <> · profile <code>{res.profile_id}</code> provisioned</>}
             </div>
             <button className="btn" onClick={copy}>{copied ? "Copied ✓" : "Copy"}</button>
           </div>
-          <pre style={{ background: "var(--panel-2,#0d0f13)", border: "1px solid var(--line)", borderRadius: 6, padding: 12, overflowX: "auto", fontSize: 12, whiteSpace: "pre" }}>
+          <pre style={{ background: "var(--surface-2)", color: "var(--fg)", border: "1px solid var(--border)", borderRadius: 6, padding: 12, overflowX: "auto", fontSize: 12, whiteSpace: "pre" }}>
             {res.device_config}
           </pre>
           <div style={{ fontSize: 11, color: "var(--warn,#f5a623)", marginTop: 6 }}>
