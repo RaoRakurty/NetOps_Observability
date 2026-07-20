@@ -24,7 +24,7 @@
       ],
       "tags": {
         "auto_stop": "true",
-        "project": "correlix-faultlab",
+        "project": "demo-cloud",
         "environment": "lab",
         "managed_by": "terraform",
         "app_id": "shared",
@@ -57,7 +57,7 @@
       "tags": {
         "app_id": "shared",
         "ttl_hours": "0",
-        "project": "correlix-faultlab",
+        "project": "demo-cloud",
         "Name": "correlix-data-host-01",
         "cloud": "aws",
         "owner": "rao",
@@ -91,7 +91,7 @@
       "tags": {
         "environment": "lab",
         "managed_by": "terraform",
-        "project": "correlix-faultlab",
+        "project": "demo-cloud",
         "ttl_hours": "0",
         "Name": "correlix-vpn-nat-01",
         "auto_stop": "false",

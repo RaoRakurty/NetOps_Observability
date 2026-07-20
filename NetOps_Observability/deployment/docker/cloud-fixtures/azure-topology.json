@@ -1,6 +1,6 @@
 {
   "provider": "azure",
-  "account_id": "8d0f8a4e-c36e-4265-821f-d6df48123c24",
+  "account_id": "00000000-0000-0000-0000-000000000000",
   "region": "westus2",
   "vpcs": [
     {

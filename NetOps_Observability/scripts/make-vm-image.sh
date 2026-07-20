@@ -97,13 +97,66 @@ Type=oneshot
 TimeoutStartSec=0
 WorkingDirectory=/opt/correlix/bundle
 # Secrets (.env) are generated HERE, on the customer's appliance, first boot —
-# never in the shipped image.
-ExecStart=/usr/bin/bash /opt/correlix/bundle/install-correlix.sh install
+# never in the shipped image. The wrapper paints install progress on tty1 and
+# leaves the access URL + credentials on the login screen (easy-install, owner
+# requirement — a bare headless install looked like a hang).
+ExecStart=/usr/bin/bash /opt/correlix/firstboot.sh
 ExecStartPost=/usr/bin/touch /opt/correlix/.installed
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+cat > "$work/firstboot.sh" <<'FIRSTBOOT'
+#!/usr/bin/env bash
+# Correlix appliance first-boot: run the bundle installer with a visible
+# self-install screen on the VM console, then pin the access details to the
+# login banner. Credentials shown here are the appliance's own first-boot
+# generated secrets — the customer is told to change them at first sign-in.
+set -uo pipefail
+TTY=/dev/tty1
+say() { printf '\n  %s\n' "$*" > "$TTY" 2>/dev/null || true; }
+
+clear > "$TTY" 2>/dev/null || true
+printf '\n\n   ██████╗ CORRELIX appliance — self-install\n' > "$TTY" 2>/dev/null || true
+say "Installing… this can take several minutes on first boot."
+say "Progress: journalctl -fu correlix-firstboot (from another console)"
+
+phase() { say "▸ $1"; }
+phase "Generating appliance secrets + loading container images"
+if bash /opt/correlix/bundle/install-correlix.sh install; then
+  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  ADMIN_USER="$(grep -m1 '^ADMIN_USERNAME=' /opt/correlix/bundle/.env 2>/dev/null | cut -d= -f2)"
+  ADMIN_PASS="$(grep -m1 '^ADMIN_INITIAL_PASSWORD=' /opt/correlix/bundle/.env 2>/dev/null | cut -d= -f2)"
+  cat > /etc/issue <<BANNER
+
+  ┌────────────────────────────────────────────────────────────┐
+    CORRELIX is ready.
+
+    Open:      http://${IP:-<appliance-ip>}:8000
+    Sign in:   ${ADMIN_USER:-admin} / ${ADMIN_PASS:-<see /opt/correlix/bundle/.env>}
+
+    Change the password at first sign-in.
+    Docs: README.md + TROUBLESHOOTING.md in /opt/correlix/bundle
+  └────────────────────────────────────────────────────────────┘
+
+BANNER
+  say "✓ Correlix is ready → http://${IP:-<appliance-ip>}:8000"
+  say "  Sign in: ${ADMIN_USER:-admin} (password on this screen after reboot, or /opt/correlix/bundle/.env)"
+else
+  RC=$?
+  cat > /etc/issue <<BANNER
+
+  CORRELIX first-boot install FAILED (exit $RC).
+  Inspect:  journalctl -u correlix-firstboot
+  Retry:    rm -f /opt/correlix/.installed && reboot
+
+BANNER
+  say "✗ Install failed (exit $RC) — see journalctl -u correlix-firstboot"
+  exit "$RC"
+fi
+FIRSTBOOT
+chmod +x "$work/firstboot.sh"
 
 # ── assemble the appliance qcow2 ─────────────────────────────────────────────
 say "building appliance image (this takes a while — libguestfs without kvm)"
@@ -133,6 +186,8 @@ docker run --rm --dns 1.1.1.1 --dns 8.8.8.8 -v "$ROOT/dist:/dist" -v "$work:/wor
     --copy-in '/dist/$(basename "$bundle_dir")':/opt/correlix/ \
     --run-command 'mv /opt/correlix/$(basename "$bundle_dir")/* /opt/correlix/bundle/ && rmdir /opt/correlix/$(basename "$bundle_dir")' \
     --copy-in /work/correlix-firstboot.service:/etc/systemd/system/ \
+    --copy-in /work/firstboot.sh:/opt/correlix/ \
+    --run-command 'chmod +x /opt/correlix/firstboot.sh' \
     --run-command 'systemctl enable docker correlix-firstboot' \
     --run-command 'truncate -s 0 /etc/machine-id'
   # flatten overlay -> standalone compressed qcow2

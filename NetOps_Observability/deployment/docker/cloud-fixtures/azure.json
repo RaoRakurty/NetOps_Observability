@@ -1,6 +1,6 @@
 {
   "provider": "azure",
-  "account_id": "8d0f8a4e-c36e-4265-821f-d6df48123c24",
+  "account_id": "00000000-0000-0000-0000-000000000000",
   "collection": {
     "mode": "live_poller",
     "collected_at": "2026-07-15T16:28:22.340368+00:00"
@@ -8,8 +8,8 @@
   "resources": [
     {
       "region": "westus2",
-      "resource_id": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
-      "resource_arn_or_uri": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
+      "resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DEMO-CLOUD/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
+      "resource_arn_or_uri": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DEMO-CLOUD/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01",
       "resource_type": "compute:virtualMachine",
       "resource_name": "correlix-app-host-01",
       "power_state": "deallocated",
@@ -19,21 +19,21 @@
       ],
       "public_ips": [],
       "network_interface_ids": [
-        "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/correlix-faultlab/providers/Microsoft.Network/networkInterfaces/correlix-app-nic"
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/demo-cloud/providers/Microsoft.Network/networkInterfaces/correlix-app-nic"
       ],
       "tags": {},
       "owner": "",
       "env": "",
       "source": "cloud_api",
       "confidence": "strong",
-      "inferred_service": "correlix-faultlab",
+      "inferred_service": "demo-cloud",
       "inferred_service_confidence": "suspected",
-      "inferred_service_basis": "resource-group name 'CORRELIX-FAULTLAB'"
+      "inferred_service_basis": "resource-group name 'DEMO-CLOUD'"
     },
     {
       "region": "westus2",
-      "resource_id": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
-      "resource_arn_or_uri": "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
+      "resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DEMO-CLOUD/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
+      "resource_arn_or_uri": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/DEMO-CLOUD/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
       "resource_type": "compute:virtualMachine",
       "resource_name": "correlix-vpn-nat-01",
       "power_state": "running",
@@ -45,16 +45,16 @@
         "20.9.199.16"
       ],
       "network_interface_ids": [
-        "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/correlix-faultlab/providers/Microsoft.Network/networkInterfaces/correlix-nva-nic"
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/demo-cloud/providers/Microsoft.Network/networkInterfaces/correlix-nva-nic"
       ],
       "tags": {},
       "owner": "",
       "env": "",
       "source": "cloud_api",
       "confidence": "strong",
-      "inferred_service": "correlix-faultlab",
+      "inferred_service": "demo-cloud",
       "inferred_service_confidence": "suspected",
-      "inferred_service_basis": "resource-group name 'CORRELIX-FAULTLAB'"
+      "inferred_service_basis": "resource-group name 'DEMO-CLOUD'"
     }
   ]
 }

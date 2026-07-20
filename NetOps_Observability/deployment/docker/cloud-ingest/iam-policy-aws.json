@@ -54,8 +54,8 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::correlix-faultlab-flowlogs-*",
-        "arn:aws:s3:::correlix-faultlab-flowlogs-*/*"
+        "arn:aws:s3:::YOUR-FLOWLOG-BUCKET*",
+        "arn:aws:s3:::YOUR-FLOWLOG-BUCKET*/*"
       ]
     }
   ]

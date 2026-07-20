@@ -187,6 +187,25 @@ SRC_OUT="$BUNDLE_DIR/correlix-source-$VERSION.tar.gz"
 echo "-- git archive -> $SRC_OUT"
 git -C "$ROOT" archive --format=tar.gz --prefix=NetOps_Observability/ -o "$SRC_OUT" HEAD
 
+# 5b. Lab-leak guard (audit 2026-07-20): the tarball is git-archive-of-HEAD, so
+#     a single mistaken commit can ship lab infrastructure to a customer. Fail
+#     the build if any lab marker appears in the archive's paths or contents.
+LAB_MARKERS='10\.70\.245\.120|rao123|correlix-faultlab|healthchecks\.io|hc-ping|ntfy\.sh|8d0f8a4e-c36e'
+LAB_PATHS='scripts/lab/|scripts/bundle-autoupdate|scripts/stack-watchdog|scripts/host-hygiene|docs/GTM_PLAN|docs/TRACKER|mock-servicenow/|mock-nms/|brand-samples/'
+if tar -tzf "$SRC_OUT" | grep -qE "$LAB_PATHS"; then
+  echo "FATAL: lab-only path leaked into the customer source archive:" >&2
+  tar -tzf "$SRC_OUT" | grep -E "$LAB_PATHS" | head >&2
+  exit 1
+fi
+if tar -xzOf "$SRC_OUT" 2>/dev/null | grep -qaE "$LAB_MARKERS"; then
+  echo "FATAL: lab identifier leaked into customer source archive contents:" >&2
+  for f in $(tar -tzf "$SRC_OUT" | grep -v '/$'); do
+    tar -xzOf "$SRC_OUT" "$f" 2>/dev/null | grep -qaE "$LAB_MARKERS" && echo "  $f" >&2
+  done
+  exit 1
+fi
+echo "-- lab-leak guard: clean"
+
 # 6. Manifest + checksums + client instructions.
 {
   echo "product:  Correlix (NetOps Observability)"

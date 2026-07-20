@@ -1,1 +1,19 @@
 src/config/devices.lab-clos.yaml export-ignore
+# Customer-bundle excludes (lab-only assets; audit 2026-07-20). git archive is
+# the bundle source of truth — anything NOT export-ignored ships to customers.
+scripts/bundle-autoupdate.sh export-ignore
+scripts/host-hygiene.sh export-ignore
+scripts/stack-watchdog.sh export-ignore
+scripts/stack-watchdog.env.example export-ignore
+scripts/pipeline-watchdog.sh export-ignore
+scripts/rca-canary.sh export-ignore
+scripts/tracker_staleness.py export-ignore
+scripts/cloud-discover-azure.py export-ignore
+scripts/demo_fill.py export-ignore
+scripts/lab/** export-ignore
+docs/** export-ignore
+README.md export-ignore
+deployment/docker/mock-servicenow/** export-ignore
+deployment/docker/mock-nms/** export-ignore
+deployment/docker/docker-compose.flowgen.yml export-ignore
+deployment/docker/cloud-ingest/CREDENTIALS.md export-ignore
