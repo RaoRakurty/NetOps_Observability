@@ -133,10 +133,10 @@ func TestCorrelationsListSQLShape(t *testing.T) {
 	sql := correlationsListSQL(sinceCond, []string{"1", "state = 'open'"}, 100)
 
 	for _, must := range []string{
-		"FROM netops.corr_current FINAL",                  // hot pick + serve source
-		"LIMIT 100",                                       // bounded rows
+		"FROM netops.corr_current FINAL", // hot pick + serve source
+		"LIMIT 100",                      // bounded rows
 		"IN (SELECT correlation_id, version FROM picked)", // keyed decorate
-		"ANY LEFT JOIN",                                   // duplicate-history guard on the keyed fetch
+		"ANY LEFT JOIN", // duplicate-history guard on the keyed fetch
 	} {
 		if !strings.Contains(sql, must) {
 			t.Errorf("correlations list SQL lost its bounded shape: missing %q\n%s", must, sql)

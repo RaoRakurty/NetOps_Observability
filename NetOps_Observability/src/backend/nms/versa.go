@@ -15,19 +15,19 @@ type VersaDirectorTransformer struct{}
 func (VersaDirectorTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
 	var resp struct {
 		Alarms []struct {
-			ID           string `json:"id"`
-			Type         string `json:"type"`
-			Severity     string `json:"severity"`
-			Organization string `json:"organization"`
+			ID            string `json:"id"`
+			Type          string `json:"type"`
+			Severity      string `json:"severity"`
+			Organization  string `json:"organization"`
 			ApplianceName string `json:"applianceName"`
-			SiteName     string `json:"siteName"`
-			LocalSite    string `json:"localSite"`
-			RemoteSite   string `json:"remoteSite"`
-			TunnelName   string `json:"tunnelName"`
-			Transport    string `json:"transport"`
-			SLAViolation bool   `json:"slaViolation"`
-			EventTime    string `json:"eventTime"`
-			Description  string `json:"description"`
+			SiteName      string `json:"siteName"`
+			LocalSite     string `json:"localSite"`
+			RemoteSite    string `json:"remoteSite"`
+			TunnelName    string `json:"tunnelName"`
+			Transport     string `json:"transport"`
+			SLAViolation  bool   `json:"slaViolation"`
+			EventTime     string `json:"eventTime"`
+			Description   string `json:"description"`
 		} `json:"alarms"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {

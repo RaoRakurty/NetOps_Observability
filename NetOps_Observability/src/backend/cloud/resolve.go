@@ -13,7 +13,7 @@ var (
 	// own account uses) — omitting them made every tagged resource look untagged.
 	// TODO(connectors): make this list operator-configurable per connector;
 	// hardcoding key names guarantees we are wrong at the first customer.
-	appTagKeys   = []string{
+	appTagKeys = []string{
 		"app", "application", "app_id", "app-id", "appid",
 		"app_name", "app-name", "service", "workload", "component",
 		// AWS's own first-party application tag (Service Catalog AppRegistry).
@@ -91,7 +91,7 @@ func AttributeResource(r *CloudResource) {
 	// the resource stays in the unknown bucket so the operator is told to tag it.
 	if r.ResourceName != "" {
 		r.AppName = r.ResourceName
-		r.AppID = ""      // NOT an app identity — keeps it counted as unattributed
+		r.AppID = "" // NOT an app identity — keeps it counted as unattributed
 		r.Source = SrcSuspectedName
 		r.Confidence = Suspected
 		return

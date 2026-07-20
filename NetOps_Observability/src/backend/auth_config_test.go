@@ -40,8 +40,8 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 		tenants:   ts,
 		refresh:   rf,
 		startedAt: time.Now().UTC(),
-		ldap:      newLDAPConfigStore(dir + "/ldap_config.json", nil),
-		tacacs:    newTACACSConfigStore(dir + "/tacacs_config.json", nil),
+		ldap:      newLDAPConfigStore(dir+"/ldap_config.json", nil),
+		tacacs:    newTACACSConfigStore(dir+"/tacacs_config.json", nil),
 	}
 	s.oidc.Store(newOIDCProvider()) // disabled (no env) -> ready()==false
 	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)
@@ -87,7 +87,7 @@ func TestLDAPConfigStoreSetEffectiveAndReload(t *testing.T) {
 }
 
 func TestLDAPConfigSecretPreservedOnUpdate(t *testing.T) {
-	st := newLDAPConfigStore(t.TempDir() + "/ldap.json", nil)
+	st := newLDAPConfigStore(t.TempDir()+"/ldap.json", nil)
 	if _, err := st.set(ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "orig"}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestTACACSConfigClientBuild(t *testing.T) {
 }
 
 func TestTACACSConfigSecretPreservedAndValidate(t *testing.T) {
-	st := newTACACSConfigStore(t.TempDir() + "/tac.json", nil)
+	st := newTACACSConfigStore(t.TempDir()+"/tac.json", nil)
 	if _, err := st.set(tacacsConfig{Enabled: true, Host: "h", Secret: "orig"}); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestAuthMethodsPublic(t *testing.T) {
 		t.Fatalf("methods status %d: %s", st, b)
 	}
 	var m struct {
-		Local  bool `json:"local"`
+		Local  bool                   `json:"local"`
 		LDAP   struct{ Enabled bool } `json:"ldap"`
 		TACACS struct{ Enabled bool } `json:"tacacs"`
 		SSO    struct{ Enabled bool } `json:"sso"`

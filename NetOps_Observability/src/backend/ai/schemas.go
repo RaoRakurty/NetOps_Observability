@@ -84,14 +84,14 @@ type Answer struct {
 // card can show several numbers without them reading as conflicting. Derived
 // from the tenant-scoped active-correlation set — never fabricated.
 type IncidentCounts struct {
-	ActiveCorrelationGroups    int  `json:"active_correlation_groups"`     // all active correlation groups in the live RCA view
-	ConfirmedCount             int  `json:"confirmed_count"`               //
-	SuspectedCount             int  `json:"suspected_count"`               //
-	CandidateCount             int  `json:"candidate_count"`               //
-	UndeterminedCount          int  `json:"undetermined_count"`            // low-evidence, under investigation
-	ActionableIncidentsCount   int  `json:"actionable_incidents_count"`    // confirmed + suspected (+ candidate) — the NOC queue
+	ActiveCorrelationGroups    int  `json:"active_correlation_groups"`      // all active correlation groups in the live RCA view
+	ConfirmedCount             int  `json:"confirmed_count"`                //
+	SuspectedCount             int  `json:"suspected_count"`                //
+	CandidateCount             int  `json:"candidate_count"`                //
+	UndeterminedCount          int  `json:"undetermined_count"`             // low-evidence, under investigation
+	ActionableIncidentsCount   int  `json:"actionable_incidents_count"`     // confirmed + suspected (+ candidate) — the NOC queue
 	LowEvidenceWatchItemsCount int  `json:"low_evidence_watch_items_count"` // == undetermined in our model
-	Capped                     bool `json:"capped,omitempty"`              // true → counts are a lower bound (list was capped)
+	Capped                     bool `json:"capped,omitempty"`               // true → counts are a lower bound (list was capped)
 }
 
 // CurrentStateSummary is the P2 Command Center answer-mode schema: a NOC
@@ -103,16 +103,16 @@ type CurrentStateSummary struct {
 	Title            string          `json:"title,omitempty"`  // card heading (spec §2)
 	Counts           *IncidentCounts `json:"counts,omitempty"` // normalized counts (spec §6)
 	ActiveIncidents  []string        `json:"active_incidents"`
-	Confirmed        int      `json:"confirmed"`
-	Suspected        int      `json:"suspected"`
-	Undetermined     int      `json:"undetermined"`
-	ImpactedEntities []string `json:"impacted_entities"`
-	RecommendedFocus []string `json:"recommended_focus"`
-	FocusReason      string   `json:"focus_reason,omitempty"` // "why this is first"
-	WatchNote        string   `json:"watch_note,omitempty"`   // grouped undetermined / evidence-gap note
-	ActionableCount  int      `json:"actionable_count"`       // confirmed + suspected (need review)
-	ConfidenceNotes  []string `json:"confidence_notes"`
-	MissingData      []string `json:"missing_data"`
+	Confirmed        int             `json:"confirmed"`
+	Suspected        int             `json:"suspected"`
+	Undetermined     int             `json:"undetermined"`
+	ImpactedEntities []string        `json:"impacted_entities"`
+	RecommendedFocus []string        `json:"recommended_focus"`
+	FocusReason      string          `json:"focus_reason,omitempty"` // "why this is first"
+	WatchNote        string          `json:"watch_note,omitempty"`   // grouped undetermined / evidence-gap note
+	ActionableCount  int             `json:"actionable_count"`       // confirmed + suspected (need review)
+	ConfidenceNotes  []string        `json:"confidence_notes"`
+	MissingData      []string        `json:"missing_data"`
 	// FocusStatus / FocusConfidence label the RECOMMENDED-FOCUS incident's status
 	// and evidence confidence (spec §2). They are rendered INSIDE the focus section
 	// ("Recommended focus status: Suspected"), never as the whole card's status —

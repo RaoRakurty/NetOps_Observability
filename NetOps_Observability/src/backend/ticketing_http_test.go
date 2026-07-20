@@ -488,7 +488,7 @@ func TestTicketStatusView_URLNotDoubled(t *testing.T) {
 	want := inst + "/nav_to.do?uri=incident.do?sys_id=" + sys
 
 	for name, stored := range map[string]string{
-		"bare-instance": inst,
+		"bare-instance":         inst,
 		"legacy-full-deep-link": inst + "/nav_to.do?uri=incident.do?sys_id=" + sys,
 	} {
 		v := ticketStatusView(ticketLink{

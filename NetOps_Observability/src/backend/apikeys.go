@@ -42,9 +42,9 @@ type APIKey struct {
 	GrantTypes      []string   `json:"grant_types,omitempty"`
 	ClientURI       string     `json:"client_uri,omitempty"`
 	LogoURI         string     `json:"logo_uri,omitempty"`
-	Contacts        []string   `json:"contacts,omitempty"`         // emails
+	Contacts        []string   `json:"contacts,omitempty"` // emails
 	ContactPhone    string     `json:"contact_phone,omitempty"`
-	SourceCIDRs     []string   `json:"source_cidrs,omitempty"`     // allowed source IPs
+	SourceCIDRs     []string   `json:"source_cidrs,omitempty"` // allowed source IPs
 	ClientExpiresAt *time.Time `json:"client_expires_at,omitempty"`
 	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 }

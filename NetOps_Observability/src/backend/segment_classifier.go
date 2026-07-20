@@ -106,7 +106,7 @@ var (
 		netip.MustParsePrefix("172.16.0.0/12"),
 		netip.MustParsePrefix("192.168.0.0/16"),
 	}
-	rfc4193 = netip.MustParsePrefix("fc00::/7")     // IPv6 unique-local
+	rfc4193 = netip.MustParsePrefix("fc00::/7")      // IPv6 unique-local
 	rfc6598 = netip.MustParsePrefix("100.64.0.0/10") // CGNAT / shared address space
 )
 
@@ -328,10 +328,10 @@ type SegmentClass struct {
 
 // Hop is the classifier input. Only IP is required.
 type Hop struct {
-	IP              string
-	RDNS            string
-	DeviceRoleHint  string
-	ASN             int // 0 = unknown
+	IP             string
+	RDNS           string
+	DeviceRoleHint string
+	ASN            int // 0 = unknown
 }
 
 // ── the classifier ──────────────────────────────────────────────────────────
@@ -437,7 +437,7 @@ func scoreASN(asn int) []SegmentSignal {
 	return []SegmentSignal{{
 		Name: "asn_" + row.class, Family: "asn", Tier: "strong", tierRank: tierStrong,
 		SegmentVote: vote, Provider: row.provider,
-		Detail:      "curated " + row.class + " network (" + row.provider + ")",
+		Detail: "curated " + row.class + " network (" + row.provider + ")",
 	}}
 }
 

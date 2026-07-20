@@ -95,13 +95,13 @@ func TestBuildDependencyViewExcludesNoise(t *testing.T) {
 		"10.0.0.2": {ID: "dev-b", Name: "db1", Address: "10.0.0.2"},
 	}
 	rows := []map[string]any{
-		depRowPort("10.0.0.1", "10.0.0.2", 5432),          // KEEP: real unicast service
-		depRowPort("10.0.0.1", "224.0.0.5", 5432),         // DROP: OSPF multicast
-		depRowPort("10.0.0.1", "239.255.255.250", 1900),   // DROP: SSDP multicast
-		depRowPort("10.0.0.1", "255.255.255.255", 67),     // DROP: DHCP broadcast
-		depRowPort("10.0.0.1", "169.254.1.1", 5432),       // DROP: link-local
-		depRowPort("10.0.0.1", "10.0.0.2", 0),             // DROP: counter/control sample (no port)
-		depRowPort("10.0.0.2", "10.0.0.2", 5432),          // DROP: self-talk
+		depRowPort("10.0.0.1", "10.0.0.2", 5432),        // KEEP: real unicast service
+		depRowPort("10.0.0.1", "224.0.0.5", 5432),       // DROP: OSPF multicast
+		depRowPort("10.0.0.1", "239.255.255.250", 1900), // DROP: SSDP multicast
+		depRowPort("10.0.0.1", "255.255.255.255", 67),   // DROP: DHCP broadcast
+		depRowPort("10.0.0.1", "169.254.1.1", 5432),     // DROP: link-local
+		depRowPort("10.0.0.1", "10.0.0.2", 0),           // DROP: counter/control sample (no port)
+		depRowPort("10.0.0.2", "10.0.0.2", 5432),        // DROP: self-talk
 	}
 	v := buildDependencyView("t1", now, byAddr, rows)
 	if len(v.Edges) != 1 {
@@ -127,17 +127,17 @@ func TestIsDependencyNoise(t *testing.T) {
 		dport    int
 		noise    bool
 	}{
-		{"10.0.0.1", "10.0.0.2", 443, false},        // unicast HTTPS
-		{"10.0.0.1", "8.8.8.8", 53, false},          // external unicast
-		{"10.0.0.1", "db.example", 5432, false},     // hostname → resolver's call, not noise
-		{"10.0.0.1", "224.0.0.5", 89, true},         // OSPF
-		{"10.0.0.1", "239.1.2.3", 5432, true},       // multicast app
-		{"10.0.0.1", "255.255.255.255", 67, true},   // broadcast
-		{"10.0.0.1", "169.254.0.1", 443, true},      // link-local
-		{"10.0.0.1", "0.0.0.0", 443, true},          // unspecified
-		{"10.0.0.1", "10.0.0.2", 0, true},           // no real port
-		{"10.0.0.1", "10.0.0.1", 443, true},         // self-talk
-		{"", "10.0.0.2", 443, true},                 // empty src
+		{"10.0.0.1", "10.0.0.2", 443, false},      // unicast HTTPS
+		{"10.0.0.1", "8.8.8.8", 53, false},        // external unicast
+		{"10.0.0.1", "db.example", 5432, false},   // hostname → resolver's call, not noise
+		{"10.0.0.1", "224.0.0.5", 89, true},       // OSPF
+		{"10.0.0.1", "239.1.2.3", 5432, true},     // multicast app
+		{"10.0.0.1", "255.255.255.255", 67, true}, // broadcast
+		{"10.0.0.1", "169.254.0.1", 443, true},    // link-local
+		{"10.0.0.1", "0.0.0.0", 443, true},        // unspecified
+		{"10.0.0.1", "10.0.0.2", 0, true},         // no real port
+		{"10.0.0.1", "10.0.0.1", 443, true},       // self-talk
+		{"", "10.0.0.2", 443, true},               // empty src
 	}
 	for _, c := range cases {
 		if got := isDependencyNoise(c.src, c.dst, c.dport); got != c.noise {

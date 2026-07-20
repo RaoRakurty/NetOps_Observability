@@ -107,31 +107,31 @@ type NodeIssue struct {
 // ── output: node ─────────────────────────────────────────────────────────────
 
 type Node struct {
-	ID          string             `json:"id"`
-	Label       string             `json:"label"`
-	Kind        string             `json:"kind"`
-	Role        string             `json:"role,omitempty"`
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"`
+	Role  string `json:"role,omitempty"`
 	// DeviceRole — discovery-driven canonical role (roles.go): access_switch |
 	// distribution_switch | core_router | firewall | load_balancer | wan_edge |
 	// carrier_hop | dc_wan_edge | dc_leaf | dc_spine | cloud_edge. Omitted when
 	// the classifier could not establish one (unknown stays unknown). Additive:
 	// existing consumers of Role/Kind are untouched.
-	DeviceRole     string   `json:"device_role,omitempty"`
-	RoleConfidence string   `json:"role_confidence,omitempty"` // strong|medium|weak (words)
-	RoleEvidence   []string `json:"role_evidence,omitempty"`   // "signal: detail" lines
-	Vendor      string             `json:"vendor,omitempty"`
-	Model       string             `json:"model,omitempty"`
-	Site        string             `json:"site,omitempty"`
-	Rack        string             `json:"rack,omitempty"`
-	MgmtIP      string             `json:"mgmt_ip,omitempty"`
-	Health      string             `json:"health"`
-	Owner       string             `json:"owner,omitempty"`
-	Confidence  float64            `json:"confidence"`
-	FirstSeen   string             `json:"first_seen,omitempty"`
-	LastSeen    string             `json:"last_seen,omitempty"`
-	ChangeState string             `json:"change_state,omitempty"`
-	Metrics     map[string]float64 `json:"metrics,omitempty"`
-	Evidence    []EvidenceRef      `json:"evidence"`
+	DeviceRole     string             `json:"device_role,omitempty"`
+	RoleConfidence string             `json:"role_confidence,omitempty"` // strong|medium|weak (words)
+	RoleEvidence   []string           `json:"role_evidence,omitempty"`   // "signal: detail" lines
+	Vendor         string             `json:"vendor,omitempty"`
+	Model          string             `json:"model,omitempty"`
+	Site           string             `json:"site,omitempty"`
+	Rack           string             `json:"rack,omitempty"`
+	MgmtIP         string             `json:"mgmt_ip,omitempty"`
+	Health         string             `json:"health"`
+	Owner          string             `json:"owner,omitempty"`
+	Confidence     float64            `json:"confidence"`
+	FirstSeen      string             `json:"first_seen,omitempty"`
+	LastSeen       string             `json:"last_seen,omitempty"`
+	ChangeState    string             `json:"change_state,omitempty"`
+	Metrics        map[string]float64 `json:"metrics,omitempty"`
+	Evidence       []EvidenceRef      `json:"evidence"`
 	// Issues are the active alerts DRIVING this node's health — surfaced so the
 	// inspector can answer "why is this device critical/warning" with the actual
 	// problem, not just a colour. Worst-first, capped. Empty when healthy.

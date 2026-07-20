@@ -274,7 +274,7 @@ type systemNetworkStatus struct {
 	} `json:"dns"`
 	NTP struct {
 		Results  []NTPResult `json:"results"`
-		OK       bool        `json:"ok"`       // at least one server reachable
+		OK       bool        `json:"ok"`        // at least one server reachable
 		OffsetMs float64     `json:"offset_ms"` // best (min |offset|) reachable server
 	} `json:"ntp"`
 }

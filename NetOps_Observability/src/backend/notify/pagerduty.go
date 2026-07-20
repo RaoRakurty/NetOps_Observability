@@ -27,8 +27,8 @@ var pagerDutyEventsV2URL = "https://events.pagerduty.com/v2/enqueue"
 type PagerDuty struct {
 	routingKey string
 	client     *http.Client
-	env    string
-	region string
+	env        string
+	region     string
 }
 
 // WithDeploymentIdentity returns a copy namespaced to env/region.

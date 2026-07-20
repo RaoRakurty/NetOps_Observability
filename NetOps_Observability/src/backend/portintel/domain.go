@@ -21,17 +21,17 @@ type ModuleFamily string
 
 const (
 	// Legacy
-	FamGBIC ModuleFamily = "GBIC"
-	FamXFP  ModuleFamily = "XFP"
+	FamGBIC   ModuleFamily = "GBIC"
+	FamXFP    ModuleFamily = "XFP"
 	FamXENPAK ModuleFamily = "XENPAK"
-	FamX2   ModuleFamily = "X2"
-	FamXPAK ModuleFamily = "XPAK"
-	FamCFP  ModuleFamily = "CFP"
-	FamCFP2 ModuleFamily = "CFP2"
-	FamCFP4 ModuleFamily = "CFP4"
-	FamCFP8 ModuleFamily = "CFP8"
-	FamCXP  ModuleFamily = "CXP"
-	FamCDFP ModuleFamily = "CDFP"
+	FamX2     ModuleFamily = "X2"
+	FamXPAK   ModuleFamily = "XPAK"
+	FamCFP    ModuleFamily = "CFP"
+	FamCFP2   ModuleFamily = "CFP2"
+	FamCFP4   ModuleFamily = "CFP4"
+	FamCFP8   ModuleFamily = "CFP8"
+	FamCXP    ModuleFamily = "CXP"
+	FamCDFP   ModuleFamily = "CDFP"
 	// SFP family
 	FamSFP    ModuleFamily = "SFP"
 	FamSFPP   ModuleFamily = "SFP+"
@@ -41,14 +41,14 @@ const (
 	FamSFPDD  ModuleFamily = "SFP-DD"
 	FamCSFP   ModuleFamily = "CSFP"
 	// QSFP family
-	FamQSFP      ModuleFamily = "QSFP"
-	FamQSFPP     ModuleFamily = "QSFP+"
-	FamQSFP14    ModuleFamily = "QSFP14"
-	FamQSFP28    ModuleFamily = "QSFP28"
-	FamQSFP56    ModuleFamily = "QSFP56"
-	FamQSFP112   ModuleFamily = "QSFP112"
-	FamQSFPDD    ModuleFamily = "QSFP-DD"
-	FamQSFPDD800 ModuleFamily = "QSFP-DD800"
+	FamQSFP       ModuleFamily = "QSFP"
+	FamQSFPP      ModuleFamily = "QSFP+"
+	FamQSFP14     ModuleFamily = "QSFP14"
+	FamQSFP28     ModuleFamily = "QSFP28"
+	FamQSFP56     ModuleFamily = "QSFP56"
+	FamQSFP112    ModuleFamily = "QSFP112"
+	FamQSFPDD     ModuleFamily = "QSFP-DD"
+	FamQSFPDD800  ModuleFamily = "QSFP-DD800"
 	FamQSFPDD1600 ModuleFamily = "QSFP-DD1600"
 	// OSFP family
 	FamOSFP     ModuleFamily = "OSFP"
@@ -67,11 +67,11 @@ const (
 	Fam800ZR        ModuleFamily = "800ZR"
 	Fam1600ZR       ModuleFamily = "1600ZR"
 	// Cable
-	FamDAC        ModuleFamily = "DAC"
-	FamAOC        ModuleFamily = "AOC"
-	FamAEC        ModuleFamily = "AEC"
-	FamACC        ModuleFamily = "ACC"
-	FamRJ45Copper ModuleFamily = "RJ45-copper"
+	FamDAC         ModuleFamily = "DAC"
+	FamAOC         ModuleFamily = "AOC"
+	FamAEC         ModuleFamily = "AEC"
+	FamACC         ModuleFamily = "ACC"
+	FamRJ45Copper  ModuleFamily = "RJ45-copper"
 	FamFixedCopper ModuleFamily = "fixed-copper"
 	FamFixedFiber  ModuleFamily = "fixed-fiber"
 	FamUnknown     ModuleFamily = "unknown"
@@ -168,19 +168,19 @@ type LanePayload struct {
 
 // CoherentPMPayload is a coherent-optic performance sample (carrier handoff).
 type CoherentPMPayload struct {
-	TenantID       string  `json:"tenant_id"`
-	DeviceID       string  `json:"device_id"`
-	PortID         string  `json:"port_id"`
-	OSNRdB         float64 `json:"osnr_db"`
-	ESNRdB         float64 `json:"esnr_db"`
-	CDpsnm         float64 `json:"cd_ps_nm"`
-	DGDps          float64 `json:"dgd_ps"`
-	PDLdB          float64 `json:"pdl_db"`
-	FreqOffsetHz   float64 `json:"carrier_freq_offset_hz"`
-	OpticalFreqHz  float64 `json:"optical_frequency_hz"`
-	InputPowerDBM  float64 `json:"input_power_dbm"`
-	MinRxOSNRdB    float64 `json:"min_rx_osnr_db"`
-	PreFECThresh   float64 `json:"pre_fec_threshold"`
+	TenantID      string  `json:"tenant_id"`
+	DeviceID      string  `json:"device_id"`
+	PortID        string  `json:"port_id"`
+	OSNRdB        float64 `json:"osnr_db"`
+	ESNRdB        float64 `json:"esnr_db"`
+	CDpsnm        float64 `json:"cd_ps_nm"`
+	DGDps         float64 `json:"dgd_ps"`
+	PDLdB         float64 `json:"pdl_db"`
+	FreqOffsetHz  float64 `json:"carrier_freq_offset_hz"`
+	OpticalFreqHz float64 `json:"optical_frequency_hz"`
+	InputPowerDBM float64 `json:"input_power_dbm"`
+	MinRxOSNRdB   float64 `json:"min_rx_osnr_db"`
+	PreFECThresh  float64 `json:"pre_fec_threshold"`
 }
 
 // FiberPathPayload is a physical-path object (relational-only).
@@ -208,14 +208,14 @@ type EventPayload struct {
 // ---- validators (zero-trust boundary: every payload is validated) -------------
 
 var (
-	ErrNoTenant   = errors.New("portintel: tenant_id required")
-	ErrNoDevice   = errors.New("portintel: device_id required")
-	ErrNoPort     = errors.New("portintel: port_id required")
-	ErrBadFamily  = errors.New("portintel: unknown module family")
-	ErrBadMedia   = errors.New("portintel: unknown media type")
-	ErrBadSupport = errors.New("portintel: unknown supported_status")
-	ErrLaneRange  = errors.New("portintel: lane_id out of range")
-	ErrNoPath     = errors.New("portintel: path_id required")
+	ErrNoTenant    = errors.New("portintel: tenant_id required")
+	ErrNoDevice    = errors.New("portintel: device_id required")
+	ErrNoPort      = errors.New("portintel: port_id required")
+	ErrBadFamily   = errors.New("portintel: unknown module family")
+	ErrBadMedia    = errors.New("portintel: unknown media type")
+	ErrBadSupport  = errors.New("portintel: unknown supported_status")
+	ErrLaneRange   = errors.New("portintel: lane_id out of range")
+	ErrNoPath      = errors.New("portintel: path_id required")
 	ErrNoEventType = errors.New("portintel: event_type required")
 )
 

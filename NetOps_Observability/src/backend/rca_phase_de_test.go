@@ -27,9 +27,9 @@ import (
 // (testSig defaults + explicit attrs/probe_scope/probe_authority/observer_type).
 type deSigOpt struct {
 	kind, modality, observer, observerType, entityType, entity, sev, ts string
-	attached                                                           bool
-	probeScope, probeAuth                                              string
-	agentHost, sourceEgress, seamID, target                           string
+	attached                                                            bool
+	probeScope, probeAuth                                               string
+	agentHost, sourceEgress, seamID, target                             string
 }
 
 func deSig(o deSigOpt) map[string]any {
@@ -102,11 +102,11 @@ func TestPhaseD_ImpactWordingMatrix(t *testing.T) {
 		mgmtMustNot     string
 	}{
 		{
-			name:            "partial flow coverage — real-user NOT none_detected (P1 kill)",
-			sigs:            append(base(), partialFlow()...),
-			wantImpactRU:    "not_observable",
-			wantImpact:      "detected", // synthetic confirmed
-			mgmtMustNot:     "No customer impact was detected",
+			name:         "partial flow coverage — real-user NOT none_detected (P1 kill)",
+			sigs:         append(base(), partialFlow()...),
+			wantImpactRU: "not_observable",
+			wantImpact:   "detected", // synthetic confirmed
+			mgmtMustNot:  "No customer impact was detected",
 		},
 		{
 			name: "anomalous flow — indicator_detected",
@@ -119,11 +119,11 @@ func TestPhaseD_ImpactWordingMatrix(t *testing.T) {
 			wantImpact: "detected",
 		},
 		{
-			name:            "no real-traffic lane — real-user not_observable, no no-impact claim",
-			sigs:            base(),
-			wantImpactRU:    "not_observable",
-			wantImpact:      "detected",
-			mgmtMustNot:     "No customer impact was detected",
+			name:         "no real-traffic lane — real-user not_observable, no no-impact claim",
+			sigs:         base(),
+			wantImpactRU: "not_observable",
+			wantImpact:   "detected",
+			mgmtMustNot:  "No customer impact was detected",
 		},
 	}
 	for _, tc := range cases {

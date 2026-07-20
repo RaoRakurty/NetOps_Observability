@@ -49,13 +49,13 @@ func TestIntQuery(t *testing.T) {
 		raw  string
 		want int
 	}{
-		{"", 20},       // missing -> default
-		{"50", 50},     // in range
-		{"0", 20},      // below min -> default
-		{"999", 20},    // above max -> default
-		{"abc", 20},    // unparseable -> default
-		{"1", 1},       // min boundary
-		{"500", 500},   // max boundary
+		{"", 20},     // missing -> default
+		{"50", 50},   // in range
+		{"0", 20},    // below min -> default
+		{"999", 20},  // above max -> default
+		{"abc", 20},  // unparseable -> default
+		{"1", 1},     // min boundary
+		{"500", 500}, // max boundary
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(http.MethodGet, "/api/flows?limit="+c.raw, nil)
@@ -77,9 +77,9 @@ func TestDurationQuery(t *testing.T) {
 		{"30m", 30 * time.Minute},
 		{"2h", 2 * time.Hour},
 		{"bogus", def},
-		{"-5m", def},                 // non-positive
-		{"0s", def},                  // non-positive
-		{"9000h", def},               // exceeds 30-day cap
+		{"-5m", def},   // non-positive
+		{"0s", def},    // non-positive
+		{"9000h", def}, // exceeds 30-day cap
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(http.MethodGet, "/api/flows?since="+c.raw, nil)

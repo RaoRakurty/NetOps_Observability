@@ -12,13 +12,13 @@ import (
 
 // TokenBucket is a simple refilling token bucket. Safe for concurrent use.
 type TokenBucket struct {
-	mu       sync.Mutex
-	capacity float64
-	tokens   float64
+	mu         sync.Mutex
+	capacity   float64
+	tokens     float64
 	ratePerSec float64
-	last     time.Time
-	now      func() time.Time // injectable clock for tests
-	sleep    func(context.Context, time.Duration) error
+	last       time.Time
+	now        func() time.Time // injectable clock for tests
+	sleep      func(context.Context, time.Duration) error
 }
 
 // NewTokenBucket builds a bucket of ratePerSec sustained rate and burst = ceil

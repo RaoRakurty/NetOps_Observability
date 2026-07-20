@@ -77,11 +77,11 @@ func TestBucketObservationTimesIsPureAndClamped(t *testing.T) {
 	start := time.Date(2026, 7, 12, 18, 0, 0, 0, time.UTC)
 	end := start.Add(20 * time.Minute)
 	got := bucketObservationTimes([]time.Time{
-		start,                        // first bucket
-		start.Add(10 * time.Minute),  // middle
-		end,                          // clamps into the last bucket
-		start.Add(-1 * time.Minute),  // clamps into the first
-		end.Add(5 * time.Minute),     // clamps into the last
+		start,                       // first bucket
+		start.Add(10 * time.Minute), // middle
+		end,                         // clamps into the last bucket
+		start.Add(-1 * time.Minute), // clamps into the first
+		end.Add(5 * time.Minute),    // clamps into the last
 	}, start, end, 4)
 	want := []int{2, 0, 1, 2}
 	for i := range want {

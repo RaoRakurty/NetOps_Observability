@@ -44,7 +44,9 @@ func normalizeIsolationMode(m string) (IsolationMode, error) {
 
 // isolationImplemented reports whether a mode is actually provisioned today.
 // Dedicated modes capture intent but currently fall back to shared at runtime.
+//
 //nolint:unused // guards the not-yet-implemented dedicated isolation modes; dedicated falls back to shared at runtime
+//lint:ignore U1000 guards the not-yet-implemented dedicated isolation modes
 func isolationImplemented(m IsolationMode) bool { return m == IsolationShared || m == "" }
 
 // TenantBackend identifies where a tenant's data physically lives. For shared

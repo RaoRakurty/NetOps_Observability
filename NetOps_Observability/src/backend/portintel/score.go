@@ -36,15 +36,15 @@ type PortEvidence struct {
 	OperDown     bool
 	FlapsPerHour float64
 	// DOM absolute alarms (already-crossed hard thresholds)
-	RxPowerAlarm   bool
-	TxPowerAlarm   bool
+	RxPowerAlarm bool
+	TxPowerAlarm bool
 	// DOM margins (dB / units of headroom; <=0 means past the warn boundary)
 	RxMarginDB float64
 	TxMarginDB float64
 	// FEC/BER
-	PreFECBER  float64
-	PostFECBER float64
-	UCWordsPerMin float64
+	PreFECBER              float64
+	PostFECBER             float64
+	UCWordsPerMin          float64
 	FECCorrectedVsBaseline float64 // multiple of baseline (0 = unknown)
 	// Lanes
 	LaneRxDBM []float64 // per-lane RX; divergence computed from the spread
@@ -59,16 +59,16 @@ type PortEvidence struct {
 	// Fiber path
 	FiberPathConflict bool
 	// Thermal/power
-	TempMarginC   float64 // C of headroom below high-warn (<=0 debits)
+	TempMarginC      float64 // C of headroom below high-warn (<=0 debits)
 	VoltageOutOfBand bool
 }
 
 // HealthResult is the scorer's output → port_health_current.
 type HealthResult struct {
-	Score          int            // 0-100
-	State          string         // ok | watch | degraded | critical
-	DominantIssue  string         // the dimension that took the biggest debit
-	Contributions  map[string]int // dimension → debit (for "why 72")
+	Score         int            // 0-100
+	State         string         // ok | watch | degraded | critical
+	DominantIssue string         // the dimension that took the biggest debit
+	Contributions map[string]int // dimension → debit (for "why 72")
 }
 
 // Score computes the deterministic port health. clampDebit keeps each dimension

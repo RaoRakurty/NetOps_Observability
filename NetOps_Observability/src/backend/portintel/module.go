@@ -28,10 +28,10 @@ type DetectInput struct {
 
 // Detected is the normalized result plus how it was derived (transparency).
 type Detected struct {
-	Family    ModuleFamily
-	Media     MediaType
-	OpticPMD  string
-	Method    string // "form_factor_field" | "part_number" | "pmd_app_code" | "heuristic" | "unknown"
+	Family   ModuleFamily
+	Media    MediaType
+	OpticPMD string
+	Method   string // "form_factor_field" | "part_number" | "pmd_app_code" | "heuristic" | "unknown"
 }
 
 // Detect resolves a normalized module family/media/PMD from the strongest

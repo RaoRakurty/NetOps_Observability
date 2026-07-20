@@ -59,15 +59,15 @@ func TestToDeviceFactsCarriesRoleFacts(t *testing.T) {
 
 func TestStampSpineRolesResolvesByRefAddressAndLabel(t *testing.T) {
 	idx := map[string]topology.RoleResult{
-		"dev-1":       {Role: topology.DevRoleWANEdge, Confidence: topology.RoleConfStrong},
-		"10.0.0.9":    {Role: topology.DevRoleCoreRouter, Confidence: topology.RoleConfMedium},
-		"dc1-leaf03":  {Role: topology.DevRoleDCLeaf, Confidence: topology.RoleConfMedium},
+		"dev-1":      {Role: topology.DevRoleWANEdge, Confidence: topology.RoleConfStrong},
+		"10.0.0.9":   {Role: topology.DevRoleCoreRouter, Confidence: topology.RoleConfMedium},
+		"dc1-leaf03": {Role: topology.DevRoleDCLeaf, Confidence: topology.RoleConfMedium},
 	}
 	spine := []pathgraph.SpineNode{
-		{Index: 0, EntityRef: "dev-1", Label: "br1-cpe"},              // by entity ref
-		{Index: 1, Address: "10.0.0.9", Label: "unnamed"},             // by address
-		{Index: 2, Label: "DC1-LEAF03"},                               // by (case-folded) label
-		{Index: 3, Address: "8.8.8.8", Label: "transit"},              // no resolution → untouched
+		{Index: 0, EntityRef: "dev-1", Label: "br1-cpe"},  // by entity ref
+		{Index: 1, Address: "10.0.0.9", Label: "unnamed"}, // by address
+		{Index: 2, Label: "DC1-LEAF03"},                   // by (case-folded) label
+		{Index: 3, Address: "8.8.8.8", Label: "transit"},  // no resolution → untouched
 	}
 	stampSpineRoles(spine, idx)
 	if spine[0].DeviceRole != topology.DevRoleWANEdge || spine[0].RoleConfidence != "strong" {

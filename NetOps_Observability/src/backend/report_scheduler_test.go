@@ -17,12 +17,12 @@ func TestAtoiSafe(t *testing.T) {
 		{"", 0},
 		{"0", 0},
 		{"42", 42},
-		{"  17  ", 17},     // surrounding space trimmed before parsing
-		{"123abc", 123},    // stops at first non-digit
-		{"abc", 0},         // no leading digits
-		{"-5", 0},          // '-' is not a digit, stops immediately
-		{"9 8", 9},         // embedded space stops parsing
-		{"007", 7},         // leading zeros fine
+		{"  17  ", 17},  // surrounding space trimmed before parsing
+		{"123abc", 123}, // stops at first non-digit
+		{"abc", 0},      // no leading digits
+		{"-5", 0},       // '-' is not a digit, stops immediately
+		{"9 8", 9},      // embedded space stops parsing
+		{"007", 7},      // leading zeros fine
 		{"1000000", 1000000},
 	}
 	for _, c := range cases {

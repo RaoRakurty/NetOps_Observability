@@ -59,13 +59,22 @@ type snmpGenResult struct {
 	PrivKey      string `json:"priv_key,omitempty"`
 }
 
+// titleVendor uppercases the first letter of an ASCII vendor slug ("cisco" →
+// "Cisco") — replaces the deprecated strings.Title for this single use.
+func titleVendor(v string) string {
+	if v == "" {
+		return v
+	}
+	return strings.ToUpper(v[:1]) + v[1:]
+}
+
 // buildSNMPCredential builds the credential profile that matches a generated
 // config (pure; the caller persists it). v3 uses SHA + AES128 (the widest
 // interoperable pairing Correlix supports).
 func buildSNMPCredential(vendor, version, community, secName, authKey, privKey string) SNMPCredential {
 	c := SNMPCredential{
 		ID:      fmt.Sprintf("%s-%s-gen", vendor, version),
-		Name:    fmt.Sprintf("%s %s (generated)", strings.Title(vendor), version), //nolint:staticcheck
+		Name:    fmt.Sprintf("%s %s (generated)", titleVendor(vendor), version),
 		Version: version,
 		Port:    161,
 	}

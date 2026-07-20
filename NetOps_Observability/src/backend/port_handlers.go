@@ -173,12 +173,12 @@ func (s *server) handlePortFilterOptions(w http.ResponseWriter, r *http.Request)
 		return out
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device":       uniq(func(p PortRow) string { return p.DeviceID }),
-		"seam":         uniq(func(p PortRow) string { return p.Seam }),
-		"role":         uniq(func(p PortRow) string { return p.Role }),
-		"media_type":   uniq(func(p PortRow) string { return p.MediaType }),
-		"form_factor":  uniq(func(p PortRow) string { return p.FormFactor }),
-		"vendor_name":  uniq(func(p PortRow) string { return p.VendorName }),
+		"device":      uniq(func(p PortRow) string { return p.DeviceID }),
+		"seam":        uniq(func(p PortRow) string { return p.Seam }),
+		"role":        uniq(func(p PortRow) string { return p.Role }),
+		"media_type":  uniq(func(p PortRow) string { return p.MediaType }),
+		"form_factor": uniq(func(p PortRow) string { return p.FormFactor }),
+		"vendor_name": uniq(func(p PortRow) string { return p.VendorName }),
 	})
 }
 

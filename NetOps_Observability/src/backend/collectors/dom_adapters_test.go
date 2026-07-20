@@ -67,14 +67,14 @@ func TestDomAdapterRegistry(t *testing.T) {
 
 func TestOpenconfigTransceiverMetric(t *testing.T) {
 	cases := map[string]string{
-		"/components/component/transceiver/physical-channels/channel/state/input-power/instant":  "port_optics_rx_power_dbm",
-		"output-power/instant":         "port_optics_tx_power_dbm",
-		"laser-bias-current/instant":   "port_optics_tx_bias_ma",
+		"/components/component/transceiver/physical-channels/channel/state/input-power/instant": "port_optics_rx_power_dbm",
+		"output-power/instant":          "port_optics_tx_power_dbm",
+		"laser-bias-current/instant":    "port_optics_tx_bias_ma",
 		"transceiver/state/temperature": "port_optics_temperature_c",
-		"supply-voltage":               "port_optics_supply_voltage_v",
-		"pre-fec-ber":                  "port_prefec_ber",
-		"osnr/instant":                 "port_coherent_osnr_db",
-		"admin-state":                  "", // not an optics leaf
+		"supply-voltage":                "port_optics_supply_voltage_v",
+		"pre-fec-ber":                   "port_prefec_ber",
+		"osnr/instant":                  "port_coherent_osnr_db",
+		"admin-state":                   "", // not an optics leaf
 	}
 	for leaf, want := range cases {
 		if got := openconfigTransceiverMetric(leaf); got != want {

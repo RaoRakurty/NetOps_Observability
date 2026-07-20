@@ -108,12 +108,12 @@ var componentFamilies = map[string]string{
 	"compute:vpcpeering":            FamilySeam,
 
 	// K8s layer (Wave 5 #15) — clusters + node pools
-	"eks:cluster":                      FamilyK8s,
-	"eks:nodegroup":                    FamilyK8s,
-	"containerservice:managedcluster":  FamilyK8s, // AKS
-	"containerservice:agentpool":       FamilyK8s,
-	"container:cluster":                FamilyK8s, // GKE
-	"container:nodepool":               FamilyK8s,
+	"eks:cluster":                     FamilyK8s,
+	"eks:nodegroup":                   FamilyK8s,
+	"containerservice:managedcluster": FamilyK8s, // AKS
+	"containerservice:agentpool":      FamilyK8s,
+	"container:cluster":               FamilyK8s, // GKE
+	"container:nodepool":              FamilyK8s,
 
 	// serverless / PaaS (Wave 5 #15)
 	"lambda:function": FamilyServerless,

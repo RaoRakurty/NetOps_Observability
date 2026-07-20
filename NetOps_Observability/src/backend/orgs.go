@@ -26,10 +26,10 @@ import (
 const OrgGlobal = "global"
 
 type Org struct {
-	ID         string `json:"id"`   // slug, stable
-	Name       string `json:"name"`
-	Slug       string `json:"slug"`
-	Note       string `json:"note,omitempty"`
+	ID   string `json:"id"` // slug, stable
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Note string `json:"note,omitempty"`
 	// HomeRegion is where this org's tenants' data resides by default (data
 	// residency). Recorded now for governance/display; per-region routing is a
 	// later phase. Always a member of the known region set.

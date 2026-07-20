@@ -13,11 +13,11 @@ type connector struct {
 	transformer Transformer
 }
 
-func (c connector) Spec() ConnectorSpec       { return c.spec }
-func (c connector) Auth() AuthProvider        { return c.auth }
-func (c connector) Poller() Poller            { return c.poller }
-func (c connector) Webhook() WebhookHandler   { return c.webhook }
-func (c connector) Transformer() Transformer  { return c.transformer }
+func (c connector) Spec() ConnectorSpec      { return c.spec }
+func (c connector) Auth() AuthProvider       { return c.auth }
+func (c connector) Poller() Poller           { return c.poller }
+func (c connector) Webhook() WebhookHandler  { return c.webhook }
+func (c connector) Transformer() Transformer { return c.transformer }
 
 // Registry maps vendor → Connector.
 type Registry struct {

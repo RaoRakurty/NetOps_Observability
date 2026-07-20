@@ -39,7 +39,7 @@ type Tenant struct {
 	// Global view and the operator is denied if it scopes into the tenant. The
 	// tenant's OWN users are unaffected (they always see their own data). Default
 	// false (zero value) = operator-visible, preserving existing behavior.
-	OperatorRestricted bool      `json:"operator_restricted,omitempty"`
+	OperatorRestricted bool `json:"operator_restricted,omitempty"`
 	// Status is the lifecycle state of the tenant (ABAC-ready; surfaced in
 	// TenantContext). Default "active"; a future suspend/archive flow flips it,
 	// and policy can deny access to a non-active tenant. Blank is read as active

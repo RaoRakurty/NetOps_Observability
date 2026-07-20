@@ -11,11 +11,11 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/des"   // #nosec G502 -- RFC 3414 DES-CBC privacy; protocol-mandated, not a free cipher choice
+	"crypto/des" // #nosec G502 -- RFC 3414 DES-CBC privacy; protocol-mandated, not a free cipher choice
 	"crypto/hmac"
-	"crypto/md5"   // #nosec G501 -- RFC 3414 HMAC-MD5-96 authentication; protocol-mandated
+	"crypto/md5" // #nosec G501 -- RFC 3414 HMAC-MD5-96 authentication; protocol-mandated
 	"crypto/rand"
-	"crypto/sha1"  // #nosec G505 -- RFC 3414 HMAC-SHA-96 authentication; protocol-mandated
+	"crypto/sha1" // #nosec G505 -- RFC 3414 HMAC-SHA-96 authentication; protocol-mandated
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
@@ -155,7 +155,7 @@ func usmSecurityParams(engineID []byte, boots, etime int, user string, macLen in
 	body = append(body, berInt(boots)...)
 	body = append(body, berInt(etime)...)
 	body = append(body, berOctet([]byte(user))...)
-	authFieldStart := len(body)         // start of the authParams TLV within body
+	authFieldStart := len(body) // start of the authParams TLV within body
 	body = append(body, berOctet(authPlaceholder)...)
 	body = append(body, berOctet(privParams)...)
 	usmSeq := berTLV(0x30, body)
@@ -247,11 +247,12 @@ func (s *v3Session) encrypt(creds snmpCreds, scoped []byte, salt8 []byte) ([]byt
 		// IV = engineBoots(4) || engineTime(4) || salt(8) per RFC 3826 §3.1 — a
 		// constructed, unique IV, NOT a zero/hardcoded nonce (so G407 is a false
 		// positive here).
-		binary.BigEndian.PutUint32(iv[0:4], uint32(s.boots))  // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
-		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime))  // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
+		binary.BigEndian.PutUint32(iv[0:4], uint32(s.boots)) // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
+		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime)) // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
 		copy(iv[8:16], salt8)
 		out := make([]byte, len(scoped))
 		// #nosec G407 -- IV constructed above per RFC 3826, not zeroed
+		//lint:ignore SA1019 SNMPv3 USM mandates AES-CFB (RFC 3826); no AEAD mode interoperates
 		cipher.NewCFBEncrypter(block, iv).XORKeyStream(out, scoped) //nolint:staticcheck // SA1019: SNMPv3 USM mandates AES-CFB (RFC 3826); no AEAD interops
 		return out, salt8, nil
 	case strings.HasPrefix(proto, "DES"):
@@ -265,7 +266,7 @@ func (s *v3Session) encrypt(creds snmpCreds, scoped []byte, salt8 []byte) ([]byt
 		}
 		// salt = engineBoots(4) || 4 random bytes; IV = preIV XOR salt.
 		salt := make([]byte, 8)
-		binary.BigEndian.PutUint32(salt[0:4], uint32(s.boots))  // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
+		binary.BigEndian.PutUint32(salt[0:4], uint32(s.boots)) // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
 		copy(salt[4:8], salt8[4:8])
 		preIV := key[8:16]
 		iv := make([]byte, 8)
@@ -293,11 +294,12 @@ func (s *v3Session) decrypt(creds snmpCreds, cipherText, privParams []byte) ([]b
 			return nil, err
 		}
 		iv := make([]byte, 16)
-		binary.BigEndian.PutUint32(iv[0:4], uint32(s.boots))  // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
-		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime))  // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
+		binary.BigEndian.PutUint32(iv[0:4], uint32(s.boots)) // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
+		binary.BigEndian.PutUint32(iv[4:8], uint32(s.etime)) // #nosec G115 -- SNMP engineBoots/engineTime are RFC 3414 0..2^31-1, fit uint32
 		copy(iv[8:16], privParams)
 		out := make([]byte, len(cipherText))
 		// #nosec G407 -- IV reconstructed from engineBoots/time + privParams per RFC 3826
+		//lint:ignore SA1019 SNMPv3 USM mandates AES-CFB (RFC 3826); no AEAD mode interoperates
 		cipher.NewCFBDecrypter(block, iv).XORKeyStream(out, cipherText) //nolint:staticcheck // SA1019: SNMPv3 USM mandates AES-CFB (RFC 3826)
 		return out, nil
 	case strings.HasPrefix(proto, "DES"):
@@ -469,7 +471,7 @@ func parseV3SecurityParams(pkt []byte) (engineID []byte, boots, etime int, privP
 	if err != nil {
 		return
 	}
-	boots = int(decodeUint(bootsB))  // #nosec G115 -- engineBoots parsed from a 32-bit wire field
+	boots = int(decodeUint(bootsB)) // #nosec G115 -- engineBoots parsed from a 32-bit wire field
 	etime = int(decodeUint(timeB))  // #nosec G115 -- engineTime parsed from a 32-bit wire field
 	return engineID, boots, etime, privParams, nil
 }

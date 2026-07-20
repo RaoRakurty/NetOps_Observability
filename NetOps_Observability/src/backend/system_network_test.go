@@ -36,12 +36,12 @@ func TestSanitizeSystemNetwork(t *testing.T) {
 // TestParseNTPResponse checks the offset math against a synthesized response.
 func TestParseNTPResponse(t *testing.T) {
 	// Construct a response where the server clock is exactly 1s AHEAD of local.
-	t1 := time.Unix(1_700_000_000, 0).UTC() // client transmit
-	t4 := t1.Add(20 * time.Millisecond)     // client receive (20ms RTT)
+	t1 := time.Unix(1_700_000_000, 0).UTC()                     // client transmit
+	t4 := t1.Add(20 * time.Millisecond)                         // client receive (20ms RTT)
 	serverMid := t1.Add(10 * time.Millisecond).Add(time.Second) // server is +1s, midway in RTT
 
 	resp := make([]byte, 48)
-	resp[1] = 2 // stratum 2
+	resp[1] = 2                          // stratum 2
 	writeNTPTime(resp[32:40], serverMid) // T2 receive
 	writeNTPTime(resp[40:48], serverMid) // T3 transmit
 

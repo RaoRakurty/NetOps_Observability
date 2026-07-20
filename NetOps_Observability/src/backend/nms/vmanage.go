@@ -18,18 +18,18 @@ type VManageTransformer struct{}
 func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
 	var resp struct {
 		Data []struct {
-			UUID       string `json:"uuid"`
-			EventName  string `json:"eventname"`
-			Type       string `json:"type"`
-			RuleDisp   string `json:"rule_name_display"`
-			Component  string `json:"component"`
-			Severity   string `json:"severity"`
-			EntryTime  int64  `json:"entry_time"`
-			SystemIP   string `json:"system_ip"`
-			HostName   string `json:"host_name"`
-			SiteID     string `json:"site_id"`
-			Active     bool   `json:"active"`
-			Values     []map[string]any `json:"values"`
+			UUID      string           `json:"uuid"`
+			EventName string           `json:"eventname"`
+			Type      string           `json:"type"`
+			RuleDisp  string           `json:"rule_name_display"`
+			Component string           `json:"component"`
+			Severity  string           `json:"severity"`
+			EntryTime int64            `json:"entry_time"`
+			SystemIP  string           `json:"system_ip"`
+			HostName  string           `json:"host_name"`
+			SiteID    string           `json:"site_id"`
+			Active    bool             `json:"active"`
+			Values    []map[string]any `json:"values"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {

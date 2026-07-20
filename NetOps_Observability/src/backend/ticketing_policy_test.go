@@ -76,11 +76,11 @@ func TestEvalTicketDecision_Guardrails(t *testing.T) {
 			create: true,
 		},
 		{
-			name:   "existing open ticket held (no double-create)",
-			link:   &ticketLink{Status: "open", TicketNumber: "INC0012345"},
+			name: "existing open ticket held (no double-create)",
+			link: &ticketLink{Status: "open", TicketNumber: "INC0012345"},
 		},
 		{
-			name: "resolved within suppression window held",
+			name:   "resolved within suppression window held",
 			policy: func(p *incidentPolicy) { p.SuppressFlappingSeconds = 300 },
 			link: func() *ticketLink {
 				ts := now.Add(-30 * time.Second)

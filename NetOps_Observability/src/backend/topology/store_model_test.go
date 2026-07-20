@@ -122,10 +122,10 @@ func TestToViewAndCoverage(t *testing.T) {
 func TestEnrichLive(t *testing.T) {
 	now := time.Now()
 	g := GraphRecords{Nodes: []NodeRecord{
-		{ID: "crit", LastSeen: now},                 // has a critical alert
-		{ID: "warn", LastSeen: now},                 // has a warning alert
-		{ID: "ok", LastSeen: now},                   // fresh, no alert
-		{ID: "staleq", Stale: true, LastSeen: now},  // stale, no alert
+		{ID: "crit", LastSeen: now},                // has a critical alert
+		{ID: "warn", LastSeen: now},                // has a warning alert
+		{ID: "ok", LastSeen: now},                  // fresh, no alert
+		{ID: "staleq", Stale: true, LastSeen: now}, // stale, no alert
 	}}
 	v := g.ToView("a", now)
 	v.EnrichLive(map[string][]AlertFact{

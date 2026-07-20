@@ -890,8 +890,8 @@ func trapSysName(ev *TrapEvent) string {
 // IP (fail-closed on an ambiguous shared NAT source); this RESCUES the identity from
 // inside the PDU when the source IP didn't resolve — both signals survive NAT:
 //
-//	1. sysName.0 varbind matched (case-insensitively) to a device id — by NAME.
-//	2. v1 agent-addr resolved by IP — the device's own address inside the PDU.
+//  1. sysName.0 varbind matched (case-insensitively) to a device id — by NAME.
+//  2. v1 agent-addr resolved by IP — the device's own address inside the PDU.
 //
 // When nothing resolves, Device stays "" — an honest unknown: the producer keeps the
 // trap as evidence under its source host, never a guessed device. EnrichmentStatus

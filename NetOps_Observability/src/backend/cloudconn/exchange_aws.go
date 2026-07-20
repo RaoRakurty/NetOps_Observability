@@ -28,11 +28,11 @@ import (
 )
 
 const (
-	awsSTSVersion         = "2011-06-15"
-	awsSTSGlobalEndpoint  = "https://sts.amazonaws.com"
+	awsSTSVersion          = "2011-06-15"
+	awsSTSGlobalEndpoint   = "https://sts.amazonaws.com"
 	awsSTSGlobalSignRegion = "us-east-1"
-	awsMinSessionSeconds  = 900  // STS lower bound for DurationSeconds
-	awsMaxSessionSeconds  = 3600 // matches the setup templates' MaxSessionDuration
+	awsMinSessionSeconds   = 900  // STS lower bound for DurationSeconds
+	awsMaxSessionSeconds   = 3600 // matches the setup templates' MaxSessionDuration
 )
 
 // AWSSTSExchanger implements TokenExchanger against the AWS STS Query API.

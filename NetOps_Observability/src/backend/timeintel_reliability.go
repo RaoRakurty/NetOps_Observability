@@ -32,7 +32,6 @@ type reliabilityFilters struct {
 	Owner     string // customer | isp | cloud_provider | ...
 	Provider  string
 	Device    string
-	Severity  string
 	Signature string // root_cause_signature (top_hypothesis)
 }
 
@@ -49,7 +48,6 @@ func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
 		Owner:     strings.ToLower(strings.TrimSpace(q.Get("owner"))),
 		Provider:  strings.TrimSpace(q.Get("provider")),
 		Device:    strings.TrimSpace(q.Get("device")),
-		Severity:  strings.ToLower(strings.TrimSpace(q.Get("severity"))),
 		Signature: strings.TrimSpace(q.Get("signature")),
 	}
 }

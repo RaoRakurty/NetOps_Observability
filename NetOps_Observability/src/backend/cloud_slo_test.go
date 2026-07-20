@@ -22,8 +22,8 @@ func TestNormalizeCloudSLOs(t *testing.T) {
 		nil, // empty
 		{{AppName: "", TargetPct: 99.9, WindowDays: 30}},
 		{{AppName: "a;drop", TargetPct: 99.9, WindowDays: 30}},
-		{{AppName: "ok", TargetPct: 49.9, WindowDays: 30}},   // below floor
-		{{AppName: "ok", TargetPct: 100, WindowDays: 30}},    // no budget left
+		{{AppName: "ok", TargetPct: 49.9, WindowDays: 30}}, // below floor
+		{{AppName: "ok", TargetPct: 100, WindowDays: 30}},  // no budget left
 		{{AppName: "ok", TargetPct: math.NaN(), WindowDays: 30}},
 		{{AppName: "ok", TargetPct: 99.9, WindowDays: 0}},
 		{{AppName: "ok", TargetPct: 99.9, WindowDays: 31}},

@@ -130,7 +130,7 @@ func (s *server) startBroadcaster(stop <-chan struct{}) {
 	telemetryTicker := time.NewTicker(2 * time.Second)
 	defer telemetryTicker.Stop()
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))  // #nosec G404 -- non-cryptographic: seeds synthetic dashboard telemetry, not security tokens
+	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404 -- non-cryptographic: seeds synthetic dashboard telemetry, not security tokens
 
 	for {
 		select {

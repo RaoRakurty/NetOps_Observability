@@ -13,11 +13,11 @@ func TestSanitizeLandingRoute(t *testing.T) {
 		}
 	}
 	bad := []string{
-		"https://evil.com",            // open-redirect attempt
-		"//evil.com",                  // scheme-relative
-		"#/foo bar",                   // whitespace
-		"javascript:alert(1)",         // no hash route
-		"/incident/overview",          // missing hash
+		"https://evil.com",               // open-redirect attempt
+		"//evil.com",                     // scheme-relative
+		"#/foo bar",                      // whitespace
+		"javascript:alert(1)",            // no hash route
+		"/incident/overview",             // missing hash
 		"#/" + string(make([]byte, 200)), // too long / control bytes
 	}
 	for _, r := range bad {

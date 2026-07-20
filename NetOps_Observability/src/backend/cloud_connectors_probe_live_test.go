@@ -79,12 +79,12 @@ func wireProbeBroker(s *server, fixture *httptest.Server) {
 }
 
 type permsResp struct {
-	CapabilityPack      string                     `json:"capability_pack"`
-	RequiredPermissions []string                   `json:"required_permissions"`
-	LiveCheck           string                     `json:"live_check"`
+	CapabilityPack      string                      `json:"capability_pack"`
+	RequiredPermissions []string                    `json:"required_permissions"`
+	LiveCheck           string                      `json:"live_check"`
 	Report              *cloudconn.CapabilityReport `json:"report"`
-	Note                string                     `json:"note"`
-	Error               string                     `json:"error"`
+	Note                string                      `json:"note"`
+	Error               string                      `json:"error"`
 }
 
 func TestCloudConnectorLivePermissionsAndSourceStatus(t *testing.T) {

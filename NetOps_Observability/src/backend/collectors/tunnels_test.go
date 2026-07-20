@@ -133,8 +133,8 @@ func TestOidHelpers(t *testing.T) {
 
 func TestIsTunnelIface(t *testing.T) {
 	cases := []struct {
-		f   iface
-		ep  bool
+		f    iface
+		ep   bool
 		want bool
 	}{
 		{iface{name: "Tunnel0"}, false, true},

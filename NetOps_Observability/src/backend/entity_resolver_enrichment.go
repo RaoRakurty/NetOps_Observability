@@ -28,8 +28,8 @@ import (
 
 type erDevice struct {
 	TenantID string `json:"tenant_id"`
-	Device   string `json:"device"`           // correlation device entity (device id)
-	Name     string `json:"name,omitempty"`   // human name (an alias for IP→device)
+	Device   string `json:"device"`            // correlation device entity (device id)
+	Name     string `json:"name,omitempty"`    // human name (an alias for IP→device)
 	MgmtIP   string `json:"mgmt_ip,omitempty"` // management address
 }
 

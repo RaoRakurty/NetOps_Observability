@@ -164,7 +164,7 @@ func TestAWSWebIdentitySetupInstructions(t *testing.T) {
 	pack, _ := Pack("aws-observer-v1")
 	bundle, err := a.SetupInstructions(IdentityConfig{
 		Provider: ProviderAWS, Method: AuthMethodWorkloadFederation,
-		Anchor: TrustAnchor{OIDCIssuer: "https://issuer.correlix.example", OIDCSubject: "correlix:connector:ccn_1"},
+		Anchor:   TrustAnchor{OIDCIssuer: "https://issuer.correlix.example", OIDCSubject: "correlix:connector:ccn_1"},
 		Audience: "sts.amazonaws.com",
 	}, pack)
 	if err != nil {

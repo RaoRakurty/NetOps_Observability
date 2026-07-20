@@ -30,14 +30,14 @@ import (
 // dormant (srv.nms == nil) so the surface doesn't exist unless enabled.
 
 type nmsIntegrationInput struct {
-	Vendor        string            `json:"vendor"`
-	DisplayName   string            `json:"displayName"`
-	Enabled       *bool             `json:"enabled,omitempty"`
-	BaseURL       string            `json:"baseUrl"`
-	AuthType      string            `json:"authType,omitempty"`
-	PollIntervalS int               `json:"pollIntervalS,omitempty"`
-	Streams       []string          `json:"streams,omitempty"`
-	TLSSkipVerify *bool             `json:"tlsSkipVerify,omitempty"`
+	Vendor        string   `json:"vendor"`
+	DisplayName   string   `json:"displayName"`
+	Enabled       *bool    `json:"enabled,omitempty"`
+	BaseURL       string   `json:"baseUrl"`
+	AuthType      string   `json:"authType,omitempty"`
+	PollIntervalS int      `json:"pollIntervalS,omitempty"`
+	Streams       []string `json:"streams,omitempty"`
+	TLSSkipVerify *bool    `json:"tlsSkipVerify,omitempty"`
 	// Credentials is write-only: fields are Vault-encrypted under the owning
 	// tenant's DEK and never returned.
 	Credentials map[string]string `json:"credentials,omitempty"`

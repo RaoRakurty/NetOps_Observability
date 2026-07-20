@@ -22,18 +22,18 @@ import (
 // and detail drawer consume. Identity fields (serial/part) are RELATIONAL here,
 // never TSDB labels (cardinality law).
 type PortRow struct {
-	TenantID     string `json:"-"`
-	DeviceID     string `json:"device"`
-	PortID       string `json:"port_id"`
-	IfName       string `json:"port_name"`
-	IfAlias      string `json:"if_alias"`
-	AdminStatus  string `json:"admin_status"`
-	OperStatus   string `json:"oper_status"`
-	SpeedBps     int64  `json:"speed_bps"`
-	Role         string `json:"role"`
-	Seam         string `json:"seam"`
-	LagID        string `json:"lag_id,omitempty"`
-	BreakoutGrp  string `json:"breakout_group_id,omitempty"`
+	TenantID    string `json:"-"`
+	DeviceID    string `json:"device"`
+	PortID      string `json:"port_id"`
+	IfName      string `json:"port_name"`
+	IfAlias     string `json:"if_alias"`
+	AdminStatus string `json:"admin_status"`
+	OperStatus  string `json:"oper_status"`
+	SpeedBps    int64  `json:"speed_bps"`
+	Role        string `json:"role"`
+	Seam        string `json:"seam"`
+	LagID       string `json:"lag_id,omitempty"`
+	BreakoutGrp string `json:"breakout_group_id,omitempty"`
 	// transceiver join
 	FormFactor   string `json:"form_factor,omitempty"`
 	MediaType    string `json:"media_type,omitempty"`
@@ -42,23 +42,23 @@ type PortRow struct {
 	SerialNumber string `json:"serial_number,omitempty"`
 	Supported    string `json:"supported_status,omitempty"`
 	// health join
-	HealthScore  int    `json:"health"`
-	HealthState  string `json:"health_state"`
+	HealthScore   int    `json:"health"`
+	HealthState   string `json:"health_state"`
 	DominantIssue string `json:"dominant_issue,omitempty"`
-	MatchedSig   string `json:"matched_signature,omitempty"`
-	LastChange   string `json:"last_change,omitempty"`
+	MatchedSig    string `json:"matched_signature,omitempty"`
+	LastChange    string `json:"last_change,omitempty"`
 }
 
 // PortFilter is the server-side filter set (owner spec — subset wired now).
 type PortFilter struct {
-	Device       string
-	Seam         string
-	Role         string
-	MediaType    string
-	FormFactor   string
-	Supported    string
-	OperStatus   string
-	RCAAttached  bool
+	Device      string
+	Seam        string
+	Role        string
+	MediaType   string
+	FormFactor  string
+	Supported   string
+	OperStatus  string
+	RCAAttached bool
 	// paging
 	Limit  int
 	Offset int
@@ -69,16 +69,16 @@ type PortFilter struct {
 // discovered neighbor. RCA uses it to point an incident at the exact optic /
 // strand / cross-connect instead of just "device X".
 type PathContext struct {
-	Port     *PortRow          `json:"port,omitempty"`
-	Resolved bool              `json:"resolved"`
-	Circuit  string            `json:"circuit_id,omitempty"`
-	Provider string            `json:"provider,omitempty"`
-	PanelID  string            `json:"panel_id,omitempty"`
-	Cassette string            `json:"cassette_id,omitempty"`
-	Polarity string            `json:"polarity_method,omitempty"`
-	FarDevice string           `json:"far_device_id,omitempty"`
-	FarPort  string            `json:"far_port_id,omitempty"`
-	Neighbor string            `json:"lldp_remote_system_name,omitempty"`
+	Port      *PortRow `json:"port,omitempty"`
+	Resolved  bool     `json:"resolved"`
+	Circuit   string   `json:"circuit_id,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	PanelID   string   `json:"panel_id,omitempty"`
+	Cassette  string   `json:"cassette_id,omitempty"`
+	Polarity  string   `json:"polarity_method,omitempty"`
+	FarDevice string   `json:"far_device_id,omitempty"`
+	FarPort   string   `json:"far_port_id,omitempty"`
+	Neighbor  string   `json:"lldp_remote_system_name,omitempty"`
 }
 
 type portStore interface {
@@ -94,16 +94,16 @@ type portStore interface {
 // fiberPathRec is the writer shape for fiber_path_inventory (subset used by the
 // resolver; the full lossless record rides JSONB via the collector router).
 type fiberPathRec struct {
-	PathID    string
-	ADevice   string
-	APort     string
-	ZDevice   string
-	ZPort     string
-	Circuit   string
-	Provider  string
-	Polarity  string
-	PanelID   string
-	Cassette  string
+	PathID   string
+	ADevice  string
+	APort    string
+	ZDevice  string
+	ZPort    string
+	Circuit  string
+	Provider string
+	Polarity string
+	PanelID  string
+	Cassette string
 }
 
 func newPortStore() portStore {

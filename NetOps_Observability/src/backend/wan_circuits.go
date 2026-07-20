@@ -68,9 +68,9 @@ type WanTargetKind string
 
 const (
 	WanTargetDirectPeer WanTargetKind = "direct_peer" // LLDP/CDP-connected neighbor (lab, internal P2P)
-	WanTargetNextHop    WanTargetKind = "next_hop"     // operator-configured ISP next-hop
-	WanTargetAnchor     WanTargetKind = "anchor"       // public-DNS / reachability anchor (prod default)
-	WanTargetNone       WanTargetKind = ""             // no target could be derived
+	WanTargetNextHop    WanTargetKind = "next_hop"    // operator-configured ISP next-hop
+	WanTargetAnchor     WanTargetKind = "anchor"      // public-DNS / reachability anchor (prod default)
+	WanTargetNone       WanTargetKind = ""            // no target could be derived
 )
 
 // Label is the customer-facing kind name (no raw tokens — customer-language rule).
@@ -125,13 +125,13 @@ type WanCircuit struct {
 // It replaces the old hub/spoke topology policy: no roles, no mesh mode. All
 // operator intent for the WAN interface view lives here.
 type WanMeasurementPolicy struct {
-	TenantID   string            `json:"tenant_id,omitempty"`
-	WanPattern string            `json:"wan_pattern,omitempty"`       // which devices are WAN devices
-	Anchors    []string          `json:"anchors,omitempty"`           // reachability anchors (default 1.1.1.1/8.8.8.8)
-	NextHops   map[string]string `json:"next_hops,omitempty"`         // device or device/ifName → explicit target (ISP next-hop)
-	IncludeConnected *bool        `json:"include_connected,omitempty"` // include ifaces connected to a WAN device (default true)
-	UpdatedBy  string            `json:"updated_by,omitempty"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	TenantID         string            `json:"tenant_id,omitempty"`
+	WanPattern       string            `json:"wan_pattern,omitempty"`       // which devices are WAN devices
+	Anchors          []string          `json:"anchors,omitempty"`           // reachability anchors (default 1.1.1.1/8.8.8.8)
+	NextHops         map[string]string `json:"next_hops,omitempty"`         // device or device/ifName → explicit target (ISP next-hop)
+	IncludeConnected *bool             `json:"include_connected,omitempty"` // include ifaces connected to a WAN device (default true)
+	UpdatedBy        string            `json:"updated_by,omitempty"`
+	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
 // withDefaults fills empty fields with the safe baseline a tenant gets before it
@@ -489,12 +489,12 @@ type WanInterfaceRow struct {
 	HasOper bool    `json:"has_oper"`
 
 	// derived measurement target (no hub/spoke)
-	Target      string        `json:"target,omitempty"`       // dst host measured to
-	TargetKind  WanTargetKind `json:"target_kind,omitempty"`  // direct_peer | next_hop | anchor
-	TargetLabel string        `json:"target_label,omitempty"` // customer-facing target description
-	RemoteDevice string       `json:"remote_device,omitempty"`
-	RemoteIf     string       `json:"remote_if,omitempty"`
-	HasTarget    bool         `json:"has_target"`
+	Target       string        `json:"target,omitempty"`       // dst host measured to
+	TargetKind   WanTargetKind `json:"target_kind,omitempty"`  // direct_peer | next_hop | anchor
+	TargetLabel  string        `json:"target_label,omitempty"` // customer-facing target description
+	RemoteDevice string        `json:"remote_device,omitempty"`
+	RemoteIf     string        `json:"remote_if,omitempty"`
+	HasTarget    bool          `json:"has_target"`
 
 	// live throughput sparkline (bits/sec, oldest→newest) for the in-row moving
 	// graph. Refetched each poll so the line advances (live). Empty when no series.

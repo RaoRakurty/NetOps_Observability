@@ -39,8 +39,8 @@ const (
 	ResUser       ResourceType = "user"
 	ResTenant     ResourceType = "tenant"
 	ResRole       ResourceType = "role"
-	ResAPIKey     ResourceType = "api_key"  // #nosec G101 -- ResourceType enum value, not a credential
-	ResSNMPCred   ResourceType = "snmp_credential"  // #nosec G101 -- ResourceType enum value, not a credential
+	ResAPIKey     ResourceType = "api_key"         // #nosec G101 -- ResourceType enum value, not a credential
+	ResSNMPCred   ResourceType = "snmp_credential" // #nosec G101 -- ResourceType enum value, not a credential
 	ResAlert      ResourceType = "alert"
 	ResInfraStack ResourceType = "infra_stack" // platform plumbing: stack health, collectors, raw tools
 )
@@ -135,7 +135,9 @@ func (s *server) can(c jwtClaims, a Action, r Resource) bool {
 // cross-tenant resource so existence isn't leaked, 403 for a platform-only
 // resource the caller could legitimately know exists. Returns (principal, true)
 // only when allowed.
+//
 //nolint:unused // tenant-aware HTTP gate (404-vs-403 existence hiding); handlers still use requirePerm — migration target
+//lint:ignore U1000 migration target — handlers still use requirePerm (see nolint above)
 func (s *server) authorize(w http.ResponseWriter, r *http.Request, a Action, res Resource) (Principal, bool) {
 	claims, ok := userFrom(r.Context())
 	if !ok {

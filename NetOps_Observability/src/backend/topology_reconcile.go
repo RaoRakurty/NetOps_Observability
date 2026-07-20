@@ -22,8 +22,8 @@ import (
 
 const (
 	topologyReconcileDefault = 60 * time.Second
-	topologyStaleAfter       = 15 * time.Minute    // unobserved longer than this → stale (smooths a missed poll)
-	topologyPruneAfter       = 7 * 24 * time.Hour  // stale longer than this → dropped
+	topologyStaleAfter       = 15 * time.Minute   // unobserved longer than this → stale (smooths a missed poll)
+	topologyPruneAfter       = 7 * 24 * time.Hour // stale longer than this → dropped
 )
 
 // topologyReconcileInterval resolves the cadence from TOPOLOGY_RECONCILE_SEC

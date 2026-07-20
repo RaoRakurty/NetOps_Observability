@@ -87,12 +87,12 @@ func TestPlatformDrift(t *testing.T) {
 		vendor   string
 		drift    bool
 	}{
-		{"Cisco IOS-XE", iosxe, "cisco", false},          // punctuation variant — same platform
-		{"IOS XE 17", iosxe, "cisco", false},             // version digits in platform name
-		{"Cisco IOS", iosxe, "cisco", true},              // IOS vs IOS-XE is real drift
-		{"Juniper Junos", iosxe, "cisco", true},          // wrong family entirely
+		{"Cisco IOS-XE", iosxe, "cisco", false}, // punctuation variant — same platform
+		{"IOS XE 17", iosxe, "cisco", false},    // version digits in platform name
+		{"Cisco IOS", iosxe, "cisco", true},     // IOS vs IOS-XE is real drift
+		{"Juniper Junos", iosxe, "cisco", true}, // wrong family entirely
 		{"Arista EOS", "Arista Networks EOS version 4.33.1F", "arista", false},
-		{"", iosxe, "cisco", false},                      // no declared platform → nothing to diff
+		{"", iosxe, "cisco", false}, // no declared platform → nothing to diff
 	}
 	for _, c := range cases {
 		nb := nbDev("netbox-1", "d", "10.0.0.1", "", c.platform, c.vendor)

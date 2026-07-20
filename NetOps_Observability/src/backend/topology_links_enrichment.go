@@ -24,12 +24,12 @@ import (
 // tenants (zero-leak bar). Absent file → engine falls back to seam/containment.
 
 type topologyLinkExport struct {
-	TenantID string `json:"tenant_id"`        // local device's tenant ("" = global)
-	A        string `json:"a"`                // local device id (correlation entity device-part)
-	B        string `json:"b"`                // neighbour device id
-	AIf      string `json:"a_if,omitempty"`   // local interface
-	BIf      string `json:"b_if,omitempty"`   // neighbour interface
-	Proto    string `json:"proto,omitempty"`  // lldp | cdp | bgp_ls
+	TenantID string `json:"tenant_id"`       // local device's tenant ("" = global)
+	A        string `json:"a"`               // local device id (correlation entity device-part)
+	B        string `json:"b"`               // neighbour device id
+	AIf      string `json:"a_if,omitempty"`  // local interface
+	BIf      string `json:"b_if,omitempty"`  // neighbour interface
+	Proto    string `json:"proto,omitempty"` // lldp | cdp | bgp_ls
 }
 
 func (s *server) startTopologyLinksEnrichment(ctx context.Context) {

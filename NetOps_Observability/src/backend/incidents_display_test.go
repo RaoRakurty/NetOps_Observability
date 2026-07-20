@@ -11,11 +11,11 @@ import (
 
 func TestIncidentDisplayID(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"8591a323df59f393", "INC-8591A3"},            // the owner's raw-hex complaint
-		{"INC-8591A3", "INC-8591A3"},                  // idempotent
-		{"", ""},                                      // safe on empty
-		{"ab12", "ab12"},                              // too short → unchanged
-		{"deadbeefcafef00d", "INC-DEADBE"},            // randHex(8) shape
+		{"8591a323df59f393", "INC-8591A3"}, // the owner's raw-hex complaint
+		{"INC-8591A3", "INC-8591A3"},       // idempotent
+		{"", ""},                           // safe on empty
+		{"ab12", "ab12"},                   // too short → unchanged
+		{"deadbeefcafef00d", "INC-DEADBE"}, // randHex(8) shape
 	}
 	for _, c := range cases {
 		if got := incidentDisplayID(c.in); got != c.want {

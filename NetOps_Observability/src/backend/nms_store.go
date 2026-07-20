@@ -26,18 +26,18 @@ import (
 // nmsIntegration is one configured controller integration (integrations table).
 // Secrets never live on this struct.
 type nmsIntegration struct {
-	Tenant        string   `json:"-"`
-	ID            string   `json:"id"`
-	Vendor        string   `json:"vendor"`
-	Product       string   `json:"product,omitempty"`
-	DisplayName   string   `json:"displayName"`
-	Enabled       bool     `json:"enabled"`
-	BaseURL       string   `json:"baseUrl"`
-	AuthType      string   `json:"authType,omitempty"`
-	PollIntervalS int      `json:"pollIntervalS"`
-	Streams       []string `json:"streams,omitempty"` // data_sources column; empty = connector defaults
-	TLSSkipVerify bool     `json:"tlsSkipVerify,omitempty"`
-	WebhookToken  string   `json:"-"` // opaque webhook path token; exposed only as a URL to the owner
+	Tenant        string    `json:"-"`
+	ID            string    `json:"id"`
+	Vendor        string    `json:"vendor"`
+	Product       string    `json:"product,omitempty"`
+	DisplayName   string    `json:"displayName"`
+	Enabled       bool      `json:"enabled"`
+	BaseURL       string    `json:"baseUrl"`
+	AuthType      string    `json:"authType,omitempty"`
+	PollIntervalS int       `json:"pollIntervalS"`
+	Streams       []string  `json:"streams,omitempty"` // data_sources column; empty = connector defaults
+	TLSSkipVerify bool      `json:"tlsSkipVerify,omitempty"`
+	WebhookToken  string    `json:"-"` // opaque webhook path token; exposed only as a URL to the owner
 	CreatedAt     time.Time `json:"createdAt,omitempty"`
 	UpdatedAt     time.Time `json:"updatedAt,omitempty"`
 }
@@ -131,13 +131,13 @@ type nmsConfigStore interface {
 // ── in-memory backend (dev/file backend + tests) ─────────────────────────────
 
 type memNMSStore struct {
-	mu      sync.Mutex
-	ints    map[string]nmsIntegration       // tenant\x00id
-	creds   map[string]map[string]string    // tenant\x00id → field→plaintext (mem = non-prod)
-	health  map[string]nmsHealth            // tenant\x00id
-	runs    map[string][]nmsRunRecord       // tenant\x00id, bounded
-	states  map[string]nms.StateRecord      // tenant\x00id\x00entity\x00kind
-	cks     *nms.MemCheckpoints
+	mu     sync.Mutex
+	ints   map[string]nmsIntegration    // tenant\x00id
+	creds  map[string]map[string]string // tenant\x00id → field→plaintext (mem = non-prod)
+	health map[string]nmsHealth         // tenant\x00id
+	runs   map[string][]nmsRunRecord    // tenant\x00id, bounded
+	states map[string]nms.StateRecord   // tenant\x00id\x00entity\x00kind
+	cks    *nms.MemCheckpoints
 }
 
 func newMemNMSStore() *memNMSStore {

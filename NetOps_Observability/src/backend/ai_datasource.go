@@ -14,8 +14,8 @@ import (
 // (the CH row policies deliberately share untagged rows to every scope — the
 // hybrid model — so the policy alone is NOT sufficient for a scoped caller):
 //
-//   1. every query rides the caller's tenant_scope (row policy: tagged rows);
-//   2. app-layer narrowing for untagged rows — telemetry reads narrow to the
+//  1. every query rides the caller's tenant_scope (row policy: tagged rows);
+//  2. app-layer narrowing for untagged rows — telemetry reads narrow to the
 //     principal's own devices (addrTenantClauseFor/deviceTenantCondFor, the same
 //     guards the REST surfaces use), and correlation reads are STRICT
 //     (corrRowVisible: untagged correlation intel is platform-only — device

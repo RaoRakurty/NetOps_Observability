@@ -15,12 +15,12 @@ import (
 // Connector lifecycle audit event names (emitted through the request-path audit
 // middleware Detail, plus explicit records for security-relevant transitions).
 const (
-	evConnectorCreated  = "CONNECTOR_CREATED"
+	evConnectorCreated   = "CONNECTOR_CREATED"
 	evConnectorValidated = "TRUST_VALIDATED"
 	evConnectorActivated = "CONNECTOR_ENABLED"
-	evConnectorDisabled = "CONNECTOR_DISABLED"
-	evConnectorRevoked  = "CONNECTOR_REVOKED"
-	evScopeChanged      = "SCOPE_CHANGED"
+	evConnectorDisabled  = "CONNECTOR_DISABLED"
+	evConnectorRevoked   = "CONNECTOR_REVOKED"
+	evScopeChanged       = "SCOPE_CHANGED"
 )
 
 var (
@@ -83,7 +83,7 @@ func toConnectorView(c cloudConnector) cloudConnectorView {
 			ProjectNumber: c.Identity.ProjectNumber, WorkloadPool: c.Identity.WorkloadPool,
 			WorkloadProvider: c.Identity.WorkloadProvider, ServiceAccount: c.Identity.ServiceAccount,
 			HasLegacySecret: c.Identity.LegacySecretRef != "", LegacyKeyHint: c.Identity.LegacyKeyID,
-			Org:             c.Identity.Org,
+			Org: c.Identity.Org,
 		},
 		Scopes: c.Scopes, IdentityHealth: c.IdentityHealth, TelemetryHealth: c.TelemetryHealth,
 		LastValidation: c.LastValidation, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
@@ -163,8 +163,8 @@ func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Reques
 	c := cloudConnector{
 		TenantID: tenant, ConnectorID: newOpaqueID(ccnIDPrefix), Provider: provider,
 		DisplayName: strings.TrimSpace(req.DisplayName), State: cloudconn.StateDraft,
-		Identity: cloudconn.IdentityConfig{Provider: provider, TenantID: tenant},
-		Scopes:   []cloudconn.Scope{},
+		Identity:        cloudconn.IdentityConfig{Provider: provider, TenantID: tenant},
+		Scopes:          []cloudconn.Scope{},
 		IdentityHealth:  healthStatus{State: "unknown"},
 		TelemetryHealth: healthStatus{State: "unknown"},
 	}
@@ -1041,11 +1041,11 @@ func (s *server) handleCloudProviderCatalog(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	type methodView struct {
-		Method     cloudconn.AuthMethod `json:"method"`
-		Rank       int                  `json:"rank"`
-		Federated  bool                 `json:"federated"`
-		Legacy     bool                 `json:"legacy"`
-		Recommended bool                `json:"recommended"`
+		Method      cloudconn.AuthMethod `json:"method"`
+		Rank        int                  `json:"rank"`
+		Federated   bool                 `json:"federated"`
+		Legacy      bool                 `json:"legacy"`
+		Recommended bool                 `json:"recommended"`
 	}
 	type providerView struct {
 		Provider        cloudconn.Provider         `json:"provider"`

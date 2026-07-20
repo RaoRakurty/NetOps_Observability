@@ -30,8 +30,8 @@ func snapRow(tenant, corr string, at time.Time) incidentTimeMetricRow {
 		Group:      map[string]string{"device": "wan-r2", "root_entity": "wan-r2", "provider": "isp"},
 		Metrics: []timeintel.TimeMetric{
 			snapMetric(timeintel.MetricTTI, 60000, true),
-			snapMetric(timeintel.MetricTTD, 5000, true),  // must be EXCLUDED from rollups (onset fallback)
-			snapMetric(timeintel.MetricTTC, 0, false),    // incomplete → excluded
+			snapMetric(timeintel.MetricTTD, 5000, true), // must be EXCLUDED from rollups (onset fallback)
+			snapMetric(timeintel.MetricTTC, 0, false),   // incomplete → excluded
 		},
 	}
 }

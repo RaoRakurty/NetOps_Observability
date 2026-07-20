@@ -105,20 +105,20 @@ type RevokeRequest struct {
 
 // SetupArtifact is one deploy artifact the operator applies on their side.
 type SetupArtifact struct {
-	Kind    string `json:"kind"`     // "cloudformation" | "terraform" | "manual" | "gcloud" | "azure_cli" | "federated_credential"
+	Kind    string `json:"kind"` // "cloudformation" | "terraform" | "manual" | "gcloud" | "azure_cli" | "federated_credential"
 	Title   string `json:"title"`
-	Format  string `json:"format"`   // "yaml" | "hcl" | "json" | "text"
+	Format  string `json:"format"` // "yaml" | "hcl" | "json" | "text"
 	Content string `json:"content"`
 }
 
 // SetupBundle is the full set of deploy artifacts + human steps for establishing
 // trust for a connector. Pure output — never contains a secret.
 type SetupBundle struct {
-	Provider   Provider        `json:"provider"`
-	Method     AuthMethod      `json:"method"`
-	Summary    string          `json:"summary"`
-	Steps      []string        `json:"steps"`
-	Artifacts  []SetupArtifact `json:"artifacts"`
+	Provider  Provider        `json:"provider"`
+	Method    AuthMethod      `json:"method"`
+	Summary   string          `json:"summary"`
+	Steps     []string        `json:"steps"`
+	Artifacts []SetupArtifact `json:"artifacts"`
 }
 
 // CloudIdentityProvider is the provider-neutral adapter contract. Adapters are

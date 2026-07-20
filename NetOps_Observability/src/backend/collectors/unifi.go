@@ -70,13 +70,13 @@ func envOrDefault(k, d string) string {
 // controller returns many more fields; we take the device-level health only
 // (radio_table_stats etc. are wireless-specific — deferred).
 type unifiDevice struct {
-	Name         string  `json:"name"`
-	Model        string  `json:"model"`
-	Type         string  `json:"type"` // uap | usw | ugw | udm
-	State        int     `json:"state"`
-	NumSta       int     `json:"num_sta"`
-	Uptime       int64   `json:"uptime"`
-	Satisfaction int     `json:"satisfaction"`
+	Name         string `json:"name"`
+	Model        string `json:"model"`
+	Type         string `json:"type"` // uap | usw | ugw | udm
+	State        int    `json:"state"`
+	NumSta       int    `json:"num_sta"`
+	Uptime       int64  `json:"uptime"`
+	Satisfaction int    `json:"satisfaction"`
 	SystemStats  struct {
 		CPU string `json:"cpu"`
 		Mem string `json:"mem"`
@@ -232,7 +232,7 @@ func NewUniFi() Collector {
 }
 
 func (u *unifiCollector) Name() string   { return "unifi" }
-func (u *unifiCollector) Status() Status  { return u.status }
+func (u *unifiCollector) Status() Status { return u.status }
 
 func (u *unifiCollector) Run(ctx context.Context) error {
 	t := time.NewTicker(u.interval)

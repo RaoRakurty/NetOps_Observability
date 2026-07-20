@@ -12,9 +12,9 @@ import (
 
 // ExpoRetry is the default RetryPolicy.
 type ExpoRetry struct {
-	Base    time.Duration // first backoff (e.g. 500ms)
-	Max     time.Duration // cap per delay (e.g. 30s)
-	MaxTries int          // total attempts before giving up (e.g. 5)
+	Base     time.Duration // first backoff (e.g. 500ms)
+	Max      time.Duration // cap per delay (e.g. 30s)
+	MaxTries int           // total attempts before giving up (e.g. 5)
 	// Jitter returns a fraction in [0,1) added to the backoff; injected for
 	// determinism in tests. Nil → no jitter.
 	Jitter func() float64

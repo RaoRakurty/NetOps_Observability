@@ -21,16 +21,20 @@ import "strings"
 
 // Scope types (the fixed lattice, highest → lowest).
 const (
-	ScopePlatform = "platform"
+	ScopePlatform     = "platform"
 	scopeTypeOrg      = "org"
 	scopeTypeTenant   = "tenant"
 	scopeTypeResource = "resource"
 )
 
 // scopeOrg / scopeTenant / scopeResource mint canonical scope ids.
-func scopeOrg(id string) string    { return scopeTypeOrg + ":" + strings.ToLower(strings.TrimSpace(id)) }
-func scopeTenant(id string) string { return scopeTypeTenant + ":" + strings.ToLower(strings.TrimSpace(id)) }
+func scopeOrg(id string) string { return scopeTypeOrg + ":" + strings.ToLower(strings.TrimSpace(id)) }
+func scopeTenant(id string) string {
+	return scopeTypeTenant + ":" + strings.ToLower(strings.TrimSpace(id))
+}
+
 //nolint:unused // part of the scope-mint API (lazy resource scopes); used as resource-level ACLs land (Phase D+)
+//lint:ignore U1000 scope-mint API completeness — resource-level ACLs land Phase D+
 func scopeResource(kind, id string) string {
 	return scopeTypeResource + ":" + strings.ToLower(strings.TrimSpace(kind)) + ":" + strings.ToLower(strings.TrimSpace(id))
 }

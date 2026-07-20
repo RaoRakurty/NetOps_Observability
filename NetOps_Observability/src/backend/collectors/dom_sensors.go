@@ -27,10 +27,10 @@ import (
 // every ENTITY-SENSOR-capable platform answers.
 
 var (
-	entPhySensorTypeOID      = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 1} // entPhySensorType
-	entPhySensorScaleOID     = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 2} // entPhySensorScale
-	entPhySensorPrecisionOID = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 3} // entPhySensorPrecision
-	entPhySensorValueOID     = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4} // entPhySensorValue
+	entPhySensorTypeOID      = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 1}    // entPhySensorType
+	entPhySensorScaleOID     = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 2}    // entPhySensorScale
+	entPhySensorPrecisionOID = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 3}    // entPhySensorPrecision
+	entPhySensorValueOID     = []int{1, 3, 6, 1, 2, 1, 99, 1, 1, 1, 4}    // entPhySensorValue
 	entPhysicalNameOID       = []int{1, 3, 6, 1, 2, 1, 47, 1, 1, 1, 1, 7} // entPhysicalName (for port naming)
 )
 

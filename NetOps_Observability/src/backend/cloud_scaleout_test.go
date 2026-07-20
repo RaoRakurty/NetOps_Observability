@@ -25,12 +25,12 @@ func TestSignalCursorRoundTrip(t *testing.T) {
 func TestSignalCursorFailsClosed(t *testing.T) {
 	bad := []string{
 		"not-base64!!!",
-		"",                                         // empty
-		encodeSignalCursor("", "id"),               // empty ts
-		encodeSignalCursor("2026-07-17", ""),       // empty id
-		encodeSignalCursor("2026-07-17'; DROP", "x"), // quote in ts
-		encodeSignalCursor("2026-07-17", "id' OR 1=1--"), // quote in id
-		encodeSignalCursor(strings.Repeat("1", 41), "x"), // ts too long
+		"",                                   // empty
+		encodeSignalCursor("", "id"),         // empty ts
+		encodeSignalCursor("2026-07-17", ""), // empty id
+		encodeSignalCursor("2026-07-17'; DROP", "x"),              // quote in ts
+		encodeSignalCursor("2026-07-17", "id' OR 1=1--"),          // quote in id
+		encodeSignalCursor(strings.Repeat("1", 41), "x"),          // ts too long
 		encodeSignalCursor("2026-07-17", strings.Repeat("a", 81)), // id too long
 		"djF8YXxi", // "v1|a|b" — wrong version tag
 	}

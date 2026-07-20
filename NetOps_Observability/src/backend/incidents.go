@@ -79,31 +79,31 @@ func validTransition(from, to string) bool {
 
 // Incident is one operational problem (the internal record).
 type Incident struct {
-	ID            string     `json:"id"`
-	TenantID      string     `json:"tenant_id"`
-	Title         string     `json:"title"`
-	Description   string     `json:"description,omitempty"`
-	Severity      string     `json:"severity"`
-	Status        string     `json:"status"`
-	SourceType    string     `json:"source_type"`
-	SourceID      string     `json:"source_id,omitempty"`
-	DedupKey      string     `json:"dedup_key,omitempty"`
-	Owner         string     `json:"owner,omitempty"`
-	Occurrences   int        `json:"occurrences"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	FirstSeenAt   time.Time  `json:"first_seen_at"`
-	LastSeenAt    time.Time  `json:"last_seen_at"`
-	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
-	ExternalTicket string    `json:"external_ticket_id,omitempty"`
-	ExternalURL   string     `json:"external_url,omitempty"`
-	ExternalSystem string    `json:"external_system,omitempty"`
-	SyncStatus    string     `json:"sync_status"`
-	LastSyncedAt  *time.Time `json:"last_synced_at,omitempty"`
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenant_id"`
+	Title          string     `json:"title"`
+	Description    string     `json:"description,omitempty"`
+	Severity       string     `json:"severity"`
+	Status         string     `json:"status"`
+	SourceType     string     `json:"source_type"`
+	SourceID       string     `json:"source_id,omitempty"`
+	DedupKey       string     `json:"dedup_key,omitempty"`
+	Owner          string     `json:"owner,omitempty"`
+	Occurrences    int        `json:"occurrences"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	FirstSeenAt    time.Time  `json:"first_seen_at"`
+	LastSeenAt     time.Time  `json:"last_seen_at"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	ExternalTicket string     `json:"external_ticket_id,omitempty"`
+	ExternalURL    string     `json:"external_url,omitempty"`
+	ExternalSystem string     `json:"external_system,omitempty"`
+	SyncStatus     string     `json:"sync_status"`
+	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`
 	// NotifiedVia lists the notification channels this incident was actually
 	// delivered to (derived from `notified` timeline events — a recorded
 	// delivery, never an intent). Feeds the UI "Notified via" column (#103 UX-1).
-	NotifiedVia   []string   `json:"notified_via,omitempty"`
+	NotifiedVia []string `json:"notified_via,omitempty"`
 }
 
 // incidentDisplayID turns an internal incident id (16 hex chars) into the
@@ -123,12 +123,12 @@ func incidentDisplayID(id string) string {
 
 // IncidentEvent is one append-only timeline entry.
 type IncidentEvent struct {
-	ID         string          `json:"id"`
-	IncidentID string          `json:"incident_id"`
-	EventType  string          `json:"event_type"`
-	Payload    map[string]any  `json:"payload,omitempty"`
-	Actor      string          `json:"actor"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID         string         `json:"id"`
+	IncidentID string         `json:"incident_id"`
+	EventType  string         `json:"event_type"`
+	Payload    map[string]any `json:"payload,omitempty"`
+	Actor      string         `json:"actor"`
+	CreatedAt  time.Time      `json:"created_at"`
 }
 
 // IncidentInput is a detection (or manual request) to be folded into an incident.

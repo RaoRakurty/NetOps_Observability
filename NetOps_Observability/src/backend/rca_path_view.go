@@ -56,13 +56,13 @@ type rcaAnnotation struct {
 }
 
 type rcaPathView struct {
-	CorrObjectID           string            `json:"corr_object_id"`
-	Verdict                string            `json:"verdict"`
-	Confidence             float64           `json:"confidence"`
-	Internal               bool              `json:"internal"`
+	CorrObjectID string  `json:"corr_object_id"`
+	Verdict      string  `json:"verdict"`
+	Confidence   float64 `json:"confidence"`
+	Internal     bool    `json:"internal"`
 	// Validation: every attached signal declares a non-production purpose (§11)
 	// — the case renders (watermarked) but must not open production tickets.
-	Validation bool `json:"validation"`
+	Validation             bool              `json:"validation"`
 	Title                  string            `json:"title"`
 	Summary                string            `json:"summary"`
 	RecommendedAction      string            `json:"recommended_action"`

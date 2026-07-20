@@ -44,10 +44,10 @@ const brokerRefreshFraction = 0.8
 const brokerLifetimeSlack = 2.0
 
 var (
-	errBrokerNotFound   = errors.New("cloudconn: connector not found for tenant")
-	errBrokerNotActive  = errors.New("cloudconn: connector cannot exchange tokens in its current state")
+	errBrokerNotFound     = errors.New("cloudconn: connector not found for tenant")
+	errBrokerNotActive    = errors.New("cloudconn: connector cannot exchange tokens in its current state")
 	errBrokerTokenTooLong = errors.New("cloudconn: provider returned a token exceeding the max lifetime")
-	errBrokerNoSecret   = errors.New("cloudconn: legacy secret reference is missing or empty")
+	errBrokerNoSecret     = errors.New("cloudconn: legacy secret reference is missing or empty")
 )
 
 // scopedTokenRequest is a request for ONE tenant, ONE connector, ONE provider

@@ -10,24 +10,24 @@ package portintel
 // are "headroom before trouble" in the field's unit; a negative margin means the
 // reading is already past the boundary.
 type ThresholdPolicy struct {
-	RxMarginLowWarnDB        float64 // dB of RX headroom below which we warn
-	TxMarginLowWarnDB        float64
+	RxMarginLowWarnDB          float64 // dB of RX headroom below which we warn
+	TxMarginLowWarnDB          float64
 	TemperatureMarginHighWarnC float64 // C below the high-warn threshold
-	VoltageMarginThresholdV  float64
-	BiasGrowthRatio          float64 // TX bias / baseline that flags aging
-	PAM4PreFECBERWatch       float64
-	PAM4PreFECBERDegraded    float64
-	PAM4PreFECBERCritical    float64
-	PostFECBERWatch          float64
-	PostFECBERDegraded       float64
-	PostFECBERCritical       float64
+	VoltageMarginThresholdV    float64
+	BiasGrowthRatio            float64 // TX bias / baseline that flags aging
+	PAM4PreFECBERWatch         float64
+	PAM4PreFECBERDegraded      float64
+	PAM4PreFECBERCritical      float64
+	PostFECBERWatch            float64
+	PostFECBERDegraded         float64
+	PostFECBERCritical         float64
 	CorrectedFECRateVsBaseline float64 // multiple of baseline that flags masking
-	UCWordsPolicyPerMin      float64 // uncorrectable words/min tolerated (>0 = degraded)
-	LaneDivergenceRatio      float64 // worst-lane / median that flags divergence
-	FlapRatePerHour          float64 // link flaps/hour that flags instability
-	CoherentOSNRMarginDB     float64 // dB above min-rx-OSNR required
+	UCWordsPolicyPerMin        float64 // uncorrectable words/min tolerated (>0 = degraded)
+	LaneDivergenceRatio        float64 // worst-lane / median that flags divergence
+	FlapRatePerHour            float64 // link flaps/hour that flags instability
+	CoherentOSNRMarginDB       float64 // dB above min-rx-OSNR required
 	CoherentInputPowerMarginDB float64
-	FiberPathBudgetHeadroomDB float64
+	FiberPathBudgetHeadroomDB  float64
 }
 
 // DefaultPolicy is the vendor-neutral fallback (values chosen from common

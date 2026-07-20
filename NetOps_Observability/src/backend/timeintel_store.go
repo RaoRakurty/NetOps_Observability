@@ -43,7 +43,7 @@ func (e incidentTimelineEvent) guard() string {
 
 type incidentTimelineStore interface {
 	List(ctx context.Context, tenant string, cross bool, corrID string) ([]incidentTimelineEvent, error)
-	Put(ctx context.Context, e incidentTimelineEvent) error                         // upsert by guard
+	Put(ctx context.Context, e incidentTimelineEvent) error // upsert by guard
 	Delete(ctx context.Context, tenant string, cross bool, corrID, id string) (bool, error)
 }
 

@@ -47,15 +47,15 @@ type Evidence struct {
 
 // SpineNode is one ordered element of the spine (§7).
 type SpineNode struct {
-	Index          int      `json:"index"`
-	Kind           string   `json:"kind"`
-	Label          string   `json:"label"`
-	Address        string   `json:"address,omitempty"`
-	Boundary       string   `json:"boundary"`
-	EntityRef      string   `json:"entity_ref,omitempty"`
-	State          string   `json:"state"`
-	SeamID         string   `json:"seam_id,omitempty"`
-	Transformation string   `json:"transformation,omitempty"`
+	Index          int    `json:"index"`
+	Kind           string `json:"kind"`
+	Label          string `json:"label"`
+	Address        string `json:"address,omitempty"`
+	Boundary       string `json:"boundary"`
+	EntityRef      string `json:"entity_ref,omitempty"`
+	State          string `json:"state"`
+	SeamID         string `json:"seam_id,omitempty"`
+	Transformation string `json:"transformation,omitempty"`
 	// Provider names the cloud whose DECLARED inventory (NIC/EIP bindings)
 	// claims this hop's address — aws|azure|gcp. Stamped by the API layer from
 	// the cloud resource store, never guessed from names. Empty = not a known

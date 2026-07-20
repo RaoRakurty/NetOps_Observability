@@ -15,24 +15,24 @@ import "time"
 // severity when suspected_requires_critical). Internal/debug-only and
 // probe-only objects are excluded unless explicitly allowed.
 type incidentPolicy struct {
-	ID                        string         `json:"id"`
-	TenantID                  string         `json:"tenant_id"`
-	Name                      string         `json:"name"`
-	ExternalSystem            string         `json:"external_system"`
-	Enabled                   bool           `json:"enabled"`
-	MinVerdict                string         `json:"min_verdict"`                  // suspected | confirmed
-	RequireCustomerFacing     bool           `json:"require_customer_facing"`
-	AllowProbeOnly            bool           `json:"allow_probe_only"`
-	AllowInternalMonitoring   bool           `json:"allow_internal_monitoring"`
+	ID                      string `json:"id"`
+	TenantID                string `json:"tenant_id"`
+	Name                    string `json:"name"`
+	ExternalSystem          string `json:"external_system"`
+	Enabled                 bool   `json:"enabled"`
+	MinVerdict              string `json:"min_verdict"` // suspected | confirmed
+	RequireCustomerFacing   bool   `json:"require_customer_facing"`
+	AllowProbeOnly          bool   `json:"allow_probe_only"`
+	AllowInternalMonitoring bool   `json:"allow_internal_monitoring"`
 	// AllowValidationScenarios: explicit opt-in for a validation canary to file
 	// REAL tickets (§11 — default false: test traffic never pages production).
-	AllowValidationScenarios bool `json:"allow_validation_scenarios"`
-	SuspectedRequiresCritical bool           `json:"suspected_requires_critical"`
-	RequirePersistenceSeconds int            `json:"require_persistence_seconds"`
-	SuppressFlappingSeconds   int            `json:"suppress_flapping_seconds"`
-	AssignmentGroup           string         `json:"assignment_group"`
-	DefaultImpact             int            `json:"default_impact"`
-	DefaultUrgency            int            `json:"default_urgency"`
+	AllowValidationScenarios  bool   `json:"allow_validation_scenarios"`
+	SuspectedRequiresCritical bool   `json:"suspected_requires_critical"`
+	RequirePersistenceSeconds int    `json:"require_persistence_seconds"`
+	SuppressFlappingSeconds   int    `json:"suppress_flapping_seconds"`
+	AssignmentGroup           string `json:"assignment_group"`
+	DefaultImpact             int    `json:"default_impact"`
+	DefaultUrgency            int    `json:"default_urgency"`
 	// Per-verdict ServiceNow priority mapping (0 = automatic escalation:
 	// confirmed+critical → 1/1 = P1, confirmed → urgency 1 = P2, suspected uses
 	// the defaults above). Explicit values win outright — the customer decides.
@@ -41,8 +41,8 @@ type incidentPolicy struct {
 	ImpactConfirmed          int            `json:"impact_confirmed,omitempty"`
 	UrgencyConfirmed         int            `json:"urgency_confirmed,omitempty"`
 	Filters                  map[string]any `json:"filters,omitempty"`
-	CreatedAt                 time.Time      `json:"created_at"`
-	UpdatedAt                 time.Time      `json:"updated_at"`
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
 }
 
 // defaultIncidentPolicy is the MVP policy used when a tenant has configured none:
@@ -135,8 +135,8 @@ type ticketAuditEntry struct {
 type ticketPayload struct {
 	CorrObjectID      string   `json:"corr_object_id"`
 	ExternalSystem    string   `json:"external_system"`
-	Title             string   `json:"title"`             // "Suspected|Confirmed <fault> on <entity/path>"
-	Verdict           string   `json:"verdict"`           // undetermined|suspected|confirmed
+	Title             string   `json:"title"`   // "Suspected|Confirmed <fault> on <entity/path>"
+	Verdict           string   `json:"verdict"` // undetermined|suspected|confirmed
 	Confidence        float64  `json:"confidence"`
 	Signature         string   `json:"signature,omitempty"`
 	Summary           string   `json:"summary"`

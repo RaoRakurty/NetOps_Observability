@@ -15,7 +15,7 @@ func TestBuildEnrichmentRows(t *testing.T) {
 		{ID: "d1", Name: "leaf1", Address: "10.0.0.1", TenantID: "Acme"}, // tenant normalized to lower
 		{ID: "d2", Name: "leaf2", Address: "10.0.0.2", TenantID: "acme"},
 		{ID: "d3", Name: "spine1", Address: "10.0.0.3", TenantID: ""}, // global
-		{ID: "d4", Name: "", Address: ""},                            // empty identities → skipped
+		{ID: "d4", Name: "", Address: ""},                             // empty identities → skipped
 	}
 	got := buildEnrichmentRows(devices)
 	want := []enrichmentRow{

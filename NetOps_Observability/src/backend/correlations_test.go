@@ -21,10 +21,10 @@ func TestIsUUIDToken(t *testing.T) {
 	invalid := []string{
 		"",
 		"9f0537bd",
-		"9f0537bd-0787-547e-a6fc-6692acaec13cX",          // too long
-		"9f0537bd-0787-547e-a6fc-6692acaec13'",           // quote
-		"9f0537bd_0787_547e_a6fc_6692acaec13c",           // wrong separators
-		"zf0537bd-0787-547e-a6fc-6692acaec13c",           // non-hex
+		"9f0537bd-0787-547e-a6fc-6692acaec13cX", // too long
+		"9f0537bd-0787-547e-a6fc-6692acaec13'",  // quote
+		"9f0537bd_0787_547e_a6fc_6692acaec13c",  // wrong separators
+		"zf0537bd-0787-547e-a6fc-6692acaec13c",  // non-hex
 		"9f0537bd-0787-547e-a6fc-6692acaec13c; DROP ALL", // injection shape
 	}
 	for _, v := range invalid {
@@ -48,9 +48,9 @@ func TestIsDatetimeToken(t *testing.T) {
 	}
 	invalid := []string{
 		"",
-		"short",                                           // < 10 chars
-		"2026-06-14 05:11:39'; DROP",                      // quote + injection
-		"now() - INTERVAL 1 DAY",                          // function call (parens/letters)
+		"short",                      // < 10 chars
+		"2026-06-14 05:11:39'; DROP", // quote + injection
+		"now() - INTERVAL 1 DAY",     // function call (parens/letters)
 		"2026-06-14 05:11:39.836xxxxxxxxxxxxxxxxxxxxxxxx", // too long (> 32)
 	}
 	for _, v := range invalid {
@@ -86,9 +86,9 @@ func ev(signalID, role, subjectID string) map[string]any {
 // "what the engine linked vs ignored, and why".
 func TestMergeTimelineEvidence_LinkageStatusAndCounts(t *testing.T) {
 	sigs := []map[string]any{
-		sig("s1", "active_probe", "path", "a->b", "probe_rtt_anomaly"),       // trigger, attached
-		sig("s2", "control_plane", "device", "r1", "bgp_state_anomaly"),      // attached (edge peer)
-		sig("s3", "active_probe", "path", "a->c", "probe_rtt_anomaly_clear"), // recovery (clear)
+		sig("s1", "active_probe", "path", "a->b", "probe_rtt_anomaly"),           // trigger, attached
+		sig("s2", "control_plane", "device", "r1", "bgp_state_anomaly"),          // attached (edge peer)
+		sig("s3", "active_probe", "path", "a->c", "probe_rtt_anomaly_clear"),     // recovery (clear)
 		sig("s4", "device_telemetry", "device", "r2", "device_resource_anomaly"), // unlinked (no grounding)
 	}
 	edges := []map[string]any{
@@ -139,8 +139,8 @@ func TestMergeTimelineEvidence_LinkageStatusAndCounts(t *testing.T) {
 // shares nothing. And a signal with no resolvable identity reads as malformed.
 func TestMergeTimelineEvidence_ReasonRefinement(t *testing.T) {
 	sigs := []map[string]any{
-		sig("s1", "active_probe", "path", "api->x", "probe_rtt_anomaly"),   // attached
-		sig("s2", "active_probe", "path", "api->y", "probe_rtt_anomaly"),   // shares 'api' token, not linked
+		sig("s1", "active_probe", "path", "api->x", "probe_rtt_anomaly"),     // attached
+		sig("s2", "active_probe", "path", "api->y", "probe_rtt_anomaly"),     // shares 'api' token, not linked
 		sig("s3", "device_telemetry", "device", "unknown", "metric_anomaly"), // malformed identity
 	}
 	edges := []map[string]any{

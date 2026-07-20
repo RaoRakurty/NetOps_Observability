@@ -12,8 +12,8 @@ func TestNormalizePrecedence(t *testing.T) {
 		t.Fatalf("normalize = (%v, %v)", got, err)
 	}
 	bad := [][]string{
-		nil,                            // empty
-		{"operator"},                   // incomplete
+		nil,          // empty
+		{"operator"}, // incomplete
 		{"operator", "cloud_tag", "firewall_appid", "cloud_graph", "domain", "asn"},       // unknown class
 		{"operator", "operator", "firewall_appid", "cloud_graph", "domain", "ip_catalog"}, // duplicate
 	}

@@ -18,18 +18,18 @@ type VManageStatsTransformer struct{}
 func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {
 	var resp struct {
 		Data []struct {
-			VDevice    string  `json:"vdevice_name"`
-			LocalIP    string  `json:"local_system_ip"`
-			RemoteIP   string  `json:"remote_system_ip"`
-			LocalColor string  `json:"local_color"`
-			RemoteColor string `json:"remote_color"`
-			SiteID     string  `json:"site_id"`
-			Name       string  `json:"name"`
-			Latency    float64 `json:"latency"`
-			Jitter     float64 `json:"jitter"`
-			Loss       float64 `json:"loss_percentage"`
-			QoE        float64 `json:"vqoe_score"`
-			EntryTime  int64   `json:"entry_time"`
+			VDevice     string  `json:"vdevice_name"`
+			LocalIP     string  `json:"local_system_ip"`
+			RemoteIP    string  `json:"remote_system_ip"`
+			LocalColor  string  `json:"local_color"`
+			RemoteColor string  `json:"remote_color"`
+			SiteID      string  `json:"site_id"`
+			Name        string  `json:"name"`
+			Latency     float64 `json:"latency"`
+			Jitter      float64 `json:"jitter"`
+			Loss        float64 `json:"loss_percentage"`
+			QoE         float64 `json:"vqoe_score"`
+			EntryTime   int64   `json:"entry_time"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -41,7 +41,7 @@ func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byt
 		tags := map[string]string{
 			"tenant_id": tenant, "integration_id": integrationID, "source_system": "vmanage",
 			"device": s.VDevice, "site": s.SiteID, "tunnel": s.Name,
-			"transport": s.LocalColor + "-" + s.RemoteColor,
+			"transport":   s.LocalColor + "-" + s.RemoteColor,
 			"local_color": s.LocalColor, "remote_color": s.RemoteColor,
 		}
 		mk := func(name string, v float64, unit string) ControllerMetric {

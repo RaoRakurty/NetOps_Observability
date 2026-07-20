@@ -15,11 +15,11 @@ import (
 type AuthKind string
 
 const (
-	AuthAPIKey  AuthKind = "api_key"  // e.g. Meraki X-Cisco-Meraki-API-Key
-	AuthToken   AuthKind = "token"    // e.g. Catalyst /auth/token, NDFC login → JWT
-	AuthSession AuthKind = "session"  // e.g. vManage JSESSIONID + XSRF
-	AuthBasic   AuthKind = "basic"    // e.g. Prime, Versa Director
-	AuthOAuth   AuthKind = "oauth"    // e.g. Versa bearer
+	AuthAPIKey  AuthKind = "api_key" // e.g. Meraki X-Cisco-Meraki-API-Key
+	AuthToken   AuthKind = "token"   // e.g. Catalyst /auth/token, NDFC login → JWT
+	AuthSession AuthKind = "session" // e.g. vManage JSESSIONID + XSRF
+	AuthBasic   AuthKind = "basic"   // e.g. Prime, Versa Director
+	AuthOAuth   AuthKind = "oauth"   // e.g. Versa bearer
 )
 
 // ConnectorSpec is a connector's static description — what it is and how it's
@@ -39,15 +39,15 @@ const (
 //     NDFC) or session (older vManage) or raw Basic (Prime, legacy). Basic /
 //     credential login is therefore always a supported path for them.
 type ConnectorSpec struct {
-	Vendor       string        // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
-	Product      string        // human product name
-	SourceSystem string        // maps to Signal source_system
-	SupportedAuth []AuthKind   // all auth flows this connector implements (Basic/API-key always present for testing)
-	PreferredAuth AuthKind     // the flow the wizard defaults to (OAuth where the vendor supports it)
-	Webhook      bool          // supports inbound webhooks
-	Poll         bool          // supports REST polling
-	Streams      []string      // logical streams it can poll (alarms, inventory, tunnels, …)
-	DefaultPoll  time.Duration // recommended poll interval
+	Vendor        string        // meraki | catalyst_center | vmanage | ndfc | versa_director | versa_concerto | prime | generic
+	Product       string        // human product name
+	SourceSystem  string        // maps to Signal source_system
+	SupportedAuth []AuthKind    // all auth flows this connector implements (Basic/API-key always present for testing)
+	PreferredAuth AuthKind      // the flow the wizard defaults to (OAuth where the vendor supports it)
+	Webhook       bool          // supports inbound webhooks
+	Poll          bool          // supports REST polling
+	Streams       []string      // logical streams it can poll (alarms, inventory, tunnels, …)
+	DefaultPoll   time.Duration // recommended poll interval
 	// RatePerSec bounds outbound calls (0 = connector default). E.g. Meraki 10/s.
 	RatePerSec float64
 }

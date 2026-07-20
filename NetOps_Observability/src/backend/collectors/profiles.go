@@ -68,9 +68,9 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "generic",
 			Enterprise: 0,
 			Metrics: []SNMPMetric{
-				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                           // sysUpTime
-				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true},   // ifOperStatus
-				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true},  // ifAdminStatus
+				{Name: "device_sysuptime", OID: []int{1, 3, 6, 1, 2, 1, 1, 3}},                          // sysUpTime
+				{Name: "device_if_oper_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 8}, Table: true},  // ifOperStatus
+				{Name: "device_if_admin_status", OID: []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 7}, Table: true}, // ifAdminStatus
 				// ifLastChange (sysUpTime when the interface entered its current
 				// state) — the interface flap timestamp. A change in this value IS a
 				// flap; correlation can pin "this port flapped at T" against other
@@ -104,7 +104,7 @@ func builtinProfiles() []SNMPProfile {
 				// BGP4-MIB bgpPeerTable (index = bgpPeerRemoteAddr) — gNMI-OWNED where a
 				// device has gNMI (OpenConfig carries richer BGP: per-AFI prefixes, vrf),
 				// SNMP is the agentless fallback. IndexLabel "peer" matches gNMI's contract.
-				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true, Owner: "gnmi", IndexLabel: "peer"},      // bgpPeerState
+				{Name: "device_bgp_peer_state", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 2}, Table: true, Owner: "gnmi", IndexLabel: "peer"},       // bgpPeerState
 				{Name: "device_bgp_fsm_transitions", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 15}, Table: true, Owner: "gnmi", IndexLabel: "peer"}, // bgpPeerFsmEstablishedTransitions
 				{Name: "device_bgp_in_updates", OID: []int{1, 3, 6, 1, 2, 1, 15, 3, 1, 10}, Table: true, Owner: "gnmi", IndexLabel: "peer"},      // bgpPeerInUpdates
 				// OSPF-MIB neighbor/interface state — SNMP-owned (gNMI carries IS-IS here,
@@ -117,8 +117,8 @@ func builtinProfiles() []SNMPProfile {
 				// to its feed port. Rows exist only on PSE-capable switches; a walk on
 				// anything else returns nothing (a cheap no-op). Index is
 				// pethPsePortGroupIndex.pethPsePortIndex (group.port).
-				{Name: "device_poe_port_detection_status", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 6}, Table: true},  // pethPsePortDetectionStatus
-				{Name: "device_poe_port_power_class", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 10}, Table: true},      // pethPsePortPowerClassifications
+				{Name: "device_poe_port_detection_status", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 6}, Table: true},    // pethPsePortDetectionStatus
+				{Name: "device_poe_port_power_class", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 1, 1, 10}, Table: true},        // pethPsePortPowerClassifications
 				{Name: "device_poe_pse_consumption_watts", OID: []int{1, 3, 6, 1, 2, 1, 105, 1, 3, 1, 1, 4}, Table: true}, // pethMainPseConsumptionPower (per PSE group)
 			},
 		},
@@ -149,11 +149,11 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "f5",
 			Enterprise: 3375,
 			Metrics: []SNMPMetric{
-				{Name: "device_lb_client_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 8}},        // sysStatClientCurConns (scalar)
-				{Name: "device_lb_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 45}},     // sysStatMemoryUsed (scalar)
+				{Name: "device_lb_client_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 8}},                                                 // sysStatClientCurConns (scalar)
+				{Name: "device_lb_mem_used_bytes", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 1, 1, 2, 1, 45}},                                              // sysStatMemoryUsed (scalar)
 				{Name: "device_lb_pool_member_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 5, 2, 1, 5}, Table: true, IndexLabel: "pool_member"}, // ltmPoolMbrStatusAvailState
-				{Name: "device_lb_pool_cur_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 2, 3, 1, 8}, Table: true, IndexLabel: "pool"},          // ltmPoolStatServerCurConns
-				{Name: "device_lb_vs_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 10, 13, 2, 1, 2}, Table: true, IndexLabel: "virtual_server"},    // ltmVsStatusAvailState
+				{Name: "device_lb_pool_cur_conns", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 5, 2, 3, 1, 8}, Table: true, IndexLabel: "pool"},           // ltmPoolStatServerCurConns
+				{Name: "device_lb_vs_avail", OID: []int{1, 3, 6, 1, 4, 1, 3375, 2, 2, 10, 13, 2, 1, 2}, Table: true, IndexLabel: "virtual_server"},     // ltmVsStatusAvailState
 				// Trunk (LAG) membership — the Port-Intelligence lane (#94): a trunk
 				// whose working-member count drops below its configured count is a
 				// degraded port bundle even while the trunk stays "up". sysTrunkTable
@@ -187,8 +187,8 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "fortinet",
 			Enterprise: 12356,
 			Metrics: []SNMPMetric{
-				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 3}},      // fgSysCpuUsage (scalar %)
-				{Name: "device_fw_mem_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 4}},      // fgSysMemUsage (scalar %)
+				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 3}},        // fgSysCpuUsage (scalar %)
+				{Name: "device_fw_mem_pct", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 4}},        // fgSysMemUsage (scalar %)
 				{Name: "device_fw_session_active", OID: []int{1, 3, 6, 1, 4, 1, 12356, 101, 4, 1, 8}}, // fgSysSesCount (scalar)
 			},
 		},
@@ -198,8 +198,8 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "checkpoint",
 			Enterprise: 2620,
 			Metrics: []SNMPMetric{
-				{Name: "device_fw_conns", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 1, 25, 3}},        // fwNumConn (scalar)
-				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 6, 7, 2, 7}},    // procUsage (scalar %)
+				{Name: "device_fw_conns", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 1, 25, 3}},              // fwNumConn (scalar)
+				{Name: "device_fw_cpu_pct", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 6, 7, 2, 7}},          // procUsage (scalar %)
 				{Name: "device_fw_mem_active_bytes", OID: []int{1, 3, 6, 1, 4, 1, 2620, 1, 6, 7, 4, 6}}, // memActiveReal64 (scalar)
 			},
 		},
@@ -210,7 +210,7 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "mikrotik",
 			Enterprise: 14988,
 			Metrics: []SNMPMetric{
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 10}},   // mtxrHlTemperature (scalar, deci-C on some models)
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 10}},     // mtxrHlTemperature (scalar, deci-C on some models)
 				{Name: "device_cpu_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 11}}, // mtxrHlProcessorTemperature (scalar)
 				{Name: "device_voltage_dv", OID: []int{1, 3, 6, 1, 4, 1, 14988, 1, 1, 3, 8}},        // mtxrHlVoltage (scalar, deci-V)
 			},
@@ -264,8 +264,8 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "huawei",
 			Enterprise: 2011,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 5}, Table: true},  // hwEntityCpuUsage
-				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 7}, Table: true},  // hwEntityMemUsage
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 5}, Table: true},   // hwEntityCpuUsage
+				{Name: "device_mem_percent", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 7}, Table: true},   // hwEntityMemUsage
 				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 2011, 5, 25, 31, 1, 1, 1, 1, 11}, Table: true}, // hwEntityTemperature
 			},
 		},
@@ -275,9 +275,9 @@ func builtinProfiles() []SNMPProfile {
 			Name:       "extreme",
 			Enterprise: 1916,
 			Metrics: []SNMPMetric{
-				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 1, 4, 1, 4}, Table: true},      // extremeCpuMonitorTotalUtilization
-				{Name: "device_mem_free_kb", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 2, 2, 1, 3}, Table: true},      // extremeMemoryMonitorSystemFree
-				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 1, 1, 8}},                          // extremeCurrentTemperature (scalar)
+				{Name: "device_cpu_percent", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 1, 4, 1, 4}, Table: true}, // extremeCpuMonitorTotalUtilization
+				{Name: "device_mem_free_kb", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 32, 2, 2, 1, 3}, Table: true}, // extremeMemoryMonitorSystemFree
+				{Name: "device_temp_celsius", OID: []int{1, 3, 6, 1, 4, 1, 1916, 1, 1, 1, 8}},                    // extremeCurrentTemperature (scalar)
 			},
 		},
 		// Arista EOS — standard-MIB native: CPU/memory via HOST-RESOURCES and

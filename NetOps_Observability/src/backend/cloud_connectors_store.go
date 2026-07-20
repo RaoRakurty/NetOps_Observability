@@ -25,7 +25,7 @@ const (
 // is tracked SEPARATELY from telemetry health (is data flowing?) — a successful
 // auth must never imply data is flowing or permissions are complete.
 type healthStatus struct {
-	State   string    `json:"state"`             // unknown|config_validated|healthy|degraded|failed|unverified
+	State   string    `json:"state"` // unknown|config_validated|healthy|degraded|failed|unverified
 	Detail  string    `json:"detail,omitempty"`
 	Checked time.Time `json:"checked,omitempty"`
 }

@@ -51,10 +51,10 @@ func domAdapterFor(vendor string) domAdapter {
 // in units of 1 °C; TX laser bias in units of 0.001 mA (µA). Verify against a
 // live MX/PTX MIB dump before production trust.
 var (
-	jnxDomRxPowerOID = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 6}  // jnxDomCurrentRxLaserPower (0.01 dBm)
-	jnxDomTxPowerOID = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 7}  // jnxDomCurrentTxLaserOutputPower (0.01 dBm)
-	jnxDomTempOID    = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 8}  // jnxDomCurrentModuleTemperature (1 C)
-	jnxDomBiasOID    = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 5}  // jnxDomCurrentTxLaserBiasCurrent (0.001 mA)
+	jnxDomRxPowerOID = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 6} // jnxDomCurrentRxLaserPower (0.01 dBm)
+	jnxDomTxPowerOID = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 7} // jnxDomCurrentTxLaserOutputPower (0.01 dBm)
+	jnxDomTempOID    = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 8} // jnxDomCurrentModuleTemperature (1 C)
+	jnxDomBiasOID    = []int{1, 3, 6, 1, 4, 1, 2636, 3, 60, 1, 1, 1, 1, 5} // jnxDomCurrentTxLaserBiasCurrent (0.001 mA)
 )
 
 type juniperDOM struct{}

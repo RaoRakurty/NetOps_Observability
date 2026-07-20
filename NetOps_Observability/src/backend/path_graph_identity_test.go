@@ -24,10 +24,10 @@ func TestStampSpineCloudIdentity(t *testing.T) {
 	}, nil)
 
 	spine := &pathgraph.Spine{Spine: []pathgraph.SpineNode{
-		{Index: 0, Label: "client-pc", Address: "192.168.1.10"},          // unclaimed → untouched
-		{Index: 1, Label: "10.60.10.10", Address: "10.60.10.10"},        // cloud-claimed, IP-labelled → named + marked
-		{Index: 2, Label: "edge-fw-01", Address: "10.61.10.10"},         // already named → mark only
-		{Index: 3, Label: "", Address: "20.9.199.16"},                   // public EIP → named + marked
+		{Index: 0, Label: "client-pc", Address: "192.168.1.10"},  // unclaimed → untouched
+		{Index: 1, Label: "10.60.10.10", Address: "10.60.10.10"}, // cloud-claimed, IP-labelled → named + marked
+		{Index: 2, Label: "edge-fw-01", Address: "10.61.10.10"},  // already named → mark only
+		{Index: 3, Label: "", Address: "20.9.199.16"},            // public EIP → named + marked
 	}}
 	s.stampSpineCloudIdentity(ctx, "org-a", spine)
 

@@ -9,18 +9,18 @@ import "strings"
 type ScopeType string
 
 const (
-	ScopeOrg          ScopeType = "org"           // AWS Organizations root / Azure tenant root / GCP org
-	ScopeMgmtGroup    ScopeType = "mgmt_group"    // Azure management group
-	ScopeOU           ScopeType = "ou"            // AWS Organizational Unit
-	ScopeFolder       ScopeType = "folder"        // GCP folder
-	ScopeAccount      ScopeType = "account"       // AWS account
-	ScopeSubscription ScopeType = "subscription"  // Azure subscription
-	ScopeProject      ScopeType = "project"       // GCP project
-	ScopeRegion       ScopeType = "region"        // a region within an account/sub/project
+	ScopeOrg          ScopeType = "org"            // AWS Organizations root / Azure tenant root / GCP org
+	ScopeMgmtGroup    ScopeType = "mgmt_group"     // Azure management group
+	ScopeOU           ScopeType = "ou"             // AWS Organizational Unit
+	ScopeFolder       ScopeType = "folder"         // GCP folder
+	ScopeAccount      ScopeType = "account"        // AWS account
+	ScopeSubscription ScopeType = "subscription"   // Azure subscription
+	ScopeProject      ScopeType = "project"        // GCP project
+	ScopeRegion       ScopeType = "region"         // a region within an account/sub/project
 	ScopeResourceGrp  ScopeType = "resource_group" // Azure resource group
-	ScopeVPC          ScopeType = "vpc"           // AWS/GCP VPC
-	ScopeVNet         ScopeType = "vnet"          // Azure VNet
-	ScopeExplicit     ScopeType = "explicit"      // an explicit list of resource ids
+	ScopeVPC          ScopeType = "vpc"            // AWS/GCP VPC
+	ScopeVNet         ScopeType = "vnet"           // Azure VNet
+	ScopeExplicit     ScopeType = "explicit"       // an explicit list of resource ids
 )
 
 // ValidForProvider reports whether a scope type is meaningful for a provider.
@@ -53,11 +53,11 @@ func ScopeTypesForProvider(p Provider) []ScopeType {
 // as a uniqueness key on its own — provider ids are not globally unique across
 // Correlix tenants.
 type Scope struct {
-	Type      ScopeType `json:"type"`
-	Ref       string    `json:"ref"`             // provider-native id (account/sub/project/region/...)
-	Display   string    `json:"display,omitempty"` // human label; NEVER an identity/uniqueness key
-	Regions   []string  `json:"regions,omitempty"` // optional region narrowing
-	Discovered bool     `json:"discovered,omitempty"` // came from DiscoverScopes (vs operator-entered)
+	Type       ScopeType `json:"type"`
+	Ref        string    `json:"ref"`                  // provider-native id (account/sub/project/region/...)
+	Display    string    `json:"display,omitempty"`    // human label; NEVER an identity/uniqueness key
+	Regions    []string  `json:"regions,omitempty"`    // optional region narrowing
+	Discovered bool      `json:"discovered,omitempty"` // came from DiscoverScopes (vs operator-entered)
 }
 
 // ParseScopeType normalizes a free-form scope token.

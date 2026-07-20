@@ -41,41 +41,41 @@ func Specs() map[string]ConnectorSpec {
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthSession},
 			PreferredAuth: AuthToken, // JWT+refresh (≥20.18); session fallback
 			Poll:          true,
-			Streams:     []string{"alarms", "events", "tunnels", "control_connections", "bfd", "inventory"},
-			DefaultPoll: 2 * time.Minute,
+			Streams:       []string{"alarms", "events", "tunnels", "control_connections", "bfd", "inventory"},
+			DefaultPoll:   2 * time.Minute,
 		},
 		"ndfc": {
 			Vendor: "ndfc", Product: "Cisco Nexus Dashboard / NDFC", SourceSystem: "ndfc",
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthAPIKey},
 			PreferredAuth: AuthToken, // login → JWT
 			Poll:          true,
-			Streams:     []string{"fabric_alarms", "switch_health", "interface_alarms", "deployments", "inventory"},
-			DefaultPoll: 5 * time.Minute,
+			Streams:       []string{"fabric_alarms", "switch_health", "interface_alarms", "deployments", "inventory"},
+			DefaultPoll:   5 * time.Minute,
 		},
 		"prime": {
 			Vendor: "prime", Product: "Cisco Prime Infrastructure", SourceSystem: "prime",
 			SupportedAuth: []AuthKind{AuthBasic}, // legacy: raw Basic only
 			PreferredAuth: AuthBasic,
 			Poll:          true,
-			Streams:     []string{"alarms", "inventory"},
-			DefaultPoll: 10 * time.Minute, // conservative (legacy)
-			RatePerSec:  2,
+			Streams:       []string{"alarms", "inventory"},
+			DefaultPoll:   10 * time.Minute, // conservative (legacy)
+			RatePerSec:    2,
 		},
 		"versa_director": {
 			Vendor: "versa_director", Product: "Versa Director", SourceSystem: "versa_director",
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
 			Poll:          true,
-			Streams:     []string{"alarms", "appliances", "interfaces", "tunnels", "events"},
-			DefaultPoll: 5 * time.Minute,
+			Streams:       []string{"alarms", "appliances", "interfaces", "tunnels", "events"},
+			DefaultPoll:   5 * time.Minute,
 		},
 		"versa_concerto": {
 			Vendor: "versa_concerto", Product: "Versa Concerto", SourceSystem: "versa_concerto",
 			SupportedAuth: []AuthKind{AuthBasic, AuthOAuth},
 			PreferredAuth: AuthOAuth,
 			Poll:          true,
-			Streams:     []string{"tenants", "sase", "policy", "events"},
-			DefaultPoll: 5 * time.Minute,
+			Streams:       []string{"tenants", "sase", "policy", "events"},
+			DefaultPoll:   5 * time.Minute,
 		},
 		"generic": {
 			Vendor: "generic", Product: "Generic REST/Webhook", SourceSystem: "generic",

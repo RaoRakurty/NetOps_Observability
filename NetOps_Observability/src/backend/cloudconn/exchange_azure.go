@@ -27,10 +27,10 @@ import (
 )
 
 const (
-	azureLoginBase             = "https://login.microsoftonline.com"
-	azureDefaultScope          = "https://management.azure.com/.default"
-	azureDefaultFederationAud  = "api://AzureADTokenExchange"
-	azureClientAssertionType   = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+	azureLoginBase            = "https://login.microsoftonline.com"
+	azureDefaultScope         = "https://management.azure.com/.default"
+	azureDefaultFederationAud = "api://AzureADTokenExchange"
+	azureClientAssertionType  = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 )
 
 // AzureEntraExchanger implements TokenExchanger against the Entra (Azure AD)

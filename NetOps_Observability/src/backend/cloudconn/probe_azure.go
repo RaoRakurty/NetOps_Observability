@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	azureARMBase                = "https://management.azure.com"
-	azureSubscriptionsAPIVer    = "2022-12-01"
-	azureAuthPermissionsAPIVer  = "2022-04-01"
-	azureMgmtGroupsAPIVer       = "2020-05-01"
+	azureARMBase               = "https://management.azure.com"
+	azureSubscriptionsAPIVer   = "2022-12-01"
+	azureAuthPermissionsAPIVer = "2022-04-01"
+	azureMgmtGroupsAPIVer      = "2020-05-01"
 	// One bounded enumeration page (§9) — same contract as the other probes.
 	azureMgmtGroupDescendantsTop = 100
 )

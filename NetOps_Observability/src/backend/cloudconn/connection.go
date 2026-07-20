@@ -10,16 +10,16 @@ type LifecycleState string
 
 const (
 	StateDraft                   LifecycleState = "DRAFT"                    // created, auth not yet chosen/deployed
-	StateDeploying               LifecycleState = "DEPLOYING"               // operator deploying trust (templates) on their side
-	StateValidating              LifecycleState = "VALIDATING"             // running trust/permission validation
-	StateActive                  LifecycleState = "ACTIVE"                 // validated; collecting
-	StateDegraded                LifecycleState = "DEGRADED"               // collecting but partial (some sources/perms failing)
+	StateDeploying               LifecycleState = "DEPLOYING"                // operator deploying trust (templates) on their side
+	StateValidating              LifecycleState = "VALIDATING"               // running trust/permission validation
+	StateActive                  LifecycleState = "ACTIVE"                   // validated; collecting
+	StateDegraded                LifecycleState = "DEGRADED"                 // collecting but partial (some sources/perms failing)
 	StateRotationRequired        LifecycleState = "ROTATION_REQUIRED"        // a stored secret is aging/expiring
 	StateReauthorizationRequired LifecycleState = "REAUTHORIZATION_REQUIRED" // trust broke; needs re-consent/re-deploy
-	StateDisabled                LifecycleState = "DISABLED"               // operator-paused; no collection, trust intact
-	StateRevoked                 LifecycleState = "REVOKED"                // trust torn down; cannot exchange tokens
-	StateDeleting                LifecycleState = "DELETING"               // teardown in progress
-	StateDeleted                 LifecycleState = "DELETED"                // terminal
+	StateDisabled                LifecycleState = "DISABLED"                 // operator-paused; no collection, trust intact
+	StateRevoked                 LifecycleState = "REVOKED"                  // trust torn down; cannot exchange tokens
+	StateDeleting                LifecycleState = "DELETING"                 // teardown in progress
+	StateDeleted                 LifecycleState = "DELETED"                  // terminal
 )
 
 // validTransitions is the allowed state-machine edge set. Anything not listed is

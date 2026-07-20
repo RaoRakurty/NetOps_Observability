@@ -47,9 +47,9 @@ type incidentTimeMetricRow struct {
 	CalculatedAt  time.Time              `json:"calculated_at"`
 	// Rollup-source fields (migration 0027): everything the reliability rollups
 	// need so they can read snapshots instead of a capped live ClickHouse scan.
-	Owner    string            `json:"owner,omitempty"`    // raw seam owner (isp/cloud_provider/…) — owner filter
-	State    string            `json:"state,omitempty"`    // open|closed|merged — merged children excluded from MTBF
-	Internal bool              `json:"internal"`           // platform self-monitoring (excluded by default)
+	Owner    string            `json:"owner,omitempty"`      // raw seam owner (isp/cloud_provider/…) — owner filter
+	State    string            `json:"state,omitempty"`      // open|closed|merged — merged children excluded from MTBF
+	Internal bool              `json:"internal"`             // platform self-monitoring (excluded by default)
 	Group    map[string]string `json:"group_keys,omitempty"` // device/interface/provider/signature/… grouping keys
 }
 

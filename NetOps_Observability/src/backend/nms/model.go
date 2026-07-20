@@ -61,7 +61,7 @@ type ControllerMetric struct {
 	TenantID      string
 	IntegrationID string
 	SourceSystem  string
-	Name          string  // normalized metric name (controller_metric_*)
+	Name          string // normalized metric name (controller_metric_*)
 	Value         float64
 	Unit          string
 	Time          time.Time

@@ -16,15 +16,15 @@ type PrimeTransformer struct{}
 
 // primeAlarm is the normalized shape we pull from either encoding.
 type primeAlarm struct {
-	ObjectID      string `xml:"objectId" json:"objectId"`
-	Severity      string `xml:"severity" json:"severity"`
-	Category      string `xml:"category" json:"category"`
-	Source        string `xml:"source" json:"source"`
-	DeviceName    string `xml:"deviceName" json:"deviceName"`
-	DeviceIP      string `xml:"deviceIpAddress" json:"deviceIpAddress"`
-	EventType     string `xml:"eventType" json:"eventType"`
-	Message       string `xml:"message" json:"message"`
-	TimeStamp     int64  `xml:"timeStamp" json:"timeStamp"`
+	ObjectID   string `xml:"objectId" json:"objectId"`
+	Severity   string `xml:"severity" json:"severity"`
+	Category   string `xml:"category" json:"category"`
+	Source     string `xml:"source" json:"source"`
+	DeviceName string `xml:"deviceName" json:"deviceName"`
+	DeviceIP   string `xml:"deviceIpAddress" json:"deviceIpAddress"`
+	EventType  string `xml:"eventType" json:"eventType"`
+	Message    string `xml:"message" json:"message"`
+	TimeStamp  int64  `xml:"timeStamp" json:"timeStamp"`
 }
 
 func (PrimeTransformer) Transform(tenant, integrationID string, raw []byte) (Batch, error) {

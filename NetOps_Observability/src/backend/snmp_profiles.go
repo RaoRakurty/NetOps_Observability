@@ -63,12 +63,12 @@ type SNMPMetric struct {
 
 // SNMPProfile is a vendor/category metric set.
 type SNMPProfile struct {
-	ID                string       `json:"id"`          // stable key, e.g. "cisco-ios"
-	Vendor            string       `json:"vendor"`      // display name
-	Description       string       `json:"description,omitempty"`
-	Category          string       `json:"category"` // universal | router_switch | firewall | load_balancer | wireless | voip | printer | ups | server
-	SysObjectIDPrefix string       `json:"sysobjectid_prefix,omitempty"`
-	Builtin           bool         `json:"builtin"`
+	ID                string `json:"id"`     // stable key, e.g. "cisco-ios"
+	Vendor            string `json:"vendor"` // display name
+	Description       string `json:"description,omitempty"`
+	Category          string `json:"category"` // universal | router_switch | firewall | load_balancer | wireless | voip | printer | ups | server
+	SysObjectIDPrefix string `json:"sysobjectid_prefix,omitempty"`
+	Builtin           bool   `json:"builtin"`
 	// Overlay marks a persistence-only record carrying an operator's metric
 	// additions to a *built-in* profile (keyed by the built-in's id). Overlay
 	// carriers are never part of the served profile set — the additions are

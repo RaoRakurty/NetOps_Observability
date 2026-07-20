@@ -166,11 +166,11 @@ func TestCoreRouterFromIGP(t *testing.T) {
 
 func TestUnknownStaysUnknown(t *testing.T) {
 	fixtures := []DeviceFact{
-		{},                                     // no facts at all
-		{Name: "mystery-9", Type: "generic"},   // bare inventory row
-		{Name: "r-77", Type: "router"},         // router with no IGP/tunnel/identity signal
-		{Name: "sw-0", Type: "switch"},         // switch with zero observed neighbours
-		{Name: "printer-3", Type: "ap"},        // a type with no role mapping
+		{},                                   // no facts at all
+		{Name: "mystery-9", Type: "generic"}, // bare inventory row
+		{Name: "r-77", Type: "router"},       // router with no IGP/tunnel/identity signal
+		{Name: "sw-0", Type: "switch"},       // switch with zero observed neighbours
+		{Name: "printer-3", Type: "ap"},      // a type with no role mapping
 	}
 	for _, f := range fixtures {
 		r := ClassifyDeviceRole(f)

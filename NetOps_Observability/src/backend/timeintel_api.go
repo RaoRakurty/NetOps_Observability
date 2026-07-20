@@ -110,7 +110,7 @@ type timeIntelResponse struct {
 	VerdictTier     string                  `json:"verdict_tier"`
 	Owner           string                  `json:"owner,omitempty"`
 	OwnerDomain     timeintel.OwnerDomain   `json:"owner_domain"`
-	OwnerLabel      string                  `json:"owner_label"` // operator-facing (never lowercase raw)
+	OwnerLabel      string                  `json:"owner_label"`         // operator-facing (never lowercase raw)
 	SeamType        string                  `json:"seam_type,omitempty"` // DIA/SDWAN/VPN/DX/CLOUD_BACKBONE (grounded seam)
 	RootDomain      string                  `json:"root_domain,omitempty"`
 	ConfidenceLbl   string                  `json:"confidence_label"` // Evidence-backed | Candidate | Insufficient evidence

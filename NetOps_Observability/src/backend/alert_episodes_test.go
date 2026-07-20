@@ -75,7 +75,7 @@ func TestEpisodeFoldCloseReopenMatrix(t *testing.T) {
 	// 4. Clear + quiet gap beyond the close window → episode closes.
 	clock.advance(time.Minute)
 	s.Observe("acme", "leaf1", "HighCPU", "critical", "", false)
-	clock.advance(16 * time.Minute) // > closeWindow
+	clock.advance(16 * time.Minute)                             // > closeWindow
 	s.Observe("acme", "leaf1", "HighCPU", "warning", "", false) // any observe sweeps
 	var crit AlertEpisode
 	for _, ep := range listAll(t, s) {

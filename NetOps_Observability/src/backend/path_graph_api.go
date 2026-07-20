@@ -535,11 +535,11 @@ var pathFaultFamilies = []string{
 // stampSpineFault marks WHERE the measurement stopped — and separately, whether
 // THIS case blames that point. Two different statements, never conflated:
 //
-//   "last_response"  — a MEASUREMENT FACT: this partial run's last answering hop.
-//                      Always stated (an operator must never have to guess where
-//                      a trace died), carries no blame.
-//   "broken"/"suspected" — a CAUSAL ATTRIBUTION: the case's verdict is a
-//                      path-family fault, so the drop point IS the case's break.
+//	"last_response"  — a MEASUREMENT FACT: this partial run's last answering hop.
+//	                   Always stated (an operator must never have to guess where
+//	                   a trace died), carries no blame.
+//	"broken"/"suspected" — a CAUSAL ATTRIBUTION: the case's verdict is a
+//	                   path-family fault, so the drop point IS the case's break.
 //
 // An application-layer fault therefore shows where the path stopped answering
 // without the network being accused of it (the earlier gate threw the fact away

@@ -57,7 +57,7 @@ func gcpSAKeyRequest(saJSON string) ExchangeRequest {
 		Identity: IdentityConfig{
 			Provider: ProviderGCP, Method: AuthMethodStaticKey,
 			ConnectorID: "ccn_gcp1", ProjectNumber: "123456789",
-			ServiceAccount: "correlix-observer@proj.iam.gserviceaccount.com",
+			ServiceAccount:  "correlix-observer@proj.iam.gserviceaccount.com",
 			LegacySecretRef: "csr_gcp",
 		},
 		LegacySecret: saJSON,

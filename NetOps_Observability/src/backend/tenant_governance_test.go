@@ -60,12 +60,12 @@ func TestNormalizeRequiredTags(t *testing.T) {
 		t.Fatalf("normalize = (%v, %v)", got, err)
 	}
 	bad := [][]string{
-		nil,                          // empty
-		{""},                         // blank entry
-		{"has space"},                // charset
-		{"quote'"},                   // charset (SQL-ish)
-		{strings.Repeat("a", 65)},    // too long
-		make([]string, 33),           // too many
+		nil,                       // empty
+		{""},                      // blank entry
+		{"has space"},             // charset
+		{"quote'"},                // charset (SQL-ish)
+		{strings.Repeat("a", 65)}, // too long
+		make([]string, 33),        // too many
 	}
 	for i := range bad {
 		if len(bad[i]) == 33 {

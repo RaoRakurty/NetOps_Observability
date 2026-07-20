@@ -70,7 +70,7 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	samples := 0
 	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
 	var lastErr string
-	ifaddr := map[string]map[string]string{}    // deviceID → (interface IP → ifName), for topology enrichment
+	ifaddr := map[string]map[string]string{}     // deviceID → (interface IP → ifName), for topology enrichment
 	ifindexMap := map[string]map[string]string{} // deviceID → (ifIndex → ifName), for the C7.1 EntityResolver
 
 	for _, tg := range targets {
@@ -327,7 +327,7 @@ func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]str
 func valueInt(v berVal) int64 {
 	switch v.tag {
 	case 0x41, 0x42, 0x43, 0x46: // Counter32, Gauge32, TimeTicks, Counter64
-		return int64(decodeUint(v.raw))  // #nosec G115 -- SNMP counter; int64 range covers Counter32/64 telemetry
+		return int64(decodeUint(v.raw)) // #nosec G115 -- SNMP counter; int64 range covers Counter32/64 telemetry
 	default:
 		return decodeInt(v.raw)
 	}

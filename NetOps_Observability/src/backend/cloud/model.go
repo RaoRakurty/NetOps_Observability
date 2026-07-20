@@ -57,8 +57,8 @@ func (c Confidence) rank() int {
 type Source string
 
 const (
-	SrcCloudTag        Source = "cloud_tag"        // operator tag on the resource — authoritative
-	SrcCloudGraph      Source = "cloud_graph"      // STRUCTURAL relation (ALB→target group→instance, ASG→instance) — strong
+	SrcCloudTag   Source = "cloud_tag"   // operator tag on the resource — authoritative
+	SrcCloudGraph Source = "cloud_graph" // STRUCTURAL relation (ALB→target group→instance, ASG→instance) — strong
 	// SrcSuspectedName: the resource's own name was used as a stand-in for an
 	// application. That is a GUESS, not attribution — the resource stays in the
 	// unknown bucket so the operator is prompted to tag it (audit 2026-07-13).
@@ -141,7 +141,7 @@ type CloudResource struct {
 	// PowerState is the provider-reported lifecycle state (running | stopped |
 	// deallocated | …). Stopped ≠ broken: the audit found 2 stopped hosts being
 	// read as failures because the product didn't know their lifecycle state.
-	PowerState          string            `json:"power_state,omitempty"`
+	PowerState string `json:"power_state,omitempty"`
 	// Network context (cloud-network-overview P0, design §5): the VPC/VNet is
 	// the segregation axis — every component carries it where it has one;
 	// subnets localize a fault within the VPC.
@@ -168,22 +168,22 @@ type CloudResource struct {
 	// links are discoverable rather than assumed.
 	AttachedVpcIDs  []string `json:"attached_vpc_ids,omitempty"`
 	AttachedRegions []string `json:"attached_regions,omitempty"`
-	Owner               string            `json:"owner,omitempty"`
-	Env                 string            `json:"env,omitempty"`
-	AppID               string            `json:"app_id,omitempty"`
-	AppName             string            `json:"app_name,omitempty"`
+	Owner           string   `json:"owner,omitempty"`
+	Env             string   `json:"env,omitempty"`
+	AppID           string   `json:"app_id,omitempty"`
+	AppName         string   `json:"app_name,omitempty"`
 	// Inferred* carry the built-in service-mapping guess written by the poller
 	// (service_infer.py) when the resource has no app tag: the service name, its
 	// confidence ("strong"|"suspected"|"weak"), and a human basis. Optional —
 	// absent when nothing could be inferred. The resolver consumes these to
 	// attribute the untagged fleet; reports surface them as "(inferred)".
-	InferredService           string `json:"inferred_service,omitempty"`
-	InferredServiceConfidence string `json:"inferred_service_confidence,omitempty"`
-	InferredServiceBasis      string `json:"inferred_service_basis,omitempty"`
-	DiscoveredAt        time.Time         `json:"discovered_at"`
-	LastSeenAt          time.Time         `json:"last_seen_at"`
-	Source              Source            `json:"source"`
-	Confidence          Confidence        `json:"confidence"`
+	InferredService           string     `json:"inferred_service,omitempty"`
+	InferredServiceConfidence string     `json:"inferred_service_confidence,omitempty"`
+	InferredServiceBasis      string     `json:"inferred_service_basis,omitempty"`
+	DiscoveredAt              time.Time  `json:"discovered_at"`
+	LastSeenAt                time.Time  `json:"last_seen_at"`
+	Source                    Source     `json:"source"`
+	Confidence                Confidence `json:"confidence"`
 }
 
 // AppResourceEdge is an app→resource relationship (the dependency/seam graph).

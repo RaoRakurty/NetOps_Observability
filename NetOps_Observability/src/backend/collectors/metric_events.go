@@ -41,12 +41,12 @@ type MetricEvent struct {
 	CollectionPath string `json:"collection_path"` // "snmp_poll"
 
 	// Identity.
-	Device  string `json:"device"`            // operator-assigned device id
-	Vendor  string `json:"vendor,omitempty"`  // resolved from sysObjectID
-	IfName  string `json:"if_name,omitempty"` // interface families only
+	Device  string `json:"device"`             // operator-assigned device id
+	Vendor  string `json:"vendor,omitempty"`   // resolved from sysObjectID
+	IfName  string `json:"if_name,omitempty"`  // interface families only
 	IfAlias string `json:"if_alias,omitempty"` // operator circuit ID (ifAlias), if set
-	Index   string `json:"index,omitempty"`   // table row index (ifIndex / scalar)
-	Peer    string `json:"peer,omitempty"`    // BGP families: remote peer address
+	Index   string `json:"index,omitempty"`    // table row index (ifIndex / scalar)
+	Peer    string `json:"peer,omitempty"`     // BGP families: remote peer address
 
 	// Signal.
 	SignalFamily string  `json:"signal_family"` // interface | bgp | device_resource
