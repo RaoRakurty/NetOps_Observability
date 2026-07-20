@@ -15,16 +15,17 @@ import (
 // gqlgen + its generated boilerplate into the scaffold.
 //
 // To replace this with a real implementation:
-//   1. `go get github.com/graph-gophers/graphql-go`
-//   2. Define a schema in src/backend/schema.graphql
-//   3. Implement resolvers and swap this handler out for graphql.Handler.
+//  1. `go get github.com/graph-gophers/graphql-go`
+//  2. Define a schema in src/backend/schema.graphql
+//  3. Implement resolvers and swap this handler out for graphql.Handler.
 //
 // Until then, the supported operations are:
-//   query devices         -> []Device
-//   query alerts          -> []Alert
-//   query findings        -> []Finding (from ClickHouse)
-//   query health          -> Health
-//   query  __schema       -> a static schema-introspection blob
+//
+//	query devices         -> []Device
+//	query alerts          -> []Alert
+//	query findings        -> []Finding (from ClickHouse)
+//	query health          -> Health
+//	query  __schema       -> a static schema-introspection blob
 type gqlRequest struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables,omitempty"`

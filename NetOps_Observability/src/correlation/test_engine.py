@@ -111,7 +111,7 @@ def test_shared_vantage_is_not_topology_grounding():
     nodes = build_nodes((
         sig("probe_loss", EntityType.PATH, "prober->nginx",
             observer="prober", modality=ModalityClass.ACTIVE_PROBE),
-        sig("probe_loss", EntityType.PATH, "prober->10.70.245.120", offset_s=5,
+        sig("probe_loss", EntityType.PATH, "prober->192.0.2.120", offset_s=5,
             observer="prober", modality=ModalityClass.ACTIVE_PROBE),
     ))
     edges, gap_hints = build_edges(nodes, (), EngineConfig())
@@ -159,7 +159,7 @@ def test_chronic_condition_corroborates_recent_overlapping_partner():
 
 _DIA_SEAM = SeamView(
     seam_id="sm-dia", tenant_id="", seam_type="DIA",
-    endpoints=(("on_prem", "172.40.40.52"), ("probe_target", "10.70.245.120")),
+    endpoints=(("on_prem", "172.40.40.52"), ("probe_target", "192.0.2.120")),
     control_plane_owner="isp",
 )
 
@@ -169,8 +169,8 @@ def _probe(off: float) -> Signal:
         tenant_id="", ts=T0 + timedelta(seconds=off), source=Source.PROBE, kind="probe_loss",
         observer=Observer(observer_id="prober", observer_type=ObserverType.VANTAGE_AGENT),
         modality_class=ModalityClass.ACTIVE_PROBE, entity_type=EntityType.PATH,
-        entity_id="prober->10.70.245.120", severity=Severity.CRIT, native_id=f"p|{off}",
-        entity_tokens=("prober", "10.70.245.120"),
+        entity_id="prober->192.0.2.120", severity=Severity.CRIT, native_id=f"p|{off}",
+        entity_tokens=("prober", "192.0.2.120"),
     )
     # As classify_probe would stamp a TRUSTED customer-path probe (confirm-capable).
     s.attrs.update(probe_authority="high", probe_scope="customer_path", agent_host="prober")
@@ -180,10 +180,10 @@ def _probe(off: float) -> Signal:
 def _bgp(off: float) -> Signal:
     return Signal(
         tenant_id="", ts=T0 + timedelta(seconds=off), source=Source.TRAP, kind="bgp_adjacency_change",
-        observer=Observer(observer_id="10.70.245.120", observer_type=ObserverType.DEVICE),
+        observer=Observer(observer_id="192.0.2.120", observer_type=ObserverType.DEVICE),
         modality_class=ModalityClass.CONTROL_PLANE, entity_type=EntityType.DEVICE,
-        entity_id="10.70.245.120:192.168.100.5", severity=Severity.CRIT, native_id=f"b|{off}",
-        entity_tokens=("10.70.245.120", "192.168.100.5"),
+        entity_id="192.0.2.120:192.168.100.5", severity=Severity.CRIT, native_id=f"b|{off}",
+        entity_tokens=("192.0.2.120", "192.168.100.5"),
     )
 
 
@@ -196,7 +196,7 @@ def test_dia_egress_corroborated_confirms_via_probe_and_control_plane():
     still never confirms (covered by verdicts tests)."""
     sigs = (_probe(30), _probe(60), _bgp(0), _bgp(300), _bgp(600))
     snaps = run_window(sigs, builtin_catalog(), (_DIA_SEAM,), EngineConfig())
-    objs = [s for s in snaps if any(n.entity_id == "prober->10.70.245.120" for n in s.nodes)]
+    objs = [s for s in snaps if any(n.entity_id == "prober->192.0.2.120" for n in s.nodes)]
     assert len(objs) == 1, f"probe + bgp must form ONE object, got {len(snaps)} snapshots"
     r = objs[0].ranking
     assert r.top_hypothesis == "sig.ent.middle-mile.dia-egress-corroborated", r.top_hypothesis

@@ -26,8 +26,8 @@ import (
 	"netops/backend/alerts"
 	"netops/backend/collectors"
 	"netops/backend/integration"
-	"netops/backend/nms"
 	"netops/backend/models"
+	"netops/backend/nms"
 	"netops/backend/notify"
 	"netops/backend/reports"
 )
@@ -80,73 +80,73 @@ type server struct {
 	wanNeighbors func(context.Context) ([]collectors.LLDPNeighbor, error)
 	// vmRangeRaw is an optional test seam for the WAN sparkline range query
 	// (query → device+ifName → value series). nil in prod = real VM query_range.
-	vmRangeRaw          func(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error)
-	reports             *reportScheduler
-	reportPipeline      *reportPipeline // async PG-backed pipeline (nil on file backend)
-	incidents           incidentsRepo   // incident system of record (nil on file backend)
-	incMetrics          *incidentMetrics
-	ticketing           ticketingStore           // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	vmRangeRaw     func(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error)
+	reports        *reportScheduler
+	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
+	incidents      incidentsRepo   // incident system of record (nil on file backend)
+	incMetrics     *incidentMetrics
+	ticketing      ticketingStore // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	// ticketing invariant/contract counters (exposed on /metrics): enable attempts
 	// rejected by the one-enabled-policy rule, fail-closed holds on a violated
 	// invariant, and manual actions redirected off a merged object.
 	tktPolicyConflicts    atomic.Int64
 	tktPolicyMultiEnabled atomic.Int64
 	tktMergedRedirects    atomic.Int64
-	seams               *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services            *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn           cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
-	cloudBroker         *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
-	workloadIssuer      *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
-	cloudIngestInv      *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
-	cloudSourceStatus   *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology            topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline    incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	incidentTimeMetrics incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	aiFeedback          aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
-	applications        applicationStore         // Application Identification registry #81 P0 (in-memory or pg)
-	appCatalog          *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
-	ngfw                *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
-	fusion              *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
-	appOverrides        appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
-	cloud               cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
-	bizServices         *pgBusinessServiceStore  // Business Service mapping + manual overrides #0024 (nil on file backend)
-	cloudApp            *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
+	seams                 *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services              *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn             cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker           *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer        *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
+	cloudIngestInv        *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
+	cloudSourceStatus     *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
+	topology              topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline      incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	aiFeedback            aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	applications          applicationStore         // Application Identification registry #81 P0 (in-memory or pg)
+	appCatalog            *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
+	ngfw                  *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	fusion                *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
+	appOverrides          appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
+	cloud                 cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	bizServices           *pgBusinessServiceStore  // Business Service mapping + manual overrides #0024 (nil on file backend)
+	cloudApp              *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
 	// the ordered LAN→SD-WAN→carrier/cloud→application RCA spine. pathGraph is the
 	// storage (PG registries + CH observation/hop streams, or in-memory on the file
 	// backend); pathFacts and corrPath are the DI seams for the §3 fact base and the
 	// correlation→path linkage (nil = the real inventories / ClickHouse).
-	pathGraph           pathGraphStore
-	pathFacts           pathFactSource
-	corrPath            corrPathRef
-	remotePaths         *remotePathStore // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations        *integrationStore        // integration-platform persistence (nil on file backend)
-	providers           *integration.Registry    // inbound provider translators (registry)
-	nms                 *nmsRuntime              // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	intMetrics          *integrationMetrics      // integration-platform Prometheus counters
-	vault               *Vault                   // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv              *tlsServer               // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	exportPolicy        *exportPolicyStore       // runtime-tunable log-export limits
-	exportLimiter       *tenantRateLimiter       // per-tenant export rate limit
-	copilotLimiter      *tenantRateLimiter       // per-principal copilot rate limit (SR-021)
-	aiToolBudget        *aiDailyBudget           // per-tenant daily token budget for the agent loop (P2, LLM04)
-	copilotCfg          *copilotConfigStore
-	aiTenantCfg         *aiTenantConfigStore // per-tenant AI entitlement + BYO provider key (P4a)
-	displayPrefs        *tenantDisplayStore  // per-tenant display prefs (Wave 4 #11: time display)
-	verifyCfg           *verifyConfigStore   // spec #8: per-tenant active-verification opt-in + SSH credential
-	verifyRuns          *verifyRunStore      // spec #8: latest verification run per case (bounded)
-	verifyLimiter       *tenantRateLimiter   // spec #8: manual-verify per-tenant rate limit
-	governance          *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
-	cloudSLOs           *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
-	cloudMonitors       *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
-	rcaPromotions       *rcaPromotionStore   // manual RCA-document promotions, tenant-keyed (#113 point 3)
-	rcaActionItems      *rcaActionItemStore  // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
-	rcaRevisions        *rcaRevisionStore    // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	portStore           portStore            // Port Intelligence physical-layer store (#94)
-	netboxCfg           *netboxConfigStore    // NetBox source-of-truth discovery config
-	discoveryCfg        *discoveryConfigStore // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync          *netboxSyncer         // reconciles discovered devices INTO NetBox (write-through)
-	vulns               *vulnFeed             // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	pathGraph      pathGraphStore
+	pathFacts      pathFactSource
+	corrPath       corrPathRef
+	remotePaths    *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
+	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
+	providers      *integration.Registry // inbound provider translators (registry)
+	nms            *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
+	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	exportPolicy   *exportPolicyStore    // runtime-tunable log-export limits
+	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
+	copilotLimiter *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
+	aiToolBudget   *aiDailyBudget        // per-tenant daily token budget for the agent loop (P2, LLM04)
+	copilotCfg     *copilotConfigStore
+	aiTenantCfg    *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
+	displayPrefs   *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
+	verifyCfg      *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
+	verifyRuns     *verifyRunStore        // spec #8: latest verification run per case (bounded)
+	verifyLimiter  *tenantRateLimiter     // spec #8: manual-verify per-tenant rate limit
+	governance     *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
+	cloudSLOs      *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
+	cloudMonitors  *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
+	rcaPromotions  *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
+	rcaActionItems *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
+	rcaRevisions   *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	portStore      portStore              // Port Intelligence physical-layer store (#94)
+	netboxCfg      *netboxConfigStore     // NetBox source-of-truth discovery config
+	discoveryCfg   *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync     *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)
+	vulns          *vulnFeed              // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -529,8 +529,8 @@ func newServer() *server {
 	// Platform workload OIDC issuer (Wave 4 #13): minted federated assertions
 	// when CLOUD_WORKLOAD_ISSUER_URL is set; dormant (env-token fallback) otherwise.
 	srv.bootstrapWorkloadIssuer(vault, os.Getenv("CLOUD_WORKLOAD_ISSUER_URL"))
-	srv.cloudIngestInv = newCloudIngestInventory() // per-tenant ingestion (Wave 1 #2)
-	srv.cloudSourceStatus = newCloudSourceStatusStore() // poller-reported source errors (Wave 2 #4)
+	srv.cloudIngestInv = newCloudIngestInventory()          // per-tenant ingestion (Wave 1 #2)
+	srv.cloudSourceStatus = newCloudSourceStatusStore()     // poller-reported source errors (Wave 2 #4)
 	srv.topology = newTopologyStore()                       // persistent topology graph (#77); reconciler starts in main()
 	srv.incidentTimeline = newIncidentTimelineStore()       // RCA Time Intelligence manual lifecycle events (#84)
 	srv.incidentTimeMetrics = newIncidentTimeMetricsStore() // RCA Time Intelligence backfilled snapshots (#84); ticker starts in main()
@@ -785,6 +785,17 @@ func main() {
 	srv.startCredCacheReload(ctx)
 	srv.startTopologyReconciler(ctx)          // #77: keep the persistent topology graph fresh
 	srv.startIncidentTimeMetricsBackfill(ctx) // #84: persist phase-metric snapshots (incl. seam_type)
+	// ── #69 P2 (one contiguous block): service flow rollup + PBH V1 baselines ──
+	// Both opt-in + default-off. The rollup worker materializes per-service
+	// per-minute flow attribution WITHOUT an MV over the policy-protected flows
+	// table (svc_rollup_worker.go); the baseline precompute feeds the
+	// hour-of-week tier of the path-health cascade (path_health_baselines.go).
+	if os.Getenv("FEATURE_SVC_FLOW_ROLLUP") == "true" {
+		srv.startSvcFlowRollup(ctx)
+	}
+	if os.Getenv("FEATURE_PATH_BASELINES") == "true" {
+		srv.startPathBaselinePrecompute(ctx)
+	}
 
 	mux := http.NewServeMux()
 	srv.routes(mux)
@@ -966,8 +977,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
-	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)        // tenant-scoped episode list
-	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction)  // POST {id}/(ack|assign|mute|snooze|notes)
+	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)       // tenant-scoped episode list
+	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction) // POST {id}/(ack|assign|mute|snooze|notes)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
@@ -976,7 +987,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/automation/netbox/sync", s.handleNetboxSync) // GET status / POST reconcile-now
 	mux.HandleFunc("/api/logs/search", s.handleLogsSearch)
 	mux.HandleFunc("/api/logs/indices", s.handleLogsIndices)
-	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention) // retention floor: oldest visible log + exact total (tenant-scoped)
+	mux.HandleFunc("/api/logs/retention", s.handleLogsRetention)    // retention floor: oldest visible log + exact total (tenant-scoped)
 	mux.HandleFunc("/api/logs/export", s.handleLogsExport)          // Mode B: whole result set (sync/async)
 	mux.HandleFunc("/api/logs/export/rows", s.handleLogsExportRows) // Mode A: selected/loaded rows
 	mux.HandleFunc("/api/exports/view/", s.handleExportView)        // token-authenticated (public)
@@ -1033,7 +1044,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/correlations", s.handleCorrelations)
 	mux.HandleFunc("/api/correlations/stats", s.handleCorrelationStats)                       // exact path wins over the prefix below
 	mux.HandleFunc("/api/correlations/summary", s.handleCorrelationsSummary)                  // true window counts (total / tier / state) behind the page's stat chips
-	mux.HandleFunc("/api/correlations/rca-reports", s.handleRcaReportsLibrary)               // #113 point 3: the management library — promoted real outages only (exact path wins over the /api/correlations/ prefix)
+	mux.HandleFunc("/api/correlations/rca-reports", s.handleRcaReportsLibrary)                // #113 point 3: the management library — promoted real outages only (exact path wins over the /api/correlations/ prefix)
 	mux.HandleFunc("/api/correlations/undetermined-frequency", s.handleUndeterminedFrequency) // #80 signature-governance: ranked recurring undetermined gap-shapes
 	mux.HandleFunc("/api/correlations/", s.handleCorrelationByID)
 	// Service Path Graph (frozen contract §7): GET /api/rca/{correlation_id}/path —
@@ -1052,6 +1063,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/applications", s.handleApplications)
 	mux.HandleFunc("/api/applications/", s.handleApplicationByID)
 	mux.HandleFunc("/api/appid/resolve", s.handleAppIDResolve)
+	mux.HandleFunc("/api/appid/resolve/batch", s.handleAppIDResolveBatch) // #81 P3G client-side enrichment primitive
 	mux.HandleFunc("/api/appid/status", s.handleAppIDStatus)
 	mux.HandleFunc("/api/appid/fusion/status", s.handleFusionStatus)
 	mux.HandleFunc("/api/appid/catalog", s.handleAppIDCatalog)
@@ -1082,7 +1094,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cloud/security", s.handleCloudSecurity)
 	mux.HandleFunc("/api/cloud/provider-events", s.handleCloudProviderEvents)
 	mux.HandleFunc("/api/cloud/seam-telemetry", s.handleCloudSeamTelemetry)
-	mux.HandleFunc("/api/cloud/costs", s.handleCloudCosts) // daily provider-billed cost records (Wave 5 #18)
+	mux.HandleFunc("/api/cloud/costs", s.handleCloudCosts)                          // daily provider-billed cost records (Wave 5 #18)
 	mux.HandleFunc("/api/cloud/investigations/", s.handleCloudInvestigationChanges) // {id}/changes — change→incident correlation (Wave 4 #12)
 	mux.HandleFunc("/api/cloud/service-map", s.handleCloudServiceMap)
 	// Cloud metric charts (Wave 5 #14 slice 1): bounded VM query_range over the

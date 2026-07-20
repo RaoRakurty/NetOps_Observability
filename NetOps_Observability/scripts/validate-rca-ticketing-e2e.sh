@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # validate-rca-ticketing-e2e.sh — exercise the RCA auto-ticketing CREATE leg (#78)
-# end-to-end against the running stack and the bundled mock ServiceNow.
+# AND the INBOUND state-sync leg (#84) end-to-end against the running stack and
+# the bundled mock ServiceNow.
 #
 # It proves the WHOLE path on real data (not a unit): a live correlation object →
 # the policy sweeper → the outbox → the worker → a REAL HTTP create → the mock's
@@ -9,6 +10,11 @@
 # permissive policy so a real suspected/confirmed object tickets deterministically,
 # waits for the sweeper+worker, then asserts an INC landed with the right
 # correlation_id + u_correlix_* fields.
+#
+# It then closes the loop the other way: it PATCHes the mock incident as a
+# "human" would in ServiceNow (In Progress → Resolved) and asserts the inbound
+# state syncer (RCA_TICKETING_INBOUND_INTERVAL, 45s default) appends the
+# acknowledged/resolve phases to the ticket audit and advances the link status.
 #
 # Prereqs (see deployment/docker/mock-servicenow/README.md):
 #   docker compose --profile mock-snow up -d --build mock-servicenow
@@ -130,8 +136,61 @@ STATUS="$(curl -fsS -m 10 "${AUTH[@]}" "$BASE_URL/api/correlations/$CORR/tickets
 STATE="$(printf '%s' "$STATUS" | jget "['status']['state']" 2>/dev/null || echo unknown)"
 NUM="$(printf '%s' "$STATUS" | jget "['status'].get('ticket_number','')" 2>/dev/null || echo '')"
 [ "$STATE" = "open" ] || [ "$STATE" = "updated" ] || die "ticket link state=$STATE (expected open/updated). $STATUS"
-ok "ticket link state=$STATE number=$NUM — the loop is closed end-to-end"
+ok "ticket link state=$STATE number=$NUM — the create leg is closed end-to-end"
+
+# ── 6. inbound leg: a "human" moves the ticket to In Progress in ServiceNow ────
+SYS_ID="$(printf '%s' "$SNAP" | jget "['incidents'][0]['sys_id']")"
+[ -n "$SYS_ID" ] || die "no sys_id in mock snapshot"
+
+# audit_has <action> — succeeds when the correlation's ticket audit holds an ok
+# row for <action> (the inbound syncer appends them with actor servicenow:sync).
+audit_has() {
+  curl -fsS -m 10 "${AUTH[@]}" "$BASE_URL/api/correlations/$CORR/tickets" 2>/dev/null \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);sys.exit(0 if any(e.get("action")==sys.argv[1] and e.get("result")=="ok" for e in d.get("audit") or []) else 1)' "$1" 2>/dev/null
+}
+
+say "Inbound leg: PATCHing mock incident $SYS_ID → In Progress (state=2 + work_start)"
+curl -fsS -m 10 -u "$MOCK_USER:$MOCK_PASS" -X PATCH \
+  "$MOCK_INSPECT_URL/api/now/table/incident/$SYS_ID" \
+  -H 'Content-Type: application/json' \
+  -d "{\"state\":\"2\",\"work_start\":\"$(date -u '+%Y-%m-%d %H:%M:%S')\"}" >/dev/null
+
+say "Waiting up to ${TIMEOUT}s for the inbound sync (RCA_TICKETING_INBOUND_INTERVAL, 45s default) to observe acknowledged…"
+deadline=$(( $(date +%s) + TIMEOUT ))
+until audit_has acknowledged; do
+  [ "$(date +%s)" -lt "$deadline" ] || die "acknowledged phase not observed within ${TIMEOUT}s — check: docker compose logs api | grep 'inbound'"
+  printf '  … %ds elapsed, waiting for acknowledged\n' "$(( $(date +%s) - (deadline - TIMEOUT) ))"
+  sleep 8
+done
+ok "acknowledged phase appended by the inbound sync"
+
+# ── 7. inbound leg: resolve in ServiceNow → resolve phase + link advances ──────
+say "PATCHing mock incident $SYS_ID → Resolved (state=6 + resolved_at)"
+curl -fsS -m 10 -u "$MOCK_USER:$MOCK_PASS" -X PATCH \
+  "$MOCK_INSPECT_URL/api/now/table/incident/$SYS_ID" \
+  -H 'Content-Type: application/json' \
+  -d "{\"state\":\"6\",\"resolved_at\":\"$(date -u '+%Y-%m-%d %H:%M:%S')\"}" >/dev/null
+
+say "Waiting up to ${TIMEOUT}s for the resolve phase + link advance…"
+deadline=$(( $(date +%s) + TIMEOUT ))
+until audit_has resolve; do
+  [ "$(date +%s)" -lt "$deadline" ] || die "resolve phase not observed within ${TIMEOUT}s — check: docker compose logs api | grep 'inbound'"
+  printf '  … %ds elapsed, waiting for resolve\n' "$(( $(date +%s) - (deadline - TIMEOUT) ))"
+  sleep 8
+done
+# The link advance lands in the same sync pass as the resolve row; poll briefly
+# in case we read between the audit append and the link write.
+deadline=$(( $(date +%s) + 30 ))
+STATE=unknown
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  STATUS="$(curl -fsS -m 10 "${AUTH[@]}" "$BASE_URL/api/correlations/$CORR/tickets" 2>/dev/null || echo '{}')"
+  STATE="$(printf '%s' "$STATUS" | jget "['status']['state']" 2>/dev/null || echo unknown)"
+  [ "$STATE" = "resolved" ] && break
+  sleep 3
+done
+[ "$STATE" = "resolved" ] || die "ticket link state=$STATE (expected resolved after inbound sync)"
+ok "resolve phase appended and link status advanced to resolved"
 
 echo
-ok "PASS — RCA → ServiceNow create leg validated live against the mock."
+ok "PASS — RCA → ServiceNow create AND inbound state-sync legs validated live against the mock."
 echo "  Re-run with --teardown to disable the connection + remove the policy."

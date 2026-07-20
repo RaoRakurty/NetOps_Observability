@@ -52,7 +52,7 @@ func TestChTenantScope(t *testing.T) {
 
 // TestCorrRowPoliciesStrict is the regression lock for the 2026-07-17 security
 // fix: the boot-convergence path must NEVER emit the lenient untagged-shared
-// escape (`tenant_id = ''`) for any correlation-family (corr_*) or path graph
+// escape (`tenant_id = ”`) for any correlation-family (corr_*) or path graph
 // (path_*) row policy — untagged correlation intel is platform-only, and the
 // lenient clause would leak platform-global rows into every tenant's view.
 // It asserts over the ACTUAL DDL strings the boot path executes.

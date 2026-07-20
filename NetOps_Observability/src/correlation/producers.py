@@ -766,7 +766,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
     # Go receiver's G2a — source-IP/sysName/agent-addr — and, when that fails, by the
     # caller's C7.1 EntityResolver). We deliberately do NOT fall back to the raw source
     # IP (ev["host"]): a NAT-collapsed source would otherwise form a PHANTOM device
-    # (e.g. "10.70.245.120:Ethernet1") that never correlates with the real device's
+    # (e.g. "192.0.2.120:Ethernet1") that never correlates with the real device's
     # metrics/syslog. An unattributed trap stays searchable in OpenSearch but is not an
     # RCA signal — the same honesty guardrail as an unclassified trap.
     device = str(ev.get("device") or "")

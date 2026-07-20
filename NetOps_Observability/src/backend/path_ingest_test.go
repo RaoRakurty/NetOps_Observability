@@ -329,7 +329,7 @@ func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
 				"a_name": "netops-lab-edge", "b_host": "aws-app-host-01", "b_public_ip": "100.21.102.86"}},
 		{SeamID: "sm-azure", SeamType: "VPN", State: "active",
 			Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.61.2.10",
-				"probe_target": "10.70.245.120"}},
+				"probe_target": "192.0.2.120"}},
 	})
 	awsPath := map[string]bool{"172.40.40.1": true, "10.70.245.122": true, "10.60.1.10": true, "10.60.10.10": true}
 	if id, tr := si.transformAt("10.70.245.122", awsPath); id != "sm-aws" || tr != pathgraph.TransformTunnelIngress {
@@ -347,7 +347,7 @@ func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
 		t.Fatalf("ambiguous shared edge = {%s %s}, want NO seam", id, tr)
 	}
 	// probe_target / names must not have been indexed as seam endpoints.
-	if id, _ := si.transformAt("10.70.245.120", map[string]bool{"10.70.245.120": true}); id != "" {
+	if id, _ := si.transformAt("192.0.2.120", map[string]bool{"192.0.2.120": true}); id != "" {
 		t.Fatalf("probe_target was indexed as a seam endpoint (%s)", id)
 	}
 	if id, _ := si.transformAt("100.21.102.86", awsPath); id != "sm-aws" {

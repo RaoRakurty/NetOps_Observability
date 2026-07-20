@@ -738,3 +738,101 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_cloud_costs ON netops.cloud_costs
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- #69 P2 — service flow attribution rollup (front-page.md §3).
+--
+-- MIRRORED IN src/backend/svc_rollup_schema.go (converged on every API boot).
+-- Written by the Go svc-rollup worker (svc_rollup_worker.go), NOT by a
+-- materialized view: netops.flows carries a tenant row policy, and an MV that
+-- reads a policy table re-evaluates the policy on INSERT and breaks ingestion
+-- (the removed flows_hourly regression above). The worker scans closed minutes
+-- per tenant with that tenant's own scope + device-address bounds, so no rollup
+-- row ever mixes tenants.
+--
+-- selector_version stamps WHICH selector version attributed the row (§3.3:
+-- selector edits never rewrite history; a backfill inserts NEW rows under the
+-- new version and readers resolve latest-version-wins per minute). rolled_by
+-- distinguishes the live roller ('live' — the idempotency checkpoint is
+-- max(minute) of these rows) from explicit audited backfills ('backfill').
+-- seam_id is '' until flows carry seam attribution (#68) — honest, not faked.
+-- service_id is Nullable from day one (§3.2: Phase-1 heuristic rows may carry
+-- NULL); it sits in the sort key, hence allow_nullable_key.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.svc_flow_rollup_1m
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    minute           DateTime,                          -- minute bucket (UTC)
+    service_id       Nullable(UUID),
+    selector_version UInt32,                            -- 0 = heuristic attribution
+    seam_id          LowCardinality(String) DEFAULT '', -- '' until seam attribution lands (#68)
+    rolled_by        LowCardinality(String) DEFAULT 'live',  -- live | backfill
+    bytes            UInt64,
+    packets          UInt64,
+    flows            UInt64
+)
+ENGINE = SummingMergeTree((bytes, packets, flows))
+PARTITION BY (tenant_id, toYYYYMMDD(minute))
+ORDER BY (tenant_id, minute, service_id, selector_version, seam_id, rolled_by)
+TTL minute + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1, allow_nullable_key = 1;
+
+-- STRICT: attributed per-service traffic is tenant data — untagged rows are
+-- PLATFORM-ONLY, never shared into every tenant's view.
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_svc_flow_rollup_1m ON netops.svc_flow_rollup_1m
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- Path Behavior Health V1 — hour-of-week baseline precompute
+-- (path-behavior-health.md §9; tier-2 "this path at this time of week").
+--
+-- MIRRORED IN src/backend/path_health_baselines.go (converged on every boot).
+-- Written by the path-baseline precompute worker (FEATURE_PATH_BASELINES) from
+-- the same VictoriaMetrics probe series /api/paths/health scores against.
+-- Rows are keyed by the dst-host path key that endpoint uses. route_fingerprint
+-- is '' on every row today: tier-1 (route-conditioned hour baselines) has no
+-- honest source yet — VM probe series carry no route label, and traceroute
+-- observations do not carry the probe RTT stream — so only the path_hour tier
+-- is populated (documented honest subset). sample_count is the bucket's own
+-- sample count (readiness gate); samples_total is the path's whole-window count
+-- (confidence input).
+--
+-- STRICT row policy (the netops.path_* family rule): untagged precompute rows
+-- are platform-only at the DB layer. The tier-2 reader in the Go API fetches
+-- them at an explicit platform scope hard-bounded to tenant_id='' rows — pure
+-- derivations of the same unlabelled VM probe series /api/paths/health already
+-- serves, so nothing new is exposed (see path_health_baselines.go).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.path_baselines
+(
+    tenant_id         LowCardinality(String) DEFAULT '',
+    path_id           String,                            -- dst-host path key (path_health_api)
+    route_fingerprint String DEFAULT '',                 -- '' = hour-only row (tier 2); reserved for tier 1
+    hour_of_week      UInt8,                             -- 0..167, Monday 00:00 UTC = 0
+    latency_p50       Float64 DEFAULT 0,
+    latency_p90       Float64 DEFAULT 0,
+    latency_p95       Float64 DEFAULT 0,
+    latency_p99       Float64 DEFAULT 0,
+    jitter_p50        Float64 DEFAULT 0,
+    jitter_p90        Float64 DEFAULT 0,
+    jitter_p95        Float64 DEFAULT 0,
+    jitter_p99        Float64 DEFAULT 0,
+    loss_p50          Float64 DEFAULT 0,
+    loss_p95          Float64 DEFAULT 0,
+    sample_count      UInt32 DEFAULT 0,                  -- samples in THIS hour-of-week bucket
+    samples_total     UInt32 DEFAULT 0,                  -- samples across the whole window for the path
+    window_days       UInt16 DEFAULT 0,
+    computed_at       DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(computed_at)
+PARTITION BY (tenant_id)
+ORDER BY (tenant_id, path_id, route_fingerprint, hour_of_week)
+TTL computed_at + INTERVAL 14 DAY
+SETTINGS index_granularity = 8192;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_baselines ON netops.path_baselines
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;

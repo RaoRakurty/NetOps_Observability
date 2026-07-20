@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, Tunnel } from "../services/api";
+import { useAppNames } from "../services/appNames";
 import { StatStrip, Stat } from "../components/ui";
 import { Group, Panel, MetricTop, MetricStat, BarPanel } from "../components/board/panels";
 import { NocHeader, LiveChip } from "../components/noc";
@@ -83,6 +84,11 @@ function TunnelQuality() {
   );
   const qoeTone = (q: number) => (q >= 8 ? "good" : q >= 5 ? "warn" : "bad");
 
+  // App-name enrichment (#81 P3G): name the tunnel remote endpoints the unified
+  // resolver knows; unresolved remotes render exactly as before.
+  const remoteKeys = useMemo(() => worst.map((t) => t.remote_addr), [worst]);
+  const apps = useAppNames(remoteKeys);
+
   return (
     <>
       <StatStrip>
@@ -102,7 +108,14 @@ function TunnelQuality() {
           <ul className="dm-list">
             {worst.map((t) => (
               <li key={t.id}>
-                <span>{t.local_device || t.id} → {t.remote_device || "—"} <em style={{ color: "var(--fg-subtle)" }}>({t.type})</em></span>
+                <span>
+                  {t.local_device || t.id} → {t.remote_device || "—"} <em style={{ color: "var(--fg-subtle)" }}>({t.type})</em>
+                  {apps[t.remote_addr] && (
+                    <em style={{ color: "var(--fg-subtle)" }} title={`identified by ${apps[t.remote_addr].source}`}>
+                      {" "}· {apps[t.remote_addr].app}
+                    </em>
+                  )}
+                </span>
                 <strong>
                   QoE {num(t.qoe).toFixed(1)} · {num(t.latency_ms).toFixed(0)}ms · loss {num(t.loss_pct).toFixed(1)}%
                 </strong>

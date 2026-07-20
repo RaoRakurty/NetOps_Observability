@@ -26,11 +26,15 @@ import (
 const flowsAppsTopN = 1000
 
 type appFlowRow struct {
-	App   string  `json:"app"`
-	Tier  string  `json:"tier"`  // strongest verdict tier seen across this app's destinations
-	Bytes float64 `json:"bytes"` // sampling-corrected
-	Flows float64 `json:"flows"`
-	Dests int     `json:"dests"` // distinct destination IPs attributed to this app
+	App string `json:"app"`
+	// SrcApp is the SOURCE side's resolved app (#81 P3G): the same resolver run
+	// over src_addr, so app→app conversations surface ("payroll → AWS S3").
+	// "unknown" is first-class here too; "" only for legacy rows with no src col.
+	SrcApp string  `json:"src_app,omitempty"`
+	Tier   string  `json:"tier"`  // strongest verdict tier seen across this app's destinations
+	Bytes  float64 `json:"bytes"` // sampling-corrected
+	Flows  float64 `json:"flows"`
+	Dests  int     `json:"dests"` // distinct destination IPs attributed to this app
 }
 
 func tierRank(t appid.Tier) int {
@@ -44,44 +48,56 @@ func tierRank(t appid.Tier) int {
 	}
 }
 
-// aggregateFlowApps resolves each destination row (cols d=dst_addr, b=bytes,
-// f=flows) to an app via the global catalog, layering any extra signals from
-// extraFor(dst) (operator overrides + the authoritative NGFW app-id), and
-// aggregates by app, strongest-tier-wins, sorted by bytes desc. Pure (no IO;
-// extraFor is an injected lookup) so it is unit-tested without ClickHouse.
-// extraFor may be nil.
-func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(dst string) []appid.Signal) []appFlowRow {
+// aggregateFlowApps resolves each row's destination (col d=dst_addr) AND source
+// (col s=src_addr, when present) to an app via the global catalog, layering any
+// extra signals from extraFor(addr) (operator overrides + the authoritative NGFW
+// app-id + the cloud identity-map), and aggregates by the (dst app, src app)
+// pair, strongest-dst-tier-wins, sorted by bytes desc. Rows without a src col
+// (legacy shape) aggregate exactly as before (pair key with empty src). Pure
+// (no IO; extraFor is an injected lookup) so it is unit-tested without
+// ClickHouse. extraFor may be nil.
+func aggregateFlowApps(rows []map[string]any, cat *appid.Catalog, extraFor func(addr string) []appid.Signal) []appFlowRow {
 	type agg struct {
+		app, srcApp  string
 		bytes, flows float64
-		dests        int
+		dests        map[string]struct{} // distinct destination IPs (rows are src×dst pairs)
 		tier         appid.Tier
 	}
-	byApp := map[string]*agg{}
+	resolve := func(addr string) appid.Verdict {
+		var extra []appid.Signal
+		if extraFor != nil {
+			extra = extraFor(addr)
+		}
+		return cat.ResolveStr(addr, extra...)
+	}
+	byPair := map[string]*agg{}
 	var order []string
 	for _, row := range rows {
 		dst, _ := row["d"].(string)
-		var extra []appid.Signal
-		if extraFor != nil {
-			extra = extraFor(dst)
+		src, _ := row["s"].(string)
+		v := resolve(dst)
+		srcApp := ""
+		if src != "" {
+			srcApp = resolve(src).App // second extraFor pass — the SAME resolver path
 		}
-		v := cat.ResolveStr(dst, extra...)
-		a := byApp[v.App]
+		key := v.App + "\x00" + srcApp
+		a := byPair[key]
 		if a == nil {
-			a = &agg{tier: v.Tier}
-			byApp[v.App] = a
-			order = append(order, v.App)
+			a = &agg{app: v.App, srcApp: srcApp, tier: v.Tier, dests: map[string]struct{}{}}
+			byPair[key] = a
+			order = append(order, key)
 		}
 		a.bytes += asFloat(row["b"])
 		a.flows += asFloat(row["f"])
-		a.dests++
+		a.dests[dst] = struct{}{}
 		if tierRank(v.Tier) > tierRank(a.tier) {
 			a.tier = v.Tier
 		}
 	}
-	out := make([]appFlowRow, 0, len(byApp))
-	for _, app := range order {
-		a := byApp[app]
-		out = append(out, appFlowRow{App: app, Tier: string(a.tier), Bytes: a.bytes, Flows: a.flows, Dests: a.dests})
+	out := make([]appFlowRow, 0, len(byPair))
+	for _, key := range order {
+		a := byPair[key]
+		out = append(out, appFlowRow{App: a.app, SrcApp: a.srcApp, Tier: string(a.tier), Bytes: a.bytes, Flows: a.flows, Dests: len(a.dests)})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Bytes > out[j].Bytes })
 	return out
@@ -103,10 +119,12 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	clause, empty := s.addrTenantClauseFor(claims, "src_addr", "dst_addr")
 	var rows []map[string]any
 	if !empty {
-		sql := "SELECT dst_addr AS d, " +
+		// src_addr rides along (#81 P3G) so the source side resolves too — the
+		// top-N is now the top src×dst pairs by bytes (coverage reports honestly).
+		sql := "SELECT dst_addr AS d, src_addr AS s, " +
 			"sum(bytes*if(sampling_rate=0,1,sampling_rate)) AS b, count() AS f " +
 			"FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND" + clause + " " +
-			"GROUP BY dst_addr ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
+			"GROUP BY dst_addr, src_addr ORDER BY b DESC LIMIT " + intToString(flowsAppsTopN) + " FORMAT JSON"
 		var err error
 		rows, err = s.chRows(r, sql)
 		if err != nil {
@@ -118,17 +136,20 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	cat := s.appCatalog.get()
 	tenant, cross := principalTenant(claims)
 	ov := s.overridesFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
-	extraFor := func(dst string) []appid.Signal {
+	// extraFor layers the non-catalog signals for EITHER side's address (dst and,
+	// since #81 P3G, src): operator prefix overrides, the authoritative NGFW
+	// app-id, and the cloud identity-map (a flow to/from a tagged cloud private
+	// IP resolves to its app instead of "unknown", #81 P3F+1). The catalog itself
+	// is applied inside ResolveStr — not here — so no signal is double-counted.
+	extraFor := func(addr string) []appid.Signal {
 		var extra []appid.Signal
-		if ip, err := netip.ParseAddr(dst); err == nil {
+		if ip, err := netip.ParseAddr(addr); err == nil {
 			extra = append(extra, ov.prefixes.SignalsFor(ip)...)
 		}
-		if sig, has := s.ngfw.signalFor(tenant, cross, dst); has {
+		if sig, has := s.ngfw.signalFor(tenant, cross, addr); has {
 			extra = append(extra, sig)
 		}
-		// cloud inventory identity-map: a flow to a tagged cloud private IP now
-		// resolves to its app instead of "unknown" (#81 P3F+1).
-		if sig, has := s.cloudApp.signalFor(tenant, cross, dst); has {
+		if sig, has := s.cloudApp.signalFor(tenant, cross, addr); has {
 			extra = append(extra, sig)
 		}
 		return extra
@@ -138,9 +159,9 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"apps":  out,
 		"count": len(out),
-		// honest coverage: we resolved the top-N destinations by volume, not every flow.
+		// honest coverage: we resolved the top-N src×dst pairs by volume, not every flow.
 		"coverage": map[string]any{
-			"top_destinations": flowsAppsTopN,
+			"top_pairs":        flowsAppsTopN,
 			"window_seconds":   int(since.Seconds()),
 			"catalog_prefixes": cat.Size(),
 		},

@@ -97,7 +97,7 @@ def test_chaos_fixture_tags_current_row(monkeypatch):
 def test_chaos_fixture_env_parsing():
     assert main._parse_chaos_fixtures("") == {}
     assert main._parse_chaos_fixtures(
-        "lab_probe_storm_fixture_120=10.70.245.120, other=devX"
-    ) == {"10.70.245.120": "lab_probe_storm_fixture_120", "devX": "other"}
+        "lab_probe_storm_fixture_120=192.0.2.120, other=devX"
+    ) == {"192.0.2.120": "lab_probe_storm_fixture_120", "devX": "other"}
     # Malformed pairs are dropped, never crash the engine at import time.
     assert main._parse_chaos_fixtures("oops,=x,name=") == {}

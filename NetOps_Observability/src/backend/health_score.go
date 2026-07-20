@@ -32,6 +32,7 @@ var healthClassWeights = map[string]float64{
 	"path_health":   2.5,
 	"correlation":   2.0,
 	"device_health": 1.5,
+	"flow_health":   1.5, // #69 P2 service scope: passive attributed-volume evidence (svc_health.go)
 }
 
 type healthContribution struct {
@@ -199,15 +200,22 @@ func (s *server) handleHealthScore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
 	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
 	if scope == "" {
 		scope = "global"
 	}
-	if scope != "global" && scope != "site" {
-		writeError(w, http.StatusBadRequest, errors.New("scope must be global or site"))
+	if scope != "global" && scope != "site" && scope != "service" {
+		writeError(w, http.StatusBadRequest, errors.New("scope must be global, site or service"))
+		return
+	}
+	// #69 P2: per-service score — bindings + flow attribution + correlation,
+	// tenant-scoped, same explainable contract (svc_health.go).
+	if scope == "service" {
+		s.serveServiceHealthScore(w, r, claims)
 		return
 	}
 	site := sanitizeCHText(r.URL.Query().Get("id"))
@@ -362,7 +370,17 @@ func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) health
 // excluded so internal self-probes never drive customer health. (Full scope/
 // authority-based exclusion is V1 when probe metrics carry those labels.)
 func (s *server) fetchPathHealthClass(ctx context.Context) healthClassResult {
+	return s.fetchPathHealthClassFiltered(ctx, nil)
+}
+
+// fetchPathHealthClassFiltered is fetchPathHealthClass restricted to an allowed
+// destination set (nil = all paths; empty = none — used by the per-service
+// scope, where only the service's BOUND probes/paths may drive its score).
+func (s *server) fetchPathHealthClassFiltered(ctx context.Context, allow map[string]bool) healthClassResult {
 	res := healthClassResult{Class: "path_health"}
+	if allow != nil && len(allow) == 0 {
+		return res // no bound paths → class honestly not live
+	}
 	internal := map[string]bool{}
 	for _, t := range strings.Split(envOr("HEALTH_INTERNAL_PROBE_TARGETS", ""), ",") {
 		if t = strings.TrimSpace(t); t != "" {
@@ -380,6 +398,9 @@ func (s *server) fetchPathHealthClass(ctx context.Context) healthClassResult {
 	for dst, lat := range curLat {
 		if internal[dst] || internal[hostOnly(dst)] {
 			continue // internal monitoring target — excluded from customer health
+		}
+		if allow != nil && !allow[dst] && !allow[hostOnly(dst)] {
+			continue // not bound to the scoped service
 		}
 		considered++
 		var b float64

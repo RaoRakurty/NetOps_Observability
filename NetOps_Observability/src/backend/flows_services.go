@@ -107,7 +107,9 @@ func buildSelectorCondition(spec map[string]any) (string, bool) {
 		}
 	}
 	if protos := intList(spec["protocols"], 0, 255); len(protos) > 0 {
-		ors = append(ors, "protocol IN ("+joinInts(protos)+")")
+		// netops.flows column is `proto` (goflow2 field name) — `protocol` was a
+		// latent UNKNOWN_IDENTIFIER (#69 P2 fix; svc_rollup_worker reuses this).
+		ors = append(ors, "proto IN ("+joinInts(protos)+")")
 	}
 	if len(ors) == 0 {
 		return "", false

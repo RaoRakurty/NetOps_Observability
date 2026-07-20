@@ -23,11 +23,12 @@ import (
 // official aws-sdk-go-v2 if you want STS, IMDS, profile loading, etc.
 //
 // Required env (read by main.go and passed in here):
-//   AWS_ACCESS_KEY_ID
-//   AWS_SECRET_ACCESS_KEY
-//   AWS_REGION              (e.g. us-east-1)
-//   SNS_PHONE_NUMBERS       comma-separated E.164 numbers
-//   SNS_TOPIC_ARN           optional — publish to a topic instead of phone numbers
+//
+//	AWS_ACCESS_KEY_ID
+//	AWS_SECRET_ACCESS_KEY
+//	AWS_REGION              (e.g. us-east-1)
+//	SNS_PHONE_NUMBERS       comma-separated E.164 numbers
+//	SNS_TOPIC_ARN           optional — publish to a topic instead of phone numbers
 type SNS struct {
 	accessKey string
 	secretKey string

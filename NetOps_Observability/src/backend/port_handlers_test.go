@@ -61,7 +61,9 @@ func TestPortInterfacesTenantScoped(t *testing.T) {
 	// Cross-tenant owner sees all three.
 	w2 := httptest.NewRecorder()
 	s.handlePortInterfaces(w2, portReq(ownerX, "GET", "/api/infrastructure/interfaces"))
-	var all struct{ Total int `json:"total"` }
+	var all struct {
+		Total int `json:"total"`
+	}
 	_ = json.Unmarshal(w2.Body.Bytes(), &all)
 	if all.Total != 3 {
 		t.Fatalf("platform owner must see all 3, got %d", all.Total)
@@ -169,7 +171,9 @@ func TestModuleTypesAndSignatures(t *testing.T) {
 	}
 	w2 := httptest.NewRecorder()
 	s.handlePortSignatureCatalog(w2, portReq(viewerA, "GET", "/api/infrastructure/port-signatures"))
-	var sc struct{ Signatures []map[string]any `json:"signatures"` }
+	var sc struct {
+		Signatures []map[string]any `json:"signatures"`
+	}
 	_ = json.Unmarshal(w2.Body.Bytes(), &sc)
 	if len(sc.Signatures) != 23 {
 		t.Fatalf("expected 23 SP/DC signatures, got %d", len(sc.Signatures))

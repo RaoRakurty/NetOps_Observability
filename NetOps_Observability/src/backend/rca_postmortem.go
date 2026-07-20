@@ -446,11 +446,13 @@ func buildRcaGlossary(rep *rcaReport) []rcaGlossaryEntry {
 	used := map[string]bool{
 		// evidence exists ⇒ the document uses "observed" (symptom lineage, evidence
 		// summary) and the "independent sources" headline.
-		"observed":             rep.Evidence.Observations > 0 || len(rep.Evidence.Symptoms) > 0 || stepState(epistemicObserved),
-		"corroborated":         stepState(epistemicCorroborated),
-		"reported":             stepState(epistemicReported),
-		"inferred":             rep.States.Recovery == "inferred" || impactStatus(impactInferred) || stepState(epistemicInferred),
-		"confirmed":            hasState("confirmed") || anyHyp(func(h rcaHypothesis) bool { return h.ObservationState == "confirmed" || strings.EqualFold(h.Label, "confirmed") }),
+		"observed":     rep.Evidence.Observations > 0 || len(rep.Evidence.Symptoms) > 0 || stepState(epistemicObserved),
+		"corroborated": stepState(epistemicCorroborated),
+		"reported":     stepState(epistemicReported),
+		"inferred":     rep.States.Recovery == "inferred" || impactStatus(impactInferred) || stepState(epistemicInferred),
+		"confirmed": hasState("confirmed") || anyHyp(func(h rcaHypothesis) bool {
+			return h.ObservationState == "confirmed" || strings.EqualFold(h.Label, "confirmed")
+		}),
 		"suspected":            hasState("suspected") || anyHyp(func(h rcaHypothesis) bool { return strings.EqualFold(h.Label, "suspected") }),
 		"contradicted":         rep.CausalChain.PrimaryContradicted || stepState(epistemicContradicted) || anyHyp(func(h rcaHypothesis) bool { return h.Contradicted }),
 		"independent evidence": rep.Evidence.Observations > 0 || rep.Evidence.IndependentSources > 0,

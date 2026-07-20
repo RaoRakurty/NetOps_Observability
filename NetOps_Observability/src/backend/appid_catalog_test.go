@@ -90,3 +90,46 @@ func TestAppCatalogEmptyDirIsSafe(t *testing.T) {
 		t.Fatalf("empty catalog must resolve unknown, got %+v", v)
 	}
 }
+
+// route wiring + auth gate for the batch primitive (#81 P3G): the mounted
+// endpoint resolves catalog-backed IPs over HTTP and rejects anonymous calls.
+func TestAppIDResolveBatchEndpointWiring(t *testing.T) {
+	srv, s := newTestServerState(t)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "aws.json"),
+		[]byte(`{"prefixes":[{"ip_prefix":"52.94.0.0/22","service":"S3"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.appCatalog = &appCatalogHolder{feedsDir: dir}
+	s.appCatalog.cur.Store(appid.NewCatalog(nil))
+	if n, errs := s.appCatalog.reload(); n != 1 || len(errs) != 0 {
+		t.Fatalf("reload: n=%d errs=%v", n, errs)
+	}
+
+	tok := adminToken(t, srv)
+	st, body := do(t, srv, "POST", "/api/appid/resolve/batch", tok,
+		map[string]any{"keys": []string{"52.94.0.9", "8.8.8.8"}})
+	if st != 200 {
+		t.Fatalf("batch status %d: %s", st, body)
+	}
+	var out map[string]struct {
+		App    string `json:"app"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := out["52.94.0.9"]; !ok || v.App != "AWS S3" || v.Source != "ip_catalog" {
+		t.Fatalf("catalog key: %+v (ok=%v)", v, ok)
+	}
+	if _, has := out["8.8.8.8"]; has {
+		t.Fatal("uncatalogued key must be omitted")
+	}
+
+	// anonymous → 401 (audited as a denial by withAudit)
+	if st, _ := do(t, srv, "POST", "/api/appid/resolve/batch", "",
+		map[string]any{"keys": []string{"8.8.8.8"}}); st != 401 {
+		t.Fatalf("no token want 401, got %d", st)
+	}
+}

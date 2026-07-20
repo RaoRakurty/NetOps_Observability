@@ -229,6 +229,54 @@ func (st *pgServiceStore) AddSelector(ctx context.Context, tenant string, cross 
 	return sel, err
 }
 
+// svcSelectorSet is one (tenant, service, latest-selector) attribution unit the
+// rollup worker materializes. Tenant comes from the SERVICE ROW (never a request),
+// so a rollup row can only ever be stamped with its owner's tenant.
+type svcSelectorSet struct {
+	TenantID  string
+	ServiceID string
+	Version   int
+	Spec      map[string]any
+}
+
+// ActiveSelectorSets returns, across ALL tenants (cross-tenant read — background
+// worker only, never exposed over HTTP), the latest selector version of every
+// non-archived service that has at least one selector. Bounded by `limit`
+// (oldest services first, so attribution is stable as the catalog grows).
+func (st *pgServiceStore) ActiveSelectorSets(ctx context.Context, limit int) ([]svcSelectorSet, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	out := make([]svcSelectorSet, 0)
+	err := st.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT s.tenant_id, s.service_id, sel.version, sel.spec
+              FROM services s
+              JOIN LATERAL (SELECT version, spec FROM service_selectors ss
+                             WHERE ss.tenant_id = s.tenant_id AND ss.service_id = s.service_id
+                             ORDER BY version DESC LIMIT 1) sel ON true
+             WHERE s.archived_at IS NULL
+             ORDER BY s.created_at ASC
+             LIMIT $1`, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var set svcSelectorSet
+			var spec []byte
+			if err := rows.Scan(&set.TenantID, &set.ServiceID, &set.Version, &spec); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(spec, &set.Spec); err != nil {
+				return fmt.Errorf("selector %s v%d spec: %w", set.ServiceID, set.Version, err)
+			}
+			out = append(out, set)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 func (st *pgServiceStore) ListBindings(ctx context.Context, tenant string, cross bool, serviceID string) ([]ServiceBinding, error) {
 	out := make([]ServiceBinding, 0)
 	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
@@ -362,6 +410,12 @@ func (s *server) handleServiceByID(w http.ResponseWriter, r *http.Request) {
 	case "":
 		s.serveServiceRoot(w, r, id)
 	case "selectors":
+		// /api/services/{id}/selectors/{version}/backfill → the audited
+		// re-attribution job (#69 §3.3, svc_backfill.go).
+		if len(parts) > 3 && parts[3] == "backfill" {
+			s.serveSelectorBackfill(w, r, id, parts[2])
+			return
+		}
 		s.serveServiceSelectors(w, r, id)
 	case "bindings":
 		bindingID := ""

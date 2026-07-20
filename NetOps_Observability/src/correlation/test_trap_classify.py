@@ -192,7 +192,7 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
         orig = main.cached_entity_resolver_all
         main.cached_entity_resolver_all = lambda: EMPTY_RESOLVER
         try:
-            await main.handle_snmptrap(trap(device="", host="10.70.245.120"))
+            await main.handle_snmptrap(trap(device="", host="192.0.2.120"))
         finally:
             main.cached_entity_resolver_all = orig
         self.assertEqual(main.TRAPS_DROPPED, 1)

@@ -43,7 +43,7 @@ func TestAWSTrailEventURL(t *testing.T) {
 }
 
 func TestAzurePortalURLs(t *testing.T) {
-	arm := "/subscriptions/8d0f8a4e-c36e-4265-821f-d6df48123c24/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01"
+	arm := "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/demo-cloud/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01"
 	if got := azurePortalResourceURL(arm); got != "https://portal.azure.com/#resource"+arm {
 		t.Errorf("azurePortalResourceURL = %q", got)
 	}
@@ -145,7 +145,7 @@ func TestConsoleRefLinks(t *testing.T) {
 		"10.60.10.10":   {Provider: "aws", Region: "us-west-2", ResourceID: "i-0448c046139420a7f"},
 		"correlix-vpn-nat-01": {
 			Provider: "azure", Region: "westus2", ResourceID: "correlix-vpn-nat-01",
-			ResourceURI: "/subscriptions/8d0f8a4e/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
+			ResourceURI: "/subscriptions/00000000/resourceGroups/demo-cloud/providers/Microsoft.Compute/virtualMachines/correlix-vpn-nat-01",
 		},
 		"projects/correlix-lab/zones/us-west1-b/instances/gcp-app-host-01": {
 			Provider: "gcp", Region: "us-west1", AccountID: "correlix-lab",
@@ -227,12 +227,12 @@ func TestConsoleRefLinks(t *testing.T) {
 		// lookupCloudResource case-folds: Activity Log stamps the RG segment in
 		// inconsistent case. The index stores the lowercased URI as an alias.
 		armIdx := map[string]cloud.CloudResource{
-			strings.ToLower("/subscriptions/8d0f/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/vm-1"): {
+			strings.ToLower("/subscriptions/0000/resourceGroups/demo-cloud/providers/Microsoft.Compute/virtualMachines/vm-1"): {
 				Provider: "azure", ResourceID: "vm-1", ResourceName: "vm-1",
-				ResourceURI: "/subscriptions/8d0f/resourceGroups/correlix-faultlab/providers/Microsoft.Compute/virtualMachines/vm-1",
+				ResourceURI: "/subscriptions/0000/resourceGroups/demo-cloud/providers/Microsoft.Compute/virtualMachines/vm-1",
 			},
 		}
-		c, ok := lookupCloudResource(armIdx, "/subscriptions/8d0f/resourceGroups/CORRELIX-FAULTLAB/providers/Microsoft.Compute/virtualMachines/vm-1")
+		c, ok := lookupCloudResource(armIdx, "/subscriptions/0000/resourceGroups/DEMO-CLOUD/providers/Microsoft.Compute/virtualMachines/vm-1")
 		if !ok || c.ResourceID != "vm-1" {
 			t.Fatalf("case-folded ARM lookup failed: ok=%v c=%+v", ok, c)
 		}
@@ -272,7 +272,7 @@ func TestResourceConsoleURL(t *testing.T) {
 		t.Errorf("aws resource url = %q", u)
 	}
 	az := cloud.CloudResource{Provider: "azure", ResourceID: "correlix-app-host-01",
-		ResourceURI: "/subscriptions/8d0f8a4e/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01"}
+		ResourceURI: "/subscriptions/00000000/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/correlix-app-host-01"}
 	if u := resourceConsoleURL(az); !strings.HasPrefix(u, "https://portal.azure.com/#resource/subscriptions/") {
 		t.Errorf("azure resource url = %q", u)
 	}

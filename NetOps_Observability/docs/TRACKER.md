@@ -1,6 +1,6 @@
 # NetOps_Observability — Consolidated Work Tracker
 
-> Branch: `feat/observability-platform` · Last updated: 2026-07-18
+> Branch: `feat/observability-platform` · Last updated: 2026-07-20
 > Single source of truth for remaining work. Reconciled against the git history
 > on this branch and the roadmap memories. Update status here as items land.
 
@@ -36,8 +36,8 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 
 | Stream | Outcome (done-definition) | Bundles | Status |
 |--------|---------------------------|---------|--------|
-| **1 — Close the RCA Loop** | incident → root-cause (evidence) → ONE auto-filed ticket → measured phase timing, end to end | #78 (RCA→ServiceNow) + #84 tails (backfill, seam_type, ITSM phase link) | 🟡 in progress — **#78 create leg CLOSED+LIVE-VALIDATED 2026-06-28**: bundled stdlib mock ServiceNow (`deployment/docker/mock-servicenow/`, opt-in `--profile mock-snow`) + `scripts/validate-rca-ticketing-e2e.sh` drove a real `suspected` corr object → sweeper→outbox→worker→**HTTP create**→`INC0000001`, ticket link `state=open`. Caught+fixed a latent global-tenant policy-miss bug (`tenant_id=""` vs `"global"`; `canonicalCorrTenant`, regression test). **#84 ITSM phase-link DONE+LIVE 2026-06-29**: incident timeline now derives the human-response phases from #78's `ticket_audit_log` via one seam (`ticketAuditToITSMFacts`) — "ticket filed"/"resolved" + `workflowConnected` populate with NO real ServiceNow (validated: `ticket_created` itsm-sourced on a real incident); forward-compatible write-contract so an inbound ServiceNow sync lights up acknowledged/mitigated/… with zero rework. **#84 backfill + seam_type DONE 2026-06-30** (`timeintel_backfill.go` + migration 0017: cross-tenant worker populates `incident_time_metrics` + persisted `seam_type`, ticker + admin endpoint, mem+pg + isolation tests). **#84 rollup snapshot read DONE 2026-07-17**: `/api/reliability/*` now reads persisted `incident_time_metrics` (ListWindow, DB-side window/dedupe/20000 bound; migration 0027 rollup facts) — the 5000 live-scan cap survives only as a disclosed cold-start fallback. **Remaining = the inbound ServiceNow state-sync (full human-phase timing); optional real-PDI** |
-| **2 — App & Service Layer** | app/service health attributed from real flows, with baselines + the App Observability trust pass | #69 P2 (service catalog, svc_flow_rollup, baselines) + #81 P3 + **#81 P3F+1 App Observability Trust & Data Readiness Pass** | 🟡 in progress — **P3F+1 COMPLETE (8/8 phases + gap close, `a620d20`→HEAD)**: scope/freshness/data-mode shell · Ingestion page · readiness strips · evidence categories · App-Detail why-this/why-not · Health timeline · Underlay path strip · Unknowns remediation queue · **Cloud-Resources row drawer · Attribution coverage funnel + by-scope · App-Map structural map · App-Detail Resources tab (all from real inventory)**. Remaining in Stream 2 = #69 P2 service catalog + the flow-dependent appobs surfaces below (👤 pending owner — need cloud telemetry) |
+| **1 — Close the RCA Loop** | incident → root-cause (evidence) → ONE auto-filed ticket → measured phase timing, end to end | #78 (RCA→ServiceNow) + #84 tails (backfill, seam_type, ITSM phase link) | 🟡 in progress — **#78 create leg CLOSED+LIVE-VALIDATED 2026-06-28**: bundled stdlib mock ServiceNow (`deployment/docker/mock-servicenow/`, opt-in `--profile mock-snow`) + `scripts/validate-rca-ticketing-e2e.sh` drove a real `suspected` corr object → sweeper→outbox→worker→**HTTP create**→`INC0000001`, ticket link `state=open`. Caught+fixed a latent global-tenant policy-miss bug (`tenant_id=""` vs `"global"`; `canonicalCorrTenant`, regression test). **#84 ITSM phase-link DONE+LIVE 2026-06-29**: incident timeline now derives the human-response phases from #78's `ticket_audit_log` via one seam (`ticketAuditToITSMFacts`) — "ticket filed"/"resolved" + `workflowConnected` populate with NO real ServiceNow (validated: `ticket_created` itsm-sourced on a real incident); forward-compatible write-contract so an inbound ServiceNow sync lights up acknowledged/mitigated/… with zero rework. **#84 backfill + seam_type DONE 2026-06-30** (`timeintel_backfill.go` + migration 0017: cross-tenant worker populates `incident_time_metrics` + persisted `seam_type`, ticker + admin endpoint, mem+pg + isolation tests). **#84 rollup snapshot read DONE 2026-07-17**: `/api/reliability/*` now reads persisted `incident_time_metrics` (ListWindow, DB-side window/dedupe/20000 bound; migration 0027 rollup facts) — the 5000 live-scan cap survives only as a disclosed cold-start fallback. **✅ STREAM CLOSED 2026-07-20** — inbound ServiceNow state-sync live-validated e2e against the mock: PATCH SN state=2/work_start → `acknowledged`+`mitigation_started` appended by `ticketStateSyncer` (actor `servicenow:sync`), state=6 → `resolve` appended + link advanced `resolved`; `validate-rca-ticketing-e2e.sh` now covers BOTH legs (steps 6–7) and passed clean (`E2E_EXIT=0`). Isolation test `ticketing_inbound_isolation_test.go` shipped. Note for future runs: the e2e needs clean state (fresh mock + no stale links/outbox idempotency rows from prior runs — stale state suppresses re-creation and poisons the poll). Only optional real-PDI validation remains, 👤 owner-gated |
+| **2 — App & Service Layer** | app/service health attributed from real flows, with baselines + the App Observability trust pass | #69 P2 (service catalog, svc_flow_rollup, baselines) + #81 P3 + **#81 P3F+1 App Observability Trust & Data Readiness Pass** | 🟡 in progress — **P3F+1 COMPLETE (8/8 phases + gap close, `a620d20`→HEAD)**: scope/freshness/data-mode shell · Ingestion page · readiness strips · evidence categories · App-Detail why-this/why-not · Health timeline · Underlay path strip · Unknowns remediation queue · **Cloud-Resources row drawer · Attribution coverage funnel + by-scope · App-Map structural map · App-Detail Resources tab (all from real inventory)**. **#69 P2 DONE 2026-07-20** (service catalog + `svc_flow_rollup` CH worker w/ FEATURE_SVC_FLOW_ROLLUP + insert-only versioned backfill (30d cap, `infrastructure:admin`) + tier-2 path-health baselines (tier-1 honestly refused) + `scope=service` health + pg isolation test; also fixed latent `flows_services.go` `protocol IN`→`proto IN` bug). **P3G DONE 2026-07-20** (app-name consumption at Flows/Threat/Quality/events-feed + src-IP resolution via `POST /api/appid/resolve/batch` (cap 200, 16KiB bound) + frontend `appNames.ts` debounce/TTL cache + chips, w/ isolation + UI tests). Remaining in Stream 2 = ONLY the flow-dependent appobs surfaces below (👤 pending owner — need cloud telemetry) |
 
 > **Unified app naming (#81 P3F+1, `92087c6`):** ✅ CAPABILITY COMPLETE — one resolver now names a record from ANY identity it carries (public IP · **private IP/ENI/resource via the cloud identity-map, previously stranded/unconsumed** · domain · NGFW App-ID · operator override), tenant-scoped, fused honestly with "unknown" first-class. Live: "cloud-appid: indexed 35 cloud identity mappings". Applied at `/api/appid/resolve` + `/api/flows/apps`. **Remaining (software, consumption/rendering — folds into P3G where app names are consumed):** render resolved app names at the other read paths (OpenSearch logs search, flow top-talkers/fanout/geo, tunnels, findings, events feed) + source-IP resolution (dst-only today) + ENI/resource-key resolution for cloud logs once ingested.
 >
@@ -48,10 +48,51 @@ BEFORE SCALE → Stream 6 (SaaS hardening)
 > - **App-to-underlay RCA join** (P3D) → real Underlay correlation + the App-Map **suspected_cause / RCA** edges (today preview).
 > - **App Detail → Dependencies tab** → inbound/outbound/cross-region deps (flow-derived; honest "not measured" until P3B).
 > - These are gated on **Stream 5 (cloud ingestion)** / #68 / #70 — i.e. you building the cloud network + connectors.
-| **3 — Path & Topology Completeness** | every hop shows real metrics; no sourceable "—" gaps left | #85 (4 per-hop backend metrics) + #77 polish | ⏳ open — pure software |
+| **3 — Path & Topology Completeness** | every hop shows real metrics; no sourceable "—" gaps left | #85 (4 per-hop backend metrics) + #77 polish | ✅ **STREAM CLOSED 2026-07-20** — `topology_path_trace.go` enriches every hop with real RTT (VM `probe_hop_rtt_ms`), loss (probe-paths store), jitter + provenance; `NetworkPathView` stamp→trace fallback + provenance chips; `PathAnalysisPanel` renders all 4 metric rows; backend+frontend tests green |
 | **4 — Engine Maturation (calibration)** | engine calibrated vs real incident history; grows own signature coverage | #67 P4 (replay calibration) + ~~#80 (undetermined-frequency feed)~~ ✅ | ⏳ later — **#80 feed DONE 2026-06-30** (`corr_undetermined.go`, live); remaining = #67 P4 replay calibration, which needs the incident history Stream 1 generates |
 | **5 — Cloud Expansion** | RCA runs end-to-end into AWS across the seams | #70 (build AWS net) → #68 (ingestion) → #81 cloud-log enrichment | 🅿️ gated on owner building the network |
-| **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) |
+| **6 — SaaS Foundation Hardening** | operator/multi-tenant-grade hardening complete | #16 + #17 + #18 + #33 + #75 + SaaS ingestion one-way-door decision | ⏳ before scale (one deliberate pass) — worked designs SAVED in git: `docs/design/saas-orgs-regions-compliance.md` · `saas-identity-pbac.md` · `org-tenant-model.md` · `provider-org-tenant-ia.md` (owner confirmed park 2026-07-20) |
+
+## 🧭 Owner review 2026-07-20 — fresh execution list (supersedes stream order above)
+
+Owner walked streams 1–6 + packaging; the agreed list:
+
+1. **T1 · Stream 1 finish:** ✅ **DONE 2026-07-20** — inbound state-sync
+   live-validated both legs e2e (create + acknowledged/resolve inbound),
+   `E2E_EXIT=0`. Stream 1 CLOSED; only real-PDI validation 👤 owner-gated.
+2. **T2 · Stream 2, non-live-traffic remainder:** ✅ **DONE 2026-07-20** —
+   #69 P2 (catalog/rollup/backfill/baselines) + P3G app-name consumption
+   shipped with tests. Flow/health-dependent surfaces stay 👤 gated.
+3. **T3 · Stream 3 finish & close:** ✅ **DONE 2026-07-20** — four per-hop
+   metrics + provenance shipped backend→UI. Stream CLOSED.
+4. **T4 · Stream 4:** nothing actionable (#80 ✅; #67 P4 replay calibration
+   needs Stream 1's incident history). Parked with reopen trigger =
+   promoted-incident history exists.
+5. **T5 · Stream 5 re-validation (joint):** AWS/GCP/Azure built + some live
+   traffic already tested; repeat the live test so ALL counters fall
+   correctly. Prep = counter-verification matrix/harness from
+   `docs/design/cloud-provider-parity.md` acceptance drills; rides with the
+   #110 #13 live-connector-validation tail. Owner: cloud hosts/creds up.
+6. **T6 · Stream 6:** parked (designs saved, see stream row above). Revisit
+   before scale.
+7. **T7 · #114 Kubernetes packaging (NEW, below):** confirmed NOT built —
+   single-host compose + VM appliance only today.
+
+Ops note 2026-07-20: disk 89%→76% (8.5G→18G free): pruned superseded 07-17
+bundle gen, merged agent worktrees (5.5G→0.7G), Go-build/staticcheck/pip/ruff
+caches, dangling docker images + removed Prometheus image. Nightly
+bundle-autoupdate (needs 15G) unblocked after 3 skipped nights.
+
+## #114 — Kubernetes deployment packaging (filed 2026-07-20, owner) — ⏳ OPEN
+
+Today customers get single-host artifacts only (compose bundle + first-boot VM
+appliance, #97). No Helm chart / K8s manifests exist (verified 2026-07-20 —
+repo `k8s` hits are correlation fixtures only). Scope when picked up: Helm
+chart over the 19-service stack (StatefulSets for CH/OS/PG/Kafka + PVCs,
+per-service resource requests from `RESOURCE_SIZING.md`/#102, ingress replacing
+the nginx front, secrets from the installer's `.env` contract, air-gapped image
+bundle for k8s registries), CI packaging leg alongside make-installer.sh.
+Sequenced after T1–T3 of the 2026-07-20 list.
 
 ## #113 — RCA quality directive: seam ownership · causality render · creation policy (owner 2026-07-18) — ✅ SHIPPED (all 4 points, 2026-07-18)
 

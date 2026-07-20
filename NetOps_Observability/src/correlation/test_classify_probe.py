@@ -49,7 +49,7 @@ def test_untrusted_measurement_probe_to_customer_is_visible_support(monkeypatch)
     monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", {"nginx"})
     monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
     monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", set())  # conservative default
-    sig = classify("prober->10.70.245.120", "prober")
+    sig = classify("prober->192.0.2.120", "prober")
     # customer_path scope → shown (NOT internal/synthetic); LOW authority → supports
     # but never confirms, and is not debug_only so it stays visible.
     assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value
@@ -63,7 +63,7 @@ def test_trusted_measurement_probe_to_customer_can_confirm(monkeypatch):
     monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
     monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", {"prober"})
     monkeypatch.setattr(main, "_TRUSTED_PROBE_VANTAGE", main.VantageType.PRIVATE_LOCATION)
-    sig = classify("prober->10.70.245.120", "prober")
+    sig = classify("prober->192.0.2.120", "prober")
     assert sig.attrs["probe_scope"] == ProbeScope.CUSTOMER_PATH.value
     # trusted real vantage on a customer path → confirm-capable
     assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}
@@ -73,7 +73,7 @@ def test_registry_fields_are_authoritative(monkeypatch):
     monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})
     monkeypatch.setattr(main, "_TRUSTED_PROBE_OBSERVERS", set())
     # the probe event explicitly declares a real enterprise vantage → trumps inference
-    sig = classify("prober->10.70.245.120", "prober",
+    sig = classify("prober->192.0.2.120", "prober",
                    ev={"probe_intent": "customer_path", "vantage_type": "enterprise_agent"})
     assert sig.attrs["classification_source"] == "registry"
     assert sig.attrs["probe_authority"] in {a.value for a in CONFIRM_AUTHORITIES}

@@ -30,7 +30,7 @@ func aiHumanizeMissing(lines []string) []string {
 
 // aiEntityLabel humanizes ONE raw entity token for NOC-facing AI text — a server
 // mirror of the UI mapToken: strip the entity-type prefix, take the base before
-// any ":" suffix (so "10.70.245.120:established(6)" and a peer-pair "a:b" both
+// any ":" suffix (so "192.0.2.120:established(6)" and a peer-pair "a:b" both
 // reduce cleanly), and map a bare IP to "Monitored endpoint" / an internal/test
 // target to "Internal / test target". Real device/interface names pass through.
 func aiEntityLabel(raw string) string {
@@ -133,7 +133,7 @@ var sigNocTitle = map[string]string{
 	"sig.ent.cloud.app-dependency-down":       "Cloud application dependency down",
 	"sig.ent.cloud.private-connectivity-down": "Cloud private connectivity down",
 	"sig.ent.cloud.route-table-blackhole":     "Cloud route-table blackhole",
-	"sig.ent.cloud.sg-nacl-block":            "Cloud security-group / NACL block",
+	"sig.ent.cloud.sg-nacl-block":             "Cloud security-group / NACL block",
 	// Middle-mile IPsec family (truthfulness epic D1a: these fell into the
 	// substring cascade, where the bare "ipsec" token routed them to the
 	// SD-WAN group — a live report titled an underlay-root case "SD-WAN").

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, FlowFilters } from "../services/api";
+import { useAppNames, ResolvedApp } from "../services/appNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
@@ -101,6 +102,20 @@ const SECTIONS: { id: string; label: string; icon: string }[] = [
   { id: "flags", label: "Flags", icon: "reports" },
 ];
 
+// AppNameChip — secondary line under an IP when the unified resolver (#81 P3G)
+// names its application; unresolved IPs render exactly as before (no chip).
+function AppNameChip({ app }: { app?: ResolvedApp }) {
+  if (!app) return null;
+  return (
+    <span
+      style={{ display: "block", fontSize: 11, color: "var(--fg-subtle)", lineHeight: 1.2 }}
+      title={`identified by ${app.source}`}
+    >
+      {app.app}
+    </span>
+  );
+}
+
 // ── Reusable Top-N panel (bar / table toggle) ────────────────────────────────
 // Split presentational/container: TopNView renders any {k, bytes, packets,
 // flows} rows (also used by the Geo IP section); TopNPanel adds the standard
@@ -120,16 +135,28 @@ function TopNView({
 }) {
   const [view, setView] = useState<"bar" | "table">("bar");
   const label = (k: string) => (fmtKey ? fmtKey(k) : k);
+  // App-name enrichment (#81 P3G): only IP-shaped keys are batched to the
+  // resolver (ports/devices/countries are skipped client-side).
+  const keys = useMemo(() => rows.map((r) => r.k), [rows]);
+  const apps = useAppNames(keys);
 
   const cols = useMemo<Column<TopNRow>[]>(
     () => [
-      { key: "k", header: keyHeader, width: "42%", sortable: true, text: (r) => label(r.k), render: (r) => label(r.k) },
+      {
+        key: "k", header: keyHeader, width: "42%", sortable: true, text: (r) => label(r.k),
+        render: (r) => (
+          <span>
+            {label(r.k)}
+            <AppNameChip app={apps[r.k]} />
+          </span>
+        ),
+      },
       { key: "bytes", header: "Bytes", align: "right", sortable: true, sortValue: (r) => Number(r.bytes_total), render: (r) => fmtBytes(r.bytes_total) },
       { key: "packets", header: "Packets", align: "right", sortable: true, sortValue: (r) => Number(r.packets_total), render: (r) => fmtNum(r.packets_total) },
       { key: "flows", header: "Flows", align: "right", sortable: true, sortValue: (r) => Number(r.flows), render: (r) => fmtNum(r.flows) },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [keyHeader],
+    [keyHeader, apps],
   );
 
   return (
@@ -161,7 +188,9 @@ function TopNView({
               axisPointer: { type: "shadow" },
               formatter: (ps: any) => {
                 const p = Array.isArray(ps) ? ps[0] : ps;
-                return `${label(String(p.name))}<br/><b>${fmtBytes(p.value)}</b>`;
+                const key = String(p.name);
+                const app = apps[key] ? ` · ${apps[key].app}` : "";
+                return `${label(key)}${app}<br/><b>${fmtBytes(p.value)}</b>`;
               },
             },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBytes(v) } },
@@ -334,7 +363,8 @@ function FlowsSection({ q }: { q: FlowQuery }) {
 }
 
 // ── Section: Conversations (initiator→responder table + endpoint top-Ns) ──────
-function ConversationsSection({ q }: { q: FlowQuery }) {
+// Exported for the app-name enrichment spec (Flows.appnames.test.tsx).
+export function ConversationsSection({ q }: { q: FlowQuery }) {
   const [rows, setRows] = useState<TalkerRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const mono: React.CSSProperties = { fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 12 };
@@ -360,16 +390,20 @@ function ConversationsSection({ q }: { q: FlowQuery }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.since, q.ftype, q.fkey, q.direction]);
 
+  // App-name enrichment (#81 P3G): batch-resolve the visible endpoint IPs once.
+  const talkerKeys = useMemo(() => rows.flatMap((r) => [r.src, r.dst]), [rows]);
+  const apps = useAppNames(talkerKeys);
+
   const cols = useMemo<Column<TalkerRow>[]>(
     () => [
-      { key: "src", header: q.direction === "bi" ? "Endpoint A" : "Initiator", width: "26%", sortable: true, text: (r) => r.src, render: (r) => <span style={mono} title={r.src}>{r.src}</span> },
-      { key: "dst", header: q.direction === "bi" ? "Endpoint B" : "Responder", width: "26%", sortable: true, text: (r) => r.dst, render: (r) => <span style={mono} title={r.dst}>{r.dst}</span> },
+      { key: "src", header: q.direction === "bi" ? "Endpoint A" : "Initiator", width: "26%", sortable: true, text: (r) => r.src, render: (r) => <span style={mono} title={r.src}>{r.src}<AppNameChip app={apps[r.src]} /></span> },
+      { key: "dst", header: q.direction === "bi" ? "Endpoint B" : "Responder", width: "26%", sortable: true, text: (r) => r.dst, render: (r) => <span style={mono} title={r.dst}>{r.dst}<AppNameChip app={apps[r.dst]} /></span> },
       { key: "bytes", header: "Bytes", align: "right", sortable: true, sortValue: (r) => Number(r.bytes_total), render: (r) => fmtBytes(r.bytes_total) },
       { key: "packets", header: "Packets", align: "right", sortable: true, sortValue: (r) => Number(r.packets_total), render: (r) => fmtNum(r.packets_total) },
       { key: "flows", header: "Flows", align: "right", sortable: true, sortValue: (r) => Number(r.flows), render: (r) => fmtNum(r.flows) },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q.direction],
+    [q.direction, apps],
   );
 
   return (

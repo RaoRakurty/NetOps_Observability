@@ -355,6 +355,7 @@ func (t actionableIncidentsTool) Run(ctx context.Context, p Principal, _ ToolArg
 	}
 	return tr, nil
 }
+
 // ---- Module read tools (HLD P4, generic governed wrapper) -------------------
 
 // moduleReadTool is one governed, read-only tool over the ModuleDataSource seam.

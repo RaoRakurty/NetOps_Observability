@@ -221,7 +221,7 @@ func (s *server) geoDictReady() bool {
 // handleFlowsGeo aggregates flow traffic by country of the initiator
 // (?dim=src, default) or responder (?dim=dst), resolved at query time through
 // the geoip_country dictionary. Addresses the dataset doesn't cover (RFC 1918,
-// CGNAT, unallocated) come back as country '' — kept in the result so the UI
+// CGNAT, unallocated) come back as country ” — kept in the result so the UI
 // can report the public-traffic share honestly instead of hiding it. When the
 // dictionary has no data yet the response is {"data":[],"geo_enabled":false}
 // and the UI renders onboarding guidance instead of an empty chart.

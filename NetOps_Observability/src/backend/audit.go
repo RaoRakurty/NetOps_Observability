@@ -220,6 +220,7 @@ func auditClientIP(r *http.Request) string {
 //     per-tenant and merged, so each read stays under its tenant's RLS — no
 //     bypass, works for the file and Postgres backends alike);
 //   - tenant admin → only its own tenant's events.
+//
 // Break-glass sessions are recorded like any other mutation, so they surface here.
 func (s *server) auditScopedList(claims jwtClaims, q auditQuery) []AuditEvent {
 	tenant, cross := principalTenant(claims)

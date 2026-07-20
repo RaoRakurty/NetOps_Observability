@@ -15,9 +15,12 @@ type recChannel struct {
 	resolved []models.Alert
 }
 
-func (r *recChannel) Name() string                      { return "rec" }
-func (r *recChannel) Send(a models.Alert) error         { r.sent = append(r.sent, a); return nil }
-func (r *recChannel) SendResolve(a models.Alert) error  { r.resolved = append(r.resolved, a); return nil }
+func (r *recChannel) Name() string              { return "rec" }
+func (r *recChannel) Send(a models.Alert) error { r.sent = append(r.sent, a); return nil }
+func (r *recChannel) SendResolve(a models.Alert) error {
+	r.resolved = append(r.resolved, a)
+	return nil
+}
 
 func TestPlatformScopeFilter_RejectsCustomerAlerts(t *testing.T) {
 	rec := &recChannel{}

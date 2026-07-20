@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
+import { useAppNames } from "../services/appNames";
 import { Group, BarPanel, Panel, fmtNum, fmtBytes } from "../components/board/panels";
 
 // Threat Detection — flow-derived (IPFIX/NetFlow) network threat signals. No new
@@ -55,20 +56,30 @@ export default function ThreatDetection({ sinceSeconds }: { sinceSeconds?: numbe
 
   const riskyHits = ports.filter((p) => RISKY_PORTS[p.k]);
 
+  // App-name enrichment (#81 P3G): name the scan-suspect source IPs when the
+  // unified resolver knows them ("10.0.1.10 · payroll" reads faster than a bare
+  // IP); unresolved sources render exactly as before.
+  const fanKeys = useMemo(
+    () => [...horiz.rows.map((r) => r.k), ...vert.rows.map((r) => r.k)],
+    [horiz.rows, vert.rows],
+  );
+  const apps = useAppNames(fanKeys);
+  const withApp = (k: string) => (apps[k] ? `${k} · ${apps[k].app}` : k);
+
   return (
     <div className="dm-board">
       <Group title="Scan detection (flow fan-out)" hue="#EF4444">
         <div className="dm-grid">
           <BarPanel
             title="Horizontal scan suspects — distinct destination hosts per source"
-            rows={horiz.rows.map((r) => ({ label: r.k, value: Number(r.dst_count), danger: Number(r.dst_count) >= 25 }))}
+            rows={horiz.rows.map((r) => ({ label: withApp(r.k), value: Number(r.dst_count), danger: Number(r.dst_count) >= 25 }))}
             fmtX={(n) => `${n.toFixed(0)} hosts`}
             loading={horiz.loading}
             err={horiz.err}
           />
           <BarPanel
             title="Vertical scan suspects — distinct destination ports per source"
-            rows={vert.rows.map((r) => ({ label: r.k, value: Number(r.port_count), danger: Number(r.port_count) >= 25 }))}
+            rows={vert.rows.map((r) => ({ label: withApp(r.k), value: Number(r.port_count), danger: Number(r.port_count) >= 25 }))}
             fmtX={(n) => `${n.toFixed(0)} ports`}
             loading={vert.loading}
             err={vert.err}

@@ -9,7 +9,8 @@ import (
 
 // TestLiveV3 exercises the SNMPv3 USM engine against the real clos-lab fabric.
 // Gated by SNMP_LIVE=1 so it never runs in offline CI.
-//   SNMP_LIVE=1 go test ./collectors/ -run TestLiveV3 -v
+//
+//	SNMP_LIVE=1 go test ./collectors/ -run TestLiveV3 -v
 func TestLiveV3(t *testing.T) {
 	if os.Getenv("SNMP_LIVE") == "" {
 		t.Skip("set SNMP_LIVE=1 to run against the live fabric")

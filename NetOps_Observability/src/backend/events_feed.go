@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/appid"
 )
 
 // Allowlists for the enum columns — shape-validate, never quote-escape (SR-011).
@@ -90,6 +92,41 @@ func feedTitle(kind, entityID, source string) string {
 	return k + " — " + ent
 }
 
+// feedAppEntityTypes are the entity kinds whose entity_id is an address-like
+// key the unified app-name resolver can speak to (#81 P3G): plain IPs, CIDR
+// prefixes, and cloud resource ids. Device/interface/path/site entities are
+// named by inventory, not by app identity — never resolved here.
+var feedAppEntityTypes = map[string]bool{
+	"ip": true, "address": true, "prefix": true, "cloud_resource": true,
+}
+
+// feedEntityApp resolves an app name for an IP/prefix/cloud-resource feed
+// entity via the unified resolver ("" = unresolved or not an addressable
+// entity — the title then stays EXACTLY as before; no "unknown" spam). A CIDR
+// prefix resolves by its base address; a cloud resource id matches the cloud
+// identity-map directly. Tenant-scoped default-closed like every resolve.
+func (s *server) feedEntityApp(tenant string, cross bool, ov tenantOverrides, order []string, entityType, entityID string) string {
+	if !feedAppEntityTypes[entityType] {
+		return ""
+	}
+	key := strings.TrimSpace(entityID)
+	if key == "" || key == "unknown" {
+		return ""
+	}
+	if i := strings.IndexByte(key, '/'); i > 0 {
+		key = key[:i] // prefix → its base address
+	}
+	sigs := s.keyAppSignals(tenant, cross, ov, key)
+	if len(sigs) == 0 {
+		return ""
+	}
+	v := appid.FuseWithPrecedence(sigs, order)
+	if v.Tier == appid.Undetermined || v.App == "" || v.App == "unknown" {
+		return ""
+	}
+	return v.App
+}
+
 // kindNoc is a compact humanizer for signal kinds (server side mirror of the UI's
 // kindLabel for the common families; the UI re-labels for display, this is the
 // stored title fallback).
@@ -137,7 +174,8 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
 	q := r.URL.Query()
@@ -218,6 +256,12 @@ SELECT toString(signal_id) AS signal_id,
 		return
 	}
 
+	// #81 P3G: name the app for address-like entities via the unified resolver
+	// (cheap — the feed already runs on s.chRows, no passthrough conversion).
+	tenant, cross := principalTenant(claims)
+	ov := s.overridesFor(r.Context(), tenant, cross)
+	order, _ := s.governance.attributionPrecedence(tenant)
+
 	items := make([]map[string]any, 0, len(rows))
 	var nextCursor string
 	for _, row := range rows {
@@ -230,7 +274,13 @@ SELECT toString(signal_id) AS signal_id,
 			row["ts"] = v
 			delete(row, "ts_iso")
 		}
-		row["title"] = feedTitle(kind, entity, src)
+		title := feedTitle(kind, entity, src)
+		etype := fmt.Sprintf("%v", row["entity_type"])
+		if app := s.feedEntityApp(tenant, cross, ov, order, etype, entity); app != "" {
+			row["entity_app"] = app
+			title += " (" + app + ")" // resolved name appended; otherwise UNCHANGED
+		}
+		row["title"] = title
 		row["correlation_id"] = nil // best-effort link is a follow-up (Explorer wiring)
 		items = append(items, row)
 	}

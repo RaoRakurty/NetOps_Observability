@@ -106,6 +106,7 @@ const actingAll = "all"
 //   - PBAC Phase B: a NON-owner principal may select any tenant it REACHES via its
 //     bindings (reachesTenant) — the multi-tenant/MSP/SRE switcher. A single-tenant
 //     user only reaches its own tenant, so this is behaviour-preserving for them.
+//
 // "", "all", "global" mean the default view (no narrowing). An unknown/unreachable
 // target is ignored. The result feeds principalTenant.
 func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {

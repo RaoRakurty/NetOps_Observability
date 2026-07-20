@@ -121,6 +121,33 @@ describe("NetworkPathView — ribbon", () => {
     expect(screen.getByText(/1.5 ms/)).toBeTruthy();      // b→c delta = 1.5ms
   });
 
+  it("falls back to traceroute per-hop RTT/loss when STAMP is absent (with provenance)", () => {
+    render(<NetworkPathView view={viewWith({
+      path_source: "measured",
+      // hop a: traceroute-only measurement (an intermediate hop STAMP never targets)
+      stamp: [{ trace_rtt_ms: 5, trace_loss_pct: 33.3 }, undefined, undefined],
+    })} />);
+    expect(screen.getAllByText("5.0 ms").length).toBeGreaterThan(0); // inline LAT from trace_*
+    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
+    expect(screen.getByText("33.3%")).toBeTruthy(); // packet loss from trace_*
+    // provenance: the value tooltip says traceroute, never STAMP
+    expect(screen.getAllByTitle(/Measured by traceroute/).length).toBeGreaterThan(0);
+    expect(screen.queryByTitle(/Measured by a STAMP active probe/)).toBeNull();
+    // OWD/jitter have no traceroute source → honest "—" with the STAMP-only hint
+    expect(screen.getAllByTitle(/STAMP-only metric/).length).toBe(2);
+  });
+
+  it("prefers STAMP over traceroute when both measured the hop", () => {
+    render(<NetworkPathView view={viewWith({
+      path_source: "measured",
+      stamp: [{ stamp_rtt_ms: 1, trace_rtt_ms: 9 }, undefined, undefined],
+    })} />);
+    expect(screen.getAllByText("1.0 ms").length).toBeGreaterThan(0);
+    expect(screen.queryByText("9.0 ms")).toBeNull();
+    fireEvent.click(screen.getAllByTitle(/Click for the full per-hop metrics/)[0]);
+    expect(screen.getAllByTitle(/Measured by a STAMP active probe/).length).toBeGreaterThan(0);
+  });
+
   it("shows the honest footnote when no hop has a STAMP probe", () => {
     render(<NetworkPathView view={viewWith({ path_source: "computed" })} />);
     expect(screen.getByText(/add a STAMP target per hop/i)).toBeTruthy();

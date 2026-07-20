@@ -50,21 +50,21 @@ var routeIsolationLedger = map[string]string{
 	"/api/ai/tenant-config": "scoped",
 	// Static, identical-for-everyone reference: the slash-command registry + the
 	// caller's own answer feedback (audited). No tenant data crosses these.
-	"/api/ai/commands":                         "selfScoped",
-	"/api/ai/commands/suggestions":             "selfScoped",
-	"/api/ai/feedback":                         "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
-	"/api/alerts":                              "scoped",
+	"/api/ai/commands":             "selfScoped",
+	"/api/ai/commands/suggestions": "selfScoped",
+	"/api/ai/feedback":             "scoped", // POST own rating (tenant-stamped); GET tenant-scoped aggregate (store RLS)
+	"/api/alerts":                  "scoped",
 	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
 	// (own tenant + device-less platform rows); triage is own-tenant-only with
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.
-	"/api/alerts/episodes":                     "scoped",
-	"/api/alerts/episodes/":                    "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
-	"/api/compliance":                          "scoped",
-	"/api/correlations":                        "scoped",
-	"/api/correlations/":                       "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
-	"/api/correlations/rca-reports":            "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
-	"/api/correlations/stats":                  "scoped",
-	"/api/correlations/summary":                "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
+	"/api/alerts/episodes":          "scoped",
+	"/api/alerts/episodes/":         "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
+	"/api/compliance":               "scoped",
+	"/api/correlations":             "scoped",
+	"/api/correlations/":            "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
+	"/api/correlations/rca-reports": "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
+	"/api/correlations/stats":       "scoped",
+	"/api/correlations/summary":     "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
 	// Per-tenant display preference (a281c7a): GET/PUT always the CALLER's own
 	// tenant record (principalTenant; PUT behind requireAdmin, audited) — the
 	// tenant id never comes from the request (tenant_display_test.go).
@@ -79,16 +79,16 @@ var routeIsolationLedger = map[string]string{
 	// ALWAYS the caller's own tenant (principalTenant; PUT behind requireAdmin,
 	// audited) — the tenant id never comes from the request
 	// (tenant_governance_test.go).
-	"/api/settings/required-tags": "scoped",
-	"/api/settings/rca-window":    "scoped",
+	"/api/settings/required-tags":          "scoped",
+	"/api/settings/rca-window":             "scoped",
 	"/api/settings/attribution-precedence": "scoped",
 	"/api/settings/seam-owners":            "scoped",
 	// Read-only recent-changes view over the governance settings writes:
 	// requireAdmin + auditScopedList (the same scoping as /api/audit), filtered
 	// to the settings actions (tenant_governance_test.go).
-	"/api/settings/governance-audit": "adminScoped",
+	"/api/settings/governance-audit":           "adminScoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
-	"/api/rca/":                                "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
+	"/api/rca/": "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
 	// own incidents: chRows injects chTenantScope, ClickHouse row policies enforce it
 	// (TestChTenantScope). A tenant never sees another tenant's MTTI/MTBF/offenders.
@@ -105,55 +105,55 @@ var routeIsolationLedger = map[string]string{
 	// Port Intelligence (#94): every port/interface/optics read is tenant DATA,
 	// scoped by requirePerm(infrastructure:read) + the portStore RLS/tenant
 	// filter (cross-tenant get → 404); proven by port_handlers_test.go.
-	"/api/infrastructure/interfaces":           "scoped",
-	"/api/infrastructure/interfaces/":          "scoped",
-	"/api/infrastructure/port-summary":         "scoped",
-	"/api/infrastructure/port-filter-options":  "scoped",
+	"/api/infrastructure/interfaces":          "scoped",
+	"/api/infrastructure/interfaces/":         "scoped",
+	"/api/infrastructure/port-summary":        "scoped",
+	"/api/infrastructure/port-filter-options": "scoped",
 	// Static reference (identical for everyone; no tenant data).
-	"/api/infrastructure/module-types":   "selfScoped",
+	"/api/infrastructure/module-types":    "selfScoped",
 	"/api/infrastructure/port-signatures": "selfScoped",
-	"/api/events":                   "scoped",
-	"/api/events/feed":              "scoped",
-	"/api/findings":                 "scoped",
-	"/api/flows/by-proto":           "scoped",
-	"/api/flows/by-type":            "scoped",
-	"/api/flows/fanout":             "scoped",
-	"/api/flows/flags":              "scoped",
-	"/api/flows/geo":                "scoped",
-	"/api/flows/services":           "scoped",
-	"/api/flows/timeseries":         "scoped",
-	"/api/flows/top":                "scoped",
-	"/api/flows/topn":               "scoped",
-	"/api/geomap":                   "scoped",
-	"/api/graphql":                  "scoped",
-	"/api/health/score":             "scoped",
-	"/api/incidents":                "scoped",
-	"/api/incidents/":               "scoped",
+	"/api/events":                         "scoped",
+	"/api/events/feed":                    "scoped",
+	"/api/findings":                       "scoped",
+	"/api/flows/by-proto":                 "scoped",
+	"/api/flows/by-type":                  "scoped",
+	"/api/flows/fanout":                   "scoped",
+	"/api/flows/flags":                    "scoped",
+	"/api/flows/geo":                      "scoped",
+	"/api/flows/services":                 "scoped",
+	"/api/flows/timeseries":               "scoped",
+	"/api/flows/top":                      "scoped",
+	"/api/flows/topn":                     "scoped",
+	"/api/geomap":                         "scoped",
+	"/api/graphql":                        "scoped",
+	"/api/health/score":                   "scoped",
+	"/api/incidents":                      "scoped",
+	"/api/incidents/":                     "scoped",
 	// RCA auto-ticketing #78 P3: incident policies + outbox/audit are per-tenant
 	// data — requirePerm + principalTenant scope, tenant stamped from token, store
 	// isolation + HTTP cross-tenant tests (ticketing_isolation_test/ticketing_http_test).
-	"/api/incident-policies":      "scoped",
-	"/api/incident-policies/":     "scoped",
-	"/api/tickets/audit":          "scoped",
-	"/api/tickets/outbox":         "scoped",
+	"/api/incident-policies":  "scoped",
+	"/api/incident-policies/": "scoped",
+	"/api/tickets/audit":      "scoped",
+	"/api/tickets/outbox":     "scoped",
 	// #103 UX-1 notified-via read: per-tenant ticket links (requirePerm +
 	// principalTenant; store-level scope). Cross-org test: ticketing_links_test.go.
 	"/api/tickets/links": "scoped",
-	"/api/integrations":           "scoped",
-	"/api/integrations/":          "scoped",
+	"/api/integrations":  "scoped",
+	"/api/integrations/": "scoped",
 	// NMS vendor-controller integrations (#95): per-tenant config/health/state,
 	// tenant stamped from the principal, cross-tenant id → 404. Cross-org
 	// isolation test: nms_isolation_test.go (TestNMSCrossOrgIsolation).
 	"/api/nms/integrations":  "scoped",
 	"/api/nms/integrations/": "scoped",
-	"/api/itsm/jira":              "scoped",
-	"/api/itsm/servicenow":        "scoped",
+	"/api/itsm/jira":         "scoped",
+	"/api/itsm/servicenow":   "scoped",
 	// #103 tenant RCA policy destinations: per-tenant connection config (routing
 	// key / webhook are write-only secrets, tenant from the principal). Isolation
 	// coverage: ticketing_pagerduty_test.go (two-tenant key isolation) +
 	// ticketing_http_test.go.
-	"/api/itsm/pagerduty-rca": "scoped",
-	"/api/itsm/slack-rca":     "scoped",
+	"/api/itsm/pagerduty-rca":     "scoped",
+	"/api/itsm/slack-rca":         "scoped",
 	"/api/logs/export":            "scoped",
 	"/api/logs/export/rows":       "scoped",
 	"/api/logs/indices":           "scoped",
@@ -181,50 +181,51 @@ var routeIsolationLedger = map[string]string{
 	// Wave 6 #20 unified search: every sub-search re-scopes to the principal
 	// (visibleDevices, tenant-keyed cloud/connector stores, chTenantScope for
 	// cases) — proven by search_unified_isolation_test.go.
-	"/api/search": "scoped",
-	"/api/seams":                  "scoped",
-	"/api/seams/":                 "scoped",
-	"/api/seams/groups":           "scoped",
-	"/api/seams/groups/":          "scoped",
-	"/api/services":               "scoped",
-	"/api/services/":              "scoped",
-	"/api/sites":                  "scoped",
-	"/api/sites/":                 "scoped",
-	"/api/sot/import":             "scoped",
-	"/api/snmp/credentials":       "scoped",
-	"/api/snmp/credentials/":      "scoped",
-	"/api/snmp/options":           "scoped",
-	"/api/tunnels":                "scoped",
-	"/api/wan/interfaces":         "scoped",
-	"/api/wan/endpoints":          "scoped",
-	"/api/wan/circuits":           "scoped",
-	"/api/wan/policy":             "scoped",
-	"/api/topology/links":         "scoped",
-	"/api/topology/view":          "scoped",
-	"/api/topology/graph":         "scoped",
-	"/api/topology/cloud":         "scoped",
-	"/api/vulns":                  "scoped",
-	"/api/apikeys":                "scoped",
-	"/api/apikeys/":               "scoped",
-	"/api/sessions":               "scoped",
-	"/api/sessions/":              "scoped",
-	"/api/copilot/chat":           "scoped",
+	"/api/search":            "scoped",
+	"/api/seams":             "scoped",
+	"/api/seams/":            "scoped",
+	"/api/seams/groups":      "scoped",
+	"/api/seams/groups/":     "scoped",
+	"/api/services":          "scoped",
+	"/api/services/":         "scoped",
+	"/api/sites":             "scoped",
+	"/api/sites/":            "scoped",
+	"/api/sot/import":        "scoped",
+	"/api/snmp/credentials":  "scoped",
+	"/api/snmp/credentials/": "scoped",
+	"/api/snmp/options":      "scoped",
+	"/api/tunnels":           "scoped",
+	"/api/wan/interfaces":    "scoped",
+	"/api/wan/endpoints":     "scoped",
+	"/api/wan/circuits":      "scoped",
+	"/api/wan/policy":        "scoped",
+	"/api/topology/links":    "scoped",
+	"/api/topology/view":     "scoped",
+	"/api/topology/graph":    "scoped",
+	"/api/topology/cloud":    "scoped",
+	"/api/vulns":             "scoped",
+	"/api/apikeys":           "scoped",
+	"/api/apikeys/":          "scoped",
+	"/api/sessions":          "scoped",
+	"/api/sessions/":         "scoped",
+	"/api/copilot/chat":      "scoped",
 
 	// ── Application Identification + Cloud App Observability (#81), tenant-scoped ──
 	// appid resolve/status reflect the caller's tenant view (operator overrides +
 	// NGFW + cloud identity-map are all default-closed per tenant); cloud inventory
 	// + applications are principalTenant-scoped with store isolation tests
 	// (TestCloudStoreIsolation, appid_isolation_test.go, cloud_appid_resolver_test.go).
-	"/api/appid/resolve":              "scoped",
-	"/api/appid/status":               "scoped",
-	"/api/appid/fusion/status":        "scoped",
-	"/api/appid/catalog":              "scoped",
-	"/api/appid/catalog/":             "scoped",
-	"/api/applications":               "scoped",
-	"/api/applications/":              "scoped",
-	"/api/flows/apps":                 "scoped",
-	"/api/cloud/apps":                 "scoped",
-	"/api/cloud/resources":            "scoped",
+	"/api/appid/resolve":       "scoped",
+	"/api/appid/resolve/batch": "scoped", // #81 P3G — isolation test: appid_batch_isolation_test.go
+	"/api/appid/status":        "scoped",
+	"/api/appid/fusion/status": "scoped",
+	"/api/appid/catalog":       "scoped",
+	"/api/appid/catalog/":      "scoped",
+	"/api/applications":        "scoped",
+	"/api/applications/":       "scoped",
+	"/api/flows/apps":          "scoped",
+	"/api/cloud/apps":          "scoped",
+	"/api/cloud/resources":     "scoped",
 	// Wave 6 #20 permanent resource page read: store-scoped GetResource,
 	// cross-tenant / unknown id → identical 404 (search_unified_isolation_test.go).
 	"/api/cloud/resources/":           "scoped",
@@ -238,10 +239,10 @@ var routeIsolationLedger = map[string]string{
 	// Business Service mapping + manual overrides (migration 0024): tenant DATA,
 	// requirePerm + principalTenant + FORCE-RLS; cross-org proof in
 	// business_service_isolation_test.go.
-	"/api/cloud/business-services":     "scoped",
-	"/api/cloud/business-services/":    "scoped",
-	"/api/cloud/resource-mappings":     "scoped",
-	"/api/cloud/resource-mappings/":    "scoped",
+	"/api/cloud/business-services":  "scoped",
+	"/api/cloud/business-services/": "scoped",
+	"/api/cloud/resource-mappings":  "scoped",
+	"/api/cloud/resource-mappings/": "scoped",
 	// #81 P3H cloud telemetry reads — every query carries the caller's tenant_scope,
 	// which the corr_signals / corr_signals_archive / corr_objects FORCE row policies
 	// enforce in ClickHouse (see cloud_signals.go, cloud_ingestion.go).
@@ -313,16 +314,16 @@ var routeIsolationLedger = map[string]string{
 	// AI entitlement per tenant is platform PACKAGING (which tenants get the
 	// assistant / the agent loop) — requirePlatformAdmin, a tenant admin must
 	// never grant itself investigations (§3a.3).
-	"/api/ai/tenants":             "platform",
-	"/api/ai/tenants/":            "platform",
-	"/api/auth/ldap/config":       "platform",
-	"/api/auth/ldap/test":         "platform",
-	"/api/auth/tacacs/config":     "platform",
-	"/api/auth/tacacs/test":       "platform",
-	"/api/auth/oidc/config":       "platform",
-	"/api/auth/sso/config":        "platform",
-	"/api/auth/token-policy":      "platform",
-	"/api/copilot/config":         "platform",
+	"/api/ai/tenants":         "platform",
+	"/api/ai/tenants/":        "platform",
+	"/api/auth/ldap/config":   "platform",
+	"/api/auth/ldap/test":     "platform",
+	"/api/auth/tacacs/config": "platform",
+	"/api/auth/tacacs/test":   "platform",
+	"/api/auth/oidc/config":   "platform",
+	"/api/auth/sso/config":    "platform",
+	"/api/auth/token-policy":  "platform",
+	"/api/copilot/config":     "platform",
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
 	// poller across EVERY tenant's connectors, so it is platform plumbing by
@@ -331,25 +332,25 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/ingest/connectors":    "platform",
 	"/api/cloud/ingest/connectors/":   "platform",
 	"/api/cloud/ingest/source-status": "platform", // poller error reports (Wave 2 #4) — same service credential
-	"/api/system/network":         "platform",
-	"/api/system/network/test":    "platform",
-	"/api/automation/netbox":      "platform",
-	"/api/automation/netbox/sync": "platform",
-	"/api/discovery/config":       "platform", // subnet-scan scope: directs the platform prober (#91)
-	"/api/notify/smtp":            "platform",
-	"/api/notify/smtp/test":       "platform",
-	"/api/notify/slack":           "platform",
-	"/api/notify/slack/test":      "platform",
-	"/api/notify/twilio":          "platform",
-	"/api/notify/twilio/test":     "platform",
-	"/api/notify/ntfy":            "platform",
-	"/api/notify/ntfy/test":       "platform",
-	"/api/notify/pagerduty":       "platform",
-	"/api/notify/pagerduty/test":  "platform",
-	"/api/exports/policy":         "platform",
-	"/api/breakglass":             "platform",
-	"/api/breakglass/":            "platform",
-	"/api/onboard":                "platform",
+	"/api/system/network":             "platform",
+	"/api/system/network/test":        "platform",
+	"/api/automation/netbox":          "platform",
+	"/api/automation/netbox/sync":     "platform",
+	"/api/discovery/config":           "platform", // subnet-scan scope: directs the platform prober (#91)
+	"/api/notify/smtp":                "platform",
+	"/api/notify/smtp/test":           "platform",
+	"/api/notify/slack":               "platform",
+	"/api/notify/slack/test":          "platform",
+	"/api/notify/twilio":              "platform",
+	"/api/notify/twilio/test":         "platform",
+	"/api/notify/ntfy":                "platform",
+	"/api/notify/ntfy/test":           "platform",
+	"/api/notify/pagerduty":           "platform",
+	"/api/notify/pagerduty/test":      "platform",
+	"/api/exports/policy":             "platform",
+	"/api/breakglass":                 "platform",
+	"/api/breakglass/":                "platform",
+	"/api/onboard":                    "platform",
 	// SNMP config generator — platform-owner action that mints a credential.
 	"/api/onboard/snmp-config":    "platform",
 	"/api/discovery/refresh":      "platform",

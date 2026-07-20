@@ -22,7 +22,7 @@ T0 = datetime(2026, 6, 12, 10, 0, 0, tzinfo=timezone.utc)
 
 def probe_event(**over) -> dict:
     ev = {
-        "kind": "stamp", "prober": "prober", "target": "10.70.245.120:8620",
+        "kind": "stamp", "prober": "prober", "target": "192.0.2.120:8620",
         "ok": True, "rtt_ms": 4.0, "jitter_ms": 0.2, "loss_pct": 0.0,
         "ts": "2026-06-12T10:00:00.123456789Z",
     }
@@ -65,8 +65,8 @@ def test_loss_event_is_discrete_signal_with_probe_provenance():
     assert s.observer.observer_type is ObserverType.VANTAGE_AGENT
     assert s.observer.observer_id == "prober"
     assert s.entity_type is EntityType.PATH
-    assert s.entity_id == "prober->10.70.245.120"
-    assert "10.70.245.120" in s.entity_tokens  # the seam-grounding token
+    assert s.entity_id == "prober->192.0.2.120"
+    assert "192.0.2.120" in s.entity_tokens  # the seam-grounding token
     assert s.severity is Severity.CRIT
     assert s.tenant_id == "t1"
     # Event time came from the record, not ingest time.
@@ -109,8 +109,8 @@ def test_rtt_step_opens_probe_episode():
     s = onsets[0]
     assert s.modality_class is ModalityClass.ACTIVE_PROBE
     assert s.entity_type is EntityType.PATH
-    assert s.path_id == "prober->10.70.245.120"
-    assert "10.70.245.120" in s.entity_tokens
+    assert s.path_id == "prober->192.0.2.120"
+    assert "192.0.2.120" in s.entity_tokens
 
 
 def test_malformed_probe_event_ignored():

@@ -227,25 +227,34 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 		Base        map[string]any `json:"baseline"`
 		PathHealth
 	}
+	// V1 tier 2: hour-of-week precomputed baselines (path_health_baselines.go).
+	// Best-effort — nil (feature off / CH down / table empty) falls through to
+	// tiers 3–5 exactly as the MVP behaved. Tier 1 (route+hour) is a declared
+	// stub until probes carry route labels (see path_health_baselines.go).
+	hourBase := s.fetchHourBaselines(r, time.Now().UTC())
+
 	items := make([]item, 0, len(paths))
 	for k, a := range paths {
 		days := a.count * probeInterval / 86400
-		var base PathBaseline
-		perPathReady := (a.count >= 500 || days >= 7) && a.latP99 > a.latP50
-		if perPathReady {
-			base = PathBaseline{
-				Source:      baselinePath,
-				Latency:     metricBaseline{P50: a.latP50, P99: a.latP99},
-				Jitter:      metricBaseline{P50: a.jitP50, P99: a.jitP99},
-				SampleCount: int(a.count),
-				Days:        days,
-				RouteStable: true, // no route-change signal in MVP → treat as stable
-			}
-		} else {
-			base = classBaseline(classifyPathClass(a.dst))
-			base.SampleCount = int(a.count)
-			base.Days = days
+		perPath := PathBaseline{
+			Source:      baselinePath,
+			Latency:     metricBaseline{P50: a.latP50, P99: a.latP99},
+			Jitter:      metricBaseline{P50: a.jitP50, P99: a.jitP99},
+			SampleCount: int(a.count),
+			Days:        days,
+			RouteStable: true, // no route-change signal in MVP → treat as stable
 		}
+		classBase := classBaseline(classifyPathClass(a.dst))
+		classBase.SampleCount = int(a.count)
+		classBase.Days = days
+		hb, hasHour := hourBase[k]
+		// §4 cascade, strongest→weakest; the class fallback is always last so a
+		// path never fails to score. SelectBaseline applies the readiness gates.
+		base, _ := SelectBaseline([]BaselineCandidate{
+			{Baseline: hb, Available: hasHour},
+			{Baseline: perPath, Available: a.latP99 > a.latP50},
+			{Baseline: classBase, Available: true},
+		})
 		cur := PathCurrent{
 			LatencyP95_5m: a.curLat, JitterP95_5m: a.curJit, LossPct5m: a.curLoss,
 			HasLatency: a.hasLat, HasJitter: a.hasJit, HasLoss: a.hasLoss,

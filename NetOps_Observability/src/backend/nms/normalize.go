@@ -76,4 +76,3 @@ func roleForEventType(net string) EvidenceRole {
 	}
 	return RoleSupporting
 }
-

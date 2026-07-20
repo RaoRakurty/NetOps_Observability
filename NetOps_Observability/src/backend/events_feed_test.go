@@ -27,12 +27,12 @@ func TestFeedCursorRoundTrip(t *testing.T) {
 
 func TestSanitizeCHText(t *testing.T) {
 	cases := map[string]string{
-		"leaf1":                 "leaf1",
-		"path:a->b":             "path:a->b",
-		"Gi0/1":                 "Gi0/1",
-		"a' OR '1'='1":          "a OR 11",       // quotes + '=' stripped
-		"foo;DROP TABLE x":      "fooDROP TABLE x", // ';' stripped
-		"x\\y":                  "xy",            // backslash stripped
+		"leaf1":            "leaf1",
+		"path:a->b":        "path:a->b",
+		"Gi0/1":            "Gi0/1",
+		"a' OR '1'='1":     "a OR 11",         // quotes + '=' stripped
+		"foo;DROP TABLE x": "fooDROP TABLE x", // ';' stripped
+		"x\\y":             "xy",              // backslash stripped
 	}
 	for in, want := range cases {
 		if got := sanitizeCHText(in); got != want {
@@ -120,5 +120,82 @@ func TestFeedTotalSQLShape(t *testing.T) {
 	if !strings.Contains(sql, "count()") || !strings.Contains(sql, "source = 'syslog'") ||
 		!strings.Contains(sql, "INTERVAL 3600 SECOND") {
 		t.Errorf("total SQL lost its filters:\n%s", sql)
+	}
+}
+
+// #81 P3G: address-like feed entities are named via the unified app resolver —
+// entity_app appears and the title gains "(app)" ONLY when identity is on file;
+// everything else renders byte-identical to before (no "unknown" spam).
+func TestEventsFeedEntityAppEnrichment(t *testing.T) {
+	// fake CH serving one prefix-entity row (acme's tagged cloud IP) and one
+	// device row; the count/facet queries get empty data.
+	items := `{"meta":[],"data":[
+	  {"signal_id":"0192f1a2-3b4c-7d5e-8f60-112233445566","ts_iso":"2026-07-20T00:00:00Z","ts_ms":"1752969600000",
+	   "source":"flow","kind":"flow_volume_anomaly","severity":"warn","entity_type":"prefix","entity_id":"10.0.1.10/32","site":""},
+	  {"signal_id":"0192f1a2-3b4c-7d5e-8f60-112233445577","ts_iso":"2026-07-20T00:00:01Z","ts_ms":"1752969601000",
+	   "source":"syslog","kind":"link_state_change","severity":"warn","entity_type":"device","entity_id":"leaf1","site":""}
+	],"rows":2}`
+	first := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if first {
+			first = false
+			_, _ = w.Write([]byte(items))
+			return
+		}
+		_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+	t.Setenv("CLICKHOUSE_PASSWORD", "")
+
+	s := batchTestServer(t) // roles + cloudApp: acme's 10.0.1.10 → billing
+
+	w := httptest.NewRecorder()
+	s.handleEventsFeed(w, req(http.MethodGet, "/api/events/feed?from=24h", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(body.Items))
+	}
+	ipRow, devRow := body.Items[0], body.Items[1]
+	if got := ipRow["entity_app"]; got != "billing" {
+		t.Fatalf("entity_app = %v, want billing", got)
+	}
+	if got := ipRow["title"]; got != "Traffic volume change — 10.0.1.10/32 (billing)" {
+		t.Fatalf("enriched title = %q", got)
+	}
+	// non-address entity: no entity_app key, title unchanged
+	if _, has := devRow["entity_app"]; has {
+		t.Fatalf("device row must not carry entity_app: %+v", devRow)
+	}
+	if got := devRow["title"]; got != "Link up/down — leaf1" {
+		t.Fatalf("device title changed: %q", got)
+	}
+}
+
+// feedEntityApp is default-closed: another tenant's identity never names an
+// entity, non-address kinds never resolve, and unresolved stays "".
+func TestFeedEntityAppScoping(t *testing.T) {
+	s := batchTestServer(t)
+	ov := tenantOverrides{}
+	if got := s.feedEntityApp("acme", false, ov, nil, "prefix", "10.0.1.10/32"); got != "billing" {
+		t.Fatalf("acme prefix → %q, want billing", got)
+	}
+	if got := s.feedEntityApp("globex", false, ov, nil, "prefix", "10.0.1.10/32"); got != "" {
+		t.Fatalf("TENANT LEAK: globex resolved acme's identity: %q", got)
+	}
+	if got := s.feedEntityApp("acme", false, ov, nil, "device", "10.0.1.10"); got != "" {
+		t.Fatalf("device entity must not resolve: %q", got)
+	}
+	if got := s.feedEntityApp("acme", false, ov, nil, "prefix", "203.0.113.9"); got != "" {
+		t.Fatalf("unresolved must stay empty, got %q", got)
 	}
 }

@@ -70,3 +70,38 @@ func TestAggregateFlowApps_NGFWPromotes(t *testing.T) {
 		t.Fatalf("ngfw app-id should confirm Zoom, got %+v", out)
 	}
 }
+
+// #81 P3G: the SOURCE side resolves through the same path — rows carry src_app,
+// pairs split per (dst app, src app), and distinct-dest counting stays honest
+// when one destination appears in several pairs.
+func TestAggregateFlowApps_SrcResolution(t *testing.T) {
+	aws, _ := appid.ParseAWS([]byte(`{"prefixes":[{"ip_prefix":"52.94.0.0/22","service":"S3"}]}`))
+	cat := appid.NewCatalog(aws)
+
+	extraFor := func(addr string) []appid.Signal {
+		if addr == "10.0.1.10" { // a tagged cloud workload as the SOURCE
+			return []appid.Signal{{Source: appid.SrcCloudTag, App: "payroll"}}
+		}
+		return nil
+	}
+	rows := []map[string]any{
+		{"d": "52.94.0.9", "s": "10.0.1.10", "b": float64(3000), "f": float64(3)}, // payroll → AWS S3
+		{"d": "52.94.0.9", "s": "10.0.9.9", "b": float64(1000), "f": float64(1)},  // unknown → AWS S3 (same dest!)
+	}
+	out := aggregateFlowApps(rows, cat, extraFor)
+	if len(out) != 2 {
+		t.Fatalf("want 2 pair rows, got %d: %+v", len(out), out)
+	}
+	if out[0].App != "AWS S3" || out[0].SrcApp != "payroll" || out[0].Bytes != 3000 {
+		t.Fatalf("top pair should be payroll → AWS S3, got %+v", out[0])
+	}
+	if out[1].SrcApp != "unknown" {
+		t.Fatalf("unresolved src must be the first-class unknown, got %+v", out[1])
+	}
+	// the same destination in two pairs still counts as ONE distinct dest each
+	for _, r := range out {
+		if r.Dests != 1 {
+			t.Fatalf("dests must count distinct destination IPs, got %+v", r)
+		}
+	}
+}

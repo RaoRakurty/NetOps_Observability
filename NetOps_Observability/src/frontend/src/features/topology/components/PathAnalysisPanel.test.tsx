@@ -69,6 +69,49 @@ function investigatedView(statuses: (string | undefined)[]): TopologyView {
   };
 }
 
+// #85 — the hop rail carries the edge's interface facts (bandwidth / throughput /
+// reliability / MTU). Honesty: a measured value renders formatted; an absent one
+// renders "—" with a provenance tooltip — never a fabricated number.
+function edgeMetricsView(withMetrics: boolean): TopologyView {
+  const base = viewWith("measured");
+  return {
+    ...base,
+    edges: [
+      {
+        id: "e1", source: "a", target: "b", relationship: "connected_to", protocol: "lldp",
+        confidence: 1, evidence: [], source_port: "Et1", target_port: "Et2",
+        ...(withMetrics
+          ? { bandwidth_mbps: 1000, throughput_mbps: 320, reliability_pct: 99.98, mtu: 9000 }
+          : {}),
+      },
+    ],
+  };
+}
+
+describe("PathAnalysisPanel — #85 hop-edge interface metrics", () => {
+  it("renders bandwidth / throughput / reliability / MTU on the hop rows", () => {
+    render(<PathAnalysisPanel view={edgeMetricsView(true)} />);
+    expect(screen.getAllByText("bw 1 Gbps").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("thr 320 Mbps").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("rel 99.98%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("mtu 9000 B").length).toBeGreaterThan(0);
+  });
+
+  it("HONESTY: absent metrics read as an em-dash with a provenance tooltip", () => {
+    render(<PathAnalysisPanel view={edgeMetricsView(false)} />);
+    // hop c touches no measured edge → all four slots are "—" there
+    expect(screen.getAllByText("bw —").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("thr —").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("rel —").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("mtu —").length).toBeGreaterThan(0);
+    // the "—" tooltips explain WHERE the value would come from, not just "missing"
+    expect(screen.getAllByTitle(/ifSpeed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle(/ifMtu/).length).toBeGreaterThan(0);
+    // no fabricated numbers anywhere
+    expect(document.body.textContent).not.toMatch(/Gbps|Mbps/);
+  });
+});
+
 describe("PathAnalysisPanel — hop → evidence link (Increment 5)", () => {
   it("tags a confirmed-fault hop as the root cause", () => {
     render(<PathAnalysisPanel view={investigatedView([undefined, "confirmed_down", undefined])} />);

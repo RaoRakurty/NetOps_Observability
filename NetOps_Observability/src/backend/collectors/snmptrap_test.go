@@ -167,11 +167,11 @@ func TestTrapResolveAmbiguityGuard(t *testing.T) {
 		wantOK  bool
 	}{
 		{"unique source resolves", []Target{{ID: "leaf1", Address: "10.0.0.5:161"}}, "10.0.0.5", "leaf1", true},
-		{"unknown source is honest miss", []Target{{ID: "leaf1", Address: "10.0.0.5"}}, "10.70.245.120", "", false},
+		{"unknown source is honest miss", []Target{{ID: "leaf1", Address: "10.0.0.5"}}, "192.0.2.120", "", false},
 		{"shared NAT source fails closed", []Target{
-			{ID: "leaf1", Address: "10.70.245.120:16001"},
-			{ID: "leaf2", Address: "10.70.245.120:16002"},
-		}, "10.70.245.120", "", false},
+			{ID: "leaf1", Address: "192.0.2.120:16001"},
+			{ID: "leaf2", Address: "192.0.2.120:16002"},
+		}, "192.0.2.120", "", false},
 		{"same device twice still resolves", []Target{
 			{ID: "leaf1", Address: "10.0.0.5:161"},
 			{ID: "leaf1", Address: "10.0.0.5:161"},
@@ -196,8 +196,8 @@ func TestTrapAttributeDevice(t *testing.T) {
 	}
 	// A NAT gateway fronting both devices — neither leaf1 nor spine1 polls FROM it.
 	nat := []Target{
-		{ID: "leaf1", Address: "10.70.245.120:16001"},
-		{ID: "spine1", Address: "10.70.245.120:16002"},
+		{ID: "leaf1", Address: "192.0.2.120:16001"},
+		{ID: "spine1", Address: "192.0.2.120:16002"},
 	}
 	sysName := func(name string) []TrapVarbind {
 		return []TrapVarbind{{OID: "1.3.6.1.2.1.1.5.0", Name: "sysName", Value: name}}
@@ -214,12 +214,12 @@ func TestTrapAttributeDevice(t *testing.T) {
 		// (source-IP attribution is decodeTrap's job — see TestTrapResolveAmbiguityGuard
 		// + TestV3AuthPrivRoundTrip; attributeDevice only RESCUES identity from the PDU.)
 		{"already attributed is left untouched", ts, &TrapEvent{Device: "leaf1"}, "10.0.0.5", "leaf1", "inventory_matched"},
-		{"sysName recovers identity behind NAT", nat, &TrapEvent{Varbinds: sysName("spine1")}, "10.70.245.120", "spine1", "inventory_matched"},
-		{"v1 agent-addr recovers identity behind NAT", nat, &TrapEvent{agentAddr: "10.0.0.5"}, "10.70.245.120", "", "inventory_missing"}, // agent-addr not in NAT inventory
+		{"sysName recovers identity behind NAT", nat, &TrapEvent{Varbinds: sysName("spine1")}, "192.0.2.120", "spine1", "inventory_matched"},
+		{"v1 agent-addr recovers identity behind NAT", nat, &TrapEvent{agentAddr: "10.0.0.5"}, "192.0.2.120", "", "inventory_missing"}, // agent-addr not in NAT inventory
 		{"v1 agent-addr resolves when in inventory", ts, &TrapEvent{agentAddr: "10.0.0.9"}, "172.16.0.1", "spine1", "inventory_matched"},
-		{"sysName wins over a shared source", nat, &TrapEvent{Varbinds: sysName("leaf1")}, "10.70.245.120", "leaf1", "inventory_matched"},
-		{"unknown NAT source stays an honest unknown", nat, &TrapEvent{}, "10.70.245.120", "", "inventory_missing"},
-		{"unmatched sysName falls through to unknown", ts, &TrapEvent{Varbinds: sysName("ghost")}, "10.70.245.120", "", "inventory_missing"},
+		{"sysName wins over a shared source", nat, &TrapEvent{Varbinds: sysName("leaf1")}, "192.0.2.120", "leaf1", "inventory_matched"},
+		{"unknown NAT source stays an honest unknown", nat, &TrapEvent{}, "192.0.2.120", "", "inventory_missing"},
+		{"unmatched sysName falls through to unknown", ts, &TrapEvent{Varbinds: sysName("ghost")}, "192.0.2.120", "", "inventory_missing"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

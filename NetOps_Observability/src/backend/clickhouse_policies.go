@@ -23,7 +23,7 @@ import (
 // inserting connection's context, where `tenant_scope` is unset → the insert
 // ERRORS, breaking ingestion). See deployment/docker/clickhouse/init.sql.
 
-// chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = '')
+// chRowPolicyDDL is the LENIENT telemetry policy: untagged (tenant_id = ”)
 // rows are shared into every tenant's view. Correct ONLY for the shared
 // telemetry tables (flows, findings, tunnels) whose data model depends on
 // untagged rows. NEVER use it for the correlation family — see
@@ -84,6 +84,11 @@ func chConvergeStmts() []string {
 	// Cloud cost store (Wave 5 #18) — table + STRICT tenant row policy
 	// (cloud_costs.go). Billing data is per-tenant financial data.
 	stmts = append(stmts, cloudCostsSchemaDDL()...)
+	// #69 P2 service flow rollup (svc_rollup_schema.go, STRICT policy) and the
+	// Path Behavior Health V1 hour-of-week baselines (path_health_baselines.go,
+	// lenient policy — see that file for why). Same converge-on-boot contract.
+	stmts = append(stmts, svcRollupSchemaDDL()...)
+	stmts = append(stmts, pathBaselineSchemaDDL()...)
 	return stmts
 }
 

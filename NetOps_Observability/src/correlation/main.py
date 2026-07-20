@@ -330,7 +330,7 @@ PROJECTION_WRITE_FAILURES = 0
 
 # --- #101 chaos/storm fixtures -------------------------------------------
 # CORR_CHAOS_FIXTURES names INTENTIONAL storm sources: "name=match[,name=match]"
-# e.g. "lab_probe_storm_fixture_120=10.70.245.120". A persisted object whose
+# e.g. "lab_probe_storm_fixture_120=192.0.2.120". A persisted object whose
 # affected entities contain a match is tagged with the fixture name in
 # corr_current.chaos_fixture: Command Center badges it, the ticketing sweeper
 # skips it, and NOC dashboards can tell "known chaos" from a real incident —
@@ -360,7 +360,7 @@ CHAOS_FIXTURES = _parse_chaos_fixtures(os.environ.get("CORR_CHAOS_FIXTURES", "")
 def _chaos_fixture_for(snap: "ObjectSnapshot") -> str:
     """Fixture name when any affected entity matches a registered chaos source
     ('' = real incident). Substring match: probe entities carry the target in
-    path/entity ids (e.g. 'path:prober->10.70.245.120')."""
+    path/entity ids (e.g. 'path:prober->192.0.2.120')."""
     if not CHAOS_FIXTURES:
         return ""
     for entities in snap.affected().values():

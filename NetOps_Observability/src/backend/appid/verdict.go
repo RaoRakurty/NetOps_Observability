@@ -303,3 +303,29 @@ func minF(a, b float64) float64 {
 func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100
 }
+
+// TopSource returns the strongest source supporting the fused app ("" when the
+// verdict is unknown or nothing supports it). Batch consumers surface it as the
+// one-line provenance ("who says so") next to the app name — the tooltip in the
+// UI's secondary app-name chip.
+func (v Verdict) TopSource() Source {
+	if v.App == "" || v.App == "unknown" || v.Tier == Undetermined {
+		return ""
+	}
+	var best Source
+	bestConf := -1.0
+	for _, sig := range v.Signals {
+		if sig.Role != Supports || sig.App != v.App {
+			continue
+		}
+		cf := sig.Confidence
+		if cf <= 0 {
+			cf = sig.Source.baseConfidence()
+		}
+		if cf > bestConf {
+			bestConf = cf
+			best = sig.Source
+		}
+	}
+	return best
+}

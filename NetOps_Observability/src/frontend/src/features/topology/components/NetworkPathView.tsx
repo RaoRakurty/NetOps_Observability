@@ -18,6 +18,7 @@ import type { TopologyView, TopologyNode, TopologyEdge, RcaOverlayState } from "
 import { HEALTH_COLOR, HEALTH_LABEL } from "../utils/topologyHealth";
 import { RCA_OVERLAY } from "../utils/rcaOverlay";
 import { ShapeSVG, kindForRole, type ShapeKind } from "../../../components/graph/shapes";
+import { fmtMs, fmtMbps } from "../utils/pathFormat";
 import PathAnalysisPanel from "./PathAnalysisPanel";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
@@ -60,28 +61,40 @@ function edgeBetween(edges: TopologyEdge[], a: string, b: string): TopologyEdge 
   return edges.find((e) => (e.source === a && e.target === b) || (e.source === b && e.target === a));
 }
 
-/** A hop's STAMP active-measurement metrics, read from node.metrics (backend attaches
- *  stamp_* keys for hops a probe reaches; absent → honest "—"). */
-type HopStamp = { rtt?: number; pdv?: number; owd?: number; loss?: number; has: boolean };
+/** A hop's active-measurement metrics, read from node.metrics. The backend attaches
+ *  stamp_* keys (STAMP probe, per destination) and trace_* keys (traceroute per-hop
+ *  probe, keyed by hop IP). Latency + loss prefer STAMP and fall back to traceroute;
+ *  OWD + jitter are STAMP-only (traceroute cannot measure them — never faked from
+ *  RTT). Absent everywhere → honest "—". */
+type HopMetricSource = "stamp" | "trace";
+type HopStamp = {
+  rtt?: number; pdv?: number; owd?: number; loss?: number;
+  rttSource?: HopMetricSource; lossSource?: HopMetricSource;
+  has: boolean;
+};
 function hopStamp(n: TopologyNode | undefined): HopStamp {
   const m = n?.metrics;
   const num = (k: string): number | undefined => {
     const v = m?.[k];
     return typeof v === "number" ? v : undefined;
   };
-  const rtt = num("stamp_rtt_ms"), pdv = num("stamp_pdv_ms"), owd = num("stamp_owd_ms"), loss = num("stamp_loss_pct");
-  return { rtt, pdv, owd, loss, has: rtt != null || pdv != null || owd != null || loss != null };
+  const pdv = num("stamp_pdv_ms"), owd = num("stamp_owd_ms");
+  const sRtt = num("stamp_rtt_ms"), tRtt = num("trace_rtt_ms");
+  const sLoss = num("stamp_loss_pct"), tLoss = num("trace_loss_pct");
+  const rtt = sRtt ?? tRtt, loss = sLoss ?? tLoss;
+  return {
+    rtt, pdv, owd, loss,
+    rttSource: sRtt != null ? "stamp" : tRtt != null ? "trace" : undefined,
+    lossSource: sLoss != null ? "stamp" : tLoss != null ? "trace" : undefined,
+    has: rtt != null || pdv != null || owd != null || loss != null,
+  };
 }
-/** Format a millisecond value compactly: sub-ms as µs, else 1-decimal ms. */
-function fmtMs(v: number): string {
-  if (v < 1) return `${Math.round(v * 1000)} µs`;
-  return `${v.toFixed(v < 10 ? 1 : 0)} ms`;
-}
-/** Mbps → human bitrate: Gbps when ≥1000, Kbps when <1, else Mbps (#85). */
-function fmtMbps(v: number): string {
-  if (v >= 1000) return `${(v / 1000).toFixed(v % 1000 ? 1 : 0)} Gbps`;
-  if (v < 1) return `${Math.round(v * 1000)} Kbps`;
-  return `${v.toFixed(v < 10 ? 1 : 0)} Mbps`;
+/** Provenance tooltip for a measured latency/loss value — the operator must always
+ *  be able to see HOW a number was measured. */
+function sourceTip(s: HopMetricSource | undefined): string | undefined {
+  if (s === "trace") return "Measured by traceroute (per-hop probe; routers may deprioritize ICMP replies)";
+  if (s === "stamp") return "Measured by a STAMP active probe";
+  return undefined;
 }
 /** A hop's end-to-end latency for segment-delta math: prefer one-way delay (OWD),
  *  fall back to RTT. The DIFFERENCE between two consecutive hops' values is that
@@ -303,11 +316,11 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
             outE?.[k] ?? inE?.[k];
           const bw = em("bandwidth_mbps"), thr = em("throughput_mbps");
           const mtu = em("mtu"), rel = em("reliability_pct");
-          const M = (label: string, value: string | null, hint?: string) => (
+          const M = (label: string, value: string | null, hint?: string, valueTitle?: string) => (
             <div className="netpath-hd-row" key={label}>
               <span className="netpath-hd-label">{label}</span>
               {value != null
-                ? <span className="netpath-hd-val mono">{value}</span>
+                ? <span className="netpath-hd-val mono" title={valueTitle}>{value}</span>
                 : <span className="netpath-hd-na" title={hint ?? "Not measured yet"}>—</span>}
             </div>
           );
@@ -318,11 +331,15 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
                 <button type="button" className="netpath-hd-close" aria-label="Close" onClick={() => setOpenHop(null)}>✕</button>
               </div>
               <div className="netpath-hopdetail-grid">
-                <div className="netpath-hd-group">Active measurement · STAMP</div>
-                {M("Latency (round-trip)", st.rtt != null ? fmtMs(st.rtt) : null, "No STAMP probe targets this hop's IP yet")}
-                {M("One-way delay (OWD)", st.owd != null ? fmtMs(st.owd) : null, "No STAMP probe targets this hop's IP yet")}
-                {M("Jitter (PDV)", st.pdv != null ? fmtMs(st.pdv) : null, "No STAMP probe targets this hop's IP yet")}
-                {M("Packet loss", st.loss != null ? `${st.loss.toFixed(st.loss < 1 ? 2 : 1)}%` : null, "No STAMP probe targets this hop's IP yet")}
+                <div className="netpath-hd-group">Active measurement</div>
+                {M("Latency (round-trip)", st.rtt != null ? fmtMs(st.rtt) : null,
+                  "No STAMP probe or traceroute measurement reaches this hop yet", sourceTip(st.rttSource))}
+                {M("One-way delay (OWD)", st.owd != null ? fmtMs(st.owd) : null,
+                  "STAMP-only metric — no STAMP probe targets this hop's IP yet")}
+                {M("Jitter (PDV)", st.pdv != null ? fmtMs(st.pdv) : null,
+                  "STAMP-only metric — no STAMP probe targets this hop's IP yet")}
+                {M("Packet loss", st.loss != null ? `${st.loss.toFixed(st.loss < 1 ? 2 : 1)}%` : null,
+                  "No STAMP probe or traceroute measurement reaches this hop yet", sourceTip(st.lossSource))}
                 <div className="netpath-hd-group">Link</div>
                 {M("Load (utilization)", loadPct != null ? `${Math.round(loadPct)}%` : null)}
                 {M("Bandwidth", bw != null ? fmtMbps(bw) : null, "Interface link speed (ifSpeed) — no series for this hop's interface")}
@@ -338,9 +355,9 @@ export default function NetworkPathView({ view }: { view: TopologyView }) {
 
         {!anyStamp && !openHop && (
           <div className="netpath-stamp-foot" role="note">
-            Per-hop latency / jitter appear here from STAMP active probes — click a hop for the full
-            metric list. No probe currently targets the hops on this path; add a STAMP target per hop
-            to light them up.
+            Per-hop latency / jitter appear here from STAMP active probes and traceroute per-hop
+            measurements — click a hop for the full metric list. No probe currently covers the hops
+            on this path; add a STAMP target per hop to light them up.
           </div>
         )}
       </div>

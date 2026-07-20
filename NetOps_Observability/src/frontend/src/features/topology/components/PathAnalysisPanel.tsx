@@ -2,8 +2,10 @@
 // may be MEASURED (traceroute ground truth) or COMPUTED (an IGP shortest-path
 // inference); a provenance chip states which so a computed proxy is never read as a
 // live trace (honesty guard).
-// Each hop shows the device, a per-hop HEALTH band, and the ingress/egress
-// interfaces; between hops it shows the connecting LINK's utilization + status,
+// Each hop shows the device, a per-hop HEALTH band, the ingress/egress interfaces,
+// and the hop edge's interface facts (bandwidth / throughput / reliability / MTU,
+// #85 — measured value or an honest "—" with a provenance tooltip); between hops
+// it shows the connecting LINK's utilization + status,
 // and the worst hop/link on the path is flagged as the likely bottleneck. Per-hop
 // active-measurement (loss/latency/jitter) is end-to-end today, not per-segment —
 // so we show what we honestly have (device health + measured link load) rather
@@ -11,6 +13,7 @@
 
 import type React from "react";
 import type { TopologyView, TopologyNode, TopologyEdge, RcaOverlayState } from "../api/topologyTypes";
+import { fmtMbps } from "../utils/pathFormat";
 
 const MONO = "var(--font-mono, ui-monospace, monospace)";
 
@@ -127,6 +130,13 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
           const nextEdge = i < path.length - 1 ? edgeBetween(view.edges, id, path[i + 1]) : undefined;
           const ingress = prevEdge ? (prevEdge.target === id ? prevEdge.target_port : prevEdge.source_port) : undefined;
           const egress = nextEdge ? (nextEdge.source === id ? nextEdge.source_port : nextEdge.target_port) : undefined;
+          // #85 — interface facts on the hop's edge (egress preferred, ingress
+          // fallback — same per-metric join the ribbon's hop detail uses). Honesty:
+          // a measured value or "—" with a provenance tooltip, never a fabrication.
+          const em = (k: "bandwidth_mbps" | "throughput_mbps" | "reliability_pct" | "mtu") =>
+            nextEdge?.[k] ?? prevEdge?.[k];
+          const bw = em("bandwidth_mbps"), thr = em("throughput_mbps");
+          const rel = em("reliability_pct"), mtu = em("mtu");
           const decision = node?.tags?.decision;
           // Hop → evidence link: a fault role recolours the hop's rail to the verdict
           // colour, so the path itself shows WHERE the root cause sits.
@@ -158,6 +168,32 @@ export default function PathAnalysisPanel({ view }: { view: TopologyView }) {
                     {ingress ? `in ${ingress}` : i === 0 ? "ingress" : "in —"}
                     {"  ·  "}
                     {egress ? `out ${egress}` : i === path.length - 1 ? "egress" : "out —"}
+                  </div>
+                  {/* #85 hop-edge interface facts: bandwidth / throughput / reliability / MTU. */}
+                  <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", marginTop: 2, fontFamily: MONO }}>
+                    <span title={bw != null
+                      ? "Bandwidth — interface link speed (ifSpeed)"
+                      : "Bandwidth — interface link speed (ifSpeed); no series for this hop's interface yet"}>
+                      {`bw ${bw != null ? fmtMbps(bw) : "—"}`}
+                    </span>
+                    {"  ·  "}
+                    <span title={thr != null
+                      ? "Throughput — measured interface octet rate"
+                      : "Throughput — interface octet rate; no series for this hop's interface yet"}>
+                      {`thr ${thr != null ? fmtMbps(thr) : "—"}`}
+                    </span>
+                    {"  ·  "}
+                    <span title={rel != null
+                      ? "Reliability — oper-status × error-free ratio"
+                      : "Reliability — oper-status × error-free ratio; no series for this hop's interface yet"}>
+                      {`rel ${rel != null ? `${rel.toFixed(2)}%` : "—"}`}
+                    </span>
+                    {"  ·  "}
+                    <span title={mtu != null
+                      ? "MTU — interface ifMtu"
+                      : "MTU — ifMtu added to the SNMP profile; populates on the next poll"}>
+                      {`mtu ${mtu != null ? `${Math.round(mtu)} B` : "—"}`}
+                    </span>
                   </div>
                   {rc && (
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 4,

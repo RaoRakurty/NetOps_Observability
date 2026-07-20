@@ -45,9 +45,10 @@ var closeVerificationLabels = map[string]string{
 }
 
 // handleCorrelationTimeEvents routes the manual-event path:
-//   GET    /api/correlations/{id}/time-events            (list the caller-tenant's manual events)
-//   POST   /api/correlations/{id}/time-events            (add/edit a manual event)
-//   DELETE /api/correlations/{id}/time-events/{eventID}  (remove one)
+//
+//	GET    /api/correlations/{id}/time-events            (list the caller-tenant's manual events)
+//	POST   /api/correlations/{id}/time-events            (add/edit a manual event)
+//	DELETE /api/correlations/{id}/time-events/{eventID}  (remove one)
 func (s *server) handleCorrelationTimeEvents(w http.ResponseWriter, r *http.Request, id, eventID string) {
 	if r.Method == http.MethodGet {
 		// Read-back (who closed / recovery-verification state at close, for the
@@ -100,9 +101,9 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	var body struct {
-		EventType string  `json:"event_type"`
-		EventTime string  `json:"event_time"` // RFC3339
-		Note      string  `json:"note"`
+		EventType  string  `json:"event_type"`
+		EventTime  string  `json:"event_time"` // RFC3339
+		Note       string  `json:"note"`
 		Confidence float64 `json:"confidence"`
 		// Verification: the recovery-verification state at close (#7 embedded
 		// investigation loop). Allowed ONLY on "closed" events, allowlisted

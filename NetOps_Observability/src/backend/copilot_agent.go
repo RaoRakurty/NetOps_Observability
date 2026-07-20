@@ -30,7 +30,6 @@ const (
 	aiToolsMaxCitations  = 12              // citations returned to the UI
 )
 
-
 // agentDoctrine is the investigation playbook appended to the server-owned
 // system prompt on tool-enabled turns. It exists because models — especially
 // small ones — default to interrogating the operator ("which source? exact

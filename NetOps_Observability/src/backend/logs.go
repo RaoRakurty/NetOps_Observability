@@ -96,11 +96,12 @@ const logsMaxWindow = 10000
 // signal — the SINGLE scoping path shared by the interactive search and the
 // retention-floor read, so isolation (#20 Phase 3 + the applogs platform
 // boundary + operator restrictions) is enforced identically on both:
-//   index    — the caller's index pattern (never names another tenant's indices)
-//   filters  — per-doc tenant filter (osTenantFilter; defense in depth)
-//   mustNot  — restricted-tenant exclusions for the operator's Global view
-//   denyAll  — the caller is scoped into a restricted tenant: match nothing
-//   forbidden— platform-only signal (applogs) requested by a non-owner
+//
+//	index    — the caller's index pattern (never names another tenant's indices)
+//	filters  — per-doc tenant filter (osTenantFilter; defense in depth)
+//	mustNot  — restricted-tenant exclusions for the operator's Global view
+//	denyAll  — the caller is scoped into a restricted tenant: match nothing
+//	forbidden— platform-only signal (applogs) requested by a non-owner
 func (s *server) logsScope(r *http.Request, signal string) (index string, filters, mustNot []any, denyAll, forbidden bool) {
 	claims, authed := userFrom(r.Context())
 	tenant, cross := "", true

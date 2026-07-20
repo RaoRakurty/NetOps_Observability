@@ -1,8 +1,8 @@
 package ai
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -1379,7 +1379,7 @@ func (o *Orchestrator) answerProduct(question string, plan Plan, disc []string) 
 		// ("where is X" questions classify to navigation before reaching here).
 		return Answer{
 			Mode: ModeProductAnswer, Intent: plan.Intent, Modules: plan.Modules,
-			Text: "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
+			Text:      "The documentation doesn't cover that (yet). I can explain what's going on right now, look up a troubleshooting playbook, or point you to a feature — or browse the docs from the ? menu.",
 			Citations: []Citation{}, ModeBadges: []string{"Product help"},
 			Disclaimers: append(disc, "No matching documentation — nothing was invented."),
 		}

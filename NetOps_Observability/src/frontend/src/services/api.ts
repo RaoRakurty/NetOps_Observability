@@ -1053,6 +1053,15 @@ export type SystemNetworkStatus = {
   ntp: { results: NTPResult[]; ok: boolean; offset_ms: number };
 };
 
+// One resolved app name from POST /api/appid/resolve/batch (#81 P3G). `source`
+// is the winning provenance (cloud_tag | ngfw_app_id | operator | ip_catalog |
+// …) — surfaced as the tooltip on the UI's app-name chip.
+export type AppIdBatchVerdict = {
+  app: string;
+  source: string;
+  confidence: number;
+};
+
 export type Tunnel = {
   ts: string;
   id: string;
@@ -1920,6 +1929,15 @@ export const api = {
     request<ClickHouseResponse>(
       `/api/flows/fanout?sort=${sort}&since=${sinceSeconds}s&limit=${limit}${type ? `&type=${type}` : ""}${flowQS(filters)}`,
     ),
+  // Batch app-name resolution (#81 P3G): visible IPs → {ip: {app, source,
+  // confidence}} through the unified resolver. Unresolved IPs are OMITTED from
+  // the response. Callers should go through services/appNames.ts (debounce +
+  // TTL cache) rather than calling this directly.
+  appIdResolveBatch: (keys: string[]) =>
+    request<Record<string, AppIdBatchVerdict>>("/api/appid/resolve/batch", {
+      method: "POST",
+      body: JSON.stringify({ keys }),
+    }),
   // Traffic by country of the initiator (dim=src) or responder (dim=dst),
   // resolved through the server's GeoIP dictionary. Rows: {country, bytes_total,
   // packets_total, flows}; country "" = private/unmatched. The generous default

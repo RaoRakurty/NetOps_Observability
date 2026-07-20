@@ -231,6 +231,16 @@ func (st *store) handlePatch(w http.ResponseWriter, r *http.Request) {
 	for k, v := range patch {
 		inc[k] = v
 	}
+	// A real ServiceNow stamps these when the state transition happens in the UI;
+	// mirror that so a bare `{"state":"6"}` PATCH still yields honest lifecycle
+	// timestamps — but never overwrite a caller-supplied value.
+	if state := atoiOr(asString(inc["state"]), 0); state > 0 {
+		for field, minState := range map[string]int{"work_start": 2, "resolved_at": 6, "closed_at": 7} {
+			if state >= minState && asString(inc[field]) == "" {
+				inc[field] = nowStamp()
+			}
+		}
+	}
 	inc["sys_updated_on"] = nowStamp()
 	st.incidents[sysID] = inc
 	log.Printf("PATCH  %v (%s) state=%v work_notes=%q", inc["number"], sysID, inc["state"], asString(patch["work_notes"]))
