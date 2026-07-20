@@ -996,6 +996,11 @@ services:
       # as normalized RCA evidence. ON by default (read-only, inert until a
       # controller is connected); set =false to hide the integrations page.
       FEATURE_NMS_INTEGRATIONS: ${FEATURE_NMS_INTEGRATIONS:-true}
+      # Active Verification (RCA spec #8): read-only SSH interrogation of devices
+      # to gather an independent second source of evidence. DORMANT by default —
+      # requires this global gate PLUS per-tenant opt-in (GET/PUT
+      # /api/settings/verification) AND a registered read-only SSH credential.
+      FEATURE_ACTIVE_VERIFICATION: ${FEATURE_ACTIVE_VERIFICATION:-false}
       # SSRF allowlist for outbound integrations (ITSM/webhooks). The outbound
       # guard (safehttp) refuses private/internal targets by default; add a
       # self-hosted/lab ServiceNow or the bundled mock-servicenow fixture here
