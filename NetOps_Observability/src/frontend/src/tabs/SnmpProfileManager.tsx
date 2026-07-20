@@ -12,7 +12,7 @@ type Pane = "credentials" | "profiles" | "generate";
 const PANES: { id: Pane; label: string; hint: string }[] = [
   { id: "credentials", label: "Credentials", hint: "Per-device community / SNMPv3 USM secrets" },
   { id: "profiles", label: "Profiles", hint: "Vendor OID & metric library" },
-  { id: "generate", label: "Generate config", hint: "One-click device config + auto-provisioned profile" },
+  { id: "generate", label: "Generate Config", hint: "One-click device config + auto-provisioned profile" },
 ];
 
 export default function SnmpProfileManager() {
