@@ -82,26 +82,67 @@ transforms:
   applogs_tagged:
     type: remap
     inputs: [kafka_applogs]
-    source: |
+    # &log_lane: the tenant-segment + timestamp normalisation every log-shaped
+    # lane needs. Anchored (not copy-pasted) so the four lanes can never drift
+    # apart again — divergence between sibling lanes is what caused DEF-6.
+    source: &log_lane |
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
+
+      # ── `ts` normalisation (DEF-6, 2026-07-21) ──────────────────────────
+      # Producers on these topics emit `ts` in three incompatible shapes:
+      # float epoch-SECONDS (Python time.time()), an RFC3339 string, and
+      # absent. `ts` is not declared in the index template, so OpenSearch
+      # DYNAMICALLY mapped it as a date from the first integer it saw — every
+      # float after that died with mapper_parsing_exception. A mapping
+      # rejection is not retriable, so Vector dropped those events for good:
+      # measured 217 events lost in 30 min on the applogs lane alone (~10k/day),
+      # with no dead-letter and no alert.
+      #
+      # Coerce every shape to integer epoch MILLISECONDS — the same contract
+      # flows_decoded already enforces. The unit is inferred by magnitude, so a
+      # producer that changes precision (s → ms → µs → ns) can never silently
+      # poison the index again. An unparseable value is preserved as a STRING
+      # in .ts_invalid rather than dropped, so the bad producer is greppable
+      # instead of invisible.
+      if exists(.ts) {
+        if is_string(.ts) {
+          parsed, perr = parse_timestamp(to_string(.ts) ?? "", format: "%+")
+          if perr == null {
+            .ts = to_unix_timestamp(parsed, unit: "milliseconds")
+          } else {
+            .ts_invalid = to_string(.ts) ?? ""
+            del(.ts)
+          }
+        } else {
+          n = to_float(.ts) ?? -1.0
+          if n <= 0.0 {
+            .ts_invalid = to_string(.ts) ?? ""
+            del(.ts)
+          } else if n < 100000000000.0 {
+            # < 1e11 → epoch seconds (1e11 s is year 5138; no real ms value is
+            # this small), e.g. Python time.time() = 1784658034.77
+            .ts = to_int(floor(n * 1000.0))
+          } else if n < 100000000000000.0 {
+            .ts = to_int(floor(n))                 # already milliseconds
+          } else if n < 100000000000000000.0 {
+            .ts = to_int(floor(n / 1000.0))        # microseconds
+          } else {
+            .ts = to_int(floor(n / 1000000.0))     # nanoseconds
+          }
+        }
+      }
 
   syslog_tagged:
     type: remap
     inputs: [kafka_syslog]
-    source: |
-      seg = downcase(to_string(.tenant_id) ?? "")
-      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
-      .tenant_seg = seg
+    source: *log_lane
 
   snmptrap_tagged:
     type: remap
     inputs: [kafka_snmptrap]
-    source: |
-      seg = downcase(to_string(.tenant_id) ?? "")
-      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
-      .tenant_seg = seg
+    source: *log_lane
 
   # Cloud logs carry an explicit tenant_id from the source (cloud logs have no
   # device to enrich from — the poller/aggregator stamp it). Derive the same
@@ -110,10 +151,7 @@ transforms:
   cloudlogs_tagged:
     type: remap
     inputs: [kafka_cloudlogs]
-    source: |
-      seg = downcase(to_string(.tenant_id) ?? "")
-      if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
-      .tenant_seg = seg
+    source: *log_lane
 
   # goflow2 renders the IP protocol as a NAME ("TCP"/"UDP"/"ICMP"…), but the
   # ClickHouse flows.proto column is UInt8 (the IANA number). Without this
@@ -180,6 +218,10 @@ transforms:
     inputs: [kafka_cloudcosts]
     drop_on_abort: true
     drop_on_error: true
+    # Aborted/errored records used to vanish with no trace. Reroute them to the
+    # `.dropped` output so the dead-letter sink below can keep the evidence
+    # (DEF-6 follow-up: nothing may be discarded invisibly).
+    reroute_dropped: true
     source: |
       if (to_string(.kind) ?? "") != "cloud_cost" { abort }
       if !match(to_string(.day) ?? "", r'^\d{4}-\d{2}-\d{2}$') { abort }
@@ -190,6 +232,21 @@ transforms:
         .ts = to_unix_timestamp(tsp, unit: "milliseconds")
       } else {
         del(.ts)
+      }
+
+  # Dead-letter encoder — the last stop before an event would be discarded.
+  # Every field is flattened into ONE json string so a poisoned document can
+  # never conflict with the dead-letter index's own mapping (a dead-letter that
+  # can itself be rejected is worthless). Keep this shape boring on purpose.
+  deadletter_encoded:
+    type: remap
+    inputs: [cloudcosts_normalized.dropped]
+    source: |
+      . = {
+        "dropped_at": format_timestamp!(now(), format: "%+"),
+        "lane": "cloudcosts",
+        "reason": to_string(.metadata.message) ?? "aborted or failed remap",
+        "raw": encode_json(.)
       }
 
   # OS gets a 1-in-50 SAMPLE of flows — ClickHouse is the canonical flow store.
@@ -215,6 +272,20 @@ sinks:
     mode: bulk
     bulk:
       index: "netops-applogs-{{ tenant_seg }}-%Y.%m.%d"
+      action: index
+    api_version: v7
+    healthcheck: { enabled: false }
+
+  # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
+  # records land here), so a non-empty netops-deadletter-* index is itself the
+  # signal that a producer has broken its contract.
+  opensearch_deadletter:
+    type: elasticsearch
+    inputs: [deadletter_encoded]
+    endpoints: ["http://opensearch:9200"]
+    mode: bulk
+    bulk:
+      index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: false }

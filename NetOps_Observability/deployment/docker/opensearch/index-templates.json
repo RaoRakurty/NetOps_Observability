@@ -1,9 +1,10 @@
 {
-  "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.",
-
+  "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.  |  ts is declared explicitly (2026-07-21, DEF-6): it was previously left to dynamic mapping, which inferred `date` from the first integer seen and then rejected every float epoch-seconds value, silently dropping ~10k events/day. The router normalises ts to integer epoch-millis; this mapping pins that contract.",
   "templates": {
     "netops-applogs": {
-      "index_patterns": ["netops-applogs-*"],
+      "index_patterns": [
+        "netops-applogs-*"
+      ],
       "template": {
         "settings": {
           "number_of_shards": 1,
@@ -13,21 +14,42 @@
         },
         "mappings": {
           "properties": {
-            "timestamp":      { "type": "date" },
-            "level":          { "type": "keyword" },
-            "component":      { "type": "keyword" },
-            "service":        { "type": "keyword" },
-            "container_name": { "type": "keyword" },
-            "message":        { "type": "text" },
-            "msg":            { "type": "text" },
-            "tenant_id":      { "type": "keyword" }
+            "timestamp": {
+              "type": "date"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "component": {
+              "type": "keyword"
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "container_name": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "msg": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
           }
         }
       }
     },
-
     "netops-syslog": {
-      "index_patterns": ["netops-syslog-*"],
+      "index_patterns": [
+        "netops-syslog-*"
+      ],
       "template": {
         "settings": {
           "number_of_shards": 1,
@@ -37,20 +59,39 @@
         },
         "mappings": {
           "properties": {
-            "timestamp": { "type": "date" },
-            "hostname":  { "type": "keyword" },
-            "appname":   { "type": "keyword" },
-            "severity":  { "type": "keyword" },
-            "facility":  { "type": "keyword" },
-            "message":   { "type": "text" },
-            "tenant_id": { "type": "keyword" }
+            "timestamp": {
+              "type": "date"
+            },
+            "hostname": {
+              "type": "keyword"
+            },
+            "appname": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "facility": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
           }
         }
       }
     },
-
     "netops-flows": {
-      "index_patterns": ["netops-flows-*"],
+      "index_patterns": [
+        "netops-flows-*"
+      ],
       "template": {
         "settings": {
           "number_of_shards": 1,
@@ -60,16 +101,40 @@
         },
         "mappings": {
           "properties": {
-            "timestamp":       { "type": "date" },
-            "sampler_address": { "type": "ip" },
-            "src_addr":        { "type": "ip" },
-            "dst_addr":        { "type": "ip" },
-            "src_port":        { "type": "integer" },
-            "dst_port":        { "type": "integer" },
-            "proto":           { "type": "integer" },
-            "bytes":           { "type": "long" },
-            "packets":         { "type": "long" },
-            "tenant_id":       { "type": "keyword" }
+            "timestamp": {
+              "type": "date"
+            },
+            "sampler_address": {
+              "type": "ip"
+            },
+            "src_addr": {
+              "type": "ip"
+            },
+            "dst_addr": {
+              "type": "ip"
+            },
+            "src_port": {
+              "type": "integer"
+            },
+            "dst_port": {
+              "type": "integer"
+            },
+            "proto": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
           }
         }
       }
