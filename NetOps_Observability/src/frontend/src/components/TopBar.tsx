@@ -3,7 +3,7 @@ import { AuthUser, Health } from "../services/api";
 import { omniSearch, groupHits, OmniHit, OmniKind, OMNI_KIND_ICON, OMNI_KIND_TAG, OMNI_KIND_LABEL } from "../lib/omniSearch";
 import { useShell } from "../context/shell";
 import { allRanges, addCustomPreset, rangeFromMinutes } from "../theme/timeprefs";
-import CorrelixLogo from "./brand/CorrelixLogo";
+import { BRAND } from "../brand";
 import Icon from "./Icon";
 import ScopeSelector from "./ScopeSelector";
 import AppearanceControls from "./AppearanceControls";
@@ -148,11 +148,16 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
   return (
     <header className="topbar">
-      {/* Brand wordmark (owner 2026-07-19): CORRELIX with the O as the
-          signature eye — inline SVG mark (brand/CorrelixLogo), same Space
-          Grotesk face as the login wordmark, no raster assets. Anchors the
-          product identity top-left on every page. */}
-      <CorrelixLogo />
+      {/* Brand (owner 2026-07-21, final): the BLOGO5 artwork itself — the
+          glowing network-eye as the O in CORRELIX — served from
+          public/brand/ (background-stripped + trimmed masters, 160px tall for
+          retina). The owner chose the exact artwork over the SVG recreation;
+          it is the ONLY brand mark in the shell (the rail's standalone eye is
+          gone by the same decision). Two theme variants of the same artwork:
+          navy/blue on light chrome, neon leafy green on dark — CSS shows
+          exactly one per [data-theme], so AT announces the brand once. */}
+      <img className="cx-brand-img cx-brand-light" src="/brand/blogo5.png" alt={BRAND} />
+      <img className="cx-brand-img cx-brand-dark" src="/brand/blogo5-dark.png" alt={BRAND} />
       <div className="topbar-right">
         <form className="omni omni-compact" onSubmit={submitSearch} ref={omniRef}>
           <span className="omni-icon" aria-hidden="true"><Icon name="search" size={14} /></span>

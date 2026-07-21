@@ -1257,40 +1257,70 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   border-radius: 5px; padding: 2px 6px;
 }
 
-/* Brand wordmark (owner 2026-07-19): CORRELIX with the O as the signature
-   eye — deep-space iris holding a miniature device constellation, rendered by
-   components/brand/CorrelixLogo (inline SVG eye + real text so the letters
-   always match the login wordmark's Space Grotesk — no raster assets).
-   Letters ride var(--fg); the eye ring's gradient stops come from the
-   per-surface tokens below. */
+/* Brand (owner 2026-07-21, final): the BLOGO5 artwork itself in the topbar —
+   the owner chose the exact PNG over any SVG recreation. 38px tall in the
+   52px bar (owner: "bigger font"); the masters in public/brand/ are 160px
+   (background-stripped + trimmed) so they stay retina-crisp. One artwork,
+   two theme variants (owner 2026-07-21): navy/blue for light chrome
+   (blogo5.png), the same mark in luminous ice-cyan for dark chrome
+   (blogo5-dark.png — same blue family lifted to glow, NOT a new hue: brand
+   identity stays consistent across themes; the green trial was rejected).
+   Exactly one is displayed per theme, so assistive tech announces the brand
+   once. */
+.cx-brand-img { display: block; height: 38px; width: auto; user-select: none; }
+.cx-brand-dark { display: none; }
+:root[data-theme="dark"] .cx-brand-light, :root[data-theme="oled"] .cx-brand-light,
+:root[data-theme="indigo"] .cx-brand-light, :root[data-theme="graphite"] .cx-brand-light { display: none; }
+:root[data-theme="dark"] .cx-brand-dark, :root[data-theme="oled"] .cx-brand-dark,
+:root[data-theme="indigo"] .cx-brand-dark, :root[data-theme="graphite"] .cx-brand-dark { display: block; }
+
+/* Brand dot matrix (owner 2026-07-21): a micro dot-grid across the topbar in
+   the brand colour of the active theme — royal blue on light chrome, ice-cyan
+   on dark — fading out toward the right so it reads as texture radiating from
+   the mark, not wallpaper. Pure CSS (radial-gradient tile + mask), no assets;
+   pointer-events off so it can never intercept clicks. */
+:root { --brand-dot: rgba(29, 78, 216, 0.11); }
+:root[data-theme="dark"], :root[data-theme="oled"],
+:root[data-theme="indigo"], :root[data-theme="graphite"] { --brand-dot: rgba(56, 189, 248, 0.13); }
+.topbar { position: relative; }
+.topbar::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(circle, var(--brand-dot) 1px, transparent 1.4px);
+  background-size: 12px 12px;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.5) 42%, transparent 82%);
+  mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.5) 42%, transparent 82%);
+}
+/* Keep all topbar content above the dot layer (the ::before is positioned, so
+   it would otherwise paint over static children). */
+.topbar > * { position: relative; z-index: 1; }
+
+/* Legacy SVG wordmark lockup (superseded by the BLOGO5 artwork above; kept for
+   the brand component's own tests / future reuse). */
 .cx-logo {
-  display: inline-flex; align-items: center; gap: 0.02em; user-select: none;
+  display: inline-flex; align-items: center; gap: 0.07em; user-select: none;
   font-family: "Space Grotesk", var(--font-sans, sans-serif);
   font-weight: 700; line-height: 1; letter-spacing: 0.05em;
-  color: var(--fg, #1e2233);
+  color: #1d4ed8;
 }
-.cx-logo svg { display: block; margin: 0 0.015em; }
-/* Iris accent — the ONE brand colour in the mark (ring + pupil are ink, from
-   currentColor). Confident indigo on light chrome (≥4.5:1 on white), a brighter
-   periwinkle on dark surfaces and on the rail column whenever its chrome preset
-   is dark (navy default + graphite). `-hi` is the iris centre highlight for the
-   soft radial falloff. The element-scoped rail rule wins var() resolution over
-   :root, so a navy rail under a light app theme still gets the luminous iris. */
-:root { --brand-iris: #4f46e5; --brand-iris-hi: #6366f1; }
-:root[data-theme="dark"], :root[data-theme="oled"],
-:root[data-theme="indigo"], :root[data-theme="graphite"],
-.rail, .sidebar {
-  --brand-iris: #6366f1; --brand-iris-hi: #818cf8;
-}
-/* The white chrome preset lightens the rail — back to the deep iris there. */
-:root[data-chrome="white"] .rail, :root[data-chrome="white"] .sidebar {
-  --brand-iris: #4f46e5; --brand-iris-hi: #6366f1;
+.cx-logo svg { display: block; }
+/* The X — the wordmark's typographic accent (candidate 5): brand blue into
+   bright cyan along the falling stroke. Gradient text needs
+   background-clip:text, so it is gated behind @supports; without it the X
+   simply stays brand blue like its neighbours — never invisible. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .cx-logo-x {
+    background-image: linear-gradient(135deg, currentColor 30%, #38bdf8 85%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
 }
 
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-/* The topbar carries the full CORRELIX wordmark (the authoritative lockup, with
-   horizontal room); the narrow rail head carries the eye-O logomark alone. Two
+/* The topbar carries the C‹eye›RRELIX wordmark (the authoritative lockup, with
+   horizontal room); the narrow rail head carries the eye logomark alone. Two
    lockups of one mark — standard product-brand practice. */
 
 /* Brand-mark slot in the rail head (final logo pending — see brand board).

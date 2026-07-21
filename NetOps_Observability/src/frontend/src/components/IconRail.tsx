@@ -3,8 +3,6 @@ import { createPortal } from "react-dom";
 import { NavSection, routeFor } from "../nav";
 import { useShell } from "../context/shell";
 import { AuthUser } from "../services/api";
-import { BRAND } from "../brand";
-import { CorrelixEyeO } from "./brand/CorrelixLogo";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
 import { Modal } from "./ui";
@@ -70,7 +68,7 @@ type OpenState = { id: string; top: number; focus?: boolean } | null;
 // navigates. All sections render in order (Administration is no longer pinned to
 // the very bottom), and a utility cluster (Account · Support · Help) sits at the
 // foot — replacing the top-right user menu.
-export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword, homeRoute }: Props) {
+export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword }: Props) {
   const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
   const [open, setOpen] = useState<OpenState>(null);
   const [acctOpen, setAcctOpen] = useState(false);
@@ -177,21 +175,9 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
 
   return (
     <aside className="rail">
-      <button
-        className="rail-brand"
-        onClick={() => navigate(homeRoute ?? routeFor(nav[0]))}
-        title={BRAND}
-        aria-label={BRAND}
-      >
-        {/* The Correlix eye-O (owner 2026-07-19): the wordmark's O standing
-            alone as the brand glyph — the rail is icon-only-narrow, so the
-            full CORRELIX lockup lives in the topbar; the button's aria-label
-            still names the brand. Inline SVG, no raster assets. */}
-        <span className="rail-brand-mark" aria-hidden="true">
-          <CorrelixEyeO size={26} />
-        </span>
-        <span className="rail-brand-name">{BRAND}</span>
-      </button>
+      {/* No brand head (owner 2026-07-21): the rail's standalone eye is
+          retired — the BLOGO5 wordmark in the topbar is the shell's one and
+          only brand mark. The nav groups start at the top of the pane. */}
 
       {/* Segregated groups with thin dividers (Monitoring · Infra & Logs · Admin). */}
       <nav className="rail-main" aria-label="Primary">

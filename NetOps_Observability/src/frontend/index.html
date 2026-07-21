@@ -3,11 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Tab mark: the Correlix eye-O (brand/CorrelixLogo.tsx at favicon scale) —
-         a self-contained app tile (dark ground so it reads on any tab), ink
-         ring, single-tone indigo iris, deep pupil, one catchlight. Inlined as a
-         data URI — no binary favicon files. -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='2' y='2' width='44' height='44' rx='11' fill='%230b1020'/%3E%3Ccircle cx='24' cy='24' r='6.6' fill='%236366f1'/%3E%3Ccircle cx='24' cy='24' r='6.6' fill='none' stroke='%2305060d' stroke-opacity='.25' stroke-width='1'/%3E%3Ccircle cx='24' cy='24' r='3' fill='%2305060d'/%3E%3Ccircle cx='21.8' cy='21.8' r='1.1' fill='%23f8fafc'/%3E%3Ccircle cx='24' cy='24' r='15' fill='none' stroke='%23eef1f8' stroke-width='4.2'/%3E%3C/svg%3E" />
+    <!-- Tab mark: the Correlix network-eye (brand/CorrelixLogo.tsx at favicon
+         scale, candidate 5 — the glowing eye-O) — a self-contained app tile
+         (dark ground so it reads on any tab): bright-blue almond lids over a
+         navy field with a luminous cyan hub and a three-node constellation
+         (the full spoke set is illegible at 16px). Inlined as a data URI — no
+         binary favicon files. -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='2' y='2' width='44' height='44' rx='11' fill='%230b1020'/%3E%3Cpath d='M6 24 C13 12,35 12,42 24 C35 36,13 36,6 24 Z' fill='%2316307a'/%3E%3Cg stroke='%237dd3fc' stroke-width='1'%3E%3Cline x1='24' y1='24' x2='24' y2='16.5'/%3E%3Cline x1='24' y1='24' x2='31' y2='27'/%3E%3Cline x1='24' y1='24' x2='17.5' y2='28'/%3E%3C/g%3E%3Ccircle cx='24' cy='16.5' r='1.6' fill='%23bae6fd'/%3E%3Ccircle cx='31' cy='27' r='1.6' fill='%23bae6fd'/%3E%3Ccircle cx='17.5' cy='28' r='1.6' fill='%23bae6fd'/%3E%3Ccircle cx='24' cy='24' r='5.5' fill='%2338bdf8' opacity='.3'/%3E%3Ccircle cx='24' cy='24' r='2.6' fill='%237dd3fc'/%3E%3Ccircle cx='24' cy='24' r='1.3' fill='%23e0f2fe'/%3E%3Cpath d='M6 24 C13 12,35 12,42 24 C35 36,13 36,6 24 Z' fill='none' stroke='%232563eb' stroke-width='3.4' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <!-- Login backdrop artwork: preload so it's on screen the instant the app
          paints (it lives in public/ under a stable URL for exactly this). -->
     <link rel="preload" as="image" type="image/webp" href="/brand/eye-hero.webp" fetchpriority="high" />
