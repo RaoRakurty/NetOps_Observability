@@ -20,6 +20,7 @@ import { WorkspaceProvider, useWorkspace } from "./context/workspace";
 import Login from "./pages/Login";
 import { Modal } from "./components/ui";
 import ChangePasswordCard from "./components/ChangePasswordCard";
+import TenantGate from "./components/TenantGate";
 
 // ShellGridSizing mirrors the live pane sizes into the shell grid's track vars
 // (--ins-w / --drawer-h) so the docked Inspector/BottomDrawer reflow the center
@@ -258,7 +259,13 @@ export default function App() {
                 <ScopeBadge user={user} />
               </div>
             )}
-            {view}
+            {/* Cross-tenant reach is not cross-tenant display (owner 2026-07-21):
+                a platform admin opens ONE tenant at a time rather than reading
+                ten tenants' telemetry merged into one table. Tenant users and
+                already-scoped admins pass straight through. */}
+            <TenantGate sectionId={resourceRoute ? "resource" : section.id} sectionLabel={resourceRoute ? "this resource" : section.label}>
+              {view}
+            </TenantGate>
           </div>
         </main>
         <OpsisDrawer />

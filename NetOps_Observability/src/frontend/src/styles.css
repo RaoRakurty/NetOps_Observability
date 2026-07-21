@@ -5316,3 +5316,91 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .resource-tags { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .resource-tags h3 { margin: 0 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .resource-service { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+
+/* ── Tenant gate ──────────────────────────────────────────────────────────
+   The platform admin's per-tenant entry screen (components/TenantGate).
+   Cross-tenant reach is not cross-tenant display: telemetry sections stay
+   locked until one Org → Tenant is opened, so ten tenants' rows never merge
+   into one unreadable table. Styled as a calm, centred "choose a door" card —
+   this is a routine navigation step for a platform admin, NOT an error state,
+   so no red, no alarm iconography. */
+.tenant-gate {
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: clamp(18px, 5vh, 56px) 16px;
+}
+.tg-card {
+  width: min(720px, 100%);
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 16px; padding: 26px 28px 22px;
+  box-shadow: 0 12px 40px rgba(2, 8, 23, 0.10);
+}
+.tg-lock {
+  width: 40px; height: 40px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  margin-bottom: 14px;
+}
+.tg-title { font-size: var(--fs-xl, 19px); font-weight: 650; letter-spacing: -0.01em; }
+.tg-sub { color: var(--muted); margin: 6px 0 18px; max-width: 60ch; line-height: 1.5; }
+.tg-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--muted); margin-bottom: 7px;
+}
+.tg-recent { margin-bottom: 16px; }
+.tg-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.tg-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 7px 13px; border-radius: 10px; cursor: pointer; text-align: left;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  transition: border-color .15s, transform .12s;
+}
+.tg-chip:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--panel-border)); transform: translateY(-1px); }
+.tg-chip-t { font-weight: 600; font-size: 13px; }
+.tg-chip-o { color: var(--muted); font-size: 11px; }
+
+.tg-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 0 11px; margin-bottom: 14px;
+  color: var(--muted);
+}
+.tg-search input {
+  flex: 1; background: transparent; border: 0; outline: none;
+  color: var(--fg); font-size: 14px; padding: 10px 0;
+}
+.tg-search:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--panel-border)); }
+
+.tg-orgs { display: grid; gap: 14px; max-height: min(46vh, 460px); overflow: auto; }
+.tg-org-head {
+  display: flex; align-items: center; gap: 7px; color: var(--muted);
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.tg-count {
+  margin-left: auto; text-transform: none; letter-spacing: 0;
+  border: 1px solid var(--panel-border); border-radius: 999px;
+  padding: 0 7px; font-size: 10.5px;
+}
+.tg-tenants { display: grid; gap: 6px; }
+.tg-tenant {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 13px; border-radius: 10px; cursor: pointer; text-align: left;
+  background: var(--bg); border: 1px solid var(--panel-border);
+  transition: border-color .15s, background .15s;
+}
+.tg-tenant:hover, .tg-tenant:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--panel-border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+}
+.tg-tenant-name { font-weight: 600; font-size: 14px; }
+.tg-tenant-meta { color: var(--muted); font-size: 11.5px; }
+.tg-open { margin-left: auto; color: var(--muted); display: inline-flex; }
+.tg-tenant:hover .tg-open { color: var(--accent); }
+.tg-empty { color: var(--muted); padding: 14px 2px; font-size: 13.5px; }
+
+@media (max-width: 560px) {
+  .tg-card { padding: 20px 18px 18px; }
+  .tg-tenant { flex-wrap: wrap; }
+}

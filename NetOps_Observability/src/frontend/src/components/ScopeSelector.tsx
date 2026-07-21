@@ -49,14 +49,14 @@ export default function ScopeSelector() {
   }, [scopes]);
 
   const current = scopes.find((s) => s.tenant_id === active);
-  // The platform owner already has the cross-tenant Global view — a top-bar
-  // tenant switcher is the "view-as-tenant" pattern we deliberately removed, so
-  // it is NOT shown for them (they drill into a tenant from Administration →
-  // Tenants instead). The selector exists for MULTI-scope non-owner principals
-  // (SRE / consultant / org-admin) — the case it was actually built for.
-  if (allTenants) return null;
-  // Nothing to switch between (single tenant) → a static context chip.
-  const switchable = scopes.length > 1;
+  // The platform owner DOES get this control (owner 2026-07-21, reversing the
+  // earlier "no view-as-tenant" stance). Telemetry sections are now gated behind
+  // TenantGate — an admin must open one tenant at a time — so the top bar has to
+  // show which door is open and offer a one-click switch. Without it the only
+  // way back out of a tenant would be clearing local storage.
+  // "All organizations" here means the ESTATE view (tenant list, platform
+  // config), not a merged telemetry dump: picking it re-locks the data sections.
+  const switchable = scopes.length > 1 || allTenants;
 
   const pick = (tenantId: string) => {
     setActiveScope(tenantId);
@@ -111,7 +111,7 @@ export default function ScopeSelector() {
           {allTenants && (
             <button className={`scope-opt${!active ? " on" : ""}`} aria-current={!active ? "true" : undefined} onClick={() => pick("")}>
               <span className="scope-opt-title">All organizations</span>
-              <span className="scope-opt-sub">Platform-wide view</span>
+              <span className="scope-opt-sub">Estate view — tenant data stays locked</span>
             </button>
           )}
           {byOrg.map(([orgId, og]) => (
