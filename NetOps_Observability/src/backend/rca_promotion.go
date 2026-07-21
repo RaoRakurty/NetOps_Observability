@@ -79,7 +79,7 @@ func rcaPromotionsPath() string {
 	if p := strings.TrimSpace(os.Getenv("RCA_PROMOTIONS_PATH")); p != "" {
 		return p
 	}
-	return "rca_promotions.json"
+	return "/data/rca_promotions.json"
 }
 
 func newRcaPromotionStore(path string) *rcaPromotionStore {

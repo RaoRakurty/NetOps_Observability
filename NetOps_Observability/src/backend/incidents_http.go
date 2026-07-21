@@ -86,7 +86,7 @@ func (s *server) notifyIncidentSlackActions(inc Incident) {
 	if !ok || !notify.SeverityAtLeast(inc.Severity, minSev) {
 		return
 	}
-	go func() {
+	safeGo("incident-slack-notify", func() {
 		if err := notify.NewSlack(url).SendIncident(notify.IncidentNotice{
 			IncidentID: inc.ID, DisplayID: incidentDisplayID(inc.ID),
 			Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
@@ -101,7 +101,7 @@ func (s *server) notifyIncidentSlackActions(inc Incident) {
 		if err := s.incidents.MarkNotified(ctx, inc.ID, "slack"); err != nil {
 			logError("incidents", "record slack delivery", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 		}
-	}()
+	})
 }
 
 // ---- REST API --------------------------------------------------------------

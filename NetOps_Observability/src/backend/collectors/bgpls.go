@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/safego"
 )
 
 // bgpls.go — BGP Link-State (BGP-LS, RFC 7752 / RFC 9552) topology discovery.
@@ -290,7 +292,9 @@ func (c *bgplsCollector) Run(ctx context.Context) error {
 	}
 	// One session goroutine per peer; a ticker publishes the merged RIB.
 	for _, p := range peers {
-		go c.runPeer(ctx, p)
+		// Guarded: runPeer decodes BGP-LS TLVs straight off a peer session.
+		peer := p
+		safego.Go("bgpls-peer", func() { c.runPeer(ctx, peer) })
 	}
 	t := time.NewTicker(c.publishEvery)
 	defer t.Stop()

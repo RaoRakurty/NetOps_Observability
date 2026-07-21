@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"time"
 )
@@ -312,7 +313,7 @@ func (w *ticketWorker) retryLater(ctx context.Context, it ticketOutboxItem, now 
 		return
 	}
 	it.Status = "retrying"
-	it.NextRetryAt = now.Add(backoffDelay(it.RetryCount))
+	it.NextRetryAt = now.Add(backoffDelay(it.RetryCount, it.ID))
 	_ = w.store.FinishOutbox(ctx, it)
 }
 
@@ -323,19 +324,31 @@ func (w *ticketWorker) deadLetter(ctx context.Context, it ticketOutboxItem, reas
 	w.audit(ctx, it, it.Action, "dead_letter", "", "")
 }
 
-// backoffDelay is capped exponential backoff with a deterministic jitter derived
-// from the attempt (no Math.random — the harness forbids it and it would break
-// resume): base 30s * 2^(n-1), capped at 30m, ± up to ~12% from the attempt.
-func backoffDelay(attempt int) time.Duration {
+// backoffDelay is capped exponential backoff with jitter derived from the ITEM,
+// not the attempt: base 30s * 2^(n-1), capped at 30m, plus 0-50% spread.
+//
+// Deriving jitter from the attempt number gave every item at attempt N an
+// IDENTICAL delay, so a full outbox (10k items) retried in lockstep and
+// re-flooded the recovering ServiceNow/Jira it had just failed against. Hashing
+// (id, attempt) spreads items across the window while staying deterministic —
+// still no Math.random, so a restart resumes the same schedule and tests can
+// assert exact values.
+func backoffDelay(attempt int, id string) time.Duration {
 	if attempt < 1 {
 		attempt = 1
+	}
+	if attempt > 16 { // 2^16 * 30s is far past the cap; guard the Pow from overflowing
+		attempt = 16
 	}
 	base := 30 * time.Second * time.Duration(math.Pow(2, float64(attempt-1)))
 	if base > 30*time.Minute {
 		base = 30 * time.Minute
 	}
-	jitter := time.Duration(attempt*271%1000) * base / 8000 // 0..12.5% deterministic
-	return base + jitter
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	_, _ = h.Write([]byte{byte(attempt)})
+	frac := float64(h.Sum32()) / float64(math.MaxUint32) // [0,1]
+	return base + time.Duration(frac*0.5*float64(base))
 }
 
 // ── outbox payload helpers ───────────────────────────────────────────────────

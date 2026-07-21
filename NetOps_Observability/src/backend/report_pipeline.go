@@ -86,9 +86,9 @@ func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore,
 // Start launches the scheduler goroutine and the worker pool. It returns
 // immediately; all loops exit when ctx is cancelled.
 func (p *reportPipeline) Start(ctx context.Context) {
-	go p.runScheduler(ctx)
+	safeGo("report-scheduler", func() { p.runScheduler(ctx) })
 	for i := 0; i < p.workers; i++ {
-		go p.runWorker(ctx, i)
+		safeGo("report-worker-"+strconv.Itoa(i), func() { p.runWorker(ctx, i) })
 	}
 	logInfo("reports.pipeline", "async reporting pipeline started",
 		map[string]any{"workers": p.workers, "lease_s": p.lease.Seconds()})
@@ -458,6 +458,10 @@ func (p *reportPipeline) fail(ctx, _ context.Context, job reports.Job, tenant, c
 // (e.g. pdf without a sidecar) — skipped silently, never fatal.
 var errFormatUnavailable = errors.New("format renderer unavailable")
 
+// errRenderIncomplete marks a render slot whose goroutine never reported back —
+// today only possible when a renderer panics and safeGo recovers it.
+var errRenderIncomplete = errors.New("renderer did not complete")
+
 // renderAll renders the dataset to every requested format in parallel, storing
 // each artifact under a per-format key (execID_format). HTML is the primary (the
 // email body) — its failure sinks the job; a non-HTML format failing is logged
@@ -479,7 +483,13 @@ func (p *reportPipeline) renderAll(ctx context.Context, execID string, vm report
 			continue
 		}
 		wg.Add(1)
-		go func(i int, f string, r reports.Renderer) {
+		// Pre-seed the slot: if the goroutine dies (a panic recovered by safeGo)
+		// it never overwrites this, so the format reports a failure instead of a
+		// silently empty artifact.
+		results[i] = out{format: f, err: errRenderIncomplete}
+		// Panic-guarded: a renderer fault must fail its format, not the process
+		// (and the deferred Done still releases the caller either way).
+		safeGo("report-render:"+f, func() {
 			defer wg.Done()
 			art, err := r.Render(ctx, vm)
 			if err != nil {
@@ -488,7 +498,7 @@ func (p *reportPipeline) renderAll(ctx context.Context, execID string, vm report
 			}
 			ref, err := p.artifacts.Save(ctx, execID+"_"+f, art)
 			results[i] = out{format: f, art: art, ref: ref, err: err}
-		}(i, f, r)
+		})
 	}
 	wg.Wait()
 

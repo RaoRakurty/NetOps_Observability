@@ -39,8 +39,17 @@ func chRowPolicyDDL(table string) string {
 // (atomic in ClickHouse: no policyless window, unlike DROP+CREATE) so boot
 // convergence UPGRADES a pre-2026-07-02 lenient policy in place instead of
 // no-opping past it, and re-heals if /var/lib/clickhouse/access is ever reset.
+// NOTE ON GRAMMAR (2026-07-21): the modifier goes AFTER "ROW POLICY" —
+// `CREATE ROW POLICY OR REPLACE name ON ...`. The natural-looking
+// `CREATE OR REPLACE ROW POLICY ...` is NOT valid ClickHouse: it parses as
+// CREATE OR REPLACE {TABLE|VIEW|DICTIONARY|FUNCTION} and dies at 'ROW'. That
+// typo shipped and every strict policy failed 1,560 times with SYNTAX_ERROR
+// and never once succeeded, so boot convergence silently never ran: cloud_costs
+// (per-tenant financial data) was left with NO row policy — the DB-layer
+// backstop CLAUDE.md §3a rule 4 requires — and any install predating
+// 2026-07-02 kept its lenient untagged-shared policy forever.
 func chStrictRowPolicyDDL(table string) string {
-	return "CREATE OR REPLACE ROW POLICY tenant_iso_" + table + " ON netops." + table +
+	return "CREATE ROW POLICY OR REPLACE tenant_iso_" + table + " ON netops." + table +
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
 }
 

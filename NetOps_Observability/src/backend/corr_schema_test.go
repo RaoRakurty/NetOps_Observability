@@ -36,7 +36,15 @@ func TestCorrSchemaIdempotent(t *testing.T) {
 		// CREATE OR REPLACE VIEW is idempotent (re-runnable) AND, unlike CREATE VIEW
 		// IF NOT EXISTS, refreshes a SELECT * view's columns when the base table gains
 		// one (#81 P5 app_impact) — so a stale view can't shadow a new column.
-		if strings.Contains(s, "CREATE OR REPLACE") {
+		//
+		// Row policies express the same "replace in place" intent with a DIFFERENT
+		// clause order — ClickHouse puts the modifier AFTER the object type:
+		// `CREATE ROW POLICY OR REPLACE name ON …`. Both spellings are idempotent;
+		// only the row-policy one is valid for a policy (see F-50, 2026-07-21:
+		// the `CREATE OR REPLACE ROW POLICY` spelling parsed as CREATE OR REPLACE
+		// TABLE and failed 1,560 times without ever succeeding).
+		if strings.Contains(s, "CREATE OR REPLACE") || strings.Contains(s, "OR REPLACE ROW POLICY") ||
+			strings.Contains(s, "ROW POLICY OR REPLACE") {
 			continue
 		}
 		// The corr_current backfill INSERT is idempotent by construction: its

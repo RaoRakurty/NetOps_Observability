@@ -78,7 +78,7 @@ func TestCloudCostsSchemaIsStrictTenantIsolated(t *testing.T) {
 			if strings.Contains(s, "tenant_id = ''") {
 				t.Errorf("cloud_costs row policy carries the lenient untagged-shared escape (cross-tenant billing leak):\n%s", s)
 			}
-			if !strings.HasPrefix(s, "CREATE OR REPLACE ROW POLICY tenant_iso_cloud_costs") {
+			if !strings.HasPrefix(s, "CREATE ROW POLICY OR REPLACE tenant_iso_cloud_costs") {
 				t.Errorf("cloud_costs policy must be the atomic strict form:\n%s", s)
 			}
 		}

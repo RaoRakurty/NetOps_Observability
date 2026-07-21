@@ -88,7 +88,7 @@ func cloudMonitorsPath() string {
 	if p := strings.TrimSpace(os.Getenv("CLOUD_MONITORS_PATH")); p != "" {
 		return p
 	}
-	return "cloud_monitors.json"
+	return "/data/cloud_monitors.json"
 }
 
 func newCloudMonitorStore(path string) *cloudMonitorStore {

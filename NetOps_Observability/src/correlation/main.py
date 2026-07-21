@@ -28,7 +28,7 @@ import logging
 import os
 import time
 import uuid
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
@@ -77,6 +77,7 @@ from producers import (
     probe_signals,
     syslog_control_signal,
     trap_control_signal,
+    ts_invalid_count,
 )
 from replay import replay_object
 from flow_app_attribution import AppIdentityIndex, resolve_flow_app
@@ -229,7 +230,12 @@ class Series:
         self.values.append(v)
 
 
-SERIES: Dict[tuple[str, str], Series] = {}
+# Legacy z-score series, bounded + LRU. Unbounded before: keyed by
+# (device, metric) with no eviction, so cardinality churn (ephemeral cloud
+# resource ids arriving as `device`) grew it until the container hit its memory
+# limit. Dropping the least-recently-scored series only costs it its warm-up.
+SERIES: "OrderedDict[tuple[str, str], Series]" = OrderedDict()
+SERIES_MAX = int(os.environ.get("CORR_MAX_SERIES", "200000"))
 
 # ---------------------------------------------------------------------------
 # Correlation Engine v2 — build ②: episode model (stages [1]+[2] of the
@@ -246,7 +252,18 @@ DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
 # lane was historically empty; these prove it is fed and where events are lost.
 METRICS_RECEIVED = 0           # consumed from netops.metrics
 METRICS_ACCEPTED = 0           # passed schema/identity/timestamp validation
-METRICS_DROPPED = 0            # rejected (missing identity/value, bad timestamp)
+METRICS_DROPPED = 0            # rejected — the SUM of the three causes below
+# One "dropped" number cannot be acted on: a device whose clock is an hour off
+# loses 100% of its telemetry and looks exactly like a producer emitting rows
+# with no value. The cause has to be in the counter, not only in a log line.
+METRICS_DROPPED_NO_VALUE = 0     # no metric name / no numeric value
+METRICS_DROPPED_NO_IDENTITY = 0  # no canonical entity (device/if/peer missing)
+METRICS_DROPPED_STALE_TS = 0     # event timestamp outside the skew/age window
+# The syslog lane is TOPICS[0] and the source of link_down / BGP-state / optics
+# evidence — the highest-value RCA evidence class — and had NO intake counter at
+# all, so a broken Vector syslog route was indistinguishable from a quiet night.
+SYSLOG_RECEIVED = 0            # consumed from netops.syslog
+SYSLOG_SIGNALS = 0             # control-plane / port / clock-skew signals emitted
 DEVICE_TELEMETRY_SIGNALS = 0   # device_telemetry signals written to corr_signals
 TRAPS_RECEIVED = 0             # consumed from netops.snmptrap (Commit 3)
 TRAPS_NORMALIZED = 0           # classified into a control_plane signal
@@ -456,7 +473,7 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
         })
     if ch is not None:
         try:
-            await ch.insert("netops.corr_tenant_write_amp", rows)
+            await ch_insert("netops.corr_tenant_write_amp", rows)
         except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
             log.warning("tenant write-amp flush failed (window kept in metrics): %s", exc)
     TENANT_WA_LAST = sorted(
@@ -483,7 +500,22 @@ _FLOW_AGG: Dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
 _FLOW_APP_AGG: Dict[tuple, dict] = {}   # (tenant, app_slug) -> {bytes, sampler, source, confidence}
 _APPID_INDEX = AppIdentityIndex()       # tenant-scoped dst_ip → fused app identity
 FLOWS_RECEIVED = 0
+FLOWS_DROPPED = 0   # records flow_sample() could not attribute/measure (F-42)
 PASSIVE_FLOW_SIGNALS = 0
+_FLOW_DROP_LOG_LAST = -1e9
+FLOW_DROP_LOG_EVERY_S = float(os.environ.get("CORR_FLOW_DROP_LOG_EVERY_S", "60"))
+
+
+def _log_flow_drop(ev: dict) -> None:
+    """One sample line per interval naming the fields that were missing — flows
+    are a firehose, so the counter is exact and the LOG is rate-limited."""
+    global _FLOW_DROP_LOG_LAST
+    now = time.monotonic()
+    if (now - _FLOW_DROP_LOG_LAST) < FLOW_DROP_LOG_EVERY_S:
+        return
+    _FLOW_DROP_LOG_LAST = now
+    log.warning("flow record dropped: unparseable/unattributable (dropped_total=%d) fields=%s",
+                FLOWS_DROPPED, sorted(ev)[:20])
 # C7.3 NetFlow direction: directed per-pair volume, tenant → {(src_dev,dst_dev): bytes}.
 # Accumulated CONTINUOUSLY (no reset) — the dominant direction is the structural
 # forwarding direction (the causal prior: A normally upstream of B), stable under a
@@ -491,6 +523,7 @@ PASSIVE_FLOW_SIGNALS = 0
 # Bounded by communicating device-pairs. Feeds the oracle's NetFlow source each cycle.
 # (Rolling/decay window for faster reversal detection = a documented future refinement.)
 _FLOW_DIR: Dict[str, Dict[tuple, float]] = {}
+FLOW_DIR_MAX_PAIRS = int(os.environ.get("CORR_MAX_FLOW_DIR_PAIRS", "100000"))
 FLOW_DIRECTION_DOMINANCE = float(os.environ.get("CORR_FLOW_DOMINANCE", "0.6"))
 FLOW_DIRECTION_PAIRS = 0  # observability: distinct directed device-pairs seen
 SEAM_ENRICHMENT_FILE = os.environ.get("SEAM_ENRICHMENT_FILE", "/data/enrichment/seams.json")
@@ -578,6 +611,10 @@ def topology_links_by_tenant() -> dict[str, list[dict]]:
     try:
         mt = os.path.getmtime(TOPO_LINKS_FILE)
     except OSError:
+        # File gone: keep serving the last-known adjacency (dropping it would
+        # collapse grounding mid-incident) — but this view is now FROZEN, and
+        # _topology_stale ages it into staleness so nothing scored under it is
+        # declared fresh.
         return _adj_cache
     if mt != _adj_mtime:
         _adj_mtime = mt
@@ -1106,7 +1143,8 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
     obj_row = snap.to_object_row(version, state, merged_into)
-    await ch.insert("netops.corr_objects", [obj_row])
+    await ch_insert("netops.corr_objects", [obj_row],
+                    corr_id=snap.correlation_id, version=version, tenant=snap.tenant_id)
     # Dual-write the narrow current-state row (app-level, NOT an MV — row
     # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
     # latest write per (tenant, correlation_id). Projection failure must never
@@ -1120,7 +1158,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
         current_row.update(_current_badges(obj_row.get("hypotheses", "")))
         current_row["chaos_fixture"] = _chaos_fixture_for(snap)
-        if not await ch.insert("netops.corr_current", [current_row]):
+        if not await ch_insert("netops.corr_current", [current_row]):
             failure = ("clickhouse rejected insert (see preceding error log)", True)
     except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
         # Network/timeout errors are retryable; anything else (serialization,
@@ -1138,7 +1176,8 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         )
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
-        await ch.insert("netops.corr_edges", edge_rows)
+        await ch_insert("netops.corr_edges", edge_rows,
+                        corr_id=snap.correlation_id, version=version)
         # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
         # evidence_class, evidence_ref, observation_method, confidence, observed_at,
         # data_class). corr_edges' frozen Enum8 grounding_kind cannot express these and
@@ -1147,10 +1186,11 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         # emitted: embedded in the snapshot's grounding context (replay-safe) and served
         # from there.
         if CORR_EDGES_V2:
-            await ch.insert(CORR_PATH_EDGES_TABLE, snap.to_typed_edge_rows(version))
+            await ch_insert(CORR_PATH_EDGES_TABLE, snap.to_typed_edge_rows(version))
     ev_rows = snap.to_evidence_rows(version)
     if ev_rows:
-        await ch.insert("netops.corr_evidence", ev_rows)
+        await ch_insert("netops.corr_evidence", ev_rows,
+                        corr_id=snap.correlation_id, version=version)
     # Stage [8] archive: the WHOLE tenant window, not just attached signals —
     # candidate-pool decisions depend on non-attached episodes, so a
     # participating-only archive would break bit-perfect replay. Slices are
@@ -1163,25 +1203,59 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         row["archived_version"] = version
         archive_rows.append(row)
     if archive_rows:
-        await ch.insert("netops.corr_signals_archive", archive_rows)
+        await ch_insert("netops.corr_signals_archive", archive_rows,
+                        corr_id=snap.correlation_id, version=version, row_count=len(archive_rows))
     log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
              snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
              snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
+
+
+# Wall-clock of the last time ANY topology enrichment file was readable. A
+# DELETED file used to age into freshness instead of staleness: getmtime raised,
+# the loaders returned their cache "silently forever", newest stayed -1 and this
+# function returned False = NOT stale. So the exporter dying (or the enrichment
+# volume unmounting) left the engine grounding causal edges on a frozen topology
+# while stamping topology_stale=false on every snapshot it emitted — the one
+# state where the declaration is a lie rather than a caveat.
+_TOPO_LAST_SEEN_WALL: float | None = None
+_TOPO_ABSENT_LOG_LAST = -1e9
 
 
 def _topology_stale(now: datetime) -> bool:
     """§8: the topology/seam view is STALE when the Go exporter has stopped
     refreshing it (newest of seams.json / topology_links.json older than
     CORR_TOPO_STALE_S). Grounding then resolves against the last-known view with
-    w_topo capped, and every snapshot scored under it is declared. An ABSENT file
-    is not 'stale' — the grounding gate already handles an empty inventory honestly."""
+    w_topo capped, and every snapshot scored under it is declared.
+
+    A file that DISAPPEARS ages exactly like a frozen one: staleness is measured
+    from the last moment the view was known-good, so a deleted export can never
+    read as fresh. Files that were never present get the same single staleness
+    grace period from process start — after it, the cached (empty) view the
+    loaders keep serving is honestly declared stale.
+    """
+    global _TOPO_LAST_SEEN_WALL
     newest = -1.0
     for path in (SEAM_ENRICHMENT_FILE, TOPO_LINKS_FILE):
         try:
             newest = max(newest, os.path.getmtime(path))
         except OSError:
             continue
-    return newest >= 0 and (now.timestamp() - newest) > CORR_TOPO_STALE_S
+    wall = now.timestamp()
+    if newest >= 0:
+        _TOPO_LAST_SEEN_WALL = wall
+        return (wall - newest) > CORR_TOPO_STALE_S
+    if _TOPO_LAST_SEEN_WALL is None:
+        _TOPO_LAST_SEEN_WALL = wall
+    stale = (wall - _TOPO_LAST_SEEN_WALL) > CORR_TOPO_STALE_S
+    if stale:
+        global _TOPO_ABSENT_LOG_LAST
+        mono = time.monotonic()
+        if (mono - _TOPO_ABSENT_LOG_LAST) >= CORR_TOPO_STALE_S:
+            _TOPO_ABSENT_LOG_LAST = mono
+            log.warning("topology enrichment files ABSENT for %.0fs (%s, %s) — "
+                        "grounding on the last-known view, declared stale",
+                        wall - _TOPO_LAST_SEEN_WALL, SEAM_ENRICHMENT_FILE, TOPO_LINKS_FILE)
+    return stale
 
 
 async def engine_cycle() -> None:
@@ -1409,9 +1483,10 @@ async def feed_episode_detector(
         row = sig.to_ch_row()
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
+        keep_deadletter_payload("provenance", ev, exc)
         log.warning("dead-letter (provenance): %s", exc)
         return False
-    await ch.insert("netops.corr_signals", [row])
+    await ch_insert("netops.corr_signals", [row], lane="metrics", kind=row.get("kind", ""))
     if modality is ModalityClass.DEVICE_TELEMETRY:
         DEVICE_TELEMETRY_SIGNALS += 1
     # Build ⑥: every spine signal also feeds the engine's evidence window.
@@ -1424,7 +1499,14 @@ async def feed_episode_detector(
 def score(device: str, metric: str, value: float) -> float | None:
     """Return a |z-score| if the value is anomalous, else None."""
     key = (device, metric)
-    s = SERIES.setdefault(key, Series())
+    s = SERIES.get(key)
+    if s is None:
+        s = Series()
+        SERIES[key] = s
+        while len(SERIES) > SERIES_MAX:
+            SERIES.popitem(last=False)
+    else:
+        SERIES.move_to_end(key)
     if len(s.values) < 20:
         s.push(value)
         return None
@@ -1485,6 +1567,52 @@ class CH:
 
 
 ch: CH | None = None
+
+# Per-table count of ClickHouse inserts that did NOT land. `CH.insert` returns
+# False on a 4xx/5xx, and 19 of the 20 call sites used to discard that boolean:
+# a schema drift affecting only netops.corr_signals_archive would keep live RCA
+# looking perfect (the signal still enters WINDOW_BUFFER, which happens AFTER
+# the insert) while the replay source silently grew holes — so "replay this
+# incident" months later answers differently than the incident did at the time,
+# with no counter having moved. Every write now goes through ch_insert(), which
+# cannot forget to check.
+CH_INSERT_FAILURES: Dict[str, int] = {}
+_CH_FAIL_LOG_LAST: Dict[str, float] = {}
+CH_FAIL_LOG_EVERY_S = float(os.environ.get("CORR_CH_FAIL_LOG_EVERY_S", "30"))
+
+
+def _note_ch_failure(table: str, reason: str, ctx: dict) -> None:
+    """Count + log one lost ClickHouse write. Logging is rate-limited per table
+    (a ClickHouse outage fails every write; 10k identical lines bury the one
+    that explains it) — the COUNTER is always exact."""
+    CH_INSERT_FAILURES[table] = CH_INSERT_FAILURES.get(table, 0) + 1
+    now = time.monotonic()
+    if (now - _CH_FAIL_LOG_LAST.get(table, -1e9)) < CH_FAIL_LOG_EVERY_S:
+        return
+    _CH_FAIL_LOG_LAST[table] = now
+    detail = " ".join(f"{k}={v}" for k, v in ctx.items() if v not in (None, ""))
+    log.warning("clickhouse write LOST table=%s reason=%s lost_total=%d %s",
+                table, reason, CH_INSERT_FAILURES[table], detail)
+
+
+async def ch_insert(table: str, rows, **ctx) -> bool:
+    """`ch.insert` with the failure actually surfaced (log + counter).
+
+    Exceptions are counted and RE-RAISED, deliberately: a transport failure is
+    the caller's problem (the consumer quarantines the event so the payload
+    survives), while a rejected insert is reported here and returned as False.
+    """
+    assert ch is not None
+    try:
+        ok = await ch.insert(table, rows)
+    except Exception as exc:  # noqa: BLE001 — counted, then re-raised
+        _note_ch_failure(table, type(exc).__name__, ctx)
+        raise
+    # `is False` exactly: CH.insert's contract is a bool, and a test double that
+    # returns None must not be miscounted as a lost write.
+    if ok is False:
+        _note_ch_failure(table, "rejected", ctx)
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -1606,6 +1734,97 @@ async def _stop_bounded(consumer) -> None:
         log.exception("consumer stop failed/timed out — abandoning old consumer")
 
 
+# ── poison-event quarantine (the per-EVENT half of the supervisor) ───────────
+#
+# The supervisor below survives a poison BATCH, but until an unexpected
+# exception in one handler (a TypeError on an unforeseen field shape, a
+# ClickHouse transport error) tore down the consumer for ALL ten topics: the
+# batch in flight was lost, the offending payload was never recorded, and the
+# only evidence was a stack trace. A single malformed producer could therefore
+# stop every evidence lane in the engine.
+#
+# Now one event's failure costs exactly that event: it is counted per topic,
+# logged (rate-limited), and its PAYLOAD is preserved so the defect can be
+# reproduced — in a bounded in-memory ring always, and appended to a
+# dead-letter NDJSON file when CORR_DLQ_DIR is configured.
+CORR_QUARANTINE_MAX = int(os.environ.get("CORR_QUARANTINE_MAX", "200"))
+CORR_QUARANTINE_PAYLOAD_CHARS = int(os.environ.get("CORR_QUARANTINE_PAYLOAD_CHARS", "4000"))
+CORR_DLQ_DIR = os.environ.get("CORR_DLQ_DIR", "")
+CORR_DLQ_MAX_BYTES = int(os.environ.get("CORR_DLQ_MAX_BYTES", str(32 * 1024 * 1024)))
+QUARANTINE: Deque[dict] = deque(maxlen=CORR_QUARANTINE_MAX)
+HANDLER_FAILURES: Dict[str, int] = {}   # topic -> events lost to a handler error
+QUARANTINE_WRITE_FAILURES = 0
+_QUARANTINE_LOG_LAST: Dict[str, float] = {}
+QUARANTINE_LOG_EVERY_S = float(os.environ.get("CORR_QUARANTINE_LOG_EVERY_S", "30"))
+# Consecutive handler failures that mean "the dependency is down", not "one
+# poison event" — the consumer then restarts through the supervisor's backoff
+# instead of quarantining the whole stream at full consume rate.
+CORR_QUARANTINE_BURST_MAX = int(os.environ.get("CORR_QUARANTINE_BURST_MAX", "100"))
+
+
+def _dlq_append(record: dict) -> None:
+    """Append one quarantined event to the on-disk dead-letter file. Bounded by
+    CORR_DLQ_MAX_BYTES so a poison producer can never fill the volume; a write
+    failure is counted, never raised (quarantine must not become the new
+    failure)."""
+    global QUARANTINE_WRITE_FAILURES
+    if not CORR_DLQ_DIR:
+        return
+    path = os.path.join(CORR_DLQ_DIR, "corr-deadletter.ndjson")
+    try:
+        os.makedirs(CORR_DLQ_DIR, exist_ok=True)
+        try:
+            if os.path.getsize(path) >= CORR_DLQ_MAX_BYTES:
+                return
+        except OSError:
+            pass
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except (OSError, TypeError, ValueError):
+        QUARANTINE_WRITE_FAILURES += 1
+
+
+def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
+    """Build + store one quarantine record (ring + optional on-disk NDJSON)."""
+    try:
+        payload = json.dumps(event, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    except (TypeError, ValueError):
+        payload = repr(event)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "topic": topic,
+        "error": f"{type(exc).__name__}: {exc}"[:500],
+        "payload": payload,
+    }
+    QUARANTINE.append(record)
+    _dlq_append(record)
+    return record
+
+
+def keep_deadletter_payload(lane: str, event: object, exc: BaseException) -> None:
+    """Preserve a dead-lettered payload for inspection.
+
+    DeadLetter is caught at 8 sites; each counted it and logged the exception
+    MESSAGE, then dropped the event — so the record that provoked it could never
+    be looked at, and "why did this device's traps stop becoming signals" was
+    unanswerable. Counting stays with DEADLETTER_COUNT at the call site; this
+    only keeps the evidence.
+    """
+    _quarantine_record(f"deadletter:{lane}", event, exc)
+
+
+def quarantine_event(topic: str, event: object, exc: BaseException) -> None:
+    """Record one event whose handler raised: count it, keep the payload, log."""
+    HANDLER_FAILURES[topic] = HANDLER_FAILURES.get(topic, 0) + 1
+    _quarantine_record(topic, event, exc)
+    now = time.monotonic()
+    if (now - _QUARANTINE_LOG_LAST.get(topic, -1e9)) >= QUARANTINE_LOG_EVERY_S:
+        _QUARANTINE_LOG_LAST[topic] = now
+        log.exception("event QUARANTINED topic=%s lost_total=%d (payload kept, "
+                      "consumer continues)", topic, HANDLER_FAILURES[topic],
+                      exc_info=exc)
+
+
 async def consume() -> None:
     """Supervised consumer: a poison batch / codec error / broker hiccup is
     logged and retried with backoff, NEVER a silent task death (§10 — the
@@ -1627,8 +1846,24 @@ async def consume() -> None:
             await asyncio.wait_for(consumer.start(), timeout=CONSUMER_START_TIMEOUT_S)
             log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
             backoff = 1.0
+            consecutive_failures = 0
             async for msg in consumer:
-                await handle(msg.topic, msg.value)
+                # Per-EVENT isolation: one bad record must cost one record, not
+                # the whole ten-topic consumer (see quarantine_event above).
+                try:
+                    await handle(msg.topic, msg.value)
+                    consecutive_failures = 0
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:                   # noqa: BLE001
+                    quarantine_event(msg.topic, msg.value, exc)
+                    consecutive_failures += 1
+                    # A RUN of failures is not a poison event, it is a broken
+                    # dependency (ClickHouse down). Tolerating those at full
+                    # consume rate would quarantine the entire stream; hand it
+                    # back to the supervisor so its backoff applies pressure.
+                    if consecutive_failures >= CORR_QUARANTINE_BURST_MAX:
+                        raise
         except asyncio.CancelledError:
             await _stop_bounded(consumer)
             raise
@@ -1707,6 +1942,7 @@ async def handle_metric(ev: dict) -> None:
     Telegraf-shaped events (hostname/name/first-numeric) are still tolerated for
     back-compat but carry no canonical identity."""
     global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED
+    global METRICS_DROPPED_NO_VALUE, METRICS_DROPPED_NO_IDENTITY, METRICS_DROPPED_STALE_TS
     METRICS_RECEIVED += 1
 
     metric = str(ev.get("metric") or ev.get("name") or "")
@@ -1719,6 +1955,7 @@ async def handle_metric(ev: dict) -> None:
                 break
     if not metric or not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
         METRICS_DROPPED += 1
+        METRICS_DROPPED_NO_VALUE += 1
         return
     value = float(raw_value)
 
@@ -1726,6 +1963,7 @@ async def handle_metric(ev: dict) -> None:
     if ident is None:
         # No canonical identity → cannot ground a signal. Drop, don't guess.
         METRICS_DROPPED += 1
+        METRICS_DROPPED_NO_IDENTITY += 1
         return
     entity_id, entity_type, kind_prefix, tokens = ident
 
@@ -1735,6 +1973,7 @@ async def handle_metric(ev: dict) -> None:
     age = (now - event_ts).total_seconds()
     if age < -METRIC_FUTURE_SKEW_S or age > METRIC_MAX_AGE_S:
         METRICS_DROPPED += 1
+        METRICS_DROPPED_STALE_TS += 1
         log.warning("metric dropped: timestamp out of bounds (age=%.0fs) %s/%s", age, entity_id, metric)
         return
 
@@ -1778,6 +2017,31 @@ SEVERITY_WEIGHT = {"emerg": 8, "alert": 7, "crit": 6, "err": 5, "warning": 3, "n
 SYSLOG_BUCKET: Dict[str, list[tuple[float, int]]] = {}
 SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
+# Cap on distinct syslog hostnames tracked for burst detection. The key comes
+# from the device — it is attacker-controllable — so it needs a hard bound, not
+# just per-key pruning.
+SYSLOG_BUCKET_MAX = int(os.environ.get("CORR_MAX_SYSLOG_HOSTS", "50000"))
+_SYSLOG_SWEEP_LAST = 0.0
+SYSLOG_SWEEP_EVERY_S = 30.0
+
+
+def _sweep_syslog_buckets(now: float) -> None:
+    """Drop hosts whose window has emptied; hard-cap the key set as a backstop."""
+    global _SYSLOG_SWEEP_LAST
+    if (now - _SYSLOG_SWEEP_LAST) < SYSLOG_SWEEP_EVERY_S and len(SYSLOG_BUCKET) < SYSLOG_BUCKET_MAX:
+        return
+    _SYSLOG_SWEEP_LAST = now
+    cutoff = now - SYSLOG_WINDOW
+    for host in [h for h, b in SYSLOG_BUCKET.items() if not b or b[-1][0] < cutoff]:
+        SYSLOG_BUCKET.pop(host, None)
+    if len(SYSLOG_BUCKET) > SYSLOG_BUCKET_MAX:
+        # Still over: evict the least-recently-active hosts.
+        for host, _ in sorted(SYSLOG_BUCKET.items(),
+                              key=lambda kv: kv[1][-1][0] if kv[1] else 0.0,
+                              )[:len(SYSLOG_BUCKET) - SYSLOG_BUCKET_MAX]:
+            SYSLOG_BUCKET.pop(host, None)
+        log.warning("syslog burst tracker at cap (%d hosts) — evicting oldest; "
+                    "check for spoofed/rotating syslog hostnames", SYSLOG_BUCKET_MAX)
 
 
 # Probe-authority classification config (Step 3). Registry-sourced fields on the
@@ -1911,11 +2175,12 @@ async def handle_probe(ev: dict) -> None:
         sigs = probe_signals(ev, DETECTOR, tenant, now)
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
+        keep_deadletter_payload("probe", ev, exc)
         log.warning("dead-letter (probe): %s", exc)
         return
     for sig in sigs:
         classify_probe(ev, sig)
-        await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+        await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="probes")
         buffer_signal(sig)
         log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
                  sig.kind, sig.entity_id, sig.severity.value, sig.value,
@@ -1931,7 +2196,7 @@ async def handle_probe(ev: dict) -> None:
     app_sig = synthetic_app_signal(ev, tenant, now)
     if app_sig is not None:
         classify_probe(ev, app_sig)
-        await ch.insert("netops.corr_signals", [app_sig.to_ch_row()])
+        await ch_insert("netops.corr_signals", [app_sig.to_ch_row()], lane="probes")
         buffer_signal(app_sig)
         log.info("synthetic app-experience signal %s: %s reason=%s app=%s",
                  app_sig.kind, app_sig.entity_id, app_sig.attrs.get("reason"),
@@ -1965,12 +2230,13 @@ async def handle_snmptrap(ev: dict) -> None:
         sig = trap_control_signal(ev, tenant, datetime.now(timezone.utc))
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
+        keep_deadletter_payload("trap", ev, exc)
         log.warning("dead-letter (trap): %s", exc)
         return
     if sig is None:
         TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="snmptrap")
     TRAPS_NORMALIZED += 1
     buffer_signal(sig)
     log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
@@ -1991,7 +2257,7 @@ async def handle_controller_event(ev: dict) -> None:
     if sig is None:
         CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="controller_events")
     CONTROLLER_EVENTS_SIGNALS += 1
     buffer_signal(sig)
     log.info("controller signal %s: %s", sig.kind, sig.entity_id)
@@ -2015,7 +2281,7 @@ async def handle_verification(ev: dict) -> None:
     if sig is None:
         VERIFICATION_DROPPED += 1  # no tenant/device identity or skipped — default-closed
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="verification")
     VERIFICATION_SIGNALS += 1
     buffer_signal(sig)
     log.info("verification signal %s %s: %s", sig.kind, sig.attrs.get("check", ""), sig.entity_id)
@@ -2043,6 +2309,7 @@ async def handle_cloud(ev: dict) -> None:
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
         CLOUD_DROPPED += 1
+        keep_deadletter_payload("cloud", ev, exc)
         log.warning("dead-letter (cloud): %s", exc)
         return
     if sig.kind == "clock_skew":
@@ -2051,12 +2318,12 @@ async def handle_cloud(ev: dict) -> None:
         # too — defense in depth against a chatty poller.
         global CLOCK_SKEW_SIGNALS
         if _clock_skew_due(tenant, sig.entity_id):
-            await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+            await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="cloud")
             CLOCK_SKEW_SIGNALS += 1
             log.info("clock-skew signal (cloud lane): %s skew=%.0fs",
                      sig.entity_id, float(sig.value))
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="cloud")
     CLOUD_SIGNALS += 1
     buffer_signal(sig)
     log.info("cloud signal %s: %s sev=%s acct=%s region=%s",
@@ -2089,9 +2356,10 @@ async def handle_app_identity(ev: dict) -> None:
     except DeadLetter as exc:
         DEADLETTER_COUNT += 1
         APP_ID_DROPPED += 1
+        keep_deadletter_payload("app_identity", ev, exc)
         log.warning("dead-letter (app-identity): %s", exc)
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="app_identity")
     APP_ID_SIGNALS += 1
     buffer_signal(sig)
     # #98 Phase 4 — feed the tenant-scoped dst_ip→app index the flow lane joins
@@ -2127,7 +2395,7 @@ async def handle_app_edge(ev: dict) -> None:
     if sig is None:
         APP_EDGE_DROPPED += 1
         return
-    await ch.insert("netops.corr_signals", [sig.to_ch_row()])
+    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="app_edge")
     APP_EDGE_SIGNALS += 1
     buffer_signal(sig)
     log.info("app-edge signal %s: %s reason=%s lb=%s",
@@ -2139,17 +2407,23 @@ async def handle_syslog(ev: dict) -> None:
     # Control-plane extraction first (#67 build ⑦): adjacency / link-state
     # events become control_plane signals on the spine regardless of burst
     # behavior — one BGP-down is evidence even when nothing else is on fire.
-    global DEADLETTER_COUNT
+    global DEADLETTER_COUNT, SYSLOG_RECEIVED, SYSLOG_SIGNALS
+    # Intake is counted BEFORE any filtering: `syslog_received` must mean
+    # "arrived from the bus", so a flat-line means the lane died, not that the
+    # traffic happened to be unclassifiable.
+    SYSLOG_RECEIVED += 1
     if CORR_SIGNALS_ENABLED and ch is not None:
         cp_tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("hostname") or ""))
         try:
             cp_sig = syslog_control_signal(ev, cp_tenant, datetime.now(timezone.utc))
         except DeadLetter as exc:
             DEADLETTER_COUNT += 1
+            keep_deadletter_payload("syslog", ev, exc)
             log.warning("dead-letter (syslog): %s", exc)
             cp_sig = None
         if cp_sig is not None:
-            await ch.insert("netops.corr_signals", [cp_sig.to_ch_row()])
+            await ch_insert("netops.corr_signals", [cp_sig.to_ch_row()], lane="syslog")
+            SYSLOG_SIGNALS += 1
             buffer_signal(cp_sig)
             log.info("control-plane signal %s: %s %s",
                      cp_sig.kind, cp_sig.entity_id, cp_sig.attrs.get("state", ""))
@@ -2160,10 +2434,12 @@ async def handle_syslog(ev: dict) -> None:
             pe_sig = port_event_signal(ev, cp_tenant, datetime.now(timezone.utc))
         except DeadLetter as exc:
             DEADLETTER_COUNT += 1
+            keep_deadletter_payload("port_event", ev, exc)
             log.warning("dead-letter (port-event): %s", exc)
             pe_sig = None
         if pe_sig is not None:
-            await ch.insert("netops.corr_signals", [pe_sig.to_ch_row()])
+            await ch_insert("netops.corr_signals", [pe_sig.to_ch_row()], lane="syslog")
+            SYSLOG_SIGNALS += 1
             buffer_signal(pe_sig)
             log.info("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
         # Clock-skew meta-finding (log-time standard S5/R5): Vector stamps
@@ -2178,12 +2454,14 @@ async def handle_syslog(ev: dict) -> None:
             skew_sig = clock_skew_signal(ev, cp_tenant, datetime.now(timezone.utc))
         except DeadLetter as exc:
             DEADLETTER_COUNT += 1
+            keep_deadletter_payload("clock_skew", ev, exc)
             log.warning("dead-letter (clock-skew): %s", exc)
             skew_sig = None
         if skew_sig is not None and _clock_skew_due(cp_tenant, skew_sig.entity_id):
             global CLOCK_SKEW_SIGNALS
-            await ch.insert("netops.corr_signals", [skew_sig.to_ch_row()])
+            await ch_insert("netops.corr_signals", [skew_sig.to_ch_row()], lane="syslog")
             CLOCK_SKEW_SIGNALS += 1
+            SYSLOG_SIGNALS += 1
             log.info("clock-skew signal: %s skew=%.0fs", skew_sig.entity_id,
                      float(skew_sig.value))
 
@@ -2198,6 +2476,11 @@ async def handle_syslog(ev: dict) -> None:
     # Drop expired entries.
     cutoff = now - SYSLOG_WINDOW
     SYSLOG_BUCKET[host] = [(t, w) for t, w in bucket if t >= cutoff]
+    # The per-host LISTS were pruned but the KEY SET never was — and the key is
+    # the device-supplied, spoofable syslog hostname, so a single misbehaving or
+    # hostile sender could grow this map without limit. Sweep empty buckets, and
+    # hard-cap the key set as the backstop.
+    _sweep_syslog_buckets(now)
     total = sum(w for _, w in SYSLOG_BUCKET[host])
     if total >= SYSLOG_THRESHOLD:
         await emit(
@@ -2220,11 +2503,17 @@ async def handle_flow(ev: dict) -> None:
     sample per engine cycle. This is the passive_flow modality lane — the 4th
     independent witness class for the verdict gate (DDoS / top-talker-shift /
     port-scan SIGNATURES are future catalog growth on top of this volume series)."""
-    global FLOWS_RECEIVED
+    global FLOWS_RECEIVED, FLOWS_DROPPED
     if not (CORR_SIGNALS_ENABLED and FLOW_CORRELATION_ENABLED) or ch is None:
         return
     sample = flow_sample(ev)
     if sample is None:
+        # Unattributable/unmeasurable record. `flows_received` counts ACCEPTED
+        # flows (it is incremented after the parse), so without this counter a
+        # goflow2 field-name change that fails 100% of parses reads exactly like
+        # a quiet network. Logged rate-limited: flows are a firehose.
+        FLOWS_DROPPED += 1
+        _log_flow_drop(ev)
         return
     FLOWS_RECEIVED += 1
     sampler, entity, bytes_est = sample
@@ -2250,6 +2539,13 @@ async def handle_flow(ev: dict) -> None:
         sd, dd, dbytes = dsample
         dirmap = _FLOW_DIR.setdefault(tenant, {})
         if (sd, dd) not in dirmap:
+            # Accumulated CONTINUOUSLY (never reset) and keyed by resolved
+            # device pair: bounded in a stable fleet, unbounded under entity
+            # churn. At the cap the smallest-volume pairs go first — they are
+            # the ones the dominance ratio never depends on.
+            if len(dirmap) >= FLOW_DIR_MAX_PAIRS:
+                for pair, _ in sorted(dirmap.items(), key=lambda kv: kv[1])[:FLOW_DIR_MAX_PAIRS // 4]:
+                    dirmap.pop(pair, None)
             FLOW_DIRECTION_PAIRS += 1
         dirmap[(sd, dd)] = dirmap.get((sd, dd), 0.0) + dbytes
 
@@ -2313,7 +2609,7 @@ async def emit(**kwargs) -> None:
         "tenant_id":   tenant_for(device),  # #20: same tenant discriminator as flows/logs
     }
     assert ch is not None
-    await ch.insert("netops.findings", [row])
+    await ch_insert("netops.findings", [row], kind=row["kind"], device=device)
     log.info("finding: %s %s %s", row["severity"], row["kind"], row["summary"])
 
 
@@ -2359,6 +2655,21 @@ class Finding(BaseModel):
     description: str
 
 
+@app.get("/deadletters")
+async def deadletters(limit: int = 50) -> dict:
+    """The quarantined events (newest first) WITH their payloads — the point of
+    the quarantine is that a poison event stays reproducible instead of costing
+    a stack trace and a lost record. Internal surface (the Go API fronts it with
+    authz), bounded by CORR_QUARANTINE_MAX."""
+    n = max(1, min(int(limit), CORR_QUARANTINE_MAX))
+    return {
+        "count": len(QUARANTINE),
+        "failures_by_topic": dict(sorted(HANDLER_FAILURES.items())),
+        "write_failures": QUARANTINE_WRITE_FAILURES,
+        "events": list(QUARANTINE)[-n:][::-1],
+    }
+
+
 @app.get("/metrics")
 async def metrics_exposition():
     """Prometheus text exposition of the intake/drop counters (#99 R6) — the
@@ -2392,6 +2703,25 @@ async def metrics_exposition():
         "# HELP corr_current_projection_write_failures_total corr_current projection writes lost (hot-read staleness risk).",
         "# TYPE corr_current_projection_write_failures_total counter",
         f"corr_current_projection_write_failures_total {PROJECTION_WRITE_FAILURES}",
+        # F-38: any lost ClickHouse write, by table. corr_signals_archive
+        # rising = the replay source is growing holes while live RCA looks fine.
+        "# HELP corr_ch_insert_failures_total ClickHouse inserts that did not land, by table.",
+        "# TYPE corr_ch_insert_failures_total counter",
+    ]
+    for table, n in sorted(CH_INSERT_FAILURES.items()):
+        lines.append(f'corr_ch_insert_failures_total{{table="{table}"}} {n}')
+    lines += [
+        # F-40: events lost to a handler exception. Non-zero means a producer is
+        # emitting a shape the engine cannot process — the payloads are in
+        # /deadletters (and CORR_DLQ_DIR when configured).
+        "# HELP corr_handler_failures_total Events quarantined after a handler raised, by topic.",
+        "# TYPE corr_handler_failures_total counter",
+    ]
+    for topic, n in sorted(HANDLER_FAILURES.items()):
+        lines.append(f'corr_handler_failures_total{{topic="{topic}"}} {n}')
+    lines += [
+        "# TYPE corr_quarantined_events gauge",
+        f"corr_quarantined_events {len(QUARANTINE)}",
     ]
     # #101 tenant write-amp, BOUNDED cardinality: only the top-K noisiest
     # tenants of the last flushed window get series (K=CORR_WA_TOPK); the full
@@ -2436,19 +2766,39 @@ async def health() -> dict:
             "probe_paths": len(probe_paths()),          # C7.4 measured paths available
             "routing_direction_pairs": len(routing_direction()),  # C7.5 computed fwd pairs
         },
+        # Durability: writes and events that did NOT land. All-zero is the only
+        # healthy state; anything else is data the platform silently does not
+        # have (F-38 ClickHouse writes, F-40 quarantined events).
+        "durability": {
+            "ch_insert_failures": dict(sorted(CH_INSERT_FAILURES.items())),
+            "handler_failures": dict(sorted(HANDLER_FAILURES.items())),
+            "quarantined_events": len(QUARANTINE),
+            "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
+            "topology_stale": _topology_stale(datetime.now(timezone.utc)),
+        },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).
         "ingest": {
             "probes_received": PROBES_RECEIVED,
+            "syslog_received": SYSLOG_RECEIVED,
+            "syslog_signals": SYSLOG_SIGNALS,
             "metrics_received": METRICS_RECEIVED,
             "metrics_accepted": METRICS_ACCEPTED,
             "metrics_dropped": METRICS_DROPPED,
+            # F-44: the SAME total, split by cause — "which device/producer is
+            # losing data, and why" is not answerable from the total alone.
+            "metrics_dropped_no_value": METRICS_DROPPED_NO_VALUE,
+            "metrics_dropped_no_identity": METRICS_DROPPED_NO_IDENTITY,
+            "metrics_dropped_stale_ts": METRICS_DROPPED_STALE_TS,
+            # Event timestamps that fell back to ingest time (producers.py).
+            "event_ts_invalid": ts_invalid_count(),
             "device_telemetry_signals": DEVICE_TELEMETRY_SIGNALS,
             "traps_received": TRAPS_RECEIVED,
             "traps_normalized": TRAPS_NORMALIZED,
             "traps_recanonicalized": TRAPS_RECANON,  # C8: device recovered via EntityResolver
             "traps_dropped": TRAPS_DROPPED,
             "flows_received": FLOWS_RECEIVED,
+            "flows_dropped": FLOWS_DROPPED,
             "passive_flow_signals": PASSIVE_FLOW_SIGNALS,
             "flow_entities_tracked": len(_FLOW_AGG),
             # C7.3 NetFlow direction: distinct directed device-pairs observed.

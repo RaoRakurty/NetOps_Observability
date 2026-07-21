@@ -471,21 +471,25 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 	s.verifyRuns.put(rec)
 	s.auditVerifyRun(rec, "start", why, cmds)
 
-	go func(rec verifyRunRecord) { // own copy — the caller returns the RUNNING record
+	run := rec // own copy — the caller returns the RUNNING record
+	// Panic-guarded: this drives SSH sessions and parses device output, and it
+	// runs detached from the request, so a panic here would kill the API rather
+	// than fail one verification run.
+	safeGo("verify-run", func() {
 		// Bounded by the engine's own run budget; independent of the request.
 		engine := newVerifyEngineForCase(s.newVerifyDialers(), cc)
 		results := engine.run(context.Background(), targets)
-		rec.Results = results
-		rec.FinishedAt = time.Now().UTC()
-		rec.Status = "completed"
-		s.verifyRuns.put(rec)
-		s.emitVerificationResults(rec)
-		s.auditVerifyRun(rec, "complete", why, nil)
+		run.Results = results
+		run.FinishedAt = time.Now().UTC()
+		run.Status = "completed"
+		s.verifyRuns.put(run)
+		s.emitVerificationResults(run)
+		s.auditVerifyRun(run, "complete", why, nil)
 		logInfo("verify", "verification run completed", map[string]any{
-			"tenant": tenant, "correlation_id": caseID, "run_id": rec.RunID,
+			"tenant": tenant, "correlation_id": caseID, "run_id": run.RunID,
 			"trigger": trigger, "devices": len(targets), "results": len(results),
 		})
-	}(rec)
+	})
 	return rec, nil
 }
 

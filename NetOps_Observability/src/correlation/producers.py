@@ -33,6 +33,7 @@ from signals import (
     Signal,
     Source,
 )
+from timenorm import parse_any_timestamp
 
 # Loss at/above this (percent) is a discrete probe_loss signal each cycle.
 PROBE_LOSS_PCT = 5.0
@@ -216,20 +217,48 @@ def episode_signal(
         attrs=attrs,
     )
 
-_FRACTION_RE = re.compile(r"(\.\d{6})\d+")  # >µs precision → truncate for fromisoformat
+# Timestamps the correlation lanes could not parse. Every call site falls back
+# to ingest time, which silently re-stamps the event with RECEIVE time — the
+# input to `onset_uncertainty_s`, i.e. to the cause/effect ORDER that RCA is
+# built on. A fallback that nothing counts is a lie that looks like data, so
+# the substitution is now visible (surfaced as ingest.event_ts_invalid).
+TS_INVALID = 0
 
 
-def parse_event_ts(raw: object) -> datetime | None:
-    """RFC3339/ISO event time → tz-aware UTC; None when absent/malformed
-    (the caller substitutes ingest time — honest fallback, never a guess)."""
-    if not raw:
+def ts_invalid_count() -> int:
+    """Timestamps present on the wire but unparseable (fell back to ingest time)."""
+    return TS_INVALID
+
+
+def reset_ts_invalid() -> None:
+    """Test hook."""
+    global TS_INVALID
+    TS_INVALID = 0
+
+
+def parse_event_ts(raw: object, *, reference: datetime | None = None) -> datetime | None:
+    """Wire event time → tz-aware UTC; None when absent/malformed (the caller
+    substitutes ingest time — honest fallback, never a guess).
+
+    Accepts every shape the ingest lane normalizes (timenorm.parse_any_timestamp,
+    the same _EPOCH_MS/_US/_NS thresholds Vector uses downstream): RFC3339/ISO
+    with or without an offset, float epoch SECONDS, int epoch ms/µs/ns, numeric
+    strings, and RFC3164 syslog header time. This function used to accept ONLY
+    RFC3339 and returned None for every numeric epoch — so a numeric-epoch
+    producer landed correctly in ClickHouse (normalized by the vector-router,
+    which sits downstream of Kafka) while the correlation engine, which reads
+    UPSTREAM of it, re-timestamped the same event to receive time. Both stores
+    then disagreed about when the event happened, and nothing said so.
+    """
+    if raw is None or raw == "":
         return None
-    s = _FRACTION_RE.sub(r"\1", str(raw).strip().replace("Z", "+00:00"))
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
+    ref = reference or datetime.now(timezone.utc)
+    parsed = parse_any_timestamp(raw, reference=ref)
+    if parsed is None:
+        global TS_INVALID
+        TS_INVALID += 1
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return parsed[0]
 
 
 # ── flow events (netops.flows) — passive_flow volume aggregation (C6) ─────────

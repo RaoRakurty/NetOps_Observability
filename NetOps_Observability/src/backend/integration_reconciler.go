@@ -39,7 +39,7 @@ func (s *server) startDriftReconciler(ctx context.Context) {
 			interval = d
 		}
 	}
-	go func() {
+	safeGo("itsm-drift-reconciler", func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -50,7 +50,7 @@ func (s *server) startDriftReconciler(ctx context.Context) {
 				s.reconcileDriftOnce(ctx)
 			}
 		}
-	}()
+	})
 	logInfo("integration.reconcile", "drift reconciler started", map[string]any{"interval": interval.String()})
 }
 

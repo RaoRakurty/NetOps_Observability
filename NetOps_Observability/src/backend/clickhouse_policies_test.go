@@ -93,7 +93,7 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 		"corr_current", "corr_tenant_write_amp", "corr_path_edges",
 		"path_observations", "path_hops",
 	} {
-		want := "CREATE OR REPLACE ROW POLICY tenant_iso_" + table + " ON netops." + table
+		want := "CREATE ROW POLICY OR REPLACE tenant_iso_" + table + " ON netops." + table
 		found := false
 		for s := range strictSeen {
 			if strings.Contains(s, want) {
@@ -117,7 +117,7 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 	// Helper-level lock: the strict generator output is exactly the approved
 	// form (atomic OR REPLACE + strict filter, no escape).
 	got := chStrictRowPolicyDDL("corr_signals")
-	want := "CREATE OR REPLACE ROW POLICY tenant_iso_corr_signals ON netops.corr_signals" +
+	want := "CREATE ROW POLICY OR REPLACE tenant_iso_corr_signals ON netops.corr_signals" +
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
 	if got != want {
 		t.Errorf("chStrictRowPolicyDDL(corr_signals):\n got %q\nwant %q", got, want)
@@ -139,6 +139,44 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("boot convergence missing telemetry row policy for %s", table)
+		}
+	}
+}
+
+// TestRowPolicyGrammarShape guards the CLASS of bug that shipped on
+// 2026-07-21, not the one instance of it. The strict builder emitted
+// `CREATE OR REPLACE ROW POLICY …`, which ClickHouse parses as
+// CREATE OR REPLACE {TABLE|VIEW|DICTIONARY|FUNCTION} and rejects at 'ROW'.
+// It failed 1,560 times and never once succeeded — yet four test files passed,
+// because every one of them asserted the exact broken STRING. A test that
+// pins a literal cannot fail when the literal is wrong; it only proves the
+// code still says what it said yesterday.
+//
+// So assert the GRAMMAR instead: every policy statement this package emits
+// must begin with the one prefix ClickHouse accepts. Any future rewording of
+// the modifier fails here rather than in production.
+func TestRowPolicyGrammarShape(t *testing.T) {
+	stmts := []string{
+		chRowPolicyDDL("flows"),
+		chStrictRowPolicyDDL("corr_signals"),
+	}
+	for _, s := range chConvergeStmts() {
+		if strings.Contains(s, "ROW POLICY") {
+			stmts = append(stmts, s)
+		}
+	}
+	if len(stmts) < 3 {
+		t.Fatalf("expected the converge list to emit row policies; got %d statements", len(stmts))
+	}
+	for _, s := range stmts {
+		if !strings.HasPrefix(s, "CREATE ROW POLICY ") {
+			t.Errorf("row-policy DDL must start with %q (ClickHouse puts the modifier AFTER\n"+
+				"ROW POLICY: `CREATE ROW POLICY OR REPLACE|IF NOT EXISTS name ON …`).\ngot: %s",
+				"CREATE ROW POLICY ", s)
+		}
+		// Catch the exact inversion that shipped.
+		if strings.HasPrefix(s, "CREATE OR REPLACE") {
+			t.Errorf("invalid ClickHouse grammar (parses as CREATE OR REPLACE TABLE/VIEW/...): %s", s)
 		}
 	}
 }

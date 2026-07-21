@@ -56,7 +56,7 @@ func tenantDisplayPath() string {
 	if p := strings.TrimSpace(os.Getenv("TENANT_DISPLAY_PATH")); p != "" {
 		return p
 	}
-	return "tenant_display.json"
+	return "/data/tenant_display.json"
 }
 
 func (s *tenantDisplayStore) load() {

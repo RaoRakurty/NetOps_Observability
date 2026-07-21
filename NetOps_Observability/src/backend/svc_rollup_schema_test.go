@@ -44,7 +44,7 @@ func TestSvcRollupSchemaPins(t *testing.T) {
 	}
 	// STRICT policy — attributed traffic is tenant data; the lenient
 	// untagged-shared escape would leak platform rows into every tenant.
-	if !strings.Contains(ddl, "CREATE OR REPLACE ROW POLICY tenant_iso_svc_flow_rollup_1m") {
+	if !strings.Contains(ddl, "CREATE ROW POLICY OR REPLACE tenant_iso_svc_flow_rollup_1m") {
 		t.Error("rollup needs the STRICT row policy")
 	}
 	if strings.Contains(ddl, "tenant_iso_svc_flow_rollup_1m ON netops.svc_flow_rollup_1m USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = ''") {
@@ -73,7 +73,7 @@ func TestPathBaselineSchemaPins(t *testing.T) {
 	}
 	// STRICT policy (the path_* family rule, TestCorrRowPoliciesStrict): the
 	// lenient untagged-shared escape is forbidden on every netops.path_* table.
-	if !strings.Contains(ddl, "CREATE OR REPLACE ROW POLICY tenant_iso_path_baselines") {
+	if !strings.Contains(ddl, "CREATE ROW POLICY OR REPLACE tenant_iso_path_baselines") {
 		t.Error("path_baselines needs the STRICT row policy")
 	}
 	if strings.Contains(ddl, "OR tenant_id = ''") {

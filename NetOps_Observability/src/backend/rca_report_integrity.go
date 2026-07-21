@@ -106,7 +106,7 @@ func rcaRevisionsPath() string {
 	if p := strings.TrimSpace(os.Getenv("RCA_REVISIONS_PATH")); p != "" {
 		return p
 	}
-	return "rca_report_revisions.json"
+	return "/data/rca_report_revisions.json"
 }
 
 func newRcaRevisionStore(path string) *rcaRevisionStore {

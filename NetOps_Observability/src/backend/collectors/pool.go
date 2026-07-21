@@ -10,6 +10,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"netops/backend/safego"
 )
 
 // Collector is the contract every protocol-specific collector implements.
@@ -87,9 +89,12 @@ func (p *Pool) Start(ctx context.Context) {
 		if !p.enabled[name] {
 			continue
 		}
-		go func(c Collector) {
+		// Panic-guarded: every collector goroutine parses bytes off the network
+		// (SNMP, gNMI, syslog, flows). A panic in any one of them would otherwise
+		// take the whole API process with it, not just that collector.
+		safego.Go("collector:"+name, func() {
 			_ = c.Run(ctx)
-		}(c)
+		})
 	}
 }
 

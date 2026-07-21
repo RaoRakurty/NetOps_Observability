@@ -119,22 +119,41 @@ func newPathGraphStore() pathGraphStore {
 
 // ── in-memory backend (default build, dev, tests) ────────────────────────────
 
+// Retention for the in-memory backend. The prober appends an observation per
+// path every 60s forever, and ListObservations full-scans the slice under
+// RLock on every API read — so without a bound this store is a slow OOM whose
+// read latency degrades in lockstep with its memory. Oldest-first eviction
+// keeps the recent route-change history, which is all this backend is for
+// (Postgres is the durable one). PATH_GRAPH_MEM_RETENTION overrides.
+const defaultPathObsRetention = 5000
+
 type memPathGraphStore struct {
 	mu sync.RWMutex
 	// EVERY map is tenant-keyed. There is deliberately no flat collection to
 	// accidentally range over: a cross-tenant read has to be spelled out.
 	endpoints   map[string]map[string]pathgraph.Endpoint       // tenant → endpoint_id → ep
 	definitions map[string]map[string]pathgraph.PathDefinition // tenant → path_id → def
-	obs         map[string][]pathgraph.PathObservation         // tenant → observations (append-only)
+	obs         map[string][]pathgraph.PathObservation         // tenant → observations, oldest-first, capped at maxObs
 	hops        map[string]map[string][]pathgraph.PathHop      // tenant → observation_id → ordered hops
+	maxObs      int                                            // per-tenant observation cap (0 = unbounded)
+	evicted     map[string]uint64                              // tenant → observations dropped by retention (for throttled logging)
 }
 
 func newMemPathGraphStore() *memPathGraphStore {
+	return newMemPathGraphStoreWithRetention(envInt("PATH_GRAPH_MEM_RETENTION", defaultPathObsRetention))
+}
+
+func newMemPathGraphStoreWithRetention(maxObs int) *memPathGraphStore {
+	if maxObs < 0 {
+		maxObs = 0
+	}
 	return &memPathGraphStore{
 		endpoints:   map[string]map[string]pathgraph.Endpoint{},
 		definitions: map[string]map[string]pathgraph.PathDefinition{},
 		obs:         map[string][]pathgraph.PathObservation{},
 		hops:        map[string]map[string][]pathgraph.PathHop{},
+		maxObs:      maxObs,
+		evicted:     map[string]uint64{},
 	}
 }
 
@@ -247,7 +266,41 @@ func (m *memPathGraphStore) AppendObservation(_ context.Context, _ pathgraph.Pat
 		ordered[i].TenantID = t
 	}
 	m.hops[t][o.ObservationID] = ordered
+	m.evictOldestLocked(t)
 	return nil
+}
+
+// evictOldestLocked trims the tenant's observation ring back to maxObs, dropping
+// each evicted observation's hops with it (they are unreachable once the
+// observation is gone, and leaving them behind would recreate the same leak one
+// map down). Caller holds m.mu.
+func (m *memPathGraphStore) evictOldestLocked(tenant string) {
+	if m.maxObs <= 0 {
+		return
+	}
+	over := len(m.obs[tenant]) - m.maxObs
+	if over <= 0 {
+		return
+	}
+	dropped := m.obs[tenant][:over]
+	// Re-slice into a fresh array so the evicted observations become garbage
+	// rather than staying alive behind the slice header.
+	kept := make([]pathgraph.PathObservation, len(m.obs[tenant])-over)
+	copy(kept, m.obs[tenant][over:])
+	m.obs[tenant] = kept
+	for _, o := range dropped {
+		delete(m.hops[tenant], o.ObservationID)
+	}
+	// Retention is lossy by design, so it must be visible (§10) — but at steady
+	// state every append evicts, so log the first loss per tenant and then once
+	// per full turnover instead of once per row.
+	prev := m.evicted[tenant]
+	m.evicted[tenant] = prev + uint64(over)
+	if prev == 0 || prev/uint64(m.maxObs) != m.evicted[tenant]/uint64(m.maxObs) {
+		logInfo("pathgraph", "evicting oldest in-memory path observations", map[string]any{
+			"tenant": tenant, "evicted_total": m.evicted[tenant], "retained": len(kept), "cap": m.maxObs,
+		})
+	}
 }
 
 func (m *memPathGraphStore) LatestObservation(_ context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error) {

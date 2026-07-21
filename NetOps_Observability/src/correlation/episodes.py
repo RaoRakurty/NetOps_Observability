@@ -24,10 +24,11 @@ first, calibrated at P4 (replay-driven calibration), never silently tuned.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Deque
-from collections import deque
+from collections import OrderedDict, deque
 
 # --- Detection constants (config-hash members; P4 calibration re-fits them) ---
 WINDOW_SIZE = 200          # rolling baseline samples
@@ -37,6 +38,10 @@ CUSUM_K = 0.5              # slack per sample (σ) — absorbs drift
 CLEAR_SIGMA = 1.0          # |z| considered "back to normal"
 CLEAR_HOLD = 3             # consecutive normal samples to close
 DEFAULT_INTERVAL_S = 60.0  # assumed sampling interval until observed
+# Bound on distinct (tenant, entity, metric) series held in memory (§9: all
+# queues bounded). Sized well above a real fleet's cardinality; it exists so
+# entity-id churn cannot become an OOM.
+MAX_SERIES = int(os.environ.get("CORR_MAX_SERIES", "200000"))
 
 # Owner: source-specific timing budget. Clock quality widens onset uncertainty
 # beyond the sampling-interval term (seconds).
@@ -109,8 +114,28 @@ class EpisodeDetector:
     reads — event time only (replay contract).
     """
 
-    def __init__(self) -> None:
-        self._state: dict[tuple[str, str, str], _SeriesState] = {}
+    def __init__(self, max_series: int | None = None) -> None:
+        # Bounded, LRU by last observation. The key is
+        # (tenant, entity, metric) and NOTHING evicted it: a tenant whose
+        # entity_ids are ephemeral cloud resource ids (the realistic churn
+        # shape) grows this map without limit until the container OOMs. At the
+        # cap the least-recently-observed series is dropped — it loses its
+        # baseline (it re-warms over MIN_SAMPLES), which is strictly better
+        # than losing the process. An OPEN episode is never the LRU victim
+        # unless every series is open.
+        self._max_series = max_series if max_series is not None else MAX_SERIES
+        self._state: OrderedDict[tuple[str, str, str], _SeriesState] = OrderedDict()
+        self.evicted = 0
+
+    def _evict_if_needed(self) -> None:
+        while len(self._state) > self._max_series:
+            for key, st in self._state.items():
+                if not st.open:
+                    self._state.pop(key)
+                    break
+            else:
+                self._state.popitem(last=False)   # all open: drop the oldest
+            self.evicted += 1
 
     def observe(
         self,
@@ -123,7 +148,13 @@ class EpisodeDetector:
     ) -> EpisodeEvent | None:
         """Feed one sample; returns an EpisodeEvent on onset/clear, else None."""
         key = (tenant_id, entity_id, metric)
-        st = self._state.setdefault(key, _SeriesState())
+        st = self._state.get(key)
+        if st is None:
+            st = _SeriesState()
+            self._state[key] = st
+            self._evict_if_needed()
+        else:
+            self._state.move_to_end(key)          # LRU touch
         st.clock_quality = clock_quality
 
         # Sampling-interval EWMA (event-time): the uncertainty budget's first term.

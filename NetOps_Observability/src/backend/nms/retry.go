@@ -1,6 +1,7 @@
 package nms
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,11 +21,21 @@ type ExpoRetry struct {
 	Jitter func() float64
 }
 
-// DefaultRetry returns a sane policy: 500ms base, 30s cap, 5 tries, no jitter
-// (callers set Jitter for production spread).
+// DefaultRetry returns a sane policy: 500ms base, 30s cap, 5 tries, and REAL
+// jitter — every production caller gets it.
+//
+// The hook existed and was unit-tested but was never wired, so every connector
+// that failed during one upstream outage retried on an identical schedule and
+// hit the recovering controller as a synchronized herd (§9). Tests that need a
+// deterministic delay override Jitter (or build ExpoRetry directly).
 func DefaultRetry() ExpoRetry {
-	return ExpoRetry{Base: 500 * time.Millisecond, Max: 30 * time.Second, MaxTries: 5}
+	return ExpoRetry{Base: 500 * time.Millisecond, Max: 30 * time.Second, MaxTries: 5, Jitter: randJitter}
 }
+
+// randJitter spreads a delay uniformly over [delay, 2*delay). Not
+// cryptographic and doesn't need to be: it exists to decorrelate clients, not
+// to be unguessable.
+func randJitter() float64 { return rand.Float64() }
 
 // Next implements RetryPolicy. 429/503 with a Retry-After always wins (we obey
 // the server). Retries on 429, 5xx, and transport errors (status 0). 4xx other

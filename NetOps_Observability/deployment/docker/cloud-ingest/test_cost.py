@@ -405,3 +405,112 @@ def test_connector_checkpoints_never_mix(monkeypatch):
     assert st["connectors"]["ccn_1"]["cost_day"] == yesterday
     assert st["connectors"]["ccn_2"]["cost_day"] == yesterday
     assert st["connectors"]["ccn_1"] is not st["connectors"]["ccn_2"]
+
+
+# ── F-37: the day checkpoint may never outrun the flush ───────────────────────
+#
+# The cost lane runs on a 6-hour cadence with a short restate window, so a
+# checkpoint that advances over records the broker never acknowledged loses a
+# full billing day per account PERMANENTLY: the next poll window starts after
+# the checkpoint and never looks back. These tests pin the ordering
+# (emit → flush → verify → advance) and the hold-back on failure.
+
+class _FlakyProducer(_Producer):
+    """Producer whose flush fails, or which reports lost deliveries."""
+
+    def __init__(self, *, flush_raises=False, lose=0):
+        super().__init__()
+        self._flush_raises = flush_raises
+        self._lose = lose
+        self.flushes = 0
+        self.failed_count = 0
+
+    def flush(self, timeout=None):
+        self.flushes += 1
+        if self._flush_raises:
+            raise TimeoutError("broker unreachable")
+        self.failed_count += self._lose
+
+
+def test_aws_checkpoint_held_when_flush_fails():
+    prod, st = _FlakyProducer(flush_raises=True), {}
+    n = cost.poll_aws(_FakeCE(), prod, "acme", "1", st, today="2026-07-18")
+    assert n == 3                      # records were emitted...
+    assert prod.flushes == 1           # ...and the flush was attempted...
+    assert "cost_day" not in st        # ...but the day is NOT marked done.
+
+
+def test_aws_checkpoint_held_when_records_are_lost_in_delivery():
+    prod, st = _FlakyProducer(lose=1), {}
+    cost.poll_aws(_FakeCE(), prod, "acme", "1", st, today="2026-07-18")
+    assert "cost_day" not in st
+
+
+def test_aws_checkpoint_advances_only_after_a_verified_flush():
+    prod, st = _FlakyProducer(), {}
+    cost.poll_aws(_FakeCE(), prod, "acme", "1", st, today="2026-07-18")
+    assert prod.flushes == 1
+    assert st["cost_day"] == "2026-07-17"
+
+
+def test_held_checkpoint_makes_the_next_cycle_re_read_the_same_window():
+    """The hold-back is only useful if it actually retries: the same window must
+    come back on the next poll (ReplacingMergeTree dedupes the re-emit)."""
+    st = {}
+    failing = _FlakyProducer(flush_raises=True)
+    ce = _FakeCE()
+    cost.poll_aws(ce, failing, "acme", "1", st, today="2026-07-18")
+    first_window = (ce.calls[0]["TimePeriod"]["Start"], ce.calls[0]["TimePeriod"]["End"])
+
+    ok, ce2 = _FlakyProducer(), _FakeCE()
+    n = cost.poll_aws(ce2, ok, "acme", "1", st, today="2026-07-18")
+    retry_window = (ce2.calls[0]["TimePeriod"]["Start"], ce2.calls[0]["TimePeriod"]["End"])
+    assert retry_window == first_window
+    assert n == 3
+    assert st["cost_day"] == "2026-07-17"
+
+
+def test_azure_checkpoint_held_when_flush_fails(monkeypatch):
+    monkeypatch.setattr(cost, "_azure_cost_query", lambda *a: AZ_RESP)
+    prod, st = _FlakyProducer(flush_raises=True), {}
+    cost.poll_azure("tok", prod, "acme", "sub", st, today="2026-07-18")
+    assert "cost_day" not in st
+
+
+def test_run_reports_a_failed_cycle_flush_instead_of_swallowing_it(monkeypatch):
+    """The cycle-closing flush error used to be `except: pass`."""
+    monkeypatch.setattr(cost.broker_client, "configured", lambda: False)
+
+    class _AzMod:
+        SUBSCRIPTION = "sub"
+
+        @staticmethod
+        def configured():
+            return True
+
+        @staticmethod
+        def token():
+            return "tok"
+
+    class _GcpMod:
+        PROJECT = "p"
+
+        @staticmethod
+        def configured():
+            return False
+
+    monkeypatch.setattr(cost, "_azure_cost_query", lambda *a: AZ_RESP)
+
+    class _CycleFlushFails(_Producer):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def flush(self, timeout=None):
+            self.n += 1
+            if self.n > 1:          # the lane flush succeeds, the cycle one fails
+                raise TimeoutError("broker unreachable")
+
+    counts = cost.run(_CycleFlushFails(), {}, azure_mod=_AzMod, gcp_mod=_GcpMod)
+    assert counts["azure"] == 3
+    assert counts.get("flush_failed") == 1

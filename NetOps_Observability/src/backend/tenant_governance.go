@@ -99,7 +99,7 @@ func tenantGovernancePath() string {
 	if p := strings.TrimSpace(os.Getenv("TENANT_GOVERNANCE_PATH")); p != "" {
 		return p
 	}
-	return "tenant_governance.json"
+	return "/data/tenant_governance.json"
 }
 
 func (s *tenantGovernanceStore) load() {

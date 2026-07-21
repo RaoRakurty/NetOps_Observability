@@ -28,6 +28,7 @@ import cost
 import discover
 import gcp
 import ingest_metrics
+import producer_guard
 import seam_aws
 import source_status
 import trail_state
@@ -692,10 +693,16 @@ def main():
     ct = session.client("cloudtrail")
     s3 = session.client("s3")
     cw = session.client("cloudwatch")
-    producer = KafkaProducer(
+    # Every lane produces through the guard: kafka-python's send() is async and
+    # returns a future, so a record that exhausts retries=5 is otherwise lost
+    # with no log and no counter (the lane still logs "produced count=N"). The
+    # wrapper observes the delivery RESULT for all ~17 send() sites at once and
+    # gives the cost lane a failure count to verify against before it advances
+    # its day checkpoint.
+    producer = producer_guard.GuardedProducer(KafkaProducer(
         bootstrap_servers=BROKERS.split(","),
         value_serializer=lambda v: json.dumps(v).encode(),
-        acks="all", linger_ms=100, retries=5)
+        acks="all", linger_ms=100, retries=5))
     jlog("cloud-ingest started", group=LOG_GROUP, brokers=BROKERS, tenant=TENANT)
     # Which ingestion mode(s) this process runs (Wave 1 #2). Ambient = today's
     # single-credential lanes (always on, unchanged); connectors = per-tenant
@@ -707,6 +714,7 @@ def main():
         jlog("metrics serving", port=metrics_srv.server_address[1])
     last_connectors = 0.0
     last_cost = 0.0
+    last_produce_failed = 0
     st = load_state()
     last_discover = 0.0
     last_metrics = 0.0
@@ -935,6 +943,16 @@ def main():
         # misconfiguration set to the platform once per loop. Best-effort and
         # bounded inside; a report failure never touches the lanes above.
         source_status.flush()
+
+        # Produce failures are counted per record inside the guard (and logged
+        # rate-limited there); this is the cycle-level rollup, so a cycle that
+        # "produced 42 changes" can never look identical to one that delivered
+        # none of them.
+        failed = producer.failed_count
+        if failed != last_produce_failed:
+            jlog("kafka produce failures", lost_records=failed - last_produce_failed,
+                 lost_total=failed, last_error=producer.last_error)
+            last_produce_failed = failed
 
         time.sleep(POLL_S)
 

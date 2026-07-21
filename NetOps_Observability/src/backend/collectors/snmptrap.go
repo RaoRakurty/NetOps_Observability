@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/safego"
 )
 
 // snmptrap.go — the SNMP trap/inform receiver. Unlike the pollers (which GET
@@ -919,6 +921,33 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 	}
 }
 
+// decodePacket decodes and attributes ONE datagram, with panic recovery.
+//
+// Everything below it is hand-rolled BER/ASN.1 offset arithmetic over
+// UNAUTHENTICATED UDP — anything that can reach :162 controls those bytes. An
+// out-of-range slice there would otherwise be remote, pre-auth termination of
+// the whole API process. A poisoned packet must cost exactly that packet: it is
+// counted as a decode error and the receiver keeps listening.
+func (r *trapReceiver) decodePacket(pkt []byte, srcIP string) (ev *TrapEvent, err error) {
+	completed := safego.Run(safego.Stderr, "snmptrap-decode", func() {
+		ev, err = decodeTrap(pkt, srcIP, r.resolve)
+		if err != nil || ev == nil {
+			return
+		}
+		r.attributeDevice(ev, srcIP)
+	})
+	if !completed {
+		return nil, fmt.Errorf("snmptrap: decoder panicked on %d-byte packet from %s", len(pkt), srcIP)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ev == nil {
+		return nil, fmt.Errorf("snmptrap: decoder returned no event")
+	}
+	return ev, nil
+}
+
 func (r *trapReceiver) Run(ctx context.Context) error {
 	var lc net.ListenConfig
 	pc, err := lc.ListenPacket(ctx, "udp", r.addr)
@@ -930,8 +959,8 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 		return err
 	}
 	defer pc.Close()
-	go func() { <-ctx.Done(); _ = pc.Close() }()
-	go r.forwardLoop(ctx)
+	safego.Go("snmptrap-closer", func() { <-ctx.Done(); _ = pc.Close() })
+	safego.Go("snmptrap-forward-loop", func() { r.forwardLoop(ctx) })
 
 	buf := make([]byte, 65535)
 	for {
@@ -951,16 +980,15 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 		r.received++
 		r.mu.Unlock()
 
-		ev, derr := decodeTrap(pkt, srcIP, r.resolve)
+		// Canonicalize the originating device (sysName / agent-addr / source IP) so
+		// trap evidence binds to the same entity id as every other producer (G2).
+		ev, derr := r.decodePacket(pkt, srcIP)
 		if derr != nil {
 			r.mu.Lock()
 			r.status.LastError = derr.Error()
 			r.mu.Unlock()
 			continue
 		}
-		// Canonicalize the originating device (sysName / agent-addr / source IP) so
-		// trap evidence binds to the same entity id as every other producer (G2).
-		r.attributeDevice(ev, srcIP)
 		r.mu.Lock()
 		r.decoded++
 		r.status.LastTick = time.Now().UTC()
@@ -981,7 +1009,9 @@ func (r *trapReceiver) forwardLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case ev := <-r.events:
-			r.forward(ctx, client, ev)
+			// Same reasoning as decodePacket: the envelope derivation runs over
+			// attacker-supplied fields, and this loop must outlive any one event.
+			safego.Run(safego.Stderr, "snmptrap-forward", func() { r.forward(ctx, client, ev) })
 		}
 	}
 }

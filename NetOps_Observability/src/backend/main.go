@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"netops/backend/nms"
 	"netops/backend/notify"
 	"netops/backend/reports"
+	"netops/backend/safego"
 )
 
 const version = "0.1.0-scaffold"
@@ -620,6 +622,81 @@ func newServer() *server {
 	return srv
 }
 
+// ── goroutine safety + shutdown drain ────────────────────────────────────────
+
+// apiPanicLogger routes a recovered goroutine panic into the structured app log,
+// so the bug is as visible as the crash was (§10) — searchable next to every
+// other event instead of being a container restart with no explanation.
+func apiPanicLogger(name string, recovered any, stack []byte) {
+	logError("panic", "goroutine panic recovered", map[string]any{
+		"goroutine": name,
+		"panic":     fmt.Sprint(recovered),
+		"stack":     string(stack),
+	})
+}
+
+// safeGo starts fn on its own goroutine with panic recovery. Nothing recovers
+// panics outside net/http's per-request handler, so ANY background loop or
+// per-connection pump that panics takes the whole API down for every tenant.
+func safeGo(name string, fn func()) { safego.GoWith(apiPanicLogger, name, fn) }
+
+// workerGroup tracks background workers so shutdown can WAIT for them. Without
+// it, SIGTERM cancelled the root context and returned immediately: every
+// in-flight Postgres/ClickHouse write (ticketing outbox, report jobs, incident
+// sync) was abandoned mid-operation on every deploy.
+type workerGroup struct{ wg sync.WaitGroup }
+
+// start launches a tracked worker. fn must return when the root context is
+// cancelled — a worker that ignores cancellation only costs the drain timeout.
+func (g *workerGroup) start(name string, fn func()) {
+	g.wg.Add(1)
+	safeGo(name, func() {
+		defer g.wg.Done()
+		fn()
+	})
+}
+
+// drain waits up to d for the tracked workers to return after cancellation. It
+// reports whether they all finished; the caller logs a false rather than
+// hiding it, since it means work really was cut short.
+func (g *workerGroup) drain(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		g.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// newAPIServer builds the HTTP server with a COMPLETE timeout set.
+//
+// Only ReadHeaderTimeout was set before, which leaves a request BODY dribblable
+// forever and connections parkable indefinitely (slowloris-on-body). nginx's
+// client_body_timeout covers the default deployment — but in TLS/mTLS mode this
+// server is reachable directly, with nothing in front of it.
+//
+// The WebSocket and SSH-proxy handlers hijack their connections and manage
+// their own per-read/per-write deadlines, so these values do not cap session
+// length there.
+func newAPIServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: durationOr("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),
+		// Generous: large SOT/profile imports upload over slow links.
+		ReadTimeout: durationOr("HTTP_READ_TIMEOUT", 120*time.Second),
+		// Must exceed the slowest upstream a handler waits on (copilot proxy, 60s).
+		WriteTimeout:   durationOr("HTTP_WRITE_TIMEOUT", 180*time.Second),
+		IdleTimeout:    durationOr("HTTP_IDLE_TIMEOUT", 120*time.Second),
+		MaxHeaderBytes: 1 << 20, // 1 MiB header cap (SR-012); default is also 1 MiB, set explicitly.
+	}
+}
+
 func main() {
 	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
 	// measurement collectors (STAMP / traceroute) — the single component that
@@ -636,6 +713,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Background workers started through this group are waited for on shutdown
+	// (see the drain below) instead of being abandoned mid-write.
+	workers := &workerGroup{}
 	srv.discovery.Start(ctx)
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
@@ -643,7 +723,7 @@ func main() {
 	// SNMP collection; CRED_AUTO_RESOLVE=false opts out (bound refs then fail
 	// dark exactly as before).
 	if os.Getenv("ENABLE_SNMP_COLLECTION") == "true" && os.Getenv("CRED_AUTO_RESOLVE") != "false" {
-		go srv.credSentinel.run(ctx)
+		workers.start("cred-sentinel", func() { srv.credSentinel.run(ctx) })
 	}
 	srv.alerts.Start(ctx)
 	srv.loadUserRules() // re-feed persisted operator-created monitors (rules_user.go)
@@ -658,7 +738,7 @@ func main() {
 	ensureCHRowPolicies()
 	// corr_current projection drift repair (#101): detect + re-seed hot-read rows
 	// whose dual-write was lost. No-op when ClickHouse is not configured.
-	go srv.corrCurrentReconcileLoop(ctx)
+	workers.start("corr-current-reconcile", func() { srv.corrCurrentReconcileLoop(ctx) })
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
 	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.
@@ -671,7 +751,7 @@ func main() {
 	srv.startCloudInventory(ctx)
 	// Appliance self-health guard: watches disk + OpenSearch read-only blocks,
 	// heals ingest after disk pressure, pages via the platform lane (self_heal.go).
-	go srv.selfHeal.run(ctx)
+	workers.start("self-heal", func() { srv.selfHeal.run(ctx) })
 	// Service Path Graph ingest (contract v1): the prober's traceroutes → immutable
 	// PathObservations + ordered PathHops, each hop resolved through the §3 ranked
 	// resolver. Opt-in (FEATURE_PATH_GRAPH=true), dormant by default.
@@ -742,12 +822,21 @@ func main() {
 			cfg, ok := srv.itsmCfg.ticketSystemConfig(tenant, system)
 			return cfg, ok, nil
 		}
-		go newTicketWorker(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
-		go newTicketSweeper(srv, srv.ticketing).Run(ctx, durationOr("RCA_TICKETING_SWEEP_INTERVAL", 60*time.Second))
+		tw := newTicketWorker(srv.ticketing, resolve)
+		workers.start("ticketing-worker", func() {
+			tw.Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
+		})
+		ts := newTicketSweeper(srv, srv.ticketing)
+		workers.start("ticketing-sweeper", func() {
+			ts.Run(ctx, durationOr("RCA_TICKETING_SWEEP_INTERVAL", 60*time.Second))
+		})
 		// Inbound state sync (#84): poll each live ticket's ServiceNow state back and
 		// append the human-phase lifecycle events (acknowledged/resolved/closed/…) the
 		// incident time-decomposition renders. Self-dormant when no connection is set.
-		go newTicketStateSyncer(srv.ticketing, resolve).Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
+		sy := newTicketStateSyncer(srv.ticketing, resolve)
+		workers.start("ticketing-inbound-sync", func() {
+			sy.Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
+		})
 		logInfo("ticketing", "RCA auto-ticketing enabled", nil)
 	}
 	// Cloud signal notifications (Wave 4 #12 slice 1): page/message the owning
@@ -761,24 +850,27 @@ func main() {
 			}
 			return srv.itsmCfg.rcaNotifyTargets(tenant)
 		}
-		go newCloudNotifySweeper(srv, resolveNotify).Run(ctx, durationOr("CLOUD_NOTIFY_INTERVAL", 60*time.Second))
+		cn := newCloudNotifySweeper(srv, resolveNotify)
+		workers.start("cloud-notify-sweeper", func() {
+			cn.Run(ctx, durationOr("CLOUD_NOTIFY_INTERVAL", 60*time.Second))
+		})
 		logInfo("cloud", "cloud signal notifications enabled", nil)
 	}
 	// NMS controller polling (#95 P3b): each enabled integration polls on its
 	// own interval; the tick only re-evaluates due-ness. Non-nil only when
 	// FEATURE_NMS_INTEGRATIONS=true.
 	if srv.nms != nil {
-		go srv.nms.Run(ctx, durationOr("NMS_POLL_TICK", 30*time.Second))
+		workers.start("nms-scheduler", func() { srv.nms.Run(ctx, durationOr("NMS_POLL_TICK", 30*time.Second)) })
 		logInfo("nms", "NMS integration scheduler enabled", nil)
 	}
 	// Active Verification auto-trigger (RCA spec item 8): watches suspected-tier
 	// cases in opted-in tenants; bounded per tick, deduped per case (cooldown).
 	if srv.verifyFeatureOn() {
-		go srv.verifyLoop(ctx, verifyScanInterval())
+		workers.start("verify-loop", func() { srv.verifyLoop(ctx, verifyScanInterval()) })
 		logInfo("verify", "active-verification trigger enabled", nil)
 	}
-	go srv.startBroadcaster(ctx.Done())
-	go srv.watchAlertsForBroadcast(ctx)
+	workers.start("ws-broadcaster", func() { srv.startBroadcaster(ctx.Done()) })
+	workers.start("ws-alert-watcher", func() { srv.watchAlertsForBroadcast(ctx) })
 	// Multi-instance cache coherence for the cached-by-design stores: refresh
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
@@ -818,24 +910,21 @@ func main() {
 	}
 	srv.tlsSrv = tlsSrv
 
-	httpSrv := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		MaxHeaderBytes:    1 << 20, // 1 MiB header cap (SR-012); default is also 1 MiB, set explicitly.
-	}
+	httpSrv := newAPIServer(addr, handler)
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
 		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
 		// Count + structure-log handshake failures instead of the default logger.
 		httpSrv.ErrorLog = log.New(handshakeErrLog{tlsSrv.metrics}, "", 0)
-		go tlsSrv.reloader.WatchInterval(ctx, tlsSrv.interval, func(e error) {
-			logError("tls", "cert reload", errf(e))
+		safeGo("tls-cert-reloader", func() {
+			tlsSrv.reloader.WatchInterval(ctx, tlsSrv.interval, func(e error) {
+				logError("tls", "cert reload", errf(e))
+			})
 		})
 		// Periodic SVID re-issue (#18 phase 4): re-mint + rewrite the API/nginx
 		// certs at ~half the TTL; the reloader hot-swaps them — rotation, no restart.
 		if caMgr != nil {
-			go caMgr.startReissueLoop(ctx)
+			safeGo("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
 		}
 	}
 
@@ -859,12 +948,21 @@ func main() {
 	}()
 
 	<-stop
-	log.Println("shutdown requested")
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	logInfo("shutdown", "shutdown requested", nil)
+	// Order matters: stop accepting/finish in-flight HTTP first, THEN cancel the
+	// workers' context, THEN wait for them. Cancelling before the drain (and not
+	// waiting at all) is what abandoned in-flight ticketing/report/incident
+	// writes on every deploy.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), durationOr("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second))
 	defer shutdownCancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		logError("shutdown", "http graceful shutdown", errf(err))
+	}
 	cancel()
-	log.Println("goodbye")
+	if !workers.drain(durationOr("WORKER_DRAIN_TIMEOUT", 15*time.Second)) {
+		logWarn("shutdown", "background workers did not drain before timeout", nil)
+	}
+	logInfo("shutdown", "goodbye", nil)
 }
 
 // runProber runs the active-measurement sidecar: only the probe collectors,
@@ -1437,6 +1535,14 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.cloudBroker != nil {
 		s.cloudBroker.metrics.write(w)
+	}
+	if s.hub != nil {
+		fmt.Fprintf(w, "# HELP netops_ws_clients Currently connected WebSocket event clients.\n")
+		fmt.Fprintf(w, "# TYPE netops_ws_clients gauge\n")
+		fmt.Fprintf(w, "netops_ws_clients %d\n", s.hub.Count())
+		fmt.Fprintf(w, "# HELP netops_ws_frames_dropped_total Event frames discarded because a client's send buffer was full.\n")
+		fmt.Fprintf(w, "# TYPE netops_ws_frames_dropped_total counter\n")
+		fmt.Fprintf(w, "netops_ws_frames_dropped_total %d\n", s.hub.Dropped())
 	}
 	fmt.Fprintf(w, "# HELP netops_ticketing_policy_conflicts_total Policy enables rejected because another policy is enabled for the tenant+system.\n")
 	fmt.Fprintf(w, "# TYPE netops_ticketing_policy_conflicts_total counter\n")

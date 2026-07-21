@@ -34,6 +34,13 @@ _lock = threading.Lock()
 _exchange: dict[tuple[str, str], int] = {}   # (provider, outcome) -> count
 _lat_sum: dict[str, float] = {}              # provider -> seconds
 _lat_count: dict[str, int] = {}
+# Records whose Kafka delivery is known to have FAILED, by topic. Produce
+# failures used to be invisible (send() is async and every lane discarded the
+# future), so "no data downstream" was indistinguishable from "no data
+# upstream". Topic is the ONLY label — bounded by the topic list, never a
+# tenant/account/payload.
+_produce_failed: dict[str, int] = {}
+_flush_failed: dict[str, int] = {}           # component -> failed flushes
 
 
 def classify_error(exc: BaseException) -> str:
@@ -59,6 +66,28 @@ def record_exchange(provider: str, outcome: str, seconds: float | None = None) -
             _lat_count[p] = _lat_count.get(p, 0) + 1
 
 
+def record_produce_failure(topic: str) -> None:
+    """Count one record whose Kafka delivery failed. Never raises."""
+    t = str(topic or "unknown")
+    with _lock:
+        _produce_failed[t] = _produce_failed.get(t, 0) + 1
+
+
+def record_flush_failure(component: str) -> None:
+    """Count one failed producer flush (component = the lane that flushed).
+    A failed flush means unacknowledged records: whatever checkpoint that lane
+    was about to advance must NOT advance."""
+    c = str(component or "unknown")
+    with _lock:
+        _flush_failed[c] = _flush_failed.get(c, 0) + 1
+
+
+def produce_failures() -> dict[str, int]:
+    """Snapshot of the per-topic produce-failure counts (test/introspection)."""
+    with _lock:
+        return dict(_produce_failed)
+
+
 def render() -> str:
     """Prometheus text exposition of the current counters."""
     lines = [
@@ -75,6 +104,14 @@ def render() -> str:
         for p in sorted(_lat_count):
             lines.append(f'netops_cloud_ingest_exchange_latency_seconds_sum{{provider="{p}"}} {_lat_sum[p]:.6f}')
             lines.append(f'netops_cloud_ingest_exchange_latency_seconds_count{{provider="{p}"}} {_lat_count[p]}')
+        lines.append("# HELP netops_cloud_ingest_produce_failures_total Records whose Kafka delivery failed (data lost).")
+        lines.append("# TYPE netops_cloud_ingest_produce_failures_total counter")
+        for t in sorted(_produce_failed):
+            lines.append(f'netops_cloud_ingest_produce_failures_total{{topic="{t}"}} {_produce_failed[t]}')
+        lines.append("# HELP netops_cloud_ingest_flush_failures_total Producer flushes that did not complete (checkpoint held back).")
+        lines.append("# TYPE netops_cloud_ingest_flush_failures_total counter")
+        for c in sorted(_flush_failed):
+            lines.append(f'netops_cloud_ingest_flush_failures_total{{component="{c}"}} {_flush_failed[c]}')
     return "\n".join(lines) + "\n"
 
 
@@ -121,3 +158,5 @@ def reset() -> None:
         _exchange.clear()
         _lat_sum.clear()
         _lat_count.clear()
+        _produce_failed.clear()
+        _flush_failed.clear()

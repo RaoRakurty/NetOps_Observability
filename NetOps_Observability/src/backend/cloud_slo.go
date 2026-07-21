@@ -74,7 +74,7 @@ func cloudSLOPath() string {
 	if p := strings.TrimSpace(os.Getenv("CLOUD_SLO_PATH")); p != "" {
 		return p
 	}
-	return "cloud_slos.json"
+	return "/data/cloud_slos.json"
 }
 
 func newCloudSLOStore(path string) *cloudSLOStore {

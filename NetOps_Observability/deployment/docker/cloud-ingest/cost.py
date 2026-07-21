@@ -48,6 +48,7 @@ import time
 import urllib.request
 
 import broker_client
+import ingest_metrics
 import source_status
 
 COST_TOPIC = os.environ.get("COST_TOPIC", "netops.cloudcosts")
@@ -67,6 +68,9 @@ COST_MAX_PAGES = int(os.environ.get("COST_MAX_PAGES", "20"))
 # Connector pass bounds (the connector_cycle pattern).
 COST_CONNECTOR_MAX = int(os.environ.get("COST_CONNECTOR_MAX", "25"))
 COST_CONNECTOR_BUDGET_S = int(os.environ.get("COST_CONNECTOR_BUDGET_S", "240"))
+# How long a lane waits for the broker to acknowledge its records before it
+# declares the flush failed and HOLDS the day checkpoint (see flush_verified).
+COST_FLUSH_TIMEOUT_S = int(os.environ.get("COST_FLUSH_TIMEOUT_S", "30"))
 
 TENANT = os.environ.get("CLOUD_TENANT", "global")
 ACCOUNT = os.environ.get("CLOUD_ACCOUNT", "")
@@ -180,6 +184,44 @@ def _emit(producer, records: list[dict]) -> int:
     return len(records)
 
 
+def _delivery_failures(producer) -> int:
+    """Records the producer KNOWS it failed to deliver (GuardedProducer).
+    0 when the producer does not track them (tests, plain KafkaProducer) — the
+    flush result is then the only evidence, which is still strictly better than
+    advancing blind."""
+    n = getattr(producer, "failed_count", None)
+    return n if isinstance(n, int) else 0
+
+
+def flush_verified(producer, lane: str, mark: int) -> bool:
+    """Block until this lane's records are acknowledged, and report whether ALL
+    of them made it (`mark` = the delivery-failure count taken BEFORE emitting).
+
+    The cost checkpoint is the only record that a billing day was fetched, and
+    the lane is on a 6-hour cadence with a short restate window: advancing it
+    over records that were never delivered loses a full day of a customer's
+    billing data permanently, because the next poll window starts after the
+    checkpoint and never looks back. So the order is flush → verify → advance,
+    and a failure is LOUD and holds the checkpoint (the next cycle re-reads the
+    same window; ClickHouse's ReplacingMergeTree dedupes the re-emit, so a
+    retry is free and idempotent).
+    """
+    try:
+        producer.flush(COST_FLUSH_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — classified into the return value
+        ingest_metrics.record_flush_failure(f"cost_{lane}")
+        _log("cost flush FAILED — day checkpoint HELD BACK (window will be re-read)",
+             lane=lane, error=str(exc)[:200])
+        return False
+    lost = _delivery_failures(producer) - mark
+    if lost > 0:
+        ingest_metrics.record_flush_failure(f"cost_{lane}")
+        _log("cost records LOST in delivery — day checkpoint HELD BACK",
+             lane=lane, lost_records=lost)
+        return False
+    return True
+
+
 # ── AWS: Cost Explorer GetCostAndUsage ───────────────────────────────────────
 
 def poll_aws(ce, producer, tenant: str, account: str, st: dict,
@@ -197,6 +239,7 @@ def poll_aws(ce, producer, tenant: str, account: str, st: dict,
     sent = 0
     token = None
     truncated = False
+    mark = _delivery_failures(producer)
     for _ in range(max(1, COST_MAX_PAGES)):
         kw = {
             "TimePeriod": {"Start": start, "End": end},
@@ -234,6 +277,10 @@ def poll_aws(ce, producer, tenant: str, account: str, st: dict,
             break
     if truncated:
         _log("aws cost emission capped", cap=COST_MAX_RECORDS, window=[start, end])
+    # flush → verify → THEN advance. The checkpoint must never move past
+    # records the broker has not acknowledged (flush_verified explains why).
+    if sent and not flush_verified(producer, "aws", mark):
+        return sent
     st["cost_day"] = advance_day_checkpoint(st.get("cost_day", ""), today)
     return sent
 
@@ -280,6 +327,7 @@ def poll_azure(tok: str, producer, tenant: str, subscription: str, st: dict,
         return 0
     start, end = win
     end_incl = (dt.date.fromisoformat(end) - dt.timedelta(days=1)).isoformat()
+    mark = _delivery_failures(producer)
     resp = _azure_cost_query(tok, subscription, start, end_incl)
     props = resp.get("properties") or {}
     cols = [str(c.get("name", "")).lower() for c in (props.get("columns") or [])]
@@ -313,6 +361,9 @@ def poll_azure(tok: str, producer, tenant: str, subscription: str, st: dict,
     sent = _emit(producer, batch)
     if truncated:
         _log("azure cost emission capped", cap=COST_MAX_RECORDS, window=[start, end])
+    # flush → verify → THEN advance (see flush_verified).
+    if sent and not flush_verified(producer, "azure", mark):
+        return sent
     st["cost_day"] = advance_day_checkpoint(st.get("cost_day", ""), today)
     return sent
 
@@ -485,9 +536,16 @@ def run(producer, st: dict, *, session=None, azure_mod=None, gcp_mod=None) -> di
 
     conn_counts = connector_pass(producer, cst)
     counts.update({f"connector_{k}": v for k, v in conn_counts.items()})
+    # Cycle-closing flush. Each lane already flushed + verified before it moved
+    # its own checkpoint; this catches anything a lane emitted without one (and
+    # the failure is REPORTED, not swallowed — a silently discarded flush error
+    # is how a day of billing records used to disappear).
     if produced or conn_counts.get("connectors"):
         try:
-            producer.flush(10)
-        except Exception:  # noqa: BLE001 — flush hiccup never fails the cycle
-            pass
+            producer.flush(COST_FLUSH_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — observable, never fails the cycle
+            ingest_metrics.record_flush_failure("cost_cycle")
+            counts["flush_failed"] = 1
+            _log("cost cycle flush FAILED — records may be undelivered",
+                 error=str(exc)[:200])
     return counts

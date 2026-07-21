@@ -11,6 +11,7 @@ import (
 	"net/smtp"
 	"net/textproto"
 	"strings"
+	"time"
 
 	"netops/backend/models"
 )
@@ -26,11 +27,25 @@ type Email struct {
 	user         string
 	password     string
 	to           []string
-	tlsOnConnect bool // true for SSL-on-connect (port 465)
+	tlsOnConnect bool          // true for SSL-on-connect (port 465)
+	dialTimeout  time.Duration // TCP/TLS connect budget
+	deadline     time.Duration // whole-conversation budget
 }
 
 func NewEmail(host, from string) *Email {
-	return &Email{host: host, from: from}
+	return &Email{host: host, from: from, dialTimeout: smtpDialTimeout, deadline: smtpDeadline}
+}
+
+// WithTimeouts overrides the transport budgets. Both must be > 0 to take
+// effect: an unbounded SMTP send is the exact defect this channel had.
+func (e *Email) WithTimeouts(dial, conversation time.Duration) *Email {
+	if dial > 0 {
+		e.dialTimeout = dial
+	}
+	if conversation > 0 {
+		e.deadline = conversation
+	}
+	return e
 }
 
 // WithTLSOnConnect enables implicit TLS (SSL-on-connect, typically port 465)
@@ -173,34 +188,89 @@ func buildMixed(from string, to []string, subject, htmlBody string, atts []Attac
 	return append([]byte(headers), body.Bytes()...), nil
 }
 
+// SMTP timeouts. net/smtp dials with no timeout and sets no deadlines, and
+// smtp.SendMail gives no way to inject either — so a tarpitting, blackholed or
+// simply wedged relay parked one goroutine AND one TCP/TLS socket permanently,
+// once per alert, with the dispatcher fanning out a goroutine per channel per
+// alert. Every other notify channel is capped at 10-15s; email was the only
+// unbounded one. Hence the hand-rolled conversation below instead of SendMail.
+const (
+	smtpDialTimeout = 10 * time.Second // TCP (+TLS handshake on the 465 path)
+	smtpDeadline    = 60 * time.Second // whole conversation, greeting → QUIT
+)
+
+// dial opens the transport for one SMTP conversation, with a bounded dial and
+// an absolute deadline covering every subsequent read and write.
+func (e *Email) dial(host string) (net.Conn, error) {
+	// Zero values mean the Email was built by a struct literal rather than
+	// NewEmail; fall back to the defaults rather than dialing unbounded.
+	dialTimeout, deadline := e.dialTimeout, e.deadline
+	if dialTimeout <= 0 {
+		dialTimeout = smtpDialTimeout
+	}
+	if deadline <= 0 {
+		deadline = smtpDeadline
+	}
+	d := &net.Dialer{Timeout: dialTimeout}
+	var conn net.Conn
+	var err error
+	if e.tlsOnConnect {
+		// Implicit TLS (port 465): the handshake happens inside the dial, so it
+		// is covered by the dialer timeout.
+		conn, err = tls.DialWithDialer(d, "tcp", e.host, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+	} else {
+		conn, err = d.Dial("tcp", e.host)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(deadline)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
 // sendRaw applies auth and the STARTTLS / TLS-on-connect transport choice shared
-// by Send and SendDocument.
+// by Send, SendDocument and SendReport.
 func (e *Email) sendRaw(msg []byte) error {
-	host, _, _ := net.SplitHostPort(e.host)
+	host, _, err := net.SplitHostPort(e.host)
+	if err != nil {
+		return fmt.Errorf("smtp host %q must be host:port: %w", e.host, err)
+	}
 	var auth smtp.Auth
 	if e.user != "" {
 		auth = smtp.PlainAuth("", e.user, e.password, host)
 	}
-	if e.tlsOnConnect {
-		return e.sendTLSOnConnect(host, auth, msg)
-	}
-	// STARTTLS path (port 587/25).
-	return smtp.SendMail(e.host, auth, e.from, e.to, msg)
-}
 
-// sendTLSOnConnect dials an implicit-TLS connection (port 465) before HELO,
-// which smtp.SendMail can't do on its own.
-func (e *Email) sendTLSOnConnect(host string, auth smtp.Auth, msg []byte) error {
-	conn, err := tls.Dial("tcp", e.host, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+	conn, err := e.dial(host)
 	if err != nil {
 		return err
 	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
+		_ = conn.Close()
 		return err
 	}
-	defer c.Close()
+	// Close (not Quit) on every error path: Quit is attempted at the end, and a
+	// second close on an already-closed client is harmless.
+	defer func() { _ = c.Close() }()
+
+	if !e.tlsOnConnect {
+		// STARTTLS path (port 587/25) — upgrade when the server offers it, which
+		// is what smtp.SendMail did before we replaced it for the deadlines.
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+				return err
+			}
+		}
+	}
 	if auth != nil {
+		if ok, _ := c.Extension("AUTH"); !ok {
+			return errors.New("smtp: credentials configured but server advertises no AUTH")
+		}
+		// PlainAuth itself refuses to send credentials over an unencrypted
+		// connection (except to localhost) — that check is deliberately left to it.
 		if err := c.Auth(auth); err != nil {
 			return err
 		}

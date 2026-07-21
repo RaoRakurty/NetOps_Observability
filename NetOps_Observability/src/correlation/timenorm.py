@@ -155,6 +155,21 @@ _ISO_ZONELESS_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$"
 )
 
+# Sub-second field of an ISO timestamp. datetime.fromisoformat accepts only 3
+# or 6 digits on Python 3.10, but the wire carries whatever the producer emits:
+# gNMI/OpenConfig sources stamp NANOseconds ("…:00.123456789Z") and some agents
+# emit two. Rejecting those shapes is what pushed real event times back to
+# receive time, so normalize the field to exactly 6 digits (truncate, never
+# round — a timestamp must not move forward) instead of failing the parse.
+_FRACTION_RE = re.compile(r"\.(\d+)")
+
+
+def _normalize_fraction(s: str) -> str:
+    m = _FRACTION_RE.search(s)
+    if m is None or len(m.group(1)) == 6:
+        return s
+    return s[:m.start()] + "." + m.group(1)[:6].ljust(6, "0") + s[m.end():]
+
 
 def parse_any_timestamp(
     value: object,
@@ -190,7 +205,7 @@ def parse_any_timestamp(
 
     # ISO 8601 / RFC 3339. fromisoformat in 3.11+ handles "Z"; normalize
     # for 3.10 compatibility.
-    iso = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+    iso = _normalize_fraction(raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw)
     try:
         dt = datetime.fromisoformat(iso.replace(" ", "T", 1) if _ISO_ZONELESS_RE.match(raw) else iso)
     except ValueError:

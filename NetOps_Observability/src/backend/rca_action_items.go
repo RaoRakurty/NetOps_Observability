@@ -128,7 +128,7 @@ func rcaActionItemsPath() string {
 	if p := strings.TrimSpace(os.Getenv("RCA_ACTION_ITEMS_PATH")); p != "" {
 		return p
 	}
-	return "rca_action_items.json"
+	return "/data/rca_action_items.json"
 }
 
 func newRcaActionItemStore(path string) *rcaActionItemStore {
