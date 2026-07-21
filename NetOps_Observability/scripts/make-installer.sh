@@ -289,6 +289,21 @@ cat > "$BUNDLE_DIR/ADVANCED.md" <<EOF
 Most installations should use the default \`./install-correlix.sh\` and never
 read this file.
 
+## Recovering a lost admin password
+
+If the \`admin\` password is lost (or the value in \`.env\` no longer
+authenticates — the installer's post-install self-test will tell you), reset
+it without losing any data:
+
+1. Edit \`NetOps_Observability/deployment/docker/.env\` and set
+   \`ADMIN_RESET_PASSWORD=<new password>\`.
+2. Apply it to the running API:
+   \`cd NetOps_Observability/deployment/docker && docker compose up -d --force-recreate api\`
+3. Sign in as \`admin\` with the new password, then REMOVE the
+   \`ADMIN_RESET_PASSWORD\` line from \`.env\` (it is a one-shot bootstrap
+   knob, not a place to keep a live credential) and update
+   \`ADMIN_INITIAL_PASSWORD\` to match so the documented credential stays true.
+
 ## Event bus modes
 
 Correlix moves telemetry internally over a Kafka-compatible event bus.

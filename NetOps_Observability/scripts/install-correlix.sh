@@ -240,6 +240,31 @@ verify_bundle() {
   fi
 }
 
+# Post-install credential self-test: verify the admin password we are about to
+# print actually authenticates (QA 2026-07-21 found a live appliance whose
+# documented .env credential had drifted from the stored hash — every runbook
+# built on it then fails). Non-fatal: the stack is up either way; we just
+# refuse to print credentials we know are wrong without saying so.
+verify_admin_login() {
+  local pw code payload
+  pw=$(env_get ADMIN_INITIAL_PASSWORD) || return 0
+  [ -n "$pw" ] || return 0
+  # JSON-escape backslash + double-quote (generated passwords can hold both).
+  payload=$(printf '{"username":"admin","password":"%s"}' \
+    "$(printf '%s' "$pw" | sed 's/\\/\\\\/g; s/"/\\"/g')")
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 \
+    -H 'Content-Type: application/json' -d "$payload" \
+    "http://localhost:${UI_PORT}/api/auth/login" 2>/dev/null) || return 0
+  if [ "$code" = "200" ]; then
+    ok "admin credential verified (login self-test passed)"
+  else
+    warn "the admin password in .env did NOT authenticate (HTTP $code)."
+    warn "If this is an upgrade of a system whose password was changed in the UI,"
+    warn "that is expected — sign in with the current password. Otherwise reset it:"
+    warn "  see ADMIN_RESET_PASSWORD in ADVANCED.md"
+  fi
+}
+
 wait_healthy() {
   say "Waiting for services to become healthy (this can take a few minutes)..."
   local deadline=$(( $(date +%s) + 420 ))
@@ -412,6 +437,7 @@ cmd_install() {
     # disk forever. Dangling-only: everything the running stack references is
     # untouchable by definition.
     docker image prune -f >/dev/null 2>&1 || true
+    verify_admin_login
     print_success
   else
     print_failure
