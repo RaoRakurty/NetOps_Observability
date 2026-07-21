@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Correlix Setup</title>
+<!-- Everything inline: the appliance host is offline by design (no CDNs).
+     Brand language mirrors the product: obsidian ground, ice-cyan light,
+     the watchful-eye mark, and the topbar dot matrix. -->
+<style>
+  :root{
+    --bg:#070b16; --bg2:#0b1224; --panel:rgba(17,25,48,.72);
+    --line:rgba(125,211,252,.14); --ink:#e6edf8; --mut:#8ea0bf;
+    --cy:#38bdf8; --cy2:#7dd3fc; --blue:#3b82f6; --ok:#34d399; --bad:#fb7185;
+    --glow:0 0 24px rgba(56,189,248,.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font:15px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif;
+    color:var(--ink); background:
+      radial-gradient(1100px 600px at 75% -10%, rgba(59,130,246,.16), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(56,189,248,.10), transparent 55%),
+      var(--bg);
+    overflow-x:hidden;
+  }
+  /* brand dot-matrix, same motif as the product topbar */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;
+    background-image:radial-gradient(circle,rgba(56,189,248,.10) 1px,transparent 1.4px);
+    background-size:22px 22px;
+    -webkit-mask-image:radial-gradient(900px 700px at 30% 20%,#000,transparent 75%);
+    mask-image:radial-gradient(900px 700px at 30% 20%,#000,transparent 75%);}
+  .wrap{max-width:1060px;margin:0 auto;padding:34px 26px 60px;position:relative}
+
+  /* ── hero ─────────────────────────────────────────────── */
+  .hero{display:flex;align-items:center;gap:22px;margin-bottom:30px}
+  .eye{width:86px;height:60px;flex:none;position:relative}
+  .eye svg{display:block;width:100%;height:100%}
+  @keyframes pulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.25)}}
+  @keyframes orbit{to{transform:rotate(360deg)}}
+  .eye .hub{animation:pulse 2.6s ease-in-out infinite;transform-origin:center}
+  .eye .ring{animation:orbit 14s linear infinite;transform-origin:32px 22px}
+  @media (prefers-reduced-motion: reduce){.eye .hub,.eye .ring{animation:none}}
+  h1{font-size:30px;letter-spacing:.10em;font-weight:700}
+  h1 .x{background:linear-gradient(135deg,var(--blue) 30%,var(--cy2) 85%);
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+  .sub{color:var(--mut);margin-top:3px}
+  .bundle{margin-left:auto;color:var(--mut);font-size:12.5px;border:1px solid var(--line);
+    border-radius:999px;padding:5px 14px;background:rgba(56,189,248,.05)}
+
+  /* ── step rail ───────────────────────────────────────── */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+  .step{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--panel);
+    backdrop-filter:blur(8px);position:relative;transition:border-color .4s, box-shadow .4s}
+  .step .n{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:12.5px;font-weight:700;border:1px solid var(--line);color:var(--mut);margin-bottom:8px;
+    transition:all .4s}
+  .step .t{font-weight:600;font-size:13.5px}
+  .step .d{color:var(--mut);font-size:12px;margin-top:2px}
+  .step.active{border-color:rgba(56,189,248,.55);box-shadow:var(--glow)}
+  .step.active .n{background:var(--cy);border-color:var(--cy);color:#04121f}
+  .step.done .n{background:var(--ok);border-color:var(--ok);color:#04121f}
+  .step.done .t{color:var(--ok)}
+
+  /* ── main card ───────────────────────────────────────── */
+  .card{border:1px solid var(--line);border-radius:18px;background:var(--panel);
+    backdrop-filter:blur(10px);padding:26px 28px;margin-bottom:20px}
+  .card h2{font-size:19px;margin-bottom:6px}
+  .card p.lead{color:var(--mut);margin-bottom:18px;max-width:640px}
+  .btn{appearance:none;border:0;border-radius:12px;padding:12px 26px;font-size:15px;font-weight:600;
+    cursor:pointer;color:#04121f;background:linear-gradient(135deg,var(--cy) 0%,var(--blue) 120%);
+    box-shadow:var(--glow);transition:transform .15s, filter .15s}
+  .btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
+  .btn:disabled{opacity:.45;cursor:default;transform:none;box-shadow:none}
+  .btn.ghost{background:transparent;color:var(--cy2);border:1px solid var(--line);box-shadow:none}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  input[type=password]{background:#0a1120;border:1px solid var(--line);border-radius:12px;
+    color:var(--ink);padding:12px 16px;font-size:15px;min-width:260px;outline:none}
+  input[type=password]:focus{border-color:rgba(56,189,248,.6);box-shadow:var(--glow)}
+
+  .checks{display:grid;gap:8px;margin:14px 0 6px}
+  .chk{display:flex;gap:10px;align-items:baseline;font-size:13.5px;padding:8px 12px;border-radius:10px;
+    background:rgba(10,17,32,.6);border:1px solid transparent}
+  .chk .ic{font-weight:700;flex:none}
+  .chk.ok .ic{color:var(--ok)} .chk.fix .ic{color:var(--bad)}
+  .chk.fix{border-color:rgba(251,113,133,.35)}
+
+  .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(125,211,252,.25);
+    border-top-color:var(--cy);animation:orbit 0.9s linear infinite;display:inline-block;vertical-align:-4px}
+  .err{color:var(--bad);margin-top:10px;font-size:13.5px}
+
+  /* ── success ─────────────────────────────────────────── */
+  .success{display:none;text-align:center;padding:38px 20px 30px}
+  .success.show{display:block;animation:rise .6s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .success .big{font-size:24px;font-weight:700;margin:16px 0 4px}
+  .success .halo{width:92px;height:92px;margin:0 auto;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:40px;
+    background:radial-gradient(circle,rgba(52,211,153,.25),transparent 70%);color:var(--ok)}
+  .cred{display:inline-grid;grid-template-columns:auto auto;gap:8px 18px;text-align:left;
+    margin:18px auto 8px;padding:16px 22px;border:1px solid var(--line);border-radius:14px;
+    background:rgba(10,17,32,.6);font-size:14.5px}
+  .cred b{color:var(--mut);font-weight:600}
+  .cred code{color:var(--cy2);font-family:ui-monospace,Consolas,monospace}
+  a.open{display:inline-block;margin-top:16px;text-decoration:none}
+
+  /* ── terminal ────────────────────────────────────────── */
+  .term{border:1px solid var(--line);border-radius:14px;background:#05080f;overflow:hidden}
+  .term .bar{display:flex;gap:6px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--line);
+    color:var(--mut);font-size:12px;letter-spacing:.05em}
+  .term .bar i{width:9px;height:9px;border-radius:50%;background:#26314b;display:inline-block}
+  .term .bar i:first-child{background:rgba(56,189,248,.7)}
+  .term pre{margin:0;padding:14px 16px;height:300px;overflow:auto;font:12.5px/1.6 ui-monospace,Consolas,monospace;
+    color:#9fb4d8;white-space:pre-wrap;word-break:break-word}
+  .term pre .ok{color:var(--ok)} .term pre .bad{color:var(--bad)} .term pre .hd{color:var(--cy2)}
+  @media (max-width:860px){.steps{grid-template-columns:repeat(2,1fr)}.hero{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div class="eye" aria-hidden="true">
+      <svg viewBox="0 0 64 44" fill="none">
+        <path d="M2.5 22 C12 6.5,52 6.5,61.5 22 C52 37.5,12 37.5,2.5 22 Z" fill="#0d1b3d"/>
+        <g class="ring" stroke="#38bdf8" stroke-opacity=".55" stroke-width="1">
+          <line x1="32" y1="22" x2="32" y2="10"/><line x1="32" y1="22" x2="44.5" y2="15"/>
+          <line x1="32" y1="22" x2="46" y2="28.5"/><line x1="32" y1="22" x2="33.5" y2="33.5"/>
+          <line x1="32" y1="22" x2="19.5" y2="29.5"/><line x1="32" y1="22" x2="18" y2="15.5"/>
+        </g>
+        <circle class="hub" cx="32" cy="22" r="6" fill="#38bdf8" opacity=".3"/>
+        <circle class="hub" cx="32" cy="22" r="2.8" fill="#bae6fd"/>
+        <path d="M2.5 22 C12 6.5,52 6.5,61.5 22 C52 37.5,12 37.5,2.5 22 Z"
+              stroke="#3b82f6" stroke-width="3.6" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div>
+      <h1>C&#8202;&#9673;&#8202;RRELI<span class="x">X</span> <span style="font-weight:300;color:var(--mut)">Setup</span></h1>
+      <div class="sub">Network observability appliance — guided installation</div>
+    </div>
+    <div class="bundle" id="bundle">bundle</div>
+  </div>
+
+  <div class="steps" id="steps">
+    <div class="step" data-s="1"><div class="n">1</div><div class="t">System check</div><div class="d">Audit this host, read-only</div></div>
+    <div class="step" data-s="2"><div class="n">2</div><div class="t">Prepare host</div><div class="d">Docker, kernel, limits</div></div>
+    <div class="step" data-s="3"><div class="n">3</div><div class="t">Install</div><div class="d">Load images, start stack</div></div>
+    <div class="step" data-s="4"><div class="n">4</div><div class="t">Launch</div><div class="d">Sign in to Correlix</div></div>
+  </div>
+
+  <div class="card" id="panel">
+    <!-- step content swapped by JS -->
+    <div id="p-welcome">
+      <h2>Welcome</h2>
+      <p class="lead">This wizard installs the Correlix appliance on this host — the same
+        audited steps as the command-line install, with everything visible below as it runs.
+        Start with a read-only check of the host.</p>
+      <div class="row">
+        <button class="btn" id="b-check">Run system check</button>
+        <span id="s-check"></span>
+      </div>
+    </div>
+
+    <div id="p-prepare" style="display:none">
+      <h2>Prepare host</h2>
+      <p class="lead">The check found items to fix. Preparation uses <code>sudo</code> —
+        enter the password of this Linux user (<span id="who">the current user</span>). It is
+        passed directly to sudo and never stored or logged.</p>
+      <div class="checks" id="checks"></div>
+      <div class="row" style="margin-top:12px">
+        <input type="password" id="sudo" placeholder="sudo password" autocomplete="current-password">
+        <button class="btn" id="b-prep">Prepare this host</button>
+        <span id="s-prep"></span>
+      </div>
+    </div>
+
+    <div id="p-install" style="display:none">
+      <h2>Ready to install</h2>
+      <p class="lead">The host passed every check. Installing loads the appliance images,
+        generates fresh secrets, and starts the full stack — typically a few minutes.</p>
+      <div class="checks" id="checks2"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="b-install">Install Correlix</button>
+        <span id="s-install"></span>
+      </div>
+    </div>
+
+    <div class="success" id="p-done">
+      <div class="halo">✓</div>
+      <div class="big">Correlix is up and watching</div>
+      <div class="sub">All services healthy — your appliance is ready.</div>
+      <div class="cred">
+        <b>Dashboard</b><code id="d-url">—</code>
+        <b>Username</b><code>admin</code>
+        <b>Password</b><code id="d-pw">see install log</code>
+      </div>
+      <div class="sub" style="font-size:12.5px">Change the password right after first sign-in (Settings → Change password).</div>
+      <a class="open" id="d-open" href="#" target="_blank" rel="noopener"><button class="btn">Open Correlix →</button></a>
+    </div>
+
+    <div class="err" id="err" style="display:none"></div>
+  </div>
+
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i>&nbsp;LIVE INSTALL LOG</div>
+    <pre id="log" aria-live="polite"></pre>
+  </div>
+</div>
+
+<script>
+"use strict";
+// All server text lands via textContent — never innerHTML (LLM02/§15 rule:
+// treat every upstream byte as hostile, even our own installer's output).
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+let phase = "idle";
+
+function line(txt){
+  const s = document.createElement("span");
+  if (/^(PASS|✔| *ok\b)/i.test(txt)) s.className = "ok";
+  else if (/^(FIX|ERROR|FATAL|✘)/i.test(txt)) s.className = "bad";
+  else if (/^(==|--|::)/.test(txt)) s.className = "hd";
+  s.textContent = txt;
+  logEl.appendChild(s); logEl.appendChild(document.createTextNode("\n"));
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setSteps(active, doneUpTo){
+  document.querySelectorAll(".step").forEach(el=>{
+    const n = +el.dataset.s;
+    el.classList.toggle("active", n === active);
+    el.classList.toggle("done", n < doneUpTo || (doneUpTo===5));
+  });
+}
+function show(id){
+  ["p-welcome","p-prepare","p-install"].forEach(p=>$(p).style.display = p===id ? "" : "none");
+  $("p-done").classList.toggle("show", id==="p-done");
+  if (id==="p-done"){ ["p-welcome","p-prepare","p-install"].forEach(p=>$(p).style.display="none"); }
+}
+function renderChecks(el, checks){
+  el.textContent = "";
+  (checks||[]).forEach(c=>{
+    const d = document.createElement("div");
+    d.className = "chk " + (c.ok ? "ok" : "fix");
+    const i = document.createElement("span"); i.className="ic"; i.textContent = c.ok ? "✔" : "✘";
+    const t = document.createElement("span"); t.textContent = c.text;
+    d.append(i,t); el.appendChild(d);
+  });
+}
+
+async function refresh(){
+  const r = await fetch("api/state"); if (!r.ok) return;
+  const st = await r.json();
+  phase = st.phase;
+  $("bundle").textContent = st.bundle;
+  $("err").style.display = st.error ? "" : "none";
+  $("err").textContent = st.error || "";
+  const busy = '<span class="spin"></span>';
+  $("s-check").innerHTML = phase==="checking" ? busy : "";
+  $("s-prep").innerHTML  = phase==="preparing" ? busy : "";
+  $("s-install").innerHTML = phase==="installing" ? busy : "";
+  $("b-check").disabled = phase==="checking";
+  $("b-prep").disabled = phase==="preparing";
+  $("b-install").disabled = phase==="installing";
+
+  switch(phase){
+    case "idle": case "checking": setSteps(1,1); show("p-welcome"); break;
+    case "needs-prep": case "preparing":
+      setSteps(2,2); show("p-prepare"); renderChecks($("checks"), st.checks); break;
+    case "ready": case "installing":
+      setSteps(3,3); show("p-install"); renderChecks($("checks2"), st.checks); break;
+    case "installed":
+      setSteps(4,5); show("p-done");
+      $("d-url").textContent = st.ui_url; $("d-open").href = st.ui_url;
+      if (st.admin_pw) $("d-pw").textContent = st.admin_pw;
+      break;
+    case "error": /* stay on current panel; err box shows the reason */ break;
+  }
+}
+
+async function post(path, body){
+  await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+                     body: body ? JSON.stringify(body) : "{}"});
+  refresh();
+}
+$("b-check").onclick  = () => post("api/run/check");
+$("b-install").onclick= () => post("api/run/install");
+$("b-prep").onclick   = () => {
+  const pw = $("sudo").value;
+  if (!pw) { $("sudo").focus(); return; }
+  post("api/run/prepare", {sudo_password: pw});
+  $("sudo").value = "";
+};
+
+// Live log over SSE; phase markers trigger a state refresh.
+const es = new EventSource("api/stream");
+es.onmessage = e => {
+  if (e.data === "::ping::") return;
+  if (e.data.startsWith("::phase::")) { refresh(); return; }
+  line(e.data);
+};
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

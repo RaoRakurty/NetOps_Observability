@@ -82,7 +82,7 @@ PURGE=0
 LOG_SVC=""
 if [ $# -gt 0 ]; then
   case "$1" in
-    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu) CMD="$1"; shift ;;
+    install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|gui) CMD="$1"; shift ;;
     -*) : ;;  # bare options → install
     *) die "Unknown command: $1" "Commands: install status logs stop start uninstall reset-demo-data enable disable menu" ;;
   esac
@@ -588,6 +588,11 @@ cmd_menu() {
 
 case "$CMD" in
   menu)            cmd_menu ;;
+  gui)             # Graphical installer: serves the setup wizard on :8800 with
+                   # a one-time tokened URL (printed below). Everything the CLI
+                   # does, from a browser.
+                   [ -x "$BUNDLE_DIR/correlix-setup" ] || die "correlix-setup binary missing from this bundle."
+                   exec "$BUNDLE_DIR/correlix-setup" -bundle "$BUNDLE_DIR" ;;
   install)         cmd_install ;;
   status)          friendly_status ;;
   logs)            [ -f "$ENV_FILE" ] || die "Correlix is not installed here yet."

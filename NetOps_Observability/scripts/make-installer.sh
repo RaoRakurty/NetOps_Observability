@@ -224,6 +224,14 @@ cp "$ROOT/scripts/install-correlix.sh" "$BUNDLE_DIR/install-correlix.sh"
 cp "$ROOT/scripts/prepare-host.sh" "$BUNDLE_DIR/prepare-host.sh"
 chmod +x "$BUNDLE_DIR/install-correlix.sh" "$BUNDLE_DIR/prepare-host.sh"
 
+# 7b. The graphical installer (correlix-setup): a static stdlib-only Go binary
+#     serving the embedded setup wizard. Built here so the customer host needs
+#     nothing — launched via `./install-correlix.sh gui` (or directly).
+echo "-- building correlix-setup (graphical installer)"
+( cd "$ROOT/scripts/installer-gui" && \
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$BUNDLE_DIR/correlix-setup" . )
+chmod +x "$BUNDLE_DIR/correlix-setup"
+
 cat > "$BUNDLE_DIR/README.md" <<EOF
 # Correlix — Quick Start ($VERSION)
 
@@ -239,6 +247,14 @@ cat > "$BUNDLE_DIR/README.md" <<EOF
    scripted/non-interactive runs install directly):
 
        ./install-correlix.sh
+
+   Prefer a browser? Launch the graphical installer instead — it walks
+   through check → prepare → install with live logs, from any machine on
+   your network:
+
+       ./install-correlix.sh gui
+
+   then open the tokened URL it prints.
 
 4. Open the UI URL printed at the end.
 5. Sign in with the generated credentials shown on screen.
