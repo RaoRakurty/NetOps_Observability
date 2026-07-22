@@ -115,7 +115,11 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 		// becomes editable from the admin UI. (SMTP/Twilio/ntfy predate this and
 		// have always defaulted off; only Slack/PagerDuty were env-only.)
 		s.seedFromEnv()
-		s.save()
+		if err := s.save(); err != nil {
+			// Boot-time seed: log loudly, but a failed seed must not stop the
+			// server from starting — the env wiring still drives the channels.
+			logError("notify.config", "seed config persist failed", errf(err))
+		}
 	}
 	s.apply()
 	return s
@@ -164,17 +168,36 @@ func (s *notifyConfigStore) vault() *Vault {
 	return s.srv.vault
 }
 
-func (s *notifyConfigStore) save() {
+// save persists the config, returning any failure.
+//
+// F-78: this used to return NOTHING and discard three separate failures — an
+// encrypt error returned early, a marshal error skipped the write, and kvSave's
+// error went to `_`. Every notification-channel PUT then answered 200. An
+// operator configured the pager for an outage, saw it saved, and had nothing
+// written: the channel reverted at the next restart, silently, on the surface
+// whose entire job is to tell someone that something broke.
+//
+// Callers MUST surface this. The existing TestNoVoidSaveLocked guard did not
+// catch it because that guard matched `saveLocked()` by name — an instance fix,
+// not a class fix. TestNoVoidSaveFuncs (architecture_guards_test.go) now covers
+// the `save()` spelling too.
+func (s *notifyConfigStore) save() error {
 	// Encrypt secrets at rest (platform DEK); the in-memory s.cfg stays plaintext.
 	c, err := mapNotify(s.cfg, sealFn(s.vault()))
 	if err != nil {
 		logError("notify.config", "encrypt secrets", errf(err))
-		return
+		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
-	if err == nil {
-		_ = kvSave(s.path, b)
+	if err != nil {
+		logError("notify.config", "marshal config", errf(err))
+		return err
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("notify.config", "persist config", errf(err))
+		return err
+	}
+	return nil
 }
 
 // apply (re)registers the live channels in the dispatcher per the current config.
@@ -337,8 +360,14 @@ func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
 			in.MinSeverity = "warning"
 		}
 		s.notifyCfg.cfg.SMTP = in
-		s.notifyCfg.save()
+		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
+		if saveErr != nil {
+			// F-78: do NOT apply or report success for a config that was not
+			// written — it would work until the next restart and then vanish.
+			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
+			return
+		}
 		s.notifyCfg.apply()
 		writeJSON(w, http.StatusOK, s.notifyCfg.publicSMTP())
 	default:
@@ -409,8 +438,14 @@ func (s *server) handleTwilioConfig(w http.ResponseWriter, r *http.Request) {
 			in.MinSeverity = "critical"
 		}
 		s.notifyCfg.cfg.Twilio = in
-		s.notifyCfg.save()
+		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
+		if saveErr != nil {
+			// F-78: do NOT apply or report success for a config that was not
+			// written — it would work until the next restart and then vanish.
+			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
+			return
+		}
 		s.notifyCfg.apply()
 		writeJSON(w, http.StatusOK, s.notifyCfg.publicTwilio())
 	default:
@@ -492,8 +527,14 @@ func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
 			in.MinSeverity = "critical"
 		}
 		s.notifyCfg.cfg.Ntfy = in
-		s.notifyCfg.save()
+		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
+		if saveErr != nil {
+			// F-78: do NOT apply or report success for a config that was not
+			// written — it would work until the next restart and then vanish.
+			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
+			return
+		}
 		s.notifyCfg.apply()
 		writeJSON(w, http.StatusOK, s.notifyCfg.publicNtfy())
 	default:
@@ -574,8 +615,14 @@ func (s *server) handleSlackConfig(w http.ResponseWriter, r *http.Request) {
 			in.MinSeverity = "warning"
 		}
 		s.notifyCfg.cfg.Slack = in
-		s.notifyCfg.save()
+		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
+		if saveErr != nil {
+			// F-78: do NOT apply or report success for a config that was not
+			// written — it would work until the next restart and then vanish.
+			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
+			return
+		}
 		s.notifyCfg.apply()
 		writeJSON(w, http.StatusOK, s.notifyCfg.publicSlack())
 	default:
@@ -648,8 +695,14 @@ func (s *server) handlePagerDutyConfig(w http.ResponseWriter, r *http.Request) {
 			in.MinSeverity = "critical"
 		}
 		s.notifyCfg.cfg.PagerDuty = in
-		s.notifyCfg.save()
+		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
+		if saveErr != nil {
+			// F-78: do NOT apply or report success for a config that was not
+			// written — it would work until the next restart and then vanish.
+			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
+			return
+		}
 		s.notifyCfg.apply()
 		writeJSON(w, http.StatusOK, s.notifyCfg.publicPagerDuty())
 	default:

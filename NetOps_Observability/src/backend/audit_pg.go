@@ -97,7 +97,7 @@ func (s *pgAuditStore) Count(tenant string, cross bool, q auditQuery) int {
 	return n
 }
 
-func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent {
+func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -131,8 +131,11 @@ func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) []AuditEven
 		}
 		return rows.Err()
 	}); err != nil {
+		// F-73: `return nil` here rendered as `{"events":[],"count":0}` with a
+		// 200 — a SIEM polling through a PG blip or an RLS regression recorded
+		// "no privileged actions occurred". The error must reach the caller.
 		logError("audit", "query trail", map[string]any{"error": err.Error()})
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }

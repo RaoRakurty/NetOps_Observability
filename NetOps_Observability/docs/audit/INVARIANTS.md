@@ -41,7 +41,7 @@ An invariant that no gate enforces is a preference.
 | Bus producer surfaces non-2xx / transport failure | ✅ | **BUILD** — `bus_producer_failure_test.go` (7 status codes, transport, timeout) |
 | Settings writes report a failed persist | ✅ | **BUILD** — `settings_persist_failure_test.go`, `TestNoVoidSaveLocked`, `TestSaveResultsAreChecked` |
 | Operator-created devices survive a restart | ✅ | **BUILD** — `device_persist_test.go` (restart simulated via a second aggregator over the same backend) |
-| ClickHouse writes check their status | ✅ | **BUILD** — `TestClickHouseHTTPWritesCheckTheirStatus` |
+| ClickHouse writes check their status | 🟡 | **BUILD (source scan)** — `TestClickHouseHTTPWritesCheckTheirStatus` walks source text and proves the check is *written*; no test ever fires a real ClickHouse error, so nothing proves it *behaves*. The one seam of four still lacking fault injection |
 | Dead-letter path captures the reason | ✅ | **GATE** — ingest-contract-ci + `scripts/vrl-harness.py` |
 | Backup/restore actually produces a restorable artifact | 🟡 | Script exits non-zero on a partial dump (F-59), but the OpenSearch snapshot repo + SM policy are **syntax-checked only, never exercised against a live cluster** |
 
@@ -60,6 +60,7 @@ An invariant that no gate enforces is a preference.
 | Alert delivery failures are counted, not logged and forgotten | ✅ | **BUILD** — `notify/delivery_test.go` |
 | Every alert rule names a metric that is actually produced | ✅ | **GATE** — ingest-contract-ci metric-name guard |
 | CI gates report *why* they failed | ✅ | `preflight-configs.sh` always emits a reason (2026-07-22) |
+| An unreadable audit trail cannot render as an empty one | ✅ | **BUILD** — `audit_failure_test.go` (F-73): a failing `auditRepo` must produce 503, never `200 {"events":[]}`. `Count` returns −1, never 0, for an unknown total |
 
 ## 3. Bounded execution
 
@@ -68,7 +69,7 @@ An invariant that no gate enforces is a preference.
 | Aspect | Status | Enforced by |
 |---|---|---|
 | HTTP clients carry timeouts | ✅ | Measured: 28/28 clients bounded |
-| ClickHouse reads carry execution guards + cancellation | ✅ | **BUILD** — `TestClickHouseReadsCarryExecutionGuards` |
+| ClickHouse reads carry execution guards + cancellation | 🟡 | **BUILD (source scan)** — `TestClickHouseReadsCarryExecutionGuards`; same caveat as the write row above |
 | No unbounded response-body reads | ✅ | **BUILD** — `TestNoUnboundedResponseBodyReads` (source scan) |
 | Pre-auth handlers cap their body | ✅ | **BUILD** — `TestPreAuthRoutesAreBodyCapped` |
 | Postgres `statement_timeout` / pool bound | 🟡 | Implemented (F-60), **compile-reviewed only — never exercised against a live database** |
@@ -119,6 +120,10 @@ An invariant that no gate enforces is a preference.
 | A refused write rolls back in-memory state | ✅ | **BUILD** — `TestSettingsRollBackInMemoryStateOnFailedPersist` |
 | Orphaned store keys self-heal | ✅ | **BUILD** — `kv_legacy_migrate_test.go` (copy-not-move, never overwrites live data) |
 | A deleted device stays deleted | ✅ | **BUILD** — `TestDeletedDeviceStaysDeleted` (F-69 tombstones) |
+| A revoked session/token stays revoked | ✅ | **BUILD** — `logout_revocation_test.go` (F-70): revokes return `(killed, persistErr)`, and the tests inject a persist failure rather than trusting the in-memory map. A logged-out refresh token is proven unable to mint a new session |
+| A credential is never accepted into non-durable storage | ✅ | **BUILD** — `credential_durability_test.go` (F-76): the cloud-connector store returns nil off Postgres so the 501 guards are reachable; NMS refuses credential writes while still serving its catalog |
+| An inbound webhook that lost events asks the sender to redeliver | ✅ | **BUILD** — `integrations_inbound_test.go` (F-75): `received` counts durable events, and any failure is a 500 so the sender's retry — the only recovery path — fires |
+| A compliance record is written only for an action that persisted | ✅ | **BUILD** — `TestAdminSessionKillDoesNotReport204OnAFailedPersist`; `SESSION_REVOKED` is no longer emitted for a kill that did not stick |
 | Demo estates are removable | ✅ | `demo_lab.py teardown` — manifest-driven, never pattern-matched |
 | Restore from backup | ❌ | **NOT ENFORCED** — see §1 |
 
@@ -142,6 +147,11 @@ An invariant that no gate enforces is a preference.
 | Bounded query params fail closed | ✅ | **BUILD** — `TestBoundedQueryParamsFailClosed`, `TestNoDiscardedIntParseInQueryHandling` |
 | Ingest auth is fail-closed | ✅ | `${INGEST_TOKEN:?}` — Vector refuses to start without it |
 | Documented switches actually work | 🟡 | `BUS_BRIDGE_URL=""` claimed to disable emit and did not (fixed 2026-07-22). **No general guard** that a documented env switch behaves as documented |
+| A security setting an operator enables is actually read | ✅ | **BUILD** — `TestEverySecuritySettingHasAReadSite` fails when any `SecuritySettings` field has no read site outside its own definition; `TestF68SettingsAreEnforced` pins the seven by name. Proven to fire (a field added with no reader fails the build) |
+| A persisted struct field has a SQL column | ✅ | **BUILD** — `TestPersistedStructFieldsHaveColumns` (F-77). Proven to fire. Caveat stated in-file: it proves the column NAME is in the list, not that the value is bound in the right position |
+| A persist function can report failure | ✅ | **BUILD** — `TestNoVoidPersistFuncs` (F-78) covers the whole `save`/`persist`/`flush` family, not just `saveLocked()`. Widening it **found 3 instances the 84-finding audit never listed** |
+| A tenant setting reaches the surface it is named for | ✅ | **BUILD** — `rca_window_test.go` (F-80): `tenantRcaSince` on all 3 RCA surfaces, explicit `?since=` fails closed |
+| …and enforced correctly, not merely read | ✅ | **BUILD** — `account_policy_test.go` (rules, pure) + `account_policy_http_test.go` (wired through the real login handler, incl. the rehash-must-not-reset-the-expiry-clock regression) |
 
 ---
 
@@ -149,10 +159,12 @@ An invariant that no gate enforces is a preference.
 
 1. **Restore is never exercised.** Backups exit non-zero on a partial dump, but no test or drill restores one. (§1, §7)
 2. **§3a rule 5 is unenforced.** Isolation tests are mandatory in prose; a new route can ship without one. (§6)
-3. **Postgres-dependent paths are compile-reviewed only.** `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE — none executed against a live database. (§3)
-4. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
-5. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
-6. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
+3. **The tenant-create rollback is compile-reviewed only.** F-81's handler deletes a half-created tenant when `operator_restricted` cannot be applied, but `s.tenants` is a concrete `*tenantStore` with no interface seam, so a mid-request failure cannot be injected. Breaking the store path makes the CREATE fail first and the test would pass for the wrong reason — stated in `rca_window_test.go` rather than papered over. Extracting a `tenantRepo` interface is the change that would make it testable. (§7)
+4. **Postgres-dependent paths are compile-reviewed only.** `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE — none executed against a live database. (§3)
+5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
+6. **ClickHouse is the last un-fault-injected seam.** kv/settings, bus and notification all have real injection tests (and the bus one found 2 defects when written). ClickHouse — 66 write sites, the seam F-38 showed discarded 19 of 20 failure booleans — is covered by source scans only. Measured 2026-07-22. (§1, §3)
+7. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
+8. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
 
 ## How to use this file
 

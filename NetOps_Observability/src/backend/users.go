@@ -47,6 +47,10 @@ type usersRepo interface {
 	UpsertFederated(username, email, displayName, role, source, tenant string) (User, error)
 	ChangePassword(username, newPassword string) error
 	ResetPassword(username, newPassword string) error
+	// RehashPassword re-wraps the SAME secret at the current cost (SR-029). It
+	// updates only the hash — never PasswordChangedAt, never the history — so
+	// rehash-on-login cannot silently reset the password_expire_days clock.
+	RehashPassword(username, samePassword string) error
 	// SetMFA sets the account's MFA state atomically (secret/pending already sealed
 	// by the caller). enabled=false + empty strings clears MFA.
 	SetMFA(username string, enabled bool, secret, pending string) error
@@ -86,6 +90,23 @@ type User struct {
 	MFAEnabled bool   `json:"mfa_enabled,omitempty"`
 	MFASecret  string `json:"mfa_secret,omitempty"`
 	MFAPending string `json:"mfa_pending,omitempty"`
+
+	// Account-lifecycle state backing the Security Settings that F-68 found
+	// stored-but-unenforced. See account_policy.go for the rules these feed.
+	//
+	// PasswordChangedAt is stamped by a REAL password change only — never by the
+	// SR-029 rehash-on-login, which would otherwise reset the expiry clock every
+	// time the user signed in and make password_expire_days unreachable forever.
+	// ZERO means "unknown": the expiry rule then declines to fire rather than
+	// force a fleet-wide reset on the first boot after upgrade (the F-58 lesson —
+	// a converge step must not destroy the estate it is converging).
+	PasswordChangedAt time.Time `json:"password_changed_at,omitempty"`
+	// PasswordHistory holds prior hashes, newest first, bounded to
+	// passwordHistoryDepth. Only consulted when password_history is on.
+	PasswordHistory []string `json:"password_history,omitempty"`
+	// MustChangePassword forces a reset before a session is issued. Set at create
+	// time under reset_on_first_login, and by the expiry rule at login.
+	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
 type userStore struct {
@@ -362,6 +383,17 @@ func (s *userStore) ResetPassword(username, newPassword string) error {
 }
 
 func (s *userStore) ChangePassword(username, newPassword string) error {
+	return s.setPassword(username, newPassword, true)
+}
+
+// RehashPassword re-wraps the same secret at the current cost — hash only.
+func (s *userStore) RehashPassword(username, samePassword string) error {
+	return s.setPassword(username, samePassword, false)
+}
+
+// setPassword is the single write path for both. `stamp` distinguishes a real
+// change (history + expiry clock) from a cost rehash (hash only).
+func (s *userStore) setPassword(username, newPassword string, stamp bool) error {
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
@@ -375,7 +407,11 @@ func (s *userStore) ChangePassword(username, newPassword string) error {
 	if !ok {
 		return errNoSuchUser
 	}
-	u.PasswordHash = hash
+	if stamp {
+		applyPasswordChange(&u, hash, time.Now().UTC())
+	} else {
+		u.PasswordHash = hash
+	}
 	s.users[strings.ToLower(username)] = u
 	return s.flushLocked()
 }
@@ -401,7 +437,15 @@ func (s *userStore) TouchLogin(username string) {
 	}
 	u.LastLoginAt = time.Now().UTC()
 	s.users[strings.ToLower(username)] = u
-	_ = s.flushLocked()
+	// F-30 class: this was `_ = s.flushLocked()`. It matters more than it looks
+	// since F-68 — account_inactivity_days LOCKS an account from LastLoginAt, so
+	// a silently unpersisted login stamp would eventually lock out an actively
+	// used account. Still best-effort (a login must not fail because the
+	// timestamp did not write), but never silent.
+	if err := s.flushLocked(); err != nil {
+		logError("users", "login timestamp persist failed — account_inactivity_days reads this field",
+			map[string]any{"user": username, "err": err.Error()})
+	}
 }
 
 func (s *userStore) Count() int {

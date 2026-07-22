@@ -241,9 +241,27 @@ func (w *ticketWorker) linkRef(ctx context.Context, it ticketOutboxItem) (ticket
 	return ticketRef{Number: l.TicketNumber, SysID: l.SysID, URL: l.InstanceURL}, nil
 }
 
+// storeErr surfaces a ticketing-store write failure.
+//
+// F-30: these writes were all `_ = w.store.…`. The worker is a proper outbox
+// with idempotent create-adoption, so a failed FinishOutbox is RE-RUN rather
+// than lost — but it is re-run silently, and a lost AppendAudit is a compliance
+// record that simply never existed. §10 forbids a silent failure regardless of
+// whether the system recovers from it: an operator debugging a duplicate
+// notification needs to see that the outbox could not be marked done.
+func (w *ticketWorker) storeErr(op string, it ticketOutboxItem, err error) {
+	if err == nil {
+		return
+	}
+	logError("ticketing", "store write failed", map[string]any{
+		"op": op, "corr_object_id": it.CorrObjectID, "external_system": it.ExternalSystem,
+		"action": it.Action, "status": it.Status, "err": err.Error(),
+	})
+}
+
 func (w *ticketWorker) upsertLink(ctx context.Context, it ticketOutboxItem, cfg ticketSystemConfig, ref ticketRef, p ticketPayload, status string, now time.Time) {
 	t := now
-	_ = w.store.PutLink(ctx, ticketLink{
+	w.storeErr("PutLink", it, w.store.PutLink(ctx, ticketLink{
 		TenantID:       it.TenantID,
 		CorrObjectID:   it.CorrObjectID,
 		ExternalSystem: it.ExternalSystem,
@@ -258,7 +276,7 @@ func (w *ticketWorker) upsertLink(ctx context.Context, it ticketOutboxItem, cfg 
 		LastConfidence:  p.Confidence,
 		LastPayloadHash: payloadHash(p),
 		LastSyncedAt:    &t,
-	})
+	}))
 }
 
 func (w *ticketWorker) markLinkStatus(ctx context.Context, it ticketOutboxItem, status string) {
@@ -269,11 +287,11 @@ func (w *ticketWorker) markLinkStatus(ctx context.Context, it ticketOutboxItem, 
 	now := time.Now().UTC()
 	l.Status = status
 	l.LastSyncedAt = &now
-	_ = w.store.PutLink(ctx, l)
+	w.storeErr("PutLink", it, w.store.PutLink(ctx, l))
 }
 
 func (w *ticketWorker) audit(ctx context.Context, it ticketOutboxItem, action, result, oldStatus, newStatus string) {
-	_ = w.store.AppendAudit(ctx, ticketAuditEntry{
+	w.storeErr("AppendAudit", it, w.store.AppendAudit(ctx, ticketAuditEntry{
 		TenantID:       it.TenantID,
 		ID:             randID(),
 		CorrObjectID:   it.CorrObjectID,
@@ -284,7 +302,7 @@ func (w *ticketWorker) audit(ctx context.Context, it ticketOutboxItem, action, r
 		NewStatus:      newStatus,
 		PayloadHash:    payloadHashRaw(it.Payload),
 		Result:         result,
-	})
+	}))
 }
 
 // ── retry / dead-letter ──────────────────────────────────────────────────────
@@ -292,7 +310,7 @@ func (w *ticketWorker) audit(ctx context.Context, it ticketOutboxItem, action, r
 func (w *ticketWorker) succeed(ctx context.Context, it ticketOutboxItem) {
 	it.Status = "sent"
 	it.LastError = ""
-	_ = w.store.FinishOutbox(ctx, it)
+	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 }
 
 // retryLater bumps the retry count and schedules the next attempt with capped
@@ -306,7 +324,7 @@ func (w *ticketWorker) retryLater(ctx context.Context, it ticketOutboxItem, now 
 	}
 	if it.RetryCount >= max {
 		it.Status = "dead_letter"
-		_ = w.store.FinishOutbox(ctx, it)
+		w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 		w.audit(ctx, it, it.Action, "dead_letter", "", "")
 		logWarn("ticketing", "outbox item dead-lettered", map[string]any{
 			"corr_object_id": it.CorrObjectID, "action": it.Action, "retries": it.RetryCount})
@@ -314,13 +332,13 @@ func (w *ticketWorker) retryLater(ctx context.Context, it ticketOutboxItem, now 
 	}
 	it.Status = "retrying"
 	it.NextRetryAt = now.Add(backoffDelay(it.RetryCount, it.ID))
-	_ = w.store.FinishOutbox(ctx, it)
+	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 }
 
 func (w *ticketWorker) deadLetter(ctx context.Context, it ticketOutboxItem, reason string) {
 	it.Status = "dead_letter"
 	it.LastError = truncate(reason, 480)
-	_ = w.store.FinishOutbox(ctx, it)
+	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 	w.audit(ctx, it, it.Action, "dead_letter", "", "")
 }
 
@@ -459,11 +477,11 @@ func (w *ticketWorker) retryAfter(ctx context.Context, it ticketOutboxItem, now 
 	}
 	if it.RetryCount >= max {
 		it.Status = "dead_letter"
-		_ = w.store.FinishOutbox(ctx, it)
+		w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 		w.audit(ctx, it, it.Action, "dead_letter", "", "")
 		return
 	}
 	it.Status = "retrying"
 	it.NextRetryAt = now.Add(after)
-	_ = w.store.FinishOutbox(ctx, it)
+	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 }

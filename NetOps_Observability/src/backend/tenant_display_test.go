@@ -117,7 +117,7 @@ func TestDisplaySettingsHandlerIsolation(t *testing.T) {
 		t.Fatalf("anon GET = %d, want 401", rec.Code)
 	}
 	// The write is audited.
-	events := s.audit.List("t-a", false, auditQuery{})
+	events := auditList(t, s, "t-a", false, auditQuery{})
 	found := false
 	for _, e := range events {
 		if e.Detail["action"] == "set_time_display" {

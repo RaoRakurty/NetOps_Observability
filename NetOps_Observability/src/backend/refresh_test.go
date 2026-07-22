@@ -51,7 +51,9 @@ func TestRefreshRevokeAndMalformed(t *testing.T) {
 		t.Fatalf("newRefreshStore: %v", err)
 	}
 	s1, _ := rs.Issue("carol")
-	rs.Revoke(s1)
+	if _, err := rs.Revoke(s1); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
 	if _, _, err := rs.Rotate(s1); err == nil {
 		t.Error("expected revoked token to fail rotation")
 	}

@@ -1666,13 +1666,27 @@ export const api = {
 
   // ---- auth ----
   // Returns { mfaRequired:false } on success (session set), or
-  // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin.
-  login: async (username: string, password: string): Promise<{ mfaRequired: boolean; mfaToken?: string }> => {
-    const r = await request<LoginResponse & { mfa_required?: boolean; mfa_token?: string }>("/api/auth/login", {
+  // { mfaRequired:true, mfaToken } when the account has MFA — complete via mfaLogin,
+  // or { mustChangePassword:true } when the account's Security Settings withhold
+  // the session until the password is reset (F-68: password expiry /
+  // reset-on-first-login). In that last case there is NO token in the response —
+  // falling through to setToken(undefined) would leave the SPA believing it was
+  // signed in with an empty credential.
+  login: async (username: string, password: string): Promise<{
+    mfaRequired: boolean; mfaToken?: string;
+    mustChangePassword?: boolean; message?: string;
+  }> => {
+    const r = await request<LoginResponse & {
+      mfa_required?: boolean; mfa_token?: string;
+      must_change_password?: boolean; reason?: string; message?: string;
+    }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
     if (r.mfa_required && r.mfa_token) return { mfaRequired: true, mfaToken: r.mfa_token };
+    if (r.must_change_password) {
+      return { mfaRequired: false, mustChangePassword: true, message: r.message };
+    }
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     markFreshLogin();

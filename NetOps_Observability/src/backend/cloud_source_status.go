@@ -187,6 +187,9 @@ type srcStatusReq struct {
 }
 
 func (s *server) handleCloudIngestSourceStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.cloudStoreReady(w) {
+		return
+	}
 	if s.cloudSourceStatus == nil {
 		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
 		return

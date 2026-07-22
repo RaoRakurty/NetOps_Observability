@@ -40,14 +40,20 @@ func TestPgAuditStore(t *testing.T) {
 	}
 
 	// Platform owner sees all four, newest-first.
-	all := a.List("", true, auditQuery{})
+	all, allErr := a.List("", true, auditQuery{})
+	if allErr != nil {
+		t.Fatalf("list: %v", allErr)
+	}
 	if got := ids(all); len(got) != 4 || got[0] != "e4" || got[3] != "e1" {
 		t.Fatalf("platform List = %v, want [e4 e3 e2 e1]", got)
 	}
 
 	// A scoped tenant sees ONLY its own rows — and "Acme" (e4) normalizes to
 	// "acme", so RLS includes it. globex's e2 must be invisible.
-	acme := a.List("acme", false, auditQuery{})
+	acme, acmeErr := a.List("acme", false, auditQuery{})
+	if acmeErr != nil {
+		t.Fatalf("list: %v", acmeErr)
+	}
 	if got := ids(acme); len(got) != 3 {
 		t.Fatalf("acme List = %v, want 3 (e4 e3 e1, incl normalized Acme)", got)
 	}
@@ -58,17 +64,28 @@ func TestPgAuditStore(t *testing.T) {
 	}
 
 	// Limit caps and preserves newest-first.
-	if got := ids(a.List("", true, auditQuery{Limit: 2})); len(got) != 2 || got[0] != "e4" || got[1] != "e3" {
+	if got := ids(listOK(t, a, "", true, auditQuery{Limit: 2})); len(got) != 2 || got[0] != "e4" || got[1] != "e3" {
 		t.Errorf("limit=2 List = %v, want [e4 e3]", got)
 	}
 
 	// Keyset pagination: before e3's timestamp → strictly older (e2, e1).
-	if got := ids(a.List("", true, auditQuery{Before: base.Add(2 * time.Minute)})); len(got) != 2 || got[0] != "e2" || got[1] != "e1" {
+	if got := ids(listOK(t, a, "", true, auditQuery{Before: base.Add(2 * time.Minute)})); len(got) != 2 || got[0] != "e2" || got[1] != "e1" {
 		t.Errorf("before-cursor List = %v, want [e2 e1]", got)
 	}
 
 	// Since window (inclusive lower bound): e3, e4.
-	if got := ids(a.List("", true, auditQuery{Since: base.Add(2 * time.Minute)})); len(got) != 2 || got[0] != "e4" || got[1] != "e3" {
+	if got := ids(listOK(t, a, "", true, auditQuery{Since: base.Add(2 * time.Minute)})); len(got) != 2 || got[0] != "e4" || got[1] != "e3" {
 		t.Errorf("since-window List = %v, want [e4 e3]", got)
 	}
+}
+
+// mustList unwraps List's (events, error) pair — F-73 gave the audit seam an
+// error channel precisely so a failure cannot masquerade as an empty trail.
+func listOK(t *testing.T, a auditRepo, tenant string, cross bool, q auditQuery) []AuditEvent {
+	t.Helper()
+	events, err := a.List(tenant, cross, q)
+	if err != nil {
+		t.Fatalf("audit list: %v", err)
+	}
+	return events
 }

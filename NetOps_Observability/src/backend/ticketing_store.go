@@ -479,8 +479,9 @@ func (s *pgTicketingStore) PutPolicy(ctx context.Context, p incidentPolicy) erro
 INSERT INTO incident_policies (tenant_id, id, name, external_system, enabled, min_verdict,
     require_customer_facing, allow_probe_only, allow_internal_monitoring, suspected_requires_critical,
     require_persistence_seconds, suppress_flapping_seconds, assignment_group, default_impact, default_urgency,
-    impact_confirmed_critical, urgency_confirmed_critical, impact_confirmed, urgency_confirmed, filters)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+    impact_confirmed_critical, urgency_confirmed_critical, impact_confirmed, urgency_confirmed,
+    allow_validation_scenarios, filters)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 ON CONFLICT (tenant_id, id) DO UPDATE SET
     name=EXCLUDED.name, external_system=EXCLUDED.external_system, enabled=EXCLUDED.enabled,
     min_verdict=EXCLUDED.min_verdict, require_customer_facing=EXCLUDED.require_customer_facing,
@@ -492,12 +493,14 @@ ON CONFLICT (tenant_id, id) DO UPDATE SET
     impact_confirmed_critical=EXCLUDED.impact_confirmed_critical,
     urgency_confirmed_critical=EXCLUDED.urgency_confirmed_critical,
     impact_confirmed=EXCLUDED.impact_confirmed, urgency_confirmed=EXCLUDED.urgency_confirmed,
+    allow_validation_scenarios=EXCLUDED.allow_validation_scenarios,
     filters=EXCLUDED.filters, updated_at=now()`,
 			normTenant(p.TenantID), p.ID, p.Name, orDefault(p.ExternalSystem, "servicenow"), p.Enabled,
 			orDefault(p.MinVerdict, "suspected"), p.RequireCustomerFacing, p.AllowProbeOnly,
 			p.AllowInternalMonitoring, p.SuspectedRequiresCritical, p.RequirePersistenceSeconds,
 			p.SuppressFlappingSeconds, p.AssignmentGroup, p.DefaultImpact, p.DefaultUrgency,
-			p.ImpactConfirmedCritical, p.UrgencyConfirmedCritical, p.ImpactConfirmed, p.UrgencyConfirmed, filters)
+			p.ImpactConfirmedCritical, p.UrgencyConfirmedCritical, p.ImpactConfirmed, p.UrgencyConfirmed,
+			p.AllowValidationScenarios, filters)
 		// 23505 on incident_policies_one_enabled = the one-enabled invariant
 		// (migration 0021) — surface the typed conflict, not a raw driver error.
 		if err != nil && strings.Contains(err.Error(), "incident_policies_one_enabled") {
@@ -810,7 +813,7 @@ const policyCols = `tenant_id, id, name, external_system, enabled, min_verdict, 
     allow_probe_only, allow_internal_monitoring, suspected_requires_critical, require_persistence_seconds,
     suppress_flapping_seconds, assignment_group, default_impact, default_urgency,
     impact_confirmed_critical, urgency_confirmed_critical, impact_confirmed, urgency_confirmed,
-    filters, created_at, updated_at`
+    allow_validation_scenarios, filters, created_at, updated_at`
 
 func scanPolicy(rows pgx.Rows) (incidentPolicy, error) {
 	var p incidentPolicy
@@ -819,7 +822,7 @@ func scanPolicy(rows pgx.Rows) (incidentPolicy, error) {
 		&p.RequireCustomerFacing, &p.AllowProbeOnly, &p.AllowInternalMonitoring, &p.SuspectedRequiresCritical,
 		&p.RequirePersistenceSeconds, &p.SuppressFlappingSeconds, &p.AssignmentGroup, &p.DefaultImpact,
 		&p.DefaultUrgency, &p.ImpactConfirmedCritical, &p.UrgencyConfirmedCritical, &p.ImpactConfirmed,
-		&p.UrgencyConfirmed, &filters, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.UrgencyConfirmed, &p.AllowValidationScenarios, &filters, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return p, err
 	}
 	if len(filters) > 0 {

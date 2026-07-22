@@ -370,10 +370,28 @@ func (s *server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			t = updated
 		}
 		// Apply the "hide from global view" setting at creation time, if requested.
+		//
+		// F-81: the error used to be discarded (`if …; e == nil`), so a failed
+		// write returned 201 with operator_restricted:false. This is the
+		// data-privacy switch — the tenant's telemetry is visible to the global
+		// operator view from the moment it exists. Failing OPEN on a privacy
+		// control while reporting success is the worst available outcome, so a
+		// failure now removes the half-created tenant rather than leaving one
+		// that is exposed and believed to be restricted.
 		if req.OperatorRestricted {
-			if updated, e := s.tenants.SetOperatorRestricted(t.ID, true); e == nil {
-				t = updated
+			updated, e := s.tenants.SetOperatorRestricted(t.ID, true)
+			if e != nil {
+				logError("tenants", "operator_restricted could not be applied — rolling back the tenant",
+					map[string]any{"tenant_id": t.ID, "err": e.Error()})
+				if derr := s.tenants.Delete(t.ID); derr != nil {
+					logError("tenants", "ROLLBACK FAILED — tenant exists and is NOT operator-restricted",
+						map[string]any{"tenant_id": t.ID, "err": derr.Error()})
+				}
+				writeError(w, http.StatusInternalServerError,
+					errors.New("tenant not created: the operator-visibility restriction could not be applied"))
+				return
 			}
+			t = updated
 		}
 		logInfo("tenants", "tenant created", map[string]any{"tenant_id": t.ID, "tenant_slug": t.Slug, "org_id": orgOf(t)})
 		s.recordIdentityAudit(r, claims, "TENANT_CREATED", auditTenantDetail(t))

@@ -122,6 +122,37 @@ func isUUIDToken(s string) bool {
 	return true
 }
 
+// tenantRcaSince resolves the read window for an RCA surface.
+//
+// F-80: /api/settings/rca-window persisted correctly and was honoured by SEVEN
+// cloud endpoints via tenantWindowHours — and by ZERO RCA endpoints, which are
+// what the setting is NAMED for. A tenant setting its RCA window to 7 days kept
+// getting 24 hours on the Correlations pages, with the response reporting the
+// window it actually used, so the number looked authoritative.
+//
+// Precedence: an explicit ?since= wins; else the tenant's custom rca-window if
+// one is set; else this surface's own default (the pre-existing behaviour, so a
+// tenant that never touched the setting sees no change).
+//
+// Fails CLOSED on a malformed ?since= — durationQuery falls back to the default
+// on junk, which is the F-71 shape: the caller asks for 90 days, silently gets
+// 24 hours behind a 200, and reads it as the whole window.
+func (s *server) tenantRcaSince(r *http.Request, def time.Duration) (time.Duration, error) {
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 || d > 30*24*time.Hour {
+			return 0, fmt.Errorf("since must be a positive duration up to 720h (got %q)", raw)
+		}
+		return d, nil
+	}
+	claims, _ := userFrom(r.Context())
+	tenant, _ := principalTenant(claims)
+	if hours, custom := s.governance.rcaWindowHours(tenant); custom && hours > 0 {
+		return time.Duration(hours) * time.Hour, nil
+	}
+	return def, nil
+}
+
 func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
@@ -135,7 +166,11 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errLimit)
 		return
 	}
-	since := durationQuery(r, "since", 24*time.Hour)
+	since, serr := s.tenantRcaSince(r, 24*time.Hour)
+	if serr != nil {
+		writeError(w, http.StatusBadRequest, serr)
+		return
+	}
 	// The created_at bound prunes the base-table scan BEFORE the latest-version
 	// fold; state/tier apply AFTER it (they describe the latest version, and
 	// pushing them into the base scan would surface a stale version whose state
@@ -281,7 +316,11 @@ func (s *server) handleCorrelationStats(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := durationQuery(r, "since", 7*24*time.Hour)
+	since, serr := s.tenantRcaSince(r, 7*24*time.Hour)
+	if serr != nil {
+		writeError(w, http.StatusBadRequest, serr)
+		return
+	}
 	win := intToString(int(since.Seconds()))
 	sql := `
 SELECT countIf(state='open')                                          AS open,
@@ -375,7 +414,11 @@ func (s *server) handleCorrelationsSummary(w http.ResponseWriter, r *http.Reques
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := durationQuery(r, "since", 24*time.Hour)
+	since, serr := s.tenantRcaSince(r, 24*time.Hour)
+	if serr != nil {
+		writeError(w, http.StatusBadRequest, serr)
+		return
+	}
 	sinceCond := "created_at >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"
 	var extra []string
 	if st := strings.TrimSpace(r.URL.Query().Get("state")); st != "" {

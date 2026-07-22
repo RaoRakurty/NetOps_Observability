@@ -258,6 +258,11 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 	if s.cloudConn == nil {
 		return nil
 	}
+	// F-76: connector storage is absent off the Postgres backend. Unified
+	// search contributes no account hits rather than panicking.
+	if s.cloudConn == nil {
+		return nil
+	}
 	conns, err := s.cloudConn.List(ctx, tenant, cross)
 	if err != nil {
 		log.Printf("search: connector store unavailable: %v", err)

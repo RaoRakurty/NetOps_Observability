@@ -215,19 +215,39 @@ func (s *sessionStore) Touch(id string) {
 }
 
 // Revoke kills one session (logout / admin action). Idempotent.
-func (s *sessionStore) Revoke(id string) {
+//
+// Returns (revoked, err): `revoked` reports whether an ACTIVE session was found
+// and killed — false means the id was unknown or already dead, which is a
+// legitimate idempotent outcome, not a failure. `err` is a PERSIST failure: the
+// in-memory status flipped but the change did not reach disk, so a restart
+// resurrects the session.
+//
+// F-70: this used to return nothing and swallow the flush error, so a logout
+// that failed to persist reported success and the session came back on the next
+// restart — while an audit record asserted it had been killed.
+func (s *sessionStore) Revoke(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if x, ok := s.byID[id]; ok && x.Status == sessionActive {
-		x.Status = sessionRevoked
-		s.byID[id] = x
-		_ = s.flushLocked()
+	x, ok := s.byID[id]
+	if !ok || x.Status != sessionActive {
+		return false, nil
 	}
+	x.Status = sessionRevoked
+	s.byID[id] = x
+	if err := s.flushLocked(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // RevokeAllForUser revokes every active session for a user (e.g. on password
-// change). Returns the number revoked.
-func (s *sessionStore) RevokeAllForUser(userID string) int {
+// change). Returns the number revoked and any PERSIST failure — see Revoke.
+//
+// A non-nil error with n>0 means the sessions are dead in memory but will
+// return on restart. auth.go's promise that a password change "revokes ALL
+// sessions so a stolen session can't survive a credential reset" depends
+// entirely on this error being surfaced.
+func (s *sessionStore) RevokeAllForUser(userID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
@@ -239,9 +259,11 @@ func (s *sessionStore) RevokeAllForUser(userID string) int {
 		}
 	}
 	if n > 0 {
-		_ = s.flushLocked()
+		if err := s.flushLocked(); err != nil {
+			return n, err
+		}
 	}
-	return n
+	return n, nil
 }
 
 // Get returns a session by id.

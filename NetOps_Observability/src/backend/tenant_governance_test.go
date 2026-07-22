@@ -224,7 +224,7 @@ func TestRcaWindowHandlerIsolation(t *testing.T) {
 		t.Fatal("reset must restore the default window")
 	}
 	found := false
-	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+	for _, e := range auditList(t, s, "t-a", false, auditQuery{}) {
 		if e.Detail["action"] == "set_rca_window" {
 			found = true
 		}
@@ -326,7 +326,7 @@ func TestAttributionPrecedenceHandlerIsolation(t *testing.T) {
 		t.Fatal("reset must restore the default order")
 	}
 	found := false
-	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+	for _, e := range auditList(t, s, "t-a", false, auditQuery{}) {
 		if e.Detail["action"] == "set_attribution_precedence" {
 			found = true
 		}
@@ -462,7 +462,7 @@ func TestRequiredTagsHandlerIsolation(t *testing.T) {
 	}
 	// The write is audited with its own action.
 	found := false
-	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+	for _, e := range auditList(t, s, "t-a", false, auditQuery{}) {
 		if e.Detail["action"] == "set_required_tags" {
 			found = true
 		}
@@ -596,7 +596,7 @@ func TestSeamOwnersHandlerIsolation(t *testing.T) {
 	}
 	// Audited with its own action, surfaced by the governance-audit filter.
 	found := false
-	for _, e := range s.audit.List("t-a", false, auditQuery{}) {
+	for _, e := range auditList(t, s, "t-a", false, auditQuery{}) {
 		if e.Detail["action"] == "set_seam_owners" {
 			found = true
 		}

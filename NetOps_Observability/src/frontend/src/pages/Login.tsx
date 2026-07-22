@@ -111,6 +111,15 @@ export default function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
       else {
         const r = await api.login(username, password);
         if (r.mfaRequired && r.mfaToken) { setMfaToken(r.mfaToken); return; } // → code step
+        // F-68: credentials were right, but the scope's Security Settings
+        // withhold the session until the password is reset (expiry /
+        // reset-on-first-login). No token was issued — send the user to the
+        // pre-auth change-password form rather than onLoggedIn().
+        if (r.mustChangePassword) {
+          setError(r.message ?? "A password reset is required before you can sign in.");
+          setView("changepw");
+          return;
+        }
       }
       onLoggedIn();
     } catch (e) {

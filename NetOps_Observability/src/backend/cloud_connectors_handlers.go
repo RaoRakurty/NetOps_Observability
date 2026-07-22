@@ -986,6 +986,9 @@ func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *server) persistConnector(w http.ResponseWriter, r *http.Request, c cloudConnector) (cloudConnector, bool) {
+	if !s.cloudStoreReady(w) {
+		return cloudConnector{}, false
+	}
 	// Anchor is derived at template time; never persist it.
 	c.Identity.Anchor = cloudconn.TrustAnchor{}
 	saved, found, err := s.cloudConn.Update(r.Context(), c, 0)
@@ -1078,4 +1081,18 @@ func (s *server) handleCloudProviderCatalog(w http.ResponseWriter, r *http.Reque
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
+}
+
+// cloudStoreReady reports whether durable connector storage is wired, writing a
+// 501 when it is not. F-76: the in-memory fallback made `s.cloudConn == nil`
+// unreachable, so credentials were accepted into RAM behind a 201. The
+// constructor now returns nil off Postgres and every entry point checks here.
+func (s *server) cloudStoreReady(w http.ResponseWriter) bool {
+	if s.cloudConn == nil {
+		writeError(w, http.StatusNotImplemented,
+			errors.New("cloud connectors require the Postgres backend (STORE_BACKEND=postgres); "+
+				"credentials are refused rather than held in memory"))
+		return false
+	}
+	return true
 }

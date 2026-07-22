@@ -35,7 +35,7 @@ func TestScopedAuditVisibility(t *testing.T) {
 
 	count := func(claims jwtClaims) (perTenant map[string]int) {
 		perTenant = map[string]int{}
-		for _, e := range s.auditScopedList(claims, auditQuery{Limit: 100}) {
+		for _, e := range auditScoped(t, s, claims, auditQuery{Limit: 100}) {
 			perTenant[e.Tenant]++
 		}
 		return
@@ -61,4 +61,24 @@ func TestScopedAuditVisibility(t *testing.T) {
 	if ta[seed.globex] != 1 || ta[seed.acmeProd] != 0 {
 		t.Errorf("tenant admin should see only its own tenant, got %v", ta)
 	}
+}
+
+// auditList / auditScoped unwrap the (events, error) pairs F-73 introduced. A
+// test that ignored the error would be the very shape the finding was about.
+func auditList(t *testing.T, s *server, tenant string, cross bool, q auditQuery) []AuditEvent {
+	t.Helper()
+	events, err := s.audit.List(tenant, cross, q)
+	if err != nil {
+		t.Fatalf("audit list: %v", err)
+	}
+	return events
+}
+
+func auditScoped(t *testing.T, s *server, claims jwtClaims, q auditQuery) []AuditEvent {
+	t.Helper()
+	events, err := s.auditScopedList(claims, q)
+	if err != nil {
+		t.Fatalf("scoped audit list: %v", err)
+	}
+	return events
 }

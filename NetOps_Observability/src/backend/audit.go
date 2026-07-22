@@ -40,7 +40,12 @@ const (
 //     load-all/rewrite-whole, queries served from SQL with RLS scoping the read.
 type auditRepo interface {
 	Record(e AuditEvent)
-	List(tenant string, cross bool, q auditQuery) []AuditEvent
+	// List returns the matching page, or an ERROR when the backend could not
+	// answer. F-73: this used to return a bare slice, so a failed query was
+	// indistinguishable from "no privileged actions occurred" — on the one
+	// surface where silence must never read as success. A SIEM polling through
+	// a PG blip recorded a clean bill of health.
+	List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error)
 	// Count is List's TRUE total under the SAME filters and the SAME tenant
 	// scope, ignoring Limit/Offset.
 	//
@@ -146,20 +151,22 @@ func (s *auditStore) Record(e AuditEvent) {
 // List returns events newest-first, scoped to the caller: the platform owner
 // sees all; a scoped principal sees only its own tenant's events (global/untagged
 // events never match a scoped tenant — same rule the pg backend's RLS enforces).
-func (s *auditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent {
+// List cannot fail on the file backend (the ring is in memory), but it returns
+// an error to satisfy the seam — the Postgres backend genuinely can.
+func (s *auditStore) List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error) {
 	out := s.matching(tenant, cross, q)
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 	limit := clampAuditLimit(q.Limit)
 	if q.Offset >= len(out) {
 		// Past the end is an EMPTY page, never a clamped last page: a clamped
 		// page re-serves rows the caller already walked and never terminates.
-		return out[:0:0]
+		return out[:0:0], nil
 	}
 	end := q.Offset + limit
 	if end > len(out) {
 		end = len(out)
 	}
-	return out[q.Offset:end]
+	return out[q.Offset:end], nil
 }
 
 // Count is List's true total under the same filters and the same tenant scope.
@@ -259,7 +266,7 @@ func auditClientIP(r *http.Request) string {
 //   - tenant admin → only its own tenant's events.
 //
 // Break-glass sessions are recorded like any other mutation, so they surface here.
-func (s *server) auditScopedList(claims jwtClaims, q auditQuery) []AuditEvent {
+func (s *server) auditScopedList(claims jwtClaims, q auditQuery) ([]AuditEvent, error) {
 	tenant, cross := principalTenant(claims)
 	if cross {
 		return s.audit.List(tenant, true, q)
@@ -279,18 +286,26 @@ func (s *server) auditScopedList(claims jwtClaims, q auditQuery) []AuditEvent {
 		}
 		var merged []AuditEvent
 		for _, tid := range tids {
-			merged = append(merged, s.audit.List(tid, false, sub)...)
+			part, err := s.audit.List(tid, false, sub)
+			if err != nil {
+				// F-73: one tenant's read failing used to contribute zero rows
+				// and vanish into the merge — an org-admin got a SHORT page that
+				// looked complete. A partial audit answer is a wrong audit
+				// answer; refuse the whole request.
+				return nil, fmt.Errorf("audit read failed for tenant %s: %w", tid, err)
+			}
+			merged = append(merged, part...)
 		}
 		sort.Slice(merged, func(i, j int) bool { return merged[i].Time.After(merged[j].Time) })
 		limit := clampAuditLimit(q.Limit)
 		if q.Offset >= len(merged) {
-			return nil
+			return nil, nil
 		}
 		end := q.Offset + limit
 		if end > len(merged) {
 			end = len(merged)
 		}
-		return merged[q.Offset:end]
+		return merged[q.Offset:end], nil
 	}
 	return s.audit.List(tenant, false, q)
 }
@@ -397,7 +412,18 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			auditMergeCeiling))
 		return
 	}
-	events := s.auditScopedList(claims, q)
+	// F-73: a failed query must NOT render as an empty trail. This is the one
+	// endpoint where "no rows" is itself a security assertion — a SIEM reads it
+	// as "no privileged actions occurred". 503 (not 500): the trail exists, we
+	// just could not read it right now, and the caller should retry rather than
+	// record a clean bill of health.
+	events, err := s.auditScopedList(claims, q)
+	if err != nil {
+		logError("audit", "scoped list failed", map[string]any{"error": err.Error(), "user": claims.Sub})
+		writeError(w, http.StatusServiceUnavailable,
+			errors.New("audit trail is temporarily unreadable; this is NOT an empty trail — retry"))
+		return
+	}
 	if events == nil {
 		events = []AuditEvent{}
 	}

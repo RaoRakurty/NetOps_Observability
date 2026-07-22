@@ -224,17 +224,31 @@ func (s *refreshStore) RotateSession(secret string) (newSecret, username, sessio
 	return ns, t.Username, t.SessionID, nil
 }
 
-// Revoke kills a single refresh token (logout). Unknown tokens are ignored.
-func (s *refreshStore) Revoke(secret string) {
+// Revoke kills a single refresh token (logout).
+//
+// Returns (revoked, err). `revoked` is false when the secret is malformed,
+// unknown, or already revoked — all idempotent no-ops. `err` is a PERSIST
+// failure: the token is dead in memory but alive on disk, so it will mint
+// access tokens again after a restart.
+//
+// F-70: this returned nothing. A logout whose revoke never persisted — or
+// whose token was never recognised at all — was reported to the caller as
+// {"status":"ok"}, and the same token still minted a new access token.
+func (s *refreshStore) Revoke(secret string) (bool, error) {
 	id, ok := parseSecret(secret)
 	if !ok {
-		return
+		return false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t, ok := s.toks[id]; ok {
-		t.Revoked = true
-		s.toks[id] = t
-		_ = s.flushLocked()
+	t, ok := s.toks[id]
+	if !ok || t.Revoked {
+		return false, nil
 	}
+	t.Revoked = true
+	s.toks[id] = t
+	if err := s.flushLocked(); err != nil {
+		return true, err
+	}
+	return true, nil
 }

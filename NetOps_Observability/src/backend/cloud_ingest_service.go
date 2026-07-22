@@ -108,6 +108,9 @@ type ingestConnectorView struct {
 }
 
 func (s *server) handleCloudIngestConnectors(w http.ResponseWriter, r *http.Request) {
+	if !s.cloudStoreReady(w) {
+		return
+	}
 	if s.cloudConn == nil {
 		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
 		return
@@ -153,6 +156,9 @@ func (s *server) handleCloudIngestConnectors(w http.ResponseWriter, r *http.Requ
 // ── by-id subtree: /api/cloud/ingest/connectors/{id}/{action} ─────────────────
 
 func (s *server) handleCloudIngestConnectorByID(w http.ResponseWriter, r *http.Request) {
+	if !s.cloudStoreReady(w) {
+		return
+	}
 	if s.cloudConn == nil {
 		writeError(w, http.StatusNotImplemented, errCCNStoreOff)
 		return
@@ -311,6 +317,9 @@ type ingestInventoryDoc struct {
 }
 
 func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c cloudConnector) {
+	if !s.cloudStoreReady(w) {
+		return
+	}
 	if r.Method != http.MethodPut && r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("PUT or POST"))
 		return

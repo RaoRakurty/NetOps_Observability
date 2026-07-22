@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -163,12 +164,22 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 		if conn.Spec().Webhook {
 			c.WebhookToken = randHex(24)
 		}
+		// F-76: refuse BEFORE writing the integration row, so a refused
+		// credential cannot leave a half-created, unusable integration behind.
+		if len(in.Credentials) > 0 && !nmsStoreDurable(s.nms.store) {
+			writeError(w, http.StatusNotImplemented, errNMSStorageNotDurable)
+			return
+		}
 		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
 		if len(in.Credentials) > 0 {
 			if err := s.nms.store.SetCredentials(r.Context(), tenant, c.ID, in.Credentials); err != nil {
+				if errors.Is(err, errNMSStorageNotDurable) {
+					writeError(w, http.StatusNotImplemented, err)
+					return
+				}
 				http.Error(w, "credential save failed", http.StatusInternalServerError)
 				return
 			}
@@ -346,12 +357,21 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 		}
 		conn, _ := s.nms.reg.Get(c.Vendor)
 		applyNMSInput(&c, in, conn.Spec())
+		// F-76: same refusal as the create path — check before the config write.
+		if len(in.Credentials) > 0 && !nmsStoreDurable(s.nms.store) {
+			writeError(w, http.StatusNotImplemented, errNMSStorageNotDurable)
+			return
+		}
 		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
 		if len(in.Credentials) > 0 {
 			if err := s.nms.store.SetCredentials(r.Context(), c.Tenant, c.ID, in.Credentials); err != nil {
+				if errors.Is(err, errNMSStorageNotDurable) {
+					writeError(w, http.StatusNotImplemented, err)
+					return
+				}
 				http.Error(w, "credential save failed", http.StatusInternalServerError)
 				return
 			}

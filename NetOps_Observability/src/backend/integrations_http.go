@@ -229,15 +229,25 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 
 	ctx := r.Context()
 	queued := 0
+	// F-75: these three counters replace `len(events)`. The old response said
+	// `received: <number PARSED>`, so all N could fail to record and the body
+	// still reported N. Worse, the 200 told ServiceNow/Jira the delivery
+	// succeeded — and a webhook sender's retry is the ONLY recovery mechanism
+	// for an inbound ticket-state transition. A 200 over a failed write turned a
+	// transient database error into permanent, unrecoverable loss.
+	recorded, duplicates, failed := 0, 0, 0
 	for _, ev := range events {
 		id, correlationID, inserted, err := s.integrations.RecordInbound(ctx, ev)
 		if err != nil {
+			failed++
 			logError("integration", "record inbound", map[string]any{"provider": providerType, "error": err.Error()})
 			continue
 		}
 		if !inserted {
+			duplicates++
 			continue // level-1 raw duplicate (redelivery) — already handled
 		}
+		recorded++
 		s.intgWebhookReceived()
 		logInfo("integration", "inbound recorded", map[string]any{
 			"provider": providerType, "external_id": ev.ExternalID, "event_id": id,
@@ -247,15 +257,72 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 		// so the webhook returns immediately and never blocks the caller.
 		if itsmInboundEnabled() && cfg.Bidirectional() && s.reportPipeline != nil {
 			if _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, id, correlationID); err != nil {
+				// Recorded in the ledger but never queued: the transition would
+				// sit forever unapplied. Count it as failed so the sender
+				// redelivers — RecordInbound dedupes the replay.
+				failed++
 				logError("integration", "enqueue inbound", map[string]any{"provider": providerType, "error": err.Error()})
 				continue
 			}
 			queued++
-		} else {
-			_ = s.integrations.MarkEvent(ctx, id, "received", "ingest-only")
+		} else if err := s.integrations.MarkEvent(ctx, id, "received", "ingest-only"); err != nil {
+			// Not fatal — the event IS in the ledger — but it must not vanish.
+			logError("integration", "mark event", map[string]any{"provider": providerType, "event_id": id, "error": err.Error()})
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"received": len(events), "queued": queued})
+
+	out := inboundOutcome{
+		Parsed: len(events), Recorded: recorded,
+		Duplicates: duplicates, Queued: queued, Failed: failed,
+	}
+	if failed > 0 {
+		logError("integration", "inbound webhook partially failed — asking the sender to redeliver",
+			map[string]any{"provider": providerType, "parsed": len(events), "failed": failed})
+	}
+	writeJSON(w, out.status(), out.body())
+}
+
+// inboundOutcome is one webhook delivery's tally, and the decision it implies.
+//
+// F-75: the handler used to answer `{"received": len(events)}` with a hard-coded
+// 200 — the count of events PARSED, not recorded. All N could fail to write and
+// the response still said N, with a 200 that told ServiceNow/Jira the delivery
+// had succeeded. A webhook sender's retry is the only recovery path for an
+// inbound ticket-state transition, so that 200 converted a transient database
+// error into permanent, unrecoverable loss.
+//
+// Split out as a value with no IO so the decision is testable: the concrete
+// *integrationStore is nil on the file backend, which is precisely why nothing
+// exercised this path before.
+type inboundOutcome struct {
+	Parsed     int // events the provider's Normalize produced
+	Recorded   int // newly written to the ledger
+	Duplicates int // level-1 raw duplicates — already durable from an earlier delivery
+	Queued     int // enqueued for the apply worker
+	Failed     int // could not be recorded, or recorded but not queued
+}
+
+// status returns 500 when anything failed, so the sender redelivers. Partial
+// success is still a failure: replay is safe because RecordInbound dedupes raw
+// duplicates, so events that DID land are not applied twice.
+func (o inboundOutcome) status() int {
+	if o.Failed > 0 {
+		return http.StatusInternalServerError
+	}
+	return http.StatusOK
+}
+
+// body reports what actually happened. `received` counts what is DURABLE
+// (new + already-stored duplicates), never what was merely parsed.
+func (o inboundOutcome) body() map[string]any {
+	return map[string]any{
+		"received":   o.Recorded + o.Duplicates,
+		"parsed":     o.Parsed,
+		"new":        o.Recorded,
+		"duplicates": o.Duplicates,
+		"queued":     o.Queued,
+		"failed":     o.Failed,
+	}
 }
 
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict

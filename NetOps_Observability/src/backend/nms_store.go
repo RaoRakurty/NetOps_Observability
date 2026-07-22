@@ -713,3 +713,42 @@ func (s *pgNMSStore) Health(ctx context.Context, tenant string, cross bool, id s
 	})
 	return h, found, err
 }
+
+// ── non-durable guard (F-76) ────────────────────────────────────────────────
+
+// errNMSStorageNotDurable is returned when an NMS credential write is attempted
+// against storage that cannot survive a restart.
+var errNMSStorageNotDurable = errors.New(
+	"NMS integrations require the Postgres backend (STORE_BACKEND=postgres) to store credentials; " +
+		"they are refused rather than held in memory")
+
+// nonDurableNMSStore is the in-memory store with credential writes REFUSED.
+//
+// F-76: on the file backend an operator pasted controller credentials, received
+// 201 Created, and had them held as PLAINTEXT in a Go map until the next
+// restart — after which the webhook URLs already registered with Meraki became
+// permanent 404s. The integration list and the static connector catalog are
+// still served (a fresh install renders its gallery, which is why the runtime is
+// wired at all); only the credential write is refused, and it says why.
+//
+// Tests that need the permissive behaviour use newMemNMSStore() directly.
+type nonDurableNMSStore struct{ *memNMSStore }
+
+func (nonDurableNMSStore) SetCredentials(_ context.Context, _, _ string, _ map[string]string) error {
+	return errNMSStorageNotDurable
+}
+
+// Durable reports whether credentials written here survive a restart.
+func (nonDurableNMSStore) Durable() bool { return false }
+func (*memNMSStore) Durable() bool       { return true }
+func (*pgNMSStore) Durable() bool        { return true }
+
+// nmsStoreDurable reports whether a store persists credentials across a
+// restart. Stores that do not implement the probe are assumed durable — only
+// the explicit non-durable wrapper opts out.
+func nmsStoreDurable(st nmsConfigStore) bool {
+	if d, ok := st.(interface{ Durable() bool }); ok {
+		return d.Durable()
+	}
+	return true
+}

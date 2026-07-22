@@ -156,15 +156,24 @@ func newAlertEpisodeStore(path string) *alertEpisodeStore {
 	return s
 }
 
-func (s *alertEpisodeStore) flushLocked() {
+// flushLocked persists the episode set, returning any failure.
+//
+// Callers deliberately do NOT fail the alert loop on a persist error — an
+// unwritable disk must not stop alerts from being evaluated — but the error is
+// now returned and LOGGED rather than discarded (F-78 class, §10 no silent
+// failures). "Best effort" is a decision for the caller to make explicitly, not
+// a reason for the store to hide the outcome.
+func (s *alertEpisodeStore) flushLocked() error {
 	list := make([]AlertEpisode, 0, len(s.episodes))
 	for _, ep := range s.episodes {
 		list = append(list, *ep)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
-	if b, err := json.Marshal(list); err == nil {
-		_ = kvSave(s.path, b) // best-effort like the audit ring — never break the alert loop
+	b, err := json.Marshal(list)
+	if err != nil {
+		return err
 	}
+	return kvSave(s.path, b)
 }
 
 // sweepLocked closes cleared episodes whose quiet gap exceeded the close
@@ -285,7 +294,9 @@ func (s *alertEpisodeStore) Observe(tenant, resource, signal, state, summary str
 			s.recordFlipLocked(ep, now) // firing → cleared
 		}
 	}
-	s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		logError("alerts", "episode persist failed", map[string]any{"err": err.Error()})
+	}
 }
 
 // Suppressed reports whether notifications for this fold key are currently
@@ -366,7 +377,9 @@ func (s *alertEpisodeStore) Triage(id, tenant string, cross bool, apply func(*Al
 	if err := apply(ep); err != nil {
 		return AlertEpisode{}, err
 	}
-	s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		logError("alerts", "episode persist failed", map[string]any{"err": err.Error()})
+	}
 	return *ep, nil
 }
 

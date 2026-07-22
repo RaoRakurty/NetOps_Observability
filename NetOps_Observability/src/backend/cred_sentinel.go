@@ -85,21 +85,24 @@ func (s *credOverrideStore) Get(deviceID string) (credOverride, bool) {
 	return o, ok
 }
 
-func (s *credOverrideStore) Set(o credOverride) {
+// Set stores an override, returning a persist failure so the caller can refuse
+// to report success for a suppression that did not stick (F-78 class).
+func (s *credOverrideStore) Set(o credOverride) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[o.DeviceID] = o
-	s.flushLocked()
+	return s.flushLocked()
 }
 
-func (s *credOverrideStore) Clear(deviceID string) {
+// Clear removes an override, returning a persist failure for the same reason.
+func (s *credOverrideStore) Clear(deviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[deviceID]; !ok {
-		return
+		return nil
 	}
 	delete(s.m, deviceID)
-	s.flushLocked()
+	return s.flushLocked()
 }
 
 // All returns a stable snapshot (devices API join + tests).
@@ -114,7 +117,10 @@ func (s *credOverrideStore) All() []credOverride {
 	return out
 }
 
-func (s *credOverrideStore) flushLocked() {
+// flushLocked persists the overrides, returning any failure. These are
+// SECURITY overrides — an operator suppressing a credential alarm must not be
+// told it stuck when it did not (F-78 class).
+func (s *credOverrideStore) flushLocked() error {
 	list := make([]credOverride, 0, len(s.m))
 	for _, o := range s.m {
 		list = append(list, o)
@@ -122,11 +128,14 @@ func (s *credOverrideStore) flushLocked() {
 	sort.Slice(list, func(i, j int) bool { return list[i].DeviceID < list[j].DeviceID })
 	raw, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		return
+		logWarn("credsentinel", "marshal overrides failed", map[string]any{"err": err.Error()})
+		return err
 	}
 	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
 		logWarn("credsentinel", "persist overrides failed", map[string]any{"err": err.Error()})
+		return err
 	}
+	return nil
 }
 
 // applyCredToTarget threads a resolved credential profile into a poll target —
@@ -219,7 +228,9 @@ func (cs *credSentinel) checkDevice(ctx context.Context, dev models.Device) {
 			active, activeOK = c, true
 		} else {
 			// The learned profile was deleted — drop the stale override.
-			cs.overrides.Clear(dev.ID)
+			if err := cs.overrides.Clear(dev.ID); err != nil {
+				logWarn("credsentinel", "clear override failed", map[string]any{"device": dev.ID, "err": err.Error()})
+			}
 			hasOv = false
 			active, activeOK = bound, boundOK
 		}
@@ -242,7 +253,9 @@ func (cs *credSentinel) checkDevice(ctx context.Context, dev models.Device) {
 		// Active credential works. If we're on an override, check whether the
 		// BOUND profile recovered — intent wins when it works again.
 		if hasOv && boundOK && bound.ID != active.ID && cs.probeWith(ctx, dev, bound) == nil {
-			cs.overrides.Clear(dev.ID)
+			if err := cs.overrides.Clear(dev.ID); err != nil {
+				logWarn("credsentinel", "clear override failed", map[string]any{"device": dev.ID, "err": err.Error()})
+			}
 			logInfo("credsentinel", "bound credential recovered — override cleared", map[string]any{
 				"device": dev.ID, "bound": dev.CredentialRef, "was_override": ov.ProfileID,
 			})
@@ -273,11 +286,15 @@ func (cs *credSentinel) checkDevice(ctx context.Context, dev models.Device) {
 		if boundOK && cand.ID == bound.ID {
 			// The bound profile itself answers (the earlier failure was the
 			// override's) — restoring intent means clearing, not overriding.
-			cs.overrides.Clear(dev.ID)
+			if err := cs.overrides.Clear(dev.ID); err != nil {
+				logWarn("credsentinel", "clear override failed", map[string]any{"device": dev.ID, "err": err.Error()})
+			}
 			logInfo("credsentinel", "bound credential works — override cleared", map[string]any{"device": dev.ID, "bound": dev.CredentialRef})
 			return
 		}
-		cs.overrides.Set(credOverride{DeviceID: dev.ID, ProfileID: cand.ID, BoundRef: dev.CredentialRef, Since: now.UTC()})
+		if err := cs.overrides.Set(credOverride{DeviceID: dev.ID, ProfileID: cand.ID, BoundRef: dev.CredentialRef, Since: now.UTC()}); err != nil {
+			logWarn("credsentinel", "set override failed", map[string]any{"device": dev.ID, "err": err.Error()})
+		}
 		logInfo("credsentinel", "credential override adopted — bound profile does not answer", map[string]any{
 			"device": dev.ID, "bound": dev.CredentialRef, "adopted": cand.ID, "version": cand.Version,
 		})

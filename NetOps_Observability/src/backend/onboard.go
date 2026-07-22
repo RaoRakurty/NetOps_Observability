@@ -70,10 +70,27 @@ func (s *server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// F-81: the error was discarded here too, so onboarding a customer who
+	// requires operator-visibility restriction returned 201 with the switch OFF.
+	// The rollback below already exists for a failed tenant create; a failed
+	// PRIVACY control deserves exactly the same treatment.
 	if req.OperatorRestricted {
-		if updated, e := s.tenants.SetOperatorRestricted(t.ID, true); e == nil {
-			t = updated
+		updated, e := s.tenants.SetOperatorRestricted(t.ID, true)
+		if e != nil {
+			logError("onboard", "operator_restricted could not be applied — rolling back",
+				map[string]any{"tenant_id": t.ID, "err": e.Error()})
+			if derr := s.tenants.Delete(t.ID); derr != nil {
+				logError("onboard", "ROLLBACK FAILED — tenant exists and is NOT operator-restricted",
+					map[string]any{"tenant_id": t.ID, "err": derr.Error()})
+			}
+			if derr := s.orgs.Delete(org.ID); derr != nil {
+				logError("onboard", "org rollback failed", map[string]any{"org_id": org.ID, "err": derr.Error()})
+			}
+			writeError(w, http.StatusInternalServerError,
+				errors.New("onboarding aborted: the operator-visibility restriction could not be applied"))
+			return
 		}
+		t = updated
 	}
 
 	logInfo("onboard", "customer onboarded", map[string]any{

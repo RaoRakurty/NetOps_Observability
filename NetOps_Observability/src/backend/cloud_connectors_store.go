@@ -89,13 +89,29 @@ type cloudConnRepo interface {
 	DeleteSecretRefs(ctx context.Context, tenant string, cross bool, connectorID string) (int, error)
 }
 
-// newCloudConnStore returns the pg store on the postgres backend, else an
-// in-memory store (dev/file backend + tests). Both enforce tenant isolation.
+// newCloudConnStore returns the pg store on the postgres backend, and NIL
+// otherwise — which makes the handlers' existing `if s.cloudConn == nil { 501 }`
+// guards reachable for the first time.
+//
+// F-76: this used to fall back to an in-memory store, so an operator on the
+// file backend pasted an AWS/Azure/GCP credential, received 201 Created, and
+// had it held in RAM until the next restart. Nothing said so. Webhook URLs
+// already handed to the provider became permanent 404s after a restart, and the
+// credential — the whole point of the record — was simply gone.
+//
+// Refusing is the honest answer, and the codebase already had the pattern: the
+// integration platform returns 501/409 "requires the Postgres backend" rather
+// than pretending. A credential store that cannot persist should not accept
+// credentials. Tests that need the in-memory behaviour construct
+// newMemCloudConnStore() directly.
 func newCloudConnStore() cloudConnRepo {
 	if ps, ok := backend.(*pgStore); ok {
 		return &pgCloudConnStore{db: ps.db}
 	}
-	return newMemCloudConnStore()
+	logWarn("cloud", "cloud connectors disabled: durable storage required", map[string]any{
+		"reason": "STORE_BACKEND is not postgres; credentials would live only in RAM",
+	})
+	return nil
 }
 
 // ── in-memory backend (dev/file backend + tests) ─────────────────────────────

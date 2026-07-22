@@ -378,7 +378,7 @@ func TestEpisodeTriageHTTPAndAudit(t *testing.T) {
 
 	// Audit trail: every triage action recorded with who/what detail; note TEXT
 	// itself must never appear in the trail.
-	events := s.audit.List("", true, auditQuery{Limit: 100})
+	events := auditList(t, s, "", true, auditQuery{Limit: 100})
 	actions := map[string]int{}
 	for _, e := range events {
 		if e.Method != "TRIAGE" {

@@ -212,14 +212,20 @@ func TestSessionStoreUnit(t *testing.T) {
 	}
 	// Revoke.
 	s3, _, _ := ss.Create("u3", "", "", time.Minute, time.Hour)
-	ss.Revoke(s3.ID)
+	if _, err := ss.Revoke(s3.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
 	if _, err := ss.Validate(s3.ID, true, true); !errors.Is(err, errSessionRevoked) {
 		t.Errorf("revoked validate: %v, want errSessionRevoked", err)
 	}
 	// RevokeAllForUser.
 	ss.Create("multi", "", "", time.Minute, time.Hour)
 	ss.Create("multi", "", "", time.Minute, time.Hour)
-	if n := ss.RevokeAllForUser("multi"); n != 2 {
+	n, err := ss.RevokeAllForUser("multi")
+	if err != nil {
+		t.Fatalf("RevokeAllForUser: %v", err)
+	}
+	if n != 2 {
 		t.Errorf("RevokeAllForUser = %d, want 2", n)
 	}
 	// Cap eviction.

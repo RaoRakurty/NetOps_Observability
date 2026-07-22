@@ -172,10 +172,21 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// F-68: account lifecycle — expiry, inactivity, first-login reset, password
+	// age. These are the Security Settings the SPA has always rendered as active
+	// controls; until now nothing read them. Checked AFTER the password verifies
+	// (so it cannot be used to enumerate accounts) and BEFORE any session is
+	// minted. See account_policy.go.
+	if s.enforceAccountPolicy(w, r, user) {
+		return
+	}
 	// SR-029: opportunistically upgrade a hash stored at a weaker iteration count
 	// to the current cost. Best-effort — never fail the login if rehash fails.
+	// rehashPassword deliberately does NOT stamp PasswordChangedAt: this is the
+	// same secret, re-wrapped. Treating it as a change would restart the
+	// password_expire_days clock on every sign-in and make expiry unreachable.
 	if passwordNeedsRehash(user.PasswordHash) {
-		if err := s.users.ChangePassword(user.Username, req.Password); err != nil {
+		if err := s.users.RehashPassword(user.Username, req.Password); err != nil {
 			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.Username, "err": err.Error()})
 		}
 	}
@@ -323,6 +334,27 @@ func (s *server) mintSession(r *http.Request, user User) (token, refresh string,
 // (also refreshing the console gate cookie). Shared by password login and
 // MFA-challenge completion (handleMFALogin).
 func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
+	// F-68: concurrent_login=deny — one live session per account. Revoke the
+	// prior ones BEFORE minting, so the new session is never the one culled.
+	// Last-login-wins (rather than refusing the new sign-in) is the deliberate
+	// reading: an operator locked out by their own stale session on a closed
+	// laptop is a support ticket, not a security control.
+	if s.sessions != nil && concurrentLoginDenied(s.securitySettingsFor(user)) {
+		n, err := s.sessions.RevokeAllForUser(user.Username)
+		if err != nil {
+			// The whole point of deny is that only one session lives. If the
+			// revoke did not persist, minting a second session would leave two
+			// usable ones — the exact state the policy forbids.
+			logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.Username, "err": err.Error()})
+			writeError(w, http.StatusInternalServerError, errors.New("sign-in could not be completed; prior sessions could not be closed"))
+			return
+		}
+		if n > 0 {
+			logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.Username, "count": n})
+			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID,
+				map[string]any{"reason": "concurrent_login_deny", "count": n})
+		}
+	}
 	ttl := accessTokenTTL()
 	tok, refresh, err := s.mintSession(r, user)
 	if err != nil {
@@ -371,7 +403,12 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 				}
 				s.recordSessionEvent(r, ev, sess.UserID, sid, "", nil)
 			}
-			s.refresh.Revoke(req.RefreshToken) // drop the now-dead token
+			// Drop the now-dead token. Best-effort: the caller is already being
+			// refused, so a persist failure here must not mask that 401 — but it
+			// must not vanish either (§10: no silent failures).
+			if _, rerr := s.refresh.Revoke(req.RefreshToken); rerr != nil {
+				logError("auth", "expired-session token revoke did not persist", map[string]any{"err": rerr.Error()})
+			}
 			writeJSONError(w, http.StatusUnauthorized, verr.Error(), code)
 			return
 		}
@@ -455,24 +492,61 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	// F-32: PRE-AUTH route. A missing/malformed body is tolerated by design
-	// (logout must always succeed), but the read is now bounded — and a body
-	// refused for SIZE gets a line, because a caller pushing megabytes at
-	// /logout is not a browser. The old `_ = ...Decode(...)` discarded both.
-	if err := decodeJSONBody(w, r, authTokenBodyBytes, &req); err != nil && !errors.Is(err, io.EOF) {
+	// F-32: PRE-AUTH route. An EMPTY body is tolerated by design (a browser
+	// logging out with no stored token must still clear its cookie), but the
+	// read is bounded and anything else is now reported.
+	//
+	// F-70: a field TYPO — {"refreshToken":…} instead of {"refresh_token":…} —
+	// used to decode "successfully" into an empty struct, revoke nothing, and
+	// return {"status":"ok"}. The caller believed it had logged out; the token
+	// went on minting access tokens. Unknown fields are refused outright, the
+	// same way cloud_monitors.go refuses leftover keys rather than dropping them.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, authTokenBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		logWarn("auth", "logout body rejected", map[string]any{"err": err.Error()})
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
+
+	// F-70: report what actually happened. `revoked` false with a token supplied
+	// means the token was unknown or already dead — idempotent, still 200. A
+	// PERSIST failure is different: the revoke did not stick, so saying "ok"
+	// would be the same lie in a new place. That is a 500.
+	revoked := false
 	if req.RefreshToken != "" {
 		// Revoke the server-side session too (not just the refresh token), so the
 		// logout is authoritative across the session's lifecycle.
-		if sid, ok := s.refresh.SessionOf(req.RefreshToken); ok && sid != "" && s.sessions != nil {
-			s.sessions.Revoke(sid)
-			s.recordSessionEvent(r, "SESSION_REVOKED", "", sid, "", map[string]any{"reason": "logout"})
+		sid, hasSession := s.refresh.SessionOf(req.RefreshToken)
+		if hasSession && sid != "" && s.sessions != nil {
+			killed, err := s.sessions.Revoke(sid)
+			if err != nil {
+				logError("auth", "logout: session revoke did not persist", map[string]any{"session": sid, "err": err.Error()})
+				writeError(w, http.StatusInternalServerError, errors.New("logout could not be completed; the session is still active"))
+				return
+			}
+			if killed {
+				revoked = true
+				// The audit record is written only for a revoke that actually
+				// happened and actually persisted — it is a compliance artifact.
+				s.recordSessionEvent(r, "SESSION_REVOKED", "", sid, "", map[string]any{"reason": "logout"})
+			}
 		}
-		s.refresh.Revoke(req.RefreshToken)
+		tokenKilled, err := s.refresh.Revoke(req.RefreshToken)
+		if err != nil {
+			logError("auth", "logout: refresh revoke did not persist", map[string]any{"err": err.Error()})
+			writeError(w, http.StatusInternalServerError, errors.New("logout could not be completed; the refresh token is still valid"))
+			return
+		}
+		if tokenKilled {
+			revoked = true
+		}
+		if !revoked {
+			logWarn("auth", "logout presented an unrecognised refresh token", nil)
+		}
 	}
 	clearOSDCookie(w, r)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "revoked": revoked})
 }
 
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -613,11 +687,16 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	// No-reuse: the new password must differ from the current one. (A full
-	// password-history check would compare against the last N hashes; this blocks
-	// the common new==current case, which is the reuse the audit flags.)
+	// No-reuse: the new password must differ from the current one.
 	if verifyPassword(req.NewPassword, user.PasswordHash) {
 		writeError(w, http.StatusBadRequest, errors.New("new password must differ from the current password"))
+		return
+	}
+	// F-68: password_history — the full check this comment used to say was left
+	// undone. When the scope enables it, the candidate is verified against the
+	// last passwordHistoryDepth hashes, not just the current one.
+	if err := checkPasswordHistory(s.securitySettingsFor(user), user, req.NewPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := s.users.ChangePassword(user.Username, req.NewPassword); err != nil {
@@ -626,13 +705,25 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// Enterprise-safe: a password change revokes ALL of the user's sessions, so a
 	// stolen/old session can't survive a credential reset.
+	//
+	// F-70: that promise was only true until the next restart, because the
+	// revoke's persist error was discarded. The password is already changed by
+	// this point — so the honest report is 200 with sessions_revoked:false plus
+	// a loud log, NOT a 500 that would tell the caller their password change
+	// failed when it did not.
+	sessionsRevoked := true
 	if s.sessions != nil {
-		if n := s.sessions.RevokeAllForUser(user.Username); n > 0 {
+		n, err := s.sessions.RevokeAllForUser(user.Username)
+		if err != nil {
+			sessionsRevoked = false
+			logError("auth", "password change: session revoke did not persist — old sessions may survive a restart",
+				map[string]any{"user": user.Username, "err": err.Error()})
+		} else if n > 0 {
 			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID, map[string]any{"reason": "password_change", "count": n})
 		}
 	}
 	logInfo("auth", "password changed", map[string]any{"user": user.Username, "pre_auth": !authed})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "sessions_revoked": sessionsRevoked})
 }
 
 // ---- middleware -----------------------------------------------------------

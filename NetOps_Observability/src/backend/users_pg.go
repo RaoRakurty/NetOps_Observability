@@ -282,6 +282,18 @@ func (s *pgUsersStore) Delete(username string) error {
 }
 
 func (s *pgUsersStore) ChangePassword(username, newPassword string) error {
+	return s.setPassword(username, newPassword, true)
+}
+
+// RehashPassword re-wraps the same secret at the current cost — hash only.
+func (s *pgUsersStore) RehashPassword(username, samePassword string) error {
+	return s.setPassword(username, samePassword, false)
+}
+
+// setPassword mirrors userStore.setPassword exactly; `stamp` separates a real
+// change (history + expiry clock) from a cost rehash. The User row is a JSON
+// `data` column, so the new lifecycle fields need no migration.
+func (s *pgUsersStore) setPassword(username, newPassword string, stamp bool) error {
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
@@ -297,7 +309,11 @@ func (s *pgUsersStore) ChangePassword(username, newPassword string) error {
 		if err != nil {
 			return err
 		}
-		u.PasswordHash = hash
+		if stamp {
+			applyPasswordChange(&u, hash, time.Now().UTC())
+		} else {
+			u.PasswordHash = hash
+		}
 		return writeUserTx(ctx, tx, u)
 	})
 }

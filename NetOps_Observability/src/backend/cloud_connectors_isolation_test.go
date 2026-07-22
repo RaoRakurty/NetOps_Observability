@@ -205,13 +205,13 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 
 	// (9) Cross-tenant AUDIT access fails closed: A's audit view excludes B's
 	//     connector events (and vice-versa).
-	aEvents := s.audit.List(a.tenantID, false, auditQuery{Limit: 500})
+	aEvents := auditList(t, s, a.tenantID, false, auditQuery{Limit: 500})
 	for _, e := range aEvents {
 		if detailConnector(e) == b.connID {
 			t.Fatal("tenant A audit view contains tenant B's connector event — cross-tenant audit leak")
 		}
 	}
-	bEvents := s.audit.List(b.tenantID, false, auditQuery{Limit: 500})
+	bEvents := auditList(t, s, b.tenantID, false, auditQuery{Limit: 500})
 	sawB := false
 	for _, e := range bEvents {
 		if detailConnector(e) == b.connID {

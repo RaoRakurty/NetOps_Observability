@@ -589,7 +589,15 @@ func (s *server) handleGovernanceAudit(w http.ResponseWriter, r *http.Request) {
 	// One bounded page of the caller-visible trail, newest-first, then filter.
 	// If governance writes are older than the newest auditMaxQueryLimit events
 	// the view is honest about being a recent-changes window, not an archive.
-	events := s.auditScopedList(claims, auditQuery{Limit: auditMaxQueryLimit})
+	events, err := s.auditScopedList(claims, auditQuery{Limit: auditMaxQueryLimit})
+	if err != nil {
+		// F-73: same rule as /api/audit — an unreadable trail must not render
+		// as "no governance changes were made".
+		logError("audit", "governance audit read failed", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusServiceUnavailable,
+			errors.New("governance trail is temporarily unreadable; retry"))
+		return
+	}
 	out := make([]AuditEvent, 0, limit)
 	for _, e := range events {
 		if e.Detail == nil || !isGovernanceAuditAction(e.Detail["action"]) {

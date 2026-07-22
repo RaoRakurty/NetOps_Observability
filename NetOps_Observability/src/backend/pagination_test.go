@@ -387,13 +387,13 @@ func TestAuditStoreOffsetBoundary(t *testing.T) {
 	if n := repo.Count("t1", false, auditQuery{}); n != 7 {
 		t.Fatalf("Count = %d, want 7", n)
 	}
-	if got := len(repo.List("t1", false, auditQuery{Limit: 3, Offset: 6})); got != 1 {
+	if got := len(listOK(t, repo, "t1", false, auditQuery{Limit: 3, Offset: 6})); got != 1 {
 		t.Fatalf("offset 6 of 7 returned %d rows, want 1", got)
 	}
-	if got := len(repo.List("t1", false, auditQuery{Limit: 3, Offset: 7})); got != 0 {
+	if got := len(listOK(t, repo, "t1", false, auditQuery{Limit: 3, Offset: 7})); got != 0 {
 		t.Fatalf("offset AT the end returned %d rows, want an empty page", got)
 	}
-	if got := len(repo.List("t1", false, auditQuery{Limit: 3, Offset: 900})); got != 0 {
+	if got := len(listOK(t, repo, "t1", false, auditQuery{Limit: 3, Offset: 900})); got != 0 {
 		t.Fatalf("offset far past the end returned %d rows, want an empty page", got)
 	}
 	// Isolation: another tenant's scope sees nothing, and its total is 0 —
@@ -401,7 +401,7 @@ func TestAuditStoreOffsetBoundary(t *testing.T) {
 	if n := repo.Count("t2", false, auditQuery{}); n != 0 {
 		t.Fatalf("tenant t2 Count = %d over t1's events — CROSS-TENANT LEAK", n)
 	}
-	if got := len(repo.List("t2", false, auditQuery{Limit: 10})); got != 0 {
+	if got := len(listOK(t, repo, "t2", false, auditQuery{Limit: 10})); got != 0 {
 		t.Fatalf("tenant t2 List returned %d of t1's events — CROSS-TENANT LEAK", got)
 	}
 }

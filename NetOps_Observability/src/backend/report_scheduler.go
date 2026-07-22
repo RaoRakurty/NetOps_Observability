@@ -246,7 +246,9 @@ func (rs *reportScheduler) tick() {
 			// rather than firing immediately on every restart.
 			run.NextRun = now.Add(time.Duration(spec.IntervalMinutes) * time.Minute)
 			rs.runs[o.ID] = run
-			rs.flushLocked()
+			if err := rs.flushLocked(); err != nil {
+				logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+			}
 			rs.mu.Unlock()
 			continue
 		}
@@ -310,7 +312,9 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 	}
 	run.Detail = detail
 	rs.runs[o.ID] = run
-	rs.flushLocked()
+	if err := rs.flushLocked(); err != nil {
+		logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+	}
 }
 
 // deliverToContactPoints resolves the report's email contact points (tenant-
@@ -1472,7 +1476,9 @@ func (rs *reportScheduler) gc() {
 		}
 	}
 	if changed {
-		rs.flushLocked()
+		if err := rs.flushLocked(); err != nil {
+			logError("reports", "run history persist failed", map[string]any{"err": err.Error()})
+		}
 	}
 }
 
@@ -1497,21 +1503,26 @@ func (rs *reportScheduler) load() {
 }
 
 // flushLocked persists run-state; callers must hold rs.mu.
-func (rs *reportScheduler) flushLocked() {
+// flushLocked persists the run history, returning any failure (F-78 class:
+// found by the widened TestNoVoidPersistFuncs guard, not by the audit).
+func (rs *reportScheduler) flushLocked() error {
 	if err := os.MkdirAll(filepath.Dir(rs.path), 0o755); err != nil {
 		log.Printf("report runs mkdir: %v", err)
-		return
+		return err
 	}
 	b, err := json.MarshalIndent(rs.runs, "", "  ")
 	if err != nil {
-		return
+		log.Printf("report runs marshal: %v", err)
+		return err
 	}
 	tmp := rs.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		log.Printf("report runs write: %v", err)
-		return
+		return err
 	}
 	if err := os.Rename(tmp, rs.path); err != nil {
 		log.Printf("report runs rename: %v", err)
+		return err
 	}
+	return nil
 }

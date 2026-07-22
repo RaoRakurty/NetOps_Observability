@@ -82,6 +82,39 @@ func TestNoVoidSaveLocked(t *testing.T) {
 	}
 }
 
+// TestNoVoidPersistFuncs widens the guard above to the OTHER spellings of the
+// same function.
+//
+// F-78 slipped past TestNoVoidSaveLocked for a purely lexical reason: the
+// method was called `save()`, not `saveLocked()`. The guard had been written
+// against the instance the audit happened to name. `notifyConfigStore.save()`
+// returned nothing and swallowed three distinct failures — encrypt, marshal and
+// kvSave — so every notification-channel PUT answered 200 for a config that was
+// never written. An operator wired up paging during an incident, saw it saved,
+// and lost it at the next restart.
+//
+// Fixing the guard is the actual lesson of the audit: fix the generator, not
+// the instance. If a persist method genuinely cannot fail, add it to
+// voidPersistAllowed WITH a reason.
+var voidPersistAllowed = map[string]string{}
+
+func TestNoVoidPersistFuncs(t *testing.T) {
+	// Any method named save/persist/flush/store (± Locked) returning nothing.
+	voidPersist := regexp.MustCompile(`func \([^)]+\) (save|persist|flush|writeAll)(Locked)?\(\) \{`)
+	for name, src := range goSources(t) {
+		for _, m := range voidPersist.FindAllString(src, -1) {
+			if reason, ok := voidPersistAllowed[strings.TrimSpace(m)]; ok && reason != "" {
+				continue
+			}
+			t.Errorf("%s: %q returns nothing.\n"+
+				"A persist function that cannot fail makes its caller unable to report a failed "+
+				"write, so the API returns 2xx for data that never reached the store (F-62, F-63, F-78). "+
+				"Return error and propagate it. If it genuinely cannot fail, add it to "+
+				"voidPersistAllowed with a reason.", name, m)
+		}
+	}
+}
+
 // TestSaveResultsAreChecked guards the other half of the same class: converting
 // saveLocked to return an error achieves nothing if callers drop it on the
 // floor. Go permits ignoring a returned error in statement position, so the

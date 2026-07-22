@@ -588,7 +588,10 @@ func newServer() *server {
 		if ps, ok := backend.(*pgStore); ok {
 			srv.nms = newNMSRuntime(newPGNMSStore(ps.db, vault))
 		} else {
-			srv.nms = newNMSRuntime(newMemNMSStore())
+			// F-76: the catalog + integration list still render on a fresh
+			// install, but credential writes are REFUSED rather than held as
+			// plaintext in a map that dies with the process.
+			srv.nms = newNMSRuntime(nonDurableNMSStore{newMemNMSStore()})
 		}
 	}
 	srv.intMetrics = &integrationMetrics{}

@@ -80,7 +80,15 @@ func (s *server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("not permitted"))
 		return
 	}
-	s.sessions.Revoke(id)
+	// F-70: an admin "kill session" that returned 204 while the revoke never
+	// reached disk produced a false compliance artifact — a SESSION_REVOKED
+	// audit record for a session that came back on the next restart. Surface
+	// the failure instead, and only write the record for a kill that stuck.
+	if _, err := s.sessions.Revoke(id); err != nil {
+		logError("session", "admin revoke did not persist", map[string]any{"session": id, "err": err.Error()})
+		writeError(w, http.StatusInternalServerError, errors.New("session could not be revoked"))
+		return
+	}
 	s.recordSessionEvent(r, "SESSION_REVOKED", sess.UserID, id, u.TenantID, map[string]any{"reason": "admin", "by": claims.Sub})
 	w.WriteHeader(http.StatusNoContent)
 }
