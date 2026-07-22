@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -27,7 +28,16 @@ import (
 // override via env for other topologies. Empty ("BUS_BRIDGE_URL=") → emit is
 // a no-op (offline-safe).
 func busBridgeURL() string {
-	return strings.TrimRight(envOr("BUS_BRIDGE_URL", "http://vector-aggregator:8692"), "/")
+	// LookupEnv, not envOr: envOr treats an EMPTY value as "unset" and returns
+	// the fallback, so `BUS_BRIDGE_URL=` silently kept dialling
+	// vector-aggregator instead of disabling emit. The documented offline-safe
+	// switch did not exist — on a dev box every emit attempted a DNS lookup and
+	// failed. An explicitly-empty value now means disabled, as documented; only
+	// an ABSENT variable takes the compose default.
+	if v, ok := os.LookupEnv("BUS_BRIDGE_URL"); ok {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://vector-aggregator:8692"
 }
 
 // produceJSON publishes records to a netops.* topic via the bus bridge. Each

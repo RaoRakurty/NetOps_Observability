@@ -62,6 +62,11 @@ func resetIngestCredentialForTest() {
 	ingestCred = ingestCredential{}
 }
 
+// ResetIngestCredentialForTest is the exported form of the reset below, for
+// tests in OTHER packages (the bus producer lives in package main). Test-only:
+// production must never re-read the credential mid-flight.
+func ResetIngestCredentialForTest() { resetIngestCredentialForTest() }
+
 // SetIngestAuth stamps the ingest credential on an outbound bus request.
 //
 // An EMPTY INGEST_TOKEN deliberately sends no header rather than sending an
