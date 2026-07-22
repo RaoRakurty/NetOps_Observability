@@ -1282,7 +1282,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 :root { --brand-dot: rgba(29, 78, 216, 0.11); }
 :root[data-theme="dark"], :root[data-theme="oled"],
 :root[data-theme="indigo"], :root[data-theme="graphite"] { --brand-dot: rgba(56, 189, 248, 0.13); }
-.topbar { position: relative; }
+/* The top bar must sit ABOVE the page content in paint order, or any menu that
+   overflows it (scope selector, account menu, omni-search results) is clipped
+   behind <main>. It is not automatic: `backdrop-filter` on .topbar creates a
+   stacking context, and .main comes later in the DOM, so with z-index:auto the
+   page paints over the bar's own dropdowns. Stays well under the drawer/modal
+   layer (1000) so overlays still cover the bar. */
+.topbar { position: relative; z-index: 60; }
 .topbar::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background-image: radial-gradient(circle, var(--brand-dot) 1px, transparent 1.4px);
