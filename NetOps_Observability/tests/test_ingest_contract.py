@@ -322,6 +322,44 @@ def test_enrichment_miss_alert_exists():
         assert required in alerts, f"rules.yaml is missing {required}"
 
 
+def test_ingest_alerts_reference_metrics_the_pipeline_actually_emits():
+    """An alert whose selector matches ZERO series reads as coverage — the F-35
+    defect, found five times in this audit (all five container OOM/restart rules
+    matched nothing because cAdvisor emits no `name` label).
+
+    This bit during THIS fix: the first draft of TenantEnrichmentMissRateJumped
+    said `netops_tenant_attribution_events_total`, on the reasonable assumption
+    that the exporter appends `_total` to counters like most Prometheus client
+    libraries. Verified against timberio/vector:0.40.0-alpine: it does NOT. The
+    rule would have been permanently silent.
+
+    So: every `netops_*` metric an ingest rule names must be produced by a
+    log_to_metric transform in one of the Vector configs, spelled identically.
+    """
+    produced = set()
+    for tier in ALL_TIERS:
+        for tr in (vector_cfg(tier).get("transforms") or {}).values():
+            if tr.get("type") != "log_to_metric":
+                continue
+            for m in tr.get("metrics") or []:
+                # Vector's prometheus_exporter emits the configured name
+                # VERBATIM — no _total suffix, no namespace prefix.
+                produced.add(m["name"])
+
+    rules = yaml.safe_load(read("src", "config", "rules.yaml"))
+    group = next(g for g in rules["groups"] if g["name"] == "ingest-integrity")
+    referenced = set()
+    for rule in group["rules"]:
+        referenced |= set(re.findall(r"\bnetops_[a-z0-9_]+", str(rule.get("expr", ""))))
+
+    missing = sorted(referenced - produced)
+    assert not missing, (
+        f"ingest-integrity alerts reference {missing}, which no log_to_metric transform "
+        f"produces (produced: {sorted(produced)}). A selector that matches nothing is "
+        "worse than no rule — it reads as coverage."
+    )
+
+
 # ── F-49: flows must not be split off container stdout by a name match ──────
 
 def test_goflow2_ships_over_kafka_not_stdout():

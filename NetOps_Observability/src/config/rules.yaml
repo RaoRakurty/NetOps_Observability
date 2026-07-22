@@ -1128,13 +1128,22 @@ groups:
         # one shared bucket when this happens, leaving isolation resting on
         # the API query filter alone — a single-layer defence where a
         # two-layer one was designed.
+        #
+        # METRIC NAME: `netops_tenant_attribution_events`, NO `_total` suffix.
+        # Verified empirically against timberio/vector:0.40.0-alpine's
+        # prometheus_exporter — it does NOT append `_total` to counters, unlike
+        # most Prometheus client libraries. The first draft of this rule said
+        # `_total` and would have matched ZERO series forever, i.e. exactly the
+        # F-35 defect this audit found five times over: an alert whose selector
+        # matches nothing reads as coverage. Check the exporter output before
+        # renaming this.
         # ####################################################################
         expr: |
-          (sum by (topic) (rate(netops_tenant_attribution_events_total{outcome="unmatched"}[15m]))
-             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events_total[15m])), 0.001))
+          (sum by (topic) (rate(netops_tenant_attribution_events{outcome="unmatched"}[15m]))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events[15m])), 0.001))
           >
-          (sum by (topic) (rate(netops_tenant_attribution_events_total{outcome="unmatched"}[6h] offset 1h))
-             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events_total[6h] offset 1h)), 0.001)) + 0.25
+          (sum by (topic) (rate(netops_tenant_attribution_events{outcome="unmatched"}[6h] offset 1h))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events[6h] offset 1h)), 0.001)) + 0.25
         for: 20m
         labels: { severity: warning, layer: ingest }
         annotations:
@@ -1144,7 +1153,7 @@ groups:
       - alert: TenantAttributionLaneMissing
         # Meta-alert: the rule above is vacuous if the counter stops. An alert
         # whose selector matches zero series reads as coverage (the F-35 lesson).
-        expr: absent(netops_tenant_attribution_events_total)
+        expr: absent(netops_tenant_attribution_events)
         for: 30m
         labels: { severity: warning, layer: ingest }
         annotations:
