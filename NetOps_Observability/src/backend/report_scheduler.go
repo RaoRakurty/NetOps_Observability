@@ -1191,43 +1191,88 @@ SELECT local_device, remote_device, status,
 	return summary, b.String()
 }
 
+// chQueryBudget is the wall-clock budget for one report ClickHouse read. The
+// SERVER is told the same number (max_execution_time), so it aborts before the
+// client does rather than being abandoned still running.
+const chQueryBudget = 8 * time.Second
+
 // chQuery runs a read-only query against ClickHouse over HTTP and returns the
-// non-empty result lines. Best-effort: any error yields nil so the caller emits
-// a clean "no data" report rather than failing.
+// non-empty result lines. Errors yield nil so the caller emits a clean "no data"
+// report rather than failing — but they are now COUNTED AND LOGGED
+// (netops_ch_read_failures_total), because "ClickHouse is unreachable" and
+// "there is genuinely no data" produced an identical empty report before.
+//
+// This is the shared read used by 14 report sections; the F-27 fixes are here
+// rather than at the call sites.
 func chQuery(sql string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), chQueryBudget)
+	defer cancel()
+	lines, err := chQueryCtx(ctx, sql)
+	if err != nil {
+		chReadFailures.Add(1)
+		logWarn("reports", "clickhouse read failed — this report section will render as 'no data'", map[string]any{
+			"err": err.Error(),
+		})
+		return nil
+	}
+	return lines
+}
+
+// chQueryCtx is chQuery with a caller-supplied context and a real error.
+//
+// F-27, three defects in the old five lines:
+//  1. `http.NewRequest` (no context) — the request could not be cancelled at
+//     all, so a caller giving up left the query running server-side.
+//  2. `io.ReadAll(resp.Body)` with NO limit — response size is a function of
+//     table size, in the process that also serves the API.
+//  3. `b, _ :=` — the read error was discarded, so a truncated response parsed
+//     as a short, plausible-looking result set.
+func chQueryCtx(ctx context.Context, sql string) ([]string, error) {
 	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
 	u, err := url.Parse(base)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	// #20 Phase 2: reports are a trusted internal reader — pass tenant_scope=__all__
 	// so the flows/findings row policies don't reject the query (getSetting errors
 	// on an unset custom setting). Report-level tenant scoping is handled upstream.
 	q := u.Query()
 	q.Set("tenant_scope", "__all__")
+	q.Set("log_comment", "worker:reports") // #100 read-budget attribution
+	if p := chWorkloadProfile("worker:reports"); p != "" {
+		q.Set("profile", p)
+	}
+	chApplyGuards(q, chQueryBudget)
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(sql))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), os.Getenv("CLICKHOUSE_PASSWORD"))
 	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(8 * time.Second).Do(req)
+	resp, err := backendHTTPClient(chQueryBudget).Do(req)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
+	b, err := io.ReadAll(io.LimitReader(resp.Body, chMaxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read clickhouse response: %w", err)
 	}
-	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	if int64(len(b)) >= chMaxResponseBytes {
+		// Truncation must never masquerade as a complete answer (F-67 shape).
+		return nil, fmt.Errorf("clickhouse response exceeded %d bytes — narrow the query", chMaxResponseBytes)
+	}
 	var out []string
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		if strings.TrimSpace(line) != "" {
 			out = append(out, line)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func atoiSafe(s string) int {

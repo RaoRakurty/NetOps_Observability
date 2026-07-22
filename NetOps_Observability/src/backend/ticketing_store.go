@@ -124,6 +124,10 @@ func syncableLink(l ticketLink, since time.Time) bool {
 
 // ── in-memory backend ────────────────────────────────────────────────────────
 
+// memTicketAuditMax bounds the in-memory ticketing audit trail (F-33), matching
+// the auditMaxEvents ring the app audit store already uses.
+const memTicketAuditMax = 5000
+
 type memTicketingStore struct {
 	mu       sync.RWMutex
 	policies map[string]incidentPolicy   // key: tenant\x00id
@@ -385,6 +389,15 @@ func (m *memTicketingStore) AppendAudit(_ context.Context, e ticketAuditEntry) e
 		e.At = time.Now().UTC()
 	}
 	m.audit = append(m.audit, e)
+	// F-33: this slice was append-only for the life of the process. Every
+	// ticketing action on every tenant accumulated in the API's heap with no
+	// cap, no TTL and no trim — while audit.go, a sibling store with the same
+	// job, correctly ring-buffers at 5,000. This is the in-memory backend (the
+	// Postgres backend is the durable one), so the honest bound is the same
+	// ring: keep the most recent entries and drop the oldest.
+	if len(m.audit) > memTicketAuditMax {
+		m.audit = append([]ticketAuditEntry(nil), m.audit[len(m.audit)-memTicketAuditMax:]...)
+	}
 	return nil
 }
 

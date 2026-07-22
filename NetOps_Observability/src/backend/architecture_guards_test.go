@@ -115,6 +115,114 @@ func TestNoSscanfIntParsing(t *testing.T) {
 	}
 }
 
+// TestNoUnboundedResponseBodyReads guards F-27: `io.ReadAll(resp.Body)` with no
+// limit reads a remote peer's response — whose size is a function of THEIR table
+// / dataset, not of anything we control — straight into the heap of the process
+// that also serves the API. That is the client-side shape of the #100 incident.
+//
+// The correct form is io.ReadAll(io.LimitReader(resp.Body, N)), which is already
+// used at 25 sites in this tree. The four that were not are what this guard
+// stops coming back — and it also catches the sibling-inconsistency pattern the
+// audit found twice, where a capped read sits three lines above an uncapped one.
+func TestNoUnboundedResponseBodyReads(t *testing.T) {
+	// io.ReadAll( <something>.Body ) — with no LimitReader between them.
+	unbounded := regexp.MustCompile(`io\.ReadAll\(\s*[a-zA-Z_][a-zA-Z0-9_]*\.Body\s*\)`)
+	for name, src := range goSources(t) {
+		for _, m := range unbounded.FindAllString(src, -1) {
+			t.Errorf("%s: %q reads a response body with NO size limit.\n"+
+				"Response size is controlled by the peer, not by us: an 8 GiB ClickHouse "+
+				"result or a hostile endpoint becomes an OOM in the API process (audit F-27). "+
+				"Use io.ReadAll(io.LimitReader(resp.Body, N)) and treat hitting N as an ERROR, "+
+				"not as a short result.", name, m)
+		}
+	}
+}
+
+// TestClickHouseReadsCarryExecutionGuards guards the other half of F-27: a Go
+// client timeout does NOT stop a ClickHouse query. Without max_execution_time
+// and cancel_http_readonly_queries_on_client_close, every abandoned read keeps
+// running server-side, holding memory, while the caller retries on the next
+// poll — the compounding shape of the 2026-07-09 incident.
+//
+// Rather than trying to match every call site, this asserts the shared helper
+// exists and that the read paths route through it.
+func TestClickHouseReadsCarryExecutionGuards(t *testing.T) {
+	srcs := goSources(t)
+	guard, ok := srcs["ch_workload.go"]
+	if !ok || !strings.Contains(guard, "func chApplyGuards(") {
+		t.Fatal("chApplyGuards is gone from ch_workload.go — without it no ClickHouse read carries " +
+			"max_execution_time / cancel_http_readonly_queries_on_client_close, and an abandoned query " +
+			"runs to completion server-side (F-27)")
+	}
+	for _, want := range []string{"max_execution_time", "cancel_http_readonly_queries_on_client_close"} {
+		if !strings.Contains(guard, want) {
+			t.Errorf("chApplyGuards no longer sets %s", want)
+		}
+	}
+	// Every file that builds a ClickHouse read URL must stamp the guards.
+	for _, name := range []string{"correlations.go", "report_scheduler.go", "appid_fusion_store.go"} {
+		if src, ok := srcs[name]; ok && !strings.Contains(src, "chApplyGuards(") {
+			t.Errorf("%s builds a ClickHouse query but never calls chApplyGuards — "+
+				"its queries outlive the caller that gave up on them (F-27)", name)
+		}
+	}
+}
+
+// TestWriteJSONMarshalsBeforeCommittingTheStatus guards F-21 at the shape level.
+//
+// `w.WriteHeader(status)` followed by `json.NewEncoder(w).Encode(body)` cannot
+// report an encode failure: the status line is already on the wire, so a NaN
+// produced 200 OK with an empty body at ~400 call sites and no signal anywhere.
+// Marshalling first is the only ordering that keeps the failure reportable.
+func TestWriteJSONMarshalsBeforeCommittingTheStatus(t *testing.T) {
+	src, ok := goSources(t)["main.go"]
+	if !ok {
+		t.Fatal("main.go not found")
+	}
+	start := strings.Index(src, "func writeJSON(")
+	if start == -1 {
+		t.Fatal("writeJSON has moved — update this guard")
+	}
+	body := src[start:]
+	if end := strings.Index(body, "\nfunc "); end != -1 {
+		body = body[:end]
+	}
+	if strings.Contains(body, "json.NewEncoder(w)") {
+		t.Error("writeJSON encodes straight to the ResponseWriter again.\n" +
+			"Encode() marshals to an internal buffer first, so an unencodable body (NaN, ±Inf, " +
+			"a broken MarshalJSON) yields a 200 with ZERO bytes and no error anywhere — the F-21 " +
+			"silent empty-200. Marshal first, then WriteHeader.")
+	}
+	if !strings.Contains(body, "json.Marshal(body)") {
+		t.Error("writeJSON no longer marshals before writing the status line (F-21)")
+	}
+	if !strings.Contains(body, "jsonEncodeFailures.Add(1)") {
+		t.Error("writeJSON no longer counts encode failures — the defect was that they were invisible (§10)")
+	}
+}
+
+// TestPreAuthRoutesAreBodyCapped guards F-32: the routes reachable with no
+// credentials at all must not ride only the 50 MiB global backstop, which
+// amplifies 3-5× in a struct decode and can be sent concurrently by anyone.
+// Capping by ROUTE CLASS (rather than per handler) is what makes the NEXT
+// public route safe without its author remembering.
+func TestPreAuthRoutesAreBodyCapped(t *testing.T) {
+	src, ok := goSources(t)["main.go"]
+	if !ok {
+		t.Fatal("main.go not found")
+	}
+	if !strings.Contains(src, "func requestBodyLimit(") {
+		t.Fatal("requestBodyLimit is gone — the per-route body cap has been removed (F-32)")
+	}
+	if !strings.Contains(src, "requestBodyLimit(r.URL.Path") {
+		t.Error("withBodyLimit no longer consults requestBodyLimit, so every public route is back " +
+			"on the 50 MiB global cap (F-32)")
+	}
+	if preAuthMaxBodyBytes > 1<<20 {
+		t.Errorf("preAuthMaxBodyBytes = %d — an unauthenticated body cap above 1 MiB defeats the point", preAuthMaxBodyBytes)
+	}
+}
+
 // TestBoundedQueryParamsFailClosed guards F-71 at the contract level: the
 // shared bounded-int query parser must reject out-of-range and malformed input
 // rather than substituting the default.

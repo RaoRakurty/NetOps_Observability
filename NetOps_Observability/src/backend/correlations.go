@@ -67,6 +67,9 @@ func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[
 	if p := chWorkloadProfile(tag); p != "" {
 		q.Set("profile", p)
 	}
+	// F-27: without these the 20s client timeout leaves the query running
+	// server-side, holding memory the next poll will ask for again.
+	chApplyGuards(q, 20*time.Second)
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
 	if err != nil {
@@ -304,10 +307,13 @@ SELECT countIf(state='open')                                          AS open,
 	num := func(k string) float64 {
 		switch v := row[k].(type) {
 		case float64:
-			return v
+			return sanitizeFloat(v)
 		case string:
-			f, _ := strconv.ParseFloat(v, 64)
-			return f
+			// F-21: a ClickHouse aggregate over an empty window returns "nan",
+			// which ParseFloat accepts. It then rides into the summary response
+			// and json.Marshal refuses the WHOLE body — the endpoint answered
+			// 200 with zero bytes and the UI showed an empty Command Center.
+			return finiteOrZero(v)
 		}
 		return 0
 	}

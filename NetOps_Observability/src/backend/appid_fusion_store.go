@@ -62,6 +62,7 @@ func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
 	q := u.Query()
 	q.Set("tenant_scope", "__all__")
 	q.Set("log_comment", "worker:cross-tenant") // #100 read-budget attribution
+	chApplyGuards(q, 20*time.Second)            // F-27: the client timeout alone never stops the query
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
 	if err != nil {
@@ -74,7 +75,14 @@ func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	// F-27: this was a bare io.ReadAll with the error discarded, two lines below
+	// its own sibling (chWorkerExec) which caps at 4096 — the sibling
+	// inconsistency the audit called out. Response size here is a function of
+	// table size.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, chMaxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read clickhouse response: %w", err)
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

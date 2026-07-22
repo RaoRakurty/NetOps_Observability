@@ -31,9 +31,20 @@ func (l *tenantRateLimiter) allow(tenant string) bool {
 	return l.allowN(tenant, envInt("EXPORT_RATE_PER_MIN", 10))
 }
 
+// rlSweepThreshold is the map size above which allowN reclaims expired windows.
+// Sweeping is O(n), so it runs only when the map is big enough for the scan to
+// pay for itself.
+const rlSweepThreshold = 1024
+
 // allowN is the generic per-key fixed-window check: at most perMin requests per
 // key per minute (≤0 disables). Keyed off an authenticated identity (tenant, or
 // tenant|user) — never a spoofable client IP.
+//
+// F-33: this map had no deletion path. A window whose minute had elapsed was
+// OVERWRITTEN when the same key came back, but a key that never returned stayed
+// forever. The copilot limiter keys on tenant|user, so the map grew with every
+// principal that ever made one request and never shrank for the life of the
+// process.
 func (l *tenantRateLimiter) allowN(key string, perMin int) bool {
 	if l == nil || perMin <= 0 {
 		return true
@@ -41,6 +52,9 @@ func (l *tenantRateLimiter) allowN(key string, perMin int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	if len(l.windows) >= rlSweepThreshold {
+		l.sweepLocked(now)
+	}
 	w := l.windows[key]
 	if w == nil || now.Sub(w.start) >= time.Minute {
 		l.windows[key] = &rlWindow{start: now, count: 1}
@@ -51,4 +65,26 @@ func (l *tenantRateLimiter) allowN(key string, perMin int) bool {
 	}
 	w.count++
 	return true
+}
+
+// sweepLocked drops windows whose minute has elapsed. Removing an expired
+// window can never weaken the limit: a fresh window is created on the next
+// request with count=1, which is exactly what the expired one would have been
+// reset to.
+func (l *tenantRateLimiter) sweepLocked(now time.Time) {
+	for k, w := range l.windows {
+		if now.Sub(w.start) >= time.Minute {
+			delete(l.windows, k)
+		}
+	}
+}
+
+// size reports the number of tracked windows (tests + leak assertions).
+func (l *tenantRateLimiter) size() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.windows)
 }

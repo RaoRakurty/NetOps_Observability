@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,36 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// boundedEnvInt reads an int from env, clamped to [min,max] and falling back to
+// def when unset or unparseable. Fail-CLOSED to the default rather than to a
+// value outside the safe range: pool sizing that silently accepts 0 or 100000
+// is a worse outcome than ignoring a typo (F-71 discipline applied to config).
+func boundedEnvInt(key string, def, min, max int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < min || n > max {
+		logWarn("db", "ignoring out-of-range configuration value", map[string]any{
+			"key": key, "value": raw, "min": min, "max": max, "using": def,
+		})
+		return def
+	}
+	return n
+}
+
+// setDefaultParam sets a libpq runtime parameter unless the operator already
+// pinned it in DATABASE_URL — an explicit setting in the DSN always wins.
+func setDefaultParam(rp map[string]string, key, val string) {
+	if strings.TrimSpace(val) == "" {
+		return
+	}
+	if _, ok := rp[key]; !ok {
+		rp[key] = val
+	}
+}
+
 type pgDB struct {
 	pool *pgxpool.Pool
 }
@@ -52,8 +83,37 @@ func newPgDB(ctx context.Context, dsn string) (*pgDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
-	cfg.MaxConns = 10
+	// ── F-60: pool sizing + server-side statement bounds ─────────────────────
+	//
+	// MaxConns was a hardcoded 10. Every data access opens an explicit
+	// transaction to set the app.tenant_id GUC for RLS, so a connection is held
+	// for the whole logical operation — ten concurrent requests saturate the
+	// pool and the eleventh queues behind them. Tunable, with a floor so a typo
+	// cannot configure the pool down to something that deadlocks.
+	cfg.MaxConns = int32(boundedEnvInt("PG_MAX_CONNS", 25, 4, 200))
+	cfg.MinConns = 2
 	cfg.MaxConnIdleTime = 5 * time.Minute
+	// A connection that has lived a long time has also accumulated a long-lived
+	// server-side backend; recycling bounds that and lets a failover be picked up.
+	cfg.MaxConnLifetime = durationOr("PG_MAX_CONN_LIFETIME", 30*time.Minute)
+
+	// statement_timeout / lock_timeout / idle_in_transaction_session_timeout did
+	// not appear ANYWHERE in the repo — not in Go, not in SQL. Without them a
+	// runaway query keeps its backend and its LOCKS after the caller's context
+	// has already expired and the caller has moved on: the Go side gives up, the
+	// database does not, and the next request blocks on locks held by work
+	// nobody is waiting for any more. Setting them as connection RuntimeParams
+	// applies them to every statement on every pooled connection — one place,
+	// no call site can forget.
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	rp := cfg.ConnConfig.RuntimeParams
+	setDefaultParam(rp, "statement_timeout", envOr("PG_STATEMENT_TIMEOUT", "30s"))
+	setDefaultParam(rp, "lock_timeout", envOr("PG_LOCK_TIMEOUT", "10s"))
+	// A transaction left idle holds its snapshot and its locks; withTenant opens
+	// one per request, so a wedged handler must not be able to park one forever.
+	setDefaultParam(rp, "idle_in_transaction_session_timeout", envOr("PG_IDLE_TX_TIMEOUT", "60s"))
 
 	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -107,10 +167,52 @@ func (db *pgDB) assertRLSCapable(ctx context.Context) error {
 		"or set STORE_PG_ALLOW_RLS_BYPASS=true to override for a single-tenant deployment", role, isSuper, bypassRLS)
 }
 
+// migrationLockKey is the advisory-lock key guarding schema migration. Any
+// constant works as long as it is stable and unique to this concern.
+const migrationLockKey int64 = 0x4E45544F50534D47 // "NETOPSMG"
+
+// migrationStatementTimeout is the per-statement budget DURING migration. The
+// pool's 30s statement_timeout is right for request-path queries and wrong for
+// a CREATE INDEX on a large table, so migrations raise it for their own
+// transaction only (SET LOCAL — reverted on commit/rollback).
+const migrationStatementTimeout = "15min"
+
 // migrate applies pending migrations/*.sql in lexical order, each in its own
 // transaction, recording applied versions in schema_migrations (forward-only).
+//
+// F-60: this had NO lock. Two replicas booting together (a rolling deploy, a
+// scaled Compose service, a restart storm) both read schema_migrations, both
+// saw the same file pending, and both applied it — one then crashed on the
+// duplicate, and the loser's failure mode depended on what the migration did.
+// A session-level advisory lock serialises them: the second replica WAITS,
+// re-reads schema_migrations, and finds the work already done.
 func (db *pgDB) migrate(ctx context.Context) error {
-	if _, err := db.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// The lock must be held on ONE session for the whole migration, so take a
+	// dedicated connection rather than using the pool (which would hand
+	// different statements to different backends and silently drop the lock).
+	conn, err := db.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	lockStart := time.Now()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		// Release explicitly: the lock is session-scoped and the connection goes
+		// back to the pool, so leaving it held would block every future boot.
+		if _, err := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockKey); err != nil {
+			logError("db", "failed to release migration advisory lock — the next boot will block until this connection closes",
+				map[string]any{"err": err.Error()})
+		}
+	}()
+	if waited := time.Since(lockStart); waited > time.Second {
+		logInfo("db", "waited for another replica's migration", map[string]any{"waited_ms": waited.Milliseconds()})
+	}
+
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version    TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`); err != nil {
@@ -130,7 +232,7 @@ func (db *pgDB) migrate(ctx context.Context) error {
 
 	for _, f := range files {
 		var done bool
-		if err := db.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, f).Scan(&done); err != nil {
+		if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, f).Scan(&done); err != nil {
 			return err
 		}
 		if done {
@@ -140,9 +242,15 @@ func (db *pgDB) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		tx, err := db.pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
+		}
+		// DDL on a populated table can exceed the request-path statement_timeout
+		// (F-60); SET LOCAL raises it for this transaction only.
+		if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '`+migrationStatementTimeout+`'`); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("set migration statement_timeout: %w", err)
 		}
 		if _, err := tx.Exec(ctx, string(body)); err != nil {
 			_ = tx.Rollback(ctx)
