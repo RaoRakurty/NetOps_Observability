@@ -273,7 +273,11 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	inv := s.cloudResourceIndex(r)
 	rows := chJSONRows[chSignalRow](cloudSecuritySQL(
 		window, appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
@@ -327,7 +331,11 @@ func (s *server) handleCloudProviderEvents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	rows := chJSONRows[chSignalRow](cloudProviderEventsSQL(
 		window, limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudProviderEvent, 0, len(rows))
@@ -358,7 +366,11 @@ func (s *server) handleCloudSeamTelemetry(w http.ResponseWriter, r *http.Request
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	rows := chJSONRows[chSeamGroupRow](cloudSeamTelemetrySQL(
 		window, limit, safeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudSeamTelemetryRow, 0, len(rows))

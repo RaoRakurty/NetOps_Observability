@@ -407,7 +407,11 @@ func (s *server) handleCloudServiceMap(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	scope := safeScopeLiteral(chTenantScope(r))
 	pairs := chJSONRows[chPairRow](cloudPairSQL(window, serviceMapMaxPairRows, scope))
 	rejects := chJSONRows[chPairRow](cloudRejectPairSQL(window, serviceMapMaxRejectRows, scope))

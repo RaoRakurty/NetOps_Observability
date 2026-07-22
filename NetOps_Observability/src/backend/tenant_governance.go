@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -577,11 +576,12 @@ func (s *server) handleGovernanceAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := governanceAuditDefaultLimit
-	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
+	// Fail closed on a malformed/out-of-range limit (F-71/F-74 rule): it used
+	// to be discarded, so `?limit=abc` silently became the default.
+	limit, lerr := intQuery(r, "limit", governanceAuditDefaultLimit, 1, auditMaxQueryLimit)
+	if lerr != nil {
+		writeError(w, http.StatusBadRequest, lerr)
+		return
 	}
 	if limit > auditDefaultLimit {
 		limit = auditDefaultLimit

@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,18 +28,29 @@ func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, errors.New("execution history requires the Postgres backend (STORE_BACKEND=postgres)"))
 		return
 	}
+	// Same bounded-read contract as every other list endpoint (F-57/F-74
+	// class): a parameter is applied as written or refused by name. `limit` and
+	// `before` used to have their parse errors discarded, so `?limit=abc` and
+	// `?before=yesterday` silently became "no filter" behind a 200.
+	if err := rejectUnknownQuery(r, "schedule_id", "before"); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	limit, err := intQuery(r, "limit", 0, 1, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	tenant, cross := principalTenant(claims)
 	// Scope to report executions only — log exports share the table (kind='export').
-	q := reports.ExecQuery{Kind: "report", ScheduleID: r.URL.Query().Get("schedule_id")}
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil {
-			q.Limit = n
-		}
-	}
+	q := reports.ExecQuery{Kind: "report", ScheduleID: r.URL.Query().Get("schedule_id"), Limit: limit}
 	if b := r.URL.Query().Get("before"); b != "" {
-		if t, err := time.Parse(time.RFC3339, b); err == nil {
-			q.Before = t
+		t, perr := time.Parse(time.RFC3339, b)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, errors.New("before must be an RFC3339 timestamp"))
+			return
 		}
+		q.Before = t
 	}
 	list, err := s.reportPipeline.execs.List(r.Context(), tenant, cross, q)
 	if err != nil {

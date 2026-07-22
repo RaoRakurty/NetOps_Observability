@@ -135,3 +135,137 @@ func TestBoundedQueryParamsFailClosed(t *testing.T) {
 			"paginating by doubling renders a fraction of the traffic as the whole picture (F-71).")
 	}
 }
+
+// TestNoDiscardedIntParseInQueryHandling guards F-57/F-74 at the class level.
+//
+// Both endpoints parsed a query parameter with strconv.Atoi and DISCARDED the
+// error — `if n, err := strconv.Atoi(v); err == nil { q.Limit = n }`. The
+// caller's `?limit=abc` then silently became the default, and `?limit=100000`
+// was silently clamped, so a client asking for MORE quietly received FEWER with
+// a 200. intQuery/parsePage exist precisely so this never has to be hand-rolled
+// again; a handler that hand-rolls it is reintroducing the class.
+func TestNoDiscardedIntParseInQueryHandling(t *testing.T) {
+	// `strconv.Atoi(...); err == nil` is the discard-the-error idiom. It is
+	// only a DEFECT when the parsed string is a caller's query parameter:
+	// falling back to a default for an env var or a stored cursor is correct,
+	// but falling back for `?limit=` means the caller's request was not
+	// honoured and they were told 200. So the guard fires only when a
+	// `r.URL.Query().Get(...)` appears in the same short window.
+	discarded := regexp.MustCompile(`strconv\.Atoi\([^)]*\);\s*err\s*==\s*nil`)
+	const window = 3 // lines of context above the parse
+	for name, src := range goSources(t) {
+		lines := strings.Split(src, "\n")
+		for i, l := range lines {
+			m := discarded.FindString(l)
+			if m == "" {
+				continue
+			}
+			fromQuery := false
+			for j := i; j >= 0 && j > i-window; j-- {
+				if strings.Contains(lines[j], "r.URL.Query().Get(") {
+					fromQuery = true
+					break
+				}
+			}
+			if !fromQuery {
+				continue
+			}
+			t.Errorf("%s:%d: %q parses a QUERY PARAMETER and discards the error.\n"+
+				"The caller's `?limit=abc` then silently becomes the default and they get a 200 "+
+				"for a request that was never honoured (audit F-57/F-74). "+
+				"Use intQuery/parsePage, which fail closed, and answer 400.", name, i+1, strings.TrimSpace(m))
+		}
+	}
+}
+
+// TestPaginatedReadsReportTheirTotal guards the other half of the bounded-read
+// contract: an endpoint that BOUNDS a read must also state the true total, or
+// the caller cannot tell a page from the whole set.
+//
+// Asserted at the contract level (the behavioural cases are in
+// pagination_test.go) because dropping the total is exactly the change that
+// would compile fine and silently reintroduce F-61/F-79.
+func TestPaginatedReadsReportTheirTotal(t *testing.T) {
+	src, ok := goSources(t)["pagination.go"]
+	if !ok {
+		t.Fatal("pagination.go not found — the bounded-read contract may have moved; update this guard")
+	}
+	for _, want := range []string{
+		"func writePageHeaders(w http.ResponseWriter, p pageRequest, returned, total int)",
+		"func pageComplete(p pageRequest, returned, total int) bool",
+		"func rejectUnknownQuery(r *http.Request, allowed ...string) error",
+		`headerTotalCount = "X-Total-Count"`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("pagination.go no longer declares %q.\n"+
+				"Every bounded read must report the caller's TRUE total and refuse unknown "+
+				"parameters by name; without both, a truncated answer is indistinguishable "+
+				"from a complete one (audit F-57/F-61/F-74/F-79).", want)
+		}
+	}
+	// pageSliceOf must return an EMPTY page past the end, never a clamped one.
+	if !strings.Contains(src, "if p.Offset >= len(rows) {") {
+		t.Error("pageSliceOf must return an empty slice when the offset is past the end. " +
+			"A clamped last page re-serves rows the caller already walked, so a sequential " +
+			"walk never terminates.")
+	}
+}
+
+// TestClickHouseHTTPWritesCheckTheirStatus guards F-56. A ClickHouse write that
+// builds an INSERT and never looks at resp.StatusCode discards 400/401/500
+// identically to success — no log, no counter, no retry.
+func TestClickHouseHTTPWritesCheckTheirStatus(t *testing.T) {
+	roots := []string{".", "collectors"}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatalf("read %s: %v", root, err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Clean(filepath.Join(root, name)))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			src := stripComments(string(b))
+			if !strings.Contains(src, "INSERT INTO netops.") {
+				continue
+			}
+			if !strings.Contains(src, "StatusCode") && !strings.Contains(src, "chExecErr") {
+				t.Errorf("%s/%s builds an `INSERT INTO netops.*` but never inspects the "+
+					"response status (nor delegates to chExecErr).\n"+
+					"A 400 from one unknown key, a 401 from a rotated password and a 500 all "+
+					"look exactly like success — the write vanishes with no log and no counter "+
+					"(audit F-56).", root, name)
+			}
+		}
+	}
+}
+
+// TestGraphQLDoesNotDispatchOnSubstrings guards F-72's correctness half at the
+// source level: the endpoint must PARSE the document. Substring dispatch cannot
+// tell a selection from a comment, an argument from a typo, or a field name from
+// a substring — which is how `{devices(limit:1,first:1){id}}` returned the whole
+// 512-device inventory and `{bogus}` returned 200.
+func TestGraphQLDoesNotDispatchOnSubstrings(t *testing.T) {
+	src, ok := goSources(t)["graphql.go"]
+	if !ok {
+		t.Fatal("graphql.go not found — update this guard")
+	}
+	if !strings.Contains(src, "parseGraphQL(req.Query)") {
+		t.Error("handleGraphQL must parse the document (parseGraphQL), not pattern-match it (F-72).")
+	}
+	// The security half: the same RBAC gate as the REST twin, which the old
+	// handler skipped entirely with `claims, _ := userFrom(r.Context())`.
+	if !strings.Contains(src, `s.requirePerm(w, r, "infrastructure", LevelRead)`) {
+		t.Error("handleGraphQL must enforce infrastructure:read — the SAME gate handleDevices " +
+			"enforces. Without it /api/graphql is a second, ungated door into the device " +
+			"inventory for any authenticated principal (audit F-72, authorization bypass).")
+	}
+	if strings.Contains(src, "claims, _ := userFrom(") {
+		t.Error("handleGraphQL is authenticating without authorizing again (F-72).")
+	}
+}

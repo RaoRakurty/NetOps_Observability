@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -241,14 +240,12 @@ func (s *server) handleUndeterminedFrequency(w http.ResponseWriter, r *http.Requ
 	}
 	since := durationQuery(r, "since", 7*24*time.Hour)
 	win := intToString(int(since.Seconds()))
-	topN := 20
-	if v := strings.TrimSpace(r.URL.Query().Get("top")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			if n > 200 {
-				n = 200
-			}
-			topN = n
-		}
+	// Fail closed (F-71/F-74 rule): `?top=abc` used to become 20 and `?top=500`
+	// used to become 200, both behind a 200 the caller read as their answer.
+	topN, terr := intQuery(r, "top", 20, 1, 200)
+	if terr != nil {
+		writeError(w, http.StatusBadRequest, terr)
+		return
 	}
 	sql := `
 SELECT toString(correlation_id) AS correlation_id,

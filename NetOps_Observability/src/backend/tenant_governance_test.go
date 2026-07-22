@@ -128,24 +128,39 @@ func TestTenantWindowHours(t *testing.T) {
 	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
 	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
 
-	at := func(c jwtClaims, url string) int {
+	at := func(c jwtClaims, url string) (int, error) {
 		r := httptest.NewRequest(http.MethodGet, url, nil)
 		return s.tenantWindowHours(claimsCtx(r, c))
 	}
-	if got := at(admA, "/api/cloud/health"); got != 72 {
+	must := func(c jwtClaims, url string) int {
+		t.Helper()
+		n, err := at(c, url)
+		if err != nil {
+			t.Fatalf("%s: %v", url, err)
+		}
+		return n
+	}
+	if got := must(admA, "/api/cloud/health"); got != 72 {
 		t.Fatalf("t-a default window = %d, want its governed 72", got)
 	}
-	if got := at(admB, "/api/cloud/health"); got != cloudSignalWindowHours {
+	if got := must(admB, "/api/cloud/health"); got != cloudSignalWindowHours {
 		t.Fatalf("t-b default window = %d — cross-tenant bleed", got)
 	}
-	if got := at(admA, "/api/cloud/health?window_hours=6"); got != 6 {
+	if got := must(admA, "/api/cloud/health?window_hours=6"); got != 6 {
 		t.Fatalf("explicit window = %d, want 6 (caller wins)", got)
 	}
-	if got := at(admA, "/api/cloud/health?window_hours=9999"); got != cloudSignalWindowMaxHours {
-		t.Fatalf("oversize explicit window = %d, want clamp %d", got, cloudSignalWindowMaxHours)
+	// Out-of-range and malformed now FAIL CLOSED (audit F-71/F-74 rule): they
+	// used to silently become the ceiling / the tenant default, so a caller
+	// asking for a 90-day window got 24h behind a 200 and read it as the whole
+	// window. Silent substitution is the defect; a 400 is the fix.
+	if _, err := at(admA, "/api/cloud/health?window_hours=9999"); err == nil {
+		t.Fatal("an oversize window was silently clamped instead of refused")
 	}
-	if got := at(admA, "/api/cloud/health?window_hours=junk"); got != 72 {
-		t.Fatalf("junk window = %d, want tenant default 72", got)
+	if _, err := at(admA, "/api/cloud/health?window_hours=junk"); err == nil {
+		t.Fatal("a malformed window silently became the tenant default instead of being refused")
+	}
+	if _, err := at(admA, "/api/cloud/health?window_hours=0"); err == nil {
+		t.Fatal("window_hours=0 was silently substituted instead of refused")
 	}
 }
 

@@ -93,18 +93,22 @@ func clampWindowHours(raw string) int {
 // reports the honored value, so the UI label never claims a range the data
 // doesn't cover. Platform-global engine tuning is untouched — this only shapes
 // per-tenant reads.
-func (s *server) tenantWindowHours(r *http.Request) int {
-	raw := strings.TrimSpace(r.URL.Query().Get("window_hours"))
-	if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-		if n > cloudSignalWindowMaxHours {
-			return cloudSignalWindowMaxHours
+// It FAILS CLOSED on a malformed or out-of-range value (the F-71/F-74 rule):
+// `?window_hours=abc` and `?window_hours=99999` used to fall through to the
+// tenant default, so a caller asking for a 90-day window silently received 24
+// hours behind a 200 and read it as the whole window. The caller is now told.
+func (s *server) tenantWindowHours(r *http.Request) (int, error) {
+	if raw := strings.TrimSpace(r.URL.Query().Get("window_hours")); raw != "" {
+		n, err := intQuery(r, "window_hours", 0, 1, cloudSignalWindowMaxHours)
+		if err != nil {
+			return 0, err
 		}
-		return n
+		return n, nil
 	}
 	claims, _ := userFrom(r.Context())
 	tenant, _ := principalTenant(claims)
 	hours, _ := s.governance.rcaWindowHours(tenant)
-	return hours
+	return hours, nil
 }
 
 // safeScopeLiteral is the caller's tenant_scope, guarded before it is embedded in
@@ -941,7 +945,11 @@ func (s *server) handleCloudHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	q, curTS, curID, ok := parseSignalPage(w, r)
 	if !ok {
 		return
@@ -1029,7 +1037,11 @@ func (s *server) handleCloudChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	q, curTS, curID, ok := parseSignalPage(w, r)
 	if !ok {
 		return
@@ -1139,7 +1151,11 @@ func (s *server) handleCloudEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := clampSignalLimit(r.URL.Query().Get("limit"))
-	window := s.tenantWindowHours(r)
+	window, werr := s.tenantWindowHours(r)
+	if werr != nil {
+		writeError(w, http.StatusBadRequest, werr)
+		return
+	}
 	q, curTS, curID, pok := parseSignalPage(w, r)
 	if !pok {
 		return

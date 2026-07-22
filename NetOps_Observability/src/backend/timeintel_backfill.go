@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -493,11 +492,12 @@ func (s *server) handleReliabilityTimeMetrics(w http.ResponseWriter, r *http.Req
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		limit := 500
-		if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= timeIntelBackfillCap {
-				limit = n
-			}
+		// Fail closed (F-71/F-74 rule): a malformed or over-cap limit used to be
+		// discarded, so a caller asking for MORE silently received the default.
+		limit, lerr := intQuery(r, "limit", 500, 1, timeIntelBackfillCap)
+		if lerr != nil {
+			writeError(w, http.StatusBadRequest, lerr)
+			return
 		}
 		rowsOut, err := s.incidentTimeMetrics.List(r.Context(), tenant, cross, limit)
 		if err != nil {
