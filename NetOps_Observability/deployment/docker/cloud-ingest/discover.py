@@ -26,6 +26,7 @@ import boto3
 
 import aws_components
 import aws_workloads
+import ingest_metrics
 
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 # Live snapshots belong in a RUNTIME dir (a gitignored data/ mount), never the
@@ -238,6 +239,11 @@ def run() -> tuple[int, int]:
                                                     inventory.get("account_id", ""))
     inventory["resources"].extend(comp_rows)
     if comp_errors:
+        # F-41: this used to be log-only, which is how a real pagination bug
+        # (describe_vpn_gateways) ran 167 consecutive cycles with nothing able
+        # to alert on it. Count it per family so a degraded family is a metric.
+        for family in comp_errors:
+            ingest_metrics.record_family_degraded("aws", family)
         print(json.dumps({"service": "cloud-ingest",
                           "msg": "aws component families degraded",
                           "errors": comp_errors}), flush=True)
@@ -250,6 +256,8 @@ def run() -> tuple[int, int]:
         account=inventory.get("account_id", ""))
     inventory["resources"].extend(wl_rows)
     if wl_errors:
+        for family in wl_errors:
+            ingest_metrics.record_family_degraded("aws", family)
         print(json.dumps({"service": "cloud-ingest",
                           "msg": "aws workload families degraded",
                           "errors": wl_errors}), flush=True)

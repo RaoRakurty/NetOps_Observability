@@ -738,50 +738,79 @@ def main():
     last_gcp_logs = 0.0
     last_az_seam = 0.0
     while True:
-        try:
-            # Cloud inventory + in-cloud egress topology, discovered from the live
-            # APIs. Route tables are the authoritative statement of which edge a
-            # subnet leaves by (IGW / NAT / IPsec NVA) — we read it, never assume it.
-            if time.time() - last_discover >= DISCOVER_EVERY_S:
-                res, edges = discover.run()
-                last_discover = time.time()
+        # ── AWS lanes: one failure domain EACH (audit F-41) ─────────────────
+        # Every AWS lane used to share ONE try/except, and each set its cadence
+        # marker AFTER its call. So an unguarded failure in the FIRST lane
+        # (cloudmetrics.poll → a bare urlopen at cloudmetrics.py:61, i.e. any
+        # vector-aggregator blip) jumped straight to the cycle handler and
+        # permanently starved every lane behind it: flow logs, the two S3
+        # lanes, CloudTrail, seams, health — and save_state, so no checkpoint
+        # advanced either. Worse, the marker never advanced, so the failing lane
+        # re-ran on every single cycle and could never self-heal.
+        #
+        # _isolated gives each lane its own guard and advances that lane's
+        # cadence marker in `finally`, so a permanently failing lane fails on
+        # ITS OWN schedule and nothing downstream of it is affected.
+        def _isolated(lane: str, fn, *args, **kw):
+            """Run one AWS lane inside its own failure domain. Returns
+            (ok, value) — never raises, always counts a failure."""
+            try:
+                return True, fn(*args, **kw)
+            except Exception as exc:  # noqa: BLE001 - lane isolation is the point
+                ingest_metrics.record_lane_failure("aws", lane)
+                jlog("aws lane error", lane=lane, error=str(exc)[:200])
+                return False, None
+
+        now = time.time()
+        # Cloud inventory + in-cloud egress topology, discovered from the live
+        # APIs. Route tables are the authoritative statement of which edge a
+        # subnet leaves by (IGW / NAT / IPsec NVA) — we read it, never assume it.
+        if now - last_discover >= DISCOVER_EVERY_S:
+            last_discover = now  # advance FIRST: a failing lane keeps its cadence
+            ok, out = _isolated("discovery", discover.run)
+            if ok:
+                res, edges = out
                 inventory = discover.instances_snapshot()
                 jlog("cloud discovery", resources=res, route_edges=edges)
 
-            # CloudWatch → canonical metric lane: live values for the Service View
-            # counters AND anomaly evidence via the correlation CUSUM detector.
-            if AWS_METERED_METRICS and inventory and time.time() - last_metrics >= METRICS_EVERY_S:
-                n = cloudmetrics.poll(cw, inventory)
-                last_metrics = time.time()
+        # CloudWatch → canonical metric lane: live values for the Service View
+        # counters AND anomaly evidence via the correlation CUSUM detector.
+        if AWS_METERED_METRICS and inventory and time.time() - last_metrics >= METRICS_EVERY_S:
+            last_metrics = time.time()
+            ok, n = _isolated("cloudmetrics", cloudmetrics.poll, cw, inventory)
+            if ok:
                 jlog("cloud metrics", events=n, instances=len(inventory))
-            if LOG_GROUP:
-                _lane("flow_logs", poll_flow_logs, logs, st, producer)
-            poll_flow_logs_s3(s3, st, producer)      # primary (guarded within) + extra sources
-            poll_fidelity_logs_s3(s3, st, producer)  # opt-in prefixes/buckets; no-op when unset
-            _lane("change_audit", poll_cloudtrail, ct, producer, st)
-            # Seam lane in its OWN guard: a seam hiccup must never block the
-            # flow/cloudtrail lanes' save_state below (P1-11, seen live on the
-            # Azure side 2026-07-15).
-            if CLOUD_SEAM_TELEMETRY and time.time() - last_seam >= SEAM_EVERY_S:
-                try:
-                    st["seam_every_s"] = SEAM_EVERY_S
-                    counts = seam_aws.run(session, producer, TENANT, st, AWS_METERED_METRICS)
-                    jlog("aws seams", **counts)
-                except Exception as exc:  # noqa: BLE001 - lane isolation
-                    jlog("aws seam error", error=str(exc)[:200])
-                last_seam = time.time()
-            # Provider incident lane (Wave 5 #16) — own guard; run() never
-            # raises (Basic-support denial becomes a structured status).
-            if time.time() - last_health >= HEALTH_EVERY_S:
-                n = aws_health.run(
+        if LOG_GROUP:
+            _isolated("flow_logs", _lane, "flow_logs", poll_flow_logs, logs, st, producer)
+        # primary (guarded within) + extra sources
+        _isolated("flow_logs_s3", poll_flow_logs_s3, s3, st, producer)
+        # opt-in prefixes/buckets; no-op when unset
+        _isolated("fidelity_logs_s3", poll_fidelity_logs_s3, s3, st, producer)
+        _isolated("change_audit", _lane, "change_audit", poll_cloudtrail, ct, producer, st)
+        # Seam lane in its OWN guard: a seam hiccup must never block the
+        # flow/cloudtrail lanes' save_state below (P1-11, seen live on the
+        # Azure side 2026-07-15).
+        if CLOUD_SEAM_TELEMETRY and time.time() - last_seam >= SEAM_EVERY_S:
+            last_seam = time.time()
+            st["seam_every_s"] = SEAM_EVERY_S
+            ok, counts = _isolated("seams", seam_aws.run,
+                                   session, producer, TENANT, st, AWS_METERED_METRICS)
+            if ok:
+                jlog("aws seams", **counts)
+        # Provider incident lane (Wave 5 #16) — own guard; run() never
+        # raises (Basic-support denial becomes a structured status).
+        if time.time() - last_health >= HEALTH_EVERY_S:
+            last_health = time.time()
+            ok, n = _isolated(
+                "health", lambda: aws_health.run(
                     session.client("health", region_name=aws_health.HEALTH_REGION),
-                    producer, TENANT, ACCOUNT, st)
-                if n:
-                    jlog("aws health events", count=n)
-                last_health = time.time()
-            save_state(st)
-        except Exception as exc:  # noqa: BLE001 - poller must survive transient API errors
-            jlog("poll cycle error", error=str(exc)[:200])
+                    producer, TENANT, ACCOUNT, st))
+            if ok and n:
+                jlog("aws health events", count=n)
+        # save_state is LAST but no longer behind anyone else's failure: it now
+        # runs on every cycle regardless of which lanes above went wrong, so a
+        # lane that DID make progress can always checkpoint it.
+        _isolated("save_state", save_state, st)
 
         # ── GCP (provider-parity program #105) ─────────────────────────────
         # Same separate-failure-domain rule as Azure (audit P1-11): a GCP

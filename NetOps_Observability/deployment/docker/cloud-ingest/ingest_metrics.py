@@ -41,6 +41,15 @@ _lat_count: dict[str, int] = {}
 # tenant/account/payload.
 _produce_failed: dict[str, int] = {}
 _flush_failed: dict[str, int] = {}           # component -> failed flushes
+# Poll lanes whose run raised, by (provider, lane). Audit F-41: a real
+# pagination bug (describe_vpn_gateways) ran for 167 CONSECUTIVE CYCLES and the
+# only trace of it was a log line — nothing counted it, so nothing could alert
+# on it. Labels are bounded: provider is a fixed set, lane is a fixed literal
+# at each call site — never a tenant, account, region or payload.
+_lane_failed: dict[tuple[str, str], int] = {}
+# Inventory families that came back degraded, by (provider, family). Same
+# reason: "aws component families degraded" was log-only.
+_family_degraded: dict[tuple[str, str], int] = {}
 
 
 def classify_error(exc: BaseException) -> str:
@@ -82,6 +91,32 @@ def record_flush_failure(component: str) -> None:
         _flush_failed[c] = _flush_failed.get(c, 0) + 1
 
 
+def record_lane_failure(provider: str, lane: str) -> None:
+    """Count one poll lane that raised. Bounded labels; never raises."""
+    key = (str(provider or "unknown"), str(lane or "unknown"))
+    with _lock:
+        _lane_failed[key] = _lane_failed.get(key, 0) + 1
+
+
+def record_family_degraded(provider: str, family: str) -> None:
+    """Count one inventory family that came back degraded. Never raises."""
+    key = (str(provider or "unknown"), str(family or "unknown"))
+    with _lock:
+        _family_degraded[key] = _family_degraded.get(key, 0) + 1
+
+
+def lane_failures() -> dict[tuple[str, str], int]:
+    """Snapshot of the per-lane failure counts (test/introspection)."""
+    with _lock:
+        return dict(_lane_failed)
+
+
+def family_degradations() -> dict[tuple[str, str], int]:
+    """Snapshot of the per-family degradation counts (test/introspection)."""
+    with _lock:
+        return dict(_family_degraded)
+
+
 def produce_failures() -> dict[str, int]:
     """Snapshot of the per-topic produce-failure counts (test/introspection)."""
     with _lock:
@@ -112,6 +147,18 @@ def render() -> str:
         lines.append("# TYPE netops_cloud_ingest_flush_failures_total counter")
         for c in sorted(_flush_failed):
             lines.append(f'netops_cloud_ingest_flush_failures_total{{component="{c}"}} {_flush_failed[c]}')
+        lines.append("# HELP netops_cloud_ingest_lane_failures_total Poll lanes whose run raised (F-41: this was log-only for 167 cycles).")
+        lines.append("# TYPE netops_cloud_ingest_lane_failures_total counter")
+        for (p, lane) in sorted(_lane_failed):
+            lines.append(
+                f'netops_cloud_ingest_lane_failures_total{{provider="{p}",lane="{lane}"}} '
+                f"{_lane_failed[(p, lane)]}")
+        lines.append("# HELP netops_cloud_ingest_family_degraded_total Inventory families that returned degraded.")
+        lines.append("# TYPE netops_cloud_ingest_family_degraded_total counter")
+        for (p, fam) in sorted(_family_degraded):
+            lines.append(
+                f'netops_cloud_ingest_family_degraded_total{{provider="{p}",family="{fam}"}} '
+                f"{_family_degraded[(p, fam)]}")
     return "\n".join(lines) + "\n"
 
 
@@ -160,3 +207,5 @@ def reset() -> None:
         _lat_count.clear()
         _produce_failed.clear()
         _flush_failed.clear()
+        _lane_failed.clear()
+        _family_degraded.clear()
