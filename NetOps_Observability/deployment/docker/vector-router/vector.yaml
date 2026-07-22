@@ -15,6 +15,33 @@ api:
   enabled: true
   address: 0.0.0.0:8686
 
+# ----------------------------------------------------------------------------
+# DURABILITY (F-04) — end-to-end acknowledgements.
+#
+# THE DEFECT THIS FIXES: every source on this tier is a `kafka` source. With
+# acknowledgements off — the Vector default — those sources commit their
+# consumer-group offset when the message is READ, not when the sink has
+# accepted it. A router crash therefore lost up to 500 events per sink (the
+# in-memory buffer) AND had already advanced the offset past them, so replay
+# from Kafka could never recover them. The bus was doing its job; the router
+# was throwing away the receipt.
+#
+# With this enabled the offset is only committed once the event is durably
+# accepted downstream (OpenSearch / ClickHouse). Kafka is then a real replay
+# buffer, which is why this tier needs no disk buffers of its own: the retained
+# topic IS the buffer, and a restart resumes from the last acknowledged offset.
+acknowledgements:
+  enabled: true
+
+# Sink healthchecks are enabled per-sink below (F-04). require_healthy stays
+# FALSE on purpose: a healthcheck that refuses to start the router when
+# OpenSearch is briefly down converts a storage blip into an ingestion outage,
+# and Kafka is already buffering. false = report loudly (error log +
+# component_errors_total), keep running, keep retrying.
+healthchecks:
+  enabled: true
+  require_healthy: false
+
 sources:
   internal_metrics:
     type: internal_metrics
@@ -274,7 +301,7 @@ sinks:
       index: "netops-applogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
   # records land here), so a non-empty netops-deadletter-* index is itself the
@@ -288,7 +315,7 @@ sinks:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # Syslog from network devices → OpenSearch
   opensearch_syslog:
@@ -300,7 +327,7 @@ sinks:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # SNMP traps from network devices → OpenSearch
   opensearch_snmptrap:
@@ -312,7 +339,7 @@ sinks:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # Tagged raw cloud logs → OpenSearch (the unified Cloud Logs search plane).
   opensearch_cloudlogs:
@@ -324,7 +351,7 @@ sinks:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
@@ -336,7 +363,7 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   clickhouse_flows:
     type: clickhouse
@@ -349,7 +376,7 @@ sinks:
       user: "${CLICKHOUSE_USER}"
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }
 
   # Daily cloud cost records → ClickHouse (Wave 5 #18). skip_unknown_fields
   # drops the record's `kind` routing field; schema growth is a plain
@@ -365,4 +392,4 @@ sinks:
       user: "${CLICKHOUSE_USER}"
       password: "${CLICKHOUSE_PASSWORD}"
     skip_unknown_fields: true
-    healthcheck: { enabled: false }
+    healthcheck: { enabled: true }

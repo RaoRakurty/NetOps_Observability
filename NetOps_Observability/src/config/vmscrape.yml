@@ -47,11 +47,31 @@ scrape_configs:
     static_configs:
       - targets: ['vector-aggregator:9598', 'vector-router:9598']
 
+  # Kafka consumer LAG (F-46). Previously there was no kafka job here at all
+  # and no lag metric anywhere in the stack — which meant partial degradation
+  # was structurally invisible: every flat-line rule in rules.yaml needs
+  # `increase(...) == 0` EXACTLY, so a consumer running 10x slow (the realistic
+  # shape when ClickHouse or OpenSearch is struggling) tripped nothing at all.
+  # Lag is also the only signal that tells "quiet bus, quiet network" apart
+  # from "quiet bus, dead consumer" — producer and consumer rates read zero in
+  # both cases, lag only grows in the second.
+  #
+  # The note below still holds — the BROKER itself has no Prometheus endpoint —
+  # so this scrapes a small sidecar (kafka-exporter) that speaks the Kafka
+  # admin protocol instead of JMX. Part of the `self-monitoring` add-on, so it
+  # is a silent no-op under suppressScrapeErrors when the add-on is off.
+  # Series of interest: kafka_consumergroup_lag{consumergroup,topic,partition},
+  # kafka_consumergroup_lag_sum, kafka_topic_partition_current_offset.
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+
   # NOTE: the embedded Kafka broker has no native Prometheus endpoint (JMX
   # only — a jmx-exporter sidecar was judged not worth the image/licensing
   # surface for a transit-only bus). Broker liveness = compose healthcheck +
-  # api stack-health TCP probe; consumer progress = pipeline-watchdog.sh
-  # high-watermark deltas + the vector job above.
+  # api stack-health TCP probe; consumer progress = the kafka job above
+  # (consumer-group lag), pipeline-watchdog.sh high-watermark deltas, and the
+  # vector job above.
 
   # ---- self-monitoring add-on (optional; silent no-ops when disabled) -------
   # cAdvisor: per-CONTAINER cpu / memory / network / restart / OOM for EVERY

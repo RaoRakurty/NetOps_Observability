@@ -1,5 +1,6 @@
 {
   "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.  |  ts is declared explicitly (2026-07-21, DEF-6): it was previously left to dynamic mapping, which inferred `date` from the first integer seen and then rejected every float epoch-seconds value, silently dropping ~10k events/day. The router normalises ts to integer epoch-millis; this mapping pins that contract.",
+  "_comment_lane_coverage": "F-06/F-15/F-53 (2026-07-21): there are SIX log lanes on the bus but only three templates existed (applogs/syslog/flows). snmptrap + cloudlogs were 100% dynamically mapped, so after the DEF-6 fix started emitting `ts` as an integer they would have inferred `long` instead of `date` — date-range queries, the Dashboards time picker and any sort on ts then silently misbehave. netops-snmptrap ALSO had no template at all, so number_of_replicas defaulted to 1 on a single-node cluster, its replica sat UNASSIGNED forever, and the cluster was permanently yellow — which destroys yellow as a usable alarm signal. Every template here therefore pins number_of_replicas: 0 (single-node appliance; see F-07 for the production posture note) and declares the shared field contract.",
   "templates": {
     "netops-applogs": {
       "index_patterns": [
@@ -134,6 +135,168 @@
             "ts": {
               "type": "date",
               "format": "strict_date_optional_time||epoch_millis"
+            }
+          }
+        }
+      }
+    },
+    "netops-snmptrap": {
+      "_comment": "F-53/F-06: this lane had NO template. Consequences fixed here: (1) number_of_replicas defaulted to 1 -> permanently UNASSIGNED replica -> permanently yellow cluster; (2) `ts` would map as long, not date; (3) `varbinds` is vendor-controlled free-form input and was fully dynamically mapped, so a trap storm from a new vendor could type-poison the index or walk it into the 1000-field wall. varbinds is stored but NOT indexed (enabled:false) - searchable-by-document, un-mappable-by-vendor.",
+      "index_patterns": [
+        "netops-snmptrap-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "device": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "hostname": {
+              "type": "keyword"
+            },
+            "source_address": {
+              "type": "keyword"
+            },
+            "trap_oid": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "varbinds": {
+              "type": "object",
+              "enabled": false
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
+          }
+        }
+      }
+    },
+    "netops-cloudlogs": {
+      "_comment": "F-06/F-15: cloud log lane, previously untemplated. Same shared contract; cloud_family/cloud_provider/resource_id are the lane's routing keys.",
+      "index_patterns": [
+        "netops-cloudlogs-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "cloud_family": {
+              "type": "keyword"
+            },
+            "cloud_provider": {
+              "type": "keyword"
+            },
+            "resource_id": {
+              "type": "keyword"
+            },
+            "account": {
+              "type": "keyword"
+            },
+            "region": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "app": {
+              "type": "keyword"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "keyword"
+            },
+            "source_type": {
+              "type": "keyword"
+            },
+            "signal": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            }
+          }
+        }
+      }
+    },
+    "netops-deadletter": {
+      "_comment": "The dead-letter lane is deliberately flat: dropped_at/lane/reason/raw only, raw being an encoded JSON STRING. A dead-letter index that can itself reject a document is worthless, so nothing here is dynamically typed.",
+      "index_patterns": [
+        "netops-deadletter-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "codec": "best_compression",
+          "refresh_interval": "5s"
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "dropped_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "lane": {
+              "type": "keyword"
+            },
+            "reason": {
+              "type": "text"
+            },
+            "raw": {
+              "type": "text",
+              "index": false
             }
           }
         }

@@ -658,8 +658,49 @@ groups:
   # auto-heal has NOT recovered a component (down / restart-loop / OOM) or when
   # a resource is being exhausted — the "alert when no auto-heal" layer.
   # ===========================================================================
+  # F-35 (2026-07-21) — LABEL CONTRACT. Every rule in this group used to select
+  # {name=~"netops-.+"} and matched ZERO series, so the entire container safety
+  # net was dead while reading, on a dashboard, as coverage. Two separate causes,
+  # both fixed:
+  #
+  #   1. cAdvisor produced no per-container series AT ALL. Its docker handler
+  #      cannot start a container handler under docker's containerd image store
+  #      (no image/<driver>/layerdb tree to read the rw-layer id from), and it
+  #      claims the docker-*.scope cgroups ahead of every other handler, so
+  #      nothing else picked them up. Live evidence: container_last_seen had
+  #      exactly one series, {id="/"}. Fixed in docker-compose.yml by running
+  #      cAdvisor's containerd handler against docker's "moby" namespace.
+  #
+  #   2. The label. cAdvisor's containerd handler sets name=<container-id-hash>,
+  #      not name="netops-api-1", so "netops-.+" could never match even once
+  #      per-container series existed. The selector is now {name!=""}, which is
+  #      what genuinely distinguishes a CONTAINER from a cgroup slice (slices
+  #      carry name="") and does not depend on the cgroup driver, the image
+  #      store, or the compose project name.
+  #
+  # Annotations use {{ $labels.image }} because it is the human-readable
+  # identifier this handler actually provides; the id hash is in {{ $labels.name }}.
+  #
+  # ContainerMetricsMissing below is the load-bearing part of this fix: an alert
+  # whose selector matches nothing is indistinguishable from an alert that is
+  # simply not firing, which is how this stayed broken. It asserts the input.
   - name: stack-resilience
     rules:
+      - alert: ContainerMetricsMissing
+        # THE META-ALERT. If this fires, every other rule in this group is
+        # silently vacuous — treat it as "container monitoring is DOWN", not as
+        # "no containers". A healthy stack has ~20+ containers; <5 means the
+        # cAdvisor handler is broken again (image-store change, socket moved,
+        # cgroup driver change) rather than that the stack shrank.
+        # Runbook: docker logs netops-cadvisor-1 | grep -i "failed to create"
+        #          curl cadvisor:8080/metrics | grep -c '^container_last_seen'
+        expr: count(container_last_seen{name!=""}) < 5 or absent(container_last_seen{name!=""})
+        for: 10m
+        labels: { severity: critical, layer: stack }
+        annotations:
+          summary: "cAdvisor is reporting {{ $value }} containers — the container OOM/restart/memory alerts below are matching nothing and cannot fire"
+          description: "An alert that matches zero series reads as coverage. Fix the exporter, not the rule."
+
       - alert: ContainerDown
         # cAdvisor stops reporting a container that has died/been removed.
         # No absent() arm: cadvisor going blind (e.g. docker's containerd image
@@ -667,42 +708,42 @@ groups:
         # "every container is down" — that false-fired platform-wide. The
         # external stack-watchdog cron is the authoritative container-down
         # sentinel either way; this rule is the in-platform per-container view.
-        expr: time() - container_last_seen{name=~"netops-.+"} > 120
+        expr: time() - container_last_seen{name!=""} > 120
         for: 2m
         labels: { severity: critical, layer: stack }
         annotations:
-          summary: "Container {{ $labels.name }} is down (no cAdvisor data >2m)"
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) is down (no cAdvisor data >2m)"
           description: "Auto-heal did not bring it back — investigate."
 
       - alert: ContainerRestartLoop
         # Start time changing repeatedly = crash/restart looping.
-        expr: changes(container_start_time_seconds{name=~"netops-.+"}[15m]) > 3
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 3
         for: 5m
         labels: { severity: critical, layer: stack }
         annotations:
-          summary: "Container {{ $labels.name }} restart-looping ({{ $value }} restarts/15m)"
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) restart-looping ({{ $value }} restarts/15m)"
 
       - alert: ContainerOOMKilled
-        expr: increase(container_oom_events_total{name=~"netops-.+"}[10m]) > 0
+        expr: increase(container_oom_events_total{name!=""}[10m]) > 0
         labels: { severity: critical, layer: stack }
         annotations:
-          summary: "Container {{ $labels.name }} was OOM-killed — raise its mem_limit or fix the leak"
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) was OOM-killed — raise its mem_limit or fix the leak"
 
       - alert: ContainerMemoryNearLimit
         # Working set within 10% of the container's mem_limit → OOM risk / leak.
-        expr: container_memory_working_set_bytes{name=~"netops-.+"} / container_spec_memory_limit_bytes{name=~"netops-.+"} > 0.90 and container_spec_memory_limit_bytes{name=~"netops-.+"} > 0
+        expr: container_memory_working_set_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} > 0.90 and container_spec_memory_limit_bytes{name!=""} > 0
         for: 10m
         labels: { severity: warning, layer: stack }
         annotations:
-          summary: "Container {{ $labels.name }} at {{ $value | humanizePercentage }} of its memory limit"
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) at {{ $value | humanizePercentage }} of its memory limit"
 
       - alert: ContainerCPUSaturated
         # Sustained near its CPU ceiling (quota/period = limit in cores).
-        expr: rate(container_cpu_usage_seconds_total{name=~"netops-.+"}[5m]) / on(name) group_left() (container_spec_cpu_quota{name=~"netops-.+"} / container_spec_cpu_period{name=~"netops-.+"}) > 0.90
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[5m]) / on(name) group_left() (container_spec_cpu_quota{name!=""} / container_spec_cpu_period{name!=""}) > 0.90
         for: 15m
         labels: { severity: warning, layer: stack }
         annotations:
-          summary: "Container {{ $labels.name }} CPU-saturated against its limit for 15m"
+          summary: "Container {{ $labels.image }} ({{ $labels.name }}) CPU-saturated against its limit for 15m"
 
       - alert: HostMemoryLow
         expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.08
@@ -723,7 +764,14 @@ groups:
           summary: "Host OOM-killer fired ({{ $value }} kill(s)/10m) — a process was reaped"
 
       - alert: HostDiskLow
-        expr: node_filesystem_avail_bytes{mountpoint="/host"} / node_filesystem_size_bytes{mountpoint="/host"} < 0.10
+        # 2026-07-21: this rule matched ZERO series and could never fire — the
+        # same disease as the container rules above, on the one alert that would
+        # have caught the disk exhaustion in F-55. node-exporter runs with
+        # --path.rootfs=/host, which STRIPS that prefix from the reported
+        # mountpoint, so the label is "/" and never "/host". Confirmed against
+        # the live store: mountpoints emitted are / /boot /run ... — no /host.
+        # fstype filter keeps tmpfs/overlay mounts out of the comparison.
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.10
         for: 5m
         labels: { severity: critical, layer: host }
         annotations:
@@ -860,3 +908,258 @@ groups:
         labels: { severity: warning, layer: correlation }
         annotations:
           summary: "Correlation flow+metric intake flat-lined 1h — telemetry sources silent (lab down or edge-ingest broken)"
+
+  # ============================================================================
+  # STORAGE-LOSS OBSERVABILITY (F-17 / F-18 / F-19 / F-04)
+  # ============================================================================
+  #
+  # The theme these rules exist to break: EVERY silent-loss finding in the
+  # 2026-07-21 audit had the same shape — the failing component KNEW, and the
+  # knowledge stopped there. Vector knew (it logged and counted). OpenSearch
+  # knew (it returned a 400 per bulk item). The knowledge died in an unscraped
+  # log line, or landed in a metric with no rule attached to it.
+  #
+  # The authoritative measurement that motivated this group: 1,127 documents
+  # rejected in 4.75 h = ~5,700/day = 0.93% of ALL application logs,
+  # permanently lost, while every dashboard showed a healthy cluster and the
+  # external watchdog stayed green for the entire incident.
+  #
+  # Metric provenance:
+  #   vector_*     -> vmscrape job 'vector' (both tiers, :9598)
+  #   opensearch_* -> vector-aggregator's opensearch_indexing_stats /
+  #                   opensearch_cluster_health http_client sources ->
+  #                   prometheus_remote_write -> VM. See vector/vector.yaml.
+  # ----------------------------------------------------------------------------
+  - name: storage-loss-observability
+    interval: 60s
+    rules:
+      - alert: OpenSearchDocumentsRejected
+        # ####################################################################
+        # DO NOT "SIMPLIFY" THIS TO index_failed. THAT COUNTER LIES.
+        #
+        # Measured simultaneously, on the same node, in the same response:
+        #     "index_failed" : 0        <- while documents were being discarded
+        #     "doc_status"   : { "2xx": 120029, "4xx": 1127 }
+        # index_failed counts whole-REQUEST failures. Bulk indexing rejects
+        # PER ITEM: OpenSearch returns HTTP 200 for the batch and a 400 inside
+        # the individual item, so index_failed never moves. A dashboard panel
+        # built on index_failed is worse than no panel — it actively asserts
+        # health during data loss.
+        #
+        # doc_status.4xx is per-DOCUMENT and does move. It is a mapping
+        # rejection (wrong type for a field, field-limit exceeded); those are
+        # NOT retriable, so every increment is a document destroyed for good.
+        # Threshold is > 0 because the correct rate of permanent loss is zero.
+        #
+        # It is a gauge holding an absolute counter, so delta() not increase():
+        # an OpenSearch restart resets it to 0, which yields a negative delta
+        # and cannot false-fire.
+        # ####################################################################
+        expr: delta(opensearch_indexing_doc_status{code="4xx"}[15m]) > 0
+        for: 5m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch REJECTED {{ $value }} documents in 15m — permanent loss, not a retry"
+          description: "Per-item bulk rejection (mapping conflict or field-limit). Find them: curl netops-opensearch-1:9200/_nodes/stats/indices/indexing | jq .nodes[].indices.indexing.doc_status ; then check the lane's index template. index_failed will read ~0 — ignore it."
+
+      - alert: OpenSearchRejectionRatioHigh
+        # The same signal as a proportion, so a busy day cannot hide a
+        # proportionally worse failure inside a bigger absolute number.
+        expr: delta(opensearch_indexing_doc_status{code="4xx"}[1h]) / clamp_min(delta(opensearch_indexing_index_total[1h]), 1) > 0.001
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "OpenSearch is rejecting {{ $value | humanizePercentage }} of all documents (>0.1%)"
+
+      - alert: VectorEventsDiscarded
+        # F-18: this metric was exported by BOTH Vector tiers and confirmed
+        # present in VictoriaMetrics for the whole incident. The data needed to
+        # detect the loss within 60 seconds was in the metrics store the entire
+        # time; the only thing missing was this rule. intentional="false" is
+        # load-bearing — intentional="true" is ordinary filtering and is
+        # constantly non-zero.
+        expr: sum by (component_id, instance) (increase(vector_component_discarded_events_total{intentional="false"}[15m])) > 0
+        for: 5m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Vector discarded {{ $value }} events UNINTENTIONALLY at {{ $labels.component_id }} ({{ $labels.instance }})"
+          description: "Unintentional discard = a bug or a rejected write, never normal filtering. Check the component's errors and netops-deadletter-*."
+
+      - alert: VectorComponentErrors
+        expr: sum by (component_id, error_type, instance) (increase(vector_component_errors_total[15m])) > 0
+        for: 10m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Vector {{ $labels.component_id }} error_type={{ $labels.error_type }} ({{ $value }} in 15m)"
+
+      - alert: LogIngestRateDegraded
+        # ####################################################################
+        # F-19: PARTIAL loss, not total stall.
+        #
+        # The external watchdog's ingest check was `count == 0` — it can only
+        # see a pipeline that has stopped completely. During the measured
+        # incident the count was ~14,000/h and the watchdog stayed GREEN while
+        # 4,390 documents/day were being destroyed. "Ingesting correctly" and
+        # "ingesting with a 5% hole" are identical under a zero-test.
+        #
+        # This compares the current 15m indexing rate against the trailing 6h
+        # baseline of itself. The clamp_min floor stops an idle lab (where the
+        # baseline is legitimately near zero) from firing continuously — the
+        # rule is deliberately silent below a real traffic level rather than
+        # noisy, because an alert nobody trusts is worse than none.
+        # ####################################################################
+        expr: sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m])) < 0.5 * sum(avg_over_time(delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) and sum(avg_over_time(delta(opensearch_indexing_doc_status{code="2xx"}[15m])[6h:15m])) > 100
+        for: 20m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "Log indexing rate is under half its 6h baseline ({{ $value }} docs/15m) — partial ingest loss, not a stall"
+          description: "A total stall is caught by the watchdog; this is the shape that hid for weeks. Check vector-router discards, Kafka consumer lag, and OpenSearch rejections."
+
+      - alert: LogIngestStalled
+        expr: sum(delta(opensearch_indexing_doc_status{code="2xx"}[15m])) == 0
+        for: 15m
+        labels: { severity: critical, layer: ingest }
+        annotations:
+          summary: "OpenSearch indexed ZERO documents in 15m — the log pipeline has stopped"
+
+      - alert: OpenSearchStatsMissing
+        # Meta-alert, same reasoning as ContainerMetricsMissing: the two rules
+        # above are vacuous if this lane stops. An alert whose selector matches
+        # zero series reads as coverage.
+        expr: absent(opensearch_indexing_doc_status)
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "The OpenSearch doc_status lane is gone — document-rejection alerting is BLIND (check vector-aggregator's opensearch_indexing_stats source)"
+
+  # ----------------------------------------------------------------------------
+  # OpenSearch cluster shape (F-53 / F-54)
+  # ----------------------------------------------------------------------------
+  - name: opensearch-cluster-shape
+    interval: 60s
+    rules:
+      - alert: OpenSearchClusterNotGreen
+        # YELLOW IS A REAL SIGNAL AGAIN — it was not, and that is the finding.
+        # netops-snmptrap-* had no index template, so it defaulted to 1 replica
+        # on a single-node cluster, its replica was permanently UNASSIGNED, and
+        # 33 ISM audit-history indices did the same: 35 permanently unassigned
+        # shards. The cluster was ALWAYS yellow, so yellow meant nothing and the
+        # genuine problem hid inside the noise. Templates now pin
+        # number_of_replicas: 0 and apply-ism.sh pins it for the plugin indices,
+        # so the cluster sits at green and any departure is actionable.
+        expr: opensearch_cluster_status > 0
+        for: 15m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "OpenSearch cluster is {{ $labels.status_text }} ({{ $value }}) — a lane is missing a template, or a shard cannot be allocated"
+
+      - alert: OpenSearchUnassignedShards
+        expr: opensearch_cluster_unassigned_shards > 0
+        for: 30m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "{{ $value }} unassigned shards — on a single-node cluster this is almost always number_of_replicas > 0 on a new index pattern"
+
+      - alert: OpenSearchShardCountHigh
+        # Heap, not disk, is what fails first. At ~1.8 GB heap the accepted
+        # density is roughly 20 shards/GB (~36 shards); the per-tenant DAILY
+        # index scheme adds ~26 shards/day and reaches ~365 at the 14-day ISM
+        # steady state. Heap/GC death arrives well before the 1000-shard cap,
+        # and AT the cap index creation is rejected outright and ingest stops
+        # silently. Warn early, while consolidating index granularity is still
+        # a planning decision instead of an incident.
+        expr: opensearch_cluster_active_shards / clamp_min(opensearch_cluster_data_nodes, 1) > 300
+        for: 30m
+        labels: { severity: warning, layer: storage }
+        annotations:
+          summary: "{{ $value }} shards/node — heap exhaustion risk; consolidate to weekly or aliased per-tenant indices, and verify ISM deletes every lane"
+
+      - alert: OpenSearchShardCountCritical
+        expr: opensearch_cluster_active_shards / clamp_min(opensearch_cluster_data_nodes, 1) > 700
+        for: 15m
+        labels: { severity: critical, layer: storage }
+        annotations:
+          summary: "{{ $value }} shards/node — approaching cluster.max_shards_per_node (1000), where index creation is REJECTED and ingest stops with no error"
+
+  # ----------------------------------------------------------------------------
+  # Bus consumer lag (F-46) — the only signal that separates "quiet bus" from
+  # "dead consumer". Source: kafka-exporter (vmscrape job 'kafka').
+  # ----------------------------------------------------------------------------
+  - name: bus-consumer-lag
+    interval: 60s
+    rules:
+      - alert: KafkaConsumerLagGrowing
+        # THE POINT OF THIS RULE. Every flat-line rule in this file requires
+        # `increase(...) == 0` EXACTLY, so a consumer running 10x slow — the
+        # realistic shape when ClickHouse or OpenSearch is degraded — tripped
+        # absolutely nothing. Sustained GROWTH is the 10x-slowdown signature:
+        # the consumer is still alive and still committing, it just cannot keep
+        # up, and it will never catch up on its own.
+        expr: delta(kafka_consumergroup_lag_sum[30m]) > 1000 and kafka_consumergroup_lag_sum > 1000
+        for: 15m
+        labels: { severity: critical, layer: bus }
+        annotations:
+          summary: "Kafka lag GROWING on {{ $labels.consumergroup }}/{{ $labels.topic }} (+{{ $value }} in 30m) — the consumer is falling behind and will not recover unaided"
+
+      - alert: KafkaConsumerLagHigh
+        expr: kafka_consumergroup_lag_sum > 50000
+        for: 15m
+        labels: { severity: warning, layer: bus }
+        annotations:
+          summary: "Kafka lag {{ $value }} on {{ $labels.consumergroup }}/{{ $labels.topic }}"
+
+      - alert: KafkaConsumerStalled
+        # Lag present AND the consumer's committed offset is not advancing =
+        # dead/wedged consumer, as distinct from a quiet topic (lag 0).
+        expr: kafka_consumergroup_lag_sum > 100 and delta(kafka_consumergroup_current_offset_sum[15m]) == 0
+        for: 15m
+        labels: { severity: critical, layer: bus }
+        annotations:
+          summary: "Kafka consumer {{ $labels.consumergroup }} is STALLED on {{ $labels.topic }} — {{ $value }} messages behind and its offset is not moving"
+
+      - alert: KafkaLagMetricsMissing
+        # Meta-alert (see ContainerMetricsMissing). Before 2026-07-21 there was
+        # no lag metric at all and that absence was itself invisible.
+        expr: absent(kafka_consumergroup_lag_sum)
+        for: 30m
+        labels: { severity: warning, layer: bus }
+        annotations:
+          summary: "No Kafka consumer-lag metrics — kafka-exporter is down and every bus-lag alert above is blind"
+
+  # ----------------------------------------------------------------------------
+  # Disk headroom (F-55) — fire well BEFORE OpenSearch's flood stage.
+  # ----------------------------------------------------------------------------
+  # All six stores share ONE 77 GB filesystem, measured at 83% used with ~2.3 GB
+  # of margin against each store's own configured steady state. It has already
+  # run out once: 3,018 NOT_ENOUGH_SPACE errors, last 2026-07-17. At 95%
+  # OpenSearch sets EVERY index read-only and ingestion stops with no error —
+  # the 2026-06-10 outage mode. HostDiskLow in stack-resilience fires at <10%
+  # free, which on this filesystem is ~2 GB away from flood stage and far too
+  # late to do anything but delete data under pressure.
+  - name: disk-headroom
+    interval: 60s
+    rules:
+      - alert: DiskHeadroomLow
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.17
+        for: 15m
+        labels: { severity: warning, layer: host }
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} free on the shared store filesystem — act now, not at flood stage"
+          description: "Order of operations: docker builder prune -f; verify ISM is deleting EVERY lane (_plugins/_ism/explain/netops-*); check Kafka retention.bytes per topic; only then consider growing the volume."
+
+      - alert: DiskWillFillIn24h
+        # Trend, not level. The value of this over a static threshold is that it
+        # fires while there is still time to choose a remedy rather than take
+        # whichever one is fastest.
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Shared filesystem trending to FULL within 24h — OpenSearch flood stage (95%) sets every index read-only and stops ingest"
+
+      - alert: DiskFloodStageImminent
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs"} < 0.07
+        for: 2m
+        labels: { severity: critical, layer: host }
+        annotations:
+          summary: "Under {{ $value | humanizePercentage }} free — OpenSearch flood stage is at 5%. Every index goes read-only and ingestion stops SILENTLY."

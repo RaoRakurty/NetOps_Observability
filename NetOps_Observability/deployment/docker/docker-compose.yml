@@ -238,9 +238,18 @@ services:
     mem_limit: ${SYSLOGNG_MEM_LIMIT:-256m}
     cpus: ${SYSLOGNG_CPU_LIMIT:-1}
     logging: *deflog
-    command: ["-F", "-e"]
+    # F-51: DIRECTORY mount (see vector-aggregator). /etc/syslog-ng itself cannot
+    # be shadowed — the image keeps scl.conf and the scl/ tree there and the
+    # config @includes them — so the repo dir mounts alongside as conf.d/ and -f
+    # names the file inside it.
+    command: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng.conf"]
     volumes:
-      - ./syslog-ng/syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro
+      - ./syslog-ng:/etc/syslog-ng/conf.d:ro
+      # F-48: persistent disk-buffer spool for d_vector. Without this the output
+      # queue is memory-only and a vector-aggregator restart silently DROPS
+      # device syslog — the highest-value RCA evidence class — with the counter
+      # switched off. Must be writable, so no :ro.
+      - ../../data/syslog-ng:/var/lib/syslog-ng
     ports:
       # Published on 5514 (non-privileged, the documented lab port) AND the
       # standard syslog 514, so devices configured with the default `logging
@@ -286,7 +295,8 @@ services:
     image: ghcr.io/openconfig/gnmic:0.46.0@sha256:9538f93a9a85e996d0ad5f7c523835e874557be84b8d279c2a51d2f092b24c7e
     mem_limit: ${GNMIC_MEM_LIMIT:-512m}
     cpus: ${GNMIC_CPU_LIMIT:-1}
-    command: ["subscribe", "--config", "/app/gnmic.yaml"]
+    # F-51: DIRECTORY mount (see vector-aggregator).
+    command: ["subscribe", "--config", "/app/conf/gnmic.yaml"]
     environment:
       # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
       # (creds the collector uses to reach lab nodes), not platform secrets — they
@@ -296,7 +306,7 @@ services:
       SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
       EOS_GNMI_PASS: ${EOS_GNMI_PASS:-admin}
     volumes:
-      - ./gnmic/gnmic.yaml:/app/gnmic.yaml:ro
+      - ./gnmic:/app/conf:ro
     depends_on: [victoria]
     networks: [netops]
     restart: *restart
@@ -339,13 +349,27 @@ services:
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
     cpus: ${VECTOR_CPU_LIMIT:-2}
     logging: *deflog
-    command: ["--config", "/etc/vector/vector.yaml"]
+    # F-51: DIRECTORY mount, not a single file. A single-file bind mount resolves
+    # to an INODE at container start. Every editor that writes-then-renames (vim,
+    # VS Code, sed -i, python's atomic write — i.e. almost all of them) creates a
+    # NEW inode, and the mount stays pinned to the old one FOREVER: `docker
+    # compose restart` re-runs the container against the stale file, the operator
+    # sees the fix in the repo, and the container never had it. That is exactly
+    # what happened to vector-router on 2026-07-21 (host inode 268641 vs
+    # container 291584 — the DEF-6 fix was "deployed" for hours and absent).
+    # Mounting the DIRECTORY makes the path resolve per-open, so a rename is
+    # picked up by a plain restart. Do not revert this to a file mount.
+    command: ["--config", "/etc/vector/conf/vector.yaml"]
     environment:
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
       # default keeps preflight fresh-loads working without a full env).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
     volumes:
-      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector:/etc/vector/conf:ro
+      # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
+      # spool — the whole point of which is surviving a restart — is not thrown
+      # away with the container's writable layer on every recreate.
+      - ../../data/vector-aggregator:/var/lib/vector
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # #20: device→tenant enrichment CSV exported by the api (read-only). Loaded
       # by the device_tenant enrichment table to stamp tenant_id onto telemetry.
@@ -368,14 +392,16 @@ services:
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
     cpus: ${VECTOR_CPU_LIMIT:-2}
     logging: *deflog
-    command: ["--config", "/etc/vector/vector.yaml"]
+    # F-51: DIRECTORY mount — see the note on vector-aggregator above. This is
+    # the service the stale-inode trap was caught on.
+    command: ["--config", "/etc/vector/conf/vector.yaml"]
     environment:
       # ClickHouse credentials are interpolated into vector.yaml at startup.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
     volumes:
-      - ./vector-router/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector-router:/etc/vector/conf:ro
     # Liveness: Vector's API /health (process-level). A WEDGED SINK keeps the
     # API healthy, so this only catches a fully-hung process — the sink-wedge
     # case (input advancing, output stale) is handled by pipeline-watchdog.sh.
@@ -435,9 +461,10 @@ services:
     environment:
       OPENSEARCH_URL: http://opensearch:9200
       OPENSEARCH_LOG_RETENTION_DAYS: ${OPENSEARCH_LOG_RETENTION_DAYS:-14}
-    entrypoint: ["sh", "/apply-ism.sh"]
+    # F-51: DIRECTORY mount (see vector-aggregator).
+    entrypoint: ["sh", "/opensearch-init/apply-ism.sh"]
     volumes:
-      - ./opensearch/apply-ism.sh:/apply-ism.sh:ro
+      - ./opensearch:/opensearch-init:ro
     depends_on:
       opensearch: { condition: service_healthy }
     networks: [netops]
@@ -482,11 +509,16 @@ services:
       # VM scrapes the stack's self-metrics itself (Prometheus removed, #97
       # footprint pass). suppressScrapeErrors: optional add-on targets
       # (cadvisor/node/grafana) are silent no-ops while their add-on is off.
-      - "--promscrape.config=/etc/victoria/vmscrape.yml"
+      # F-51: DIRECTORY mount (see vector-aggregator) — src/config is the same
+      # dir the api already mounts at /config, so this follows existing shape.
+      - "--promscrape.config=/etc/victoria/config/vmscrape.yml"
       - "--promscrape.suppressScrapeErrors"
+      # Reload the scrape config when the file changes instead of requiring a
+      # restart — with a directory mount the new inode is now actually visible.
+      - "--promscrape.configCheckInterval=60s"
     volumes:
       - ../../data/victoria:/victoria
-      - ../../src/config/vmscrape.yml:/etc/victoria/vmscrape.yml:ro
+      - ../../src/config:/etc/victoria/config:ro
     healthcheck:
       # 127.0.0.1, not localhost: busybox wget tries ::1 first and the server
       # only listens on IPv4 → false "unhealthy" while the service is fine.
@@ -500,6 +532,97 @@ services:
   # Prometheus was REMOVED (#97 footprint pass): VictoriaMetrics scrapes the
   # stack's self-metrics itself (vmscrape.yml above) and the alert engine
   # already evaluated rules.yaml against VM — one store, one query API.
+  # vmalert below is VictoriaMetrics' OWN rule evaluator — NOT Prometheus, and
+  # not a second metrics store. Do not reintroduce Prometheus.
+
+  # =========================================================================
+  # ALERT EVALUATION — vmalert  (F-16)
+  # =========================================================================
+  #
+  # Before this service existed the platform had NO standing metric-based
+  # alerting: no vmalert, no Alertmanager, Grafana's provisioned alert-rules
+  # list was literally `[]`, and src/config/rules.yaml — a carefully written,
+  # 860-line, ~33-rule file — was evaluated by NOTHING. It was documentation
+  # wearing the costume of a control. Every "add an alert" remediation in the
+  # audit had nowhere to land.
+  #
+  # Why this in ADDITION to the in-API engine (src/backend/alerts/engine.go):
+  # that engine runs INSIDE the api process. It therefore cannot alert on the
+  # api being down, wedged, OOM-killed or crash-looping — the failure modes an
+  # observability platform is most embarrassed to miss. vmalert is an external
+  # evaluator with its own process, its own lifecycle and its own container
+  # limits. The two read the SAME rules.yaml, so there is one source of truth.
+  #
+  # Notification path: `-notifier.blackhole` by default because this stack ships
+  # no Alertmanager. That is NOT "alerts go nowhere" — `-remoteWrite.url` writes
+  # the firing state back into VictoriaMetrics as the standard ALERTS /
+  # ALERTS_FOR_STATE series, so `ALERTS{alertstate="firing"}` is queryable by
+  # Grafana, by the in-app boards, and by scripts/stack-watchdog.sh, which turns
+  # it into an actual phone push over the existing independent ntfy channel.
+  # To attach a real Alertmanager later, override the flag — the two are
+  # mutually exclusive in vmalert:
+  #   VMALERT_NOTIFIER_FLAG=-notifier.url=http://alertmanager:9093
+  vmalert:
+    image: victoriametrics/vmalert:v1.101.0@sha256:83137300d1451461884093697fbbeea56529cc8201d3b31cdce3b530e8d5af6f
+    mem_limit: ${VMALERT_MEM_LIMIT:-256m}
+    cpus: ${VMALERT_CPU_LIMIT:-1}
+    logging: *deflog
+    command:
+      # F-51: rules come from a DIRECTORY mount, so editing rules.yaml and
+      # restarting actually reloads the edited file.
+      - "-rule=/etc/vmalert/config/rules.yaml"
+      - "-datasource.url=http://victoria:8428"
+      - "-remoteWrite.url=http://victoria:8428"
+      - "-remoteRead.url=http://victoria:8428"
+      # Survive a vmalert restart without re-firing every active alert from
+      # scratch (restores `for:` state from the ALERTS_FOR_STATE series).
+      - "-evaluationInterval=${VMALERT_EVAL_INTERVAL:-30s}"
+      # Hot-reload rules.yaml without a restart.
+      - "-configCheckInterval=60s"
+      - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.blackhole}"
+    volumes:
+      - ../../src/config:/etc/vmalert/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8880/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      victoria: { condition: service_started }
+    networks: [netops]
+    restart: *restart
+
+  # =========================================================================
+  # KAFKA CONSUMER-LAG EXPORTER  (F-46)
+  # =========================================================================
+  #
+  # The bus had NO lag metric of any kind: `vmscrape.yml` had no kafka job and
+  # a repo-wide grep for "lag" found nothing. That matters because every
+  # flat-line alert in rules.yaml requires `increase(...) == 0` EXACTLY, so the
+  # realistic degradation shape — a consumer running 10x slow because
+  # ClickHouse or OpenSearch is struggling — tripped absolutely nothing. Lag is
+  # also the ONLY signal that distinguishes "the bus is quiet because the
+  # network is quiet" from "the bus is quiet because the consumer is dead":
+  # producer rate and consumer rate both read zero in each case, but lag only
+  # grows in the second.
+  #
+  # The broker exposes JMX only, which is why a native scrape was previously
+  # judged not worth it — this is a 15 MB sidecar that speaks the Kafka admin
+  # protocol instead, so no JMX agent and no broker restart is required.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0@sha256:e90b7ba06d97717224d67774fc7f208c26d1c4dafd4c8011185b0d45b5b38ace
+    profiles: ["self-monitoring"]
+    mem_limit: ${KAFKA_EXPORTER_MEM_LIMIT:-128m}
+    cpus: ${KAFKA_EXPORTER_CPU_LIMIT:-0.5}
+    logging: *deflog
+    command:
+      - "--kafka.server=${BROKER_URLS:-kafka:9092}"
+      - "--topic.filter=^netops\\..*"
+      - "--group.filter=^netops-.*"
+    networks: [netops]
+    restart: *restart
 
   # cAdvisor — per-container CPU/memory/network/restart/OOM metrics for EVERY
   # service (reads the docker runtime). The backbone of stack self-monitoring:
@@ -520,14 +643,51 @@ services:
     # behind disk-usage stats doesn't exist under docker's containerd image
     # store and made the docker handler fail per-container. cpu/memory/network/
     # oom/restart cover every container-level alert; host disk is node-exporter's.
-    command: ["--housekeeping_interval=30s", "--docker_only=true", "--store_container_labels=false",
-              "--enable_metrics=cpu,memory,network,oom_event"]
+    #
+    # F-35 (2026-07-21) — WHY THE CONTAINERD HANDLER, NOT THE DOCKER HANDLER:
+    #
+    # Every container-level alert in rules.yaml (ContainerDown, restart-loop,
+    # OOMKilled, memory-near-limit, CPU-saturated) matched ZERO series. The
+    # cause was not the alert expressions; it was that cAdvisor emitted no
+    # per-container series AT ALL. Live proof before the fix:
+    #     /api/v1/series?match[]=container_last_seen  ->  exactly ONE series,
+    #     {job="cadvisor", id="/"}   (the root cgroup, nothing else)
+    # and the log repeating, once per container, forever:
+    #     "Failed to create existing container: /system.slice/docker-<id>.scope:
+    #      failed to identify the read-write layer ID ... open /rootfs/var/lib/
+    #      docker/image/overlayfs/layerdb/mounts/<id>/mount-id: no such file"
+    #
+    # Under docker's containerd image store (storage driver "overlayfs") there
+    # is no image/<driver>/layerdb tree, so cAdvisor's DOCKER handler fails at
+    # container-creation time for every container. It still CLAIMS each
+    # docker-*.scope cgroup ahead of the raw handler, so nothing else picks
+    # them up and there is no fallback — dropping --docker_only does not help.
+    # Verified empirically: a side-by-side cAdvisor without --docker_only still
+    # produced 0 docker-scope series.
+    #
+    # The fix is to take the docker handler out of the running: point --docker
+    # at a socket that does not exist (registration then fails cleanly at boot)
+    # and hand cAdvisor the containerd socket for docker's own "moby" namespace.
+    # Measured after this change: 28 per-container series with real
+    # container_spec_memory_limit_bytes values, vs 1 before.
+    #
+    # NOTE FOR THE RULES: the containerd handler labels series id/name/image,
+    # where `name` is the container ID hash, NOT "netops-api-1". The old
+    # {name=~"netops-.+"} selector can therefore never match on this host — the
+    # rules now select {name!=""}, which is what actually separates a container
+    # from a cgroup slice and is independent of the cgroup driver.
+    command: ["--housekeeping_interval=30s", "--store_container_labels=false",
+              "--enable_metrics=cpu,memory,network,oom_event",
+              "--docker=unix:///var/run/docker-handler-disabled.sock",
+              "--containerd=/run/containerd/containerd.sock",
+              "--containerd-namespace=moby"]
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     devices:
       - /dev/kmsg
     healthcheck:
@@ -739,6 +899,18 @@ services:
       # Runtime layer (live-poller snapshots under gitignored data/) — shadows
       # the tracked fixtures per file (static-fixture/runtime split).
       - ../../data/api/cloud-runtime:/data/cloud-topology-runtime:ro
+    # F-47: the correlation service had NO healthcheck, so a dead or wedged
+    # consumer was indistinguishable from a healthy one — `docker compose ps`
+    # said "Up", the watchdog's per-service check passed, and findings simply
+    # stopped being produced. /metrics is the right probe: it is served by the
+    # same FastAPI app that hosts /findings, so it goes unhealthy if the app
+    # dies, and (unlike a bare TCP check) it fails if the event loop is wedged.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=4).status==200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 45s
     # Broker dependency intentionally absent (external-broker mode; the
     # aiokafka consumer runs in a reconnect/backoff loop).
     depends_on:

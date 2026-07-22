@@ -60,29 +60,54 @@ for _ in $(seq 1 30); do
 done
 
 # Apply each template.
-for name in netops-applogs netops-syslog netops-flows; do
+#
+# F-06/F-15/F-53 (2026-07-21): this list used to be HARD-CODED to the three
+# original lanes, so adding a template to index-templates.json silently did
+# nothing — which is how snmptrap and cloudlogs ended up 100% dynamically
+# mapped (and snmptrap permanently yellow) while a template file sat in the
+# repo looking authoritative. Enumerate the file instead: the JSON is the
+# single source of truth for which lanes have a declared schema.
+TEMPLATE_NAMES=$(python3 -c "
+import json
+print(' '.join(k for k in json.load(open('$TEMPLATES'))['templates']))
+")
+echo "Templates declared in index-templates.json: $TEMPLATE_NAMES"
+
+for name in $TEMPLATE_NAMES; do
+    # Strip _-prefixed documentation keys: OpenSearch's _index_template parser
+    # rejects unknown fields outright (400 x_content_parse_exception), and the
+    # old `curl -sf` swallowed that into an empty response — a template could
+    # fail to apply while the script printed nothing and exited 0.
     body=$(python3 -c "
 import json
 d = json.load(open('$TEMPLATES'))
-print(json.dumps(d['templates']['$name']))
+t = {k: v for k, v in d['templates']['$name'].items() if not k.startswith('_')}
+print(json.dumps(t))
 ")
     url="${OPENSEARCH_URL:-http://localhost:9200}/_index_template/$name"
     echo "→ Applying template: $name"
 
     if [[ $USE_HOST -eq 1 ]]; then
-        resp=$(curl -sf -X PUT "$url" \
+        resp=$(curl -s -X PUT "$url" \
             -H 'Content-Type: application/json' \
             -d "$body" 2>&1) || resp="$(echo "$resp"; echo "(curl exit=$?)")"
     else
         resp=$(docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T opensearch \
-            curl -sf -X PUT "http://localhost:9200/_index_template/$name" \
+            curl -s -X PUT "http://localhost:9200/_index_template/$name" \
             -H 'Content-Type: application/json' \
             -d "$body" 2>&1) || resp="$(echo "$resp"; echo "(curl exit=$?)")"
     fi
 
     # Try to pretty-print as JSON; fall back to raw on parse error.
     echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+    case "$resp" in *'"acknowledged":true'*|*'"acknowledged": true'*) ;;
+      *) echo "!! template $name was NOT applied — see the response above" >&2; FAILED=1 ;;
+    esac
     echo
 done
 
+if [[ "${FAILED:-0}" -ne 0 ]]; then
+  echo "One or more templates FAILED to apply." >&2
+  exit 1
+fi
 echo "Done."

@@ -23,6 +23,33 @@ api:
   address: 0.0.0.0:8686
 
 # ----------------------------------------------------------------------------
+# DURABILITY (F-04) — end-to-end acknowledgements.
+#
+# THE DEFECT THIS FIXES: the sources on this tier are `http_server`
+# (trap_in:8688, probe_in:8689, metrics_in:8690, bus_in:8692). With
+# acknowledgements off — the Vector default — an http_server source returns
+# **HTTP 200 the moment it has parsed the body**, long before the event reaches
+# Kafka. src/backend/bus_producer.go therefore recorded a SUCCESS for events
+# that were still sitting in a 500-event in-MEMORY buffer and were lost outright
+# if this process restarted. That is a 2xx-without-persistence bug at the
+# ingestion boundary: the platform told its own backend the data was safe when
+# it was not.
+#
+# With this enabled the 200 is withheld until every sink the event reached has
+# durably accepted it (for the kafka sinks: until the broker acks). A failing
+# or unreachable bus now produces an HONEST non-2xx to the caller instead of a
+# false success. That is the intended behaviour — do not "fix" a sudden
+# appearance of 5xx here by turning this back off; it means the bus is broken
+# and it was always broken, just invisibly.
+acknowledgements:
+  enabled: true
+
+# Disk-buffer spool (see the `buffer:` blocks on the kafka sinks below). Mounted
+# from the host so the spool survives a container recreate, which is the whole
+# point of it.
+data_dir: /var/lib/vector
+
+# ----------------------------------------------------------------------------
 # ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
 #
 # The Go API exports a CSV (identity,tenant_id) — one row per device name and per
@@ -107,6 +134,60 @@ sources:
   internal_metrics:
     type: internal_metrics
     scrape_interval_secs: 30
+
+  # --------------------------------------------------------------------------
+  # OpenSearch indexing outcome (F-17) — THE COUNTER THAT ACTUALLY MOVES.
+  #
+  # OpenSearch's obvious health counter LIES about this failure mode. During a
+  # measured window in which 1,127 documents were rejected and permanently lost
+  # (0.93% of all app logs, ~5,700/day), `_nodes/stats/indices/indexing`
+  # reported:
+  #     "index_total"  : 114168
+  #     "index_failed" : 0          <-- while documents were being discarded
+  #     "doc_status"   : { "2xx": 120029, "4xx": 1127 }
+  # `index_failed` counts whole-REQUEST failures. Bulk rejections are PER ITEM:
+  # OpenSearch returns HTTP 200 for the batch with a 400 inside each bad item,
+  # so index_failed never moves. An operator checking the obvious counter — or
+  # a dashboard panel built on it — sees a perfectly healthy cluster.
+  # `doc_status.4xx` is the counter that does move, and it is per-document.
+  #
+  # Nothing in the stack scraped it, because _nodes/stats is JSON and
+  # VictoriaMetrics' promscrape only speaks the Prometheus exposition format.
+  # So poll it here and convert it to metrics on the remote_write path that
+  # already exists for the cloud lane — no new service, no OpenSearch plugin,
+  # no broker change. Alerted by OpenSearchDocumentsRejected in rules.yaml.
+  #
+  # index_failed is scraped ALONGSIDE it deliberately: a dashboard that shows
+  # both makes the lie self-evident instead of folklore.
+  opensearch_indexing_stats:
+    type: http_client
+    endpoint: "${OPENSEARCH_STATS_URL:-http://opensearch:9200/_nodes/stats/indices/indexing}"
+    scrape_interval_secs: 60
+    scrape_timeout_secs: 10
+    decoding:
+      codec: json
+
+  # Cluster health + shard census (F-53 / F-54). Two reasons this is worth a
+  # second poll:
+  #   * YELLOW is now a usable alarm signal again. It was not: netops-snmptrap-*
+  #     had no template, so it defaulted to 1 replica on a SINGLE-NODE cluster,
+  #     its replica sat UNASSIGNED forever, and 33 ISM audit-history indices did
+  #     the same — 35 permanently unassigned shards. The cluster was always
+  #     yellow, so nobody could ever act on yellow. Replicas are pinned to 0
+  #     now and the cluster is green, which only means something if something
+  #     watches it.
+  #   * Shard count is the heap-exhaustion leading indicator. At 1.8 GB heap the
+  #     accepted density is ~20 shards/GB ~= 36 shards, and the per-tenant daily
+  #     index scheme adds ~26 shards/day. Disk is NOT the first thing to fail
+  #     here; heap is, and at the 1000-shard cap index creation is rejected
+  #     outright and ingest stops silently.
+  opensearch_cluster_health:
+    type: http_client
+    endpoint: "${OPENSEARCH_HEALTH_URL:-http://opensearch:9200/_cluster/health}"
+    scrape_interval_secs: 60
+    scrape_timeout_secs: 10
+    decoding:
+      codec: json
 
 # ----------------------------------------------------------------------------
 # TRANSFORMS — parsing, normalization, enrichment
@@ -397,6 +478,118 @@ transforms:
           provider: "{{ vendor }}"
           tenant_id: "{{ tenant_id }}"
 
+  # F-17: flatten the _nodes/stats response into one event per counter. The
+  # response is keyed by node id, so walk the map rather than assuming a name.
+  # Emitted as GAUGES holding the absolute counter value (they reset to 0 when
+  # OpenSearch restarts), so rules.yaml uses delta() over a window rather than
+  # increase() — a restart then produces a negative delta and cannot false-fire.
+  opensearch_indexing_flat:
+    type: remap
+    inputs: [opensearch_indexing_stats]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      nodes, nerr = object(.nodes)
+      if nerr != null { abort }
+      out = []
+      for_each(nodes) -> |_id, node| {
+        n = object(node) ?? {}
+        idx = object(get(n, ["indices", "indexing"]) ?? {}) ?? {}
+        ds  = object(get(idx, ["doc_status"]) ?? {}) ?? {}
+        host = to_string(get(n, ["host"]) ?? "") ?? ""
+        # doc_status is keyed "2xx"/"4xx"/"5xx" — per-DOCUMENT outcomes, which
+        # is the granularity bulk rejection actually happens at.
+        for_each(ds) -> |code, count| {
+          out = push(out, {
+            "os_metric": "opensearch_indexing_doc_status",
+            "code": code,
+            "node": host,
+            "value": to_float(count) ?? 0.0
+          })
+        }
+        # The lying counter, kept next to the truthful one on purpose.
+        out = push(out, {
+          "os_metric": "opensearch_indexing_index_failed",
+          "code": "none",
+          "node": host,
+          "value": to_float(get(idx, ["index_failed"]) ?? 0) ?? 0.0
+        })
+        out = push(out, {
+          "os_metric": "opensearch_indexing_index_total",
+          "code": "none",
+          "node": host,
+          "value": to_float(get(idx, ["index_total"]) ?? 0) ?? 0.0
+        })
+      }
+      . = { "rows": out }
+
+  opensearch_indexing_rows:
+    type: remap
+    inputs: [opensearch_indexing_flat]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      rows = array(.rows) ?? []
+      if length(rows) == 0 { abort }
+      . = rows
+
+  opensearch_indexing_vm:
+    type: log_to_metric
+    inputs: [opensearch_indexing_rows]
+    metrics:
+      - type: gauge
+        field: value
+        name: "{{ os_metric }}"
+        tags:
+          code: "{{ code }}"
+          node: "{{ node }}"
+
+  # F-53/F-54: cluster status as a NUMBER (green=0 yellow=1 red=2 — ordered so
+  # a single ">= 1" threshold means "not green") plus the shard census.
+  opensearch_health_vm:
+    type: remap
+    inputs: [opensearch_cluster_health]
+    drop_on_abort: true
+    drop_on_error: true
+    source: |
+      st = to_string(.status) ?? ""
+      code = 3
+      if st == "green" { code = 0 } else if st == "yellow" { code = 1 } else if st == "red" { code = 2 }
+      . = {
+        "cluster": to_string(.cluster_name) ?? "unknown",
+        "status_text": st,
+        "cluster_status": code,
+        "active_shards": to_float(.active_shards) ?? 0.0,
+        "active_primary_shards": to_float(.active_primary_shards) ?? 0.0,
+        "unassigned_shards": to_float(.unassigned_shards) ?? 0.0,
+        "number_of_data_nodes": to_float(.number_of_data_nodes) ?? 0.0
+      }
+
+  opensearch_health_metrics:
+    type: log_to_metric
+    inputs: [opensearch_health_vm]
+    metrics:
+      - type: gauge
+        field: cluster_status
+        name: "opensearch_cluster_status"
+        tags: { cluster: "{{ cluster }}", status_text: "{{ status_text }}" }
+      - type: gauge
+        field: active_shards
+        name: "opensearch_cluster_active_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: active_primary_shards
+        name: "opensearch_cluster_active_primary_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: unassigned_shards
+        name: "opensearch_cluster_unassigned_shards"
+        tags: { cluster: "{{ cluster }}" }
+      - type: gauge
+        field: number_of_data_nodes
+        name: "opensearch_cluster_data_nodes"
+        tags: { cluster: "{{ cluster }}" }
+
   # Bus-bridge envelopes → topic-tagged events. Zero-trust guard: only
   # netops.* topics are producible through the bridge; anything else (or a
   # non-object event) is dropped, not forwarded.
@@ -560,6 +753,33 @@ sinks:
 
   kafka_snmptrap:
     type: kafka
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered here and NOT on the other kafka sinks, deliberately. These four
+    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
+    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
+    # by returning HTTP 200 to its own backend, and they have no upstream that
+    # can replay. kafka_applogs/kafka_flows come from docker_logs and
+    # kafka_syslog from the syslog source; neither supports acknowledgements at
+    # all (Vector warns about this at boot), and syslog now has its OWN reliable
+    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
+    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
+    # cannot carry an ack would be cost without the guarantee.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Four sinks x
+    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
+    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
     inputs: [snmptrap_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.snmptrap"
@@ -568,6 +788,33 @@ sinks:
 
   kafka_probes:
     type: kafka
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered here and NOT on the other kafka sinks, deliberately. These four
+    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
+    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
+    # by returning HTTP 200 to its own backend, and they have no upstream that
+    # can replay. kafka_applogs/kafka_flows come from docker_logs and
+    # kafka_syslog from the syslog source; neither supports acknowledgements at
+    # all (Vector warns about this at boot), and syslog now has its OWN reliable
+    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
+    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
+    # cannot carry an ack would be cost without the guarantee.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Four sinks x
+    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
+    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
     inputs: [probe_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.probes"
@@ -576,12 +823,41 @@ sinks:
 
   victoria_cloud_metrics:
     type: prometheus_remote_write
-    inputs: [cloud_metrics_vm]
+    # F-17: the OpenSearch doc_status lane rides the remote_write path that
+    # already exists for the cloud lane — no new service, no extra scrape job.
+    inputs: [cloud_metrics_vm, opensearch_indexing_vm, opensearch_health_metrics]
     endpoint: "${VM_REMOTE_WRITE_URL:-http://victoria:8428/api/v1/write}"
     healthcheck: false
 
   kafka_metrics:
     type: kafka
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered here and NOT on the other kafka sinks, deliberately. These four
+    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
+    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
+    # by returning HTTP 200 to its own backend, and they have no upstream that
+    # can replay. kafka_applogs/kafka_flows come from docker_logs and
+    # kafka_syslog from the syslog source; neither supports acknowledgements at
+    # all (Vector warns about this at boot), and syslog now has its OWN reliable
+    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
+    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
+    # cannot carry an ack would be cost without the guarantee.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Four sinks x
+    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
+    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
     inputs: [metrics_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.metrics"
@@ -595,6 +871,33 @@ sinks:
   # value stays exactly the record the producer sent.
   kafka_bus:
     type: kafka
+    # F-04: DISK buffer, not the 500-event in-memory default.
+    #
+    # Buffered here and NOT on the other kafka sinks, deliberately. These four
+    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
+    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
+    # by returning HTTP 200 to its own backend, and they have no upstream that
+    # can replay. kafka_applogs/kafka_flows come from docker_logs and
+    # kafka_syslog from the syslog source; neither supports acknowledgements at
+    # all (Vector warns about this at boot), and syslog now has its OWN reliable
+    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
+    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
+    # cannot carry an ack would be cost without the guarantee.
+    #
+    # when_full: block applies backpressure to the source rather than dropping,
+    # so together with the global `acknowledgements` block a full buffer becomes
+    # an honest non-2xx to the producer instead of a silent discard.
+    #
+    # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
+    # 268435488 bytes at topology-build time. Note that `vector validate` does
+    # NOT catch a smaller value — it only fails when the process actually starts,
+    # so validate-then-deploy is not sufficient for this setting. Four sinks x
+    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
+    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
     inputs: [bus_bridge]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "{{ __topic }}"
