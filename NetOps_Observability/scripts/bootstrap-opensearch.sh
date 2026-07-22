@@ -78,11 +78,43 @@ for name in $TEMPLATE_NAMES; do
     # rejects unknown fields outright (400 x_content_parse_exception), and the
     # old `curl -sf` swallowed that into an empty response — a template could
     # fail to apply while the script printed nothing and exited 0.
-    body=$(python3 -c "
-import json
+    # Strip _-prefixed docs keys AND resolve the ${OPENSEARCH_REPLICAS}
+    # placeholder (F-07). The replica count is a per-install posture, not a
+    # constant: 0 on the single-node appliance (a replica can never be assigned
+    # there — that is F-53's permanently-yellow cluster), >= 1 on a real
+    # cluster, where 0 replicas plus no snapshot repository (F-59) means one
+    # corrupt shard is unrecoverable loss. It is substituted as an INT, because
+    # a quoted "0" is accepted by OpenSearch but then compares unequal to the
+    # int in every settings diff an operator will later run.
+    body=$(OPENSEARCH_REPLICAS="${OPENSEARCH_REPLICAS:-0}" python3 -c "
+import json, os, sys
+
+replicas = os.environ['OPENSEARCH_REPLICAS']
+try:
+    replicas = int(replicas)
+except ValueError:
+    sys.exit('OPENSEARCH_REPLICAS must be an integer, got %r' % replicas)
+
 d = json.load(open('$TEMPLATES'))
 t = {k: v for k, v in d['templates']['$name'].items() if not k.startswith('_')}
-print(json.dumps(t))
+
+
+def resolve(node):
+    if isinstance(node, dict):
+        return {k: resolve(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [resolve(v) for v in node]
+    if node == '\${OPENSEARCH_REPLICAS}':
+        return replicas
+    if isinstance(node, str) and '\${' in node:
+        # Fail loudly on an unresolved placeholder rather than PUTting the
+        # literal string: OpenSearch would accept some of them as settings
+        # values and the template would be quietly wrong.
+        sys.exit('unresolved placeholder in template: %r' % node)
+    return node
+
+
+print(json.dumps(resolve(t)))
 ")
     url="${OPENSEARCH_URL:-http://localhost:9200}/_index_template/$name"
     echo "→ Applying template: $name"

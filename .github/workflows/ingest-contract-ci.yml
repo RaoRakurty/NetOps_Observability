@@ -1,0 +1,76 @@
+name: ingest-contract-ci
+
+# BLOCKING gate for the ingest/storage tier contracts (audit 2026-07-21).
+#
+# Why this workflow exists at all: NetOps_Observability/tests/ already held
+# `test_architecture_contract.py`, described in its own docstring as the thing
+# that "fails CI if the finalized wiring is broken" — and no workflow ran it.
+# It had rotted into a failing state unnoticed. A guard test that CI does not
+# run is documentation, and documentation is exactly what failed to stop the 84
+# findings this audit produced.
+#
+# What it enforces (tests/test_ingest_contract.py):
+#   F-03  every dropping transform reroutes to a dead-letter lane, and every
+#         .dropped output is actually consumed
+#   F-05  every log template freezes its field set (`dynamic: false`) so
+#         producer JSON cannot walk the mapping into the 1000-field wall
+#   F-07  the replica count stays an operator posture, not a literal
+#   F-08  every http_server ingest source is authenticated, fails CLOSED, and
+#         every Go forwarder both sends the credential and reports rejection
+#   F-10  `ts` is derived on every log lane; timeless producers get a labelled
+#         receive stamp
+#   F-11  tenant-enrichment outcome is stamped, exported and alerted on
+#   F-14  dead-letter encoders read Vector's real dropped-metadata path
+#   F-49  no lane is separated by container NAME; misroutes are dead-lettered
+#   plus: no field the pipeline stamps may be missing from its index template
+#         (under `dynamic: false` that would silently make it unsearchable)
+#
+# The Vector-runtime harness (scripts/vrl-harness.py) is NOT run here: it needs
+# the pinned Vector image and is a local/manual verification tool. These checks
+# are static and take ~3 seconds.
+
+on:
+  push:
+    paths:
+      - 'NetOps_Observability/deployment/docker/vector/**'
+      - 'NetOps_Observability/deployment/docker/vector-router/**'
+      - 'NetOps_Observability/deployment/docker/opensearch/**'
+      - 'NetOps_Observability/deployment/docker/docker-compose.yml'
+      - 'NetOps_Observability/src/config/rules.yaml'
+      - 'NetOps_Observability/src/backend/collectors/**'
+      - 'NetOps_Observability/scripts/bootstrap-opensearch.sh'
+      - 'NetOps_Observability/tests/**'
+      - '.github/workflows/ingest-contract-ci.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ingest-contract-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability
+
+jobs:
+  contract:
+    name: ingest + storage contracts (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.10'
+      - name: install deps
+        run: pip install pyyaml==6.0.3 pytest==9.0.3
+      - name: shell syntax (the scripts that carry the storage contracts)
+        run: |
+          bash -n scripts/bootstrap-opensearch.sh
+          bash -n scripts/backup.sh
+          bash -n scripts/restore.sh
+          bash -n scripts/stack-watchdog.sh
+          sh   -n deployment/docker/opensearch/apply-ism.sh
+      - name: pytest (whole tests/ directory)
+        run: python3 -m pytest tests/ -v

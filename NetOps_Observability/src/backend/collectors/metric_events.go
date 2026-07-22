@@ -159,6 +159,7 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
+	SetIngestAuth(req) // F-08
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -166,6 +167,11 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
+		// F-08: a 401/403 here means the ingest credential is wrong, and the
+		// symptom — this whole lane going quiet — is indistinguishable from a
+		// quiet network. Name it. (The count is already folded into the
+		// collector_metric_events_* built-vs-sent gauges by the caller.)
+		logIngestRejection("metrics", sink, resp.StatusCode)
 		return 0
 	}
 	return len(events)

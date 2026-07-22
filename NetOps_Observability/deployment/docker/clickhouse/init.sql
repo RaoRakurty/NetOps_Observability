@@ -118,7 +118,14 @@ CREATE TABLE IF NOT EXISTS netops.tunnels
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, id)
-TTL toDateTime(ts) + INTERVAL 30 DAY
+-- F-58 (2026-07-22): 30 -> 90 DAY. This line was never enforced on any
+-- pre-existing install (a TTL inside CREATE TABLE IF NOT EXISTS is a no-op
+-- against a table that already exists, and nothing issued MODIFY TTL), so the
+-- live cluster had been running 90 days for its whole life. src/backend/
+-- ch_retention.go now converges this on every boot; the declared value is set
+-- to the one actually in force so that convergence cannot silently delete two
+-- months of history on the first boot after the upgrade.
+TTL toDateTime(ts) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
 -- ---------------------------------------------------------------------------
@@ -143,7 +150,9 @@ CREATE TABLE IF NOT EXISTS netops.findings
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMMDD(ts))
 ORDER BY (ts, severity, score)
-TTL toDateTime(ts) + INTERVAL 30 DAY
+-- F-58: 30 -> 90 DAY, same reasoning as netops.tunnels above — the live value
+-- has always been 90 and ch_retention.go now enforces the declared one.
+TTL toDateTime(ts) + INTERVAL 90 DAY
 SETTINGS ttl_only_drop_parts = 1;
 
 -- ---------------------------------------------------------------------------

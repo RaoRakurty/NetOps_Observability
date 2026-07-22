@@ -1028,12 +1028,23 @@ func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *Tra
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	SetIngestAuth(req) // F-08
 	resp, err := client.Do(req)
 	if err != nil {
 		r.mu.Lock()
 		r.status.LastError = "forward: " + err.Error()
 		r.mu.Unlock()
 		return
+	}
+	// F-08: same gap as the probe lane — the status was discarded, so a
+	// rejected trap looked exactly like a delivered one. Surface it on the
+	// receiver's own status (which /api/collectors already renders) as well as
+	// in the shared counter, because a trap has no upstream that can replay it.
+	if resp.StatusCode >= 300 {
+		logIngestRejection("snmptrap", r.sinkURL, resp.StatusCode)
+		r.mu.Lock()
+		r.status.LastError = fmt.Sprintf("forward: sink rejected with status %d", resp.StatusCode)
+		r.mu.Unlock()
 	}
 	_ = resp.Body.Close()
 }

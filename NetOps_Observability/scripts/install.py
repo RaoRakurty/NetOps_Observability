@@ -290,6 +290,20 @@ def write_env(env_path: Path, port: int, *, force: bool,
             additions.append(f"CORR_RETENTION_PROFILE={retention_profile}")
         if "CORR_CHAOS_FIXTURES" not in env:
             additions.append("CORR_CHAOS_FIXTURES=")
+        # Migration (F-08): a pre-auth .env has no ingest credential, and
+        # vector-aggregator now refuses to start without one (${INGEST_TOKEN:?}).
+        # Seed it here so an upgrade converges instead of taking the whole
+        # ingest tier down — this is the ONLY supported way to get the value,
+        # so it must never be generated per-boot or the producers and the
+        # collector would disagree.
+        if "INGEST_TOKEN" not in env:
+            additions.append("INGEST_USER=netops-ingest")
+            additions.append(f"INGEST_TOKEN={generate_token(32)}")
+        # Migration (F-07/F-59): search-tier durability posture.
+        if "OPENSEARCH_REPLICAS" not in env:
+            additions.append("OPENSEARCH_REPLICAS=0")
+        if "OPENSEARCH_SNAPSHOT_KEEP" not in env:
+            additions.append("OPENSEARCH_SNAPSHOT_KEEP=14")
         if additions:
             with env_path.open("a") as f:
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
@@ -326,6 +340,8 @@ def write_env(env_path: Path, port: int, *, force: bool,
         "NETBOX_DB_PASSWORD":        generate_password(24),
         "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
         "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
+        # F-08 ingest credential shared by every in-stack telemetry producer.
+        "INGEST_TOKEN":              generate_token(32),
         # KRaft storage id for the embedded Kafka broker (22-char base64url
         # uuid, same format kafka-storage random-uuid emits). Generated ONCE
         # per install: the data dir is formatted with it, and a changed id
@@ -385,6 +401,27 @@ GRAFANA_CH_PASSWORD={secrets_map["GRAFANA_CH_PASSWORD"]}
 # Application secrets
 JWT_SECRET={secrets_map["JWT_SECRET"]}
 ENCRYPTION_KEY={secrets_map["ENCRYPTION_KEY"]}
+
+# Ingest credential (F-08). The four Vector http_server ingest sources
+# (traps :8688, probes :8689, metrics :8690, bus bridge :8692) accepted
+# UNAUTHENTICATED writes to any netops.* topic, including a forged tenant_id —
+# a cross-tenant injection path guarded only by the assumption that nothing
+# hostile can reach the compose network. Every in-stack producer now presents
+# this credential; Vector refuses to start without it.
+INGEST_USER=netops-ingest
+INGEST_TOKEN={secrets_map["INGEST_TOKEN"]}
+
+# Search-tier durability posture.
+#   OPENSEARCH_REPLICAS      F-07 — 0 is correct for the single-node appliance
+#                            (a replica can never be assigned on one node and
+#                            pins the cluster YELLOW forever). Raise it to >= 1
+#                            on a real multi-node cluster.
+#   OPENSEARCH_SNAPSHOT_KEEP F-59 — daily snapshots retained in the netops-fs
+#                            repository (data/opensearch-snapshots). 0 disables
+#                            snapshots entirely, leaving the search tier with
+#                            no backup of any kind.
+OPENSEARCH_REPLICAS=0
+OPENSEARCH_SNAPSHOT_KEEP=14
 
 # Feature toggles
 # Discovery is OPT-IN: an appliance must never scan a network unasked.
@@ -605,6 +642,11 @@ def ensure_data_dirs(root: Path) -> None:
         "grafana":    None,             # user-mapped to the installing user (CORRELIX_UID)
         "kafka":      (1000, 1000),
         "opensearch": (1000, 1000),
+        # F-59: snapshot repository destination (path.repo). Must be writable
+        # by the opensearch UID or the repository registers and then every
+        # snapshot fails — which is the worst of the three states, because the
+        # stack then reports that it HAS backups.
+        "opensearch-snapshots": (1000, 1000),
         "clickhouse": (101, 101),
         "api":        None,             # Go API runs as nonroot but writes JSON only
         "secrets-seal": None,           # #17 sealing-sidecar socket dir (root-owned; opt-in 'seal' profile)

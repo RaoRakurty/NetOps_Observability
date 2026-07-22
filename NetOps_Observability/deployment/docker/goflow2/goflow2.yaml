@@ -1,17 +1,30 @@
 # goflow2 configuration.
 #
+# ⚠️ THIS FILE IS NOT MOUNTED INTO THE CONTAINER. docker-compose.yml passes
+# every setting as a flag on the goflow2 `command:`, and there is no volume for
+# this path — so the compose file is authoritative and this file is reference
+# documentation only. It is kept because the `fields` list below IS the flow
+# schema the OpenSearch/ClickHouse mappings are written against; it is not kept
+# as configuration. (Discovered while closing F-49: the file still described a
+# stdout transport the stack had every reason to have moved off years ago,
+# which is exactly the kind of authoritative-looking-but-inert config that
+# makes an audit slow.)
+#
 # goflow2 is CloudFlare-originated (now under netsampler) and decodes
 # NetFlow v5, NetFlow v9, IPFIX, and sFlow into a common JSON schema.
-# It writes one JSON record per flow to stdout, which Vector picks up
-# via docker_logs.
 #
 # Default listener ports (we expose all three):
 #   NetFlow v5/v9 : udp/2055
 #   IPFIX         : udp/4739
 #   sFlow         : udp/6343
 #
-# When wiring Kafka later, switch the transport to `kafka://` here and
-# point Vector at the broker instead of scraping container stdout.
+# TRANSPORT (F-49, 2026-07-22): kafka:// → netops.flows, set on the compose
+# command. It was `file → stdout` read back by Vector's docker_logs source,
+# which meant (a) the json-file driver's 3x50 MB rotation was an uncounted loss
+# window for flow records, and (b) flows were separated from application logs
+# by `contains(.container_name, "goflow2")` — rename the container and every
+# flow record silently became an app log in netops-applogs-*. Tenant
+# attribution moved to vector-router with the transport.
 
 formatter:
   type: json
@@ -34,6 +47,8 @@ formatter:
     - vlan_id
 
 transport:
-  type: file
-  file:
-    path: stdout
+  type: kafka          # see the transport note above; set via the compose command
+  kafka:
+    brokers: kafka:9092
+    topic: netops.flows
+    compression: snappy

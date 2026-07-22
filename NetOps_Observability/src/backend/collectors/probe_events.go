@@ -167,9 +167,17 @@ func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
+		SetIngestAuth(req) // F-08
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
+		}
+		// F-08: the status code used to be discarded outright, so a rejected
+		// probe event was byte-for-byte indistinguishable from an accepted
+		// one — and with authentication now in front of this source, a wrong
+		// token would silently delete the entire active-measurement lane.
+		if resp.StatusCode >= 300 {
+			logIngestRejection("probes", sink, resp.StatusCode)
 		}
 		_ = resp.Body.Close()
 	}

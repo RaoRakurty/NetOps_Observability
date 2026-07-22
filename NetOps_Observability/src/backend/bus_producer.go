@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/collectors"
 )
 
 // bus_producer.go — #81 P5b / #97. A minimal, stdlib-only bus producer over the
@@ -63,6 +65,10 @@ func produceJSON(ctx context.Context, topic string, records []proxyRecord) (int,
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// F-08: the bus bridge is authenticated now. Its netops.* prefix check is
+	// a ROUTING guard, never an identity guard — without this header anything
+	// on the compose network could produce onto any tenant's topic.
+	collectors.SetIngestAuth(req)
 	resp, err := backendHTTPClient(20 * time.Second).Do(req)
 	if err != nil {
 		return 0, err
