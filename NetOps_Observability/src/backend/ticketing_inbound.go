@@ -98,7 +98,15 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketLink, now tim
 	obs := snowIncidentObservations(inc)
 
 	// Dedupe against the existing (append-only) audit ledger: one row per action.
-	existing, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID)
+	// This dedupe needs EVERY audit row for the object, not a page: a truncated
+	// read would make an already-recorded action look unrecorded and append it
+	// again. One object's ledger is one row per action, so the max page is
+	// ample — but if it ever were not, say so rather than silently duplicating.
+	existing, existingTotal, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID, ticketMaxPage, 0)
+	if existingTotal > len(existing) {
+		logError("ticketing", "audit ledger truncated during inbound dedupe — duplicate audit rows possible",
+			map[string]any{"corr_object_id": l.CorrObjectID, "total": existingTotal, "read": len(existing)})
+	}
 	seen := map[string]bool{}
 	for _, e := range existing {
 		if strings.EqualFold(strings.TrimSpace(e.Result), "ok") {

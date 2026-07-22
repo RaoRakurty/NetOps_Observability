@@ -276,7 +276,7 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 	if len(fB.all()) != before {
 		t.Fatal("SECURITY: mismatched-tenant delivery reached the external provider")
 	}
-	items, _ := store.ListOutbox(ctx, "t_a", false)
+	items, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	found := false
 	for _, it := range items {
 		if it.CorrObjectID == "cccccccc-cccc-4ccc-8ccc-cccccccccccc" {

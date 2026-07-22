@@ -249,7 +249,7 @@ func TestManualTicketCreate_CrossTenantAdminReachesPlatformObject(t *testing.T) 
 	}
 	// The enqueued action is stamped with the object's OWNING tenant (""→global),
 	// mirroring the sweeper — never the raw read scope.
-	items, err := s.ticketing.ListOutbox(context.Background(), "", true)
+	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("outbox after manual create: items=%d err=%v, want exactly 1", len(items), err)
 	}
@@ -278,7 +278,7 @@ func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
 	if st != 404 {
 		t.Fatalf("owner guard: tenant A ticketing a leaked platform object = %d %s, want 404", st, body)
 	}
-	if items, _ := s.ticketing.ListOutbox(context.Background(), "", true); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0); len(items) != 0 {
 		t.Fatalf("owner guard must not enqueue; outbox has %d items", len(items))
 	}
 }
@@ -305,7 +305,7 @@ func TestManualTicketCreate_TenantObjectOwnerStamped(t *testing.T) {
 	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", a.token, map[string]any{}); st != 202 {
 		t.Fatalf("owning tenant create on own object = %d %s, want 202", st, body)
 	}
-	items, err := s.ticketing.ListOutbox(context.Background(), "", true)
+	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("outbox = %d items err=%v, want exactly 1 (same idempotency key)", len(items), err)
 	}
@@ -340,7 +340,7 @@ func TestManualTicketSync_OwnerKeyedUpdate(t *testing.T) {
 	if st != 202 {
 		t.Fatalf("manual sync with open link = %d %s, want 202", st, body)
 	}
-	items, _ := s.ticketing.ListOutbox(context.Background(), "", true)
+	items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
 	if len(items) != 1 || items[0].Action != "update" || items[0].TenantID != TenantGlobal {
 		t.Fatalf("outbox after sync = %+v, want one update stamped %q", items, TenantGlobal)
 	}
@@ -365,7 +365,7 @@ func TestManualTicketCreate_MergedObject409(t *testing.T) {
 	if st != 409 || !strings.Contains(string(body), tktCanonCorrID) {
 		t.Fatalf("create on merged object = %d %s, want 409 carrying canonical id %s", st, body, tktCanonCorrID)
 	}
-	if items, _ := s.ticketing.ListOutbox(context.Background(), "", true); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0); len(items) != 0 {
 		t.Fatalf("merged object must not enqueue; outbox has %d items", len(items))
 	}
 }
@@ -684,7 +684,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	if sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
 		t.Fatal("sweeper must skip a tenant with no ticketing connection")
 	}
-	if items, _ := s.ticketing.ListOutbox(ctx, "", true); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketMaxPage, 0); len(items) != 0 {
 		t.Fatalf("nothing may enqueue without a connection; outbox has %d items", len(items))
 	}
 
@@ -699,7 +699,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	if !sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
 		t.Fatal("sweeper must enqueue once the connection exists")
 	}
-	items, _ := s.ticketing.ListOutbox(ctx, "", true)
+	items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketMaxPage, 0)
 	if len(items) != 1 {
 		t.Fatalf("manual+sweeper collapse to ONE create via the idempotency key; outbox has %d", len(items))
 	}

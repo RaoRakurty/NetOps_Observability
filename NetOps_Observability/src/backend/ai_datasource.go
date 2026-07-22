@@ -346,7 +346,7 @@ func (d aiDataSource) moduleTicketStatus(p ai.Principal, problemID string) (ai.T
 	if d.srv.ticketing == nil || problemID == "" {
 		return ai.ToolResult{}, nil
 	}
-	audit, err := d.srv.ticketing.ListAudit(d.ctx, p.Tenant, p.Cross, problemID)
+	audit, _, err := d.srv.ticketing.ListAudit(d.ctx, p.Tenant, p.Cross, problemID, ticketAuditDefaultPage, 0)
 	if err != nil {
 		return ai.ToolResult{}, nil // degrade quietly — ticket status is enrichment, not core
 	}

@@ -247,11 +247,11 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	}
 
 	// A scoped caller sees ONLY its own queued ticket — no cross-tenant leak.
-	aOut, _ := st.ListOutbox(ctx, "t_a", false)
+	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if len(aOut) != 1 || aOut[0].TenantID != "t_a" {
 		t.Fatalf("tenant A outbox leaked across tenants: %+v", aOut)
 	}
-	bOut, _ := st.ListOutbox(ctx, "t_b", false)
+	bOut, _, _ := st.ListOutbox(ctx, "t_b", false, ticketMaxPage, 0)
 	if len(bOut) != 1 || bOut[0].TenantID != "t_b" {
 		t.Fatalf("tenant B outbox leaked across tenants: %+v", bOut)
 	}

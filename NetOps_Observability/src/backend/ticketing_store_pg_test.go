@@ -46,7 +46,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.EnqueueOutbox(ctx, dup); err != nil {
 		t.Fatalf("EnqueueOutbox dup: %v", err)
 	}
-	if out, _ := st.ListOutbox(ctx, "acme", false); len(out) != 1 {
+	if out, _, _ := st.ListOutbox(ctx, "acme", false, ticketMaxPage, 0); len(out) != 1 {
 		t.Fatalf("idempotency: outbox has %d rows, want 1", len(out))
 	}
 
@@ -74,7 +74,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.FinishOutbox(ctx, fin); err != nil {
 		t.Fatalf("FinishOutbox: %v", err)
 	}
-	out, _ := st.ListOutbox(ctx, "acme", false)
+	out, _, _ := st.ListOutbox(ctx, "acme", false, ticketMaxPage, 0)
 	if len(out) != 1 || out[0].Status != "sent" {
 		t.Fatalf("after finish, outbox = %+v, want one row status=sent", out)
 	}
@@ -83,7 +83,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.AppendAudit(ctx, ticketAuditEntry{TenantID: "acme", ID: "au1", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Action: "create", Result: "ok"}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
-	if a, _ := st.ListAudit(ctx, "acme", false, "obj-a"); len(a) != 1 {
+	if a, _, _ := st.ListAudit(ctx, "acme", false, "obj-a", ticketMaxPage, 0); len(a) != 1 {
 		t.Fatalf("ListAudit = %d, want 1", len(a))
 	}
 	now := time.Now().UTC()
@@ -95,7 +95,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 
 	// Tenant isolation through RLS: another tenant sees none of acme's rows.
-	if out, _ := st.ListOutbox(ctx, "globex", false); len(out) != 0 {
+	if out, _, _ := st.ListOutbox(ctx, "globex", false, ticketMaxPage, 0); len(out) != 0 {
 		t.Fatalf("RLS leak: globex sees acme outbox: %+v", out)
 	}
 	if _, found, _ := st.GetLink(ctx, "globex", false, "obj-a", "servicenow"); found {

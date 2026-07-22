@@ -261,7 +261,8 @@ func (s *server) itsmTimeFacts(r *http.Request, id string) (itsmTimeFacts, bool)
 	if err != nil {
 		return itsmTimeFacts{}, false
 	}
-	audit, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id)
+	// Per-object ledger (one row per action) — the max page covers it whole.
+	audit, _, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketMaxPage, 0)
 	if err != nil {
 		audit = nil
 	}

@@ -123,7 +123,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	if n, _ := sy.tick(ctx, now); n == 0 {
 		t.Fatal("in-progress ticket must append acknowledged/mitigation_started")
 	}
-	audit, _ := st.ListAudit(ctx, "t_a", false, "obj-1")
+	audit, _, _ := st.ListAudit(ctx, "t_a", false, "obj-1", ticketMaxPage, 0)
 	if !hasAuditAction(audit, auditActionAcknowledged) {
 		t.Fatalf("expected acknowledged in audit, got %+v", auditActions(audit))
 	}
@@ -131,7 +131,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	// Second pass must NOT double-stamp (idempotent against the audit ledger).
 	before := len(audit)
 	_, _ = sy.tick(ctx, now)
-	after, _ := st.ListAudit(ctx, "t_a", false, "obj-1")
+	after, _, _ := st.ListAudit(ctx, "t_a", false, "obj-1", ticketMaxPage, 0)
 	if len(after) != before {
 		t.Fatalf("re-sync double-stamped: %d → %d", before, len(after))
 	}
@@ -143,7 +143,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	m.mu.Unlock()
 
 	_, _ = sy.tick(ctx, now)
-	audit, _ = st.ListAudit(ctx, "t_a", false, "obj-1")
+	audit, _, _ = st.ListAudit(ctx, "t_a", false, "obj-1", ticketMaxPage, 0)
 	if !hasAuditAction(audit, auditActionResolve) {
 		t.Fatalf("expected resolved in audit, got %+v", auditActions(audit))
 	}

@@ -46,12 +46,12 @@ func TestOutboxWorker_CreateHappyPath(t *testing.T) {
 		t.Fatalf("link not advanced: found=%v %+v", found, link)
 	}
 	// Audit trail recorded the create.
-	au, _ := store.ListAudit(ctx, "t_a", false, "obj-1")
+	au, _, _ := store.ListAudit(ctx, "t_a", false, "obj-1", ticketMaxPage, 0)
 	if len(au) != 1 || au[0].Action != "create" || au[0].Result != "ok" {
 		t.Fatalf("audit not recorded: %+v", au)
 	}
 	// Outbox item is sent (terminal).
-	out, _ := store.ListOutbox(ctx, "t_a", false)
+	out, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if len(out) != 1 || out[0].Status != "sent" {
 		t.Fatalf("outbox not marked sent: %+v", out)
 	}
@@ -102,7 +102,7 @@ func TestOutboxWorker_RetryThenDeadLetter(t *testing.T) {
 	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	out, _ := store.ListOutbox(ctx, "t_a", false)
+	out, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if len(out) != 1 || out[0].Status != "retrying" || out[0].RetryCount != 1 {
 		t.Fatalf("after fail1: %+v", out)
 	}
@@ -119,7 +119,7 @@ func TestOutboxWorker_RetryThenDeadLetter(t *testing.T) {
 	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	out, _ = store.ListOutbox(ctx, "t_a", false)
+	out, _, _ = store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if out[0].Status != "dead_letter" {
 		t.Fatalf("expected dead_letter, got %q (retries=%d)", out[0].Status, out[0].RetryCount)
 	}
@@ -145,7 +145,7 @@ func TestOutboxWorker_HoldsWhenNoConnection(t *testing.T) {
 	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	out, _ := store.ListOutbox(ctx, "t_a", false)
+	out, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if out[0].Status != "retrying" {
 		t.Fatalf("missing connection should hold (retry), got %q", out[0].Status)
 	}

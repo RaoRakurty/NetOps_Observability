@@ -322,7 +322,7 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 				pdView = v
 			}
 		}
-		audit, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id)
+		audit, _, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketAuditDefaultPage, 0)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       ticketStatusView(link, found),
 			"pagerduty":    pdView,
@@ -513,12 +513,28 @@ func (s *server) handleTicketsOutbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	items, err := s.ticketing.ListOutbox(r.Context(), tenant, cross)
+	limit, err := intQuery(r, "limit", ticketOutboxDefaultPage, 1, ticketMaxPage)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	offset, err := intQuery(r, "offset", 0, 0, 1<<30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	items, total, err := s.ticketing.ListOutbox(r.Context(), tenant, cross, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"outbox": items})
+	// F-66: this endpoint had no LIMIT at all and served 22 MB. `total` is the
+	// caller's real row count, so a client can tell "that is everything" from
+	// "that is the first page" instead of guessing.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"outbox": items, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+len(items) < total,
+	})
 }
 
 // handleTicketsLinks lists the caller-tenant's ticket links (UX-1 "notified
@@ -535,7 +551,44 @@ func (s *server) handleTicketsLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	links, err := s.ticketing.ListLinksForTenant(r.Context(), tenant, cross, 1000)
+
+	// F-67: an exact per-object lookup for the surfaces that must never guess.
+	// A link the caller did not receive renders as "not_created", so answering
+	// a detail view from a truncated top-N page is how a real ServiceNow ticket
+	// becomes "no ticket filed" and an operator files a duplicate.
+	if corrID := strings.TrimSpace(r.URL.Query().Get("corr_object_id")); corrID != "" {
+		if !isUUIDToken(corrID) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid corr_object_id"))
+			return
+		}
+		links, err := s.ticketing.ListLinksForCorr(r.Context(), tenant, cross, corrID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		out := make([]map[string]any, 0, len(links))
+		for _, l := range links {
+			v := ticketStatusView(l, true)
+			v["corr_object_id"] = l.CorrObjectID
+			out = append(out, v)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"links": out, "total": len(out), "complete": true,
+		})
+		return
+	}
+
+	limit, err := intQuery(r, "limit", ticketLinksDefaultPage, 1, ticketMaxPage)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	offset, err := intQuery(r, "offset", 0, 0, 1<<30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	links, total, err := s.ticketing.ListLinksForTenant(r.Context(), tenant, cross, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -546,7 +599,14 @@ func (s *server) handleTicketsLinks(w http.ResponseWriter, r *http.Request) {
 		v["corr_object_id"] = l.CorrObjectID
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"links": out})
+	// `complete` says outright whether this response is the whole set. A client
+	// joining by correlation id MUST NOT read a miss as "no ticket filed" when
+	// complete is false — it means "not in this page".
+	writeJSON(w, http.StatusOK, map[string]any{
+		"links": out, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+len(out) < total,
+		"complete": offset == 0 && len(out) == total,
+	})
 }
 
 func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
@@ -564,12 +624,25 @@ func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid corr_object_id"))
 		return
 	}
-	entries, err := s.ticketing.ListAudit(r.Context(), tenant, cross, corrID)
+	limit, err := intQuery(r, "limit", ticketAuditDefaultPage, 1, ticketMaxPage)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	offset, err := intQuery(r, "offset", 0, 0, 1<<30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	entries, total, err := s.ticketing.ListAudit(r.Context(), tenant, cross, corrID, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"audit": entries})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"audit": entries, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+len(entries) < total,
+	})
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────

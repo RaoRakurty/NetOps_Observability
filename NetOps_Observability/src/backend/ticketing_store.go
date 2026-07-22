@@ -44,7 +44,17 @@ type ticketingStore interface {
 	// ListLinksForTenant returns the caller-visible ticket links, most recently
 	// updated first, capped at limit (bounded read — the notified-via join in the
 	// RCA candidate list only needs the recent working set).
-	ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit int) ([]ticketLink, error)
+	// ListLinksForTenant returns ONE page plus the true total. F-67: this took a
+	// hardcoded 1000 and dropped everything past it SILENTLY — and a link the
+	// caller never received reads as {"state":"not_created"}, so crossing the
+	// cliff flips the oldest RCAs' badge from a real ServiceNow ticket to "no
+	// ticket filed" and operators file duplicates against incidents that already
+	// have them. Returning the total lets a caller SEE that it holds a partial
+	// set; ListLinksForCorr avoids the question entirely for detail views.
+	ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketLink, int, error)
+	// ListLinksForCorr returns every link for ONE correlation object — an exact
+	// lookup with no cliff, for the detail surfaces that must never guess.
+	ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketLink, error)
 	// ListSyncableLinks returns the live, externally-filed links the inbound state
 	// syncer should poll (a real sys_id, non-terminal status, touched since `since`).
 	// Runs at platform scope (the syncer spans all tenants; each row carries its
@@ -53,7 +63,11 @@ type ticketingStore interface {
 
 	// outbox + audit
 	EnqueueOutbox(ctx context.Context, item ticketOutboxItem) error
-	ListOutbox(ctx context.Context, tenant string, cross bool) ([]ticketOutboxItem, error)
+	// ListOutbox returns ONE page plus the true total. F-66: this had no LIMIT
+	// in the SQL at all and both tables are append-only, so the endpoint served
+	// a 22 MB response that grew forever and any infrastructure:read user could
+	// loop into a self-DoS while holding one of the pool's 10 PG connections.
+	ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketOutboxItem, int, error)
 	// ClaimDueOutbox atomically leases up to n due items (status pending/retrying
 	// AND next_retry_at <= now) for the worker, advancing next_retry_at by lease so
 	// a concurrent/abandoned claim re-runs only after the lease expires. Runs at
@@ -63,7 +77,8 @@ type ticketingStore interface {
 	// retry_count, next_retry_at, last_error), keyed by (tenant_id, id).
 	FinishOutbox(ctx context.Context, item ticketOutboxItem) error
 	AppendAudit(ctx context.Context, e ticketAuditEntry) error
-	ListAudit(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketAuditEntry, error)
+	// ListAudit returns ONE page plus the true total (F-66, as ListOutbox).
+	ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketAuditEntry, int, error)
 }
 
 // newTicketingStore picks the backend: an RLS-scoped pg repository under
@@ -245,9 +260,10 @@ func (m *memTicketingStore) PutLink(_ context.Context, l ticketLink) error {
 	return nil
 }
 
-func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string, cross bool, limit int) ([]ticketLink, error) {
+func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string, cross bool, limit, offset int) ([]ticketLink, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	limit, offset = boundPage(limit, offset, ticketLinksDefaultPage)
 	var out []ticketLink
 	for _, l := range m.links {
 		if scopeVisible(tenant, cross, l.TenantID) {
@@ -263,12 +279,22 @@ func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string,
 		}
 		return out[i].ExternalSystem < out[j].ExternalSystem
 	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	total := len(out)
+	return pageSlice(out, limit, offset), total, nil
 }
 
+func (m *memTicketingStore) ListLinksForCorr(_ context.Context, tenant string, cross bool, corrID string) ([]ticketLink, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []ticketLink
+	for _, l := range m.links {
+		if scopeVisible(tenant, cross, l.TenantID) && l.CorrObjectID == corrID {
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ExternalSystem < out[j].ExternalSystem })
+	return out, nil
+}
 func (m *memTicketingStore) ListSyncableLinks(_ context.Context, since time.Time) ([]ticketLink, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -298,9 +324,10 @@ func (m *memTicketingStore) EnqueueOutbox(_ context.Context, item ticketOutboxIt
 	return nil
 }
 
-func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross bool) ([]ticketOutboxItem, error) {
+func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross bool, limit, offset int) ([]ticketOutboxItem, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	limit, offset = boundPage(limit, offset, ticketOutboxDefaultPage)
 	var out []ticketOutboxItem
 	for _, it := range m.outbox {
 		if scopeVisible(tenant, cross, it.TenantID) {
@@ -308,9 +335,9 @@ func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross b
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
+	total := len(out)
+	return pageSlice(out, limit, offset), total, nil
 }
-
 func (m *memTicketingStore) ClaimDueOutbox(_ context.Context, _ string, n int, lease time.Duration) ([]ticketOutboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -361,9 +388,10 @@ func (m *memTicketingStore) AppendAudit(_ context.Context, e ticketAuditEntry) e
 	return nil
 }
 
-func (m *memTicketingStore) ListAudit(_ context.Context, tenant string, cross bool, corrID string) ([]ticketAuditEntry, error) {
+func (m *memTicketingStore) ListAudit(_ context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketAuditEntry, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	limit, offset = boundPage(limit, offset, ticketAuditDefaultPage)
 	var out []ticketAuditEntry
 	for _, e := range m.audit {
 		if !scopeVisible(tenant, cross, e.TenantID) {
@@ -375,7 +403,8 @@ func (m *memTicketingStore) ListAudit(_ context.Context, tenant string, cross bo
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
-	return out, nil
+	total := len(out)
+	return pageSlice(out, limit, offset), total, nil
 }
 
 // ── Postgres backend (RLS-scoped via withTenant) ─────────────────────────────
@@ -523,16 +552,46 @@ ON CONFLICT (tenant_id, corr_object_id, external_system) DO UPDATE SET
 	})
 }
 
-func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit int) ([]ticketLink, error) {
+func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketLink, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if limit <= 0 {
-		limit = 1000
-	}
+	limit, offset = boundPage(limit, offset, ticketLinksDefaultPage)
+	var out []ticketLink
+	var total int
+	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		// The COUNT runs under the same RLS-scoped transaction, so the total is
+		// the caller's total — never a cross-tenant row count.
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM correlix_ticket_links`).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
+            ORDER BY updated_at DESC, corr_object_id, external_system LIMIT $1 OFFSET $2`, limit, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			l, err := scanLink(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, l)
+		}
+		return rows.Err()
+	})
+	return out, total, err
+}
+
+// ListLinksForCorr is the exact per-object lookup that removes F-67's guess:
+// a detail surface asks for the links of the object it is rendering instead of
+// hoping that object appeared in a truncated top-N page.
+func (s *pgTicketingStore) ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketLink, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var out []ticketLink
 	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
-            ORDER BY updated_at DESC, corr_object_id, external_system LIMIT $1`, limit)
+            WHERE corr_object_id=$1 ORDER BY external_system`, corrID)
 		if err != nil {
 			return err
 		}
@@ -548,7 +607,6 @@ func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string
 	})
 	return out, err
 }
-
 func (s *pgTicketingStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketLink, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -603,12 +661,17 @@ ON CONFLICT (idempotency_key) DO NOTHING`,
 	})
 }
 
-func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross bool) ([]ticketOutboxItem, error) {
+func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketOutboxItem, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	limit, offset = boundPage(limit, offset, ticketOutboxDefaultPage)
 	var out []ticketOutboxItem
+	var total int
 	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+outboxCols+` FROM ticket_outbox ORDER BY created_at`)
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ticket_outbox`).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT `+outboxCols+` FROM ticket_outbox ORDER BY created_at LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -622,16 +685,11 @@ func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross 
 		}
 		return rows.Err()
 	})
-	return out, err
+	return out, total, err
 }
 
 // claimOutboxSQL leases due rows with FOR UPDATE SKIP LOCKED (the report-queue
-// pattern): the CTE selects+locks candidates another worker isn't holding, the
-// UPDATE advances next_retry_at by the lease so an abandoned claim re-runs only
-// after it expires, and RETURNING hands back exactly this worker's rows.
-//
-// The CTE projects `id AS claim_id` (not bare `id`): the UPDATE joins
-// `ticket_outbox o` to `claimable c`, so an unqualified `id` in RETURNING (part
+// pattern). The CTE selects id AS claim_id because a bare `id` in RETURNING (part
 // of the shared outboxCols list) would be ambiguous between the two relations.
 // Renaming the CTE column keeps `id` resolving unambiguously to o.id.
 const claimOutboxSQL = `
@@ -698,18 +756,26 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 	})
 }
 
-func (s *pgTicketingStore) ListAudit(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketAuditEntry, error) {
+func (s *pgTicketingStore) ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketAuditEntry, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	limit, offset = boundPage(limit, offset, ticketAuditDefaultPage)
 	var out []ticketAuditEntry
+	var total int
 	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		countQ := `SELECT count(*) FROM ticket_audit_log`
 		q := `SELECT ` + auditCols + ` FROM ticket_audit_log`
 		args := []any{}
 		if corrID != "" {
+			countQ += ` WHERE corr_object_id=$1`
 			q += ` WHERE corr_object_id=$1`
 			args = append(args, corrID)
 		}
-		q += ` ORDER BY at`
+		if err := tx.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+			return err
+		}
+		q += ` ORDER BY at LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)
+		args = append(args, limit, offset)
 		rows, err := tx.Query(ctx, q, args...)
 		if err != nil {
 			return err
@@ -724,10 +790,8 @@ func (s *pgTicketingStore) ListAudit(ctx context.Context, tenant string, cross b
 		}
 		return rows.Err()
 	})
-	return out, err
+	return out, total, err
 }
-
-// ── column lists + row scanners ──────────────────────────────────────────────
 
 const policyCols = `tenant_id, id, name, external_system, enabled, min_verdict, require_customer_facing,
     allow_probe_only, allow_internal_monitoring, suspected_requires_critical, require_persistence_seconds,
@@ -749,6 +813,46 @@ func scanPolicy(rows pgx.Rows) (incidentPolicy, error) {
 		_ = json.Unmarshal(filters, &p.Filters)
 	}
 	return p, nil
+}
+
+// Page bounds for the append-only ticketing tables (F-66/F-67). Defaults are
+// what a UI actually renders; the max is what one caller may hold in memory and
+// in a PG connection at once.
+const (
+	ticketLinksDefaultPage  = 500
+	ticketOutboxDefaultPage = 200
+	ticketAuditDefaultPage  = 200
+	ticketMaxPage           = 2000
+)
+
+// pageSlice applies limit/offset to an already-sorted slice. Offsets past the
+// end yield an EMPTY page, never a wrapped or clamped one — a caller paging off
+// the end must see "no more rows", not the last page again.
+func pageSlice[T any](rows []T, limit, offset int) []T {
+	if offset >= len(rows) {
+		return nil
+	}
+	end := offset + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	return rows[offset:end]
+}
+
+// boundPage clamps a requested page. Callers parse limit/offset with intQuery,
+// which already fails closed on out-of-range input; this is the storage-layer
+// backstop so no internal caller can accidentally ask for the whole table.
+func boundPage(limit, offset, def int) (int, int) {
+	if limit <= 0 {
+		limit = def
+	}
+	if limit > ticketMaxPage {
+		limit = ticketMaxPage
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
 
 const linkCols = `tenant_id, corr_object_id, external_system, instance_url, ticket_number, sys_id, dedupe_key,
