@@ -57,12 +57,10 @@ func (s *pgAuditStore) Record(e AuditEvent) {
 	}
 }
 
-func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Fragments are constant (no user input) — only the parameterized values vary.
-	sql := "SELECT data FROM audit_events"
+// auditWhere builds the shared time-window fragment for List and Count so a
+// page and its reported total are always computed under identical filters.
+// Fragments are constant (no user input) — only the parameterized values vary.
+func auditWhere(q auditQuery) (string, []any) {
 	args := []any{}
 	var conds []string
 	if !q.Before.IsZero() {
@@ -73,11 +71,44 @@ func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) []AuditEven
 		args = append(args, q.Since)
 		conds = append(conds, fmt.Sprintf("ts >= $%d", len(args)))
 	}
-	if len(conds) > 0 {
-		sql += " WHERE " + strings.Join(conds, " AND ")
+	if len(conds) == 0 {
+		return "", args
 	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// Count is the TRUE number of audit rows visible to this principal in the
+// window — the number that makes unbounded growth of an unbounded table
+// observable at all (F-57). RLS scopes it exactly like List.
+func (s *pgAuditStore) Count(tenant string, cross bool, q auditQuery) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	where, args := auditWhere(q)
+	var n int
+	if err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT count(*) FROM audit_events"+where, args...).Scan(&n)
+	}); err != nil {
+		// -1 is "unknown", never 0: on the audit surface, a failed count must
+		// not be able to render as "no privileged actions occurred" (F-73's
+		// lesson applied to the total).
+		logError("audit", "count trail", map[string]any{"error": err.Error()})
+		return -1
+	}
+	return n
+}
+
+func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	where, args := auditWhere(q)
+	sql := "SELECT data FROM audit_events" + where
 	args = append(args, clampAuditLimit(q.Limit))
 	sql += fmt.Sprintf(" ORDER BY ts DESC, id DESC LIMIT $%d", len(args))
+	if q.Offset > 0 {
+		args = append(args, q.Offset)
+		sql += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
 
 	var out []AuditEvent
 	// RLS scopes the read: a scoped tenant sees only its own rows; '*' sees all.

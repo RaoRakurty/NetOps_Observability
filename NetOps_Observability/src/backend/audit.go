@@ -2,10 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,15 +41,32 @@ const (
 type auditRepo interface {
 	Record(e AuditEvent)
 	List(tenant string, cross bool, q auditQuery) []AuditEvent
+	// Count is List's TRUE total under the SAME filters and the SAME tenant
+	// scope, ignoring Limit/Offset.
+	//
+	// F-57: the Postgres trail is an unbounded INSERT (29,002 rows / 13 MB and
+	// +597/day at audit time, with no counterpart trim) while its read path is
+	// capped at 1,000. The table grew without bound and the UI stopped
+	// reflecting it — growth was invisible BY CONSTRUCTION, on the one surface
+	// where silence must never read as "no privileged actions occurred".
+	// Reporting the real count is what makes that growth observable at all.
+	Count(tenant string, cross bool, q auditQuery) int
 }
 
 // auditQuery bounds a List: newest-first within an optional [Since, Before) time
-// window, capped at Limit (see clampAuditLimit).
+// window, capped at Limit (see clampAuditLimit) and skipping Offset rows.
 type auditQuery struct {
 	Limit  int
+	Offset int
 	Before time.Time // exclusive upper bound (keyset pagination cursor); zero = newest
 	Since  time.Time // inclusive lower bound; zero = unbounded
 }
+
+// auditMergeCeiling bounds the org-admin merge path (auditScopedList), which
+// must materialise Offset+Limit rows PER administered tenant before it can
+// merge-sort them. Beyond this the caller is told — with a 400, never a short
+// page — to walk with `before=` (keyset) instead of a growing offset.
+const auditMergeCeiling = 5000
 
 // clampAuditLimit normalizes a requested count: <=0 → default, over the cap →
 // cap. Shared by both backends so paging behaves identically.
@@ -129,6 +147,29 @@ func (s *auditStore) Record(e AuditEvent) {
 // sees all; a scoped principal sees only its own tenant's events (global/untagged
 // events never match a scoped tenant — same rule the pg backend's RLS enforces).
 func (s *auditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent {
+	out := s.matching(tenant, cross, q)
+	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
+	limit := clampAuditLimit(q.Limit)
+	if q.Offset >= len(out) {
+		// Past the end is an EMPTY page, never a clamped last page: a clamped
+		// page re-serves rows the caller already walked and never terminates.
+		return out[:0:0]
+	}
+	end := q.Offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return out[q.Offset:end]
+}
+
+// Count is List's true total under the same filters and the same tenant scope.
+func (s *auditStore) Count(tenant string, cross bool, q auditQuery) int {
+	return len(s.matching(tenant, cross, q))
+}
+
+// matching applies the tenant scope and the time window — the filters List and
+// Count MUST share, so a page and its total can never disagree.
+func (s *auditStore) matching(tenant string, cross bool, q auditQuery) []AuditEvent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]AuditEvent, 0, len(s.events))
@@ -143,10 +184,6 @@ func (s *auditStore) List(tenant string, cross bool, q auditQuery) []AuditEvent 
 			continue
 		}
 		out = append(out, e)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
-	if limit := clampAuditLimit(q.Limit); len(out) > limit {
-		out = out[:limit]
 	}
 	return out
 }
@@ -228,29 +265,83 @@ func (s *server) auditScopedList(claims jwtClaims, q auditQuery) []AuditEvent {
 		return s.audit.List(tenant, true, q)
 	}
 	// Org-admin: union of the tenants in the orgs it administers, plus its own.
-	if orgs := s.orgAdminOrgs(claims.Sub); len(orgs) > 0 {
-		seen := map[string]bool{}
+	if tids := s.auditOrgTenants(claims, tenant); len(tids) > 0 {
+		// Each per-tenant read must cover the caller's whole window
+		// (Offset+Limit) before the merge-sort can pick the right slice —
+		// asking each tenant for only Limit rows and then slicing would drop
+		// rows that belong on the page. auditMergeCeiling bounds that, and
+		// handleAudit refuses (400) rather than serving a short page beyond it.
+		sub := q
+		sub.Offset = 0
+		sub.Limit = clampAuditLimit(q.Limit) + q.Offset
+		if sub.Limit > auditMergeCeiling {
+			sub.Limit = auditMergeCeiling
+		}
 		var merged []AuditEvent
-		add := func(tid string) {
-			if tid == "" || seen[tid] {
-				return
-			}
-			seen[tid] = true
-			merged = append(merged, s.audit.List(tid, false, q)...)
+		for _, tid := range tids {
+			merged = append(merged, s.audit.List(tid, false, sub)...)
 		}
-		for _, org := range orgs {
-			for _, t := range s.tenants.ListByOrg(org) {
-				add(t.ID)
-			}
-		}
-		add(tenant) // its own tenant, in case it's outside the administered orgs
 		sort.Slice(merged, func(i, j int) bool { return merged[i].Time.After(merged[j].Time) })
-		if limit := clampAuditLimit(q.Limit); len(merged) > limit {
-			merged = merged[:limit]
+		limit := clampAuditLimit(q.Limit)
+		if q.Offset >= len(merged) {
+			return nil
 		}
-		return merged
+		end := q.Offset + limit
+		if end > len(merged) {
+			end = len(merged)
+		}
+		return merged[q.Offset:end]
 	}
 	return s.audit.List(tenant, false, q)
+}
+
+// auditScopedCount is auditScopedList's TRUE total under the same scope and
+// window. Per-tenant rows are disjoint, so the org-admin total is the sum.
+// Returns -1 when a backend could not answer — never 0, which on this surface
+// would read as "no privileged actions occurred".
+func (s *server) auditScopedCount(claims jwtClaims, q auditQuery) int {
+	tenant, cross := principalTenant(claims)
+	if cross {
+		return s.audit.Count(tenant, true, q)
+	}
+	if tids := s.auditOrgTenants(claims, tenant); len(tids) > 0 {
+		total := 0
+		for _, tid := range tids {
+			n := s.audit.Count(tid, false, q)
+			if n < 0 {
+				return -1
+			}
+			total += n
+		}
+		return total
+	}
+	return s.audit.Count(tenant, false, q)
+}
+
+// auditOrgTenants is the de-duplicated tenant set an org-admin may read, or nil
+// when the caller is not an org-admin. Shared by the list and count paths so
+// the two can never disagree about scope.
+func (s *server) auditOrgTenants(claims jwtClaims, tenant string) []string {
+	orgs := s.orgAdminOrgs(claims.Sub)
+	if len(orgs) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(tid string) {
+		if tid == "" || seen[tid] {
+			return
+		}
+		seen[tid] = true
+		out = append(out, tid)
+	}
+	for _, org := range orgs {
+		for _, t := range s.tenants.ListByOrg(org) {
+			add(t.ID)
+		}
+	}
+	add(tenant) // its own tenant, in case it's outside the administered orgs
+	return out
 }
 
 // handleAudit serves the audit trail, scoped to the caller (Phase E). Admin-gated.
@@ -264,23 +355,53 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	q := auditQuery{Limit: auditDefaultLimit}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Limit = n
-		}
+	// F-57: `limit` used to be parsed with a discarded error and then silently
+	// clamped, and a malformed `before`/`since` was silently dropped — so a SIEM
+	// asking for a window it mistyped got the FULL newest page and read it as
+	// the window. Every parameter is now applied as written or refused by name.
+	if err := rejectUnknownQuery(r, "before", "since"); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
+	page, err := parsePage(r, auditDefaultLimit, auditMaxQueryLimit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	q := auditQuery{Limit: page.Limit, Offset: page.Offset}
 	// before/since accept RFC3339 timestamps for keyset pagination + range
 	// filtering ("?before=<ts of the last row you saw>" walks older pages).
 	if v := r.URL.Query().Get("before"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Before = t
+		t, perr := time.Parse(time.RFC3339, v)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, errors.New("before must be an RFC3339 timestamp"))
+			return
 		}
+		q.Before = t
 	}
 	if v := r.URL.Query().Get("since"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Since = t
+		t, perr := time.Parse(time.RFC3339, v)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, errors.New("since must be an RFC3339 timestamp"))
+			return
 		}
+		q.Since = t
 	}
-	writeJSON(w, http.StatusOK, s.auditScopedList(claims, q))
+	// The org-admin merge path must materialise Offset+Limit rows per
+	// administered tenant. Past the ceiling, say so — a short page here would
+	// be indistinguishable from the end of the trail.
+	if _, cross := principalTenant(claims); !cross && len(s.auditOrgTenants(claims, "")) > 0 &&
+		q.Offset+q.Limit > auditMergeCeiling {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"offset+limit must be <= %d for an org-scoped trail; walk older pages with ?before=<ts of the last row you saw>",
+			auditMergeCeiling))
+		return
+	}
+	events := s.auditScopedList(claims, q)
+	if events == nil {
+		events = []AuditEvent{}
+	}
+	total := s.auditScopedCount(claims, q)
+	logTruncatedPage("/api/audit", page, len(events), total)
+	writePage(w, "audit", events, page, len(events), total)
 }
