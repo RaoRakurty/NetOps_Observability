@@ -180,7 +180,11 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	since := durationQuery(r, "from", 24*time.Hour)
-	limit := intQuery(r, "limit", 100, 1, 500)
+	limit, errLimit := intQuery(r, "limit", 100, 1, 500)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 
 	conds := []string{"ts >= now() - INTERVAL " + intToString(int(since.Seconds())) + " SECOND"}
 	if to := strings.TrimSpace(q.Get("to")); to != "" && isDatetimeToken(to) {

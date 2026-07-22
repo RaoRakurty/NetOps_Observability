@@ -126,7 +126,12 @@ func (s *server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	days := float64(intQuery(r, "days", 28, 7, 90))
+	daysN, errDays := intQuery(r, "days", 28, 7, 90)
+	if errDays != nil {
+		writeError(w, http.StatusBadRequest, errDays)
+		return
+	}
+	days := float64(daysN)
 	end := time.Now().Unix()
 	start := end - int64(days*86400)
 	step := int64(6 * 3600) // 6h

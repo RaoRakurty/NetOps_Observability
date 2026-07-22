@@ -360,7 +360,11 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"vuln_enabled": false})
 		return
 	}
-	limit := intQuery(r, "limit", 500, 1, 2000)
+	limit, errLimit := intQuery(r, "limit", 500, 1, 2000)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
 	findings := make([]vulnFinding, 0, 16)

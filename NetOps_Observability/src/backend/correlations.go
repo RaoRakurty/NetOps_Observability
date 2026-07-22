@@ -127,7 +127,11 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	limit := intQuery(r, "limit", 100, 1, 500)
+	limit, errLimit := intQuery(r, "limit", 100, 1, 500)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", 24*time.Hour)
 	// The created_at bound prunes the base-table scan BEFORE the latest-version
 	// fold; state/tier apply AFTER it (they describe the latest version, and
@@ -500,7 +504,11 @@ func isDatetimeToken(s string) bool {
 // so the query is constrained to the object's [window_start, window_end] (the
 // order key) AND archived_for/version — never a full-table scan.
 func (s *server) serveCorrelationTimeline(w http.ResponseWriter, r *http.Request, id string) {
-	version := intQuery(r, "version", 0, 0, 1<<30)
+	version, errVersion := intQuery(r, "version", 0, 0, 1<<30)
+	if errVersion != nil {
+		writeError(w, http.StatusBadRequest, errVersion)
+		return
+	}
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
 		writeError(w, status, err)
@@ -943,7 +951,11 @@ func attachedReason(links []map[string]any) string {
 // one response. Two policy-scoped queries; the hypotheses JSON (ranking +
 // embedded grounding context) is passed through verbatim for the UI to render.
 func (s *server) serveCorrelationDetail(w http.ResponseWriter, r *http.Request, id string) {
-	version := intQuery(r, "version", 0, 0, 1<<30)
+	version, errVersion := intQuery(r, "version", 0, 0, 1<<30)
+	if errVersion != nil {
+		writeError(w, http.StatusBadRequest, errVersion)
+		return
+	}
 	verCond := ""
 	if version > 0 {
 		verCond = " AND version = " + intToString(version)

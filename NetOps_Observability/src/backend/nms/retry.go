@@ -34,7 +34,10 @@ func DefaultRetry() ExpoRetry {
 
 // randJitter spreads a delay uniformly over [delay, 2*delay). Not
 // cryptographic and doesn't need to be: it exists to decorrelate clients, not
-// to be unguessable.
+// to be unguessable. An attacker who predicts a retry delay learns nothing and
+// can do nothing with it; crypto/rand here would add a syscall per retry to
+// defend against a threat that does not exist.
+// #nosec G404 -- decorrelation jitter, not a security decision (see above)
 func randJitter() float64 { return rand.Float64() }
 
 // Next implements RetryPolicy. 429/503 with a Retry-After always wins (we obey

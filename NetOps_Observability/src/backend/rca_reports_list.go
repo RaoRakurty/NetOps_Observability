@@ -107,7 +107,11 @@ func (s *server) handleRcaReportsLibrary(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	days := intQuery(r, "days", 30, 1, 365)
+	days, errDays := intQuery(r, "days", 30, 1, 365)
+	if errDays != nil {
+		writeError(w, http.StatusBadRequest, errDays)
+		return
+	}
 
 	// (a) prefilter — every read under the caller's tenant scope (row policies).
 	preRows, err := s.chRows(r, rcaLibraryPrefilterSQL(days))

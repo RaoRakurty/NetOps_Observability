@@ -110,7 +110,11 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
-	version := intQuery(r, "version", 0, 0, 1<<30)
+	version, errVersion := intQuery(r, "version", 0, 0, 1<<30)
+	if errVersion != nil {
+		writeError(w, http.StatusBadRequest, errVersion)
+		return
+	}
 	rep, status, err := s.buildRcaReportForID(r, claims, id, version)
 	if err != nil {
 		writeError(w, status, err)

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,7 +37,11 @@ func isAlphaToken(s string) bool {
 // materialized view or a dedicated rollup table later.
 
 func (s *server) handleFlowsTopTalkers(w http.ResponseWriter, r *http.Request) {
-	limit := intQuery(r, "limit", 20, 1, 500)
+	limit, errLimit := intQuery(r, "limit", 20, 1, 500)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 
 	tenantClause, empty := s.flowTenantClause(r)
@@ -102,7 +108,11 @@ func (s *server) handleFlowsTopN(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid 'by' dimension"))
 		return
 	}
-	limit := intQuery(r, "limit", 20, 1, 500)
+	limit, errLimit := intQuery(r, "limit", 20, 1, 500)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -138,7 +148,11 @@ SELECT ` + dim.expr + ` AS k,
 // ports) signal. Pure IPFIX/NetFlow, no new collection. ?sort=hosts|ports picks
 // the ordering column (server-side allowlist, injection-safe).
 func (s *server) handleFlowsFanout(w http.ResponseWriter, r *http.Request) {
-	limit := intQuery(r, "limit", 15, 1, 200)
+	limit, errLimit := intQuery(r, "limit", 15, 1, 200)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -176,7 +190,11 @@ SELECT src_addr AS k,
 // names and derives scan/reset heuristics. proto=6 only — flags are
 // meaningless for non-TCP flows.
 func (s *server) handleFlowsFlags(w http.ResponseWriter, r *http.Request) {
-	limit := intQuery(r, "limit", 20, 1, 100)
+	limit, errLimit := intQuery(r, "limit", 20, 1, 100)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -237,7 +255,11 @@ func (s *server) handleFlowsGeo(w http.ResponseWriter, r *http.Request) {
 	}
 	// Countries are bounded (~250), so the default limit returns the full
 	// distribution and the UI can compute exact share stats client-side.
-	limit := intQuery(r, "limit", 300, 1, 500)
+	limit, errLimit := intQuery(r, "limit", 300, 1, 500)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	since := durationQuery(r, "since", time.Hour)
 	tenantClause, empty := s.flowTenantClause(r)
 	if empty {
@@ -344,7 +366,11 @@ SELECT toStartOfInterval(ts, INTERVAL ` + intToString(int(step.Seconds())) + ` S
 }
 
 func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	limit := intQuery(r, "limit", 100, 1, 1000)
+	limit, errLimit := intQuery(r, "limit", 100, 1, 1000)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	sev := r.URL.Query().Get("severity")
 	var conds []string
 	if sev != "" {
@@ -546,7 +572,11 @@ func writeEmptyClickHouse(w http.ResponseWriter) {
 // ?status=up|down filters; ?limit caps the rows. Empty until a collector
 // populates netops.tunnels — the view renders whatever real data arrives.
 func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
-	limit := intQuery(r, "limit", 200, 1, 2000)
+	limit, errLimit := intQuery(r, "limit", 200, 1, 2000)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 	var conds []string
 	if st := r.URL.Query().Get("status"); st == "up" || st == "down" {
 		conds = append(conds, "status = '"+st+"'")
@@ -647,16 +677,32 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func intQuery(r *http.Request, key string, def, min, max int) int {
+// intQuery parses a bounded integer query parameter.
+//
+// F-71 (High): this used to FAIL OPEN — a malformed or out-of-range value
+// silently returned the DEFAULT. Measured on /api/flows/top: limit=500 gave 500
+// rows, limit=501 gave 20, limit=5000 gave 20, limit=abc gave 20, and never an
+// error. A client paginating by doubling collapses to the default at step 4 and
+// renders a fraction of the traffic as the whole picture. Silently returning
+// FEWER results than were asked for is indistinguishable, at the client, from
+// "that is all the data there is" — which is why this class is invisible.
+//
+// Out-of-range and unparseable now FAIL CLOSED with a message naming the key
+// and its bounds. An ABSENT parameter still takes the default: that is the
+// documented contract and every caller relies on it.
+func intQuery(r *http.Request, key string, def, min, max int) (int, error) {
 	v := r.URL.Query().Get(key)
 	if v == "" {
-		return def
+		return def, nil
 	}
 	n, err := parseIntStrict(v)
-	if err != nil || n < min || n > max {
-		return def
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", key, min, max)
 	}
-	return n
+	if n < min || n > max {
+		return 0, fmt.Errorf("%s must be between %d and %d (got %d)", key, min, max, n)
+	}
+	return n, nil
 }
 
 func durationQuery(r *http.Request, key string, def time.Duration) time.Duration {
@@ -671,10 +717,16 @@ func durationQuery(r *http.Request, key string, def time.Duration) time.Duration
 	return d
 }
 
+// parseIntStrict parses a decimal integer and rejects ANY trailing garbage.
+//
+// It previously used fmt.Sscanf("%d"), which is not strict despite the name:
+// Sscanf stops at the first character that does not fit the verb and reports
+// success for what it consumed. So "1e3" parsed as 1, "100x" as 100, and
+// "5 OR 1=1" as 5 — each silently becoming a DIFFERENT number than the caller
+// sent, with no error. Combined with intQuery that produced `?limit=1e3`
+// returning a single row. strconv.Atoi consumes the whole string or fails.
 func parseIntStrict(s string) (int, error) {
-	var n int
-	_, err := fmtSscanf(s, "%d", &n)
-	return n, err
+	return strconv.Atoi(s)
 }
 
 func intToString(n int) string {

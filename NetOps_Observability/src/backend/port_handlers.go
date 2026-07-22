@@ -24,6 +24,16 @@ func (s *server) handlePortInterfaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
+	limit, err := intQuery(r, "limit", 100, 1, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	offset, err := intQuery(r, "offset", 0, 0, 1<<30)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	f := PortFilter{
 		Device:      strings.TrimSpace(r.URL.Query().Get("device")),
 		Seam:        strings.TrimSpace(r.URL.Query().Get("seam")),
@@ -33,8 +43,8 @@ func (s *server) handlePortInterfaces(w http.ResponseWriter, r *http.Request) {
 		Supported:   strings.TrimSpace(r.URL.Query().Get("supported_status")),
 		OperStatus:  strings.TrimSpace(r.URL.Query().Get("oper_status")),
 		RCAAttached: r.URL.Query().Get("rca_attached") == "true",
-		Limit:       intQuery(r, "limit", 100, 1, 500),
-		Offset:      intQuery(r, "offset", 0, 0, 1<<30),
+		Limit:       limit,
+		Offset:      offset,
 	}
 	rows, total, err := s.portStore.ListPorts(r.Context(), tenant, cross, f)
 	if err != nil {

@@ -557,7 +557,11 @@ func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"compliance_enabled": false})
 		return
 	}
-	limit := intQuery(r, "limit", 500, 1, 2000)
+	limit, errLimit := intQuery(r, "limit", 500, 1, 2000)
+	if errLimit != nil {
+		writeError(w, http.StatusBadRequest, errLimit)
+		return
+	}
 
 	raw := visibleDevices(s.discovery.RawDevices(), claims)
 	// Drift pairs against whichever SoT provider is active (internal | netbox | …),

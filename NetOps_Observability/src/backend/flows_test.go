@@ -42,25 +42,42 @@ func TestParseIntStrict(t *testing.T) {
 	}
 }
 
-// intQuery clamps to [min,max] and falls back to the default for missing/bad/
-// out-of-range values.
+// intQuery takes the default ONLY for an absent parameter, and FAILS CLOSED on
+// anything malformed or out of range (F-71).
+//
+// This test previously asserted the opposite — that `limit=999` and `limit=abc`
+// silently became 20 — and it passed for the entire life of the defect. An
+// assertion that pins fail-open behaviour is worse than no test: it converts a
+// silent data-truncation bug into a documented, protected feature. Note the two
+// cases below that used to read `{"999", 20}` and `{"abc", 20}`.
 func TestIntQuery(t *testing.T) {
-	cases := []struct {
+	okCases := []struct {
 		raw  string
 		want int
 	}{
-		{"", 20},     // missing -> default
+		{"", 20},     // absent -> default (the documented contract)
 		{"50", 50},   // in range
-		{"0", 20},    // below min -> default
-		{"999", 20},  // above max -> default
-		{"abc", 20},  // unparseable -> default
 		{"1", 1},     // min boundary
 		{"500", 500}, // max boundary
 	}
-	for _, c := range cases {
+	for _, c := range okCases {
 		r := httptest.NewRequest(http.MethodGet, "/api/flows?limit="+c.raw, nil)
-		if got := intQuery(r, "limit", 20, 1, 500); got != c.want {
+		got, err := intQuery(r, "limit", 20, 1, 500)
+		if err != nil {
+			t.Errorf("intQuery(limit=%q) unexpected error: %v", c.raw, err)
+			continue
+		}
+		if got != c.want {
 			t.Errorf("intQuery(limit=%q) = %d, want %d", c.raw, got, c.want)
+		}
+	}
+
+	// The whole point: asking for something the endpoint cannot serve is an
+	// ERROR, never a quiet downgrade to fewer rows than the caller requested.
+	for _, raw := range []string{"0", "999", "501", "-1", "abc", "1e3", "100x", "%2050"} {
+		r := httptest.NewRequest(http.MethodGet, "/api/flows?limit="+raw, nil)
+		if got, err := intQuery(r, "limit", 20, 1, 500); err == nil {
+			t.Errorf("intQuery(limit=%q) = (%d, nil) — must fail closed, not silently return the default", raw, got)
 		}
 	}
 }

@@ -296,7 +296,11 @@ func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
+	since, errSince := intQuery(r, "since", 30*86400, 3600, 365*86400)
+	if errSince != nil {
+		writeError(w, http.StatusBadRequest, errSince)
+		return
+	}
 	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -330,8 +334,16 @@ func (s *server) handleReliabilityTrends(w http.ResponseWriter, r *http.Request)
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := intQuery(r, "since", 30*86400, 86400, 365*86400)
-	bucket := intQuery(r, "bucket", 86400, 3600, 30*86400) // default daily
+	since, errSince := intQuery(r, "since", 30*86400, 86400, 365*86400)
+	if errSince != nil {
+		writeError(w, http.StatusBadRequest, errSince)
+		return
+	}
+	bucket, errBucket := intQuery(r, "bucket", 86400, 3600, 30*86400) // default daily
+	if errBucket != nil {
+		writeError(w, http.StatusBadRequest, errBucket)
+		return
+	}
 	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -383,8 +395,16 @@ func (s *server) handleReliabilityChronicOffenders(w http.ResponseWriter, r *htt
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	since := intQuery(r, "since", 30*86400, 3600, 365*86400)
-	topN := intQuery(r, "top", 10, 1, 100)
+	since, errSince := intQuery(r, "since", 30*86400, 3600, 365*86400)
+	if errSince != nil {
+		writeError(w, http.StatusBadRequest, errSince)
+		return
+	}
+	topN, errTopN := intQuery(r, "top", 10, 1, 100)
+	if errTopN != nil {
+		writeError(w, http.StatusBadRequest, errTopN)
+		return
+	}
 	res, err := s.buildIncidentSummaries(r, since, reliabilityFiltersFrom(r), includeInternalFrom(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
