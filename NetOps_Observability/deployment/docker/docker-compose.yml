@@ -209,6 +209,10 @@ services:
   # One-shot: pre-creates the canonical netops.* topics once the broker is
   # healthy, then exits — consumers never race topic auto-creation on a fresh
   # install. Retention rides the cluster-wide bounds set on the broker above.
+  # cloudlogs/cloudcosts were missing from this list and relied on broker
+  # auto-creation; deadletter is new with F-03. A topic that exists only by
+  # auto-creation races its first consumer on a fresh install — the same
+  # "works until it doesn't, silently" shape as the rest of this audit.
   kafka-init:
     image: apache/kafka:4.1.1@sha256:0bc1bb2478f45b6cea78864df86acdc11e8df2c5172477819a4d12942cbe5d40
     profiles: ["embedded-bus"]
@@ -219,7 +223,8 @@ services:
       - >-
         for t in netops.applogs netops.syslog netops.flows netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
-        netops.controller_events netops.app.edge netops.verification; do
+        netops.controller_events netops.app.edge netops.verification
+        netops.cloudlogs netops.cloudcosts netops.deadletter; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions 1 --replication-factor 1 || exit 1; done
@@ -321,15 +326,39 @@ services:
     logging: *deflog
     environment:
       GOMEMLIMIT: ${GOFLOW2_GOMEMLIMIT:-460MiB}   # #102
+    # F-49: NATIVE kafka:// transport, not container stdout.
+    #
+    # THE DEFECT THIS FIXES: flows used to be written to stdout, read back by
+    # Vector's docker_logs source, and separated from application logs by
+    # `contains(.container_name, "goflow2")`. Two silent failure modes:
+    #   * the json-file driver caps at 3x50 MB, so a Vector that falls behind
+    #     during a rotation loses those flow records with nothing counting it;
+    #   * a rename (goflow2 -> flowcollector, a vendor swap, a compose
+    #     refactor) makes the substring stop matching and EVERY flow record
+    #     silently becomes an app log in netops-applogs-*.
+    # goflow2 has had a kafka transport all along — goflow2/goflow2.yaml has
+    # carried a "switch to kafka:// when wiring Kafka later" comment since the
+    # start, and the bus has been Kafka since #97.
+    #
+    # Tenant attribution moved with it: vector-router now loads the same
+    # device_tenant enrichment table and stamps .tenant_id from
+    # sampler_address (it already owned .tenant_seg for this lane).
+    #
+    # snappy matches every other producer on the bus (the correlation consumer
+    # pins cramjam for exactly this codec — see #67 build ⑥).
     command:
       - "-listen"
       - "netflow://:2055,sflow://:6343,netflow://:4739"
       - "-format"
       - "json"
       - "-transport"
-      - "file"
-      - "-transport.file"
-      - "/dev/stdout"
+      - "kafka"
+      - "-transport.kafka.brokers"
+      - "${BROKER_URLS:-kafka:9092}"
+      - "-transport.kafka.topic"
+      - "netops.flows"
+      - "-transport.kafka.compression"
+      - "snappy"
     ports:
       - "${NETFLOW_PORT:-2055}:2055/udp"
       - "${IPFIX_PORT:-4739}:4739/udp"
@@ -364,6 +393,13 @@ services:
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
       # default keeps preflight fresh-loads working without a full env).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      # F-08: shared ingest credential for the four http_server sources. Vector
+      # refuses to start without it (${INGEST_TOKEN:?} in vector.yaml) — a
+      # deliberate fail-CLOSED: an ingest tier that silently reverts to
+      # unauthenticated is the defect, not the mitigation. install.py seeds it,
+      # including into an existing .env on upgrade.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN required — run scripts/install.py to seed it}
     volumes:
       - ./vector:/etc/vector/conf:ro
       # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
@@ -402,6 +438,10 @@ services:
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
     volumes:
       - ./vector-router:/etc/vector/conf:ro
+      # F-49: the device→tenant enrichment CSV, same read-only mount the
+      # aggregator has. Flows reach the bus straight from goflow2 now, so this
+      # tier is where their tenant stamp is applied.
+      - ../../data/api/enrichment:/etc/vector/enrichment:ro
     # Liveness: Vector's API /health (process-level). A WEDGED SINK keeps the
     # API healthy, so this only catches a fully-hung process — the sink-wedge
     # case (input advancing, output stale) is handled by pipeline-watchdog.sh.
@@ -438,11 +478,22 @@ services:
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms${OPENSEARCH_HEAP:-1g} -Xmx${OPENSEARCH_HEAP:-1g}"
       DISABLE_SECURITY_PLUGIN: "true"    # dev default; flip for prod and add certs
+      # F-59: a snapshot repository cannot be registered at all unless the
+      # allowed path is declared here FIRST — `GET _snapshot` returned {} on
+      # the live stack, i.e. there was no backup of any search index, ever.
+      # Combined with number_of_replicas: 0 (F-07) that left the search tier
+      # with no redundancy at either layer: one corrupt shard was permanent
+      # loss. opensearch-init registers the repo + a daily snapshot policy.
+      path.repo: "/usr/share/opensearch/snapshots"
     ulimits:
       memlock: { soft: -1, hard: -1 }
       nofile:  { soft: 65536, hard: 65536 }
     volumes:
       - ../../data/opensearch:/usr/share/opensearch/data
+      # F-59: snapshot destination. A separate directory from data/opensearch
+      # on purpose — a snapshot living inside the thing it backs up is not a
+      # backup. Copy/rsync data/opensearch-snapshots off-host to make it one.
+      - ../../data/opensearch-snapshots:/usr/share/opensearch/snapshots
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 20s
@@ -461,6 +512,15 @@ services:
     environment:
       OPENSEARCH_URL: http://opensearch:9200
       OPENSEARCH_LOG_RETENTION_DAYS: ${OPENSEARCH_LOG_RETENTION_DAYS:-14}
+      # F-07: replica posture. 0 on the single-node appliance (a replica can
+      # never be assigned there and pins the cluster yellow forever — F-53's
+      # root cause); >= 1 on any real multi-node cluster, where 0 replicas plus
+      # no snapshots means one corrupt shard is unrecoverable.
+      OPENSEARCH_REPLICAS: ${OPENSEARCH_REPLICAS:-0}
+      # F-59: how many daily snapshots to keep, and whether to register the
+      # repository at all. 0 disables (documented escape hatch for an operator
+      # who backs up at the volume layer instead).
+      OPENSEARCH_SNAPSHOT_KEEP: ${OPENSEARCH_SNAPSHOT_KEEP:-14}
     # F-51: DIRECTORY mount (see vector-aggregator).
     entrypoint: ["sh", "/opensearch-init/apply-ism.sh"]
     volumes:

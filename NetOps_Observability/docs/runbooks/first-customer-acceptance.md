@@ -90,5 +90,41 @@ first customer.** A projection failure at 02:00 must reach a phone/pager.
       `corr-current-reconcile` shows no repairs, or the drift SQL in
       `docs/runbooks/clickhouse-query-budget.md` §4 returns 0.
 
+## 8. Backups exist, run on a schedule, and have been RESTORED once (F-59)
+
+The 2026-07-21 audit found `GET _snapshot` = `{}` (no OpenSearch snapshot
+repository had ever been registered), a "ClickHouse dump" that was
+`SHOW CREATE TABLE` for 2 of 16 tables, every dump command ending in `|| true`
+so a total failure still exited 0, and `scripts/backup.sh` in no crontab at
+all. The dangerous part is not the absence of backups — it is that the system
+reported having them. Each gate below tests the failure path, not the presence
+of a script.
+
+- [ ] **Snapshot repository is registered and healthy** (not just configured):
+      `docker compose exec -T opensearch curl -s localhost:9200/_snapshot/netops-fs/_verify`
+      returns nodes, not `repository_missing_exception`.
+- [ ] **The daily snapshot policy is enabled and has actually run:**
+      `curl -s 'localhost:9200/_cat/snapshots/netops-fs?v'` lists at least one
+      snapshot in state `SUCCESS`. `PARTIAL` is a FAILED gate — it means some
+      shards were not captured.
+- [ ] **Backup cron installed** (daily, ahead of the ISM delete horizon):
+      `30 3 * * * .../scripts/backup.sh /backups/netops-$(date +\%F).tar.zst >> .../backup.log 2>&1`
+      Note `backup.sh` now EXITS NON-ZERO when any component fails, so cron
+      MAILTO / the log is a real signal rather than decoration.
+- [ ] **The last archive verifies:** `scripts/backup.sh --verify <file>` exits 0
+      and its MANIFEST shows no `FAIL` lines.
+- [ ] **A restore has been performed once on this deployment** — into a scratch
+      copy, not production. `scripts/restore.sh` refuses an archive whose
+      manifest records a failure; the OpenSearch half is restored from a
+      SNAPSHOT (see the commands it prints), never from the copied data dir: a
+      file-level copy of a live Lucene directory can be torn and may not open.
+- [ ] **Off-host copy exists.** `data/opensearch-snapshots` and the tarballs
+      live on the same disk as the stack until someone moves them. A backup
+      that dies with the host is not a backup.
+- [ ] **Replica posture recorded**: `OPENSEARCH_REPLICAS` in `.env` (0 is
+      correct ONLY on a single-node appliance — see F-07; on a multi-node
+      cluster 0 replicas plus a lost snapshot is unrecoverable loss).
+
 Sign-off: date, deployment, profile chosen, alert channel chosen, drill
-policy — one line each, into the customer's deployment record.
+policy, backup schedule + last verified restore — one line each, into the
+customer's deployment record.

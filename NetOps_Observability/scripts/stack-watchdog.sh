@@ -238,6 +238,49 @@ if [ -n "$os_cid" ]; then
   case "${os_status:-}" in
     yellow|red) problems+=("OpenSearch cluster is ${os_status} (was pinned green on 2026-07-21 — check for a lane with no index template, i.e. replicas>0)") ;;
   esac
+
+  # ---------------------------------------------------------------------------
+  # F-59: BACKUP FRESHNESS — checked here, out of band, on purpose.
+  #
+  # The 2026-07-21 audit found `GET _snapshot` = {}: no snapshot repository had
+  # ever been registered, so nothing had ever backed up a search index. The
+  # repository and the daily SM policy exist now (opensearch/apply-ism.sh), but
+  # a policy that silently stops running returns the system to exactly the same
+  # state — with the added problem that everyone now believes backups exist.
+  #
+  # This check deliberately does NOT live in rules.yaml. The metrics path runs
+  # inside the stack; an alarm about the stack's last line of defence must not
+  # share fate with it. Same reasoning that keeps this whole watchdog external.
+  #
+  # A PARTIAL snapshot is treated as a failure: it means shards were missed, so
+  # a restore from it is incomplete — the most dangerous state of the three,
+  # because it looks like success in `_cat/snapshots`.
+  # ---------------------------------------------------------------------------
+  snap_max_age_h="${SNAPSHOT_MAX_AGE_H:-36}"
+  if [ "$snap_max_age_h" -gt 0 ]; then
+    snap_json=$(docker exec "$os_cid" curl -s -m 10 \
+      "http://localhost:9200/_cat/snapshots/netops-fs?h=id,status,end_epoch&format=json" 2>/dev/null)
+    case "${snap_json:-}" in
+      *repository_missing*|*RepositoryMissingException*)
+        problems+=("NO OPENSEARCH BACKUPS: snapshot repository 'netops-fs' is not registered — every search index is unrecoverable if data/ is lost (run docker compose up opensearch-init)") ;;
+      "["*)
+        # Newest end_epoch across all snapshots; empty list => no snapshot yet.
+        snap_last=$(printf '%s' "$snap_json" |
+          grep -oE '"end_epoch"[[:space:]]*:[[:space:]]*"?[0-9]+' |
+          grep -oE '[0-9]+$' | sort -n | tail -1)
+        if [ -z "${snap_last:-}" ]; then
+          problems+=("NO OPENSEARCH BACKUPS: repository 'netops-fs' exists but contains ZERO snapshots — the daily policy has never completed")
+        else
+          snap_age_h=$(( ($(date +%s) - snap_last) / 3600 ))
+          [ "$snap_age_h" -gt "$snap_max_age_h" ] &&
+            problems+=("OpenSearch backup STALE: newest snapshot is ${snap_age_h}h old (>${snap_max_age_h}h) — the daily snapshot policy has stopped")
+        fi
+        if printf '%s' "$snap_json" | grep -q '"PARTIAL"'; then
+          problems+=("OpenSearch snapshot is PARTIAL — some shards were NOT captured; a restore from it would be incomplete")
+        fi
+        ;;
+    esac
+  fi
 fi
 
 # -----------------------------------------------------------------------------

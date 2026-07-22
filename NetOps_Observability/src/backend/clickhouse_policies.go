@@ -98,6 +98,11 @@ func chConvergeStmts() []string {
 	// lenient policy — see that file for why). Same converge-on-boot contract.
 	stmts = append(stmts, svcRollupSchemaDDL()...)
 	stmts = append(stmts, pathBaselineSchemaDDL()...)
+	// F-58 retention contract for the TELEMETRY family. Must come LAST: every
+	// MODIFY TTL above targets a table the statements before it create, and a
+	// converge list that ALTERs before it CREATEs fails on a fresh volume.
+	// Same metadata-only, idempotent contract as corrRetentionDDL.
+	stmts = append(stmts, chRetentionDDL(chRetentionConfig())...)
 	return stmts
 }
 
@@ -108,6 +113,10 @@ func ensureCHRowPolicies() {
 		return // no ClickHouse configured (file/dev backend)
 	}
 	stmts := chConvergeStmts()
+	// F-58: state the retention schedule before applying it. `MODIFY TTL` is a
+	// deletion schedule, and a deletion schedule applied without a log line is
+	// exactly the kind of silent data loss this audit found everywhere else.
+	logCHRetention(chRetentionConfig())
 	go func() {
 		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {

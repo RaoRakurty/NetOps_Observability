@@ -133,11 +133,18 @@ def test_correlation_consumes_all_bus_planes():
 
 def test_correlation_live_path_does_not_query_victoriametrics():
     """Live RCA must consume the bus, not poll VM. A VM-query bridge may exist for
-    replay/backfill later, but not in the live consume/handle path today."""
+    replay/backfill later, but not in the live consume/handle path today.
+
+    2026-07-22: this used to assert `"victoria" not in main.py.lower()`, which
+    had rotted into a false failure — the word now appears in a service-name
+    LIST (a health-probe default) and in a comment saying VM SCRAPES this
+    service's /metrics. Neither is a query. Nothing caught the rot because this
+    file was in no CI workflow; it is now (ingest-contract-ci.yml), so the
+    assertion has to mean what it says: no VM QUERY api, no VM endpoint."""
     src = read("src", "correlation", "main.py")
-    low = src.lower()
-    assert "victoria" not in low, "correlation must not query VictoriaMetrics on the live path"
-    assert ":8428" not in src, "no VM endpoint in the live correlation path"
+    for probe in ("/api/v1/query", "/api/v1/query_range", ":8428", "VICTORIA_URL", "VM_URL"):
+        assert probe not in src, \
+            f"correlation must not query VictoriaMetrics on the live path (found {probe!r})"
 
 
 # ── critical #4 plumbing: traps reach correlation only via the classifier ─────

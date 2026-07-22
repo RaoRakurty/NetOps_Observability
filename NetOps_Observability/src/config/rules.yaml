@@ -1082,6 +1082,82 @@ groups:
           summary: "{{ $value }} shards/node — approaching cluster.max_shards_per_node (1000), where index creation is REJECTED and ingest stops with no error"
 
   # ----------------------------------------------------------------------------
+  # Ingest integrity (F-03 / F-11 / F-59) — the signals that only exist because
+  # the pipeline was made to EMIT them. Each of these replaces an
+  # indistinguishable-from-normal failure with a number.
+  # ----------------------------------------------------------------------------
+  - name: ingest-integrity
+    interval: 60s
+    rules:
+      - alert: VectorDeadLetters
+        # F-03/F-14: nothing lands in netops-deadletter-* during normal
+        # operation — it is fed only by transforms that could not process an
+        # event. So ANY document here means a producer broke its contract, or
+        # a transform did. Before this, the same events were `drop_on_error`d
+        # into a counter shared with ordinary filtering: a genuine VRL failure
+        # and "this syslog line is not a cloud line" were the same number, with
+        # no payload kept for either.
+        #
+        # Measured at the SINKS, not per-lane: `opensearch_deadletter` (router)
+        # and `kafka_deadletter` (aggregator) are the two exits of the whole
+        # dead-letter path, so a lane added later is covered the day it is
+        # wired, without editing this rule. Both are already exported by the
+        # vector job in vmscrape.yml — no new scrape target.
+        expr: sum by (component_id, instance) (increase(vector_component_sent_events_total{component_id=~"opensearch_deadletter|kafka_deadletter"}[15m])) > 0
+        for: 5m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "{{ $value }} events dead-lettered via {{ $labels.component_id }} in 15m — a producer or transform is failing"
+          description: "Read them: curl 'netops-opensearch-1:9200/netops-deadletter-*/_search?size=20&sort=dropped_at:desc' | jq '.hits.hits[]._source | {lane, reason, detail}'. reason=error is a processing failure (data would have been lost); reason=abort is a rejected/filtered record, e.g. a bus-bridge write to a non-netops topic."
+
+      - alert: TenantEnrichmentMissRateJumped
+        # ####################################################################
+        # F-11: tenant_id = "" is a LEGITIMATE value (platform-owned
+        # telemetry), which is exactly why a broken device→tenant enrichment
+        # table is invisible: every device lane collapses into the shared
+        # -untagged- index and the pipeline reports perfect health. Measured
+        # 2026-07-21: 400/400 sampled messages on all six device lanes carried
+        # tenant_id="". From the outside that is indistinguishable from a lab
+        # whose devices genuinely have no tenant.
+        #
+        # So alert on the CHANGE, not the level. A deployment that never
+        # matched anything stays silent forever (correct — nothing broke); a
+        # deployment whose match rate collapses is a broken enrichment table,
+        # a stale CSV export, or a device inventory that lost its tenant
+        # column. At-rest tenant separation (#20 Phase 3) silently degrades to
+        # one shared bucket when this happens, leaving isolation resting on
+        # the API query filter alone — a single-layer defence where a
+        # two-layer one was designed.
+        # ####################################################################
+        expr: |
+          (sum by (topic) (rate(netops_tenant_attribution_events_total{outcome="unmatched"}[15m]))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events_total[15m])), 0.001))
+          >
+          (sum by (topic) (rate(netops_tenant_attribution_events_total{outcome="unmatched"}[6h] offset 1h))
+             / clamp_min(sum by (topic) (rate(netops_tenant_attribution_events_total[6h] offset 1h)), 0.001)) + 0.25
+        for: 20m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "Tenant enrichment miss rate on {{ $labels.topic }} jumped to {{ $value | humanizePercentage }} above its 6h baseline"
+          description: "The device→tenant CSV (data/api/enrichment/device_tenant.csv) is stale, empty, or not mounted. Every unmatched event lands in the shared netops-*-untagged-* index, so per-tenant at-rest separation is not in effect for that lane."
+
+      - alert: TenantAttributionLaneMissing
+        # Meta-alert: the rule above is vacuous if the counter stops. An alert
+        # whose selector matches zero series reads as coverage (the F-35 lesson).
+        expr: absent(netops_tenant_attribution_events_total)
+        for: 30m
+        labels: { severity: warning, layer: ingest }
+        annotations:
+          summary: "The tenant-attribution counter is gone — enrichment-miss alerting is BLIND (check vector-router's tenant_attribution_metric transform)"
+
+      # NOTE ON F-59 (backup freshness): there is deliberately NO metric-based
+      # snapshot-age rule here. The metrics path runs INSIDE the stack, and a
+      # backup alarm that dies with the thing it protects is theatre — the same
+      # reasoning that keeps scripts/stack-watchdog.sh independent of the
+      # platform's own notifiers. Snapshot age is checked out-of-band by the
+      # watchdog (`check_backup_freshness`), which pages over its own channel.
+
+  # ----------------------------------------------------------------------------
   # Bus consumer lag (F-46) — the only signal that separates "quiet bus" from
   # "dead consumer". Source: kafka-exporter (vmscrape job 'kafka').
   # ----------------------------------------------------------------------------

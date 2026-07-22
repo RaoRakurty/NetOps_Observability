@@ -42,6 +42,29 @@ healthchecks:
   enabled: true
   require_healthy: false
 
+# ----------------------------------------------------------------------------
+# ENRICHMENT TABLES — device → tenant attribution (#20 multi-tenant telemetry).
+#
+# Same CSV the aggregator loads (exported by the Go API to a shared volume).
+# The router needs it because F-49 moved flows off container stdout onto
+# goflow2's native kafka:// transport: they no longer pass through the
+# aggregator at all, so the tenant stamp had to move to the tier that still
+# sees them. Everything else about the contract is unchanged — the file always
+# exists (the stack seeds a header-only CSV) and no match yields tenant_id=""
+# (global/platform), which is now COUNTED rather than assumed (F-11).
+# ----------------------------------------------------------------------------
+
+enrichment_tables:
+  device_tenant:
+    type: file
+    file:
+      path: /etc/vector/enrichment/device_tenant.csv
+      encoding:
+        type: csv
+    schema:
+      identity: string
+      tenant_id: string
+
 sources:
   internal_metrics:
     type: internal_metrics
@@ -85,6 +108,18 @@ sources:
     group_id: "netops-router-cloudlogs"
     decoding: { codec: json }
 
+  # F-03: dead letters produced by the AGGREGATOR tier (which has no storage
+  # sink of its own). Already in the flat dead-letter shape, so this lane goes
+  # straight to the opensearch_deadletter sink with no transform — a
+  # dead-letter record must never be re-processed by the machinery that can
+  # itself drop it.
+  kafka_deadletter:
+    type: kafka
+    bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
+    topics: ["netops.deadletter"]
+    group_id: "netops-router-deadletter"
+    decoding: { codec: json }
+
   # Cloud cost records (Wave 5 #18) — normalized daily cloud_cost records
   # produced by the cloud poller's cost lanes (AWS Cost Explorer / Azure Cost
   # Management). Routed to ClickHouse netops.cloud_costs (analytics; tenant
@@ -116,6 +151,17 @@ transforms:
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
+
+      # ── enrichment-miss observability (F-11) ────────────────────────────
+      # An empty tenant_id is a VALID value (platform-owned telemetry), which
+      # is exactly why a BROKEN device→tenant enrichment table is invisible:
+      # every device lane collapses into the shared -untagged- index and looks
+      # completely normal. Measured 2026-07-21: 400/400 sampled messages on all
+      # six device lanes carried tenant_id="" — indistinguishable, from the
+      # config alone, from "the CSV never loaded". Stamp the attribution
+      # OUTCOME as its own field so the miss rate is a queryable number and
+      # rules.yaml can alert on it (TenantEnrichmentMissRateHigh).
+      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
 
       # ── `ts` normalisation (DEF-6, 2026-07-21) ──────────────────────────
       # Producers on these topics emit `ts` in three incompatible shapes:
@@ -158,6 +204,29 @@ transforms:
           } else {
             .ts = to_int(floor(n / 1000000.0))     # nanoseconds
           }
+        }
+      }
+
+      # ── `ts` is the CANONICAL event-time field (F-10) ───────────────────
+      # Measured 2026-07-21 across 400 messages/topic: `ts` was present on
+      # applogs/metrics/probes/cloud/cloudcosts/app.edge, ABSENT on
+      # syslog/snmptrap/flows/cloudlogs (which carry only `timestamp`), and
+      # absent on BOTH counts for controller_events. So the field the index
+      # template declares as the time axis — and that every date-range query,
+      # sort and time picker uses — simply did not exist on four of the six
+      # lanes this tier indexes. Nothing failed; the docs just had no `ts`,
+      # which reads exactly like "no data in that window".
+      #
+      # Derive it from `timestamp` so ONE field means event time on every
+      # lane. `timestamp` is never rewritten (log-time standard R2: origin
+      # time preserved) and .ts_source records that this value was derived
+      # rather than sent, so a producer that starts sending `ts` is
+      # distinguishable from one that never did.
+      if !exists(.ts) && exists(.timestamp) {
+        dts, dterr = parse_timestamp(to_string(.timestamp) ?? "", format: "%+")
+        if dterr == null {
+          .ts = to_unix_timestamp(dts, unit: "milliseconds")
+          .ts_source = "timestamp"
         }
       }
 
@@ -228,10 +297,30 @@ transforms:
       } else {
         .flow_type = "unknown"
       }
+      # Tenant attribution: match the flow exporter (sampler_address) to its
+      # device's tenant. No match → "" (global). #20. This lookup used to live
+      # in the aggregator's flows_normalized; it moved here with F-49, because
+      # flows now reach the bus straight from goflow2 and never touch the
+      # aggregator. `.signal` moved with it for the same reason.
+      .signal = "netflow"
+      if !exists(.tenant_id) { .tenant_id = "" }
+      sampler = to_string(.sampler_address) ?? ""
+      if sampler != "" && (to_string(.tenant_id) ?? "") == "" {
+        trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
+        if length(trows) > 0 {
+          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+        }
+      }
+
       # #20 Phase 3 — per-tenant index segment (see applogs_tagged).
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
+      # F-11: same enrichment-miss stamp the anchored lanes carry. This lane
+      # hand-rolls its tenant block (it has extra flow-specific work), which is
+      # precisely why it must be audited whenever the anchor changes — a fix
+      # applied to the anchor alone would leave flows unmeasured.
+      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
 
   # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
   # the bus payload: only kind=cloud_cost with a well-formed day passes; the
@@ -265,14 +354,50 @@ transforms:
   # Every field is flattened into ONE json string so a poisoned document can
   # never conflict with the dead-letter index's own mapping (a dead-letter that
   # can itself be rejected is worthless). Keep this shape boring on purpose.
+  #
+  # F-14 — THE DEFECT THIS FIXES, measured (not inferred) against
+  # timberio/vector:0.40.0-alpine on 2026-07-22 with a throwaway abort→dropped
+  # pipeline:
+  #
+  #   .metadata.dropped.reason       -> "abort"                  <- the truth
+  #   .metadata.dropped.message      -> "aborted"                <- the truth
+  #   .metadata.dropped.component_id -> "t"                      <- the truth
+  #   .metadata.message              -> ""                       <- what we read
+  #   %vector.dropped.reason         -> ""                       (vector-namespace
+  #                                                                only; this
+  #                                                                config is
+  #                                                                legacy)
+  #
+  # Vector annotates a rerouted event under `<log_schema.metadata_key>.dropped`,
+  # i.e. the event FIELD `.metadata.dropped` in the default (legacy) log
+  # namespace — one path segment deeper than the old expression looked. And
+  # `to_string(null)` returns "" rather than erroring, so the `??` fallback
+  # never fired either: every dead-letter document was written with
+  # **reason: ""**, not even the placeholder string. The DLQ kept the payload
+  # and threw away the only field that says why it is there — which is most of
+  # the way to having no DLQ at all.
+  #
+  # `lane` is now derived from component_id rather than hardcoded, so this one
+  # encoder serves every rerouting transform on this tier and a new lane cannot
+  # be added with a wrong-but-plausible constant label.
   deadletter_encoded:
     type: remap
     inputs: [cloudcosts_normalized.dropped]
     source: |
+      lane = to_string(.metadata.dropped.component_id) ?? ""
+      if lane == "" { lane = "unknown" }
+      kind = to_string(.metadata.dropped.reason) ?? ""
+      if kind == "" { kind = "unknown" }
+      why = to_string(.metadata.dropped.message) ?? ""
+      # An empty reason means Vector changed where it annotates dropped events
+      # (namespace switch / schema change). Say so explicitly instead of
+      # writing a blank field that reads like "no reason recorded".
+      if why == "" { why = "no dropped-metadata captured — check Vector's log namespace (F-14)" }
       . = {
         "dropped_at": format_timestamp!(now(), format: "%+"),
-        "lane": "cloudcosts",
-        "reason": to_string(.metadata.message) ?? "aborted or failed remap",
+        "lane": lane,
+        "reason": kind,
+        "detail": why,
         "raw": encode_json(.)
       }
 
@@ -285,10 +410,45 @@ transforms:
     inputs: [flows_decoded]
     rate: 50
 
+  # F-11 — make a broken device→tenant enrichment table VISIBLE.
+  #
+  # THE DEFECT THIS FIXES: tenant_id="" is a legitimate value (platform-owned
+  # telemetry), so "the enrichment CSV never loaded" and "these devices really
+  # are platform-owned" produce byte-identical events, byte-identical indices
+  # and byte-identical dashboards. The design's at-rest guarantee ("another
+  # tenant's docs are unreachable even if a query filter is missed") quietly
+  # degrades to one shared -untagged- bucket, and isolation falls back to the
+  # single API-layer query filter it was meant to backstop.
+  #
+  # Counting the attribution OUTCOME per topic turns that into a number:
+  # a miss RATE that jumps to 1.0 on lanes that previously matched is an
+  # enrichment failure, while a lab whose devices genuinely have no tenant
+  # simply reads a steady 1.0 and never alerts (rules.yaml scopes the alert to
+  # a RISE, not to a level). Exported on the existing :9598 exporter that
+  # vmscrape.yml already scrapes — no new service, no new scrape job.
+  tenant_attribution_metric:
+    type: log_to_metric
+    inputs:
+      - applogs_tagged
+      - syslog_tagged
+      - snmptrap_tagged
+      - cloudlogs_tagged
+      - flows_decoded
+    metrics:
+      - type: counter
+        field: tenant_attribution
+        name: netops_tenant_attribution_events
+        tags:
+          outcome: "{{ tenant_attribution }}"
+          # The kafka source stamps the source topic on every event, so the
+          # lane label needs no per-lane transform (and therefore cannot drift
+          # away from the lane it actually describes).
+          topic: "{{ topic }}"
+
 sinks:
   prometheus_internal:
     type: prometheus_exporter
-    inputs: [internal_metrics]
+    inputs: [internal_metrics, tenant_attribution_metric]
     address: 0.0.0.0:9598
 
   # Application + container logs → OpenSearch
@@ -308,7 +468,7 @@ sinks:
   # signal that a producer has broken its contract.
   opensearch_deadletter:
     type: elasticsearch
-    inputs: [deadletter_encoded]
+    inputs: [deadletter_encoded, kafka_deadletter]
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
