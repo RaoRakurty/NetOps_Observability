@@ -46,6 +46,12 @@ SYSLOGNG_IMG="balabit/syslog-ng:4.7.1"
 # topology: a VRL/topology error prints `error[E…]` and exits BEFORE sinks connect;
 # a clean config proceeds to start (we time it out). Stub env + enrichment dir so
 # config LOAD reaches the VRL compile.
+# INGEST_TOKEN is stubbed like the other secrets below: the ingest sources use
+# `${INGEST_TOKEN:?}` so Vector REFUSES TO START without it (F-08 fail-closed
+# auth on the previously unauthenticated ingest ports). That is correct at
+# runtime, but this check validates that the committed topology COMPILES, not
+# that a secret has been provisioned — without the stub every future run fails
+# for a reason that has nothing to do with the config being broken.
 check_vector(){
   local rel="$1" label="$2"
   [ -f "$ROOT/$rel" ] || { skip "$label (no $rel)"; return; }
@@ -55,6 +61,7 @@ check_vector(){
   out="$(timeout 30 docker run --rm --entrypoint vector \
       -e CLICKHOUSE_USER=x -e CLICKHOUSE_PASSWORD=x -e OPENSEARCH_URL=http://x:9200 \
       -e DB_HOST=x -e DB_USER=x -e DB_PASSWORD=x -e REDIS_HOST=x \
+      -e INGEST_TOKEN=preflight-stub \
       -v "$ROOT/$rel:/etc/vector/vector.yaml:ro" \
       -v "$stub:/etc/vector/enrichment:ro" \
       "$VECTOR_IMG" --config /etc/vector/vector.yaml 2>&1)"
@@ -63,7 +70,16 @@ check_vector(){
     red "$label — VRL/topology compile error: $(grep -oE 'error\[E[0-9]+\][^
 ]*' <<<"$out" | head -1)"
   elif grep -qiE 'configuration error|failed to (load|parse|build)' <<<"$out"; then
-    red "$label — $(grep -iE 'configuration error|failed to' <<<"$out" | grep -viE 'environment variable' | head -1)"
+    # Report a REASON, always. The env-variable filter exists to avoid
+    # classifying a benign unset-var notice as a config break, but applying it
+    # to the DETAIL once produced "✗ vector-aggregator — " with nothing after
+    # the dash: the check correctly failed and told the operator nothing, which
+    # is the same silent-failure shape this repo keeps fixing elsewhere. Fall
+    # back to the first error-ish line when the filter empties the detail.
+    detail="$(grep -iE 'configuration error|failed to' <<<"$out" | grep -viE 'environment variable' | head -1)"
+    [ -n "$detail" ] || detail="$(grep -iE 'error|missing|required' <<<"$out" | head -1)"
+    [ -n "$detail" ] || detail="(no diagnostic emitted; re-run the docker command in check_vector by hand)"
+    red "$label — $detail"
   else
     green "$label (vector topology compiles on a fresh load)"
   fi
