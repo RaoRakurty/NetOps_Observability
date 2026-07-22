@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -117,24 +117,57 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// §3: validate the request at the boundary, BEFORE asking whether the store
+	// happens to be available. A malformed request is a 400 whether or not the
+	// backend is wired.
+	//
+	// F-74: every one of these parameters used to be accepted and then quietly
+	// turned into something else — an unknown `severity` became the `info`
+	// predicate, a malformed `limit` or `before` was dropped on the floor, and
+	// an over-large `limit` was clamped. Each is now applied as written or
+	// refused by name with a 400.
+	if err := rejectUnknownQuery(r, "status", "severity", "before"); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	page, err := parsePage(r, 100, 500)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	q := IncidentQuery{
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
+		Limit:    page.Limit,
+		Offset:   page.Offset,
+	}
+	if q.Status != "" && !validIncidentStatus(q.Status) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"status must be one of open, acknowledged, investigating, resolved, closed (got %q)", q.Status))
+		return
+	}
+	if q.Severity != "" && !validIncidentSeverity(q.Severity) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"severity must be one of %s (got %q)", strings.Join(incidentSeverities, ", "), q.Severity))
+		return
+	}
+	if b := r.URL.Query().Get("before"); b != "" {
+		tm, perr := time.Parse(time.RFC3339, b)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, errors.New("before must be an RFC3339 timestamp"))
+			return
+		}
+		q.Before = tm
+	}
 	if s.incidents == nil {
 		writeError(w, http.StatusConflict, errIncidentsUnavailable)
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	q := IncidentQuery{
-		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
-		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
-	}
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil {
-			q.Limit = n
-		}
-	}
-	if b := r.URL.Query().Get("before"); b != "" {
-		if tm, err := time.Parse(time.RFC3339, b); err == nil {
-			q.Before = tm
-		}
+	total, err := s.incidents.Count(r.Context(), tenant, cross, q)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
 	}
 	list, err := s.incidents.List(r.Context(), tenant, cross, q)
 	if err != nil {
@@ -144,7 +177,8 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []Incident{}
 	}
-	writeJSON(w, http.StatusOK, list)
+	logTruncatedPage("/api/incidents", page, len(list), total)
+	writePage(w, "incidents", list, page, len(list), total)
 }
 
 // handleIncidentByID serves /api/incidents/{id} and /{id}/{action}.
