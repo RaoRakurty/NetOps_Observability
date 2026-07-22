@@ -41,7 +41,7 @@ An invariant that no gate enforces is a preference.
 | Bus producer surfaces non-2xx / transport failure | ✅ | **BUILD** — `bus_producer_failure_test.go` (7 status codes, transport, timeout) |
 | Settings writes report a failed persist | ✅ | **BUILD** — `settings_persist_failure_test.go`, `TestNoVoidSaveLocked`, `TestSaveResultsAreChecked` |
 | Operator-created devices survive a restart | ✅ | **BUILD** — `device_persist_test.go` (restart simulated via a second aggregator over the same backend) |
-| ClickHouse writes check their status | 🟡 | **BUILD (source scan)** — `TestClickHouseHTTPWritesCheckTheirStatus` walks source text and proves the check is *written*; no test ever fires a real ClickHouse error, so nothing proves it *behaves*. The one seam of four still lacking fault injection |
+| ClickHouse writes check their status | ✅ | **BUILD** — `chhttp/chhttp_test.go` fires real failures (21 tests: the TOO_MANY_PARTS-vs-schema-bug 500 pair, 9-case taxonomy, transport, hang, mid-body reset, truncation). Structure held by `TestClickHouseAccessGoesThroughTheSeam` (AST) |
 | Dead-letter path captures the reason | ✅ | **GATE** — ingest-contract-ci + `scripts/vrl-harness.py` |
 | Backup/restore actually produces a restorable artifact | 🟡 | Script exits non-zero on a partial dump (F-59), but the OpenSearch snapshot repo + SM policy are **syntax-checked only, never exercised against a live cluster** |
 
@@ -69,7 +69,7 @@ An invariant that no gate enforces is a preference.
 | Aspect | Status | Enforced by |
 |---|---|---|
 | HTTP clients carry timeouts | ✅ | Measured: 28/28 clients bounded |
-| ClickHouse reads carry execution guards + cancellation | 🟡 | **BUILD (source scan)** — `TestClickHouseReadsCarryExecutionGuards`; same caveat as the write row above |
+| ClickHouse reads carry execution guards + cancellation | ✅ | **BUILD** — `chhttp` applies `max_execution_time` + `cancel_http_readonly_queries_on_client_close` to EVERY call unconditionally; `TestRequestSettingsReachTheWire` proves they reach the wire |
 | No unbounded response-body reads | ✅ | **BUILD** — `TestNoUnboundedResponseBodyReads` (source scan) |
 | Pre-auth handlers cap their body | ✅ | **BUILD** — `TestPreAuthRoutesAreBodyCapped` |
 | Postgres `statement_timeout` / pool bound | 🟡 | Implemented (F-60), **compile-reviewed only — never exercised against a live database** |
@@ -162,9 +162,12 @@ An invariant that no gate enforces is a preference.
 3. **The tenant-create rollback is compile-reviewed only.** F-81's handler deletes a half-created tenant when `operator_restricted` cannot be applied, but `s.tenants` is a concrete `*tenantStore` with no interface seam, so a mid-request failure cannot be injected. Breaking the store path makes the CREATE fail first and the test would pass for the wrong reason — stated in `rca_window_test.go` rather than papered over. Extracting a `tenantRepo` interface is the change that would make it testable. (§7)
 4. **Postgres-dependent paths are compile-reviewed only.** `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE — none executed against a live database. (§3)
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
-6. **ClickHouse is the last un-fault-injected seam.** kv/settings, bus and notification all have real injection tests (and the bus one found 2 defects when written). ClickHouse — 66 write sites, the seam F-38 showed discarded 19 of 20 failure booleans — is covered by source scans only. Measured 2026-07-22. (§1, §3)
-7. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
-8. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
+6. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
+7. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
+
+### Closed
+
+- ~~**ClickHouse is the last un-fault-injected seam.**~~ **Closed 2026-07-22** by the `chhttp` package. All six seams — kv/settings, bus, notification, audit, credentials, ClickHouse — now have real fault injection. Building it found five things the source scan could not: 9 call sites still hand-rolling their own request, `chInsertJSON` accepting a `ctx` and discarding it, no execution ceiling on the rollup worker, the API proxy forwarding raw `DB::Exception` text to callers, and an unbounded `io.Copy` on that same path.
 
 ## How to use this file
 

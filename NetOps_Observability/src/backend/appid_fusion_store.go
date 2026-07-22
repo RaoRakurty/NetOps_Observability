@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"strings"
-	"time"
 
 	"netops/backend/appid"
+
+	"netops/backend/chhttp"
 )
 
 // appid_fusion_store.go — #81 Fusion Layer Phase 4 persistence. A non-request-scoped
@@ -25,66 +21,31 @@ import (
 // the worker (tenant_scope=__all__: the worker spans tenants; per-tenant isolation is
 // enforced by the row policies on READ + the tenant_id stamped on every row).
 func chWorkerExec(ctx context.Context, body string) error {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
-	if err != nil {
-		return err
-	}
-	q := u.Query()
-	q.Set("tenant_scope", "__all__")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
+	_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:      body,
+		Op:       "worker exec",
+		Scope:    "__all__",
+		Settings: chInsertTolerance(),
+		Budget:   chWorkerBudget,
+	})
+	return err
 }
 
 // chWorkerQuery POSTs a SELECT … FORMAT JSON and returns the data rows.
 func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
+	// F-27 (execution guards + a bounded body) is now structural: chhttp applies
+	// max_execution_time and the response cap to every call, so this path cannot
+	// drift from its sibling chWorkerExec the way it once did.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "worker query",
+		Scope:      "__all__",
+		LogComment: "worker:cross-tenant", // #100 read-budget attribution
+		Budget:     chWorkerBudget,
+		MaxBytes:   chMaxResponseBytes,
+	})
 	if err != nil {
 		return nil, err
-	}
-	q := u.Query()
-	q.Set("tenant_scope", "__all__")
-	q.Set("log_comment", "worker:cross-tenant") // #100 read-budget attribution
-	chApplyGuards(q, 20*time.Second)            // F-27: the client timeout alone never stops the query
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
-	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	// F-27: this was a bare io.ReadAll with the error discarded, two lines below
-	// its own sibling (chWorkerExec) which caps at 4096 — the sibling
-	// inconsistency the audit called out. Response size here is a function of
-	// table size.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, chMaxResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read clickhouse response: %w", err)
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var out struct {
 		Data []map[string]any `json:"data"`

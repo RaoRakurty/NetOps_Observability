@@ -44,6 +44,8 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/models"
+
+	"netops/backend/chhttp"
 )
 
 // startSeamBootstrap launches the periodic suggestion loop. Postgres-only
@@ -699,31 +701,16 @@ func seamFetchBGPPeers(ctx context.Context) ([]seamBGPPeer, error) {
 // passes tenant_scope=__all__ like the report scheduler; per-row tenancy is
 // preserved by carrying tenant_id through the rules into the suggestions.
 func seamCHQueryJSON(ctx context.Context, sql string, dst any) error {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "seam bootstrap query",
+		Scope:      "__all__",
+		LogComment: "worker:seam-bootstrap",
+		Budget:     chWorkerBudget,
+		MaxBytes:   chMaxResponseBytes,
+	})
 	if err != nil {
 		return err
-	}
-	q := u.Query()
-	q.Set("tenant_scope", "__all__")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
-	if err != nil {
-		return err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), os.Getenv("CLICKHOUSE_PASSWORD"))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("clickhouse status %d: %s", resp.StatusCode, truncateForLog(string(body), 200))
 	}
 	var wrapper struct {
 		Data json.RawMessage `json:"data"`

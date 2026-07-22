@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/alerts"
+	"netops/backend/chhttp"
 	"netops/backend/models"
 	"netops/backend/notify"
 	"netops/backend/reports"
@@ -1232,43 +1232,23 @@ func chQuery(sql string) []string {
 //  3. `b, _ :=` — the read error was discarded, so a truncated response parsed
 //     as a short, plausible-looking result set.
 func chQueryCtx(ctx context.Context, sql string) ([]string, error) {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil, err
-	}
 	// #20 Phase 2: reports are a trusted internal reader — pass tenant_scope=__all__
 	// so the flows/findings row policies don't reject the query (getSetting errors
 	// on an unset custom setting). Report-level tenant scoping is handled upstream.
-	q := u.Query()
-	q.Set("tenant_scope", "__all__")
-	q.Set("log_comment", "worker:reports") // #100 read-budget attribution
-	if p := chWorkloadProfile("worker:reports"); p != "" {
-		q.Set("profile", p)
-	}
-	chApplyGuards(q, chQueryBudget)
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(sql))
+	//
+	// Transport, execution guards, status classification and the anti-truncation
+	// check all live in chhttp now; what remains here is this reader's policy.
+	b, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "query worker:reports",
+		Scope:      "__all__",
+		LogComment: "worker:reports", // #100 read-budget attribution
+		Profile:    chWorkloadProfile("worker:reports"),
+		Budget:     chQueryBudget,
+		MaxBytes:   chMaxResponseBytes,
+	})
 	if err != nil {
 		return nil, err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), os.Getenv("CLICKHOUSE_PASSWORD"))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(chQueryBudget).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, chMaxResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read clickhouse response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	if int64(len(b)) >= chMaxResponseBytes {
-		// Truncation must never masquerade as a complete answer (F-67 shape).
-		return nil, fmt.Errorf("clickhouse response exceeded %d bytes — narrow the query", chMaxResponseBytes)
 	}
 	var out []string
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {

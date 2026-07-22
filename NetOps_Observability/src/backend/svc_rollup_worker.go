@@ -37,15 +37,13 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log"
 	"math/rand"
-	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/chhttp"
 )
 
 const (
@@ -61,33 +59,21 @@ const (
 // policy bounds the INSERT..SELECT's read server-side (defense in depth under
 // the app-layer address clause). Mirrors chWorkerExec, which is fixed at
 // __all__.
+//
+// Routed through chhttp, which gains this path the two things it lacked: a
+// server-side execution ceiling (it set no max_execution_time, so a runaway
+// INSERT..SELECT was bounded only by the client) and classification, so the
+// caller can tell insert backpressure from a schema fault.
 func chScopedExec(ctx context.Context, scope, body string) error {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
-	if err != nil {
-		return err
-	}
-	q := u.Query()
-	q.Set("tenant_scope", scope)
-	q.Set("log_comment", "worker:svc-rollup")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(svcRollupQueryTimeout).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("clickhouse %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
+	_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        body,
+		Op:         "rollup insert",
+		Scope:      scope,
+		LogComment: "worker:svc-rollup",
+		Settings:   chInsertTolerance(),
+		Budget:     svcRollupQueryTimeout,
+	})
+	return err
 }
 
 // sqlStringLiteral quotes an internally-sourced identifier (tenant id, uuid)

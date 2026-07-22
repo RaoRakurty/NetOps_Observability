@@ -322,7 +322,7 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.syncUserBinding(user) // PBAC Phase A: mirror the provisioned identity
+	s.logBindingSync(user, "tacacs") // PBAC Phase A: mirror the provisioned identity
 	if user.Status == "disabled" {
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return

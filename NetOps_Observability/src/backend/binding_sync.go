@@ -15,6 +15,7 @@ package main
 // mutations re-sync the mirror in the meantime.
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -41,9 +42,18 @@ func userBindingScope(u User) string {
 // syncUserBinding makes the binding store reflect the user's current role+tenant:
 // it drops any stale bindings for the principal and writes the single mirror
 // binding. Idempotent (deterministic binding id), safe to call repeatedly.
-func (s *server) syncUserBinding(u User) {
+// Returns an error rather than swallowing one. Found by the widened
+// TestNoVoidPersistFuncs: both store writes below discarded their error, so a
+// failed re-sync left the binding mirror describing the user's OLD role or
+// tenant while the user record showed the new one — and nothing said so. On an
+// authorization mirror that is the worst possible place for a silent write.
+//
+// Callers that cannot fail the operation (SSO/LDAP/TACACS provisioning, where
+// refusing the login would be worse than a stale mirror) must still LOG it —
+// see logBindingSync.
+func (s *server) syncUserBinding(u User) error {
 	if s.bindings == nil || strings.TrimSpace(u.Username) == "" {
-		return
+		return nil
 	}
 	pid := strings.ToLower(strings.TrimSpace(u.Username))
 	want := bindingID(pid, u.Role, userBindingScope(u), EffectAllow)
@@ -51,17 +61,35 @@ func (s *server) syncUserBinding(u User) {
 	// role/tenant change re-syncs cleanly). Phase A holds exactly one per user.
 	for _, b := range s.bindings.ListByPrincipal(pid) {
 		if b.ID != want {
-			_ = s.bindings.Remove(b.ID)
+			if err := s.bindings.Remove(b.ID); err != nil {
+				return fmt.Errorf("remove stale binding %s: %w", b.ID, err)
+			}
 		}
 	}
-	_, _ = s.bindings.Add(RoleBinding{
+	if _, err := s.bindings.Add(RoleBinding{
 		PrincipalID: pid,
 		RoleID:      u.Role,
 		ScopeID:     userBindingScope(u), // ScopeType derived by Add (tenant or platform)
 		Effect:      EffectAllow,
 		GrantedBy:   "system:sync",
 		Reason:      "mirror of legacy user role+tenant",
-	})
+	}); err != nil {
+		return fmt.Errorf("add binding for %s: %w", pid, err)
+	}
+	return nil
+}
+
+// logBindingSync runs the mirror and logs any failure. For the federated
+// provisioning paths, where the sign-in itself must still succeed: a stale
+// mirror is recoverable, a login outage during an IdP migration is not. The
+// point is that the failure is now VISIBLE rather than discarded.
+func (s *server) logBindingSync(u User, source string) {
+	if err := s.syncUserBinding(u); err != nil {
+		logError("bindings", "role-binding mirror out of sync", map[string]any{
+			"user": u.Username, "role": u.Role, "tenant": u.TenantID,
+			"source": source, "err": err.Error(),
+		})
+	}
 }
 
 // removeUserBindings drops a deleted user's bindings.
@@ -78,8 +106,20 @@ func (s *server) backfillBindings() {
 	if s.bindings == nil || s.users == nil {
 		return
 	}
+	failed := 0
 	for _, u := range s.users.List(TenantGlobal, true) { // cross-tenant: every user
-		s.syncUserBinding(u)
+		if err := s.syncUserBinding(u); err != nil {
+			logError("bindings", "backfill mirror failed", map[string]any{
+				"user": u.Username, "err": err.Error(),
+			})
+			failed++
+		}
+	}
+	// A partial backfill leaves some users authorized by the legacy path alone.
+	// Boot continues (refusing to start over one bad row would be worse), but it
+	// must not do so quietly.
+	if failed > 0 {
+		logWarn("bindings", "role-binding backfill incomplete", map[string]any{"failed": failed})
 	}
 }
 

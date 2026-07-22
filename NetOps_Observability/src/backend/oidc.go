@@ -310,7 +310,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "provisioning failed: "+err.Error())
 		return
 	}
-	s.syncUserBinding(user) // PBAC Phase A: mirror the provisioned identity
+	s.logBindingSync(user, "oidc") // PBAC Phase A: mirror the provisioned identity
 	if user.Status == "disabled" {
 		s.ssoFail(w, r, "account disabled")
 		return

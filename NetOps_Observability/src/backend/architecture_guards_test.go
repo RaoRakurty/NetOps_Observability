@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/ast"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -96,21 +97,92 @@ func TestNoVoidSaveLocked(t *testing.T) {
 // Fixing the guard is the actual lesson of the audit: fix the generator, not
 // the instance. If a persist method genuinely cannot fail, add it to
 // voidPersistAllowed WITH a reason.
-var voidPersistAllowed = map[string]string{}
+// Keyed by METHOD NAME. Each entry was read end-to-end and is a prefix-match
+// false positive, not a persist function — the verb list matches leading verbs,
+// which is what makes it spelling-proof and also what makes it over-fire.
+var voidPersistAllowed = map[string]string{
+	"storeSession": "nms_scheduler.go — writes an in-memory map (rt.sessions) under a mutex. " +
+		"'store' here means 'put in the map'; there is no durable write and nothing that can fail.",
+	"storeErr": "ticketing_worker.go — a LOGGING helper that records a store error. " +
+		"It is the thing that reports failures, not one that can have them.",
+	"saveConnectorAndRespond": "cloud_connectors_handlers.go — an HTTP handler. It delegates the " +
+		"write to persistConnector, which returns ok=false and writes the error response itself; " +
+		"the handler returns early on failure. Returning nothing is correct for a handler that owns its own response.",
+}
 
+// The two ClickHouse guards that used to live here — TestClickHouseReadsCarryExecutionGuards
+// and TestClickHouseHTTPWritesCheckTheirStatus — have been REPLACED by
+// clickhouse_seam_test.go + chhttp/chhttp_test.go.
+//
+// They are worth a note because of HOW they died. Both asked whether a token
+// ("chApplyGuards", "StatusCode") appeared somewhere in the same FILE. When the
+// ClickHouse calls moved behind the chhttp seam — which applies execution
+// guards and classifies every status, for every caller, unconditionally — both
+// guards FAILED. Not on a regression: on the fix. A token-presence guard cannot
+// tell "this file stopped checking" from "this file stopped needing to check",
+// so it opposes the very refactor that makes the check universal.
+//
+// What replaces them is stronger on both axes: chhttp_test.go proves the
+// BEHAVIOUR by firing real ClickHouse failures at a real client, and
+// clickhouse_seam_test.go proves the STRUCTURE with an AST walk that no
+// spelling change can slip past.
+
+// persistVerbs name a method whose job is to make data durable. Matched on the
+// leading verb, case-insensitively, so Save/save/SaveLocked/saveToDisk all land.
+var persistVerbs = []string{"save", "persist", "flush", "store", "commit", "sync", "writeall", "writefile"}
+
+// TestNoVoidPersistFuncs fails on any METHOD whose name starts with a persist
+// verb and which returns nothing.
+//
+// Rewritten from a regex to an AST walk, because the regex had inherited the
+// exact weakness it was created to fix. It read:
+//
+//	func \([^)]+\) (save|persist|flush|writeAll)(Locked)?\(\) \{
+//
+// which matches only zero-argument, lowercase, four-specific-verb methods on
+// one line. `func (s *x) save(ctx context.Context) {`, `func (s *x) Save() {`
+// and `func (s *x) commit() {` all sail past — the same lexical blind spot that
+// let F-78's `save()` past TestNoVoidSaveLocked, one level up. A guard written
+// against a spelling is itself an instance fix.
+//
+// The AST does not care about spelling, argument lists, or line breaks.
 func TestNoVoidPersistFuncs(t *testing.T) {
-	// Any method named save/persist/flush/store (± Locked) returning nothing.
-	voidPersist := regexp.MustCompile(`func \([^)]+\) (save|persist|flush|writeAll)(Locked)?\(\) \{`)
-	for name, src := range goSources(t) {
-		for _, m := range voidPersist.FindAllString(src, -1) {
-			if reason, ok := voidPersistAllowed[strings.TrimSpace(m)]; ok && reason != "" {
+	for path, f := range goFilesUnder(t, ".") {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Body == nil {
+				continue // methods only: a bare function has no store to persist to
+			}
+			lower := strings.ToLower(fn.Name.Name)
+			matched := false
+			for _, v := range persistVerbs {
+				if strings.HasPrefix(lower, v) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
-			t.Errorf("%s: %q returns nothing.\n"+
-				"A persist function that cannot fail makes its caller unable to report a failed "+
-				"write, so the API returns 2xx for data that never reached the store (F-62, F-63, F-78). "+
-				"Return error and propagate it. If it genuinely cannot fail, add it to "+
-				"voidPersistAllowed with a reason.", name, m)
+			// Does it return anything at all?
+			if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+				continue
+			}
+			if reason, ok := voidPersistAllowed[fn.Name.Name]; ok {
+				if reason == "" {
+					t.Errorf("%s: %s is exempted with an empty reason — state why or delete the exemption",
+						path, fn.Name.Name)
+				}
+				continue
+			}
+			t.Errorf(`%s: %s() returns nothing.
+
+  A persist function that cannot fail makes its caller unable to report a failed
+  write, so the API returns 2xx for data that never reached the store (F-62,
+  F-63, F-78). Return error and propagate it.
+
+  If it genuinely cannot fail, add its NAME to voidPersistAllowed with a reason.`,
+				path, fn.Name.Name)
 		}
 	}
 }
@@ -167,36 +239,6 @@ func TestNoUnboundedResponseBodyReads(t *testing.T) {
 				"result or a hostile endpoint becomes an OOM in the API process (audit F-27). "+
 				"Use io.ReadAll(io.LimitReader(resp.Body, N)) and treat hitting N as an ERROR, "+
 				"not as a short result.", name, m)
-		}
-	}
-}
-
-// TestClickHouseReadsCarryExecutionGuards guards the other half of F-27: a Go
-// client timeout does NOT stop a ClickHouse query. Without max_execution_time
-// and cancel_http_readonly_queries_on_client_close, every abandoned read keeps
-// running server-side, holding memory, while the caller retries on the next
-// poll — the compounding shape of the 2026-07-09 incident.
-//
-// Rather than trying to match every call site, this asserts the shared helper
-// exists and that the read paths route through it.
-func TestClickHouseReadsCarryExecutionGuards(t *testing.T) {
-	srcs := goSources(t)
-	guard, ok := srcs["ch_workload.go"]
-	if !ok || !strings.Contains(guard, "func chApplyGuards(") {
-		t.Fatal("chApplyGuards is gone from ch_workload.go — without it no ClickHouse read carries " +
-			"max_execution_time / cancel_http_readonly_queries_on_client_close, and an abandoned query " +
-			"runs to completion server-side (F-27)")
-	}
-	for _, want := range []string{"max_execution_time", "cancel_http_readonly_queries_on_client_close"} {
-		if !strings.Contains(guard, want) {
-			t.Errorf("chApplyGuards no longer sets %s", want)
-		}
-	}
-	// Every file that builds a ClickHouse read URL must stamp the guards.
-	for _, name := range []string{"correlations.go", "report_scheduler.go", "appid_fusion_store.go"} {
-		if src, ok := srcs[name]; ok && !strings.Contains(src, "chApplyGuards(") {
-			t.Errorf("%s builds a ClickHouse query but never calls chApplyGuards — "+
-				"its queries outlive the caller that gave up on them (F-27)", name)
 		}
 	}
 }
@@ -349,40 +391,6 @@ func TestPaginatedReadsReportTheirTotal(t *testing.T) {
 		t.Error("pageSliceOf must return an empty slice when the offset is past the end. " +
 			"A clamped last page re-serves rows the caller already walked, so a sequential " +
 			"walk never terminates.")
-	}
-}
-
-// TestClickHouseHTTPWritesCheckTheirStatus guards F-56. A ClickHouse write that
-// builds an INSERT and never looks at resp.StatusCode discards 400/401/500
-// identically to success — no log, no counter, no retry.
-func TestClickHouseHTTPWritesCheckTheirStatus(t *testing.T) {
-	roots := []string{".", "collectors"}
-	for _, root := range roots {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			t.Fatalf("read %s: %v", root, err)
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			b, err := os.ReadFile(filepath.Clean(filepath.Join(root, name)))
-			if err != nil {
-				t.Fatalf("read %s: %v", name, err)
-			}
-			src := stripComments(string(b))
-			if !strings.Contains(src, "INSERT INTO netops.") {
-				continue
-			}
-			if !strings.Contains(src, "StatusCode") && !strings.Contains(src, "chExecErr") {
-				t.Errorf("%s/%s builds an `INSERT INTO netops.*` but never inspects the "+
-					"response status (nor delegates to chExecErr).\n"+
-					"A 400 from one unknown key, a 401 from a rotated password and a 500 all "+
-					"look exactly like success — the write vanishes with no log and no counter "+
-					"(audit F-56).", root, name)
-			}
-		}
 	}
 }
 

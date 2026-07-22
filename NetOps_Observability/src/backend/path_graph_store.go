@@ -737,28 +737,6 @@ func (s *pgchPathGraphStore) PurgeRun(ctx context.Context, tenant, scenarioID, r
 
 // chInsertJSON writes rows to a ClickHouse table as JSONEachRow. Table names come
 // only from this file's constants — never from user input.
-func chInsertJSON(ctx context.Context, table string, rows []map[string]any) error {
-	base := envOr("CLICKHOUSE_URL", "")
-	if base == "" {
-		return errors.New("CLICKHOUSE_URL not configured")
-	}
-	var b strings.Builder
-	b.WriteString("INSERT INTO " + table + " FORMAT JSONEachRow\n")
-	for _, r := range rows {
-		line, err := json.Marshal(r)
-		if err != nil {
-			return err
-		}
-		b.Write(line)
-		b.WriteByte('\n')
-	}
-	_ = ctx // chExecErr uses its own bounded client + timeout
-	if msg := chExecErr(base, b.String()); msg != "" {
-		return errors.New(msg)
-	}
-	return nil
-}
-
 // chScopeFor maps a (tenant, cross) principal to the ClickHouse tenant_scope
 // setting the row policies enforce on. Fails CLOSED: an empty, non-cross tenant
 // sees '__none__' rather than everything.

@@ -1,15 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/chhttp"
 )
 
 // isAlphaToken reports whether s is non-empty and contains only ASCII letters.
@@ -634,47 +634,47 @@ func chTenantScope(r *http.Request) string {
 // the caller's tenant_scope so the DB row policies enforce per-tenant isolation
 // even if a handler's SQL filter is ever forgotten (defense in depth).
 func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
+	// Streams via the chhttp seam: the result set is passed through to the client
+	// rather than buffered, but the FAILURE path is now classified like every
+	// other ClickHouse call.
+	//
+	// Two things this used to do wrong. It forwarded ClickHouse's status AND raw
+	// body straight to the API caller, so a DB::Exception — table names, column
+	// names, sometimes fragments of the query — was rendered to whoever hit the
+	// endpoint. And a 500 from insert backpressure reached the SPA looking
+	// exactly like a 500 from a schema bug.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).ExecStream(r.Context(), chhttp.Request{
+		SQL:   sql,
+		Op:    "api:" + r.URL.Path,
+		Scope: chTenantScope(r),
+		// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
+		// so per-endpoint read budgets are enforceable operationally (see
+		// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
+		// normalized query hashes during an incident.
+		LogComment: "api:" + r.URL.Path,
+		// #101 workload fairness: hot UI reads run under a stricter settings
+		// profile than analytics/background work, so a regressed hot query fails
+		// small and alone instead of competing with the whole platform.
+		Profile: chWorkloadProfile("api:" + r.URL.Path),
+		Budget:  chWorkerBudget,
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		// 503 for transient pressure (the client may usefully retry), 502 for a
+		// permanent fault. The operator gets the detail; the caller does not.
+		status := http.StatusBadGateway
+		if chhttp.Retryable(err) {
+			status = http.StatusServiceUnavailable
+		}
+		logError("clickhouse", "proxy query failed", map[string]any{
+			"path": r.URL.Path, "error": err.Error(), "retryable": chhttp.Retryable(err),
+		})
+		writeError(w, status, errors.New("query backend unavailable"))
 		return
 	}
-	q := u.Query()
-	q.Set("tenant_scope", chTenantScope(r))
-	// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
-	// so per-endpoint read budgets are enforceable operationally (see
-	// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
-	// normalized query hashes during an incident.
-	q.Set("log_comment", "api:"+r.URL.Path)
-	// #101 workload fairness: hot UI reads run under a stricter settings
-	// profile than analytics/background work, so a regressed hot query fails
-	// small and alone instead of competing with the whole platform.
-	if p := chWorkloadProfile("api:" + r.URL.Path); p != "" {
-		q.Set("profile", p)
-	}
-	u.RawQuery = q.Encode()
-	user := envOr("CLICKHOUSE_USER", "netops")
-	pass := envOr("CLICKHOUSE_PASSWORD", "")
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	req.SetBasicAuth(user, pass)
-	req.Header.Set("Content-Type", "text/plain")
-
-	client := backendHTTPClient(20 * time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	defer resp.Body.Close()
+	defer func() { _ = body.Close() }()
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
 }
 
 // intQuery parses a bounded integer query parameter.

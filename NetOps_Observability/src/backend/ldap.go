@@ -316,7 +316,7 @@ func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.syncUserBinding(user) // PBAC Phase A: mirror the provisioned identity
+	s.logBindingSync(user, "ldap") // PBAC Phase A: mirror the provisioned identity
 	if user.Status == "disabled" {
 		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
 		return

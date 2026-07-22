@@ -14,17 +14,17 @@ package main
 // tenant_scope setting (proxyClickHouse/chTenantScope), same as flows/findings.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/chhttp"
 )
 
 // chRows runs one tenant-scoped ClickHouse query and returns the parsed JSON
@@ -51,43 +51,24 @@ func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...
 // is exactly ONE ClickHouse read path carrying tenant_scope, log_comment and the
 // #101 workload profile.
 func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
-	base := envOr("CLICKHOUSE_URL", "http://clickhouse:8123")
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil, err
-	}
-	q := u.Query()
-	q.Set("tenant_scope", scope)
 	tag := "worker:generic"
 	if len(comment) > 0 && comment[0] != "" {
 		tag = comment[0]
 	}
-	q.Set("log_comment", tag)
-	// #101 workload fairness: same profile routing as proxyClickHouse.
-	if p := chWorkloadProfile(tag); p != "" {
-		q.Set("profile", p)
-	}
-	// F-27: without these the 20s client timeout leaves the query running
-	// server-side, holding memory the next poll will ask for again.
-	chApplyGuards(q, 20*time.Second)
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
+	// F-27's execution guards are applied by chhttp for every caller now, rather
+	// than by each site remembering to call chApplyGuards.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "select " + tag,
+		Scope:      scope,
+		LogComment: tag,
+		// #101 workload fairness: same profile routing as proxyClickHouse.
+		Profile:  chWorkloadProfile(tag),
+		Budget:   chWorkerBudget,
+		MaxBytes: chMaxResponseBytes,
+	})
 	if err != nil {
 		return nil, err
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("clickhouse: %s", strings.TrimSpace(string(body)))
 	}
 	var out struct {
 		Data []map[string]any `json:"data"`

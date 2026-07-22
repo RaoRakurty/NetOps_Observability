@@ -1,12 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"io"
 	"log"
-	"net/http"
-	"net/url"
-	"strings"
 	"time"
 )
 
@@ -135,63 +130,4 @@ func ensureCHRowPolicies() {
 			log.Printf("clickhouse: converge failure: %s", e)
 		}
 	}()
-}
-
-// chExecAll runs every statement and returns a description of each failure.
-// It deliberately does NOT stop at the first error: every statement is
-// independently idempotent, and aborting early lets one permanently-failing
-// statement block every statement after it (2026-07-09: a stale enum ALTER
-// kept corr_current from ever being created). Dependent statements (e.g. the
-// corr_current backfill after its CREATE) just fail the same attempt and
-// converge on a later one.
-func chExecAll(base string, stmts []string) []string {
-	var errs []string
-	for _, s := range stmts {
-		if msg := chExecErr(base, s); msg != "" {
-			errs = append(errs, msg)
-		}
-	}
-	return errs
-}
-
-// chExec runs one DDL statement against ClickHouse over HTTP. Passes
-// tenant_scope=__all__ so the statement is never itself filtered by a policy.
-func chExec(base, sql string) bool {
-	return chExecErr(base, sql) == ""
-}
-
-// chExecErr is chExec returning a diagnosable failure description ("" = ok):
-// the head of the statement plus ClickHouse's own error line, so a converge
-// failure names its cause in the log instead of a bare false.
-func chExecErr(base, sql string) string {
-	head := sql
-	if len(head) > 80 {
-		head = head[:80] + "…"
-	}
-	head = strings.Join(strings.Fields(head), " ")
-	u, err := url.Parse(base)
-	if err != nil {
-		return "bad CLICKHOUSE_URL: " + err.Error()
-	}
-	q := u.Query()
-	q.Set("tenant_scope", "__all__")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader([]byte(sql)))
-	if err != nil {
-		return head + ": " + err.Error()
-	}
-	req.SetBasicAuth(envOr("CLICKHOUSE_USER", "netops"), envOr("CLICKHOUSE_PASSWORD", ""))
-	req.Header.Set("Content-Type", "text/plain")
-	resp, err := backendHTTPClient(10 * time.Second).Do(req)
-	if err != nil {
-		return head + ": " + err.Error()
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		// Body read best-effort: the status line alone still identifies the
-		// failing statement; ClickHouse puts the DB::Exception in the body.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return head + ": HTTP " + resp.Status + ": " + strings.Join(strings.Fields(string(body)), " ")
-	}
-	return ""
 }

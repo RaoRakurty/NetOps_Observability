@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/chhttp"
 )
 
 // tunnels.go — vendor-neutral tunnel discovery (step 1: IF-MIB baseline).
@@ -454,40 +454,29 @@ func insertTunnels(ctx context.Context, rows []tunnelRow) error {
 		b.Write(j)
 		b.WriteByte('\n')
 	}
-	endpoint, err := url.Parse(strings.TrimRight(base, "/") + "/")
-	if err != nil {
-		return fmt.Errorf("bad CLICKHOUSE_URL: %w", err)
-	}
-	q := endpoint.Query()
+	// Routed through the shared chhttp seam: transport, bounded read, drain and
+	// — the part this could not do on its own — classification, so a caller can
+	// distinguish TOO_MANY_PARTS backpressure (retry) from a schema fault (do
+	// not). tenant_scope travels in chInsertSettings; see its comment.
+	settings := make(map[string]string, len(chInsertSettings))
 	for k, v := range chInsertSettings {
-		q.Set(k, v)
+		settings[k] = v
 	}
-	endpoint.RawQuery = q.Encode()
-	// #nosec G704 -- base is the operator-configured CLICKHOUSE_URL backend, not user input
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(b.String()))
-	if err != nil {
-		return err
-	}
-	if user := chEnv("CLICKHOUSE_USER", "netops"); user != "" {
-		req.SetBasicAuth(user, os.Getenv("CLICKHOUSE_PASSWORD"))
-	}
-	req.Header.Set("Content-Type", "text/plain")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("clickhouse insert netops.tunnels: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		// Bounded read: ClickHouse puts the DB::Exception in the body, and the
-		// first line of it is what makes the failure diagnosable at all.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("clickhouse insert netops.tunnels: HTTP %s: %s",
-			resp.Status, strings.Join(strings.Fields(string(body)), " "))
-	}
-	// Drain so the connection can be reused (a partially-read body is not).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	return nil
+	scope := settings["tenant_scope"]
+	delete(settings, "tenant_scope") // carried explicitly by Request.Scope
+	_, err := (&chhttp.Client{
+		Base:     base,
+		User:     chEnv("CLICKHOUSE_USER", "netops"),
+		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
+		HTTP:     &http.Client{Timeout: 12 * time.Second},
+	}).Exec(ctx, chhttp.Request{
+		SQL:      b.String(),
+		Op:       "insert netops.tunnels",
+		Scope:    scope,
+		Settings: settings,
+		Budget:   10 * time.Second,
+	})
+	return err
 }
 
 func chEnv(key, def string) string {

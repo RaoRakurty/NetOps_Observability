@@ -139,7 +139,7 @@ func TestPersistedStructFieldsHaveColumns(t *testing.T) {
     1. persist it — add the column (migration + INSERT + ON CONFLICT + scan)
     2. remove it  — from the struct AND from any API that accepts it
     3. exempt it  — add to the struct's exempt map with a reason`,
-				ps.structName, f, f, ps.colsConst)
+					ps.structName, f, f, ps.colsConst)
 			}
 		}
 	}
