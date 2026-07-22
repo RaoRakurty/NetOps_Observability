@@ -50,6 +50,8 @@ scripts/bundle-autoupdate.log
 scripts/bundle-autoupdate.build.log
 scripts/.stack-watchdog.restarts
 scripts/.stack-watchdog.rejects
+# demo_lab.py run manifests — local lab state, not source
+scripts/.demo-runs/
 src/frontend/public/brand-samples/
 # compiled binaries (never commit build artifacts)
 src/backend/backend

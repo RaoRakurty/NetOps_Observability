@@ -1,0 +1,44 @@
+# retail.yaml — a retail-chain estate.
+#
+# Every key is optional: what you omit falls back to the builtin defaults in
+# demo_lab.py, so a profile that only changes tenant count is a two-line file.
+#
+#   ./demo_lab.py seed --profile demo-profiles/retail.yaml --dry-run
+name: retail
+
+org:
+  name_template: "{brand} Group"
+  slug_template: "{slug}-grp"
+
+tenants:
+  count: 10
+  brands: [Walmart, Target, Costco, Kroger, Homedepot,
+           Lowes, Bestbuy, Safeway, Nordstrom, Walgreens]
+  name_template: "{brand} Retail"
+  slug_template: "{slug}"
+  regions: [us-east, us-west, eu-central, eu-west]
+  note_template: "demo tenant for {brand}"
+
+sites:
+  per_tenant: 5
+  name_template: "br{n}"
+
+devices:
+  # Tokens: {tenant_slug} {site} {role} {idx}
+  name_template: "{tenant_slug}-{site}-{role}{idx:02d}"
+  roles:
+    - {role: core-sw,    type: switch,   vendor: arista,    count: 1}
+    - {role: access-sw,  type: switch,   vendor: arista,    count: 1}
+    - {role: branch-fw,  type: firewall, vendor: palo-alto, count: 1}
+    - {role: sdwan-edge, type: router,   vendor: cisco,     count: 1}
+
+addressing:
+  # Tenant N gets 10.(base+N).x.y; site M gets the third octet.
+  base_second_octet: 100
+  site_third_octet_start: 1
+
+traffic:
+  syslog_per_device: 5
+  netflow_per_device: 10
+  metrics: true
+  findings_per_tenant: 1
