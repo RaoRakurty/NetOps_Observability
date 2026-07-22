@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,23 +16,79 @@ import (
 //
 // All methods are nil-safe so test servers that don't wire a throttle simply
 // have lockout disabled.
+//
+// ── F-25: this map used to FAIL OPEN, silently ───────────────────────────────
+// The old code returned from fail() the moment the map hit 50,000 entries. An
+// entry with fails<allowed and a zero lockedUntil was never swept, so the map
+// only ever grew. /api/auth/login is unauthenticated (publicPaths), so anyone
+// could spray ~50k junk usernames, fill the map, and from then on NO new
+// account was tracked — brute-force lockout was off platform-wide, with no log
+// and no metric. Operators would still see "lockout: enabled" in Security
+// Settings. A throttle that disables itself under load is worse than no
+// throttle, because it is believed.
+//
+// The replacement keeps the memory bound and never stops counting:
+//
+//  1. SWEEP. Unlocked entries older than trackWindow, and locks that have
+//     expired, are dropped. Junk from a spray evaporates on its own.
+//  2. LRU EVICTION of UNLOCKED entries when the cap is reached. A locked entry
+//     is never evictable — otherwise the spray becomes an UNLOCK primitive:
+//     50k junk logins would clear the lock on the account being attacked.
+//     Attacker entries (touched once) are the LRU; an account actively being
+//     brute-forced is touched every guess and stays hot, so reaching the
+//     lockout threshold survives eviction.
+//  3. FAIL CLOSED at true saturation. If every one of the 50k slots is a live
+//     lock there is no room and no eviction candidate. The old code shrugged;
+//     this one reports untracked=false to the caller, which refuses the sign-in
+//     the way a lock does, and counts + logs it. That is a login brown-out
+//     caused by an attacker — deliberate: refusing sign-ins loudly is the
+//     lesser failure against silently disabling brute-force protection for
+//     every account. It self-heals as locks expire (default 300s), and it takes
+//     allowed×50k failures inside one unlock window to reach.
 type loginThrottle struct {
 	mu      sync.Mutex
 	entries map[string]*throttleEntry
+	max     int
+	window  time.Duration
+	now     func() time.Time
+
+	// Observability (§10): every one of these was a silent event before.
+	evictions  atomic.Uint64
+	sweeps     atomic.Uint64
+	saturation atomic.Uint64
 }
 
 type throttleEntry struct {
 	fails       int
 	lockedUntil time.Time
+	// lastSeen drives both sweeping and LRU eviction. Its absence is why the
+	// old map could only grow.
+	lastSeen time.Time
 }
 
-const throttleMaxAccounts = 50000 // memory backstop against username spraying
+const (
+	throttleMaxAccounts = 50000           // memory backstop against username spraying
+	throttleTrackWindow = 1 * time.Hour   // unlocked failure state older than this is stale
+	throttleSweepEvery  = 5 * time.Minute // janitor cadence
+)
 
 func newLoginThrottle() *loginThrottle {
-	return &loginThrottle{entries: map[string]*throttleEntry{}}
+	return &loginThrottle{
+		entries: map[string]*throttleEntry{},
+		max:     throttleMaxAccounts,
+		window:  throttleTrackWindow,
+		now:     time.Now,
+	}
 }
 
 func throttleKey(user string) string { return strings.ToLower(strings.TrimSpace(user)) }
+
+func (t *loginThrottle) clock() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
+}
 
 // locked reports whether the account is currently locked and the remaining time.
 // An expired lock is cleared lazily.
@@ -45,38 +103,53 @@ func (t *loginThrottle) locked(user string) (bool, time.Duration) {
 	if e == nil || e.lockedUntil.IsZero() {
 		return false, 0
 	}
-	if d := time.Until(e.lockedUntil); d > 0 {
+	if d := e.lockedUntil.Sub(t.clock()); d > 0 {
 		return true, d
 	}
 	delete(t.entries, k) // lock window elapsed
 	return false, 0
 }
 
-// fail records one failed attempt and locks the account once it reaches `allowed`.
-// allowed<=0 disables lockout (no-op).
-func (t *loginThrottle) fail(user string, allowed, unlockSeconds int) {
+// fail records one failed attempt and locks the account once it reaches
+// `allowed`. allowed<=0 disables lockout (no-op, tracked=true).
+//
+// tracked reports whether the failure was actually COUNTED. false means the
+// throttle is saturated (F-25) and the caller MUST refuse the attempt — an
+// uncounted failure is an unlimited guess.
+func (t *loginThrottle) fail(user string, allowed, unlockSeconds int) (tracked bool) {
 	if t == nil || allowed <= 0 {
-		return
+		return true
 	}
 	k := throttleKey(user)
+	now := t.clock()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	e := t.entries[k]
 	if e == nil {
-		if len(t.entries) >= throttleMaxAccounts {
-			return // backstop: stop tracking new accounts under a spray
+		if len(t.entries) >= t.max {
+			t.sweepLocked(now)
+		}
+		if len(t.entries) >= t.max && !t.evictLRULocked(now) {
+			// Every slot is a live lock: no room, nothing evictable.
+			t.saturation.Add(1)
+			logWarn("auth", "login throttle saturated — sign-ins refused while every tracked account is locked",
+				map[string]any{"tracked_accounts": len(t.entries), "max": t.max})
+			return false
 		}
 		e = &throttleEntry{}
 		t.entries[k] = e
 	}
 	e.fails++
+	e.lastSeen = now
 	if e.fails >= allowed {
 		secs := unlockSeconds
 		if secs <= 0 {
 			secs = 300
 		}
-		e.lockedUntil = time.Now().Add(time.Duration(secs) * time.Second)
+		e.lockedUntil = now.Add(time.Duration(secs) * time.Second)
 	}
+	return true
 }
 
 // success clears any failure/lock state for the account.
@@ -88,4 +161,89 @@ func (t *loginThrottle) success(user string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.entries, k)
+}
+
+// sweep drops stale state. Called by the janitor; also inline at the cap.
+func (t *loginThrottle) sweep() {
+	if t == nil {
+		return
+	}
+	now := t.clock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sweepLocked(now)
+}
+
+// sweepLocked removes expired locks and unlocked entries idle past the tracking
+// window. This is the deletion path the original had NO equivalent of: entries
+// were only ever removed on a successful login or a lock expiry check, so a
+// spray of usernames that never log in successfully accumulated forever.
+func (t *loginThrottle) sweepLocked(now time.Time) {
+	removed := 0
+	for k, e := range t.entries {
+		switch {
+		case !e.lockedUntil.IsZero():
+			if !e.lockedUntil.After(now) {
+				delete(t.entries, k)
+				removed++
+			}
+		case now.Sub(e.lastSeen) >= t.window:
+			delete(t.entries, k)
+			removed++
+		}
+	}
+	if removed > 0 {
+		t.sweeps.Add(uint64(removed))
+	}
+}
+
+// evictLRULocked frees one slot by dropping the least-recently-touched UNLOCKED
+// entry, and reports whether it found one. Locked entries are deliberately not
+// candidates: evicting a lock would let a spray unlock the account under attack.
+func (t *loginThrottle) evictLRULocked(now time.Time) bool {
+	oldestKey := ""
+	var oldest time.Time
+	for k, e := range t.entries {
+		if !e.lockedUntil.IsZero() && e.lockedUntil.After(now) {
+			continue // live lock — never evictable
+		}
+		if oldestKey == "" || e.lastSeen.Before(oldest) {
+			oldestKey, oldest = k, e.lastSeen
+		}
+	}
+	if oldestKey == "" {
+		return false
+	}
+	delete(t.entries, oldestKey)
+	t.evictions.Add(1)
+	return true
+}
+
+// size reports the tracked-account count (metrics + tests).
+func (t *loginThrottle) size() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.entries)
+}
+
+// runJanitor sweeps stale state until ctx is cancelled, so an idle process
+// releases the memory a spray parked in the map instead of holding it until
+// restart.
+func (t *loginThrottle) runJanitor(ctx context.Context) {
+	if t == nil {
+		return
+	}
+	tk := time.NewTicker(throttleSweepEvery)
+	defer tk.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tk.C:
+			t.sweep()
+		}
+	}
 }

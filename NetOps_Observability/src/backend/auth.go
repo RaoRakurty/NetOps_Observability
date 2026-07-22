@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -137,7 +138,16 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok || !verifyPassword(req.Password, user.PasswordHash) {
 		// Count the failure against the lockout policy for the account's scope.
 		allowed, unlock := s.lockoutPolicy(user, ok)
-		s.loginThrottle.fail(req.Username, allowed, unlock)
+		// F-25: an UNCOUNTED failure is an unlimited guess. The throttle used to
+		// stop counting silently once its map was full, so a username spray turned
+		// brute-force lockout off platform-wide. Now it says so, and we refuse the
+		// attempt rather than serving a guess we cannot count.
+		if !s.loginThrottle.fail(req.Username, allowed, unlock) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests,
+				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
+			return
+		}
 		// Generic message: don't leak whether the username exists.
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
@@ -338,7 +348,11 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// F-32: PRE-AUTH route — a refresh token is a few hundred bytes. Its sibling
+	// /api/auth/login was correctly capped at 64 KiB; this one had no cap of its
+	// own and rode only the 50 MiB global backstop, which amplifies 3-5× in the
+	// struct decode and can be sent concurrently by an unauthenticated caller.
+	if err := decodeJSONBody(w, r, authTokenBodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -441,7 +455,13 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	// F-32: PRE-AUTH route. A missing/malformed body is tolerated by design
+	// (logout must always succeed), but the read is now bounded — and a body
+	// refused for SIZE gets a line, because a caller pushing megabytes at
+	// /logout is not a browser. The old `_ = ...Decode(...)` discarded both.
+	if err := decodeJSONBody(w, r, authTokenBodyBytes, &req); err != nil && !errors.Is(err, io.EOF) {
+		logWarn("auth", "logout body rejected", map[string]any{"err": err.Error()})
+	}
 	if req.RefreshToken != "" {
 		// Revoke the server-side session too (not just the refresh token), so the
 		// logout is authoritative across the session's lifecycle.
@@ -547,7 +567,9 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req changePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// F-32: PRE-AUTH route (the login window's "Change password" names the
+	// account and proves ownership with the current password).
+	if err := decodeJSONBody(w, r, authCredentialBodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -614,6 +636,18 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- middleware -----------------------------------------------------------
+
+// Per-handler body caps for the unauthenticated auth surface (F-32). Named
+// rather than inline so the five sibling routes cannot drift apart again —
+// drift is exactly how /api/auth/login ended up capped and its five neighbours
+// did not.
+const (
+	// authTokenBodyBytes bounds a body that carries only an opaque token.
+	authTokenBodyBytes int64 = 16 << 10
+	// authCredentialBodyBytes bounds a credential pair; matches the 64 KiB
+	// already used by /api/auth/login (SR-012).
+	authCredentialBodyBytes int64 = 64 << 10
+)
 
 // publicPaths can be reached without a Bearer token.
 var publicPaths = []string{

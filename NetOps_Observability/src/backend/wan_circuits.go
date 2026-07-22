@@ -587,7 +587,9 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 		for _, v := range r.Values {
 			f := 0.0
 			if str, ok := v[1].(string); ok {
-				f, _ = strconv.ParseFloat(str, 64)
+				// F-21: NaN/±Inf are missing data, not utilisation — and they
+				// cannot be JSON-encoded, so one of them emptied the response.
+				f = finiteOrZero(str)
 			}
 			if f < 0 {
 				f = 0

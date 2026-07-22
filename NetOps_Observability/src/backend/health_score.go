@@ -518,10 +518,14 @@ func truthy(v any) bool {
 func asFloat(v any) float64 {
 	switch x := v.(type) {
 	case float64:
-		return x
+		// ClickHouse can hand back a non-finite float directly (nan/inf in a
+		// JSON number position); sanitise it here too, not just the string form.
+		return sanitizeFloat(x)
 	case string:
-		f, _ := strconv.ParseFloat(x, 64)
-		return f
+		// F-21: ParseFloat("NaN") succeeds and the NaN lands in a health-score
+		// response field, where it (a) fails the JSON encode for the entire
+		// response and (b) compares false against every threshold above.
+		return finiteOrZero(x)
 	}
 	return 0
 }

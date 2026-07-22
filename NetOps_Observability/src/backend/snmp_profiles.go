@@ -4,11 +4,21 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+)
+
+// Body bounds for the SNMP profile surface (F-32). The metrics endpoint decodes
+// into a slice with no element limit, so it needs BOTH a byte cap and a count
+// cap — bytes alone still permit a very large number of very small structs.
+const (
+	snmpProfileBodyBytes     int64 = 1 << 20 // 1 MiB: a profile is an OID table
+	snmpMetricsBodyBytes     int64 = 1 << 20
+	maxSNMPMetricsPerRequest       = 2000
 )
 
 // catalogFS embeds an optional vendor profile catalog kept as data (not Go
@@ -342,7 +352,9 @@ func (s *server) handleSNMPProfiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var p SNMPProfile
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		// F-32: a profile carries an OID table, so it is larger than a form post
+		// but nowhere near 50 MiB.
+		if err := decodeJSONBody(w, r, snmpProfileBodyBytes, &p); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -371,9 +383,20 @@ func (s *server) handleSNMPProfileByID(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
 			return
 		}
+		// F-32: this decodes into an UNBOUNDED SLICE. Under the 50 MiB global
+		// backstop a single request could allocate millions of SNMPMetric
+		// structs — the one shape in the handler set where body size becomes an
+		// unbounded allocation rather than a bounded one. Cap the bytes AND the
+		// element count: a profile with thousands of custom metrics is a
+		// mistake, not a workload, and it must be refused rather than stored.
 		var metrics []SNMPMetric
-		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+		if err := decodeJSONBody(w, r, snmpMetricsBodyBytes, &metrics); err != nil {
 			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if len(metrics) > maxSNMPMetricsPerRequest {
+			writeError(w, http.StatusRequestEntityTooLarge,
+				fmt.Errorf("too many metrics in one request: %d (max %d)", len(metrics), maxSNMPMetricsPerRequest))
 			return
 		}
 		p, err := s.snmpProfiles.AddMetrics(id, metrics)

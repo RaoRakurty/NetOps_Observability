@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -326,8 +325,12 @@ func parseThresholdSpec(spec string, base coverageThresholds) (coverageThreshold
 	out := base
 	dst := []*float64{&out.Complete, &out.Substantial, &out.Minimal}
 	for i, p := range parts {
-		f, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil || f < 0 || f > 100 {
+		// F-21: `f < 0 || f > 100` does NOT reject a NaN — every comparison with
+		// NaN is false, so "NaN/80/25" slipped through the range check here and
+		// was only caught by luck downstream (the ordering test also compares
+		// false). Reject non-finite explicitly rather than by accident.
+		f, ok := parseMetricFloat(p)
+		if !ok || f < 0 || f > 100 {
 			return base, false
 		}
 		*dst[i] = f / 100.0

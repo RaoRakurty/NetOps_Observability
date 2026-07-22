@@ -330,6 +330,12 @@ func newServer() *server {
 	pool.Enable("wan-echo", os.Getenv("FEATURE_WAN_ECHO") == "true")
 
 	notifier := notify.NewDispatcher()
+	// F-22: delivery failures used to be a bare log.Printf and nothing else.
+	// Route them into the structured app log so a lost page is searchable next
+	// to the alert that produced it (§10).
+	notifier.SetLogger(func(level, msg string, fields map[string]any) {
+		appLog.log(level, "notify", msg, fields)
+	})
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
 	// after srv exists), which seeds from FEATURE_SLACK_NOTIFICATIONS/SLACK_WEBHOOK_URL
 	// and FEATURE_PAGERDUTY_NOTIFICATIONS/PAGERDUTY_KEY on first run and is then
@@ -880,6 +886,10 @@ func main() {
 	}
 	workers.start("ws-broadcaster", func() { srv.startBroadcaster(ctx.Done()) })
 	workers.start("ws-alert-watcher", func() { srv.watchAlertsForBroadcast(ctx) })
+	// F-25: the failed-login map had no deletion path at all — a username spray
+	// filled it permanently and lockout then failed OPEN for every account not
+	// already tracked. The janitor is what keeps the cap reachable.
+	workers.start("login-throttle-janitor", func() { srv.loginThrottle.runJanitor(ctx) })
 	// Multi-instance cache coherence for the cached-by-design stores: refresh
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
@@ -970,6 +980,14 @@ func main() {
 	cancel()
 	if !workers.drain(durationOr("WORKER_DRAIN_TIMEOUT", 15*time.Second)) {
 		logWarn("shutdown", "background workers did not drain before timeout", nil)
+	}
+	// F-22: drain queued notifications last. A deploy during an incident used to
+	// kill the fan-out goroutines mid-send; the pages simply never arrived.
+	if srv.notifier != nil {
+		if d := srv.notifier.QueueDepth(); d > 0 {
+			logWarn("shutdown", "notifications still queued at shutdown", map[string]any{"queued": d})
+		}
+		srv.notifier.Close()
 	}
 	logInfo("shutdown", "goodbye", nil)
 }
@@ -1562,14 +1580,92 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_ticketing_merged_redirects_total Manual ticket actions refused with the canonical id because the object was merged.\n")
 	fmt.Fprintf(w, "# TYPE netops_ticketing_merged_redirects_total counter\n")
 	fmt.Fprintf(w, "netops_ticketing_merged_redirects_total %d\n", s.tktMergedRedirects.Load())
+	// F-25: the brute-force throttle's pressure was entirely invisible — it went
+	// fail-open at its cap with no log and no metric, so "lockout: enabled" in
+	// Security Settings could be a lie for months. Saturation > 0 means sign-ins
+	// are being refused; evictions climbing means a spray is in progress.
+	if s.loginThrottle != nil {
+		fmt.Fprintf(w, "# HELP netops_login_throttle_accounts Accounts currently tracked by the failed-login throttle.\n")
+		fmt.Fprintf(w, "# TYPE netops_login_throttle_accounts gauge\n")
+		fmt.Fprintf(w, "netops_login_throttle_accounts %d\n", s.loginThrottle.size())
+		fmt.Fprintf(w, "# HELP netops_login_throttle_evictions_total Unlocked failure records evicted (LRU) to make room at the cap — a username spray in progress.\n")
+		fmt.Fprintf(w, "# TYPE netops_login_throttle_evictions_total counter\n")
+		fmt.Fprintf(w, "netops_login_throttle_evictions_total %d\n", s.loginThrottle.evictions.Load())
+		fmt.Fprintf(w, "# HELP netops_login_throttle_swept_total Stale failed-login records reclaimed by the janitor.\n")
+		fmt.Fprintf(w, "# TYPE netops_login_throttle_swept_total counter\n")
+		fmt.Fprintf(w, "netops_login_throttle_swept_total %d\n", s.loginThrottle.sweeps.Load())
+		fmt.Fprintf(w, "# HELP netops_login_throttle_saturated_total Sign-ins refused because every throttle slot held a live lock (fail-closed).\n")
+		fmt.Fprintf(w, "# TYPE netops_login_throttle_saturated_total counter\n")
+		fmt.Fprintf(w, "netops_login_throttle_saturated_total %d\n", s.loginThrottle.saturation.Load())
+	}
+	// F-21: a response body that failed to encode used to be a 200 with zero
+	// bytes and no trace anywhere. This counter is that trace.
+	fmt.Fprintf(w, "# HELP netops_json_encode_failures_total Responses that failed to JSON-encode and were answered 500 instead of an empty 200.\n")
+	fmt.Fprintf(w, "# TYPE netops_json_encode_failures_total counter\n")
+	fmt.Fprintf(w, "netops_json_encode_failures_total %d\n", jsonEncodeFailures.Load())
+	fmt.Fprintf(w, "# HELP netops_json_write_failures_total Response bodies that encoded but could not be written (client disconnected mid-response).\n")
+	fmt.Fprintf(w, "# TYPE netops_json_write_failures_total counter\n")
+	fmt.Fprintf(w, "netops_json_write_failures_total %d\n", jsonWriteFailures.Load())
+	fmt.Fprintf(w, "# HELP netops_metric_nonfinite_total Metric samples dropped because the store returned NaN/±Inf.\n")
+	fmt.Fprintf(w, "# TYPE netops_metric_nonfinite_total counter\n")
+	fmt.Fprintf(w, "netops_metric_nonfinite_total %d\n", metricNonFinite.Load())
+	// F-22: alert delivery had no counter at all — a page lost to a transient
+	// 502 during an incident was invisible.
+	if s.notifier != nil {
+		s.notifier.WriteMetrics(w)
+	}
 }
 
 // ---- helpers ----------------------------------------------------------------
 
+// jsonEncodeFailures / jsonWriteFailures make the two ways a response can fail
+// to reach the client countable (§10). Package-level because writeJSON is a free
+// function called from ~400 sites and threading a server through all of them
+// would be a far larger change than the defect warrants; they are write-only
+// atomics with no configuration, so there is no mutable global state to race on.
+var (
+	jsonEncodeFailures atomic.Uint64
+	jsonWriteFailures  atomic.Uint64
+)
+
+// writeJSON encodes body as the response.
+//
+// F-21: this used to be `w.WriteHeader(status)` followed by
+// `_ = json.NewEncoder(w).Encode(body)`. Encode marshals into an internal
+// buffer BEFORE writing anything, so a body containing a NaN or ±Inf float
+// (json: unsupported value: NaN) produced a 200 OK with
+// Content-Type: application/json and ZERO BYTES — no log, no metric, at any of
+// ~400 call sites. NaN reaches response structs from unguarded ParseFloat on
+// VictoriaMetrics/ClickHouse values ("NaN" parses successfully), so a metric
+// that goes NaN turns an endpoint into a silent empty-200 generator and the UI
+// renders "no data" for a live fault.
+//
+// Marshalling FIRST is the whole fix: the status line is committed only once
+// there is a body to send, so an encode failure can still be answered honestly
+// with a 500 the caller can see.
 func writeJSON(w http.ResponseWriter, status int, body any) {
+	buf, err := json.Marshal(body)
+	if err != nil {
+		jsonEncodeFailures.Add(1)
+		logError("http", "response body failed to encode — answering 500 instead of an empty 200", map[string]any{
+			"err":             err.Error(),
+			"body_type":       fmt.Sprintf("%T", body),
+			"intended_status": status,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("{\"error\":\"response encoding failed\",\"code\":\"RESPONSE_ENCODE_FAILED\"}\n"))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	// Trailing newline keeps the bytes identical to the previous Encoder path.
+	if _, err := w.Write(append(buf, '\n')); err != nil {
+		// The status line is already committed and the connection is gone, so
+		// there is nothing to report to the client — but a rising counter still
+		// distinguishes "clients disconnect mid-response" from "all is well".
+		jsonWriteFailures.Add(1)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
@@ -1650,13 +1746,59 @@ func maxRequestBodyBytes() int64 {
 	return 50 << 20 // 50 MiB, matching nginx client_max_body_size
 }
 
+// preAuthMaxBodyBytes caps the request body on every UNAUTHENTICATED route
+// (F-32).
+//
+// The global 50 MiB backstop is correctly placed and nothing is truly
+// unbounded — but 50 MiB decoded into Go structs amplifies 3-5×, and the routes
+// that can be hit with no credentials at all are the ones where that matters:
+// /api/auth/refresh, /logout, /change-password, /api/auth/ldap/login and
+// /api/auth/tacacs/login all decoded a body with no cap of their own, while
+// /api/auth/login right next to them was correctly capped at 64 KiB. That is a
+// sibling inconsistency, and closing it per-handler would only close today's
+// five: capping by ROUTE CLASS means the next public route inherits the bound
+// whether or not its author remembers.
+//
+// 256 KiB rather than 64 KiB because /api/auth/sso/callback carries a signed
+// SAML/OIDC assertion, which is legitimately tens of kilobytes. Still ~200×
+// tighter than the global cap.
+const preAuthMaxBodyBytes int64 = 256 << 10
+
+// isPublicPath reports whether a path is reachable without a Bearer token.
+// Shares the single publicPaths list with withAuth, so the two can never drift.
+func isPublicPath(p string) bool {
+	for _, pub := range publicPaths {
+		if p == pub {
+			return true
+		}
+	}
+	return false
+}
+
+// requestBodyLimit picks the byte cap for a request: the tight pre-auth cap for
+// unauthenticated routes, the global backstop for everything else.
+func requestBodyLimit(path string, global int64) int64 {
+	if isPublicPath(path) && preAuthMaxBodyBytes < global {
+		return preAuthMaxBodyBytes
+	}
+	return global
+}
+
 func withBodyLimit(limit int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			r.Body = http.MaxBytesReader(w, r.Body, requestBodyLimit(r.URL.Path, limit))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// decodeJSONBody decodes the request body into dst under a PER-HANDLER byte cap
+// (F-32). Defence in depth behind the route-class cap above: a handler that
+// knows its payload is small (a token, a credential pair) should say so, so the
+// bound survives the handler being reused on a non-public route.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, max int64, dst any) error {
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, max)).Decode(dst)
 }
 
 func withLogging(next http.Handler) http.Handler {

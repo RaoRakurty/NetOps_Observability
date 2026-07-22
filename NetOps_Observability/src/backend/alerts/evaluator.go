@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,7 +77,10 @@ func Evaluate(r Rule) ([]Sample, error) {
 			Result     json.RawMessage `json:"result"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	// F-27 class: bound the reply. A query that accidentally selects a huge
+	// series set would otherwise be read into memory without limit, on a 30s
+	// tick, inside the process that serves the API.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&body); err != nil {
 		return nil, err
 	}
 	if body.Status != "success" {
@@ -93,12 +100,44 @@ func Evaluate(r Rule) ([]Sample, error) {
 		s := Sample{Labels: m.Metric}
 		if len(m.Value) == 2 {
 			if vs, ok := m.Value[1].(string); ok {
-				s.Value, _ = strconv.ParseFloat(vs, 64)
+				v, finite := parseSampleValue(vs)
+				if !finite {
+					// F-21 companion, worse consequence than the empty-200:
+					// strconv.ParseFloat("NaN", 64) SUCCEEDS, and NaN compares
+					// false against every threshold — so the sample was carried
+					// into the alert and the rule built on it silently never
+					// fired. A metric going NaN (stddev over one sample, a 0/0
+					// rate) used to disable its alert with no signal anywhere.
+					// A non-finite sample is MISSING data: drop it and say so.
+					nonFiniteSamples.Add(1)
+					log.Printf("alerts: rule %q dropped a non-finite sample (value=%q) — the series is producing NaN/Inf, so any threshold on it evaluates false", r.Name, vs)
+					continue
+				}
+				s.Value = v
 			}
 		}
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// nonFiniteSamples counts samples dropped for being NaN/±Inf. Exported to the
+// API's /metrics through NonFiniteSamples() — the defect was that this
+// condition had no signal at all.
+var nonFiniteSamples atomic.Uint64
+
+// NonFiniteSamples reports how many NaN/±Inf samples have been dropped.
+func NonFiniteSamples() uint64 { return nonFiniteSamples.Load() }
+
+// parseSampleValue parses a VictoriaMetrics sample value, reporting finite=false
+// for malformed AND for non-finite values (NaN, ±Inf) — which ParseFloat
+// otherwise accepts happily.
+func parseSampleValue(s string) (v float64, finite bool) {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
 }
 
 func envOr(key, fallback string) string {
