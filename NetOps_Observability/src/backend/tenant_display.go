@@ -76,15 +76,22 @@ func (s *tenantDisplayStore) load() {
 }
 
 // saveLocked persists the map. Caller holds s.mu. Blank path = in-memory only.
-func (s *tenantDisplayStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *tenantDisplayStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.cfgs, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("settings", "persist tenant display prefs failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.cfgs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode tenant display prefs: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("settings", "persist tenant display prefs failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist tenant display prefs: %w", err)
+	}
+	return nil
 }
 
 // get returns the tenant's record; unconfigured tenants get the default.
@@ -105,15 +112,23 @@ func (s *tenantDisplayStore) get(tenant string) tenantDisplayConfig {
 
 // setTimeDisplay stamps the tenant FROM THE PRINCIPAL (callers pass the
 // principalTenant result, never body input) and persists.
-func (s *tenantDisplayStore) setTimeDisplay(tenant, mode string) tenantDisplayConfig {
+func (s *tenantDisplayStore) setTimeDisplay(tenant, mode string) (tenantDisplayConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.TimeDisplay = mode
 	s.cfgs[tenant] = c
-	s.saveLocked()
-	return c
+	if err := s.saveLocked(); err != nil {
+		if had {
+			s.cfgs[tenant] = prev
+		} else {
+			delete(s.cfgs, tenant)
+		}
+		return prev, err
+	}
+	return c, nil
 }
 
 // normalizeTimeDisplay validates the caller's value — anything off the closed
@@ -161,7 +176,11 @@ func (s *server) handleDisplaySettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		cfg := s.displayPrefs.setTimeDisplay(tenant, mode)
+		cfg, err := s.displayPrefs.setTimeDisplay(tenant, mode)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("display preference was not saved"))
+			return
+		}
 		if s.audit != nil {
 			s.audit.Record(AuditEvent{
 				Actor: claims.Sub, Tenant: tenant, Cross: cross,

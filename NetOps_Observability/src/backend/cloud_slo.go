@@ -95,15 +95,22 @@ func (s *cloudSLOStore) load() {
 	s.slos = m
 }
 
-func (s *cloudSLOStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *cloudSLOStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.slos, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("settings", "persist cloud slos failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.slos, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode cloud slos: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("settings", "persist cloud slos failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist cloud slos: %w", err)
+	}
+	return nil
 }
 
 // list returns the tenant's SLO definitions (copy). Nil-safe.
@@ -118,15 +125,24 @@ func (s *cloudSLOStore) list(tenant string) []cloudSLO {
 
 // set stamps the tenant FROM THE PRINCIPAL (callers pass principalTenant) and
 // persists. defs==nil clears the tenant's SLOs.
-func (s *cloudSLOStore) set(tenant string, defs []cloudSLO) {
+func (s *cloudSLOStore) set(tenant string, defs []cloudSLO) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev, had := s.slos[tenant]
 	if defs == nil {
 		delete(s.slos, tenant)
 	} else {
 		s.slos[tenant] = defs
 	}
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if had {
+			s.slos[tenant] = prev
+		} else {
+			delete(s.slos, tenant)
+		}
+		return err
+	}
+	return nil
 }
 
 // normalizeCloudSLOs validates a caller's list: bounded count, real app tokens,
@@ -306,7 +322,10 @@ func (s *server) handleCloudSLOs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		tenant, cross := principalTenant(claims)
-		s.cloudSLOs.set(tenant, defs)
+		if err := s.cloudSLOs.set(tenant, defs); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("SLOs were not saved"))
+			return
+		}
 		if s.audit != nil {
 			apps := make([]string, 0, len(defs))
 			for _, d := range defs {

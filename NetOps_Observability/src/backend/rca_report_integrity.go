@@ -120,15 +120,22 @@ func newRcaRevisionStore(path string) *rcaRevisionStore {
 	return s
 }
 
-func (s *rcaRevisionStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *rcaRevisionStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.m, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("rca", "persist rca revisions failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode rca revisions: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("rca", "persist rca revisions failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist rca revisions: %w", err)
+	}
+	return nil
 }
 
 // list returns ONE tenant's revision register for one case, oldest first.
@@ -169,8 +176,14 @@ func (s *rcaRevisionStore) record(tenant, corrID string, rev rcaReportRevision) 
 		s.m[tenant] = map[string][]rcaReportRevision{}
 	}
 	rev.Revision = len(s.m[tenant][corrID]) + 1
-	s.m[tenant][corrID] = append(s.m[tenant][corrID], rev)
-	s.saveLocked()
+	prev := s.m[tenant][corrID]
+	s.m[tenant][corrID] = append(append([]rcaReportRevision(nil), prev...), rev)
+	if err := s.saveLocked(); err != nil {
+		// The register exists SPECIFICALLY to prove a report was not mutated. An
+		// unpersisted revision must never be reported as registered.
+		s.m[tenant][corrID] = prev
+		return rcaReportRevision{}, false, err
+	}
 	return rev, true, nil
 }
 

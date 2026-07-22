@@ -117,7 +117,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	s := corrTestServer(t)
 	s.rcaPromotions = newRcaPromotionStore("")
 	s.rcaRevisions = newRcaRevisionStore("")
-	s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	// JSON: integrity embedded, no revision recorded.
 	w := httptest.NewRecorder()

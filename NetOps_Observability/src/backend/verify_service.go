@@ -89,15 +89,22 @@ func (s *verifyConfigStore) load() {
 	s.cfgs = m
 }
 
-func (s *verifyConfigStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *verifyConfigStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.cfgs, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("verify", "persist verification config failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.cfgs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode verification config: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("verify", "persist verification config failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist verification config: %w", err)
+	}
+	return nil
 }
 
 func (s *verifyConfigStore) seal(tenant, field, v string) (string, error) {
@@ -198,8 +205,16 @@ func (s *verifyConfigStore) set(tenant string, p verifySettingsPatch) (verifyTen
 			return c, err
 		}
 	}
+	prev, had := s.cfgs[tenant]
 	s.cfgs[tenant] = c
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if had {
+			s.cfgs[tenant] = prev
+		} else {
+			delete(s.cfgs, tenant)
+		}
+		return prev, err
+	}
 	return c, nil
 }
 

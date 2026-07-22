@@ -109,7 +109,7 @@ func TestCloudMonitorCRUDContract(t *testing.T) {
 	}
 
 	// Update resets the verdict (definition changed).
-	s.cloudMonitors.setStatus(ob.Tenant.ID, created.ID, monitorStateFiring, "was firing", nil, time.Now())
+	_ = s.cloudMonitors.setStatus(ob.Tenant.ID, created.ID, monitorStateFiring, "was firing", nil, time.Now())
 	st, b = do(t, srv, "PUT", "/api/cloud/monitors/"+created.ID, tok, map[string]any{
 		"name": "High CPU v2", "metric": "cloud_cpu_util", "mode": "threshold",
 		"condition": "above", "threshold": 80, "enabled": true,
@@ -153,7 +153,7 @@ func evalHarness(t *testing.T, m cloudMonitor, ids []string,
 	q func(ctx context.Context, query string) map[string]float64) (*cloudMonitorEvaluator, *cloudMonitorStore, *[]string) {
 	t.Helper()
 	store := newCloudMonitorStore("")
-	if !store.upsert("t1", m) {
+	if fits, err := store.upsert("t1", m); err != nil || !fits {
 		t.Fatal("seed monitor failed")
 	}
 	var events []string

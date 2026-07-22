@@ -178,7 +178,7 @@ func libObjs() map[string]libFakeObj {
 func TestRcaLibraryAutoManualUnionAndPhaseBFilter(t *testing.T) {
 	libFakeCH(t, map[string][]string{"acme": {libAutoID, libSuspectID}}, libObjs())
 	s := promoServer(t)
-	s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
@@ -228,7 +228,7 @@ func TestRcaLibraryDedupesManualAlsoInPrefilter(t *testing.T) {
 	libFakeCH(t, map[string][]string{"acme": {libAutoID}}, libObjs())
 	s := promoServer(t)
 	// the same id is BOTH prefiltered and manually promoted — one row, manual wins
-	s.rcaPromotions.set("acme", libAutoID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libAutoID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
@@ -281,8 +281,8 @@ func TestRcaLibraryTenantIsolation(t *testing.T) {
 	// own manual promotion. Each caller's library is exactly its own view.
 	scopes := libFakeCH(t, map[string][]string{"acme": {libAutoID}}, libObjs())
 	s := promoServer(t)
-	s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
-	s.rcaPromotions.set("globex", libGlobexOwnID, rcaPromotionRecord{PromotedBy: "ops@globex", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("globex", libGlobexOwnID, rcaPromotionRecord{PromotedBy: "ops@globex", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	// acme: its two promoted cases, nothing of globex's.
 	w := httptest.NewRecorder()

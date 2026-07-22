@@ -208,7 +208,7 @@ func TestPerTenantGuardrails(t *testing.T) {
 	if got := s.dailyTokensFor("t-a"); got != 250000 {
 		t.Fatalf("unconfigured tenant budget default wrong: %d", got)
 	}
-	s.aiTenantCfg.setEntitlement("t-a", false, true, 2, 50_000)
+	_, _ = s.aiTenantCfg.setEntitlement("t-a", false, true, 2, 50_000)
 	if got := s.maxCallsFor("t-a"); got != 2 {
 		t.Fatalf("tenant override must win, got %d", got)
 	}
@@ -219,7 +219,7 @@ func TestPerTenantGuardrails(t *testing.T) {
 		t.Fatal("override must not leak to other tenants")
 	}
 	// Clamps: the store refuses silly values.
-	s.aiTenantCfg.setEntitlement("t-a", false, true, 99, 99_000_000)
+	_, _ = s.aiTenantCfg.setEntitlement("t-a", false, true, 99, 99_000_000)
 	if got := s.maxCallsFor("t-a"); got != 8 {
 		t.Fatalf("max_calls must clamp to 8, got %d", got)
 	}
@@ -240,14 +240,14 @@ func TestAgentLoopEligibility(t *testing.T) {
 	}
 	// Per-tenant entitlement (P4a): granting "AI Investigations" to ONE tenant
 	// enables its users — and nobody else's.
-	s.aiTenantCfg.setEntitlement("t-a", false, true, 0, 0)
+	_, _ = s.aiTenantCfg.setEntitlement("t-a", false, true, 0, 0)
 	if !s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
 		t.Fatal("entitled tenant must be eligible")
 	}
 	if s.agentLoopEligible(jwtClaims{Tenant: "t-b"}) {
 		t.Fatal("entitlement must not leak to other tenants")
 	}
-	s.aiTenantCfg.setEntitlement("t-a", false, false, 0, 0)
+	_, _ = s.aiTenantCfg.setEntitlement("t-a", false, false, 0, 0)
 	t.Setenv("AI_TOOLS_ALL_TENANTS", "true")
 	if !s.agentLoopEligible(jwtClaims{Tenant: "t-a"}) {
 		t.Fatal("AI_TOOLS_ALL_TENANTS widens the rollout globally")

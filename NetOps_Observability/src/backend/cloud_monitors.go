@@ -116,15 +116,22 @@ func (s *cloudMonitorStore) load() {
 	s.monitors = m
 }
 
-func (s *cloudMonitorStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *cloudMonitorStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.monitors, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("monitors", "persist cloud monitors failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.monitors, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode cloud monitors: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("monitors", "persist cloud monitors failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist cloud monitors: %w", err)
+	}
+	return nil
 }
 
 // list returns the tenant's monitors (copy). Nil-safe.
@@ -153,48 +160,85 @@ func (s *cloudMonitorStore) get(tenant, id string) (cloudMonitor, bool) {
 	return cloudMonitor{}, false
 }
 
+// restoreLocked puts a tenant's bucket back after a failed persist so RAM and
+// disk cannot disagree. The caller snapshots BEFORE mutating (append can share
+// backing storage, so the snapshot is a copy). Caller holds s.mu.
+func (s *cloudMonitorStore) restoreLocked(tenant string, prev []cloudMonitor) {
+	if prev == nil {
+		delete(s.monitors, tenant)
+		return
+	}
+	s.monitors[tenant] = prev
+}
+
+// snapshotLocked copies a tenant's bucket for rollback. Caller holds s.mu.
+func (s *cloudMonitorStore) snapshotLocked(tenant string) []cloudMonitor {
+	list, ok := s.monitors[tenant]
+	if !ok {
+		return nil
+	}
+	return append([]cloudMonitor(nil), list...)
+}
+
 // upsert stamps the tenant FROM THE PRINCIPAL and persists. Returns false when
-// creating would exceed the per-tenant cap.
-func (s *cloudMonitorStore) upsert(tenant string, m cloudMonitor) bool {
+// creating would exceed the per-tenant cap, and an error when the write did not
+// reach the store (F-62 class: never report success for an unpersisted write).
+func (s *cloudMonitorStore) upsert(tenant string, m cloudMonitor) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m.TenantID = tenant
+	prev := s.snapshotLocked(tenant)
 	list := s.monitors[tenant]
 	for i := range list {
 		if list[i].ID == m.ID {
 			list[i] = m
 			s.monitors[tenant] = list
-			s.saveLocked()
-			return true
+			if err := s.saveLocked(); err != nil {
+				s.restoreLocked(tenant, prev)
+				return false, err
+			}
+			return true, nil
 		}
 	}
 	if len(list) >= cloudMonitorsMaxPerTenant {
-		return false
+		return false, nil
 	}
 	s.monitors[tenant] = append(list, m)
-	s.saveLocked()
-	return true
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev)
+		return false, err
+	}
+	return true, nil
 }
 
-// delete removes an id inside the tenant bucket. Returns found.
-func (s *cloudMonitorStore) delete(tenant, id string) bool {
+// delete removes an id inside the tenant bucket. Returns found, and an error
+// when the deletion did not reach the store.
+func (s *cloudMonitorStore) delete(tenant, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.snapshotLocked(tenant)
 	list := s.monitors[tenant]
 	for i := range list {
 		if list[i].ID == id {
 			s.monitors[tenant] = append(list[:i], list[i+1:]...)
-			s.saveLocked()
-			return true
+			if err := s.saveLocked(); err != nil {
+				s.restoreLocked(tenant, prev)
+				return false, err
+			}
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// setStatus records an evaluation outcome (evaluator-only writer).
-func (s *cloudMonitorStore) setStatus(tenant, id, state, reason string, value *float64, at time.Time) {
+// setStatus records an evaluation outcome (evaluator-only writer). The
+// evaluator is a background loop with no caller to answer, so it returns the
+// error for the loop to LOG — an unpersisted evaluation must not be silent
+// (§10: no silent failures).
+func (s *cloudMonitorStore) setStatus(tenant, id, state, reason string, value *float64, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.snapshotLocked(tenant)
 	list := s.monitors[tenant]
 	for i := range list {
 		if list[i].ID == id {
@@ -203,10 +247,14 @@ func (s *cloudMonitorStore) setStatus(tenant, id, state, reason string, value *f
 			list[i].LastValue = value
 			list[i].LastEvalAt = at.UTC().Format(time.RFC3339)
 			s.monitors[tenant] = list
-			s.saveLocked()
-			return
+			if err := s.saveLocked(); err != nil {
+				s.restoreLocked(tenant, prev)
+				return err
+			}
+			return nil
 		}
 	}
+	return nil
 }
 
 // snapshot copies the whole map for the in-process evaluator (NOT an API
@@ -320,7 +368,12 @@ func (s *server) handleCloudMonitors(w http.ResponseWriter, r *http.Request) {
 		m.CreatedAt, m.UpdatedAt = now, now
 		m.LastState = monitorStateNever
 		tenant, _ := principalTenant(claims) // §3a rule 2: owner from the token
-		if !s.cloudMonitors.upsert(tenant, m) {
+		fits, err := s.cloudMonitors.upsert(tenant, m)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("monitor was not saved"))
+			return
+		}
+		if !fits {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("at most %d monitors per tenant", cloudMonitorsMaxPerTenant))
 			return
 		}
@@ -379,7 +432,10 @@ func (s *server) handleCloudMonitorByID(w http.ResponseWriter, r *http.Request) 
 		m.CreatedAt = existing.CreatedAt
 		m.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		m.LastState = monitorStateNever
-		s.cloudMonitors.upsert(tenant, m)
+		if _, err := s.cloudMonitors.upsert(tenant, m); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("monitor was not saved"))
+			return
+		}
 		m.TenantID = tenant
 		s.auditMonitor(r, claims, "update_cloud_monitor", m)
 		writeJSON(w, http.StatusOK, m)
@@ -394,7 +450,10 @@ func (s *server) handleCloudMonitorByID(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, errors.New("monitor not found"))
 			return
 		}
-		s.cloudMonitors.delete(tenant, id)
+		if _, err := s.cloudMonitors.delete(tenant, id); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("monitor was not deleted"))
+			return
+		}
 		s.auditMonitor(r, claims, "delete_cloud_monitor", m)
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 	default:

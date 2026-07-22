@@ -178,10 +178,10 @@ func TestActionStoreIsTenantKeyed(t *testing.T) {
 	if _, ok := st.get("globex", "c-1", "a-1"); ok {
 		t.Fatal("TENANT LEAK: cross-tenant get")
 	}
-	if st.remove("globex", "c-1", "a-1") {
+	if removed, _ := st.remove("globex", "c-1", "a-1"); removed {
 		t.Fatal("TENANT LEAK: cross-tenant remove")
 	}
-	if !st.remove("acme", "c-1", "a-1") {
+	if removed, err := st.remove("acme", "c-1", "a-1"); err != nil || !removed {
 		t.Fatal("own remove failed")
 	}
 }

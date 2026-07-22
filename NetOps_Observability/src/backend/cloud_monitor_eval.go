@@ -125,7 +125,9 @@ func (e *cloudMonitorEvaluator) evaluateAll(ctx context.Context) {
 		for _, m := range monitors {
 			if !m.Enabled {
 				if m.LastState != monitorStateDisabled {
-					e.store.setStatus(tenant, m.ID, monitorStateDisabled, "monitor is disabled", nil, e.now())
+					if err := e.store.setStatus(tenant, m.ID, monitorStateDisabled, "monitor is disabled", nil, e.now()); err != nil {
+						logError("monitors", "persist monitor state failed", map[string]any{"monitor": m.ID, "err": err.Error()})
+					}
 				}
 				continue
 			}
@@ -272,7 +274,11 @@ func (e *cloudMonitorEvaluator) applyAnomaly(tenant string, m cloudMonitor, last
 // edge (ok/…→firing fires; firing→ok/no_data resolves), never on repeats.
 func (e *cloudMonitorEvaluator) transition(tenant string, m cloudMonitor, state, reason string, value *float64) {
 	prev := m.LastState
-	e.store.setStatus(tenant, m.ID, state, reason, value, e.now())
+	if err := e.store.setStatus(tenant, m.ID, state, reason, value, e.now()); err != nil {
+		// The verdict was computed and is now unrecorded — the operator must be
+		// able to see that, or the monitor silently stops reporting.
+		logError("monitors", "persist monitor state failed", map[string]any{"monitor": m.ID, "err": err.Error()})
+	}
 	alert := models.Alert{
 		ID: "cloud-monitor-" + m.ID, Rule: m.Name, Severity: "warning",
 		Summary:     fmt.Sprintf("Cloud monitor %q: %s", m.Name, reason),

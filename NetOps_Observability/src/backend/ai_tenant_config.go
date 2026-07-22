@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,14 +47,41 @@ type aiTenantConfig struct {
 	NoPlatformKey bool   `json:"no_platform_key,omitempty"` // true → never fall back to the platform key
 }
 
+// secretSealer is the narrow slice of the Vault this store actually depends on
+// (§5: depend on an interface, not the concrete dependency). *Vault satisfies
+// it. Taking an interface here is also what makes the SEAL-FAILURE path
+// testable — see settings_persist_failure_test.go. Before this, a seal failure
+// could only be reached with a live custody provider, so the branch that
+// destroyed another tenant's data (F-64) had no test and never got one.
+type secretSealer interface {
+	Encrypt(tenant, fieldID, plaintext string) (string, error)
+	Decrypt(tenant, fieldID, stored string) (string, error)
+}
+
 type aiTenantConfigStore struct {
 	mu    sync.RWMutex
 	cfgs  map[string]aiTenantConfig // in-memory, key decrypted
 	path  string
-	vault *Vault
+	vault secretSealer
 }
 
-func newAITenantConfigStore(path string, v *Vault) *aiTenantConfigStore {
+// seal/unseal centralize the nil-sealer case: a store built without custody
+// passes values through, exactly as a dormant *Vault does.
+func (s *aiTenantConfigStore) seal(tenant, field, v string) (string, error) {
+	if s.vault == nil {
+		return v, nil
+	}
+	return s.vault.Encrypt(tenant, field, v)
+}
+
+func (s *aiTenantConfigStore) unseal(tenant, field, v string) (string, error) {
+	if s.vault == nil {
+		return v, nil
+	}
+	return s.vault.Decrypt(tenant, field, v)
+}
+
+func newAITenantConfigStore(path string, v secretSealer) *aiTenantConfigStore {
 	s := &aiTenantConfigStore{cfgs: map[string]aiTenantConfig{}, path: path, vault: v}
 	s.load()
 	return s
@@ -71,7 +99,7 @@ func (s *aiTenantConfigStore) load() {
 	for id, c := range m {
 		c.TenantID = id
 		// Decrypt the BYO key under this tenant's DEK (no-op on a dormant Vault).
-		if key, err := s.vault.Decrypt(id, aiFieldProviderKey, c.Key); err == nil {
+		if key, err := s.unseal(id, aiFieldProviderKey, c.Key); err == nil {
 			c.Key = key
 		}
 		m[id] = c
@@ -81,25 +109,42 @@ func (s *aiTenantConfigStore) load() {
 
 // saveLocked persists the map with every BYO key sealed under its own tenant's
 // DEK. Caller holds s.mu. A blank path means in-memory only (tests).
-func (s *aiTenantConfigStore) saveLocked() {
+//
+// F-64 (Critical, cross-tenant data destruction): this used to `continue` past
+// a tenant whose Encrypt failed and then write the map WITHOUT it, discarding
+// the kvSave error too. Because the file is rewritten whole, tenant B's save
+// silently DELETED tenant A's stored provider key from disk — and both callers
+// got 200. A per-record failure may never be resolved by dropping the record:
+// this whole-file store is all-or-nothing, so one unsealable key fails the
+// entire write and the caller is told. The on-disk copy stays intact and
+// correct, which is the outcome that matters.
+func (s *aiTenantConfigStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
 	sealed := make(map[string]aiTenantConfig, len(s.cfgs))
 	for id, c := range s.cfgs {
 		if c.Key != "" {
-			enc, err := s.vault.Encrypt(id, aiFieldProviderKey, c.Key)
+			enc, err := s.seal(id, aiFieldProviderKey, c.Key)
 			if err != nil {
-				logWarn("ai", "seal tenant provider key failed — record not persisted", map[string]any{"tenant": id})
-				continue
+				// Name the tenant in the log, never in the returned error: the
+				// caller is a different tenant and must not learn that another
+				// tenant exists, let alone which one.
+				logError("ai", "seal tenant provider key failed — refusing to persist a partial map", map[string]any{"tenant": id, "err": err.Error()})
+				return errors.New("could not seal a stored provider key; nothing was saved")
 			}
 			c.Key = enc
 		}
 		sealed[id] = c
 	}
-	if b, err := json.MarshalIndent(sealed, "", "  "); err == nil {
-		_ = kvSave(s.path, b)
+	b, err := json.MarshalIndent(sealed, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode ai tenant config: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		return fmt.Errorf("persist ai tenant config: %w", err)
+	}
+	return nil
 }
 
 // get returns the tenant's record; an unconfigured tenant gets the default
@@ -155,10 +200,11 @@ func (s *aiTenantConfigStore) noPlatformKey(tenant string) bool {
 // reachable from here (§3a.2: never trust the request for authority). A blank
 // key preserves the stored one (the GET form is redacted and must not wipe the
 // secret on save); clearKey removes it explicitly.
-func (s *aiTenantConfigStore) setTenantSettings(tenant, provider, model, key string, noPlatformKey, clearKey bool) aiTenantConfig {
+func (s *aiTenantConfigStore) setTenantSettings(tenant, provider, model, key string, noPlatformKey, clearKey bool) (aiTenantConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.Provider = normalizeProvider(provider)
 	c.Model = strings.TrimSpace(model)
@@ -170,13 +216,28 @@ func (s *aiTenantConfigStore) setTenantSettings(tenant, provider, model, key str
 		c.Key = strings.TrimSpace(key)
 	}
 	s.cfgs[tenant] = c
-	s.saveLocked()
-	return c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
+}
+
+// restoreLocked rolls the in-memory map back after a failed persist so RAM and
+// disk cannot disagree. Without it a rejected write still changes behaviour
+// until the next restart — the same "looks applied, isn't" shape the failed
+// save was reported for. Caller holds s.mu.
+func (s *aiTenantConfigStore) restoreLocked(tenant string, prev aiTenantConfig, had bool) {
+	if had {
+		s.cfgs[tenant] = prev
+		return
+	}
+	delete(s.cfgs, tenant)
 }
 
 // setEntitlement updates the PLATFORM-OWNER fields: assistant availability, the
 // agent-loop grant, and the per-tenant spend guardrails (0 = platform default).
-func (s *aiTenantConfigStore) setEntitlement(tenant string, assistantOff, agentTools bool, maxCalls, dailyTokens int) aiTenantConfig {
+func (s *aiTenantConfigStore) setEntitlement(tenant string, assistantOff, agentTools bool, maxCalls, dailyTokens int) (aiTenantConfig, error) {
 	if maxCalls < 0 {
 		maxCalls = 0
 	} else if maxCalls > 8 {
@@ -189,15 +250,19 @@ func (s *aiTenantConfigStore) setEntitlement(tenant string, assistantOff, agentT
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.AssistantOff = assistantOff
 	c.AgentTools = agentTools
 	c.MaxCalls = maxCalls
 	c.DailyTokens = dailyTokens
 	s.cfgs[tenant] = c
-	s.saveLocked()
-	return c
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return prev, err
+	}
+	return c, nil
 }
 
 // maxCallsFor resolves the per-question lookup cap for a tenant: its override
@@ -321,7 +386,17 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("unknown provider — use anthropic, openai or gemini"))
 			return
 		}
-		s.aiTenantCfg.setTenantSettings(tenant, req.Provider, req.Model, req.Key, req.NoPlatformKey, req.ClearKey)
+		if _, err := s.aiTenantCfg.setTenantSettings(tenant, req.Provider, req.Model, req.Key, req.NoPlatformKey, req.ClearKey); err != nil {
+			// Audit the REFUSAL too. A write that failed and was never recorded
+			// is indistinguishable from one that never happened.
+			s.audit.Record(AuditEvent{
+				Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: r.URL.Path,
+				Status: http.StatusInternalServerError, Decision: "deny", Remote: auditClientIP(r),
+				Detail: map[string]any{"action": "ai_tenant_settings", "error": "persist failed"},
+			})
+			writeError(w, http.StatusInternalServerError, errors.New("settings were not saved"))
+			return
+		}
 		s.audit.Record(AuditEvent{
 			Actor: claims.Sub, Tenant: tenant, Method: r.Method, Path: r.URL.Path,
 			Status: http.StatusOK, Decision: "allow", Remote: auditClientIP(r),
@@ -423,7 +498,11 @@ func (s *server) handleAITenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		c := s.aiTenantCfg.setEntitlement(t.ID, !req.Assistant, req.Investigations, req.MaxCalls, req.DailyTokens)
+		c, err := s.aiTenantCfg.setEntitlement(t.ID, !req.Assistant, req.Investigations, req.MaxCalls, req.DailyTokens)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("entitlement was not saved"))
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"tenant_id":              t.ID,
 			"assistant_enabled":      !c.AssistantOff,

@@ -93,15 +93,22 @@ func newRcaPromotionStore(path string) *rcaPromotionStore {
 	return s
 }
 
-func (s *rcaPromotionStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *rcaPromotionStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.m, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("rca", "persist rca promotions failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode rca promotions: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("rca", "persist rca promotions failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist rca promotions: %w", err)
+	}
+	return nil
 }
 
 // get returns the tenant's manual promotion for one correlation. Nil-safe.
@@ -132,24 +139,47 @@ func (s *rcaPromotionStore) list(tenant string) []string {
 	return ids
 }
 
-func (s *rcaPromotionStore) set(tenant, id string, rec rcaPromotionRecord) {
+func (s *rcaPromotionStore) set(tenant, id string, rec rcaPromotionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.m[tenant] == nil {
 		s.m[tenant] = map[string]rcaPromotionRecord{}
 	}
+	prev, had := s.m[tenant][id]
 	s.m[tenant][id] = rec
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if had {
+			s.m[tenant][id] = prev
+		} else {
+			delete(s.m[tenant], id)
+		}
+		return err
+	}
+	return nil
 }
 
-func (s *rcaPromotionStore) remove(tenant, id string) {
+func (s *rcaPromotionStore) remove(tenant, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev, had := s.m[tenant][id]
+	byTenant, hadTenant := s.m[tenant]
 	delete(s.m[tenant], id)
 	if len(s.m[tenant]) == 0 {
 		delete(s.m, tenant)
 	}
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if hadTenant {
+			s.m[tenant] = byTenant
+		}
+		if had {
+			if s.m[tenant] == nil {
+				s.m[tenant] = map[string]rcaPromotionRecord{}
+			}
+			s.m[tenant][id] = prev
+		}
+		return err
+	}
+	return nil
 }
 
 // ---- evaluation -------------------------------------------------------------
@@ -272,7 +302,10 @@ SELECT tenant_id FROM netops.corr_objects
 			return
 		}
 		rec := rcaPromotionRecord{PromotedBy: claims.Sub, PromotedAt: fmtUTC(time.Now().UTC()), Note: strings.TrimSpace(body.Note)}
-		s.rcaPromotions.set(objTenant, id, rec)
+		if err := s.rcaPromotions.set(objTenant, id, rec); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("promotion was not saved"))
+			return
+		}
 		s.auditManualEdit(r, claims, objTenant, "rca_promote", id, map[string]any{"note": rec.Note})
 		writeJSON(w, http.StatusOK, map[string]any{"manually_promoted": true, "manual": rec})
 	case http.MethodDelete:
@@ -280,7 +313,10 @@ SELECT tenant_id FROM netops.corr_objects
 			writeError(w, http.StatusServiceUnavailable, errors.New("promotion store unavailable"))
 			return
 		}
-		s.rcaPromotions.remove(objTenant, id)
+		if err := s.rcaPromotions.remove(objTenant, id); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("promotion was not cleared"))
+			return
+		}
 		s.auditManualEdit(r, claims, objTenant, "rca_unpromote", id, map[string]any{})
 		writeJSON(w, http.StatusOK, map[string]any{"manually_promoted": false})
 	default:

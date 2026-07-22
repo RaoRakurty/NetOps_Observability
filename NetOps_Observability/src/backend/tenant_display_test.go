@@ -32,7 +32,7 @@ func TestTenantDisplayStoreDefaultsAndKeying(t *testing.T) {
 	if got := st.get("t-a").TimeDisplay; got != "local" {
 		t.Fatalf("unconfigured tenant must default local, got %q", got)
 	}
-	st.setTimeDisplay("t-a", "utc")
+	_, _ = st.setTimeDisplay("t-a", "utc")
 	if got := st.get("t-a").TimeDisplay; got != "utc" {
 		t.Fatalf("t-a = %q, want utc", got)
 	}

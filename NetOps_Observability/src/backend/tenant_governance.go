@@ -119,15 +119,36 @@ func (s *tenantGovernanceStore) load() {
 }
 
 // saveLocked persists the map. Caller holds s.mu. Blank path = in-memory only.
-func (s *tenantGovernanceStore) saveLocked() {
+//
+// F-62/F-63: this used to swallow the kvSave error into a logWarn and return
+// nothing, which made every handler above it STRUCTURALLY unable to report a
+// failed write — the seed defect ("PUT returns 200, reload shows the old
+// value"). The mutators below now roll back and propagate, and the handlers
+// answer 500. A write path that cannot fail is a write path that is not
+// writing.
+func (s *tenantGovernanceStore) saveLocked() error {
 	if s.path == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(s.cfgs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode tenant governance: %w", err)
+	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("settings", "persist tenant governance failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist tenant governance: %w", err)
+	}
+	return nil
+}
+
+// restoreLocked rolls the in-memory map back after a failed persist so RAM and
+// disk cannot disagree. Caller holds s.mu.
+func (s *tenantGovernanceStore) restoreLocked(tenant string, prev tenantGovernanceConfig, had bool) {
+	if had {
+		s.cfgs[tenant] = prev
 		return
 	}
-	if b, err := json.MarshalIndent(s.cfgs, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("settings", "persist tenant governance failed", map[string]any{"err": err.Error()})
-		}
-	}
+	delete(s.cfgs, tenant)
 }
 
 // requiredTags returns the tenant's EFFECTIVE required-tag list and whether it
@@ -148,14 +169,19 @@ func (s *tenantGovernanceStore) requiredTags(tenant string) ([]string, bool) {
 // setRequiredTags stamps the tenant FROM THE PRINCIPAL (callers pass the
 // principalTenant result, never body input) and persists. tags==nil resets the
 // tenant to the platform default.
-func (s *tenantGovernanceStore) setRequiredTags(tenant string, tags []string) {
+func (s *tenantGovernanceStore) setRequiredTags(tenant string, tags []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.RequiredTags = tags
 	s.cfgs[tenant] = c
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return err
+	}
+	return nil
 }
 
 // rcaWindowHours returns the tenant's EFFECTIVE default read window (hours)
@@ -180,14 +206,19 @@ func (s *tenantGovernanceStore) rcaWindowHours(tenant string) (int, bool) {
 
 // setRcaWindowHours stamps the tenant FROM THE PRINCIPAL and persists.
 // hours==0 resets the tenant to the platform default.
-func (s *tenantGovernanceStore) setRcaWindowHours(tenant string, hours int) {
+func (s *tenantGovernanceStore) setRcaWindowHours(tenant string, hours int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.RcaWindowHours = hours
 	s.cfgs[tenant] = c
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return err
+	}
+	return nil
 }
 
 // normalizeRcaWindowHours validates a caller's window: a whole number of hours
@@ -245,7 +276,10 @@ func (s *server) handleRcaWindowSettings(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		tenant, cross := principalTenant(claims)
-		s.governance.setRcaWindowHours(tenant, hours)
+		if err := s.governance.setRcaWindowHours(tenant, hours); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("rca window was not saved"))
+			return
+		}
 		if s.audit != nil {
 			s.audit.Record(AuditEvent{
 				Actor: claims.Sub, Tenant: tenant, Cross: cross,
@@ -282,14 +316,19 @@ func (s *tenantGovernanceStore) attributionPrecedence(tenant string) ([]string, 
 
 // setAttributionPrecedence stamps the tenant FROM THE PRINCIPAL and persists.
 // order==nil resets the tenant to the default ladder.
-func (s *tenantGovernanceStore) setAttributionPrecedence(tenant string, order []string) {
+func (s *tenantGovernanceStore) setAttributionPrecedence(tenant string, order []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.AttributionPrecedence = order
 	s.cfgs[tenant] = c
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return err
+	}
+	return nil
 }
 
 // handleAttributionPrecedenceSettings serves GET/PUT /api/settings/attribution-precedence.
@@ -342,7 +381,10 @@ func (s *server) handleAttributionPrecedenceSettings(w http.ResponseWriter, r *h
 			}
 		}
 		tenant, cross := principalTenant(claims)
-		s.governance.setAttributionPrecedence(tenant, order)
+		if err := s.governance.setAttributionPrecedence(tenant, order); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("attribution precedence was not saved"))
+			return
+		}
 		if s.audit != nil {
 			s.audit.Record(AuditEvent{
 				Actor: claims.Sub, Tenant: tenant, Cross: cross,
@@ -385,14 +427,19 @@ func (s *tenantGovernanceStore) seamOwners(tenant string) (map[string]seamOwnerE
 
 // setSeamOwners stamps the tenant FROM THE PRINCIPAL and persists. owners==nil
 // resets the tenant to class-label-only display.
-func (s *tenantGovernanceStore) setSeamOwners(tenant string, owners map[string]seamOwnerEntry) {
+func (s *tenantGovernanceStore) setSeamOwners(tenant string, owners map[string]seamOwnerEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
+	prev, had := s.cfgs[tenant]
+	c := prev
 	c.TenantID = tenant
 	c.SeamOwners = owners
 	s.cfgs[tenant] = c
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.restoreLocked(tenant, prev, had)
+		return err
+	}
+	return nil
 }
 
 const (
@@ -480,7 +527,10 @@ func (s *server) handleSeamOwnersSettings(w http.ResponseWriter, r *http.Request
 			}
 		}
 		tenant, cross := principalTenant(claims)
-		s.governance.setSeamOwners(tenant, owners)
+		if err := s.governance.setSeamOwners(tenant, owners); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("seam owners was not saved"))
+			return
+		}
 		if s.audit != nil {
 			classes := make([]string, 0, len(owners))
 			for k := range owners {
@@ -632,7 +682,10 @@ func (s *server) handleRequiredTagsSettings(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		tenant, cross := principalTenant(claims)
-		s.governance.setRequiredTags(tenant, tags)
+		if err := s.governance.setRequiredTags(tenant, tags); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("required tags was not saved"))
+			return
+		}
 		if s.audit != nil {
 			s.audit.Record(AuditEvent{
 				Actor: claims.Sub, Tenant: tenant, Cross: cross,

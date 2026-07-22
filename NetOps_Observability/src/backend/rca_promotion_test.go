@@ -64,14 +64,14 @@ func TestPromotionManualOverrides(t *testing.T) {
 
 func TestPromotionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaPromotionStore("") // in-memory
-	st.set("acme", "c-1", rcaPromotionRecord{PromotedBy: "a"})
+	_ = st.set("acme", "c-1", rcaPromotionRecord{PromotedBy: "a"})
 	if _, ok := st.get("globex", "c-1"); ok {
 		t.Fatal("TENANT LEAK: another tenant read acme's promotion")
 	}
 	if rec, ok := st.get("acme", "c-1"); !ok || rec.PromotedBy != "a" {
 		t.Fatalf("own record lost: %+v ok=%v", rec, ok)
 	}
-	st.remove("acme", "c-1")
+	_ = st.remove("acme", "c-1")
 	if _, ok := st.get("acme", "c-1"); ok {
 		t.Fatal("remove did not delete")
 	}
@@ -244,7 +244,7 @@ func TestRcaDocumentGateBlocksUnpromotedHTML(t *testing.T) {
 func TestRcaDocumentGateOpensAfterManualPromotion(t *testing.T) {
 	promoFakeCH(t, "acme")
 	s := promoServer(t)
-	s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)

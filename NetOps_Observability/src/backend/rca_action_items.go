@@ -142,15 +142,22 @@ func newRcaActionItemStore(path string) *rcaActionItemStore {
 	return s
 }
 
-func (s *rcaActionItemStore) saveLocked() {
+// F-62/F-63: returns error. A swallowed persist failure here made the
+// handler above structurally unable to report that the write did not
+// land — 200 with nothing saved. Callers roll back and answer 500.
+func (s *rcaActionItemStore) saveLocked() error {
 	if s.path == "" {
-		return
+		return nil
 	}
-	if b, err := json.MarshalIndent(s.m, "", "  "); err == nil {
-		if err := kvSave(s.path, b); err != nil {
-			logWarn("rca", "persist rca action items failed", map[string]any{"err": err.Error()})
-		}
+	b, err := json.MarshalIndent(s.m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode rca action items: %w", err)
 	}
+	if err := kvSave(s.path, b); err != nil {
+		logError("rca", "persist rca action items failed", map[string]any{"err": err.Error()})
+		return fmt.Errorf("persist rca action items: %w", err)
+	}
+	return nil
 }
 
 // list returns ONE tenant's items for one correlation, oldest first. No
@@ -196,17 +203,28 @@ func (s *rcaActionItemStore) put(tenant, corrID string, it rcaActionItem) error 
 	if _, exists := s.m[tenant][corrID][it.ID]; !exists && len(s.m[tenant][corrID]) >= rcaActionItemsMaxPerCase {
 		return fmt.Errorf("action register full for this case (max %d items)", rcaActionItemsMaxPerCase)
 	}
+	prev, had := s.m[tenant][corrID][it.ID]
 	s.m[tenant][corrID][it.ID] = it
-	s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if had {
+			s.m[tenant][corrID][it.ID] = prev
+		} else {
+			delete(s.m[tenant][corrID], it.ID)
+		}
+		return err
+	}
 	return nil
 }
 
-func (s *rcaActionItemStore) remove(tenant, corrID, id string) bool {
+func (s *rcaActionItemStore) remove(tenant, corrID, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[tenant][corrID][id]; !ok {
-		return false
+	prev, ok := s.m[tenant][corrID][id]
+	if !ok {
+		return false, nil
 	}
+	byCorr, hadCorr := s.m[tenant]
+	items := s.m[tenant][corrID]
 	delete(s.m[tenant][corrID], id)
 	if len(s.m[tenant][corrID]) == 0 {
 		delete(s.m[tenant], corrID)
@@ -214,8 +232,22 @@ func (s *rcaActionItemStore) remove(tenant, corrID, id string) bool {
 			delete(s.m, tenant)
 		}
 	}
-	s.saveLocked()
-	return true
+	if err := s.saveLocked(); err != nil {
+		// Rebuild the exact pre-delete shape: the empty-bucket pruning above may
+		// have removed two levels of map, so restoring the item alone is not
+		// enough.
+		if !hadCorr {
+			byCorr = map[string]map[string]rcaActionItem{}
+		}
+		s.m[tenant] = byCorr
+		if items == nil {
+			items = map[string]rcaActionItem{}
+		}
+		items[id] = prev
+		s.m[tenant][corrID] = items
+		return false, err
+	}
+	return true, nil
 }
 
 // ---- validation ---------------------------------------------------------------
@@ -558,7 +590,12 @@ SELECT tenant_id FROM netops.corr_objects
 		writeJSON(w, http.StatusOK, next)
 
 	case r.Method == http.MethodDelete && rest != "":
-		if !s.rcaActionItems.remove(objTenant, id, rest) {
+		removed, err := s.rcaActionItems.remove(objTenant, id, rest)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("action item was not deleted"))
+			return
+		}
+		if !removed {
 			writeError(w, http.StatusNotFound, errors.New("action item not found"))
 			return
 		}
