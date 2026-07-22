@@ -29,6 +29,8 @@ import urllib.request
 
 import cloud_events
 
+from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
 PERIOD_S = int(os.environ.get("CW_PERIOD_S", "300"))
 
@@ -57,7 +59,7 @@ def _post(events: list[dict]) -> None:
         return
     body = "\n".join(json.dumps(e) for e in events).encode()
     req = urllib.request.Request(METRICS_SINK, data=body,
-                                 headers={"Content-Type": "application/x-ndjson"})
+                                 headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
     urllib.request.urlopen(req, timeout=10).read()  # noqa: S310 - operator-configured sink
 
 

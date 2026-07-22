@@ -303,6 +303,11 @@ services:
     # F-51: DIRECTORY mount (see vector-aggregator).
     command: ["subscribe", "--config", "/app/conf/gnmic.yaml"]
     environment:
+      # F-08: this container posts directly to a vector-aggregator http_server
+      # source, so it needs the SAME ingest credential the aggregator enforces.
+      # Missing here, its events are rejected 401 and silently dropped.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
       # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
       # (creds the collector uses to reach lab nodes), not platform secrets — they
       # match the lab's device config and install.py can't generate them. For a
@@ -1022,6 +1027,18 @@ services:
       # backend is stdlib-only — no Kafka client; replaces the old pandaproxy).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
       BUS_BRIDGE_URL: "http://vector-aggregator:8692"
+      # F-08 completion: the api is the ONLY bus producer, and collectors/
+      # ingest_auth.go stamps Basic auth from THIS container's environment.
+      # vector-aggregator was given the credential and the producer was not, so
+      # enabling the aggregator's auth would have rejected every event the API
+      # sends. Both halves must come from the same .env value or the pair
+      # disagrees — which is the failure ingest_auth.go's error hint describes.
+      #
+      # Default-empty (NOT :?) on purpose: an api that cannot resolve the token
+      # sends NO header rather than an empty password, which is the documented
+      # upgrade window. Vector is the fail-closed half of the pair.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
       VICTORIA_URL: "http://victoria:8428"
       # Set (by install tooling) only when the self-monitoring add-on is
       # enabled — gates the Grafana stack-health probe.
@@ -1411,6 +1428,11 @@ services:
     # secrets and mounts nothing.
     user: "0:0"
     environment:
+      # F-08: this container posts directly to a vector-aggregator http_server
+      # source, so it needs the SAME ingest credential the aggregator enforces.
+      # Missing here, its events are rejected 401 and silently dropped.
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
       GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"
       REDIS_HOST: redis

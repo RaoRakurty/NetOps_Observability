@@ -41,6 +41,8 @@ import gcp_log_lanes
 import gcp_workloads
 import trail_state
 
+from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+
 PROJECT = os.environ.get("GCP_PROJECT", "")
 CREDS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
@@ -125,7 +127,7 @@ def _post_ndjson(events: list[dict]) -> None:
         return
     body = "\n".join(json.dumps(e) for e in events).encode()
     req = urllib.request.Request(METRICS_SINK, data=body,
-                                 headers={"Content-Type": "application/x-ndjson"})
+                                 headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
     urllib.request.urlopen(req, timeout=10).read()  # noqa: S310
 
 

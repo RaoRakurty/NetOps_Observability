@@ -54,9 +54,36 @@ fail() {
 }
 
 dc() { docker compose --project-directory "$COMPOSE_DIR" "$@"; }
+# produce publishes stdin to a topic, with the two things whose absence cost a
+# week of misdirected alerts (2026-07-22).
+#
+# WHAT HAPPENED: this discarded stderr, so when `docker compose exec` began
+# failing at CONFIG-PARSE time — `.env` had no INGEST_TOKEN after the F-08
+# change, and compose validates the whole file before running anything — the
+# only symptom was "could not produce probe event onto the bus". That accused
+# Kafka, which was healthy with zero restarts throughout. 47 of 100 logged
+# failures, plus the 27 "signals missing" ones (ch() has the same shape), were
+# this single unset variable.
+#
+# So: keep stderr, and retry, because one transient blip should not page a human
+# at high priority.
+PRODUCE_TRIES="${PRODUCE_TRIES:-3}"
+PRODUCE_ERR=""
 produce() { # $1 topic, stdin = one JSON event per line
-    dc exec -T kafka /opt/kafka/bin/kafka-console-producer.sh \
-        --bootstrap-server kafka:9092 --topic "$1" >/dev/null 2>&1
+    local topic="$1" payload err attempt=1
+    payload="$(cat)"   # buffer: stdin is consumed once but may be sent twice
+    while :; do
+        if err="$(printf '%s\n' "$payload" | timeout 60 dc exec -T kafka \
+            /opt/kafka/bin/kafka-console-producer.sh \
+            --bootstrap-server kafka:9092 --topic "$topic" 2>&1 >/dev/null)"; then
+            return 0
+        fi
+        PRODUCE_ERR="$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-300)"
+        [ "$attempt" -ge "$PRODUCE_TRIES" ] && return 1
+        log "produce to $topic failed (attempt $attempt/$PRODUCE_TRIES): $PRODUCE_ERR"
+        attempt=$((attempt + 1))
+        sleep $((attempt * 2))
+    done
 }
 ch() { dc exec -T clickhouse clickhouse-client -q "$1" 2>/dev/null; }
 
@@ -64,11 +91,11 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)"
 
 # 1) canary synthetic probe failure (exact enriched ProbeEvent wire shape)
 printf '%s\n' "{\"kind\":\"http\",\"prober\":\"rca-canary-probe\",\"target\":\"https://portal.rca-canary.example/health\",\"ok\":false,\"rtt_ms\":800,\"loss_pct\":100,\"ts\":\"$TS\",\"tenant_id\":\"$TENANT\",\"site_id\":\"canary\",\"status_code\":503,\"method\":\"GET\",\"path\":\"/health\",\"total_ms\":800,\"app_name\":\"$APP\",\"signal_purpose\":\"validation\",\"environment\":\"validation\"}" \
-    | produce netops.probes || fail "could not produce probe event onto the bus"
+    | produce netops.probes || fail "could not produce probe event onto the bus: ${PRODUCE_ERR:-no stderr captured}"
 
 # 2) canary LB 503 for the SAME app (independent witness class)
 printf '%s\n' "{\"source\":\"lb\",\"vendor\":\"generic\",\"product\":\"reverse_proxy\",\"tenant_id\":\"$TENANT\",\"ts\":\"$TS\",\"app_name\":\"$APP\",\"service_name\":\"canary_frontend\",\"host\":\"portal.rca-canary.example\",\"path\":\"/health\",\"status_code\":503,\"reason\":\"backend_unavailable\",\"lb_name\":\"canary-lb\",\"raw_event_id\":\"$RUN_ID\",\"signal_purpose\":\"validation\",\"environment\":\"validation\"}" \
-    | produce netops.app.edge || fail "could not produce app-edge event onto the bus"
+    | produce netops.app.edge || fail "could not produce app-edge event onto the bus: ${PRODUCE_ERR:-no stderr captured}"
 
 log "injected $RUN_ID; waiting for signals (budget ${SIGNAL_BUDGET_S}s)"
 

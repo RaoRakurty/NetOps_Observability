@@ -38,6 +38,8 @@ import cloud_events
 import service_infer
 import trail_state
 
+from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+
 TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET", "")
@@ -170,7 +172,7 @@ def poll_metrics(tok: str, vms: list[dict]) -> int:
     if events:
         body = "\n".join(json.dumps(e) for e in events).encode()
         req = urllib.request.Request(METRICS_SINK, data=body,
-                                     headers={"Content-Type": "application/x-ndjson"})
+                                     headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
         urllib.request.urlopen(req, timeout=10).read()  # noqa: S310 - internal sink
     return len(events)
 
