@@ -131,10 +131,22 @@ func chInsertJSON(ctx context.Context, table string, rows []map[string]any) erro
 }
 
 // chInsertTolerance is the insert-hardening settings block F-56 found absent
-// from every write site. A producer that learns a new field must not 400 an
-// entire batch of otherwise-valid rows; the unknown field is dropped and the
-// insert proceeds. Deliberately NOT applied to reads, where a silently skipped
-// field would corrupt an answer rather than protect one.
+// from every write site. Deliberately NOT applied to reads, where a silently
+// skipped field would corrupt an answer rather than protect one.
+//
+// MEASURED CORRECTION (2026-07-22, ClickHouse 24.8.14.39, the deployed pin):
+// F-56's premise — "without these, one unknown JSON key 400s the ENTIRE batch"
+// — is NOT true for JSONEachRow on this version.
+//
+//	SELECT value, changed FROM system.settings
+//	WHERE name='input_format_skip_unknown_fields'  →  value=1, changed=0
+//
+// It is already the server default, so that half of this block is DECLARATIVE:
+// it pins the behaviour against a future default flip and states the intent at
+// the call site, but it does not change what the server does today.
+// date_time_input_format is the half that genuinely does (default 'basic').
+// chhttp_integration_test.go asserts both facts against a live server, and
+// fails if either default moves.
 //
 // This mirrors collectors.chInsertSettings EXACTLY, including what it refuses:
 //

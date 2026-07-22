@@ -42,11 +42,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -64,17 +67,23 @@ const DefaultBudget = 8 * time.Second
 // Anything unlisted falls back to HTTP-status classification.
 //
 // Ref: ClickHouse ErrorCodes.cpp.
+// All values below were CONFIRMED against clickhouse/clickhouse-server:24.8-alpine
+// (24.8.14.39), the digest-pinned image this repo deploys — not read off a wiki.
+// See chhttp_integration_test.go, which re-verifies them against a live server.
 const (
 	codeUnknownSetting      = 115 // an insert-tolerance/setting key this server rejects (F-56)
 	codeNoSuchColumn        = 16
 	codeUnknownTable        = 60
-	codeAuthFailed          = 516
+	codeUnknownDatabase     = 81  // measured: SELECT FROM nope.nope → HTTP 404 + code 81
+	codeAuthFailed          = 516 // measured: wrong password → HTTP 403 + code 516
 	codeTooManyParts        = 252 // insert pressure — the classic production failure
 	codeMemoryLimitExceeded = 241
 	codeTooManySimultaneous = 202
 	codeTimeoutExceeded     = 159
 	codeSocketTimeout       = 209
 	codeNotEnoughSpace      = 243
+	codeTypeMismatch        = 53 // TYPE_MISMATCH — a malformed row, not a transient
+	codeUnknownIdentifier   = 47 // measured: SELECT no_such_col → HTTP 404 + code 47
 )
 
 // retryableCodes are transient by nature: the same statement, unchanged, can
@@ -92,21 +101,151 @@ var retryableCodes = map[int]bool{
 // permanentCodes are the ones worth naming explicitly so a caller's log says
 // "unknown setting" rather than "HTTP 500".
 var permanentCodes = map[int]bool{
-	codeUnknownSetting: true,
-	codeNoSuchColumn:   true,
-	codeUnknownTable:   true,
-	codeAuthFailed:     true,
+	codeUnknownSetting:    true,
+	codeNoSuchColumn:      true,
+	codeUnknownTable:      true,
+	codeUnknownDatabase:   true,
+	codeAuthFailed:        true,
+	codeTypeMismatch:      true,
+	codeUnknownIdentifier: true,
 }
 
-// Error is a classified ClickHouse failure. Callers branch on Retryable, never
-// on Status — see the package doc for why the two disagree so often.
+// classificationFor maps a code to the stable metric slug. Metrics keyed on a
+// raw integer are unreadable in an alert; these names are what an operator sees.
+var classificationFor = map[int]string{
+	codeTooManyParts:        "too_many_parts",
+	codeMemoryLimitExceeded: "memory_limit",
+	codeTooManySimultaneous: "too_many_queries",
+	codeTimeoutExceeded:     "server_timeout",
+	codeSocketTimeout:       "socket_timeout",
+	codeNotEnoughSpace:      "disk_full",
+	codeUnknownSetting:      "schema_setting",
+	codeNoSuchColumn:        "schema_column",
+	codeUnknownTable:        "schema_table",
+	codeUnknownDatabase:     "schema_database",
+	codeTypeMismatch:        "schema_type",
+	codeAuthFailed:          "auth",
+	codeUnknownIdentifier:   "schema_identifier",
+}
+
+// exceptionMarkers identify a ClickHouse exception embedded in a body that
+// already carried a 200.
+//
+// MEASURED on 24.8.14.39: with wait_end_of_query=0, a query that fails AFTER
+// the output buffer has flushed returns **HTTP 200, no X-ClickHouse-Exception-Code
+// header, and a 15 MB body whose tail is the exception**. A status-only check —
+// and the header check below — both call that success. This is the only signal
+// left, so it is checked too.
+var exceptionMarkers = []string{"DB::Exception", "__exception__"}
+
+// bodyCarriesException reports whether a 200 body has an exception in its tail.
+// Only the tail is inspected: ClickHouse appends the exception after the data,
+// and scanning a whole multi-megabyte result for a substring on every successful
+// read would be a real cost for no benefit.
+func bodyCarriesException(body []byte) bool {
+	const tail = 4 << 10
+	seg := body
+	if len(seg) > tail {
+		seg = seg[len(seg)-tail:]
+	}
+	for _, m := range exceptionMarkers {
+		if bytes.Contains(seg, []byte(m)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Outcome is the COMMIT-STATE axis, which is not the same question as "did we
+// get an error". A caller that advances a Kafka offset or a checkpoint must
+// branch on this and nothing else.
+//
+// The three states are not stylistic. A distributed write has three honest
+// answers, and collapsing Unknown into either neighbour causes a specific,
+// opposite bug: call it Committed and you lose data; call it Rejected and a
+// blind retry duplicates rows that are already there.
+type Outcome uint8
+
+const (
+	// OutcomeCommitted — ClickHouse positively accepted the statement.
+	OutcomeCommitted Outcome = iota
+	// OutcomeRejected — positively did NOT commit. Either the server said so,
+	// or the request never reached it (connection refused). Safe to retry from
+	// scratch; safe to quarantine.
+	OutcomeRejected
+	// OutcomeUnknown — the request may or may not have been applied. The body
+	// was (or may have been) fully transmitted and the answer was lost. Retry
+	// ONLY with byte-identical payload and the same idempotency identity.
+	OutcomeUnknown
+)
+
+func (o Outcome) String() string {
+	switch o {
+	case OutcomeCommitted:
+		return "committed"
+	case OutcomeRejected:
+		return "rejected"
+	default:
+		return "unknown"
+	}
+}
+
+// Error is a classified ClickHouse failure. Callers branch on Outcome (commit
+// state) and Retryable (whether another attempt is worthwhile) — never on
+// Status, for the reason in the package doc.
 type Error struct {
-	Op        string // caller-supplied label, e.g. "insert netops.flows"
-	Status    int    // HTTP status; 0 when the failure was at transport level
-	Code      int    // ClickHouse DB::Exception code; 0 when absent/unparsed
-	Message   string
-	Retryable bool
-	wrapped   error // transport-level cause, if any
+	Op      string // caller-supplied label, e.g. "insert netops.flows"
+	Status  int    // HTTP status; 0 when the failure was at transport level
+	Code    int    // ClickHouse DB::Exception code; 0 when absent/unparsed
+	Message string
+	// QueryID is X-ClickHouse-Query-Id when the server sent one. It is the only
+	// handle that ties this failure to a row in system.query_log, which is how
+	// an Unknown outcome gets resolved after the fact.
+	QueryID string
+	// Outcome is the commit state. See the Outcome docs.
+	Outcome Outcome
+	// Classification is a short stable slug for metrics/logs, e.g.
+	// "too_many_parts", "schema", "auth", "transport_refused", "response_lost".
+	Classification string
+	Retryable      bool
+	wrapped        error // transport-level cause, if any
+}
+
+// Committed reports whether err represents a write that definitely landed.
+// A nil error is committed; anything else is not.
+func Committed(err error) bool { return err == nil }
+
+// OutcomeOf returns the commit state carried by err. A nil error is Committed.
+// A non-chhttp error is Unknown: we did not produce it, so we cannot claim to
+// know whether the write landed — and Unknown is the safe direction, because it
+// forbids both silent data loss and a blind non-idempotent retry.
+func OutcomeOf(err error) Outcome {
+	if err == nil {
+		return OutcomeCommitted
+	}
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Outcome
+	}
+	return OutcomeUnknown
+}
+
+// QueryIDOf returns the ClickHouse query id carried by err, or "".
+func QueryIDOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.QueryID
+	}
+	return ""
+}
+
+// ClassificationOf returns the stable metric slug carried by err, or "".
+func ClassificationOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Classification
+	}
+	return ""
 }
 
 func (e *Error) Error() string {
@@ -190,6 +329,11 @@ type Request struct {
 	Budget time.Duration
 	// MaxBytes bounds the response; zero uses DefaultMaxBytes.
 	MaxBytes int64
+	// NoWaitEndOfQuery disables server-side response buffering. Set ONLY by a
+	// caller that must stream a large result (the API proxy). It trades the
+	// authoritative error status for constant memory — see the wait_end_of_query
+	// measurement in do().
+	NoWaitEndOfQuery bool
 }
 
 // ErrNoEndpoint is returned when the client has no Base configured. A missing
@@ -234,24 +378,58 @@ func (c *Client) Exec(ctx context.Context, req Request) ([]byte, error) {
 		_ = resp.Body.Close()
 	}()
 
+	queryID := resp.Header.Get("X-ClickHouse-Query-Id")
+	hdrCode := headerExceptionCode(resp)
+
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if readErr != nil {
-		// A body that died mid-read is transport trouble, not a server verdict.
-		return nil, &Error{Op: req.Op, Status: resp.StatusCode,
-			Message: "read response: " + readErr.Error(), Retryable: true, wrapped: readErr}
+		// The request was fully sent and the server began answering; the answer
+		// was lost mid-flight. We CANNOT know whether the insert applied, and
+		// saying "failed" here is how a retry duplicates committed rows.
+		return nil, &Error{Op: req.Op, Status: resp.StatusCode, QueryID: queryID,
+			Message: "read response: " + readErr.Error(), Outcome: OutcomeUnknown,
+			Classification: "response_lost", Retryable: true, wrapped: readErr}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, classify(req.Op, resp.StatusCode, body)
+		return nil, classify(req.Op, resp.StatusCode, body, hdrCode, queryID)
+	}
+
+	// A 200 can still be a failure, two different ways.
+	//
+	// (1) The exception header is present. Authoritative when ClickHouse got to
+	//     set it, and it costs nothing to check.
+	// (2) The header is absent but the body ends in an exception — the measured
+	//     wait_end_of_query=0 case. Without this check a 15 MB body whose tail
+	//     is a DB::Exception is returned to the caller as a successful read.
+	if hdrCode != 0 || bodyCarriesException(body) {
+		return nil, classify(req.Op, resp.StatusCode, body, hdrCode, queryID)
 	}
 
 	// A 200 whose body hit the cap is a TRUNCATED answer. Returning it would let
 	// a partial result read as a complete one — the exact shape of F-67.
 	if int64(len(body)) >= maxBytes {
-		return nil, &Error{Op: req.Op, Status: resp.StatusCode,
-			Message: fmt.Sprintf("response exceeded %d bytes — narrow the query", maxBytes)}
+		return nil, &Error{Op: req.Op, Status: resp.StatusCode, QueryID: queryID,
+			Message:        fmt.Sprintf("response exceeded %d bytes — narrow the query", maxBytes),
+			Outcome:        OutcomeUnknown, // the statement may well have applied in full
+			Classification: "response_truncated"}
 	}
 	return body, nil
+}
+
+// headerExceptionCode reads X-ClickHouse-Exception-Code. MEASURED present on
+// 24.8.14.39 for 403 (516) and 404 (81), and — critically — ABSENT on the
+// 200-with-embedded-exception case, which is why it cannot be the only check.
+func headerExceptionCode(resp *http.Response) int {
+	v := resp.Header.Get("X-ClickHouse-Exception-Code")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // ExecStream is Exec for callers that must stream the result rather than hold
@@ -272,7 +450,7 @@ func (c *Client) ExecStream(ctx context.Context, req Request) (io.ReadCloser, er
 	if resp.StatusCode != http.StatusOK {
 		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-		return nil, classify(req.Op, resp.StatusCode, body)
+		return nil, classify(req.Op, resp.StatusCode, body, headerExceptionCode(resp), resp.Header.Get("X-ClickHouse-Query-Id"))
 	}
 	return resp.Body, nil
 }
@@ -281,10 +459,10 @@ func (c *Client) ExecStream(ctx context.Context, req Request) (io.ReadCloser, er
 // ExecStream so URL construction, settings and auth cannot drift between them.
 func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if strings.TrimSpace(c.Base) == "" {
-		return nil, &Error{Op: req.Op, Message: ErrNoEndpoint.Error(), wrapped: ErrNoEndpoint}
+		return nil, &Error{Op: req.Op, Message: ErrNoEndpoint.Error(), Outcome: OutcomeRejected, Classification: "no_endpoint", wrapped: ErrNoEndpoint}
 	}
 	if req.Scope == "" {
-		return nil, &Error{Op: req.Op, Message: ErrScopeRequired.Error(), wrapped: ErrScopeRequired}
+		return nil, &Error{Op: req.Op, Message: ErrScopeRequired.Error(), Outcome: OutcomeRejected, Classification: "no_scope", wrapped: ErrScopeRequired}
 	}
 	budget := req.Budget
 	if budget <= 0 {
@@ -292,7 +470,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	u, err := url.Parse(c.Base)
 	if err != nil {
-		return nil, &Error{Op: req.Op, Message: "bad endpoint: " + err.Error(), wrapped: err}
+		return nil, &Error{Op: req.Op, Message: "bad endpoint: " + err.Error(), Outcome: OutcomeRejected, Classification: "bad_endpoint", wrapped: err}
 	}
 	q := u.Query()
 	q.Set("tenant_scope", req.Scope)
@@ -302,6 +480,20 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	q.Set("max_execution_time", strconv.Itoa(secs))
 	q.Set("cancel_http_readonly_queries_on_client_close", "1")
+	// wait_end_of_query=1 makes ClickHouse buffer the response server-side so a
+	// failure AFTER the first flush still arrives as a proper status + exception
+	// header instead of a 200 with the error buried in the body.
+	//
+	// MEASURED on 24.8.14.39, same failing query, only this flag differing:
+	//   wait_end_of_query=0 → HTTP 200, no exception header, 15,687,190 bytes
+	//   wait_end_of_query=1 → HTTP 500, exception header,          300 bytes
+	//
+	// It is NOT the sole detector — it costs server-side buffering, so the
+	// streaming path (ExecStream) cannot use it, and bodyCarriesException
+	// backstops both. Callers that must stream set NoWaitEndOfQuery.
+	if !req.NoWaitEndOfQuery {
+		q.Set("wait_end_of_query", "1")
+	}
 	if req.LogComment != "" {
 		q.Set("log_comment", req.LogComment)
 	}
@@ -315,7 +507,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(req.SQL)))
 	if err != nil {
-		return nil, &Error{Op: req.Op, Message: err.Error(), wrapped: err}
+		return nil, &Error{Op: req.Op, Message: err.Error(), Outcome: OutcomeRejected, Classification: "bad_request_build", wrapped: err}
 	}
 	httpReq.SetBasicAuth(c.User, c.Password)
 	httpReq.Header.Set("Content-Type", "text/plain")
@@ -326,9 +518,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	resp, err := cl.Do(httpReq)
 	if err != nil {
-		// Transport failures (connection refused, reset, timeout) are transient
-		// by nature — the server may simply be restarting.
-		return nil, &Error{Op: req.Op, Message: err.Error(), Retryable: true, wrapped: err}
+		return nil, classifyTransport(req.Op, err)
 	}
 	return resp, nil
 }
@@ -336,30 +526,104 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 // classify turns a non-200 into a typed verdict. Exception code wins over HTTP
 // status whenever we recognise it, because ClickHouse reports both transient
 // backpressure and permanent schema bugs as 500 (see the package doc).
-func classify(op string, status int, body []byte) *Error {
+// classify turns a failed response into a typed verdict. The exception code —
+// from the header when present, else parsed from the body — outranks the HTTP
+// status, because ClickHouse reports transient backpressure and permanent
+// schema faults with the same 500.
+//
+// Outcome here is always Rejected: the server answered, and its answer was no.
+// Unknown is produced only by the transport paths, where the answer was lost.
+func classify(op string, status int, body []byte, hdrCode int, queryID string) *Error {
 	msg := strings.Join(strings.Fields(string(body)), " ")
+	// Bound the message BEFORE it reaches a log. A ClickHouse exception body can
+	// quote the offending row, which for this platform is customer telemetry.
 	if len(msg) > 512 {
 		msg = msg[:512] + "…"
 	}
-	e := &Error{Op: op, Status: status, Code: parseCode(msg), Message: msg}
+	code := hdrCode
+	if code == 0 {
+		code = parseCode(msg)
+	}
+	e := &Error{
+		Op: op, Status: status, Code: code, Message: msg,
+		QueryID: queryID, Outcome: OutcomeRejected,
+		Classification: classificationFor[code],
+	}
 
 	switch {
-	case retryableCodes[e.Code]:
+	case retryableCodes[code]:
 		e.Retryable = true
-	case permanentCodes[e.Code]:
+	case permanentCodes[code]:
 		e.Retryable = false
 	case status == http.StatusTooManyRequests, status == http.StatusServiceUnavailable,
 		status == http.StatusGatewayTimeout, status == http.StatusBadGateway:
 		// Backpressure and proxy-level transients, no exception code present.
 		e.Retryable = true
+		if e.Classification == "" {
+			e.Classification = "infrastructure"
+		}
 	case status >= 500:
 		// An unrecognised server-side failure: retrying is the safer default,
 		// and the caller's backoff bounds the cost.
 		e.Retryable = true
+		if e.Classification == "" {
+			e.Classification = "server_error"
+		}
 	default:
 		// 4xx without a known code: the request itself is wrong. Retrying an
 		// unchanged bad request is how a poison statement loops forever.
 		e.Retryable = false
+		if e.Classification == "" {
+			e.Classification = "bad_request"
+		}
+	}
+	if e.Classification == "" {
+		e.Classification = "clickhouse_error"
 	}
 	return e
 }
+
+// classifyTransport decides the COMMIT STATE of a failure that happened before
+// any response was parsed. This is the hardest judgement in the package and the
+// stdlib does not make it easy: net/http does not tell us how much of the
+// request body reached the server.
+//
+// So the rule is asymmetric on purpose. We claim Rejected only for failures
+// that provably happened BEFORE the server could have seen the body — a refused
+// connection, an unresolvable host. Everything else (deadline exceeded, reset
+// mid-flight, EOF) is Unknown, because "we timed out waiting for the answer"
+// and "the insert applied and we missed the ack" are the same observation.
+//
+// Erring toward Unknown is the safe direction: Unknown forbids both silent loss
+// and a blind non-idempotent retry, whereas a wrong Rejected causes duplicates.
+func classifyTransport(op string, err error) *Error {
+	e := &Error{Op: op, Message: err.Error(), Retryable: true, wrapped: err}
+
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		// Nothing was listening: the body cannot have been read.
+		e.Outcome, e.Classification = OutcomeRejected, "transport_refused"
+	case isDNSFailure(err):
+		// We never opened a connection.
+		e.Outcome, e.Classification = OutcomeRejected, "transport_dns"
+	case errors.Is(err, context.Canceled):
+		e.Outcome, e.Classification = OutcomeUnknown, "context_canceled"
+		e.Retryable = false // the caller went away; do not retry on its behalf
+	case errors.Is(err, context.DeadlineExceeded), os.IsTimeout(err):
+		e.Outcome, e.Classification = OutcomeUnknown, "timeout"
+	default:
+		// Connection reset, unexpected EOF, broken pipe: the request may have
+		// been delivered in full.
+		e.Outcome, e.Classification = OutcomeUnknown, "response_lost"
+	}
+	return e
+}
+
+func isDNSFailure(err error) bool {
+	var d *net.DNSError
+	return errors.As(err, &d)
+}
+
+// errorsAs is errors.As bound to *Error, so callers (and tests) do not each
+// re-declare the target variable dance.
+func errorsAs(err error, target **Error) bool { return errors.As(err, target) }
