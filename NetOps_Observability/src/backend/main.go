@@ -200,6 +200,15 @@ func newServer() *server {
 		log.Fatalf("store backend: %v", err)
 	}
 
+	// Recover settings orphaned by the F-63 key rename (relative -> /data/...).
+	// On the Postgres backend the old relative keys worked, so repointing the
+	// code stranded live per-tenant config. Copies legacy -> current where the
+	// current key is empty; no-op on a fresh install. See kv_legacy_migrate.go.
+	if recovered := migrateLegacyKVKeys(); len(recovered) > 0 {
+		logInfo("store", "recovered settings written under pre-2026-07-21 store keys",
+			map[string]any{"keys": recovered, "count": len(recovered)})
+	}
+
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
 	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
 	// root KEK — never silently fall back to storing secrets in the clear.
