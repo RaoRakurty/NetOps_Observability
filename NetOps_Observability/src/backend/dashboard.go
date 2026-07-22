@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/models"
 )
 
 // dashboard.go — endpoints that feed the live Dashboard tab.
@@ -181,7 +183,21 @@ func (s *server) watchAlertsForBroadcast(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, a := range s.alerts.Active() {
+			active := s.alerts.Active()
+			// F-33: `seen` was keyed by alert fingerprint (rule|device|ifName|…)
+			// and NOTHING ever deleted from it. Every distinct series that ever
+			// fired stayed for the life of the process — on a fleet with churning
+			// interface/device labels that grows without bound, inside the API
+			// process, and the alert built to catch that growth was the one F-35
+			// had disabled.
+			//
+			// Pruning to the currently-active set also fixes a behavioural bug
+			// this loop's own comment promised and did not deliver ("each alert
+			// is sent exactly once per FIRING"): an alert that resolved and later
+			// re-fired kept its `seen` entry forever, so the re-fire was never
+			// broadcast and the dashboard silently missed it.
+			pruneSeenAlerts(seen, active)
+			for _, a := range active {
 				if seen[a.ID] {
 					continue
 				}
@@ -197,6 +213,24 @@ func (s *server) watchAlertsForBroadcast(ctx context.Context) {
 					return []map[string]any{{"type": "alert", "data": alert}}
 				})
 			}
+		}
+	}
+}
+
+// pruneSeenAlerts drops broadcast-dedup entries for alerts that are no longer
+// active (F-33). Extracted so the retention rule is directly testable — the
+// growth it prevents is invisible in any happy-path assertion.
+func pruneSeenAlerts(seen map[string]bool, active []models.Alert) {
+	if len(seen) == 0 {
+		return
+	}
+	live := make(map[string]bool, len(active))
+	for _, a := range active {
+		live[a.ID] = true
+	}
+	for id := range seen {
+		if !live[id] {
+			delete(seen, id)
 		}
 	}
 }

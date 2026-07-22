@@ -4,7 +4,6 @@ import (
 	"crypto/md5" // #nosec G501 -- RFC 8907 §4.5: TACACS+ body obfuscation is MD5-based; protocol-mandated
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -297,7 +296,8 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// F-32: PRE-AUTH route — a TACACS+ sign-in is a username/password pair.
+	if err := decodeJSONBody(w, r, authCredentialBodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

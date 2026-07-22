@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -292,7 +291,10 @@ func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// F-32: PRE-AUTH route — an LDAP sign-in is a username/password pair. Same
+	// loginRequest struct as /api/auth/login, which caps at 64 KiB; this sibling
+	// was missed.
+	if err := decodeJSONBody(w, r, authCredentialBodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

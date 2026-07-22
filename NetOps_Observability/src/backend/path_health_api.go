@@ -64,7 +64,9 @@ func (s *server) vmInstant(ctx context.Context, query string) ([]vmSample, error
 	for _, r := range out.Data.Result {
 		v := 0.0
 		if str, ok := r.Value[1].(string); ok {
-			v, _ = strconv.ParseFloat(str, 64)
+			// F-21: ParseFloat("NaN") succeeds, and NaN cannot be JSON-encoded —
+			// one NaN series used to empty the whole response body.
+			v = finiteOrZero(str)
 		}
 		samples = append(samples, vmSample{Labels: r.Metric, Value: v})
 	}

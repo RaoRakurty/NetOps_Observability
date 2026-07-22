@@ -108,9 +108,17 @@ func (s *server) vmRange(ctx context.Context, query string, start, end, step int
 		labels[key] = r.Metric
 		for _, v := range r.Values {
 			ts, _ := v[0].(float64)
-			val := 0.0
-			if str, ok := v[1].(string); ok {
-				val, _ = strconv.ParseFloat(str, 64)
+			str, isStr := v[1].(string)
+			if !isStr {
+				continue
+			}
+			// F-21: a NaN point is MISSING, not zero. Feeding 0 into the trend
+			// fit would drag the forecast toward zero and invent a "capacity
+			// improving" signal out of a gap in the data; carrying the NaN
+			// through would break the JSON encode for the whole response.
+			val, ok := parseMetricFloat(str)
+			if !ok {
+				continue
 			}
 			pts[key] = append(pts[key], [2]float64{ts, val})
 		}

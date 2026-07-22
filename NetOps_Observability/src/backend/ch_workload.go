@@ -21,7 +21,50 @@ package main
 // profile parameter entirely (queries run under the default profile), for
 // upgrades where the API image lands before the ClickHouse config does.
 
-import "strings"
+import (
+	"net/url"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+)
+
+// ── F-27: server-side execution guards ───────────────────────────────────────
+//
+// Every ClickHouse read here goes over the HTTP interface with a Go client
+// timeout. A Go client timeout does NOT stop the query: ClickHouse keeps
+// executing, keeps holding memory, and keeps occupying a slot long after the
+// caller gave up and returned "no data". That is the client-side shape of the
+// 2026-07-09 #100 incident — the API times out, retries on the next poll, and
+// each abandoned query is still running underneath.
+//
+// Two parameters fix it at the protocol level, and they belong on EVERY read
+// path rather than on the one that was noticed:
+//
+//	max_execution_time                          — ClickHouse aborts by itself
+//	cancel_http_readonly_queries_on_client_close — closing the socket kills the query
+//
+// chMaxResponseBytes bounds the other half: an io.ReadAll with no limit on a
+// response whose size is a function of table size.
+const chMaxResponseBytes int64 = 8 << 20
+
+// chReadFailures counts ClickHouse reads that returned an error. Before F-27
+// the shared read helper swallowed every failure and returned nil, so an
+// unreachable ClickHouse and an empty result were indistinguishable — the
+// report simply said "no data".
+var chReadFailures atomic.Uint64
+
+// chApplyGuards stamps the server-side execution guards onto a ClickHouse HTTP
+// query. budget should match (or slightly undercut) the caller's client
+// timeout, so the server gives up first and no orphaned query is left behind.
+func chApplyGuards(q url.Values, budget time.Duration) {
+	secs := int(budget.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	q.Set("max_execution_time", strconv.Itoa(secs))
+	q.Set("cancel_http_readonly_queries_on_client_close", "1")
+}
 
 // chHotUIPrefixes: endpoints served from the corr_current hot projection (or
 // equally narrow #100-shaped reads). Extend when a new hot lane ships — the

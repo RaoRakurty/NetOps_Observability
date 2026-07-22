@@ -5,7 +5,6 @@
 package notify
 
 import (
-	"log"
 	"strings"
 	"sync"
 
@@ -26,12 +25,18 @@ type ResolveSender interface {
 }
 
 // Dispatcher holds the registered channels and forwards alerts to each.
+//
+// Delivery itself is owned by the bounded worker pool in delivery.go (F-22):
+// Dispatch/DispatchTo/DispatchResolve ENQUEUE, they no longer spawn a goroutine
+// per channel per alert. DispatchToResults stays synchronous — its callers want
+// per-channel receipts and already run off the request path.
 type Dispatcher struct {
 	mu       sync.RWMutex
 	channels []Channel
+	delivery *delivery
 }
 
-func NewDispatcher() *Dispatcher { return &Dispatcher{} }
+func NewDispatcher() *Dispatcher { return &Dispatcher{delivery: newDelivery()} }
 
 func (d *Dispatcher) Register(c Channel) {
 	if c == nil {
@@ -73,22 +78,24 @@ func (d *Dispatcher) Remove(name string) {
 	d.channels = out
 }
 
-// Dispatch sends the alert to all registered channels concurrently.
-// Channel errors are logged but never returned — alert delivery should
-// never block the evaluation loop.
+// Dispatch queues the alert for delivery to every registered channel. It never
+// blocks the alert evaluation loop and never spawns an unbounded goroutine per
+// channel (F-22): sends run on the fixed worker pool, with retries and
+// per-channel counters.
 func (d *Dispatcher) Dispatch(a models.Alert) {
-	d.mu.RLock()
-	channels := make([]Channel, len(d.channels))
-	copy(channels, d.channels)
-	d.mu.RUnlock()
-
-	for _, c := range channels {
-		go func(c Channel) {
-			if err := c.Send(a); err != nil {
-				log.Printf("notify %s: %v", c.Name(), err)
-			}
-		}(c)
+	for _, c := range d.snapshot() {
+		d.delivery.enqueue(sendJob{ch: c, alert: a})
 	}
+}
+
+// snapshot copies the channel list under the read lock, so delivery never runs
+// with the registry lock held.
+func (d *Dispatcher) snapshot() []Channel {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]Channel, len(d.channels))
+	copy(out, d.channels)
+	return out
 }
 
 // DispatchResolve tells every resolution-capable channel that an alert
@@ -96,22 +103,13 @@ func (d *Dispatcher) Dispatch(a models.Alert) {
 // (same dedup key) instead of accumulating stale open incidents forever.
 // Channels without ResolveSender are skipped; errors are logged, never block.
 func (d *Dispatcher) DispatchResolve(a models.Alert) {
-	d.mu.RLock()
-	channels := make([]Channel, len(d.channels))
-	copy(channels, d.channels)
-	d.mu.RUnlock()
+	channels := d.snapshot()
 
 	for _, c := range channels {
-		rs, ok := c.(ResolveSender)
-		if !ok {
+		if _, ok := c.(ResolveSender); !ok {
 			continue
 		}
-		name := c.Name()
-		go func(rs ResolveSender) {
-			if err := rs.SendResolve(a); err != nil {
-				log.Printf("notify %s resolve: %v", name, err)
-			}
-		}(rs)
+		d.delivery.enqueue(sendJob{ch: c, alert: a, resolve: true})
 	}
 }
 
@@ -141,10 +139,7 @@ func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
 	for _, n := range names {
 		want[strings.ToLower(strings.TrimSpace(n))] = true
 	}
-	d.mu.RLock()
-	channels := make([]Channel, len(d.channels))
-	copy(channels, d.channels)
-	d.mu.RUnlock()
+	channels := d.snapshot()
 
 	sent := 0
 	for _, c := range channels {
@@ -159,11 +154,7 @@ func (d *Dispatcher) DispatchTo(a models.Alert, names []string) int {
 		if g, ok := c.(interface{ Unguarded() Channel }); ok {
 			target = g.Unguarded()
 		}
-		go func(c Channel) {
-			if err := c.Send(a); err != nil {
-				log.Printf("notify %s: %v", c.Name(), err)
-			}
-		}(target)
+		d.delivery.enqueue(sendJob{ch: target, alert: a})
 	}
 	return sent
 }
@@ -187,10 +178,7 @@ func (d *Dispatcher) DispatchToResults(a models.Alert, names []string) []SendRes
 	}
 	all := len(names) == 0
 
-	d.mu.RLock()
-	channels := make([]Channel, len(d.channels))
-	copy(channels, d.channels)
-	d.mu.RUnlock()
+	channels := d.snapshot()
 
 	var results []SendResult
 	for _, c := range channels {
