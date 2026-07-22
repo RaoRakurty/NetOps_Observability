@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,8 +259,12 @@ func newServer() *server {
 			// full USM params; a v1/v2c profile threads the community. An empty
 			// community falls back to the global SNMP_COMMUNITY in the poller.
 			tgt := collectors.Target{
-				ID:       dev.ID,
-				Address:  dev.Address,
+				ID:      dev.ID,
+				Address: dev.Address,
+				// §3a.2 / F-56: the owning tenant travels with the target so a
+				// collector that persists rows stamps it from the inventory,
+				// never from anything the device says on the wire.
+				TenantID: dev.TenantID,
 				Protocol: dev.PreferredProtocol,
 				// gNMI-capable devices (a gnmic subscription exists) declare it via the
 				// `gnmi: "true"` label; the SNMP collector then yields gNMI-owned metric
@@ -743,6 +748,10 @@ func main() {
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
 	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
 	srv.startTenantEnrichment(ctx)
+	// Bounded growth for the Postgres audit trail (F-57). Opt-in and OFF by
+	// default — an audit trail is evidence; only an operator decides how long
+	// it is kept. No-op unless AUDIT_RETENTION_DAYS is a positive integer.
+	startAuditRetention(ctx)
 	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
 	ensureCHRowPolicies()
 	// corr_current projection drift repair (#101): detect + re-seed hot-read rows
@@ -1368,7 +1377,28 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims))))
+		// F-61: this endpoint used to parse NOTHING and return the whole table —
+		// `?limit=1`, `?limit=1&offset=0` and `?page_size=1` all produced the
+		// byte-identical 218 KB / 512-row body. Parameters are now applied or
+		// rejected by name, the page is bounded, and the TRUE fleet total rides
+		// on every response (headers; ?envelope=1 for the JSON form) so a client
+		// can tell a page from the whole fleet. See pagination.go.
+		if err := rejectUnknownQuery(r); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		page, err := parsePage(r, deviceDefaultPage, deviceMaxPage)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		all := s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
+		// Stable order: without one, paging over a map-backed aggregator can
+		// show the same device twice and never show another at all.
+		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+		rows := pageSliceOf(all, page)
+		logTruncatedPage("/api/devices", page, len(rows), len(all))
+		writePage(w, "devices", rows, page, len(rows), len(all))
 	case http.MethodPost:
 		// SR-003: creating a device is a write — gate it. Previously any
 		// authenticated principal (incl. read-only) could create/overwrite devices.

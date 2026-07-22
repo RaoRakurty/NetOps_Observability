@@ -360,13 +360,27 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"vuln_enabled": false})
 		return
 	}
-	limit, errLimit := intQuery(r, "limit", 500, 1, 2000)
-	if errLimit != nil {
-		writeError(w, http.StatusBadRequest, errLimit)
+	// F-79: the read used to be limit-only with a hard ceiling of 2,000 and no
+	// offset, so with 7,560 findings live, 5,560 of them were unreachable at ANY
+	// limit — teams triaged 6.6% of fleet exposure believing it was all of it.
+	// `offset` makes every finding reachable; the true total was already in
+	// summary.findings and is now also on the headers/envelope alongside an
+	// explicit `complete`. `unassessed` was fully unbounded — it is paged by the
+	// same window and reports its own true total.
+	if err := rejectUnknownQuery(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	page, err := parsePage(r, 500, 2000)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
 	devices := visibleDevices(s.discovery.Devices(), claims)
+	// Stable device order → stable `unassessed` order → an offset walk that
+	// reaches every row exactly once (the aggregator is map-backed).
+	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
 	findings := make([]vulnFinding, 0, 16)
 	unassessed := make([]vulnUnassessed, 0, 8)
 	assessed, affected := 0, 0
@@ -412,13 +426,22 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		if a.CVSS != b.CVSS {
 			return a.CVSS > b.CVSS
 		}
-		return a.CVE > b.CVE
+		if a.CVE != b.CVE {
+			return a.CVE > b.CVE
+		}
+		// F-79 total tiebreak: sort.Slice is NOT stable, so two findings equal on
+		// (KEV, severity, CVSS, CVE) — the same CVE on two devices — could swap
+		// order between two calls, and a client walking offsets would see one
+		// twice and the other never. device_id makes the order total.
+		return a.DeviceID < b.DeviceID
 	})
 	totalFindings := len(findings)
-	if len(findings) > limit {
-		findings = findings[:limit]
-	}
+	totalUnassessed := len(unassessed)
+	findings = pageSliceOf(findings, page)
+	unassessed = pageSliceOf(unassessed, page)
+	logTruncatedPage("/api/vulns", page, len(findings), totalFindings)
 	entries, kevEntries, updated := s.vulns.info()
+	writePageHeaders(w, page, len(findings), totalFindings)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"vuln_enabled": true,
 		"feed":         map[string]any{"entries": entries, "kev_entries": kevEntries, "updated_at": updated.UTC().Format(time.RFC3339)},
@@ -428,5 +451,16 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		},
 		"findings":   findings,
 		"unassessed": unassessed,
+		// The bounded-read contract, in-body (this endpoint has always been an
+		// object, so it can carry it without an ?envelope=1 opt-in). `complete`
+		// is the bit that used to be missing: 500 of 7,560 rows looked exactly
+		// like "there are 500".
+		"page": map[string]any{
+			"limit": page.Limit, "offset": page.Offset, "max_limit": page.Max,
+			"returned": len(findings), "total": totalFindings,
+			"complete":           pageComplete(page, len(findings), totalFindings),
+			"unassessed_total":   totalUnassessed,
+			"unassessed_partial": !pageComplete(page, len(unassessed), totalUnassessed),
+		},
 	})
 }
