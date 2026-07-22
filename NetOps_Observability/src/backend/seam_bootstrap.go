@@ -721,13 +721,6 @@ func seamCHQueryJSON(ctx context.Context, sql string, dst any) error {
 	return json.Unmarshal(wrapper.Data, dst)
 }
 
-func truncateForLog(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
 // seamPrivateIPSQL classifies an address column as enterprise-internal in CH
 // SQL, mirroring seamPrivateIP (IPv4 RFC 1918 + CGNAT; IPv6 ULA).
 func seamPrivateIPSQL(col string) string {

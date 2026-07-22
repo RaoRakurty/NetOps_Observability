@@ -22,11 +22,8 @@ package main
 // upgrades where the API image lands before the ClickHouse config does.
 
 import (
-	"net/url"
-	"strconv"
 	"strings"
 	"sync/atomic"
-	"time"
 )
 
 // ── F-27: server-side execution guards ───────────────────────────────────────
@@ -53,18 +50,6 @@ const chMaxResponseBytes int64 = 8 << 20
 // unreachable ClickHouse and an empty result were indistinguishable — the
 // report simply said "no data".
 var chReadFailures atomic.Uint64
-
-// chApplyGuards stamps the server-side execution guards onto a ClickHouse HTTP
-// query. budget should match (or slightly undercut) the caller's client
-// timeout, so the server gives up first and no orphaned query is left behind.
-func chApplyGuards(q url.Values, budget time.Duration) {
-	secs := int(budget.Seconds())
-	if secs < 1 {
-		secs = 1
-	}
-	q.Set("max_execution_time", strconv.Itoa(secs))
-	q.Set("cancel_http_readonly_queries_on_client_close", "1")
-}
 
 // chHotUIPrefixes: endpoints served from the corr_current hot projection (or
 // equally narrow #100-shaped reads). Extend when a new hot lane ships — the

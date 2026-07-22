@@ -623,7 +623,3 @@ func isDNSFailure(err error) bool {
 	var d *net.DNSError
 	return errors.As(err, &d)
 }
-
-// errorsAs is errors.As bound to *Error, so callers (and tests) do not each
-// re-declare the target variable dance.
-func errorsAs(err error, target **Error) bool { return errors.As(err, target) }

@@ -25,6 +25,7 @@ package chhttp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -339,6 +340,8 @@ func TestLiveInsertToleranceActuallyTolerates(t *testing.T) {
 	}
 }
 
-// asChErr is errors.As specialised to *Error, kept local so the integration
-// file has no dependency on the unit-test helpers.
-func asChErr(err error, target **Error) bool { return errorsAs(err, target) }
+// asChErr is errors.As specialised to *Error. It lives HERE, behind the
+// integration build tag, rather than in chhttp.go: a helper used only by
+// tagged tests is dead code in the default build, and golangci-lint's unused
+// check is right to say so.
+func asChErr(err error, target **Error) bool { return errors.As(err, target) }
