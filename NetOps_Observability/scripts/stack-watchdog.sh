@@ -333,6 +333,43 @@ drift_check() {  # $1 = compose service, $2 = repo-relative path, $3 = in-contai
 drift_check vector-aggregator deployment/docker/vector/vector.yaml        /etc/vector/conf/vector.yaml
 drift_check vector-router     deployment/docker/vector-router/vector.yaml /etc/vector/conf/vector.yaml
 drift_check victoria          src/config/vmscrape.yml                     /etc/victoria/config/vmscrape.yml
+
+# ---- BUILD drift: is the deployed BINARY the committed source? -------------
+#
+# drift_check above covers BIND-MOUNTED config, which updates the instant a
+# container restarts. It cannot see the other half: code BAKED INTO AN IMAGE,
+# which only changes on `docker compose build`.
+#
+# That asymmetry is what made F-08 invisible (2026-07-22). The feature's code and
+# config were both correct and both committed, but the api image was never
+# rebuilt, so it sat built-but-undeployed for weeks while looking complete.
+# `docker compose up -d` recreates a container from whatever image already
+# exists — it does not rebuild — so "restart the service" silently redeployed old
+# code. prober was running a 38-hour-old binary and had been restarted repeatedly
+# without ever gaining the fix it needed. Nothing objected, because nothing could
+# answer "which commit is actually running?".
+#
+# Now the binary answers, at /admin/version, and this compares it to HEAD.
+build_drift_check() { # $1 service, $2 url
+  local running head_sha body
+  head_sha=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)
+  [ -n "$head_sha" ] || return 0   # not a git checkout (e.g. an offline bundle)
+  body=$(curl -fsS -m 10 "$2" 2>/dev/null) || {
+    problems+=("BUILD UNVERIFIABLE: $1 did not answer $2 — the provenance probe is blind, fix the probe rather than ignoring it")
+    return 0
+  }
+  running=$(printf '%s' "$body" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  # An UNIDENTIFIED build is a failure, not a pass: a binary that cannot name its
+  # revision is exactly the situation this check exists to end.
+  if [ -z "$running" ] || [ "$running" = "unknown" ]; then
+    problems+=("BUILD UNIDENTIFIED: $1 reports no git SHA — it was built without GIT_SHA. Rebuild with: GIT_SHA=\$(git rev-parse HEAD) docker compose build $1")
+    return 0
+  fi
+  if [ "$running" != "$head_sha" ]; then
+    problems+=("BUILD DRIFT: $1 is running ${running:0:8} but HEAD is ${head_sha:0:8} — the deployed image predates the source. Fix: GIT_SHA=\$(git rev-parse HEAD) BUILD_TIME=\$(date -u +%FT%TZ) docker compose build $1 && docker compose up -d $1")
+  fi
+}
+build_drift_check api "${APP_URL%/}/admin/version"
 drift_check vmalert           src/config/rules.yaml                       /etc/vmalert/config/rules.yaml
 drift_check syslog-ng         deployment/docker/syslog-ng/syslog-ng.conf  /etc/syslog-ng/conf.d/syslog-ng.conf
 drift_check nginx             deployment/docker/nginx/default.conf        /etc/nginx/conf.d/default.conf

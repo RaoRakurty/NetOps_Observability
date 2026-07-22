@@ -1008,6 +1008,12 @@ services:
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
+      # Build provenance: the running binary reports these at /admin/version,
+      # so drift between deployed image and source is DETECTABLE. Supplied by
+      # install.py / deploy tooling; "unknown" if a build bypasses them.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     mem_limit: ${API_MEM_LIMIT:-512m}
     cpus: ${API_CPU_LIMIT:-2}
     environment:
@@ -1412,6 +1418,12 @@ services:
     build:
       context: ../..
       dockerfile: deployment/docker/Dockerfile.backend
+      # Build provenance: the running binary reports these at /admin/version,
+      # so drift between deployed image and source is DETECTABLE. Supplied by
+      # install.py / deploy tooling; "unknown" if a build bypasses them.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     mem_limit: ${PROBER_MEM_LIMIT:-128m}
     # Least privilege: drop everything, add only the one capability raw sockets
     # need. no-new-privileges blocks setuid escalation.

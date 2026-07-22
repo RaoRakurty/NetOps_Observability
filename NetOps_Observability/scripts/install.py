@@ -63,6 +63,23 @@ _PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 def generate_password(length: int = 24) -> str:
     return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
 
+def _git_sha(root: Path) -> str:
+    """HEAD of the checkout, or "unknown".
+
+    "unknown" is the honest answer for a source bundle with no .git, and the
+    drift check treats it as a FAILURE rather than a pass — an unidentifiable
+    artifact is exactly the condition build provenance exists to end.
+    """
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
 def generate_token(bytes_: int = 32) -> str:
     return secrets.token_urlsafe(bytes_)
 
@@ -806,10 +823,25 @@ def compose_up(compose_dir: Path, offline: bool = False) -> None:
     # and leaves api/correlation/nginx in "Created". `up -d` is idempotent, so a
     # second/third pass starts exactly those stragglers once their deps have since
     # gone healthy. Retry before giving up.
+    # Build provenance (2026-07-22): stamp the git SHA into every image built
+    # here, so the running binary can report which commit it is at
+    # /admin/version and stack-watchdog can alarm on drift.
+    #
+    # F-08 is why. Its code and config were both correct and both committed, but
+    # the api image was never rebuilt — so the feature sat built-but-undeployed
+    # for weeks while looking complete, and nothing in the system could tell.
+    # `docker compose up -d` recreates from whatever image already exists; it
+    # does not rebuild. Supplying these through the environment means the normal
+    # install path CANNOT produce an unidentifiable image.
+    build_env = dict(os.environ)
+    build_env.setdefault("GIT_SHA", _git_sha(root))
+    build_env.setdefault("BUILD_TIME",
+                         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
     last = 1
     for attempt in range(1, 4):
         r = subprocess.run(["docker", "compose", "up", "-d", build_flag],
-                           cwd=str(compose_dir))
+                           cwd=str(compose_dir), env=build_env)
         if r.returncode == 0:
             ok("services started")
             return

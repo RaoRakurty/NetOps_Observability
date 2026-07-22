@@ -10,9 +10,28 @@
 FROM golang:1.25.12-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS build
 WORKDIR /src
 COPY src/backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .
+
+# BUILD PROVENANCE. Baked into the binary so the RUNNING process can state which
+# commit it is — the thing whose absence let F-08 sit built-but-undeployed for
+# weeks while looking complete, and let a 38-hour-old prober binary get
+# "restarted" repeatedly without ever gaining the fix it needed.
+#
+# Unknown is the honest default: a build that was not told its revision must not
+# claim one. Drift detection treats "unknown" as a failure, not a pass.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags="-s -w -X main.buildSHA=${GIT_SHA} -X main.buildTime=${BUILD_TIME}" \
+      -o /out/api .
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+# Standard OCI labels, so `docker image inspect` answers the same question the
+# running process does, without starting it.
+LABEL org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
+      org.opencontainers.image.title="correlix-backend"
 COPY --from=build /out/api /api
 USER nonroot:nonroot
 EXPOSE 8080

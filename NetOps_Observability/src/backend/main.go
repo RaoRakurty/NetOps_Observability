@@ -1373,8 +1373,10 @@ func (s *server) handleHealthDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleVersion reports the deployed build, including the git SHA baked in at
+// image build time. See build_provenance.go for why that matters.
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+	writeJSON(w, http.StatusOK, s.currentBuildInfo())
 }
 
 // handleReadyz is the readiness probe (#18 phase 4). When serving TLS it returns
