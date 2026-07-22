@@ -224,6 +224,11 @@ func newServer() *server {
 	}
 
 	d := NewDiscoveryAggregator()
+	// Operator-created devices persist here and are seeded into the cache before
+	// any source polls or the API serves a request. Without this, POST
+	// /api/devices returned 201 for a device that existed only until the process
+	// exited (see device_persist.go).
+	d.SetStore(newDeviceStore(devicesPath()))
 	d.Register(NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
 	// SNMP subnet discovery: registered always with a LIVE config getter
 	// (console-set store, env bootstrap fallback) so operators can scope and
@@ -1387,7 +1392,12 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if tenant, cross := principalTenant(claims); !cross {
 			d.TenantID = tenant
 		}
-		s.discovery.Upsert(d)
+		// 201 must mean the device survives a restart. Before this store existed
+		// the device lived only in RAM and vanished on the next deploy.
+		if err := s.discovery.Upsert(d); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("device was not saved"))
+			return
+		}
 		writeJSON(w, http.StatusCreated, d)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -1457,7 +1467,12 @@ func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		s.discovery.Delete(id)
+		// 204 must mean the device stays deleted — see F-69: this used to return
+		// 204 while the owning source re-added the device within 60s.
+		if err := s.discovery.Delete(id); err != nil {
+			writeError(w, http.StatusInternalServerError, errors.New("device was not deleted"))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "GET, DELETE")

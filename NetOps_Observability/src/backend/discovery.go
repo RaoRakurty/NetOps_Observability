@@ -42,6 +42,12 @@ type DiscoveryAggregator struct {
 	// device id. Re-applied on every source poll so a re-poll (which rebuilds
 	// the cache entry from the source) doesn't wipe a detected vendor.
 	detected map[string]string
+	// store persists OPERATOR-CREATED devices and deletion tombstones. Nil-safe:
+	// a nil store keeps the old in-memory-only behaviour (tests). Source-reported
+	// devices are deliberately NOT persisted — their source is their authority
+	// and a persisted shadow would resurrect what pollOnce legitimately prunes.
+	// See device_persist.go.
+	store *deviceStore
 }
 
 type sourceStats struct {
@@ -195,6 +201,11 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	// records lingering as duplicates until a restart.
 	seen := make(map[string]bool, len(devices))
 	for _, d := range devices {
+		// An operator deleted this device: honour that instead of resurrecting
+		// it every poll (F-69). Recreating it via POST clears the tombstone.
+		if a.store.isSuppressed(d.ID) {
+			continue
+		}
 		existing, ok := a.cache[d.ID]
 		if ok && existing.Source != src.Name() {
 			continue // higher-precedence source already won this id
@@ -398,20 +409,63 @@ func (a *DiscoveryAggregator) Get(id string) (models.Device, bool) {
 	return d, ok
 }
 
-func (a *DiscoveryAggregator) Upsert(d models.Device) {
+// SetStore attaches the persistence layer and seeds the cache from it. Called
+// once at startup, before Start(), so operator-created devices exist before the
+// first poll and before the API serves a request.
+func (a *DiscoveryAggregator) SetStore(st *deviceStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.store = st
+	for _, d := range st.devices() {
+		if d.Source == "" {
+			d.Source = "manual"
+		}
+		a.cache[d.ID] = d
+	}
+}
+
+// Upsert records an operator-created device and PERSISTS it.
+//
+// This used to be an in-memory map write with no persistence anywhere, so
+// POST /api/devices returned 201 Created for a device that evaporated on the
+// next restart, container recreate, crash, deploy or documented upgrade — a 2xx
+// for a write that never landed. It now returns error so the handler can refuse
+// to claim success; the cache is only updated once the store has accepted it,
+// so RAM never claims a device the store does not have.
+func (a *DiscoveryAggregator) Upsert(d models.Device) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if d.Source == "" {
 		d.Source = "manual"
 	}
 	d.LastSeen = time.Now().UTC()
+	// Only manual devices persist; a source-owned record is rebuilt by its
+	// source and must not be shadowed here.
+	if d.Source == "manual" && a.store != nil {
+		if err := a.store.put(d); err != nil {
+			return err
+		}
+	}
 	a.cache[d.ID] = d
+	return nil
 }
 
-func (a *DiscoveryAggregator) Delete(id string) {
+// Delete removes a device and records a TOMBSTONE so it stays deleted.
+//
+// F-69: this used to be a bare cache delete, so DELETE returned 204 and the
+// owning source re-added the device within 60s on its next poll. The operator
+// was told the device was gone and it was not. The suppression below is honoured
+// by pollOnce, so a delete now means what it says.
+func (a *DiscoveryAggregator) Delete(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.store != nil {
+		if err := a.store.remove(id); err != nil {
+			return err
+		}
+	}
 	delete(a.cache, id)
+	return nil
 }
 
 func (a *DiscoveryAggregator) Health() map[string]sourceStats {
