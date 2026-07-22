@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -386,30 +389,84 @@ type tunnelRow struct {
 	LossPct      float64 `json:"loss_pct"`
 	QoE          float64 `json:"qoe"`
 	UptimeS      uint64  `json:"uptime_s"`
+	// TenantID stamps the owning tenant on the row (#20 / §3a.4). It was
+	// missing entirely (F-56): every discovered tunnel landed as '' and was
+	// therefore visible to EVERY tenant through the `OR tenant_id = ''`
+	// untagged-shared clause of the tenant_iso_tunnels row policy. The
+	// collector is the only place that knows which device — and so which
+	// tenant — a tunnel belongs to, so it is the only place that can stamp it.
+	TenantID string `json:"tenant_id"`
+}
+
+// chInsertSettings are the insert-tolerance settings EVERY ClickHouse write
+// from this tier now carries (audit F-56).
+//
+// A repo-wide grep for these at audit time returned ZERO hits in Go and Python,
+// while both Vector ClickHouse sinks set skip_unknown_fields — the discipline
+// existed in the config tier and was absent from both code tiers. Without them
+// a single unknown JSON key 400s the ENTIRE batch, so one schema drift between
+// a deploy and a migration silently costs every row in the poll cycle.
+//
+//   - input_format_skip_unknown_fields=1 — a field the table does not have yet
+//     is dropped, not fatal to its batch.
+//   - date_time_input_format=best_effort — a timestamp in a slightly different
+//     shape parses instead of failing the batch.
+//
+// input_format_allow_errors_num/ratio are DELIBERATELY NOT SET: they make
+// ClickHouse silently discard malformed ROWS, which trades a loud batch failure
+// for exactly the invisible partial loss this audit exists to eliminate.
+var chInsertSettings = map[string]string{
+	"input_format_skip_unknown_fields": "1",
+	"date_time_input_format":           "best_effort",
+	// tenant_scope: the tenant_iso_tunnels row policy is re-evaluated on INSERT
+	// in the inserting connection's context. Unset, it admits only tenant_id=''
+	// rows — so stamping a real tenant_id without this would make every insert
+	// fail. __all__ is the platform-writer scope the Go DDL path already uses.
+	"tenant_scope": "__all__",
 }
 
 // insertTunnels writes rows to ClickHouse via the HTTP interface using
-// JSONEachRow (ts uses the column DEFAULT now64(3)). Best-effort, like the
-// VictoriaMetrics emit in poller.go.
-func insertTunnels(ctx context.Context, rows []tunnelRow) {
+// JSONEachRow (ts uses the column DEFAULT now64(3)).
+//
+// F-56: this function used to end with
+//
+//	resp, err := client.Do(req)
+//	if err != nil { return }
+//	_ = resp.Body.Close()
+//
+// The status code was NEVER inspected. A 400 (schema drift), a 401 (rotated
+// password) or a 500 was indistinguishable from success — no log, no counter,
+// no retry — so the Tunnels tab would simply show stale data forever while the
+// collector reported itself healthy. It now returns an error the caller
+// surfaces on the collector's Status and counts as a metric.
+func insertTunnels(ctx context.Context, rows []tunnelRow) error {
 	base := chEnv("CLICKHOUSE_URL", "http://clickhouse:8123")
 	if base == "" || len(rows) == 0 {
-		return
+		return nil
 	}
 	var b strings.Builder
 	b.WriteString("INSERT INTO netops.tunnels FORMAT JSONEachRow\n")
 	for _, r := range rows {
 		j, err := json.Marshal(r)
 		if err != nil {
-			continue
+			return fmt.Errorf("encode tunnel row %q: %w", r.ID, err)
 		}
 		b.Write(j)
 		b.WriteByte('\n')
 	}
-	// #nosec G704 -- base is the operator-configured CLICKHOUSE_URL backend, not user input
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/", strings.NewReader(b.String()))
+	endpoint, err := url.Parse(strings.TrimRight(base, "/") + "/")
 	if err != nil {
-		return
+		return fmt.Errorf("bad CLICKHOUSE_URL: %w", err)
+	}
+	q := endpoint.Query()
+	for k, v := range chInsertSettings {
+		q.Set(k, v)
+	}
+	endpoint.RawQuery = q.Encode()
+	// #nosec G704 -- base is the operator-configured CLICKHOUSE_URL backend, not user input
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(b.String()))
+	if err != nil {
+		return err
 	}
 	if user := chEnv("CLICKHOUSE_USER", "netops"); user != "" {
 		req.SetBasicAuth(user, os.Getenv("CLICKHOUSE_PASSWORD"))
@@ -418,9 +475,19 @@ func insertTunnels(ctx context.Context, rows []tunnelRow) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return
+		return fmt.Errorf("clickhouse insert netops.tunnels: %w", err)
 	}
-	_ = resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		// Bounded read: ClickHouse puts the DB::Exception in the body, and the
+		// first line of it is what makes the failure diagnosable at all.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("clickhouse insert netops.tunnels: HTTP %s: %s",
+			resp.Status, strings.Join(strings.Fields(string(body)), " "))
+	}
+	// Drain so the connection can be reused (a partially-read body is not).
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return nil
 }
 
 func chEnv(key, def string) string {
@@ -516,6 +583,11 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 				LocalDevice: tg.ID,
 				LocalAddr:   local,
 				Status:      ifStatus(f.oper),
+				// §3a.2: the owner comes from the device inventory, never from
+				// anything on the wire. '' stays '' — a device with no tenant
+				// is genuinely platform-global, which the row policy's
+				// untagged-shared clause already expresses.
+				TenantID: tg.TenantID,
 			}
 			if ep != nil {
 				if ep.local != "" {
@@ -527,7 +599,15 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 		}
 	}
 
-	insertTunnels(ctx, rows)
+	// F-56: the write result is now observed. A failed insert makes the
+	// collector UNHEALTHY and names the cause — previously the cycle reported
+	// success while every row was thrown away by ClickHouse.
+	writeErr := insertTunnels(ctx, rows)
+	writeFailed := 0
+	if writeErr != nil {
+		writeFailed = 1
+		log.Printf("collector tunnels: clickhouse write failed: %v", writeErr)
+	}
 
 	now := start.UnixMilli()
 	emitMetrics(ctx, strings.Join([]string{
@@ -535,6 +615,11 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 		fmt.Sprintf(`collector_targets{collector="tunnels"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="tunnels"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_tunnels{collector="tunnels"} %d %d`, len(rows), now),
+		// §10: the failure must be alertable, not just logged. Without this
+		// counter a persistently rejected insert is invisible to the platform's
+		// own monitoring — the exact shape of F-41's 167 unalertable cycles.
+		fmt.Sprintf(`collector_store_write_failed{collector="tunnels",store="clickhouse"} %d %d`, writeFailed, now),
+		fmt.Sprintf(`collector_store_rows{collector="tunnels",store="clickhouse"} %d %d`, len(rows), now),
 	}, "\n"))
 
 	c.mu.Lock()
@@ -542,10 +627,13 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 	c.status.Targets = len(targets)
 	c.status.Reachable = reachable
 	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = true
-	if reachable == 0 && len(targets) > 0 {
+	c.status.Healthy = writeErr == nil
+	switch {
+	case writeErr != nil:
+		c.status.LastError = writeErr.Error()
+	case reachable == 0 && len(targets) > 0:
 		c.status.LastError = lastErr
-	} else {
+	default:
 		c.status.LastError = ""
 	}
 	c.mu.Unlock()

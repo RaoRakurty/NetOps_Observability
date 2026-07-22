@@ -160,30 +160,58 @@ func (s *pgIncidentStore) Get(ctx context.Context, tenant string, cross bool, id
 	return inc, events, found, nil
 }
 
-func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q IncidentQuery) ([]Incident, error) {
-	sql := selectIncidentCols + ` FROM incidents`
+// incidentFilterSQL builds the shared WHERE fragment + args for List and Count,
+// so the total can never be computed under different filters than the page.
+//
+// It FAILS CLOSED on an unrecognised severity instead of substituting one
+// (F-74): normalizeSeverity used to be called right here, turning every
+// unknown value into `info` and applying it as a real predicate. The handler
+// validates first; this is the storage-layer backstop required by §3a.4 — no
+// caller, internal or external, gets a silently different filter.
+func incidentFilterSQL(q IncidentQuery) (string, []any, error) {
 	var args []any
 	var conds []string
 	if q.Status != "" {
+		if !validIncidentStatus(q.Status) {
+			return "", nil, fmt.Errorf("unknown incident status %q", q.Status)
+		}
 		args = append(args, q.Status)
 		conds = append(conds, fmt.Sprintf("status = $%d", len(args)))
 	}
 	if q.Severity != "" {
-		args = append(args, normalizeSeverity(q.Severity))
+		if !validIncidentSeverity(q.Severity) {
+			return "", nil, fmt.Errorf("unknown incident severity %q", q.Severity)
+		}
+		args = append(args, canonicalIncidentSeverity(q.Severity))
 		conds = append(conds, fmt.Sprintf("severity = $%d", len(args)))
 	}
 	if !q.Before.IsZero() {
 		args = append(args, q.Before)
 		conds = append(conds, fmt.Sprintf("last_seen_at < $%d", len(args)))
 	}
-	if len(conds) > 0 {
-		sql += " WHERE " + strings.Join(conds, " AND ")
+	if len(conds) == 0 {
+		return "", args, nil
 	}
+	return " WHERE " + strings.Join(conds, " AND "), args, nil
+}
+
+func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q IncidentQuery) ([]Incident, error) {
+	where, args, err := incidentFilterSQL(q)
+	if err != nil {
+		return nil, err
+	}
+	sql := selectIncidentCols + ` FROM incidents` + where
 	args = append(args, clampIncidentLimit(q.Limit))
 	sql += fmt.Sprintf(" ORDER BY last_seen_at DESC, id DESC LIMIT $%d", len(args))
+	// OFFSET completes the walk: a limit-only read could never reach row
+	// limit+1, which is how /api/vulns lost 5,560 of 7,560 findings (F-79).
+	if q.Offset > 0 {
+		args = append(args, q.Offset)
+		sql += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
 
 	var out []Incident
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
@@ -202,6 +230,22 @@ func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q
 		return nil, err
 	}
 	return out, nil
+}
+
+// Count is List's true total under the same filters and the same RLS scope.
+func (s *pgIncidentStore) Count(ctx context.Context, tenant string, cross bool, q IncidentQuery) (int, error) {
+	where, args, err := incidentFilterSQL(q)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM incidents`+where, args...).Scan(&n)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *pgIncidentStore) Transition(ctx context.Context, tenant string, cross bool, id, to, actor, note string) (Incident, error) {

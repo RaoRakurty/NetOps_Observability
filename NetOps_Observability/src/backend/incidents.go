@@ -31,6 +31,37 @@ func severityRankIncident(s string) int {
 	return 0 // unknown → info
 }
 
+// validIncidentSeverity reports whether s is EXACTLY one of the ladder values
+// (case-insensitively). It exists because severityRankIncident above maps every
+// unrecognised string to 0 — and 0 is not "no match", it is `info`.
+//
+// F-74: /api/incidents?severity=X ran that mapping and then applied the result
+// as a real SQL predicate, so `?severity=warning` (not on the ladder),
+// `?severity=WARN` and `?severity=bogus` all returned the byte-identical `info`
+// bucket. A client filtering for warnings received info incidents labelled as
+// warnings — confidently wrong, which is worse than ignoring the parameter.
+// Filter parsing must use THIS, never the rank/normalize pair.
+func validIncidentSeverity(s string) bool {
+	t := strings.TrimSpace(s)
+	for _, v := range incidentSeverities {
+		if strings.EqualFold(t, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalIncidentSeverity lowercases a severity already known to be valid.
+func canonicalIncidentSeverity(s string) string {
+	t := strings.TrimSpace(s)
+	for _, v := range incidentSeverities {
+		if strings.EqualFold(t, v) {
+			return v
+		}
+	}
+	return ""
+}
+
 func normalizeSeverity(s string) string {
 	if r := severityRankIncident(s); r >= 0 && r < len(incidentSeverities) {
 		if strings.EqualFold(strings.TrimSpace(s), incidentSeverities[r]) {
@@ -150,6 +181,7 @@ type IncidentQuery struct {
 	Severity string
 	Before   time.Time
 	Limit    int
+	Offset   int
 }
 
 // incidentsRepo is the Incident store seam (mirrors auditRepo/savedRepo). Reads
@@ -162,6 +194,10 @@ type incidentsRepo interface {
 	Ingest(ctx context.Context, in IncidentInput) (inc Incident, created bool, err error)
 	Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []IncidentEvent, bool, error)
 	List(ctx context.Context, tenant string, cross bool, q IncidentQuery) ([]Incident, error)
+	// Count is List's TRUE total under the SAME filters and the SAME RLS tenant
+	// scope, ignoring limit/offset. Without it a capped page is indistinguishable
+	// from the whole set at the client (audit F-74/F-79 class).
+	Count(ctx context.Context, tenant string, cross bool, q IncidentQuery) (int, error)
 	// Transition changes status (validated), stamps resolved_at on resolve, and
 	// appends a status_change event. Returns the updated incident.
 	Transition(ctx context.Context, tenant string, cross bool, id, to, actor, note string) (Incident, error)

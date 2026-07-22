@@ -42,6 +42,14 @@ SOURCE_TYPE = "workloads"
 
 
 def _pages(client, op: str, key: str, **kw) -> list:
+    """Page-capped describe, with the same non-pageable fallback as
+    aws_components._pages — see the F-41 note there. Fixing one copy of a
+    duplicated helper and not the other is exactly the "instance, not class"
+    failure this audit was called on."""
+    can_paginate = getattr(client, "can_paginate", None)
+    if can_paginate is not None and not can_paginate(op):
+        resp = getattr(client, op)(**kw)
+        return list(resp.get(key, []))
     out: list = []
     for i, page in enumerate(client.get_paginator(op).paginate(**kw)):
         if i >= PAGE_CAP:

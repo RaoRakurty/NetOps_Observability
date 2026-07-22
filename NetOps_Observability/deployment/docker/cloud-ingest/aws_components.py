@@ -38,7 +38,29 @@ def _tags(raw) -> dict:
 
 
 def _pages(client, op: str, key: str, **kw) -> list:
-    """Paginated describe, page-capped (inventory, never an unbounded read)."""
+    """Page-capped describe (inventory, never an unbounded read).
+
+    Falls back to a single direct call when the operation has NO paginator.
+
+    Audit F-41, observed live for 167 consecutive cycles:
+        "aws component families degraded"
+        {"seam_endpoints": "Operation cannot be paginated: describe_vpn_gateways"}
+
+    ec2:DescribeVpnGateways is one of the handful of EC2 operations botocore
+    does not model as pageable (it returns the full set in one response and has
+    no NextToken), so get_paginator() raises OperationNotPageableError before a
+    single request goes out. The seam_endpoints family therefore produced ZERO
+    rows on every cycle since it shipped — VPN gateways, VPN connections, DX
+    connections and transit gateways were all missing from the inventory — and
+    the only symptom was a log line nothing alerted on.
+
+    can_paginate() is botocore's own answer to "is this op pageable", so this
+    stays correct for every other operation and for any future one.
+    """
+    can_paginate = getattr(client, "can_paginate", None)
+    if can_paginate is not None and not can_paginate(op):
+        resp = getattr(client, op)(**kw)
+        return list(resp.get(key, []))
     out: list = []
     for i, page in enumerate(client.get_paginator(op).paginate(**kw)):
         if i >= PAGE_CAP:

@@ -30,6 +30,13 @@ type Target struct {
 	Protocol  string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
 	Community string // resolved SNMP v2c community ("" => SNMP_COMMUNITY/"public")
 
+	// TenantID is the owning tenant from the device inventory ("" = global).
+	// Collectors that persist rows MUST stamp it so at-rest isolation holds at
+	// the storage layer (§3a.4). Added for audit F-56: the tunnel writer had no
+	// tenant at all, so every discovered tunnel landed untagged and was shared
+	// into every tenant's view by the row policy's untagged clause.
+	TenantID string
+
 	// SNMPv3 USM (set when the device's credential profile is v3; takes
 	// precedence over Community). See snmpCreds.
 	SNMPVersion int // 0/2 => v2c, 3 => v3
