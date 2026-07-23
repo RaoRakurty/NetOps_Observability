@@ -70,10 +70,11 @@ type server struct {
 	notifyCfg        *notifyConfigStore
 	contactPoints    *contactPointStore
 	deviceLocations  *deviceLocationStore
-	sites            *sitesStore      // internal SoT sites (default provider)
-	deviceSites      *deviceSiteStore // operator device→site bindings (intent)
-	wanPolicy        *wanPolicyStore  // WAN measurement policy (operator intent) #wan-path-metrics
-	systemNet        *systemNetStore  // platform DNS + NTP system settings (clock sync + URL resolution)
+	sites            *sitesStore        // internal SoT sites (default provider)
+	deviceSites      *deviceSiteStore   // operator device→site bindings (intent)
+	wanPolicy        *wanPolicyStore    // WAN measurement policy (operator intent) #wan-path-metrics
+	systemNet        *systemNetStore    // platform DNS + NTP system settings (clock sync + URL resolution)
+	backupCfg        *backupConfigStore // platform data-protection settings + DR status
 	// wanIfAddr is the interface-IP registry source (deviceID → ip → ifName) for
 	// the WAN endpoint projector. Defaults to collectors.FetchIfAddrMap; a DI seam
 	// so the projector's tenant-filter is unit-testable without Redis (§5).
@@ -495,6 +496,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("system network store: %v", err)
 	}
+	backupCfg, err := newBackupConfigStore(envOr("SYSTEM_BACKUP_FILE", "/data/system_backup.json"))
+	if err != nil {
+		log.Fatalf("backup config store: %v", err)
+	}
 
 	srv := &server{
 		startedAt:        time.Now().UTC(),
@@ -527,6 +532,7 @@ func newServer() *server {
 		deviceSites:      deviceSites,
 		wanPolicy:        wanPolicy,
 		systemNet:        systemNet,
+		backupCfg:        backupCfg,
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
@@ -1296,6 +1302,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
+	mux.HandleFunc("/api/system/backup", s.handleSystemBackup) // platform data-protection config + DR status
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)

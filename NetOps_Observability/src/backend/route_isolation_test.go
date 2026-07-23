@@ -333,6 +333,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/ingest/connectors/":   "platform",
 	"/api/cloud/ingest/source-status": "platform", // poller error reports (Wave 2 #4) — same service credential
 	"/api/system/network":             "platform",
+	"/api/system/backup":              "platform", // DR config + status; requirePlatformAdmin
 	"/api/system/network/test":        "platform",
 	"/api/automation/netbox":          "platform",
 	"/api/automation/netbox/sync":     "platform",

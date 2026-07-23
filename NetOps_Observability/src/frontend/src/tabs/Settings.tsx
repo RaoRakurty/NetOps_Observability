@@ -5,6 +5,7 @@ import Icon from "../components/Icon";
 import { setTzMode, tzLabel } from "../lib/time";
 import { useAuth } from "../hooks/useAuth";
 import SystemNetworkCard from "../pages/SystemNetwork";
+import DataProtection from "../pages/DataProtection";
 import { Modal } from "../components/ui";
 
 // Default landing page — the platform-wide page users land on after sign-in.
@@ -155,6 +156,9 @@ export default function Settings() {
 
       {/* DNS + NTP — two boxes (Configure → popup), platform-owner only. */}
       {platformAdmin && <SystemNetworkCard />}
+
+      {/* Data Protection — backup destination + DR status, platform-owner only. */}
+      {platformAdmin && <DataProtection />}
 
       {/* Log export limits — tile + guided setup (C3). */}
       <div className="card" style={{ display: "flex", alignItems: "center", gap: 12 }}>

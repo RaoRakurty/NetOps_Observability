@@ -1048,6 +1048,25 @@ export type NTPResult = {
   rtt_ms?: number;
   error?: string;
 };
+export type BackupConfig = {
+  remote_url: string;
+  push_command?: string;
+  schedule_enabled: boolean;
+  schedule_cron?: string;
+  updated_by?: string;
+  updated_at?: string;
+};
+export type BackupStatus = {
+  remote_configured: boolean;
+  schedule_enabled: boolean;
+  os_snapshot_repo_ok: boolean;
+  os_last_snapshot_age_hours?: number;
+  os_snapshot_detail: string;
+  on_host_only_warning: boolean;
+  last_drill_result?: string;
+  last_drill_at?: string;
+};
+export type BackupConfigAndStatus = { config: BackupConfig; status: BackupStatus };
 export type SystemNetworkStatus = {
   dns: { servers: string[]; test_host: string; resolved?: string[]; ok: boolean; error?: string };
   ntp: { results: NTPResult[]; ok: boolean; offset_ms: number };
@@ -2028,6 +2047,9 @@ export const api = {
   systemNetwork: () => request<SystemNetworkConfig>(`/api/system/network`),
   setSystemNetwork: (cfg: SystemNetworkConfig) =>
     request<SystemNetworkConfig>(`/api/system/network`, { method: "PUT", body: JSON.stringify(cfg) }),
+  backupConfig: () => request<BackupConfigAndStatus>(`/api/system/backup`),
+  setBackupConfig: (cfg: BackupConfig) =>
+    request<BackupConfigAndStatus>(`/api/system/backup`, { method: "PUT", body: JSON.stringify(cfg) }),
   testSystemNetwork: (host?: string) =>
     request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
   findings: (limit = 100, severity?: string) => {
