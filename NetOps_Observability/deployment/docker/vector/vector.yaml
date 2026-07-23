@@ -298,6 +298,35 @@ transforms:
       }
       # Promote the compose service label before dropping the label map.
       .service   = string(.label."com.docker.compose.service") ?? string(.container_name) ?? "unknown"
+
+      # ── log_class: platform-infra vs application (operator directive) ──
+      #
+      # `docker_logs` collects stdout from EVERY container, so the platform's own
+      # datastores and pipeline (OpenSearch, Vector, Kafka, ClickHouse, Victoria,
+      # Grafana, cAdvisor, node-exporter, nginx) emit into the SAME lane as the
+      # Correlix application. Their self-health chatter — "OpenSearch rejected N
+      # documents", "Vector discarded N events" — was surfacing in the app-log
+      # view an operator uses to watch tenant infrastructure, where it reads as a
+      # tenant incident. It is not: it is the observability platform observing
+      # itself, and belongs with Grafana/self-monitoring.
+      #
+      # Classify here so the value is queryable immediately and the router can
+      # split the stream. NOTHING is dropped — platform logs are kept, just kept
+      # SEPARATE (an operator debugging an ingest stall still needs them).
+      platform_services = ["opensearch", "opensearch-dashboards", "vector-aggregator",
+        "vector-router", "kafka", "kafka-exporter", "clickhouse", "victoria",
+        "vmalert", "grafana", "cadvisor", "node-exporter", "nginx", "redis",
+        "postgres", "goflow2", "syslog-ng", "gotenberg", "prober"]
+      .log_class = "application"
+      .log_index_base = "applogs"
+      if includes(platform_services, .service) {
+        .log_class = "platform"
+        # Platform logs index into netops-platformlogs-* (see the router sink).
+        # The GUI reads netops-applogs-*, so they leave the device-monitoring
+        # view while staying retained for Grafana/operators.
+        .log_index_base = "platformlogs"
+      }
+
       # Drop the Docker label map: its dotted keys (com.docker.compose.*)
       # collide in OpenSearch, which reads dots as nested objects and rejects
       # every applog doc with a mapping conflict. Not needed downstream.
@@ -332,8 +361,8 @@ transforms:
       # So coerce every DECLARED scalar back to a string after the merge. A
       # structured value is preserved as its JSON text rather than dropped, so
       # the offending producer stays greppable instead of invisible.
-      for_each(["message", "msg", "level", "component", "service",
-                "container_name", "host", "stream", "error", "trace_id"]) -> |_i, name| {
+      for_each(["message", "msg", "level", "component", "service", "log_class",
+                "log_index_base", "container_name", "host", "stream", "error", "trace_id"]) -> |_i, name| {
         v = get(., [name]) ?? null
         if v != null && !is_string(v) {
           . = set!(., [name], encode_json(v))

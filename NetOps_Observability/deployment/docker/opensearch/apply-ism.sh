@@ -18,8 +18,8 @@ SNAP_KEEP="${OPENSEARCH_SNAPSHOT_KEEP:-14}"
 # already hit NOT_ENOUGH_SPACE once (F-55). Dead-letter is included too: it is
 # tiny by construction but "tiny by construction" is exactly the assumption that
 # stops being true during the incident you wrote it for.
-PATTERNS='["netops-applogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-deadletter-*"]'
-ADD_PATTERNS='netops-applogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-deadletter-*'
+PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-deadletter-*"]'
+ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-deadletter-*'
 
 echo "ism: waiting for OpenSearch at $OS ..."
 until curl -sf "$OS/_cluster/health" >/dev/null 2>&1; do sleep 5; done

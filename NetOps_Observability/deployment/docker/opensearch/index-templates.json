@@ -1,8 +1,8 @@
 {
   "_comment": "Apply these on first start with: scripts/bootstrap-opensearch.sh, or call the OS bootstrap API once the cluster is green.  |  ts is declared explicitly (2026-07-21, DEF-6): it was previously left to dynamic mapping, which inferred `date` from the first integer seen and then rejected every float epoch-seconds value, silently dropping ~10k events/day. The router normalises ts to integer epoch-millis; this mapping pins that contract.",
-  "_comment_lane_coverage": "F-06/F-15/F-53 (2026-07-21): there are SIX log lanes on the bus but only three templates existed (applogs/syslog/flows). snmptrap + cloudlogs were 100% dynamically mapped, so after the DEF-6 fix started emitting `ts` as an integer they would have inferred `long` instead of `date` — date-range queries, the Dashboards time picker and any sort on ts then silently misbehave. netops-snmptrap ALSO had no template at all, so number_of_replicas defaulted to 1 on a single-node cluster, its replica sat UNASSIGNED forever, and the cluster was permanently yellow — which destroys yellow as a usable alarm signal. Every template here therefore pins number_of_replicas and declares the shared field contract.",
-  "_comment_dynamic_false": "F-05 (2026-07-22) — THE FIELD WALL, closed for EVERY lane rather than for the one that was measured. `applogs_normalized` merges arbitrary producer JSON into the top level (vector/vector.yaml), `syslog_normalized` merges vendor-controlled FortiOS key=value pairs, and snmptrap carries free-form varbinds: three unbounded, producer-controlled generators of NEW OpenSearch fields. Measured 2026-07-21: 67 top-level fields on netops-applogs-untagged, growing, against index.mapping.total_fields.limit = 1000. That limit fails CLOSED — at 1,000 fields OpenSearch rejects EVERY REMAINING DOCUMENT for that day's index, i.e. a full-day application-log blackout for every tenant, triggered by one service shipping a new structured-log schema. `dynamic: false` makes the wall structurally unreachable: an undeclared key is kept in _source (still visible in a hit body, still exported) but never creates a mapping, so the field count is FROZEN at the declared set below. Free-text search is unaffected — the raw producer line stays in the declared `message` text field. The cost is deliberate and bounded: a field-specific query against an UNDECLARED key (e.g. `duration_ms:>500`) no longer matches new documents. Declare the field here when a lane needs it searchable — tests/test_ingest_contract.py fails the build if the pipeline stamps a field this file does not declare.",
-  "_comment_replicas": "F-07 (2026-07-22): number_of_replicas is a per-install POSTURE, not a constant. It is 0 on the single-node appliance because a replica on a one-node cluster can never be assigned — it just sits UNASSIGNED and pins the cluster yellow forever (that is F-53's root cause). It must be >= 1 on any multi-node cluster, because with 0 replicas AND no snapshot repository (F-59) a single corrupt shard is unrecoverable data loss. bootstrap-opensearch.sh substitutes OPENSEARCH_REPLICAS (default 0) into every template here, and refuses a value > 0 that the cluster has too few data nodes to assign. Do not hardcode this back to a literal.",
+  "_comment_lane_coverage": "F-06/F-15/F-53 (2026-07-21): there are SIX log lanes on the bus but only three templates existed (applogs/syslog/flows). snmptrap + cloudlogs were 100% dynamically mapped, so after the DEF-6 fix started emitting `ts` as an integer they would have inferred `long` instead of `date` \u2014 date-range queries, the Dashboards time picker and any sort on ts then silently misbehave. netops-snmptrap ALSO had no template at all, so number_of_replicas defaulted to 1 on a single-node cluster, its replica sat UNASSIGNED forever, and the cluster was permanently yellow \u2014 which destroys yellow as a usable alarm signal. Every template here therefore pins number_of_replicas and declares the shared field contract.",
+  "_comment_dynamic_false": "F-05 (2026-07-22) \u2014 THE FIELD WALL, closed for EVERY lane rather than for the one that was measured. `applogs_normalized` merges arbitrary producer JSON into the top level (vector/vector.yaml), `syslog_normalized` merges vendor-controlled FortiOS key=value pairs, and snmptrap carries free-form varbinds: three unbounded, producer-controlled generators of NEW OpenSearch fields. Measured 2026-07-21: 67 top-level fields on netops-applogs-untagged, growing, against index.mapping.total_fields.limit = 1000. That limit fails CLOSED \u2014 at 1,000 fields OpenSearch rejects EVERY REMAINING DOCUMENT for that day's index, i.e. a full-day application-log blackout for every tenant, triggered by one service shipping a new structured-log schema. `dynamic: false` makes the wall structurally unreachable: an undeclared key is kept in _source (still visible in a hit body, still exported) but never creates a mapping, so the field count is FROZEN at the declared set below. Free-text search is unaffected \u2014 the raw producer line stays in the declared `message` text field. The cost is deliberate and bounded: a field-specific query against an UNDECLARED key (e.g. `duration_ms:>500`) no longer matches new documents. Declare the field here when a lane needs it searchable \u2014 tests/test_ingest_contract.py fails the build if the pipeline stamps a field this file does not declare.",
+  "_comment_replicas": "F-07 (2026-07-22): number_of_replicas is a per-install POSTURE, not a constant. It is 0 on the single-node appliance because a replica on a one-node cluster can never be assigned \u2014 it just sits UNASSIGNED and pins the cluster yellow forever (that is F-53's root cause). It must be >= 1 on any multi-node cluster, because with 0 replicas AND no snapshot repository (F-59) a single corrupt shard is unrecoverable data loss. bootstrap-opensearch.sh substitutes OPENSEARCH_REPLICAS (default 0) into every template here, and refuses a value > 0 that the cluster has too few data nodes to assign. Do not hardcode this back to a literal.",
   "templates": {
     "netops-applogs": {
       "index_patterns": [
@@ -87,13 +87,114 @@
             },
             "ts_invalid": {
               "type": "keyword"
+            },
+            "log_class": {
+              "type": "keyword"
+            },
+            "log_index_base": {
+              "type": "keyword"
             }
           }
         }
       }
     },
+    "netops-platformlogs": {
+      "index_patterns": [
+        "netops-platformlogs-*"
+      ],
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": "${OPENSEARCH_REPLICAS}",
+          "codec": "best_compression",
+          "refresh_interval": "5s",
+          "mapping": {
+            "total_fields": {
+              "limit": 1000
+            },
+            "ignore_malformed": true
+          }
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "timestamp": {
+              "type": "date"
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "component": {
+              "type": "keyword"
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "container_name": {
+              "type": "keyword"
+            },
+            "container_id": {
+              "type": "keyword"
+            },
+            "image": {
+              "type": "keyword"
+            },
+            "host": {
+              "type": "keyword"
+            },
+            "stream": {
+              "type": "keyword"
+            },
+            "source_type": {
+              "type": "keyword"
+            },
+            "error": {
+              "type": "text"
+            },
+            "trace_id": {
+              "type": "keyword"
+            },
+            "message": {
+              "type": "text"
+            },
+            "msg": {
+              "type": "text"
+            },
+            "tenant_id": {
+              "type": "keyword"
+            },
+            "tenant_seg": {
+              "type": "keyword"
+            },
+            "tenant_attribution": {
+              "type": "keyword"
+            },
+            "topic": {
+              "type": "keyword"
+            },
+            "ts": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
+            },
+            "ts_source": {
+              "type": "keyword"
+            },
+            "ts_invalid": {
+              "type": "keyword"
+            },
+            "log_class": {
+              "type": "keyword"
+            },
+            "log_index_base": {
+              "type": "keyword"
+            }
+          }
+        }
+      },
+      "_comment": "Platform-infra self-health logs (log_class=platform), split from netops-applogs-* so they stay out of the device-monitoring GUI. Same field contract as applogs."
+    },
     "netops-syslog": {
-      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map — VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor.",
+      "_comment": "F-05: `fgt` holds the parsed FortiOS key=value map \u2014 VENDOR-controlled key names, i.e. the same unbounded generator as snmptrap's varbinds. Stored but not indexed, exactly like varbinds: searchable-by-document, un-mappable-by-vendor.",
       "index_patterns": [
         "netops-syslog-*"
       ],

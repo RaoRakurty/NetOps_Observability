@@ -151,6 +151,11 @@ transforms:
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
+      # Default the index base so a message produced before the aggregator
+      # learned log_index_base (an upgrade-window in-flight record) can never
+      # render a broken "netops--untagged-*" index. Harmless no-op for the
+      # syslog/snmptrap lanes that share this anchor and never read it.
+      if !exists(.log_index_base) { .log_index_base = "applogs" }
 
       # ── enrichment-miss observability (F-11) ────────────────────────────
       # An empty tenant_id is a VALID value (platform-owned telemetry), which
@@ -458,7 +463,11 @@ sinks:
     endpoints: ["http://opensearch:9200"]
     mode: bulk
     bulk:
-      index: "netops-applogs-{{ tenant_seg }}-%Y.%m.%d"
+      # log_index_base is "applogs" for application services and "platformlogs"
+      # for the platform's own infra (classified in the aggregator). Platform
+      # self-health logs therefore leave the netops-applogs-* pattern the GUI
+      # reads. Fail-safe: an older producer without the field defaults below.
+      index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
     healthcheck: { enabled: true }
