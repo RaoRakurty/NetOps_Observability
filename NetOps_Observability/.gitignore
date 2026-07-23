@@ -56,3 +56,4 @@ src/frontend/public/brand-samples/
 # compiled binaries (never commit build artifacts)
 src/backend/backend
 deployment/docker/mock-servicenow/mock-servicenow
+scripts/.restore-drill.report.json
