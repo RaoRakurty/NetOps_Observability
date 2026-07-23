@@ -125,6 +125,50 @@ of a script.
       correct ONLY on a single-node appliance — see F-07; on a multi-node
       cluster 0 replicas plus a lost snapshot is unrecoverable loss).
 
+## 9. 🏷️ CODE-COMPLETE, VALIDATE-IN-CUSTOMER-ENV (deferred from lab on purpose)
+
+These are **finished in code and known to work**, but their final proof needs
+the customer's real infrastructure — they cannot be closed in the lab because the
+lab has neither an off-host store nor a large disk. Do NOT ship without walking
+each one here. Tagged 2026-07-23.
+
+### 9a. Off-host disaster recovery  🏷️ TAG:OFFHOST-DR
+
+The mechanism is built and unit/dry-run verified: `BACKUP_REMOTE` push hook in
+`backup.sh`, the **Settings → Data Protection** UI, and `apply-backup-config.sh`
+(writes `.env` + the cron, refuses a schedule without a remote). What the lab
+could NOT do is push to a real off-host target and pull it back.
+
+- [ ] Provision the customer's off-host store (S3/MinIO/NAS/second host).
+- [ ] Set it in **Settings → Data Protection** (or `BACKUP_REMOTE` +
+      `BACKUP_PUSH`), then run `scripts/apply-backup-config.sh`.
+- [ ] Run `scripts/backup.sh` once — confirm the artifact **lands on the remote**
+      (not just exit 0).
+- [ ] Enable the schedule (it stays refused until the remote is set — F-55 guard).
+- [ ] **Restore from the PULLED-BACK copy**, not the local one:
+      `scripts/restore-drill.sh` against an artifact fetched from the remote.
+- [ ] Confirm the **Data Protection status panel** shows the remote configured,
+      snapshot age fresh, and no on-host-only warning.
+
+### 9b. Data volume is sized for the customer's retention  🏷️ TAG:F55-DISK
+
+The lab runs on a **77 GB volume that already filled once** (F-55): six stores
+(PG, ClickHouse, OpenSearch, Kafka, Victoria, Grafana) share it, and the LVM LV
+(78 GB) already fills the 80 GB virtual disk — there is no headroom to grow
+in-place. This is not a code fault; retention (`CORR_RETENTION_PROFILE`, OS ISM,
+CH TTLs) and monitoring (`host-hygiene`, `stack-watchdog` disk alerts) already
+bound growth. It is a SIZING decision that must match the customer's data.
+
+- [ ] Size the VM disk to the customer's retention window BEFORE go-live —
+      rough rule: sum(daily ingest × retention days) across the six stores,
+      plus headroom for OpenSearch snapshots (incremental) and CH cold export.
+- [ ] If growing an existing appliance, the sequence is standard and known-good:
+      hypervisor grows `vda` → `growpart` / `pvresize` → `lvextend -l +100%FREE`
+      → `resize2fs`. (In the lab, `vda`=80 GB blocks step one — the hypervisor
+      resize is the only part that needs infra.)
+- [ ] Confirm `host-hygiene` disk alerts and the flood-stage watermark are wired
+      to the customer's alert channel.
+
 Sign-off: date, deployment, profile chosen, alert channel chosen, drill
-policy, backup schedule + last verified restore — one line each, into the
-customer's deployment record.
+policy, backup schedule + last verified restore, **off-host remote + disk size
+confirmed (§9)** — one line each, into the customer's deployment record.
