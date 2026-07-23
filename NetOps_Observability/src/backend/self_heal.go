@@ -64,8 +64,25 @@ type selfHealer struct {
 	enabled  bool
 	interval time.Duration
 
+	// diskPctFn measures the filesystem holding diskPath. Injectable so a test
+	// can drive the heal decision deterministically instead of reading the real
+	// host disk — the previous test used t.TempDir() and passed or failed purely
+	// on whatever the host's /tmp happened to be, which made a merge-blocking
+	// test flaky (it failed at 91% host usage, which is a genuine disk problem,
+	// not a code fault). nil means "use the real diskUsedPct".
+	diskPctFn func(string) int
+
 	mu    sync.Mutex
 	state selfHealSnapshot
+}
+
+// measureDisk returns the disk usage percent, via the injected function when a
+// test set one, else the real filesystem measurement.
+func (h *selfHealer) measureDisk() int {
+	if h.diskPctFn != nil {
+		return h.diskPctFn(h.diskPath)
+	}
+	return diskUsedPct(h.diskPath)
 }
 
 func newSelfHealer(notifier *notify.Dispatcher) *selfHealer {
@@ -200,7 +217,7 @@ func (h *selfHealer) run(ctx context.Context) {
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
 	for {
-		diskPct := diskUsedPct(h.diskPath)
+		diskPct := h.measureDisk()
 		blocked, err := h.osBlockedIndices(ctx)
 		h.mu.Lock()
 		h.state.Enabled = h.enabled

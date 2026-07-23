@@ -92,10 +92,16 @@ func TestSelfHealerHealsBlockedIndices(t *testing.T) {
 
 	h := &selfHealer{
 		osURL:    srv.URL,
-		diskPath: t.TempDir(), // measurable and far below the watermark
+		diskPath: "/test",
 		clearPct: 90,
 		enabled:  true,
 		interval: 10 * time.Millisecond,
+		// Inject a disk reading below the watermark rather than measuring the real
+		// host filesystem. The old test used t.TempDir() and so passed or failed on
+		// whatever the host's /tmp happened to be — it failed at 91% real usage,
+		// which is a genuine disk problem, not a code fault. The heal DECISION is
+		// what this test is about, so the disk input must be deterministic.
+		diskPctFn: func(string) int { return 40 },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

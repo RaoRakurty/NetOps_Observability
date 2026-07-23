@@ -73,7 +73,13 @@ produce() { # $1 topic, stdin = one JSON event per line
     local topic="$1" payload err attempt=1
     payload="$(cat)"   # buffer: stdin is consumed once but may be sent twice
     while :; do
-        if err="$(printf '%s\n' "$payload" | timeout 60 dc exec -T kafka \
+        # Call `docker compose` directly, NOT the dc() shell function: `timeout`
+        # execs its argument as a program and cannot see a shell function, so
+        # `timeout dc …` fails with "No such file or directory". (Regression
+        # introduced 2026-07-22 when timeout+retry were added; the happy path was
+        # not re-tested — the exact miss this file's own hardening warns about.)
+        if err="$(printf '%s\n' "$payload" | timeout 60 \
+            docker compose --project-directory "$COMPOSE_DIR" exec -T kafka \
             /opt/kafka/bin/kafka-console-producer.sh \
             --bootstrap-server kafka:9092 --topic "$topic" 2>&1 >/dev/null)"; then
             return 0
