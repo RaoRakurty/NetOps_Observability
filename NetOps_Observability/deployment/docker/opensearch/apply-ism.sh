@@ -181,12 +181,20 @@ if [ "${SNAP_KEEP:-14}" -gt 0 ]; then
         sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
   SM_TERM=$(curl -s "$OS/_plugins/_sm/policies/netops-daily" 2>/dev/null |
         sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+  # Snapshot Management differs from ISM here: CREATE is POST, UPDATE is PUT with
+  # seq_no/primary_term. ISM accepts PUT for both, so the sibling code above uses
+  # PUT throughout — but SM rejects a seq_no-less PUT as "must be provided when
+  # updating" even for a policy that does not exist (404 on GET). This was the
+  # bug that left netops-daily uninstalled: the else branch below PUT-created it
+  # and SM 400'd every time. Method + URL now branch together.
   if [ -n "${SM_SEQ:-}" ] && [ -n "${SM_TERM:-}" ]; then
+    SM_METHOD=PUT
     SM_URL="$OS/_plugins/_sm/policies/netops-daily?if_seq_no=${SM_SEQ}&if_primary_term=${SM_TERM}"
   else
+    SM_METHOD=POST
     SM_URL="$OS/_plugins/_sm/policies/netops-daily"
   fi
-  SM_RESP=$(curl -s -X PUT "$SM_URL" -H 'Content-Type: application/json' -d @- <<JSON
+  SM_RESP=$(curl -s -X "$SM_METHOD" "$SM_URL" -H 'Content-Type: application/json' -d @- <<JSON
 {
   "description": "Daily snapshot of netops-* to the netops-fs repository (F-59).",
   "creation": {
