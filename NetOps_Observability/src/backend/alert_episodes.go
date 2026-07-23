@@ -367,6 +367,17 @@ var errEpisodeNotFound = errors.New("episode not found")
 // Triage applies a mutation to an episode the principal OWNS. Default-closed:
 // a cross-tenant id (including a platform episode for a scoped caller) returns
 // errEpisodeNotFound so existence is never revealed.
+// reachable reports whether id exists AND the principal may see it. Used to gate
+// input validation behind the 404, so a cross-tenant probe can never learn an
+// id exists by receiving a 400 (input rejected) instead of a 404 (id hidden) —
+// CLAUDE.md §3a. Same scoping rule as Triage, so the two cannot disagree.
+func (s *alertEpisodeStore) reachable(id, tenant string, cross bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ep, ok := s.episodes[id]
+	return ok && (cross || sameTenantStrict(ep.TenantID, tenant))
+}
+
 func (s *alertEpisodeStore) Triage(id, tenant string, cross bool, apply func(*AlertEpisode) error) (AlertEpisode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -497,6 +508,16 @@ func (s *server) handleAlertEpisodeAction(w http.ResponseWriter, r *http.Request
 	tenant, cross := principalTenant(claims)
 	actor := claims.Sub
 	now := s.alertEpisodes.now().UTC()
+
+	// §3a: check existence+ownership BEFORE any action-specific input validation.
+	// Otherwise a cross-tenant probe with a malformed value (e.g. a snooze past
+	// the 7-day cap) receives a 400 that confirms the id exists, instead of the
+	// 404 that hides it. The 404 must win over the 400. Triage re-checks under
+	// its own lock, so this is a fast-fail gate, not the authority.
+	if !s.alertEpisodes.reachable(id, tenant, cross) {
+		http.NotFound(w, r)
+		return
+	}
 
 	var body struct {
 		Acknowledged *bool  `json:"acknowledged"`
