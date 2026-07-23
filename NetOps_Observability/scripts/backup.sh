@@ -241,6 +241,34 @@ cat "$MANIFEST"
 echo "────────────────"
 echo "→ Done: $OUT ($(du -h "$OUT" | cut -f1))"
 
+# ---- off-host copy (DR failure-domain, BACKUP-FAILURE-DOMAIN.md) -----------
+#
+# A backup on the same disk/host as primary data is not disaster recovery: one
+# LVM/filesystem failure or the 95% flood-stage takes both. When BACKUP_REMOTE
+# is set, push the artifact to a DIFFERENT failure domain. The transport is the
+# operator's choice — anything that takes "<src> <dest>" works:
+#
+#   BACKUP_REMOTE="rsync://backup-host/correlix/"          # + rsync
+#   BACKUP_REMOTE="s3://correlix-dr/"   BACKUP_PUSH="rclone copy"
+#   BACKUP_REMOTE="/mnt/nas/correlix/"  (a separately-mounted device/NFS)
+#
+# UNSET is reported as a WARNING, never a silent pass: an operator who thinks
+# they have DR and does not is the exact looks-backed-up-but-isnt state F-59 was
+# about. A push FAILURE is fatal (the off-host copy is the whole point).
+if [[ -n "${BACKUP_REMOTE:-}" ]]; then
+    PUSH_CMD="${BACKUP_PUSH:-rsync -a}"
+    echo "→ Off-host copy: $PUSH_CMD $OUT $BACKUP_REMOTE"
+    if $PUSH_CMD "$OUT" "$BACKUP_REMOTE" 2>"$STAGE/push.err"; then
+        note "off-host copy → $BACKUP_REMOTE"
+    else
+        fail "off-host copy FAILED: $(tail -1 "$STAGE/push.err" 2>/dev/null) — the artifact is ON-HOST ONLY (no DR)"
+    fi
+else
+    echo "!! WARNING: BACKUP_REMOTE unset — this backup shares the primary data's" >&2
+    echo "!!          failure domain (same disk/host). It is NOT disaster recovery." >&2
+    echo "!!          See docs/audit/BACKUP-FAILURE-DOMAIN.md. Set BACKUP_REMOTE to fix." >&2
+fi
+
 # Exit non-zero when any component failed. THIS IS THE POINT: a cron entry
 # whose script always exits 0 cannot alert, so `backup.sh` silently producing
 # an empty backup every night is indistinguishable from success. Verify a

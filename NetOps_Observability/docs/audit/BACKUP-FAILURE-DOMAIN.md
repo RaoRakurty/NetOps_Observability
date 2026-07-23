@@ -41,15 +41,23 @@ flood stage once) and the fact that the restore drill (`restore-drill.sh`) can
 now *prove* a restore works — which makes it worse, not better, that the artifact
 being restored lives on the disk most likely to fail.
 
-## What would fix it (not provisioned here — needs infra authorization)
+## Mechanism now in place (2026-07-23)
 
-- **Off-host destination with retention.** `backup.sh` output and
-  `data/opensearch-snapshots` rsync'd to a different host / object store (S3,
-  MinIO, a NAS) on a schedule. Object storage also addresses the ransomware /
-  same-credentials axis if it is write-once or separately credentialed.
-- **Schedule `backup.sh`** (daily, off-peak) so an RPO actually exists — with
-  the §16.1 discipline: it already exits non-zero on a partial dump; the cron
-  must surface that, not `|| true` it.
+`backup.sh` gained a `BACKUP_REMOTE` off-host push (rsync/rclone/NFS — the
+operator's transport via `BACKUP_PUSH`). When set, the artifact is copied to a
+separate failure domain and a push failure is FATAL; when unset, the script WARNS
+that the backup is on-host-only and not DR (never a silent pass). This closes the
+*code* half. The remaining half needs infrastructure authorization:
+
+## What still needs infra authorization
+
+- **Provision the off-host destination** and set `BACKUP_REMOTE` (the push hook
+  is ready). S3/MinIO/NAS on a different host; write-once or separately
+  credentialed storage also addresses the ransomware / same-credentials axis.
+- **Schedule `backup.sh` ONLY AFTER `BACKUP_REMOTE` is set.** A local-only
+  nightly backup on the current 68%-full 77 GB volume would *cause* F-55 — it is
+  deliberately NOT scheduled until the artifact goes off-host. The script already
+  exits non-zero on a partial dump; the cron must surface that per §16.1.
 - **Move the OpenSearch `path.repo` off the data volume**, or at minimum ensure
   the off-host copy captures it independently.
 - **Then extend `restore-drill.sh`** to pull from the off-host copy, so the drill
