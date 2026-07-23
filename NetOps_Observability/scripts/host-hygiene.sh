@@ -47,7 +47,15 @@
 #   HYGIENE_LOG_MAX_MB=512  KEEP_BUILD_CACHE=2GB
 
 set -uo pipefail
-export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+# PATH under cron is only /usr/bin:/bin, and the tools this script's whole job
+# depends on do NOT live there: go is at ~/.local/go/bin, and user npm/pip shims
+# under ~/.local/bin. Before this line included the go dir, `go clean -cache`
+# was command-not-found on every cron run — swallowed by `|| true` — so the
+# single biggest reclaimable item (11 GB of go-build cache) was NEVER cleaned by
+# the cron that exists to clean it. The disk climbed to 91% while the log said
+# "91% -> 91%" every ten minutes. Resolve HOME's tool dirs explicitly.
+_HOME="${HOME:-/home/$(id -un 2>/dev/null || echo rao)}"
+export PATH="/usr/local/bin:/usr/bin:/bin:${_HOME}/.local/go/bin:${_HOME}/go/bin:${_HOME}/.local/bin:${PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${WATCHDOG_ENV:-$SCRIPT_DIR/stack-watchdog.env}"
@@ -124,22 +132,64 @@ truncate_big_container_logs() {
   done
 }
 
+# reclaim runs one cleanup command and REPORTS what happened. It is the opposite
+# of `cmd >/dev/null 2>&1 || true`, which is how this script used to hide a
+# command-not-found and report "91% -> 91%" every ten minutes while reclaiming
+# nothing. Three failure modes are now distinct and none is silent:
+#
+#   - tool missing  → WARN naming the tool (the go-on-cron-PATH bug that let the
+#                     disk reach 91% unnoticed)
+#   - command fails → WARN with the tool's own stderr, and a non-zero tally so
+#                     the caller can alert
+#   - command works → the bytes it reclaimed, measured, not assumed
+#
+# $1 label, $2 path whose freed bytes to measure (or ""), $3.. the command.
+RECLAIM_FAILURES=0
+reclaim() {
+  local label="$1" measure="$2"; shift 2
+  local tool="$1"
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "   WARN: $label skipped — '$tool' not on PATH ($PATH). Cache NOT reclaimed."
+    RECLAIM_FAILURES=$((RECLAIM_FAILURES + 1))
+    return 1
+  fi
+  local before=0 after=0 err rc
+  [ -n "$measure" ] && before=$(du -sb "$measure" 2>/dev/null | cut -f1 || echo 0)
+  # Capture stderr so a real failure is REPORTED with its cause, not discarded.
+  err=$("$@" 2>&1 >/dev/null); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "   WARN: $label failed (rc=$rc): ${err:0:200}"
+    RECLAIM_FAILURES=$((RECLAIM_FAILURES + 1))
+    return 1
+  fi
+  if [ -n "$measure" ]; then
+    after=$(du -sb "$measure" 2>/dev/null | cut -f1 || echo 0)
+    local freed=$(( before - after ))
+    [ "$freed" -lt 0 ] && freed=0
+    echo "   $label: reclaimed $(numfmt --to=iec "$freed" 2>/dev/null || echo "${freed}B") (was $(numfmt --to=iec "$before" 2>/dev/null || echo "${before}B"))"
+  else
+    echo "   $label: ok"
+  fi
+  return 0
+}
+
 tier1() {
   echo "-- tier 1: dev caches --"
-  echo "   go build cache: $(du -sh ~/.cache/go-build 2>/dev/null | cut -f1 || echo 0)"
-  go clean -cache 2>/dev/null || true
-  npm cache clean --force >/dev/null 2>&1 || true
-  python3 -m pip cache purge >/dev/null 2>&1 || true
-  docker builder prune -f --keep-storage "${KEEP_BUILD_CACHE:-2GB}" >/dev/null 2>&1 || true
-  docker image prune -f >/dev/null 2>&1 || true
+  reclaim "go build cache" "$HOME/.cache/go-build"           go clean -cache
+  reclaim "npm cache"      "$HOME/.npm"                       npm cache clean --force
+  reclaim "pip cache"      "$HOME/.cache/pip"                 python3 -m pip cache purge
+  reclaim "docker build cache" ""  docker builder prune -f --keep-storage "${KEEP_BUILD_CACHE:-2GB}"
+  reclaim "docker dangling images" ""  docker image prune -f
   truncate_big_container_logs
+  return 0
 }
 
 tier2() {
   echo "-- tier 2 (critical): full docker reclaim --"
-  docker builder prune -af >/dev/null 2>&1 || true
-  docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
-  docker volume prune -f >/dev/null 2>&1 || true
+  reclaim "docker build cache (full)" "" docker builder prune -af
+  reclaim "docker unused images (>72h)" "" docker image prune -af --filter "until=72h"
+  reclaim "docker anonymous volumes" "" docker volume prune -f
+  return 0
 }
 
 status() {
@@ -194,7 +244,16 @@ fi
 # space may have been what kept OS blocked — try healing again post-sweep.
 heal_opensearch
 
-echo "== done: ${before_pct}% -> ${pct}% ($(disk_free) free) =="
+echo "== done: ${before_pct}% -> ${pct}% ($(disk_free) free), reclaim_failures=${RECLAIM_FAILURES} =="
+
+# A sweep that reclaimed NOTHING while still over threshold is the failure this
+# script was blind to for weeks: it ran, swallowed a command-not-found, and
+# reported "91% -> 91%" as if healthy. That is now an explicit, alerting
+# condition — a hygiene job that cannot clean must be as loud as a full disk.
+if [ "$RECLAIM_FAILURES" -gt 0 ] && [ "${pct:-0}" -ge "$TRIGGER_PCT" ]; then
+  push "NetOps: host hygiene DEGRADED" "warning" "high" \
+    "$RECLAIM_FAILURES cleanup step(s) failed on $(hostname) and disk is still ${pct}% — the sweeper is not reclaiming. Check host-hygiene.log for the WARN lines (likely a tool not on cron PATH)."
+fi
 
 # one push per episode: only when this run CROSSED the threshold (no state file).
 if [ ! -f "$STATE_FILE" ] && [ "$force" -eq 0 ]; then
@@ -202,3 +261,8 @@ if [ ! -f "$STATE_FILE" ] && [ "$force" -eq 0 ]; then
   push "NetOps: host hygiene triggered" "broom" "high" \
     "Disk hit ${before_pct}% on $(hostname) (${before_free} free). Swept dev caches + docker debris: now ${pct}% ($(disk_free) free). If this recurs, something is filling the disk faster than caches explain — check host-hygiene.log."
 fi
+
+# Non-zero exit when the sweep could not do its job, so a supervisor/CI or a
+# `set -e` caller treats a broken sweeper as the failure it is.
+[ "$RECLAIM_FAILURES" -gt 0 ] && [ "${pct:-0}" -ge "$TRIGGER_PCT" ] && exit 1
+exit 0
