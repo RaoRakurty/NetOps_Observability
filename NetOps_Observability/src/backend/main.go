@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"netops/backend/alerts"
+	"netops/backend/chhttp"
 	"netops/backend/collectors"
 	"netops/backend/integration"
 	"netops/backend/models"
@@ -1598,6 +1599,23 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP netops_alerts_active Currently active alerts.\n")
 	fmt.Fprintf(w, "# TYPE netops_alerts_active gauge\n")
 	fmt.Fprintf(w, "netops_alerts_active %d\n", len(s.alerts.Active()))
+
+	// ClickHouse write outcomes (Phase 8): the per-outcome visibility F-38/F-56
+	// lacked. committed/rejected/unknown is the COMMIT-STATE axis a dashboard
+	// alerts on; the by-class series names WHY (too_many_parts, schema, auth, …).
+	chm := chhttp.Snapshot()
+	fmt.Fprintf(w, "# HELP netops_clickhouse_write_outcomes_total ClickHouse writes by commit outcome.\n")
+	fmt.Fprintf(w, "# TYPE netops_clickhouse_write_outcomes_total counter\n")
+	fmt.Fprintf(w, "netops_clickhouse_write_outcomes_total{outcome=\"committed\"} %d\n", chm.Committed)
+	fmt.Fprintf(w, "netops_clickhouse_write_outcomes_total{outcome=\"rejected\"} %d\n", chm.Rejected)
+	fmt.Fprintf(w, "netops_clickhouse_write_outcomes_total{outcome=\"unknown\"} %d\n", chm.Unknown)
+	if len(chm.ByClass) > 0 {
+		fmt.Fprintf(w, "# HELP netops_clickhouse_failures_total ClickHouse failures by classification.\n")
+		fmt.Fprintf(w, "# TYPE netops_clickhouse_failures_total counter\n")
+		for class, n := range chm.ByClass {
+			fmt.Fprintf(w, "netops_clickhouse_failures_total{class=%q} %d\n", class, n)
+		}
+	}
 	if s.reportPipeline != nil {
 		s.reportPipeline.writeMetrics(w)
 	}

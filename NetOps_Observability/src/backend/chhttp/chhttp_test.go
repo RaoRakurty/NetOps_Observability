@@ -316,3 +316,35 @@ func TestRetryableOnForeignErrorIsFalse(t *testing.T) {
 		t.Error("nil is not a retryable failure")
 	}
 }
+
+// TestMetricsRecordOutcomes proves the Phase 8 counters move on real calls —
+// committed on success, rejected with a class on a server refusal.
+func TestMetricsRecordOutcomes(t *testing.T) {
+	before := Snapshot()
+
+	okSrv, done1 := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("1\n"))
+	})
+	defer done1()
+	if _, err := okSrv.Exec(context.Background(), Request{SQL: "SELECT 1", Op: "probe", Scope: "__all__"}); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	badSrv, done2 := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Code: 252. DB::Exception: Too many parts"))
+	})
+	defer done2()
+	_, _ = badSrv.Exec(context.Background(), Request{SQL: "INSERT INTO netops.x VALUES", Op: "ins", Scope: "__all__"})
+
+	after := Snapshot()
+	if after.Committed <= before.Committed {
+		t.Errorf("committed counter did not advance (%d → %d)", before.Committed, after.Committed)
+	}
+	if after.Rejected <= before.Rejected {
+		t.Errorf("rejected counter did not advance (%d → %d)", before.Rejected, after.Rejected)
+	}
+	if after.ByClass["too_many_parts"] <= before.ByClass["too_many_parts"] {
+		t.Errorf("too_many_parts class counter did not advance")
+	}
+}

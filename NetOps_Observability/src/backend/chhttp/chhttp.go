@@ -49,6 +49,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -409,11 +411,13 @@ func (c *Client) Exec(ctx context.Context, req Request) ([]byte, error) {
 	// A 200 whose body hit the cap is a TRUNCATED answer. Returning it would let
 	// a partial result read as a complete one — the exact shape of F-67.
 	if int64(len(body)) >= maxBytes {
+		recordOutcome(OutcomeUnknown, "response_truncated")
 		return nil, &Error{Op: req.Op, Status: resp.StatusCode, QueryID: queryID,
 			Message:        fmt.Sprintf("response exceeded %d bytes — narrow the query", maxBytes),
 			Outcome:        OutcomeUnknown, // the statement may well have applied in full
 			Classification: "response_truncated"}
 	}
+	recordOutcome(OutcomeCommitted, "")
 	return body, nil
 }
 
@@ -580,6 +584,7 @@ func classify(op string, status int, body []byte, hdrCode int, queryID string) *
 	if e.Classification == "" {
 		e.Classification = "clickhouse_error"
 	}
+	recordOutcome(e.Outcome, e.Classification)
 	return e
 }
 
@@ -616,10 +621,64 @@ func classifyTransport(op string, err error) *Error {
 		// been delivered in full.
 		e.Outcome, e.Classification = OutcomeUnknown, "response_lost"
 	}
+	recordOutcome(e.Outcome, e.Classification)
 	return e
 }
 
 func isDNSFailure(err error) bool {
 	var d *net.DNSError
 	return errors.As(err, &d)
+}
+
+// ── metrics (Phase 8) ──────────────────────────────────────────────────────
+//
+// Package-level counters, because the adapter constructs a Client per call
+// (clickhouse_client.go chClientFor) so per-Client state would not aggregate.
+// The backend's /metrics handler reads Snapshot() and exposes it, giving the
+// operator per-outcome visibility into every ClickHouse write the seam carries —
+// the observability F-56/F-38 were invisible for want of.
+var (
+	mCommitted atomic.Int64
+	mRejected  atomic.Int64
+	mUnknown   atomic.Int64
+	mByClass   sync.Map // classification string -> *atomic.Int64
+)
+
+func recordOutcome(o Outcome, classification string) {
+	switch o {
+	case OutcomeCommitted:
+		mCommitted.Add(1)
+	case OutcomeRejected:
+		mRejected.Add(1)
+	default:
+		mUnknown.Add(1)
+	}
+	if classification == "" {
+		return
+	}
+	v, _ := mByClass.LoadOrStore(classification, new(atomic.Int64))
+	v.(*atomic.Int64).Add(1)
+}
+
+// MetricsSnapshot is a point-in-time read of the seam's outcome counters.
+type MetricsSnapshot struct {
+	Committed int64
+	Rejected  int64
+	Unknown   int64
+	ByClass   map[string]int64
+}
+
+// Snapshot returns the current counters for exposition.
+func Snapshot() MetricsSnapshot {
+	m := MetricsSnapshot{
+		Committed: mCommitted.Load(),
+		Rejected:  mRejected.Load(),
+		Unknown:   mUnknown.Load(),
+		ByClass:   map[string]int64{},
+	}
+	mByClass.Range(func(k, v any) bool {
+		m.ByClass[k.(string)] = v.(*atomic.Int64).Load()
+		return true
+	})
+	return m
 }
