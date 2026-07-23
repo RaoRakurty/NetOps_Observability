@@ -125,7 +125,7 @@ An invariant that no gate enforces is a preference.
 | An inbound webhook that lost events asks the sender to redeliver | ✅ | **BUILD** — `integrations_inbound_test.go` (F-75): `received` counts durable events, and any failure is a 500 so the sender's retry — the only recovery path — fires |
 | A compliance record is written only for an action that persisted | ✅ | **BUILD** — `TestAdminSessionKillDoesNotReport204OnAFailedPersist`; `SESSION_REVOKED` is no longer emitted for a kill that did not stick |
 | Demo estates are removable | ✅ | `demo_lab.py teardown` — manifest-driven, never pattern-matched |
-| Restore from backup | 🟡 | **SCRIPT+DRILL** — `scripts/restore-drill.sh` restores a real pg_dumpall into an empty scratch Postgres and asserts a canary row (magic + exact timestamp) plus the core `users` schema survived. Proven: 7/7 assertions, RTO 27s. ClickHouse/OpenSearch legs are scaffolded but gated behind `--stores` and REFUSE to report as covered until exercised (F-59 discipline) |
+| Restore from backup | ✅ | **SCRIPT+DRILL** — `scripts/restore-drill.sh` restores all THREE durable stores into empty scratch containers and asserts a canary (magic + exact timestamp) survived: Postgres (pg_dumpall), ClickHouse (schema + FORMAT Native data), OpenSearch (snapshot→delete→restore). Proven live: **17/17 assertions, RTO pg 21s / ch 9s / os 52s**. Local-copy path only — off-host DR is still unconfigured (BACKUP-FAILURE-DOMAIN.md) |
 
 ## 8. Schema / contract compatibility
 
@@ -157,7 +157,7 @@ An invariant that no gate enforces is a preference.
 
 ## Standing gaps, ranked
 
-1. **Restore is exercised for Postgres; ClickHouse/OpenSearch legs pending.** `restore-drill.sh` proves the app-state store restores with content intact (canary + RTO). The CH/OpenSearch legs share the same canary→backup→restore→assert shape but are not yet run against live scratch stores — the script fails loudly rather than claiming them covered. (§1, §7)
+1. **Restore is exercised for all three durable stores; off-host DR is not.** `restore-drill.sh` proves PG, ClickHouse and OpenSearch each restore with content intact (17/17 assertions). What remains is the FAILURE DOMAIN: backups still live on the same disk/host as primary data, and the live OpenSearch snapshot repo is unregistered — the drill proves the mechanism, not a geographically-separate copy. (§1, §7, BACKUP-FAILURE-DOMAIN.md)
 2. **§3a rule 5 is unenforced.** Isolation tests are mandatory in prose; a new route can ship without one. (§6)
 3. **The tenant-create rollback is compile-reviewed only.** F-81's handler deletes a half-created tenant when `operator_restricted` cannot be applied, but `s.tenants` is a concrete `*tenantStore` with no interface seam, so a mid-request failure cannot be injected. Breaking the store path makes the CREATE fail first and the test would pass for the wrong reason — stated in `rca_window_test.go` rather than papered over. Extracting a `tenantRepo` interface is the change that would make it testable. (§7)
 4. **Postgres-dependent paths are compile-reviewed only.** `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE — none executed against a live database. (§3)

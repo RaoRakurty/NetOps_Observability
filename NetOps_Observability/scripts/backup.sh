@@ -149,6 +149,35 @@ if is_running clickhouse; then
         else
             note "clickhouse schema $CH_OK tables"
         fi
+
+        # ---- ClickHouse DATA (2026-07-23) --------------------------------------
+        # Until now this captured SCHEMA ONLY — SHOW CREATE TABLE, zero rows — and
+        # relied on the data/clickhouse filesystem rsync for the rows. A live-CH
+        # data-dir copy is not guaranteed consistent (parts merge mid-copy), so
+        # the OLAP store holding signals/objects/edges/evidence/flows had no
+        # RELIABLE row backup. Dump each table as FORMAT Native — ClickHouse's own
+        # binary, exactly type-preserving and re-ingestible with INSERT … FORMAT
+        # Native — which restore-drill.sh exercises. Compressed; skips *View
+        # engines (materialised from their sources).
+        echo "→ ClickHouse data dump (Native, all tables)"
+        mkdir -p "$STAGE/clickhouse-data"
+        CH_D_OK=0; CH_D_BAD=0
+        while read -r tbl; do
+            [[ -z "$tbl" ]] && continue
+            if docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T clickhouse \
+                clickhouse-client --query \
+                "SELECT * FROM netops.$tbl FORMAT Native SETTINGS tenant_scope='__all__'" \
+                2>>"$STAGE/clickhouse.err" | gzip > "$STAGE/clickhouse-data/$tbl.native.gz"; then
+                CH_D_OK=$((CH_D_OK + 1))
+            else
+                CH_D_BAD=$((CH_D_BAD + 1))
+            fi
+        done <<< "$CH_TABLES"
+        if [[ $CH_D_BAD -gt 0 ]]; then
+            fail "clickhouse data dump: $CH_D_BAD of $((CH_D_OK + CH_D_BAD)) tables failed"
+        else
+            note "clickhouse data $CH_D_OK tables (Native)"
+        fi
     fi
 else
     skip "clickhouse not running"
