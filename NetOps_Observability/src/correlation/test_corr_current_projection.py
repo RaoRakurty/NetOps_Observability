@@ -19,7 +19,7 @@ class _FlakyCH(_StubCH):
         super().__init__()
         self.mode = mode
 
-    async def insert(self, table: str, rows: list) -> bool:
+    async def insert(self, table: str, rows: list, dedup_token="") -> bool:
         if table == "netops.corr_current":
             if self.mode == "reject":
                 return False  # what CH.insert returns on an HTTP 4xx/5xx

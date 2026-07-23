@@ -320,7 +320,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_objects
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(window_start))
-ORDER BY (tenant_id, correlation_id, version);
+ORDER BY (tenant_id, correlation_id, version)
+SETTINGS non_replicated_deduplication_window = 1000;
 
 -- "latest snapshot per object" convenience view (plain view: row policies on the
 -- base table evaluate in the reader's context — safe, unlike an MV).
@@ -423,7 +424,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_edges
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
-ORDER BY (tenant_id, correlation_id, version, from_node, to_node);
+ORDER BY (tenant_id, correlation_id, version, from_node, to_node)
+SETTINGS non_replicated_deduplication_window = 1000;
 
 -- 2.3 Evidence log — human-readable "why" per edge/hypothesis, written in the
 -- same batch as the snapshot.
@@ -441,7 +443,8 @@ CREATE TABLE IF NOT EXISTS netops.corr_evidence
 )
 ENGINE = MergeTree
 PARTITION BY (tenant_id, toYYYYMM(created_at))
-ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id);
+ORDER BY (tenant_id, correlation_id, version, subject_kind, subject_id)
+SETTINGS non_replicated_deduplication_window = 1000;
 
 -- ---------------------------------------------------------------------------
 -- Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md)

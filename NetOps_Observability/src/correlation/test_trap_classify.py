@@ -140,7 +140,7 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
         self.rows = []
 
         class FakeCH:
-            async def insert(_self, table, rows):
+            async def insert(_self, table, rows, dedup_token=""):
                 for r in rows:
                     self.rows.append({"_table": table, **r})
 

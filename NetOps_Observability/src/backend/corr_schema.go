@@ -415,5 +415,19 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 		// Same strict model for the write-amp rollup: a tenant may see its own
 		// storm accounting; platform-global (untagged '') rows are platform-only.
 		chStrictRowPolicyDDL("corr_tenant_write_amp"),
+
+		// Phase 3 (idempotency): these four are plain MergeTree with NO content
+		// dedup, so a retry of an insert after an UNKNOWN outcome would duplicate
+		// causal rows. Give each a non-replicated dedup window so an insert
+		// carrying an insert_deduplication_token it has seen (the correlation
+		// consumer sends one derived from the Kafka coordinate) is dropped rather
+		// than re-applied. MODIFY SETTING is metadata-only — no rewrite — and
+		// converges live installs the same way the row policies above do; init.sql
+		// carries it on the CREATE for fresh installs. 1000 easily covers an
+		// immediate retry; corr_current is ReplacingMergeTree and needs no window.
+		`ALTER TABLE netops.corr_signals MODIFY SETTING non_replicated_deduplication_window = 1000`,
+		`ALTER TABLE netops.corr_objects MODIFY SETTING non_replicated_deduplication_window = 1000`,
+		`ALTER TABLE netops.corr_edges MODIFY SETTING non_replicated_deduplication_window = 1000`,
+		`ALTER TABLE netops.corr_evidence MODIFY SETTING non_replicated_deduplication_window = 1000`,
 	}
 }

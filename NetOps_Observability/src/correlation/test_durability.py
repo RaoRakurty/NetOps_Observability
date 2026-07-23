@@ -37,13 +37,13 @@ class RejectingCH:
         self.ok = ok
         self.calls: list[str] = []
 
-    async def insert(self, table, rows) -> bool:
+    async def insert(self, table, rows, dedup_token="") -> bool:
         self.calls.append(table)
         return self.ok
 
 
 class ExplodingCH:
-    async def insert(self, table, rows) -> bool:
+    async def insert(self, table, rows, dedup_token="") -> bool:
         raise TimeoutError("clickhouse unreachable")
 
 
@@ -155,9 +155,11 @@ class _PoisonConsumer:
 
 
 class _Msg:
-    def __init__(self, topic, value):
+    def __init__(self, topic, value, partition=0, offset=0):
         self.topic = topic
         self.value = value
+        self.partition = partition
+        self.offset = offset
 
 
 def test_poison_event_does_not_tear_down_the_consumer(monkeypatch):
@@ -392,3 +394,31 @@ def test_syslog_bucket_key_set_is_swept(monkeypatch):
     run(main.handle_syslog({"hostname": "real1", "severity": "err", "message": "x"}))
     assert len(main.SYSLOG_BUCKET) == 1
     assert "real1" in main.SYSLOG_BUCKET
+
+
+def test_dedup_token_derived_from_kafka_coordinate(monkeypatch):
+    # Phase 3: a critical-table insert carries insert_deduplication_token derived
+    # from the message coordinate, stable across a retry so ClickHouse dedups.
+    sent = []
+
+    class CaptureCH:
+        async def insert(self, table, rows, dedup_token=""):
+            sent.append((table, dedup_token))
+            return True
+
+    monkeypatch.setattr(main, "ch", CaptureCH())
+    main.set_dedup_coord("netops.probes", 3, 104857)
+    run(main.ch_insert("netops.corr_signals", [{"a": 1}]))
+    run(main.ch_insert("netops.corr_objects", [{"a": 1}]))
+    # a non-critical table gets NO token (its engine/source-of-truth handles it)
+    run(main.ch_insert("netops.corr_signals_archive", [{"a": 1}]))
+
+    assert sent[0] == ("netops.corr_signals", "netops.probes:3:104857:netops.corr_signals:0")
+    assert sent[1] == ("netops.corr_objects", "netops.probes:3:104857:netops.corr_objects:1")
+    assert sent[2][1] == ""  # non-critical: no token
+
+    # RETRY/redelivery of the SAME message re-derives the SAME tokens.
+    sent.clear()
+    main.set_dedup_coord("netops.probes", 3, 104857)
+    run(main.ch_insert("netops.corr_signals", [{"a": 1}]))
+    assert sent[0][1] == "netops.probes:3:104857:netops.corr_signals:0"

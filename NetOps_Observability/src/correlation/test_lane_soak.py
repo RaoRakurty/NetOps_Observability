@@ -35,7 +35,7 @@ class _StubCH:
     def __init__(self):
         self.rows: dict = {}
 
-    async def insert(self, table: str, rows: list) -> None:
+    async def insert(self, table: str, rows: list, dedup_token="") -> None:
         self.rows.setdefault(table, []).extend(rows)
 
 

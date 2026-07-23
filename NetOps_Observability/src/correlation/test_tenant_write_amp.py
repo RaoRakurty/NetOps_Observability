@@ -131,7 +131,7 @@ def test_flush_failure_is_nonfatal(monkeypatch):
     _reset_wa(monkeypatch, flush_s=0.0)
 
     class _Boom(_StubCH):
-        async def insert(self, table, rows):
+        async def insert(self, table, rows, dedup_token=""):
             if table == "netops.corr_tenant_write_amp":
                 raise ConnectionError("ch down")
             await super().insert(table, rows)

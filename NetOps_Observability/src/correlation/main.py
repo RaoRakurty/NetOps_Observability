@@ -1532,7 +1532,7 @@ class CH:
         self.auth = (user, password)
         self.client = httpx.AsyncClient(timeout=10.0)
 
-    async def insert(self, table: str, rows: Iterable[dict]) -> bool:
+    async def insert(self, table: str, rows: Iterable[dict], dedup_token: str = "") -> bool:
         """True on a POSITIVELY COMMITTED insert, False otherwise.
 
         Ports the wire-level correctness the Go chhttp package proved against the
@@ -1548,6 +1548,13 @@ class CH:
             is customer telemetry. It must NEVER reach the log (constraint:
             no PII in logs). We log status + exception code + query id, never
             r.text.
+
+        dedup_token (Phase 3): when set, sent as insert_deduplication_token so a
+        retried insert of the SAME block is dropped by ClickHouse rather than
+        duplicated. The RCA-critical tables are plain MergeTree (no content
+        dedup), so this is what makes a retry-after-Unknown safe on them. The
+        table's non_replicated_deduplication_window (init.sql) bounds the memory
+        of tokens; immediate retries are always inside it.
         """
         body = "\n".join(json.dumps(r) for r in rows)
         if not body:
@@ -1563,6 +1570,8 @@ class CH:
             "input_format_skip_unknown_fields": "1",
             "date_time_input_format": "best_effort",
         }
+        if dedup_token:
+            params["insert_deduplication_token"] = dedup_token
         try:
             r = await self.client.post(
                 self.base, params=params, content=body, auth=self.auth,
@@ -1657,6 +1666,42 @@ class CHInsertRejected(Exception):
     """
 
 
+# ── Phase 3 idempotency: per-message dedup coordinate ──────────────────────
+#
+# The RCA-critical tables are plain MergeTree (no content dedup), so a retry of
+# an insert after an UNKNOWN outcome would DUPLICATE causal rows. ClickHouse
+# insert_deduplication_token drops a re-inserted block carrying a token it has
+# seen within the table's non_replicated_deduplication_window (set in init.sql).
+#
+# The token must be STABLE across a retry/redelivery of the same message and
+# UNIQUE per logical insert. The consumer processes messages sequentially
+# (`async for msg: await handle(...)`), so a module-level coordinate set before
+# each handle() is safe without contextvars — there is no interleaving. The
+# per-message sequence disambiguates multiple inserts (same or different tables)
+# from one message; a deterministic handler re-runs them in the same order on
+# redelivery, so the tokens match and ClickHouse dedups.
+_dedup_coord = ""      # "topic:partition:offset" for the message in flight
+_dedup_seq = 0         # monotonic per-message insert counter
+
+
+def set_dedup_coord(topic: str, partition: int, offset: int) -> None:
+    """Called by the consumer before handle(); establishes this message's token base."""
+    global _dedup_coord, _dedup_seq
+    _dedup_coord = f"{topic}:{partition}:{offset}"
+    _dedup_seq = 0
+
+
+def _next_dedup_token(table: str) -> str:
+    """Stable, unique token for the next insert of this message. Empty when there
+    is no coordinate (e.g. a non-consumer write path), leaving dedup off."""
+    global _dedup_seq
+    if not _dedup_coord:
+        return ""
+    tok = f"{_dedup_coord}:{table}:{_dedup_seq}"
+    _dedup_seq += 1
+    return tok
+
+
 async def ch_insert(table: str, rows, **ctx) -> bool:
     """`ch.insert` with the failure actually surfaced (log + counter).
 
@@ -1665,10 +1710,14 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
     here, and for an RCA-critical table it is RAISED as CHInsertRejected so it
     too reaches the durable quarantine — a rejected causal write that silently
     returned False was the F-38 hole on the Python side.
+
+    Phase 3: critical-table inserts carry an insert_deduplication_token derived
+    from the Kafka coordinate, so a retry/redelivery cannot duplicate the row.
     """
     assert ch is not None
+    token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
     try:
-        ok = await ch.insert(table, rows)
+        ok = await ch.insert(table, rows, dedup_token=token)
     except Exception as exc:  # noqa: BLE001 — counted, then re-raised
         _note_ch_failure(table, type(exc).__name__, ctx)
         raise
@@ -1944,6 +1993,10 @@ async def consume() -> None:
                 # Per-EVENT isolation: one bad record must cost one record, not
                 # the whole ten-topic consumer (see quarantine_event above).
                 try:
+                    # Phase 3: establish this message's dedup coordinate so every
+                    # critical-table insert it drives carries a stable token — a
+                    # retry/redelivery of THIS offset dedups instead of duplicating.
+                    set_dedup_coord(msg.topic, msg.partition, msg.offset)
                     await handle(msg.topic, msg.value)
                     consecutive_failures = 0
                 except asyncio.CancelledError:

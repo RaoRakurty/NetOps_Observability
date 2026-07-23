@@ -23,7 +23,7 @@ class FakeCH:
     def __init__(self) -> None:
         self.rows: list[dict] = []
 
-    async def insert(self, table: str, rows) -> None:
+    async def insert(self, table: str, rows, dedup_token="") -> None:
         for r in rows:
             self.rows.append({"_table": table, **r})
 

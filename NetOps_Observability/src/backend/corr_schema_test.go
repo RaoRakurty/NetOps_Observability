@@ -33,6 +33,12 @@ func TestCorrSchemaIdempotent(t *testing.T) {
 		if strings.Contains(s, "MODIFY COLUMN") {
 			continue
 		}
+		// MODIFY SETTING sets a table setting to a fixed value (Phase 3 dedup
+		// window): re-running writes the same value — a no-op — and there is no
+		// "IF NOT EXISTS" form. Idempotent by nature, same as MODIFY COLUMN.
+		if strings.Contains(s, "MODIFY SETTING") {
+			continue
+		}
 		// CREATE OR REPLACE VIEW is idempotent (re-runnable) AND, unlike CREATE VIEW
 		// IF NOT EXISTS, refreshes a SELECT * view's columns when the base table gains
 		// one (#81 P5 app_impact) — so a stale view can't shadow a new column.
