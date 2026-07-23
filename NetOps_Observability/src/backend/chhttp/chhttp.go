@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -681,4 +682,71 @@ func Snapshot() MetricsSnapshot {
 		return true
 	})
 	return m
+}
+
+// ── retry orchestration (Phase 3) ──────────────────────────────────────────
+
+// RetryPolicy bounds an ExecWithRetry loop. Zero values disable retry (one
+// attempt), so a caller must opt in explicitly.
+type RetryPolicy struct {
+	MaxAttempts int           // total attempts including the first; <=1 means no retry
+	BaseDelay   time.Duration // first backoff; doubles each attempt
+	MaxDelay    time.Duration // backoff ceiling
+	// JitterFrac in [0,1): the delay is multiplied by (1 - frac/2 + rand*frac),
+	// spreading retries so a fleet does not thunder-herd a recovering server.
+	JitterFrac float64
+}
+
+// DefaultRetry is a sane bounded policy for an idempotent insert.
+var DefaultRetry = RetryPolicy{MaxAttempts: 4, BaseDelay: 200 * time.Millisecond, MaxDelay: 5 * time.Second, JitterFrac: 0.5}
+
+// ExecWithRetry runs Exec and retries ONLY on a classified-retryable failure,
+// with bounded exponential backoff + jitter. The payload is byte-identical on
+// every attempt (the same Request), which is the idempotency contract this
+// relies on:
+//
+//   - SAFE for tables that dedup a re-insert (ReplacingMergeTree, or a
+//     deterministic PK the engine collapses). The correlation writes use
+//     deterministic signal/object ids for exactly this reason.
+//   - For a NON-idempotent table (plain MergeTree with no dedup), a retry after
+//     an UNKNOWN outcome can duplicate rows — which is why Unknown is retried
+//     the SAME bytes, never rebuilt into a different batch, and why the caller,
+//     not this package, decides whether its table is safe to retry. Pass
+//     RetryPolicy{} (no retry) when it is not.
+//
+// randFn is injectable for deterministic tests; nil uses a time-seeded source.
+func (c *Client) ExecWithRetry(ctx context.Context, req Request, p RetryPolicy, randFn func() float64) ([]byte, error) {
+	attempts := p.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	if randFn == nil {
+		r := rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404 -- jitter, not crypto
+		randFn = r.Float64
+	}
+	var body []byte
+	var err error
+	delay := p.BaseDelay
+	for attempt := 1; attempt <= attempts; attempt++ {
+		body, err = c.Exec(ctx, req)
+		if err == nil || !Retryable(err) || attempt == attempts {
+			return body, err
+		}
+		// jittered sleep, cancellable.
+		d := delay
+		if p.JitterFrac > 0 {
+			f := p.JitterFrac
+			d = time.Duration(float64(delay) * (1 - f/2 + randFn()*f))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, &Error{Op: req.Op, Message: "retry aborted: " + ctx.Err().Error(),
+				Outcome: OutcomeUnknown, Classification: "context_canceled", wrapped: ctx.Err()}
+		case <-time.After(d):
+		}
+		if delay = delay * 2; p.MaxDelay > 0 && delay > p.MaxDelay {
+			delay = p.MaxDelay
+		}
+	}
+	return body, err
 }

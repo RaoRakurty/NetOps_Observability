@@ -17,10 +17,12 @@ package chhttp
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -346,5 +348,61 @@ func TestMetricsRecordOutcomes(t *testing.T) {
 	}
 	if after.ByClass["too_many_parts"] <= before.ByClass["too_many_parts"] {
 		t.Errorf("too_many_parts class counter did not advance")
+	}
+}
+
+// TestExecWithRetryRecoversTransient: a server that fails N times with a
+// retryable code then succeeds must be recovered within budget, sending the
+// SAME payload each time.
+func TestExecWithRetryRecoversTransient(t *testing.T) {
+	var calls atomic.Int32
+	var payloads sync.Map
+	c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		payloads.Store(string(b), true)
+		if calls.Add(1) <= 2 { // fail twice (TOO_MANY_PARTS), then succeed
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("Code: 252. DB::Exception: Too many parts"))
+			return
+		}
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	defer done()
+
+	p := RetryPolicy{MaxAttempts: 4, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond, JitterFrac: 0.5}
+	_, err := c.ExecWithRetry(context.Background(), Request{SQL: "INSERT INTO netops.x VALUES(1)", Op: "ins", Scope: "__all__"},
+		p, func() float64 { return 0.5 })
+	if err != nil {
+		t.Fatalf("should have recovered within budget: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Errorf("expected 3 attempts (2 fail + 1 ok), got %d", calls.Load())
+	}
+	// exactly one distinct payload was ever sent — byte-identical retries.
+	n := 0
+	payloads.Range(func(_, _ any) bool { n++; return true })
+	if n != 1 {
+		t.Errorf("retry sent %d distinct payloads, want 1 (byte-identical)", n)
+	}
+}
+
+// TestExecWithRetryDoesNotRetryPermanent: a schema fault must fail on the first
+// attempt — retrying an unchanged bad statement loops forever.
+func TestExecWithRetryDoesNotRetryPermanent(t *testing.T) {
+	var calls atomic.Int32
+	c, done := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Code: 16. DB::Exception: No such column"))
+	})
+	defer done()
+
+	_, err := c.ExecWithRetry(context.Background(), Request{SQL: "INSERT INTO netops.x VALUES", Op: "ins", Scope: "__all__"},
+		DefaultRetry, func() float64 { return 0.5 })
+	if err == nil {
+		t.Fatal("expected permanent failure")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("permanent failure retried %d times — must be exactly 1", calls.Load())
 	}
 }
