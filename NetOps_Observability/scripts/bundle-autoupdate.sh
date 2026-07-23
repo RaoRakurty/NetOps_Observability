@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-# bundle-autoupdate.sh — daily customer-bundle lockstep (#97, owner directive
-# 2026-07-18): as the code is built every day, the customer package rebuilds
-# itself to match. Cron-driven sibling of stack-watchdog.sh, and the LOCAL
-# counterpart of release-bundle.yml (which only fires on pushes to main /
-# v-tags — day-to-day work lives on a feature branch, so without this the
-# dist/ bundle silently ages, exactly the 300-commit drift the 2026-07-17
-# audit found).
+# bundle-autoupdate.sh — ON-DEMAND customer-bundle build (#97).
+#
+# NO LONGER A DAILY CRON (removed 2026-07-23, CLAUDE.md §16.4). Building a
+# multi-GB customer package on a wall-clock timer, whether or not anything
+# shipped, was the wrong model: it consumed the disk it then refused to run on
+# (the daily job SKIPPED for days — "only 8GiB free < 15GiB" — because prior runs
+# had filled the volume), and it decoupled the artifact from the commit that
+# warrants it. A release artifact is EVENT-DRIVEN.
+#
+# The event-driven path is release-bundle.yml (CI, on a push to main / a v-tag),
+# gated on the build passing — that is the source of truth for a shippable
+# bundle. This script remains for a DELIBERATE local build:
+#
+#     make bundle                      # or: scripts/bundle-autoupdate.sh
+#     GIT_SHA=$(git rev-parse HEAD) scripts/make-installer.sh
+#
+# Run it when you actually need a fresh eval/demo bundle from the current branch
+# — before a customer demo, not every night.
 #
 #   * runs bundle-staleness.sh; exits 0 quietly when the bundle already
-#     matches HEAD's shippable code (docs-only days never rebuild);
+#     matches HEAD's shippable code;
 #   * when stale: `make bundle` (full bundle: base + add-on packs) at HEAD;
 #   * prunes old bundles, keeping the newest KEEP_BUNDLES (default 2) —
 #     bundles are multi-GB and this host has had a disk-full incident;
-#   * optional phone ping via the watchdog's ntfy topic on success/failure
-#     (reads scripts/stack-watchdog.env; silent if absent);
-#   * flock guard so a long build never overlaps the next cron firing.
-#
-# Install (daily, 03:30, after the nightly builds settle):
-#   30 3 * * * /home/rao/Projects/NetOps_Observability/NetOps_Observability/scripts/bundle-autoupdate.sh --quiet >> /home/rao/Projects/NetOps_Observability/NetOps_Observability/scripts/bundle-autoupdate.log 2>&1
+#   * disk preflight is a REAL gate (below): it refuses to build rather than
+#     half-filling the disk, and says so loudly;
+#   * flock guard so two invocations never overlap.
 
 set -u -o pipefail
 
