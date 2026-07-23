@@ -1533,20 +1533,57 @@ class CH:
         self.client = httpx.AsyncClient(timeout=10.0)
 
     async def insert(self, table: str, rows: Iterable[dict]) -> bool:
-        """True on success. An HTTP-level failure is logged AND reported to the
-        caller (#101: the corr_current projection write must be able to count
-        its own failures — before this, a 4xx/5xx insert was log-only and
-        indistinguishable from success at the call site)."""
+        """True on a POSITIVELY COMMITTED insert, False otherwise.
+
+        Ports the wire-level correctness the Go chhttp package proved against the
+        pinned ClickHouse 24.8.14.39 (see src/backend/chhttp). A status check
+        alone is NOT sufficient, for reasons measured there:
+
+          - ClickHouse can return HTTP 200 with the DB::Exception in the BODY
+            (wait_end_of_query=0, failure after the first buffer flush). A
+            status-only check calls that success and drops the write. We send
+            wait_end_of_query=1, inspect X-ClickHouse-Exception-Code, and
+            backstop with a body-tail scan.
+          - The error body may quote the offending ROW, which for this platform
+            is customer telemetry. It must NEVER reach the log (constraint:
+            no PII in logs). We log status + exception code + query id, never
+            r.text.
+        """
         body = "\n".join(json.dumps(r) for r in rows)
         if not body:
             return True
-        params = {"query": f"INSERT INTO {table} FORMAT JSONEachRow"}
-        r = await self.client.post(
-            self.base, params=params, content=body, auth=self.auth,
-            headers={"Content-Type": "application/x-ndjson"},
-        )
-        if r.status_code >= 300:
-            log.error("clickhouse insert failed: %s %s", r.status_code, r.text)
+        params = {
+            "query": f"INSERT INTO {table} FORMAT JSONEachRow",
+            # Server-side buffering so a post-flush failure arrives as a real
+            # error status + header rather than a 200 with the exception buried.
+            "wait_end_of_query": "1",
+            # Insert tolerance (F-56): an unknown field is dropped, not fatal to
+            # the batch. Row errors are NOT tolerated (see the Go note) — a bad
+            # row must fail loudly, never be silently discarded.
+            "input_format_skip_unknown_fields": "1",
+            "date_time_input_format": "best_effort",
+        }
+        try:
+            r = await self.client.post(
+                self.base, params=params, content=body, auth=self.auth,
+                headers={"Content-Type": "application/x-ndjson"},
+            )
+        except httpx.HTTPError as exc:
+            # Transport failure before any verdict: the caller must treat this as
+            # NOT committed and quarantine the payload. Type name only — never
+            # the exception detail, which can echo the request body.
+            log.error("clickhouse insert transport failure table=%s err=%s",
+                      table, type(exc).__name__)
+            return False
+        code = r.headers.get("X-ClickHouse-Exception-Code")
+        qid = r.headers.get("X-ClickHouse-Query-Id", "")
+        # A 200 can still be a failure: the exception header, or the exception
+        # marker in the body tail (the measured wait_end_of_query race backstop).
+        embedded = ("DB::Exception" in r.text[-4096:]) if r.status_code < 300 else False
+        if r.status_code >= 300 or code or embedded:
+            # r.text deliberately absent — it can contain customer rows.
+            log.error("clickhouse insert failed table=%s status=%s ch_code=%s query_id=%s",
+                      table, r.status_code, code or "-", qid or "-")
             return False
         return True
 
@@ -1595,12 +1632,39 @@ def _note_ch_failure(table: str, reason: str, ctx: dict) -> None:
                 table, reason, CH_INSERT_FAILURES[table], detail)
 
 
+# RCA-critical tables: a rejected write here corrupts causality, so it must
+# never advance the Kafka offset silently. These raise CHInsertRejected on a
+# rejected insert, which the consumer's per-event handler turns into a durable
+# quarantine — closing the gap where the ~19 callers that ignored the bool let a
+# rejected write look like success. Reconstructable/best-effort tables keep the
+# bool contract (their source of truth is replayable).
+CH_CRITICAL_TABLES = frozenset({
+    "netops.corr_signals",
+    "netops.corr_objects",
+    "netops.corr_current",
+    "netops.corr_edges",
+    "netops.corr_evidence",
+})
+
+
+class CHInsertRejected(Exception):
+    """A ClickHouse insert to an RCA-critical table was positively rejected.
+
+    Raised (not returned) so it enters the consumer's quarantine path: the
+    payload is preserved durably and the offset is NOT advanced past it. This is
+    the constraint — never acknowledge a source message for a write that neither
+    committed nor was durably kept.
+    """
+
+
 async def ch_insert(table: str, rows, **ctx) -> bool:
     """`ch.insert` with the failure actually surfaced (log + counter).
 
-    Exceptions are counted and RE-RAISED, deliberately: a transport failure is
-    the caller's problem (the consumer quarantines the event so the payload
-    survives), while a rejected insert is reported here and returned as False.
+    Transport exceptions are counted and RE-RAISED (the consumer quarantines the
+    event). A REJECTED insert (HTTP 4xx/5xx or an embedded exception) is counted
+    here, and for an RCA-critical table it is RAISED as CHInsertRejected so it
+    too reaches the durable quarantine — a rejected causal write that silently
+    returned False was the F-38 hole on the Python side.
     """
     assert ch is not None
     try:
@@ -1612,6 +1676,8 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
     # returns None must not be miscounted as a lost write.
     if ok is False:
         _note_ch_failure(table, "rejected", ctx)
+        if table in CH_CRITICAL_TABLES:
+            raise CHInsertRejected(f"{table} rejected the insert")
     return ok
 
 
@@ -1754,6 +1820,8 @@ CORR_DLQ_MAX_BYTES = int(os.environ.get("CORR_DLQ_MAX_BYTES", str(32 * 1024 * 10
 QUARANTINE: Deque[dict] = deque(maxlen=CORR_QUARANTINE_MAX)
 HANDLER_FAILURES: Dict[str, int] = {}   # topic -> events lost to a handler error
 QUARANTINE_WRITE_FAILURES = 0
+QUARANTINE_ROTATIONS = 0
+_DLQ_UNSET_WARNED = False
 _QUARANTINE_LOG_LAST: Dict[str, float] = {}
 QUARANTINE_LOG_EVERY_S = float(os.environ.get("CORR_QUARANTINE_LOG_EVERY_S", "30"))
 # Consecutive handler failures that mean "the dependency is down", not "one
@@ -1763,25 +1831,50 @@ CORR_QUARANTINE_BURST_MAX = int(os.environ.get("CORR_QUARANTINE_BURST_MAX", "100
 
 
 def _dlq_append(record: dict) -> None:
-    """Append one quarantined event to the on-disk dead-letter file. Bounded by
-    CORR_DLQ_MAX_BYTES so a poison producer can never fill the volume; a write
-    failure is counted, never raised (quarantine must not become the new
-    failure)."""
-    global QUARANTINE_WRITE_FAILURES
+    """Append one quarantined event to the on-disk dead-letter file.
+
+    Bounded by CORR_DLQ_MAX_BYTES so a poison producer can never fill the volume.
+    At the cap the file ROTATES (one .1 kept) rather than silently dropping — the
+    previous version just `return`ed with no counter, which is the accept-and-
+    ignore defect (F-38) reappearing inside the safety net that exists to catch
+    it. A dropped dead-letter is a lost payload with nothing to say so.
+
+    A write failure is counted (QUARANTINE_WRITE_FAILURES, a scraped metric),
+    never raised: quarantine must not itself become the failure that kills the
+    consumer.
+    """
+    global QUARANTINE_WRITE_FAILURES, QUARANTINE_ROTATIONS
     if not CORR_DLQ_DIR:
+        # Memory-only quarantine (ring buffer) is NOT durable across a restart.
+        # In a deployment that means an RCA-critical payload can be lost when the
+        # offset has already auto-committed. Surface it once so the operational
+        # posture is visible rather than assumed. See the compose default.
+        global _DLQ_UNSET_WARNED
+        if not _DLQ_UNSET_WARNED:
+            _DLQ_UNSET_WARNED = True
+            log.warning("CORR_DLQ_DIR unset — quarantine is in-memory only and "
+                        "does NOT survive a restart; set it to a durable volume")
         return
     path = os.path.join(CORR_DLQ_DIR, "corr-deadletter.ndjson")
     try:
         os.makedirs(CORR_DLQ_DIR, exist_ok=True)
         try:
             if os.path.getsize(path) >= CORR_DLQ_MAX_BYTES:
-                return
+                # Rotate: keep exactly one prior generation. Retains the most
+                # recent 2×CAP of evidence instead of freezing at CAP and
+                # dropping everything after — silently.
+                os.replace(path, path + ".1")
+                QUARANTINE_ROTATIONS += 1
+                log.warning("dead-letter file hit %d bytes — rotated to .1 "
+                            "(rotations=%d)", CORR_DLQ_MAX_BYTES, QUARANTINE_ROTATIONS)
         except OSError:
             pass
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError) as exc:
         QUARANTINE_WRITE_FAILURES += 1
+        log.error("dead-letter write failed (total=%d): %s",
+                  QUARANTINE_WRITE_FAILURES, type(exc).__name__)
 
 
 def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:

@@ -90,13 +90,30 @@ def test_transport_exception_is_counted_and_re_raised(monkeypatch):
 
 
 def test_repeated_failures_log_rate_limited_but_count_exactly(monkeypatch, caplog):
+    # A RECONSTRUCTABLE table (source of truth is replayable) keeps the bool
+    # contract: a rejected insert is counted and returned False, not raised.
+    # corr_signals_archive is not in CH_CRITICAL_TABLES.
+    table = "netops.corr_signals_archive"
     monkeypatch.setattr(main, "ch", RejectingCH())
     monkeypatch.setattr(main, "CH_FAIL_LOG_EVERY_S", 3600.0)
     with caplog.at_level("WARNING"):
         for _ in range(25):
-            run(main.ch_insert("netops.corr_signals", [{"a": 1}]))
-    assert main.CH_INSERT_FAILURES["netops.corr_signals"] == 25
+            assert run(main.ch_insert(table, [{"a": 1}])) is False
+    assert main.CH_INSERT_FAILURES[table] == 25
     assert sum("clickhouse write LOST" in r.message for r in caplog.records) == 1
+
+
+def test_rejected_critical_write_raises_so_the_offset_is_not_advanced(monkeypatch):
+    # An RCA-critical table (causality-bearing) must NOT silently return False on
+    # a rejected write — that let the ~19 callers who ignored the bool advance
+    # the Kafka offset past a lost causal record. It now raises CHInsertRejected,
+    # which the consumer turns into a durable quarantine (constraint #7).
+    monkeypatch.setattr(main, "ch", RejectingCH())
+    for table in sorted(main.CH_CRITICAL_TABLES):
+        with pytest.raises(main.CHInsertRejected):
+            run(main.ch_insert(table, [{"a": 1}]))
+    # Counted, too — the metric still moves.
+    assert main.CH_INSERT_FAILURES["netops.corr_signals"] >= 1
 
 
 def test_metrics_exposition_carries_the_insert_failure_counter(monkeypatch):

@@ -670,6 +670,11 @@ def ensure_data_dirs(root: Path) -> None:
         "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
         "netbox-postgres": None,        # bundled-NetBox DB (opt-in 'netbox' profile); initdb self-chowns
         "netbox-media":    None,        # bundled-NetBox media (opt-in 'netbox' profile)
+        # F-38/durability: the correlation dead-letter volume. The Python service
+        # runs as root inside its container and writes NDJSON, so no chown — but
+        # the directory must exist and be writable before first boot, or the very
+        # first rejected RCA-critical evidence has nowhere durable to land.
+        "correlation/deadletter": None,
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name

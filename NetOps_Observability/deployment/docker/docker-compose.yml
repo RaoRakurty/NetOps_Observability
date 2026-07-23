@@ -912,6 +912,10 @@ services:
     mem_limit: ${CORRELATION_MEM_LIMIT:-768m}
     cpus: ${CORRELATION_CPU_LIMIT:-2}
     environment:
+      # F-38/durability: RCA-critical evidence whose ClickHouse write is
+      # rejected is preserved here across restarts (constraint: never advance
+      # an offset past a payload that is neither committed nor durably kept).
+      CORR_DLQ_DIR: ${CORR_DLQ_DIR:-/data/deadletter}
       KAFKA_BOOTSTRAP: ${BROKER_URLS:-kafka:9092}
       OPENSEARCH_URL: "http://opensearch:9200"
       CLICKHOUSE_URL: "http://clickhouse:8123"
@@ -957,6 +961,7 @@ services:
       CORR_WA_FLUSH_S: ${CORR_WA_FLUSH_S:-300}
       CORR_WA_TOPK: ${CORR_WA_TOPK:-5}
     volumes:
+      - ../../data/correlation/deadletter:/data/deadletter
       - ../../data/api/enrichment:/data/enrichment:ro
       - ../../data/cloud-logs:/data/cloud-logs:ro
       # Cloud inventory topology fixtures (read-only) for the P1 INVENTORY source.
