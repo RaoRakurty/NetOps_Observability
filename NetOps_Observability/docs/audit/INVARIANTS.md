@@ -104,7 +104,7 @@ An invariant that no gate enforces is a preference.
 | Aspect | Status | Enforced by |
 |---|---|---|
 | DB-layer row policies exist and fail closed | ✅ | Verified live: `cloud_costs` 0 → 1 policy, 15 → 18 total (F-50) |
-| Every feature ships an isolation test | 🟡 | **PROSE** (CLAUDE.md §3a rule 5). Widely followed, but **no gate proves a new data-returning route has one** |
+| Every feature ships an isolation test | ✅ | **BUILD** — `TestEveryScopedRouteHasIsolationCoverage`: a new scoped route needs a real isolation test or fails the build (§3a rule 5). 82 pre-existing routes baselined, set shrinks only |
 | One tenant's failed write cannot destroy another's data | ✅ | **BUILD** — `TestAITenantConfigFailedSaveDoesNotDestroyOtherTenants` (F-64) |
 | GraphQL enforces the same RBAC as REST | ✅ | **BUILD** — `TestGraphQLEnforcesTheSameRBACGateAsREST` (was an auth bypass) |
 | Ingest ports authenticate the producer | ✅ | **BUILD** — `TestProduceCarriesIngestAuth`; fail-closed config (F-08) |
@@ -158,7 +158,7 @@ An invariant that no gate enforces is a preference.
 ## Standing gaps, ranked
 
 1. **Restore proven for all 3 stores (17/17); OpenSearch repo registered + snapshotting daily.** Off-host DR and disk-sizing are CODE-COMPLETE and 🏷️ **tagged for first-customer validation** — see `docs/runbooks/first-customer-acceptance.md` §9 (TAG:OFFHOST-DR, TAG:F55-DISK). They are deferred, not open: the lab has no off-host store or large disk to finish the proof against; a real customer environment does. Not code. (§1, §7, BACKUP-FAILURE-DOMAIN.md)
-2. **§3a rule 5 is unenforced.** Isolation tests are mandatory in prose; a new route can ship without one. (§6)
+2. ~~**§3a rule 5 is unenforced.**~~ **CLOSED 2026-07-23** — `TestEveryScopedRouteHasIsolationCoverage` fails the build when a NEW scoped route has neither a real HTTP isolation test nor a frozen-baseline entry. Proven to fire on an injected uncovered route. 82 pre-existing scoped routes (store/RLS-covered) are baselined; the set only shrinks as dedicated tests are written. (§6)
 3. **The tenant-create rollback is compile-reviewed only.** F-81's handler deletes a half-created tenant when `operator_restricted` cannot be applied, but `s.tenants` is a concrete `*tenantStore` with no interface seam, so a mid-request failure cannot be injected. Breaking the store path makes the CREATE fail first and the test would pass for the wrong reason — stated in `rca_window_test.go` rather than papered over. Extracting a `tenantRepo` interface is the change that would make it testable. (§7)
 4. **Postgres-dependent paths are compile-reviewed only.** `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE — none executed against a live database. (§3)
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
