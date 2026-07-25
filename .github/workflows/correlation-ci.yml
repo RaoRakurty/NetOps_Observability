@@ -31,6 +31,10 @@ env:
   BANDIT_VERSION: '1.9.4'
   MYPY_VERSION: '2.3.0'
   PIP_AUDIT_VERSION: '2.10.1'
+  # NOTE: ingest-contract-ci and telemetry-catalog-ci pin pytest==9.0.3. This is
+  # 9.1.1 because that is what this workflow last ran GREEN with; aligning the
+  # three is a deliberate bump, not a drive-by edit.
+  PYTEST_VERSION: '9.1.1'
 
 concurrency:
   group: correlation-ci-${{ github.ref }}
@@ -57,7 +61,9 @@ jobs:
           # requirements.txt is hash-locked (SC-011) → pip auto-enables
           # --require-hashes, so it must be installed alone; pytest installs after.
           pip install -r requirements.txt
-          pip install pytest
+          # Pinned for the same reason the linters are (see env): an unpinned
+          # test-runner upgrade can turn a green branch red with no code change.
+          pip install "pytest==${PYTEST_VERSION}"
       - name: pytest
         # The WHOLE suite: this is also the signature-catalog fixture gate
         # (#67 build ④ — every signature needs a passing positive fixture) and

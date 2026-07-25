@@ -1043,12 +1043,22 @@ def main() -> None:
                     choices=["lab", "demo", "production", "extended"],
                     help="correlation history retention profile written to .env "
                          "(#101: hot TTLs + cold Parquet export; default: production)")
-    ap.add_argument("--plan-resources", nargs="?", const="auto", default=None,
+    # #102/#119: DEFAULT-ON, matching the customer bundle (install-correlix.sh
+    # passes --plan-resources unless CORRELIX_NO_SIZING=1). A dev install and a
+    # customer install now size the same way by default, so the sizing path is
+    # exercised continuously instead of only on customer hosts. Opt out with
+    # --no-plan-resources or CORRELIX_NO_SIZING=1.
+    ap.add_argument("--plan-resources", nargs="?", const="auto",
+                    default=("auto" if os.environ.get("CORRELIX_NO_SIZING", "0") != "1" else None),
                     metavar="PROFILE",
                     help="Generate host/workload-derived resource limits into a "
                          "managed .env block via scripts/resource_planner.py (#102). "
                          "PROFILE = demo|small|medium|large|custom; 'auto' (bare "
-                         "flag) picks by detected host RAM. Opt-in this release.")
+                         "flag, and the default) picks by detected host RAM.")
+    ap.add_argument("--no-plan-resources", action="store_const", const=None,
+                    dest="plan_resources",
+                    help="Skip resource planning; keep the static compose defaults "
+                         "(equivalent to CORRELIX_NO_SIZING=1).")
     ap.add_argument("--sizing-file", type=Path, default=None, metavar="YAML",
                     help="correlix-sizing.yaml workload inputs for --plan-resources.")
     ap.add_argument("--replan", action="store_true",
