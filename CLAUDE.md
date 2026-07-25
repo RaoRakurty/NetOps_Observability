@@ -9,6 +9,15 @@ The project source lives under `NetOps_Observability/` (a nested dir of the same
 name). It has its own `README.md` and `docs/`; read those for depth, this file
 is the orientation map and the build/test cheat-sheet.
 
+**Current work state = `docs/TRACKER.md` (open items only) + `docs/audit/INVARIANTS.md`
+(what is PROVEN vs merely built).** Anything under `docs/archive/` is frozen
+history — **never read it to decide what is open, shipped, or next**, only to
+recover the rationale behind a past decision; where it disagrees with
+`docs/TRACKER.md`, the tracker wins. When an item ships, DELETE its tracker row
+rather than marking it ✅ — the archived tracker reached 263 KB because nothing
+was ever removed, and an item filed there as "open research" turned out to have
+shipped months earlier. Verify a premise against the code before building on it.
+
 ---
 
 ## NetOps_Observability
