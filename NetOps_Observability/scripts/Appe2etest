@@ -15,7 +15,7 @@
 #
 # USAGE
 #   ./Appe2etest                         # seed + smoke test (anonymous API checks)
-#   ./Appe2etest -p 'Versa123@'          # also verify 200-level auth'd endpoints
+#   ./Appe2etest -p "$NETOPS_PASS"       # also verify 200-level auth'd endpoints
 #   ./Appe2etest --alert-demo            # additionally fire HighCPU/Memory/Unreachable
 #   ./Appe2etest --no-seed               # smoke test only, don't generate traffic
 #   ./Appe2etest --host 10.1.2.3 -p PW   # target a remote stack
