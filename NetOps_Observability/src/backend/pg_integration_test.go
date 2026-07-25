@@ -15,14 +15,29 @@ package main
 //	  -e POSTGRES_USER=netops -e POSTGRES_PASSWORD=pgpw -e POSTGRES_DB=netops \
 //	  --tmpfs /var/lib/postgresql/data \
 //	  postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
-//	PG_TEST_DSN='postgres://netops:pgpw@localhost:15432/netops' \
-//	  go test -tags=pgintegration -run TestPG ./...
+//	# newPgDB fails CLOSED on a role that bypasses RLS (assertRLSCapable), and
+//	# POSTGRES_USER is a superuser — so connect as a separate NOBYPASSRLS role.
+//	# Connecting as 'netops' aborts every test with "bypasses Row-Level Security".
+//	docker exec -i rdpg psql -U netops -d netops -v ON_ERROR_STOP=1 <<'SQL'
+//	CREATE ROLE netops_app LOGIN PASSWORD 'apppw' NOBYPASSRLS;
+//	GRANT CONNECT, CREATE ON DATABASE netops TO netops_app;
+//	GRANT USAGE, CREATE ON SCHEMA public TO netops_app;
+//	SQL
+//	PG_TEST_DSN='postgres://netops_app:apppw@localhost:15432/netops' \
+//	  go test -tags=pgintegration -count=1 -run TestPG ./...
 //
-// This verifies the mechanism, not tenant isolation (which has its own tests and
-// requires a non-superuser role — see the newPgDB RLS note).
+// Because the role does NOT bypass RLS, the tenant_iso policies are live for the
+// whole run: seeds and counts go through withTenant, and a bare pool query would
+// legitimately see zero rows. That is the production shape, not a test artifact.
+//
+// This verifies the mechanism, not tenant isolation itself (which has its own
+// dedicated tests — see org_isolation_test.go).
+//
+// CI: the `pg-integration` job in .github/workflows/backend-ci.yml.
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -30,6 +45,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 )
+
+// pgIntegrationTenant is the tenant these tests stamp their rows with. Any
+// non-empty value works — the sweeper runs cross-tenant ('*') — but a fixed,
+// obviously-synthetic id keeps a stray row identifiable if one ever escapes a
+// TRUNCATE into a shared database.
+const pgIntegrationTenant = "pgintegration-test-tenant"
 
 func pgDSN(t *testing.T) string {
 	t.Helper()
@@ -206,22 +227,35 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	}
 
 	// 3 OLD rows (100 days) + 2 FRESH rows (today). Retain 30 days.
+	//
+	// Inserted through withTenant, not a bare pool.Exec: audit_events has FORCE
+	// ROW LEVEL SECURITY, and the tenant_iso policy's WITH CHECK reads
+	// current_setting('app.tenant_id'). A raw INSERT on a pooled connection with
+	// no GUC set is refused by the policy — FORCE means the table owner is not
+	// exempt either. withTenant(cross=true) sets the '*' scope the sweeper
+	// itself runs under.
 	old := time.Now().UTC().AddDate(0, 0, -100)
 	fresh := time.Now().UTC()
-	for i := 0; i < 3; i++ {
-		if _, err := db.pool.Exec(ctx,
-			`INSERT INTO audit_events (id, ts, actor, method, path, status, decision)
-			 VALUES (gen_random_uuid(), $1, 'old', 'GET', '/x', 200, 'allow')`, old); err != nil {
-			t.Fatalf("insert old: %v", err)
+	seed := func(n int, ts time.Time, actor string) {
+		t.Helper()
+		if err := db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+			for i := 0; i < n; i++ {
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO audit_events (id, tenant_id, ts, data)
+					 VALUES (gen_random_uuid()::text, $1, $2, $3)`,
+					pgIntegrationTenant, ts,
+					fmt.Sprintf(`{"actor":%q,"method":"GET","path":"/x","status":200,"decision":"allow"}`, actor),
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("insert %s: %v", actor, err)
 		}
 	}
-	for i := 0; i < 2; i++ {
-		if _, err := db.pool.Exec(ctx,
-			`INSERT INTO audit_events (id, ts, actor, method, path, status, decision)
-			 VALUES (gen_random_uuid(), $1, 'fresh', 'GET', '/x', 200, 'allow')`, fresh); err != nil {
-			t.Fatalf("insert fresh: %v", err)
-		}
-	}
+	seed(3, old, "old")
+	seed(2, fresh, "fresh")
 
 	removed, err := sweepAuditRetention(ctx, db, 30)
 	if err != nil {
@@ -230,8 +264,14 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	if removed != 3 {
 		t.Errorf("sweep removed %d rows, want 3 (the old ones only)", removed)
 	}
+	// Counted under the same cross-tenant scope, for the same reason the seed
+	// inserts are: a bare pool query carries no app.tenant_id, so tenant_iso
+	// filters every row out and the count reads 0 whether or not the sweep
+	// behaved.
 	var remaining int
-	if err := db.pool.QueryRow(ctx, "SELECT count(*) FROM audit_events").Scan(&remaining); err != nil {
+	if err := db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT count(*) FROM audit_events").Scan(&remaining)
+	}); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if remaining != 2 {

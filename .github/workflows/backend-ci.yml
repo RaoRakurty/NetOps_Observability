@@ -75,6 +75,55 @@ jobs:
       # ("context deadline exceeded"), and 30s finds little. Run it in a scheduled
       # job (see fuzz-nightly.yml) for real exploration; seeds cover regression.
 
+  pg-integration:
+    name: Postgres integration (blocking)
+    runs-on: ubuntu-latest
+    # INVARIANTS standing gap #4: statement_timeout, the migration advisory lock,
+    # pgAuditStore Count/Offset and sweepAuditRetention's DELETE were
+    # compile-reviewed only — never executed against a live database. These are
+    # build-tagged `pgintegration` so the default `go test ./...` stays hermetic;
+    # this job is the only place they run.
+    services:
+      postgres:
+        # Pinned by digest to the same 16-alpine the test header documents.
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+        env:
+          POSTGRES_USER: netops
+          POSTGRES_PASSWORD: pgpw
+          POSTGRES_DB: netops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netops -d netops"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: create the non-superuser app role
+        # newPgDB fails CLOSED when its role would bypass RLS (assertRLSCapable):
+        # a superuser ignores even FORCE ROW LEVEL SECURITY, which would silently
+        # disable tenant isolation. POSTGRES_USER is a superuser, so the tests
+        # MUST connect as a separate NOBYPASSRLS role — that is also the shape
+        # production runs in, so the tenant_iso policies are genuinely exercised.
+        env:
+          PGPASSWORD: pgpw
+        run: |
+          psql -h localhost -U netops -d netops -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE netops_app LOGIN PASSWORD 'apppw' NOBYPASSRLS;
+          GRANT CONNECT, CREATE ON DATABASE netops TO netops_app;
+          GRANT USAGE, CREATE ON SCHEMA public TO netops_app;
+          SQL
+      - name: go test -tags=pgintegration
+        env:
+          PG_TEST_DSN: postgres://netops_app:apppw@localhost:5432/netops
+        # -count=1 so a cached PASS can never stand in for a real run.
+        run: go test -tags=pgintegration -count=1 -timeout 10m -run TestPG ./...
+
   vuln:
     name: govulncheck (blocking)
     runs-on: ubuntu-latest
