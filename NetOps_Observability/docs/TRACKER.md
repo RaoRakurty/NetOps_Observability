@@ -61,7 +61,6 @@ ignores them.
 | # | Item | Pri | Status |
 |---|------|-----|--------|
 | 114 | **Kubernetes deployment packaging** — Helm chart over the 19-service stack (StatefulSets + PVCs for CH/OS/PG/Kafka), per-service requests from `RESOURCE_SIZING.md`, ingress replacing nginx, secrets from the installer `.env` contract, air-gapped image bundle for k8s registries, CI packaging leg alongside `make-installer.sh`. Customers get single-host artifacts only today. | High | ⏳ not started — confirmed absent 2026-07-20; **a project, not a task** |
-| 116 | **Extract a `tenantRepo` interface** — INVARIANTS gap #3: the F-81 tenant-create rollback is compile-reviewed only because `s.tenants` is a concrete `*tenantStore` with no seam, so mid-request failure cannot be injected. The fix is named in the gap itself. Most tractable of the invariant gaps. | High | ⏳ not started |
 | 117 | **250 deferred ruff findings** — `618b87b8` pinned ruff to 0.15.22 to restore determinism after an unpinned upgrade turned CI red. That defers the new rules, it does not resolve them; `ruff check --fix` handles 197 automatically. Do this BEFORE the next deliberate ruff bump. | Med | ⏳ not started |
 | 118 | **echarts XSS (GHSA-fgmj-fm8m-jvvx)** — moderate, so `npm audit --audit-level=high` does not block it, but it is an XSS in the library rendering the dashboard. Fix is echarts 6.x, a breaking major: needs a planned migration, not `audit fix --force`. | Med | ⏳ not started |
 | 120 | **#105 T5 prep — counter-verification harness** from the `docs/design/cloud-provider-parity.md` acceptance drills, built now so the drills run the moment O1/O2 land instead of after. | Med | ⏳ not started |
@@ -101,7 +100,7 @@ ignores them.
 | Gap | State |
 |-----|-------|
 | #1 Off-host DR / disk sizing | Deferred to first customer (above) |
-| #3 Tenant-create rollback compile-reviewed only | → item **116** |
+| #3 Tenant-create rollback compile-reviewed only | CLOSED 2026-07-26 (item 116) — `s.tenants` is now the `tenantRepo` interface; `failRestrictRepo` injects the mid-request failure and both F-81 rollbacks (create + onboard) are exercised end-to-end, proven to fire |
 | #4 Postgres paths compile-reviewed only | CLOSED 2026-07-25 (`33cb45f2`) — the `pg-integration` job in `backend-ci.yml` runs them against a pinned postgres:16-alpine |
 | #5 `go test -race` runs only in CI | No local gate; the sandboxes used had no cgo |
 | #6 Documented env switches unverified as a class | One was found lying; nothing checks the rest |

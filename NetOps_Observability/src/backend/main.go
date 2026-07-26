@@ -52,7 +52,7 @@ type server struct {
 	selfHeal         *selfHealer
 	users            usersRepo
 	roles            *roleStore
-	tenants          *tenantStore
+	tenants          tenantRepo
 	orgs             *orgStore
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore

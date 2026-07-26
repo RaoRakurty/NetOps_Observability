@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -132,26 +133,76 @@ func TestTenantCreateAppliesOperatorRestricted(t *testing.T) {
 
 // The error the handler must surface has to EXIST first. This is the store-level
 // half of F-81: SetOperatorRestricted returns a real error on a failed persist.
-//
-// Honest limitation, stated rather than papered over: the handler's rollback
-// (delete the tenant, return 500) cannot be exercised end-to-end here. Breaking
-// the store path makes the tenant CREATE fail first, so the request never
-// reaches the restriction code — an assertion of "not 201" would pass
-// vacuously, for the wrong reason. `s.tenants` is a concrete *tenantStore, not
-// an interface, so there is no seam to inject a mid-request failure. The
-// rollback is compile-reviewed only; extracting a tenantRepo interface is the
-// change that would make it testable.
 func TestSetOperatorRestrictedReportsAPersistFailure(t *testing.T) {
 	_, s := newTestServerState(t)
 	tn, err := s.tenants.Create("Private Co", "", "", "", "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	s.tenants.path = "/proc/self/no/such/dir/tenants.json"
+	// Break the persist path on the CONCRETE store (the seam is an interface;
+	// this store-level test deliberately reaches through it).
+	st, ok := s.tenants.(*tenantStore)
+	if !ok {
+		t.Fatalf("test server tenants is %T, want *tenantStore", s.tenants)
+	}
+	st.path = "/proc/self/no/such/dir/tenants.json"
 
 	if _, err := s.tenants.SetOperatorRestricted(tn.ID, true); err == nil {
 		t.Fatal("SetOperatorRestricted must return a persist failure — the handler " +
 			"discarded this error (F-81) and returned 201 with the privacy switch OFF")
+	}
+}
+
+// failRestrictRepo delegates everything to the real store but fails
+// SetOperatorRestricted — the mid-request failure INVARIANTS gap #3 said could
+// not be injected while `s.tenants` was a concrete *tenantStore: the CREATE
+// succeeds, only the later privacy write fails, so the handler's rollback path
+// is what actually runs.
+type failRestrictRepo struct {
+	tenantRepo
+}
+
+func (f *failRestrictRepo) SetOperatorRestricted(ref string, restricted bool) (Tenant, error) {
+	return Tenant{}, errors.New("injected: persist failed after the tenant was created")
+}
+
+// The handler-level half of F-81, end-to-end: when the privacy control cannot
+// be applied, POST /api/tenants must return 500 AND remove the half-created
+// tenant — never leave one that is exposed while believed to be restricted.
+func TestTenantCreateRollsBackWhenRestrictionFails(t *testing.T) {
+	srv, s := newTestServerState(t)
+	real := s.tenants
+	s.tenants = &failRestrictRepo{tenantRepo: real}
+	tok, _ := loginFor(t, srv.URL)
+
+	code, out := postJSONAuth(t, srv.URL+"/api/tenants", tok,
+		`{"name":"Private Co","operator_restricted":true}`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("create = %d, want 500 — a failed privacy control must not report success (body %v)", code, out)
+	}
+	if tn, ok := real.Resolve("private-co"); ok {
+		t.Fatalf("tenant %s still exists after the rollback — exposed and believed restricted", tn.ID)
+	}
+}
+
+// Same failure injected into POST /api/onboard: the rollback must remove BOTH
+// the tenant and the org, or a failed onboard leaves a tenant-less org shell.
+func TestOnboardRollsBackWhenRestrictionFails(t *testing.T) {
+	srv, s := newTestServerState(t)
+	real := s.tenants
+	s.tenants = &failRestrictRepo{tenantRepo: real}
+	tok, _ := loginFor(t, srv.URL)
+
+	code, out := postJSONAuth(t, srv.URL+"/api/onboard", tok,
+		`{"org_name":"Acme","tenant_name":"Acme Prod","operator_restricted":true}`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("onboard = %d, want 500 (body %v)", code, out)
+	}
+	if tn, ok := real.Resolve("acme-prod"); ok {
+		t.Fatalf("tenant %s still exists after the onboard rollback", tn.ID)
+	}
+	if o, ok := s.orgs.Resolve("acme"); ok {
+		t.Fatalf("org %s still exists after the onboard rollback — a tenant-less shell", o.ID)
 	}
 }
 

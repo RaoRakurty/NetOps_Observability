@@ -87,11 +87,33 @@ func (t Tenant) status() string {
 	return t.Status
 }
 
+// tenantRepo is the seam the server depends on for tenant state. It exists so a
+// mid-request failure can be injected in tests (INVARIANTS gap #3: the F-81
+// tenant-create rollback was compile-reviewed only while `s.tenants` was a
+// concrete *tenantStore). *tenantStore is the production implementation; tests
+// may wrap it to fail a single method while the rest keep working.
+type tenantRepo interface {
+	List() []Tenant
+	Get(ref string) (Tenant, bool)
+	Resolve(ref string) (Tenant, bool)
+	ListByOrg(orgID string) []Tenant
+	CountByOrg(orgID string) int
+	restrictedIDs() []string
+	Create(name, slug, note, isolationMode, orgID string) (Tenant, error)
+	Delete(ref string) error
+	SetRegion(ref, region string) (Tenant, error)
+	SetDefaultLanding(ref, route string) (Tenant, error)
+	SetOperatorRestricted(ref string, restricted bool) (Tenant, error)
+	SetStatus(ref, status string) (Tenant, error)
+}
+
 type tenantStore struct {
 	mu      sync.RWMutex
 	path    string
 	tenants map[string]Tenant
 }
+
+var _ tenantRepo = (*tenantStore)(nil)
 
 func newTenantStore(path string) (*tenantStore, error) {
 	if path == "" {
