@@ -45,6 +45,14 @@ ignores them.
   fixture, or keep tracked?
 - **O6 · Decision:** 8 stale agent worktrees under `.claude/worktrees/` (890 MB,
   each on an unmerged branch with commits). Merge or drop, per branch.
+- **O7 · Wireless hardware (Q8, item 128):** any WLC + AP + client — lab,
+  loaner, or first customer. Blocks Phase 9 live validation, the doc_claimed→
+  live fidelity promotion, and the first real remediation executor. Everything
+  else in the wireless programme shipped without it.
+- **O8 · Wireless PII decisions (Q4/Q5, item 128):** client-MAC retention
+  length + pseudonymization point, and whether per-user location history is
+  Sensitive or Restricted. Blocks the client-history Iris tools (deliberately
+  unregistered until decided).
 
 ---
 
@@ -61,7 +69,7 @@ ignores them.
 | 123 | **`docs-portal` advisory triage** — 46 npm advisories (14 high). Only 2 were Trivy-visible (`ignore-unfixed: true`) and are fixed. Triage the rest so what is deferred is deferred knowingly. | Low | ⏳ not started |
 | 124 | **Notification hook swallows every error** — the `.claude/settings.local.json` Notification hook ends in `2>/dev/null \|\| true`, the §16.1 cardinal rule violated in our own tooling. If the ntfy push dies, nothing reports it. | Low | ⏳ not started |
 | 127 | **Guard the conditional CH exclusions** — Phase 6 skipped Distributed-table and `async_insert` integration cases because the repo uses neither (verified 0 of each). True today, silent tomorrow: add a guard asserting those counts stay zero, so introducing either trips a test instead of quietly opening a coverage hole. | Low | ⏳ not started |
-| 128 | **Wireless as a native Correlix access domain** — the owner's 55-page spec (`docs/Correlix-Wireless-Architecture.pdf`); report `docs/Wireslessdesign.md` **SIGNED OFF 2026-07-26** with Q1 RF=-1, Q2 hard token guard, Q3 reuse Source.CONTROLLER, Q7 dedicated topics. Phases 1–4 SHIPPED (canonical model + migration 0030 · Catalyst 9800 connector, doc_claimed · correlation integration, 9 signatures · onboarding episodes + session lane + the #126 manual-commit prerequisite). Remaining: Phase 5 multi-vendor proof fixtures · 6 Iris module · 7 UI · 8 guarded remediation (default-off) · Phase 9 live validation **blocked on hardware (Q8/O-item)**. Supersedes the parked WiFi skeleton in `multi-vendor-wifi-expansion.md` §3. | High | 🟡 in build — Phases 1–4 landed 2026-07-26 |
+| 128 | **Wireless — Phase 9 live validation + the doc_claimed→lab/live fidelity ladder.** Phases 1–8 SHIPPED 2026-07-26 (report `docs/Wireslessdesign.md` signed off; canonical model + mig 0030 · Catalyst 9800 connector · correlation integration RF=-1 + 9 signatures · onboarding/session lanes + #126 fix · 9-model architecture proof · Iris module · UI · guarded remediation, five gates fail-closed, `FEATURE_WIRELESS_ACTIONS=false`). OPEN: **Phase 9 needs hardware (Q8 — a WLC + AP + client; owner decision O7)**: verify the Cisco-IOS-XE-wireless-* leaf spellings the connector authored doc_claimed, run the physical fault-injection battery (report §23), promote fidelity, then build the first real action executor behind gate 4 (which fails closed until it exists). Follow-ons unblocked but not started: Aruba/Meraki/Mist connectors over the proven model; client-history Iris tools once the pseudonymization contract (Q4/Q5) is decided. | High | 🟡 Phases 1–8 shipped; Phase 9 blocked on hardware |
 | 125 | **Stale customer bundle** — the pre-push hook warns on every push; `make bundle` when ready to ship. Note `6092adce` deliberately took this off its daily cron per §16.4, so rebuild is event-driven and manual by design. | Low | ⏳ not started |
 
 ---
