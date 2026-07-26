@@ -21,6 +21,7 @@ serve /findings) stays stable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import glob
 import json
@@ -67,6 +68,11 @@ from cloud_log_parsers import (
 from cloud_producers import cloud_signal_from_event
 from app_producers import app_identity_from_event
 from controller_events import controller_event_to_signal
+from wireless_onboarding import (
+    assemble_episode as assemble_wireless_episode,
+    client_identity as wo_client_identity,
+    episode_signal as wireless_episode_signal,
+)
 from verification_producer import verification_signal_from_event
 from producers import (
     clock_skew_signal,
@@ -109,7 +115,11 @@ CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
-TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification"]
+TOPICS = ["netops.syslog", "netops.flows", "netops.metrics", "netops.probes", "netops.snmptrap", "netops.cloud", "netops.app.identities.v1", "netops.controller_events", "netops.app.edge", "netops.verification",
+          # #128 Q7: DEDICATED wireless topics — session records and onboarding
+          # observations must not starve SD-WAN/fabric controller events on a
+          # shared partition set (wireless is the highest-volume producer).
+          "netops.wireless_sessions", "netops.wireless_events"]
 
 # #81 P3B runtime source — a file-based cloud-log tailer (dev/demo + on-host log
 # drops). Reads *.alb / *.vpc files from CLOUD_LOGS_DIR, parses them with the P3B
@@ -280,6 +290,9 @@ CONTROLLER_EVENTS_DROPPED = 0   # dropped: no tenant/kind identity (default-clos
 VERIFICATION_RECEIVED = 0       # consumed from netops.verification (RCA spec item 8 lane)
 VERIFICATION_SIGNALS = 0        # source=verification signals written to corr_signals + buffered
 VERIFICATION_DROPPED = 0        # dropped: no tenant/device identity or skipped (default-closed)
+WIRELESS_RECEIVED = 0           # #128: wireless session/event records received
+WIRELESS_SIGNALS = 0            # #128: onboarding-failure signals emitted
+WIRELESS_DROPPED = 0            # #128: dropped — no tenant/identity (default-closed)
 APP_ID_DROPPED = 0            # dropped: no tenant (default-closed) / malformed (dead-letter)
 PROBES_RECEIVED = 0           # consumed from netops.probes (the 24/7 heartbeat lane — R6 flatline alert)
 APP_EDGE_RECEIVED = 0         # consumed from netops.app.edge (#98 P5 LB/proxy/ingress lane)
@@ -1835,6 +1848,11 @@ async def cloud_log_tailer() -> None:
 # the process looked healthy).
 CONSUMER_STOP_TIMEOUT_S = float(os.environ.get("CONSUMER_STOP_TIMEOUT_S", "30"))
 CONSUMER_START_TIMEOUT_S = float(os.environ.get("CONSUMER_START_TIMEOUT_S", "90"))
+# Tracker #126: manual-commit batching. Replay-after-crash is bounded to at
+# most N already-HANDLED messages (dedup tokens absorb the redelivery); an
+# unhandled offset is never committed.
+CORR_COMMIT_EVERY_N = int(os.environ.get("CORR_COMMIT_EVERY_N", "100"))
+CORR_COMMIT_EVERY_S = float(os.environ.get("CORR_COMMIT_EVERY_S", "5"))
 
 
 async def _stop_bounded(consumer) -> None:
@@ -1982,11 +2000,36 @@ async def consume() -> None:
             group_id="netops-correlation",
             auto_offset_reset="latest",
             value_deserializer=lambda v: json.loads(v.decode("utf-8")) if v else None,
-            enable_auto_commit=True,
+            # Tracker #126 (write-integrity criterion 8): offsets advance ONLY
+            # after the handler returned — never on a timer that runs ahead of
+            # the outcome. Auto-commit could commit an offset whose handler then
+            # crashed BEFORE the durable-DLQ append, losing the event silently.
+            # A quarantined event counts as handled (its payload is preserved);
+            # redelivery after a crash is safe because every critical insert
+            # carries the Phase-3 dedup token (set_dedup_coord below).
+            enable_auto_commit=False,
         )
+        # Batched manual commit: per-message commits would round-trip the broker
+        # on every event. Committing every N/T bounds replay after a crash to at
+        # most N already-handled messages — which dedup absorbs.
+        uncommitted = 0
+        last_commit = time.monotonic()
+
+        async def _commit(force: bool = False) -> None:
+            nonlocal uncommitted, last_commit
+            if uncommitted == 0:
+                return
+            if not force and uncommitted < CORR_COMMIT_EVERY_N \
+                    and (time.monotonic() - last_commit) < CORR_COMMIT_EVERY_S:
+                return
+            await asyncio.wait_for(consumer.commit(), timeout=CONSUMER_STOP_TIMEOUT_S)
+            uncommitted = 0
+            last_commit = time.monotonic()
+
         try:
             await asyncio.wait_for(consumer.start(), timeout=CONSUMER_START_TIMEOUT_S)
-            log.info("consuming topics=%s bootstrap=%s", TOPICS, KAFKA_BOOTSTRAP)
+            log.info("consuming topics=%s bootstrap=%s (manual commit, N=%d/T=%.0fs)",
+                     TOPICS, KAFKA_BOOTSTRAP, CORR_COMMIT_EVERY_N, CORR_COMMIT_EVERY_S)
             backoff = 1.0
             consecutive_failures = 0
             async for msg in consumer:
@@ -2008,13 +2051,24 @@ async def consume() -> None:
                     # dependency (ClickHouse down). Tolerating those at full
                     # consume rate would quarantine the entire stream; hand it
                     # back to the supervisor so its backoff applies pressure.
+                    # The quarantined message itself IS handled (payload kept)
+                    # — commit through it so restart resumes AFTER it instead
+                    # of replaying the poison forever.
                     if consecutive_failures >= CORR_QUARANTINE_BURST_MAX:
+                        uncommitted += 1
+                        await _commit(force=True)
                         raise
+                uncommitted += 1
+                await _commit()
         except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await _commit(force=True)  # clean shutdown: nothing replays
             await _stop_bounded(consumer)
             raise
         except Exception:                                  # noqa: BLE001
             log.exception("consumer failed; restarting in %.0fs", backoff)
+            # NO commit here beyond what _commit already advanced: an offset
+            # whose handler did not return stays unacknowledged, by design.
         await _stop_bounded(consumer)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
@@ -2044,6 +2098,10 @@ async def handle(topic: str, event: dict | None) -> None:
         await handle_app_edge(event)
     elif topic == "netops.verification":
         await handle_verification(event)
+    elif topic == "netops.wireless_sessions":
+        await handle_wireless_session(event)
+    elif topic == "netops.wireless_events":
+        await handle_wireless_event(event)
 
 
 def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | None:
@@ -2431,6 +2489,143 @@ async def handle_verification(ev: dict) -> None:
     VERIFICATION_SIGNALS += 1
     buffer_signal(sig)
     log.info("verification signal %s %s: %s", sig.kind, sig.attrs.get("check", ""), sig.entity_id)
+
+
+async def handle_wireless_session(ev: dict) -> None:
+    """Wireless client-session record (netops.wireless_sessions, #128 Phase 4)
+    → netops.wireless_sessions CH row (+ MLO link rows). PURELY the per-client
+    event tier: session records are troubleshooting data and NEVER become
+    engine signals (the §20 volume rule — onboarding FAILURES are the signal
+    lane, handle_wireless_event). Tenancy explicit, default-closed. A non-MLO
+    client is an MLO client with one link (report §10): a session with no
+    links list still writes one implicit link row so every query works
+    against wireless_mlo_links from day one."""
+    global WIRELESS_RECEIVED, WIRELESS_DROPPED
+    WIRELESS_RECEIVED += 1
+    if ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    session_id = str(ev.get("session_id") or "")
+    client_mac = str(ev.get("client_mac") or "")
+    bssid = str(ev.get("bssid") or "")
+    if not tenant or not session_id or not client_mac or not bssid:
+        WIRELESS_DROPPED += 1
+        log.warning("wireless session dropped: missing identity (tenant=%r session=%r)",
+                    tenant, session_id)
+        return
+    cid, confidence, method = wo_client_identity(
+        tenant, client_mac,
+        eap_cn=str(ev.get("eap_cn") or ""), username=str(ev.get("username") or ""),
+        dhcp_client_id=str(ev.get("dhcp_client_id") or ""), session_seed=session_id)
+    links = ev.get("links") or []
+    row = {
+        "tenant_id": tenant, "session_id": session_id,
+        "client_mac": client_mac.lower(),
+        "mld_mac": str(ev.get("mld_mac") or client_mac).lower(),
+        "client_id": cid, "identity_confidence": confidence, "identity_method": method,
+        "bssid": bssid.lower(), "ap_ref": str(ev.get("ap_ref") or ""),
+        "radio_ref": str(ev.get("radio_ref") or ""),
+        "wlan_ref": str(ev.get("wlan_ref") or ""),
+        "ssid_name": str(ev.get("ssid_name") or ""),
+        "username": str(ev.get("username") or ""),
+        "ip_v4": str(ev.get("ip_v4") or ""), "ip_v6": str(ev.get("ip_v6") or ""),
+        "is_mlo": bool(ev.get("is_mlo") or len(links) > 1),
+        "link_count": max(1, len(links)),
+        "assoc_start": int(ev.get("assoc_start_ms") or 0),
+        "assoc_end": int(ev["assoc_end_ms"]) if ev.get("assoc_end_ms") else None,
+        "end_reason": str(ev.get("end_reason") or ""),
+        "observer_id": str(ev.get("observer_id") or ""),
+        "collection_path": str(ev.get("collection_path") or "via_controller"),
+        "data_class": str(ev.get("data_class") or "live"),
+    }
+    await ch_insert("netops.wireless_sessions", [row], lane="wireless")
+    link_rows = []
+    for i, ln in enumerate(links if links else [{}]):
+        link_rows.append({
+            "tenant_id": tenant,
+            "link_id": f"{session_id}|{i}",
+            "session_ref": session_id, "link_index": i,
+            "band": str(ln.get("band") or ""),
+            "radio_ref": str(ln.get("radio_ref") or ev.get("radio_ref") or ""),
+            "bssid_ref": str(ln.get("bssid") or bssid).lower(),
+            "link_state": str(ln.get("link_state") or "active"),
+            "rssi_dbm": float(ln.get("rssi_dbm") or 0),
+            "snr_db": float(ln.get("snr_db") or 0),
+            "mcs": int(ln.get("mcs") or 0), "nss": int(ln.get("nss") or 0),
+            "channel": int(ln.get("channel") or 0),
+            "channel_width_mhz": int(ln.get("channel_width_mhz") or 0),
+            "valid_from": int(ev.get("assoc_start_ms") or 0),
+            "data_class": str(ev.get("data_class") or "live"),
+        })
+    await ch_insert("netops.wireless_mlo_links", link_rows, lane="wireless")
+
+
+async def handle_wireless_event(ev: dict) -> None:
+    """Wireless onboarding/roam observations (netops.wireless_events, #128
+    Phase 4). `type=onboarding` events assemble an applicability-aware episode
+    (wireless_onboarding.py): the EPISODE always lands in ClickHouse; only a
+    terminal failure/degraded emits ONE engine signal at the terminal phase's
+    kind (§20 — successes never enter the window). `type=roam` events write
+    the deduped roam row (both APs may report one roam; the deterministic
+    roam_id collapses them)."""
+    global WIRELESS_RECEIVED, WIRELESS_SIGNALS, WIRELESS_DROPPED
+    WIRELESS_RECEIVED += 1
+    if ch is None:
+        return
+    tenant = str(ev.get("tenant_id") or "")
+    if not tenant:
+        WIRELESS_DROPPED += 1
+        return
+    etype = str(ev.get("type") or "")
+    if etype == "onboarding":
+        client_mac = str(ev.get("client_mac") or "")
+        bssid = str(ev.get("bssid") or "")
+        start_ms = int(ev.get("attempt_start_ms") or 0)
+        if not client_mac or not bssid or not start_ms:
+            WIRELESS_DROPPED += 1
+            return
+        ep = assemble_wireless_episode(
+            tenant, client_mac, bssid, str(ev.get("ap_ref") or ""),
+            dict(ev.get("wlan") or {}), dict(ev.get("observations") or {}),
+            datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc),
+            str(ev.get("observer_id") or ""),
+            wlan_ref=str(ev.get("wlan_ref") or ""),
+            data_class=str(ev.get("data_class") or "live"))
+        await ch_insert("netops.wireless_onboarding_episodes", [ep.to_ch_row()],
+                        lane="wireless")
+        sig = wireless_episode_signal(ep)
+        if sig is not None and CORR_SIGNALS_ENABLED:
+            await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="wireless")
+            WIRELESS_SIGNALS += 1
+            buffer_signal(sig)
+            log.info("wireless onboarding signal %s: %s", sig.kind, sig.entity_id)
+    elif etype == "roam":
+        client_mac = str(ev.get("client_mac") or "").lower()
+        to_bssid = str(ev.get("to_bssid") or "").lower()
+        ts_ms = int(ev.get("ts_ms") or 0)
+        if not client_mac or not to_bssid or not ts_ms:
+            WIRELESS_DROPPED += 1
+            return
+        # Deterministic roam id: both the old and new AP may report this roam;
+        # bucketing ts to the report-uncertainty window collapses the pair.
+        bucket = ts_ms // 5000
+        roam_id = f"{client_mac}|{to_bssid}|{bucket}"
+        await ch_insert("netops.wireless_roams", [{
+            "tenant_id": tenant, "roam_id": roam_id, "client_mac": client_mac,
+            "session_ref": str(ev.get("session_ref") or ""),
+            "from_bssid": str(ev.get("from_bssid") or "").lower(),
+            "to_bssid": to_bssid,
+            "from_ap_ref": str(ev.get("from_ap_ref") or ""),
+            "to_ap_ref": str(ev.get("to_ap_ref") or ""),
+            "roam_type": str(ev.get("roam_type") or "unknown"),
+            "duration_ms": int(ev.get("duration_ms") or 0),
+            "ts": ts_ms,
+            "observer_id": str(ev.get("observer_id") or ""),
+            "collection_path": str(ev.get("collection_path") or "via_controller"),
+            "data_class": str(ev.get("data_class") or "live"),
+        }], lane="wireless")
+    else:
+        WIRELESS_DROPPED += 1
 
 
 async def handle_cloud(ev: dict) -> None:

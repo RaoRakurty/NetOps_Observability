@@ -98,3 +98,72 @@ def test_hung_start_never_wedges_the_supervisor(monkeypatch):
         return await _run_until(reached_second, timeout=5.0)
 
     assert asyncio.run(scenario()), "supervisor wedged on hung consumer.start()"
+
+
+def test_offsets_commit_only_after_handling(monkeypatch):
+    """Tracker #126 (write-integrity criterion 8): offsets advance ONLY behind
+    the handler. A handled message commits (batched); a message whose handler
+    dies before returning is NEVER committed past — the restart replays it."""
+    monkeypatch.setattr(main, "CONSUMER_STOP_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(main, "CONSUMER_START_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_N", 1)   # commit every message
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_S", 0.0)
+    monkeypatch.setattr(main, "CORR_QUARANTINE_BURST_MAX", 10_000)
+
+    class Msg:
+        topic, partition, offset = "netops.metrics", 0, 0
+        value = {"k": 1}
+
+    commits: list[int] = []
+    handled: list[int] = []
+
+    async def fake_handle(topic, event):
+        handled.append(1)
+        if len(handled) == 3:
+            # Simulate death BEFORE the outcome is durable — this message's
+            # offset must not be committed. (CancelledError passes straight
+            # through the per-event isolation, like a real crash/shutdown.)
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(main, "handle", fake_handle)
+
+    async def scenario() -> bool:
+        done = asyncio.Event()
+
+        class Scripted(FakeConsumer):
+            created = []
+
+            def __init__(self, *topics, **kwargs):
+                super().__init__(*topics, **kwargs)
+                assert kwargs.get("enable_auto_commit") is False, (
+                    "#126: auto-commit must be OFF")
+                self.sent = 0
+
+            async def commit(self):
+                commits.append(len(handled))
+
+            async def __anext__(self):
+                self.sent += 1
+                if self.sent > 3:
+                    done.set()
+                    await asyncio.sleep(3600)
+                return Msg()
+
+        monkeypatch.setattr(main, "AIOKafkaConsumer", Scripted)
+        task = asyncio.create_task(main.consume())
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        return True
+
+    assert asyncio.run(scenario())
+    # Messages 1 and 2 were handled and committed; message 3's handler died
+    # mid-flight, so no commit may reflect it as handled.
+    assert commits, "handled messages must commit"
+    assert max(commits) == 2, (
+        f"an unhandled message's offset leaked into a commit: {commits}")
