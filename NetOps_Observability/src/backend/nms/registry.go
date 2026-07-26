@@ -33,6 +33,9 @@ func NewRegistry() *Registry {
 	}
 	reg("meraki", MerakiAuth{}, merakiPoller(), MerakiWebhook{}, MerakiTransformer{})
 	reg("catalyst_center", CatalystAuth{}, catalystPoller(), nil, CatalystTransformer{})
+	// catalyst_9800 is the WIRELESS WLC source (#128) — RESTCONF oper/cfg data,
+	// distinct from catalyst_center's assurance issues.
+	reg("catalyst_9800", Catalyst9800Auth{}, catalyst9800Poller(), nil, Catalyst9800Transformer{})
 	// vmanage uses the shape-routing transformer so BOTH lanes work through the
 	// single Transformer seam: alarms → events/states, approute → metrics.
 	reg("vmanage", VManageAuth{}, vmanagePoller(), nil, VManageAutoTransformer{})

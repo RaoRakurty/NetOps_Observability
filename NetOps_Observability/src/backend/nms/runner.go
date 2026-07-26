@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"netops/backend/wireless"
 )
 
 // runner.go — the connector runtime driver: a rate-limited, retrying HTTP Doer
@@ -88,6 +90,7 @@ type Routed struct {
 	Events       []ControllerEvent // deduped, ready for netops.controller_events
 	States       []StateRecord     // EVERY state applied this batch (first sightings + refreshes) — persist these
 	StateChanges []StateChange     // the subset that TRANSITIONED — emit these as change-events
+	Wireless     *wireless.Inventory // canonical wireless inventory (#128) — upserted by the scheduler
 }
 
 // Pipeline routes normalized batches: dedupes events, folds state (flap
@@ -120,5 +123,9 @@ func (p *Pipeline) Route(b Batch) Routed {
 		}
 	}
 	out.Events = p.Seen.DedupeEvents(b.Events)
+	if !b.Wireless.Empty() {
+		out.Wireless = &wireless.Inventory{}
+		out.Wireless.Merge(b.Wireless)
+	}
 	return out
 }

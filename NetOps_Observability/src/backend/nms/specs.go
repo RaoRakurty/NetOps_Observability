@@ -36,6 +36,29 @@ func Specs() map[string]ConnectorSpec {
 			Streams:     []string{"assurance_issues", "inventory", "events"},
 			DefaultPoll: 5 * time.Minute,
 		},
+		"catalyst_9800": {
+			Vendor: "catalyst_9800", Product: "Cisco Catalyst 9800 WLC", SourceSystem: "catalyst_9800",
+			SupportedAuth: []AuthKind{AuthBasic}, // RESTCONF = HTTP Basic (RFC 8040); no OAuth on IOS-XE
+			PreferredAuth: AuthBasic,
+			Poll:          true,
+			Streams:       []string{"wireless_aps", "wireless_radios", "wireless_wlans", "wireless_clients", "wireless_rf"},
+			// Poll budget (#128 report §14): inventory-class streams are cheap;
+			// per-client detail deliberately is NOT a stream here. 5 min default
+			// keeps a 500-AP estate well under WLC rate limits.
+			DefaultPoll: 5 * time.Minute,
+			// EVERY capability is doc_claimed (report B7: no live 9800 exists;
+			// the ladder is earned, never assumed). Absent = FidelityNone.
+			Capabilities: []CapabilityDecl{
+				{CapAPInventory, FidelityDocClaimed, 5 * time.Minute, "Cisco-IOS-XE-wireless-access-point-oper: capwap-data"},
+				{CapRadioState, FidelityDocClaimed, 5 * time.Minute, "Cisco-IOS-XE-wireless-access-point-oper: radio-oper-data"},
+				{CapChannelUtil, FidelityDocClaimed, 5 * time.Minute, "Cisco-IOS-XE-wireless-rrm-oper: rrm-measurement/load"},
+				{CapClientSessions, FidelityDocClaimed, 0, "Cisco-IOS-XE-wireless-client-oper: common-oper-data — counts only until Phase 4"},
+				{CapAPUplinkMapping, FidelityNone, 0, "not in the wireless oper models — uplink comes from switch-side LLDP/CDP (the rank-1 join)"},
+				{CapRoamEvents, FidelityNone, 0, "mobility oper model not yet mapped — do not claim"},
+				{CapOnboardingFailures, FidelityNone, 0, "reason detail comes from syslog (Phase 4), not RESTCONF"},
+				{CapMLOLinks, FidelityNone, 0, "Wi-Fi 7 MLO oper model not yet mapped — do not claim"},
+			},
+		},
 		"vmanage": {
 			Vendor: "vmanage", Product: "Cisco Catalyst SD-WAN Manager", SourceSystem: "vmanage",
 			SupportedAuth: []AuthKind{AuthBasic, AuthToken, AuthSession},

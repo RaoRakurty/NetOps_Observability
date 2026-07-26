@@ -1,0 +1,28 @@
+{
+  "Cisco-IOS-XE-wireless-access-point-oper:capwap-data": [
+    {
+      "wtp-mac": "a8:66:7f:04:00:01",
+      "ip-addr": "10.20.30.11",
+      "name": "AP-Floor1-East",
+      "ap-operation-state": "registered",
+      "device-detail": {
+        "static-info": {
+          "board-data": { "wtp-serial-num": "FCW1234L0AB" },
+          "ap-models": { "model": "C9130AXI-B" }
+        }
+      }
+    },
+    {
+      "wtp-mac": "a8:66:7f:04:00:02",
+      "ip-addr": "10.20.30.12",
+      "name": "AP-Floor1-West",
+      "ap-operation-state": "disjoined",
+      "device-detail": {
+        "static-info": {
+          "board-data": { "wtp-serial-num": "FCW1234L0AC" },
+          "ap-models": { "model": "C9130AXI-B" }
+        }
+      }
+    }
+  ]
+}

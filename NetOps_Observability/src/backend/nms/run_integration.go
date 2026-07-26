@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"netops/backend/wireless"
 )
 
 // run_integration.go — the poll-cycle driver. Given a connector + its config +
@@ -94,6 +96,12 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			res.Routed.Events = append(res.Routed.Events, routed.Events...)
 			res.Routed.States = append(res.Routed.States, routed.States...)
 			res.Routed.StateChanges = append(res.Routed.StateChanges, routed.StateChanges...)
+			if routed.Wireless != nil {
+				if res.Routed.Wireless == nil {
+					res.Routed.Wireless = &wireless.Inventory{}
+				}
+				res.Routed.Wireless.Merge(routed.Wireless)
+			}
 		}
 		res.Checkpoints[stream] = next
 		_ = cps.Save(ctx, cfg.Tenant, cfg.IntegrationID, stream, next)

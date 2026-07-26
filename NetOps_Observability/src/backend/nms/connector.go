@@ -50,6 +50,10 @@ type ConnectorSpec struct {
 	DefaultPoll   time.Duration // recommended poll interval
 	// RatePerSec bounds outbound calls (0 = connector default). E.g. Meraki 10/s.
 	RatePerSec float64
+	// Capabilities declares what the vendor can actually report and how proven
+	// each mapping is (capability.go, #128). Absent capability = FidelityNone
+	// (fail closed): "not observable here", never assumed healthy.
+	Capabilities []CapabilityDecl
 }
 
 // SupportsAuth reports whether the connector implements an auth kind.

@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/wireless"
 )
 
 // SignalClass is the routing decision every normalized datum carries. A
@@ -125,6 +127,10 @@ type Batch struct {
 	Metrics []ControllerMetric
 	States  []ControllerState
 	Events  []ControllerEvent
+	// Wireless carries canonical-inventory discoveries (#128 Phase 2): a
+	// fourth, vendor-neutral output class for connectors that observe wireless
+	// entities. Nil for every non-wireless connector.
+	Wireless *wireless.Inventory
 }
 
 // DedupeKey computes a stable dedupe key from the identity-bearing parts of an

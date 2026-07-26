@@ -1,0 +1,5 @@
+{
+  "Cisco-IOS-XE-wireless-rrm-oper:rrm-measurement": [
+    { "wtp-mac": "a8:66:7f:04:00:01", "radio-slot-id": 1, "load": { "cca-util-percentage": 61.5, "rx-noise-channel-utilization": 12.0 } }
+  ]
+}

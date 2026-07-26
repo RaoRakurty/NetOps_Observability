@@ -34,6 +34,11 @@ type wirelessStore interface {
 	ListAPs(ctx context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error)
 	GetAP(ctx context.Context, tenant string, cross bool, id string) (wireless.AccessPoint, bool, error)
 
+	// UpsertRadios upserts radio rows independently of their AP (vendors report
+	// radios on a separate stream; a radio poll must not clobber AP fields it
+	// did not fetch). Reads overlay radios onto their AP by APID.
+	UpsertRadios(ctx context.Context, tenant string, radios []wireless.Radio) error
+
 	UpsertWLAN(ctx context.Context, wl wireless.WLAN) error
 	ListWLANs(ctx context.Context, tenant string, cross bool) ([]wireless.WLAN, error)
 
@@ -47,6 +52,7 @@ type memWirelessStore struct {
 	mu          sync.RWMutex
 	controllers map[string]map[string]wireless.Controller // tenant → id → row
 	aps         map[string]map[string]wireless.AccessPoint
+	radios      map[string]map[string]wireless.Radio // tenant → radio_id → row (overlaid on APs at read)
 	wlans       map[string]map[string]wireless.WLAN
 	bssids      map[string]map[string]wireless.BSSID
 }
@@ -55,6 +61,7 @@ func newMemWirelessStore() *memWirelessStore {
 	return &memWirelessStore{
 		controllers: map[string]map[string]wireless.Controller{},
 		aps:         map[string]map[string]wireless.AccessPoint{},
+		radios:      map[string]map[string]wireless.Radio{},
 		wlans:       map[string]map[string]wireless.WLAN{},
 		bssids:      map[string]map[string]wireless.BSSID{},
 	}
@@ -129,6 +136,54 @@ func (m *memWirelessStore) UpsertAP(_ context.Context, ap wireless.AccessPoint) 
 	return nil
 }
 
+func (m *memWirelessStore) UpsertRadios(_ context.Context, tenant string, radios []wireless.Radio) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t := m.radios[tenant]
+	if t == nil {
+		t = map[string]wireless.Radio{}
+		m.radios[tenant] = t
+	}
+	for _, r := range radios {
+		id := wireless.RadioID(r.APID, r.Slot)
+		prev, had := t[id]
+		r.TenantID = tenant
+		r.RadioID = id
+		r.FirstSeen, r.LastSeen = upsertTimes(prev.FirstSeen, had)
+		r.Stale = false
+		t[id] = r
+	}
+	return nil
+}
+
+// overlayRadios merges separately-stored radio rows onto an AP (slot wins over
+// any radio embedded at AP-upsert time).
+func (m *memWirelessStore) overlayRadios(tenant string, ap wireless.AccessPoint) wireless.AccessPoint {
+	rows := m.radios[tenant]
+	if len(rows) == 0 {
+		return ap
+	}
+	bySlot := map[int]wireless.Radio{}
+	for _, r := range ap.Radios {
+		bySlot[r.Slot] = r
+	}
+	for _, r := range rows {
+		if r.APID == ap.APID {
+			bySlot[r.Slot] = r
+		}
+	}
+	if len(bySlot) == 0 {
+		return ap
+	}
+	merged := make([]wireless.Radio, 0, len(bySlot))
+	for _, r := range bySlot {
+		merged = append(merged, r)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Slot < merged[j].Slot })
+	ap.Radios = merged
+	return ap
+}
+
 func (m *memWirelessStore) ListAPs(_ context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -138,7 +193,7 @@ func (m *memWirelessStore) ListAPs(_ context.Context, tenant string, cross bool)
 			continue
 		}
 		for _, ap := range rows {
-			out = append(out, ap)
+			out = append(out, m.overlayRadios(tid, ap))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].APID < out[j].APID })
@@ -153,7 +208,7 @@ func (m *memWirelessStore) GetAP(_ context.Context, tenant string, cross bool, i
 			continue
 		}
 		if ap, ok := rows[id]; ok {
-			return ap, true, nil
+			return m.overlayRadios(tid, ap), true, nil
 		}
 	}
 	return wireless.AccessPoint{}, false, nil
@@ -406,6 +461,90 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
 	})
 }
 
+func (p *pgWirelessStore) UpsertRadios(ctx context.Context, tenant string, radios []wireless.Radio) error {
+	if len(radios) == 0 {
+		return nil
+	}
+	return p.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+		for _, r := range radios {
+			if _, err := tx.Exec(ctx, `
+INSERT INTO ap_radios (tenant_id, radio_id, ap_id, slot, band, channel, channel_width_mhz,
+    tx_power_dbm, tx_power_max_dbm, admin_state, oper_state, generation, mlo_capable, data, last_seen, stale)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE(NULLIF($10,''),'unknown'),COALESCE(NULLIF($11,''),'unknown'),$12,$13,$14,now(),false)
+ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
+    band=EXCLUDED.band, channel=EXCLUDED.channel, channel_width_mhz=EXCLUDED.channel_width_mhz,
+    tx_power_dbm=EXCLUDED.tx_power_dbm, tx_power_max_dbm=EXCLUDED.tx_power_max_dbm,
+    admin_state=EXCLUDED.admin_state, oper_state=EXCLUDED.oper_state,
+    generation=EXCLUDED.generation, mlo_capable=EXCLUDED.mlo_capable,
+    data=EXCLUDED.data, last_seen=now(), stale=false`,
+				tenant, wireless.RadioID(r.APID, r.Slot), r.APID, r.Slot, r.Band,
+				r.Channel, r.ChannelWidthMHz, r.TxPowerDBm, r.TxPowerMaxDBm,
+				r.AdminState, r.OperState, r.Generation, r.MLOCapable, jsonBlob(r)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// pgOverlayRadios loads ap_radios rows in the SAME withTenant transaction and
+// merges them onto the AP list by (ap_id, slot) — the row store is the truth
+// for radios, the AP blob only a bootstrap.
+func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint) error {
+	if len(aps) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT ap_id, data, first_seen, last_seen, stale FROM ap_radios`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	bySlotByAP := map[string]map[int]wireless.Radio{}
+	for rows.Next() {
+		var (
+			apID        string
+			blob        []byte
+			first, last time.Time
+			stale       bool
+		)
+		if err := rows.Scan(&apID, &blob, &first, &last, &stale); err != nil {
+			return err
+		}
+		var r wireless.Radio
+		if err := json.Unmarshal(blob, &r); err != nil {
+			return err
+		}
+		r.APID, r.FirstSeen, r.LastSeen, r.Stale = apID, first, last, stale
+		if bySlotByAP[apID] == nil {
+			bySlotByAP[apID] = map[int]wireless.Radio{}
+		}
+		bySlotByAP[apID][r.Slot] = r
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range aps {
+		slots := bySlotByAP[aps[i].APID]
+		if len(slots) == 0 {
+			continue
+		}
+		merged := map[int]wireless.Radio{}
+		for _, r := range aps[i].Radios {
+			merged[r.Slot] = r
+		}
+		for s, r := range slots {
+			merged[s] = r
+		}
+		out := make([]wireless.Radio, 0, len(merged))
+		for _, r := range merged {
+			out = append(out, r)
+		}
+		sort.Slice(out, func(a, b int) bool { return out[a].Slot < out[b].Slot })
+		aps[i].Radios = out
+	}
+	return nil
+}
+
 func (p *pgWirelessStore) ListAPs(ctx context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error) {
 	var out []wireless.AccessPoint
 	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
@@ -422,7 +561,11 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points ORDER BY
 			}
 			out = append(out, ap)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		return pgOverlayRadios(ctx, tx, out)
 	})
 	return out, err
 }
@@ -443,7 +586,19 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap
 			}
 			found = true
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		if !found {
+			return nil
+		}
+		one := []wireless.AccessPoint{ap}
+		if err := pgOverlayRadios(ctx, tx, one); err != nil {
+			return err
+		}
+		ap = one[0]
+		return nil
 	})
 	return ap, found, err
 }

@@ -34,6 +34,10 @@ const (
 type nmsRuntime struct {
 	store nmsConfigStore
 	reg   *nms.Registry
+	// wireless receives canonical-inventory discoveries (#128) from wireless
+	// connectors (Routed.Wireless). Nil = inventory discarded with a warning —
+	// never silently (main.go wires it whenever the runtime exists).
+	wireless wirelessStore
 
 	client         *http.Client // strict TLS (default)
 	insecureClient *http.Client // per-integration opt-in for self-signed controllers
@@ -259,6 +263,43 @@ func (rt *nmsRuntime) sinkRouted(ctx context.Context, ic nmsIntegration, routed 
 	if len(routed.States) > 0 {
 		if err := rt.store.UpsertStates(ctx, ic.Tenant, ic.ID, routed.States); err != nil {
 			logWarn("nms", "state sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+		}
+	}
+	// Wireless canonical inventory (#128): fourth sink, same best-effort-per-
+	// lane contract. Tenant comes from the integration record, never the batch.
+	if inv := routed.Wireless; !inv.Empty() {
+		if rt.wireless == nil {
+			logWarn("nms", "wireless inventory discarded: no store wired", map[string]any{"integration": ic.ID})
+		} else {
+			for _, c := range inv.Controllers {
+				c.TenantID = ic.Tenant
+				if err := rt.wireless.UpsertController(ctx, c); err != nil {
+					logWarn("nms", "wireless controller sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+				}
+			}
+			for _, ap := range inv.APs {
+				ap.TenantID = ic.Tenant
+				if err := rt.wireless.UpsertAP(ctx, ap); err != nil {
+					logWarn("nms", "wireless ap sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+				}
+			}
+			if len(inv.Radios) > 0 {
+				if err := rt.wireless.UpsertRadios(ctx, ic.Tenant, inv.Radios); err != nil {
+					logWarn("nms", "wireless radio sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+				}
+			}
+			for _, wl := range inv.WLANs {
+				wl.TenantID = ic.Tenant
+				if err := rt.wireless.UpsertWLAN(ctx, wl); err != nil {
+					logWarn("nms", "wireless wlan sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+				}
+			}
+			for _, bs := range inv.BSSIDs {
+				bs.TenantID = ic.Tenant
+				if err := rt.wireless.UpsertBSSID(ctx, bs); err != nil {
+					logWarn("nms", "wireless bssid sink", map[string]any{"integration": ic.ID, "error": err.Error()})
+				}
+			}
 		}
 	}
 	return produced

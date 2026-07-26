@@ -589,6 +589,15 @@ func newServer() *server {
 		srv.integrations = newIntegrationStore(ps.db, vault)
 	}
 	srv.providers = integration.DefaultRegistry()
+	// Wireless canonical inventory (#128 Phase 1, migration 0030): PG-backed on
+	// postgres (FORCE-RLS), in-memory on the file backend (dev/tests). Always
+	// set — the read APIs render an empty inventory until a connector runs.
+	// MUST init before the NMS runtime, which takes it as its inventory sink.
+	if ps, ok := backend.(*pgStore); ok {
+		srv.wireless = newPGWirelessStore(ps.db)
+	} else {
+		srv.wireless = newMemWirelessStore()
+	}
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -601,14 +610,7 @@ func newServer() *server {
 			// plaintext in a map that dies with the process.
 			srv.nms = newNMSRuntime(nonDurableNMSStore{newMemNMSStore()})
 		}
-	}
-	// Wireless canonical inventory (#128 Phase 1, migration 0030): PG-backed on
-	// postgres (FORCE-RLS), in-memory on the file backend (dev/tests). Always
-	// set — the read APIs render an empty inventory until a connector runs.
-	if ps, ok := backend.(*pgStore); ok {
-		srv.wireless = newPGWirelessStore(ps.db)
-	} else {
-		srv.wireless = newMemWirelessStore()
+		srv.nms.wireless = srv.wireless // #128: wireless-inventory sink
 	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
