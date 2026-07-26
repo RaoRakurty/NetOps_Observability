@@ -1,6 +1,6 @@
 # NetOps_Observability — Current Work Tracker
 
-**Reconciled 2026-07-25.** This file lists what is OPEN. Shipped work is not
+**Reconciled 2026-07-26.** This file lists what is OPEN. Shipped work is not
 re-listed here — `git log` is the record of what landed, and
 `docs/audit/INVARIANTS.md` is the record of what is *proven* versus merely built.
 
@@ -53,18 +53,16 @@ ignores them.
 | # | Item | Pri | Status |
 |---|------|-----|--------|
 | 114 | **Kubernetes deployment packaging** — Helm chart over the 19-service stack (StatefulSets + PVCs for CH/OS/PG/Kafka), per-service requests from `RESOURCE_SIZING.md`, ingress replacing nginx, secrets from the installer `.env` contract, air-gapped image bundle for k8s registries, CI packaging leg alongside `make-installer.sh`. Customers get single-host artifacts only today. | High | ⏳ not started — confirmed absent 2026-07-20; **a project, not a task** |
-| 115 | **Wire the Postgres integration tests into CI** — `pg_integration_test.go` exists and compiles (`c7b2fa58`) but is `//go:build pgintegration` and nothing runs it. Needs a Postgres service container in `backend-ci.yml`. Closes INVARIANTS standing gap #4; until then the tests rot. | High | ⏳ not started |
 | 116 | **Extract a `tenantRepo` interface** — INVARIANTS gap #3: the F-81 tenant-create rollback is compile-reviewed only because `s.tenants` is a concrete `*tenantStore` with no seam, so mid-request failure cannot be injected. The fix is named in the gap itself. Most tractable of the invariant gaps. | High | ⏳ not started |
 | 117 | **250 deferred ruff findings** — `618b87b8` pinned ruff to 0.15.22 to restore determinism after an unpinned upgrade turned CI red. That defers the new rules, it does not resolve them; `ruff check --fix` handles 197 automatically. Do this BEFORE the next deliberate ruff bump. | Med | ⏳ not started |
 | 118 | **echarts XSS (GHSA-fgmj-fm8m-jvvx)** — moderate, so `npm audit --audit-level=high` does not block it, but it is an XSS in the library rendering the dashboard. Fix is echarts 6.x, a breaking major: needs a planned migration, not `audit fix --force`. | Med | ⏳ not started |
-| 119 | **#102 tail — `--plan-resources` default-on for dev installs.** P1–P5 all shipped and live; `install.py` still has `default=None` while the customer bundle is already default-on. | Low | ⏳ not started |
 | 120 | **#105 T5 prep — counter-verification harness** from the `docs/design/cloud-provider-parity.md` acceptance drills, built now so the drills run the moment O1/O2 land instead of after. | Med | ⏳ not started |
 | 121 | **#53 remnants** — the Explorer and dedup/triage halves shipped (`events_feed.go`, `alert_episodes.go`). Left: maintenance windows (no `maintenance` handling in the alert path), audit + deploy events as feed sources, UI processor editor (enrich/normalize/redact is still Vector YAML). | Med | ⏳ not started |
-| 122 | **Audit the other 9 workflows for unpinned tools** — `backend-ci.yml` pins all five of its tools; `correlation-ci.yml` did not, and that cost a red branch on 2026-07-25. The convention exists; apply it uniformly. | Med | ⏳ not started |
 | 123 | **`docs-portal` advisory triage** — 46 npm advisories (14 high). Only 2 were Trivy-visible (`ignore-unfixed: true`) and are fixed. Triage the rest so what is deferred is deferred knowingly. | Low | ⏳ not started |
 | 124 | **Notification hook swallows every error** — the `.claude/settings.local.json` Notification hook ends in `2>/dev/null \|\| true`, the §16.1 cardinal rule violated in our own tooling. If the ntfy push dies, nothing reports it. | Low | ⏳ not started |
 | 126 | **Correlation consumer auto-commits offsets** — `main.py` builds its `AIOKafkaConsumer` with `enable_auto_commit=True`, so offsets advance on a timer regardless of whether the ClickHouse write committed. This misses acceptance criterion 8 of the write-integrity programme ("no source checkpoint advances on uncommitted or unknown outcomes"); the durable DLQ is a strong compensating control but runs AFTER the ack, so a crash between auto-commit and the DLQ append loses the event silently. Fix = manual commit gated on handler success (Phase 3 dedup tokens already cover the redelivery risk). See `docs/audit/clickhouse-write-integrity-phases.md`. | High | ⏳ not started |
 | 127 | **Guard the conditional CH exclusions** — Phase 6 skipped Distributed-table and `async_insert` integration cases because the repo uses neither (verified 0 of each). True today, silent tomorrow: add a guard asserting those counts stay zero, so introducing either trips a test instead of quietly opening a coverage hole. | Low | ⏳ not started |
+| 128 | **Wireless as a native Correlix access domain** — multi-vendor wireless discovery, topology, monitoring, causal correlation, Iris troubleshooting and guarded auto-healing, per the owner's 55-page spec (`docs/Correlix-Wireless-Architecture.pdf`, 37 sections). Pass 1 = architecture + repository-impact report ONLY (spec §36 stop gate); the report is `docs/Wireslessdesign.md`. Supersedes the parked WiFi skeleton in `docs/design/multi-vendor-wifi-expansion.md` §3 (owner hold, 2026-06-14) and unblocks the wireless metric family `collectors/unifi.go` explicitly deferred to "the owner's wireless-AP design". **A programme, not a task** — do not start implementation until the report is signed off. | High | 🔬 report drafted 2026-07-26, awaiting owner sign-off |
 | 125 | **Stale customer bundle** — the pre-push hook warns on every push; `make bundle` when ready to ship. Note `6092adce` deliberately took this off its daily cron per §16.4, so rebuild is event-driven and manual by design. | Low | ⏳ not started |
 
 ---
@@ -97,7 +95,7 @@ ignores them.
 |-----|-------|
 | #1 Off-host DR / disk sizing | Deferred to first customer (above) |
 | #3 Tenant-create rollback compile-reviewed only | → item **116** |
-| #4 Postgres paths compile-reviewed only | Tests now exist → item **115** to actually run them |
+| #4 Postgres paths compile-reviewed only | CLOSED 2026-07-25 (`33cb45f2`) — the `pg-integration` job in `backend-ci.yml` runs them against a pinned postgres:16-alpine |
 | #5 `go test -race` runs only in CI | No local gate; the sandboxes used had no cgo |
 | #6 Documented env switches unverified as a class | One was found lying; nothing checks the rest |
 | #7 API response-shape stability is prose | Totals ride on headers; a header-blind client silently misses them |
