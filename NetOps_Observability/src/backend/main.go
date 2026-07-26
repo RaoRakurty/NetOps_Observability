@@ -121,38 +121,39 @@ type server struct {
 	// storage (PG registries + CH observation/hop streams, or in-memory on the file
 	// backend); pathFacts and corrPath are the DI seams for the §3 fact base and the
 	// correlation→path linkage (nil = the real inventories / ClickHouse).
-	pathGraph      pathGraphStore
-	pathFacts      pathFactSource
-	corrPath       corrPathRef
-	remotePaths    *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
-	providers      *integration.Registry // inbound provider translators (registry)
-	nms            *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	wireless       wirelessStore         // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
-	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
-	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
-	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
-	exportPolicy   *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter  *tenantRateLimiter    // per-tenant export rate limit
-	copilotLimiter *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
-	aiToolBudget   *aiDailyBudget        // per-tenant daily token budget for the agent loop (P2, LLM04)
-	copilotCfg     *copilotConfigStore
-	aiTenantCfg    *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
-	displayPrefs   *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
-	verifyCfg      *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
-	verifyRuns     *verifyRunStore        // spec #8: latest verification run per case (bounded)
-	verifyLimiter  *tenantRateLimiter     // spec #8: manual-verify per-tenant rate limit
-	governance     *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
-	cloudSLOs      *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
-	cloudMonitors  *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
-	rcaPromotions  *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
-	rcaActionItems *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
-	rcaRevisions   *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	portStore      portStore              // Port Intelligence physical-layer store (#94)
-	netboxCfg      *netboxConfigStore     // NetBox source-of-truth discovery config
-	discoveryCfg   *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
-	netboxSync     *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)
-	vulns          *vulnFeed              // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	pathGraph       pathGraphStore
+	pathFacts       pathFactSource
+	corrPath        corrPathRef
+	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
+	integrations    *integrationStore     // integration-platform persistence (nil on file backend)
+	providers       *integration.Registry // inbound provider translators (registry)
+	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	wireless        wirelessStore         // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
+	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
+	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
+	vault           *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
+	exportLimiter   *tenantRateLimiter    // per-tenant export rate limit
+	copilotLimiter  *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
+	aiToolBudget    *aiDailyBudget        // per-tenant daily token budget for the agent loop (P2, LLM04)
+	copilotCfg      *copilotConfigStore
+	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
+	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
+	verifyCfg       *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
+	verifyRuns      *verifyRunStore        // spec #8: latest verification run per case (bounded)
+	verifyLimiter   *tenantRateLimiter     // spec #8: manual-verify per-tenant rate limit
+	governance      *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
+	cloudSLOs       *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
+	cloudMonitors   *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
+	rcaPromotions   *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
+	rcaActionItems  *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
+	rcaRevisions    *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	portStore       portStore              // Port Intelligence physical-layer store (#94)
+	netboxCfg       *netboxConfigStore     // NetBox source-of-truth discovery config
+	discoveryCfg    *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
+	netboxSync      *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)
+	vulns           *vulnFeed              // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -598,6 +599,7 @@ func newServer() *server {
 	} else {
 		srv.wireless = newMemWirelessStore()
 	}
+	srv.wirelessActions = newWirelessActionStore()
 	// NMS vendor-controller framework (#95 P3b): dormant unless
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
@@ -1351,6 +1353,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/wireless/aps/", s.handleWirelessAPs)
 	mux.HandleFunc("/api/wireless/wlans", s.handleWirelessWLANs)
 	mux.HandleFunc("/api/wireless/bssids", s.handleWirelessBSSIDs)
+	// #128 Phase 8 guarded remediation: 404 unless FEATURE_WIRELESS_ACTIONS.
+	mux.HandleFunc("/api/wireless/actions", s.handleWirelessActions)
+	mux.HandleFunc("/api/wireless/actions/", s.handleWirelessActionItem)
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)

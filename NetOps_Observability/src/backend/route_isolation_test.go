@@ -155,6 +155,11 @@ var routeIsolationLedger = map[string]string{
 	"/api/wireless/aps/":         "scoped",
 	"/api/wireless/wlans":        "scoped",
 	"/api/wireless/bssids":       "scoped",
+	// #128 Phase 8 guarded remediation: tenant-scoped action requests, 404 when
+	// FEATURE_WIRELESS_ACTIONS is off (default). Isolation coverage:
+	// wireless_actions_test.go exercises "/api/wireless/actions" cross-tenant.
+	"/api/wireless/actions":  "scoped",
+	"/api/wireless/actions/": "scoped",
 	"/api/itsm/jira":         "scoped",
 	"/api/itsm/servicenow":   "scoped",
 	// #103 tenant RCA policy destinations: per-tenant connection config (routing
