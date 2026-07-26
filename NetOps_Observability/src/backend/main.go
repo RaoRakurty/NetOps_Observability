@@ -1453,6 +1453,9 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		all := s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
+		// Wireless WLCs + APs are fleet citizens too (one LAN domain) —
+		// projected read-time from the wireless store, deduped by address.
+		all = append(all, s.wirelessDeviceRows(r.Context(), claims, all)...)
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })

@@ -81,7 +81,7 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   switch: { label: "Switch", color: "#22c55e" },
   firewall: { label: "Firewall", color: "#ef4444" },
   "load-balancer": { label: "Load balancer", color: "#a855f7" },
-  ap: { label: "Access point", color: "#06b6d4" },
+  ap: { label: "AP", color: "#06b6d4" },
   wlc: { label: "WLC", color: "#14b8a6" },
   "cloud-gw": { label: "Cloud GW", color: "#f59e0b" },
   generic: { label: "Generic", color: "var(--muted)" },
