@@ -20,7 +20,7 @@ so a directed edge replays deterministically (never recomputed from live volume)
 """
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from collections.abc import Mapping
 
 from directed_topology import Orientation, Source, Verdict
 from entity_resolver import EntityResolver
@@ -31,7 +31,7 @@ from producers import _flow_field
 DEFAULT_DOMINANCE = 0.6
 
 
-def flow_direction_sample(ev: dict, resolver: EntityResolver) -> Optional[tuple[str, str, float]]:
+def flow_direction_sample(ev: dict, resolver: EntityResolver) -> tuple[str, str, float] | None:
     """One raw flow → (src_device, dst_device, bytes_scaled) when BOTH endpoints
     resolve to KNOWN, DISTINCT devices; else None (abstain). Bytes are scaled by the
     sampling rate (a 1-in-N sampler under-reports N×), matching the C6 lane."""
@@ -62,7 +62,7 @@ def netflow_direction_source(volume: Mapping[tuple, float],
     orient(a,b): compare bytes(a→b) vs bytes(b→a). The dominant direction wins when
     its share ≥ `dominance`; BALANCED → AMBIGUOUS (never an assumed direction); no
     flow either way → None (UNKNOWN)."""
-    def _src(a: str, b: str) -> Optional[Orientation]:
+    def _src(a: str, b: str) -> Orientation | None:
         ab = volume.get((a, b), 0.0)
         ba = volume.get((b, a), 0.0)
         total = ab + ba

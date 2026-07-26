@@ -89,7 +89,7 @@ def _parse_ts(raw: object, fallback: datetime) -> datetime:
     if isinstance(raw, str) and raw:
         for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ"):
             try:
-                dt = datetime.strptime(raw, fmt)
+                dt = datetime.strptime(raw, fmt)  # noqa: DTZ007 — the "Z" format parses naive; made aware on the next line
                 return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue

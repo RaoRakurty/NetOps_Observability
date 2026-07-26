@@ -189,7 +189,7 @@ def test_wireless_templates_never_claim_wireless_when_healthy():
             k for c in t["requires"] if not c.get("optional")
             for k in str(c["kind"]).split("|")
         }
-        assert any(k.startswith("wireless_") or k.startswith("controller_")
+        assert any(k.startswith(("wireless_", "controller_"))
                    for k in mandatory_kinds), (
             f"{t['id']}: a wireless template must require wireless evidence")
 

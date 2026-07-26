@@ -135,7 +135,7 @@ def test_directed_object_replays_clean_via_embedded_orientation():
 def test_replay_uses_embedded_grounding_context_not_live_state():
     signals, seams, _ = load_golden()
     snap = run_window(signals, builtin_catalog(), seams)[0]
-    stored, window = persist_and_rehydrate(snap, signals)
+    stored, _window = persist_and_rehydrate(snap, signals)
     # The snapshot must carry its seams: replay grounds against the embedded
     # context even if the live inventory has since changed or vanished.
     assert tuple(s.seam_id for s in stored.grounding_context()) == tuple(

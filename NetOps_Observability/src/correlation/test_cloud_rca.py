@@ -176,8 +176,8 @@ def test_cloud_rca_renders_the_ordered_spine():
     """§7/§10: the backend hands the renderer an ORDERED spine — the UI never
     computes hop order. The acceptance spine, in order, with the unknown hop kept."""
     app, wan = _lab_signals()
-    snap = [s for s in run_window([app, wan], builtin_catalog(), (), paths=lab_path_view())
-            if len(s.nodes) == 2][0]
+    snap = next(s for s in run_window([app, wan], builtin_catalog(), (), paths=lab_path_view())
+            if len(s.nodes) == 2)
     spine = snap.path_spine()
     assert [e["address"] for e in spine["spine"]] == [
         "172.40.40.92", "172.40.40.1", "10.70.245.122", "10.60.1.10", "",

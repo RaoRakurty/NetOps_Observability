@@ -29,18 +29,18 @@ T0 = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def obs(**kw: Any) -> Observer:
-    base: dict[str, Any] = dict(observer_id="leaf1", observer_type=ObserverType.DEVICE)
+    base: dict[str, Any] = {"observer_id": "leaf1", "observer_type": ObserverType.DEVICE}
     base.update(kw)
     return Observer(**base)
 
 
 def sig(**kw: Any) -> Signal:
-    base: dict[str, Any] = dict(
-        tenant_id="", ts=T0, source=Source.METRIC, kind="metric_anomaly",
-        observer=obs(), modality_class=ModalityClass.DEVICE_TELEMETRY,
-        entity_type=EntityType.DEVICE, entity_id="leaf1",
-        severity=Severity.WARN, native_id="leaf1|cpu|onset|123",
-    )
+    base: dict[str, Any] = {
+        "tenant_id": "", "ts": T0, "source": Source.METRIC, "kind": "metric_anomaly",
+        "observer": obs(), "modality_class": ModalityClass.DEVICE_TELEMETRY,
+        "entity_type": EntityType.DEVICE, "entity_id": "leaf1",
+        "severity": Severity.WARN, "native_id": "leaf1|cpu|onset|123",
+    }
     base.update(kw)
     return Signal(**base)
 
@@ -62,7 +62,7 @@ def test_observer_block_mandatory():
     with pytest.raises(DeadLetter):
         sig(kind="")
     with pytest.raises(DeadLetter):
-        sig(ts=datetime(2026, 6, 11, 12, 0, 0))  # naive ts = event-time violation
+        sig(ts=datetime(2026, 6, 11, 12, 0, 0))  # noqa: DTZ001 — deliberately naive: asserts intake rejects it
 
 
 def test_ch_row_shape_matches_frozen_schema():

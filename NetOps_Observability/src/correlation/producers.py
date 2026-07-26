@@ -954,30 +954,30 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
 _PORT_EVENT_RULES: list[tuple[re.Pattern, str, bool, Severity]] = [
     # Unsupported / unqualified transceiver (Cisco %PLATFORM UNSUPPORTED_TRANSCEIVER,
     # Arista "unsupported transceiver", FortiGate "unqualified SFP").
-    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver.*not\s+supported", re.I),
+    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver.*not\s+supported", re.IGNORECASE),
      "transceiver_unsupported", True, Severity.HIGH),
     # DOM/DDM optical threshold alarms (SFF-8472 / %OPTICS / vendor DOM).
-    (re.compile(r"(rx|receive).*(power).*(low|below).*(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.I),
+    (re.compile(r"(rx|receive).*(power).*(low|below).*(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.IGNORECASE),
      "dom_rx_power_low", True, Severity.HIGH),
-    (re.compile(r"(temperature|temp).*(high|above).*(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.I),
+    (re.compile(r"(temperature|temp).*(high|above).*(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.IGNORECASE),
      "dom_temperature_high", True, Severity.HIGH),
-    (re.compile(r"(tx\s+)?bias.*(high|current).*(alarm|threshold)|BIAS_HIGH", re.I),
+    (re.compile(r"(tx\s+)?bias.*(high|current).*(alarm|threshold)|BIAS_HIGH", re.IGNORECASE),
      "dom_lane_bias_anomaly", True, Severity.WARN),
     # FEC / PCS.
-    (re.compile(r"uncorrectable.*(fec|codeword|block)|FEC.*UNCORRECTABLE|post[-_ ]?fec.*(error|ber)", re.I),
+    (re.compile(r"uncorrectable.*(fec|codeword|block)|FEC.*UNCORRECTABLE|post[-_ ]?fec.*(error|ber)", re.IGNORECASE),
      "prefec_ber_rising", True, Severity.HIGH),
-    (re.compile(r"pre[-_ ]?fec\s+ber|fec.*corrected.*(rate|high)|CORRECTED_FEC", re.I),
+    (re.compile(r"pre[-_ ]?fec\s+ber|fec.*corrected.*(rate|high)|CORRECTED_FEC", re.IGNORECASE),
      "fec_corrected_rate_high", True, Severity.WARN),
-    (re.compile(r"local\s+fault|LOCAL_FAULT", re.I), "pcs_local_fault", True, Severity.HIGH),
-    (re.compile(r"remote\s+fault|REMOTE_FAULT", re.I), "pcs_remote_fault", True, Severity.HIGH),
-    (re.compile(r"deskew|align.*(marker|lane).*(fail|lost)|PCS.*DESKEW", re.I),
+    (re.compile(r"local\s+fault|LOCAL_FAULT", re.IGNORECASE), "pcs_local_fault", True, Severity.HIGH),
+    (re.compile(r"remote\s+fault|REMOTE_FAULT", re.IGNORECASE), "pcs_remote_fault", True, Severity.HIGH),
+    (re.compile(r"deskew|align.*(marker|lane).*(fail|lost)|PCS.*DESKEW", re.IGNORECASE),
      "pcs_deskew_fault", True, Severity.HIGH),
-    (re.compile(r"hi[-_ ]?ber|high\s+bit\s+error", re.I), "hi_ber_indication", True, Severity.HIGH),
+    (re.compile(r"hi[-_ ]?ber|high\s+bit\s+error", re.IGNORECASE), "hi_ber_indication", True, Severity.HIGH),
     # Optic present but no light / signal (link-down-with-optic-in fingerprint).
-    (re.compile(r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS", re.I),
+    (re.compile(r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS", re.IGNORECASE),
      "link_down_no_light", True, Severity.HIGH),
     # Transceiver insert/remove flap on insert (interop/incompat fingerprint).
-    (re.compile(r"transceiver.*(insert|remov).*(insert|remov)|SFP.*flap|optic.*flap", re.I),
+    (re.compile(r"transceiver.*(insert|remov).*(insert|remov)|SFP.*flap|optic.*flap", re.IGNORECASE),
      "link_flap_on_insert", True, Severity.WARN),
 ]
 
@@ -992,7 +992,7 @@ def _port_of(ev: dict) -> str:
     return m.group(1) if m else ""
 
 
-def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> "Signal | None":
+def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | None:
     """Transceiver/optics/DOM/FEC syslog → one device_telemetry Signal in the
     sig.ent.spdc evidence vocabulary; None for anything unrecognized. Feeds the
     physical-layer signatures (#94). Also the source of port_event_log rows."""

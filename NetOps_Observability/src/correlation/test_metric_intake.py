@@ -59,7 +59,7 @@ class MetricIdentityTest(unittest.TestCase):
     def test_interface_identity(self):
         out = main.metric_identity(iface_event())
         self.assertIsNotNone(out)
-        entity_id, etype, kind, tokens = out
+        entity_id, etype, _kind, tokens = out
         self.assertEqual(entity_id, "leaf1:Ethernet1")
         self.assertEqual(etype, EntityType.INTERFACE)
         self.assertIn("leaf1", tokens)
@@ -136,7 +136,7 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
             {"device": "leaf2", "signal_family": "bgp", "peer": "10.0.0.5",
              "collection_path": "snmp_poll", "metric": "device_bgp_peer_state",
              "value": 1, "ts": datetime.now(timezone.utc).isoformat()})
-        sig = [r for r in self.ch.rows if r["_table"] == "netops.corr_signals"][0]
+        sig = next(r for r in self.ch.rows if r["_table"] == "netops.corr_signals")
         self.assertEqual(sig["entity_id"], "leaf2:10.0.0.5")
         self.assertEqual(sig["modality_class"], "device_telemetry")
 

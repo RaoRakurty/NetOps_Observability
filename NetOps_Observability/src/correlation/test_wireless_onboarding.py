@@ -110,10 +110,10 @@ def test_auth_failure_signals_at_link_layer():
 
 def test_identity_ladder():
     # EAP-TLS CN beats everything.
-    cid, conf, method = client_identity("t1", "02:00:5e:00:53:01", eap_cn="laptop-42")
+    _cid, conf, method = client_identity("t1", "02:00:5e:00:53:01", eap_cn="laptop-42")
     assert conf == "authoritative" and method == "eap_tls_cn"
     # Stable (globally-unique) MAC is strong.
-    cid2, conf2, _ = client_identity("t1", "a8:66:7f:01:02:03")
+    _cid2, conf2, _ = client_identity("t1", "a8:66:7f:01:02:03")
     assert conf2 == "strong"
     # Randomized MAC with nothing better: UNKNOWN, session-scoped — two
     # different sessions get two different identities (no fake continuity).

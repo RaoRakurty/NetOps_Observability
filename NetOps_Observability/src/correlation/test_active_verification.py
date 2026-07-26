@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from catalog import Clause, Template, Verdict as TemplateVerdict
+from catalog import Clause, Template
+from catalog import Verdict as TemplateVerdict
 from scoring import CONTRADICTION_PENALTY, score_template
 from signals import (
     EntityType,
@@ -218,15 +219,15 @@ def test_platform_reach_probe_never_confirms():
 # ── scoring: corroborate + refute ────────────────────────────────────────────
 
 def _template(**over) -> Template:
-    base = dict(
-        id="sig.test.bgp-down",
-        title="BGP session down",
-        domain="ent.campus",
-        requires=(Clause(kind="bgp_adjacency_change"),),
-        discriminators=(),
-        required_modalities=(),
-        verdict=TemplateVerdict(owner="netops", layer="L3/L4", first_steps=("check peer",)),
-    )
+    base = {
+        "id": "sig.test.bgp-down",
+        "title": "BGP session down",
+        "domain": "ent.campus",
+        "requires": (Clause(kind="bgp_adjacency_change"),),
+        "discriminators": (),
+        "required_modalities": (),
+        "verdict": TemplateVerdict(owner="netops", layer="L3/L4", first_steps=("check peer",)),
+    }
     base.update(over)
     return Template(**base)
 

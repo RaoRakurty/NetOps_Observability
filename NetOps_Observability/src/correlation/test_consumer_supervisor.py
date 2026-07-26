@@ -8,6 +8,7 @@ wedge the supervisor; a hung stop() or start() is abandoned on a bounded
 timeout and a FRESH consumer always follows.
 """
 import asyncio
+from typing import ClassVar
 
 import main
 
@@ -57,7 +58,7 @@ def test_hung_stop_never_wedges_the_supervisor(monkeypatch):
         reached_second = asyncio.Event()
 
         class Scripted(FakeConsumer):
-            created = []
+            created: ClassVar[list] = []
 
             async def start(self):
                 if self.index == 2:
@@ -87,7 +88,7 @@ def test_hung_start_never_wedges_the_supervisor(monkeypatch):
         reached_second = asyncio.Event()
 
         class Scripted(FakeConsumer):
-            created = []
+            created: ClassVar[list] = []
 
             async def start(self):
                 if self.index == 1:
@@ -112,7 +113,7 @@ def test_offsets_commit_only_after_handling(monkeypatch):
 
     class Msg:
         topic, partition, offset = "netops.metrics", 0, 0
-        value = {"k": 1}
+        value: ClassVar[dict] = {"k": 1}
 
     commits: list[int] = []
     handled: list[int] = []
@@ -131,7 +132,7 @@ def test_offsets_commit_only_after_handling(monkeypatch):
         done = asyncio.Event()
 
         class Scripted(FakeConsumer):
-            created = []
+            created: ClassVar[list] = []
 
             def __init__(self, *topics, **kwargs):
                 super().__init__(*topics, **kwargs)

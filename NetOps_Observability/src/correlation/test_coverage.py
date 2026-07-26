@@ -14,11 +14,11 @@ acknowledged state. The gate now enforces the split:
 
 from catalog import builtin_catalog
 from coverage import (
+    _NORM_FIELDS,
     COLLECTION_PENDING,
     INTENTIONAL_BLIND,
     KNOWN_PENDING,
     NORMALIZATION_PENDING,
-    _NORM_FIELDS,
     blind_spot_kinds,
     classify_kind,
     consumed_kinds,

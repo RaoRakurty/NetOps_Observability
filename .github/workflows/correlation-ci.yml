@@ -27,7 +27,7 @@ permissions:
 # touched no Python). Bump these deliberately, in a commit that also fixes
 # whatever the new rules find.
 env:
-  RUFF_VERSION: '0.15.22'
+  RUFF_VERSION: '0.16.0'  # deliberate bump (tracker #117): the 0.16 findings are fixed in-tree
   BANDIT_VERSION: '1.9.4'
   MYPY_VERSION: '2.3.0'
   PIP_AUDIT_VERSION: '2.10.1'

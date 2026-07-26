@@ -37,11 +37,10 @@ import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Union
 
 log = logging.getLogger("segment_classifier")
 
-_IPAddr = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+_IPAddr = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 # ── vocabulary ───────────────────────────────────────────────────────────────
 
@@ -125,42 +124,42 @@ _ASN_TABLE: dict[int, dict[str, str]] = {
 
 # ── rDNS naming heuristics (research Area 2.4 — HINTS ONLY, never sole basis) ──
 _RDNS_PROVIDER = [
-    (re.compile(r"(^|\.)compute\.amazonaws\.com$", re.I), "aws"),
-    (re.compile(r"(^|\.)amazonaws\.com$", re.I), "aws"),
-    (re.compile(r"(^|\.)1e100\.net$", re.I), "gcp"),
-    (re.compile(r"(^|\.)googleusercontent\.com$", re.I), "gcp"),
-    (re.compile(r"(^|\.)cloudapp\.azure\.com$", re.I), "azure"),
-    (re.compile(r"(^|\.)cloudapp\.net$", re.I), "azure"),
+    (re.compile(r"(^|\.)compute\.amazonaws\.com$", re.IGNORECASE), "aws"),
+    (re.compile(r"(^|\.)amazonaws\.com$", re.IGNORECASE), "aws"),
+    (re.compile(r"(^|\.)1e100\.net$", re.IGNORECASE), "gcp"),
+    (re.compile(r"(^|\.)googleusercontent\.com$", re.IGNORECASE), "gcp"),
+    (re.compile(r"(^|\.)cloudapp\.azure\.com$", re.IGNORECASE), "azure"),
+    (re.compile(r"(^|\.)cloudapp\.net$", re.IGNORECASE), "azure"),
 ]
 _RDNS_ROLE = [
-    (re.compile(r"(^|[-.])(lb|elb|alb|nlb|lbaas|slb)([-.]|\d|$)", re.I), DeviceRole.LOAD_BALANCER),
-    (re.compile(r"(^|[-.])(waf|appgw|appgateway)([-.]|\d|$)", re.I), DeviceRole.WAF),
-    (re.compile(r"(^|[-.])(fw|firewall|asa|palo|fgt|fortigate|ngfw)([-.]|\d|$)", re.I), DeviceRole.FIREWALL),
-    (re.compile(r"(^|[-.])(dns|resolver|ns\d|unbound|bind)([-.]|\d|$)", re.I), DeviceRole.DNS_RESOLVER),
-    (re.compile(r"(^|[-.])(rtr|router|gw|gateway|edge|core)([-.]|\d|$)", re.I), DeviceRole.ROUTER),
-    (re.compile(r"(^|[-.])(sw|switch|leaf|spine|tor)([-.]|\d|$)", re.I), DeviceRole.SWITCH),
-    (re.compile(r"(^|[-.])(vpn|ipsec|tunnel|nva|dx|expressroute)([-.]|\d|$)", re.I), DeviceRole.TUNNEL_GW),
+    (re.compile(r"(^|[-.])(lb|elb|alb|nlb|lbaas|slb)([-.]|\d|$)", re.IGNORECASE), DeviceRole.LOAD_BALANCER),
+    (re.compile(r"(^|[-.])(waf|appgw|appgateway)([-.]|\d|$)", re.IGNORECASE), DeviceRole.WAF),
+    (re.compile(r"(^|[-.])(fw|firewall|asa|palo|fgt|fortigate|ngfw)([-.]|\d|$)", re.IGNORECASE), DeviceRole.FIREWALL),
+    (re.compile(r"(^|[-.])(dns|resolver|ns\d|unbound|bind)([-.]|\d|$)", re.IGNORECASE), DeviceRole.DNS_RESOLVER),
+    (re.compile(r"(^|[-.])(rtr|router|gw|gateway|edge|core)([-.]|\d|$)", re.IGNORECASE), DeviceRole.ROUTER),
+    (re.compile(r"(^|[-.])(sw|switch|leaf|spine|tor)([-.]|\d|$)", re.IGNORECASE), DeviceRole.SWITCH),
+    (re.compile(r"(^|[-.])(vpn|ipsec|tunnel|nva|dx|expressroute)([-.]|\d|$)", re.IGNORECASE), DeviceRole.TUNNEL_GW),
 ]
 
 # ── device_role_hint normalization (research Area 2.6 — LLDP/CDP/SNMP role) ───
 # A DECLARED telemetry role is a STRONG, trusted signal (unlike rDNS). Maps free-form
 # hint text → (DeviceRole, optional segment vote, optional seam_kind).
-_ROLE_HINT_MAP: list[tuple[re.Pattern[str], DeviceRole, Optional[str], Optional[str]]] = [
-    (re.compile(r"load[_\- ]?balanc|(^|\W)(lb|elb|alb|nlb|slb)(\W|$)", re.I), DeviceRole.LOAD_BALANCER, None, None),
-    (re.compile(r"waf|app[_\- ]?gateway|web[_\- ]?application[_\- ]?firewall", re.I), DeviceRole.WAF, None, None),
-    (re.compile(r"firewall|ngfw|(^|\W)(fw|asa|palo|fortigate|fgt)(\W|$)", re.I), DeviceRole.FIREWALL, None, None),
-    (re.compile(r"dns|resolver|name[_\- ]?server", re.I), DeviceRole.DNS_RESOLVER, None, None),
-    (re.compile(r"spine|leaf|(^|\W)tor(\W|$)|fabric|datacenter|data[_\- ]?center", re.I),
+_ROLE_HINT_MAP: list[tuple[re.Pattern[str], DeviceRole, str | None, str | None]] = [
+    (re.compile(r"load[_\- ]?balanc|(^|\W)(lb|elb|alb|nlb|slb)(\W|$)", re.IGNORECASE), DeviceRole.LOAD_BALANCER, None, None),
+    (re.compile(r"waf|app[_\- ]?gateway|web[_\- ]?application[_\- ]?firewall", re.IGNORECASE), DeviceRole.WAF, None, None),
+    (re.compile(r"firewall|ngfw|(^|\W)(fw|asa|palo|fortigate|fgt)(\W|$)", re.IGNORECASE), DeviceRole.FIREWALL, None, None),
+    (re.compile(r"dns|resolver|name[_\- ]?server", re.IGNORECASE), DeviceRole.DNS_RESOLVER, None, None),
+    (re.compile(r"spine|leaf|(^|\W)tor(\W|$)|fabric|datacenter|data[_\- ]?center", re.IGNORECASE),
      DeviceRole.SWITCH, SegmentType.DC.value, None),
-    (re.compile(r"switch|(^|\W)sw\d", re.I), DeviceRole.SWITCH, SegmentType.LAN.value, None),
-    (re.compile(r"express[_\- ]?route", re.I), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "DX"),
-    (re.compile(r"direct[_\- ]?connect|(^|\W)dx(\W|$)", re.I), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "DX"),
-    (re.compile(r"ipsec|(^|\W)vpn(\W|$)", re.I), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "VPN"),
-    (re.compile(r"sd[_\- ]?wan|velocloud|versa", re.I), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "SDWAN"),
-    (re.compile(r"(^|\W)nva(\W|$)|network[_\- ]?virtual[_\- ]?appliance|tunnel", re.I),
+    (re.compile(r"switch|(^|\W)sw\d", re.IGNORECASE), DeviceRole.SWITCH, SegmentType.LAN.value, None),
+    (re.compile(r"express[_\- ]?route", re.IGNORECASE), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "DX"),
+    (re.compile(r"direct[_\- ]?connect|(^|\W)dx(\W|$)", re.IGNORECASE), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "DX"),
+    (re.compile(r"ipsec|(^|\W)vpn(\W|$)", re.IGNORECASE), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "VPN"),
+    (re.compile(r"sd[_\- ]?wan|velocloud|versa", re.IGNORECASE), DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, "SDWAN"),
+    (re.compile(r"(^|\W)nva(\W|$)|network[_\- ]?virtual[_\- ]?appliance|tunnel", re.IGNORECASE),
      DeviceRole.TUNNEL_GW, SegmentType.WAN_SEAM.value, None),
-    (re.compile(r"router|(^|\W)(rtr|gw)(\W|$)|gateway|edge", re.I), DeviceRole.ROUTER, None, None),
-    (re.compile(r"host|server|instance|(^|\W)vm(\W|$)|endpoint", re.I), DeviceRole.HOST, None, None),
+    (re.compile(r"router|(^|\W)(rtr|gw)(\W|$)|gateway|edge", re.IGNORECASE), DeviceRole.ROUTER, None, None),
+    (re.compile(r"host|server|instance|(^|\W)vm(\W|$)|endpoint", re.IGNORECASE), DeviceRole.HOST, None, None),
 ]
 
 # ── signal evidence ──────────────────────────────────────────────────────────
@@ -191,8 +190,8 @@ class SegSignal:
     name: str
     family: Family
     tier: Tier
-    segment_vote: Optional[str] = None   # a SegmentType value, or None (role-only signal)
-    role_vote: Optional[str] = None      # a DeviceRole value, or None
+    segment_vote: str | None = None   # a SegmentType value, or None (role-only signal)
+    role_vote: str | None = None      # a DeviceRole value, or None
     provider: str = ""
     region: str = ""
     service: str = ""
@@ -256,12 +255,12 @@ class _BitTrie:
     keeps the DEEPEST value seen along the path — that is, by construction, the
     longest-prefix match. Separate tries for v4 (32-bit) and v6 (128-bit)."""
 
-    __slots__ = ("_zero", "_one", "_value")
+    __slots__ = ("_one", "_value", "_zero")
 
     def __init__(self) -> None:
-        self._zero: Optional[_BitTrie] = None
-        self._one: Optional[_BitTrie] = None
-        self._value: Optional[_PrefixValue] = None
+        self._zero: _BitTrie | None = None
+        self._one: _BitTrie | None = None
+        self._value: _PrefixValue | None = None
 
     def insert(self, bits: int, prefixlen: int, width: int, value: _PrefixValue) -> None:
         # `bits` is the FULL-WIDTH integer; walk the top `prefixlen` bits, MSB-first,
@@ -279,9 +278,9 @@ class _BitTrie:
             node = child
         node._value = value
 
-    def longest_match(self, bits: int, width: int) -> Optional[_PrefixValue]:
-        node: Optional[_BitTrie] = self
-        best: Optional[_PrefixValue] = self._value
+    def longest_match(self, bits: int, width: int) -> _PrefixValue | None:
+        node: _BitTrie | None = self
+        best: _PrefixValue | None = self._value
         for i in range(width):
             if node is None:
                 break
@@ -303,7 +302,7 @@ class ProviderTrie:
         self.synced_at = ""
 
     @classmethod
-    def from_snapshot(cls, path: str) -> "ProviderTrie":
+    def from_snapshot(cls, path: str) -> ProviderTrie:
         t = cls()
         try:
             with open(path, "r", encoding="utf-8") as fh:
@@ -343,7 +342,7 @@ class ProviderTrie:
             self._v6.insert(bits, net.prefixlen, 128, val)
         self.count += 1
 
-    def lookup(self, ip: _IPAddr) -> Optional[_PrefixValue]:
+    def lookup(self, ip: _IPAddr) -> _PrefixValue | None:
         if ip.version == 4:
             return self._v4.longest_match(int(ip), 32)
         return self._v6.longest_match(int(ip), 128)
@@ -353,7 +352,7 @@ _DEFAULT_SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "segmentdata", "provider_ip_ranges.json")
 
 # Module-level default trie, built once from the bundled snapshot (offline, deterministic).
-_DEFAULT_TRIE: Optional[ProviderTrie] = None
+_DEFAULT_TRIE: ProviderTrie | None = None
 
 
 def _default_trie() -> ProviderTrie:
@@ -370,7 +369,7 @@ class SegmentClassifier:
     """Stateless, pure classifier. Construct once (builds/holds the provider trie); call
     classify() per hop. Thread-safe (read-only after construction)."""
 
-    def __init__(self, trie: Optional[ProviderTrie] = None) -> None:
+    def __init__(self, trie: ProviderTrie | None = None) -> None:
         self._trie = trie if trie is not None else _default_trie()
 
     # -- scorers (each returns 0+ SegSignal, per research Area 2 signal list) --
@@ -411,7 +410,7 @@ class SegmentClassifier:
             )]
         return []
 
-    def _score_asn(self, asn: Optional[int]) -> list[SegSignal]:
+    def _score_asn(self, asn: int | None) -> list[SegSignal]:
         if asn is None:
             return []
         row = _ASN_TABLE.get(asn)
@@ -430,7 +429,7 @@ class SegmentClassifier:
             detail=f"AS{asn} is a curated {cls} network ({row.get('provider', '')})".strip(),
         )]
 
-    def _score_device_role(self, hint: Optional[str]) -> list[SegSignal]:
+    def _score_device_role(self, hint: str | None) -> list[SegSignal]:
         if not hint:
             return []
         text = str(hint).strip()
@@ -448,7 +447,7 @@ class SegmentClassifier:
             detail=f"device role hint {text!r} did not match a known role pattern",
         )]
 
-    def _score_rdns(self, rdns: Optional[str]) -> list[SegSignal]:
+    def _score_rdns(self, rdns: str | None) -> list[SegSignal]:
         if not rdns:
             return []
         name = str(rdns).strip().rstrip(".")
@@ -472,7 +471,7 @@ class SegmentClassifier:
                 break
         return out
 
-    def _score_ttl_latency(self, ttl: Optional[int], latency: Optional[float]) -> list[SegSignal]:
+    def _score_ttl_latency(self, ttl: int | None, latency: float | None) -> list[SegSignal]:
         out: list[SegSignal] = []
         if ttl is not None:
             try:
@@ -653,8 +652,8 @@ _TIER_RANK = {Tier.WEAK: 1, Tier.STRONG: 2, Tier.AUTHORITATIVE: 3}
 def _reason_for(seg: str, families: set, seg_signals: list[SegSignal],
                 contradicted: bool, confidence: Confidence) -> str:
     drivers = ", ".join(sorted({s.name for s in seg_signals if s.segment_vote == seg}))
-    parts = [f"classified {seg} at {confidence.value} confidence from {len(families)} "
-             f"independent signal family(ies) [{drivers}]"]
+    parts = [(f"classified {seg} at {confidence.value} confidence from {len(families)} "
+             f"independent signal family(ies) [{drivers}]")]
     if confidence == Confidence.WEAK:
         parts.append("only weak/hint evidence (rDNS/TTL/hostname) — never anchors a verdict")
     if contradicted:
@@ -669,7 +668,7 @@ def _unknown(reason: str) -> Classification:
     )
 
 
-def _coerce_asn(v: object) -> Optional[int]:
+def _coerce_asn(v: object) -> int | None:
     if v is None or v == "":
         return None
     try:
@@ -685,7 +684,7 @@ def _coerce_asn(v: object) -> Optional[int]:
 
 
 # Convenience: a shared default instance (built lazily on first import use).
-_DEFAULT_CLASSIFIER: Optional[SegmentClassifier] = None
+_DEFAULT_CLASSIFIER: SegmentClassifier | None = None
 
 
 def classify_hop(hop: dict) -> dict:

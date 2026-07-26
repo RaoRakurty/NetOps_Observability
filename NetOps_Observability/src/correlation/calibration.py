@@ -27,10 +27,22 @@ from datetime import datetime, timedelta, timezone
 
 from catalog import Catalog, builtin_catalog
 from engine import (
-    EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, engine_version, run_window,
+    NO_ADJACENCY,
+    EngineConfig,
+    ObjectSnapshot,
+    SeamView,
+    TopologyAdjacency,
+    engine_version,
+    run_window,
 )
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 # A label of "" means "no correlation object should form" — the negative case that keeps
@@ -47,7 +59,7 @@ class LabeledIncident:
     name: str
     window: tuple[Signal, ...]
     seams: tuple[SeamView, ...] = ()
-    adjacency: TopologyAdjacency = TopologyAdjacency()
+    adjacency: TopologyAdjacency = NO_ADJACENCY
     expected_hypothesis: str = NO_OBJECT
     expected_verdict: str = ""
 

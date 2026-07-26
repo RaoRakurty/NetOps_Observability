@@ -3,7 +3,15 @@ from datetime import datetime, timedelta, timezone
 
 from directed_topology import DirectedTopology, Orientation, Verdict
 from engine import EngineConfig, build_edges, build_nodes
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 
 T0 = datetime(2026, 6, 23, 9, 0, 0, tzinfo=timezone.utc)
 

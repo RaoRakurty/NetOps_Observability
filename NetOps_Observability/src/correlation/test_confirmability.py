@@ -128,7 +128,6 @@ def test_confirmability_ratchet_never_decreases():
         f"producer/catalog regression; lowering the baseline requires an "
         f"explicit owner decision."
     )
-    assert now == baseline or True  # informational: bump baseline when it rises
     if now > baseline:
         import warnings
         warnings.warn(

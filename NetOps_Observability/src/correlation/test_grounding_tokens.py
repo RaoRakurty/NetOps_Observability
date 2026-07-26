@@ -6,8 +6,14 @@ from datetime import datetime, timezone
 import pytest
 
 from signals import (
-    DeadLetter, EntityType, ModalityClass, Observer, ObserverType,
-    Severity, Signal, Source,
+    DeadLetter,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 NOW = datetime(2026, 7, 9, 9, 0, 0, tzinfo=timezone.utc)

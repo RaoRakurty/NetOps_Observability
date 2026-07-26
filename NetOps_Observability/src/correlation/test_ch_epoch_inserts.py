@@ -9,8 +9,17 @@ form, and (c) the to_ch_row/from_ch_row round trip stays byte-faithful.
 from datetime import datetime, timezone
 
 import engine
-from signals import (EntityType, ModalityClass, Observer, ObserverType,
-                     Severity, Signal, Source, _ch_dt, _parse_ch_dt)
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+    _ch_dt,
+    _parse_ch_dt,
+)
 
 TS = datetime(2026, 7, 16, 21, 56, 3, 562_431, tzinfo=timezone.utc)
 TS_MS = 1784238963562  # 2026-07-16T21:56:03.562Z — µs truncated like strftime[:-3]

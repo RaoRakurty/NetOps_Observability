@@ -9,7 +9,13 @@ import pytest
 
 import main
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 T0 = datetime(2026, 6, 22, 9, 0, 0, tzinfo=timezone.utc)

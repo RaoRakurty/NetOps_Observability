@@ -81,7 +81,7 @@ def test_lb_http_5xx_family_mapping(status, reason):
 
 
 def test_backend_health_mapping():
-    kind, reason, sev = classify_lb_event({"reason": "backend_pool_down"})
+    kind, reason, _sev = classify_lb_event({"reason": "backend_pool_down"})
     assert kind == "lb_target_unhealthy" and reason == "backend_pool_down"
     kind, reason, _ = classify_lb_event({"reason": "pool_member_down"})
     assert kind == "lb_target_unhealthy"

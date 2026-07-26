@@ -47,7 +47,6 @@ correlation service holds.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from path_assembly import AssembledPath
 from segment_classifier import Confidence, DeviceRole, SegmentType
@@ -234,7 +233,7 @@ class Attribution:
     tenant_id: str
     src: str
     dst: str
-    attributed: Optional[AttributedFault]
+    attributed: AttributedFault | None
     explained_away: tuple[AttributedFault, ...]
     discounted: tuple[DiscountedFault, ...]
     verdict: Verdict
@@ -289,7 +288,7 @@ class OnPathAttributor:
     upstream-most on-path fault, lifting the verdict through verdicts.assess. Stateless +
     pure; construct once, call attribute() per (symptom, path)."""
 
-    def __init__(self, cfg: Optional[AttributionConfig] = None) -> None:
+    def __init__(self, cfg: AttributionConfig | None = None) -> None:
         self._cfg = cfg if cfg is not None else AttributionConfig()
 
     # -- tenant scoping (structural, default-closed) --------------------------
@@ -513,8 +512,8 @@ def object_attribution(
     tenant_id: str,
     signals: tuple[Signal, ...] | list[Signal],
     paths: tuple[AssembledPath, ...] | list[AssembledPath],
-    attributor: Optional[OnPathAttributor] = None,
-) -> Optional[tuple[Attribution, AssembledPath]]:
+    attributor: OnPathAttributor | None = None,
+) -> tuple[Attribution, AssembledPath] | None:
     """Engine enrichment entry (design §2.4): given ONE correlation object's signals
     and the P1-assembled typed paths for its tenant, restrict RCA candidates to the
     on-path devices and return the (attribution, winning typed path) that NAMES the
@@ -546,7 +545,7 @@ def object_attribution(
               if s.tenant_id == tenant_id and s.kind in ATTRIBUTABLE_FAULT_KINDS]
     if not faults:
         return None
-    best: Optional[tuple[Attribution, AssembledPath]] = None
+    best: tuple[Attribution, AssembledPath] | None = None
     best_rank: tuple[int, int] = (-1, -1)
     # Deterministic: paths in (src, dst) order; a strictly higher (verdict tier,
     # on-path device count) wins, so the earliest path among equals is kept.

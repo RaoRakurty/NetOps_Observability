@@ -6,7 +6,11 @@ classification." Offline: uses ONLY the bundled snapshot, no network.
 """
 
 from segment_classifier import (
-    Confidence, DeviceRole, SegmentClassifier, SegmentType, classify_hop,
+    Confidence,
+    DeviceRole,
+    SegmentClassifier,
+    SegmentType,
+    classify_hop,
 )
 
 C = SegmentClassifier()

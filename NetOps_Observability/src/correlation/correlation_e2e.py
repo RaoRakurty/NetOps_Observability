@@ -57,7 +57,8 @@ def produce(topic: str, events: list[dict]) -> int:
     p = subprocess.run(["docker", "exec", "-i", BUS,
                         "/opt/kafka/bin/kafka-console-producer.sh",
                         "--bootstrap-server", "localhost:9092", "--topic", topic],
-                       input=payload, capture_output=True, text=True)
+                       input=payload, capture_output=True, text=True,
+                       check=False)  # failure is reported below, not raised
     if p.returncode != 0:
         print(f"{RED}kafka produce {topic} failed: {p.stderr.strip()}{RST}", file=sys.stderr)
     return len(events)
@@ -65,7 +66,8 @@ def produce(topic: str, events: list[dict]) -> int:
 
 def ch(query: str) -> str:
     p = subprocess.run(["docker", "exec", CH, "clickhouse-client", "-q",
-                        query + " SETTINGS tenant_scope='__all__'"], capture_output=True, text=True)
+                        query + " SETTINGS tenant_scope='__all__'"], capture_output=True, text=True,
+                       check=False)  # caller sees "__ERR__ …" instead of an exception
     if p.returncode != 0:
         return f"__ERR__ {p.stderr.strip()}"
     return p.stdout.strip()
@@ -202,15 +204,15 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
         return like, n, sig_rows(like), obj_rows(like)
 
     # 1
-    like, n, sigs, objs = find("1. link-down / WAN handoff")
+    like, _n, sigs, objs = find("1. link-down / WAN handoff")
     kinds = {s["kind"] for s in sigs}
     ok = ({"link_state_change", "probe_loss"} <= kinds) and len(objs) >= 1 and objs[0]["verdict_tier"] in ("suspected", "confirmed")
     results.append(("1. link-down / WAN handoff", ok,
-                    f"signals={sorted(kinds)} object={objs[0]['verdict_tier'] if objs else 'NONE'}/"
-                    f"{objs[0]['top_hypothesis'] if objs else '-'} conf={objs[0]['conf'] if objs else '-'}"))
+                    (f"signals={sorted(kinds)} object={objs[0]['verdict_tier'] if objs else 'NONE'}/"
+                    f"{objs[0]['top_hypothesis'] if objs else '-'} conf={objs[0]['conf'] if objs else '-'}")))
 
     # 2 — device_resource signal present; NO multi-node RCA object (single modality)
-    like, n, sigs, objs = find("2. CPU high, no impact")
+    like, _n, sigs, objs = find("2. CPU high, no impact")
     has_cpu = any(s["kind"] == "device_resource_anomaly" for s in sigs)
     no_multi = all(int(o.get("node_count", 0)) < 2 for o in objs)
     ok = has_cpu and no_multi
@@ -218,14 +220,14 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
                     f"device_resource_anomaly={has_cpu} multi_node_objects={[o['node_count'] for o in objs] or 'none'}"))
 
     # 3 — BGP control-plane signal + object classified routing/bgp
-    like, n, sigs, objs = find("3. BGP flap")
+    like, _n, sigs, objs = find("3. BGP flap")
     has_bgp = any("bgp" in s["kind"] for s in sigs)
     routing = bool(objs) and ("bgp" in objs[0]["top_hypothesis"] or "routing" in objs[0]["top_hypothesis"] or objs[0]["verdict_tier"] in ("suspected", "confirmed"))
     ok = has_bgp and routing
     results.append(("3. BGP flap", ok, f"bgp_signal={has_bgp} object={objs[0]['top_hypothesis'] if objs else 'NONE'}"))
 
     # 4 — probe-only: not confirmed
-    like, n, sigs, objs = find("4. probe-only degradation")
+    like, _n, sigs, objs = find("4. probe-only degradation")
     has_loss = any(s["kind"] == "probe_loss" for s in sigs)
     not_confirmed = all(o["verdict_tier"] != "confirmed" for o in objs)
     ok = has_loss and not_confirmed
@@ -233,7 +235,7 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
                     f"probe_loss={has_loss} verdicts={[o['verdict_tier'] for o in objs] or 'no-object'} (must not be confirmed)"))
 
     # 5 — internal/debug probe: classified debug_only; NOT in a customer-facing object
-    like, n, sigs, objs = find("5. internal/debug probe")
+    like, _n, sigs, objs = find("5. internal/debug probe")
     dbg = [s for s in sigs if s["kind"] == "probe_loss"]
     is_debug = bool(dbg) and all(s.get("pauth") == "debug_only" for s in dbg)
     no_confirmed = all(o["verdict_tier"] != "confirmed" for o in objs)
@@ -242,7 +244,7 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
                     f"probe_authority={[s.get('pauth') for s in dbg] or 'none'} (must be debug_only) confirmed_objects={[o['verdict_tier'] for o in objs if o['verdict_tier']=='confirmed'] or 'none'}"))
 
     # 6 — false correlation: the three unrelated entities must NOT share one object
-    likeA, _, _, objsA = find("6. false correlation (unrelated)")  # like = e2e..-fc prefix
+    # object rows are fetched per-tag: one shared object across fcA/fcB/fcC = merged
     objsA = obj_rows(f"{TAG}-fcA") + obj_rows(f"{TAG}-fcB") + obj_rows(f"{TAG}-fcC")
     merged = any(("fcA" in o["affected"]) + ("fcB" in o["affected"]) + ("fcC" in o["affected"]) >= 2 for o in objsA)
     ok = not merged
@@ -250,7 +252,7 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
                     f"merged_object={merged} (must be False — no temporal-only correlation)"))
 
     # 7 — stale: dropped, no signal
-    like, n, sigs, objs = find("7. stale event (dropped)")
+    like, _n, sigs, objs = find("7. stale event (dropped)")
     ok = len(sigs) == 0
     results.append(("7. stale event (dropped)", ok, f"signals_from_stale={len(sigs)} (must be 0)"))
 
@@ -258,7 +260,7 @@ def validate(injected: dict) -> list[tuple[str, bool, str]]:
     # deterministic signal_id, so the engine's window buffer + object dedupe on it
     # (at-least-once ingest may leave multiple physical MergeTree rows — that's
     # expected; what must hold is ONE identity → no duplicate object).
-    like, n, sigs, objs = find("8. duplicate events (deduped)")
+    like, _n, sigs, objs = find("8. duplicate events (deduped)")
     rows = len([s for s in sigs if s["kind"] == "link_state_change"])
     distinct = ch(f"SELECT uniqExact(signal_id) FROM netops.corr_signals "
                   f"WHERE entity_id LIKE '%{like}%' AND kind='link_state_change'")

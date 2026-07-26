@@ -69,7 +69,7 @@ _DATA_CLASS_SEVERITY: dict[str, int] = {
 }
 
 
-def worst_data_class(values: "list[str] | tuple[str, ...]") -> str:
+def worst_data_class(values: list[str] | tuple[str, ...]) -> str:
     """The least-live data_class present. Unknown strings fail CLOSED (treated as
     lab — the most restrictive), never silently as live."""
     worst = DataClass.LIVE.value
@@ -98,7 +98,7 @@ class Provenance:
     run_id: str = ""
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Provenance":
+    def from_dict(cls, d: dict) -> Provenance:
         return cls(
             tenant_id=str(d.get("tenant_id", "")),
             producer_id=str(d.get("producer_id", "")),
@@ -301,12 +301,10 @@ class Endpoint:
     def valid_at(self, when: datetime) -> bool:
         if self.valid_from and when < self.valid_from:
             return False
-        if self.valid_to and when > self.valid_to:
-            return False
-        return True
+        return not (self.valid_to and when > self.valid_to)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Endpoint":
+    def from_dict(cls, d: dict) -> Endpoint:
         return cls(
             endpoint_id=str(d["endpoint_id"]), tenant_id=str(d.get("tenant_id", "")),
             address=str(d.get("address", "")),
@@ -353,7 +351,7 @@ class PathDefinition:
     network_context: str = ""
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PathDefinition":
+    def from_dict(cls, d: dict) -> PathDefinition:
         port = d.get("dst_port")
         return cls(
             path_id=str(d["path_id"]), tenant_id=str(d.get("tenant_id", "")),
@@ -399,7 +397,7 @@ class PathHop:
         return self.state == HopState.RESPONDING.value
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PathHop":
+    def from_dict(cls, d: dict) -> PathHop:
         rtt = d.get("rtt_ms")
         return cls(
             hop_index=int(d["hop_index"]), state=str(d.get("state", HopState.RESPONDING.value)),
@@ -460,7 +458,7 @@ class PathObservation:
         return tuple(sorted(self.hops, key=lambda h: h.hop_index))
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PathObservation":
+    def from_dict(cls, d: dict) -> PathObservation:
         return cls(
             observation_id=str(d["observation_id"]), path_id=str(d.get("path_id", "")),
             tenant_id=str(d.get("tenant_id", "")),
@@ -505,12 +503,10 @@ class ServiceBinding:
     def valid_at(self, when: datetime) -> bool:
         if self.valid_from and when < self.valid_from:
             return False
-        if self.valid_to and when > self.valid_to:
-            return False
-        return True
+        return not (self.valid_to and when > self.valid_to)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ServiceBinding":
+    def from_dict(cls, d: dict) -> ServiceBinding:
         return cls(
             service_ref=str(d["service_ref"]), endpoint_ref=str(d["endpoint_ref"]),
             tenant_id=str(d.get("tenant_id", "")), evidence_ref=str(d.get("evidence_ref", "")),
@@ -545,7 +541,7 @@ class NatSession:
     prov: Provenance | None = None
 
     @classmethod
-    def from_dict(cls, d: dict) -> "NatSession":
+    def from_dict(cls, d: dict) -> NatSession:
         return cls(
             tenant_id=str(d.get("tenant_id", "")), pre_address=str(d.get("pre_address", "")),
             post_address=str(d.get("post_address", "")),
@@ -581,7 +577,7 @@ class RouteRelation:
     prov: Provenance | None = None
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RouteRelation":
+    def from_dict(cls, d: dict) -> RouteRelation:
         return cls(
             tenant_id=str(d.get("tenant_id", "")), from_ref=str(d.get("from_ref", "")),
             to_ref=str(d.get("to_ref", "")), relation=str(d.get("relation", "routes_via")),
@@ -738,7 +734,7 @@ class PathGraphView:
         return not (self.endpoints or self.observations or self.service_bindings
                     or self.nat_sessions or self.routes)
 
-    def for_tenant(self, tenant_id: str) -> "PathGraphView":
+    def for_tenant(self, tenant_id: str) -> PathGraphView:
         """§6 rule 1 / §9: the ONLY constructor the engine uses. Every object whose
         immutable tenant_id differs is dropped here — cross-tenant relation lookup is
         structurally impossible, not merely filtered later. Objects carrying an EMPTY
@@ -753,7 +749,7 @@ class PathGraphView:
         )
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PathGraphView":
+    def from_dict(cls, d: dict) -> PathGraphView:
         return cls(
             endpoints=tuple(Endpoint.from_dict(x) for x in (d.get("endpoints") or ())),
             observations=tuple(PathObservation.from_dict(x)

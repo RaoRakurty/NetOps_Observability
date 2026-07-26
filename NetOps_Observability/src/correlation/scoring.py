@@ -74,9 +74,7 @@ def clause_matches(clause: Clause, sig: Signal) -> bool:
         return False
     if clause.entity_type is not None and sig.entity_type is not clause.entity_type:
         return False
-    if clause.min_deviation is not None and abs(sig.deviation) < clause.min_deviation:
-        return False
-    return True
+    return not (clause.min_deviation is not None and abs(sig.deviation) < clause.min_deviation)
 
 
 def _verification_corroborates(clause: Clause, sig: Signal) -> bool:

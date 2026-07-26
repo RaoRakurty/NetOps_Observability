@@ -25,19 +25,19 @@ from __future__ import annotations
 import re
 import statistics
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Deque, Dict, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 __all__ = [
     "ResolvedTime",
+    "SkewTracker",
+    "SkewVerdict",
     "parse_any_timestamp",
     "parse_rfc3164_timestamp",
     "resolve_event_time",
     "resolve_tz",
-    "SkewTracker",
-    "SkewVerdict",
 ]
 
 UTC = timezone.utc
@@ -92,7 +92,7 @@ def parse_rfc3164_timestamp(
     *,
     reference: datetime,
     tz: tzinfo = UTC,
-) -> Optional[datetime]:
+) -> datetime | None:
     """Parse an RFC 3164 timestamp ("Jul 17 06:30:00") into UTC.
 
     RFC 3164 carries neither year nor zone, so both must be inferred:
@@ -119,8 +119,8 @@ def parse_rfc3164_timestamp(
     micro = int((m.group("frac") or "0").ljust(6, "0"))
 
     ref = reference.astimezone(UTC)
-    best: Optional[datetime] = None
-    best_delta: Optional[float] = None
+    best: datetime | None = None
+    best_delta: float | None = None
     for year in (ref.year - 1, ref.year, ref.year + 1):
         try:
             local = datetime(year, mon, day, h, mi, s, micro, tzinfo=tz)
@@ -176,7 +176,7 @@ def parse_any_timestamp(
     *,
     reference: datetime,
     tz: tzinfo = UTC,
-) -> Optional[tuple[datetime, bool]]:
+) -> tuple[datetime, bool] | None:
     """Parse one timestamp value of unknown shape.
 
     Returns (utc_datetime, tz_assumed) or None if unparseable.
@@ -309,7 +309,7 @@ def resolve_event_time(
 
 def _device_tz(
     event: Mapping[str, object], device_tz_map: Mapping[str, str] | None
-) -> Optional[str]:
+) -> str | None:
     if not device_tz_map:
         return None
     for field in _DEVICE_FIELDS:
@@ -366,9 +366,9 @@ class SkewTracker:
     def __init__(self, window: int = 50, min_samples: int = 20) -> None:
         self._window = window
         self._min_samples = min_samples
-        self._series: Dict[str, Deque[float]] = {}
+        self._series: dict[str, deque[float]] = {}
 
-    def observe(self, device: str, resolved: ResolvedTime) -> Optional[SkewVerdict]:
+    def observe(self, device: str, resolved: ResolvedTime) -> SkewVerdict | None:
         """Record one event's skew; returns a verdict when the device's
         recent skew is stable and anomalous, else None."""
         if not device:

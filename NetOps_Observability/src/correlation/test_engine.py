@@ -151,7 +151,7 @@ def test_chronic_condition_corroborates_recent_overlapping_partner():
     probe = sig("probe_loss", EntityType.PATH, "prober->dallas-edge", offset_s=580,
                 observer="prober", modality=ModalityClass.ACTIVE_PROBE)
     nodes = build_nodes((*chronic, probe))
-    edges, gap_hints = build_edges(nodes, (), EngineConfig())
+    edges, _gap_hints = build_edges(nodes, (), EngineConfig())
     assert len(edges) == 1, f"overlapping cross-modality pair must edge, got {edges}"
     assert edges[0].grounding.kind == "topo"  # shared 'dallas-edge' subject
     assert edges[0].w_reinforce > 1.0          # cross-modality reinforcement applied

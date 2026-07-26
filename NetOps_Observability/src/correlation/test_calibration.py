@@ -9,11 +9,22 @@ from datetime import timedelta
 from pathlib import Path
 
 from calibration import (
-    CORPUS_T0, LabeledIncident, NO_OBJECT, evaluate, grid_search, load_corpus,
+    CORPUS_T0,
+    NO_OBJECT,
+    LabeledIncident,
+    evaluate,
+    grid_search,
+    load_corpus,
 )
 from engine import EngineConfig, engine_version
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 CORPUS = Path(__file__).parent / "examples" / "calibration-corpus.json"

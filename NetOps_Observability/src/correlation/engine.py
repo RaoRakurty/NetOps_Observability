@@ -28,6 +28,8 @@ from catalog import Catalog
 from directed_topology import Oracle, RecordingOracle
 from directed_topology import Verdict as _Verdict
 from layers import CausalLayer, layer_of, osi_label
+from path_assembly import AssembledPath
+from path_attribution import Attribution, object_attribution
 from path_graph import (
     CONTRACT_VERSION,
     DataClass,
@@ -44,8 +46,6 @@ from path_graph import (
     topology_link_relation,
     worst_data_class,
 )
-from path_assembly import AssembledPath
-from path_attribution import Attribution, object_attribution
 from scoring import RankingResult, rank
 from signals import SIGNAL_NS, EntityType, Severity, Signal, Source
 from verdicts import Verdict as GateVerdict
@@ -109,7 +109,7 @@ class SeamView:
     control_plane_owner: str = "enterprise"
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SeamView":
+    def from_dict(cls, d: dict) -> SeamView:
         eps = d.get("endpoints") or {}
         return cls(
             seam_id=str(d["seam_id"]),
@@ -306,7 +306,7 @@ _PATH_OBSERVATION_METHODS = frozenset({
 })
 
 
-def RANK_OBSERVED_PATH(method: str) -> bool:  # noqa: N802 — reads as a predicate
+def RANK_OBSERVED_PATH(method: str) -> bool:  # uppercase: rung constant that reads as a predicate
     return method in _PATH_OBSERVATION_METHODS
 
 
@@ -361,7 +361,7 @@ class TopologyAdjacency:
         return a != b and frozenset({a, b}) in self.pairs
 
     @staticmethod
-    def from_links(links: "list[dict] | tuple[dict, ...]") -> "TopologyAdjacency":
+    def from_links(links: list[dict] | tuple[dict, ...]) -> TopologyAdjacency:
         out: set[frozenset[str]] = set()
         for link in links or ():
             a, b = str(link.get("a") or ""), str(link.get("b") or "")
@@ -370,9 +370,15 @@ class TopologyAdjacency:
         return TopologyAdjacency(frozenset(out))
 
 
+# Shared empty-adjacency default. TopologyAdjacency is a frozen dataclass, so one
+# module-level instance is safe to share across every signature that defaults to
+# "no adjacency" (B008: no constructor calls in argument defaults).
+NO_ADJACENCY = TopologyAdjacency()
+
+
 def resolve_grounding(
     a: Node, b: Node, seams: tuple[SeamView, ...],
-    adjacency: TopologyAdjacency = TopologyAdjacency(),
+    adjacency: TopologyAdjacency = NO_ADJACENCY,
     paths: PathIndex | None = None,
 ) -> Grounding | None:
     """The RANKED relationship gate (contract §3) — this REPLACES token-overlap
@@ -524,7 +530,7 @@ _LAYER = {
 
 
 def _direction(a: Node, b: Node, cfg: EngineConfig,
-               directed: "Oracle | None" = None) -> tuple[float, str]:
+               directed: Oracle | None = None) -> tuple[float, str]:
     """2-of-3 to claim (§4.3): onset order + OSI layer prior + topology up/down.
     `a precedes b` (a is from_node). Each vote either agrees with a→b, conflicts
     (→ mixed/none), or abstains. The topology vote (#2) is supplied by the
@@ -563,7 +569,7 @@ def _direction(a: Node, b: Node, cfg: EngineConfig,
 
 def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
-    adjacency: TopologyAdjacency = TopologyAdjacency(),
+    adjacency: TopologyAdjacency = NO_ADJACENCY,
     topology_stale: bool = False,
     directed: Oracle | None = None,
     paths: PathIndex | None = None,
@@ -681,11 +687,11 @@ class ObjectSnapshot:
     # layer_coverage it is NOT in content_hash / material_hash / hypotheses_blob, so
     # an object with no attribution (None) is byte-for-byte identical to pre-P2 and
     # REPLAY (which re-runs run_window with no discovery paths) never drifts on it.
-    attribution: "Attribution | None" = None
+    attribution: Attribution | None = None
     # The DISCOVERED typed path the attributed cause sits on (P1 AssembledPath) —
     # kept alongside the attribution so the render contract can show the segments /
     # key devices / unknown+ambiguous / head. Also NOT hashed (additive).
-    attribution_path: "AssembledPath | None" = None
+    attribution_path: AssembledPath | None = None
 
     def attribution_blob(self) -> str:
         """The corr_objects.attribution JSON the RCA report reads (the P3 render
@@ -1139,7 +1145,7 @@ def run_window(
     catalog: Catalog,
     seams: tuple[SeamView, ...],
     cfg: EngineConfig | None = None,
-    adjacency: TopologyAdjacency = TopologyAdjacency(),
+    adjacency: TopologyAdjacency = NO_ADJACENCY,
     topology_stale: bool = False,
     storm_mode: bool = False,
     directed: Oracle | None = None,

@@ -138,7 +138,7 @@ def layer_of(kind: str) -> CausalLayer | None:
     """Causal layer for a signal kind, or None if unmapped (prior abstains)."""
     if not kind:
         return None
-    base = kind[:-6] if kind.endswith("_clear") else kind
+    base = kind.removesuffix("_clear")
     return _KIND_LAYER.get(base)
 
 

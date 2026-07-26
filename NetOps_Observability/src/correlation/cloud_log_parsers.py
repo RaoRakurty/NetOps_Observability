@@ -22,6 +22,7 @@ drops; provenance is never invented).
 
 from __future__ import annotations
 
+import json as _json
 import re
 import shlex
 from datetime import datetime, timezone
@@ -118,10 +119,10 @@ def alb_lb_signal(rec: dict) -> dict | None:
 # Space-separated. The field SET is configurable per flow-log subscription, so the
 # parser takes the field list (defaulting to the v2 default layout) and maps by
 # NAME — never by blind position — so a custom format still parses correctly.
-_VPC_V2_FIELDS = (
-    "version account-id interface-id srcaddr dstaddr srcport dstport "
-    "protocol packets bytes start end action log-status"
-).split()
+_VPC_V2_FIELDS = [
+    "version", "account-id", "interface-id", "srcaddr", "dstaddr", "srcport",
+    "dstport", "protocol", "packets", "bytes", "start", "end", "action", "log-status",
+]
 
 _PROTO_NAME = {"1": "icmp", "6": "tcp", "17": "udp", "47": "gre", "50": "esp"}
 
@@ -316,8 +317,6 @@ def vpc_accept_rollup(records: list[dict]) -> list[dict]:
 # the signal; ALLOW/COUNT are volume and are ignored (anti-noise). Aggregated
 # per (web ACL, terminating rule) per scan batch — never one event per request.
 
-import json as _json  # noqa: E402 - section-local import (this file groups imports per parser block)
-
 
 def parse_aws_waf_log(line: str) -> dict | None:
     """One AWS WAF JSON log record → dict, or None when it isn't one."""
@@ -351,8 +350,7 @@ def waf_block_rollup(records: list[dict]) -> list[dict]:
         })
         a["count"] += 1
         ts = int(rec.get("timestamp") or 0)
-        if ts > a["ts_ms"]:
-            a["ts_ms"] = ts
+        a["ts_ms"] = max(a["ts_ms"], ts)
         if not a["uri"]:
             a["uri"] = str(http.get("uri") or "")
             a["client"] = str(http.get("clientIp") or "")
@@ -427,8 +425,7 @@ def dns_error_rollup(records: list[dict]) -> list[dict]:
         a = agg.setdefault((name, rcode), {"count": 0, "ts": "", "src": "", "vpc": "", "qtype": ""})
         a["count"] += 1
         ts = str(rec.get("query_timestamp") or "")
-        if ts > a["ts"]:
-            a["ts"] = ts
+        a["ts"] = max(a["ts"], ts)
         if not a["src"]:
             a["src"] = str(rec.get("srcaddr") or "")
             a["vpc"] = str(rec.get("vpc_id") or "")

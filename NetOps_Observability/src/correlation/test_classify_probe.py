@@ -9,8 +9,16 @@ from datetime import datetime, timezone
 
 import main
 from signals import (
-    Signal, Observer, ObserverType, ModalityClass, EntityType, Severity, Source,
-    ProbeScope, ProbeAuthority, CONFIRM_AUTHORITIES,
+    CONFIRM_AUTHORITIES,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    ProbeAuthority,
+    ProbeScope,
+    Severity,
+    Signal,
+    Source,
 )
 
 
@@ -128,11 +136,12 @@ def test_production_purpose_keeps_registry_trust(monkeypatch):
 def test_one_execution_yields_one_observer(monkeypatch):
     """Owner feedback: one check execution must count as ONE observer — both
     lanes of one execution share observer identity and execution lineage."""
+    from datetime import datetime, timezone
+
     import main
     from episodes import EpisodeDetector
     from producers import probe_signals
     from synthetic_normalize import synthetic_app_signal
-    from datetime import datetime, timezone
 
     monkeypatch.setattr(main, "_INTERNAL_PROBE_TARGETS", set())
     monkeypatch.setattr(main, "_MEASUREMENT_PROBE_OBSERVERS", {"prober"})

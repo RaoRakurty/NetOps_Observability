@@ -15,8 +15,8 @@ ambiguity resolves to None, same as unknown.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable, Mapping
 
 
 def _unique_map(pairs: Iterable[tuple]) -> dict:
@@ -65,7 +65,7 @@ class EntityResolver:
 
     @classmethod
     def from_rows(cls, devices: Iterable[Mapping], interface_ips: Iterable[Mapping],
-                  ifindex: Iterable[Mapping]) -> "EntityResolver":
+                  ifindex: Iterable[Mapping]) -> EntityResolver:
         """Build a resolver from already tenant-filtered row lists (the loader passes
         a tenant's rows ∪ global). Pure; conflicting mappings drop to unresolvable."""
         ip_dev_pairs: list[tuple] = []

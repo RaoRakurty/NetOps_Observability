@@ -15,7 +15,13 @@ from entity_resolver import EntityResolver
 from flow_direction import netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 T0 = datetime(2026, 6, 23, 11, 0, 0, tzinfo=timezone.utc)

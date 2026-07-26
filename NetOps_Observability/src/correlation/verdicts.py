@@ -54,6 +54,7 @@ from signals import (
     Signal,
 )
 
+
 # Verdict tiers — string values match the frozen corr_objects.verdict_tier Enum8.
 class VerdictTier(str, Enum):
     UNDETERMINED = "undetermined"
@@ -98,7 +99,7 @@ class Witness:
             return True
         return self.probe_authority in CONFIRM_AUTHORITIES
 
-    def independent_of(self, other: "Witness") -> bool:
+    def independent_of(self, other: Witness) -> bool:
         """Mutual independence: different observer, no shared measurement
         authority, and no shared FATE — same agent host, NAT/public egress, or
         (seam+target+schedule). Fate is checked ACROSS modalities, so a probe and
@@ -108,10 +109,7 @@ class Witness:
             return False
         if self.authority is not None and self.authority == other.authority:
             return False
-        if self.fate is not None and other.fate is not None \
-                and self.fate.shares_fate_with(other.fate):
-            return False
-        return True
+        return not (self.fate is not None and other.fate is not None and self.fate.shares_fate_with(other.fate))
 
 
 def _enum_attr(attrs: dict, key: str, enum_cls, default):  # type: ignore[no-untyped-def]
@@ -358,8 +356,8 @@ def assess(
         # probes" (excluded by Decision #1) so the Inspector can say why.
         if cov.excluded_debug:
             return Verdict(VerdictTier.UNDETERMINED, cov, (
-                "only debug/lab probe evidence — excluded from customer-facing "
-                "verdicts; no admissible signal to assess",
+                ("only debug/lab probe evidence — excluded from customer-facing "
+                "verdicts; no admissible signal to assess"),
             ))
         return Verdict(VerdictTier.UNDETERMINED, cov, ("no evidence signals",))
 

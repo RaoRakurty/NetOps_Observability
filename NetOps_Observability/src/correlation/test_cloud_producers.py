@@ -12,7 +12,14 @@ from datetime import datetime, timezone
 import pytest
 
 from cloud_producers import CLOUD_KINDS, cloud_signal, cloud_signal_from_event
-from signals import DeadLetter, EntityType, ModalityClass, ObserverType, Severity, Source
+from signals import (
+    DeadLetter,
+    EntityType,
+    ModalityClass,
+    ObserverType,
+    Severity,
+    Source,
+)
 
 TS = datetime(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
 

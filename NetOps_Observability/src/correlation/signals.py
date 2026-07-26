@@ -199,19 +199,15 @@ class ProbeFate:
     target: str = ""
     schedule_id: str = ""
 
-    def shares_fate_with(self, other: "ProbeFate") -> bool:
+    def shares_fate_with(self, other: ProbeFate) -> bool:
         if self.agent_host and self.agent_host == other.agent_host:
             return True
         if self.source_egress and self.source_egress == other.source_egress:
             return True
-        if (self.seam_id and self.seam_id == other.seam_id
-                and self.target and self.target == other.target
-                and self.schedule_id and self.schedule_id == other.schedule_id):
-            return True
-        return False
+        return bool(self.seam_id and self.seam_id == other.seam_id and self.target and self.target == other.target and self.schedule_id and self.schedule_id == other.schedule_id)
 
 
-def probe_authority_of(sig: "Signal") -> "ProbeAuthority | None":
+def probe_authority_of(sig: Signal) -> ProbeAuthority | None:
     """A signal's derived probe authority (None for non-probe). Reads the field
     enriched at ingestion; fail-closed to LOW for an unclassified probe."""
     if sig.modality_class is not ModalityClass.ACTIVE_PROBE:
@@ -255,8 +251,8 @@ def _is_never_vantage(observer_id: str) -> bool:
 
 
 def classify_observer_kind(
-    observer_id: str, observer_type: "ObserverType | str",
-    modality: "ModalityClass | str", probe_authority: str = "",
+    observer_id: str, observer_type: ObserverType | str,
+    modality: ModalityClass | str, probe_authority: str = "",
 ) -> str:
     """Default observer-kind hint from provenance. Fail-closed (constraint 1):
     a low/debug/unclassified probe is `unknown`, never assumed a vantage; a
@@ -408,7 +404,7 @@ class Signal:
 
 
     @classmethod
-    def from_ch_row(cls, row: dict) -> "Signal":
+    def from_ch_row(cls, row: dict) -> Signal:
         """Inverse of to_ch_row — rehydrates a Signal from a corr_signals /
         corr_signals_archive row (the replay input). Round-trip invariant:
         Signal.from_ch_row(s.to_ch_row()).to_ch_row() == s.to_ch_row(), so a

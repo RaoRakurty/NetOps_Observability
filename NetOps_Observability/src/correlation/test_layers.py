@@ -5,7 +5,15 @@ from datetime import datetime, timedelta, timezone
 from catalog import builtin_catalog
 from engine import EngineConfig, SeamView, build_edges, build_nodes, run_window
 from layers import CausalLayer, layer_of, osi_label
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 
 _SEAM = SeamView(
     seam_id="dallas-dx", tenant_id="", seam_type="DX",

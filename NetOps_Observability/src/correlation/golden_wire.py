@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from catalog import builtin_catalog
-from episodes import EpisodeDetector
 from engine import run_window
+from episodes import EpisodeDetector
 from producers import flow_sample, probe_signals
 from scoring import rank
 from signals import (

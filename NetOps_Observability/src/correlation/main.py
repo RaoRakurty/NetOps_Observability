@@ -30,20 +30,48 @@ import os
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, replace as dc_replace
+from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
-from typing import Deque, Dict, Iterable
 
 import httpx
 from aiokafka import AIOKafkaConsumer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from app_producers import app_identity_from_event
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
+from cloud_log_parsers import (
+    cloud_log_event,
+    dns_error_rollup,
+    parse_aws_waf_log,
+    parse_r53_dns_log,
+    parse_vpc_flow_log,
+    vpc_accept_rollup,
+    vpc_flow_signal,
+    vpc_pair_rollup,
+    waf_block_rollup,
+)
+from cloud_producers import cloud_signal_from_event
+from controller_events import controller_event_to_signal
 from directed_topology import DirectedTopology
-from engine import EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, find_continuation, find_merges, run_window
+from engine import (
+    EngineConfig,
+    ObjectSnapshot,
+    SeamView,
+    TopologyAdjacency,
+    find_continuation,
+    find_merges,
+    run_window,
+)
+from entity_resolver import EntityResolver
+from episodes import EpisodeDetector
+from flow_app_attribution import AppIdentityIndex, resolve_flow_app
+from flow_direction import flow_direction_sample, netflow_direction_source
+from lb_normalize import normalize_lb_event
 from path_assembly import (
     AssembledPath,
     DiscoveredEdge,
@@ -54,26 +82,8 @@ from path_assembly import (
     inventory_edges_from_topology,
     measured_run_from_observation,
 )
-from path_graph import PathGraphView
-from entity_resolver import EntityResolver
-from flow_direction import flow_direction_sample, netflow_direction_source
 from path_direction import resolve_path_order, traceroute_direction_source
-from routing_direction import forwarding_pairs, routing_direction_source
-from episodes import EpisodeDetector
-from cloud_log_parsers import (
-    cloud_log_event, dns_error_rollup, parse_aws_waf_log, parse_r53_dns_log,
-    parse_vpc_flow_log, vpc_accept_rollup, vpc_flow_signal, vpc_pair_rollup,
-    waf_block_rollup,
-)
-from cloud_producers import cloud_signal_from_event
-from app_producers import app_identity_from_event
-from controller_events import controller_event_to_signal
-from wireless_onboarding import (
-    assemble_episode as assemble_wireless_episode,
-    client_identity as wo_client_identity,
-    episode_signal as wireless_episode_signal,
-)
-from verification_producer import verification_signal_from_event
+from path_graph import PathGraphView
 from producers import (
     clock_skew_signal,
     episode_signal,
@@ -86,9 +96,7 @@ from producers import (
     ts_invalid_count,
 )
 from replay import replay_object
-from flow_app_attribution import AppIdentityIndex, resolve_flow_app
-from lb_normalize import normalize_lb_event
-from synthetic_normalize import synthetic_app_signal
+from routing_direction import forwarding_pairs, routing_direction_source
 from signals import (
     DeadLetter,
     EntityType,
@@ -103,6 +111,17 @@ from signals import (
     VantageType,
     derive_probe_authority,
     derive_probe_scope,
+)
+from synthetic_normalize import synthetic_app_signal
+from verification_producer import verification_signal_from_event
+from wireless_onboarding import (
+    assemble_episode as assemble_wireless_episode,
+)
+from wireless_onboarding import (
+    client_identity as wo_client_identity,
+)
+from wireless_onboarding import (
+    episode_signal as wireless_episode_signal,
 )
 
 # ---------------------------------------------------------------------------
@@ -156,7 +175,7 @@ _cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
 # flows/logs the Vector aggregator tags. The file is re-read when its mtime
 # changes; an absent file or unmatched device yields "" (global/platform).
 TENANT_ENRICHMENT_FILE = os.environ.get("TENANT_ENRICHMENT_FILE", "/data/enrichment/device_tenant.csv")
-_tenant_map: Dict[str, str] = {}
+_tenant_map: dict[str, str] = {}
 _tenant_mtime: float = -1.0
 
 
@@ -187,7 +206,7 @@ def tenant_for(device: str) -> str:
         return canon_tenant(_tenant_map.get(device, ""))
     if mt != _tenant_mtime:
         _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
-        fresh: Dict[str, str] = {}
+        fresh: dict[str, str] = {}
         try:
             with open(TENANT_ENRICHMENT_FILE, newline="") as f:
                 reader = csv.reader(f)
@@ -224,7 +243,7 @@ Z_THRESHOLD = 3.0
 
 @dataclass
 class Series:
-    values: Deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    values: deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
 
     def mean(self) -> float:
         return sum(self.values) / len(self.values) if self.values else 0.0
@@ -244,7 +263,7 @@ class Series:
 # (device, metric) with no eviction, so cardinality churn (ephemeral cloud
 # resource ids arriving as `device`) grew it until the container hit its memory
 # limit. Dropping the least-recently-scored series only costs it its warm-up.
-SERIES: "OrderedDict[tuple[str, str], Series]" = OrderedDict()
+SERIES: OrderedDict[tuple[str, str], Series] = OrderedDict()
 SERIES_MAX = int(os.environ.get("CORR_MAX_SERIES", "200000"))
 
 # ---------------------------------------------------------------------------
@@ -304,7 +323,7 @@ CLOCK_SKEW_SIGNALS = 0        # clock_skew meta-findings written (S5 — never b
 # (tenant, entity) per window — a device with a wrong clock logs continuously,
 # and the finding must not become a firehose. Bounded map (see _clock_skew_due).
 CLOCK_SKEW_COOLDOWN_S = float(os.environ.get("CLOCK_SKEW_COOLDOWN_S", "900"))
-_CLOCK_SKEW_LAST: Dict[tuple, float] = {}
+_CLOCK_SKEW_LAST: dict[tuple, float] = {}
 _CLOCK_SKEW_LAST_CAP = 4096
 
 
@@ -387,7 +406,7 @@ def _parse_chaos_fixtures(raw: str) -> dict[str, str]:
 CHAOS_FIXTURES = _parse_chaos_fixtures(os.environ.get("CORR_CHAOS_FIXTURES", ""))
 
 
-def _chaos_fixture_for(snap: "ObjectSnapshot") -> str:
+def _chaos_fixture_for(snap: ObjectSnapshot) -> str:
     """Fixture name when any affected entity matches a registered chaos source
     ('' = real incident). Substring match: probe entities carry the target in
     path/entity ids (e.g. 'path:prober->192.0.2.120')."""
@@ -411,7 +430,7 @@ def _chaos_fixture_for(snap: "ObjectSnapshot") -> str:
 CORR_WA_FLUSH_S = float(os.environ.get("CORR_WA_FLUSH_S", "300"))
 CORR_WA_TOPK = int(os.environ.get("CORR_WA_TOPK", "5"))
 _WA_ENTITY_CAP = 1000  # bounded per-tenant entity Counter under a storm (§9)
-TENANT_WA: Dict[str, dict] = {}   # tenant -> raw/persisted/damped + kind/entity Counters
+TENANT_WA: dict[str, dict] = {}   # tenant -> raw/persisted/damped + kind/entity Counters
 TENANT_WA_LAST: list[dict] = []   # last flushed window rows, sorted, top-K (for /metrics)
 _WA_WINDOW_START: datetime | None = None
 
@@ -456,12 +475,12 @@ async def _flush_tenant_write_amp(now: datetime) -> None:
     if not TENANT_WA_ROWS:
         TENANT_WA_LAST = []
         return
-    ages: Dict[str, float] = {}
+    ages: dict[str, float] = {}
     for reg in OPEN_OBJECTS.values():
         t = reg["snapshot"].tenant_id
         age = (now - reg.get("opened_at", now)).total_seconds()
         ages[t] = max(ages.get(t, 0.0), age)
-    open_counts: Dict[str, int] = {}
+    open_counts: dict[str, int] = {}
     for reg in OPEN_OBJECTS.values():
         t = reg["snapshot"].tenant_id
         open_counts[t] = open_counts.get(t, 0) + 1
@@ -506,11 +525,11 @@ _PATH_ASSEMBLER = PathAssembler()
 # cycle through CUSUM → passive_flow episodes. Flows are a firehose — accumulation is
 # O(1) per flow and the flush is bounded by (samplers × interfaces).
 FLOW_CORRELATION_ENABLED = os.environ.get("ENABLE_FLOW_CORRELATION", "true") == "true"
-_FLOW_AGG: Dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
+_FLOW_AGG: dict[tuple, dict] = {}   # (tenant, entity_id) -> {bytes, sampler}
 # #98 Phase 4 — per-application flow volume, populated ONLY for records with a
 # confirming attribution (explicit / appid-fusion / operator prefix map). The
 # interface aggregation above is untouched: one flow can feed BOTH groundings.
-_FLOW_APP_AGG: Dict[tuple, dict] = {}   # (tenant, app_slug) -> {bytes, sampler, source, confidence}
+_FLOW_APP_AGG: dict[tuple, dict] = {}   # (tenant, app_slug) -> {bytes, sampler, source, confidence}
 _APPID_INDEX = AppIdentityIndex()       # tenant-scoped dst_ip → fused app identity
 FLOWS_RECEIVED = 0
 FLOWS_DROPPED = 0   # records flow_sample() could not attribute/measure (F-42)
@@ -535,7 +554,7 @@ def _log_flow_drop(ev: dict) -> None:
 # fault that breaks but doesn't reverse it; a ratio is steady under steady traffic.
 # Bounded by communicating device-pairs. Feeds the oracle's NetFlow source each cycle.
 # (Rolling/decay window for faster reversal detection = a documented future refinement.)
-_FLOW_DIR: Dict[str, Dict[tuple, float]] = {}
+_FLOW_DIR: dict[str, dict[tuple, float]] = {}
 FLOW_DIR_MAX_PAIRS = int(os.environ.get("CORR_MAX_FLOW_DIR_PAIRS", "100000"))
 FLOW_DIRECTION_DOMINANCE = float(os.environ.get("CORR_FLOW_DOMINANCE", "0.6"))
 FLOW_DIRECTION_PAIRS = 0  # observability: distinct directed device-pairs seen
@@ -589,7 +608,7 @@ CATALOG = builtin_catalog()
 # (bounded by event-time age, pruned each cycle — §9 queues bounded).
 # #102: bound from the resource plan (CORR_WINDOW_BUFFER, floor 50k = the
 # audited constant) so the window scales with the container's memory budget.
-WINDOW_BUFFER: Deque[Signal] = deque(
+WINDOW_BUFFER: deque[Signal] = deque(
     maxlen=max(50_000, int(os.environ.get("CORR_WINDOW_BUFFER", "50000"))))
 # Kafka delivery is at-least-once (auto-commit ~5s): a consumer restart
 # re-delivers recent messages, and a duplicated signal_id in the window
@@ -601,7 +620,7 @@ _BUFFERED_IDS: set[str] = set()
 # Open-object registry: correlation_id → persistence state. CH stays append-
 # only; this is the engine's working memory (PG corr_active wiring follows
 # with the ops lifecycle build).
-OPEN_OBJECTS: Dict[str, dict] = {}
+OPEN_OBJECTS: dict[str, dict] = {}
 LAST_GAP_HINTS = 0
 
 _seam_cache: tuple[SeamView, ...] = ()
@@ -663,9 +682,9 @@ def _entity_resolver_raw() -> dict[str, dict[str, list]]:
             with open(ENTITY_RESOLVER_FILE) as f:
                 raw = json.load(f)
             grouped: dict[str, dict[str, list]] = {"devices": {}, "interface_ips": {}, "ifindex": {}}
-            for section in grouped:
+            for section, by_tenant in grouped.items():
                 for row in raw.get(section) or []:
-                    grouped[section].setdefault(str(row.get("tenant_id") or ""), []).append(row)
+                    by_tenant.setdefault(str(row.get("tenant_id") or ""), []).append(row)
             _er_raw = grouped
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             log.warning("entity resolver unreadable (%s); keeping previous", exc)
@@ -972,7 +991,7 @@ def _edge_discovery_scopes(edges: tuple[DiscoveredEdge, ...], limit: int
     return scopes
 
 
-def _head_for_scope(heads: dict[str, DnsHead], src: str, dst: str) -> "DnsHead | None":
+def _head_for_scope(heads: dict[str, DnsHead], src: str, dst: str) -> DnsHead | None:
     """Attach a DNS head to a scope ONLY when the name it resolved points at the scope's
     frontend endpoint (dst, else src) — never force a head onto an unrelated path."""
     for key in (dst, src):
@@ -982,7 +1001,7 @@ def _head_for_scope(heads: dict[str, DnsHead], src: str, dst: str) -> "DnsHead |
 
 
 def discovery_paths_for(tenant: str, view: PathGraphView,
-                        window: "list | tuple" = ()) -> tuple[AssembledPath, ...]:
+                        window: list | tuple = ()) -> tuple[AssembledPath, ...]:
     """Build this tenant's P1 typed causal paths for the on-path attribution pass
     (path-causality RCA P2 / step 4), FUSING all four discovery sources so a cloud
     incident gets a discovered SRC→DST path even WITHOUT a traceroute (cloud hides hops):
@@ -1012,7 +1031,7 @@ def discovery_paths_for(tenant: str, view: PathGraphView,
         return ()
     try:
         # -- feed 1: MEASURED (the live source; groups by observed endpoints) --------
-        measured_groups: Dict[tuple[str, str], list] = {}
+        measured_groups: dict[tuple[str, str], list] = {}
         try:
             for o in (o for o in view.observations if canon_tenant(o.tenant_id) == canon_tenant(tenant) and o.hops):
                 run = measured_run_from_observation(o)
@@ -1288,7 +1307,7 @@ async def engine_cycle() -> None:
     if topo_stale or storm:
         log.warning("engine degradation: topology_stale=%s storm_mode=%s (buffer=%d/%s)",
                     topo_stale, storm, len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen)
-    by_tenant: Dict[str, list[Signal]] = {}
+    by_tenant: dict[str, list[Signal]] = {}
     for s in WINDOW_BUFFER:
         by_tenant.setdefault(s.tenant_id, []).append(s)
 
@@ -1443,7 +1462,7 @@ async def engine_loop() -> None:
     while True:
         try:
             await engine_cycle()
-        except Exception:                                  # noqa: BLE001
+        except Exception:
             log.exception("engine cycle failed (observable, §10; loop continues)")
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
 
@@ -1635,8 +1654,8 @@ ch: CH | None = None
 # incident" months later answers differently than the incident did at the time,
 # with no counter having moved. Every write now goes through ch_insert(), which
 # cannot forget to check.
-CH_INSERT_FAILURES: Dict[str, int] = {}
-_CH_FAIL_LOG_LAST: Dict[str, float] = {}
+CH_INSERT_FAILURES: dict[str, int] = {}
+_CH_FAIL_LOG_LAST: dict[str, float] = {}
 CH_FAIL_LOG_EVERY_S = float(os.environ.get("CORR_CH_FAIL_LOG_EVERY_S", "30"))
 
 
@@ -1731,7 +1750,7 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
     token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
     try:
         ok = await ch.insert(table, rows, dedup_token=token)
-    except Exception as exc:  # noqa: BLE001 — counted, then re-raised
+    except Exception as exc:  # blanket on purpose: counted, then re-raised
         _note_ch_failure(table, type(exc).__name__, ctx)
         raise
     # `is False` exactly: CH.insert's contract is a bool, and a test double that
@@ -1746,6 +1765,14 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
 # ---------------------------------------------------------------------------
 # Kafka consumer loop.
 # ---------------------------------------------------------------------------
+
+
+def _read_from_offset(path: str, off: int) -> tuple[str, int]:
+    """Blocking read of everything after `off`; runs via asyncio.to_thread so a
+    slow/large log file never stalls the event loop (ASYNC230)."""
+    with open(path) as f:
+        f.seek(off)
+        return f.read(), f.tell()
 
 
 async def _scan_cloud_logs() -> int:
@@ -1767,10 +1794,8 @@ async def _scan_cloud_logs() -> int:
         if size == off:
             continue
         try:
-            with open(path) as f:
-                f.seek(off)
-                data = f.read()
-                _cloud_log_offsets[path] = f.tell()
+            data, new_off = await asyncio.to_thread(_read_from_offset, path, off)
+            _cloud_log_offsets[path] = new_off
         except OSError as exc:
             log.warning("cloud-log read failed %s: %s", path, exc)
             continue
@@ -1834,7 +1859,7 @@ async def cloud_log_tailer() -> None:
                 log.info("cloud-log tailer fed %d signal(s)", n)
         except asyncio.CancelledError:
             raise
-        except Exception:                                  # noqa: BLE001
+        except Exception:
             log.exception("cloud-log scan failed; retrying")
         await asyncio.sleep(max(CLOUD_LOGS_REFRESH_S, 5.0))
 
@@ -1863,7 +1888,7 @@ async def _stop_bounded(consumer) -> None:
         await asyncio.wait_for(consumer.stop(), timeout=CONSUMER_STOP_TIMEOUT_S)
     except asyncio.CancelledError:
         raise
-    except Exception:                                      # noqa: BLE001
+    except Exception:
         log.exception("consumer stop failed/timed out — abandoning old consumer")
 
 
@@ -1884,12 +1909,12 @@ CORR_QUARANTINE_MAX = int(os.environ.get("CORR_QUARANTINE_MAX", "200"))
 CORR_QUARANTINE_PAYLOAD_CHARS = int(os.environ.get("CORR_QUARANTINE_PAYLOAD_CHARS", "4000"))
 CORR_DLQ_DIR = os.environ.get("CORR_DLQ_DIR", "")
 CORR_DLQ_MAX_BYTES = int(os.environ.get("CORR_DLQ_MAX_BYTES", str(32 * 1024 * 1024)))
-QUARANTINE: Deque[dict] = deque(maxlen=CORR_QUARANTINE_MAX)
-HANDLER_FAILURES: Dict[str, int] = {}   # topic -> events lost to a handler error
+QUARANTINE: deque[dict] = deque(maxlen=CORR_QUARANTINE_MAX)
+HANDLER_FAILURES: dict[str, int] = {}   # topic -> events lost to a handler error
 QUARANTINE_WRITE_FAILURES = 0
 QUARANTINE_ROTATIONS = 0
 _DLQ_UNSET_WARNED = False
-_QUARANTINE_LOG_LAST: Dict[str, float] = {}
+_QUARANTINE_LOG_LAST: dict[str, float] = {}
 QUARANTINE_LOG_EVERY_S = float(os.environ.get("CORR_QUARANTINE_LOG_EVERY_S", "30"))
 # Consecutive handler failures that mean "the dependency is down", not "one
 # poison event" — the consumer then restarts through the supervisor's backoff
@@ -2015,7 +2040,10 @@ async def consume() -> None:
         uncommitted = 0
         last_commit = time.monotonic()
 
-        async def _commit(force: bool = False) -> None:
+        async def _commit(force: bool = False, consumer: AIOKafkaConsumer = consumer) -> None:
+            # `consumer` bound at definition time (B023): the enclosing while-loop
+            # rebinds it each supervision round, and this closure must always
+            # commit on the consumer of ITS round, never a later one.
             nonlocal uncommitted, last_commit
             if uncommitted == 0:
                 return
@@ -2044,7 +2072,7 @@ async def consume() -> None:
                     consecutive_failures = 0
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:                   # noqa: BLE001
+                except Exception as exc:
                     quarantine_event(msg.topic, msg.value, exc)
                     consecutive_failures += 1
                     # A RUN of failures is not a poison event, it is a broken
@@ -2065,7 +2093,7 @@ async def consume() -> None:
                 await _commit(force=True)  # clean shutdown: nothing replays
             await _stop_bounded(consumer)
             raise
-        except Exception:                                  # noqa: BLE001
+        except Exception:
             log.exception("consumer failed; restarting in %.0fs", backoff)
             # NO commit here beyond what _commit already advanced: an offset
             # whose handler did not return stays unacknowledged, by design.
@@ -2218,7 +2246,7 @@ async def handle_metric(ev: dict) -> None:
 # Severity weights for syslog correlation. A burst of high-severity
 # events from one device within a short window is itself a finding.
 SEVERITY_WEIGHT = {"emerg": 8, "alert": 7, "crit": 6, "err": 5, "warning": 3, "notice": 2, "info": 1, "debug": 0}
-SYSLOG_BUCKET: Dict[str, list[tuple[float, int]]] = {}
+SYSLOG_BUCKET: dict[str, list[tuple[float, int]]] = {}
 SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
 # Cap on distinct syslog hostnames tracked for burst detection. The key comes
@@ -3185,13 +3213,12 @@ async def correlation_replay(correlation_id: str, version: int | None = None) ->
 async def findings(limit: int = 100, severity: str | None = None) -> list[dict]:
     assert ch is not None
     where = ""
-    if severity:
-        # Severities are simple enum words (warning/critical/info/...). Restrict
-        # to letters so the value cannot carry SQL metacharacters — quote-
-        # stripping alone is unsafe because ch.query sends raw SQL and ClickHouse
-        # honors backslash escapes. An out-of-shape value is ignored (no filter).
-        if severity.isalpha():
-            where = f"WHERE severity = '{severity.lower()}'"
+    # Severities are simple enum words (warning/critical/info/...). Restrict
+    # to letters so the value cannot carry SQL metacharacters — quote-
+    # stripping alone is unsafe because ch.query sends raw SQL and ClickHouse
+    # honors backslash escapes. An out-of-shape value is ignored (no filter).
+    if severity and severity.isalpha():
+        where = f"WHERE severity = '{severity.lower()}'"
     # RFC 3339 UTC on the wire (log-time standard S3/R1): zone-less
     # toString(DateTime64) strings parse as browser-local in JS consumers.
     sql = f"""

@@ -53,7 +53,7 @@ def test_all_remaining_lanes_normalize_from_raw_wire_events():
     assert ident.entity_id == "Microsoft Teams"
 
     # every produced fault kind is a registered producer kind (coverage honesty)
-    for kind, sig in kinds.items():
+    for kind in kinds:
         if kind in ("app_identity",):
             continue
         assert kind in EMITTED_KINDS, f"{kind} produced but not registered in EMITTED_KINDS"

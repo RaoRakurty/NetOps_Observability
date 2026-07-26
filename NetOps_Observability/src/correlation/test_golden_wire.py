@@ -65,7 +65,7 @@ def test_golden_multiple_semantic_kinds_from_one_check_cannot_conspire():
 # ── B: synthetic + UNATTRIBUTED raw-wire flow stays interface-grounded ────────
 # (the attributed/confirming variant is test_flow_app_attribution.py test D)
 def test_golden_synthetic_teams_plus_interface_flow_documents_attribution_gap():
-    signals, snaps, ranking = replay_fixture_through_engine("passive_flow_drop_teams.json")
+    signals, snaps, _ranking = replay_fixture_through_engine("passive_flow_drop_teams.json")
     fx = load_fixture("passive_flow_drop_teams.json")["expect"]
 
     flow = next(s for s in signals if s.kind == "flow_volume_anomaly")
@@ -74,7 +74,7 @@ def test_golden_synthetic_teams_plus_interface_flow_documents_attribution_gap():
     assert flow.entity_id == fx["flow_entity_id"]
     assert flow.attrs["detection_assumed"] is True
     # today: NO app token — this is the Phase 4 gap, asserted, not hidden.
-    assert not any(t.startswith("app:") for t in flow.entity_tokens) == (not fx["flow_has_app_token"])
+    assert any(t.startswith("app:") for t in flow.entity_tokens) != (not fx["flow_has_app_token"])
     assert "microsoft_teams" not in flow.entity_tokens
 
     # therefore the synthetic and flow evidence do NOT co-ground on one app

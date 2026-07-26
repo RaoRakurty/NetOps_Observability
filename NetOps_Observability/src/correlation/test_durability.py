@@ -19,6 +19,7 @@ counter or the tolerance that makes the loss visible or unnecessary:
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from typing import ClassVar
 
 import pytest
 
@@ -128,7 +129,7 @@ def test_metrics_exposition_carries_the_insert_failure_counter(monkeypatch):
 class _PoisonConsumer:
     """Yields a poison record, then a good one, then idles."""
 
-    created: list = []
+    created: ClassVar[list] = []
 
     def __init__(self, *topics, **kw):
         _PoisonConsumer.created.append(self)
@@ -194,7 +195,7 @@ def test_poison_event_does_not_tear_down_the_consumer(monkeypatch):
 class _AllPoisonConsumer(_PoisonConsumer):
     """Every record fails — the "dependency is down" shape, not one bad event."""
 
-    created: list = []
+    created: ClassVar[list] = []
 
     def __init__(self, *topics, **kw):
         _AllPoisonConsumer.created.append(self)

@@ -20,7 +20,7 @@ edge replays deterministically.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from directed_topology import Orientation, Source, Verdict
 
@@ -44,7 +44,7 @@ def routing_direction_source(forward: set) -> Source:
     """A DirectedTopology Source over the computed forwarding set. orient(a,b):
     a→b only → A_UPSTREAM; b→a only → B_UPSTREAM; BOTH (transit both ways) →
     AMBIGUOUS; neither → None (UNKNOWN, abstain)."""
-    def _src(a: str, b: str) -> Optional[Orientation]:
+    def _src(a: str, b: str) -> Orientation | None:
         ab = (a, b) in forward
         ba = (b, a) in forward
         if ab and ba:

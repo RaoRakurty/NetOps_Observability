@@ -175,7 +175,7 @@ def normalize_lb_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | N
         source=Source.METRIC,                 # app-edge device telemetry lane
         kind=kind,
         observer=Observer(
-            observer_id=lb_name or f"app-edge:{str(ev.get('collector') or 'generic')}",
+            observer_id=lb_name or f"app-edge:{ev.get('collector') or 'generic'!s}",
             observer_type=ObserverType.DEVICE,
             location=site,
             collection_path="via_aggregator",

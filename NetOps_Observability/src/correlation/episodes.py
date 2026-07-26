@@ -25,10 +25,9 @@ first, calibrated at P4 (replay-driven calibration), never silently tuned.
 from __future__ import annotations
 
 import os
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Deque
-from collections import OrderedDict, deque
 
 # --- Detection constants (config-hash members; P4 calibration re-fits them) ---
 WINDOW_SIZE = 200          # rolling baseline samples
@@ -72,7 +71,7 @@ class EpisodeEvent:
 
 @dataclass
 class _SeriesState:
-    values: Deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    values: deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
     # CUSUM accumulators (two-sided, in σ units). Each side tracks its OWN run
     # start: alternating noise ping-pongs between sides, and a shared run-start
     # would pin onset to stale noise instead of the real anomaly's first sample.

@@ -369,8 +369,8 @@ def test_multiple_vantages_are_distinct_paths():
 
 def test_missing_hop_is_preserved_and_declared():
     app, wan = lab_signals()
-    snap = [s for s in run_window([app, wan], CAT, (), paths=lab_path_view())
-            if len(s.nodes) == 2][0]
+    snap = next(s for s in run_window([app, wan], CAT, (), paths=lab_path_view())
+            if len(s.nodes) == 2)
     rel = snap.edges[0].grounding.relation
     assert rel.unknown_hops == (5,)                 # the hop that did not answer
     spine = snap.path_spine()
@@ -435,8 +435,8 @@ def test_two_tenants_overlapping_addresses_never_cross():
     snaps: dict[str, object] = {}
     for tenant, sfx in (("t_a", "a"), ("t_b", "b")):
         app, wan = lab_signals(tenant)
-        snap = [s for s in run_window([app, wan], CAT, (), paths=both)
-                if len(s.nodes) == 2][0]
+        snap = next(s for s in run_window([app, wan], CAT, (), paths=both)
+                if len(s.nodes) == 2)
         snaps[tenant] = snap
         assert snap.tenant_id == tenant
         assert snap.edges[0].grounding.relation.ref == f"obs-{sfx}-1"

@@ -13,9 +13,10 @@ behavior — so wiring it in is a safe no-op until a source is fed (C7.3+).
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Iterable, Optional, Protocol
+from typing import Protocol
 
 
 class Verdict(str, Enum):
@@ -38,7 +39,7 @@ class Orientation:
 # A Source maps an ordered device pair → its confident Orientation, or None when it
 # does not cover the pair. Sources are consulted in PRECEDENCE order (measured >
 # observed > computed); each must answer for the SAME ordered (a, b) it is given.
-Source = Callable[[str, str], Optional[Orientation]]
+Source = Callable[[str, str], Orientation | None]
 
 
 class Oracle(Protocol):
@@ -101,7 +102,7 @@ def frozen_oracle(orientations: Iterable[tuple]) -> DirectedTopology:
     for frm, to, verdict, source in orientations:
         table[(str(frm), str(to))] = Orientation(Verdict(verdict), source=str(source))
 
-    def _src(a: str, b: str) -> Optional[Orientation]:
+    def _src(a: str, b: str) -> Orientation | None:
         return table.get((a, b))
 
     return DirectedTopology(sources=(("embedded", _src),))

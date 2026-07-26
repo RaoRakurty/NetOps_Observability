@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from controller_events import controller_event_to_signal
-from signals import ModalityClass, ObserverType, Severity, Source, EntityType
+from signals import EntityType, ModalityClass, ObserverType, Severity, Source
 
 INGEST = datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc)
 

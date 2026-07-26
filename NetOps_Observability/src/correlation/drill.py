@@ -30,7 +30,13 @@ from pathlib import Path
 from catalog import builtin_catalog
 from scoring import rank
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)

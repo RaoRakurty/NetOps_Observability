@@ -24,9 +24,9 @@ import main
 from catalog import builtin_catalog
 from engine import find_continuation, run_window
 from replay import StoredObject, replay
+from signals import EntityType, Severity
 from test_engine import _obj, sig
 from test_lane_soak import _StubCH, lane_signal
-from signals import EntityType, Severity
 
 # ── pure: find_continuation ───────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ class _Clock(datetime):
     current: datetime = datetime.now(timezone.utc)
 
     @classmethod
-    def now(cls, tz=None):  # noqa: ANN001 — mirrors datetime.now
+    def now(cls, tz=None):  # signature mirrors datetime.now
         return cls.current if tz is not None else cls.current.replace(tzinfo=None)
 
 

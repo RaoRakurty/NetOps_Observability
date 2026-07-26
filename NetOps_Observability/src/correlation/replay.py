@@ -28,7 +28,12 @@ from dataclasses import dataclass, field
 from catalog import Catalog, builtin_catalog
 from directed_topology import DirectedTopology, frozen_oracle
 from engine import (
-    EngineConfig, ObjectSnapshot, SeamView, TopologyAdjacency, engine_version, run_window,
+    EngineConfig,
+    ObjectSnapshot,
+    SeamView,
+    TopologyAdjacency,
+    engine_version,
+    run_window,
 )
 from signals import Signal
 
@@ -58,7 +63,7 @@ class StoredObject:
     trigger_signal: str = ""
 
     @classmethod
-    def from_rows(cls, obj_row: dict, edge_rows: list[dict]) -> "StoredObject":
+    def from_rows(cls, obj_row: dict, edge_rows: list[dict]) -> StoredObject:
         return cls(
             correlation_id=str(obj_row["correlation_id"]),
             trigger_signal=str(obj_row.get("trigger_signal", "")),

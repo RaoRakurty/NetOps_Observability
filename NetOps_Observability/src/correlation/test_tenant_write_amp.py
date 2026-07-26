@@ -10,7 +10,15 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import main
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 from test_lane_soak import _StubCH, lane_signal
 
 

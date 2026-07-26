@@ -49,6 +49,7 @@ flow always builds the byte-identical view. main.py owns IO and tenancy resoluti
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -244,7 +245,7 @@ def _build_routes(dep: ServiceDependency) -> list[RouteRelation]:
             prov=_prov(dep, f"rt:{t.resource_id}->{dep.app}"),
         ))
     # tier → next tier (the ordered spine, for rendering / walk order)
-    for a, b in zip(tiers, tiers[1:]):
+    for a, b in itertools.pairwise(tiers):
         to_ref = dep.app if b.role == "app" else b.resource_id
         routes.append(RouteRelation(
             tenant_id=dep.tenant_id,
@@ -273,7 +274,7 @@ def _build_observation(
     if not all(t.address for t in data_tiers):
         return None  # a data-path hop with no address cannot be an observed hop
     # every consecutive data-path pair must be witnessed by flow volume
-    if not all(_edge_observed(a, b, talks) for a, b in zip(data_tiers, data_tiers[1:])):
+    if not all(_edge_observed(a, b, talks) for a, b in itertools.pairwise(data_tiers)):
         return None
     at = _observed_at(dep)
     hops: list[PathHop] = []
@@ -334,8 +335,8 @@ def _build_binding(dep: ServiceDependency, eps: dict[str, Endpoint]) -> ServiceB
 
 
 def build_dependency_view(
-    services: "list[ServiceDependency] | tuple[ServiceDependency, ...]",
-    flows: "list[FlowEdge] | tuple[FlowEdge, ...]" = (),
+    services: list[ServiceDependency] | tuple[ServiceDependency, ...],
+    flows: list[FlowEdge] | tuple[FlowEdge, ...] = (),
     *,
     min_flow_bytes: float = 1.0,
     freshness_s: float = DEFAULT_FRESHNESS_S,
@@ -404,7 +405,9 @@ def _tier_from_dict(d: dict) -> DependencyTier:
 def service_from_dict(d: dict) -> ServiceDependency:
     """One enrichment record → a ServiceDependency. Tenancy is the CALLER's job (an
     inventory record carries an explicit tenant_id)."""
-    from producers import parse_event_ts  # local import: pure builder stays import-light
+    from producers import (
+        parse_event_ts,  # local import: pure builder stays import-light
+    )
 
     tiers = tuple(_tier_from_dict(t) for t in (d.get("tiers") or ()) if t.get("resource_id"))
     return ServiceDependency(

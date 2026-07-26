@@ -45,12 +45,14 @@ assembles the same path — the replay contract the rest of the correlation serv
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from path_graph import (
     Confidence as PGConfidence,
+)
+from path_graph import (
     DataClass,
     EdgeType,
     Relation,
@@ -125,10 +127,10 @@ class HopNode:
 
     address: str = ""
     device_role_hint: str = ""
-    asn: Optional[int] = None
+    asn: int | None = None
     rdns: str = ""
-    ttl: Optional[int] = None
-    latency: Optional[float] = None
+    ttl: int | None = None
+    latency: float | None = None
     key_device: str = ""                       # resolved entity/name, when known
     state: str = HopState.RESPONDING.value
 
@@ -201,7 +203,7 @@ class DiscoverySources:
 
     measured: tuple[MeasuredRun, ...] = ()
     edges: tuple[DiscoveredEdge, ...] = ()     # flow / inventory / route
-    dns_head: Optional[DnsHead] = None
+    dns_head: DnsHead | None = None
 
 
 # ── outputs (the typed causal path — the ESSENCE) ─────────────────────────────
@@ -261,7 +263,7 @@ class AssembledPath:
     src: str
     dst: str
     segments: tuple[TypedSegment, ...]
-    head: Optional[DnsHead] = None
+    head: DnsHead | None = None
     ecmp_pairs: tuple[tuple[str, str], ...] = ()
     notes: tuple[str, ...] = ()
 
@@ -306,7 +308,7 @@ class PathAssembler:
     """Assembles a typed causal path from fused discovery sources. Construct once
     (holds the P0 classifier); call assemble() per SRC→DST. Thread-safe (read-only)."""
 
-    def __init__(self, classifier: Optional[SegmentClassifier] = None) -> None:
+    def __init__(self, classifier: SegmentClassifier | None = None) -> None:
         self._clf = classifier if classifier is not None else SegmentClassifier()
 
     # -- tenant scoping (structural, default-closed) --------------------------
@@ -585,7 +587,7 @@ class PathAssembler:
         measured_dc = s.measured[0].data_class if s.measured else DataClass.LIVE.value
 
         rels: list[Relation] = []
-        for a, b in zip(addrs, addrs[1:]):
+        for a, b in itertools.pairwise(addrs):
             pair = (a, b) if a < b else (b, a)
             is_ecmp = pair in ecmp
             # authoritative source for this adjacency

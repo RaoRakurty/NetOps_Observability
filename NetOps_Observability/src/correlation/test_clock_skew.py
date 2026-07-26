@@ -13,8 +13,7 @@ from catalog import builtin_catalog
 from cloud_producers import CLOUD_KINDS, cloud_signal_from_event
 from confirmability import KIND_MODALITY
 from coverage import classify_kind
-from producers import (EMITTED_KINDS, SYSLOG_CLOCK_SKEW_TOLERANCE_S,
-                       clock_skew_signal)
+from producers import EMITTED_KINDS, SYSLOG_CLOCK_SKEW_TOLERANCE_S, clock_skew_signal
 from signals import EntityType, ModalityClass, Severity
 
 NOW = datetime(2026, 7, 17, 9, 0, 0, tzinfo=timezone.utc)

@@ -14,7 +14,13 @@ from engine import TopologyAdjacency, run_window
 from entity_resolver import EntityResolver
 from flow_direction import flow_direction_sample, netflow_direction_source
 from signals import (
-    EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source,
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
 )
 
 T0 = datetime(2026, 6, 23, 10, 0, 0, tzinfo=timezone.utc)

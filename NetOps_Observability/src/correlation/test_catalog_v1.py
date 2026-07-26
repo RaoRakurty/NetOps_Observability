@@ -14,7 +14,7 @@ import pytest
 
 from catalog import BUILTIN_TEMPLATES, builtin_catalog, load_catalog
 from scoring import rank, score_template
-from signals import ModalityClass, Signal, Source, Observer, ObserverType, EntityType
+from signals import EntityType, ModalityClass, Observer, ObserverType, Signal, Source
 
 ALLOWED_SEAMS = {"LAN", "WAN_SDWAN", "DC_FABRIC", "CARRIER_INTERCONNECT", "CLOUD_APP"}
 ALLOWED_SCOPES = {"onprem_only", "cloud_only", "hybrid"}

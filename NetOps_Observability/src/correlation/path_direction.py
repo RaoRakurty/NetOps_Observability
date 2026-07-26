@@ -14,7 +14,7 @@ per snapshot by run_window, so a path-directed edge replays deterministically.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from directed_topology import Orientation, Source, Verdict
 from entity_resolver import EntityResolver
@@ -31,7 +31,7 @@ def resolve_path_order(paths: Iterable[dict], resolver: EntityResolver) -> set:
     before: set = set()
     for p in paths:
         devs: list[str] = []
-        last: Optional[str] = None
+        last: str | None = None
         for ip in p.get("hops", ()):
             d = resolver.device_for_ip(ip)
             if d and d != last:
@@ -48,7 +48,7 @@ def traceroute_direction_source(before: set) -> Source:
     """A DirectedTopology Source over a measured ordered-pair set. orient(a,b):
     a-before-b only → A_UPSTREAM; b-before-a only → B_UPSTREAM; BOTH orders seen
     (ECMP/loop) → AMBIGUOUS; neither → None (UNKNOWN, abstain)."""
-    def _src(a: str, b: str) -> Optional[Orientation]:
+    def _src(a: str, b: str) -> Orientation | None:
         ab = (a, b) in before
         ba = (b, a) in before
         if ab and ba:

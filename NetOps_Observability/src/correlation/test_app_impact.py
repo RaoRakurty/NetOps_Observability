@@ -67,7 +67,7 @@ def _fault_window():
 
 
 def test_identity_only_window_forms_no_object():
-    snaps = run_window(tuple([ident("Payroll", tokens=("dallas-edge",))]),
+    snaps = run_window((ident("Payroll", tokens=("dallas-edge",)),),
                        builtin_catalog(), ())
     assert snaps == []  # identity is enrichment — it can NEVER seed an object
 

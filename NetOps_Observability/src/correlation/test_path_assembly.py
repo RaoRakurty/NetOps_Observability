@@ -101,7 +101,8 @@ def test_inventory_source_assembles_typed_path():
 def test_inventory_adapter_on_real_topology_fixture():
     path = os.path.join(os.path.dirname(__file__), "..", "..", "deployment",
                         "docker", "cloud-fixtures", "aws-topology.json")
-    topo = json.load(open(path, encoding="utf-8"))
+    with open(path, encoding="utf-8") as f:
+        topo = json.load(f)
     inv = inventory_edges_from_topology("acme", topo, "aws-topo")
     assert inv, "real topology fixture should yield inventory edges"
     # every emitted edge carries evidence (§5) and its downstream role hint.
@@ -312,6 +313,7 @@ def test_assembly_is_deterministic():
 
 def test_measured_run_from_observation_adapter():
     from datetime import datetime, timezone
+
     from path_graph import PathHop, PathObservation, Provenance
 
     prov = Provenance(tenant_id="acme", producer_id="prober", provenance_id="obs-ev")

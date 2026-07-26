@@ -15,7 +15,11 @@ from flow_app_attribution import (
     normalize_app,
     resolve_flow_app,
 )
-from golden_wire import load_fixture, normalize_flow_records, replay_fixture_through_engine
+from golden_wire import (
+    load_fixture,
+    normalize_flow_records,
+    replay_fixture_through_engine,
+)
 from signals import EntityType, ModalityClass
 from synthetic_normalize import synthetic_app_signal
 from verdicts import VerdictTier

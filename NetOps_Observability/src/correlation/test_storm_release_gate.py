@@ -20,7 +20,15 @@ Asserted SLOs, from docs/design/correlation-data-contract.md §new-lane:
 from datetime import datetime, timedelta, timezone
 
 import main
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 from test_lane_soak import _dead_target_batches, run_broken_source_soak
 
 
