@@ -49,6 +49,11 @@ ignores them.
   loaner, or first customer. Blocks Phase 9 live validation, the doc_claimed→
   live fidelity promotion, and the first real remediation executor. Everything
   else in the wireless programme shipped without it.
+  **ON HOLD (owner, 2026-07-27): all hardware-dependent work demoted to Low.**
+  When revisited: the minimal build is researched and costed in
+  `docs/design/research/wireless-lab-setup.md` (hybrid 9800-CL VMs + 2 physical
+  APs, ~$150–350; no virtual CAPWAP AP exists, OpenWrt APs cannot join a Cisco
+  WLC).
 - **O8 · Wireless PII decisions (Q4/Q5, item 128):** client-MAC retention
   length + pseudonymization point, and whether per-user location history is
   Sensitive or Restricted. Blocks the client-history Iris tools (deliberately
@@ -64,7 +69,7 @@ ignores them.
 | 118 | **echarts XSS (GHSA-fgmj-fm8m-jvvx)** — moderate, so `npm audit --audit-level=high` does not block it, but it is an XSS in the library rendering the dashboard. Fix is echarts 6.x, a breaking major: needs a planned migration, not `audit fix --force`. | Med | ⏳ not started |
 | 121 | **#53 remnants** — the Explorer and dedup/triage halves shipped (`events_feed.go`, `alert_episodes.go`). Left: maintenance windows (no `maintenance` handling in the alert path), audit + deploy events as feed sources, UI processor editor (enrich/normalize/redact is still Vector YAML). | Med | ⏳ not started |
 | 123 | **`docs-portal` advisory triage** — 46 npm advisories (14 high). Only 2 were Trivy-visible (`ignore-unfixed: true`) and are fixed. Triage the rest so what is deferred is deferred knowingly. | Low | ⏳ not started |
-| 128 | **Wireless — Phase 9 live validation + the doc_claimed→lab/live fidelity ladder.** Phases 1–8 SHIPPED 2026-07-26 (report `docs/Wireslessdesign.md` signed off; canonical model + mig 0030 · Catalyst 9800 connector · correlation integration RF=-1 + 9 signatures · onboarding/session lanes + #126 fix · 9-model architecture proof · Iris module · UI · guarded remediation, five gates fail-closed, `FEATURE_WIRELESS_ACTIONS=false`). OPEN: **Phase 9 needs hardware (Q8 — a WLC + AP + client; owner decision O7)**: verify the Cisco-IOS-XE-wireless-* leaf spellings the connector authored doc_claimed, run the physical fault-injection battery (report §23), promote fidelity, then build the first real action executor behind gate 4 (which fails closed until it exists). Follow-ons unblocked but not started: Aruba/Meraki/Mist connectors over the proven model; client-history Iris tools once the pseudonymization contract (Q4/Q5) is decided. | High | 🟡 Phases 1–8 shipped; Phase 9 blocked on hardware |
+| 128 | **Wireless — Phase 9 live validation + the doc_claimed→lab/live fidelity ladder.** Phases 1–8 SHIPPED 2026-07-26 (report `docs/Wireslessdesign.md` signed off; canonical model + mig 0030 · Catalyst 9800 connector · correlation integration RF=-1 + 9 signatures · onboarding/session lanes + #126 fix · 9-model architecture proof · Iris module · UI · guarded remediation, five gates fail-closed, `FEATURE_WIRELESS_ACTIONS=false`). OPEN: **Phase 9 needs hardware (Q8 — a WLC + AP + client; owner decision O7)**: verify the Cisco-IOS-XE-wireless-* leaf spellings the connector authored doc_claimed, run the physical fault-injection battery (report §23), promote fidelity, then build the first real action executor behind gate 4 (which fails closed until it exists). Follow-ons unblocked but not started: Aruba/Meraki/Mist connectors over the proven model; client-history Iris tools once the pseudonymization contract (Q4/Q5) is decided. | Low | 🟡 Phases 1–8 shipped; Phase 9 **ON HOLD** (owner 2026-07-27: hardware-dependent work → Low; lab design saved in `docs/design/research/wireless-lab-setup.md`) |
 | 125 | **Stale customer bundle** — the pre-push hook warns on every push; `make bundle` when ready to ship. Note `6092adce` deliberately took this off its daily cron per §16.4, so rebuild is event-driven and manual by design. | Low | ⏳ not started |
 
 ---
