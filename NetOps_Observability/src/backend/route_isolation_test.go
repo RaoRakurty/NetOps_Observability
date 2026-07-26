@@ -99,9 +99,18 @@ var routeIsolationLedger = map[string]string{
 	// default-closed filter / RLS); POST triggers the cross-tenant backfill worker
 	// behind requirePlatformAdmin. The data surface is tenant-scoped.
 	"/api/reliability/time-metrics": "scoped",
-	"/api/credentials":              "scoped",
-	"/api/devices":                  "scoped",
-	"/api/devices/":                 "scoped",
+	// Platform-GLOBAL integration posture (which provider credentials / feature
+	// flags the stack was started with) — no tenant data. requirePlatformAdmin,
+	// because a tenant/org admin holds administration:admin (§3a rule 3).
+	// credentials_gate_test.go pins the 403/200 boundary.
+	"/api/credentials": "platform",
+	// Feature flags only — no tenant data, no credential/integration posture, so
+	// there is nothing to scope. Authenticated-only by design (see handleFeatures):
+	// it exists so gating /api/credentials to the platform owner does not make
+	// optional UI surfaces silently vanish for everyone else.
+	"/api/features": "infra",
+	"/api/devices":  "scoped",
+	"/api/devices/": "scoped",
 	// Port Intelligence (#94): every port/interface/optics read is tenant DATA,
 	// scoped by requirePerm(infrastructure:read) + the portStore RLS/tenant
 	// filter (cross-tenant get → 404); proven by port_handlers_test.go.

@@ -13,8 +13,19 @@ export default function Rules() {
   const [showAdd, setShowAdd] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // Without this the load's rejection was unhandled and the list stayed [] —
+  // rendering "No rules configured", i.e. a fetch failure reported as "nothing is
+  // being monitored", the most dangerous possible misreading of this page.
+  const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const load = async () => setRules((await api.rules()) ?? []);
+  const load = async () => {
+    try {
+      setRules((await api.rules()) ?? []);
+      setLoadErr(null);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : String(e));
+    }
+  };
   useEffect(() => {
     load();
   }, []);
@@ -58,7 +69,11 @@ export default function Rules() {
       <NocHeader
         title="Monitor Rules"
         subtitle="Define alert conditions, review built-in rules, and manage custom monitors over your telemetry."
-        chips={<><Chip label={`${rules.length} rules`} /><LiveChip detail="live evaluation" /></>}
+        chips={
+          loadErr
+            ? <Chip label="Rule list unavailable" tone="var(--crit)" title="The rules API did not answer — the monitor set is unknown." />
+            : <><Chip label={`${rules.length} rules`} /><LiveChip detail="live evaluation" /></>
+        }
       />
       {msg && (
         <p className={`form-msg ${msg.kind}`} role={msg.kind === "err" ? "alert" : "status"} aria-live="polite" style={{ margin: "0 2px" }}>
@@ -77,7 +92,15 @@ export default function Rules() {
           Built-in rules ship with the platform (rules file); custom monitors are yours — created here or via{" "}
           <a href="#/monitoring/new" style={{ color: "var(--accent)", fontWeight: 600 }}>New Monitor</a> — and only those can be deleted.
         </p>
-        {rules.length === 0 ? (
+        {loadErr && rules.length === 0 ? (
+          <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+            <strong>The monitor list could not be loaded.</strong>
+            <div style={{ marginTop: 4 }}>{loadErr}</div>
+            <div style={{ marginTop: 4, color: "var(--muted)" }}>
+              This does NOT mean no rules are configured — evaluation may be running normally.
+            </div>
+          </div>
+        ) : rules.length === 0 ? (
           <div className="empty">No rules configured.</div>
         ) : (
           <table>

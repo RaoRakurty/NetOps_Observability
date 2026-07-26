@@ -599,8 +599,12 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 	}
 
 	now := start.UnixMilli()
+	// The write result already drove Healthy (F-56); collector_up must carry the
+	// SAME verdict — it was a literal 1, so CollectorDown could not fire even
+	// when every insert was rejected and every device unreachable.
+	healthy := writeErr == nil && cycleHealthy(len(targets), reachable)
 	emitMetrics(ctx, strings.Join([]string{
-		fmt.Sprintf(`collector_up{collector="tunnels"} 1 %d`, now),
+		collectorUpLine("tunnels", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="tunnels"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="tunnels"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_tunnels{collector="tunnels"} %d %d`, len(rows), now),
@@ -616,14 +620,14 @@ func (c *tunnelCollector) pollOnce(ctx context.Context) {
 	c.status.Targets = len(targets)
 	c.status.Reachable = reachable
 	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = writeErr == nil
+	c.status.Healthy = healthy
 	switch {
 	case writeErr != nil:
 		c.status.LastError = writeErr.Error()
-	case reachable == 0 && len(targets) > 0:
-		c.status.LastError = lastErr
 	default:
-		c.status.LastError = ""
+		// Partial blackout included: 9 of 10 devices refusing the walk used to
+		// report healthy AND blank.
+		c.status.LastError = cycleError(len(targets), reachable, lastErr)
 	}
 	c.mu.Unlock()
 }

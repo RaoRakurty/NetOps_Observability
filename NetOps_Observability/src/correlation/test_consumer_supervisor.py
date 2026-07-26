@@ -113,7 +113,9 @@ def test_offsets_commit_only_after_handling(monkeypatch):
 
     class Msg:
         topic, partition, offset = "netops.metrics", 0, 0
-        value: ClassVar[dict] = {"k": 1}
+        # RAW wire bytes: the consumer is built with NO value_deserializer so a
+        # malformed payload fails inside the per-event try, not above it.
+        value: ClassVar[bytes] = b'{"k": 1}'
 
     commits: list[int] = []
     handled: list[int] = []

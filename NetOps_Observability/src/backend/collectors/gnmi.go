@@ -3,6 +3,8 @@ package collectors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -79,7 +81,11 @@ func (g *gnmiCollector) pollOnce(ctx context.Context) {
 	g.mu.Lock()
 	g.status.LastTick = start.UTC()
 	g.status.LastPollMillis = time.Since(start).Milliseconds()
-	g.status.Healthy = true // the collector loop itself is running
+	// This collector's entire job is to read gNMI liveness out of VictoriaMetrics.
+	// If VM does not answer, it knows NOTHING — reporting "healthy" then is the
+	// platform asserting sight it does not have. A loop that is merely running is
+	// not a healthy collector.
+	g.status.Healthy = err == nil
 	if err != nil {
 		// Couldn't reach VictoriaMetrics — report the error rather than a
 		// misleading zero, and leave the last known counts in place.
@@ -114,6 +120,12 @@ func (g *gnmiCollector) vmScalar(ctx context.Context, query string) (int, error)
 		return 0, err
 	}
 	defer resp.Body.Close()
+	// A non-2xx reply is a failure to LOOK, not an observation of zero streams —
+	// without this check a 500 from the metric store decoded to an empty result
+	// and was published as "no gNMI sources are streaming".
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("victoria %d for %s", resp.StatusCode, endpoint)
+	}
 
 	var out struct {
 		Data struct {
@@ -122,7 +134,8 @@ func (g *gnmiCollector) vmScalar(ctx context.Context, query string) (int, error)
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	// F-27 class: the reply size is the peer's business, not ours.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return 0, err
 	}
 	if len(out.Data.Result) == 0 {

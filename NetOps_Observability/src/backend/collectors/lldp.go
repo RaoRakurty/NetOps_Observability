@@ -132,6 +132,10 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 	start := time.Now()
 	now := start.UnixMilli()
 	reachable := 0
+	// answered counts devices whose LLDP walk SUCCEEDED, which is the health
+	// signal; reachable counts the subset that actually reported neighbours. A
+	// device with no LLDP peers answered fine and must not count as a failure.
+	answered := 0
 	var all []LLDPNeighbor
 	var lastErr string
 
@@ -144,6 +148,7 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 			lastErr = err.Error()
 			continue
 		}
+		answered++
 		if len(neigh) > 0 {
 			reachable++
 			all = append(all, neigh...)
@@ -159,8 +164,9 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 		_ = redisSetEX(ctx, topoLinksKeyLLDP, string(b), 1800)
 	}
 
+	healthy := cycleHealthy(len(targets), answered)
 	emitMetrics(ctx, strings.Join([]string{
-		fmt.Sprintf(`collector_up{collector="lldp"} 1 %d`, now),
+		collectorUpLine("lldp", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="lldp"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="lldp"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_lldp_neighbors{collector="lldp"} %d %d`, len(all), now),
@@ -171,12 +177,8 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 	c.status.Targets = len(targets)
 	c.status.Reachable = reachable
 	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = true
-	if reachable == 0 && len(targets) > 0 {
-		c.status.LastError = lastErr
-	} else {
-		c.status.LastError = ""
-	}
+	c.status.Healthy = healthy
+	c.status.LastError = cycleError(len(targets), answered, lastErr)
 	c.mu.Unlock()
 }
 

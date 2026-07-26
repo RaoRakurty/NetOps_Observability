@@ -176,11 +176,21 @@ export default function Incidents() {
               <Icon name="refresh" size={14} /> {busy ? "Loading…" : "Refresh"}
             </button>
           </div>
-          {error && <p style={{ color: "var(--bad)", marginBottom: 8 }}><strong>Error:</strong> {error}</p>}
+          {error && (
+            <p role="alert" style={{ color: "var(--bad)", marginBottom: 8 }}>
+              <strong>Incidents could not be loaded:</strong> {error}
+              <br />
+              <span style={{ color: "var(--muted)" }}>
+                The queue is unknown — this is not an empty queue.
+              </span>
+            </p>
+          )}
+          {/* "quiet is good" is a claim only a successful read can support, so it
+              is mutually exclusive with the error above. */}
           {unavailable ? (
             <div className="empty">Incident management isn’t enabled in this environment yet.</div>
           ) : items.length === 0 ? (
-            <div className="empty">{busy ? "Loading…" : "No incidents match — quiet is good."}</div>
+            error ? null : <div className="empty">{busy ? "Loading…" : "No incidents match — quiet is good."}</div>
           ) : (
             <DataTable<Incident>
               rows={items}

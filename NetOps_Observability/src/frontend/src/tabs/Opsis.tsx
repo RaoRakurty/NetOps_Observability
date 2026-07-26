@@ -140,7 +140,7 @@ export default function Opsis({ split, onToggleSplit }: { split?: boolean; onTog
   };
 
   useEffect(() => {
-    api.credentials().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
+    api.features().then((c) => setEnabled(Boolean(c?.copilot))).catch(() => setEnabled(false));
     // Platform owner → platform settings + the per-workspace access list;
     // tenant admin → their own workspace settings. Whichever call the caller
     // isn't authorized for simply stays null.

@@ -109,6 +109,10 @@ type echoResult struct {
 	qoe         float64
 	method      string // icmp | tcp
 	sourceBound bool   // whether we egressed the requested local interface
+	// failReason names why the circuit could not be probed at all (resolution
+	// failure, no socket). Empty when packets actually went out — a probe that
+	// was never attempted must not be reported as a quiet, healthy circuit.
+	failReason string
 }
 
 func (s *wanEcho) probeAll(ctx context.Context) {
@@ -122,10 +126,11 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	// probing would stall a whole cycle. Cap keeps socket/CPU use bounded. Each
 	// goroutine writes only its own results[i] slot, so no lock is needed.
 	type outcome struct {
-		lines []string
-		event ProbeEvent
-		reach bool
-		valid bool
+		lines      []string
+		event      ProbeEvent
+		reach      bool
+		valid      bool
+		failReason string // why this circuit could not be probed at all
 	}
 	sem := make(chan struct{}, echoConcurrency)
 	results := make([]outcome, len(targets))
@@ -144,7 +149,7 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 				`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
 				tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
 				res.method, boolLabel(res.sourceBound))
-			out := outcome{valid: true, reach: res.recv > 0}
+			out := outcome{valid: true, reach: res.recv > 0, failReason: res.failReason}
 			if res.recv > 0 {
 				out.lines = append(out.lines,
 					fmt.Sprintf(`circuit_latency_ms{%s} %.3f %d`, lbl, res.latencyMs, now),
@@ -169,14 +174,20 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	wg.Wait()
 
 	reachable := 0
+	probed := 0 // circuits actually measured (a target with no remote addr is skipped)
+	lastErr := ""
 	var lines []string
 	var events []ProbeEvent
 	for _, out := range results {
 		if !out.valid {
 			continue
 		}
+		probed++
 		if out.reach {
 			reachable++
+		}
+		if out.failReason != "" {
+			lastErr = out.failReason
 		}
 		lines = append(lines, out.lines...)
 		events = append(events, out.event)
@@ -191,7 +202,12 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	s.status.LastTick = time.Now().UTC()
 	s.status.Targets = len(targets)
 	s.status.Reachable = reachable
-	s.status.Healthy = true
+	// A cycle where most circuits answered nothing at all is not a healthy
+	// cycle (see degradedReachFraction). The per-circuit truth is already in
+	// circuit_loss_pct; this is the collector's own verdict, which used to be a
+	// literal true with a permanently blank LastError.
+	s.status.Healthy = cycleHealthy(probed, reachable)
+	s.status.LastError = cycleError(probed, reachable, lastErr)
 	s.mu.Unlock()
 }
 
@@ -242,12 +258,28 @@ func openEchoICMP(localAddr string) (conn *icmp.PacketConn, datagram, bound bool
 
 func (s *wanEcho) measureICMP(ctx context.Context, tgt EchoTarget) echoResult {
 	res := echoResult{method: "icmp"}
+	// Three states, not two (the cloud_monitor_eval.go shape): the resolver
+	// FAILED / it answered with no address / it resolved. The first two used to
+	// share a return with a zeroed result, so a circuit whose name would not
+	// resolve was published as sent=0 recv=0 loss=0% — a perfectly healthy
+	// circuit that had never been probed. A path we could not even attempt is
+	// FULL LOSS (the same call stamp.go's probeAll already makes), and the cause
+	// is carried out so the collector can report it.
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", tgt.RemoteAddr)
-	if err != nil || len(ips) == 0 {
+	switch {
+	case err != nil:
+		res.lossPct = 100
+		res.failReason = "resolve " + tgt.RemoteAddr + ": " + err.Error()
+		return res
+	case len(ips) == 0:
+		res.lossPct = 100
+		res.failReason = "resolve " + tgt.RemoteAddr + ": no IPv4 address"
 		return res
 	}
 	conn, datagram, bound := openEchoICMP(tgt.LocalAddr)
 	if conn == nil {
+		res.lossPct = 100
+		res.failReason = "could not open an ICMP socket (needs CAP_NET_RAW or a usable udp4 socket)"
 		return res
 	}
 	defer conn.Close()

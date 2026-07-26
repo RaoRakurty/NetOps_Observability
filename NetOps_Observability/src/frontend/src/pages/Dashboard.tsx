@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { fmtTime } from "../lib/time";
-import { PANELS } from "./panels";
+import { PANELS, useBoardHealth } from "./panels";
 import { useShell } from "../context/shell";
 import Icon from "../components/Icon";
 import { Modal } from "../components/ui";
@@ -45,10 +45,14 @@ const SECTIONS: Section[] = [
 export default function Dashboard() {
   const { navigate } = useShell();
   const [zoom, setZoom] = useState<string | null>(null);
-  const [now, setNow] = useState(() => new Date());
-  // light heartbeat so the "as of" clock reads live during a demo (panels own their
-  // own refresh; this is just the header timestamp).
-  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(t); }, []);
+  // Liveness is DERIVED FROM REAL FETCHES, never from a wall clock. The old
+  // header ran a local setInterval and printed "as of HH:MM" beside a pulsing
+  // dot — a freshness claim decoupled from the network by construction, so a
+  // total backend outage still read as a live board. Panels report every poll
+  // outcome into the board-health signal; this header states what it says.
+  const { lastOk, failing, feeds } = useBoardHealth();
+  const degraded = failing > 0;
+  const connecting = lastOk === null && !degraded;
 
   let n = 0;
   return (
@@ -58,9 +62,30 @@ export default function Dashboard() {
           <div className="mydash-eyebrow">Operations</div>
           <h1 className="mydash-title">Dashboard</h1>
         </div>
-        <div className="mydash-head-meta">
-          <span className="mydash-live"><span className="mydash-live-dot" /> Live</span>
-          <span className="mydash-asof">as of {fmtTime(now)}</span>
+        <div className="mydash-head-meta" role="status" aria-live="polite">
+          {degraded ? (
+            <>
+              <span className="mydash-live" style={{ color: "var(--bad)" }}>
+                <span className="mydash-live-dot" style={{ background: "var(--bad)", animation: "none" }} /> Disconnected
+              </span>
+              <span className="mydash-asof">
+                {failing} of {feeds} feed{feeds === 1 ? "" : "s"} failing
+                {lastOk === null ? " · no data loaded" : ` · last data ${fmtTime(new Date(lastOk))}`}
+              </span>
+            </>
+          ) : connecting ? (
+            <>
+              <span className="mydash-live" style={{ color: "var(--muted)" }}>
+                <span className="mydash-live-dot" style={{ background: "var(--muted)", animation: "none" }} /> Connecting
+              </span>
+              <span className="mydash-asof">no data loaded yet</span>
+            </>
+          ) : (
+            <>
+              <span className="mydash-live"><span className="mydash-live-dot" /> Live</span>
+              <span className="mydash-asof">as of {fmtTime(new Date(lastOk!))}</span>
+            </>
+          )}
         </div>
       </div>
 

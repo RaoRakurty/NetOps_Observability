@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/models"
@@ -48,8 +49,11 @@ type Jira struct {
 	resolveHint string
 	statePath   string
 
-	mu   sync.Mutex
-	open map[string]*JiraTicket // fingerprint -> ticket
+	mu sync.Mutex
+	// dedup-state persist observability (see noteStateWrite)
+	stateWriteFailures atomic.Uint64
+	lastStateErr       atomic.Value           // string
+	open               map[string]*JiraTicket // fingerprint -> ticket
 }
 
 // ResolveExternal transitions a Jira issue to Done/Resolved by its KEY (the drift
@@ -229,7 +233,7 @@ func (j *Jira) Send(a models.Alert) error {
 		Fingerprint: fp, Key: key, IssueID: id, Severity: a.Severity,
 		Device: a.DeviceID, Summary: a.Summary, OpenedAt: time.Now().UTC(), State: "open",
 	}
-	j.saveLocked()
+	j.noteStateWrite(j.saveLocked())
 	j.mu.Unlock()
 	return nil
 }
@@ -242,7 +246,7 @@ func (j *Jira) resolve(fp string) error {
 	t, ok := j.open[fp]
 	if ok {
 		delete(j.open, fp)
-		j.saveLocked()
+		j.noteStateWrite(j.saveLocked())
 	}
 	j.mu.Unlock()
 	if !ok || t.Key == "" || !j.Configured() {
@@ -404,9 +408,34 @@ func isResolveLike(name string) bool {
 
 // ---- state persistence -----------------------------------------------------
 
-func (j *Jira) saveLocked() {
+// noteStateWrite records a dedup-state persist outcome. The remote issue has
+// already been created or closed by the time we get here, so a write failure
+// must NOT fail the caller (that would re-file the ticket). It must also never
+// be silent: a lost dedup map means a restart re-files one issue per still-
+// firing alert. Counted here and exported via StateWriteFailures for /metrics.
+func (j *Jira) noteStateWrite(err error) {
+	if err != nil {
+		j.stateWriteFailures.Add(1)
+		j.lastStateErr.Store(err.Error())
+	}
+}
+
+// StateWriteFailures reports how many open-ticket dedup writes have failed and
+// the most recent reason ("" when none). Non-zero means duplicate tickets are
+// possible across a restart.
+func (j *Jira) StateWriteFailures() (uint64, string) {
+	n := j.stateWriteFailures.Load()
+	msg, _ := j.lastStateErr.Load().(string)
+	return n, msg
+}
+
+// saveLocked persists the open-ticket dedup map. It RETURNS its failure
+// (F-62/F-78 class): this map is what stops a restart from re-filing a
+// duplicate ticket for every still-firing alert, so a silent write failure is
+// an outage that survives the outage. Caller holds the lock.
+func (j *Jira) saveLocked() error {
 	if j.statePath == "" {
-		return
+		return nil
 	}
 	list := make([]JiraTicket, 0, len(j.open))
 	for _, t := range j.open {
@@ -416,15 +445,19 @@ func (j *Jira) saveLocked() {
 	}
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		return
+		return fmt.Errorf("marshal open-ticket state: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(j.statePath), 0o755); err != nil {
-		return
+		return fmt.Errorf("create state dir: %w", err)
 	}
 	tmp := j.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err == nil {
-		_ = os.Rename(tmp, j.statePath)
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return fmt.Errorf("write open-ticket state: %w", err)
 	}
+	if err := os.Rename(tmp, j.statePath); err != nil {
+		return fmt.Errorf("commit open-ticket state: %w", err)
+	}
+	return nil
 }
 
 func (j *Jira) loadState() {

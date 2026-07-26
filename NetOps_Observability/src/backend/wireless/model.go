@@ -58,22 +58,22 @@ const (
 // assumed, mirroring the seam model). For controllerless estates there are
 // zero members and APs bind directly.
 type Controller struct {
-	TenantID          string          `json:"-"`
-	ControllerID      string          `json:"controller_id"`
-	Name              string          `json:"name"`
-	Vendor            string          `json:"vendor"`
-	Model             string          `json:"model,omitempty"`
-	OSVersion         string          `json:"os_version,omitempty"`
-	Kind              string          `json:"kind,omitempty"` // controller | gateway
-	ClusterRole       ClusterRole     `json:"cluster_role"`
-	ManagementAddress string          `json:"management_address,omitempty"`
-	ForwardingDefault ForwardingMode  `json:"forwarding_default,omitempty"`
-	Visibility        string          `json:"visibility,omitempty"` // full | partial | blind
-	Members           []Member        `json:"members,omitempty"`
-	FirstSeen         time.Time       `json:"first_seen,omitempty"`
-	LastSeen          time.Time       `json:"last_seen,omitempty"`
-	Stale             bool            `json:"stale,omitempty"`
-	Attrs             map[string]any  `json:"attrs,omitempty"` // lossless vendor record
+	TenantID          string         `json:"-"`
+	ControllerID      string         `json:"controller_id"`
+	Name              string         `json:"name"`
+	Vendor            string         `json:"vendor"`
+	Model             string         `json:"model,omitempty"`
+	OSVersion         string         `json:"os_version,omitempty"`
+	Kind              string         `json:"kind,omitempty"` // controller | gateway
+	ClusterRole       ClusterRole    `json:"cluster_role"`
+	ManagementAddress string         `json:"management_address,omitempty"`
+	ForwardingDefault ForwardingMode `json:"forwarding_default,omitempty"`
+	Visibility        string         `json:"visibility,omitempty"` // full | partial | blind
+	Members           []Member       `json:"members,omitempty"`
+	FirstSeen         time.Time      `json:"first_seen,omitempty"`
+	LastSeen          time.Time      `json:"last_seen,omitempty"`
+	Stale             bool           `json:"stale,omitempty"`
+	Attrs             map[string]any `json:"attrs,omitempty"` // lossless vendor record
 }
 
 // Member is one PHYSICAL box/VM/instance of a logical controller. Controller

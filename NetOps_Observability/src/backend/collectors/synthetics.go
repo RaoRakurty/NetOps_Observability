@@ -185,12 +185,14 @@ func (s *synthetics) tick(ctx context.Context) {
 	decl := loadProberDeclaration()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	up := 0
+	checked := 0 // checks actually executed this cycle
 	var lines []string
 	var events []ProbeEvent
 	for _, r := range results {
 		if r.target.dst == "" {
 			continue
 		}
+		checked++
 		if r.up {
 			up++
 		}
@@ -230,7 +232,10 @@ func (s *synthetics) tick(ctx context.Context) {
 	s.status.LastTick = time.Now().UTC()
 	s.status.Targets = len(targets)
 	s.status.Reachable = up
-	s.status.Healthy = true
+	// Honest verdict instead of a hard-coded true: most checks failing means the
+	// synthetic view of the estate is not trustworthy this cycle.
+	s.status.Healthy = cycleHealthy(checked, up)
+	s.status.LastError = cycleError(checked, up, "")
 	s.mu.Unlock()
 }
 

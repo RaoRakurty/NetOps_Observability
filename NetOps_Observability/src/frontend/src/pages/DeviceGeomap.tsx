@@ -106,15 +106,32 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
 // "Geographic map" group. Same data + onboarding honesty, smaller frame.
 export function GeomapSection() {
   const [data, setData] = useState<GeomapResponse | null>(null);
+  // The old `catch {}` claimed "the board stays on its empty state" — it doesn't:
+  // the !data branch below is the LOADING branch, so a cold failure showed
+  // "Loading…" forever, which reads as work in progress rather than a failure.
+  const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const load = async () => {
-      try { const d = await api.geomap(); if (alive) setData(d); } catch { /* board stays on its empty state */ }
+      try {
+        const d = await api.geomap();
+        if (alive) { setData(d); setErr(null); }
+      } catch (e) {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
+      }
     };
     load();
     const t = setInterval(load, 60_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
+  if (err && !data) {
+    return (
+      <div className="empty board-empty" role="alert">
+        <div className="board-empty-msg" style={{ color: "var(--bad)" }}>The map could not be loaded.</div>
+        <div className="board-empty-hint">{err}</div>
+      </div>
+    );
+  }
   if (!data) return <div className="empty board-empty"><div className="board-empty-msg">Loading…</div></div>;
   if (!data.geo_enabled) {
     return (

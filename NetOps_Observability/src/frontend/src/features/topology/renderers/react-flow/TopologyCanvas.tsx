@@ -27,7 +27,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
-import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage } from "../../api/topologyApi";
+import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
@@ -149,6 +149,10 @@ function CanvasInner({
   const [source, setSource] = useState<"live" | "persisted">("live");
   const [fetched, setFetched] = useState<TopologyView | null>(null);
   const [coverage, setCoverage] = useState<TopologyCoverage | null>(null);
+  // Why the persistent graph is empty: nothing reconciled yet vs the read failed.
+  // The two must never render as the same state (a failed read used to render a
+  // MOCK fabric — someone else's devices — as the operator's live graph).
+  const [graphStatus, setGraphStatus] = useState<TopologyGraphStatus | null>(null);
   // Investigate mode can pin a REAL incident: its RCA fault path (GET
   // /api/correlations/{id}/rca-path-view) is converted to a view and rendered on
   // the canvas, overriding the live projection. Empty = the live/mock projection.
@@ -217,11 +221,13 @@ function CanvasInner({
         if (!alive) return;
         setFetched(r.view);
         setCoverage(r.coverage ?? null);
+        setGraphStatus(r.status);
       } else {
         const v = await fetchTopologyView(mode, mode === "path_trace" ? { src: pathSrc, dst: pathDst } : undefined);
         if (!alive) return;
         setFetched(v);
         setCoverage(null);
+        setGraphStatus(null); // graph status only describes the persisted source
         // Record what this view resolved for, so the stage can distinguish a resolved
         // empty path (no route) from one still in flight.
         setTracedKey(mode === "path_trace" && pathSrc && pathDst ? `${pathSrc}>${pathDst}` : "");
@@ -710,14 +716,19 @@ function CanvasInner({
                 leave a silent blank canvas the operator can't read. */}
             {view && view.nodes.length === 0 && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-                <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)", marginBottom: 6 }}>
-                    {mode === "dependency" ? "No service dependencies in this window" : "Nothing to display for this view"}
+                <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: `1px dashed ${graphStatus === "error" ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
+                  role={graphStatus === "error" ? "alert" : undefined}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: graphStatus === "error" ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
+                    {graphStatus === "error"
+                      ? "The topology graph could not be read"
+                      : mode === "dependency" ? "No service dependencies in this window" : "Nothing to display for this view"}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5 }}>
-                    {mode === "dependency"
-                      ? "Dependency edges appear when flows are attributed to services. Widen the time range, or confirm flow collection is active."
-                      : "No nodes resolved for the current mode, data source and time range."}
+                    {graphStatus === "error"
+                      ? "The graph service did not answer, so the shape of your network is unknown — this is NOT an empty network. Retry, or check the topology service."
+                      : mode === "dependency"
+                        ? "Dependency edges appear when flows are attributed to services. Widen the time range, or confirm flow collection is active."
+                        : "No nodes resolved for the current mode, data source and time range."}
                   </div>
                 </div>
               </div>

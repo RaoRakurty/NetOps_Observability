@@ -58,12 +58,23 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
     const from = new Date(Date.now() - since * 1000).toISOString();
     const load = async () => {
       try {
-        const [sys, traps, alerts] = await Promise.all([
-          api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE }).catch(() => null),
-          api.searchLogs({ query: "*", signal: "snmptrap", from, size: PAGE }).catch(() => null),
-          api.alerts().catch(() => []),
+        // The inner .catch()es used to guarantee this function never threw, which
+        // made the error renderer below DEAD CODE: a total OpenSearch outage
+        // rendered as "no events in this window". Settle instead, and report every
+        // failed source explicitly.
+        const [sysS, trapS, alertS] = await Promise.allSettled([
+          api.searchLogs({ query: "*", signal: "syslog", from, size: PAGE }),
+          api.searchLogs({ query: "*", signal: "snmptrap", from, size: PAGE }),
+          api.alerts(),
         ]);
         if (!alive) return;
+        const sys = sysS.status === "fulfilled" ? sysS.value : null;
+        const traps = trapS.status === "fulfilled" ? trapS.value : null;
+        const alerts = alertS.status === "fulfilled" ? alertS.value : [];
+        const failed: string[] = [];
+        if (sysS.status === "rejected") failed.push("syslog");
+        if (trapS.status === "rejected") failed.push("SNMP traps");
+        if (alertS.status === "rejected") failed.push("alerts");
         const out: Ev[] = [];
         for (const h of sys?.hits?.hits ?? []) out.push(mapSyslog(h));
         for (const h of traps?.hits?.hits ?? []) out.push(mapTrap(h));
@@ -75,7 +86,11 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
         setBase(out);
         setSysTotal(sys?.hits?.total?.value ?? null);
         setTrapTotal(traps?.hits?.total?.value ?? null);
-        setErr(null);
+        setErr(
+          failed.length === 0
+            ? null
+            : `${failed.join(" and ")} could not be read — this view is incomplete and an absent event does not mean it did not happen.`,
+        );
       } catch (e) {
         if (alive) setErr((e as Error).message);
       }
@@ -193,12 +208,14 @@ export default function Events({ sinceSeconds }: { sinceSeconds?: number } = {})
               ))}
             </span>
           </div>
-          {err ? (
-            <div className="empty" style={{ color: "var(--bad)" }}>{err}</div>
-          ) : filtered.length === 0 ? (
-            <EmptyHint kind="logs" />
-          ) : (
+          {/* The error is stated whether or not partial rows arrived; the "no
+              events" hint is suppressed while it stands, so a failed read is
+              never rendered as a quiet window. */}
+          {err && <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>}
+          {filtered.length > 0 ? (
             <DataTable<Ev> rows={filtered} columns={cols} rowKey={evKey} height={520} ariaLabel="Event stream" initialSort={{ key: "ts", dir: "desc" }} onRowClick={(e) => setSel(e)} />
+          ) : err ? null : (
+            <EmptyHint kind="logs" />
           )}
           {/* Every truncated feed SAYS it's truncated and offers the rest. */}
           {canLoadMore && !err && (

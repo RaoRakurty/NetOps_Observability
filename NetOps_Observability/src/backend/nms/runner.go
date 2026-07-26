@@ -86,10 +86,10 @@ func (d *RetryDoer) Do(req *http.Request) (*http.Response, error) {
 
 // Routed is the class-routed output of the Pipeline for one poll/webhook batch.
 type Routed struct {
-	MetricLines  []string          // exposition lines for VictoriaMetrics
-	Events       []ControllerEvent // deduped, ready for netops.controller_events
-	States       []StateRecord     // EVERY state applied this batch (first sightings + refreshes) — persist these
-	StateChanges []StateChange     // the subset that TRANSITIONED — emit these as change-events
+	MetricLines  []string            // exposition lines for VictoriaMetrics
+	Events       []ControllerEvent   // deduped, ready for netops.controller_events
+	States       []StateRecord       // EVERY state applied this batch (first sightings + refreshes) — persist these
+	StateChanges []StateChange       // the subset that TRANSITIONED — emit these as change-events
 	Wireless     *wireless.Inventory // canonical wireless inventory (#128) — upserted by the scheduler
 }
 

@@ -80,6 +80,10 @@ function DiscoveryCard() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [denied, setDenied] = useState(false);
+  // A 500 is not a 403. Rendering every failure as "you are not authorized" gives
+  // the operator the one explanation they will never investigate — so an outage
+  // in the discovery config store looked like a deliberate permission boundary.
+  const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -90,10 +94,18 @@ function DiscoveryCard() {
       setEnabled(env.config.enabled);
       setRanges(env.config.ranges.join(", "));
       setAllowNonPrivate(env.config.allow_non_private);
-    } catch {
-      // Tenant-scoped admins are refused by design — hide the card entirely
-      // rather than render a form that can only fail.
-      setDenied(true);
+      setDenied(false);
+      setLoadErr(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/^\s*40[13]\b/.test(msg)) {
+        // Tenant-scoped admins are refused by design — hide the card entirely
+        // rather than render a form that can only fail.
+        setDenied(true);
+        setLoadErr(null);
+      } else {
+        setLoadErr(msg);
+      }
     }
   };
   useEffect(() => {
@@ -101,7 +113,20 @@ function DiscoveryCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (denied || !cfg) return null;
+  if (denied) return null;
+  if (loadErr && !cfg) {
+    return (
+      <div className="cc-panel" role="alert" style={{ padding: "11px 13px" }}>
+        <strong style={{ color: "var(--bad)" }}>Discovery settings could not be loaded.</strong>
+        <div style={{ marginTop: 4, fontSize: 12.5 }}>{loadErr}</div>
+        <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--muted)" }}>
+          This is a failure to read the configuration, not a permission decision — the current
+          discovery state is unknown.
+        </div>
+      </div>
+    );
+  }
+  if (!cfg) return null;
 
   const save = async () => {
     setSaving(true);

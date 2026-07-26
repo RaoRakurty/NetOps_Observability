@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -106,22 +107,66 @@ type Engine struct {
 	healthy    bool
 	lastTick   time.Time
 
+	// ── Self-observability (§10: no silent failures) ────────────────────────
+	// The engine used to be structurally incapable of reporting its own
+	// blindness: an eval error was indistinguishable from "the rule is not
+	// firing", and `healthy` was set true at construction and never written
+	// again. These fields make failure countable and health falsifiable.
+	//
+	// evalFailures/ruleEvalFailures are cumulative totals (read from outside the
+	// package via EvalFailures/RuleEvalFailures so they can be exposed on
+	// /metrics); degradedTicks drives the health verdict; lastGoodTick is the
+	// last tick that evaluated cleanly; rulesLoadError records a rules-file that
+	// failed to load (the engine is running with fewer rules than intended).
+	evalFailures     uint64
+	ruleEvalFailures map[string]uint64
+	degradedTicks    int
+	lastGoodTick     time.Time
+	lastEvalError    string
+	rulesLoadError   string
+	lastEvalErrLog   map[string]time.Time // per-rule log rate limiter
+
 	// Seams for tests: the rule evaluator (an HTTP call to VictoriaMetrics in
 	// production) and the clock. Never nil — NewEngine sets the real ones.
 	evalFn func(Rule) ([]Sample, error)
 	now    func() time.Time
 }
 
+// unhealthyTickThreshold is how many CONSECUTIVE degraded ticks flip the engine
+// unhealthy, and degradedRuleFraction is the share of the tick's rules that must
+// error for that tick to count as degraded.
+//
+// The rule (documented because it is a judgement call): a tick is DEGRADED when
+// at least HALF of the evaluated rules returned an error. A majority failure is
+// a property of the metric store or of the whole rules file — not of one bad
+// expression — so a single mistyped rule can never declare the engine down; it
+// is reported through eval_failures / RuleEvalFailures() and a log line instead.
+// Two consecutive degraded ticks (~60s at the 30s loop) rides out one transient
+// VictoriaMetrics blip while still surfacing a real outage inside a minute. The
+// first clean tick restores health immediately.
+const (
+	unhealthyTickThreshold = 2
+	degradedRuleFraction   = 0.5
+)
+
+// evalErrLogEvery bounds per-rule eval-error logging. The loop runs every 30s
+// and a broken rule fails on every tick, so an unfiltered log would emit two
+// identical lines a minute forever and bury everything else. One line per rule
+// per window keeps the failure visible; the counters carry the exact rate.
+const evalErrLogEvery = 5 * time.Minute
+
 func NewEngine(rulesFile string, n *notify.Dispatcher) *Engine {
 	return &Engine{
-		rulesFile:  rulesFile,
-		active:     make(map[string]models.Alert),
-		pending:    make(map[string]time.Time),
-		dispatched: make(map[string]bool),
-		notifier:   n,
-		healthy:    true,
-		evalFn:     Evaluate,
-		now:        time.Now,
+		rulesFile:        rulesFile,
+		active:           make(map[string]models.Alert),
+		pending:          make(map[string]time.Time),
+		dispatched:       make(map[string]bool),
+		notifier:         n,
+		healthy:          true,
+		ruleEvalFailures: make(map[string]uint64),
+		lastEvalErrLog:   make(map[string]time.Time),
+		evalFn:           Evaluate,
+		now:              time.Now,
 	}
 }
 
@@ -172,12 +217,36 @@ func (e *Engine) Active() []models.Alert {
 // Start loads rules from disk (if a file is configured) and begins the
 // evaluation loop. Cancelling ctx terminates evaluation.
 func (e *Engine) Start(ctx context.Context) {
-	if rules, err := LoadRules(e.rulesFile); err == nil {
-		e.mu.Lock()
-		e.rules = append(e.rules, rules...)
-		e.mu.Unlock()
-	}
+	_ = e.loadRulesFile() // the error is logged + recorded in Health(), not fatal
 	go e.loop(ctx)
+}
+
+// loadRulesFile loads the configured rules file into the engine.
+//
+// The load error used to be dropped on the floor (`if rules, err := LoadRules();
+// err == nil { … }` with no else), so an unreadable or malformed RULES_FILE
+// started the engine with ZERO rules and nothing anywhere said so — the platform
+// reported "healthy, no alerts firing" while every shipped alert had silently
+// ceased to exist. Now: the failure is logged loudly, recorded in Health()
+// (`rules_load_error`) and pins healthy=false until the file is fixed and the
+// engine restarted, while any rules that DID parse are still loaded — partial
+// alerting beats none.
+func (e *Engine) loadRulesFile() error {
+	rules, err := LoadRules(e.rulesFile)
+	e.mu.Lock()
+	e.rules = append(e.rules, rules...)
+	total := len(e.rules)
+	if err != nil {
+		e.rulesLoadError = err.Error()
+		e.healthy = false
+	} else {
+		e.rulesLoadError = ""
+	}
+	e.mu.Unlock()
+	if err != nil {
+		log.Printf("alerts: rules file %q FAILED to load: %v — the engine is running with %d rule(s); every alert defined in that file is BLIND until it is fixed", e.rulesFile, err, total)
+	}
+	return err
 }
 
 func (e *Engine) loop(ctx context.Context) {
@@ -212,10 +281,35 @@ func (e *Engine) evaluateAll() {
 	// Resolution is tick-grained (the engine evaluates every 30s).
 	next := make(map[string]models.Alert)
 	nextPending := make(map[string]time.Time)
+	failed := 0
+	lastErrText := ""
 	for _, r := range rules {
 		samples, err := e.evalFn(r)
-		if err != nil || len(samples) == 0 {
+		if err != nil {
+			// §10: an eval ERROR is not "the rule is not firing". This branch
+			// used to share `continue` with the empty-result branch, so a
+			// VictoriaMetrics outage emptied the freshly-rebuilt active set and
+			// the resolution leg below RESOLVED every live alert — closing the
+			// PagerDuty incidents it had opened — then re-paged on recovery.
+			// Carry this rule's alerts (and their pending clocks) forward
+			// untouched: an unknown state must never be published as "clear".
+			failed++
+			lastErrText = fmt.Sprintf("rule %q: %v", r.Name, err)
+			e.noteEvalFailure(r.Name, err, now)
+			for id, a := range prev {
+				if ruleOwnsID(r.Name, id) {
+					next[id] = a
+				}
+			}
+			for id, held := range prevPending {
+				if ruleOwnsID(r.Name, id) {
+					nextPending[id] = held
+				}
+			}
 			continue
+		}
+		if len(samples) == 0 {
+			continue // genuinely evaluated and not firing — resolve normally
 		}
 		for _, s := range samples {
 			labels := mergeLabels(r.Labels, s.Labels)
@@ -253,10 +347,31 @@ func (e *Engine) evaluateAll() {
 
 	// Swap in the freshly-computed active set (this also resolves alerts whose
 	// series stopped firing), then dispatch only the newly-firing ones.
+	// The same critical section records the tick's health verdict — see
+	// unhealthyTickThreshold for the rule and why it is drawn there.
 	e.mu.Lock()
 	e.active = next
 	e.pending = nextPending
+	degraded := failed > 0 && float64(failed) >= degradedRuleFraction*float64(len(rules))
+	if degraded {
+		e.degradedTicks++
+	} else {
+		e.degradedTicks = 0
+		e.lastGoodTick = now
+	}
+	e.lastEvalError = lastErrText
+	was := e.healthy
+	e.healthy = e.rulesLoadError == "" && e.degradedTicks < unhealthyTickThreshold
+	became := e.healthy
+	degradedTicks := e.degradedTicks
 	e.mu.Unlock()
+	// Log the TRANSITION, not the state: the loop ticks twice a minute forever.
+	switch {
+	case was && !became:
+		log.Printf("alerts: engine UNHEALTHY — %d of %d rules failed to evaluate for %d consecutive tick(s) (last: %s); active alerts are being HELD, not resolved", failed, len(rules), degradedTicks, lastErrText)
+	case !was && became:
+		log.Printf("alerts: engine recovered — all %d rules evaluated cleanly", len(rules))
+	}
 	for id, a := range next {
 		if _, existed := prev[id]; existed {
 			continue
@@ -299,6 +414,67 @@ func (e *Engine) evaluateAll() {
 			e.notifier.DispatchResolve(a)
 		}
 	}
+}
+
+// ruleOwnsID reports whether an active-alert / pending id belongs to the named
+// rule. Ids are "<rule>" or "<rule>|<fingerprint>" (see evaluateAll).
+func ruleOwnsID(rule, id string) bool {
+	return id == rule || strings.HasPrefix(id, rule+"|")
+}
+
+// noteEvalFailure counts one rule's failed evaluation and logs it at most once
+// per evalErrLogEvery per rule. Counting is what makes a SINGLE broken rule
+// expression visible: it is a minority failure, so it never trips the health
+// flag, and before this it produced no signal of any kind — forever.
+func (e *Engine) noteEvalFailure(rule string, err error, now time.Time) {
+	e.mu.Lock()
+	e.evalFailures++
+	if e.ruleEvalFailures == nil {
+		e.ruleEvalFailures = make(map[string]uint64)
+	}
+	e.ruleEvalFailures[rule]++
+	total := e.ruleEvalFailures[rule]
+	if e.lastEvalErrLog == nil {
+		e.lastEvalErrLog = make(map[string]time.Time)
+	}
+	last, seen := e.lastEvalErrLog[rule]
+	shouldLog := !seen || now.Sub(last) >= evalErrLogEvery
+	if shouldLog {
+		e.lastEvalErrLog[rule] = now
+	}
+	e.mu.Unlock()
+	if shouldLog {
+		log.Printf("alerts: rule %q FAILED to evaluate (%d failure(s) so far): %v — its alerts are HELD (not resolved) and the rule is blind until it succeeds", rule, total, err)
+	}
+}
+
+// EvalFailures reports the cumulative number of rule evaluations that errored.
+// Exported so the API can publish it on /metrics — the defect being fixed is
+// that this condition had no counter, no log and no health effect at all.
+func (e *Engine) EvalFailures() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.evalFailures
+}
+
+// RuleEvalFailures returns a copy of the per-rule eval-failure counts, so one
+// permanently broken rule expression can be named rather than merely summed.
+func (e *Engine) RuleEvalFailures() map[string]uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]uint64, len(e.ruleEvalFailures))
+	for k, v := range e.ruleEvalFailures {
+		out[k] = v
+	}
+	return out
+}
+
+// LastSuccessfulTick reports when evaluation last completed without a degraded
+// verdict (zero if it never has).
+func (e *Engine) LastSuccessfulTick() time.Time {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.lastGoodTick
 }
 
 // mergeLabels overlays metric labels onto the rule's labels (severity, etc.),
@@ -366,6 +542,13 @@ func (e *Engine) Health() map[string]any {
 		"rules":     len(e.rules),
 		"active":    len(e.active),
 		"last_tick": e.lastTick,
+		// Why the engine believes what it believes — a "healthy" with no
+		// evidence behind it is what made this subsystem unfalsifiable.
+		"last_successful_tick": e.lastGoodTick,
+		"eval_failures":        e.evalFailures,
+		"degraded_ticks":       e.degradedTicks,
+		"last_eval_error":      e.lastEvalError,
+		"rules_load_error":     e.rulesLoadError,
 	}
 }
 
@@ -414,14 +597,46 @@ func indentOf(line string) int {
 	return len(line) - len(strings.TrimLeft(line, " \t"))
 }
 
+// validateParsedRule rejects a rule the engine could never evaluate.
+//
+// The parser used to admit ANY `- alert:` block it saw and return a nil error
+// always: a rule that lost its `expr:` (a bad indent, a dropped line, a folded
+// scalar with no continuation) was counted as loaded, shown in the rules list,
+// and then failed on every 30s tick forever with nothing said. A rule the
+// engine cannot evaluate is a defect in the file, and the file must say so at
+// LOAD time, naming the rule.
+func validateParsedRule(r Rule) error {
+	name := strings.TrimSpace(r.Name)
+	if name == "" {
+		return fmt.Errorf("rule with no alert name (expr %q)", strings.TrimSpace(r.Expr))
+	}
+	switch expr := strings.TrimSpace(r.Expr); expr {
+	case "":
+		return fmt.Errorf("rule %q has no expr — it can never evaluate", name)
+	case ">", "|", ">-", "|-":
+		return fmt.Errorf("rule %q kept the YAML fold marker %q as its expr — the folded block is empty", name, expr)
+	}
+	return nil
+}
+
+// parseRulesYAML returns the rules it could parse plus an error naming every
+// rule it REJECTED. Both are meaningful: the caller loads the good rules and
+// reports the bad ones (see Engine.loadRulesFile).
 func parseRulesYAML(s string) ([]Rule, error) {
 	var rules []Rule
+	var rejected []string
 	var cur *Rule
 	flush := func() {
-		if cur != nil {
-			rules = append(rules, *cur)
-			cur = nil
+		if cur == nil {
+			return
 		}
+		if err := validateParsedRule(*cur); err != nil {
+			rejected = append(rejected, err.Error())
+			cur = nil
+			return
+		}
+		rules = append(rules, *cur)
+		cur = nil
 	}
 
 	// Folded/literal expr blocks (`expr: >` / `expr: |`): promtool-valid and
@@ -497,6 +712,10 @@ func parseRulesYAML(s string) ([]Rule, error) {
 		}
 	}
 	flush()
+	if len(rejected) > 0 {
+		return rules, fmt.Errorf("%d malformed rule(s) rejected (%d loaded): %s",
+			len(rejected), len(rules), strings.Join(rejected, "; "))
+	}
 	return rules, nil
 }
 

@@ -75,6 +75,9 @@ func (c *cdpCollector) pollOnce(ctx context.Context) {
 	start := time.Now()
 	now := start.UnixMilli()
 	reachable := 0
+	// answered = the walk succeeded (health signal); reachable = it also found
+	// neighbours. A non-Cisco box with no CDP answers fine and reports nothing.
+	answered := 0
 	var all []LLDPNeighbor
 	var lastErr string
 
@@ -87,6 +90,7 @@ func (c *cdpCollector) pollOnce(ctx context.Context) {
 			lastErr = err.Error()
 			continue
 		}
+		answered++
 		if len(neigh) > 0 {
 			reachable++
 			all = append(all, neigh...)
@@ -100,8 +104,9 @@ func (c *cdpCollector) pollOnce(ctx context.Context) {
 		_ = redisSetEX(ctx, topoLinksKeyCDP, string(b), 1800)
 	}
 
+	healthy := cycleHealthy(len(targets), answered)
 	emitMetrics(ctx, strings.Join([]string{
-		fmt.Sprintf(`collector_up{collector="cdp"} 1 %d`, now),
+		collectorUpLine("cdp", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="cdp"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="cdp"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_cdp_neighbors{collector="cdp"} %d %d`, len(all), now),
@@ -112,12 +117,8 @@ func (c *cdpCollector) pollOnce(ctx context.Context) {
 	c.status.Targets = len(targets)
 	c.status.Reachable = reachable
 	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = true
-	if reachable == 0 && len(targets) > 0 {
-		c.status.LastError = lastErr
-	} else {
-		c.status.LastError = ""
-	}
+	c.status.Healthy = healthy
+	c.status.LastError = cycleError(len(targets), answered, lastErr)
 	c.mu.Unlock()
 }
 

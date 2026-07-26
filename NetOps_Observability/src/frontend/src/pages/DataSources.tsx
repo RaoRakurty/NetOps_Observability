@@ -12,11 +12,25 @@ import { Group, Panel } from "../components/board/panels";
 // Derived from data already in the stores (VM metrics + ClickHouse flows +
 // OpenSearch logs/traps + the device inventory) — no N×method queries.
 
-type Cov = { device: Device; snmp: boolean; flows: boolean; syslog: boolean; traps: boolean };
+// Tri — a coverage cell is three-state on purpose: true (receiving), false (the
+// store answered and this device is absent) and null (the QUERY failed, so this
+// device's coverage is UNKNOWN). Collapsing null into false reported a
+// VictoriaMetrics / OpenSearch outage as "no telemetry from any device" — a
+// definitive negative claim about the whole fleet that nothing supported.
+type Tri = boolean | null;
+type Cov = { device: Device; snmp: Tri; flows: Tri; syslog: Tri; traps: Tri };
 const FRESH_MS = 15 * 60_000;
 
 // A small status dot for a coverage cell.
-function Dot({ on, label }: { on: boolean; label: string }) {
+function Dot({ on, label }: { on: Tri; label: string }) {
+  if (on === null) {
+    return (
+      <span title={`${label}: query unavailable — coverage unknown`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--warn)" }} />
+        <span style={{ fontSize: 12, color: "var(--warn)" }}>?</span>
+      </span>
+    );
+  }
   return (
     <span title={on ? `${label}: receiving` : `${label}: no data`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span style={{ width: 8, height: 8, borderRadius: "50%", background: on ? "var(--good)" : "var(--border-strong)" }} />
@@ -28,6 +42,10 @@ function Dot({ on, label }: { on: boolean; label: string }) {
 export default function DataSources() {
   const [rows, setRows] = useState<Cov[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  // Which query PLANES failed this poll. Their columns render "unknown", and the
+  // page says which read is down — an operator must never conclude "the fleet
+  // sends nothing" from a broken query side.
+  const [downPlanes, setDownPlanes] = useState<string[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -35,14 +53,26 @@ export default function DataSources() {
       try {
         const fromIso = new Date(Date.now() - FRESH_MS).toISOString();
         const end = Math.floor(Date.now() / 1000);
-        const [devices, snmpRes, flowRes, sysRes, trapRes] = await Promise.all([
+        const settled = await Promise.all([
           api.devices(),
-          api.metricsQueryRange("device_sysuptime", end - 900, end, 300).catch(() => null),
-          api.flowsTopN("device", 900, 500).catch(() => null),
-          api.searchLogs({ query: "*", signal: "syslog", from: fromIso, size: 500 }).catch(() => null),
-          api.searchLogs({ query: "*", signal: "snmptrap", from: fromIso, size: 500 }).catch(() => null),
+          Promise.allSettled([
+            api.metricsQueryRange("device_sysuptime", end - 900, end, 300),
+            api.flowsTopN("device", 900, 500),
+            api.searchLogs({ query: "*", signal: "syslog", from: fromIso, size: 500 }),
+            api.searchLogs({ query: "*", signal: "snmptrap", from: fromIso, size: 500 }),
+          ]),
         ]);
         if (!alive) return;
+        const devices = settled[0];
+        const [snmpS, flowS, sysS, trapS] = settled[1];
+        const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
+        const snmpRes = ok(snmpS), flowRes = ok(flowS), sysRes = ok(sysS), trapRes = ok(trapS);
+        const down: string[] = [];
+        if (snmpS.status === "rejected") down.push("SNMP metrics (VictoriaMetrics)");
+        if (flowS.status === "rejected") down.push("flows (ClickHouse)");
+        if (sysS.status === "rejected") down.push("syslog (OpenSearch)");
+        if (trapS.status === "rejected") down.push("traps (OpenSearch)");
+        setDownPlanes(down);
 
         // SNMP: device labels with a fresh device_sysuptime series.
         const snmpSet = new Set<string>();
@@ -68,12 +98,13 @@ export default function DataSources() {
         const has = (set: Set<string>, d: Device) =>
           set.has((d.name || "").toLowerCase()) || set.has((d.address || "").toLowerCase());
 
+        // A failed plane yields null (unknown), never false (definitively silent).
         const cov: Cov[] = (devices ?? []).map((d) => ({
           device: d,
-          snmp: snmpSet.has(d.id) || snmpSet.has(d.name),
-          flows: flowSet.has(d.address),
-          syslog: has(sysSet, d),
-          traps: has(trapSet, d),
+          snmp: snmpRes === null ? null : snmpSet.has(d.id) || snmpSet.has(d.name),
+          flows: flowRes === null ? null : flowSet.has(d.address),
+          syslog: sysRes === null ? null : has(sysSet, d),
+          traps: trapRes === null ? null : has(trapSet, d),
         }));
         setRows(cov);
         setErr(null);
@@ -87,14 +118,18 @@ export default function DataSources() {
   }, []);
 
   const totals = useMemo(() => {
-    const t = { devices: rows.length, snmp: 0, flows: 0, syslog: 0, full: 0, none: 0 };
+    const t = { devices: rows.length, snmp: 0, flows: 0, syslog: 0, full: 0, none: 0, unknown: 0 };
     for (const r of rows) {
-      if (r.snmp) t.snmp++;
-      if (r.flows) t.flows++;
-      if (r.syslog) t.syslog++;
-      const n = [r.snmp, r.flows, r.syslog, r.traps].filter(Boolean).length;
+      const cells = [r.snmp, r.flows, r.syslog, r.traps];
+      if (r.snmp === true) t.snmp++;
+      if (r.flows === true) t.flows++;
+      if (r.syslog === true) t.syslog++;
+      const n = cells.filter((c) => c === true).length;
+      const u = cells.filter((c) => c === null).length;
+      if (u > 0) t.unknown++;
       if (n === 4) t.full++;
-      if (n === 0) t.none++;
+      // "No data" is only true when every plane ANSWERED and said nothing.
+      if (n === 0 && u === 0) t.none++;
     }
     return t;
   }, [rows]);
@@ -108,11 +143,14 @@ export default function DataSources() {
     { key: "traps", header: "Traps", sortable: true, sortValue: (r) => (r.traps ? 1 : 0), render: (r) => <Dot on={r.traps} label="Traps" /> },
     {
       key: "cov", header: "Coverage", sortable: true,
-      sortValue: (r) => [r.snmp, r.flows, r.syslog, r.traps].filter(Boolean).length,
+      sortValue: (r) => [r.snmp, r.flows, r.syslog, r.traps].filter((c) => c === true).length,
       render: (r) => {
-        const n = [r.snmp, r.flows, r.syslog, r.traps].filter(Boolean).length;
-        const tone = n === 0 ? "bad" : n >= 3 ? "good" : "warn";
-        return <span className={`badge ${tone}`}>{n}/4</span>;
+        const cells = [r.snmp, r.flows, r.syslog, r.traps];
+        const n = cells.filter((c) => c === true).length;
+        const u = cells.filter((c) => c === null).length;
+        // With an unknown cell the score is a floor, not a verdict — never "bad".
+        const tone = u > 0 ? "warn" : n === 0 ? "bad" : n >= 3 ? "good" : "warn";
+        return <span className={`badge ${tone}`} title={u > 0 ? `${u} source${u === 1 ? "" : "s"} could not be queried` : undefined}>{n}/4{u > 0 ? "?" : ""}</span>;
       },
     },
   ], []);
@@ -126,7 +164,15 @@ export default function DataSources() {
           <Stat label="Flows" value={totals.flows} tone={totals.flows > 0 ? "good" : ""} />
           <Stat label="Syslog" value={totals.syslog} tone={totals.syslog > 0 ? "good" : ""} />
           <Stat label="No data" value={totals.none} tone={totals.none > 0 ? "bad" : "good"} />
+          {totals.unknown > 0 && <Stat label="Unknown" value={totals.unknown} tone="warn" />}
         </StatStrip>
+        {downPlanes.length > 0 && (
+          <p className="empty" role="alert" style={{ margin: 0, color: "var(--warn)" }}>
+            <strong>Coverage is incomplete:</strong> {downPlanes.join(", ")} could not be queried.
+            Those columns show “?” — the devices may well be sending data. This is a QUERY-side
+            failure, not evidence that telemetry stopped.
+          </p>
+        )}
         <p className="mini-meta" style={{ margin: 0 }}>
           Coverage of agentless sources over the last 15 min. Start with <strong>SNMP</strong> (read-only v2c/v3) for device &amp; interface health,
           add <strong>NetFlow/IPFIX/sFlow</strong> for traffic, and forward <strong>syslog/traps</strong> for events. Streaming telemetry (gNMI/NETCONF) is an optional upgrade.

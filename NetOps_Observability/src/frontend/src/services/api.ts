@@ -1894,6 +1894,11 @@ export const api = {
   deleteRule: (name: string) =>
     request<void>(`/api/rules?name=${encodeURIComponent(name)}`, { method: "DELETE" }),
   credentials: () => request<Record<string, boolean>>("/api/credentials"),
+  // Feature availability for any authenticated user. Distinct from credentials()
+  // (platform-owner only): a non-admin asking "should I render the SSH button?"
+  // must not depend on an endpoint they are not allowed to read, or a 403 shows
+  // up as "the feature does not exist".
+  features: () => request<Record<string, boolean>>("/api/features"),
   // Topology Operating Canvas: resolved, renderer-agnostic TopologyView for a
   // workflow mode. Typed `unknown` to keep services/api.ts decoupled from the
   // feature's contract types; the topology API client casts + normalizes it.

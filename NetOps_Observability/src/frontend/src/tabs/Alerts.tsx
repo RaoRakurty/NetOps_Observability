@@ -40,6 +40,12 @@ export default function Alerts() {
   const [rawFiring, setRawFiring] = useState(0);
   const [filter, setFilter] = useState<EpisodeFilter>("open");
   const [sel, setSel] = useState<string | null>(null);
+  // loadErr — this page's OWN failure state. It cannot be delegated to the
+  // top-level health indicator: that polls /healthz, which stays 200 while a
+  // route-scoped 500 takes this feed down. Without it an alerts outage rendered
+  // green zeros and "all monitored conditions are within threshold".
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const ws = useWorkspace();
 
   const load = useCallback(async () => {
@@ -49,8 +55,11 @@ export default function Alerts() {
       setTotal(ep.total ?? (ep.episodes ?? []).length);
       setTruncated(!!ep.truncated);
       setRawFiring((raw ?? []).length);
-    } catch {
-      /* ignore — top-level health banner shows the failure */
+      setLoadErr(null);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoaded(true);
     }
   }, [filter]);
 
@@ -143,20 +152,30 @@ export default function Alerts() {
         subtitle="Repeated firings collapse into episodes — triage each once with acknowledge, assign, mute, snooze and notes."
         chips={
           <>
-            <Chip
-              label={`${rawFiring} firing · ${active.length} episode${active.length === 1 ? "" : "s"}`}
-              tone={active.length ? "var(--warn)" : "var(--ok)"}
-              title="Currently-firing alerts, folded into episodes"
-            />
-            <LiveChip detail="rule evaluation" />
+            {loadErr ? (
+              <Chip
+                label="Alert feed unavailable"
+                tone="var(--crit)"
+                title="The alert episode API did not answer — the counts below are unknown, not zero."
+              />
+            ) : (
+              <Chip
+                label={`${rawFiring} firing · ${active.length} episode${active.length === 1 ? "" : "s"}`}
+                tone={active.length ? "var(--warn)" : "var(--ok)"}
+                title="Currently-firing alerts, folded into episodes"
+              />
+            )}
+            {!loadErr && <LiveChip detail="rule evaluation" />}
           </>
         }
       >
+        {/* On a failed read every KPI is UNKNOWN — a green zero would be a claim
+            about the network that the API never made. */}
         <NocKpis cols={4}>
-          <NocKpi n={active.length} label="Active episodes" interp="conditions firing now" tone={active.length ? "var(--warn)" : "var(--ok)"} />
-          <NocKpi n={eCrit} label="Critical" interp="severe condition" tone={eCrit ? "var(--crit)" : undefined} />
-          <NocKpi n={eFlap} label="Flapping" interp="rapid state changes" tone={eFlap ? "var(--warn)" : undefined} />
-          <NocKpi n={ePaused} label="Notifications paused" interp="muted or snoozed" tone={ePaused ? "var(--fg-subtle)" : undefined} />
+          <NocKpi n={loadErr ? "—" : active.length} label="Active episodes" interp={loadErr ? "unknown — feed failed" : "conditions firing now"} tone={loadErr ? "var(--fg-subtle)" : active.length ? "var(--warn)" : "var(--ok)"} />
+          <NocKpi n={loadErr ? "—" : eCrit} label="Critical" interp={loadErr ? "unknown — feed failed" : "severe condition"} tone={loadErr ? "var(--fg-subtle)" : eCrit ? "var(--crit)" : undefined} />
+          <NocKpi n={loadErr ? "—" : eFlap} label="Flapping" interp={loadErr ? "unknown — feed failed" : "rapid state changes"} tone={loadErr ? "var(--fg-subtle)" : eFlap ? "var(--warn)" : undefined} />
+          <NocKpi n={loadErr ? "—" : ePaused} label="Notifications paused" interp={loadErr ? "unknown — feed failed" : "muted or snoozed"} tone={loadErr ? "var(--fg-subtle)" : ePaused ? "var(--fg-subtle)" : undefined} />
         </NocKpis>
       </NocHeader>
       <div className="cc-panel">
@@ -173,18 +192,33 @@ export default function Alerts() {
                 { value: "all", label: "All" },
               ]}
             />
-            {truncated
-              ? `showing ${items.length} of ${total} episodes (most recent)`
-              : `${items.length} episode${items.length === 1 ? "" : "s"} · click a row to triage`}
+            {loadErr
+              ? "feed unavailable"
+              : truncated
+                ? `showing ${items.length} of ${total} episodes (most recent)`
+                : `${items.length} episode${items.length === 1 ? "" : "s"} · click a row to triage`}
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>
-          {items.length === 0 ? (
-            <div className="empty">
-              {filter === "open"
-                ? "No open alert episodes — all monitored conditions are within threshold."
-                : "No episodes match this filter."}
+          {loadErr && (
+            <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+              <strong>Alert episodes could not be loaded.</strong>
+              <div style={{ marginTop: 4 }}>{loadErr}</div>
+              <div style={{ marginTop: 4, color: "var(--muted)" }}>
+                Whether any condition is firing is UNKNOWN — this is not an all-clear.
+                {items.length > 0 ? " The rows below are the last successful read and may be stale." : ""}
+              </div>
             </div>
+          )}
+          {/* "within threshold" is a claim only a SUCCESSFUL read can support. */}
+          {items.length === 0 ? (
+            loadErr || !loaded ? null : (
+              <div className="empty">
+                {filter === "open"
+                  ? "No open alert episodes — all monitored conditions are within threshold."
+                  : "No episodes match this filter."}
+              </div>
+            )
           ) : (
             <DataTable<AlertEpisode>
               rows={items}

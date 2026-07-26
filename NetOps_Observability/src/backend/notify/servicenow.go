@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/models"
@@ -43,8 +44,11 @@ type ServiceNow struct {
 	assignmentGroup string
 	statePath       string
 
-	mu   sync.Mutex
-	open map[string]*ServiceNowTicket // fingerprint -> ticket
+	mu sync.Mutex
+	// dedup-state persist observability (see noteStateWrite)
+	stateWriteFailures atomic.Uint64
+	lastStateErr       atomic.Value                 // string
+	open               map[string]*ServiceNowTicket // fingerprint -> ticket
 }
 
 // ServiceNowTicket links a NetOps alert fingerprint to its ServiceNow incident.
@@ -263,7 +267,7 @@ func (s *ServiceNow) Send(a models.Alert) error {
 		Fingerprint: fp, Number: num, SysID: sysID, Severity: a.Severity,
 		Device: a.DeviceID, Summary: a.Summary, OpenedAt: time.Now().UTC(), State: "open",
 	}
-	s.saveLocked()
+	s.noteStateWrite(s.saveLocked())
 	s.mu.Unlock()
 	return nil
 }
@@ -276,7 +280,7 @@ func (s *ServiceNow) resolve(fp string) error {
 	t, ok := s.open[fp]
 	if ok {
 		delete(s.open, fp)
-		s.saveLocked()
+		s.noteStateWrite(s.saveLocked())
 	}
 	s.mu.Unlock()
 	if !ok || t.SysID == "" || s.instanceURL == "" {
@@ -398,9 +402,34 @@ func severityToImpactUrgency(sev string) (impact, urgency string) {
 
 // ---- state persistence -----------------------------------------------------
 
-func (s *ServiceNow) saveLocked() {
+// noteStateWrite records a dedup-state persist outcome. The remote incident has
+// already been created or closed by the time we get here, so a write failure
+// must NOT fail the caller (that would re-file the ticket). It must also never
+// be silent: a lost dedup map means a restart re-files one incident per still-
+// firing alert. Counted here and exported via StateWriteFailures for /metrics.
+func (s *ServiceNow) noteStateWrite(err error) {
+	if err != nil {
+		s.stateWriteFailures.Add(1)
+		s.lastStateErr.Store(err.Error())
+	}
+}
+
+// StateWriteFailures reports how many open-ticket dedup writes have failed and
+// the most recent reason ("" when none). Non-zero means duplicate tickets are
+// possible across a restart.
+func (s *ServiceNow) StateWriteFailures() (uint64, string) {
+	n := s.stateWriteFailures.Load()
+	msg, _ := s.lastStateErr.Load().(string)
+	return n, msg
+}
+
+// saveLocked persists the open-ticket dedup map. It RETURNS its failure
+// (F-62/F-78 class): this map is what stops a restart from re-filing a
+// duplicate ticket for every still-firing alert, so a silent write failure is
+// an outage that survives the outage. Caller holds the lock.
+func (s *ServiceNow) saveLocked() error {
 	if s.statePath == "" {
-		return
+		return nil
 	}
 	list := make([]ServiceNowTicket, 0, len(s.open))
 	for _, t := range s.open {
@@ -410,15 +439,19 @@ func (s *ServiceNow) saveLocked() {
 	}
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		return
+		return fmt.Errorf("marshal open-ticket state: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o755); err != nil {
-		return
+		return fmt.Errorf("create state dir: %w", err)
 	}
 	tmp := s.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err == nil {
-		_ = os.Rename(tmp, s.statePath)
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return fmt.Errorf("write open-ticket state: %w", err)
 	}
+	if err := os.Rename(tmp, s.statePath); err != nil {
+		return fmt.Errorf("commit open-ticket state: %w", err)
+	}
+	return nil
 }
 
 func (s *ServiceNow) loadState() {

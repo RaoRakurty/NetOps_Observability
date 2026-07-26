@@ -1971,10 +1971,17 @@ def _dlq_append(record: dict) -> None:
 
 def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
     """Build + store one quarantine record (ring + optional on-disk NDJSON)."""
-    try:
-        payload = json.dumps(event, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS]
-    except (TypeError, ValueError):
-        payload = repr(event)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    if isinstance(event, (bytes, bytearray)):
+        # Raw wire bytes — a payload that failed to DECODE. Keep them as text
+        # (errors="replace": a mangled byte becomes U+FFFD, nothing is dropped)
+        # rather than a b'...' repr, so the poison record stays greppable and
+        # can be replayed from the dead-letter file.
+        payload = bytes(event).decode("utf-8", "replace")[:CORR_QUARANTINE_PAYLOAD_CHARS]
+    else:
+        try:
+            payload = json.dumps(event, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS]
+        except (TypeError, ValueError):
+            payload = repr(event)[:CORR_QUARANTINE_PAYLOAD_CHARS]
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "topic": topic,
@@ -2024,7 +2031,15 @@ async def consume() -> None:
             bootstrap_servers=KAFKA_BOOTSTRAP,
             group_id="netops-correlation",
             auto_offset_reset="latest",
-            value_deserializer=lambda v: json.loads(v.decode("utf-8")) if v else None,
+            # NO value_deserializer, deliberately. aiokafka runs the deserializer
+            # inside its fetcher (_consumer_record) BEFORE it advances
+            # next_fetch_offset — so a malformed payload raised OUTSIDE the
+            # per-event try below, escaped to the supervisor, and (with manual
+            # commit) the offset never moved: the restart re-read the same poison
+            # bytes forever and every one of the topics starved, with no counter
+            # moving to say so. Decoding moved INSIDE the per-event try, where
+            # the existing quarantine path preserves the payload and the offset
+            # advances past it. Keep the raw bytes here.
             # Tracker #126 (write-integrity criterion 8): offsets advance ONLY
             # after the handler returned — never on a timer that runs ahead of
             # the outcome. Auto-commit could commit an offset whose handler then
@@ -2063,17 +2078,25 @@ async def consume() -> None:
             async for msg in consumer:
                 # Per-EVENT isolation: one bad record must cost one record, not
                 # the whole ten-topic consumer (see quarantine_event above).
+                event = None
                 try:
                     # Phase 3: establish this message's dedup coordinate so every
                     # critical-table insert it drives carries a stable token — a
                     # retry/redelivery of THIS offset dedups instead of duplicating.
                     set_dedup_coord(msg.topic, msg.partition, msg.offset)
-                    await handle(msg.topic, msg.value)
+                    # Decode HERE, not in the consumer: a JSONDecodeError or
+                    # UnicodeDecodeError is then just another one-event failure.
+                    # Empty/tombstone values stay None (handle() no-ops on falsy).
+                    event = json.loads(msg.value.decode("utf-8")) if msg.value else None
+                    await handle(msg.topic, event)
                     consecutive_failures = 0
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    quarantine_event(msg.topic, msg.value, exc)
+                    # `event` is still None when the DECODE itself failed —
+                    # quarantine the RAW bytes then, so the poison payload that
+                    # has to be reproduced is the one that gets kept.
+                    quarantine_event(msg.topic, msg.value if event is None else event, exc)
                     consecutive_failures += 1
                     # A RUN of failures is not a poison event, it is a broken
                     # dependency (ClickHouse down). Tolerating those at full

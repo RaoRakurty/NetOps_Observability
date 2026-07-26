@@ -45,7 +45,7 @@ export default function RcaVerifyPanel({ correlationId, suspected }: {
   correlationId: string;
   suspected?: boolean; // case sits at the suspected tier → verification is the closer
 }) {
-  const { status, available, busy, message, trigger } = useVerification(correlationId);
+  const { status, available, busy, message, error, trigger } = useVerification(correlationId);
   const [canWrite, setCanWrite] = useState(false);
 
   useEffect(() => {
@@ -54,6 +54,18 @@ export default function RcaVerifyPanel({ correlationId, suspected }: {
       .catch(() => setCanWrite(false));
   }, [correlationId]);
 
+  // A failed READ is not a dormant feature: say the state is unknown rather than
+  // letting the panel disappear (which reads as "this case was never verified").
+  if (error && !status) {
+    return (
+      <div className="rw-verify" style={{ display: "grid", gap: 8 }}>
+        <h3 className="rw-section-title">Active verification</h3>
+        <div role="alert" style={{ color: "var(--warn)" }}>
+          Verification status could not be read — retrying. Whether this case was verified is unknown. ({error})
+        </div>
+      </div>
+    );
+  }
   // Dormant feature, tenant not opted in, or case not visible → no panel.
   if (!available || !status?.enabled) return null;
 

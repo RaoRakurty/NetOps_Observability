@@ -923,6 +923,10 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       POSTGRES_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}"
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
+      # Flow-lane correlation (netops.flows → signals). ON by default; =false
+      # stops the engine deriving signals from flows, e.g. when goflow2 volume
+      # is the dominant cost and only the metric/syslog lanes are wanted.
+      ENABLE_FLOW_CORRELATION: ${ENABLE_FLOW_CORRELATION:-true}
       CORR_WINDOW_BUFFER: ${CORR_WINDOW_BUFFER:-50000}   # #102
       # #20: device→tenant map (exported by api) to stamp tenant_id on findings.
       TENANT_ENRICHMENT_FILE: /data/enrichment/device_tenant.csv
@@ -1123,6 +1127,9 @@ services:
       ENABLE_SNMP_METRICS: ${ENABLE_SNMP_METRICS:-true}
       ENABLE_GNMI_COLLECTION: ${ENABLE_GNMI_COLLECTION:-false}
       ENABLE_NETCONF_COLLECTION: ${ENABLE_NETCONF_COLLECTION:-false}
+      # Background loop that fills in the vendor of inventory devices whose
+      # sysObjectID was never resolved (extra SNMP walks). Opt-in.
+      ENABLE_VENDOR_DETECTION: ${ENABLE_VENDOR_DETECTION:-false}
       # Ubiquiti UniFi controller connector — device health via the controller
       # API (client count, state, cpu/mem, satisfaction). Opt-in; needs URL+creds.
       FEATURE_UNIFI: ${FEATURE_UNIFI:-false}
@@ -1131,6 +1138,11 @@ services:
       UNIFI_USER: ${UNIFI_USER:-}
       UNIFI_PASSWORD: ${UNIFI_PASSWORD:-}
       UNIFI_OS: ${UNIFI_OS:-false}
+      # #128 Phase 8 wireless remediation (RRM nudge / AP restart / client
+      # deauth). DORMANT unless FEATURE_WIRELESS_ACTIONS=true — it WRITES to
+      # controllers; the whole surface 404s otherwise. Enable deliberately, and
+      # note the action still has to clear its five per-request gates.
+      FEATURE_WIRELESS_ACTIONS: ${FEATURE_WIRELESS_ACTIONS:-false}
       # Port Intelligence #94 P3: DOM/DDM optics via ENTITY-SENSOR-MIB (rx/tx
       # power, temp, voltage, bias per port → port_optics_* VM series). Opt-in;
       # best-effort (devices without ENTITY-SENSOR yield nothing).
@@ -1186,6 +1198,19 @@ services:
       PATH_GRAPH_ENVIRONMENT: ${PATH_GRAPH_ENVIRONMENT:-prod}
       PATH_GRAPH_VANTAGE_ADDRESSES: ${PATH_GRAPH_VANTAGE_ADDRESSES:-}
       PATH_GRAPH_LOCAL_CONTEXTS: ${PATH_GRAPH_LOCAL_CONTEXTS:-}
+      # Background precompute workers behind the path/service cascade. Both are
+      # opt-in and both need CLICKHOUSE_URL (the rollup additionally needs the
+      # postgres store); they log and stay down when a prerequisite is missing.
+      #  - svc flow rollup: per-minute service flow attribution without an MV
+      #    over the policy-protected flows table (svc_rollup_worker.go).
+      #  - path baselines: the hour-of-week tier of the path-health cascade
+      #    ("is 40 ms normal for a Tuesday 9am?", path_health_baselines.go).
+      FEATURE_SVC_FLOW_ROLLUP: ${FEATURE_SVC_FLOW_ROLLUP:-false}
+      FEATURE_PATH_BASELINES: ${FEATURE_PATH_BASELINES:-false}
+      # Seam inventory bootstrap: periodic suggestion loop that seeds the seam
+      # inventory (a P1-required input to grounding). Postgres-only and ON by
+      # default; set =false to stop the loop.
+      ENABLE_SEAM_BOOTSTRAP: ${ENABLE_SEAM_BOOTSTRAP:-true}
       # Probe-event bus lane (#67 build ⑦): each STAMP/synthetics observation is
       # POSTed to Vector → netops.probes → correlation engine (active_probe
       # evidence). PROBER_ID is the observer identity for independence analysis.
@@ -1206,6 +1231,10 @@ services:
       # out-of-order webhooks). Makes outbound API calls; default off.
       FEATURE_ITSM_RECONCILE: ${FEATURE_ITSM_RECONCILE:-false}
       ITSM_RECONCILE_INTERVAL: ${ITSM_RECONCILE_INTERVAL:-5m}
+      # Legacy per-ALERT ITSM path (pre-#78), superseded by the per-RCA
+      # auto-ticketing below. Kept for existing deployments; default off so a
+      # single outage cannot fan out into one ticket per raw alert.
+      FEATURE_LEGACY_ALERT_ITSM: ${FEATURE_LEGACY_ALERT_ITSM:-false}
       # Notification channels
       FEATURE_SLACK_NOTIFICATIONS: ${FEATURE_SLACK_NOTIFICATIONS:-false}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
@@ -1251,6 +1280,10 @@ services:
       # alert). DORMANT unless FEATURE_RCA_TICKETING=true; the connection is the
       # per-tenant ServiceNow configured in Incident Response → Integrations.
       FEATURE_RCA_TICKETING: ${FEATURE_RCA_TICKETING:-false}
+      # Cloud signal notifications (#12 slice 1): page the owning tenant when a
+      # CLOUD correlation object opens, through that tenant's OWN RCA Slack/
+      # PagerDuty lanes. Opt-in; a tenant with no lane configured is a no-op.
+      FEATURE_CLOUD_SIGNAL_NOTIFICATIONS: ${FEATURE_CLOUD_SIGNAL_NOTIFICATIONS:-false}
       # NMS vendor-controller integrations (#95): poll 3rd-party controllers
       # (Meraki / Catalyst Center / vManage / NDFC / Versa / Prime / generic)
       # as normalized RCA evidence. ON by default (read-only, inert until a
@@ -1307,6 +1340,12 @@ services:
       # Gemini (free tier — owner decision 2026-07-02); switch to anthropic or
       # openai in the assistant settings UI or via COPILOT_PROVIDER. The model
       # default tracks the provider in the backend unless COPILOT_MODEL is set.
+      # FEATURE_AI is the current name of that gate and WINS over FEATURE_COPILOT
+      # when set. Defaulted to EMPTY on purpose, not to true: an empty value is
+      # "not set" to aiEnabled(), so the legacy FEATURE_COPILOT below keeps
+      # deciding exactly as it does today. Set FEATURE_AI=false in .env to turn
+      # the assistant off, or =true to force it on regardless of FEATURE_COPILOT.
+      FEATURE_AI: ${FEATURE_AI:-}
       FEATURE_COPILOT: ${FEATURE_COPILOT:-true}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-gemini}
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
@@ -1375,6 +1414,9 @@ services:
       # by the optional gotenberg sidecar — start it with:
       #   docker compose --profile pdf up -d gotenberg
       # When the sidecar is down, pdf-format reports gracefully skip the PDF.
+      # ON by default; =false stops the scheduler (queue+workers on postgres,
+      # in-process scheduler on the file backend) so no scheduled report runs.
+      ENABLE_REPORT_SCHEDULER: ${ENABLE_REPORT_SCHEDULER:-true}
       REPORT_WORKERS: ${REPORT_WORKERS:-4}
       REPORT_PDF_SIDECAR_URL: ${REPORT_PDF_SIDECAR_URL:-http://gotenberg:3000/forms/chromium/convert/html}
       REPORT_MAX_CATCHUP_RUNS: ${REPORT_MAX_CATCHUP_RUNS:-50}

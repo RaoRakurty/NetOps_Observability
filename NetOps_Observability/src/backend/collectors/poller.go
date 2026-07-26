@@ -3,12 +3,15 @@ package collectors
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -213,8 +216,9 @@ func (p *poller) pollOnce(ctx context.Context) {
 	}
 
 	dur := time.Since(start)
+	healthy := cycleHealthy(len(targets), reachable)
 	lines = append(lines,
-		fmt.Sprintf(`collector_up{collector=%q} 1 %d`, p.name, now),
+		collectorUpLine(p.name, healthy, now),
 		fmt.Sprintf(`collector_targets{collector=%q} %d %d`, p.name, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector=%q} %d %d`, p.name, reachable, now),
 		fmt.Sprintf(`collector_poll_duration_ms{collector=%q} %d %d`, p.name, dur.Milliseconds(), now),
@@ -226,13 +230,57 @@ func (p *poller) pollOnce(ctx context.Context) {
 	p.status.Targets = len(targets)
 	p.status.Reachable = reachable
 	p.status.LastPollMillis = dur.Milliseconds()
-	p.status.Healthy = true // the collector loop itself is healthy/running
-	if reachable == 0 && len(targets) > 0 {
-		p.status.LastError = lastErr
-	} else {
-		p.status.LastError = ""
-	}
+	p.status.Healthy = healthy
+	p.status.LastError = cycleError(len(targets), reachable, lastErr)
 	p.mu.Unlock()
+}
+
+// ── collector self-observability (§10: no silent failures) ───────────────────
+
+// degradedReachFraction is the share of a collector's targets that must answer
+// for the cycle to count as healthy.
+//
+// The rule (a judgement call, so it is documented): a cycle is UNHEALTHY when
+// fewer than half of the targets answered, and LastError is populated whenever
+// ANY target failed. The audit found the opposite: Healthy was re-set to a
+// literal true every tick and LastError was cleared unless EVERY target failed,
+// so a 9-of-10 blackout reported "healthy" with a blank error. Half is the line
+// because below it the collector no longer produces a representative view of
+// the fleet and the operator must be told; above it the loss is per-device and
+// already visible as collector_target_up / collector_targets_reachable. A
+// collector with NO targets stays healthy-and-idle — nothing to reach is not a
+// failure to reach.
+const degradedReachFraction = 0.5
+
+// cycleHealthy is the health verdict for one poll cycle: answered is the number
+// of targets whose probe SUCCEEDED (not the number that had something to say —
+// a device with no LLDP neighbours answered fine).
+func cycleHealthy(targets, answered int) bool {
+	if targets <= 0 {
+		return true
+	}
+	return float64(answered) >= degradedReachFraction*float64(targets)
+}
+
+// cycleError is the LastError one cycle should report. It is non-empty whenever
+// any target failed — including the partial blackout that used to be silent —
+// and carries the last underlying error when there is one.
+func cycleError(targets, answered int, lastErr string) string {
+	if targets <= 0 || answered >= targets {
+		return ""
+	}
+	if strings.TrimSpace(lastErr) != "" {
+		return fmt.Sprintf("%d/%d targets did not answer (last error: %s)", targets-answered, targets, lastErr)
+	}
+	return fmt.Sprintf("%d/%d targets did not answer", targets-answered, targets)
+}
+
+// collectorUpLine renders the collector_up sample honestly. This metric is the
+// platform's own liveness signal and the shipped CollectorDown alert keys off
+// `collector_up == 0`; every collector emitted the literal constant 1, so that
+// alert could never fire no matter how blind the collector was.
+func collectorUpLine(name string, up bool, nowMs int64) string {
+	return fmt.Sprintf(`collector_up{collector=%q} %d %d`, name, b2i(up), nowMs)
 }
 
 // withPort returns addr unchanged if it already has a port, else appends def.
@@ -311,29 +359,99 @@ func ProbeSNMP(ctx context.Context, t Target) error {
 	return snmpProbe(ctx, withPort(t.Address, 161), t)
 }
 
+// Metric-push accounting. emitMetrics used to swallow EVERYTHING — an unset
+// endpoint, a request-build error, a dead transport — and never looked at the
+// status code, so VictoriaMetrics could reject every sample from all 14 call
+// sites indefinitely with no counter, no log and no health effect. These are
+// the collectors' own "am I being heard?" signal.
+var (
+	metricsPushOK      atomic.Uint64
+	metricsPushFailed  atomic.Uint64
+	metricsPushDropped atomic.Uint64 // no metrics endpoint configured at all
+
+	metricsPushMu      sync.Mutex
+	metricsPushLastErr string
+	metricsPushLogged  time.Time
+	metricsPushNoURL   sync.Once
+)
+
+// pushErrLogEvery bounds push-failure logging: every collector tick calls
+// emitMetrics, so an unfiltered log of a down VictoriaMetrics would emit
+// hundreds of identical lines a minute. The counters carry the rate, the log
+// carries the cause.
+const pushErrLogEvery = time.Minute
+
+// MetricsPushStats reports the outcome of the collectors' own metric pushes:
+// successful pushes, failed ones (transport, request-build, or a non-2xx/3xx
+// reply), pushes dropped for want of a configured endpoint, and the most recent
+// failure text. Exported so the API can publish it on /metrics.
+func MetricsPushStats() (ok, failed, dropped uint64, lastErr string) {
+	metricsPushMu.Lock()
+	lastErr = metricsPushLastErr
+	metricsPushMu.Unlock()
+	return metricsPushOK.Load(), metricsPushFailed.Load(), metricsPushDropped.Load(), lastErr
+}
+
+func notePushFailure(reason string) {
+	metricsPushFailed.Add(1)
+	metricsPushMu.Lock()
+	metricsPushLastErr = reason
+	shouldLog := time.Since(metricsPushLogged) >= pushErrLogEvery
+	if shouldLog {
+		metricsPushLogged = time.Now()
+	}
+	metricsPushMu.Unlock()
+	if shouldLog {
+		log.Printf("collectors: metric push FAILED: %s — collector telemetry (including collector_up, which the CollectorDown alert reads) is not reaching the metric store", reason)
+	}
+}
+
 // emitMetrics POSTs Prometheus-exposition samples to VictoriaMetrics so the
-// collectors' telemetry shows up in the Metrics Explorer. Best-effort.
+// collectors' telemetry shows up in the Metrics Explorer. Best-effort for the
+// caller — it never returns an error — but never SILENT: every outcome is
+// counted (MetricsPushStats) and failures are logged, rate-limited.
 func emitMetrics(ctx context.Context, body string) {
+	if strings.TrimSpace(body) == "" {
+		return // nothing to say this cycle; not a failure
+	}
 	base := os.Getenv("VICTORIA_URL")
 	if base == "" {
 		base = os.Getenv("METRICS_URL")
 	}
-	if base == "" || strings.TrimSpace(body) == "" {
+	if base == "" {
+		metricsPushDropped.Add(1)
+		// Configuration, not a transient fault: say it once, loudly.
+		metricsPushNoURL.Do(func() {
+			log.Print("collectors: neither VICTORIA_URL nor METRICS_URL is set — every collector sample, including collector_up, is being discarded")
+		})
 		return
 	}
 	url := strings.TrimRight(base, "/") + "/api/v1/import/prometheus"
 	// #nosec G704 -- url is the operator-configured VICTORIA_URL/METRICS_URL metrics backend, not user input
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
+		notePushFailure("build request: " + err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		notePushFailure(err.Error())
 		return
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		// A rejected import (bad line format, over quota, auth) answers 4xx/5xx
+		// and drops every sample in the batch — previously indistinguishable
+		// from success. Quote a bounded slice of the reply so the cause is in
+		// the log, not just the code.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		notePushFailure(fmt.Sprintf("%s: HTTP %d %s", url, resp.StatusCode, strings.TrimSpace(string(snippet))))
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // drain for connection reuse
+	metricsPushOK.Add(1)
 }
 
 // ---- minimal BER encoding for the SNMP v2c GET ----------------------------

@@ -150,6 +150,10 @@ type bgplsCollector struct {
 	mu     sync.RWMutex
 	status Status
 	ribs   map[string]*lsRIB // peer addr → that peer's link-state RIB
+	// lastPeerErr is the most recent session failure text, kept separately from
+	// status.LastError so publish() can re-derive LastError each cycle without
+	// nesting its own message into itself.
+	lastPeerErr string
 }
 
 // lsRIB is one peer's accumulated link-state database (kept across UPDATEs;
@@ -1055,6 +1059,7 @@ func (c *bgplsCollector) dropRIB(peer string) {
 func (c *bgplsCollector) markEstablished(peer string) {
 	c.mu.Lock()
 	c.status.LastError = ""
+	c.lastPeerErr = ""
 	c.status.Healthy = true
 	c.mu.Unlock()
 	_ = peer
@@ -1063,6 +1068,7 @@ func (c *bgplsCollector) markEstablished(peer string) {
 func (c *bgplsCollector) setPeerError(err error) {
 	c.mu.Lock()
 	c.status.LastError = err.Error()
+	c.lastPeerErr = err.Error()
 	c.mu.Unlock()
 }
 
@@ -1106,8 +1112,11 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	}
 
 	now := time.Now().UnixMilli()
+	// A receive-only collector whose peers are all down knows nothing about the
+	// topology; publishing collector_up=1 regardless made CollectorDown dead.
+	healthy := cycleHealthy(peerCount, established)
 	emitMetrics(ctx, strings.Join([]string{
-		fmt.Sprintf(`collector_up{collector="bgpls"} 1 %d`, now),
+		collectorUpLine("bgpls", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="bgpls"} %d %d`, peerCount, now),
 		fmt.Sprintf(`collector_targets_reachable{collector="bgpls"} %d %d`, established, now),
 		fmt.Sprintf(`collector_bgpls_links{collector="bgpls"} %d %d`, len(links), now),
@@ -1119,7 +1128,15 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 	c.status.LastTick = time.Now().UTC()
 	c.status.Targets = peerCount
 	c.status.Reachable = established
-	c.status.Healthy = true
+	c.status.Healthy = healthy
+	// Partial peering (2 of 5 sessions established) is a real, previously
+	// invisible gap in the link-state view — name it, keeping the last session
+	// error as the cause when there is one.
+	if e := cycleError(peerCount, established, c.lastPeerErr); e != "" {
+		c.status.LastError = e
+	} else if established == peerCount {
+		c.status.LastError = ""
+	}
 	c.mu.Unlock()
 }
 

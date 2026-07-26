@@ -6,7 +6,7 @@
 // shell draws the title bar + resize/remove tools.
 
 import { fmtDateTime } from "../lib/time";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, Alert, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, timeAxisTicks, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
@@ -37,16 +37,62 @@ function pressable(fn: () => void) {
 
 // ---- shared helpers --------------------------------------------------------
 
-function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): T | undefined {
-  const [val, setVal] = useState<T>();
+// ---- board freshness signal ------------------------------------------------
+// The Dashboard header's liveness indicator must be driven by REAL fetch
+// outcomes, never a wall clock: a ticking "as of HH:MM" beside a pulsing dot is
+// an affirmative claim that data is flowing. Every usePolled reports each poll
+// outcome here and the shell reads the aggregate — last successful load plus how
+// many feeds are currently failing — so a backend outage reads "Disconnected".
+export type BoardHealth = { lastOk: number | null; failing: number; feeds: number };
+
+let boardHealth: BoardHealth = { lastOk: null, failing: 0, feeds: 0 };
+const boardListeners = new Set<() => void>();
+
+function setBoardHealth(patch: Partial<BoardHealth>) {
+  boardHealth = { ...boardHealth, ...patch };
+  for (const l of boardListeners) l();
+}
+
+function subscribeBoardHealth(fn: () => void): () => void {
+  boardListeners.add(fn);
+  return () => { boardListeners.delete(fn); };
+}
+
+/** useBoardHealth — the honest liveness of the panel board (see BoardHealth). */
+export function useBoardHealth(): BoardHealth {
+  return useSyncExternalStore(subscribeBoardHealth, () => boardHealth, () => boardHealth);
+}
+
+/** Test seam: reset the module-level freshness signal between renders. */
+export function __resetBoardHealth(): void {
+  boardHealth = { lastOk: null, failing: 0, feeds: 0 };
+  for (const l of boardListeners) l();
+}
+
+// Polled<T> — the {data, err} shape used across the app (FrontPage's usePoll,
+// the appobs tri-state). A failed fetch is NOT no-data: callers must be able to
+// tell "the API said zero" from "the API never answered", because an empty array
+// rendered as "All clear" is a failure reported as good news.
+type Polled<T> = { data: T | undefined; err: boolean };
+
+function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): Polled<T> {
+  const [state, setState] = useState<Polled<T>>({ data: undefined, err: false });
+  const failing = useRef(false);
   useEffect(() => {
     let alive = true;
+    setBoardHealth({ feeds: boardHealth.feeds + 1 });
     const tick = async () => {
       try {
         const r = await loader();
-        if (alive) setVal(r);
+        if (!alive) return;
+        setState({ data: r, err: false });
+        if (failing.current) { failing.current = false; setBoardHealth({ failing: Math.max(0, boardHealth.failing - 1) }); }
+        setBoardHealth({ lastOk: Date.now() });
       } catch {
-        /* leave previous value */
+        if (!alive) return;
+        // Keep the last good value on screen, but SAY the refresh failed.
+        setState((cur) => ({ data: cur.data, err: true }));
+        if (!failing.current) { failing.current = true; setBoardHealth({ failing: boardHealth.failing + 1 }); }
       }
     };
     tick();
@@ -54,10 +100,15 @@ function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): T | undefin
     return () => {
       alive = false;
       clearInterval(id);
+      setBoardHealth({
+        feeds: Math.max(0, boardHealth.feeds - 1),
+        failing: failing.current ? Math.max(0, boardHealth.failing - 1) : boardHealth.failing,
+      });
+      failing.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return val;
+  return state;
 }
 
 // latestFromProm pulls the most recent finite sample out of a range response.
@@ -79,6 +130,24 @@ function nowWindow(seconds: number, step = 60): [number, number, number] {
 
 function Empty({ msg }: { msg: string }) {
   return <div className="panel-empty">{msg}</div>;
+}
+
+// Unavailable — the DEGRADED reading (FrontPage's Panel state="degraded"
+// equivalent for the registry panels). Never rendered as an empty/zero state:
+// "we could not read this" is a different claim from "there is nothing here".
+function Unavailable({ msg = "Source unavailable — this panel could not be refreshed." }: { msg?: string }) {
+  return (
+    <div className="panel-empty" role="status" style={{ color: "var(--warn)" }}>
+      <span style={{ fontWeight: 600 }}>Unavailable</span>
+      <div style={{ color: "var(--muted)", marginTop: 2 }}>{msg}</div>
+    </div>
+  );
+}
+
+// Loading — an explicit third state, so "still reading" never looks like a
+// verdict about the network.
+function Loading() {
+  return <div className="panel-empty">…</div>;
 }
 
 // seriesLabel picks the most identifying label off a metric's label set, in the
@@ -105,10 +174,13 @@ function MetricGauge({
   goodHigh?: boolean; // true => high is good (e.g. availability)
 }) {
   const { theme } = usePrefs(); // re-render the wheel when the theme flips
-  const res = usePolled(() => {
+  const { data: res, err } = usePolled(() => {
     const [s, e, st] = nowWindow(300);
     return api.metricsQueryRange(query, s, e, st);
   });
+  // A metrics-plane outage must not draw an idle wheel that reads "0 / nothing
+  // wrong" — say the reading failed.
+  if (err && !res) return <Unavailable msg="Metrics query failed — this gauge has no current reading." />;
   const v = res ? latestFromProm(res) : null;
   // Glassy progress color by current value (light tint → vivid), keyed to the
   // good/bad direction. Modern "elite glass" hues, brighter than the severity
@@ -209,10 +281,13 @@ function MetricArea({
   step?: number;
 }) {
   usePrefs(); // re-render on theme flip (chart chrome resolves from tokens)
-  const res = usePolled(() => {
+  const { data: res, err } = usePolled(() => {
     const [s, e, st] = nowWindow(windowSec, step);
     return api.metricsQueryRange(query, s, e, st);
   });
+  // "No telemetry yet" is a claim about the NETWORK; only make it when the query
+  // actually answered.
+  if (err && !res) return <Unavailable msg="Metrics query failed — telemetry coverage is unknown." />;
   const raw = res?.data?.result ?? [];
   if (res && raw.length === 0)
     return <Empty msg="No telemetry yet (enable SNMP metrics)." />;
@@ -301,14 +376,16 @@ function TopNBar({
   goodHigh?: boolean;
 }) {
   usePrefs();
-  const res = usePolled(() => api.metricsQuery(query), 15000);
+  const { data: res, err } = usePolled(() => api.metricsQuery(query), 15000);
   const rows = (res?.data?.result ?? [])
     .map((x) => ({ name: seriesLabel(x.metric), v: Number(x.value?.[1]) }))
     .filter((r) => Number.isFinite(r.v) && r.v > 0)
     .sort((a, b) => b.v - a.v)
     .slice(0, n);
+  // "Nothing above zero" would report a query outage as a clean network.
+  if (err && !res) return <Unavailable msg="Metrics query failed — this ranking is unavailable." />;
   if (res && rows.length === 0) return <Empty msg="Nothing above zero in this window." />;
-  if (!res) return <div className="panel-empty">…</div>;
+  if (!res) return <Loading />;
 
   const fmtv = fmt ?? ((v: number) => `${Math.round(v)}${unit}`);
   const band = (v: number) => {
@@ -358,12 +435,15 @@ function StatusGrid({
   okLabel?: string;
 }) {
   usePrefs();
-  const res = usePolled(() => api.metricsQuery(query), 15000);
+  const { data: res, err } = usePolled(() => api.metricsQuery(query), 15000);
   const cells = (res?.data?.result ?? [])
     .map((x) => ({ name: seriesLabel(x.metric), st: classify(Number(x.value?.[1])) }))
     .sort((a, b) => (a.st === b.st ? a.name.localeCompare(b.name) : a.st === "bad" ? -1 : b.st === "bad" ? 1 : a.st === "warn" ? -1 : 1));
+  // Never render "0 / 0 down" out of a failed read — the control plane's state
+  // is UNKNOWN, which is not the same as converged.
+  if (err && !res) return <Unavailable msg="Metrics query failed — session state is unknown." />;
   if (res && cells.length === 0) return <Empty msg="No sessions reported yet." />;
-  if (!res) return <div className="panel-empty">…</div>;
+  if (!res) return <Loading />;
   const ok = cells.filter((c) => c.st === "ok").length;
   const bad = cells.filter((c) => c.st === "bad").length;
   return (
@@ -388,7 +468,11 @@ const SEV_ORDER: SeverityKey[] = ["critical", "error", "warning", "notice", "inf
 
 function AlertsSeverity() {
   const { navigate } = useShell();
-  const alerts = usePolled(() => api.alerts(), 10000) ?? [];
+  const { data, err } = usePolled(() => api.alerts(), 10000);
+  const alerts = data ?? [];
+  // A failed alerts read rendered as five zeros in severity colours is the same
+  // lie as "All clear" — the counts are UNKNOWN, so say so.
+  if (err && !data) return <Unavailable msg="Alerts API unreachable — severity counts are unknown." />;
   const counts = alerts.reduce<Record<string, number>>((acc, a) => {
     const k = severityKey(a.severity);
     acc[k] = (acc[k] ?? 0) + 1;
@@ -416,7 +500,12 @@ function AlertsSeverity() {
 
 function ActiveAlerts() {
   const { navigate } = useShell();
-  const alerts = (usePolled(() => api.alerts(), 10000) ?? []).slice(0, 10);
+  const { data, err } = usePolled(() => api.alerts(), 10000);
+  // THE defect this pattern exists to prevent: an alerts 500 became an empty
+  // array became "All clear". Only claim all-clear when the API answered.
+  if (err && !data) return <Unavailable msg="Alerts API unreachable — active alerts cannot be listed. Do NOT read this as all-clear." />;
+  if (!data) return <Loading />;
+  const alerts = data.slice(0, 10);
   if (alerts.length === 0) return <Empty msg="All clear — no active alerts." />;
   return (
     <div className="alerts-scroll">
@@ -446,18 +535,23 @@ function ActiveAlerts() {
 // ---- flows / traffic -------------------------------------------------------
 
 function TrafficInOut() {
-  const data = usePolled(async () => {
+  // No per-query .catch: a swallowed rejection here produced an empty chart and
+  // the claim "no interface throughput", i.e. a metrics outage reported as a
+  // silent network. Let the rejection reach the hook's error channel.
+  const { data, err } = usePolled(async () => {
     const [s, e, st] = nowWindow(3600);
     const [ins, outs] = await Promise.all([
-      api.metricsQueryRange("sum(rate(device_if_in_octets[5m]))*8", s, e, st).catch(() => undefined),
-      api.metricsQueryRange("sum(rate(device_if_out_octets[5m]))*8", s, e, st).catch(() => undefined),
+      api.metricsQueryRange("sum(rate(device_if_in_octets[5m]))*8", s, e, st),
+      api.metricsQueryRange("sum(rate(device_if_out_octets[5m]))*8", s, e, st),
     ]);
     return { ins, outs };
   });
   const toSeries = (r?: PromRangeResponse) =>
     (r?.data?.result?.[0]?.values ?? []).map((v) => [v[0] * 1000, Number(v[1])]);
-  const inS = toSeries(data?.ins);
-  const outS = toSeries(data?.outs);
+  if (err && !data) return <Unavailable msg="Throughput query failed — traffic volume is unknown." />;
+  if (!data) return <Loading />;
+  const inS = toSeries(data.ins);
+  const outS = toSeries(data.outs);
   if (inS.length === 0 && outS.length === 0)
     return <Empty msg="No interface throughput yet (enable SNMP metrics)." />;
   return (
@@ -506,19 +600,22 @@ function WanInterfaces() {
   const [draft, setDraft] = useState(pattern);
   const sel = `{device=~"(?i).*(${pattern}).*"}`;
 
-  const data = usePolled(async () => {
+  // No per-query .catch: swallowing them rendered a WAN outage as "no interfaces
+  // match your pattern" — a config problem, not the outage it actually is.
+  const { data, err } = usePolled(async () => {
     const [s0, e0, st0] = nowWindow(1800, 30);
     const [trIn, trOut, inb, outb, speed, errs, oper] = await Promise.all([
-      api.metricsQueryRange(`sum(rate(device_if_in_octets${sel}[2m]))*8`, s0, e0, st0).catch(() => undefined),
-      api.metricsQueryRange(`sum(rate(device_if_out_octets${sel}[2m]))*8`, s0, e0, st0).catch(() => undefined),
-      api.metricsQuery(`rate(device_if_in_octets${sel}[2m])*8`).catch(() => undefined),
-      api.metricsQuery(`rate(device_if_out_octets${sel}[2m])*8`).catch(() => undefined),
-      api.metricsQuery(`device_if_speed${sel}`).catch(() => undefined),
-      api.metricsQuery(`rate(device_if_in_errors${sel}[5m]) + rate(device_if_out_errors${sel}[5m]) + rate(device_if_in_discards${sel}[5m]) + rate(device_if_out_discards${sel}[5m])`).catch(() => undefined),
-      api.metricsQuery(`device_if_oper_status${sel}`).catch(() => undefined),
+      api.metricsQueryRange(`sum(rate(device_if_in_octets${sel}[2m]))*8`, s0, e0, st0),
+      api.metricsQueryRange(`sum(rate(device_if_out_octets${sel}[2m]))*8`, s0, e0, st0),
+      api.metricsQuery(`rate(device_if_in_octets${sel}[2m])*8`),
+      api.metricsQuery(`rate(device_if_out_octets${sel}[2m])*8`),
+      api.metricsQuery(`device_if_speed${sel}`),
+      api.metricsQuery(`rate(device_if_in_errors${sel}[5m]) + rate(device_if_out_errors${sel}[5m]) + rate(device_if_in_discards${sel}[5m]) + rate(device_if_out_discards${sel}[5m])`),
+      api.metricsQuery(`device_if_oper_status${sel}`),
     ]);
     return { trIn, trOut, inb, outb, speed, errs, oper };
   }, 10000);
+  const degraded = err && !data;
 
   const key = (m: Record<string, string>) => `${m.device}#${m.index}`;
   const idx = (r?: PromInstantResponse) => {
@@ -555,15 +652,21 @@ function WanInterfaces() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span className="badge good" title="Polling every 10 seconds">● LIVE · 10s</span>
-        <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
+        {degraded
+          ? <span className="badge warn" title="The last poll failed">● NO DATA</span>
+          : <span className="badge good" title="Polling every 10 seconds">● LIVE · 10s</span>}
+        {!degraded && (
+          <span className="mini-meta">↓ {fmtBps(totIn)} · ↑ {fmtBps(totOut)} · peak util {worst.toFixed(1)}%{down > 0 ? ` · ${down} down` : ""}</span>
+        )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
           <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyPattern()}
             aria-label="WAN device name pattern (regex)" title="WAN device pattern (regex on device name)" style={{ width: 130, fontSize: 12, padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--fg)" }} />
           <button className="dash-btn" style={{ padding: "3px 8px", fontSize: 12 }} onClick={applyPattern}>Apply</button>
         </span>
       </div>
-      {inS.length === 0 && rows.length === 0 ? (
+      {degraded ? (
+        <Unavailable msg="Interface telemetry query failed — WAN state is unknown (this is not a pattern problem)." />
+      ) : inS.length === 0 && rows.length === 0 ? (
         <Empty msg={`No interfaces match device pattern “${pattern}” — adjust it (regex, e.g. wan|edge|dmz).`} />
       ) : (
         <>
@@ -611,8 +714,10 @@ function WanInterfaces() {
 
 function TopHosts() {
   const { navigate } = useShell();
-  const res = usePolled(() => api.topTalkers(3600, 8), 30000);
+  const { data: res, err } = usePolled(() => api.topTalkers(3600, 8), 30000);
   const rows = ((res?.data as { src: string; dst: string; bytes_total: number }[]) ?? []).slice(0, 8);
+  if (err && !res) return <Unavailable msg="Flow store unreachable — top talkers are unknown." />;
+  if (!res) return <Loading />;
   if (rows.length === 0) return <Empty msg="No flow data yet." />;
   return (
     <table className="mini-table">
@@ -631,14 +736,22 @@ function TopHosts() {
 
 // ---- collector-derived panels ----------------------------------------------
 
-function useProtocolCollectors(): CollectorStatus[] {
-  const items = usePolled(() => api.collectors(), 15000) ?? [];
-  return items.filter((c) => (c.kind ?? "protocol") === "protocol");
+function useProtocolCollectors(): { cols: CollectorStatus[]; err: boolean; loaded: boolean } {
+  const { data, err } = usePolled(() => api.collectors(), 15000);
+  return {
+    cols: (data ?? []).filter((c) => (c.kind ?? "protocol") === "protocol"),
+    err: err && !data,
+    loaded: data !== undefined,
+  };
 }
 
 function SiteAvailability() {
   const { navigate } = useShell();
-  const cols = useProtocolCollectors();
+  const { cols, err, loaded } = useProtocolCollectors();
+  // Reachability is a percentage of a KNOWN denominator; a failed collector read
+  // has no denominator, so it must not render as a reachability figure at all.
+  if (err) return <Unavailable msg="Collector status unreachable — reachability is unknown." />;
+  if (!loaded) return <Loading />;
   const targets = cols.reduce((n, c) => n + (c.targets ?? 0), 0);
   const reachable = cols.reduce((n, c) => n + (c.reachable ?? 0), 0);
   const pct = targets > 0 ? Math.round((reachable / targets) * 100) : null;
@@ -653,7 +766,10 @@ function SiteAvailability() {
 
 function StackPerformance() {
   const { navigate } = useShell();
-  const cols = useProtocolCollectors();
+  const { cols, err, loaded } = useProtocolCollectors();
+  // "0/0 healthy" out of a failed read is a false negative about the stack.
+  if (err) return <Unavailable msg="Collector status unreachable — stack health is unknown." />;
+  if (!loaded) return <Loading />;
   const enabled = cols.filter((c) => c.enabled);
   const healthy = enabled.filter((c) => c.healthy).length;
   const avgMs =
@@ -726,14 +842,21 @@ function Spark({ data, color }: { data: [number, number][]; color: string }) {
 
 function KpiTiles() {
   const { navigate } = useShell();
-  const tiles = usePolled(() => api.metricTiles(), 15000) ?? [];
-  const computed = usePolled(async () => {
+  const { data: tilesData, err: tilesErr } = usePolled(() => api.metricTiles(), 15000);
+  const tiles = tilesData ?? [];
+  const { data: computed, err: computedErr } = usePolled(async () => {
     const [s, e, st] = nowWindow(1800, 60);
-    const results = await Promise.all(
-      KPI_SPECS.map((spec) => api.metricsQueryRange(spec.query, s, e, st).catch(() => undefined)),
+    const results = await Promise.allSettled(
+      KPI_SPECS.map((spec) => api.metricsQueryRange(spec.query, s, e, st)),
     );
+    // A per-KPI failure renders "—" (honest unknown). If EVERY query failed the
+    // metrics plane is down — reject so the panel says so instead of drawing a
+    // full grid of em-dashes that looks like a quiet network.
+    if (results.every((r) => r.status === "rejected")) throw new Error("metrics unavailable");
     return KPI_SPECS.map((spec, i) => {
-      const pts = (results[i]?.data?.result?.[0]?.values ?? [])
+      const r = results[i];
+      const res = r.status === "fulfilled" ? r.value : undefined;
+      const pts = (res?.data?.result?.[0]?.values ?? [])
         .map((v) => [v[0] * 1000, Number(v[1])] as [number, number])
         .filter((p) => Number.isFinite(p[1]));
       const latest = pts.length ? pts[pts.length - 1][1] : null;
@@ -762,6 +885,10 @@ function KpiTiles() {
     countTile("Sites", "Sites", false, { route: "topology/map" }),
   ];
 
+  // Both feeds down = the KPI strip is unreadable; "Waiting for metrics…" would
+  // frame an outage as a cold start.
+  if (tilesErr && computedErr && !tilesData && !computed)
+    return <Unavailable msg="Metrics and tile APIs unreachable — no KPI can be stated." />;
   if (tiles.length === 0 && !computed) return <Empty msg="Waiting for metrics…" />;
 
   return (
@@ -831,11 +958,13 @@ const PROTO_NAMES: Record<string, string> = {
 
 function FlowsByProto() {
   const { navigate } = useShell();
-  const res = usePolled(() => api.flowsByProto(3600), 30000);
+  const { data: res, err } = usePolled(() => api.flowsByProto(3600), 30000);
   const rows = ((res?.data as { proto: string | number; bytes_total: number }[]) ?? [])
     .map((r) => ({ name: PROTO_NAMES[String(r.proto)] ?? `proto ${r.proto}`, value: Number(r.bytes_total) }))
     .filter((r) => r.value > 0)
     .slice(0, 8);
+  if (err && !res) return <Unavailable msg="Flow store unreachable — the protocol mix is unknown." />;
+  if (!res) return <Loading />;
   return <Donut rows={rows} unit="B" onClick={() => navigate("explore/flows")} />;
 }
 
@@ -843,9 +972,11 @@ function FlowsByProto() {
 
 function DevicesByVendor() {
   const { navigate } = useShell();
-  const devices = usePolled(() => api.devices(), 30000) ?? [];
+  const { data: devicesData, err } = usePolled(() => api.devices(), 30000);
+  if (err && !devicesData) return <Unavailable msg="Inventory API unreachable — the device mix is unknown." />;
+  if (!devicesData) return <Loading />;
   const by: Record<string, number> = {};
-  for (const d of devices as Device[]) by[d.vendor || "unknown"] = (by[d.vendor || "unknown"] ?? 0) + 1;
+  for (const d of devicesData as Device[]) by[d.vendor || "unknown"] = (by[d.vendor || "unknown"] ?? 0) + 1;
   const rows = Object.entries(by).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   return <Donut rows={rows} unit="devices" onClick={() => navigate("infrastructure/devices")} />;
 }
@@ -854,8 +985,11 @@ function DevicesByVendor() {
 
 function TunnelsHealth() {
   const { navigate } = useShell();
-  const res = usePolled(() => api.tunnels(500), 20000);
+  const { data: res, err } = usePolled(() => api.tunnels(500), 20000);
   const rows = (res?.data as Tunnel[]) ?? [];
+  // "Tunnels down: 0" out of a failed read is the most dangerous zero on the board.
+  if (err && !res) return <Unavailable msg="Tunnel API unreachable — tunnel state is unknown." />;
+  if (!res) return <Loading />;
   if (rows.length === 0) return <Empty msg="No tunnel telemetry yet." />;
   const up = rows.filter((t) => String(t.status).toLowerCase() === "up").length;
   const down = rows.length - up;
@@ -876,8 +1010,10 @@ function TunnelsHealth() {
 
 function RecentIncidents() {
   const { navigate } = useShell();
-  const res = usePolled(() => api.findings(12), 20000);
+  const { data: res, err } = usePolled(() => api.findings(12), 20000);
   const rows = ((res?.data as Finding[]) ?? []).slice(0, 8);
+  if (err && !res) return <Unavailable msg="Correlation API unreachable — incidents cannot be listed." />;
+  if (!res) return <Loading />;
   if (rows.length === 0) return <Empty msg="No correlated incidents." />;
   return (
     <div className="alerts-scroll">

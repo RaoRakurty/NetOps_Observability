@@ -9,10 +9,12 @@
 // NEVER React Flow nodes. The client always runs the response through normalizeView
 // so the UI gets a safe, evidence-backed graph regardless of backend bugs.
 //
-// GRACEFUL DEGRADATION: if the endpoint errors, or returns an EMPTY graph (e.g.
-// collectors are off, or a mode the backend doesn't yet project with real data),
-// we fall back to the matching mock view so the canvas always renders something
-// meaningful instead of a blank screen.
+// HONESTY OVER "GRACEFUL DEGRADATION": every real surface shows REAL data or an
+// honest empty/error state — NEVER a fabricated demo network presented as the
+// operator's own. A failed fetch is not "no data" either, so each fetcher returns
+// an empty view plus a status discriminator ("live" | "empty" | "error") and the
+// canvas renders which one it is. The bundled mock views survive ONLY for the
+// not-yet-implemented workflow modes, which are labelled as samples in the UI.
 
 import type { TopologyView, WorkflowMode } from "./topologyTypes";
 import { normalizeView } from "../utils/topologyMapper";
@@ -53,8 +55,10 @@ function mockForMode(mode: WorkflowMode): TopologyView {
  *
  *   GET /api/topology/view?mode=… → TopologyView
  *
- * The response is always normalized before reaching the renderer. On any error
- * (or an empty graph) the matching mock view is used so the canvas never blanks.
+ * The response is always normalized before reaching the renderer. On any error (or
+ * an empty graph) an EMPTY view is returned — never a mock — so the canvas renders
+ * its honest "nothing to display" state. Only the not-yet-implemented modes (those
+ * outside REAL_MODES) render a bundled sample view.
  */
 /** Modes the Go projection serves with real data; others stay mock-only. */
 const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
@@ -132,22 +136,35 @@ export type TopologyCoverage = {
   resolved_edges: number;
 };
 
+/** What the persistent-graph read actually established (drives the honest UI state). */
+export type TopologyGraphStatus = "live" | "empty" | "error";
+
 /**
  * Fetch the PERSISTENT topology graph (GET /api/topology/graph): the reconciler-
  * maintained spine with stable ids + first_seen/last_seen + stale (carried as each
  * node/edge's change_state) + live health/util enrichment, plus a coverage summary.
- * Mode-agnostic (the whole tenant graph). Same graceful degradation as the live
- * view: an empty/errored graph falls back to the physical mock so the canvas never
- * blanks.
+ * Mode-agnostic (the whole tenant graph).
+ *
+ * HONESTY: identical rule to {@link fetchTopologyView} / {@link fetchCloudTopology}.
+ * This used to fall back to `physicalTopology` — a MOCK spine-leaf fabric — on both
+ * the error path and the zero-node path, so an operator whose graph service was
+ * down was shown a fabricated healthy network of devices that were not theirs, as
+ * their live graph. That fallback is gone: returns an empty view plus `status`
+ * distinguishing "nothing reconciled yet" (empty) from "the read failed" (error).
  */
-export async function fetchTopologyGraph(): Promise<{ view: TopologyView; coverage?: TopologyCoverage }> {
+export async function fetchTopologyGraph(): Promise<{ view: TopologyView; coverage?: TopologyCoverage; status: TopologyGraphStatus }> {
+  const emptyView = (): TopologyView => normalizeView({
+    view_id: "topology-graph-empty", mode: "explore", scope: { tenant_id: "" },
+    layout_type: "spine_leaf", generated_at: new Date().toISOString(),
+    nodes: [], edges: [], groups: [], overlays: ["health"],
+  } as unknown as TopologyView);
   try {
     const raw = (await api.topologyGraph()) as TopologyView & { coverage?: TopologyCoverage };
     const view = normalizeView(raw);
-    if (view.nodes.length > 0) return { view, coverage: raw.coverage };
-    return { view: normalizeView(physicalTopology) };
+    if (view.nodes.length > 0) return { view, coverage: raw.coverage, status: "live" };
+    return { view: emptyView(), status: "empty" };
   } catch {
-    return { view: normalizeView(physicalTopology) };
+    return { view: emptyView(), status: "error" };
   }
 }
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -252,11 +254,13 @@ func (s *stampSender) probeAll(ctx context.Context) {
 	prober := proberID()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	reachable := 0
+	var lastErr string
 	var lines []string
 	var events []ProbeEvent
 	for _, tgt := range targets {
 		res, err := probeSTAMP(ctx, tgt, s.packets)
 		if err != nil {
+			lastErr = err.Error()
 			// Resolve/dial failure is still a real observation of the path:
 			// forward it as full loss so the engine sees the outage, even
 			// though there is no sample to render as a gauge.
@@ -291,7 +295,10 @@ func (s *stampSender) probeAll(ctx context.Context) {
 	s.status.LastTick = time.Now().UTC()
 	s.status.Targets = len(targets)
 	s.status.Reachable = reachable
-	s.status.Healthy = true
+	// Most reflectors not answering = the sender is measuring nothing, which the
+	// hard-coded true hid (see degradedReachFraction).
+	s.status.Healthy = cycleHealthy(len(targets), reachable)
+	s.status.LastError = cycleError(len(targets), reachable, lastErr)
 	s.mu.Unlock()
 }
 
@@ -395,12 +402,30 @@ func envDuration(key string, def time.Duration) time.Duration {
 	return def
 }
 
+// envInt reads a positive integer setting, falling back to def.
+//
+// It used to use fmt.Sscanf(v, "%d"), which is NOT strict: it consumes what
+// fits the verb and reports success for the prefix, so STAMP_PACKETS="20x" or
+// "1e3" silently became 20 and 1 — a DIFFERENT number than the operator
+// configured, with no error anywhere. strconv.Atoi consumes the whole string or
+// fails. §10: the rejection is not swallowed — a misconfigured knob is logged
+// once with the value and the default that is being used instead, because
+// silently probing at the wrong rate is exactly the kind of "looks fine" the
+// audit is about. Callers are constructors, so this logs at most once per
+// setting per process.
 func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
-			return n
-		}
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
 	}
-	return def
+	n, err := strconv.Atoi(v)
+	switch {
+	case err != nil:
+		log.Printf("collectors: %s=%q is not an integer (%v) — using the default %d", key, v, err, def)
+		return def
+	case n <= 0:
+		log.Printf("collectors: %s=%d must be positive — using the default %d", key, n, def)
+		return def
+	}
+	return n
 }

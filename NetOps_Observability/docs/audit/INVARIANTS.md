@@ -51,8 +51,27 @@ An invariant that no gate enforces is a preference.
 
 > *Every failure must become visible.*
 
+**The CLASS is now enforced, not just instances (2026-07-27).** Until this date
+every row below was a single *instance* of §10, and the general rule — CLAUDE.md
+§10 "No silent failures allowed / All errors must be observable" — sat at **no
+tier at all**. The 2026-07-27 audit found ~60 live instances of one defect: *an
+error routed to the same branch as a benign empty state*, so a failure rendered
+as "nothing wrong". The seed (`alerts/engine.go`) made a VictoriaMetrics outage
+indistinguishable from "no rules firing" and therefore **mass-resolved live
+alerts, closing pages during the outage**. Nothing caught it because the code is
+structurally perfect — the error *is* checked; the defect is which branch is
+taken — and every pre-existing guard asked a structural question. Two guards now
+move the class to BUILD tier, and the guard *scope* itself was the deeper bug:
+`goSources()` read only the root package, leaving **201 subpackage files
+(alerts/, notify/, collectors/, nms/, ai/ …) outside every structural guard in
+this repo**, while its anti-vacuity floor passed comfortably on the root package
+and thereby certified the blind scope as healthy.
+
 | Aspect | Status | Enforced by |
 |---|---|---|
+| Guards see the WHOLE module, not just the root package | ✅ | **BUILD** — `goSources()` now walks subpackages; floor raised to 400 so a regression to root-only (296) fails. Widening it immediately caught 3 real defects that had been invisible for months (two void persist funcs in `notify/`, an `Sscanf("%d")` in `collectors/`) |
+| An error is never conflated with a benign empty state | ✅ | **BUILD** — `TestErrorIsNotConflatedWithABenignState` (AST). Blocking for new code; 39-file frozen baseline, **shrink-only**, each entry to be triaged and fixed or moved to the reasoned allowlist |
+| A health flag can actually report unhealthy | ✅ | **BUILD** — `TestHealthFlagsCanBeFalsified`: a health bool assigned literal `true` and never falsified anywhere fails the build. Caught `alerts.Engine.healthy` (true at construction, never false, reported by `Health()` forever) |
 | A metric-based alerting engine exists at all | ✅ | vmalert (F-16); **RUNTIME** — was entirely absent before 2026-07-21 |
 | Unintentional ingest discards alert | ✅ | `VectorEventsDiscarded` (F-13/F-18); **RUNTIME** |
 | Per-document index rejections are visible | ✅ | `doc_status.4xx` scraped + alerted (F-17); **RUNTIME** |

@@ -70,6 +70,10 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	samples := 0
 	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
 	var lastErr string
+	// enrichErr is kept apart from lastErr: a failed enrichment walk on a device
+	// that otherwise answered is a different fact from an unreachable device, and
+	// must not be lost just because reachability was fine.
+	var enrichErr string
 	ifaddr := map[string]map[string]string{}     // deviceID → (interface IP → ifName), for topology enrichment
 	ifindexMap := map[string]map[string]string{} // deviceID → (ifIndex → ifName), for the C7.1 EntityResolver
 
@@ -179,7 +183,13 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
 		// links (interface IPs) resolve to real port names + join to metrics.
 		if ifNames != nil {
-			if m := ipIfNameMap(dctx, addr, creds, ifNames); len(m) > 0 {
+			m, err := ipIfNameMap(dctx, addr, creds, ifNames)
+			if err != nil {
+				// Enrichment is best-effort, but its FAILURE is not benign: it is
+				// reported rather than vanishing into an empty map.
+				enrichErr = err.Error()
+			}
+			if len(m) > 0 {
 				ifaddr[tg.ID] = m
 			}
 			ifindexMap[tg.ID] = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
@@ -210,8 +220,9 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		}
 	}
 
+	healthy := cycleHealthy(len(targets), reachable)
 	emitMetrics(ctx, strings.Join([]string{
-		fmt.Sprintf(`collector_up{collector="snmpmetrics"} 1 %d`, now),
+		collectorUpLine("snmpmetrics", healthy, now),
 		fmt.Sprintf(`collector_targets{collector="snmpmetrics"} %d %d`, len(targets), now),
 		fmt.Sprintf(`collector_targets_reachable{collector="snmpmetrics"} %d %d`, reachable, now),
 		fmt.Sprintf(`collector_samples{collector="snmpmetrics"} %d %d`, samples, now),
@@ -228,11 +239,13 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	c.status.Targets = len(targets)
 	c.status.Reachable = reachable
 	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = true
-	if reachable == 0 && len(targets) > 0 {
-		c.status.LastError = lastErr
+	// Honest health: a cycle where most devices refused the sysObjectID GET is
+	// not a healthy cycle, however alive the loop is (see degradedReachFraction).
+	c.status.Healthy = healthy
+	if e := cycleError(len(targets), reachable, lastErr); e != "" {
+		c.status.LastError = e
 	} else {
-		c.status.LastError = ""
+		c.status.LastError = enrichErr // "" when the whole cycle was clean
 	}
 	c.mu.Unlock()
 }
@@ -263,12 +276,20 @@ var (
 )
 
 // ipIfNameMap walks ipAddrTable and resolves each interface IPv4 to its ifName via
-// the already-walked ifIndex→ifName map (no extra ifName walk). Best-effort: a
-// device with no ipAddrTable yields an empty map.
-func ipIfNameMap(ctx context.Context, addr string, creds snmpCreds, ifNames map[string]string) map[string]string {
+// the already-walked ifIndex→ifName map (no extra ifName walk).
+//
+// Three states, not two: a FAILED walk is returned as an error (the caller folds
+// it into the collector's LastError) while a device with no ipAddrTable yields an
+// empty map and no error. They used to share one `return nil`, so a device that
+// stopped answering the walk was indistinguishable from one that genuinely has
+// no IP addresses — and the topology enrichment it feeds just quietly went blank.
+func ipIfNameMap(ctx context.Context, addr string, creds snmpCreds, ifNames map[string]string) (map[string]string, error) {
 	rows, err := snmpWalkColumn(ctx, addr, creds, ipAdEntIfIndexOID)
-	if err != nil || len(rows) == 0 {
-		return nil
+	if err != nil {
+		return nil, fmt.Errorf("ipAddrTable walk on %s: %w", addr, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil // genuinely no IP addresses on this device
 	}
 	out := make(map[string]string, len(rows))
 	for ip, v := range rows {
@@ -276,7 +297,7 @@ func ipIfNameMap(ctx context.Context, addr string, creds snmpCreds, ifNames map[
 			out[ip] = name
 		}
 	}
-	return out
+	return out, nil
 }
 
 // ifAliasMap walks ifAlias keyed by ifIndex — the operator-assigned interface

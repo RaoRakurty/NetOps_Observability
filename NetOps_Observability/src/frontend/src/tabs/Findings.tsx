@@ -17,6 +17,9 @@ const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 12
 
 export default function Findings() {
   const [items, setItems] = useState<Finding[]>([]);
+  // A failed read used to CLEAR the queue to empty next to a pulsing Live chip —
+  // an active claim that the engine found nothing. Track it and say so instead.
+  const [err, setErr] = useState<string | null>(null);
   const [severity, setSeverity] = useState<string>("");
   const [sel, setSel] = useState<string | null>(null);
   const ws = useWorkspace();
@@ -45,9 +48,10 @@ export default function Findings() {
     const tick = async () => {
       try {
         const r = await api.findings(200, severity || undefined);
-        if (alive) setItems(r?.data ?? []);
-      } catch {
-        if (alive) setItems([]);
+        if (alive) { setItems(r?.data ?? []); setErr(null); }
+      } catch (e) {
+        // Keep the last good rows on screen; report the failed refresh.
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
       }
     };
     tick();
@@ -110,8 +114,19 @@ export default function Findings() {
               <option value="critical">Critical</option>
             </select>
           </div>
+          {err && (
+            <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+              <strong>Findings could not be loaded.</strong>
+              <div style={{ marginTop: 4 }}>{err}</div>
+              <div style={{ marginTop: 4, color: "var(--muted)" }}>
+                This is not "no findings" — the queue is unknown{items.length > 0 ? "; rows below are the last successful read" : ""}.
+              </div>
+            </div>
+          )}
           {items.length === 0 ? (
-            <div className="empty">No findings in this window. The correlation engine writes here as it detects anomalies and event clusters.</div>
+            err ? null : (
+              <div className="empty">No findings in this window. The correlation engine writes here as it detects anomalies and event clusters.</div>
+            )
           ) : (
             <DataTable<Finding>
               rows={items}

@@ -98,6 +98,40 @@ describe("Active Alerts grouped by episode", () => {
   });
 });
 
+// The page used to swallow its load failure with `catch { /* ignore — top-level
+// health banner shows the failure */ }`. That comment was false: the global
+// indicator polls a separate /healthz that stays 200 during a route-scoped 500,
+// so an alerts outage rendered green zeros and the sentence "all monitored
+// conditions are within threshold" — a failure reported as good news.
+describe("Active Alerts on a failed load", () => {
+  it("never claims conditions are within threshold when the episode fetch rejects", async () => {
+    alertEpisodes.mockImplementation(() => Promise.reject(new Error("500 Internal Server Error")));
+    alerts.mockImplementation(() => Promise.reject(new Error("500 Internal Server Error")));
+    render(<Alerts />);
+    await waitFor(() => expect(alertEpisodes).toHaveBeenCalled());
+
+    // The forbidden sentence, in any form.
+    await waitFor(() => expect(screen.queryByText(/within threshold/)).toBeNull());
+    expect(screen.queryByText(/No open alert episodes/)).toBeNull();
+
+    // A real, page-scoped error state is rendered instead.
+    expect(await screen.findByText(/Alert episodes could not be loaded\./)).toBeTruthy();
+    expect(screen.getByText(/this is not an all-clear/i)).toBeTruthy();
+    expect(screen.getByText("Alert feed unavailable")).toBeTruthy();
+  });
+
+  it("renders the KPIs as unknown, not as green zeros", async () => {
+    alertEpisodes.mockImplementation(() => Promise.reject(new Error("503 Service Unavailable")));
+    alerts.mockImplementation(() => Promise.reject(new Error("503 Service Unavailable")));
+    render(<Alerts />);
+
+    // Every KPI reads "—" (unknown) and says why; none reads a confident 0.
+    await waitFor(() => expect(screen.getAllByText("—").length).toBe(4));
+    expect(screen.getAllByText("unknown — feed failed").length).toBe(4);
+    expect(screen.queryByText("0")).toBeNull();
+  });
+});
+
 describe("EpisodeDetailBody triage affordances", () => {
   it("mutes notifications only — wording promises the row stays visible", async () => {
     episodeMute.mockResolvedValue({ ...baseEpisode, muted: true, muted_by: "admin" });

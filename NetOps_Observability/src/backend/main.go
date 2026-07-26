@@ -1143,6 +1143,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction) // POST {id}/(ack|assign|mute|snooze|notes)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
+	// Feature availability only (no credential/integration posture) — any
+	// authenticated user, so gating /api/credentials to the platform owner does
+	// not silently hide optional UI surfaces. See handleFeatures.
+	mux.HandleFunc("/api/features", s.handleFeatures)
 	mux.HandleFunc("/api/discovery/refresh", s.handleDiscoveryRefresh)
 	mux.HandleFunc("/api/discovery/config", s.handleDiscoveryConfig)  // subnet-scan scope (platform-owner)
 	mux.HandleFunc("/api/automation/netbox", s.handleNetboxConfig)    // Source-of-Truth config (platform-owner)
@@ -1595,7 +1599,39 @@ func (s *server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, active)
 }
 
-func (s *server) handleCredentials(w http.ResponseWriter, _ *http.Request) {
+// handleFeatures reports which OPTIONAL UI SURFACES are switched on. It carries
+// no credential presence, no integration inventory and no tenant data — only
+// "is this feature compiled in and enabled", which every authenticated user
+// needs in order to know whether to render a button.
+//
+// It exists because /api/credentials used to answer this question while ALSO
+// reporting the platform's integration posture; gating that endpoint to the
+// platform owner (correctly, §3a rule 3) silently removed the SSH console and
+// the assistant panel for everyone else. A 403 rendering as "this feature does
+// not exist" is the same silent-failure class this release is fixing, so the
+// answer is to split the surfaces rather than to widen the gate back.
+func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
+	if _, ok := userFrom(r.Context()); !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
+		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
+		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
+	})
+}
+
+func (s *server) handleCredentials(w http.ResponseWriter, r *http.Request) {
+	// This reports the PLATFORM-GLOBAL integration/plumbing posture (which
+	// provider credentials and feature flags the stack was started with) — not
+	// per-tenant data. Per CLAUDE.md §3a rule 3 that is platform-owner surface:
+	// a tenant/org admin holds administration:admin, so a scope-blind requireAdmin
+	// would leak the platform's integration inventory to every tenant admin. The
+	// same notify config is already requirePlatformAdmin-gated in notify_config.go.
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
 	// Scaffold: credentials live in env / external vault. Never echo secrets back.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"netbox":     os.Getenv("NETBOX_TOKEN") != "",

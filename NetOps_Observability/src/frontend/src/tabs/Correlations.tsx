@@ -164,6 +164,9 @@ export function filterPromoted<T extends { correlation_id: string }>(
 
 export default function Correlations() {
   const [items, setItems] = useState<CorrObject[]>([]);
+  // The list's own failure state — the global health indicator polls /healthz and
+  // stays green through a route-scoped 500, so this surface must report itself.
+  const [listErr, setListErr] = useState<string | null>(null);
   // True window totals (server COUNTs) + keyset paging: baseCursor continues
   // after the auto-refreshed first page, moreCursor after user-loaded pages.
   const [summary, setSummary] = useState<CorrSummary | null>(null);
@@ -303,9 +306,12 @@ export default function Correlations() {
         if (alive) {
           setItems(r?.data ?? []);
           setBaseCursor(r?.next_cursor ?? "");
+          setListErr(null);
         }
-      } catch {
-        if (alive) { setItems([]); setBaseCursor(""); }
+      } catch (e) {
+        // Clearing to [] beside a Live chip claimed the engine found nothing.
+        // Keep the last good page and report the failed refresh.
+        if (alive) setListErr(e instanceof Error ? e.message : String(e));
       }
       // True window totals for the stat chips — real COUNTs, never the capped
       // list length. Tier is deliberately NOT applied so every chip stays
@@ -495,12 +501,23 @@ export default function Correlations() {
               Show internal/stack{hiddenInternal > 0 && !showInternal ? ` (${hiddenInternal} hidden)` : ""}
             </label>
           </div>
-          {visible.length === 0 ? (
-            <div className="empty">
-              {merged.length > 0
-                ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
-                : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
+          {listErr && (
+            <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+              <strong>Correlation objects could not be loaded.</strong>
+              <div style={{ marginTop: 4 }}>{listErr}</div>
+              <div style={{ marginTop: 4, color: "var(--muted)" }}>
+                Whether any issue is open is UNKNOWN{items.length > 0 ? "; rows below are the last successful read" : ""}.
+              </div>
             </div>
+          )}
+          {visible.length === 0 ? (
+            listErr ? null : (
+              <div className="empty">
+                {merged.length > 0
+                  ? "No customer-network issues in this range. Internal stack/self-monitoring objects are hidden — tick “Show internal/stack” to see them."
+                  : "No issues in this time range. One appears when related evidence — or a single high-severity sign — shows up across your network."}
+              </div>
+            )
           ) : (
             <DataTable<CorrObject>
               rows={visible}
@@ -543,6 +560,9 @@ function SignatureGaps() {
   const [clusters, setClusters] = useState<UndeterminedCluster[]>([]);
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  // Clearing to [] on failure rendered "the engine is reaching a verdict on what
+  // it sees" — praise for the engine, produced by the engine being unreachable.
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -552,8 +572,9 @@ function SignatureGaps() {
         if (!alive) return;
         setClusters(r?.clusters ?? []);
         setTotal(r?.total_undetermined ?? 0);
-      } catch {
-        if (alive) { setClusters([]); setTotal(0); }
+        setErr(null);
+      } catch (e) {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (alive) setLoaded(true);
       }
@@ -568,11 +589,17 @@ function SignatureGaps() {
       <div className="cc-panel-h">
         <h3 className="cc-panel-t">Signature coverage gaps</h3>
         <span className="cc-panel-meta">
-          {total > 0 ? `${total} not-confirmed in 7d · ranked by recurrence` : "last 7 days"}
+          {err ? "unavailable" : total > 0 ? `${total} not-confirmed in 7d · ranked by recurrence` : "last 7 days"}
         </span>
       </div>
       <div style={{ padding: "11px 13px" }}>
-        {!loaded ? (
+        {err && clusters.length === 0 ? (
+          <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
+            <strong>Signature coverage could not be read.</strong>
+            <div style={{ marginTop: 4 }}>{err}</div>
+            <div style={{ marginTop: 4, color: "var(--muted)" }}>Coverage gaps are unknown — not absent.</div>
+          </div>
+        ) : !loaded ? (
           <div className="empty">Loading…</div>
         ) : clusters.length === 0 ? (
           <div className="empty">

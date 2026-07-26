@@ -98,6 +98,9 @@ export default function Devices() {
   const [sotProvider, setSotProvider] = useState<string>("internal"); // active SoT authority
   const [sshEnabled, setSshEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error`: the inventory loaded, but the alert correlation that
+  // feeds "degraded" did not — so "Up" cannot be read as "healthy".
+  const [alertsErr, setAlertsErr] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
   const [filter, setFilter] = useState<Filter>("all");
@@ -122,14 +125,18 @@ export default function Devices() {
 
   const load = async () => {
     try {
-      const [list, al, locRes, siteRes] = await Promise.all([
+      // Alerts are the amber "reachable-but-sick" input. Swallowing their failure
+      // into [] made every device render GREEN during an alerts outage — a
+      // fabricated all-healthy fleet. Track the failure and say so instead.
+      const [list, alRes, locRes, siteRes] = await Promise.all([
         api.devices(),
-        api.alerts().catch(() => []),
+        api.alerts().then((v) => ({ ok: true as const, v })).catch((e) => ({ ok: false as const, e })),
         api.deviceLocations().catch(() => ({ devices: [] as DeviceLocationRow[] })),
         api.sites().catch(() => ({ sites: [] as SiteRow[], active: "internal" })),
       ]);
       setDevices(list ?? []);
-      setAlerts(al ?? []);
+      setAlerts(alRes.ok ? alRes.v ?? [] : []);
+      setAlertsErr(alRes.ok ? null : (alRes.e instanceof Error ? alRes.e.message : String(alRes.e)));
       setLocs(new Map((locRes?.devices ?? []).map((r) => [r.id, r])));
       setSiteOptions([...(siteRes?.sites ?? [])].sort((a, b) => a.name.localeCompare(b.name)));
       setSotProvider(siteRes?.active ?? "internal");
@@ -153,7 +160,7 @@ export default function Devices() {
 
   useEffect(() => {
     load();
-    api.credentials().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
+    api.features().then((c) => setSshEnabled(!!c.device_ssh)).catch(() => {});
     const t = setInterval(load, 30_000); // live-ish; status is time-sensitive
     return () => clearInterval(t);
   }, []);
@@ -307,11 +314,23 @@ export default function Devices() {
       >
         <NocKpis cols={4}>
           <NocKpi n={devices.length} label="Inventory" interp="devices tracked" />
-          <NocKpi n={counts.up} label="Up" interp="fresh heartbeat" tone={counts.up ? "var(--ok)" : undefined} />
-          <NocKpi n={counts.degraded} label="Degraded" interp="stale or alerting" tone={counts.degraded ? "var(--warn)" : undefined} />
+          <NocKpi
+            n={counts.up}
+            label="Up"
+            interp={alertsErr ? "heartbeat only — alert state unknown" : "fresh heartbeat"}
+            tone={alertsErr ? "var(--warn)" : counts.up ? "var(--ok)" : undefined}
+          />
+          <NocKpi n={counts.degraded} label="Degraded" interp={alertsErr ? "stale heartbeat only" : "stale or alerting"} tone={counts.degraded ? "var(--warn)" : undefined} />
           <NocKpi n={counts.down} label="Down" interp="no heartbeat" tone={counts.down ? "var(--crit)" : undefined} />
         </NocKpis>
       </NocHeader>
+
+      {alertsErr && (
+        <p className="empty" role="alert" style={{ color: "var(--warn)", margin: "0 0 10px" }}>
+          <strong>Alert correlation unavailable</strong> — device health below is derived from the
+          heartbeat alone, so a device shown as <em>Up</em> may still be alerting. ({alertsErr})
+        </p>
+      )}
 
       {devices.length > 0 && <FleetComposition devices={devices} locs={locs} siteName={siteName} />}
 

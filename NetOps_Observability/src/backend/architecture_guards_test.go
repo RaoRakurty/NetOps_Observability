@@ -2,6 +2,7 @@ package main
 
 import (
 	"go/ast"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,28 +42,51 @@ func stripComments(src string) string {
 	return strings.Join(lines, "\n")
 }
 
-// goSources returns every non-test .go file in this package directory, with
-// comments stripped.
+// goSources returns every non-test .go file in the backend module — the root
+// package AND its subpackages — with comments stripped.
+//
+// SCOPE (2026-07-27): this used to be os.ReadDir(".") — the root package only.
+// That left 201 subpackage files (alerts/, notify/, collectors/, nms/, ai/,
+// cloudconn/, appid/ …) outside EVERY structural guard in this repo, and the
+// vacuity tripwire below passed comfortably on the root package's ~296 files,
+// so the blind scope certified itself as healthy. Three void persist functions
+// (notify/jira.go, notify/servicenow.go) and the alert engine's
+// error-conflated evaluate loop all lived in that gap. The walk now descends,
+// and the floor is raised so a regression to the root-only scope FAILS instead
+// of silently narrowing coverage again.
 func goSources(t *testing.T) map[string]string {
 	t.Helper()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read package dir: %v", err)
-	}
 	out := map[string]string{}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Clean(name))
+	skipDir := map[string]bool{"vendor": true, "testdata": true, "node_modules": true}
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+			return err
 		}
-		out[name] = stripComments(string(b))
+		if d.IsDir() {
+			if skipDir[d.Name()] || strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		b, rerr := os.ReadFile(filepath.Clean(path))
+		if rerr != nil {
+			return rerr
+		}
+		out[filepath.ToSlash(path)] = stripComments(string(b))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk backend module: %v", err)
 	}
-	if len(out) < 50 {
-		t.Fatalf("only %d source files scanned — the guard is not seeing the package", len(out))
+	// Floor set above the root-package-only count (296 as of this change) so a
+	// silent narrowing of scope trips the guard rather than shrinking coverage.
+	if len(out) < 400 {
+		t.Fatalf("only %d source files scanned — the guard is not seeing the whole module "+
+			"(root package alone is ~296; subpackages must be included)", len(out))
 	}
 	return out
 }

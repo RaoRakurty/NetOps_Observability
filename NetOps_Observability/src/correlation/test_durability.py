@@ -17,6 +17,7 @@ counter or the tolerance that makes the loss visible or unnecessary:
   * F-45 — the correlation state maps are bounded.
 """
 import asyncio
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
@@ -134,8 +135,8 @@ class _PoisonConsumer:
     def __init__(self, *topics, **kw):
         _PoisonConsumer.created.append(self)
         self._msgs = iter([
-            _Msg("netops.syslog", {"boom": True}),
-            _Msg("netops.metrics", {"ok": True}),
+            _Msg("netops.syslog", _wire({"boom": True})),
+            _Msg("netops.metrics", _wire({"ok": True})),
         ])
 
     async def start(self):
@@ -158,9 +159,15 @@ class _PoisonConsumer:
 class _Msg:
     def __init__(self, topic, value, partition=0, offset=0):
         self.topic = topic
-        self.value = value
+        self.value = value          # RAW bytes, exactly as aiokafka delivers them
         self.partition = partition
         self.offset = offset
+
+
+def _wire(obj) -> bytes:
+    """Encode a payload the way a producer puts it on the wire. The consumer is
+    built with NO value_deserializer, so the loop always sees bytes."""
+    return json.dumps(obj).encode("utf-8")
 
 
 def test_poison_event_does_not_tear_down_the_consumer(monkeypatch):
@@ -199,7 +206,7 @@ class _AllPoisonConsumer(_PoisonConsumer):
 
     def __init__(self, *topics, **kw):
         _AllPoisonConsumer.created.append(self)
-        self._msgs = iter([_Msg("netops.metrics", {"i": i}) for i in range(50)])
+        self._msgs = iter([_Msg("netops.metrics", _wire({"i": i})) for i in range(50)])
 
 
 def test_a_run_of_failures_restarts_the_consumer_instead_of_eating_the_stream(monkeypatch):
@@ -227,6 +234,171 @@ def test_a_run_of_failures_restarts_the_consumer_instead_of_eating_the_stream(mo
     run(scenario())
     assert main.HANDLER_FAILURES["netops.metrics"] == 5   # stopped at the burst cap
     assert len(_AllPoisonConsumer.created) == 1           # handed back to the supervisor
+
+
+# ── F-40b: a MALFORMED payload is one event too, not a permanent wedge ───────
+#
+# The consumer used to carry value_deserializer=json.loads. aiokafka runs that
+# inside its fetcher (_consumer_record) BEFORE advancing next_fetch_offset, i.e.
+# one level ABOVE the per-event try — so a single malformed record escaped to
+# the supervisor with the offset unmoved, and (manual commit, #126) every
+# restart re-read the same bytes forever. All topics starved, no counter moved,
+# and the docstring claimed the class could not recur. Decoding now happens
+# inside the per-event try; these tests are the guarantee.
+
+_BAD_JSON = b'{"device": "r1", "metric": "cpu"'      # truncated — JSONDecodeError
+_BAD_UTF8 = b'\xff\xfe{"device": "r1"}'              # not UTF-8 — UnicodeDecodeError
+
+
+class _MalformedConsumer:
+    """Yields ONE undecodable record, then a good one, then idles."""
+
+    created: ClassVar[list] = []
+    poison: ClassVar[bytes] = _BAD_JSON
+
+    def __init__(self, *topics, **kw):
+        type(self).created.append(self)
+        assert "value_deserializer" not in kw, (
+            "the consumer must hand the loop RAW bytes — deserializing in the "
+            "fetcher raises above the per-event try and wedges every topic")
+        self._msgs = iter([
+            _Msg("netops.syslog", type(self).poison, offset=41),
+            _Msg("netops.metrics", _wire({"ok": True}), offset=42),
+        ])
+
+    async def start(self):
+        return None
+
+    async def stop(self):
+        return None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._msgs)
+        except StopIteration:
+            await asyncio.sleep(3600)
+            raise StopAsyncIteration
+
+
+def _drive_consumer(seconds: float = 0.2) -> None:
+    async def scenario():
+        task = asyncio.create_task(main.consume())
+        await asyncio.sleep(seconds)
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(("poison", "err"), [
+    (_BAD_JSON, "JSONDecodeError"),
+    (_BAD_UTF8, "UnicodeDecodeError"),
+])
+def test_malformed_payload_is_quarantined_and_the_loop_moves_on(monkeypatch, poison, err):
+    """One malformed record costs one record: it is counted, its payload is
+    kept, the NEXT message still processes, and the consumer never restarts."""
+    _MalformedConsumer.created = []
+    monkeypatch.setattr(_MalformedConsumer, "poison", poison)
+    handled: list[str] = []
+
+    async def fake_handle(topic, event):
+        handled.append(topic)
+
+    monkeypatch.setattr(main, "AIOKafkaConsumer", _MalformedConsumer)
+    monkeypatch.setattr(main, "handle", fake_handle)
+
+    _drive_consumer()
+
+    # The counter MOVES — the defect's signature was a silent infinite restart.
+    assert main.HANDLER_FAILURES == {"netops.syslog": 1}
+    rec = main.QUARANTINE[-1]
+    assert rec["topic"] == "netops.syslog"
+    assert rec["error"].startswith(err)
+    # The payload survives: the exact poison bytes, not a lost b'...' repr.
+    assert rec["payload"] == poison.decode("utf-8", "replace")
+    # …and the lane did NOT starve.
+    assert handled == ["netops.metrics"]
+    assert len(_MalformedConsumer.created) == 1        # no supervisor restart
+
+
+def test_malformed_payload_is_written_to_the_durable_dlq(monkeypatch, tmp_path):
+    """The quarantined poison reaches the on-disk dead-letter file, greppable,
+    so the offending producer can actually be found and the record replayed."""
+    _MalformedConsumer.created = []
+    monkeypatch.setattr(_MalformedConsumer, "poison", _BAD_JSON)
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "AIOKafkaConsumer", _MalformedConsumer)
+
+    async def fake_handle(topic, event):
+        return None
+
+    monkeypatch.setattr(main, "handle", fake_handle)
+    _drive_consumer()
+
+    written = (tmp_path / "corr-deadletter.ndjson").read_text()
+    assert '{\\"device\\": \\"r1\\", \\"metric\\": \\"cpu\\"' in written
+    assert "netops.syslog" in written
+
+
+def test_malformed_payload_commits_through_so_the_offset_advances(monkeypatch):
+    """The wedge was an offset that never moved. A quarantined record counts as
+    handled, so its offset must be committed — the restart resumes AFTER it."""
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_N", 1)
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_S", 0.0)
+    commits: list[int] = []
+    handled: list[str] = []
+
+    class _Committing(_MalformedConsumer):
+        created: ClassVar[list] = []
+        poison: ClassVar[bytes] = _BAD_JSON
+
+        async def commit(self):
+            commits.append(len(handled))
+
+    async def fake_handle(topic, event):
+        handled.append(topic)
+
+    monkeypatch.setattr(main, "AIOKafkaConsumer", _Committing)
+    monkeypatch.setattr(main, "handle", fake_handle)
+    _drive_consumer()
+
+    # Two commits: one after the quarantined record (handled==0 good events yet)
+    # and one after the good record — the poison offset is behind us either way.
+    assert len(commits) == 2, f"offset did not advance past the poison: {commits}"
+    assert handled == ["netops.metrics"]
+
+
+def test_empty_and_tombstone_values_are_not_quarantined(monkeypatch):
+    """Kafka tombstones (value=None) and empty payloads are NOT errors — the old
+    deserializer no-op'd them and handle() no-ops on falsy. Preserve that."""
+    seen: list[object] = []
+
+    class _Tombstones(_MalformedConsumer):
+        created: ClassVar[list] = []
+
+        def __init__(self, *topics, **kw):
+            type(self).created.append(self)
+            self._msgs = iter([
+                _Msg("netops.metrics", None, offset=1),
+                _Msg("netops.metrics", b"", offset=2),
+                _Msg("netops.metrics", _wire({"ok": True}), offset=3),
+            ])
+
+    async def fake_handle(topic, event):
+        seen.append(event)
+
+    monkeypatch.setattr(main, "AIOKafkaConsumer", _Tombstones)
+    monkeypatch.setattr(main, "handle", fake_handle)
+    _drive_consumer()
+
+    assert seen == [None, None, {"ok": True}]
+    assert main.HANDLER_FAILURES == {}
 
 
 def test_deadletter_payload_is_kept_for_inspection():
