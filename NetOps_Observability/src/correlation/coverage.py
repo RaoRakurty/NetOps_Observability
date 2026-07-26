@@ -34,6 +34,14 @@ from producers import EMITTED_KINDS
 # Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.
 # Structured: every entry says why it is allowed to stay unconsumed.
 INTENTIONAL_BLIND: dict[str, dict] = {
+    "wireless_ap_up": {
+        "reason": "#128 recovery/clear signal — supports and closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-07-26",
+    },
+    "wireless_radio_up": {
+        "reason": "#128 recovery/clear signal — supports and closes, never fault evidence",
+        "owner": "correlix", "date_added": "2026-07-26",
+    },
     "device_alarm": {
         "reason": "the #80 §4 generic catch-all — matches no signature by design",
         "owner": "correlix", "date_added": "2026-06-20",
@@ -127,6 +135,14 @@ INTENTIONAL_BLIND_KINDS: frozenset[str] = frozenset(INTENTIONAL_BLIND)
 # (exactly what happened to synthetic_http_fail & co. in #98).
 _NORM_FIELDS = ("producer", "observed_as", "reason", "owner", "ticket", "date_added")
 NORMALIZATION_PENDING: dict[str, dict] = {
+    "wireless_channel_util_high": {
+        "producer": "catalyst_9800 connector (RRM load → controller_metric_wireless_channel_util_pct in VictoriaMetrics)",
+        "observed_as": ["controller_metric_wireless_channel_util_pct"],
+        "reason": "the channel-utilization DATA is collected and stored; nothing "
+                  "yet maps its anomaly onto the signal kind the RF signatures "
+                  "expect (the metric-anomaly→wireless-kind normalizer is Phase 4)",
+        "owner": "correlix", "ticket": "#128", "date_added": "2026-07-26",
+    },
     "probe_latency_departure": {
         "producer": "prober (STAMP + synthetics)",
         "observed_as": ["probe_rtt_anomaly"],
@@ -245,6 +261,17 @@ def _group(reason: str, ticket: str, date_added: str, kinds: list[str]) -> dict[
 
 
 COLLECTION_PENDING: dict[str, dict] = {
+    # Wireless #128 Phase 4 lane: per-client RF, roam/disconnect aggregation and
+    # applicability-aware onboarding episodes (wireless_onboarding.py) do not
+    # exist yet; the WLC mobility/redundancy oper models are unmapped
+    # (nms/specs.go declares them FidelityNone — an honest hole, not a bug).
+    **_group("#128 wireless Phase 4: client-session/onboarding/RF-anomaly producers land with wireless_onboarding.py + the RRM anomaly mapper",
+             "#128", "2026-07-26", [
+        "wireless_interference", "wireless_noise_high", "wireless_coverage_low_rssi",
+        "wireless_retry_rate_high", "wireless_roam_storm", "wireless_client_disconnect_storm",
+        "wireless_onboarding_auth_failure", "wireless_onboarding_dhcp_failure",
+        "wireless_wlc_member_failover",
+    ]),
     # v0 theoretical templates (wan-congestion, routing-instability, physical-
     # degradation, dns-impairment, cloud-region, tunnel-mtu-blackhole) awaiting
     # Layer-2 collection. NOTE: if_crc stays here (FCS/CRC OIDs are a known

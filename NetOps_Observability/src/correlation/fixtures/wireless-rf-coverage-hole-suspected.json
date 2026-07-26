@@ -1,0 +1,42 @@
+{
+  "name": "Weak-signal clients + roam churn after a radio died: coverage hole",
+  "signals": [
+    {
+      "kind": "wireless_radio_down",
+      "entity_type": "radio",
+      "entity_id": "ap-abc123:radio1",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "deviation": 1.0
+    },
+    {
+      "kind": "wireless_coverage_low_rssi",
+      "entity_type": "radio",
+      "entity_id": "ap-abc123:radio1",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "ts_offset_s": 60,
+      "deviation": 3.5
+    },
+    {
+      "kind": "wireless_roam_storm",
+      "entity_type": "radio",
+      "entity_id": "ap-abc123:radio1",
+      "observer_id": "catalyst_9800:int-1",
+      "observer_type": "controller",
+      "modality": "management_plane",
+      "collection_path": "via_controller:wlc-1",
+      "ts_offset_s": 90,
+      "deviation": 3.0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wireless.rf-coverage-hole",
+    "tier": "suspected",
+    "owner": "netops"
+  }
+}

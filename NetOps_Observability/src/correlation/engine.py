@@ -242,13 +242,22 @@ class Node:
     def device_part(self) -> str | None:
         """The single device this node sits on, for L2/L3 adjacency grounding:
         'leaf1:Ethernet1' → 'leaf1'; a bare device id → itself; a path/segment
-        ('a->b') has no single device → None."""
+        ('a->b') has no single device → None.
+
+        Wireless (#128): AP / controller / client entities are device-like —
+        a bare 'ap-<id>' is its own device token, and 'ap-<id>:radio0' splits
+        to 'ap-<id>' like any device:component id. The '-' joins (never ':')
+        so the domain prefix stays part of the token — 'ap:<id>' would ground
+        every AP in the estate to the literal token 'ap' (the #99 weld class;
+        regression-tested in wireless/identity_test.go)."""
         eid = self.entity_id
         if "->" in eid:
             return None
         if ":" in eid:
             return eid.split(":", 1)[0]
-        if self.entity_type in (EntityType.DEVICE, EntityType.INTERFACE):
+        if self.entity_type in (EntityType.DEVICE, EntityType.INTERFACE,
+                                EntityType.ACCESS_POINT, EntityType.WIRELESS_CONTROLLER,
+                                EntityType.WIRELESS_CLIENT):
             return eid
         return None
 
@@ -796,7 +805,7 @@ class ObjectSnapshot:
             if _SEV_RANK[n.peak_severity] > _SEV_RANK[slot["sev"]]:
                 slot["sev"] = n.peak_severity
         layers = []
-        for cl in CausalLayer:  # device(0) → application(6): the fixed bottom-up ladder
+        for cl in CausalLayer:  # rf(-1) → application(6): the fixed bottom-up ladder
             cell = per_layer.get(cl)
             layers.append({
                 "layer": cl.name.lower(),

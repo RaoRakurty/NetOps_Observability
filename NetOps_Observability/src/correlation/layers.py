@@ -20,6 +20,13 @@ from enum import IntEnum
 
 class CausalLayer(IntEnum):
     """Ordered bottom-up: a lower value is a lower (more root-ward) layer."""
+    # RF = -1 (#128 Q1, owner-approved 2026-07-26): the air itself — channel
+    # utilization, interference, noise, coverage — CAUSES wireless link
+    # symptoms, so it sits below everything. -1 (not a renumber) deliberately:
+    # every existing layer keeps its integer, so the direction prior and every
+    # stored snapshot replay unchanged. If a second sub-physical layer ever
+    # appears, THAT is the engine-major sparse renumber (report §5 B1 option c).
+    RF = -1           # wireless spectrum conditions — below the wireless PHY
     DEVICE = 0        # device/infra health (CPU, memory, fans, PSU) — no OSI layer
     PHYSICAL = 1      # L1: optics, transceiver power, FCS/CRC at the line
     LINK = 2          # L2: link state, LLDP/CDP, STP, MAC, interface counters
@@ -30,6 +37,7 @@ class CausalLayer(IntEnum):
 
 
 _OSI_LABEL = {
+    CausalLayer.RF: "RF",
     CausalLayer.DEVICE: "device", CausalLayer.PHYSICAL: "L1", CausalLayer.LINK: "L2",
     CausalLayer.NETWORK: "L3", CausalLayer.TRANSPORT: "L4",
     CausalLayer.SERVICE: "L7", CausalLayer.APPLICATION: "L7",
@@ -92,6 +100,37 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     # `device_alarm` (the #80 generic-alarm catch-all) is INTENTIONALLY unmapped:
     # a generic alarm has no known causal layer, so the layer prior abstains for it
     # (honest, never a guess). Its absence here is by design, NOT a coverage gap.
+    # ── wireless (#128 Phase 3, docs/Wireslessdesign.md §16/§17) ─────────────
+    # RF (-1): conditions of the air itself — they CAUSE link symptoms.
+    "wireless_channel_util_high": CausalLayer.RF,
+    "wireless_interference": CausalLayer.RF,
+    "wireless_noise_high": CausalLayer.RF,
+    "wireless_coverage_low_rssi": CausalLayer.RF,
+    "wireless_radar_event": CausalLayer.RF,       # DFS: spectrum event forces a channel change
+    # AP/radio hardware placements.
+    "wireless_ap_down": CausalLayer.DEVICE,       # the AP as an infra device
+    "wireless_ap_up": CausalLayer.DEVICE,
+    "wireless_radio_down": CausalLayer.PHYSICAL,  # the radio IS the wireless PHY
+    "wireless_radio_up": CausalLayer.PHYSICAL,
+    # Association-plane symptoms (L2 of the air interface).
+    "wireless_ap_join_flap": CausalLayer.LINK,    # CAPWAP join churn
+    "wireless_retry_rate_high": CausalLayer.LINK, # the LINK symptom RF congestion causes
+    "wireless_assoc_failure_rate": CausalLayer.LINK,
+    "wireless_roam_storm": CausalLayer.LINK,
+    "wireless_client_disconnect_storm": CausalLayer.LINK,
+    "wireless_ap_oversubscribed": CausalLayer.LINK,
+    # Onboarding failures land at the layer of the TERMINAL PHASE (report §16):
+    # a DHCP failure must order below the app symptom it causes and correlate
+    # with the DHCP server, not the AP — distinct kinds per phase make the
+    # static layer map sufficient (no dynamic layering needed).
+    "wireless_onboarding_assoc_failure": CausalLayer.LINK,
+    "wireless_onboarding_auth_failure": CausalLayer.LINK,   # 802.1X/PSK at the edge (AAA health is its own signal)
+    "wireless_onboarding_key_failure": CausalLayer.LINK,    # 4-way handshake
+    "wireless_onboarding_dhcp_failure": CausalLayer.NETWORK,
+    "wireless_onboarding_dns_failure": CausalLayer.SERVICE,
+    # `wireless_wlc_member_failover` is INTENTIONALLY unmapped: a member
+    # failover has no fixed causal layer (a redundancy event, not a fault
+    # layer) — the prior abstains, onset ordering decides. By design.
 }
 
 

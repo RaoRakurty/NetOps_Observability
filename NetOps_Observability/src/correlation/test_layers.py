@@ -89,9 +89,10 @@ def test_layer_coverage_shows_observed_layers_and_the_gap_between():
     ), builtin_catalog(), (_SEAM,))
     assert len(snaps) == 1
     cov = snaps[0].layer_coverage()
-    # the FULL bottom-up ladder, always all seven, in order:
+    # the FULL bottom-up ladder, always all eight, in order (rf = -1 joined
+    # the ladder with #128 Phase 3 — below everything, per report §5 B1/Q1):
     assert [lyr["layer"] for lyr in cov["layers"]] == [
-        "device", "physical", "link", "network", "transport", "service", "application"]
+        "rf", "device", "physical", "link", "network", "transport", "service", "application"]
     by = {lyr["layer"]: lyr for lyr in cov["layers"]}
     assert by["link"]["observed"] and by["transport"]["observed"]
     assert by["network"]["observed"] is False        # the gap, surfaced not hidden

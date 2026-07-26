@@ -249,9 +249,18 @@ func (rt *nmsRuntime) sinkRouted(ctx context.Context, ic nmsIntegration, routed 
 		}
 	}
 	var produced int64
-	if len(routed.Events) > 0 {
-		recs := make([]proxyRecord, 0, len(routed.Events))
-		for _, ev := range routed.Events {
+	// #128 Phase 3: wireless state transitions (ap_join/radio_oper) synthesize
+	// normalized events onto the SAME controller_events lane — correlation
+	// evidence, not a parallel wireless pipeline. Non-wireless state kinds are
+	// untouched.
+	events := routed.Events
+	if len(routed.StateChanges) > 0 {
+		events = append(events,
+			nms.WirelessStateChangeEvents(ic.Tenant, ic.ID, ic.Vendor, routed.StateChanges)...)
+	}
+	if len(events) > 0 {
+		recs := make([]proxyRecord, 0, len(events))
+		for _, ev := range events {
 			recs = append(recs, proxyRecord{Key: ic.Tenant, Value: ev}) // tenant key: per-tenant ordering
 		}
 		if _, err := produceJSON(ctx, nms.TopicControllerEvents, recs); err != nil {

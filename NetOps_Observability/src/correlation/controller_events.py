@@ -39,6 +39,22 @@ _ENTITY_BY_KIND = {
     "controller_alarm": EntityType.DEVICE,
     "controller_topology_context": EntityType.DEVICE,
     "controller_inventory_context": EntityType.DEVICE,
+    # ── wireless (#128 Phase 3): device_id carries the CANONICAL wireless
+    # entity id (ap-<id> / ap-<id>:radioN / wlc-<id>:<member>) stamped by the
+    # Go synthesis (nms/wireless_events.go), so binding is direct and the
+    # rank-1 containment grounding works from the id structure alone.
+    "wireless_ap_down": EntityType.ACCESS_POINT,
+    "wireless_ap_up": EntityType.ACCESS_POINT,
+    "wireless_ap_join_flap": EntityType.ACCESS_POINT,
+    "wireless_radio_down": EntityType.RADIO,
+    "wireless_radio_up": EntityType.RADIO,
+    "wireless_wlc_member_failover": EntityType.WIRELESS_CONTROLLER,
+    "wireless_channel_util_high": EntityType.RADIO,
+    "wireless_interference": EntityType.RADIO,
+    "wireless_noise_high": EntityType.RADIO,
+    "wireless_coverage_low_rssi": EntityType.RADIO,
+    "wireless_radar_event": EntityType.RADIO,
+    "wireless_retry_rate_high": EntityType.RADIO,
 }
 
 _SEVERITY = {"info": Severity.INFO, "warn": Severity.WARN, "high": Severity.HIGH, "crit": Severity.CRIT}

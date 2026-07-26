@@ -26,7 +26,7 @@ def _v1_templates():
 
 def test_v1_taxonomy_is_closed():
     cat = builtin_catalog()
-    assert len(_v1_templates()) == 116  # waves 1-3 + 23 SP/DC + 3 NMS controller-intel (P4b) + 1 saas-experience-degraded + 4 cloud edge-dependency attribution (Wave 3 #9)
+    assert len(_v1_templates()) == 125  # +9 wireless (#128) — waves 1-3 + 23 SP/DC + 3 NMS controller-intel (P4b) + 1 saas-experience-degraded + 4 cloud edge-dependency attribution (Wave 3 #9)
     for t in cat.templates:
         assert set(t.seams) <= ALLOWED_SEAMS, t.id
         assert t.deployment_scope in ALLOWED_SCOPES, t.id

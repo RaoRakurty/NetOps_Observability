@@ -110,6 +110,13 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "controller_control_connection_loss": ModalityClass.MANAGEMENT_PLANE,
     "controller_device_unreachable": ModalityClass.MANAGEMENT_PLANE,
     "controller_policy_change": ModalityClass.MANAGEMENT_PLANE,
+    # Wireless state-transition lane (#128 — nms/wireless_events.go stamps
+    # management_plane via_controller).
+    "wireless_ap_down": ModalityClass.MANAGEMENT_PLANE,
+    "wireless_ap_up": ModalityClass.MANAGEMENT_PLANE,
+    "wireless_ap_join_flap": ModalityClass.MANAGEMENT_PLANE,
+    "wireless_radio_down": ModalityClass.MANAGEMENT_PLANE,
+    "wireless_radio_up": ModalityClass.MANAGEMENT_PLANE,
     # clock-skew meta-finding (log-time standard S5/R5): the PLATFORM is the
     # witness (it compared origin vs receive clocks) — management-plane, and
     # never engine-buffered, so it cannot lend a confirming plane to a fault.
@@ -161,6 +168,34 @@ APP_DOMAINS: frozenset[str] = frozenset({"ent.app"})
 # cannot reach confirmed today and are ALLOWED to ship in that state, each with
 # an owner and a target resolution. Anything not listed fails CI.
 DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
+    "sig.ent.wireless.ap-software-fault": {
+        "reason": "this family is diagnosed by the ABSENCE of the second "
+                  "witness — the uplink port staying up is what separates an "
+                  "AP-side fault from power/cable. Its only positive evidence "
+                  "is therefore the controller (management plane), and the "
+                  "suspected cap is the honest ceiling by construction",
+        "owner": "correlix",
+        "date_added": "2026-07-26",
+        "target_resolution": "wireless Phase 9 (live validation): an active "
+                             "reach probe against the AP mgmt address can be "
+                             "the confirming second modality once a real AP "
+                             "exists to validate the probe path against",
+    },
+    "sig.ent.wireless.wlc-failover": {
+        "reason": "a controller failover's only witness today IS the management "
+                  "plane (the WLC reporting its own member states), so the "
+                  "verdict correctly caps at suspected — the report's B2 "
+                  "finding: controller-alone-cannot-confirm is by design, and "
+                  "for THIS fault family the second witness does not exist "
+                  "until AP-uplink switch telemetry or an AP-join storm from "
+                  "a second observer corroborates",
+        "owner": "correlix",
+        "date_added": "2026-07-26",
+        "target_resolution": "wireless Phase 4+: corroborate via the AP-join "
+                             "flap burst on device_telemetry (uplink switch "
+                             "ports of re-joining APs) or a platform probe "
+                             "against the failed member's mgmt address",
+    },
     "sig.ent.cloud.region-degradation": {
         "reason": "became MATCHABLE via the #98 P5 lb_5xx lane, but its "
                   "required control_plane modality has no producer path among "

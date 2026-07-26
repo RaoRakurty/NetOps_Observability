@@ -3051,6 +3051,246 @@ CLOUD_EDGE_ATTRIBUTION_TEMPLATES: list[dict] = [
 ]
 BUILTIN_TEMPLATES.extend(CLOUD_EDGE_ATTRIBUTION_TEMPLATES)
 
+# ── Wireless (#128 Phase 3, docs/Wireslessdesign.md §17) ─────────────────────
+# The discriminator is the load-bearing half of every pair: each look-alike
+# names its competitor, so the engine scores BOTH instead of collapsing them.
+# "Wireless not the cause" is deliberately NOT a template — when wireless is
+# healthy it contributes no fault signals and the authoritative edges lead
+# elsewhere; the correct implementation of "don't blame wireless" is no code.
+# The LAN seam tag follows the owner ruling (2026-07-26): wireless is part of
+# the LAN domain. All kinds arrive on the controller lane at Phase 3 (a lone
+# management-plane witness caps at suspected — the second, independent witness
+# is the AP-uplink switch port telemetry, which these templates require or
+# mark optional exactly where the report says it matters).
+WIRELESS_TEMPLATES: list[dict] = [
+    {
+        "id": "sig.ent.wireless.ap-down-power",
+        "title": "AP down — power/uplink path (PoE or switch port)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_ap_down", "entity_type": "access_point"},
+            # The INDEPENDENT witness: the access switch reports the AP's
+            # uplink port down. This is what separates power/cable from an AP
+            # software fault — and what lets the verdict confirm at all (B2).
+            {"kind": "link_state_change", "entity_type": "interface"},
+        ],
+        # The uplink witness arrives on the syslog lane (control_plane) — the
+        # second modality that lets this family confirm at all (report B2).
+        "required_modalities": ["management_plane", "control_plane"],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "L1/PoE",
+            "first_steps": [
+                "Check PoE power draw and errors on the AP's uplink switch port",
+                "Verify the port is not err-disabled and the cable run is intact",
+                "If the port is administratively fine, swap-test power injector/cable",
+            ],
+        },
+        "operator_phrase": "AP down and its uplink switch port went down with it — power or cabling, not AP software",
+        "manager_phrase": "A wireless access point lost power or its cable connection",
+        "false_positives": ("a planned switch reboot taking the port down",),
+    },
+    {
+        "id": "sig.ent.wireless.ap-software-fault",
+        "title": "AP down — AP-side fault (uplink still up)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_ap_down", "entity_type": "access_point"},
+            # A failing AP commonly flaps its CAPWAP join before dying —
+            # supporting evidence when present, never required.
+            {"kind": "wireless_ap_join_flap", "entity_type": "access_point", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "discriminators": [
+            # If the uplink port ALSO went down, this is the power/path case.
+            {"absent": {"kind": "link_state_change", "entity_type": "interface"},
+             "within_s": 600, "else_prefer": "sig.ent.wireless.ap-down-power"},
+        ],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "device",
+            "first_steps": [
+                "Confirm the uplink switch port is still up (rules out power/cable)",
+                "Check the controller's AP crash/reload history for this AP",
+                "Collect AP core/syslog before power-cycling so the cause isn't lost",
+            ],
+        },
+        "operator_phrase": "AP disjoined while its uplink stayed up — AP-side software/hardware fault",
+        "manager_phrase": "A wireless access point failed on its own (not power or cabling)",
+    },
+    {
+        "id": "sig.ent.wireless.rf-co-channel-interference",
+        "title": "RF congestion — co-channel interference",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_channel_util_high", "entity_type": "radio"},
+            {"kind": "wireless_retry_rate_high", "entity_type": "radio", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "discriminators": [
+            # Low RSSI at clients says coverage hole, not airtime congestion.
+            {"absent": {"kind": "wireless_coverage_low_rssi"},
+             "within_s": 900, "else_prefer": "sig.ent.wireless.rf-coverage-hole"},
+        ],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "RF",
+            "first_steps": [
+                "Check channel utilization on neighboring APs — same channel, same spike = co-channel",
+                "Review RRM channel assignments in the affected RF neighborhood",
+                "Look for a recently-added AP or a neighbor network on the channel",
+            ],
+        },
+        "operator_phrase": "Channel utilization is saturated with normal signal strength — airtime congestion, not coverage",
+        "manager_phrase": "The Wi-Fi channel is overcrowded in this area",
+        "false_positives": ("a one-off burst from a large file transfer",),
+    },
+    {
+        "id": "sig.ent.wireless.rf-coverage-hole",
+        "title": "RF coverage hole (weak signal area)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_coverage_low_rssi"},
+            {"kind": "wireless_retry_rate_high|wireless_roam_storm", "optional": True},
+            # A hole is often OPENED by a down radio nearby — corroborating
+            # when present (and the consumer of the radio-transition lane).
+            {"kind": "wireless_radio_down", "entity_type": "radio", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "RF",
+            "first_steps": [
+                "Map which clients report low RSSI — one client = client fault, many = coverage",
+                "Check whether a nearby AP or radio recently went down (hole opened by outage)",
+                "Review tx-power: RRM may have coalesced power after an AP loss",
+            ],
+        },
+        "operator_phrase": "Clients in one area see weak signal and retries — a coverage hole, possibly opened by a down radio",
+        "manager_phrase": "Wi-Fi signal is weak in part of the site",
+    },
+    {
+        "id": "sig.ent.wireless.rf-non-wifi-interference",
+        "title": "Non-Wi-Fi interference on the channel",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_interference|wireless_noise_high"},
+        ],
+        "required_modalities": ["management_plane"],
+        "discriminators": [
+            # High WIFI-attributed utilization means co-channel, not non-Wi-Fi.
+            {"absent": {"kind": "wireless_channel_util_high"},
+             "within_s": 900, "else_prefer": "sig.ent.wireless.rf-co-channel-interference"},
+        ],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "RF",
+            "first_steps": [
+                "Check the noise floor vs Wi-Fi-attributed utilization on the affected radios",
+                "Look for non-Wi-Fi sources near the affected APs (microwave, BT, cameras)",
+                "Change channel as mitigation; locate the interferer for the fix",
+            ],
+        },
+        "operator_phrase": "High noise with low Wi-Fi airtime — a non-Wi-Fi interferer on the channel",
+        "manager_phrase": "Something other than Wi-Fi is jamming the wireless in this area",
+    },
+    {
+        "id": "sig.ent.wireless.capwap-instability",
+        "title": "AP join/CAPWAP instability (AP↔controller path)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_ap_join_flap", "entity_type": "access_point"},
+            {"kind": "probe_loss|if_util_high|if_errors", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "discriminators": [
+            # If the controller itself is unreachable, that's the WLC event,
+            # not per-AP tunnel instability.
+            {"absent": {"kind": "controller_device_unreachable"},
+             "within_s": 600, "else_prefer": "sig.ent.wireless.wlc-failover"},
+        ],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "L2/Tunnel",
+            "first_steps": [
+                "Check loss/latency on the AP→controller management path (the CAPWAP path)",
+                "Look for congestion or errors on the uplinks between the AP's switch and the WLC",
+                "Confirm the WLC is not resource-exhausted (join storms follow WLC CPU spikes)",
+            ],
+        },
+        "operator_phrase": "APs are joining and leaving the controller repeatedly — the AP↔controller path or the WLC is unstable",
+        "manager_phrase": "Access points keep losing contact with the wireless controller",
+    },
+    {
+        "id": "sig.ent.wireless.wlc-failover",
+        "title": "Controller failover / controller loss",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_wlc_member_failover|controller_device_unreachable"},
+            {"kind": "wireless_ap_join_flap", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "device",
+            "first_steps": [
+                "Confirm which member failed and whether the standby took over (redundancy held?)",
+                "If APs re-joined the standby, this is redundancy-loss, not an outage — treat as capacity risk",
+                "Check the failed member's console/crash data before restoring",
+            ],
+        },
+        "operator_phrase": "A controller member failed over — check whether redundancy held before calling it an outage",
+        "manager_phrase": "A wireless controller failed; the backup took over",
+        "false_positives": ("a planned controller upgrade rebooting members in sequence",),
+    },
+    {
+        "id": "sig.ent.wireless.onboarding-auth-radius",
+        "title": "Client onboarding fails at authentication (AAA path)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_onboarding_auth_failure"},
+            {"kind": "dns_failure_rate|probe_loss", "entity_type": "service", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "L2/AAA",
+            "first_steps": [
+                "Check RADIUS server health and reachability from the controller",
+                "Distinguish server timeout (AAA path) from reject (credential/policy) in the failure reasons",
+                "If one WLAN only: compare its AAA server list against working WLANs",
+            ],
+        },
+        "operator_phrase": "Clients fail onboarding at the 802.1X step — the AAA path, not the radio, is the suspect",
+        "manager_phrase": "Users can see the Wi-Fi but can't log into it",
+        "false_positives": ("a single user with expired credentials",),
+    },
+    {
+        "id": "sig.ent.wireless.onboarding-dhcp-exhaustion",
+        "title": "Client onboarding fails at addressing (DHCP scope)",
+        "domain": "ent.wireless",
+        "requires": [
+            {"kind": "wireless_onboarding_dhcp_failure"},
+            # Address-less clients cycle: disconnect/re-associate churn rides
+            # along when a scope exhausts. Supporting, never required.
+            {"kind": "wireless_client_disconnect_storm", "optional": True},
+        ],
+        "required_modalities": ["management_plane"],
+        "seams": ["LAN"],
+        "verdict": {
+            "owner": "netops", "layer": "L3/DHCP",
+            "first_steps": [
+                "Check lease utilization on the scope serving the affected WLAN/VLAN",
+                "Many clients on one VLAN = scope exhaustion; one client = client-side fault",
+                "Verify DHCP relay from the controller/AP VLAN to the server is healthy",
+            ],
+        },
+        "operator_phrase": "Clients associate and authenticate but get no address — the DHCP scope or relay, not wireless",
+        "manager_phrase": "Users connect to Wi-Fi but never get network access",
+    },
+]
+BUILTIN_TEMPLATES.extend(WIRELESS_TEMPLATES)
+
 
 def builtin_catalog() -> Catalog:
     """The validated built-in set. Import-time safe: validation errors here

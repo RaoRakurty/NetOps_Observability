@@ -131,6 +131,14 @@ class ResolutionMethod(str, Enum):
     FLOW_NAT_STITCH = "flow_nat_stitch"              # rank 5
     CLOUD_ROUTE = "cloud_route"                      # rank 6 — INFERRED
     SHARED_TOKEN = "shared_token"                    # rank 7 — CANDIDATE ONLY
+    # ── wireless (#128 Phase 3, docs/Wireslessdesign.md §8.2) ────────────────
+    WIRELESS_CONTAINMENT = "wireless_containment"    # rank 1: radio/BSSID within AP
+    AP_UPLINK_BINDING = "ap_uplink_binding"          # rank 1: AP ↔ its switchport (the LAN join)
+    WIRELESS_ASSOCIATION = "wireless_association"    # rank 3: observed L2 association (device/controller-reported)
+    CAPWAP_TUNNEL_BINDING = "capwap_tunnel_binding"  # rank 3: observed tunnel endpoint pair
+    WIRELESS_POLICY_RELATION = "wireless_policy_relation"  # rank 6 — INFERRED: WLAN→VLAN says
+    # traffic SHOULD land there; only a flow/lease says it DID. An object held
+    # together only by wireless configuration can never be confirmed.
 
 
 RANK: dict[str, int] = {
@@ -143,6 +151,11 @@ RANK: dict[str, int] = {
     ResolutionMethod.FLOW_NAT_STITCH.value: 5,
     ResolutionMethod.CLOUD_ROUTE.value: 6,
     ResolutionMethod.SHARED_TOKEN.value: 7,
+    ResolutionMethod.WIRELESS_CONTAINMENT.value: 1,
+    ResolutionMethod.AP_UPLINK_BINDING.value: 1,
+    ResolutionMethod.WIRELESS_ASSOCIATION.value: 3,
+    ResolutionMethod.CAPWAP_TUNNEL_BINDING.value: 3,
+    ResolutionMethod.WIRELESS_POLICY_RELATION.value: 6,
 }
 
 
@@ -193,6 +206,24 @@ class EdgeType(str, Enum):
     EVIDENCE_SUPPORTS = "EVIDENCE_SUPPORTS"
     EVIDENCE_CONTRADICTS = "EVIDENCE_CONTRADICTS"
     EVIDENCE_MISSING = "EVIDENCE_MISSING"
+    # ── wireless (#128 Phase 3, docs/Wireslessdesign.md §8.1) ────────────────
+    # corr_path_edges.edge_type is LowCardinality(String): NO schema migration.
+    # AP_MANAGED_BY_CONTROLLER (control/management association) and
+    # AP_TUNNELS_TO_CONTROLLER (client DATA encapsulation) are DIFFERENT edges:
+    # in local switching the first exists and the second does not — and its
+    # absence is a fact of the deployment, never missing evidence.
+    AP_UPLINKS_VIA_PORT = "AP_UPLINKS_VIA_PORT"
+    RADIO_ON_AP = "RADIO_ON_AP"
+    BSSID_ON_RADIO = "BSSID_ON_RADIO"
+    BSSID_SERVES_WLAN = "BSSID_SERVES_WLAN"
+    WLAN_BROADCASTS_SSID = "WLAN_BROADCASTS_SSID"
+    CLIENT_ASSOCIATED_TO_BSSID = "CLIENT_ASSOCIATED_TO_BSSID"
+    SESSION_OF_CLIENT = "SESSION_OF_CLIENT"
+    AP_MANAGED_BY_CONTROLLER = "AP_MANAGED_BY_CONTROLLER"
+    AP_TUNNELS_TO_CONTROLLER = "AP_TUNNELS_TO_CONTROLLER"
+    CONTROLLER_MEMBER_OF_CLUSTER = "CONTROLLER_MEMBER_OF_CLUSTER"
+    SESSION_AUTHENTICATED_BY = "SESSION_AUTHENTICATED_BY"
+    MLO_LINK_OF_SESSION = "MLO_LINK_OF_SESSION"
 
 
 class HopState(str, Enum):
@@ -215,6 +246,11 @@ class Transformation(str, Enum):
 BOUNDARY_OF_KIND: dict[str, str] = {
     "client": "LAN",
     "lan_gateway": "LAN",
+    # #128 (owner ruling 2026-07-26): wired and wireless are ONE LAN domain —
+    # wireless hops render inside the LAN boundary group, no separate WIRELESS
+    # zone. The endpoint `kind` still distinguishes them for fault localization.
+    "wireless_client": "LAN",
+    "wireless_access": "LAN",
     "wan_edge": "SD-WAN",
     "transit": "CARRIER",
     "nva": "CLOUD",
