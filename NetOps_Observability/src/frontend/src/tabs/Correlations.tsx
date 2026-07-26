@@ -78,7 +78,8 @@ const QUAL_RANK: Record<Qual, number> = { strong: 2, candidate: 1, weak: 0 };
 const GROUND_TONE: Record<string, string> = { seam: "#D97706", "seam+topo": "#D97706", topo: "#2563EB", none: "#8A93A6" };
 // NOC labels for the triage list (no engine vocabulary).
 const VERDICT_NOC: Record<string, string> = { confirmed: "Confirmed", suspected: "Suspected", undetermined: "Not confirmed" };
-const GROUND_NOC: Record<string, string> = { seam: "Boundary", "seam+topo": "Boundary + path", topo: "Same path", none: "—" };
+// "Handoff", never "boundary" — boundary is the path-spine zone word (labels.ts).
+const GROUND_NOC: Record<string, string> = { seam: "Handoff", "seam+topo": "Handoff + path", topo: "Same path", none: "—" };
 
 // "Notified via" chips (#103 UX-1) — compact per-destination badges. Short,
 // NOC-recognized handles in the cell (full product name + ticket + state on the

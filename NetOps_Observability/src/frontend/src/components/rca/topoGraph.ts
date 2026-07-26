@@ -469,7 +469,9 @@ export function buildTopoGraph(
     const ownerColor = seamOwnerColor(seam.control_plane_owner);
     node({ id: "seam", x: col * COL, y: 0, data: {
       kind: "gateway", tone: ownerColor,
-      label: view === "debug" ? (seam.seam_id || "boundary") : (seam.display_name || "Provider boundary"),
+      // Debug keeps the raw engine word ("seam"); operator view says "handoff" —
+      // "boundary" is reserved for the path-spine zones (labels.ts relationLabel).
+      label: view === "debug" ? (seam.seam_id || "seam") : (seam.display_name || "Provider handoff"),
       sub: `${view === "debug" ? (seam.control_plane_owner ?? "?") : seamOwnerLabel(seam.control_plane_owner)}${vis ? " · " + (view === "debug" ? vis : visibilityLabel(seam.visibility)) : ""}`,
       hasIn: false,
     } });

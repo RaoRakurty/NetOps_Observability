@@ -73,7 +73,7 @@ describe("RcaTimeImpact — measurement-gap model", () => {
     mockApi(gapFixture);
     const { default: Card } = await import("./RcaTimeImpact");
     render(<Card correlationId="abc" />);
-    expect(await screen.findByText(/Seam: DIA · Owner: Network · Suspected/)).toBeTruthy();
+    expect(await screen.findByText(/Seam: ISP · Owner: Network · Suspected/)).toBeTruthy();
     expect(screen.getByText(/Elapsed from first impact signal/)).toBeTruthy();
     expect(screen.getByText("Inferred onset")).toBeTruthy();
   });

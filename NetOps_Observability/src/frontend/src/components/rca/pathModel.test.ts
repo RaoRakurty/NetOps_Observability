@@ -163,7 +163,7 @@ describe("boundaries & seam ownership", () => {
 
 describe("cloud attachment flavor", () => {
   it("renders only the known backend vocabulary — never guesses", () => {
-    expect(attachmentLabel("dia")).toBe("DIA breakout");
+    expect(attachmentLabel("dia")).toBe("ISP breakout");
     expect(attachmentLabel("direct_connect")).toBe("Direct Connect");
     expect(attachmentLabel("expressroute")).toBe("ExpressRoute");
     expect(attachmentLabel("ipsec_vpn")).toBe("IPsec VPN");

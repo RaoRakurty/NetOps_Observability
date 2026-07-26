@@ -84,9 +84,11 @@ function fmtElapsed(ms: number): string {
   return `${h}h ${m - h * 60}m`;
 }
 const confidenceWord = (tier: string) => tier === "confirmed" ? "Confirmed" : tier === "suspected" ? "Suspected" : "Inferred";
-// Grounded seam type → operator display (the WHERE of the fault).
+// Grounded seam type → operator display (the WHERE of the fault). DIA displays
+// as "ISP" (owner 2026-07-26; labels.ts SEAM_TYPE_LABEL is the canonical map —
+// this local map only adds the extra values incident_time_metrics can carry).
 const SEAM_LABEL: Record<string, string> = {
-  DIA: "DIA", SDWAN: "SD-WAN", "SD-WAN": "SD-WAN", VPN: "VPN", DX: "Direct Connect",
+  DIA: "ISP", SDWAN: "SD-WAN", "SD-WAN": "SD-WAN", VPN: "VPN", DX: "Direct Connect",
   EXPRESSROUTE: "ExpressRoute", INTERCONNECT: "Interconnect", CLOUD_BACKBONE: "Cloud backbone",
   LAN: "LAN", WAN: "WAN", DC: "Data center", CLOUD: "Cloud",
 };

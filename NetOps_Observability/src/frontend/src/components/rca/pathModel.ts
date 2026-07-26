@@ -71,7 +71,9 @@ const LEGACY_CANON: Record<string, CanonicalSegment> = {
 // Backend cloud-attachment vocabulary → NOC display flavor. ONLY these values
 // render; anything else is omitted (never guessed).
 const ATTACHMENT_LABEL: Record<string, string> = {
-  dia: "DIA breakout", dia_breakout: "DIA breakout", sdwan_dia: "DIA breakout",
+  // "ISP breakout", not "DIA breakout" — DIA displays as ISP (owner 2026-07-26,
+  // labels.ts SEAM_TYPE_LABEL).
+  dia: "ISP breakout", dia_breakout: "ISP breakout", sdwan_dia: "ISP breakout",
   direct_connect: "Direct Connect", dx: "Direct Connect",
   expressroute: "ExpressRoute", express_route: "ExpressRoute",
   ipsec_vpn: "IPsec VPN", ipsec: "IPsec VPN", vpn: "IPsec VPN",

@@ -540,7 +540,7 @@ export const SEAM_OWNER_COLOR: Record<string, string> = {
 export function seamOwnerColor(o?: string): string {
   return SEAM_OWNER_COLOR[o ?? "unknown"] ?? SEAM_OWNER_COLOR.unknown;
 }
-// Seam visibility → how much we can see across the boundary.
+// Seam visibility → how much we can see across the handoff.
 export function visibilityLabel(v?: string): string {
   switch (v) {
     case "partial": return "limited visibility";
@@ -549,9 +549,35 @@ export function visibilityLabel(v?: string): string {
     default: return v ? `${v} visibility` : "";
   }
 }
-// grounding_kind → how the evidence relates (operator phrasing).
+// grounding_kind → how the evidence relates (operator phrasing). "Handoff", not
+// "boundary": boundary is the path-spine ZONE word (LAN/WAN/CARRIER/CLOUD) and
+// reusing it for seams caused a real owner-level confusion (2026-07-26) — the
+// two vocabularies must never collide again.
 export function relationLabel(kind?: string): string {
-  return kind === "seam" ? "related through provider boundary" : "related on the same path / device area";
+  return kind === "seam" ? "related through a provider handoff" : "related on the same path / device area";
+}
+
+// Seam type → short operator display (owner 2026-07-26: KEEP the short seam
+// names — no long "demarc" phrases — but "DIA" is telco-sales jargon; operators
+// know that seam as their ISP handoff). One source of truth; raw values pass
+// through so an unknown type is never hidden.
+export const SEAM_TYPE_LABEL: Record<string, string> = {
+  DX: "DX", VPN: "VPN", SDWAN: "SD-WAN", "SD-WAN": "SD-WAN",
+  DIA: "ISP", CLOUD_BACKBONE: "Cloud backbone",
+};
+export function seamTypeLabel(t?: string): string {
+  return t ? (SEAM_TYPE_LABEL[t.toUpperCase()] ?? t) : "";
+}
+// Seam type → domain umbrella (owner 2026-07-26): WAN is the umbrella holding
+// every enterprise external handoff (DX · ISP · SD-WAN · VPN); the cloud
+// backbone is the provider's own. LAN and DC are DOMAINS the enterprise owns
+// end-to-end — they have no handoff, so no seam ever carries them.
+export const SEAM_UMBRELLA: Record<string, string> = {
+  DX: "WAN", VPN: "WAN", SDWAN: "WAN", "SD-WAN": "WAN", DIA: "WAN",
+  CLOUD_BACKBONE: "Cloud",
+};
+export function seamUmbrella(t?: string): string {
+  return t ? (SEAM_UMBRELLA[t.toUpperCase()] ?? "") : "";
 }
 
 // --- Affected scope (item 1) -------------------------------------------------

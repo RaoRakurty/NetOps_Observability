@@ -181,6 +181,45 @@ must degrade during failover or the health score lies exactly when it matters);
 the bootstrap engine (§4.1) suggests groupings (two DX circuits in one
 VRF/route-table, a VPN whose routes shadow DX prefixes → "members of one group?").
 
+### 4.0 Definition, decision rules, and display layer (owner review, 2026-07-26)
+
+Re-affirmed after a full owner walkthrough — **the five types stay FINAL**. The
+walkthrough distilled the model into a definition + four rules, and separated the
+engine vocabulary from the operator-facing display:
+
+> **A seam is where packet-forwarding responsibility transfers between parties.**
+> It exists precisely where three things change at once: who controls the
+> forwarding, what you can see, and who you call when it breaks.
+
+1. **Different party on each side → seam** (DX, ISP breakout, SD-WAN handoff,
+   VPN over internet, cloud backbone).
+2. **Same party on both sides → a DOMAIN, not a seam.** LAN (wired *and*
+   wireless — owner ruling 2026-07-26) and DC are enterprise-owned domains:
+   faults localize to devices, owner is always Internal, no seam row ever exists
+   for them. A DC's own carrier circuits ARE seams — anchored at the DC edge.
+3. **Boxes on a seam are instrumentation, not seams** (TGW/VGW, NVA, NAT, LB).
+4. **Topology variation lives in the instance, never in the type** (redundancy
+   groups; five types stay five).
+
+Test for ever adding a type: distinct control plane AND failure domain AND
+observability blind spot AND probe strategy AND someone different to call. Any
+"same as an existing type" answer ⇒ instance attribute, not a type.
+
+**Display layer** (engine identifiers frozen; user-facing only — the
+copilot→Iris precedent): `DIA` displays as **"ISP"** (the acronym is
+telco-sales jargon; the thing is the branch's ISP handoff). **WAN is the display
+umbrella** holding DX · ISP · SD-WAN · VPN; `CLOUD_BACKBONE` displays under
+Cloud. Seam-related UI copy says **"handoff"**, never "boundary" — "boundary"
+is reserved for the path-spine zones (LAN/WAN/CARRIER/CLOUD) and the collision
+between the two words caused a real owner-level confusion on 2026-07-26.
+Canonical maps: `labels.ts` `SEAM_TYPE_LABEL` / `SEAM_UMBRELLA`.
+
+Considered and **rejected**: renaming seams to "Demarc" (right instinct, longer
+labels than the confusion warranted); merging DIA into DX (loses the ISP-vs-
+carrier verdict distinction and the bootstrap R1 split); renaming DX to "WAN"
+(recreates the seam/zone word collision); a CLOUD_EDGE zone split (owner: cloud
+edge + cloud are one zone).
+
 ### 4.1 Seam bootstrap engine — P1, required (owner, 2026-06-11)
 
 An empty seam inventory makes the grounding gate ground against nothing
