@@ -45,7 +45,11 @@ rows added below. Corrections from the audit are folded in.
 
 A provider is "at level" only when each drill below has been run against it
 live, watched rendered (Service View + RCA), and its golden log lines are
-captured as test fixtures:
+captured as test fixtures. The counter half is mechanized (tracker #120):
+`src/correlation/cloud_drill_verify.py --provider <p> --drill <n>` checks the
+expected signal kinds moved in the drill window (`--list` prints the full
+matrix; `cloud_drill_matrix.py` is the contract, its tests pin every kind and
+signature to the code):
 
 1. **Host stop/start** — power_state truth (stopped ≠ broken), metrics stop,
    dashboards degrade honestly, recover on start. (AWS ✅ · Azure ✅ · GCP 🕳)
