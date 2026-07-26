@@ -137,6 +137,22 @@ var modules = []Module{
 		ResponseModes: []string{"module_health_summary", "evidence_explanation"},
 	},
 	{
+		// #128 Phase 6. Sensitivity is SENSITIVE by design even though v1's
+		// tools are PII-free inventory reads: the module's domain includes
+		// client MAC/username/location history, and the sensitivity tag must
+		// reflect the domain so the redaction posture is already right when
+		// the client-history tools land (report §18/Q5).
+		ID: "wireless", DisplayName: "Wireless",
+		Description:        "Wireless access domain: controllers, APs, radios, WLANs and (future) client sessions/onboarding. v1 answers inventory and health; per-client history is not yet exposed to the assistant.",
+		Entities:           []string{"wireless_controller", "access_point", "radio", "wlan", "ssid"},
+		QuestionCategories: []string{"wireless_inventory", "ap_health", "controller_state"},
+		Tools:              []string{"get_wireless_ap_inventory", "get_wireless_controllers"},
+		Permissions:        []string{"infrastructure:read"},
+		Freshness:          FreshnessLive, Sensitivity: SensitivitySensitive, Availability: AvailabilityStable,
+		CrossModule:   []string{"correlations_rca", "topology", "telemetry"},
+		ResponseModes: []string{"module_health_summary"},
+	},
+	{
 		ID: "telemetry", DisplayName: "Telemetry",
 		Description:        "Device telemetry: metric anomalies, syslog, SNMP traps, probe health, interface health.",
 		Entities:           []string{"metric", "syslog", "snmp_trap", "probe", "interface"},

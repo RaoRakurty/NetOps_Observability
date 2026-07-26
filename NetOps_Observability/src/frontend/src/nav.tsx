@@ -9,6 +9,7 @@ import DeviceMonitoring from "./pages/DeviceMonitoring";
 import InterfacePerformance from "./pages/InterfacePerformance";
 import PortsWorkbench from "./pages/PortsWorkbench";
 import NmsIntegrations from "./pages/NmsIntegrations";
+import Wireless from "./pages/Wireless";
 import BgpOspf from "./pages/BgpOspf";
 import Troubleshooting from "./pages/Troubleshooting";
 import ThreatDetection from "./pages/ThreatDetection";
@@ -203,6 +204,10 @@ export const NAV: NavSection[] = [
       // intelligence (Meraki / Catalyst / vManage / NDFC / Versa / Prime) as
       // normalized RCA evidence. Dormant unless FEATURE_NMS_INTEGRATIONS.
       { id: "nms", label: "NMS Integrations", group: "Inventory", render: () => <NmsIntegrations /> },
+      // Wireless canonical inventory (#128): controllers, APs + radios, WLANs.
+      // Wired + wireless are ONE LAN domain (owner ruling) — this is the
+      // wireless VIEW of it, filled by controller connectors (Catalyst 9800).
+      { id: "wireless", label: "Wireless", group: "Inventory", render: () => <Wireless /> },
       // Dashboards — the device-monitoring board suite (see
       // docs/design/device-monitoring-dashboards.md).
       { id: "monitoring", label: "Device Monitoring", group: "Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },

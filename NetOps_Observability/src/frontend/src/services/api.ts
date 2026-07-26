@@ -2558,6 +2558,10 @@ export const api = {
   // only. All routes 404 while FEATURE_NMS_INTEGRATIONS is off (dormant).
   nmsConnectors: () => request<{ connectors: NmsConnector[] }>("/api/nms/connectors"),
   nmsIntegrations: () => request<{ integrations: NmsIntegration[] }>("/api/nms/integrations"),
+  // Wireless canonical inventory (#128): read-only, tenant-scoped.
+  wirelessControllers: () => request<WirelessController[]>("/api/wireless/controllers"),
+  wirelessAPs: () => request<WirelessAP[]>("/api/wireless/aps"),
+  wirelessWLANs: () => request<WirelessWLAN[]>("/api/wireless/wlans"),
   createNmsIntegration: (body: NmsIntegrationInput) =>
     request<NmsIntegration>("/api/nms/integrations", { method: "POST", body: JSON.stringify(body) }),
   updateNmsIntegration: (id: string, body: Partial<NmsIntegrationInput>) =>
@@ -3442,6 +3446,77 @@ export type IntegrationConfig = {
 export type IntegrationsResponse = { integrations: IntegrationConfig[]; inbound_enabled: boolean };
 
 // ── NMS vendor-controller integrations (#95) ─────────────────────────────────
+
+// Wireless canonical inventory (#128) — mirrors src/backend/wireless/model.go
+// JSON tags (the read-only /api/wireless/* surface).
+export type WirelessRadio = {
+  radio_id: string;
+  ap_id: string;
+  slot: number;
+  band?: string;
+  channel?: number;
+  admin_state?: string;
+  oper_state?: string;
+  generation?: string;
+  mlo_capable?: boolean;
+};
+
+export type WirelessAP = {
+  ap_id: string;
+  name: string;
+  mac_base?: string;
+  serial?: string;
+  model?: string;
+  vendor?: string;
+  controller_ref?: string;
+  site_id?: string;
+  uplink_switch_ref?: string;
+  uplink_port_ref?: string;
+  mgmt_address?: string;
+  forwarding_mode?: string;
+  radios?: WirelessRadio[];
+  first_seen?: string;
+  last_seen?: string;
+  stale?: boolean;
+};
+
+export type WirelessControllerMember = {
+  member_id: string;
+  controller_id: string;
+  name: string;
+  member_state: string;
+  redundancy_role: string;
+};
+
+export type WirelessController = {
+  controller_id: string;
+  name: string;
+  vendor: string;
+  model?: string;
+  kind?: string;
+  cluster_role: string;
+  management_address?: string;
+  forwarding_default?: string;
+  visibility?: string;
+  members?: WirelessControllerMember[];
+  first_seen?: string;
+  last_seen?: string;
+  stale?: boolean;
+};
+
+export type WirelessWLAN = {
+  wlan_id: string;
+  profile_name: string;
+  ssid_name: string;
+  ssid_ref?: string;
+  controller_ref?: string;
+  security_mode?: string;
+  auth_method?: string;
+  forwarding_mode?: string;
+  mobility_domain_ref?: string;
+  enabled: boolean;
+  stale?: boolean;
+};
 
 export type NmsConnector = {
   vendor: string;

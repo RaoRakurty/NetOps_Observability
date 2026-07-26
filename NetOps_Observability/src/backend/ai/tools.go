@@ -427,6 +427,12 @@ func Tools(ds DataSource) *ToolRegistry {
 	if wds, ok := ds.(WindowDataSource); ok {
 		reg.add(incidentHistoryTool{wds})
 	}
+	// Wireless (#128 Phase 6): PII-free inventory reads only — the client-
+	// history tools stay unregistered until the pseudonymization contract.
+	if wl, ok := ds.(WirelessDataSource); ok {
+		reg.add(wirelessAPInventoryTool{wl})
+		reg.add(wirelessControllersTool{wl})
+	}
 	if mds, ok := ds.(ModuleDataSource); ok {
 		for _, mt := range moduleTools {
 			reg.add(moduleReadTool{

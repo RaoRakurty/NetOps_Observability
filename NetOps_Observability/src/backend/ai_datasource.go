@@ -664,3 +664,68 @@ func shortID(id string) string {
 	}
 	return id
 }
+
+// ── Wireless seam (#128 Phase 6 — ai.WirelessDataSource) ─────────────────────
+//
+// Reads ride the SAME tenant-enforced wireless store the REST surface uses
+// (mem tenant-keyed / PG FORCE-RLS; TestWirelessCrossTenantIsolation), scoped
+// by the caller's claims — never the scope string. Projections are PII-free
+// by construction: no client MAC, username or session data crosses this seam.
+
+func (d aiDataSource) ListWirelessAPs(ctx context.Context, _ ai.Principal, limit int) ([]ai.WirelessAPSummary, error) {
+	if d.srv.wireless == nil {
+		return nil, nil
+	}
+	tenant, cross := principalTenant(d.claims)
+	aps, err := d.srv.wireless.ListAPs(ctx, tenant, cross)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(aps) > limit {
+		aps = aps[:limit]
+	}
+	out := make([]ai.WirelessAPSummary, 0, len(aps))
+	for _, ap := range aps {
+		down := 0
+		for _, r := range ap.Radios {
+			if r.OperState == "down" {
+				down++
+			}
+		}
+		out = append(out, ai.WirelessAPSummary{
+			Name: aiFirst(ap.Name, ap.APID), Model: ap.Model, SiteID: ap.SiteID,
+			ControllerRef: ap.ControllerRef,
+			RadioCount:    len(ap.Radios), RadiosDown: down, Stale: ap.Stale,
+			UplinkSwitch: ap.UplinkSwitchRef, UplinkPort: ap.UplinkPortRef,
+		})
+	}
+	return out, nil
+}
+
+func (d aiDataSource) ListWirelessControllers(ctx context.Context, _ ai.Principal) ([]ai.WirelessControllerSummary, error) {
+	if d.srv.wireless == nil {
+		return nil, nil
+	}
+	tenant, cross := principalTenant(d.claims)
+	cs, err := d.srv.wireless.ListControllers(ctx, tenant, cross)
+	if err != nil {
+		return nil, err
+	}
+	aps, err := d.srv.wireless.ListAPs(ctx, tenant, cross)
+	if err != nil {
+		return nil, err
+	}
+	apCount := map[string]int{}
+	for _, ap := range aps {
+		apCount[ap.ControllerRef]++
+	}
+	out := make([]ai.WirelessControllerSummary, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, ai.WirelessControllerSummary{
+			Name: aiFirst(c.Name, c.ControllerID), Vendor: c.Vendor,
+			ClusterRole: string(c.ClusterRole), Visibility: c.Visibility,
+			Members: len(c.Members), APCount: apCount[c.ControllerID], Stale: c.Stale,
+		})
+	}
+	return out, nil
+}
