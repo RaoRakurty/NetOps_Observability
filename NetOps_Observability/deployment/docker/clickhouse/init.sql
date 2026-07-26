@@ -206,7 +206,9 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
                          'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6),  -- C4 verdict gate
     source_clock_quality LowCardinality(String) DEFAULT 'unknown', -- ntp|ptp|free_running|unknown
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
-                         'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9),
+                         'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,
+                         'wireless_controller'=10,'access_point'=11,'radio'=12,
+                         'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16),
     entity_id      String,
     entity_tokens  Array(String),
     site           LowCardinality(String) DEFAULT '',
@@ -257,7 +259,9 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
                          'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6),
     source_clock_quality LowCardinality(String) DEFAULT 'unknown',
     entity_type    Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,
-                         'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9),
+                         'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,
+                         'wireless_controller'=10,'access_point'=11,'radio'=12,
+                         'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16),
     entity_id      String,
     entity_tokens  Array(String),
     site           LowCardinality(String) DEFAULT '',
@@ -846,5 +850,174 @@ TTL computed_at + INTERVAL 14 DAY
 SETTINGS index_granularity = 8192;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_iso_path_baselines ON netops.path_baselines
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+
+-- ---------------------------------------------------------------------------
+-- Wireless per-client event tier (#128 Phase 1, docs/Wireslessdesign.md §20).
+--
+-- MIRRORED IN src/backend/wireless_schema.go — the API converges these same
+-- statements on every boot (ensureCHRowPolicies). KEEP THEM IN LOCKSTEP.
+--
+-- Three-tier storage split: inventory → Postgres (migration 0030); aggregate
+-- series → VictoriaMetrics (per-AP / per-radio ONLY); per-client events →
+-- these tables. THE RULE: no per-client series in VictoriaMetrics, ever — a
+-- client MAC is a ClickHouse column, never a metric label. Per-client RF is
+-- sampled at event boundaries, never continuously.
+--
+-- Row policies are STRICT (the corr_current model): client sessions/RF are
+-- per-tenant PII — an untagged row is platform-only, never shared.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS netops.wireless_sessions
+(
+    tenant_id           LowCardinality(String) DEFAULT '',
+    session_id          String,
+    client_mac          String,
+    mld_mac             String DEFAULT '',
+    client_id           String DEFAULT '',
+    identity_confidence LowCardinality(String) DEFAULT 'unknown',
+    identity_method     LowCardinality(String) DEFAULT '',
+    bssid               String,
+    ap_ref              String DEFAULT '',
+    radio_ref           String DEFAULT '',
+    wlan_ref            String DEFAULT '',
+    ssid_name           LowCardinality(String) DEFAULT '',
+    username            String DEFAULT '',
+    ip_v4               String DEFAULT '',
+    ip_v6               String DEFAULT '',
+    is_mlo              Bool DEFAULT false,
+    link_count          UInt8 DEFAULT 1,
+    assoc_start         DateTime64(3),
+    assoc_end           Nullable(DateTime64(3)),
+    end_reason          LowCardinality(String) DEFAULT '',
+    observer_id         LowCardinality(String) DEFAULT '',
+    collection_path     LowCardinality(String) DEFAULT 'via_controller',
+    data_class          LowCardinality(String) DEFAULT 'live',
+    ingest_ts           DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMMDD(assoc_start))
+ORDER BY (tenant_id, session_id)
+TTL toDateTime(assoc_start) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.wireless_onboarding_episodes
+(
+    tenant_id        LowCardinality(String) DEFAULT '',
+    episode_id       String,
+    session_ref      String DEFAULT '',
+    client_mac       String,
+    bssid            String,
+    ap_ref           String DEFAULT '',
+    wlan_ref         String DEFAULT '',
+    attempt_start    DateTime64(3),
+    phases           String DEFAULT '[]',
+    terminal_phase   LowCardinality(String) DEFAULT '',
+    terminal_outcome LowCardinality(String) DEFAULT 'unknown',
+    total_duration_ms UInt32 DEFAULT 0,
+    observer_id      LowCardinality(String) DEFAULT '',
+    collection_path  LowCardinality(String) DEFAULT 'via_controller',
+    data_class       LowCardinality(String) DEFAULT 'live',
+    ingest_ts        DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMMDD(attempt_start))
+ORDER BY (tenant_id, episode_id)
+TTL toDateTime(attempt_start) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.wireless_roams
+(
+    tenant_id       LowCardinality(String) DEFAULT '',
+    roam_id         String,
+    client_mac      String,
+    session_ref     String DEFAULT '',
+    from_bssid      String DEFAULT '',
+    to_bssid        String,
+    from_ap_ref     String DEFAULT '',
+    to_ap_ref       String DEFAULT '',
+    roam_type       LowCardinality(String) DEFAULT 'unknown',
+    duration_ms     UInt32 DEFAULT 0,
+    ts              DateTime64(3),
+    observer_id     LowCardinality(String) DEFAULT '',
+    collection_path LowCardinality(String) DEFAULT 'via_controller',
+    data_class      LowCardinality(String) DEFAULT 'live',
+    ingest_ts       DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
+ORDER BY (tenant_id, roam_id)
+TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.wireless_mlo_links
+(
+    tenant_id         LowCardinality(String) DEFAULT '',
+    link_id           String,
+    session_ref       String,
+    link_index        UInt8 DEFAULT 0,
+    band              LowCardinality(String) DEFAULT '',
+    radio_ref         String DEFAULT '',
+    bssid_ref         String DEFAULT '',
+    link_state        LowCardinality(String) DEFAULT 'active',
+    rssi_dbm          Float32 DEFAULT 0,
+    snr_db            Float32 DEFAULT 0,
+    mcs               UInt8 DEFAULT 0,
+    nss               UInt8 DEFAULT 0,
+    channel           UInt16 DEFAULT 0,
+    channel_width_mhz UInt16 DEFAULT 0,
+    valid_from        DateTime64(3),
+    valid_to          Nullable(DateTime64(3)),
+    data_class        LowCardinality(String) DEFAULT 'live',
+    ingest_ts         DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(ingest_ts)
+PARTITION BY (tenant_id, toYYYYMM(valid_from))
+ORDER BY (tenant_id, session_ref, link_id)
+TTL toDateTime(valid_from) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE TABLE IF NOT EXISTS netops.wireless_client_rf
+(
+    tenant_id       LowCardinality(String) DEFAULT '',
+    client_mac      String,
+    session_ref     String DEFAULT '',
+    link_ref        String DEFAULT '',
+    bssid           String DEFAULT '',
+    ap_ref          String DEFAULT '',
+    trigger         LowCardinality(String) DEFAULT '',
+    rssi_dbm        Float32 DEFAULT 0,
+    snr_db          Float32 DEFAULT 0,
+    mcs             UInt8 DEFAULT 0,
+    nss             UInt8 DEFAULT 0,
+    tx_rate_mbps    Float32 DEFAULT 0,
+    rx_rate_mbps    Float32 DEFAULT 0,
+    retry_pct       Float32 DEFAULT 0,
+    ts              DateTime64(3),
+    observer_id     LowCardinality(String) DEFAULT '',
+    collection_path LowCardinality(String) DEFAULT 'via_controller',
+    data_class      LowCardinality(String) DEFAULT 'live',
+    ingest_ts       DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY (tenant_id, toYYYYMMDD(ts))
+ORDER BY (tenant_id, client_mac, ts)
+TTL toDateTime(ts) + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_sessions ON netops.wireless_sessions
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_onboarding_episodes ON netops.wireless_onboarding_episodes
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_roams ON netops.wireless_roams
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_mlo_links ON netops.wireless_mlo_links
+    USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
+    TO ALL;
+CREATE ROW POLICY IF NOT EXISTS tenant_iso_wireless_client_rf ON netops.wireless_client_rf
     USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__'
     TO ALL;

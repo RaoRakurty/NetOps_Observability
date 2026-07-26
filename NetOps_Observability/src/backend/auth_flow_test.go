@@ -61,6 +61,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
 		securitySettings: ss, loginThrottle: newLoginThrottle(), sessions: sessStore,
 		audit: au, startedAt: time.Now().UTC(),
+		wireless: newMemWirelessStore(), // #128: always set, like the runtime wiring
 	}
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings

@@ -73,6 +73,7 @@ type chRetentionDays struct {
 	CloudCosts   int // netops.cloud_costs — billing context, deliberately long
 	SvcRollup    int // netops.svc_flow_rollup_1m
 	PathBaseline int // netops.path_baselines — recomputed, cheap to lose
+	Wireless     int // netops.wireless_* per-client event tier (#128) — one knob, five tables
 }
 
 // chRetentionDefaults mirrors deployment/docker/clickhouse/init.sql. Keep the
@@ -92,6 +93,7 @@ func chRetentionDefaults() chRetentionDays {
 		CloudCosts:   400, // ~13 months: year-over-year cost context
 		SvcRollup:    90,
 		PathBaseline: 14,
+		Wireless:     30, // per-client events are PII (report B5) — short by default
 	}
 }
 
@@ -129,6 +131,7 @@ func chRetentionConfig() chRetentionDays {
 		CloudCosts:   knob("CH_CLOUD_COST_RETENTION_DAYS", d.CloudCosts),
 		SvcRollup:    knob("CH_SVC_ROLLUP_RETENTION_DAYS", d.SvcRollup),
 		PathBaseline: knob("CH_PATH_BASELINE_RETENTION_DAYS", d.PathBaseline),
+		Wireless:     knob("CH_WIRELESS_RETENTION_DAYS", d.Wireless),
 	}
 }
 
@@ -161,6 +164,14 @@ func chRetentionTables() []chRetentionTable {
 		{"cloud_costs", "day", func(d chRetentionDays) int { return d.CloudCosts }},
 		{"svc_flow_rollup_1m", "minute", func(d chRetentionDays) int { return d.SvcRollup }},
 		{"path_baselines", "computed_at", func(d chRetentionDays) int { return d.PathBaseline }},
+		// #128 wireless per-client event tier (wireless_schema.go) — one knob:
+		// sessions and their derivatives age together, and the 30-day default
+		// is a PII decision (report B5/Q4), not merely a cost one.
+		{"wireless_sessions", "toDateTime(assoc_start)", func(d chRetentionDays) int { return d.Wireless }},
+		{"wireless_onboarding_episodes", "toDateTime(attempt_start)", func(d chRetentionDays) int { return d.Wireless }},
+		{"wireless_roams", "toDateTime(ts)", func(d chRetentionDays) int { return d.Wireless }},
+		{"wireless_mlo_links", "toDateTime(valid_from)", func(d chRetentionDays) int { return d.Wireless }},
+		{"wireless_client_rf", "toDateTime(ts)", func(d chRetentionDays) int { return d.Wireless }},
 	}
 }
 

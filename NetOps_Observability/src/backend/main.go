@@ -128,6 +128,7 @@ type server struct {
 	integrations   *integrationStore     // integration-platform persistence (nil on file backend)
 	providers      *integration.Registry // inbound provider translators (registry)
 	nms            *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
+	wireless       wirelessStore         // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
 	intMetrics     *integrationMetrics   // integration-platform Prometheus counters
 	vault          *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv         *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
@@ -600,6 +601,14 @@ func newServer() *server {
 			// plaintext in a map that dies with the process.
 			srv.nms = newNMSRuntime(nonDurableNMSStore{newMemNMSStore()})
 		}
+	}
+	// Wireless canonical inventory (#128 Phase 1, migration 0030): PG-backed on
+	// postgres (FORCE-RLS), in-memory on the file backend (dev/tests). Always
+	// set — the read APIs render an empty inventory until a connector runs.
+	if ps, ok := backend.(*pgStore); ok {
+		srv.wireless = newPGWirelessStore(ps.db)
+	} else {
+		srv.wireless = newMemWirelessStore()
 	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
@@ -1332,6 +1341,14 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/nms/integrations", s.handleNMSIntegrations)
 	mux.HandleFunc("/api/nms/integrations/", s.handleNMSIntegrationItem)
 	mux.HandleFunc("/api/nms/webhook/", s.handleNMSWebhook)
+	// Wireless canonical inventory (#128 Phase 1): read-only surface, always
+	// registered (empty inventory until a connector runs).
+	mux.HandleFunc("/api/wireless/controllers", s.handleWirelessControllers)
+	mux.HandleFunc("/api/wireless/controllers/", s.handleWirelessControllers)
+	mux.HandleFunc("/api/wireless/aps", s.handleWirelessAPs)
+	mux.HandleFunc("/api/wireless/aps/", s.handleWirelessAPs)
+	mux.HandleFunc("/api/wireless/wlans", s.handleWirelessWLANs)
+	mux.HandleFunc("/api/wireless/bssids", s.handleWirelessBSSIDs)
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)

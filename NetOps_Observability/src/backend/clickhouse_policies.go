@@ -93,6 +93,10 @@ func chConvergeStmts() []string {
 	// lenient policy — see that file for why). Same converge-on-boot contract.
 	stmts = append(stmts, svcRollupSchemaDDL()...)
 	stmts = append(stmts, pathBaselineSchemaDDL()...)
+	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
+	// policies — client MAC/session data is per-tenant PII). Same converge-on-
+	// boot contract; init.sql carries identical DDL for fresh installs.
+	stmts = append(stmts, wirelessSchemaDDL()...)
 	// F-58 retention contract for the TELEMETRY family. Must come LAST: every
 	// MODIFY TTL above targets a table the statements before it create, and a
 	// converge list that ALTERs before it CREATEs fails on a fresh volume.

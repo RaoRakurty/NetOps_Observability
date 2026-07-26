@@ -509,20 +509,23 @@ bssids                    bssid, tenant_id, radio_ref, wlan_ref, ap_ref,
 
 ### 7.3 `entity_id` string forms in signals
 
-The engine derives grounding from `entity_id` *structure*: `device_part()` splits
-on `:`, and `identity_refs()` treats the left of `:` as a device **[V]**
-(`engine.py:194-219`). Wireless ids **must** exploit this:
+The engine derives grounding from `entity_id` *structure*: `device_part()` takes
+everything left of the **first** `:` **[V]** (`engine.py:242-253`). That exact
+behavior forced a correction during Phase-1 build (2026-07-26): a `ap:<id>:…`
+form would ground every AP to the literal estate-wide token `"ap"` — the #99
+weld bug. The prefix therefore joins with a **hyphen**, so it is part of the
+device token (implemented + regression-tested in `wireless/identity.go`):
 
 ```
-access_point         ap:<ap_id>
-radio                ap:<ap_id>:radio<slot>       → device_part = "ap:<ap_id>"  ✓
-bssid                ap:<ap_id>:bssid:<mac>       → device_part = "ap:<ap_id>"  ✓
-ap uplink interface  <switch_id>:<ifname>         → device_part = "<switch_id>" ✓ ← the LAN join
-wireless_controller  wlc:<controller_id>
-controller member    wlc:<controller_id>:<member> → device_part = "wlc:<...>"   ✓
-wireless_client      wcl:<client_id>
-wireless_session     wcl:<client_id>:<session_id> → device_part = "wcl:<...>"   ✓
-wlan                 wlan:<wlan_id>
+access_point         ap-<ap_id>
+radio                ap-<ap_id>:radio<slot>        → device_part = "ap-<ap_id>"  ✓
+bssid                ap-<ap_id>:bssid-<mac>        → device_part = "ap-<ap_id>"  ✓
+ap uplink interface  <switch_id>:<ifname>          → device_part = "<switch_id>" ✓ ← the LAN join
+wireless_controller  wlc-<controller_id>
+controller member    wlc-<controller_id>:<member>  → device_part = "wlc-<...>"   ✓
+wireless_client      wcl-<client_id>
+wireless_session     wcl-<client_id>:<session_id>  → device_part = "wcl-<...>"   ✓
+wlan                 wlan-<wlan_id>
 ```
 
 This is not cosmetic: it means an AP-radio signal and an AP-device signal ground

@@ -29,7 +29,12 @@ ATTRS_MAX_BYTES = 4096  # §2.1: attrs JSON bounded
 # Grounding-token guard (#99 R2): token prefixes that scope WIDER than one
 # entity. See Signal.__post_init__ — constructing a signal with one of these
 # in entity_tokens dead-letters loudly (tests and CI included).
-_FORBIDDEN_TOKEN_PREFIXES: frozenset[str] = frozenset({"tenant", "org", "global", "all"})
+# ssid/wlan (#128 Q2, owner-approved 2026-07-26): an SSID is broadcast by every
+# AP in the estate — as a grounding token it would weld every unrelated
+# wireless incident into one object, the exact #99 bug class this guard exists
+# for. SSID/WLAN are filters and display groupings, never co-location evidence.
+_FORBIDDEN_TOKEN_PREFIXES: frozenset[str] = frozenset(
+    {"tenant", "org", "global", "all", "ssid", "wlan"})
 
 
 class Source(str, Enum):
@@ -83,6 +88,15 @@ class EntityType(str, Enum):
     PREFIX = "prefix"
     APP = "app"                       # #81 P3G: an application (cloud-app observability)
     CLOUD_RESOURCE = "cloud_resource"  # #81 P3G: a cloud resource (ELB/RDS/ECS/…)
+    # #128 wireless (docs/Wireslessdesign.md §7.1) — CH enums extended in
+    # lockstep (corr_schema.go + init.sql, TestCorrSignalEnumsConsistent).
+    WIRELESS_CONTROLLER = "wireless_controller"  # the LOGICAL WLC/gateway cluster
+    ACCESS_POINT = "access_point"
+    RADIO = "radio"
+    BSSID = "bssid"
+    WLAN = "wlan"
+    WIRELESS_CLIENT = "wireless_client"
+    WIRELESS_SESSION = "wireless_session"
 
 
 class Severity(str, Enum):

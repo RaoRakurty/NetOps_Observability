@@ -146,6 +146,15 @@ var routeIsolationLedger = map[string]string{
 	// isolation test: nms_isolation_test.go (TestNMSCrossOrgIsolation).
 	"/api/nms/integrations":  "scoped",
 	"/api/nms/integrations/": "scoped",
+	// #128 wireless canonical inventory: read-only, store-enforced tenant scope
+	// (mem tenant-keyed / PG FORCE-RLS), cross-tenant id → 404. Cross-org
+	// isolation test: wireless_isolation_test.go (TestWirelessCrossTenantIsolation).
+	"/api/wireless/controllers":  "scoped",
+	"/api/wireless/controllers/": "scoped",
+	"/api/wireless/aps":          "scoped",
+	"/api/wireless/aps/":         "scoped",
+	"/api/wireless/wlans":        "scoped",
+	"/api/wireless/bssids":       "scoped",
 	"/api/itsm/jira":         "scoped",
 	"/api/itsm/servicenow":   "scoped",
 	// #103 tenant RCA policy destinations: per-tenant connection config (routing
