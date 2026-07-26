@@ -192,3 +192,45 @@ def test_wireless_templates_never_claim_wireless_when_healthy():
         assert any(k.startswith("wireless_") or k.startswith("controller_")
                    for k in mandatory_kinds), (
             f"{t['id']}: a wireless template must require wireless evidence")
+
+
+# ── nested encapsulation (proof model 9, report §15) ─────────────────────────
+
+def test_nested_encapsulation_transformations_never_flatten():
+    """CAPWAP inside IPsec inside SD-WAN: each hop keeps ITS OWN transformation
+    on the rendered spine — the chain must never flatten to one tunnel, and an
+    unresponsive hop inside the nest stays an explicit missing entry."""
+    from path_graph import (
+        PathGraphView,
+        PathHop,
+        PathObservation,
+        Transformation,
+        spine_of,
+    )
+    obs = PathObservation(
+        observation_id="obs-nested-1", path_id="p1", tenant_id="t1",
+        observed_at=T0, method="traceroute_icmp",
+        hops=(
+            PathHop(1, observed_address="10.0.0.2",
+                    transformation=Transformation.TUNNEL_INGRESS.value,  # CAPWAP in
+                    tenant_id="t1"),
+            PathHop(2, observed_address="10.0.0.6",
+                    transformation=Transformation.TUNNEL_INGRESS.value,  # IPsec in
+                    tenant_id="t1"),
+            PathHop(3, state="missing", tenant_id="t1"),                 # dark carrier hop
+            PathHop(4, observed_address="172.16.0.9",
+                    transformation=Transformation.TUNNEL_EGRESS.value,   # IPsec out
+                    tenant_id="t1"),
+            PathHop(5, observed_address="192.0.2.10",
+                    transformation=Transformation.TUNNEL_EGRESS.value,   # CAPWAP out
+                    tenant_id="t1"),
+        ))
+    spine = spine_of(obs, PathGraphView())
+    entries = spine["spine"] if isinstance(spine, dict) and "spine" in spine else spine
+    tfs = [e["transformation"] for e in entries if e.get("address") or e.get("state") != "responding"]
+    assert tfs[:2] == ["tunnel_ingress", "tunnel_ingress"], (
+        "successive ingress transformations must BOTH survive (no flattening)")
+    assert tfs[-2:] == ["tunnel_egress", "tunnel_egress"]
+    missing = [e for e in entries if e.get("state") == "missing"]
+    assert len(missing) == 1 and missing[0]["address"] == "", (
+        "the dark hop inside the nest is preserved as an explicit missing entry")
