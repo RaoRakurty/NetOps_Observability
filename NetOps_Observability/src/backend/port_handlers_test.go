@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"netops/backend/portintel"
 )
 
 // port_handlers_test.go — Port Intelligence API shape, pagination + tenant
@@ -20,10 +22,10 @@ func portTestServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ms := &memPortStore{ports: map[string]PortRow{}}
-	_ = ms.UpsertPort(context.Background(), PortRow{TenantID: "t-a", DeviceID: "leaf1", PortID: "leaf1:Et1", IfName: "Ethernet1", OperStatus: "up", Seam: "DIA", MediaType: "singlemode_fiber", HealthScore: 100, HealthState: "ok"})
-	_ = ms.UpsertPort(context.Background(), PortRow{TenantID: "t-a", DeviceID: "leaf1", PortID: "leaf1:Et2", IfName: "Ethernet2", OperStatus: "down", HealthScore: 55, HealthState: "degraded", MatchedSig: "sig.ent.spdc.mpo-polarity-mismatch"})
-	_ = ms.UpsertPort(context.Background(), PortRow{TenantID: "t-b", DeviceID: "leafX", PortID: "leafX:Et9", IfName: "Ethernet9", OperStatus: "up", HealthScore: 100, HealthState: "ok"})
+	ms := portintel.NewMemStore()
+	_ = ms.UpsertPort(context.Background(), portintel.PortRow{TenantID: "t-a", DeviceID: "leaf1", PortID: "leaf1:Et1", IfName: "Ethernet1", OperStatus: "up", Seam: "DIA", MediaType: "singlemode_fiber", HealthScore: 100, HealthState: "ok"})
+	_ = ms.UpsertPort(context.Background(), portintel.PortRow{TenantID: "t-a", DeviceID: "leaf1", PortID: "leaf1:Et2", IfName: "Ethernet2", OperStatus: "down", HealthScore: 55, HealthState: "degraded", MatchedSig: "sig.ent.spdc.mpo-polarity-mismatch"})
+	_ = ms.UpsertPort(context.Background(), portintel.PortRow{TenantID: "t-b", DeviceID: "leafX", PortID: "leafX:Et9", IfName: "Ethernet9", OperStatus: "up", HealthScore: 100, HealthState: "ok"})
 	return &server{roles: rs, portStore: ms}
 }
 
@@ -46,8 +48,8 @@ func TestPortInterfacesTenantScoped(t *testing.T) {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
 	var resp struct {
-		Interfaces []PortRow `json:"interfaces"`
-		Total      int       `json:"total"`
+		Interfaces []portintel.PortRow `json:"interfaces"`
+		Total      int                 `json:"total"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp.Total != 2 {
@@ -76,8 +78,8 @@ func TestPortInterfacesFilterAndPaginate(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.handlePortInterfaces(w, portReq(viewerA, "GET", "/api/infrastructure/interfaces?rca_attached=true"))
 	var r struct {
-		Interfaces []PortRow `json:"interfaces"`
-		Total      int       `json:"total"`
+		Interfaces []portintel.PortRow `json:"interfaces"`
+		Total      int                 `json:"total"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &r)
 	if r.Total != 1 || r.Interfaces[0].MatchedSig == "" {
@@ -87,8 +89,8 @@ func TestPortInterfacesFilterAndPaginate(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	s.handlePortInterfaces(w2, portReq(viewerA, "GET", "/api/infrastructure/interfaces?limit=1"))
 	var p struct {
-		Interfaces []PortRow `json:"interfaces"`
-		Total      int       `json:"total"`
+		Interfaces []portintel.PortRow `json:"interfaces"`
+		Total      int                 `json:"total"`
 	}
 	_ = json.Unmarshal(w2.Body.Bytes(), &p)
 	if len(p.Interfaces) != 1 || p.Total != 2 {
@@ -129,9 +131,9 @@ func TestPortSummaryScoped(t *testing.T) {
 
 func TestPortPathResolution(t *testing.T) {
 	s := portTestServer(t)
-	ms := s.portStore.(*memPortStore)
+	ms := s.portStore.(*portintel.MemStore)
 	// A fiber path with leaf1:Et1 as the A endpoint → far side leafZ:Et5, + a neighbor.
-	_ = ms.UpsertFiberPath(context.Background(), "t-a", fiberPathRec{
+	_ = ms.UpsertFiberPath(context.Background(), "t-a", portintel.FiberPath{
 		PathID: "fp-1", ADevice: "leaf1", APort: "leaf1:Et1", ZDevice: "leafZ", ZPort: "leafZ:Et5",
 		Circuit: "CID-9001", Provider: "Lumen", Polarity: "B", PanelID: "PP-3", Cassette: "C-12",
 	})
@@ -143,7 +145,7 @@ func TestPortPathResolution(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("path: %d %s", w.Code, w.Body.String())
 	}
-	var pc PathContext
+	var pc portintel.PathContext
 	_ = json.Unmarshal(w.Body.Bytes(), &pc)
 	if !pc.Resolved || pc.Circuit != "CID-9001" || pc.FarDevice != "leafZ" || pc.Neighbor != "leafZ.dc" {
 		t.Fatalf("path resolution wrong: %+v", pc)
@@ -155,7 +157,7 @@ func TestPortPathResolution(t *testing.T) {
 	// Tenant B resolving tenant A's endpoint → nothing (no cabling leak).
 	w2 := httptest.NewRecorder()
 	s.handlePortInterfaceDetail(w2, portReq(viewerB, "GET", "/api/infrastructure/interfaces/leaf1:Et1/path"))
-	var pc2 PathContext
+	var pc2 portintel.PathContext
 	_ = json.Unmarshal(w2.Body.Bytes(), &pc2)
 	if pc2.Resolved || pc2.Port != nil {
 		t.Fatalf("cross-tenant path must resolve to nothing: %+v", pc2)

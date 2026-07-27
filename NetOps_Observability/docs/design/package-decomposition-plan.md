@@ -93,7 +93,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ — | `internal/rca` (5 pure analysis files) | 5 | — | — | **Done** (2026-07-27, drawn from the 13+ pool). |
 | ✅ — | `internal/vault` (secret custody) | 1 | — | — | **Done** (2026-07-27). Storage + warn logging INJECTED (`vault.Store`, `vault.Warnf`) — the wiring adapter idiom later steps reuse. |
 | 4 | `internal/openapi` | 1 | 126 | 1 | Trivial; good warm-up for a new contributor. |
-| 7 | `internal/portintel` (extend existing) | 2 | 640 | 2 | A `portintel` package already exists — move these in rather than creating a sibling. |
+| ✅ 7 | `portintel` (extend existing) | 1 | 487 | 2 | **Done** (2026-07-27). `port_store.go` → `portintel/store.go`; the pg plumbing is INJECTED (`portintel.DB` wraps `withTenant`), backend selection + handlers stayed in main. `port_handlers.go` is handler-dominated and stays per the screen. Root count 283 → 282. |
 | 8 | `internal/svc` | 3 | 725 | 2 | Service rollup/health. |
 | 9 | `internal/breakglass` | 1 | 198 | 3 | Security-sensitive; move with tests, no behaviour change. |
 | 11 | `internal/export` | 2 | 246 | 6 | |

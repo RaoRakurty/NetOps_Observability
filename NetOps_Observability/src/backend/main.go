@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
+	"netops/backend/portintel"
 	"os"
 	"os/signal"
 	"sort"
@@ -151,7 +152,7 @@ type server struct {
 	rcaPromotions   *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	rcaActionItems  *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
 	rcaRevisions    *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
-	portStore       portStore              // Port Intelligence physical-layer store (#94)
+	portStore       portintel.Store        // Port Intelligence physical-layer store (#94)
 	netboxCfg       *netboxConfigStore     // NetBox source-of-truth discovery config
 	discoveryCfg    *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
 	netboxSync      *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)

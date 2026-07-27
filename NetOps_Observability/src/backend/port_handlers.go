@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"netops/backend/portintel"
 )
@@ -14,6 +17,25 @@ import (
 // tenant filter; server-side paginated; the filter set maps to PortFilter.
 // Rows are empty until the collectors populate the 0019 tables on real hardware
 // (the virtual lab has no optics) — the shapes + scoping are what P5 delivers.
+// The store itself lives in portintel (store.go); this file keeps the HTTP
+// surface and the backend-selection wiring.
+
+// newPortStore picks the store backend: pg (RLS-scoped via the portintel.DB
+// adapter below) when the relational app-state store is active, else in-memory.
+func newPortStore() portintel.Store {
+	if ps, ok := backend.(*pgStore); ok {
+		return portintel.NewPGStore(portintelPG{db: ps.db})
+	}
+	return portintel.NewMemStore()
+}
+
+// portintelPG adapts package main's pg plumbing to the portintel.DB seam — the
+// package owns port data, not how this platform scopes its transactions.
+type portintelPG struct{ db *pgDB }
+
+func (a portintelPG) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
+	return a.db.withTenant(ctx, tenant, cross, fn)
+}
 
 // handlePortInterfaces: GET /api/infrastructure/interfaces — the workbench table
 // (server-side paginated + filtered). Also serves the per-device list when
@@ -34,7 +56,7 @@ func (s *server) handlePortInterfaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	f := PortFilter{
+	f := portintel.PortFilter{
 		Device:      strings.TrimSpace(r.URL.Query().Get("device")),
 		Seam:        strings.TrimSpace(r.URL.Query().Get("seam")),
 		Role:        strings.TrimSpace(r.URL.Query().Get("role")),
@@ -52,7 +74,7 @@ func (s *server) handlePortInterfaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rows == nil {
-		rows = []PortRow{}
+		rows = []portintel.PortRow{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"interfaces": rows, "total": total, "limit": f.Limit, "offset": f.Offset,
@@ -125,7 +147,7 @@ func (s *server) handlePortSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	rows, total, err := s.portStore.ListPorts(r.Context(), tenant, cross, PortFilter{})
+	rows, total, err := s.portStore.ListPorts(r.Context(), tenant, cross, portintel.PortFilter{})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -166,12 +188,12 @@ func (s *server) handlePortFilterOptions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	rows, _, err := s.portStore.ListPorts(r.Context(), tenant, cross, PortFilter{})
+	rows, _, err := s.portStore.ListPorts(r.Context(), tenant, cross, portintel.PortFilter{})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	uniq := func(get func(PortRow) string) []string {
+	uniq := func(get func(portintel.PortRow) string) []string {
 		seen := map[string]bool{}
 		var out []string
 		for _, p := range rows {
@@ -183,12 +205,12 @@ func (s *server) handlePortFilterOptions(w http.ResponseWriter, r *http.Request)
 		return out
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device":      uniq(func(p PortRow) string { return p.DeviceID }),
-		"seam":        uniq(func(p PortRow) string { return p.Seam }),
-		"role":        uniq(func(p PortRow) string { return p.Role }),
-		"media_type":  uniq(func(p PortRow) string { return p.MediaType }),
-		"form_factor": uniq(func(p PortRow) string { return p.FormFactor }),
-		"vendor_name": uniq(func(p PortRow) string { return p.VendorName }),
+		"device":      uniq(func(p portintel.PortRow) string { return p.DeviceID }),
+		"seam":        uniq(func(p portintel.PortRow) string { return p.Seam }),
+		"role":        uniq(func(p portintel.PortRow) string { return p.Role }),
+		"media_type":  uniq(func(p portintel.PortRow) string { return p.MediaType }),
+		"form_factor": uniq(func(p portintel.PortRow) string { return p.FormFactor }),
+		"vendor_name": uniq(func(p portintel.PortRow) string { return p.VendorName }),
 	})
 }
 

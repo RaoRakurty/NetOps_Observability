@@ -1,4 +1,4 @@
-package main
+package portintel
 
 import (
 	"context"
@@ -11,12 +11,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// port_store.go — the tenant-scoped repository for Port Intelligence (#94 P5).
+// store.go — the tenant-scoped repository for Port Intelligence (#94 P5).
 // Reads/writes the 0019 relational current-state tables. Same seam pattern as
 // topologyGraphStore: in-memory store filters by tenant; pg store relies on the
-// tenant_iso FORCE-RLS policy via withTenant (CLAUDE.md §3a). The collector
-// router (real hardware) is the writer via UpsertPort/UpsertTransceiver/…; the
-// API handlers are the readers.
+// tenant_iso FORCE-RLS policy via the injected DB's WithTenant (CLAUDE.md §3a).
+// The collector router (real hardware) is the writer via UpsertPort/
+// UpsertTransceiver/…; the API handlers are the readers.
+//
+// The package does not know how the platform opens or scopes its database —
+// package main adapts its pg plumbing to the DB seam at the composition root
+// (the internal/vault Store idiom). Backend selection (pg vs in-memory) is
+// wiring and stays in package main too.
+
+// DB is the injected relational seam: run fn inside a transaction whose
+// row-level security is scoped to tenant (or unscoped for a cross-tenant
+// principal). Implemented by package main's pgDB adapter.
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
 
 // PortRow is the flattened port + transceiver + health view the workbench table
 // and detail drawer consume. Identity fields (serial/part) are RELATIONAL here,
@@ -81,19 +93,21 @@ type PathContext struct {
 	Neighbor  string   `json:"lldp_remote_system_name,omitempty"`
 }
 
-type portStore interface {
+// Store is the Port Intelligence repository seam (was package main's
+// portStore). The collector router writes; the API handlers read.
+type Store interface {
 	ListPorts(ctx context.Context, tenant string, cross bool, f PortFilter) ([]PortRow, int, error)
 	GetPort(ctx context.Context, tenant string, cross bool, deviceID, portID string) (*PortRow, bool, error)
 	ResolvePath(ctx context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error)
 	UpsertPort(ctx context.Context, r PortRow) error
 	UpsertHealth(ctx context.Context, tenant, deviceID, portID string, score int, state, dominant, sig string) error
-	UpsertFiberPath(ctx context.Context, tenant string, fp fiberPathRec) error
+	UpsertFiberPath(ctx context.Context, tenant string, fp FiberPath) error
 	UpsertNeighbor(ctx context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error
 }
 
-// fiberPathRec is the writer shape for fiber_path_inventory (subset used by the
+// FiberPath is the writer shape for fiber_path_inventory (subset used by the
 // resolver; the full lossless record rides JSONB via the collector router).
-type fiberPathRec struct {
+type FiberPath struct {
 	PathID   string
 	ADevice  string
 	APort    string
@@ -106,14 +120,16 @@ type fiberPathRec struct {
 	Cassette string
 }
 
-func newPortStore() portStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgPortStore{db: ps.db}
-	}
-	return &memPortStore{ports: map[string]PortRow{}, paths: map[string]fiberPathRec{}, neighbors: map[string][2]string{}}
+// NewMemStore returns the in-memory reference implementation (used when no
+// relational backend is configured, and by tests).
+func NewMemStore() *MemStore {
+	return &MemStore{ports: map[string]PortRow{}, paths: map[string]FiberPath{}, neighbors: map[string][2]string{}}
 }
 
-// applyFilter is the shared predicate (both backends filter with it after the
+// NewPGStore returns the Postgres-backed implementation over the injected DB.
+func NewPGStore(db DB) Store { return &pgPortStore{db: db} }
+
+// matchPort is the shared predicate (both backends filter with it after the
 // tenant scope is applied — pg by RLS + WHERE, mem in Go).
 func matchPort(r PortRow, f PortFilter) bool {
 	if f.Device != "" && !strings.EqualFold(r.DeviceID, f.Device) {
@@ -145,20 +161,20 @@ func matchPort(r PortRow, f PortFilter) bool {
 
 // ── in-memory backend ──────────────────────────────────────────────────────
 
-type memPortStore struct {
+type MemStore struct {
 	mu        sync.RWMutex
-	ports     map[string]PortRow      // key: tenant|device|port
-	paths     map[string]fiberPathRec // key: tenant|pathid
-	neighbors map[string][2]string    // key: tenant|device|port → [remoteSys, remotePort]
+	ports     map[string]PortRow   // key: tenant|device|port
+	paths     map[string]FiberPath // key: tenant|pathid
+	neighbors map[string][2]string // key: tenant|device|port → [remoteSys, remotePort]
 }
 
 func portKey(tenant, device, port string) string { return tenant + "|" + device + "|" + port }
 
-func (m *memPortStore) visible(tenant string, cross bool, r PortRow) bool {
+func (m *MemStore) visible(tenant string, cross bool, r PortRow) bool {
 	return cross || r.TenantID == tenant
 }
 
-func (m *memPortStore) ListPorts(_ context.Context, tenant string, cross bool, f PortFilter) ([]PortRow, int, error) {
+func (m *MemStore) ListPorts(_ context.Context, tenant string, cross bool, f PortFilter) ([]PortRow, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var all []PortRow
@@ -185,7 +201,7 @@ func (m *memPortStore) ListPorts(_ context.Context, tenant string, cross bool, f
 	return all[lo:hi], total, nil
 }
 
-func (m *memPortStore) GetPort(_ context.Context, tenant string, cross bool, deviceID, portID string) (*PortRow, bool, error) {
+func (m *MemStore) GetPort(_ context.Context, tenant string, cross bool, deviceID, portID string) (*PortRow, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	r, ok := m.ports[portKey(tenantOrScan(m, tenant, cross, deviceID, portID), deviceID, portID)]
@@ -207,21 +223,21 @@ func (m *memPortStore) GetPort(_ context.Context, tenant string, cross bool, dev
 }
 
 // tenantOrScan returns the direct key tenant for a non-cross caller (fast path).
-func tenantOrScan(_ *memPortStore, tenant string, cross bool, _, _ string) string {
+func tenantOrScan(_ *MemStore, tenant string, cross bool, _, _ string) string {
 	if cross {
 		return ""
 	}
 	return tenant
 }
 
-func (m *memPortStore) UpsertPort(_ context.Context, r PortRow) error {
+func (m *MemStore) UpsertPort(_ context.Context, r PortRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ports[portKey(r.TenantID, r.DeviceID, r.PortID)] = r
 	return nil
 }
 
-func (m *memPortStore) UpsertHealth(_ context.Context, tenant, deviceID, portID string, score int, state, dominant, sig string) error {
+func (m *MemStore) UpsertHealth(_ context.Context, tenant, deviceID, portID string, score int, state, dominant, sig string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := portKey(tenant, deviceID, portID)
@@ -232,17 +248,17 @@ func (m *memPortStore) UpsertHealth(_ context.Context, tenant, deviceID, portID 
 	return nil
 }
 
-func (m *memPortStore) UpsertFiberPath(_ context.Context, tenant string, fp fiberPathRec) error {
+func (m *MemStore) UpsertFiberPath(_ context.Context, tenant string, fp FiberPath) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.paths == nil {
-		m.paths = map[string]fiberPathRec{}
+		m.paths = map[string]FiberPath{}
 	}
 	m.paths[tenant+"|"+fp.PathID] = fp
 	return nil
 }
 
-func (m *memPortStore) UpsertNeighbor(_ context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error {
+func (m *MemStore) UpsertNeighbor(_ context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.neighbors == nil {
@@ -252,7 +268,7 @@ func (m *memPortStore) UpsertNeighbor(_ context.Context, tenant, deviceID, portI
 	return nil
 }
 
-func (m *memPortStore) ResolvePath(_ context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error) {
+func (m *MemStore) ResolvePath(_ context.Context, tenant string, cross bool, deviceID, portID string) (*PathContext, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	pc := &PathContext{}
@@ -300,14 +316,14 @@ func (m *memPortStore) ResolvePath(_ context.Context, tenant string, cross bool,
 
 // ── Postgres backend ─────────────────────────────────────────────────────────
 
-type pgPortStore struct{ db *pgDB }
+type pgPortStore struct{ db DB }
 
 func (s *pgPortStore) ListPorts(ctx context.Context, tenant string, cross bool, f PortFilter) ([]PortRow, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var out []PortRow
 	total := 0
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// RLS scopes rows to the tenant; the LEFT JOINs bring in transceiver +
 		// health. Filtering is applied in Go via matchPort for parity with mem.
 		rows, err := tx.Query(ctx, `
@@ -377,7 +393,7 @@ func (s *pgPortStore) UpsertPort(ctx context.Context, r PortRow) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	data, _ := json.Marshal(r)
-	return s.db.withTenant(ctx, r.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, r.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO port_inventory_current
 			  (tenant_id, device_id, port_id, if_name, if_alias, admin_status,
@@ -402,7 +418,7 @@ func (s *pgPortStore) ResolvePath(ctx context.Context, tenant string, cross bool
 	if row, ok, err := s.GetPort(ctx, tenant, cross, deviceID, portID); err == nil && ok {
 		pc.Port = row
 	}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// Fiber path where this port is the A or Z endpoint (RLS-scoped).
 		var aDev, aPort, zDev, zPort string
 		e := tx.QueryRow(ctx, `
@@ -432,10 +448,10 @@ func (s *pgPortStore) ResolvePath(ctx context.Context, tenant string, cross bool
 	return pc, err
 }
 
-func (s *pgPortStore) UpsertFiberPath(ctx context.Context, tenant string, fp fiberPathRec) error {
+func (s *pgPortStore) UpsertFiberPath(ctx context.Context, tenant string, fp FiberPath) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO fiber_path_inventory
 			  (tenant_id, path_id, a_device_id, a_port_id, z_device_id, z_port_id,
@@ -456,7 +472,7 @@ func (s *pgPortStore) UpsertFiberPath(ctx context.Context, tenant string, fp fib
 func (s *pgPortStore) UpsertNeighbor(ctx context.Context, tenant, deviceID, portID, remoteSys, remotePort string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO port_neighbor_current
 			  (tenant_id, device_id, port_id, remote_system_name, remote_port_id, last_seen)
@@ -472,7 +488,7 @@ func (s *pgPortStore) UpsertNeighbor(ctx context.Context, tenant, deviceID, port
 func (s *pgPortStore) UpsertHealth(ctx context.Context, tenant, deviceID, portID string, score int, state, dominant, sig string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO port_health_current
 			  (tenant_id, device_id, port_id, health_score, health_state, dominant_issue, matched_signature, updated_at)
