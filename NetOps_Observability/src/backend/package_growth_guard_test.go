@@ -48,9 +48,12 @@ import (
 )
 
 // rootPackageCeiling is the number of non-test .go files in the backend root
-// package, pinned on 2026-07-27. THIS NUMBER MUST ONLY EVER DECREASE.
-// Lowering it is the whole point; raising it defeats the ratchet.
-const rootPackageCeiling = 296
+// package. THIS NUMBER MUST ONLY EVER DECREASE. Lowering it is the whole point;
+// raising it defeats the ratchet.
+//
+//	2026-07-27  296  pinned
+//	2026-07-27  290  internal/chschema extracted (6 ClickHouse schema/DDL files)
+const rootPackageCeiling = 290
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

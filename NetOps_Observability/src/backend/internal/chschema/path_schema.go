@@ -1,4 +1,6 @@
-package main
+package chschema
+
+import "strconv"
 
 // path_schema.go — Service Path Graph ClickHouse schema (frozen contract v1,
 // docs/design/service-path-graph-contract.md §2.3/§2.4). Same converge-on-boot
@@ -25,7 +27,7 @@ package main
 // not immortality: the cold tier (scripts/ch-cold-export.sh) is where old runs go.
 const pathRetentionDays = 90
 
-func pathSchemaDDL() []string {
+func PathSchemaDDL() []string {
 	return []string{
 		// §2.3 — one IMMUTABLE row per measurement run. ReplacingMergeTree keyed on
 		// ingest_ts makes RE-INGEST of the same observation_id idempotent (§9
@@ -61,7 +63,7 @@ func pathSchemaDDL() []string {
 ENGINE = ReplacingMergeTree(ingest_ts)
 PARTITION BY (tenant_id, toYYYYMM(observed_at))
 ORDER BY (tenant_id, path_id, observed_at, observation_id)
-TTL toDateTime(observed_at) + INTERVAL ` + intToString(pathRetentionDays) + ` DAY
+TTL toDateTime(observed_at) + INTERVAL ` + strconv.Itoa(pathRetentionDays) + ` DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// §2.4 — ordered hops. hop_index is the SPINE ORDER: it is data, not layout.
@@ -92,7 +94,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 ENGINE = ReplacingMergeTree(ingest_ts)
 PARTITION BY (tenant_id, toYYYYMM(observed_at))
 ORDER BY (tenant_id, observation_id, hop_index)
-TTL toDateTime(observed_at) + INTERVAL ` + intToString(pathRetentionDays) + ` DAY
+TTL toDateTime(observed_at) + INTERVAL ` + strconv.Itoa(pathRetentionDays) + ` DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// STRICT row policy (the corr_current model, NOT the loose telemetry one):
@@ -100,7 +102,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 		// untagged ('') row is platform-only. §9: no endpoint resolution, edge,
 		// observation or API response crosses tenants. CREATE OR REPLACE (atomic,
 		// never DROP+CREATE) so a drifted/legacy policy is upgraded in place.
-		chStrictRowPolicyDDL("path_observations"),
-		chStrictRowPolicyDDL("path_hops"),
+		StrictRowPolicyDDL("path_observations"),
+		StrictRowPolicyDDL("path_hops"),
 	}
 }

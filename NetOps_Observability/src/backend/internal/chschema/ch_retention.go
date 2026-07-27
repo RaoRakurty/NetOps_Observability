@@ -1,4 +1,4 @@
-package main
+package chschema
 
 // ch_retention.go — F-58: boot-time TTL convergence for the TELEMETRY family
 // of ClickHouse tables.
@@ -97,10 +97,10 @@ func chRetentionDefaults() chRetentionDays {
 	}
 }
 
-// chRetentionConfig resolves per-table overrides from the environment.
+// RetentionConfig resolves per-table overrides from the environment.
 // Invalid values fall back to the default and say so; sub-floor values are
 // clamped up, never down.
-func chRetentionConfig() chRetentionDays {
+func RetentionConfig() chRetentionDays {
 	const floorDays = 7
 	d := chRetentionDefaults()
 	knob := func(env string, def int) int {
@@ -175,10 +175,10 @@ func chRetentionTables() []chRetentionTable {
 	}
 }
 
-// chRetentionDDL renders the converge statements for the resolved config.
+// RetentionDDL renders the converge statements for the resolved config.
 // Pure (no IO) so the boot path's exact statements are assertable in tests —
 // the same contract chConvergeStmts keeps.
-func chRetentionDDL(d chRetentionDays) []string {
+func RetentionDDL(d chRetentionDays) []string {
 	var stmts []string
 	for _, t := range chRetentionTables() {
 		days := t.Days(d)
@@ -195,9 +195,9 @@ func chRetentionDDL(d chRetentionDays) []string {
 	return stmts
 }
 
-// logCHRetention states the schedule at boot. A retention change that nobody
+// LogRetention states the schedule at boot. A retention change that nobody
 // can see in the logs is a data-deletion policy applied in silence (§10).
-func logCHRetention(d chRetentionDays) {
+func LogRetention(d chRetentionDays) {
 	for _, t := range chRetentionTables() {
 		if days := t.Days(d); days > 0 {
 			log.Printf("ch-retention: netops.%s keeps %d days (%s)", t.Table, days, t.Expr)

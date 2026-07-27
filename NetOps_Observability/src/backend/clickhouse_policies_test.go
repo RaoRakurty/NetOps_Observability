@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/chschema"
 	"strings"
 	"testing"
 )
@@ -116,11 +117,11 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 
 	// Helper-level lock: the strict generator output is exactly the approved
 	// form (atomic OR REPLACE + strict filter, no escape).
-	got := chStrictRowPolicyDDL("corr_signals")
+	got := chschema.StrictRowPolicyDDL("corr_signals")
 	want := "CREATE ROW POLICY OR REPLACE tenant_iso_corr_signals ON netops.corr_signals" +
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
 	if got != want {
-		t.Errorf("chStrictRowPolicyDDL(corr_signals):\n got %q\nwant %q", got, want)
+		t.Errorf("chschema.StrictRowPolicyDDL(corr_signals):\n got %q\nwant %q", got, want)
 	}
 
 	// Guard the scope boundary too: the lenient telemetry policies (flows,
@@ -158,7 +159,7 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 func TestRowPolicyGrammarShape(t *testing.T) {
 	stmts := []string{
 		chRowPolicyDDL("flows"),
-		chStrictRowPolicyDDL("corr_signals"),
+		chschema.StrictRowPolicyDDL("corr_signals"),
 	}
 	for _, s := range chConvergeStmts() {
 		if strings.Contains(s, "ROW POLICY") {

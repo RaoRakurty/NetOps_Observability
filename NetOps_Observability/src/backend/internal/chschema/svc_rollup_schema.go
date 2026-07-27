@@ -1,4 +1,4 @@
-package main
+package chschema
 
 // svc_rollup_schema.go — #69 P2 service flow attribution rollup schema
 // (front-page.md §3). Same converge-on-boot contract as corr_schema.go /
@@ -32,7 +32,7 @@ package main
 //   - STRICT row policy: attributed per-service traffic is tenant data; an
 //     untagged row is platform-only, never shared into every tenant's view.
 
-func svcRollupSchemaDDL() []string {
+func SvcRollupSchemaDDL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS netops.svc_flow_rollup_1m
 (
@@ -52,6 +52,6 @@ ORDER BY (tenant_id, minute, service_id, selector_version, seam_id, rolled_by)
 TTL minute + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1, allow_nullable_key = 1`,
 
-		chStrictRowPolicyDDL("svc_flow_rollup_1m"),
+		StrictRowPolicyDDL("svc_flow_rollup_1m"),
 	}
 }

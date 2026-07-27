@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/chschema"
 	"regexp"
 	"strconv"
 	"strings"
@@ -43,7 +44,7 @@ const (
 )
 
 // cloudCostsSchemaDDL is the boot-converge DDL for the cost store: table +
-// STRICT tenant row policy (atomic OR REPLACE via chStrictRowPolicyDDL — no
+// STRICT tenant row policy (atomic OR REPLACE via chschema.StrictRowPolicyDDL — no
 // policyless window, self-heals a reset access store). Mirrors init.sql.
 func cloudCostsSchemaDDL() []string {
 	return []string{
@@ -65,7 +66,7 @@ PARTITION BY (tenant_id, toYYYYMM(day))
 ORDER BY (tenant_id, provider, account, service, day)
 TTL day + INTERVAL 400 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
-		chStrictRowPolicyDDL("cloud_costs"),
+		chschema.StrictRowPolicyDDL("cloud_costs"),
 	}
 }
 

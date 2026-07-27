@@ -1,4 +1,4 @@
-package main
+package chschema
 
 // wireless_schema.go — ClickHouse DDL for the wireless per-client event tier
 // (tracker #128 Phase 1, design docs/Wireslessdesign.md §20). init.sql carries
@@ -24,7 +24,7 @@ package main
 // Row policies are STRICT (the corr_current model): an untagged row is
 // platform-only, never shared into every tenant's view.
 
-func wirelessSchemaDDL() []string {
+func WirelessSchemaDDL() []string {
 	return []string{
 		// One row per client association session. session_id is deterministic:
 		// sha256(tenant|bssid|client_mac|assoc_start_ms) — replayable, never
@@ -184,10 +184,10 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// STRICT tenant policies — client sessions and RF are per-tenant PII
 		// (report B5); an untagged row is platform-only, never shared.
-		chStrictRowPolicyDDL("wireless_sessions"),
-		chStrictRowPolicyDDL("wireless_onboarding_episodes"),
-		chStrictRowPolicyDDL("wireless_roams"),
-		chStrictRowPolicyDDL("wireless_mlo_links"),
-		chStrictRowPolicyDDL("wireless_client_rf"),
+		StrictRowPolicyDDL("wireless_sessions"),
+		StrictRowPolicyDDL("wireless_onboarding_episodes"),
+		StrictRowPolicyDDL("wireless_roams"),
+		StrictRowPolicyDDL("wireless_mlo_links"),
+		StrictRowPolicyDDL("wireless_client_rf"),
 	}
 }

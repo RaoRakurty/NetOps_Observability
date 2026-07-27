@@ -38,6 +38,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/chschema"
 	"sort"
 	"strconv"
 	"time"
@@ -81,7 +82,7 @@ SETTINGS index_granularity = 8192`,
 		// STRICT (the path_* family rule): untagged precompute rows are
 		// platform-only at the DB layer; the tier-2 reader is the one sanctioned
 		// consumer (see file header).
-		chStrictRowPolicyDDL("path_baselines"),
+		chschema.StrictRowPolicyDDL("path_baselines"),
 	}
 }
 

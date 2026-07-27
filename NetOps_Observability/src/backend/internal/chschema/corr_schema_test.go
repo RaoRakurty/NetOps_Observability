@@ -1,4 +1,4 @@
-package main
+package chschema
 
 import (
 	"os"
@@ -15,7 +15,7 @@ import (
 
 func corrStmt(t *testing.T, table string) string {
 	t.Helper()
-	for _, s := range corrSchemaDDL() {
+	for _, s := range CorrSchemaDDL() {
 		if strings.Contains(s, "CREATE TABLE IF NOT EXISTS netops."+table+"\n") ||
 			strings.Contains(s, "CREATE TABLE IF NOT EXISTS netops."+table+" ") {
 			return s
@@ -26,7 +26,7 @@ func corrStmt(t *testing.T, table string) string {
 }
 
 func TestCorrSchemaIdempotent(t *testing.T) {
-	for _, s := range corrSchemaDDL() {
+	for _, s := range CorrSchemaDDL() {
 		// MODIFY COLUMN re-applies an identical column definition (an additive enum
 		// value-add for the cloud signal plane, #81 P3G): idempotent by nature — a
 		// no-op once applied — and ClickHouse has no "IF NOT EXISTS" form for it.
@@ -84,7 +84,7 @@ func TestCorrSchemaTenantPartitioned(t *testing.T) {
 }
 
 func TestCorrSchemaRowPoliciesCoverAllTables(t *testing.T) {
-	all := strings.Join(corrSchemaDDL(), "\n")
+	all := strings.Join(CorrSchemaDDL(), "\n")
 	for _, table := range []string{"corr_signals", "corr_signals_archive", "corr_objects", "corr_edges", "corr_evidence", "corr_current"} {
 		if !strings.Contains(all, "tenant_iso_"+table) {
 			t.Errorf("missing row policy for %s", table)
@@ -227,13 +227,13 @@ func TestCorrEdgesGroundedByConstruction(t *testing.T) {
 // the code's ALTER; ClickHouse then refuses the (now value-dropping) ALTER on a
 // key column on every boot, and the converge list stalls behind it — this is
 // exactly how corr_current failed to be created ('controller'=11 existed live
-// and in init.sql, but not in the corrSchemaDDL ALTER).
+// and in init.sql, but not in the CorrSchemaDDL ALTER).
 func TestCorrSignalEnumsConsistent(t *testing.T) {
-	initSQL, err := os.ReadFile("../../deployment/docker/clickhouse/init.sql")
+	initSQL, err := os.ReadFile(repoFile(t, "deployment/docker/clickhouse/init.sql"))
 	if err != nil {
 		t.Fatalf("read init.sql: %v", err)
 	}
-	goDDL := strings.Join(corrSchemaDDL(), "\n")
+	goDDL := strings.Join(CorrSchemaDDL(), "\n")
 	norm := regexp.MustCompile(`\s+`)
 	for _, col := range []string{"source", "observer_type", "entity_type", "modality_class"} {
 		// Multi-line bodies are fine: enum bodies contain no ')'.
@@ -257,7 +257,7 @@ func TestCorrSignalEnumsConsistent(t *testing.T) {
 func TestCorrSchemaNoMaterializedViews(t *testing.T) {
 	// Row policies error MV inserts in the writer's context (the flows_hourly
 	// lesson) — the corr tables must never gain one.
-	for _, s := range corrSchemaDDL() {
+	for _, s := range CorrSchemaDDL() {
 		if strings.Contains(strings.ToUpper(s), "MATERIALIZED VIEW") {
 			t.Errorf("materialized view in corr schema is forbidden: %.80s", s)
 		}

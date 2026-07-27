@@ -1,4 +1,4 @@
-package main
+package chschema
 
 // corr_schema.go — Correlation Engine v2 (#67) ClickHouse schema, FROZEN at
 // build step ① (2026-06-11). docs/design/correlation-engine.md §2 is the spec;
@@ -27,7 +27,7 @@ package main
 //     enforced by CHECK, verified live at freeze time
 //   - NO materialized view reads these tables (row policies break MV inserts)
 
-func corrSchemaDDL() []string {
+func CorrSchemaDDL() []string {
 	// Shared column block: corr_signals (hot spine, 30 d TTL) and
 	// corr_signals_archive (replay input, no TTL) must stay structurally
 	// identical — replay reads archive ∪ hot deduped by signal_id.
@@ -272,7 +272,7 @@ ORDER BY (tenant_id, correlation_id)`,
 		// tenant_scope=__all__ (chExec) so every tenant's objects seed. The same
 		// statement is the missing-row half of the corr_current reconciler
 		// (corr_current_reconcile.go), which also repairs DRIFTED rows on a timer.
-		corrCurrentBackfillSQL(),
+		CorrCurrentBackfillSQL(),
 
 		`CREATE TABLE IF NOT EXISTS netops.corr_edges
 (
@@ -400,7 +400,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 
 		// STRICT policy (the corr_current model): an untagged path edge is
 		// platform-only, never shared into every tenant's view.
-		chStrictRowPolicyDDL("corr_path_edges"),
+		StrictRowPolicyDDL("corr_path_edges"),
 
 		// STRICT policies (2026-07-02 model, matching init.sql's corr policies):
 		// NO untagged-shared clause — correlation intel is platform-only when
@@ -408,15 +408,15 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1`,
 		// would leak platform-global objects into every tenant's Command Center.
 		// CREATE OR REPLACE (not IF NOT EXISTS) so deployments that first booted
 		// before the strict init.sql are UPGRADED in place on next boot.
-		chStrictRowPolicyDDL("corr_signals"),
-		chStrictRowPolicyDDL("corr_signals_archive"),
-		chStrictRowPolicyDDL("corr_objects"),
-		chStrictRowPolicyDDL("corr_edges"),
-		chStrictRowPolicyDDL("corr_evidence"),
-		chStrictRowPolicyDDL("corr_current"),
+		StrictRowPolicyDDL("corr_signals"),
+		StrictRowPolicyDDL("corr_signals_archive"),
+		StrictRowPolicyDDL("corr_objects"),
+		StrictRowPolicyDDL("corr_edges"),
+		StrictRowPolicyDDL("corr_evidence"),
+		StrictRowPolicyDDL("corr_current"),
 		// Same strict model for the write-amp rollup: a tenant may see its own
 		// storm accounting; platform-global (untagged '') rows are platform-only.
-		chStrictRowPolicyDDL("corr_tenant_write_amp"),
+		StrictRowPolicyDDL("corr_tenant_write_amp"),
 
 		// Phase 3 (idempotency): these four are plain MergeTree with NO content
 		// dedup, so a retry of an insert after an UNKNOWN outcome would duplicate

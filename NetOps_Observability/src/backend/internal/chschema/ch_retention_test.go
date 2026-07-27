@@ -1,4 +1,4 @@
-package main
+package chschema
 
 import (
 	"os"
@@ -28,7 +28,7 @@ func initSQLTTLs(t *testing.T) map[string]struct {
 	Days int
 } {
 	t.Helper()
-	path := filepath.Join("..", "..", "deployment", "docker", "clickhouse", "init.sql")
+	path := repoFile(t, filepath.Join("deployment", "docker", "clickhouse", "init.sql"))
 	raw, err := os.ReadFile(path) // #nosec G304 -- fixed repo-relative test fixture
 	if err != nil {
 		t.Fatalf("read init.sql: %v", err)
@@ -141,7 +141,7 @@ func TestNoConvergedDefaultShrinksRetention(t *testing.T) {
 // MODIFY TTL launches a full-table mutation, which on netops.flows is a
 // multi-million-row rewrite triggered by an ordinary API restart.
 func TestCHRetentionDDLIsMetadataOnly(t *testing.T) {
-	for _, s := range chRetentionDDL(chRetentionDefaults()) {
+	for _, s := range RetentionDDL(chRetentionDefaults()) {
 		if !strings.Contains(s, "materialize_ttl_after_modify = 0") {
 			t.Errorf("TTL statement is not metadata-only (would rewrite the table): %s", s)
 		}
@@ -157,7 +157,7 @@ func TestCHRetentionDDLIsMetadataOnly(t *testing.T) {
 func TestCHRetentionZeroDisablesRatherThanStrips(t *testing.T) {
 	d := chRetentionDefaults()
 	d.Flows = 0
-	for _, s := range chRetentionDDL(d) {
+	for _, s := range RetentionDDL(d) {
 		if strings.Contains(s, "netops.flows ") {
 			t.Fatalf("a zeroed knob must emit NO statement for that table, got: %s", s)
 		}
@@ -168,15 +168,15 @@ func TestCHRetentionZeroDisablesRatherThanStrips(t *testing.T) {
 // never turn it into near-instant deletion.
 func TestCHRetentionFloorClampsUp(t *testing.T) {
 	t.Setenv("CH_FLOWS_RETENTION_DAYS", "1")
-	if got := chRetentionConfig().Flows; got != 7 {
+	if got := RetentionConfig().Flows; got != 7 {
 		t.Errorf("sub-floor retention must clamp to the 7-day floor, got %d", got)
 	}
 	t.Setenv("CH_FLOWS_RETENTION_DAYS", "banana")
-	if got := chRetentionConfig().Flows; got != chRetentionDefaults().Flows {
+	if got := RetentionConfig().Flows; got != chRetentionDefaults().Flows {
 		t.Errorf("invalid retention must fall back to the default, got %d", got)
 	}
 	t.Setenv("CH_FLOWS_RETENTION_DAYS", "0")
-	if got := chRetentionConfig().Flows; got != 0 {
+	if got := RetentionConfig().Flows; got != 0 {
 		t.Errorf("0 must mean 'unmanaged', got %d", got)
 	}
 }
@@ -189,33 +189,3 @@ func TestCHRetentionFloorClampsUp(t *testing.T) {
 // Checked per table rather than globally: the converge list interleaves
 // several schema families, so "no CREATE anywhere after any ALTER" would be
 // both wrong and unmaintainable.
-func TestRetentionRunsAfterSchemaCreation(t *testing.T) {
-	stmts := chConvergeStmts()
-	createAt := map[string]int{}
-	reCreate := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS netops\.(\w+)`)
-	reAlterTTL := regexp.MustCompile(`ALTER TABLE netops\.(\w+) MODIFY TTL`)
-
-	for i, s := range stmts {
-		if m := reCreate.FindStringSubmatch(s); m != nil {
-			if _, seen := createAt[m[1]]; !seen {
-				createAt[m[1]] = i
-			}
-		}
-	}
-	seenTTL := false
-	for i, s := range stmts {
-		m := reAlterTTL.FindStringSubmatch(s)
-		if m == nil {
-			continue
-		}
-		seenTTL = true
-		if at, ok := createAt[m[1]]; ok && at > i {
-			t.Errorf("netops.%s: MODIFY TTL at index %d runs BEFORE its CREATE at index %d — "+
-				"the ALTER fails on every fresh volume, silently (chExecAll continues past errors)",
-				m[1], i, at)
-		}
-	}
-	if !seenTTL {
-		t.Fatal("no MODIFY TTL statement in the boot converge list — F-58 has regressed")
-	}
-}

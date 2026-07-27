@@ -1,4 +1,4 @@
-package main
+package chschema
 
 // corr_retention.go — retention/tiering contract for the correlation history
 // tables (#101, the deferred half of the #100 bounded-IO incident work).
@@ -61,10 +61,10 @@ var corrRetentionProfiles = map[string]corrRetentionDays{
 	"extended": {History: 730, Archive: 365, Closed: 365},
 }
 
-// corrRetentionConfig resolves the retention profile + per-knob overrides from
+// CorrRetentionConfig resolves the retention profile + per-knob overrides from
 // the environment. Invalid values fall back to the profile; sub-floor values
 // are clamped up (a typo must never become instant deletion).
-func corrRetentionConfig() corrRetentionDays {
+func CorrRetentionConfig() corrRetentionDays {
 	const floorDays = 7
 	profile := envOr("CORR_RETENTION_PROFILE", "production")
 	days, ok := corrRetentionProfiles[profile]
@@ -95,10 +95,10 @@ func corrRetentionConfig() corrRetentionDays {
 	}
 }
 
-// corrRetentionDDL renders the converge statements for the resolved retention
+// CorrRetentionDDL renders the converge statements for the resolved retention
 // config. Appended to the corr schema converge list on every API boot (same
-// idempotent, best-effort contract as corrSchemaDDL).
-func corrRetentionDDL(d corrRetentionDays) []string {
+// idempotent, best-effort contract as CorrSchemaDDL).
+func CorrRetentionDDL(d corrRetentionDays) []string {
 	var stmts []string
 	// Part-level expiry only: month-partitions drop whole, no TTL merges.
 	// (corr_current is deliberately NOT here — its TTL is row-level WHERE.)

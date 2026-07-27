@@ -11,6 +11,7 @@ package main
 // 502s. These tests make the banned shapes fail CI, not production.
 
 import (
+	"netops/backend/internal/chschema"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,7 +96,7 @@ func TestNoWideColumnsThroughFolds(t *testing.T) {
 // extracts run ONLY in the outer read, keyed by the folded (id, version) set,
 // so no blob ever crosses the sort.
 func TestCorrCurrentBackfillStaysNarrow(t *testing.T) {
-	for _, s := range corrSchemaDDL() {
+	for _, s := range chschema.CorrSchemaDDL() {
 		if !strings.Contains(s, "INSERT INTO netops.corr_current") {
 			continue
 		}
@@ -120,7 +121,7 @@ func TestCorrCurrentBackfillStaysNarrow(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("corr_current backfill statement not found in corrSchemaDDL")
+	t.Fatal("corr_current backfill statement not found in chschema.CorrSchemaDDL")
 }
 
 // Rule 3 (permanent): the Command Center list query keeps its bounded shape —

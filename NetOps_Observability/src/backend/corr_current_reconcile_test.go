@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/chschema"
 	"strings"
 	"testing"
 )
@@ -12,7 +13,7 @@ import (
 
 func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 	for name, sql := range map[string]string{
-		"backfill": corrCurrentBackfillSQL(),
+		"backfill": chschema.CorrCurrentBackfillSQL(),
 		"drift":    corrCurrentDriftRepairSQL(7),
 	} {
 		inner := sql[strings.Index(sql, "WHERE (o.tenant_id, o.correlation_id, o.version) IN ("):]
@@ -48,7 +49,7 @@ func TestCorrCurrentDriftScanIsTimeBounded(t *testing.T) {
 }
 
 func TestCorrCurrentBackfillIsIdempotent(t *testing.T) {
-	if !strings.Contains(corrCurrentBackfillSQL(), "NOT IN") {
+	if !strings.Contains(chschema.CorrCurrentBackfillSQL(), "NOT IN") {
 		t.Error("backfill must be idempotent via NOT IN")
 	}
 }

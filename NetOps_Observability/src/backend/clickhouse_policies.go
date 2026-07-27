@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"netops/backend/internal/chschema"
 	"time"
 )
 
@@ -22,13 +23,13 @@ import (
 // rows are shared into every tenant's view. Correct ONLY for the shared
 // telemetry tables (flows, findings, tunnels) whose data model depends on
 // untagged rows. NEVER use it for the correlation family — see
-// chStrictRowPolicyDDL.
+// chschema.StrictRowPolicyDDL.
 func chRowPolicyDDL(table string) string {
 	return "CREATE ROW POLICY IF NOT EXISTS tenant_iso_" + table + " ON netops." + table +
 		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' OR tenant_id = '' TO ALL"
 }
 
-// chStrictRowPolicyDDL is the STRICT tenant policy (the 2026-07-02 init.sql
+// chschema.StrictRowPolicyDDL is the STRICT tenant policy (the 2026-07-02 init.sql
 // model): NO untagged-shared clause — an untagged row is platform-only, never
 // leaked into every tenant's view. It deliberately uses CREATE OR REPLACE
 // (atomic in ClickHouse: no policyless window, unlike DROP+CREATE) so boot
@@ -43,11 +44,6 @@ func chRowPolicyDDL(table string) string {
 // (per-tenant financial data) was left with NO row policy — the DB-layer
 // backstop CLAUDE.md §3a rule 4 requires — and any install predating
 // 2026-07-02 kept its lenient untagged-shared policy forever.
-func chStrictRowPolicyDDL(table string) string {
-	return "CREATE ROW POLICY OR REPLACE tenant_iso_" + table + " ON netops." + table +
-		" USING tenant_id = getSetting('tenant_scope') OR getSetting('tenant_scope') = '__all__' TO ALL"
-}
-
 // chConvergeStmts is the complete, ordered boot-convergence DDL list. No
 // network IO (env-only inputs) so tests can assert over the exact statements
 // the boot path emits — e.g. that no correlation-family row policy carries
@@ -75,33 +71,33 @@ func chConvergeStmts() []string {
 	}
 	// Correlation Engine v2 (#67) frozen schema — tables + view + row policies
 	// (corr_schema.go). Same converge-on-boot contract as everything above.
-	stmts = append(stmts, corrSchemaDDL()...)
+	stmts = append(stmts, chschema.CorrSchemaDDL()...)
 	// #101 retention contract: profile-driven hot TTLs for the correlation
 	// history tables (corr_retention.go). Metadata-only ALTERs; expiry happens
 	// as background part drops. Cold Parquet export runs ahead of the horizon.
-	stmts = append(stmts, corrRetentionDDL(corrRetentionConfig())...)
+	stmts = append(stmts, chschema.CorrRetentionDDL(chschema.CorrRetentionConfig())...)
 	// Service Path Graph (frozen contract v1) — the immutable observation/hop
 	// streams + their STRICT tenant row policies (path_schema.go). Same
 	// converge-on-boot contract; init.sql carries the identical DDL for fresh
 	// installs.
-	stmts = append(stmts, pathSchemaDDL()...)
+	stmts = append(stmts, chschema.PathSchemaDDL()...)
 	// Cloud cost store (Wave 5 #18) — table + STRICT tenant row policy
 	// (cloud_costs.go). Billing data is per-tenant financial data.
 	stmts = append(stmts, cloudCostsSchemaDDL()...)
 	// #69 P2 service flow rollup (svc_rollup_schema.go, STRICT policy) and the
 	// Path Behavior Health V1 hour-of-week baselines (path_health_baselines.go,
 	// lenient policy — see that file for why). Same converge-on-boot contract.
-	stmts = append(stmts, svcRollupSchemaDDL()...)
+	stmts = append(stmts, chschema.SvcRollupSchemaDDL()...)
 	stmts = append(stmts, pathBaselineSchemaDDL()...)
 	// Wireless per-client event tier (#128 Phase 1, wireless_schema.go, STRICT
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.
-	stmts = append(stmts, wirelessSchemaDDL()...)
+	stmts = append(stmts, chschema.WirelessSchemaDDL()...)
 	// F-58 retention contract for the TELEMETRY family. Must come LAST: every
 	// MODIFY TTL above targets a table the statements before it create, and a
 	// converge list that ALTERs before it CREATEs fails on a fresh volume.
-	// Same metadata-only, idempotent contract as corrRetentionDDL.
-	stmts = append(stmts, chRetentionDDL(chRetentionConfig())...)
+	// Same metadata-only, idempotent contract as chschema.CorrRetentionDDL.
+	stmts = append(stmts, chschema.RetentionDDL(chschema.RetentionConfig())...)
 	return stmts
 }
 
@@ -115,7 +111,7 @@ func ensureCHRowPolicies() {
 	// F-58: state the retention schedule before applying it. `MODIFY TTL` is a
 	// deletion schedule, and a deletion schedule applied without a log line is
 	// exactly the kind of silent data loss this audit found everywhere else.
-	logCHRetention(chRetentionConfig())
+	chschema.LogRetention(chschema.RetentionConfig())
 	go func() {
 		var errs []string
 		for attempt := 0; attempt < 10; attempt++ {

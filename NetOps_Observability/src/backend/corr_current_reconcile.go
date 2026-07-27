@@ -33,41 +33,18 @@ package main
 import (
 	"context"
 	"log"
+	"netops/backend/internal/chschema"
 	"strconv"
 	"time"
 )
 
-// corrCurrentNarrowInsertPrefix is the shared INSERT head for every corr_current
+// chschema.CorrCurrentNarrowInsertPrefix is the shared INSERT head for every corr_current
 // repair: narrow columns + triage badges JSONExtract'd from the hypotheses blob
 // keyed by an already-picked version set (never through a fold/sort).
-const corrCurrentNarrowInsertPrefix = `INSERT INTO netops.corr_current
-    (tenant_id, correlation_id, version, state, window_start, window_end,
-     top_hypothesis, top_confidence, verdict_tier, evidence_missing, affected,
-     signal_count, node_count, engine_version, catalog_version, merged_into,
-     created_at, owner, plane_count, debug_excluded, low_authority)
-SELECT o.tenant_id, o.correlation_id, o.version, o.state, o.window_start, o.window_end,
-       o.top_hypothesis, o.top_confidence, o.verdict_tier, o.evidence_missing, o.affected,
-       o.signal_count, o.node_count, o.engine_version, o.catalog_version, o.merged_into,
-       o.created_at,
-       JSONExtractString(o.hypotheses,'ranking','hypotheses',1,'verdict','owner'),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','modality_coverage','Array(String)'))),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','excluded_debug_probes','Array(String)')) > 0),
-       toUInt8(length(JSONExtract(o.hypotheses,'ranking','hypotheses',1,'verdict','low_authority_probe_scopes','Array(String)')) > 0)
-  FROM netops.corr_objects AS o
- WHERE (o.tenant_id, o.correlation_id, o.version) IN (`
 
-// corrCurrentBackfillSQL repairs MISSING corr_current rows from history —
+// chschema.CorrCurrentBackfillSQL repairs MISSING corr_current rows from history —
 // idempotent (NOT IN makes a re-run a no-op). Runs in the boot converge list
 // (corr_schema.go) and from the periodic reconciler.
-func corrCurrentBackfillSQL() string {
-	return corrCurrentNarrowInsertPrefix + `
-       SELECT tenant_id, correlation_id, version
-         FROM netops.corr_objects
-        WHERE (tenant_id, correlation_id) NOT IN
-              (SELECT tenant_id, correlation_id FROM netops.corr_current)
-        ORDER BY tenant_id, correlation_id, version DESC
-        LIMIT 1 BY tenant_id, correlation_id)`
-}
 
 // corrCurrentDriftSelect picks (tenant, id, version) of objects whose latest
 // in-window history row is NEWER than the corr_current row — i.e. a projection
@@ -94,7 +71,7 @@ func corrCurrentDriftSelect(lookbackDays int) string {
 
 // corrCurrentDriftRepairSQL re-projects every drifted/missing in-window object.
 func corrCurrentDriftRepairSQL(lookbackDays int) string {
-	return corrCurrentNarrowInsertPrefix + corrCurrentDriftSelect(lookbackDays) + `)`
+	return chschema.CorrCurrentNarrowInsertPrefix + corrCurrentDriftSelect(lookbackDays) + `)`
 }
 
 // corrCurrentDriftCountSQL measures drift without repairing (observability +

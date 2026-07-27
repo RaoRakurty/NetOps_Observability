@@ -1,4 +1,4 @@
-package main
+package chschema
 
 import (
 	"strings"
@@ -28,7 +28,7 @@ func TestCorrRetentionEnvOverridesAndFloor(t *testing.T) {
 	t.Setenv("CORR_RETENTION_ARCHIVE_DAYS", "2") // below the 7-day safety floor
 	t.Setenv("CORR_RETENTION_HISTORY_DAYS", "365")
 	t.Setenv("CORR_RETENTION_CLOSED_DAYS", "0") // explicit keep-forever
-	d := corrRetentionConfig()
+	d := CorrRetentionConfig()
 	if d.Archive != 7 {
 		t.Errorf("sub-floor archive knob must clamp to 7, got %d", d.Archive)
 	}
@@ -39,7 +39,7 @@ func TestCorrRetentionEnvOverridesAndFloor(t *testing.T) {
 		t.Errorf("0 must mean keep-forever (no TTL), got %d", d.Closed)
 	}
 	// 0 emits no corr_current TTL statement at all.
-	for _, s := range corrRetentionDDL(d) {
+	for _, s := range CorrRetentionDDL(d) {
 		if strings.Contains(s, "corr_current") {
 			t.Errorf("Closed=0 must not emit a corr_current TTL: %s", s)
 		}
@@ -48,13 +48,13 @@ func TestCorrRetentionEnvOverridesAndFloor(t *testing.T) {
 
 func TestCorrRetentionUnknownProfileFallsBack(t *testing.T) {
 	t.Setenv("CORR_RETENTION_PROFILE", "yolo")
-	if d := corrRetentionConfig(); d != corrRetentionProfiles["production"] {
+	if d := CorrRetentionConfig(); d != corrRetentionProfiles["production"] {
 		t.Errorf("unknown profile must fall back to production, got %+v", d)
 	}
 }
 
 func TestCorrRetentionDDLSafetyShape(t *testing.T) {
-	stmts := corrRetentionDDL(corrRetentionProfiles["production"])
+	stmts := CorrRetentionDDL(corrRetentionProfiles["production"])
 	joined := strings.Join(stmts, "\n")
 	// Every history/archive table gets part-level-only expiry (no TTL merges).
 	for _, tbl := range []string{"corr_objects", "corr_edges", "corr_evidence", "corr_signals_archive"} {
