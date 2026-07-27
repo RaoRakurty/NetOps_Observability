@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"netops/backend/internal/rca"
 	"sort"
 	"strings"
 	"time"
@@ -112,7 +113,7 @@ type rcaReport struct {
 	SingleHypothesis bool `json:"single_hypothesis"`
 	// Phases: the generic incident phase ladder (P1.2) — detection through
 	// component recovery, residual degradation, service recovery, monitoring.
-	Phases []rcaIncidentPhase `json:"phases,omitempty"`
+	Phases []rca.IncidentPhase `json:"phases,omitempty"`
 	// FaultLocalization is WHERE the evidence converges (a domain/seam/object
 	// boundary). It is never the root cause: localization narrows, cause explains.
 	FaultLocalization rcaFaultLocalization `json:"fault_localization"`
@@ -145,7 +146,7 @@ type rcaReport struct {
 	// explained-away/discounted faults, the honesty-cap reason, and the discovered
 	// typed path the cause sits on. nil (omitted) when the engine attributed no
 	// on-path cause — an honest absence, never an invented one.
-	PathAttribution *rcaPathAttribution `json:"path_attribution,omitempty"`
+	PathAttribution *rca.PathAttribution `json:"path_attribution,omitempty"`
 
 	// mgmtTrimmed: the management summary exceeded the word cap and dropped
 	// lower-priority sentences — surfaced as a P2 quality warning.
@@ -165,7 +166,7 @@ type rcaReport struct {
 
 // rcaObserverRegistry is the package-level observer classification registry
 // (env-driven global defaults; per-tenant structured policy injected when wired).
-var rcaObserverRegistry = newObserverRegistry(nil)
+var rcaObserverRegistry = rca.NewObserverRegistry(nil)
 
 // evidenceAccounting exposes the derived accounting (and any invariant error) for
 // the quality gate and tests. Kept a method so the unexported fields have a reader.
@@ -245,9 +246,9 @@ type rcaReportStates struct {
 	Recovery      string `json:"recovery"`       // explicitly_confirmed | component_only | failed_validation | inferred | not_observed
 	RecoveryBasis string `json:"recovery_basis"` // human sentence: what (if anything) proved recovery
 	// Per-scope recovery assessments (RecoveryReconciler output).
-	RecoveryComponent rcaRecoveryScopeState `json:"recovery_component"`
-	RecoveryService   rcaRecoveryScopeState `json:"recovery_service"`
-	Analysis          string                `json:"analysis"` // retained for API compat: observed | suspected | probable | confirmed | inconclusive
+	RecoveryComponent rca.RecoveryScopeState `json:"recovery_component"`
+	RecoveryService   rca.RecoveryScopeState `json:"recovery_service"`
+	Analysis          string                 `json:"analysis"` // retained for API compat: observed | suspected | probable | confirmed | inconclusive
 	// Dimensional analysis states (owner feedback: no single umbrella flag).
 	Symptom        string `json:"symptom"`          // observed | confirmed
 	FaultDomain    string `json:"fault_domain"`     // not_localized | suspected | probable | confirmed
@@ -1061,7 +1062,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// recovery evidence is at/after the last qualifying anomaly in every
 	// participating scope. A tunnel-up while probes keep failing is component
 	// recovery + residual degradation, never incident recovery.
-	ra := reconcileRecovery(anomalous, clears)
+	ra := rca.ReconcileRecovery(anomalous, clears)
 	recovered := ra.At // zero unless the incident-level gate passed
 	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
 	switch {
@@ -1629,7 +1630,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	}
 
 	// ---- incident phases (P1.2) ----------------------------------------------------------------
-	phases := buildIncidentPhases(firstObs, ra, times.MonitoringUntil)
+	phases := rca.BuildIncidentPhases(firstObs, ra, times.MonitoringUntil)
 
 	// ---- wording ----------------------------------------------------------------------------------
 	title, subtitle, problemNoun := buildRcaTitle(topHyp, analysis, incident, scope, laneAnomalous, changes)
@@ -1705,7 +1706,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	// Path-causality RCA P2: the on-path device attribution the engine wrote to the
 	// attribution column (design §2.4). Pure passthrough decode — nil when no
 	// on-path cause was attributed, so the section is omitted, never invented.
-	rep.PathAttribution = decodePathAttribution(meta)
+	rep.PathAttribution = rca.DecodePathAttribution(meta)
 
 	// ---- Phase 1 postmortem semantics (spec §1/§2) ------------------------------
 	// Separated concepts + detection milestones, projected from the SAME derived

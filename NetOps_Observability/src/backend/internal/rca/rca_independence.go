@@ -1,4 +1,4 @@
-package main
+package rca
 
 // rca_independence.go — provenance-based independence grouping (Phase B).
 //
@@ -29,9 +29,9 @@ import (
 	"strings"
 )
 
-// sourceProvenance is the provenance fingerprint of one observation source. Built
+// SourceProvenance is the provenance fingerprint of one observation source. Built
 // from stored signal fields only; no derived or invented values.
-type sourceProvenance struct {
+type SourceProvenance struct {
 	ObserverID   string
 	AgentHost    string
 	SourceEgress string
@@ -40,16 +40,16 @@ type sourceProvenance struct {
 	Target       string
 	ScheduleID   string
 	// Kind + ProbeAuthority drive confirm-eligibility (not grouping).
-	Kind           observerKind
+	Kind           ObserverKind
 	ProbeAuthority string
 }
 
-// confirmEligible mirrors the verdict gate's `trusted` rule (verdicts.py Witness):
+// ConfirmEligible mirrors the verdict gate's `trusted` rule (verdicts.py Witness):
 // any non-probe modality may anchor a confirmation; a probe may only at HIGH/MEDIUM
 // authority. A low/debug/unclassified probe SUPPORTS a suspicion but never confirms.
 // Kind is advisory here — eligibility is decided by modality + probe authority so it
 // agrees with the audited Python gate exactly.
-func (p sourceProvenance) confirmEligible() bool {
+func (p SourceProvenance) ConfirmEligible() bool {
 	if strings.ToLower(strings.TrimSpace(p.Modality)) != "active_probe" {
 		return true
 	}
@@ -65,7 +65,7 @@ func (p sourceProvenance) confirmEligible() bool {
 // re-derived here for the accounting layer so the two never disagree. NOTE: a
 // shared measurement stream requires seam+target+schedule to ALL match (a shared
 // target alone is not co-location).
-func (p sourceProvenance) sharesFateWith(o sourceProvenance) bool {
+func (p SourceProvenance) sharesFateWith(o SourceProvenance) bool {
 	if p.ObserverID != "" && p.ObserverID == o.ObserverID {
 		return true
 	}
@@ -83,25 +83,25 @@ func (p sourceProvenance) sharesFateWith(o sourceProvenance) bool {
 	return false
 }
 
-// independenceGroup is one deduplicated independent source: the set of observer
+// IndependenceGroup is one deduplicated independent source: the set of observer
 // ids that share a fate, with the collective confirm-eligibility and modalities.
-type independenceGroup struct {
+type IndependenceGroup struct {
 	GroupID         string   `json:"group_id"`
 	ObserverIDs     []string `json:"observer_ids"`
 	Modalities      []string `json:"modalities"`
 	ConfirmEligible bool     `json:"confirm_eligible"`
 }
 
-// groupIndependence collapses provenance records into independence groups via
+// GroupIndependence collapses provenance records into independence groups via
 // union-find over the fate relation. Deterministic: the result depends only on the
 // input set, not its order (groups + their members are sorted). Records with an
 // empty observer id are ignored (they cannot be a source).
-func groupIndependence(records []sourceProvenance) []independenceGroup {
+func GroupIndependence(records []SourceProvenance) []IndependenceGroup {
 	// De-duplicate to distinct observer ids first — one observer is one node,
 	// however many signals it produced. Keep the strongest (confirm-eligible)
 	// facts and any non-empty co-location key seen for that observer.
 	type node struct {
-		prov     sourceProvenance
+		prov     SourceProvenance
 		eligible bool
 	}
 	nodes := map[string]*node{}
@@ -134,7 +134,7 @@ func groupIndependence(records []sourceProvenance) []independenceGroup {
 				n.prov.ScheduleID = rec.ScheduleID
 			}
 		}
-		if rec.confirmEligible() {
+		if rec.ConfirmEligible() {
 			n.eligible = true
 		}
 	}
@@ -167,7 +167,7 @@ func groupIndependence(records []sourceProvenance) []independenceGroup {
 		root := find(id)
 		members[root] = append(members[root], id)
 	}
-	var groups []independenceGroup
+	var groups []IndependenceGroup
 	for root, ids := range members {
 		sort.Strings(ids)
 		modSet := map[string]bool{}
@@ -185,7 +185,7 @@ func groupIndependence(records []sourceProvenance) []independenceGroup {
 			}
 		}
 		sort.Strings(mods)
-		groups = append(groups, independenceGroup{
+		groups = append(groups, IndependenceGroup{
 			GroupID:         "grp:" + root,
 			ObserverIDs:     ids,
 			Modalities:      mods,
@@ -196,12 +196,12 @@ func groupIndependence(records []sourceProvenance) []independenceGroup {
 	return groups
 }
 
-// confirmEligibleGroups returns the subset of groups that may anchor a
+// ConfirmEligibleGroups returns the subset of groups that may anchor a
 // confirmation — the mutually-independent confirming sources. Each group is
 // independent of every other by construction (union-find over the fate relation),
 // so their count is the independent-confirming-source count.
-func confirmEligibleGroups(groups []independenceGroup) []independenceGroup {
-	var out []independenceGroup
+func ConfirmEligibleGroups(groups []IndependenceGroup) []IndependenceGroup {
+	var out []IndependenceGroup
 	for _, g := range groups {
 		if g.ConfirmEligible {
 			out = append(out, g)

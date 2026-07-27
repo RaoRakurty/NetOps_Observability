@@ -1,4 +1,4 @@
-package main
+package rca
 
 // rca_recovery.go — the generic RecoveryReconciler and IncidentPhaseBuilder
 // (truthfulness redesign 2026-07-15, audit D1).
@@ -49,8 +49,8 @@ func rcaEvidenceScope(sig map[string]any) string {
 
 // ---- recovery assessment --------------------------------------------------------
 
-// rcaRecoveryScopeState is one scope's recovery assessment.
-type rcaRecoveryScopeState struct {
+// RecoveryScopeState is one scope's recovery assessment.
+type RecoveryScopeState struct {
 	// State: not_applicable | not_observed | inferred | explicitly_confirmed |
 	// failed_validation | not_observable
 	State string `json:"state"`
@@ -58,10 +58,10 @@ type rcaRecoveryScopeState struct {
 	Basis string `json:"basis"`
 }
 
-// rcaRecoveryAssessment is the reconciled multi-scope recovery picture.
-type rcaRecoveryAssessment struct {
-	Component rcaRecoveryScopeState `json:"component"`
-	Service   rcaRecoveryScopeState `json:"service"`
+// RecoveryAssessment is the reconciled multi-scope recovery picture.
+type RecoveryAssessment struct {
+	Component RecoveryScopeState `json:"component"`
+	Service   RecoveryScopeState `json:"service"`
 
 	// Confirmed: the whole incident's recovery gate passed — recovery evidence
 	// exists at/after the last qualifying anomaly in EVERY participating scope.
@@ -82,12 +82,12 @@ type rcaRecoveryAssessment struct {
 	recoveryCount        int
 }
 
-// reconcileRecovery derives the multi-scope recovery assessment.
+// ReconcileRecovery derives the multi-scope recovery assessment.
 //   - anomalous: attached anomalous signals (the incident's qualifying symptoms)
 //   - recoveries: observed recovery evidence (clears + post-onset up-states),
 //     each already filtered to AFTER the first anomaly by the caller.
-func reconcileRecovery(anomalous, recoveries []map[string]any) rcaRecoveryAssessment {
-	var ra rcaRecoveryAssessment
+func ReconcileRecovery(anomalous, recoveries []map[string]any) RecoveryAssessment {
+	var ra RecoveryAssessment
 	ts := func(sig map[string]any) (time.Time, bool) {
 		if ct, ok := parseChTS(fmt.Sprintf("%v", sig["clear_ts"])); ok {
 			return ct, true
@@ -134,16 +134,16 @@ func reconcileRecovery(anomalous, recoveries []map[string]any) rcaRecoveryAssess
 	// component scope
 	switch {
 	case !ra.componentPresent:
-		ra.Component = rcaRecoveryScopeState{State: "not_applicable",
+		ra.Component = RecoveryScopeState{State: "not_applicable",
 			Basis: "No component-scope evidence participated in this incident."}
 	case ra.componentAt.IsZero():
-		ra.Component = rcaRecoveryScopeState{State: "not_observed",
+		ra.Component = RecoveryScopeState{State: "not_observed",
 			Basis: "No component recovery evidence was captured."}
 	case !ra.lastComponentAnomaly.After(ra.componentAt):
-		ra.Component = rcaRecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.componentAt),
+		ra.Component = RecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.componentAt),
 			Basis: fmt.Sprintf("Component status recovery observed at %s.", fmtUTC(ra.componentAt))}
 	default:
-		ra.Component = rcaRecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.componentAt),
+		ra.Component = RecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.componentAt),
 			Basis: fmt.Sprintf("A component recovery was observed at %s, but component-scope anomalies continued through %s.",
 				fmtUTC(ra.componentAt), fmtUTC(ra.lastComponentAnomaly))}
 	}
@@ -151,21 +151,21 @@ func reconcileRecovery(anomalous, recoveries []map[string]any) rcaRecoveryAssess
 	// service scope
 	switch {
 	case !ra.servicePresent:
-		ra.Service = rcaRecoveryScopeState{State: "not_applicable",
+		ra.Service = RecoveryScopeState{State: "not_applicable",
 			Basis: "No service-scope (end-to-end) evidence participated in this incident."}
 	case !ra.serviceAt.IsZero() && !ra.lastServiceAnomaly.After(ra.serviceAt):
-		ra.Service = rcaRecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.serviceAt),
+		ra.Service = RecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.serviceAt),
 			Basis: fmt.Sprintf("Service-level recovery evidence observed at %s, after the last failing check.", fmtUTC(ra.serviceAt))}
 	case !ra.serviceAt.IsZero():
-		ra.Service = rcaRecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.serviceAt),
+		ra.Service = RecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.serviceAt),
 			Basis: fmt.Sprintf("Service-scope checks continued failing through %s after the recovery evidence at %s.",
 				fmtUTC(ra.lastServiceAnomaly), fmtUTC(ra.serviceAt))}
 	case !ra.componentAt.IsZero() && ra.lastServiceAnomaly.After(ra.componentAt):
-		ra.Service = rcaRecoveryScopeState{State: "failed_validation",
+		ra.Service = RecoveryScopeState{State: "failed_validation",
 			Basis: fmt.Sprintf("Component status recovered at %s, but end-to-end checks continued failing through %s. Service recovery is not confirmed.",
 				fmtUTC(ra.componentAt), fmtUTC(ra.lastServiceAnomaly))}
 	default:
-		ra.Service = rcaRecoveryScopeState{State: "not_observed",
+		ra.Service = RecoveryScopeState{State: "not_observed",
 			Basis: "No service-level recovery evidence was captured."}
 	}
 
@@ -190,22 +190,22 @@ func reconcileRecovery(anomalous, recoveries []map[string]any) rcaRecoveryAssess
 
 // ---- incident phases (P1.2) ----------------------------------------------------
 
-type rcaIncidentPhase struct {
+type IncidentPhase struct {
 	Type    string `json:"type"` // detection | degradation | component_recovery | residual_degradation | service_recovery | monitoring
 	StartAt string `json:"start_at,omitempty"`
 	EndAt   string `json:"end_at,omitempty"`
 	Summary string `json:"summary"`
 }
 
-// buildIncidentPhases derives the generic phase ladder from the reconciled
+// BuildIncidentPhases derives the generic phase ladder from the reconciled
 // recovery assessment. Phases are facts about the evidence timeline — the
 // narrative renders them so conflicting timestamps are EXPLAINED, never hidden.
-func buildIncidentPhases(firstObs time.Time, ra rcaRecoveryAssessment, monitoringUntil string) []rcaIncidentPhase {
+func BuildIncidentPhases(firstObs time.Time, ra RecoveryAssessment, monitoringUntil string) []IncidentPhase {
 	if firstObs.IsZero() {
 		return nil
 	}
-	var phases []rcaIncidentPhase
-	phases = append(phases, rcaIncidentPhase{
+	var phases []IncidentPhase
+	phases = append(phases, IncidentPhase{
 		Type: "detection", StartAt: fmtUTC(firstObs),
 		Summary: "First anomalous evidence observed.",
 	})
@@ -214,31 +214,31 @@ func buildIncidentPhases(firstObs time.Time, ra rcaRecoveryAssessment, monitorin
 		degEnd = ra.componentAt
 	}
 	if degEnd.After(firstObs) {
-		phases = append(phases, rcaIncidentPhase{
+		phases = append(phases, IncidentPhase{
 			Type: "degradation", StartAt: fmtUTC(firstObs), EndAt: fmtUTC(degEnd),
 			Summary: "Anomalous evidence persisted across the participating evidence classes.",
 		})
 	}
 	if !ra.componentAt.IsZero() {
-		phases = append(phases, rcaIncidentPhase{
+		phases = append(phases, IncidentPhase{
 			Type: "component_recovery", StartAt: fmtUTC(ra.componentAt),
 			Summary: "Component status recovery observed.",
 		})
 	}
 	if ra.ResidualAfterComponent {
-		phases = append(phases, rcaIncidentPhase{
+		phases = append(phases, IncidentPhase{
 			Type: "residual_degradation", StartAt: fmtUTC(ra.componentAt), EndAt: fmtUTC(ra.lastAnomaly),
 			Summary: fmt.Sprintf("Component status recovered at %s, but end-to-end evidence continued failing through %s — the incident entered residual degradation rather than full recovery.",
 				fmtUTC(ra.componentAt), fmtUTC(ra.lastAnomaly)),
 		})
 	}
 	if ra.Confirmed {
-		phases = append(phases, rcaIncidentPhase{
+		phases = append(phases, IncidentPhase{
 			Type: "service_recovery", StartAt: fmtUTC(ra.At),
 			Summary: "Recovery evidence observed after the last qualifying anomaly in every participating scope.",
 		})
 		if monitoringUntil != "" {
-			phases = append(phases, rcaIncidentPhase{
+			phases = append(phases, IncidentPhase{
 				Type: "monitoring", StartAt: fmtUTC(ra.At), EndAt: monitoringUntil,
 				Summary: "Post-recovery stability window.",
 			})

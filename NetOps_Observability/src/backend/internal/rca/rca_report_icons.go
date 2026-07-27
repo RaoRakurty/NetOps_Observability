@@ -1,4 +1,4 @@
-package main
+package rca
 
 // rca_report_icons.go — the OFFICIAL cloud-provider marks the RCA report's
 // path-causality SVG draws above cloud hops. Vendored from the providers'
@@ -19,10 +19,10 @@ var cloudIconFiles embed.FS
 var cloudIconURIOnce sync.Once
 var cloudIconURIs map[string]string
 
-// cloudIconDataURI returns a data: URI for the official mark of a provider we
+// CloudIconDataURI returns a data: URI for the official mark of a provider we
 // have vendored (aws, azure, gcp), or "" — callers fall back to a text label,
 // never to an unofficial approximation.
-func cloudIconDataURI(provider string) string {
+func CloudIconDataURI(provider string) string {
 	cloudIconURIOnce.Do(func() {
 		cloudIconURIs = map[string]string{}
 		for _, name := range []string{"aws", "azure", "gcp"} {

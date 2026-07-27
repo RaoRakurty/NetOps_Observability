@@ -9,6 +9,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/rca"
 	"sort"
 	"strings"
 	"time"
@@ -981,7 +982,7 @@ func buildDecision(analysis, incident, recoveryState, impact, monitoring string,
 // inputs — environment, current end-to-end impact, corroboration, analysis
 // maturity and recovery/residual state — never the circular "peak of the
 // attached evidence". Generic across issue families.
-func rcaSeverityIncidentBasis(sevIncident string, validation bool, impactSyn, impactRU, analysis string, observers, anomLanes int, ra rcaRecoveryAssessment) string {
+func rcaSeverityIncidentBasis(sevIncident string, validation bool, impactSyn, impactRU, analysis string, observers, anomLanes int, ra rca.RecoveryAssessment) string {
 	if validation {
 		return "Validation scenario — production severity not applicable; simulated severity reflects the injected condition only."
 	}
@@ -1176,7 +1177,7 @@ func rcaComposeSummary(sents []rcaSummarySentence, capWords int) (string, bool) 
 	return strings.Join(parts, " "), trimmed
 }
 
-func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rcaRecoveryAssessment, merge *rcaIncidentMerge) (string, bool) {
+func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaReportTimes, incident, analysis, impact, impactSyn, impactRealUser, monitoring string, decision rcaDecision, sig rcaSignalSummary, monitorWindow time.Duration, ra rca.RecoveryAssessment, merge *rcaIncidentMerge) (string, bool) {
 	subject := "the monitored service"
 	if len(scope.Services) > 0 {
 		subject = scope.Services[0]
@@ -1297,7 +1298,7 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 
 // ---- NOC quick-read (§4) ----------------------------------------------------------------------------------
 
-func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction, ra rcaRecoveryAssessment, merge *rcaIncidentMerge) []rcaKV {
+func buildNocQuickRead(incident, recovery, analysis, impact, impactSyn, impactRU, ticket, monitoring string, times rcaReportTimes, scope rcaReportScope, sig rcaSignalSummary, coverage []rcaEvidenceLane, own rcaOwnership, actions []rcaAction, ra rca.RecoveryAssessment, merge *rcaIncidentMerge) []rcaKV {
 	var kv []rcaKV
 	// A merged source's quick-read leads with the merge: source-case lifecycle,
 	// the surviving incident, and where operational ownership now lives (P1).

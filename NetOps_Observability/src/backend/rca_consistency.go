@@ -15,6 +15,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/rca"
 	"strings"
 	"time"
 )
@@ -348,7 +349,7 @@ func validateRcaReport(rep *rcaReport, now time.Time) rcaReportQuality {
 	// (6) api / collector presented as a logical vantage (the P-027379 defect):
 	// a denylisted identity must never render as a vantage, even against policy.
 	for _, o := range acc.AnomalyObservers {
-		if o.Kind == observerLogicalVantage && rcaObserverRegistry.isNeverVantage(o.ObserverID) {
+		if o.Kind == rca.KindLogicalVantage && rcaObserverRegistry.IsNeverVantage(o.ObserverID) {
 			errf("api_or_collector_as_vantage", "evidence_accounting.logical_vantages",
 				"observer %q is a collector/API identity but is classified as a logical vantage", o.ObserverID)
 		}

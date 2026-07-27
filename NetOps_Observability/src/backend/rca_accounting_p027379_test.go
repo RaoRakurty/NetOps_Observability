@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/rca"
 	"testing"
 )
 
@@ -115,7 +116,7 @@ func TestAccounting_P027379_Fixture(t *testing.T) {
 	}
 	// api must never be classified as a logical vantage.
 	for _, o := range acc.AnomalyObservers {
-		if o.ObserverID == "api" && o.Kind == observerLogicalVantage {
+		if o.ObserverID == "api" && o.Kind == rca.KindLogicalVantage {
 			t.Errorf("api classified as logical_vantage in P-027379")
 		}
 	}

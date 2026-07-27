@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/rca"
 	"sort"
 	"strings"
 )
@@ -73,11 +74,11 @@ func buildAccountingView(a EvidenceAccounting, lanes []rcaEvidenceLane) rcaAccou
 	}
 	for _, o := range a.AnomalyObservers {
 		switch o.Kind {
-		case observerLogicalVantage:
+		case rca.KindLogicalVantage:
 			v.LogicalVantages = append(v.LogicalVantages, o.ObserverID)
-		case observerControlPlaneSource:
+		case rca.KindControlPlaneSource:
 			v.ControlPlaneSources = append(v.ControlPlaneSources, o.ObserverID)
-		case observerCollector:
+		case rca.KindCollector:
 			v.Collectors = append(v.Collectors, o.ObserverID)
 		default:
 			v.UnknownSources = append(v.UnknownSources, o.ObserverID)

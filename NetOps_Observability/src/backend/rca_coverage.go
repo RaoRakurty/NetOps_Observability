@@ -32,6 +32,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/rca"
 	"os"
 	"sort"
 	"strings"
@@ -277,7 +278,7 @@ func newCoverageEngine(perTenant map[string]tenantCoveragePolicy) *EvidenceCover
 		pol.globalThresholds["*"] = def
 	}
 	// env: per-class thresholds.
-	for _, entry := range splitEnvList(os.Getenv("CORR_COVERAGE_THRESHOLDS")) {
+	for _, entry := range rca.SplitEnvList(os.Getenv("CORR_COVERAGE_THRESHOLDS")) {
 		class, spec, ok := strings.Cut(entry, ":")
 		if !ok {
 			continue
@@ -289,7 +290,7 @@ func newCoverageEngine(perTenant map[string]tenantCoveragePolicy) *EvidenceCover
 		pol.globalThresholds[strings.TrimSpace(class)] = th
 	}
 	// env: per-class strategy override.
-	for _, entry := range splitEnvList(os.Getenv("CORR_COVERAGE_STRATEGY")) {
+	for _, entry := range rca.SplitEnvList(os.Getenv("CORR_COVERAGE_STRATEGY")) {
 		class, strategy, ok := strings.Cut(entry, ":")
 		if !ok {
 			continue

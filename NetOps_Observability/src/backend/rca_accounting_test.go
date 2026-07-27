@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/rca"
 	"testing"
 )
 
@@ -108,22 +109,22 @@ func TestAccounting_OneExecutionManySignals_CollapseToOneGroup(t *testing.T) {
 // ── Spec family 2: api → NEVER a logical vantage ─────────────────────────────
 
 func TestAccounting_ApiNeverVantage(t *testing.T) {
-	reg := newObserverRegistry(nil)
+	reg := rca.NewObserverRegistry(nil)
 	// Even mis-stamped as a high-authority vantage_agent, api can never be a vantage.
-	k := reg.classify("t1", observerFacts{
+	k := reg.Classify("t1", rca.ObserverFacts{
 		ObserverID: "api", ObserverType: "vantage_agent", Modality: "active_probe", ProbeAuthority: "high",
 	})
-	if k == observerLogicalVantage {
+	if k == rca.KindLogicalVantage {
 		t.Fatalf("api classified as logical_vantage — hard rule violated")
 	}
-	if k != observerCollector {
+	if k != rca.KindCollector {
 		t.Errorf("api kind = %q, want collector", k)
 	}
 	// Even a tenant policy that TRIES to make api a vantage is downgraded.
-	reg2 := newObserverRegistry(map[string]map[string]observerKind{
-		"t1": {"api": observerLogicalVantage},
+	reg2 := rca.NewObserverRegistry(map[string]map[string]rca.ObserverKind{
+		"t1": {"api": rca.KindLogicalVantage},
 	})
-	if got := reg2.classify("t1", observerFacts{ObserverID: "api", Modality: "active_probe"}); got == observerLogicalVantage {
+	if got := reg2.Classify("t1", rca.ObserverFacts{ObserverID: "api", Modality: "active_probe"}); got == rca.KindLogicalVantage {
 		t.Errorf("policy override made api a vantage — hard rule must win, got %q", got)
 	}
 }
@@ -232,25 +233,25 @@ func TestAccounting_LegacyCase_ExecutionCountsUnavailable(t *testing.T) {
 // ── Spec family 16: tenant isolation for registry policy ─────────────────────
 
 func TestAccounting_RegistryPolicyTenantIsolation(t *testing.T) {
-	reg := newObserverRegistry(map[string]map[string]observerKind{
-		"tenant-a": {"site-probe-1": observerLogicalVantage},
+	reg := rca.NewObserverRegistry(map[string]map[string]rca.ObserverKind{
+		"tenant-a": {"site-probe-1": rca.KindLogicalVantage},
 	})
-	facts := observerFacts{ObserverID: "site-probe-1", Modality: "active_probe", ProbeAuthority: "low"}
+	facts := rca.ObserverFacts{ObserverID: "site-probe-1", Modality: "active_probe", ProbeAuthority: "low"}
 	// tenant-a policy elevates a low-authority probe to a vantage…
-	if got := reg.classify("tenant-a", facts); got != observerLogicalVantage {
+	if got := reg.Classify("tenant-a", facts); got != rca.KindLogicalVantage {
 		t.Errorf("tenant-a classify = %q, want logical_vantage (its policy)", got)
 	}
 	// …tenant-b, with no policy, must NOT see it — structural default = unknown.
-	if got := reg.classify("tenant-b", facts); got != observerUnknown {
+	if got := reg.Classify("tenant-b", facts); got != rca.KindUnknown {
 		t.Errorf("tenant-b classify = %q, want unknown (no policy leak across tenants)", got)
 	}
 }
 
 // Unclassified observers render explicitly unknown (constraint 1).
 func TestAccounting_UnclassifiedIsUnknownNotCollector(t *testing.T) {
-	reg := newObserverRegistry(nil)
-	got := reg.classify("t1", observerFacts{ObserverID: "mystery-src", Modality: "active_probe", ProbeAuthority: "low"})
-	if got != observerUnknown {
+	reg := rca.NewObserverRegistry(nil)
+	got := reg.Classify("t1", rca.ObserverFacts{ObserverID: "mystery-src", Modality: "active_probe", ProbeAuthority: "low"})
+	if got != rca.KindUnknown {
 		t.Errorf("unclassified low-authority probe = %q, want unknown", got)
 	}
 }

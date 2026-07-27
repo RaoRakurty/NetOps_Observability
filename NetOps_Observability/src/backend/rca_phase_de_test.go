@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/rca"
 	"os"
 	"strings"
 	"testing"
@@ -285,14 +286,14 @@ func TestPhaseD_TenantIsolation(t *testing.T) {
 	}
 
 	// A per-tenant observer policy that elevates a probe to a vantage must not leak.
-	reg := newObserverRegistry(map[string]map[string]observerKind{
-		"tenant-a": {"site-probe-9": observerLogicalVantage},
+	reg := rca.NewObserverRegistry(map[string]map[string]rca.ObserverKind{
+		"tenant-a": {"site-probe-9": rca.KindLogicalVantage},
 	})
-	f := observerFacts{ObserverID: "site-probe-9", Modality: "active_probe", ProbeAuthority: "low"}
-	if got := reg.classify("tenant-a", f); got != observerLogicalVantage {
+	f := rca.ObserverFacts{ObserverID: "site-probe-9", Modality: "active_probe", ProbeAuthority: "low"}
+	if got := reg.Classify("tenant-a", f); got != rca.KindLogicalVantage {
 		t.Errorf("tenant-a classify = %q, want logical_vantage", got)
 	}
-	if got := reg.classify("tenant-b", f); got == observerLogicalVantage {
+	if got := reg.Classify("tenant-b", f); got == rca.KindLogicalVantage {
 		t.Errorf("tenant-b saw tenant-a's vantage policy — cross-tenant leak")
 	}
 
@@ -367,14 +368,14 @@ func TestPhaseE_Blockers(t *testing.T) {
 		}, "accounting_failed_exceeds_executions"},
 		{"independent>observers", func(r *rcaReport) {
 			r.accounting.AnomalyObservers = make([]observerRecord, 1)
-			r.accounting.IndependentGroups = make([]independenceGroup, 3)
+			r.accounting.IndependentGroups = make([]rca.IndependenceGroup, 3)
 		}, "accounting_independent_exceeds_observers"},
 		{"verdict_gate_disagreement", func(r *rcaReport) {
 			r.accounting.VerdictIndependentPair = []string{"ghost-a", "ghost-b"}
 			r.accounting.IndependentGroups = nil
 		}, "accounting_verdict_gate_disagreement"},
 		{"api_as_vantage", func(r *rcaReport) {
-			r.accounting.AnomalyObservers = []observerRecord{{ObserverID: "api", Kind: observerLogicalVantage}}
+			r.accounting.AnomalyObservers = []observerRecord{{ObserverID: "api", Kind: rca.KindLogicalVantage}}
 		}, "api_or_collector_as_vantage"},
 		{"full_below_threshold", func(r *rcaReport) {
 			a := partial

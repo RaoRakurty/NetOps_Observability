@@ -26,6 +26,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/rca"
 	"sort"
 	"strings"
 )
@@ -75,12 +76,12 @@ type evidenceGroupRecord struct {
 
 // observerRecord is one distinct anomaly observer, classified + provenance-tagged.
 type observerRecord struct {
-	ObserverID      string       `json:"observer_id"`
-	Modality        string       `json:"modality_class"`
-	Kind            observerKind `json:"kind"`
-	AgentHost       string       `json:"agent_host,omitempty"`
-	ProbeAuthority  string       `json:"probe_authority,omitempty"`
-	ConfirmEligible bool         `json:"confirm_eligible"`
+	ObserverID      string           `json:"observer_id"`
+	Modality        string           `json:"modality_class"`
+	Kind            rca.ObserverKind `json:"kind"`
+	AgentHost       string           `json:"agent_host,omitempty"`
+	ProbeAuthority  string           `json:"probe_authority,omitempty"`
+	ConfirmEligible bool             `json:"confirm_eligible"`
 }
 
 // ladderRung is one layer of the reconciliation ladder (constraint 10).
@@ -119,10 +120,10 @@ type EvidenceAccounting struct {
 	// Distinct anomaly observers (the raw source set before independence dedup).
 	AnomalyObservers []observerRecord `json:"anomaly_observers"`
 	// Independence groups — anomaly sources collapsed by shared fate (provenance).
-	IndependenceGroups []independenceGroup `json:"independence_groups"`
+	IndependenceGroups []rca.IndependenceGroup `json:"independence_groups"`
 	// Independent confirming sources — confirm-eligible independence groups. This
 	// is the number a confirmed verdict rests on; must agree with the verdict gate.
-	IndependentGroups []independenceGroup `json:"independent_groups"`
+	IndependentGroups []rca.IndependenceGroup `json:"independent_groups"`
 
 	// Execution layer — path_observations / execution_id backed. Historically
 	// Unavailable (constraint 4): pre-model cases stored no configured-test or
@@ -158,7 +159,7 @@ type accountingInput struct {
 	CorrelationID string
 	Signals       []map[string]any
 	Hyp           rcaHypBlob
-	Registry      *observerRegistry
+	Registry      *rca.ObserverRegistry
 	// ProbeExecutions: distinct probe/synthetic executions the report layer already
 	// has (run_id/vantage/status). Nil/empty when not joined → execution counts are
 	// rendered Unavailable rather than fabricated.
@@ -241,7 +242,7 @@ func probeTarget(entityID, attrTarget string) string {
 func buildEvidenceAccounting(in accountingInput) (EvidenceAccounting, error) {
 	reg := in.Registry
 	if reg == nil {
-		reg = newObserverRegistry(nil)
+		reg = rca.NewObserverRegistry(nil)
 	}
 	a := EvidenceAccounting{TenantID: in.TenantID, CorrelationID: in.CorrelationID}
 
@@ -291,7 +292,7 @@ func buildEvidenceAccounting(in accountingInput) (EvidenceAccounting, error) {
 
 	// ---- distinct anomaly observers + classification + provenance -------------
 	obsIdx := map[string]int{}
-	var provByObserver = map[string]sourceProvenance{}
+	var provByObserver = map[string]rca.SourceProvenance{}
 	for _, sig := range in.Signals {
 		if attached, _ := sig["attached"].(bool); !attached {
 			continue
@@ -307,12 +308,12 @@ func buildEvidenceAccounting(in accountingInput) (EvidenceAccounting, error) {
 		modality := fmt.Sprintf("%v", sig["modality_class"])
 		probeAuth := sigStr(sig, "probe_authority")
 		at := parseSigAttrs(sig)
-		facts := observerFacts{
+		facts := rca.ObserverFacts{
 			ObserverID: oid, ObserverType: sigStr(sig, "observer_type"),
 			Modality: modality, ProbeAuthority: probeAuth,
 		}
-		ok := reg.classify(in.TenantID, facts)
-		prov := sourceProvenance{
+		ok := reg.Classify(in.TenantID, facts)
+		prov := rca.SourceProvenance{
 			ObserverID: oid, AgentHost: at.agentHost(), SourceEgress: at.sourceEgress(),
 			Modality: modality, SeamID: strings.TrimSpace(at.SeamID),
 			Target:     probeTarget(fmt.Sprintf("%v", sig["entity_id"]), at.Target),
@@ -342,21 +343,21 @@ func buildEvidenceAccounting(in accountingInput) (EvidenceAccounting, error) {
 		a.AnomalyObservers = append(a.AnomalyObservers, observerRecord{
 			ObserverID: oid, Modality: modality, Kind: ok,
 			AgentHost: prov.AgentHost, ProbeAuthority: probeAuth,
-			ConfirmEligible: prov.confirmEligible(),
+			ConfirmEligible: prov.ConfirmEligible(),
 		})
 	}
 
 	// ---- independence grouping (provenance dedup) -----------------------------
-	provs := make([]sourceProvenance, 0, len(provByObserver))
+	provs := make([]rca.SourceProvenance, 0, len(provByObserver))
 	for _, oid := range sortedKeys(provByObserver) {
 		provs = append(provs, provByObserver[oid])
 	}
-	a.IndependenceGroups = groupIndependence(provs)
-	a.IndependentGroups = confirmEligibleGroups(a.IndependenceGroups)
+	a.IndependenceGroups = rca.GroupIndependence(provs)
+	a.IndependentGroups = rca.ConfirmEligibleGroups(a.IndependenceGroups)
 	// keep ConfirmEligible flags on the observer records consistent with grouping
 	for i := range a.AnomalyObservers {
 		p := provByObserver[a.AnomalyObservers[i].ObserverID]
-		a.AnomalyObservers[i].ConfirmEligible = p.confirmEligible()
+		a.AnomalyObservers[i].ConfirmEligible = p.ConfirmEligible()
 	}
 
 	// ---- verdict-gate cross-check (agree with the audited Python gate) --------

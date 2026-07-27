@@ -1,4 +1,4 @@
-package main
+package rca
 
 // rca_path_attribution.go — the report-facing view of the path-causality RCA P2
 // on-path device attribution (design §2.4). It is a PURE passthrough decode of the
@@ -13,12 +13,12 @@ package main
 
 import "encoding/json"
 
-// rcaPathAttribution is the render contract (the P3 slice reads this): the named
+// PathAttribution is the render contract (the P3 slice reads this): the named
 // upstream-most on-path cause, its verdict lift over the symptom-only baseline, the
 // explained-away downstream victims, the discounted off-path faults, the honesty-cap
 // reason, and the DISCOVERED typed path (segments + key devices + head) the cause
 // sits on. Absent (nil) when the engine attributed no on-path cause.
-type rcaPathAttribution struct {
+type PathAttribution struct {
 	Src               string               `json:"src,omitempty"`
 	Dst               string               `json:"dst,omitempty"`
 	Headline          string               `json:"headline,omitempty"`
@@ -97,10 +97,10 @@ type rcaTypedPath struct {
 	Notes     []string          `json:"notes,omitempty"`
 }
 
-// decodePathAttribution reads the corr_objects.attribution column and returns the
+// DecodePathAttribution reads the corr_objects.attribution column and returns the
 // render view, or nil when no on-path cause was attributed. Best-effort: an
 // absent/empty/malformed blob → nil (the section is omitted honestly, never faked).
-func decodePathAttribution(meta map[string]any) *rcaPathAttribution {
+func DecodePathAttribution(meta map[string]any) *PathAttribution {
 	s := asString(meta["attribution"])
 	if s == "" || s == "{}" {
 		return nil
@@ -133,7 +133,7 @@ func decodePathAttribution(meta map[string]any) *rcaPathAttribution {
 	if raw.Attributed == nil {
 		return nil
 	}
-	return &rcaPathAttribution{
+	return &PathAttribution{
 		Src: raw.Src, Dst: raw.Dst, Headline: raw.Headline,
 		Attributed: raw.Attributed, ExplainedAway: raw.ExplainedAway,
 		Discounted: raw.Discounted, VerdictTier: raw.Verdict.Tier,

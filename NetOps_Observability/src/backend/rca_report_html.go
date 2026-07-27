@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"netops/backend/internal/rca"
 	"strings"
 	"time"
 )
@@ -216,7 +217,7 @@ func rcaPathGraphSVG(t rcaTopologyView) template.HTML {
 		}
 		if !respondingMark && !faultedFailedNode && h.Provider != "" {
 			prov := strings.ToUpper(h.Provider)
-			if uri := cloudIconDataURI(h.Provider); uri != "" {
+			if uri := rca.CloudIconDataURI(h.Provider); uri != "" {
 				// official provider mark + name (the icon terms recommend the
 				// name near the icon). Centered as one group above the node.
 				tw := 5 * len(prov) // ≈ bold 8px glyph width
