@@ -129,7 +129,15 @@ esac
 disk_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
 if [ -n "$disk_pct" ] && [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ]; then
   if [ "$disk_pct" -ge "${DISK_PRUNE_PCT:-90}" ]; then
-    docker builder prune -f >/dev/null 2>&1 || true
+    # §16.1: this is a DESTRUCTIVE remediation. It previously ended in
+    # `>/dev/null 2>&1 || true`, so a prune that could not run (daemon busy,
+    # permissions, no space to even prune) was indistinguishable from one that
+    # reclaimed nothing — the watchdog would report the disk problem without
+    # ever revealing that its own fix had failed. Report the failure; the disk
+    # warning below still fires on the re-measured value either way.
+    if ! prune_err=$(docker builder prune -f 2>&1 >/dev/null); then
+      problems+=("disk auto-prune FAILED: ${prune_err:-unknown error} (disk still ${disk_pct}%)")
+    fi
     disk_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
   fi
   [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ] &&
@@ -280,6 +288,66 @@ if [ -n "$os_cid" ]; then
         fi
         ;;
     esac
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# TELEMETRY-FLOW probe (2026-07-27 audit): every container can be RUNNING and
+# HEALTHY while zero telemetry lands. Container liveness is not data liveness,
+# and the audit showed the platform could not detect its own blindness — a
+# metric-store outage read as "no rules firing" and mass-RESOLVED live alerts.
+# The applogs probe above covers the LOG lane; these cover the two lanes whose
+# silence is most dangerous:
+#
+#   * correlation signals (ClickHouse netops.corr_signals) — the RCA substrate.
+#     Empty means the bus/consumer stalled; the UI then shows an honestly empty
+#     incident list that reads as "a quiet network".
+#   * metrics (VictoriaMetrics) — the lane that drives every metric alert. Its
+#     silence is the exact input that produced the mass-resolve.
+#
+# Both are DELTA-free absolute-freshness checks: we ask "what is the newest row
+# / most recent scrape", not "how many". A stale-but-present store is the
+# failure mode; a genuinely idle lab is handled by the opt-out below.
+# Set TELEMETRY_STALE_MIN=0 to disable (e.g. a demo host with no live devices).
+# -----------------------------------------------------------------------------
+tel_stale_min="${TELEMETRY_STALE_MIN:-20}"
+if [ "$tel_stale_min" -gt 0 ]; then
+  ch_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=clickhouse" 2>/dev/null)
+  if [ -n "$ch_cid" ]; then
+    # age in seconds of the newest signal, across all tenants.
+    sig_age=$(docker exec "$ch_cid" clickhouse-client -m -q \
+      "SELECT toInt64(dateDiff('second', max(ts), now())) FROM netops.corr_signals \
+       WHERE ts > now() - INTERVAL 1 DAY SETTINGS tenant_scope='__all__'" 2>/dev/null | tr -dc '0-9-')
+    if [ -z "$sig_age" ]; then
+      # Distinguish "the query failed" from "the lane is stale" — conflating the
+      # two is the very defect this release closed. An unanswerable store is its
+      # own problem and must be named as such.
+      problems+=("telemetry: ClickHouse did not answer the corr_signals freshness query (store unreachable or query rejected)")
+    elif [ "$sig_age" -gt $(( tel_stale_min * 60 )) ]; then
+      problems+=("telemetry STALLED: newest correlation signal is $(( sig_age / 60 ))m old (limit ${tel_stale_min}m) — the stack is up but nothing is being correlated")
+    fi
+  fi
+
+  vm_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=victoria" 2>/dev/null)
+  if [ -n "$vm_cid" ]; then
+    # Age of the newest collector sample. NOTE the query shape: last_over_time
+    # yields the VALUE, so freshness needs timestamp() around it — `time() -
+    # max(last_over_time(...))` silently computes time()-1 and always looks
+    # catastrophic. Verified against the live store when written.
+    # 127.0.0.1, not localhost: the VM image is minimal and does not resolve it
+    # (its own healthcheck uses 127.0.0.1 for the same reason).
+    # The 6h lookback means a long blackout still yields a large AGE rather than
+    # an empty result, so "stale" and "absent" stay distinguishable.
+    vm_age=$(docker exec "$vm_cid" wget -qO- --timeout=5 \
+      'http://127.0.0.1:8428/api/v1/query?query=time()-max(timestamp(last_over_time(collector_up%5B6h%5D)))' 2>/dev/null |
+      sed -n 's/.*"value":\[[^,]*,"\([0-9.]*\)".*/\1/p' | cut -d. -f1)
+    if [ -z "$vm_age" ]; then
+      problems+=("telemetry: no collector metric in VictoriaMetrics for at least 6h (store unreachable, or every collector has been silent that long)")
+    elif [ "$vm_age" -gt $(( tel_stale_min * 60 )) ]; then
+      problems+=("telemetry STALLED: newest collector metric is $(( vm_age / 60 ))m old (limit ${tel_stale_min}m) — metric alerting is blind, and a blind engine resolves alerts instead of firing them")
+    fi
   fi
 fi
 
