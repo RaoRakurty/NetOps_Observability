@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/metricval"
 )
 
 const forecastThreshold = 0.90 // 90% utilization line
@@ -206,7 +208,7 @@ func (s *server) vmRange(ctx context.Context, query string, start, end, step int
 			// fit would drag the forecast toward zero and invent a "capacity
 			// improving" signal out of a gap in the data; carrying the NaN
 			// through would break the JSON encode for the whole response.
-			val, ok := parseMetricFloat(str)
+			val, ok := metricval.Parse(str)
 			if !ok {
 				continue
 			}

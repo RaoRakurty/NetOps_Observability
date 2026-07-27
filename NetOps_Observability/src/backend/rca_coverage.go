@@ -32,6 +32,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/metricval"
 	"netops/backend/internal/rca"
 	"os"
 	"sort"
@@ -330,7 +331,7 @@ func parseThresholdSpec(spec string, base coverageThresholds) (coverageThreshold
 		// NaN is false, so "NaN/80/25" slipped through the range check here and
 		// was only caught by luck downstream (the ordering test also compares
 		// false). Reject non-finite explicitly rather than by accident.
-		f, ok := parseMetricFloat(p)
+		f, ok := metricval.Parse(p)
 		if !ok || f < 0 || f > 100 {
 			return base, false
 		}

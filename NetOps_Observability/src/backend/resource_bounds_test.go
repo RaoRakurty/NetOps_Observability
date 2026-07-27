@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/metricval"
 	"netops/backend/models"
 )
 
@@ -84,43 +85,14 @@ func TestWriteJSONHappyPathBytesUnchanged(t *testing.T) {
 	}
 }
 
-// TestParseMetricFloatRejectsNonFinite: ParseFloat ACCEPTS "NaN"/"Inf". This is
-// the parse boundary that must not.
-func TestParseMetricFloatRejectsNonFinite(t *testing.T) {
-	for _, s := range []string{"NaN", "nan", "+Inf", "-Inf", "inf", "Infinity"} {
-		if v, ok := parseMetricFloat(s); ok {
-			t.Errorf("parseMetricFloat(%q) = (%v, true) — strconv accepts it, so this helper is the only thing that can reject it", s, v)
-		}
-	}
-	for _, s := range []string{"", "abc", "1.2.3"} {
-		if _, ok := parseMetricFloat(s); ok {
-			t.Errorf("parseMetricFloat(%q) reported ok on malformed input", s)
-		}
-	}
-	if v, ok := parseMetricFloat(" 42.5 "); !ok || v != 42.5 {
-		t.Errorf("parseMetricFloat(\" 42.5 \") = (%v,%v), want (42.5,true)", v, ok)
-	}
-}
-
-// TestSanitizeFloatGuardsComputedValues: 0/0 in a rate calculation produces NaN
-// without any string ever being parsed.
-func TestSanitizeFloatGuardsComputedValues(t *testing.T) {
-	var zero float64
-	if got := sanitizeFloat(zero / zero); got != 0 {
-		t.Errorf("sanitizeFloat(NaN) = %v, want 0", got)
-	}
-	if got := sanitizeFloat(1 / zero); got != 0 {
-		t.Errorf("sanitizeFloat(+Inf) = %v, want 0", got)
-	}
-	if got := sanitizeFloat(3.5); got != 3.5 {
-		t.Errorf("sanitizeFloat(3.5) = %v, want 3.5", got)
-	}
-}
+// The F-21 parse-boundary unit tests moved into internal/metricval with the
+// code; the end-to-end shape below stays because it asserts the RELATIONSHIP
+// with this package's writeJSON.
 
 // TestNaNSampleDoesNotEmptyAResponse is the end-to-end shape: a metric store
 // returning NaN must degrade one FIELD, never the whole response.
 func TestNaNSampleDoesNotEmptyAResponse(t *testing.T) {
-	body := map[string]any{"device": "leaf1", "utilization": finiteOrZero("NaN")}
+	body := map[string]any{"device": "leaf1", "utilization": metricval.FiniteOrZero("NaN")}
 	w := httptest.NewRecorder()
 	writeJSON(w, http.StatusOK, body)
 	if w.Code != http.StatusOK {

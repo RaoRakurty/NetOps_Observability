@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/metricval"
 )
 
 type vmSample struct {
@@ -66,7 +68,7 @@ func (s *server) vmInstant(ctx context.Context, query string) ([]vmSample, error
 		if str, ok := r.Value[1].(string); ok {
 			// F-21: ParseFloat("NaN") succeeds, and NaN cannot be JSON-encoded —
 			// one NaN series used to empty the whole response body.
-			v = finiteOrZero(str)
+			v = metricval.FiniteOrZero(str)
 		}
 		samples = append(samples, vmSample{Labels: r.Metric, Value: v})
 	}

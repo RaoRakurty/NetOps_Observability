@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"netops/backend/chhttp"
+	"netops/backend/internal/metricval"
 )
 
 // chRows runs one tenant-scoped ClickHouse query and returns the parsed JSON
@@ -327,13 +328,13 @@ SELECT countIf(state='open')                                          AS open,
 	num := func(k string) float64 {
 		switch v := row[k].(type) {
 		case float64:
-			return sanitizeFloat(v)
+			return metricval.Sanitize(v)
 		case string:
 			// F-21: a ClickHouse aggregate over an empty window returns "nan",
 			// which ParseFloat accepts. It then rides into the summary response
 			// and json.Marshal refuses the WHOLE body — the endpoint answered
 			// 200 with zero bytes and the UI showed an empty Command Center.
-			return finiteOrZero(v)
+			return metricval.FiniteOrZero(v)
 		}
 		return 0
 	}

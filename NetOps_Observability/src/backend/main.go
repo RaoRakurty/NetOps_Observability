@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
@@ -1895,7 +1896,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "netops_json_write_failures_total %d\n", jsonWriteFailures.Load())
 	fmt.Fprintf(w, "# HELP netops_metric_nonfinite_total Metric samples dropped because the store returned NaN/±Inf.\n")
 	fmt.Fprintf(w, "# TYPE netops_metric_nonfinite_total counter\n")
-	fmt.Fprintf(w, "netops_metric_nonfinite_total %d\n", metricNonFinite.Load())
+	fmt.Fprintf(w, "netops_metric_nonfinite_total %d\n", metricval.NonFinite())
 	// F-22: alert delivery had no counter at all — a page lost to a transient
 	// 502 during an incident was invisible.
 	if s.notifier != nil {

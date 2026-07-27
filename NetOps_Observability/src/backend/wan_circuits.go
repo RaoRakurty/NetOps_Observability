@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/metricval"
 	"netops/backend/models"
 )
 
@@ -589,7 +590,7 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 			if str, ok := v[1].(string); ok {
 				// F-21: NaN/±Inf are missing data, not utilisation — and they
 				// cannot be JSON-encoded, so one of them emptied the response.
-				f = finiteOrZero(str)
+				f = metricval.FiniteOrZero(str)
 			}
 			if f < 0 {
 				f = 0

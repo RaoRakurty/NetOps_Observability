@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/metricval"
 )
 
 // signal-class weights (front-page §4 defaults). Availability is non-negotiable;
@@ -520,12 +522,12 @@ func asFloat(v any) float64 {
 	case float64:
 		// ClickHouse can hand back a non-finite float directly (nan/inf in a
 		// JSON number position); sanitise it here too, not just the string form.
-		return sanitizeFloat(x)
+		return metricval.Sanitize(x)
 	case string:
 		// F-21: ParseFloat("NaN") succeeds and the NaN lands in a health-score
 		// response field, where it (a) fails the JSON encode for the entire
 		// response and (b) compares false against every threshold above.
-		return finiteOrZero(x)
+		return metricval.FiniteOrZero(x)
 	}
 	return 0
 }

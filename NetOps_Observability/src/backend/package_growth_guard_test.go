@@ -64,7 +64,9 @@ import (
 //	                  portintel.DB); handlers + backend selection stayed
 //	2026-07-27  281  internal/ratelimit (the F-33 fixed-window limiter; callers
 //	                  now pass their budget — the env read left the package)
-const rootPackageCeiling = 281
+//	2026-07-27  280  internal/metricval (the F-21 metric-value parse boundary;
+//	                  counter exposed read-only via NonFinite())
+const rootPackageCeiling = 280
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")
