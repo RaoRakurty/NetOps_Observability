@@ -81,7 +81,10 @@ import (
 //	                  family is one strongly-connected component. Six rca_*
 //	                  handler/store files stayed and consume the exported
 //	                  surface (rca.Report, rca.BuildReport, …).
-const rootPackageCeiling = 263
+//	2026-07-27  262  internal/gqlparse (the F-72 GraphQL subset parser — zero
+//	                  external deps, one consumer; the handler and its RBAC
+//	                  gate stayed)
+const rootPackageCeiling = 262
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

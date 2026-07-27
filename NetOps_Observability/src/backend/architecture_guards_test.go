@@ -472,8 +472,8 @@ func TestGraphQLDoesNotDispatchOnSubstrings(t *testing.T) {
 	if !ok {
 		t.Fatal("graphql.go not found — update this guard")
 	}
-	if !strings.Contains(src, "parseGraphQL(req.Query)") {
-		t.Error("handleGraphQL must parse the document (parseGraphQL), not pattern-match it (F-72).")
+	if !strings.Contains(src, "gqlparse.Parse(req.Query)") {
+		t.Error("handleGraphQL must parse the document (gqlparse.Parse), not pattern-match it (F-72).")
 	}
 	// The security half: the same RBAC gate as the REST twin, which the old
 	// handler skipped entirely with `claims, _ := userFrom(r.Context())`.

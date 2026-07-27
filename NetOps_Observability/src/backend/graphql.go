@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/gqlparse"
 	"sort"
 )
 
@@ -88,7 +89,7 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		writeGQLErrors(w, http.StatusBadRequest, "invalid GraphQL request envelope: "+err.Error())
 		return
 	}
-	op, err := parseGraphQL(req.Query)
+	op, err := gqlparse.Parse(req.Query)
 	if err != nil {
 		writeGQLErrors(w, http.StatusBadRequest, err.Error())
 		return
@@ -100,7 +101,7 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	}
 	// Variables were declared on the request struct and read at ZERO sites.
 	// A variable the document declares but the request does not supply is now
-	// an error the moment a resolver needs it (gqlIntArg); a variable the
+	// an error the moment a resolver needs it (gqlparse.IntArg); a variable the
 	// request supplies but the document never declares is refused here, so a
 	// caller can never believe an input was applied when it was not.
 	if err := checkGQLVariables(op, req.Variables); err != nil {
@@ -130,7 +131,7 @@ func (s *server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 
 // checkGQLVariables refuses variables the document never declares. Silently
 // accepting them is the same class of defect as silently ignoring `limit`.
-func checkGQLVariables(op *gqlOperation, vars map[string]any) error {
+func checkGQLVariables(op *gqlparse.Operation, vars map[string]any) error {
 	if len(vars) == 0 {
 		return nil
 	}
@@ -156,7 +157,7 @@ func checkGQLVariables(op *gqlOperation, vars map[string]any) error {
 var gqlQueryFields = []string{"__schema", "__typename", "alerts", "devices", "health", "rules"}
 
 // resolveGQLField executes one root field.
-func (s *server) resolveGQLField(f gqlField, claims jwtClaims, vars map[string]any) (any, error) {
+func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[string]any) (any, error) {
 	_, cross := principalTenant(claims)
 	switch f.Name {
 	case "__typename":
@@ -234,7 +235,7 @@ func (s *server) resolveGQLField(f gqlField, claims jwtClaims, vars map[string]a
 }
 
 // noArgs refuses arguments on a field that takes none, naming the offender.
-func noArgs(f gqlField) error {
+func noArgs(f gqlparse.Field) error {
 	if len(f.Args) == 0 {
 		return nil
 	}
@@ -250,7 +251,7 @@ func noArgs(f gqlField) error {
 // bounded page the REST endpoints use — including refusing an unknown argument.
 // `first`/`last` are named explicitly because the audit's probe used `first:`
 // and got the entire table back with no complaint.
-func gqlPageArgs(f gqlField, vars map[string]any, defLimit, maxLimit int) (pageRequest, error) {
+func gqlPageArgs(f gqlparse.Field, vars map[string]any, defLimit, maxLimit int) (pageRequest, error) {
 	p := pageRequest{Limit: defLimit, Max: maxLimit}
 	names := make([]string, 0, len(f.Args))
 	for k := range f.Args {
@@ -268,7 +269,7 @@ func gqlPageArgs(f gqlField, vars map[string]any, defLimit, maxLimit int) (pageR
 		}
 	}
 	if v, ok := f.Args["limit"]; ok {
-		n, err := gqlIntArg(v, vars, "limit")
+		n, err := gqlparse.IntArg(v, vars, "limit")
 		if err != nil {
 			return pageRequest{}, err
 		}
@@ -279,7 +280,7 @@ func gqlPageArgs(f gqlField, vars map[string]any, defLimit, maxLimit int) (pageR
 		p.Explicit = true
 	}
 	if v, ok := f.Args["offset"]; ok {
-		n, err := gqlIntArg(v, vars, "offset")
+		n, err := gqlparse.IntArg(v, vars, "offset")
 		if err != nil {
 			return pageRequest{}, err
 		}
@@ -295,7 +296,7 @@ func gqlPageArgs(f gqlField, vars map[string]any, defLimit, maxLimit int) (pageR
 // projectList applies a selection set to every element of a typed slice. The
 // old handler serialized the WHOLE struct regardless of what was selected —
 // which is how `{devices{id}}` returned 218 KB of every field of every device.
-func projectList[T any](rows []T, sel []gqlField, typeName string) (any, error) {
+func projectList[T any](rows []T, sel []gqlparse.Field, typeName string) (any, error) {
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		m, err := toFieldMap(row)
@@ -311,7 +312,7 @@ func projectList[T any](rows []T, sel []gqlField, typeName string) (any, error) 
 	return out, nil
 }
 
-func projectOne(m map[string]any, sel []gqlField, typeName string) (any, error) {
+func projectOne(m map[string]any, sel []gqlparse.Field, typeName string) (any, error) {
 	return projectMap(m, sel, typeName)
 }
 
@@ -337,7 +338,7 @@ func toFieldMap(v any) (map[string]any, error) {
 // A field selected without a sub-selection returns the whole value — the
 // pragmatic choice for the free-form maps (health, labels) this schema carries,
 // and part of why the schema is documented as partial.
-func projectMap(m map[string]any, sel []gqlField, typeName string) (map[string]any, error) {
+func projectMap(m map[string]any, sel []gqlparse.Field, typeName string) (map[string]any, error) {
 	if len(sel) == 0 {
 		return m, nil
 	}
