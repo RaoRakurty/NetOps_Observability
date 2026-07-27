@@ -22,6 +22,7 @@ package main
 // upgrades where the API image lands before the ClickHouse config does.
 
 import (
+	"netops/backend/chhttp"
 	"strings"
 	"sync/atomic"
 )
@@ -41,9 +42,13 @@ import (
 //	max_execution_time                          — ClickHouse aborts by itself
 //	cancel_http_readonly_queries_on_client_close — closing the socket kills the query
 //
-// chMaxResponseBytes bounds the other half: an io.ReadAll with no limit on a
-// response whose size is a function of table size.
-const chMaxResponseBytes int64 = 8 << 20
+// The other half — bounding an io.ReadAll on a response whose size is a
+// function of table size — is chhttp.DefaultMaxBytes. This file used to declare
+// its OWN `const chMaxResponseBytes = 8 << 20`, a second source of truth for
+// the same cap that could drift from the transport's silently. Extracting
+// internal/chschema on 2026-07-27 surfaced the duplicate; package main now
+// defers to the package that actually enforces it.
+const chMaxResponseBytes = chhttp.DefaultMaxBytes
 
 // chReadFailures counts ClickHouse reads that returned an error. Before F-27
 // the shared read helper swallowed every failure and returned nil, so an
