@@ -143,8 +143,13 @@ func (ca *CA) Issue(req Request) (*SVID, error) {
 		return nil, errors.New("internalca: SPIFFEID required")
 	}
 	uri, err := url.Parse(req.SPIFFEID)
-	if err != nil || uri.Scheme == "" {
-		return nil, fmt.Errorf("internalca: invalid SPIFFE ID %q", req.SPIFFEID)
+	if err != nil {
+		return nil, fmt.Errorf("internalca: invalid SPIFFE ID %q: %w", req.SPIFFEID, err)
+	}
+	if uri.Scheme == "" {
+		// Parsed, but not a URI (no scheme) — a different operator/caller mistake
+		// from an unparseable string, and both must stay fail-closed.
+		return nil, fmt.Errorf("internalca: invalid SPIFFE ID %q: missing scheme (want spiffe://…)", req.SPIFFEID)
 	}
 	if req.TTL <= 0 {
 		return nil, errors.New("internalca: TTL must be positive")

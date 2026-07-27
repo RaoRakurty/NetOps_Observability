@@ -717,8 +717,14 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 	// MITM'd Netbox could point `next` at an attacker host and harvest the token
 	// (and SSRF the backend). Pin pagination to the configured instance's host.
 	base, err := url.Parse(nbURL)
-	if err != nil || base.Host == "" {
+	if err != nil {
 		return nil, fmt.Errorf("netbox: invalid URL %q: %w", nbURL, err)
+	}
+	if base.Host == "" {
+		// Parsed fine but carries no host (e.g. "netbox.example" with no scheme).
+		// Wrapping a nil err here printed "%!w(<nil>)" and told the operator
+		// nothing about which of the two failures happened.
+		return nil, fmt.Errorf("netbox: invalid URL %q: no host (a scheme is required, e.g. https://…)", nbURL)
 	}
 
 	// Page through /dcim/devices/?limit=200.

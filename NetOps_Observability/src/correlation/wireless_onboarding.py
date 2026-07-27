@@ -39,6 +39,9 @@ from signals import (
     Severity,
     Signal,
     Source,
+    cap_label,
+    cap_text,
+    normalize_mac,
 )
 
 PHASES = ("discovery", "authentication", "association", "key_exchange",
@@ -82,16 +85,29 @@ def client_identity(tenant: str, client_mac: str, *, eap_cn: str = "",
     EAP-TLS CN (authoritative) → 802.1X username (strong) → stable MAC
     (strong) → DHCP client-id (candidate) → randomized MAC (unknown,
     SESSION-SCOPED id: cross-session history honestly does not exist)."""
-    if eap_cn.strip():
-        return "wcl-" + _hash16(tenant, "cn", eap_cn.strip()), "authoritative", "eap_tls_cn"
-    if username.strip():
-        return "wcl-" + _hash16(tenant, "user", username.strip()), "strong", "dot1x_username"
-    if not is_randomized_mac(client_mac):
-        return "wcl-" + _hash16(tenant, "mac", client_mac.strip().lower()), "strong", "stable_mac"
-    if dhcp_client_id.strip():
-        return "wcl-" + _hash16(tenant, "dhcp", dhcp_client_id.strip()), "candidate", "dhcp_client_id"
+    # Every ladder input is untrusted controller/supplicant text and is BOUNDED
+    # before it is hashed (audit PIPE-MED-11). Hashing already collapses length,
+    # but an unbounded input is unbounded WORK and, for the MAC rung, unbounded
+    # distinct identities: a stable MAC is only a stable MAC if it IS a MAC, so
+    # the MAC rung is now gated on shape, default-closed.
+    eap_cn = cap_label(eap_cn, where="wireless", field_name="eap_cn").strip()
+    username = cap_label(username, where="wireless", field_name="username").strip()
+    dhcp_client_id = cap_label(dhcp_client_id, where="wireless",
+                               field_name="dhcp_client_id").strip()
+    mac = normalize_mac(client_mac)
+    if eap_cn:
+        return "wcl-" + _hash16(tenant, "cn", eap_cn), "authoritative", "eap_tls_cn"
+    if username:
+        return "wcl-" + _hash16(tenant, "user", username), "strong", "dot1x_username"
+    if mac and not is_randomized_mac(mac):
+        return "wcl-" + _hash16(tenant, "mac", mac), "strong", "stable_mac"
+    if dhcp_client_id:
+        return "wcl-" + _hash16(tenant, "dhcp", dhcp_client_id), "candidate", "dhcp_client_id"
     # Randomized MAC and nothing better: identity is the SESSION, on purpose.
-    return "wcl-" + _hash16(tenant, "session", session_seed or client_mac), "unknown", "randomized_mac"
+    return ("wcl-" + _hash16(tenant, "session",
+                             cap_label(session_seed, where="wireless", field_name="session_seed")
+                             or mac),
+            "unknown", "randomized_mac")
 
 
 @dataclass(frozen=True)
@@ -184,6 +200,29 @@ def assemble_episode(tenant: str, client_mac: str, bssid: str, ap_ref: str,
     Dual-stack rule: observations may carry addressing_v4/addressing_v6
     sub-outcomes; one family failing while the other succeeds is DEGRADED.
     """
+    # ── Untrusted-string caps + MAC SHAPE validation (audit PIPE-MED-11) ──
+    # The wireless intake accepted ANY non-empty string as client_mac/bssid: they
+    # are the episode's identity columns AND its ClickHouse partition keys, so an
+    # attacker-supplied blob was both a cardinality bomb and unbounded row width.
+    # normalize_mac is DEFAULT-CLOSED — anything that is not 12 hex nibbles is not
+    # a MAC and becomes "". The rejection is RECORDED in attrs (never silent, §10)
+    # and the raw value survives, bounded, for forensics — in the free-text blob,
+    # which is itself capped, not in an identity column.
+    raw_mac, raw_bssid = client_mac, bssid
+    client_mac = normalize_mac(client_mac)
+    bssid = normalize_mac(bssid)
+    ident_attrs: dict = {}
+    if raw_mac and not client_mac:
+        ident_attrs["client_mac_invalid"] = cap_label(
+            raw_mac, where="wireless", field_name="client_mac")[:32]
+    if raw_bssid and not bssid:
+        ident_attrs["bssid_invalid"] = cap_label(
+            raw_bssid, where="wireless", field_name="bssid")[:32]
+    ap_ref = cap_label(ap_ref, where="wireless", field_name="ap_ref")
+    wlan_ref = cap_label(wlan_ref, where="wireless", field_name="wlan_ref")
+    observer_id = cap_label(observer_id, where="wireless", field_name="observer_id")
+    data_class = cap_label(data_class, where="wireless", field_name="data_class")
+
     applicable = applicable_phases(wlan)
     results: list[PhaseResult] = []
     terminal_phase = ""
@@ -220,19 +259,28 @@ def assemble_episode(tenant: str, client_mac: str, bssid: str, ap_ref: str,
             obs = observations.get("addressing", {})
             r = PhaseResult(phase, True, outcome,
                             int(obs.get("duration_ms", 0)),
-                            str(obs.get("reason_code", "")),
+                            cap_label(obs.get("reason_code", ""), where="wireless",
+                                      field_name="reason_code"),
                             f"v4={v4} v6={v6}",
-                            str(obs.get("evidence_ref", "")))
+                            cap_label(obs.get("evidence_ref", ""), where="wireless",
+                                      field_name="evidence_ref"))
         else:
             obs = observations.get(phase)
             if obs is None:
                 results.append(PhaseResult(phase, True, "unknown"))
                 continue
-            r = PhaseResult(phase, True, str(obs.get("outcome", "unknown")),
+            # Vendor-supplied phase detail: outcome/reason_code are label class
+            # (they are grouped and charted), reason_text is free text.
+            r = PhaseResult(phase, True,
+                            cap_label(obs.get("outcome", "unknown"), where="wireless",
+                                      field_name="outcome"),
                             int(obs.get("duration_ms", 0)),
-                            str(obs.get("reason_code", "")),
-                            str(obs.get("reason_text", "")),
-                            str(obs.get("evidence_ref", "")))
+                            cap_label(obs.get("reason_code", ""), where="wireless",
+                                      field_name="reason_code"),
+                            cap_text(obs.get("reason_text", ""), where="wireless",
+                                     field_name="reason_text"),
+                            cap_label(obs.get("evidence_ref", ""), where="wireless",
+                                      field_name="evidence_ref"))
 
         results.append(r)
         total_ms += r.duration_ms
@@ -256,6 +304,7 @@ def assemble_episode(tenant: str, client_mac: str, bssid: str, ap_ref: str,
         total_duration_ms=total_ms,
         observer_id=observer_id,
         data_class=data_class,
+        attrs=ident_attrs,
     )
 
 

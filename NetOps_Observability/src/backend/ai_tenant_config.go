@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 )
@@ -63,6 +64,11 @@ type aiTenantConfigStore struct {
 	cfgs  map[string]aiTenantConfig // in-memory, key decrypted
 	path  string
 	vault secretSealer
+	// loadErr is set when the stored map could not be read/decoded, or when a
+	// stored provider key could not be unsealed. The in-memory map is then NOT
+	// the stored state, so writes are refused (same all-or-nothing doctrine as
+	// saveLocked's F-64 fix) instead of flushing a lossy copy over the file.
+	loadErr error
 }
 
 // seal/unseal centralize the nil-sealer case: a store built without custody
@@ -83,28 +89,55 @@ func (s *aiTenantConfigStore) unseal(tenant, field, v string) (string, error) {
 
 func newAITenantConfigStore(path string, v secretSealer) *aiTenantConfigStore {
 	s := &aiTenantConfigStore{cfgs: map[string]aiTenantConfig{}, path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("ai.config", "per-tenant AI config unreadable — every tenant reads as DEFAULT and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
-func (s *aiTenantConfigStore) load() {
+// load reads the stored per-tenant config. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — no tenant configured yet) / loaded.
+func (s *aiTenantConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = nothing configured yet
+	}
+	if err != nil {
+		return fmt.Errorf("read AI tenant config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = nothing configured yet
 	}
 	var m map[string]aiTenantConfig
-	if json.Unmarshal(b, &m) != nil {
-		return
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("decode AI tenant config: %w", err)
 	}
+	unsealFailed := 0
 	for id, c := range m {
 		c.TenantID = id
 		// Decrypt the BYO key under this tenant's DEK (no-op on a dormant Vault).
-		if key, err := s.unseal(id, aiFieldProviderKey, c.Key); err == nil {
+		// A failure used to leave the SEALED bytes in place as the live provider
+		// key: every request to the model then failed authentication and read as
+		// "the provider rejected us" rather than "we never opened the envelope".
+		key, uerr := s.unseal(id, aiFieldProviderKey, c.Key)
+		if uerr != nil {
+			c.Key = "" // never use ciphertext as a credential
+			unsealFailed++
+			logError("ai.config", "unseal tenant provider key failed — the tenant reads as having no BYO key", map[string]any{"tenant": id})
+		} else {
 			c.Key = key
 		}
 		m[id] = c
 	}
 	s.cfgs = m
+	if unsealFailed > 0 {
+		// Entitlements stay usable; the map is lossy, so it must never be flushed
+		// back over the file (that would DELETE the sealed keys, F-64 all over).
+		return fmt.Errorf("could not unseal the stored provider key for %d tenant(s)", unsealFailed)
+	}
+	return nil
 }
 
 // saveLocked persists the map with every BYO key sealed under its own tenant's
@@ -121,6 +154,11 @@ func (s *aiTenantConfigStore) load() {
 func (s *aiTenantConfigStore) saveLocked() error {
 	if s.path == "" {
 		return nil
+	}
+	// The in-memory map is not the stored state when the load failed: flushing it
+	// would erase the tenants (and sealed keys) that are still on disk.
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite the AI tenant config: its stored contents were not fully read: %w", s.loadErr)
 	}
 	sealed := make(map[string]aiTenantConfig, len(s.cfgs))
 	for id, c := range s.cfgs {

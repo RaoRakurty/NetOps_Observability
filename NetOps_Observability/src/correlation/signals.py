@@ -15,16 +15,99 @@ lettered. Two invariants live here:
 from __future__ import annotations
 
 import json
+import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
+log = logging.getLogger("correlation.signals")
 
 # UUIDv5 namespace for signal identity. Fixed forever — changing it would break
 # replay determinism for all stored objects.
 SIGNAL_NS = uuid.UUID("6e1f8c3a-67aa-5b9e-9d40-8a52c0de0001")
 
 ATTRS_MAX_BYTES = 4096  # §2.1: attrs JSON bounded
+
+# ── Untrusted-string caps (audit PIPE-MED-11 / FUNC-MED-8) ────────────────────
+#
+# The intake validated the SHAPE of a producer record ("entity_id is mandatory")
+# but never its SIZE. Every string below lands in a ClickHouse String column, an
+# OpenSearch document or — via the metric lane — a VictoriaMetrics LABEL, and all
+# three degrade badly under unbounded input: a distinct label value is a distinct
+# time series (a cardinality bomb reachable from a device or an HTTP header), and
+# an unbounded String column is unbounded row/part width.
+#
+# The cap is applied by FIELD CLASS at the MODEL boundary — Signal/Observer
+# __post_init__ — not per producer, so a new producer inherits the bound instead
+# of having to remember it. Truncation is deterministic and idempotent: capping an
+# already-capped value is a no-op, so a replayed signal never drifts.
+MAX_ID_CHARS = 256      # identity class: entity_id, native_id, kind, grounding tokens
+MAX_LABEL_CHARS = 128   # label class: site, metric_name, observer fields, path/service id
+MAX_TEXT_CHARS = 512    # free-text class: message / reason / uri — context, not identity
+MAX_TOKENS = 32         # entity_tokens CARDINALITY: co-location keys, never a bulk list
+
+# Observability counter (§10): truncation is never silent. Every bound applied is
+# counted here and logged once at WARNING, so "the field was cut" is a fact the
+# operator can see rather than a difference they have to notice in the data.
+TRUNCATIONS = 0
+
+
+def _count_truncation(where: str, field_name: str, was: int, now: int) -> None:
+    global TRUNCATIONS
+    TRUNCATIONS += 1
+    log.warning("bounded oversize %s.%s: %d → %d chars (untrusted-string cap)",
+                where, field_name, was, now)
+
+
+def cap_str(value: object, limit: int = MAX_LABEL_CHARS, *,
+            where: str = "signal", field_name: str = "?") -> str:
+    """Bound one untrusted string to `limit` characters, counting + logging when
+    it actually had to cut. Non-strings are coerced (a producer may hand us an int
+    or None); the empty string is returned unchanged."""
+    s = value if isinstance(value, str) else ("" if value is None else str(value))
+    if len(s) <= limit:
+        return s
+    _count_truncation(where, field_name, len(s), limit)
+    return s[:limit]
+
+
+def cap_id(value: object, *, where: str = "signal", field_name: str = "?") -> str:
+    """Identity class — entity ids, native ids, grounding tokens."""
+    return cap_str(value, MAX_ID_CHARS, where=where, field_name=field_name)
+
+
+def cap_label(value: object, *, where: str = "signal", field_name: str = "?") -> str:
+    """Label class — anything that can become a metric label or a keyword field."""
+    return cap_str(value, MAX_LABEL_CHARS, where=where, field_name=field_name)
+
+
+def cap_text(value: object, *, where: str = "signal", field_name: str = "?") -> str:
+    """Free-text class — human context stored for reading, never joined on."""
+    return cap_str(value, MAX_TEXT_CHARS, where=where, field_name=field_name)
+
+
+# MAC / BSSID shape. Wireless intake accepted ANY non-empty string as a client MAC
+# or BSSID — an attacker-controlled identity column and a per-value cardinality
+# bomb. Normalization is DEFAULT-CLOSED: anything that is not 12 hex nibbles is
+# NOT a MAC, so it is rejected (empty string) rather than stored as pseudo-identity.
+_MAC_HEX_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def normalize_mac(value: object) -> str:
+    """Canonical lowercase `aa:bb:cc:dd:ee:ff`, or "" when the input is not a MAC.
+
+    Accepts the three separator conventions devices and controllers actually emit
+    (`:` colon, `-` dash, `.` Cisco dotted-quad) plus bare hex. Default-closed:
+    a malformed value returns "" — the caller must decide what an unidentifiable
+    client means, and can no longer silently persist 4 KB of attacker text into a
+    `client_mac` column."""
+    s = (value if isinstance(value, str) else "").strip().lower()
+    if len(s) > 64:   # bound BEFORE the regex: no unbounded scan on hostile input
+        return ""
+    s = s.replace(":", "").replace("-", "").replace(".", "").replace(" ", "")
+    return ":".join(s[i:i + 2] for i in range(0, 12, 2)) if _MAC_HEX_RE.match(s) else ""
 
 # Grounding-token guard (#99 R2): token prefixes that scope WIDER than one
 # entity. See Signal.__post_init__ — constructing a signal with one of these
@@ -274,6 +357,64 @@ def classify_observer_kind(
     return OBSERVER_KIND_UNKNOWN
 
 
+def _shrink_attrs(attrs: dict, kind: str) -> tuple[dict, str]:
+    """Bound an oversize attrs blob by TRUNCATING its longest string values —
+    never by destroying the signal (audit FUNC-MED-8).
+
+    This used to `raise DeadLetter("attrs exceed N bytes")`, which meant one
+    oversize free-text field (a 5 KB syslog line, a controller's `correlation_hints`
+    blob, an attacker-supplied Host header) converted a REAL event into two
+    failures at once: the evidence was lost to the engine, and the whole record —
+    unredacted — was written to the dead-letter queue. A cap on a context field
+    must cost that field, not the event.
+
+    So: repeatedly halve the longest offending string until the JSON fits, and
+    record WHICH keys were cut in `attrs_truncated` — the truncation travels with
+    the row (§10, no silent truncation). DeadLetter survives only for the case the
+    original comment actually described: a blob that is still oversize once every
+    string is minimal, i.e. a genuine producer bug (thousands of keys), not data.
+    """
+    out = dict(attrs)
+    truncated: list[str] = []
+    for _ in range(256):
+        js = json.dumps(out, separators=(",", ":"), sort_keys=True)
+        if len(js.encode()) <= ATTRS_MAX_BYTES:
+            if truncated:
+                log.warning("attrs truncated for kind=%s: %s (was %d bytes, cap %d)",
+                            kind, ",".join(sorted(truncated)),
+                            len(json.dumps(attrs, separators=(",", ":"), sort_keys=True).encode()),
+                            ATTRS_MAX_BYTES)
+            return out, js
+        # Pick the biggest CONTRIBUTOR by encoded size, whatever its type — the
+        # heaviest field is often a nested blob (a controller's correlation_hints),
+        # and a string-only shrinker would spin on it and start eating the small
+        # provenance keys instead.
+        biggest_key, biggest_len = "", 0
+        for k, v in out.items():
+            if k == "attrs_truncated":
+                continue
+            n = len(json.dumps(v, separators=(",", ":"), sort_keys=True, default=str).encode())
+            if n > biggest_len:
+                biggest_key, biggest_len = k, n
+        if biggest_len <= 24:
+            break  # nothing left to give: the bulk is key COUNT, not any one value
+        v = out[biggest_key]
+        if isinstance(v, str):
+            out[biggest_key] = v[:max(16, len(v) // 2)]
+        else:
+            # A nested structure cannot be halved meaningfully; render it to a
+            # bounded string so the operator still sees WHAT was there.
+            out[biggest_key] = json.dumps(
+                v, separators=(",", ":"), sort_keys=True, default=str)[:MAX_TEXT_CHARS]
+        if biggest_key not in truncated:
+            truncated.append(biggest_key)
+            _count_truncation("attrs", biggest_key, biggest_len, len(str(out[biggest_key])))
+        out["attrs_truncated"] = sorted(truncated)
+    raise DeadLetter(
+        f"attrs exceed {ATTRS_MAX_BYTES} bytes even with every string field "
+        f"truncated — this is a producer bug (too many keys), not oversize data")
+
+
 class DeadLetter(ValueError):
     """Record cannot become a Signal (missing mandatory provenance, malformed
     fields). Counted + parked by the caller — never guessed around, never a
@@ -298,6 +439,16 @@ class Observer:
     def __post_init__(self) -> None:
         if not self.observer_id:
             raise DeadLetter("observer_id is mandatory (independence gate)")
+        # Bound the observer block: observer_id is a GROUP-BY key on every
+        # independence query and location/trust_domain reach the metric lane as
+        # labels. A controller that reports a 4 KB observer name would otherwise
+        # create one series per report (audit PIPE-MED-11).
+        for f in ("observer_id", "location", "trust_domain",
+                  "collection_path", "clock_quality"):
+            v = getattr(self, f)
+            capped = cap_label(v, where="observer", field_name=f)
+            if capped != v:
+                object.__setattr__(self, f, capped)
 
 
 @dataclass(frozen=True)
@@ -332,6 +483,7 @@ class Signal:
             raise DeadLetter("entity_id is mandatory")
         if self.ts.tzinfo is None:
             raise DeadLetter("ts must be timezone-aware (event-time discipline)")
+        self._bound_untrusted_strings()
         # Grounding-token guard (#99 R2): entity_tokens are the engine's
         # CO-LOCATION keys and the correlation window is single-tenant by
         # construction — a tenant-/org-wide token merges UNRELATED entities into
@@ -348,6 +500,43 @@ class Signal:
                         f"must identify ONE entity (app:/host:/site:/device:/…), "
                         f"never a tenant/org/global scope"
                     )
+
+    def _bound_untrusted_strings(self) -> None:
+        """Apply the field-class caps (audit PIPE-MED-11) at the model boundary.
+
+        Producers read device-, controller- and HTTP-supplied strings; the model is
+        the ONE place every one of them passes through, so the bound lives here and
+        a new producer cannot forget it. Deterministic + idempotent, so rehydrating
+        a stored row and re-capping it yields the same bytes.
+
+        signal_id derives from source|native_id|ts, so capping native_id changes the
+        id ONLY for a signal whose native_id was already past 256 characters — and
+        it changes it deterministically, which is what replay requires."""
+        for f, limit in (("kind", MAX_ID_CHARS),
+                         ("entity_id", MAX_ID_CHARS),
+                         ("native_id", MAX_ID_CHARS),
+                         ("site", MAX_LABEL_CHARS),
+                         ("metric_name", MAX_LABEL_CHARS),
+                         ("path_id", MAX_LABEL_CHARS),
+                         ("service_id", MAX_LABEL_CHARS)):
+            v = getattr(self, f)
+            if not isinstance(v, str):   # path_id/service_id are Optional[str]
+                continue
+            capped = cap_str(v, limit, where="signal", field_name=f)
+            if capped != v:
+                object.__setattr__(self, f, capped)
+
+        # entity_tokens are the engine's CO-LOCATION keys — the join surface. Two
+        # bounds, both cardinality: how MANY a signal may carry, and how long each
+        # may be. A producer that dumps an unbounded token list would make one
+        # signal join to everything, which is the #99 bug class by another route.
+        toks = tuple(cap_id(t, where="signal", field_name="entity_token")
+                     for t in self.entity_tokens)
+        if len(toks) > MAX_TOKENS:
+            _count_truncation("signal", "entity_tokens", len(toks), MAX_TOKENS)
+            toks = toks[:MAX_TOKENS]
+        if toks != tuple(self.entity_tokens):
+            object.__setattr__(self, "entity_tokens", toks)
 
     @property
     def signal_id(self) -> uuid.UUID:
@@ -373,8 +562,7 @@ class Signal:
             )
         attrs_json = json.dumps(attrs, separators=(",", ":"), sort_keys=True)
         if len(attrs_json.encode()) > ATTRS_MAX_BYTES:
-            # Bounded by design: oversize attrs are a producer bug, not data.
-            raise DeadLetter(f"attrs exceed {ATTRS_MAX_BYTES} bytes")
+            attrs, attrs_json = _shrink_attrs(attrs, self.kind)
         return {
             "tenant_id": self.tenant_id,
             "signal_id": str(self.signal_id),

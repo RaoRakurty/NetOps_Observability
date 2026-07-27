@@ -225,8 +225,17 @@ func (s *server) manualLifecycle(r *http.Request, claims jwtClaims, id string, l
 	}
 	tenant, cross := principalTenant(claims)
 	events, err := s.incidentTimeline.List(r.Context(), tenant, cross, id)
-	if err != nil || len(events) == 0 {
+	if err != nil {
+		// The timeline store did not answer. The derived lifecycle is returned
+		// UNOVERLAID either way, but "this operator entered no manual times" and
+		// "we could not read the ones they entered" are different facts: the
+		// second silently discards operator truth, so it is surfaced (§10).
+		logWarn("timeintel", "manual timeline read failed — operator-entered timestamps are NOT applied to this lifecycle",
+			map[string]any{"correlation_id": id, "tenant": tenant, "err": err.Error()})
 		return false
+	}
+	if len(events) == 0 {
+		return false // answered: no manual events for this object
 	}
 	for _, e := range events {
 		lc[e.EventType] = timeintel.EventStamp{At: e.EventTime, Source: e.Source, Confidence: e.Confidence}

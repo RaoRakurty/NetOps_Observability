@@ -77,8 +77,15 @@ func seamTypeFromHypotheses(blob string) string {
 			} `json:"seams"`
 		} `json:"grounding_context"`
 	}
-	if err := json.Unmarshal([]byte(blob), &h); err != nil || len(h.GroundingContext.Seams) == 0 {
+	if err := json.Unmarshal([]byte(blob), &h); err != nil {
+		// Our OWN stored blob failed to parse — that is corruption, not "this
+		// incident is not grounded on a seam". Both still answer "" (never guess
+		// a seam type), but the corrupt case is now observable (§10).
+		logWarn("timeintel", "hypotheses blob unparseable — seam type reported as UNGROUNDED", errf(err))
 		return ""
+	}
+	if len(h.GroundingContext.Seams) == 0 {
+		return "" // parsed: this object genuinely is not grounded on a seam
 	}
 	return strings.TrimSpace(h.GroundingContext.Seams[0].SeamType)
 }
@@ -235,8 +242,17 @@ func (s *server) minIngestTS(r *http.Request, id string) time.Time {
              WHERE toString(archived_for) = '` + id + `'
              FORMAT JSON`
 	rows, err := s.chRows(r, sql)
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		// The archive did not answer. Detection latency stays UNSET (the zero
+		// time the calculator reads as "incomplete"), which is also what "no
+		// archived signals" produces — but only one of the two is a fault, and
+		// it is no longer silent (§10).
+		logWarn("timeintel", "earliest-ingest read failed — detection latency left INCOMPLETE, never zero",
+			map[string]any{"correlation_id": id, "err": err.Error()})
 		return time.Time{}
+	}
+	if len(rows) == 0 {
+		return time.Time{} // answered: no archived signals for this object
 	}
 	return parseCHTime(rows[0]["fi"])
 }

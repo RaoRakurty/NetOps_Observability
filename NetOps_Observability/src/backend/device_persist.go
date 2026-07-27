@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -48,6 +49,12 @@ type deviceStore struct {
 	path       string
 	manual     map[string]models.Device
 	suppressed map[string]time.Time
+	// loadErr is set when the stored file could NOT be read at boot. An empty
+	// store then means "we do not know what was stored", NOT "no manual devices
+	// and no tombstones" — the two used to share a branch, so a boot read failure
+	// resurrected deliberately-deleted devices and the first write flushed the
+	// empty maps over the survivors (§10).
+	loadErr error
 }
 
 // devicesPath resolves the store's kv key. Absolute by construction — a
@@ -73,18 +80,30 @@ func newDeviceStore(path string) *deviceStore {
 		manual:     map[string]models.Device{},
 		suppressed: map[string]time.Time{},
 	}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("devices", "device store unreadable at boot — deleted devices may reappear and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
-func (s *deviceStore) load() {
+// load reads the persisted file. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — a fresh install) / loaded.
+func (s *deviceStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = fresh install, genuinely nothing persisted
+	}
+	if err != nil {
+		return fmt.Errorf("read device store: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = nothing persisted yet
 	}
 	var f devicePersistFile
-	if json.Unmarshal(b, &f) != nil {
-		return
+	if err := json.Unmarshal(b, &f); err != nil {
+		return fmt.Errorf("decode device store: %w", err)
 	}
 	if f.Manual != nil {
 		s.manual = f.Manual
@@ -92,6 +111,19 @@ func (s *deviceStore) load() {
 	if f.Suppressed != nil {
 		s.suppressed = f.Suppressed
 	}
+	return nil
+}
+
+// unreadable reports the boot-time load failure, if any. Callers use it to
+// distinguish "no tombstone for this id" from "we could not read the
+// tombstones".
+func (s *deviceStore) unreadable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // saveLocked persists both maps. Caller holds s.mu. Returns error so callers can
@@ -100,6 +132,12 @@ func (s *deviceStore) load() {
 func (s *deviceStore) saveLocked() error {
 	if s.path == "" {
 		return nil
+	}
+	// The in-memory maps are not the stored state when the boot read failed:
+	// flushing them would erase every manual device and every deletion tombstone
+	// that is still on disk. Refuse, and let the caller answer 5xx (F-62 shape).
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite the device store: its stored contents were never read: %w", s.loadErr)
 	}
 	b, err := json.MarshalIndent(devicePersistFile{Manual: s.manual, Suppressed: s.suppressed}, "", "  ")
 	if err != nil {
@@ -177,6 +215,12 @@ func (s *deviceStore) devices() []models.Device {
 }
 
 // isSuppressed reports whether an id was explicitly deleted by an operator.
+//
+// When unreadable() != nil the tombstone set is UNKNOWN rather than empty: this
+// still answers false (there is no safe way to suppress an unknown set without
+// hiding the whole inventory), but the boot-time logError records exactly that
+// and saveLocked refuses to flush the empty map, so the on-disk tombstones
+// survive the degraded window instead of being erased by the first write.
 func (s *deviceStore) isSuppressed(id string) bool {
 	if s == nil {
 		return false

@@ -286,6 +286,24 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return fail("the lookup failed — do not invent its data", "tool_error")
 	}
 
+	rep.Content = renderToolReply(&result)
+	s.auditAgentTool(claims, c, args, started, true, "ok")
+	return rep, result.Items
+}
+
+// renderToolReply turns a tool result into the bounded text block that is fed
+// back into the conversation and therefore SHIPPED TO THE PROVIDER.
+//
+// This is an egress boundary, so the outbound DLP filter runs here (PIPE-MED-5:
+// the loop used to render raw store rows straight into the prompt — only the
+// syslog tool redacted anything). ai.Redact masks credential-shaped material
+// AND direct identifiers, because everything in a tool result is
+// server-originated tenant data, not something the operator typed.
+//
+// Redaction runs on the ASSEMBLED block rather than per item: one pass instead
+// of N, and the mask never lengthens a line enough to matter against the
+// character budget (it only ever replaces a longer secret with "***").
+func renderToolReply(result *ai.ToolResult) string {
 	var b strings.Builder
 	for _, it := range result.Items {
 		line := fmt.Sprintf("[%s] %s\n", it.CitationID, it.Text)
@@ -304,9 +322,7 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 	if b.Len() == 0 {
 		b.WriteString("no data.\n")
 	}
-	rep.Content = b.String()
-	s.auditAgentTool(claims, c, args, started, true, "ok")
-	return rep, result.Items
+	return ai.Redact(b.String())
 }
 
 // auditAgentTool writes the per-tool-call audit line: principal, tool, arg

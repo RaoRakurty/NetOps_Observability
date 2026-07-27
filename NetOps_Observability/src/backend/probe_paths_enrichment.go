@@ -33,8 +33,16 @@ func (s *server) startProbePathsEnrichment(ctx context.Context) {
 	}
 	write := func() {
 		raw, err := collectors.FetchProbePaths(ctx)
-		if err != nil || raw == "" {
-			return // no paths published (traceroute off / Redis empty) → keep last file
+		if err != nil {
+			// The publisher did not answer. The last file is kept either way (the
+			// correlation source keeps its previous facts), but a broken fetch and
+			// "traceroute is off" are different facts and no longer share a
+			// branch — the first is a fault an operator must be able to see (§10).
+			logWarn("probe.paths", "probe-path fetch failed — the enrichment file is left at its previous contents", errf(err))
+			return
+		}
+		if raw == "" {
+			return // answered: no paths published (traceroute off) → keep last file
 		}
 		var paths []collectors.PathResult
 		if json.Unmarshal([]byte(raw), &paths) != nil {

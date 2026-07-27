@@ -1945,8 +1945,12 @@ func withLogging(next http.Handler) http.Handler {
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 		logInfo("http", "request", map[string]any{
-			"method":      r.Method,
-			"path":        r.URL.Path,
+			"method": r.Method,
+			// PIPE-HIGH-2: every line this writes is shipped to OpenSearch and
+			// kept for the retention window, so a capability token in the path
+			// would become a searchable, replayable bearer credential. Mask it
+			// here — the route survives, the credential does not.
+			"path":        maskCapabilityTokenPath(r.URL.Path),
 			"status":      rw.status,
 			"duration_ms": time.Since(start).Milliseconds(),
 			"remote":      r.RemoteAddr,

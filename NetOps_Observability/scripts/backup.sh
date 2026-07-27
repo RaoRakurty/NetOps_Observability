@@ -41,7 +41,39 @@
 #     or is missing an artifact — the restore-side check that was absent.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# RETENTION (2026-07-27) — the other half of "this is a real backup".
+#
+# apply-backup-config.sh installs a DAILY cron writing
+# data/backups/correlix-YYYYMMDD.tar.zst, and NOTHING ever pruned them, while
+# docs/runbooks/backup-restore.md claimed "retention + monitoring are already in
+# place". The only retention that existed was OpenSearch snapshots
+# (OPENSEARCH_SNAPSHOT_KEEP). A daily full backup with no retention fills the
+# disk it needs — the same failure mode as the bundle-autoupdate incident
+# (CLAUDE.md §16.4) — and a full disk takes the primary data with it.
+#
+#   BACKUP_KEEP=<N>   keep the N newest managed artifacts, prune the rest
+#                     (default 7; mirrors the OPENSEARCH_SNAPSHOT_KEEP convention)
+#   BACKUP_KEEP=0     pruning DISABLED — loud warning, never a silent default
+#
+# Rules the prune obeys (§16.1/§16.3):
+#   * it runs only after a SUCCESSFUL backup — a failed run never gets to delete
+#     history on the strength of an artifact that may be incomplete;
+#   * it NEVER deletes the newest artifact, at any value of BACKUP_KEEP;
+#   * it only touches the managed `correlix-*.tar.zst` naming scheme, in the
+#     directory the new artifact was written to — never a directory it was not
+#     pointed at;
+#   * a delete failure is FATAL (no `|| true`): a prune that cannot prune must be
+#     as visible as the disk it is protecting.
+#
+#   scripts/backup.sh --prune <dir> [--dry-run]   exercises it standalone.
+# ---------------------------------------------------------------------------
+
 set -euo pipefail
+
+# §16.2 — cron gives us PATH=/usr/bin:/bin only, and docker/zstd/rsync commonly
+# live in /usr/local/bin. This script IS a cron job now, so it states its PATH.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # --verify <file>: check a previously written backup instead of taking one.
 if [[ "${1:-}" == "--verify" ]]; then
@@ -64,18 +96,121 @@ if [[ "${1:-}" == "--verify" ]]; then
   exit 0
 fi
 
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$SCRIPT_ROOT/deployment/docker/.env"
+
+# load_env_default <VAR> — §16.2: cron does NOT source a shell profile and does
+# NOT read deployment/docker/.env, so BACKUP_REMOTE/BACKUP_PUSH/BACKUP_KEEP set
+# by apply-backup-config.sh were invisible to the nightly run: the off-host copy
+# silently never happened and retention would have been unconfigurable. Read the
+# value out of .env when the environment does not already provide it. Parsed with
+# a strict `^VAR=` match — never `source`d, so a stray line in .env cannot execute.
+load_env_default() {
+    local var="$1" line
+    [[ -n "${!var:-}" ]] && return 0          # an explicit environment value wins
+    [[ -f "$ENV_FILE" ]] || return 0
+    line="$(grep -m1 "^${var}=" "$ENV_FILE" || true)"   # absent key is not an error
+    [[ -z "$line" ]] && return 0
+    line="${line#*=}"
+    line="${line%\"}"; line="${line#\"}"
+    line="${line%\'}"; line="${line#\'}"
+    export "${var}=${line}"
+}
+load_env_default BACKUP_REMOTE
+load_env_default BACKUP_PUSH
+load_env_default BACKUP_KEEP
+
+BACKUP_KEEP="${BACKUP_KEEP:-7}"
+if ! [[ "$BACKUP_KEEP" =~ ^[0-9]+$ ]]; then
+    echo "backup: BACKUP_KEEP=${BACKUP_KEEP} is not a non-negative integer" >&2
+    exit 2
+fi
+
+# prune_backups <dir> — keep the $BACKUP_KEEP newest managed artifacts in <dir>,
+# delete the rest. Prints exactly what it will touch BEFORE touching it (§16.3).
+# Returns non-zero if any delete failed; the caller records that as a FAILURE.
+prune_backups() {
+    local dir="$1" dry="${2:-0}" rc=0 idx=0 kept=0 removed=0
+    if [[ ! -d "$dir" ]]; then
+        echo "  prune: $dir does not exist — nothing to prune"
+        return 0
+    fi
+    if [[ "$BACKUP_KEEP" -eq 0 ]]; then
+        echo "!! WARNING: BACKUP_KEEP=0 — retention is DISABLED. Backups will" >&2
+        echo "!!          accumulate until they fill the disk the stack needs." >&2
+        return 0
+    fi
+
+    # Newest first, by mtime. NUL-delimited end to end so a hostile filename in
+    # the backup directory cannot split a record and misdirect a delete.
+    local -a entries=()
+    mapfile -d '' -t entries < <(
+        find "$dir" -maxdepth 1 -type f -name 'correlix-*.tar.zst' \
+             -printf '%T@\t%p\0' 2>/dev/null | sort -z -rn
+    )
+    if [[ ${#entries[@]} -eq 0 ]]; then
+        echo "  prune: no managed backups (correlix-*.tar.zst) in $dir"
+        return 0
+    fi
+
+    echo "  prune: ${#entries[@]} managed backup(s) in $dir, keeping the $BACKUP_KEEP newest"
+    local entry path
+    for entry in "${entries[@]}"; do
+        path="${entry#*$'\t'}"
+        idx=$((idx + 1))
+        # The newest is protected UNCONDITIONALLY, independent of the arithmetic
+        # above: a retention bug must never be able to leave us with no backup.
+        if [[ $idx -eq 1 || $idx -le $BACKUP_KEEP ]]; then
+            kept=$((kept + 1))
+            continue
+        fi
+        if [[ "$dry" == "1" ]]; then
+            echo "    [dry-run] would delete $path"
+            removed=$((removed + 1))
+            continue
+        fi
+        if rm -f -- "$path" 2>"$dir/.prune.err"; then
+            echo "    deleted $path"
+            removed=$((removed + 1))
+        else
+            echo "    !! FAILED to delete $path: $(tail -1 "$dir/.prune.err" 2>/dev/null)" >&2
+            rc=1
+        fi
+    done
+    rm -f -- "$dir/.prune.err" 2>/dev/null || true  # optional: cleanup of our own temp
+    echo "  prune: kept $kept, removed $removed"
+    return $rc
+}
+
+# --prune <dir> [--dry-run]: run ONLY the retention sweep (the documented dry-run
+# / test seam; the nightly path calls the same function).
+if [[ "${1:-}" == "--prune" ]]; then
+    PDIR="${2:-}"
+    if [[ -z "$PDIR" ]]; then
+        echo "usage: $0 --prune <dir> [--dry-run]" >&2
+        exit 2
+    fi
+    PDRY=0
+    [[ "${3:-}" == "--dry-run" ]] && PDRY=1
+    prune_backups "$PDIR" "$PDRY"
+    exit $?
+fi
+
 OUT="${1:-}"
 if [[ -z "$OUT" ]]; then
   echo "usage: $0 <output.tar.zst>" >&2
   echo "       $0 --verify <backup.tar.zst>" >&2
+  echo "       $0 --prune  <dir> [--dry-run]" >&2
   exit 1
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$SCRIPT_ROOT"
 COMPOSE_DIR="$ROOT/deployment/docker"
 DATA_DIR="$ROOT/data"
 STAGE="$(mktemp -d -t netops-backup-XXXXXX)"
-trap "rm -rf $STAGE" EXIT
+# Single-quoted + quoted expansion (SC2064): the path is resolved when the trap
+# FIRES, and a staging path with a space can never word-split into `rm -rf /`.
+trap 'rm -rf -- "$STAGE"' EXIT
 
 # is_running <service>  → returns 0 if the named compose service has a
 # container currently in Running state, non-zero otherwise.
@@ -267,6 +402,21 @@ else
     echo "!! WARNING: BACKUP_REMOTE unset — this backup shares the primary data's" >&2
     echo "!!          failure domain (same disk/host). It is NOT disaster recovery." >&2
     echo "!!          See docs/audit/BACKUP-FAILURE-DOMAIN.md. Set BACKUP_REMOTE to fix." >&2
+fi
+
+# ---- retention sweep -------------------------------------------------------
+#
+# LAST, and only on a clean run. Ordering is deliberate: we prune history only
+# once THIS artifact exists, is non-empty, and every component reported PASS —
+# otherwise a broken night would delete good backups to make room for a bad one.
+echo "→ Retention (BACKUP_KEEP=$BACKUP_KEEP)"
+if [[ $FAILURES -gt 0 ]]; then
+    echo "  prune SKIPPED: this run recorded $FAILURES failure(s) — refusing to delete" >&2
+    echo "  older backups on the strength of an incomplete artifact." >&2
+elif [[ ! -s "$OUT" ]]; then
+    fail "prune SKIPPED: $OUT is missing or empty after tar — refusing to prune"
+elif ! prune_backups "$(dirname -- "$OUT")" "${BACKUP_PRUNE_DRY_RUN:-0}"; then
+    fail "backup retention prune failed — old artifacts are accumulating on the backup disk"
 fi
 
 # Exit non-zero when any component failed. THIS IS THE POINT: a cron entry

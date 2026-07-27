@@ -229,11 +229,16 @@ func (s *server) withAudit(next http.Handler) http.Handler {
 		claims, _ := userFrom(r.Context())
 		tenant, cross := principalTenant(claims)
 		s.audit.Record(AuditEvent{
-			Actor:    claims.Sub,
-			Tenant:   tenant,
-			Cross:    cross,
-			Method:   r.Method,
-			Path:     r.URL.Path,
+			Actor:  claims.Sub,
+			Tenant: tenant,
+			Cross:  cross,
+			Method: r.Method,
+			// Masked: a DENIED request on a capability-link route still carries
+			// the token in its path, and this trail is persisted to Postgres and
+			// readable by admins. A forged-or-expired token is exactly what an
+			// attacker probes with — recording it verbatim hands a reader the
+			// candidate. Same helper the request log uses.
+			Path:     maskCapabilityTokenPath(r.URL.Path),
 			Status:   rec.status,
 			Decision: auditDecision(rec.status),
 			Remote:   auditClientIP(r),

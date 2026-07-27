@@ -193,17 +193,22 @@ def canon_tenant(t: str) -> str:
     return "global" if t in ("", "global") else t
 
 
-def tenant_for(device: str) -> str:
-    """Resolve a device name/id to its canonical tenant id ("global" = the
-    platform-global tenant — see canon_tenant). Cheap: re-reads the CSV only
-    when its mtime changes."""
+def _tenant_registry() -> dict[str, str]:
+    """The TRUSTED identity→tenant registry (device_tenant.csv, written by the Go
+    API from the device inventory — src/backend/telemetry_enrichment.go).
+
+    This file is the ONLY authority on which tenant owns a piece of telemetry.
+    It is produced by the platform from its own inventory, one row per distinct
+    device NAME and per distinct management ADDRESS, and an identity that maps
+    to more than one tenant is OMITTED by the exporter (fail-safe) — so a hit
+    here is unambiguous by construction.
+
+    Cheap: re-reads the CSV only when its mtime changes."""
     global _tenant_map, _tenant_mtime
-    if not device:
-        return canon_tenant("")
     try:
         mt = os.path.getmtime(TENANT_ENRICHMENT_FILE)
     except OSError:
-        return canon_tenant(_tenant_map.get(device, ""))
+        return _tenant_map
     if mt != _tenant_mtime:
         _tenant_mtime = mt  # retry on the next mtime change (writer refreshes every 60s)
         fresh: dict[str, str] = {}
@@ -220,13 +225,169 @@ def tenant_for(device: str) -> str:
             # (platform-only). Fail-closed but NOT silent — this exact failure
             # (0600 perms across uids) once disabled tenancy stamping unnoticed.
             log.warning("tenant enrichment file unreadable, tenant map stale/empty: %s", exc)
-    return canon_tenant(_tenant_map.get(device, ""))
+    return _tenant_map
+
+
+def tenant_lookup(identity: str) -> str | None:
+    """Registry lookup for one observed identity.
+
+    Returns the registry's tenant for `identity` (which may legitimately be ""
+    = platform-owned), or **None when the registry does not know the identity
+    at all**. That distinction is the whole point: `tenant_for` collapses both
+    cases to "global", which makes it a FALLBACK-FOR-ABSENCE and useless as a
+    CHECK-ON-PRESENCE (TENANT-HIGH-3). `verified_tenant` needs to tell "the
+    registry says platform" apart from "the registry has never heard of this"."""
+    if not identity:
+        return None
+    return _tenant_registry().get(identity)
+
+
+def tenant_for(device: str) -> str:
+    """Resolve a device name/id to its canonical tenant id ("global" = the
+    platform-global tenant — see canon_tenant). Cheap: re-reads the CSV only
+    when its mtime changes.
+
+    NOTE: this answers "what does the registry say about this device", NOT "is
+    the tenant this event claims legitimate". Anything that consumes a
+    SELF-DECLARED tenant_id off the bus must go through `verified_tenant`."""
+    if not device:
+        return canon_tenant("")
+    return canon_tenant(tenant_lookup(device) or "")
 
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger("correlation")
+
+
+# ---------------------------------------------------------------------------
+# TENANT CLAIM VERIFICATION (TENANT-HIGH-3/4 — CLAUDE.md §3a, default-closed)
+#
+# THE DEFECT THIS FIXES: tenant identity used to be ASSERTED by the sender and
+# never VERIFIED by anyone. Every lane did
+#
+#     tenant = str(ev.get("tenant_id") or "") or tenant_for(<device>)
+#
+# i.e. the device→tenant registry was consulted ONLY when the payload carried
+# no tenant. A payload that DID carry one — including one written by anything
+# that can reach the bus, or (before this change) one re-derived from the
+# attacker-controlled `devname=` field inside a FortiGate log BODY — was taken
+# verbatim and persisted into that tenant's corr_signals. An empty tenant was
+# dropped (good); a FORGED non-empty tenant was honoured (the hole).
+#
+# THE TRUST MODEL NOW:
+#   • TRUSTED: device_tenant.csv, written by the Go API from its own inventory.
+#     Nothing on the wire can change it.
+#   • UNTRUSTED: every field of every bus event, `tenant_id` included. It is a
+#     CLAIM, and a claim is only ever accepted when it REPRODUCES what the
+#     registry says for an identity the event itself carries (syslog hostname,
+#     flow sampler_address, metric/trap device, probe target, wireless
+#     observer). The value we persist is always the REGISTRY's, never the
+#     claim's — a verified claim and the registry agree, so there is nothing to
+#     choose between.
+#   • On disagreement we take NEITHER value: the event is refused, counted,
+#     logged with a `SECURITY:` prefix and quarantined through the existing
+#     durable dead-letter path. Same shape as the reference implementation in
+#     src/backend/ticketing_worker.go:96-103.
+#
+# `registry_anchored=True` marks the lanes whose tenant is stamped by Vector
+# SOLELY from this same registry (syslog, flows) — for those, a non-empty claim
+# the registry cannot reproduce is by definition not something the pipeline
+# produced, so an UNKNOWN identity is refused too (requirement (c): an
+# unresolvable tenant fails closed). The remaining lanes carry tenants that
+# genuinely have no device to resolve from (cloud accounts, app identities);
+# there the registry can only ever CONTRADICT a claim, so it is used for
+# exactly that and an unknown identity leaves the authenticated producer's
+# claim standing.
+#
+# What this does NOT fix, stated plainly: an attacker who can reach the
+# unauthenticated syslog port AND knows a victim's real device hostname still
+# lands in that tenant's lane, because the registry genuinely maps that
+# hostname to that tenant. Closing that needs transport authentication
+# (RFC5425 TLS / per-source ACLs), not an app-layer check — see
+# deployment/docker/syslog-ng/syslog-ng.conf.
+# ---------------------------------------------------------------------------
+
+TENANT_CLAIMS_VERIFIED = 0            # non-empty claims that matched the registry
+TENANT_CLAIMS_REFUSED = 0             # events refused because the claim did not
+TENANT_REFUSALS: dict[str, int] = {}  # "lane:reason" -> count
+_TENANT_REFUSE_LOG_LAST: dict[str, float] = {}
+# A hostile or misconfigured producer can refuse at full consume rate; the
+# COUNTERS stay exact, the log line is rate-limited per (lane, reason).
+TENANT_REFUSE_LOG_EVERY_S = float(os.environ.get("CORR_TENANT_REFUSE_LOG_EVERY_S", "30"))
+
+
+class TenantClaimRefused(DeadLetter):
+    """An event's SELF-DECLARED tenant_id could not be verified against the
+    trusted device→tenant registry.
+
+    A DeadLetter subclass on purpose: every lane already routes DeadLetter into
+    the durable quarantine (keep_deadletter_payload → CORR_DLQ_DIR), so a
+    refused event keeps its payload for forensics instead of vanishing. It is
+    NEVER downgraded to "use the registry value anyway" — the two sources
+    disagree about who owns the data, and guessing is the defect."""
+
+
+def _tenant_refusal(lane: str, reason: str, identity: str,
+                    claimed: str, resolved: str) -> TenantClaimRefused:
+    """Count + (rate-limited) log one refusal and build the exception to raise."""
+    global TENANT_CLAIMS_REFUSED
+    TENANT_CLAIMS_REFUSED += 1
+    key = f"{lane}:{reason}"
+    TENANT_REFUSALS[key] = TENANT_REFUSALS.get(key, 0) + 1
+    now = time.monotonic()
+    if (now - _TENANT_REFUSE_LOG_LAST.get(key, -1e9)) >= TENANT_REFUSE_LOG_EVERY_S:
+        _TENANT_REFUSE_LOG_LAST[key] = now
+        log.warning(
+            "SECURITY: tenant claim refused — event quarantined, NOT persisted "
+            "lane=%s reason=%s identity=%s claimed_tenant=%s registry_tenant=%s "
+            "refused_total=%d",
+            lane, reason, identity or "-", claimed or "-", resolved or "-",
+            TENANT_REFUSALS[key])
+    return TenantClaimRefused(
+        f"tenant claim refused ({reason}): lane={lane} identity={identity or '-'} "
+        f"claimed={claimed or '-'} registry={resolved or '-'}")
+
+
+def verified_tenant(claimed: str, identity: str, lane: str, *,
+                    registry_anchored: bool = False) -> str:
+    """Return the tenant this event may be persisted under, or raise.
+
+    claimed  — the event's self-declared tenant_id (UNTRUSTED).
+    identity — the observed device identity the event carries (syslog hostname,
+               flow sampler_address, metric/trap device, probe target …).
+    lane     — counter/log label.
+
+    Contract:
+      • no claim            → the registry decides; an identity the registry
+                              does not know is the PLATFORM tenant ("global",
+                              which the strict ClickHouse row policy keeps
+                              platform-only), never another tenant's and never
+                              a permissive wildcard.
+      • claim == registry   → accepted (the registry's value is returned).
+      • claim != registry   → REFUSED (raises), both lane kinds.
+      • registry has no such identity:
+          registry_anchored → REFUSED (the claim is unverifiable and this lane's
+                              tenants only ever come from the registry).
+          otherwise         → the authenticated producer's claim stands; the
+                              registry had nothing to say about it.
+    """
+    global TENANT_CLAIMS_VERIFIED
+    claim = str(claimed or "").strip()
+    resolved = tenant_lookup(identity)
+    if not claim:
+        return canon_tenant(resolved or "")
+    if resolved is not None:
+        if canon_tenant(resolved) == canon_tenant(claim):
+            TENANT_CLAIMS_VERIFIED += 1
+            return canon_tenant(resolved)
+        raise _tenant_refusal(lane, "claim_mismatch", identity,
+                              canon_tenant(claim), canon_tenant(resolved))
+    if registry_anchored:
+        raise _tenant_refusal(lane, "identity_unknown", identity,
+                              canon_tenant(claim), "")
+    return canon_tenant(claim)
 
 
 # ---------------------------------------------------------------------------
@@ -1557,6 +1718,38 @@ def score(device: str, metric: str, value: float) -> float | None:
 # ClickHouse helpers (HTTP interface).
 # ---------------------------------------------------------------------------
 
+# Inserts that legitimately span more than one tenant, by table. A rollup that
+# summarises EVERY tenant's window in one batch (corr_tenant_write_amp) cannot
+# be written at a single tenant's scope; anything else showing up here means a
+# lane started smuggling mixed-tenant batches and wants investigating.
+CH_CROSS_TENANT_INSERTS: dict[str, int] = {}
+
+
+def insert_scope(rows: list[dict]) -> str:
+    """The `tenant_scope` custom setting one INSERT is issued under.
+
+    Derived from the ROWS, never from a caller-supplied default — mirroring
+    src/backend/chhttp's rule that Scope is REQUIRED because every default is
+    wrong ("__all__" defeats isolation, "__none__" silently returns nothing).
+
+    HONEST SCOPE NOTE: ClickHouse row policies are `FOR SELECT` only, so this
+    setting does NOT reject a mis-tenanted INSERT on its own. What it does buy:
+    (a) the insert is executed in the row's OWN tenant context, so any policy
+    re-evaluated during the write (a materialized view selecting from a
+    policy-protected table — the exact failure that forced flows_hourly to be
+    dropped, see src/backend/clickhouse_policies.go:16-19) sees the row's scope
+    instead of an unset setting or a wildcard; (b) a cross-tenant batch has to
+    announce itself and is counted. The control that actually stops a forged
+    tenant reaching a row is `verified_tenant` at intake.
+    """
+    scopes = {str(r.get("tenant_id", "")) for r in rows if "tenant_id" in r}
+    if len(scopes) == 1 and len(rows) == len([r for r in rows if "tenant_id" in r]):
+        return scopes.pop()
+    # Mixed tenants (the per-tenant write-amp rollup) or a table with no tenant
+    # column: the only honest scope is the explicit cross-tenant one. Counted
+    # per table so it can never grow quietly.
+    return "__all__"
+
 
 class CH:
     def __init__(self, base_url: str, user: str, password: str) -> None:
@@ -1588,10 +1781,18 @@ class CH:
         table's non_replicated_deduplication_window (init.sql) bounds the memory
         of tokens; immediate retries are always inside it.
         """
+        rows = list(rows)
         body = "\n".join(json.dumps(r) for r in rows)
         if not body:
             return True
+        # #20 Phase 2 / TENANT-HIGH-4: state the tenant this batch is written on
+        # behalf of instead of leaving the setting unset (or wildcarding it on
+        # the read side and hoping). See insert_scope().
+        scope = insert_scope(rows)
+        if scope == "__all__":
+            CH_CROSS_TENANT_INSERTS[table] = CH_CROSS_TENANT_INSERTS.get(table, 0) + 1
         params = {
+            "tenant_scope": scope,
             "query": f"INSERT INTO {table} FORMAT JSONEachRow",
             # Server-side buffering so a post-flush failure arrives as a real
             # error status + header rather than a 200 with the exception buried.
@@ -2232,7 +2433,18 @@ async def handle_metric(ev: dict) -> None:
         log.warning("metric dropped: timestamp out of bounds (age=%.0fs) %s/%s", age, entity_id, metric)
         return
 
-    tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("device") or ""))
+    # The claim is checked against the registry entry for the device the sample
+    # names. Not registry-anchored: a canonical MetricEvent can legitimately
+    # describe an entity the exporter has no inventory row for (a fresh device,
+    # a cloud resource), so the registry is used to CONTRADICT a claim, never to
+    # require one. A contradiction is refused + quarantined, never averaged.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                 str(ev.get("device") or ""), "metrics")
+    except TenantClaimRefused as exc:
+        METRICS_DROPPED += 1
+        keep_deadletter_payload("metrics", ev, exc)
+        return
     collection_path = str(ev.get("collection_path") or "snmp_poll")
     METRICS_ACCEPTED += 1
 
@@ -2424,7 +2636,16 @@ async def handle_probe(ev: dict) -> None:
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
     host = str(ev.get("target") or "")
-    tenant = str(ev.get("tenant_id") or "") or tenant_for(host)
+    # Most probe targets are external hosts the registry has never heard of, so
+    # this lane is not registry-anchored — but when the target IS an inventory
+    # device, a probe claiming a DIFFERENT tenant than that device's owner is a
+    # cross-tenant write and is refused.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), host, "probes")
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("probe", ev, exc)
+        return
     now = datetime.now(timezone.utc)
     try:
         sigs = probe_signals(ev, DETECTOR, tenant, now)
@@ -2480,7 +2701,17 @@ async def handle_snmptrap(ev: dict) -> None:
             ev = {**ev, "device": recovered}
             device = recovered
             TRAPS_RECANON += 1
-    tenant = str(ev.get("tenant_id") or "") or tenant_for(device)
+    # A trap's tenant claim must agree with the registry entry for the device it
+    # was attributed to. Not registry-anchored: G2a can attribute a trap to a
+    # device the exporter omitted as ambiguous (NAT-collapsed source), and that
+    # must not become a data-loss event — but a positive disagreement is refused.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), device, "snmptrap")
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        TRAPS_DROPPED += 1
+        keep_deadletter_payload("trap", ev, exc)
+        return
     try:
         sig = trap_control_signal(ev, tenant, datetime.now(timezone.utc))
     except DeadLetter as exc:
@@ -2564,6 +2795,16 @@ async def handle_wireless_session(ev: dict) -> None:
         log.warning("wireless session dropped: missing identity (tenant=%r session=%r)",
                     tenant, session_id)
         return
+    # The claim is cross-checked against the registry entry for the OBSERVER
+    # (controller / AP) that reported the session. Wireless client data is
+    # per-tenant PII, so a session claiming a tenant the reporting observer does
+    # not belong to is refused, not stored.
+    try:
+        tenant = verified_tenant(tenant, str(ev.get("observer_id") or ""), "wireless")
+    except TenantClaimRefused as exc:
+        WIRELESS_DROPPED += 1
+        keep_deadletter_payload("wireless", ev, exc)
+        return
     cid, confidence, method = wo_client_identity(
         tenant, client_mac,
         eap_cn=str(ev.get("eap_cn") or ""), username=str(ev.get("username") or ""),
@@ -2626,6 +2867,13 @@ async def handle_wireless_event(ev: dict) -> None:
     tenant = str(ev.get("tenant_id") or "")
     if not tenant:
         WIRELESS_DROPPED += 1
+        return
+    # Same observer cross-check as handle_wireless_session.
+    try:
+        tenant = verified_tenant(tenant, str(ev.get("observer_id") or ""), "wireless")
+    except TenantClaimRefused as exc:
+        WIRELESS_DROPPED += 1
+        keep_deadletter_payload("wireless", ev, exc)
         return
     etype = str(ev.get("type") or "")
     if etype == "onboarding":
@@ -2691,6 +2939,15 @@ async def handle_cloud(ev: dict) -> None:
     CLOUD_RECEIVED += 1
     if not CORR_SIGNALS_ENABLED or ch is None:
         return
+    # NOT run through verified_tenant (unlike syslog/flows/metrics/traps/probes/
+    # wireless), and deliberately so: a cloud account, an app identity and an LB
+    # host have NO device identity in device_tenant.csv to check a claim against,
+    # and inventing one would mean matching a raw IP — which collides across
+    # tenants in overlapping RFC1918 space and would refuse legitimate data. The
+    # controls that DO apply here are the authenticated bus producer (F-08
+    # ingest auth) and the default-closed empty-tenant drop below. Same for
+    # handle_app_identity and handle_app_edge. If the registry ever grows cloud
+    # resource identities, these three lanes get the same gate.
     tenant = str(ev.get("tenant_id") or "")
     if not tenant:
         CLOUD_DROPPED += 1
@@ -2804,8 +3061,23 @@ async def handle_syslog(ev: dict) -> None:
     # "arrived from the bus", so a flat-line means the lane died, not that the
     # traffic happened to be unclassifiable.
     SYSLOG_RECEIVED += 1
+    # TENANT-HIGH-3: syslog reaches this process from an UNAUTHENTICATED UDP/TCP
+    # 514 listener via syslog-ng → Vector, and Vector derives .tenant_id purely
+    # from the device→tenant registry keyed on .hostname. So a tenant_id here is
+    # only legitimate if it REPRODUCES the registry's answer for the hostname
+    # this very event carries. Anything else — a made-up hostname with a real
+    # tenant, a real hostname with someone else's tenant — is refused and
+    # quarantined BEFORE any lane can persist it. Registry-anchored, so an
+    # unknown hostname with a non-empty claim fails closed too.
+    try:
+        cp_tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                    str(ev.get("hostname") or ""),
+                                    "syslog", registry_anchored=True)
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        keep_deadletter_payload("syslog", ev, exc)
+        return
     if CORR_SIGNALS_ENABLED and ch is not None:
-        cp_tenant = str(ev.get("tenant_id") or "") or tenant_for(str(ev.get("hostname") or ""))
         try:
             cp_sig = syslog_control_signal(ev, cp_tenant, datetime.now(timezone.utc))
         except DeadLetter as exc:
@@ -2895,7 +3167,7 @@ async def handle_flow(ev: dict) -> None:
     sample per engine cycle. This is the passive_flow modality lane — the 4th
     independent witness class for the verdict gate (DDoS / top-talker-shift /
     port-scan SIGNATURES are future catalog growth on top of this volume series)."""
-    global FLOWS_RECEIVED, FLOWS_DROPPED
+    global DEADLETTER_COUNT, FLOWS_RECEIVED, FLOWS_DROPPED
     if not (CORR_SIGNALS_ENABLED and FLOW_CORRELATION_ENABLED) or ch is None:
         return
     sample = flow_sample(ev)
@@ -2909,7 +3181,19 @@ async def handle_flow(ev: dict) -> None:
         return
     FLOWS_RECEIVED += 1
     sampler, entity, bytes_est = sample
-    tenant = str(ev.get("tenant_id") or "") or tenant_for(sampler)
+    # TENANT-HIGH-4: flows arrive from goflow2 on an unauthenticated collector
+    # port and their tenancy is keyed on sampler_address — harder to forge than
+    # a hostname, but still unauthenticated, and nothing stops a bus writer from
+    # attaching a tenant_id of its choosing. Registry-anchored: the claim must
+    # reproduce the registry's answer for THIS exporter, or the flow is refused.
+    try:
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""), sampler,
+                                 "flows", registry_anchored=True)
+    except TenantClaimRefused as exc:
+        DEADLETTER_COUNT += 1
+        FLOWS_DROPPED += 1
+        keep_deadletter_payload("flows", ev, exc)
+        return
     agg = _FLOW_AGG.setdefault((tenant, entity), {"bytes": 0.0, "sampler": sampler})
     agg["bytes"] += bytes_est
     # #98 Phase 4 — SECOND grounding: when a confirming attribution source names
@@ -3114,7 +3398,24 @@ async def metrics_exposition():
     lines += [
         "# TYPE corr_quarantined_events gauge",
         f"corr_quarantined_events {len(QUARANTINE)}",
+        # TENANT-HIGH-3/4: a forged/contradicted tenant claim must be an ALERT,
+        # not a log line nobody reads. Bounded cardinality: lane:reason pairs.
+        "# HELP corr_tenant_claims_total Self-declared tenant_ids checked against the device registry.",
+        "# TYPE corr_tenant_claims_total counter",
+        f'corr_tenant_claims_total{{outcome="verified"}} {TENANT_CLAIMS_VERIFIED}',
+        f'corr_tenant_claims_total{{outcome="refused"}} {TENANT_CLAIMS_REFUSED}',
+        "# HELP corr_tenant_claims_refused_total Refused tenant claims by lane and reason.",
+        "# TYPE corr_tenant_claims_refused_total counter",
     ]
+    for key, n in sorted(TENANT_REFUSALS.items()):
+        lane, _, reason = key.partition(":")
+        lines.append(f'corr_tenant_claims_refused_total{{lane="{lane}",reason="{reason}"}} {n}')
+    lines += [
+        "# HELP corr_cross_tenant_inserts_total Inserts issued at tenant_scope=__all__, by table.",
+        "# TYPE corr_cross_tenant_inserts_total counter",
+    ]
+    for table, n in sorted(CH_CROSS_TENANT_INSERTS.items()):
+        lines.append(f'corr_cross_tenant_inserts_total{{table="{table}"}} {n}')
     # #101 tenant write-amp, BOUNDED cardinality: only the top-K noisiest
     # tenants of the last flushed window get series (K=CORR_WA_TOPK); the full
     # per-tenant history lives in netops.corr_tenant_write_amp (SQL, 30d TTL).
@@ -3161,6 +3462,18 @@ async def health() -> dict:
         # Durability: writes and events that did NOT land. All-zero is the only
         # healthy state; anything else is data the platform silently does not
         # have (F-38 ClickHouse writes, F-40 quarantined events).
+        # TENANT-HIGH-3/4: tenant claims checked against the trusted device→
+        # tenant registry. `refused` non-zero means something on the bus is
+        # asserting a tenant the registry contradicts — the payloads are in
+        # /deadletters. `cross_tenant_inserts` should only ever name
+        # netops.corr_tenant_write_amp (the per-tenant rollup).
+        "tenant_verification": {
+            "claims_verified": TENANT_CLAIMS_VERIFIED,
+            "claims_refused": TENANT_CLAIMS_REFUSED,
+            "refusals": dict(sorted(TENANT_REFUSALS.items())),
+            "registry_identities": len(_tenant_map),
+            "cross_tenant_inserts": dict(sorted(CH_CROSS_TENANT_INSERTS.items())),
+        },
         "durability": {
             "ch_insert_failures": dict(sorted(CH_INSERT_FAILURES.items())),
             "handler_failures": dict(sorted(HANDLER_FAILURES.items())),

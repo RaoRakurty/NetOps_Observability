@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -38,24 +39,49 @@ type ldapConfigStore struct {
 	cfg   *ldapConfig // nil until an operator saves; falls back to env defaults
 	path  string
 	vault *Vault // secret-custody envelope for bind_password at rest (nil = dormant/passthrough)
+	// loadErr records that the stored bind password could not be UNSEALED. The
+	// in-memory copy is blank in that case, so the "empty PUT preserves the
+	// stored secret" shortcut would silently WIPE it — set() refuses instead.
+	loadErr error
 }
 
 func newLDAPConfigStore(path string, v *Vault) *ldapConfigStore {
 	s := &ldapConfigStore{path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		// An unreadable auth config makes the provider fall back to the env
+		// defaults (usually: LDAP off). That is a sign-in outage whose CAUSE was
+		// previously invisible — it took the same branch as "no operator has
+		// configured LDAP yet" (§10).
+		logError("ldap.config", "stored LDAP config unreadable — LDAP sign-in falls back to the env defaults", errf(err))
+	}
 	return s
 }
 
-func (s *ldapConfigStore) load() {
+// load reads the stored LDAP overlay. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults apply) / loaded.
+func (s *ldapConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never configured; env defaults apply
+	}
+	if err != nil {
+		return fmt.Errorf("read LDAP config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never configured
 	}
 	var c ldapConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode LDAP config: %w", err)
 	}
+	var loadErr error
 	if dec, derr := mapLDAP(c, openFn(s.vault)); derr != nil {
+		// Keep the config (host/base-DN stay usable for the operator to inspect)
+		// but never bind with the SEALED bytes as a password.
+		c.BindPassword = ""
+		loadErr = fmt.Errorf("unseal LDAP bind password: %w", derr)
 		logError("ldap.config", "decrypt secret", errf(derr))
 	} else {
 		c = dec
@@ -63,6 +89,7 @@ func (s *ldapConfigStore) load() {
 	s.mu.Lock()
 	s.cfg = &c
 	s.mu.Unlock()
+	return loadErr
 }
 
 // effective returns the stored overlay when present, else the env-derived
@@ -89,6 +116,9 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.BindPassword == "" && s.cfg != nil {
+		if s.loadErr != nil {
+			return ldapConfig{}, errors.New("the stored bind password could not be read — re-enter it with this save")
+		}
 		in.BindPassword = s.cfg.BindPassword
 	}
 	sealed, err := mapLDAP(in, sealFn(s.vault)) // encrypt at rest; in-memory stays plaintext
@@ -104,6 +134,7 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 	}
 	stored := in
 	s.cfg = &stored
+	s.loadErr = nil // a successful save IS the repair
 	return stored, nil
 }
 
@@ -395,24 +426,42 @@ type tacacsConfigStore struct {
 	cfg   *tacacsConfig
 	path  string
 	vault *Vault // secret-custody envelope for the shared secret at rest (nil = dormant)
+	// loadErr: the stored shared secret could not be unsealed — see ldapConfigStore.
+	loadErr error
 }
 
 func newTACACSConfigStore(path string, v *Vault) *tacacsConfigStore {
 	s := &tacacsConfigStore{path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("tacacs.config", "stored TACACS+ config unreadable — TACACS+ sign-in falls back to the env defaults", errf(err))
+	}
 	return s
 }
 
-func (s *tacacsConfigStore) load() {
+// load reads the stored TACACS+ overlay. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults apply) / loaded.
+func (s *tacacsConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never configured; env defaults apply
+	}
+	if err != nil {
+		return fmt.Errorf("read TACACS config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never configured
 	}
 	var c tacacsConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode TACACS config: %w", err)
 	}
+	var loadErr error
 	if dec, derr := mapTACACS(c, openFn(s.vault)); derr != nil {
+		// Never authenticate with the SEALED bytes as the shared secret.
+		c.Secret = ""
+		loadErr = fmt.Errorf("unseal TACACS shared secret: %w", derr)
 		logError("tacacs.config", "decrypt secret", errf(derr))
 	} else {
 		c = dec
@@ -420,6 +469,7 @@ func (s *tacacsConfigStore) load() {
 	s.mu.Lock()
 	s.cfg = &c
 	s.mu.Unlock()
+	return loadErr
 }
 
 func (s *tacacsConfigStore) effective() tacacsConfig {
@@ -440,6 +490,9 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.Secret == "" && s.cfg != nil {
+		if s.loadErr != nil {
+			return tacacsConfig{}, errors.New("the stored shared secret could not be read — re-enter it with this save")
+		}
 		in.Secret = s.cfg.Secret
 	}
 	// #nosec G117 -- the TACACS shared secret is intentionally persisted to the kv
@@ -459,6 +512,7 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	}
 	stored := in
 	s.cfg = &stored
+	s.loadErr = nil // a successful save IS the repair
 	return stored, nil
 }
 

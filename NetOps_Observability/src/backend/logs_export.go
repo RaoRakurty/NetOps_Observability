@@ -572,7 +572,11 @@ func (s *server) handleExportView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("exports require the Postgres backend"))
 		return
 	}
-	token := strings.TrimPrefix(r.URL.Path, "/api/exports/view/")
+	// PIPE-HIGH-2: prefer the X-Link-Token header (never logged, never in a
+	// proxy's access log or the browser's history); the path form stays for the
+	// plain browser download and is masked at both log boundaries. See
+	// report_links.go.
+	token := linkTokenFromRequest(r, "/api/exports/view/")
 	execID, linkTenant, err := verifyExportLink(token)
 	if err != nil {
 		writeError(w, http.StatusForbidden, errors.New("invalid or expired export link"))

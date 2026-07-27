@@ -263,7 +263,13 @@ SELECT toString(signal_id) AS signal_id,
 	// #81 P3G: name the app for address-like entities via the unified resolver
 	// (cheap — the feed already runs on s.chRows, no passthrough conversion).
 	tenant, cross := principalTenant(claims)
-	ov := s.overridesFor(r.Context(), tenant, cross)
+	ov, ovErr := s.overridesFor(r.Context(), tenant, cross)
+	if ovErr != nil {
+		// Enrichment, not the answer: the feed still renders, but the missing
+		// top-of-ladder layer is recorded rather than passing as "no overrides".
+		logWarn("appid", "operator override store did not answer — feed app names fall back to lower-precedence sources",
+			map[string]any{"tenant": tenant, "err": ovErr.Error()})
+	}
 	order, _ := s.governance.attributionPrecedence(tenant)
 
 	items := make([]map[string]any, 0, len(rows))
@@ -322,8 +328,12 @@ func feedTotalSQL(where string) string {
 // the count read fails — the UI treats it as "unknown", never as zero.
 func (s *server) feedTotal(r *http.Request, where string) int64 {
 	rows, err := s.chRows(r, feedTotalSQL(where))
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		logWarn("events.feed", "window count failed — reporting UNKNOWN, never zero", errf(err))
 		return -1
+	}
+	if len(rows) == 0 {
+		return -1 // a count query always returns one row; no row = we did not learn the count
 	}
 	c, err := strconv.ParseInt(fmt.Sprintf("%v", rows[0]["c"]), 10, 64)
 	if err != nil {
@@ -334,16 +344,24 @@ func (s *server) feedTotal(r *http.Request, where string) int64 {
 
 // feedFacet returns {value: count} for one dimension over the filtered window
 // (cursor-independent). dim is a fixed column name (never user input).
+//
+// The sentinel is feedTotal's, in map form: nil (JSON `null`) means the facet
+// read FAILED — unknown — while an empty object means the window genuinely holds
+// no events in that dimension. They used to share the `{}` branch, so a
+// ClickHouse error rendered triage chips reading "0 critical" next to a total of
+// 1043 (§10).
 func (s *server) feedFacet(r *http.Request, where, dim string) map[string]int64 {
 	sql := `SELECT ` + dim + ` AS k, count() AS c
   FROM netops.corr_signals
  WHERE ` + where + `
  GROUP BY k ORDER BY c DESC LIMIT 25 FORMAT JSON`
 	rows, err := s.chRows(r, sql)
-	out := map[string]int64{}
 	if err != nil {
-		return out
+		logWarn("events.feed", "facet read failed — reporting UNKNOWN, never zero",
+			map[string]any{"dim": dim, "err": err.Error()})
+		return nil
 	}
+	out := map[string]int64{}
 	for _, row := range rows {
 		k := fmt.Sprintf("%v", row["k"])
 		c, _ := strconv.ParseInt(fmt.Sprintf("%v", row["c"]), 10, 64)

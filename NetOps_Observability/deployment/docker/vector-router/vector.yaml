@@ -307,25 +307,56 @@ transforms:
       # in the aggregator's flows_normalized; it moved here with F-49, because
       # flows now reach the bus straight from goflow2 and never touch the
       # aggregator. `.signal` moved with it for the same reason.
+      #
+      # TENANT-HIGH-4 — THE DEFECT FIXED HERE: the lookup used to run ONLY when
+      # the record arrived with no tenant_id (`... && .tenant_id == ""`), i.e.
+      # the registry was a fallback for ABSENCE and a self-declared tenant on
+      # netops.flows was carried through UNCHECKED into that tenant's index and
+      # ClickHouse rows. goflow2 never sets one, so the field could only ever
+      # come from something else writing to the topic — which is precisely the
+      # case that must not be trusted. The registry is now UNCONDITIONALLY
+      # authoritative: any inbound claim is dropped on the floor before the
+      # lookup, exactly like the aggregator's syslog lane. sampler_address is
+      # still unauthenticated (spoofable UDP), so this bounds the damage to
+      # "whatever the registry says about the exporter you can impersonate"; it
+      # is not a substitute for authenticated flow export.
+      #
+      # The resolved value is held in a VRL local and assigned to .tenant_id
+      # ONCE. That is not cosmetic: unconditionally assigning `.tenant_id = ""`
+      # first would make the path a known string, and the later
+      # `to_string(.tenant_id) ?? ""` would then be a dangling coalesce on an
+      # infallible call — a VRL COMPILE error, i.e. vector exits 78 at boot.
       .signal = "netflow"
-      if !exists(.tenant_id) { .tenant_id = "" }
+      claimed_tenant = to_string(.tenant_id) ?? ""
+      tenant_resolved = ""
       sampler = to_string(.sampler_address) ?? ""
-      if sampler != "" && (to_string(.tenant_id) ?? "") == "" {
+      if sampler != "" {
         trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
         if length(trows) > 0 {
-          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+          tenant_resolved = to_string(trows[0].tenant_id) ?? ""
         }
       }
+      .tenant_id = tenant_resolved
 
       # #20 Phase 3 — per-tenant index segment (see applogs_tagged).
-      seg = downcase(to_string(.tenant_id) ?? "")
+      seg = downcase(tenant_resolved)
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
       # F-11: same enrichment-miss stamp the anchored lanes carry. This lane
       # hand-rolls its tenant block (it has extra flow-specific work), which is
       # precisely why it must be audited whenever the anchor changes — a fix
       # applied to the anchor alone would leave flows unmeasured.
+      #
+      # A THIRD outcome (TENANT-HIGH-4): "claim_rejected" — the record asserted
+      # a tenant the registry does not agree with. The registry's answer is what
+      # gets written (never the claim, and never a permissive fallback), but the
+      # outcome is stamped so the miss-rate metric separates "no inventory row"
+      # from "somebody is writing tenanted flows onto the bus", which is a
+      # security event and not an enrichment gap.
       .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
+      if claimed_tenant != "" && claimed_tenant != tenant_resolved {
+        .tenant_attribution = "claim_rejected"
+      }
 
   # Cloud cost records → the ClickHouse cloud_costs schema. Zero-trust gate on
   # the bus payload: only kind=cloud_cost with a well-formed day passes; the

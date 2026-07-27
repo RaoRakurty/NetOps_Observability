@@ -281,8 +281,16 @@ func (w *ticketWorker) upsertLink(ctx context.Context, it ticketOutboxItem, cfg 
 
 func (w *ticketWorker) markLinkStatus(ctx context.Context, it ticketOutboxItem, status string) {
 	l, found, err := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
-	if err != nil || !found {
+	if err != nil {
+		// The link store did not answer. Skipping is the only safe action (we
+		// must not invent a link), but it leaves the ticket showing its OLD
+		// status forever while the outbox item is marked done — so the read
+		// failure is reported through the same channel as a write failure (§10).
+		w.storeErr("GetLink", it, err)
 		return
+	}
+	if !found {
+		return // answered: no link for this object/system — nothing to mark
 	}
 	now := time.Now().UTC()
 	l.Status = status

@@ -309,7 +309,10 @@ func ifAliasMap(ctx context.Context, addr string, creds snmpCreds) map[string]st
 	out := map[string]string{}
 	if rows, err := snmpWalkColumn(ctx, addr, creds, ifAliasOID); err == nil {
 		for idx, v := range rows {
-			if s := strings.TrimSpace(string(v.raw)); s != "" {
+			// sanitizeLabel, not TrimSpace: ifAlias is operator-typed free text that
+			// becomes a VictoriaMetrics LABEL. Unbounded length/control chars there
+			// are a cardinality + exposition hazard (caps.go, audit PIPE-MED-11).
+			if s := sanitizeLabel(string(v.raw)); s != "" {
 				out[idx] = s
 			}
 		}
@@ -323,9 +326,12 @@ func ifAliasMap(ctx context.Context, addr string, creds snmpCreds) map[string]st
 // falls back to "ifIndex N" rather than dropping the metric.
 func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]string {
 	out := map[string]string{}
+	// sanitizeLabel, not TrimSpace: ifName/ifDescr become the `ifName` LABEL on
+	// every interface series, so an unbounded or control-char-bearing value is a
+	// cardinality/exposition hazard, not cosmetics (caps.go, audit PIPE-MED-11).
 	if rows, err := snmpWalkColumn(ctx, addr, creds, ifNameOID); err == nil {
 		for idx, v := range rows {
-			if s := strings.TrimSpace(string(v.raw)); s != "" {
+			if s := sanitizeLabel(string(v.raw)); s != "" {
 				out[idx] = s
 			}
 		}
@@ -335,7 +341,7 @@ func ifNameMap(ctx context.Context, addr string, creds snmpCreds) map[string]str
 			if _, ok := out[idx]; ok {
 				continue
 			}
-			if s := strings.TrimSpace(string(v.raw)); s != "" {
+			if s := sanitizeLabel(string(v.raw)); s != "" {
 				out[idx] = s
 			}
 		}

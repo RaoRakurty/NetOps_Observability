@@ -40,7 +40,11 @@ from signals import (
     Severity,
     Signal,
     Source,
+    cap_label,
 )
+
+# An identity assertion cites its provenance; it is not a bulk channel.
+_MAX_SOURCES = 32
 
 # The single identity "kind" on source=app_identity. One assertion type: "this
 # scope was identified as application X (with this band/state/provenance)".
@@ -187,7 +191,8 @@ def app_identity_from_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signa
     the CALLER's job (an identity event carries an explicit tenant_id; there is no
     device to infer it from), so this takes the already-resolved `tenant`.
     """
-    app = str(ev.get("app") or ev.get("canonical_app") or "").strip()
+    app = cap_label(ev.get("app") or ev.get("canonical_app") or "",
+                    where="app_identity", field_name="app").strip()
     if not app:
         raise DeadLetter("app identity event carries no app")
 
@@ -199,11 +204,18 @@ def app_identity_from_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signa
     if state not in _STATES:
         raise DeadLetter(f"invalid resolution state: {state!r}")
 
+    # Untrusted-string caps (audit PIPE-MED-11). This is a BUS event: the shape is
+    # validated above, the SIZE was not. `sources` and `entity_tokens` are also
+    # bounded in COUNT — an identity assertion naming 10k provenance sources is a
+    # cardinality problem, not evidence. (Signal itself re-caps tokens; capping
+    # here keeps the truncation attributable to the wire adapter.)
     raw_sources = ev.get("sources")
-    sources = tuple(str(s) for s in raw_sources if s) if isinstance(
+    sources = tuple(cap_label(s, where="app_identity", field_name="source")
+                    for s in raw_sources[:_MAX_SOURCES] if s) if isinstance(
         raw_sources, (list, tuple)) else ()
     raw_tokens = ev.get("entity_tokens")
-    tokens = tuple(str(t) for t in raw_tokens if t) if isinstance(
+    tokens = tuple(cap_label(t, where="app_identity", field_name="entity_token")
+                   for t in raw_tokens if t) if isinstance(
         raw_tokens, (list, tuple)) else ()
     raw_attrs = ev.get("attrs")
     attrs = raw_attrs if isinstance(raw_attrs, dict) else None
@@ -215,18 +227,21 @@ def app_identity_from_event(ev: dict, tenant: str, ingest_ts: datetime) -> Signa
             app=app,
             band=band,
             state=state,
-            canonical_app_id=str(ev.get("canonical_app_id") or ""),
-            provider=str(ev.get("provider") or ""),
-            component=str(ev.get("component") or ""),
+            canonical_app_id=cap_label(ev.get("canonical_app_id") or "",
+                                       where="app_identity", field_name="canonical_app_id"),
+            provider=cap_label(ev.get("provider") or "", where="app_identity", field_name="provider"),
+            component=cap_label(ev.get("component") or "", where="app_identity", field_name="component"),
             evidence_score=_coerce_int(ev.get("evidence_score")),
             sources=sources,
-            fusion_version=str(ev.get("fusion_version") or ""),
+            fusion_version=cap_label(ev.get("fusion_version") or "",
+                                     where="app_identity", field_name="fusion_version"),
             catalog_version=_coerce_int(ev.get("catalog_version")),
-            dst_ip=str(ev.get("dst_ip") or ""),
+            dst_ip=cap_label(ev.get("dst_ip") or "", where="app_identity", field_name="dst_ip"),
             dst_port=_coerce_int(ev.get("dst_port")),
-            proto=str(ev.get("proto") or ""),
-            flow_id=str(ev.get("flow_id") or ""),
-            session_id=str(ev.get("session_id") or ""),
+            proto=cap_label(ev.get("proto") or "", where="app_identity", field_name="proto"),
+            flow_id=cap_label(ev.get("flow_id") or "", where="app_identity", field_name="flow_id"),
+            session_id=cap_label(ev.get("session_id") or "",
+                                 where="app_identity", field_name="session_id"),
             entity_tokens=tokens,
             attrs=attrs,
         )

@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -282,15 +283,25 @@ type pgWirelessStore struct{ db *pgDB }
 
 func newPGWirelessStore(db *pgDB) *pgWirelessStore { return &pgWirelessStore{db: db} }
 
-func jsonBlob(v any) []byte {
+// jsonBlob encodes the record's full shape for the `data` column. It returns an
+// ERROR rather than substituting "{}": swallowing the encode failure wrote a row
+// whose data column had silently lost every field the typed columns don't carry,
+// and the upsert still reported success (§10). ("b == nil" was unreachable —
+// json.Marshal only returns nil alongside an error — so the old
+// `err != nil || b == nil` branch was purely the error branch in disguise.)
+func jsonBlob(v any) ([]byte, error) {
 	b, err := json.Marshal(v)
-	if err != nil || b == nil {
-		return []byte("{}")
+	if err != nil {
+		return nil, fmt.Errorf("encode wireless record: %w", err)
 	}
-	return b
+	return b, nil
 }
 
 func (p *pgWirelessStore) UpsertController(ctx context.Context, c wireless.Controller) error {
+	ctlBlob, err := jsonBlob(c)
+	if err != nil {
+		return err
+	}
 	return p.db.withTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO wireless_controllers (tenant_id, controller_id, name, vendor, model, os_version,
@@ -303,11 +314,15 @@ ON CONFLICT (tenant_id, controller_id) DO UPDATE SET
     visibility=EXCLUDED.visibility, data=EXCLUDED.data, last_seen=now(), stale=false`,
 			c.TenantID, c.ControllerID, c.Name, c.Vendor, c.Model, c.OSVersion,
 			c.Kind, string(c.ClusterRole), c.ManagementAddress,
-			fwdOrUnknown(c.ForwardingDefault), orPartial(c.Visibility), jsonBlob(c))
+			fwdOrUnknown(c.ForwardingDefault), orPartial(c.Visibility), ctlBlob)
 		if err != nil {
 			return err
 		}
 		for _, mb := range c.Members {
+			mbBlob, err := jsonBlob(mb)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 INSERT INTO wireless_controller_members (tenant_id, member_id, controller_id, name, serial,
     member_state, redundancy_role, ap_capacity, data, last_seen, stale)
@@ -317,7 +332,7 @@ ON CONFLICT (tenant_id, member_id) DO UPDATE SET
     member_state=EXCLUDED.member_state, redundancy_role=EXCLUDED.redundancy_role,
     ap_capacity=EXCLUDED.ap_capacity, data=EXCLUDED.data, last_seen=now(), stale=false`,
 				c.TenantID, mb.MemberID, c.ControllerID, mb.Name, mb.Serial,
-				mb.MemberState, mb.RedundancyRole, mb.APCapacity, jsonBlob(mb)); err != nil {
+				mb.MemberState, mb.RedundancyRole, mb.APCapacity, mbBlob); err != nil {
 				return err
 			}
 		}
@@ -419,6 +434,10 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers W
 }
 
 func (p *pgWirelessStore) UpsertAP(ctx context.Context, ap wireless.AccessPoint) error {
+	apBlob, err := jsonBlob(ap)
+	if err != nil {
+		return err
+	}
 	return p.db.withTenant(ctx, ap.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO access_points (tenant_id, ap_id, name, mac_base, serial, model, vendor,
@@ -436,11 +455,15 @@ ON CONFLICT (tenant_id, ap_id) DO UPDATE SET
 			ap.TenantID, ap.APID, ap.Name, ap.MACBase, ap.Serial, ap.Model, ap.Vendor,
 			ap.ControllerRef, ap.SiteID, ap.FloorRef, ap.X, ap.Y,
 			ap.UplinkSwitchRef, ap.UplinkPortRef, ap.PoEClass, ap.PoEDrawW,
-			ap.MgmtAddress, ap.MgmtVLAN, fwdOrUnknown(ap.ForwardingMode), jsonBlob(ap))
+			ap.MgmtAddress, ap.MgmtVLAN, fwdOrUnknown(ap.ForwardingMode), apBlob)
 		if err != nil {
 			return err
 		}
 		for _, r := range ap.Radios {
+			radioBlob, err := jsonBlob(r)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 INSERT INTO ap_radios (tenant_id, radio_id, ap_id, slot, band, channel, channel_width_mhz,
     tx_power_dbm, tx_power_max_dbm, admin_state, oper_state, generation, mlo_capable, data, last_seen, stale)
@@ -453,7 +476,7 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
     data=EXCLUDED.data, last_seen=now(), stale=false`,
 				ap.TenantID, wireless.RadioID(ap.APID, r.Slot), ap.APID, r.Slot, r.Band,
 				r.Channel, r.ChannelWidthMHz, r.TxPowerDBm, r.TxPowerMaxDBm,
-				r.AdminState, r.OperState, r.Generation, r.MLOCapable, jsonBlob(r)); err != nil {
+				r.AdminState, r.OperState, r.Generation, r.MLOCapable, radioBlob); err != nil {
 				return err
 			}
 		}
@@ -467,6 +490,10 @@ func (p *pgWirelessStore) UpsertRadios(ctx context.Context, tenant string, radio
 	}
 	return p.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		for _, r := range radios {
+			radioBlob, err := jsonBlob(r)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 INSERT INTO ap_radios (tenant_id, radio_id, ap_id, slot, band, channel, channel_width_mhz,
     tx_power_dbm, tx_power_max_dbm, admin_state, oper_state, generation, mlo_capable, data, last_seen, stale)
@@ -479,7 +506,7 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
     data=EXCLUDED.data, last_seen=now(), stale=false`,
 				tenant, wireless.RadioID(r.APID, r.Slot), r.APID, r.Slot, r.Band,
 				r.Channel, r.ChannelWidthMHz, r.TxPowerDBm, r.TxPowerMaxDBm,
-				r.AdminState, r.OperState, r.Generation, r.MLOCapable, jsonBlob(r)); err != nil {
+				r.AdminState, r.OperState, r.Generation, r.MLOCapable, radioBlob); err != nil {
 				return err
 			}
 		}
@@ -604,6 +631,10 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap
 }
 
 func (p *pgWirelessStore) UpsertWLAN(ctx context.Context, wl wireless.WLAN) error {
+	wlanBlob, err := jsonBlob(wl)
+	if err != nil {
+		return err
+	}
 	return p.db.withTenant(ctx, wl.TenantID, false, func(tx pgx.Tx) error {
 		ssidRef := wl.SSIDRef
 		if ssidRef == "" && wl.SSIDName != "" {
@@ -633,7 +664,7 @@ ON CONFLICT (tenant_id, wlan_id) DO UPDATE SET
 			wl.TenantID, wl.WLANID, wl.ProfileName, ssidRef, wl.ControllerRef,
 			wl.SecurityMode, wl.AuthMethod, wl.AAARef, wl.VLANOrPool,
 			fwdOrUnknown(wl.ForwardingMode), wl.BandPolicy, wl.MobilityDomainRef,
-			wl.Enabled, jsonBlob(wl))
+			wl.Enabled, wlanBlob)
 		return err
 	})
 }
@@ -660,6 +691,10 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wlans ORDER BY wlan_id
 }
 
 func (p *pgWirelessStore) UpsertBSSID(ctx context.Context, b wireless.BSSID) error {
+	bssidBlob, err := jsonBlob(b)
+	if err != nil {
+		return err
+	}
 	return p.db.withTenant(ctx, b.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO bssids (tenant_id, bssid, radio_ref, wlan_ref, ap_ref, data, last_seen, stale)
@@ -667,7 +702,7 @@ VALUES ($1,$2,$3,$4,$5,$6,now(),false)
 ON CONFLICT (tenant_id, bssid) DO UPDATE SET
     radio_ref=EXCLUDED.radio_ref, wlan_ref=EXCLUDED.wlan_ref, ap_ref=EXCLUDED.ap_ref,
     data=EXCLUDED.data, last_seen=now(), stale=false`,
-			b.TenantID, b.BSSID, b.RadioRef, b.WLANRef, b.APRef, jsonBlob(b))
+			b.TenantID, b.BSSID, b.RadioRef, b.WLANRef, b.APRef, bssidBlob)
 		return err
 	})
 }

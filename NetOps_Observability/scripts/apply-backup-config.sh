@@ -44,6 +44,17 @@ SCHED="$(read_json schedule_enabled)"    # 'True' / 'False'
 CRON="$(read_json schedule_cron)"
 [ -z "$CRON" ] && CRON="30 2 * * *"
 
+# Retention (2026-07-27). The nightly cron wrote a full backup a day and NOTHING
+# pruned them; the only retention in the product was OPENSEARCH_SNAPSHOT_KEEP.
+# BACKUP_KEEP mirrors that convention exactly (keep the N newest, 0 = disabled)
+# and backup.sh reads it out of .env, so it works under cron's bare environment.
+KEEP="$(read_json retain_count)"
+[ -z "$KEEP" ] && KEEP="$(read_json keep_count)"
+[ -z "$KEEP" ] && KEEP=7
+case "$KEEP" in
+  ''|*[!0-9]*) die "retain_count in $CONFIG is not a non-negative integer: '$KEEP'" ;;
+esac
+
 # F-55 guard, enforced here too (defence in depth with the API's own check).
 if [ "$SCHED" = "True" ] && [ -z "$REMOTE" ]; then
   die "schedule is enabled but no off-host remote is set — refusing to schedule a local-only nightly backup that would fill the disk (F-55). Set a remote first."
@@ -70,7 +81,12 @@ PY
 }
 set_env BACKUP_REMOTE "$REMOTE"
 set_env BACKUP_PUSH "${PUSH:-rsync -a}"
-say "applied BACKUP_REMOTE=${REMOTE:-<empty>} to .env"
+set_env BACKUP_KEEP "$KEEP"
+say "applied BACKUP_REMOTE=${REMOTE:-<empty>} BACKUP_KEEP=${KEEP} to .env"
+if [ "$KEEP" = "0" ] && [ "$SCHED" = "True" ]; then
+  say "WARNING: BACKUP_KEEP=0 with a nightly schedule — retention is DISABLED and"
+  say "         backups will accumulate until they fill the disk the stack needs."
+fi
 
 # --- 2. install / remove the backup cron ------------------------------------
 CRON_TAG="# correlix-backup (managed by apply-backup-config.sh)"
@@ -86,7 +102,11 @@ else
   say "full-backup schedule DISABLED (removing any managed cron)"
 fi
 if [ "$DRY" = 1 ]; then
-  say "[dry-run] resulting crontab backup line:"; echo "${SCHED:+$CRON_LINE}"
+  # `${SCHED:+…}` tested for a NON-EMPTY SCHED, so it printed the cron line even
+  # when SCHED=False — a dry-run that showed a schedule about to be installed
+  # when the real run would remove it. Test the actual value.
+  say "[dry-run] resulting crontab backup line:"
+  if [ "$SCHED" = "True" ]; then echo "$CRON_LINE"; else echo "(none — schedule disabled)"; fi
 else
   mkdir -p "$ROOT/data/backups"
   printf '%s\n' "$new" | grep -v '^$' | crontab -

@@ -84,11 +84,18 @@ type tenantGovernanceStore struct {
 	mu   sync.RWMutex
 	cfgs map[string]tenantGovernanceConfig
 	path string
+	// loadErr: the stored file could not be READ — not "no tenant set a
+	// governance policy". Conflating them reverted every tenant to the default
+	// ladder/required-tag set and let the next write erase the others (§10).
+	loadErr error
 }
 
 func newTenantGovernanceStore(path string) *tenantGovernanceStore {
 	s := &tenantGovernanceStore{cfgs: map[string]tenantGovernanceConfig{}, path: path}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("tenant.governance", "stored governance config unreadable — every tenant reads as default and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
@@ -101,20 +108,30 @@ func tenantGovernancePath() string {
 	return "/data/tenant_governance.json"
 }
 
-func (s *tenantGovernanceStore) load() {
+// load reads the stored per-tenant governance config. THREE states, never two
+// (the cloud_monitor_eval.go shape): the store did not answer (error) / it
+// answered with nothing (absent key or empty blob) / loaded.
+func (s *tenantGovernanceStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = no governance policy set yet
+	}
+	if err != nil {
+		return fmt.Errorf("read tenant governance config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = none set yet
 	}
 	var m map[string]tenantGovernanceConfig
-	if json.Unmarshal(b, &m) != nil {
-		return
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("decode tenant governance config: %w", err)
 	}
 	for id, c := range m {
 		c.TenantID = id
 		m[id] = c
 	}
 	s.cfgs = m
+	return nil
 }
 
 // saveLocked persists the map. Caller holds s.mu. Blank path = in-memory only.
@@ -126,6 +143,11 @@ func (s *tenantGovernanceStore) load() {
 // answer 500. A write path that cannot fail is a write path that is not
 // writing.
 func (s *tenantGovernanceStore) saveLocked() error {
+	// The in-memory map is not the stored state when the load failed: flushing it
+	// would erase every other tenant's stored rows. Fail closed (F-62 shape).
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite the stored governance config: its stored contents were never read: %w", s.loadErr)
+	}
 	if s.path == "" {
 		return nil
 	}

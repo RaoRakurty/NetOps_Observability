@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -36,20 +37,37 @@ type exportPolicyStore struct {
 
 func newExportPolicyStore(path string) *exportPolicyStore {
 	s := &exportPolicyStore{path: path}
-	s.load()
+	if err := s.load(); err != nil {
+		// Security-relevant: these are the anti-exfiltration caps. An unreadable
+		// file silently REVERTS an operator-tightened limit to the (looser) env
+		// default, so the failure must be loud rather than shaped like "nothing
+		// was ever configured" (§10).
+		logError("export.policy", "stored export limits unreadable — the LOOSER env defaults are in force; re-save the policy", errf(err))
+	}
 	return s
 }
 
-func (s *exportPolicyStore) load() {
+// load reads the stored limits. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults are the policy) /
+// loaded and applied.
+func (s *exportPolicyStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never customised; env defaults ARE the policy
+	}
+	if err != nil {
+		return fmt.Errorf("read export policy: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never customised
 	}
 	var c exportPolicyConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode export policy: %w", err)
 	}
 	s.apply(c)
+	return nil
 }
 
 func setPositiveIntEnv(key string, v int) {

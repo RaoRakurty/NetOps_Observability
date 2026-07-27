@@ -2,6 +2,7 @@
 (stage [2]). These encode docs/design/correlation-engine.md §2.1/§4.1 and the
 owner's pre-freeze amendments; a behavior change here is a design change."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -15,6 +16,7 @@ from episodes import (
     EpisodeDetector,
 )
 from signals import (
+    ATTRS_MAX_BYTES,
     DeadLetter,
     EntityType,
     ModalityClass,
@@ -83,8 +85,28 @@ def test_ch_row_shape_matches_frozen_schema():
 
 
 def test_attrs_bounded():
+    """attrs stay bounded — but the SIGNAL SURVIVES (audit FUNC-MED-8).
+
+    This used to assert DeadLetter. That made one oversize free-text field
+    (a long syslog line, a controller hints blob, an attacker-supplied header)
+    destroy a real event AND write the whole unredacted record to the DLQ. The
+    bound now costs the offending FIELD, not the evidence, and the truncation
+    travels with the row so it is never silent (§10)."""
+    row = sig(attrs={"blob": "x" * 5000}).to_ch_row()
+    assert len(row["attrs"].encode()) <= ATTRS_MAX_BYTES
+    attrs = json.loads(row["attrs"])
+    assert attrs["attrs_truncated"] == ["blob"], "the cut field must be named in the row"
+    assert attrs["blob"].startswith("x") and len(attrs["blob"]) < 5000
+    # Everything the producer sent that FIT is still there.
+    assert attrs["observer_kind"]
+
+
+def test_attrs_dead_letter_survives_for_a_real_producer_bug():
+    """The DeadLetter path is not gone, it is NARROWED: a blob that is still
+    oversize once every string is minimal is a producer bug (thousands of keys),
+    not oversize data."""
     with pytest.raises(DeadLetter):
-        sig(attrs={"blob": "x" * 5000}).to_ch_row()
+        sig(attrs={f"k{i}": i for i in range(2000)}).to_ch_row()
 
 
 # --- stage [2]: episode detection ------------------------------------------

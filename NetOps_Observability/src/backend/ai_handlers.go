@@ -135,6 +135,7 @@ func (s *server) newOrchestrator(r *http.Request, claims jwtClaims) *ai.Orchestr
 		LLM:       aiLLM{srv: s, claims: claims},
 		Flags:     envFlagLookup,
 		Policy:    ai.NewPolicyEngine(ai.PolicyConfig{}, envFlagLookup), // safe default: read-only
+		Redactor:  ai.Redact,                                            // outbound DLP: secrets + direct identifiers (LLM06)
 		KB:        aiKB,                                                 // Network Expert KB (supporting knowledge)
 		ProductKB: aiProductKB,                                          // Correlix product knowledge (concepts + how-tos)
 		Docs:      aiDocsIndex,                                          // docs-portal retriever (real page citations)

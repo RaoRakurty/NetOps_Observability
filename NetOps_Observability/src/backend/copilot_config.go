@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -42,24 +44,42 @@ type copilotConfigStore struct {
 
 func newCopilotConfigStore(path string, v *Vault) *copilotConfigStore {
 	s := &copilotConfigStore{path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		logError("copilot.config", "stored assistant config unreadable — the assistant falls back to env defaults", errf(err))
+	}
 	return s
 }
 
-func (s *copilotConfigStore) load() {
+// load reads the stored assistant config. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults apply) / loaded.
+func (s *copilotConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never configured; env defaults apply
+	}
+	if err != nil {
+		return fmt.Errorf("read copilot config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never configured
 	}
 	var c copilotConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode copilot config: %w", err)
 	}
-	// Decrypt the key (no-op when the Vault is dormant / nil).
-	if out, err := mapCopilot(c, openFn(s.vault)); err == nil {
-		c = out
+	// Decrypt the key (no-op when the Vault is dormant / nil). A failed unseal
+	// must NOT leave the sealed bytes in place as the API key: every provider
+	// call would then fail authentication and read as "the provider rejected
+	// us" rather than "we never opened the envelope".
+	out, derr := mapCopilot(c, openFn(s.vault))
+	if derr != nil {
+		c.Key = ""
+		s.cfg = c
+		return fmt.Errorf("unseal copilot API key: %w", derr)
 	}
-	s.cfg = c
+	s.cfg = out
+	return nil
 }
 
 // get returns the effective config: stored values where set, else the env-var

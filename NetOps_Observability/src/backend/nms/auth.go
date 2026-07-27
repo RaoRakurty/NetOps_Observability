@@ -73,7 +73,13 @@ func (CatalystAuth) Authenticate(ctx context.Context, base string, creds Credent
 	var body struct {
 		Token string `json:"Token"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil || body.Token == "" {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
+		// The controller answered 200 with something we could not read (proxy
+		// login page, truncated body, HTML error). That is NOT "the controller
+		// returned no token" — the operator needs to know which one it was.
+		return Session{}, fmt.Errorf("catalyst auth: unreadable token response: %w", err)
+	}
+	if body.Token == "" {
 		return Session{}, fmt.Errorf("catalyst auth: no token")
 	}
 	h := http.Header{}
@@ -107,7 +113,10 @@ func (VManageAuth) Authenticate(ctx context.Context, base string, creds Credenti
 	var body struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil || body.Token == "" {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
+		return Session{}, fmt.Errorf("vmanage auth: unreadable token response: %w", err)
+	}
+	if body.Token == "" {
 		return Session{}, fmt.Errorf("vmanage auth: no token")
 	}
 	h := http.Header{}
@@ -205,7 +214,10 @@ func (a VersaAuth) Authenticate(ctx context.Context, base string, creds Credenti
 			AccessToken string `json:"access_token"`
 			ExpiresIn   int    `json:"expires_in"`
 		}
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil || body.AccessToken == "" {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
+			return Session{}, fmt.Errorf("versa oauth: unreadable token response: %w", err)
+		}
+		if body.AccessToken == "" {
 			return Session{}, fmt.Errorf("versa oauth: no token")
 		}
 		h := http.Header{}

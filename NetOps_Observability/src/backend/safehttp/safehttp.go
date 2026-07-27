@@ -174,8 +174,16 @@ func ValidateURL(host string) error {
 		return fmt.Errorf("%w: %s", ErrBlocked, ip)
 	}
 	addrs, err := resolveHost(host)
-	if err != nil || len(addrs) == 0 {
-		return nil // unresolved — let the dialer decide at request time
+	if err != nil {
+		// Resolution FAILED (no DNS, SERVFAIL, timeout). This pre-check is
+		// defense in depth, not the enforcement point — the dialer Control hook
+		// still refuses a blocked address at request time — so a resolver outage
+		// must not turn into a save-time rejection of a legitimate host. Distinct
+		// branch from "resolved to nothing" so the intent is explicit (§10).
+		return nil
+	}
+	if len(addrs) == 0 {
+		return nil // resolved to no addresses — the dialer guards it at request time
 	}
 	for _, a := range addrs {
 		if allowlisted(a) || !blockedIP(a) {

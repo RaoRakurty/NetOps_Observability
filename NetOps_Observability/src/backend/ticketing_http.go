@@ -476,8 +476,17 @@ func (s *server) resolveMergeChain(ctx context.Context, scope, owner, requested,
  LIMIT 1
  FORMAT JSON`
 		rows, err := s.chRowsScope(ctx, scope, sql)
-		if err != nil || len(rows) == 0 {
+		if err != nil {
+			// The projection did not answer. The walk still stops at the last
+			// known id (best-effort by design — the caller's 409 must not fail),
+			// but "this id is terminal" and "we could not read the next hop" are
+			// different facts, and the second is now visible (§10).
+			logWarn("ticketing", "merge-chain hop unreadable — canonical id resolution stopped early",
+				map[string]any{"correlation_id": cur, "tenant": owner, "merge_depth": depth, "err": err.Error()})
 			return cur, depth
+		}
+		if len(rows) == 0 {
+			return cur, depth // answered: no such object → cur is the last known id
 		}
 		if canonicalCorrTenant(asString(rows[0]["tenant_id"])) != owner {
 			// Merge pointer crossed a tenant boundary — an engine invariant

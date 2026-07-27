@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"time"
 
@@ -36,14 +35,15 @@ const (
 	aiLogMaxLineCh  = 300 // per-line render cap
 )
 
-// reAISecretKV redacts obvious secret material from log lines before it enters
-// a prompt (LLM06: never forward credentials to an external provider). Values
-// after a secret-ish key are masked; the key survives so the line stays useful.
-var reAISecretKV = regexp.MustCompile(`(?i)\b(password|passwd|secret|community|token|api[_-]?key|authorization|credential)\b(\s*[=:]\s*)\S+`)
-
-// redactAILogLine masks secret-ish values and caps the line length.
+// redactAILogLine masks secret-ish values AND direct identifiers, then caps the
+// line length. The masking itself is ai.Redact — the ONE outbound-DLP dialect
+// (ai/redact.go), shared with the orchestrator's grounded prompts and the agent
+// loop's rendered tool replies. This function used to own a private secret-KV
+// regex that was the only redaction anywhere on the egress path; it now
+// contributes only the per-line length cap on top of the shared filter, so
+// widening coverage means editing one dialect instead of discovering three.
 func redactAILogLine(s string) string {
-	s = reAISecretKV.ReplaceAllString(s, "$1$2***")
+	s = ai.Redact(s)
 	s = strings.TrimSpace(s)
 	if len(s) > aiLogMaxLineCh {
 		s = s[:aiLogMaxLineCh] + " …"
@@ -205,10 +205,21 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 		}
 		return strings.Join(parts, " or ")
 	}
+	// THREE states, never two (cloud_monitor_eval.go): the metric store did not
+	// answer / it answered with no samples / we have a reading. The first two
+	// used to share a branch, so a VictoriaMetrics outage reached the model as
+	// "this device reports no metrics" — an assistant then says the device is
+	// quiet when in truth we never asked successfully (§10, and LLM03: the model
+	// must not be handed a confident absence we cannot vouch for).
+	storeDown := false
 	addMetric := func(cid, metric, format string) {
 		samples, err := d.srv.vmInstant(d.ctx, sel(metric))
-		if err != nil || len(samples) == 0 {
-			return // degrade quietly — inventory line already answers "does it exist"
+		if err != nil {
+			storeDown = true
+			return
+		}
+		if len(samples) == 0 {
+			return // answered: no samples for this metric
 		}
 		tr.Items = append(tr.Items, ai.EvidenceItem{
 			CitationID: cid + ":" + devID, Kind: "metric",
@@ -217,13 +228,21 @@ func (d aiDataSource) moduleDeviceHealth(p ai.Principal, name string) (ai.ToolRe
 	}
 	addMetric("metric:cpu", "device_cpu_percent", "%s — CPU %.0f%%")
 	addMetric("metric:mem", "device_mem_percent", "%s — memory %.0f%%")
-	if samples, err := d.srv.vmInstant(d.ctx, fmt.Sprintf(`count(device_if_oper_status{device=%q} != 1)`, devID)); err == nil && len(samples) > 0 && samples[0].Value > 0 {
+	samples, ifErr := d.srv.vmInstant(d.ctx, fmt.Sprintf(`count(device_if_oper_status{device=%q} != 1)`, devID))
+	if ifErr != nil {
+		storeDown = true
+	} else if len(samples) > 0 && samples[0].Value > 0 {
 		tr.Items = append(tr.Items, ai.EvidenceItem{
 			CitationID: "metric:ifdown:" + devID, Kind: "metric",
 			Text: fmt.Sprintf("%s — %.0f interface(s) operationally down", label, samples[0].Value), Href: href,
 		})
 	}
-	if len(tr.Items) == 1 {
+	switch {
+	case storeDown:
+		// No provider/query detail here (LLM06): the model gets the FACT, not our
+		// internals.
+		tr.Notes = append(tr.Notes, "the metric store did not answer — this device's CPU, memory and interface state are UNKNOWN, not absent")
+	case len(tr.Items) == 1:
 		tr.Notes = append(tr.Notes, "no recent metric samples for this device — reachability may be down or collection not yet warmed")
 	}
 	return tr, nil

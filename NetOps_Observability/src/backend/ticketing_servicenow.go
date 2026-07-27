@@ -456,8 +456,13 @@ func parseInstanceURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("servicenow: instance_url is required")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("servicenow: invalid instance_url")
+	if err != nil {
+		return nil, fmt.Errorf("servicenow: instance_url is not a URL")
+	}
+	if u.Host == "" {
+		// Parsed, but carries no host (e.g. "dev123.service-now.com" with no
+		// scheme) — a different mistake from an unparseable string.
+		return nil, fmt.Errorf("servicenow: instance_url has no host (include the scheme, e.g. https://…)")
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("servicenow: instance_url must be http(s)")

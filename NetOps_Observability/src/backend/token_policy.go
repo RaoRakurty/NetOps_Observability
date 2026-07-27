@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -82,20 +83,35 @@ type tokenPolicyStore struct {
 
 func newTokenPolicyStore(path string, refresh *refreshStore) *tokenPolicyStore {
 	s := &tokenPolicyStore{path: path, refresh: refresh}
-	s.load()
+	if err := s.load(); err != nil {
+		// The stored lifetimes are a security control: an unreadable file leaves
+		// the env/default TTLs in force, which is NOT what the operator saved.
+		logError("token.policy", "stored token policy unreadable — the env/default token lifetimes are in force; re-save the policy", errf(err))
+	}
 	return s
 }
 
-func (s *tokenPolicyStore) load() {
+// load reads the stored policy. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults are the policy) /
+// loaded and applied.
+func (s *tokenPolicyStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never customised; env defaults ARE the policy
+	}
+	if err != nil {
+		return fmt.Errorf("read token policy: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never customised
 	}
 	var c tokenPolicyConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode token policy: %w", err)
 	}
 	s.apply(c)
+	return nil
 }
 
 // apply writes the config into the env (clamped/read by accessTokenTTL /

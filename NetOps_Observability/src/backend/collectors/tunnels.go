@@ -135,8 +135,14 @@ type berVal struct {
 
 func (v berVal) int() int64   { return decodeInt(v.raw) }
 func (v berVal) uint() uint64 { return decodeUint(v.raw) }
-func (v berVal) str() string  { return string(v.raw) }
-func (v berVal) ip() string   { return decodeIP(v.raw) }
+
+// str renders an OCTET STRING value. It is BOUNDED and control-char scrubbed at
+// the decoder (caps.go): every caller — CDP/LLDP neighbour names, ifName/ifDescr,
+// sysName/sysDescr — feeds a metric label, a ClickHouse String or an OpenSearch
+// document, and a device can put up to 64 KB in one varbind. Capping here means a
+// new caller inherits the bound instead of having to remember it (PIPE-MED-11).
+func (v berVal) str() string { return sanitizeText(string(v.raw)) }
+func (v berVal) ip() string  { return decodeIP(v.raw) }
 
 // SNMP v2c exception value tags that end (or skip) a walk.
 const (

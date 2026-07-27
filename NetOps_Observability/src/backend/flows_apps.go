@@ -135,7 +135,13 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 
 	cat := s.appCatalog.get()
 	tenant, cross := principalTenant(claims)
-	ov := s.overridesFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
+	ov, ovErr := s.overridesFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
+	if ovErr != nil {
+		// Enrichment, not the answer: the top-N still renders, but a store that
+		// did not answer is logged instead of passing as "no overrides".
+		logWarn("appid", "operator override store did not answer — flow app names fall back to lower-precedence sources",
+			map[string]any{"tenant": tenant, "err": ovErr.Error()})
+	}
 	// extraFor layers the non-catalog signals for EITHER side's address (dst and,
 	// since #81 P3G, src): operator prefix overrides, the authoritative NGFW
 	// app-id, and the cloud identity-map (a flow to/from a tagged cloud private

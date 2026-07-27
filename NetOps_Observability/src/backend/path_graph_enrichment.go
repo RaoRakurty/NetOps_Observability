@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -343,8 +344,16 @@ func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
 		_, hops, _, found, err := s.pathGraph.LatestObservation(ctx, o.TenantID, false, ObservationFilter{
 			PathID: o.PathID, DataClasses: classes, Limit: 1,
 		})
-		if err != nil || !found {
-			continue
+		if err != nil {
+			// A store failure must NOT silently shrink the export: the caller
+			// writes this file atomically over the one the correlation engine
+			// grounds on, so a partial build would DELETE live path facts and
+			// look like paths that simply stopped existing. Abandon the build and
+			// keep the last good file instead (§10).
+			return pathGraphExport{}, fmt.Errorf("path %s: read latest hops: %w", o.PathID, err)
+		}
+		if !found {
+			continue // answered: no current observation for this path
 		}
 		hopsOf[o.ObservationID] = hops
 		picked = append(picked, o)
@@ -366,6 +375,11 @@ func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
 		seenTenant[o.TenantID] = true
 		facts, nc, err := src.Facts(ctx, o.TenantID, o.ObservedAt)
 		if err != nil {
+			// Not fatal to the export (the paths themselves are still exported),
+			// but this tenant loses its rank-4/6 relations for the cycle — say so
+			// rather than exporting a tenant that merely LOOKS unbound (§10).
+			logWarn("path.graph", "path facts unavailable for a tenant — its service bindings and routes are omitted from this export",
+				map[string]any{"tenant": o.TenantID, "err": err.Error()})
 			continue
 		}
 		epByAddr := map[string]string{} // (address|context) → endpoint_id, this tenant only

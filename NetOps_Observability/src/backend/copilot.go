@@ -495,6 +495,16 @@ var copilotHTTP = &http.Client{Timeout: 60 * time.Second}
 // to the client) and returns an error so the chain falls through. The URL is
 // never logged (Gemini carries its key in the query string).
 func providerDo(ctx context.Context, urlStr string, headers map[string]string, body []byte, provider string) ([]byte, error) {
+	// LLM06 backstop — the LAST line before bytes leave the process. Every
+	// assembler upstream (plain chat, the grounded prompts, the agent loop's
+	// tool replies) is expected to have redacted already; this pass guarantees
+	// that a NEW assembler added later cannot ship a credential just because its
+	// author forgot. Credential tier only: identifiers are redacted upstream
+	// where server-originated data is rendered, so an operator asking about the
+	// MAC or username they typed still gets an answer about it.
+	// ai.Mask contains no quoting/escaping characters and the value patterns
+	// stop at structural characters, so the JSON payload stays well-formed.
+	body = []byte(ai.RedactSecrets(string(body)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

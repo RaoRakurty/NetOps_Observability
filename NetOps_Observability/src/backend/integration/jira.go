@@ -35,8 +35,14 @@ func (jiraProvider) VerifyWebhook(r *http.Request, body []byte, secret string) e
 	var meta struct {
 		Timestamp int64 `json:"timestamp"`
 	}
-	if err := json.Unmarshal(body, &meta); err != nil || meta.Timestamp == 0 {
-		return ErrSignatureInvalid
+	// Both rejections are fail-closed and MUST keep returning ErrSignatureInvalid
+	// (callers match on it, and a webhook endpoint must not leak which check
+	// failed), but they are different facts and no longer share a branch.
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return ErrSignatureInvalid // signed bytes are not the JSON we expect
+	}
+	if meta.Timestamp == 0 {
+		return ErrSignatureInvalid // no replay bound present → cannot be trusted
 	}
 	if !withinSkew(meta.Timestamp/1000, bodyReplayWindow()) {
 		return ErrSignatureInvalid

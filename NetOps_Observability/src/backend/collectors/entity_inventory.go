@@ -30,17 +30,9 @@ var entClassName = map[string]string{
 	"9": "module", "10": "port", "11": "stack", "12": "cpu",
 }
 
-// sanitizeLabel makes an SNMP string safe for a Prometheus label value: strip
-// control chars and collapse whitespace (serials/descrs can carry CR/LF/tabs).
-func sanitizeLabel(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, s)
-	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-}
+// sanitizeLabel (now in caps.go) makes an SNMP string safe for a Prometheus label
+// value: strip control chars, collapse whitespace, and bound the length. It moved
+// so every collector that decodes an untrusted device string shares one bound.
 
 // buildEntityInfoLines joins the ENTITY-MIB columns by physical index and emits
 // one info line per FRU — an entity that reports a serial OR a model (a real

@@ -435,8 +435,16 @@ func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross b
 		PathID: obs.PathID, Status: pathgraph.StatusComplete,
 		DataClasses: []string{obs.DataClass}, Limit: 1,
 	})
-	if err != nil || !found {
+	if err != nil {
+		// The observation store did not answer. An absent hint stays absent (a
+		// hint is never guessed), but "no prior complete run" and "we could not
+		// look" are different facts — the second one is now visible (§10).
+		logWarn("path.graph", "seam-hint history read failed — the hint is reported ABSENT, not derived",
+			map[string]any{"path_id": obs.PathID, "tenant": tenant, "err": err.Error()})
 		return nil
+	}
+	if !found {
+		return nil // answered: no prior complete run to derive a hint from
 	}
 	var seams []Seam
 	if s.seams != nil {

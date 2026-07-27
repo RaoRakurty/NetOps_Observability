@@ -378,14 +378,38 @@ transforms:
       .severity = string(.severity) ?? "info"
       .appname  = string(.appname)  ?? "unknown"
 
-      # Tenant attribution: match the device hostname to its tenant. The hostname
-      # survives NAT in the RFC5424 message, so it's the reliable device key. No
-      # match → "" (global/platform). #20.
+      # Tenant attribution (#20) — and what it is NOT (TENANT-HIGH-3).
+      #
+      # The hostname survives NAT in the RFC5424 message, which makes it a
+      # usable device KEY. It is NOT an authenticated identity: syslog-ng
+      # listens on UDP+TCP/514 with no ACL and keeps whatever hostname the
+      # sender wrote (see deployment/docker/syslog-ng/syslog-ng.conf). The
+      # previous comment here called it "the reliable device key", which
+      # conflated NAT-survival with authentication — it is neither claimed nor
+      # true that the sender is who it says it is.
+      #
+      # So the ONLY authority on tenancy is device_tenant.csv, exported by the
+      # Go API from its own inventory. `.tenant_id` is UNCONDITIONALLY reset
+      # first: whatever tenant a producer put on the wire is discarded here,
+      # and the value that survives is always exactly what the registry says
+      # for the hostname this event carries. An unknown hostname stays ""
+      # (untagged → platform-only under the strict row policy), never a guess.
+      # The correlation consumer re-derives the same lookup and REFUSES any
+      # event whose tenant_id it cannot reproduce (main.py verified_tenant), so
+      # this stamp is checkable rather than merely trusted.
+      #
+      # `tenant_resolved` mirrors .tenant_id as a plain VRL local (same shape as
+      # `vendor` below). The FortiGate branch needs to COMPARE against it, and
+      # `to_string(.tenant_id)` would be infallible once .tenant_id is known to
+      # be a string — a dangling `??` on an infallible call is a VRL COMPILE
+      # error, i.e. vector exits 78 at boot (the floor()/to_timestamp lesson).
       .tenant_id = ""
+      tenant_resolved = ""
       if .hostname != "unknown" {
         trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
         if length(trows) > 0 {
-          .tenant_id = to_string(trows[0].tenant_id) ?? ""
+          tenant_resolved = to_string(trows[0].tenant_id) ?? ""
+          .tenant_id = tenant_resolved
         }
       }
 
@@ -415,20 +439,39 @@ transforms:
       # FortiOS parser. FortiGate's "default" log format is space-separated
       # key="value" pairs and carries NO clean RFC hostname — Vector keys it to
       # the source IP, so the real device id lives in devname= inside the body.
-      # Parse the kv pairs (quoted-value aware), set the canonical device from
-      # devname, surface type/subtype as appname, lift the FortiOS severity, and
-      # re-attribute tenant on the real name. Parsed fields go under .fgt to avoid
-      # OpenSearch dynamic-mapping collisions with other log types.
+      # Parse the kv pairs (quoted-value aware), refine the device name from
+      # devname, surface type/subtype as appname and lift the FortiOS severity.
+      # Parsed fields go under .fgt to avoid OpenSearch dynamic-mapping
+      # collisions with other log types.
+      #
+      # TENANT-HIGH-3 — THE DEFECT REMOVED HERE: this block used to RE-ATTRIBUTE
+      # the tenant a second time from `devname=`, a field inside the LOG BODY.
+      # The body is written by the sender: anyone able to reach :514 could put
+      # a victim's device name in it and have their log filed under that
+      # victim's tenant, overriding the (already unauthenticated, but at least
+      # registry-derived) hostname attribution above. Log CONTENT may never set
+      # tenancy. The lookup is gone; `.tenant_id` keeps whatever the registry
+      # said for the hostname, full stop.
+      #
+      # devname may still refine the DEVICE NAME, and only to a name the
+      # registry knows AND that resolves to the tenant already attributed —
+      # because .hostname is the identity the correlation consumer re-verifies
+      # the tenant against, so letting the body rewrite it to an unverifiable
+      # value would (correctly) get the event refused downstream. When it does
+      # not qualify, the name is still captured — it is right there in
+      # .fgt.devname — it just does not become the device identity.
       if vendor == "fortinet" {
         kv, kverr = parse_key_value(msg)
         if kverr == null {
           .fgt = kv
           dn = string(kv.devname) ?? ""
           if dn != "" {
-            .hostname = dn
-            .host = dn
-            trows = find_enrichment_table_records("device_tenant", { "identity": dn }) ?? []
-            if length(trows) > 0 { .tenant_id = to_string(trows[0].tenant_id) ?? "" }
+            drows = find_enrichment_table_records("device_tenant", { "identity": dn }) ?? []
+            if length(drows) > 0 &&
+               (to_string(drows[0].tenant_id) ?? "") == tenant_resolved {
+              .hostname = dn
+              .host = dn
+            }
           }
           t  = string(kv.type) ?? ""
           st = string(kv.subtype) ?? ""

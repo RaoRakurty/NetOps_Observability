@@ -15,15 +15,18 @@ import (
 // an LLMClient (the provider proxy), the feature-flag lookup, and an optional
 // redactor. It holds NO credentials and makes NO store query itself.
 type Orchestrator struct {
-	DS        DataSource
-	Tools     *ToolRegistry
-	LLM       LLMClient
-	Flags     FlagLookup
-	Policy    *PolicyEngine       // the gate for what the AI may run; nil = safe default
-	Redactor  func(string) string // strips secrets/PII before egress (LLM02); nil = identity
-	KB        *KB                 // Network Expert KB (curated playbooks); nil = no supporting knowledge
-	ProductKB *ProductKB          // Correlix product knowledge (concepts + how-tos); nil = no product answers
-	Docs      *DocsIndex          // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
+	DS     DataSource
+	Tools  *ToolRegistry
+	LLM    LLMClient
+	Flags  FlagLookup
+	Policy *PolicyEngine // the gate for what the AI may run; nil = safe default
+	// Redactor strips secrets/PII before egress (LLM06). nil is NOT an escape
+	// hatch: redact() falls back to the package default Redact, so an
+	// orchestrator built without one still cannot leak. See redact.go.
+	Redactor  func(string) string
+	KB        *KB        // Network Expert KB (curated playbooks); nil = no supporting knowledge
+	ProductKB *ProductKB // Correlix product knowledge (concepts + how-tos); nil = no product answers
+	Docs      *DocsIndex // docs-portal BM25 retriever; when set it upgrades product answers with real page citations
 }
 
 // policy returns the configured Policy Engine, or the safe v1 default
@@ -35,9 +38,14 @@ func (o *Orchestrator) policy() *PolicyEngine {
 	return NewPolicyEngine(PolicyConfig{}, o.Flags)
 }
 
+// redact applies the outbound DLP filter to a string about to cross the
+// provider boundary. A nil Redactor falls back to the package default (Redact)
+// — NEVER to the identity function. PIPE-MED-5: the seam was declared here and
+// never wired at the one construction site, so every grounded prompt shipped
+// verbatim; a nil field must fail SAFE, not open.
 func (o *Orchestrator) redact(s string) string {
 	if o.Redactor == nil {
-		return s
+		return Redact(s)
 	}
 	return o.Redactor(s)
 }

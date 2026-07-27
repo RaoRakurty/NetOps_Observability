@@ -28,7 +28,9 @@ func ProbeIdentity(ctx context.Context, addr, community string) (sysName, vendor
 	if err != nil {
 		return "", "", "", false
 	}
-	sysName = strings.TrimSpace(v.str())
+	// sysName becomes a device label / inventory key — label-class bound, tighter
+	// than the decoder's text-class bound (caps.go, audit PIPE-MED-11).
+	sysName = sanitizeLabel(v.str())
 	vendor, sysDescr = DetectVendor(ctx, addr, community)
 	return sysName, vendor, sysDescr, true
 }

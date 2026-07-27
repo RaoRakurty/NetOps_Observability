@@ -529,7 +529,7 @@ func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgrap
 		"protocol": def.Protocol, "dst_port": def.DstPort,
 		"direction": def.Direction, "network_context": def.NetworkContext,
 	}
-	if err := chInsertJSON(ctx, "netops.path_observations", []map[string]any{obsRow}); err != nil {
+	if err := chInsertJSON(ctx, "netops.path_observations", normTenant(o.TenantID), []map[string]any{obsRow}); err != nil {
 		return err
 	}
 	rows := make([]map[string]any, 0, len(hops))
@@ -552,7 +552,8 @@ func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgrap
 	if len(rows) == 0 {
 		return nil
 	}
-	return chInsertJSON(ctx, "netops.path_hops", rows)
+	// every hop was checked above to share the observation's tenant
+	return chInsertJSON(ctx, "netops.path_hops", normTenant(o.TenantID), rows)
 }
 
 func (s *pgchPathGraphStore) LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error) {

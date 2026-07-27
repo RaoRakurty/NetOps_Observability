@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -44,10 +45,21 @@ func (s *userRulesStore) load() ([]alerts.Rule, error) {
 	return s.loadLocked()
 }
 
+// loadLocked reads the stored rules. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error — returned, so
+// the engine is not silently left with no user rules and add() cannot rewrite
+// the file with only the new one) / it answered with nothing (absent key or
+// empty blob = first run) / loaded.
 func (s *userRulesStore) loadLocked() ([]alerts.Rule, error) {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil // absent = no user rules yet (first run)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read user rules %s: %w", s.path, err)
+	}
+	if len(b) == 0 {
+		return nil, nil // present but empty = no user rules yet
 	}
 	var rules []alerts.Rule
 	if err := json.Unmarshal(b, &rules); err != nil {

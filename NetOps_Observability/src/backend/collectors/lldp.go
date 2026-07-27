@@ -293,7 +293,9 @@ func lldpRenderPort(v, sub berVal) string {
 }
 
 func lldpStringOrHex(raw []byte) string {
-	if s := strings.TrimSpace(string(raw)); isPrintableASCII(raw) && s != "" {
+	// sanitizeLabel, not TrimSpace: this is a neighbour-supplied chassis/port id
+	// that becomes a topology node/edge label and a metric label.
+	if s := sanitizeLabel(string(raw)); isPrintableASCII(raw) && s != "" {
 		return s
 	}
 	return macString(raw)
@@ -306,9 +308,16 @@ func lldpNetworkAddr(raw []byte) string {
 	return macString(raw)
 }
 
+// macString renders bytes as colon-hex. It is ALSO the hex fallback for a
+// non-printable chassis/port id, where the input is attacker-shaped rather than
+// a 6-byte MAC — so the RAW BYTES are bounded first (colon-hex triples the
+// length) and the result is a label-class value (caps.go, audit PIPE-MED-11).
 func macString(b []byte) string {
 	if len(b) == 0 {
 		return ""
+	}
+	if len(b) > maxLabelChars/3 {
+		b = b[:maxLabelChars/3]
 	}
 	parts := make([]string, len(b))
 	for i, x := range b {

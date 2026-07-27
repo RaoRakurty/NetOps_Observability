@@ -51,7 +51,9 @@ func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string,
 	// handler, so a confirmed operator assignment lifted the Resources table
 	// but Apps / Coverage / Untagged still counted the resource as unknown —
 	// the operator's fix looked like it didn't take. One shared read = one truth.
-	s.overlayManualMappings(r, tenant, cross, res)
+	if err := s.overlayManualMappings(r, tenant, cross, res); err != nil {
+		return res, tenant, cross, err
+	}
 	return res, tenant, cross, nil
 }
 
@@ -81,7 +83,13 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 	// Manual operator overrides win over inference EVERYWHERE this inventory is read
 	// (2026-07 review): one shared read = one truth, so the page agrees with
 	// Apps / Coverage / Untagged. Applied to the returned page here.
-	s.overlayManualMappings(r, tenant, cross, res)
+	if err := s.overlayManualMappings(r, tenant, cross, res); err != nil {
+		// Rendering the page without the overlay would show every CONFIRMED
+		// assignment as the inferred guess, indistinguishable from an operator
+		// who never assigned anything. Refuse the read instead.
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	// Inventory-source provenance (live poller vs hand fixture) — drives the
 	// UI's honest data-mode badge. Tenant-scoped like the resources themselves.
 	connectors, err := s.cloud.ListConnectors(r.Context(), tenant, cross)
@@ -221,15 +229,22 @@ func validAttribution(s string) bool {
 // onto the attributed inventory in place: a manual mapping sets AppName/AppID to
 // the assigned service, marks it operator-authoritative (SrcOperatorCatalog,
 // Confirmed), so the human decision beats both a tag and an inference. No-op when
-// the store is off (file backend) or the query fails (best-effort overlay — the
-// inventory read must still succeed).
-func (s *server) overlayManualMappings(r *http.Request, tenant string, cross bool, res []cloud.CloudResource) {
+// the store is off (file backend).
+//
+// THREE states, never two (the cloud_monitor_eval.go shape): the mapping store
+// did not answer (error — returned, because silently skipping the overlay
+// REVERTS every operator-CONFIRMED assignment to the inferred guess and the page
+// looks normal) / it answered with no mappings (nothing to overlay) / overlaid.
+func (s *server) overlayManualMappings(r *http.Request, tenant string, cross bool, res []cloud.CloudResource) error {
 	if s.bizServices == nil {
-		return
+		return nil // file backend: manual mappings are not a feature here
 	}
 	byID, err := s.bizServices.mappingsByResource(r.Context(), tenant, cross)
-	if err != nil || len(byID) == 0 {
-		return
+	if err != nil {
+		return fmt.Errorf("read operator service mappings: %w", err)
+	}
+	if len(byID) == 0 {
+		return nil // answered: this tenant has confirmed no assignments
 	}
 	for i := range res {
 		m, ok := byID[res[i].ResourceID]
@@ -241,6 +256,7 @@ func (s *server) overlayManualMappings(r *http.Request, tenant string, cross boo
 		res[i].Source = cloud.SrcOperatorCatalog
 		res[i].Confidence = cloud.Confirmed
 	}
+	return nil
 }
 
 func (s *server) handleCloudIdentityMap(w http.ResponseWriter, r *http.Request) {

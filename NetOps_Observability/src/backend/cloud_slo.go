@@ -68,6 +68,11 @@ type cloudSLOStore struct {
 	mu   sync.RWMutex
 	slos map[string][]cloudSLO
 	path string
+	// loadErr: the stored file could not be READ, which is not "no tenant has
+	// defined an SLO". Both used to take the same branch, so a read failure
+	// showed every tenant zero SLOs and the next single-tenant write flushed an
+	// empty map over everyone else's (§10).
+	loadErr error
 }
 
 func cloudSLOPath() string {
@@ -79,26 +84,42 @@ func cloudSLOPath() string {
 
 func newCloudSLOStore(path string) *cloudSLOStore {
 	s := &cloudSLOStore{slos: map[string][]cloudSLO{}, path: path}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("cloud.slo", "stored SLOs unreadable — every tenant reads as having none and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
-func (s *cloudSLOStore) load() {
+// load reads the stored per-tenant SLOs. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob) / loaded.
+func (s *cloudSLOStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = no SLOs defined yet
+	}
+	if err != nil {
+		return fmt.Errorf("read cloud SLOs: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = none defined yet
 	}
 	var m map[string][]cloudSLO
-	if json.Unmarshal(b, &m) != nil {
-		return
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("decode cloud SLOs: %w", err)
 	}
 	s.slos = m
+	return nil
 }
 
 // F-62/F-63: returns error. A swallowed persist failure here made the
 // handler above structurally unable to report that the write did not
 // land — 200 with nothing saved. Callers roll back and answer 500.
 func (s *cloudSLOStore) saveLocked() error {
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite the stored SLOs: their contents were never read: %w", s.loadErr)
+	}
 	if s.path == "" {
 		return nil
 	}

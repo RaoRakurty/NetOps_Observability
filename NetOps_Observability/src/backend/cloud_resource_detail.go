@@ -46,7 +46,12 @@ func (s *server) handleCloudResourceByID(w http.ResponseWriter, r *http.Request)
 	one := []cloud.CloudResource{res}
 	// Manual operator overrides win over inference everywhere this inventory
 	// is read — the detail page must agree with the Resources table.
-	s.overlayManualMappings(r, tenant, cross, one)
+	if err := s.overlayManualMappings(r, tenant, cross, one); err != nil {
+		// Never show the inferred guess where an operator-CONFIRMED assignment
+		// exists but could not be read (§10).
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	body := map[string]any{"resource": one[0]}
 	// Live state (provider status / traffic / active checks). Absent feeds stay
 	// absent — unknown is never rendered as healthy.

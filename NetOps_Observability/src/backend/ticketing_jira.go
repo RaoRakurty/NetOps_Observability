@@ -390,8 +390,14 @@ func jiraBaseURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("jira: base URL is required")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("jira: invalid base URL")
+	if err != nil {
+		return nil, fmt.Errorf("jira: base URL is not a URL")
+	}
+	if u.Host == "" {
+		// Parsed, but carries no host (e.g. "jira.example.com" with no scheme) —
+		// a different operator mistake from an unparseable string, and the
+		// message now says which one it is.
+		return nil, fmt.Errorf("jira: base URL has no host (include the scheme, e.g. https://…)")
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("jira: base URL must be http(s)")

@@ -170,7 +170,14 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	ov := s.overridesFor(r.Context(), tenant, cross)
+	ov, ovErr := s.overridesFor(r.Context(), tenant, cross)
+	if ovErr != nil {
+		// The operator layer outranks every other signal. Answering without it
+		// would publish a lower-precedence guess wearing a confidence it has not
+		// earned — refuse instead (§10).
+		writeError(w, http.StatusBadGateway, ovErr)
+		return
+	}
 
 	// Gather every signal (global IP catalog + operator prefix overrides + NGFW
 	// app-id for an IP; global + operator domain matchers for a domain) and fuse once.
@@ -260,7 +267,11 @@ func (s *server) handleAppIDResolveBatch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	ov := s.overridesFor(r.Context(), tenant, cross)
+	ov, ovErr := s.overridesFor(r.Context(), tenant, cross)
+	if ovErr != nil {
+		writeError(w, http.StatusBadGateway, ovErr) // see handleAppIDResolve: never answer without the top of the ladder
+		return
+	}
 	order, _ := s.governance.attributionPrecedence(tenant)
 
 	out := make(map[string]appIDBatchVerdict, len(body.Keys))
@@ -296,7 +307,7 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	ov := s.overridesFor(r.Context(), tenant, cross)
+	ov, ovErr := s.overridesFor(r.Context(), tenant, cross)
 	// The tenant's ACTIVE precedence order (default ladder when unset) — the
 	// status surface stays inspectable after the editor ships.
 	order, customOrder := s.governance.attributionPrecedence(tenant)
@@ -306,7 +317,18 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	// The engine's coverage at a glance (the design's "coverage is INSPECTABLE"):
 	// global vendor catalog + domain matcher (shared), the firewall app-id overlay,
 	// and THIS tenant's operator overrides.
-	writeJSON(w, http.StatusOK, map[string]any{
+	// -1 is the "unknown" sentinel (feedTotal's convention): a store that did not
+	// answer must never render as a tenant with zero overrides on a page whose
+	// whole job is to say what the engine can see.
+	pfx, dom := -1, -1
+	if ovErr == nil {
+		pfx, dom = ov.prefixes.Size(), ov.domains.Size()
+	}
+	total := -1
+	if ovErr == nil {
+		total = pfx + dom
+	}
+	out := map[string]any{
 		"attribution_precedence": order,
 		"precedence_is_default":  !customOrder,
 		"feeds_configured":       s.appCatalog.feedsDir != "",
@@ -314,8 +336,14 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 		"catalog_domains":        s.appCatalog.domains().Size(),
 		"ngfw_attributions":      s.ngfw.count(),
 		"cloud_attributions":     s.cloudApp.count(),
-		"tenant_overrides":       ov.prefixes.Size() + ov.domains.Size(),
-		"tenant_override_pfx":    ov.prefixes.Size(),
-		"tenant_override_dom":    ov.domains.Size(),
-	})
+		"tenant_overrides":       total,
+		"tenant_override_pfx":    pfx,
+		"tenant_override_dom":    dom,
+	}
+	if ovErr != nil {
+		out["tenant_overrides_unavailable"] = true
+		logWarn("appid", "operator override store did not answer — status reports UNKNOWN, not zero",
+			map[string]any{"tenant": tenant, "err": ovErr.Error()})
+	}
+	writeJSON(w, http.StatusOK, out)
 }

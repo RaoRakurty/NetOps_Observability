@@ -82,6 +82,10 @@ type cloudMonitorStore struct {
 	mu       sync.RWMutex
 	monitors map[string][]cloudMonitor
 	path     string
+	// loadErr: the stored file could not be READ, which is not "no tenant has
+	// defined a monitor". Conflating them left every monitor silently
+	// unevaluated and let the next write flush an empty map over the file (§10).
+	loadErr error
 }
 
 func cloudMonitorsPath() string {
@@ -93,18 +97,30 @@ func cloudMonitorsPath() string {
 
 func newCloudMonitorStore(path string) *cloudMonitorStore {
 	s := &cloudMonitorStore{monitors: map[string][]cloudMonitor{}, path: path}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("cloud.monitors", "stored monitors unreadable — NOTHING is being evaluated and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
-func (s *cloudMonitorStore) load() {
+// load reads the stored per-tenant monitors. THREE states, never two (the
+// cloud_monitor_eval.go shape, which this store feeds): the store did not
+// answer / it answered with nothing / loaded.
+func (s *cloudMonitorStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = no monitors defined yet
+	}
+	if err != nil {
+		return fmt.Errorf("read cloud monitors: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = none defined yet
 	}
 	var m map[string][]cloudMonitor
-	if json.Unmarshal(b, &m) != nil {
-		return
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("decode cloud monitors: %w", err)
 	}
 	// §3: never trust cached data — re-stamp the tenant from the bucket key.
 	for tenant, list := range m {
@@ -114,12 +130,18 @@ func (s *cloudMonitorStore) load() {
 		m[tenant] = list
 	}
 	s.monitors = m
+	return nil
 }
 
 // F-62/F-63: returns error. A swallowed persist failure here made the
 // handler above structurally unable to report that the write did not
 // land — 200 with nothing saved. Callers roll back and answer 500.
 func (s *cloudMonitorStore) saveLocked() error {
+	// The in-memory map is not the stored state when the load failed: flushing it
+	// would erase every other tenant's stored rows. Fail closed (F-62 shape).
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite the stored monitors: its stored contents were never read: %w", s.loadErr)
+	}
 	if s.path == "" {
 		return nil
 	}

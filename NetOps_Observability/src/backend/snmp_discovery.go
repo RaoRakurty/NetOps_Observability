@@ -149,27 +149,61 @@ type discoveryConfigStore struct {
 	cfg   *discoveryScanConfig
 	path  string
 	vault *Vault
+	// loadErr is set when the SAVED config could not be read or unsealed. That is
+	// not "no config saved": falling through to the env bootstrap would sweep a
+	// range and community the operator never chose (the shipped default is
+	// 10.0.0.0/8), and a failed unseal used to leave the CIPHERTEXT in place as
+	// the SNMP community — every probe then failed auth while the sweep reported
+	// a clean "no devices found" (§10).
+	loadErr error
 }
 
 func newDiscoveryConfigStore(path string, v *Vault) *discoveryConfigStore {
 	s := &discoveryConfigStore{path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("discovery", "saved SNMP discovery config unreadable — discovery is DISABLED (the env bootstrap is deliberately not substituted)", errf(err))
+	}
 	return s
 }
 
-func (s *discoveryConfigStore) load() {
+// load reads the saved scan config. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer / it answered with
+// nothing (no operator config yet — the env bootstrap applies) / loaded.
+func (s *discoveryConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = no console config yet; effective() uses env
+	}
+	if err != nil {
+		return fmt.Errorf("read discovery config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = nothing saved yet
 	}
 	var c discoveryScanConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode discovery config: %w", err)
 	}
-	if out, err := mapDiscovery(c, openFn(s.vault)); err == nil {
-		c = out
+	out, derr := mapDiscovery(c, openFn(s.vault))
+	if derr != nil {
+		// NEVER keep the sealed bytes as the community: a sweep with a ciphertext
+		// community authenticates against nothing and looks like an empty network.
+		return fmt.Errorf("unseal discovery community: %w", derr)
 	}
-	s.cfg = &c
+	s.cfg = &out
+	return nil
+}
+
+// unavailable reports the load failure, if any — "we do not know what was
+// configured", which is not the same as "nothing is configured".
+func (s *discoveryConfigStore) unavailable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // effective resolves the live scan config: a console-saved config wins;
@@ -179,8 +213,13 @@ func (s *discoveryConfigStore) load() {
 // with the wide default range shows "narrow the range" instead of scanning it.
 func (s *discoveryConfigStore) effective() discoveryScanConfig {
 	s.mu.RLock()
-	c := s.cfg
+	c, loadErr := s.cfg, s.loadErr
 	s.mu.RUnlock()
+	if loadErr != nil {
+		// Fail closed: we do not know what the operator saved, so we scan
+		// nothing rather than scanning the env default at a real network.
+		return discoveryScanConfig{}
+	}
 	if c != nil {
 		return *c
 	}
@@ -231,6 +270,9 @@ func (s *discoveryConfigStore) set(in discoveryScanConfig) (discoveryScanConfig,
 	}
 	stored := in
 	s.cfg = &stored
+	// A successful save IS the repair: the stored bytes are now known-good, so
+	// the degraded (fail-closed) mode ends here rather than at the next restart.
+	s.loadErr = nil
 	return stored, nil
 }
 
@@ -431,11 +473,18 @@ func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{
+		body := map[string]any{
 			"config": s.discoveryCfg.effective().public(),
 			"limits": map[string]int{"max_hosts": discoveryMaxHosts, "max_ranges": discoveryMaxRanges},
 			"stats":  s.discovery.Health()["snmp"],
-		})
+		}
+		// A config that could not be READ must not render as an operator who
+		// disabled discovery — the console says so, and PUT is the repair path.
+		if s.discoveryCfg.unavailable() != nil {
+			body["config_unavailable"] = true
+			body["config_error"] = "the saved discovery config could not be read or decrypted — discovery is disabled until it is re-saved"
+		}
+		writeJSON(w, http.StatusOK, body)
 	case http.MethodPut:
 		var in discoveryScanConfig
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {

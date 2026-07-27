@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -157,24 +158,44 @@ type oidcConfigStore struct {
 	cfg  *oidcConfig // nil until an operator saves; falls back to env defaults
 	path string
 	srv  *server
+	// loadErr: the stored client secret could not be unsealed — see ldapConfigStore.
+	loadErr error
 }
 
 func newOIDCConfigStore(path string, srv *server) *oidcConfigStore {
 	s := &oidcConfigStore{path: path, srv: srv}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		// SSO silently reverting to the env defaults is a sign-in outage; the
+		// cause used to share a branch with "no operator has configured SSO yet".
+		logError("oidc.config", "stored SSO config unreadable — SSO falls back to the env defaults", errf(err))
+	}
 	return s
 }
 
-func (s *oidcConfigStore) load() {
+// load reads the stored OIDC overlay. THREE states, never two (the
+// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — env defaults apply) / loaded.
+func (s *oidcConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = never configured; env defaults apply
+	}
+	if err != nil {
+		return fmt.Errorf("read OIDC config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = never configured
 	}
 	var c oidcConfig
-	if json.Unmarshal(b, &c) != nil {
-		return
+	if err := json.Unmarshal(b, &c); err != nil {
+		return fmt.Errorf("decode OIDC config: %w", err)
 	}
+	var loadErr error
 	if dec, derr := mapOIDC(c, openFn(s.vault())); derr != nil {
+		// Never send the SEALED bytes to the IdP as the client secret.
+		c.ClientSecret = ""
+		loadErr = fmt.Errorf("unseal OIDC client secret: %w", derr)
 		logError("oidc.config", "decrypt secret", errf(derr))
 	} else {
 		c = dec
@@ -182,6 +203,7 @@ func (s *oidcConfigStore) load() {
 	s.mu.Lock()
 	s.cfg = &c
 	s.mu.Unlock()
+	return loadErr
 }
 
 // vault returns the secret-custody Vault (nil → dormant/passthrough).
@@ -216,6 +238,10 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 	}
 	s.mu.Lock()
 	if in.ClientSecret == "" && s.cfg != nil {
+		if s.loadErr != nil {
+			s.mu.Unlock()
+			return oidcConfig{}, errors.New("the stored client secret could not be read — re-enter it with this save")
+		}
 		in.ClientSecret = s.cfg.ClientSecret
 	}
 	// #nosec G117 -- the OIDC client secret is intentionally persisted to the kv
@@ -238,6 +264,7 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 	}
 	stored := in
 	s.cfg = &stored
+	s.loadErr = nil // a successful save IS the repair
 	s.mu.Unlock()
 
 	// Rebuild and swap the live provider so the hot auth path and SSO handlers

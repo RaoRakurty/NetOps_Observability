@@ -22,6 +22,96 @@ import (
 
 const reportLinkTTL = 7 * 24 * time.Hour
 
+// ---- capability tokens must never reach a log line -------------------------
+//
+// PIPE-HIGH-2. A report token is a 7-DAY bearer credential for a tenant's
+// report artifact; an export token is the same thing for a raw log export on a
+// 5–15 minute fuse. Both were minted INTO THE URL PATH, and a URL path is the
+// most-copied string in the stack: the Go request log (withLogging) writes
+// r.URL.Path on every request, nginx writes "$request", and both streams land
+// in OpenSearch unredacted. That makes the credential searchable, persisted for
+// the whole retention window, and replayable from any log copy or backup by
+// anyone who can read logs — a strictly larger audience than the recipient the
+// link was minted for.
+//
+// The fix is BOTH halves, because neither alone is sufficient:
+//
+//	(a) a header form — X-Link-Token — so any programmatic client (the SPA, a
+//	    script, a poller) can present the capability WITHOUT putting it in a URL
+//	    at all. Preferred, and the only form that keeps the token out of
+//	    intermediaries we do not control (proxies, browser history, Referer).
+//	    It cannot be the ONLY form: a report link is emailed and clicked in a
+//	    mail client, and a plain browser navigation carries no custom header.
+//	(b) masking at BOTH log boundaries, which is what actually closes the leak
+//	    for the browser case: maskCapabilityTokenPath below for the Go request
+//	    log, and a masked $request in the nginx log_format.
+//
+// Authorization: is deliberately NOT accepted for these routes — the SPA
+// already sends the user's session JWT in that header, and honouring it here
+// would turn every authenticated browser request into a failed link
+// verification (403) on a route that works today.
+const linkTokenHeader = "X-Link-Token"
+
+// maskedTokenSegment is what a capability token becomes in a log line. It is
+// deliberately not a fixed-width blob of the same shape as a token: an operator
+// reading the log should see redaction, not a token they might try to use.
+const maskedTokenSegment = "[token-redacted]"
+
+// tokenPathRule marks a URL prefix whose remaining path segments are (or
+// contain) a bearer-equivalent capability token. keep is the number of leading
+// segments after the prefix that are safe to log — everything after them is
+// masked, because when in doubt the safe answer is to redact.
+type tokenPathRule struct {
+	prefix string
+	keep   int
+}
+
+// capabilityTokenPaths is the whole set of token-in-path routes this server
+// serves. It is a TABLE rather than two if-statements so the next route that
+// puts a capability in its path inherits the masking by adding one line, which
+// is the difference between fixing an instance and fixing the class.
+var capabilityTokenPaths = []tokenPathRule{
+	{prefix: "/api/reports/view/", keep: 0},         // …/{token}
+	{prefix: "/api/exports/view/", keep: 0},         // …/{token}
+	{prefix: "/api/integrations/webhook/", keep: 1}, // …/{provider}/{token}
+	{prefix: "/api/nms/webhook/", keep: 0},          // …/{token}
+}
+
+// maskCapabilityTokenPath returns a path safe to write to a log store: the
+// route survives (so the log is still useful for traffic analysis and error
+// triage), the credential does not. Non-token paths are returned untouched.
+func maskCapabilityTokenPath(p string) string {
+	for _, rule := range capabilityTokenPaths {
+		if !strings.HasPrefix(p, rule.prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(p, rule.prefix)
+		if rest == "" {
+			return p // no token in the path (header form) — nothing to mask
+		}
+		segs := strings.Split(rest, "/")
+		if len(segs) <= rule.keep {
+			return p // shorter than the safe prefix — nothing sensitive present
+		}
+		out := append([]string{}, segs[:rule.keep]...)
+		return rule.prefix + strings.Join(append(out, maskedTokenSegment), "/")
+	}
+	return p
+}
+
+// linkTokenFromRequest resolves the capability token for a token-authenticated
+// view route: the X-Link-Token header first (the form that never touches a log
+// or a proxy), falling back to the path segment for plain browser navigation
+// from an emailed link. Returns "" when neither is present, which the callers
+// turn into the same "invalid or expired link" refusal as a bad token — an
+// absent capability and a wrong one are indistinguishable to the caller.
+func linkTokenFromRequest(r *http.Request, pathPrefix string) string {
+	if tok := strings.TrimSpace(r.Header.Get(linkTokenHeader)); tok != "" {
+		return tok
+	}
+	return strings.TrimPrefix(r.URL.Path, pathPrefix)
+}
+
 func reportLinkSecret() string {
 	if v := os.Getenv("REPORT_LINK_SECRET"); v != "" {
 		return v
@@ -174,7 +264,7 @@ func (s *server) handleReportView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("report links require the Postgres backend"))
 		return
 	}
-	token := strings.TrimPrefix(r.URL.Path, "/api/reports/view/")
+	token := linkTokenFromRequest(r, "/api/reports/view/")
 	execID, tenant, err := verifyReportLink(token)
 	if err != nil {
 		writeError(w, http.StatusForbidden, errors.New("invalid or expired report link"))

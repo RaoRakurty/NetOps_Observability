@@ -61,6 +61,15 @@ type TrapEvent struct {
 	Message       string        `json:"message"`
 	Varbinds      []TrapVarbind `json:"varbinds,omitempty"`
 
+	// Truncation provenance (audit PIPE-MED-8). A trap is an UNAUTHENTICATED UDP
+	// datagram from an untrusted source: v1/v2c are spoofable, and a single 65 KB
+	// packet can carry thousands of varbinds or one 64 KB OCTET STRING. We bound
+	// it (maxTrapVarbinds / maxVarbindValueChars / maxTrapMessageChars) — but a
+	// bounded record must never be indistinguishable from a complete one, so the
+	// event CARRIES the fact that it was cut (CLAUDE.md §10, no silent failures).
+	VarbindsDropped int  `json:"varbinds_dropped,omitempty"` // varbinds beyond the cap
+	Truncated       bool `json:"truncated,omitempty"`        // any cap applied to this trap
+
 	// NormalizedEvent envelope (#32) — vendor-agnostic structure every trap emits,
 	// so Events/Correlation read parsed fields instead of re-decoding raw OIDs.
 	// Design: docs/design/research/telemetry-normalization-architecture.md §3.
@@ -308,12 +317,48 @@ func resolveVarbind(oid, value string) (name, dispValue string) {
 	return n.Name, value
 }
 
+// Bounds on one trap (audit PIPE-MED-8). A 65 KB UDP datagram from an
+// unauthenticated source can hold ~10k two-byte varbinds, or one 64 KB OCTET
+// STRING that valStr then DOUBLES to ~131 KB of hex — all of which finalizeTrap
+// used to concatenate into a single ev.Message and hand to OpenSearch verbatim.
+const (
+	// maxTrapVarbinds bounds the varbind COUNT. Real traps carry a handful;
+	// SNMPv2-MIB requires 2 (sysUpTime.0 + snmpTrapOID.0) plus the notification's
+	// own objects. 64 is far above any legitimate notification and far below the
+	// thousands a hostile packet can pack in.
+	maxTrapVarbinds = 64
+	// maxVarbindValueChars bounds ONE decoded varbind value.
+	maxVarbindValueChars = 512
+	// maxTrapOIDChars bounds a dotted OID. A real MIB OID is well under 100 chars;
+	// this only fires on a hostile OID with hundreds of arcs.
+	maxTrapOIDChars = 256
+	// maxTrapMessageChars bounds the concatenated human message. With the count and
+	// per-value caps this is already implied; it is belt-and-braces so no future
+	// change to the message format can reintroduce an unbounded field.
+	maxTrapMessageChars = 4096
+)
+
 func oidString(arcs []int) string {
 	parts := make([]string, len(arcs))
 	for i, a := range arcs {
 		parts[i] = fmt.Sprintf("%d", a)
 	}
-	return strings.Join(parts, ".")
+	return clampOID(strings.Join(parts, "."))
+}
+
+// clampOID bounds a dotted OID, cutting at an ARC boundary. Cutting mid-digit
+// would silently rename the object (".9" of a truncated arc is a different OID),
+// so the last partial arc is dropped entirely; an over-long OID then simply fails
+// the MIB lookup and reads as enterpriseSpecific — honest, not wrong.
+func clampOID(s string) string {
+	if len(s) <= maxTrapOIDChars {
+		return s
+	}
+	s = s[:maxTrapOIDChars]
+	if i := strings.LastIndexByte(s, '.'); i > 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // valStr renders a BER value by tag into a human/JSON-friendly string.
@@ -328,18 +373,26 @@ func valStr(tag byte, raw []byte) string {
 	case 0x41, 0x42, 0x43, 0x46: // Counter32, Gauge32, TimeTicks, Counter64
 		return fmt.Sprintf("%d", decodeUint(raw))
 	case 0x04: // OCTET STRING — printable if it is, else hex
-		if isPrintable(raw) {
-			return string(raw)
-		}
-		return "0x" + hex.EncodeToString(raw)
+		return octetStr(raw)
 	case 0x05: // NULL
 		return ""
 	default:
-		if isPrintable(raw) {
-			return string(raw)
-		}
-		return "0x" + hex.EncodeToString(raw)
+		return octetStr(raw)
 	}
+}
+
+// octetStr renders an OCTET STRING (or an unknown tag's payload), BOUNDED. The
+// hex branch caps the RAW BYTES first because hex doubles the length — a 64 KB
+// varbind rendered as hex is 131 KB, which is what made one trap able to blow up
+// an OpenSearch document (audit PIPE-MED-8).
+func octetStr(raw []byte) string {
+	if isPrintable(raw) {
+		return clampRunes(string(raw), maxVarbindValueChars)
+	}
+	if len(raw) > maxVarbindValueChars/2 {
+		raw = raw[:maxVarbindValueChars/2]
+	}
+	return "0x" + hex.EncodeToString(raw)
 }
 
 func isPrintable(b []byte) bool {
@@ -351,9 +404,11 @@ func isPrintable(b []byte) bool {
 	return true
 }
 
-// parseVarbinds walks a VarBindList SEQUENCE content into decoded bindings.
-func parseVarbinds(vbList []byte) []TrapVarbind {
-	var out []TrapVarbind
+// parseVarbinds walks a VarBindList SEQUENCE content into decoded bindings, at
+// most maxTrapVarbinds of them. `dropped` counts the bindings past the cap so the
+// caller can stamp the truncation onto the event rather than lose it silently
+// (CLAUDE.md §10 / §9 bounded queues — audit PIPE-MED-8).
+func parseVarbinds(vbList []byte) (out []TrapVarbind, dropped int) {
 	rest := vbList
 	for len(rest) > 0 {
 		_, vb, r, err := readTLV(rest) // one varbind SEQUENCE
@@ -369,16 +424,26 @@ func parseVarbinds(vbList []byte) []TrapVarbind {
 		if err != nil {
 			continue
 		}
+		if len(out) >= maxTrapVarbinds {
+			// Keep walking so the count is HONEST (how many were really sent),
+			// but stop accumulating — the memory/document bound is the point.
+			dropped++
+			continue
+		}
 		oid := oidString(decodeOID(oidRaw))
 		name, val := resolveVarbind(oid, valStr(valTag, valRaw))
-		out = append(out, TrapVarbind{OID: oid, Name: name, Value: val})
+		out = append(out, TrapVarbind{OID: oid, Name: sanitizeLabel(name), Value: val})
 	}
-	return out
+	return out, dropped
 }
 
 // finalizeTrap fills the trap OID / name / severity / message from the varbinds
 // (v2/v3: the snmpTrapOID.0 binding names the trap) and trims it out of the list.
-func finalizeTrap(ev *TrapEvent, vbs []TrapVarbind) {
+func finalizeTrap(ev *TrapEvent, vbs []TrapVarbind, dropped int) {
+	if dropped > 0 {
+		ev.VarbindsDropped = dropped
+		ev.Truncated = true
+	}
 	kept := vbs[:0:0]
 	for _, vb := range vbs {
 		if vb.OID == snmpTrapOIDDot && ev.TrapOID == "" {
@@ -408,29 +473,45 @@ func finalizeTrap(ev *TrapEvent, vbs []TrapVarbind) {
 		}
 		parts = append(parts, key+"="+vb.Value)
 	}
-	ev.Message = strings.Join(parts, " ")
+	if dropped > 0 {
+		parts = append(parts, fmt.Sprintf("(+%d varbinds dropped: trap exceeded the %d-varbind cap)",
+			dropped, maxTrapVarbinds))
+	}
+	ev.Message = boundMessage(ev, strings.Join(parts, " "))
+}
+
+// boundMessage caps the concatenated trap message and RECORDS that it capped —
+// a truncated message must not read as a complete one (CLAUDE.md §10).
+func boundMessage(ev *TrapEvent, msg string) string {
+	out := clampRunes(msg, maxTrapMessageChars)
+	if len(out) != len(msg) {
+		ev.Truncated = true
+	}
+	return out
 }
 
 // decodeV2StylePDU reads request-id, error-status, error-index, then varbinds
-// from an SNMPv2-Trap-PDU / Inform-PDU body and returns the varbinds.
-func decodeV2StylePDU(pduBody []byte) ([]TrapVarbind, error) {
+// from an SNMPv2-Trap-PDU / Inform-PDU body and returns the varbinds plus the
+// number dropped by the varbind-count cap (parseVarbinds).
+func decodeV2StylePDU(pduBody []byte) ([]TrapVarbind, int, error) {
 	_, _, r, err := readTLV(pduBody) // request-id
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	_, _, r, err = readTLV(r) // error-status
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	_, _, r, err = readTLV(r) // error-index
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	_, vbList, _, err := readTLV(r) // variable-bindings SEQUENCE
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return parseVarbinds(vbList), nil
+	vbs, dropped := parseVarbinds(vbList)
+	return vbs, dropped, nil
 }
 
 // decodeTrapV1 parses an RFC 1157 v1 Trap-PDU body (enterprise, agent-addr,
@@ -479,13 +560,21 @@ func decodeTrapV1(ev *TrapEvent, pduBody []byte) error {
 		ev.TrapOID = fmt.Sprintf("%s.0.%d", enterprise, specific)
 		ev.TrapName, ev.Severity = "enterpriseSpecific", "notice"
 	}
-	vbs := parseVarbinds(vbList)
+	vbs, dropped := parseVarbinds(vbList)
 	ev.Varbinds = vbs
+	if dropped > 0 {
+		ev.VarbindsDropped = dropped
+		ev.Truncated = true
+	}
 	parts := []string{ev.TrapName, ev.TrapOID}
 	for _, vb := range vbs {
 		parts = append(parts, vb.OID+"="+vb.Value)
 	}
-	ev.Message = strings.Join(parts, " ")
+	if dropped > 0 {
+		parts = append(parts, fmt.Sprintf("(+%d varbinds dropped: trap exceeded the %d-varbind cap)",
+			dropped, maxTrapVarbinds))
+	}
+	ev.Message = boundMessage(ev, strings.Join(parts, " "))
 	return nil
 }
 
@@ -547,11 +636,11 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 		if pduTag != 0xA7 && pduTag != 0xA6 { // SNMPv2-Trap-PDU / Inform-PDU
 			return nil, fmt.Errorf("snmptrap: v2c pdu tag %#x", pduTag)
 		}
-		vbs, err := decodeV2StylePDU(pduBody)
+		vbs, dropped, err := decodeV2StylePDU(pduBody)
 		if err != nil {
 			return nil, err
 		}
-		finalizeTrap(ev, vbs)
+		finalizeTrap(ev, vbs, dropped)
 		return ev, nil
 
 	case 3: // SNMPv3
@@ -640,11 +729,11 @@ func finishV3(ev *TrapEvent, scoped []byte) (*TrapEvent, error) {
 	if pduTag != 0xA7 && pduTag != 0xA6 {
 		return nil, fmt.Errorf("snmptrap: v3 inner pdu tag %#x", pduTag)
 	}
-	vbs, err := decodeV2StylePDU(pduBody)
+	vbs, dropped, err := decodeV2StylePDU(pduBody)
 	if err != nil {
 		return nil, err
 	}
-	finalizeTrap(ev, vbs)
+	finalizeTrap(ev, vbs, dropped)
 	return ev, nil
 }
 

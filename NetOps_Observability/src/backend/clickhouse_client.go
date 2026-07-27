@@ -102,7 +102,15 @@ func chExecAll(base string, stmts []string) []string {
 // then discarded it (`_ = ctx`), so an insert could outlive the request that
 // asked for it — cancellation stopped at the door. (2) It set no insert
 // tolerance at all, which is F-56: one unexpected key 400s the entire batch.
-func chInsertJSON(ctx context.Context, table string, rows []map[string]any) error {
+// chInsertJSON inserts rows at an EXPLICIT tenant scope. The scope was
+// hardcoded "__all__" until the 2026-07-27 audit: harmless for rejection
+// purposes (ClickHouse row policies are FOR SELECT — they do not filter
+// INSERTs), but it meant a per-tenant write announced itself as cross-tenant,
+// so anything re-evaluated during the write ran without the row's policy
+// context and a genuinely cross-tenant writer was indistinguishable from a
+// scoped one. Callers pass the row set's own tenant; "__all__" is reserved for
+// a deliberately mixed batch and is now a visible choice at the call site.
+func chInsertJSON(ctx context.Context, table, scope string, rows []map[string]any) error {
 	base := envOr("CLICKHOUSE_URL", "")
 	if base == "" {
 		return errors.New("CLICKHOUSE_URL not configured")
@@ -123,7 +131,7 @@ func chInsertJSON(ctx context.Context, table string, rows []map[string]any) erro
 	_, err := chClientFor(base).Exec(ctx, chhttp.Request{
 		SQL:      b.String(),
 		Op:       "insert " + table,
-		Scope:    "__all__",
+		Scope:    scope,
 		Settings: chInsertTolerance(),
 		Budget:   chDDLBudget,
 	})

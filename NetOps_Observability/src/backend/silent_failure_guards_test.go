@@ -58,7 +58,7 @@ var healthFlagNames = map[string]bool{
 // never report their own blindness while the shipped `CollectorDown` alert
 // (collector_up == 0) could never fire.
 func TestHealthFlagsCanBeFalsified(t *testing.T) {
-	srcs := goSources(t)
+	srcs := goSourcesRaw(t)
 
 	trueAssign := map[string][]string{} // field -> files assigning literal true
 	falsifiable := map[string]bool{}    // field -> has a false/derived assignment
@@ -67,7 +67,9 @@ func TestHealthFlagsCanBeFalsified(t *testing.T) {
 	for path, src := range srcs {
 		f, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
-			continue // stripComments can leave a fragment the parser dislikes; skip
+			// A file this guard cannot parse is a file it does not cover, and a
+			// guard that silently skips is the very defect being guarded against.
+			t.Fatalf("%s: cannot parse — the guard would silently stop covering it: %v", path, err)
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch v := n.(type) {
@@ -140,6 +142,8 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		"collectors/redis.go":       "byte-level RESP parse: a malformed entry is skipped, the scan continues",
 		"integration_reconciler.go": "documented dedup skip; the reconcile outcome is counted separately",
 		"pgstore.go":                "file-import migration: ENOENT-shaped absence is genuinely 'nothing to import'",
+		"totp.go":                   "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way",
+		"self_heal.go":              "diskUsedPct returns an explicit -1 'unmeasurable' sentinel for both statfs failure and a zero-block filesystem — the healer refuses to act on unmeasurable disk, which is the safe branch",
 	}
 
 	// FROZEN BASELINE — the pre-existing backlog this guard found on the day it
@@ -153,24 +157,28 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	// Not every entry is a defect: some are optional-enrichment reads where
 	// absence is genuinely benign. The obligation is to TRIAGE each one and
 	// either fix it or move it to `allow` above with a stated reason.
+	// CENSUS CORRECTION 2026-07-27 (not backlog growth): the six entries marked
+	// [was-invisible] below were always present, but the guard could not SEE
+	// them — it parsed comment-stripped text, and stripComments truncates a line
+	// at the first "//", so any file containing a URL literal became
+	// unparseable and was silently skipped. 54 files were invisible that way.
+	// The guards now parse raw source and treat a parse failure as a FAILURE
+	// rather than a skip (a guard that silently stops covering a file is the
+	// exact defect this guard exists to catch). itsm_config.go and
+	// netbox_config.go are the same 3-state `load()` shape that was fixed 35
+	// times in this release — they are the obvious next ones to clear.
 	baseline := map[string]bool{
-		"ai_datasource_ops.go": true, "ai_tenant_config.go": true, "appid_overrides.go": true,
-		"auth_config.go": true, "cloud_handlers.go": true, "cloud_monitors.go": true,
-		"cloud_slo.go": true, "collectors/bgpls.go": true,
-		"collectors/unifi.go": true, "copilot_config.go": true,
-		"device_persist.go": true, "discovery.go": true, "events_feed.go": true,
-		"events.go": true, "export_policy.go": true, "integration/jira.go": true,
-		"internalca/ca.go": true, "nms/auth.go": true, "oidc_config.go": true,
-		"path_graph_api.go": true, "path_graph_enrichment.go": true,
-		"probe_paths_enrichment.go": true, "rules_user.go": true, "safehttp/safehttp.go": true,
-		"snmp_discovery.go": true, "svc_health.go": true, "tenant_display.go": true,
-		"tenant_governance.go": true, "ticketing_http.go": true, "ticketing_jira.go": true,
-		"ticketing_servicenow.go": true, "ticketing_worker.go": true, "timeintel_api.go": true,
-		"timeintel_manual.go": true, "token_policy.go": true, "verify_service.go": true,
-		"wireless_store.go": true,
+		"cloud_console.go":          true, // [was-invisible]
+		"itsm_config.go":            true, // [was-invisible] 3-state load()
+		"netbox_config.go":          true, // [was-invisible] 3-state load()
+		"cloudconn/exchange_gcp.go": true, // [was-invisible]
+		"cloudconn/probe_aws.go":    true, // [was-invisible]
+		"collectors/synthetics.go":  true, // [was-invisible]
+		"collectors/bgpls.go":       true,
+		"collectors/unifi.go":       true,
 	}
 
-	srcs := goSources(t)
+	srcs := goSourcesRaw(t)
 	fset := token.NewFileSet()
 	stillDirty := map[string]bool{}
 
@@ -180,7 +188,7 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		}
 		f, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
-			continue
+			t.Fatalf("%s: cannot parse — the guard would silently stop covering it: %v", path, err)
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			ifs, ok := n.(*ast.IfStmt)

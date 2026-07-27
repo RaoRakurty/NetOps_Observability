@@ -25,6 +25,8 @@ from signals import (
     Severity,
     Signal,
     Source,
+    cap_label,
+    cap_text,
 )
 
 # Normalized controller event_type → the entity axis it scopes. Anything not
@@ -75,6 +77,41 @@ def _parse_ts(raw: object, fallback: datetime) -> datetime:
             except ValueError:
                 continue
     return fallback
+
+
+def _bounded_hints(hints: object) -> object:
+    """Bound the free-form `correlation_hints` blob (audit PIPE-MED-11).
+
+    It is the ONE field the normalized-event contract deliberately leaves open, so
+    it is the one a vendor payload can make arbitrarily large — and it was passed
+    through verbatim into attrs. A dict is bounded key-by-key (string values capped
+    at the free-text class, and the KEY COUNT bounded, since keys become JSON
+    object members in a ClickHouse String); anything else is stringified and capped.
+    Truncation is recorded by cap_text's counter/log, never silent (§10)."""
+    if isinstance(hints, dict):
+        out: dict = {}
+        for k in sorted(hints)[:_MAX_HINT_KEYS]:
+            v = hints[k]
+            key = cap_label(k, where="controller", field_name="correlation_hints.key")
+            # Label class, not free text: a hint is an IDENTIFIER the RCA joins on
+            # ("which BFD session", "which policy id"), and the whole attrs blob
+            # has a 4 KB budget that 32 free-text values would blow on its own.
+            out[key] = (cap_label(v, where="controller", field_name=f"correlation_hints.{key}")
+                        if isinstance(v, str) else v)
+        if len(hints) > _MAX_HINT_KEYS:
+            out["_hints_truncated"] = len(hints) - _MAX_HINT_KEYS
+        return out
+    if isinstance(hints, (list, tuple)):
+        return [cap_label(v, where="controller", field_name="correlation_hints[]")
+                if isinstance(v, str) else v for v in hints[:_MAX_HINT_KEYS]]
+    return cap_text(hints, where="controller", field_name="correlation_hints")
+
+
+# A hints blob is CONTEXT, not a payload channel: 16 identifier-sized keys is
+# generous for "which BFD session / which policy id" and fits inside the 4 KB
+# ATTRS_MAX_BYTES budget alongside the fixed fields, so the model-level attrs
+# shrinker stays a backstop rather than routine.
+_MAX_HINT_KEYS = 16
 
 
 def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
@@ -135,15 +172,20 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
         site=site,
         metric_name=kind,
         attrs={
-            "source_system": source_system,
-            "vendor": ev.get("vendor") or "",
-            "product": ev.get("product") or "",
-            "message": ev.get("message") or "",
-            "evidence_role": ev.get("evidence_role") or "supporting",
+            # Untrusted-string caps (audit PIPE-MED-11): a controller event is a
+            # vendor payload the Go connector normalized in SHAPE but not in SIZE,
+            # and every field below lands in a ClickHouse String / OpenSearch doc.
+            "source_system": cap_label(source_system, where="controller", field_name="source_system"),
+            "vendor": cap_label(ev.get("vendor") or "", where="controller", field_name="vendor"),
+            "product": cap_label(ev.get("product") or "", where="controller", field_name="product"),
+            "message": cap_text(ev.get("message") or "", where="controller", field_name="message"),
+            "evidence_role": cap_label(ev.get("evidence_role") or "supporting",
+                                       where="controller", field_name="evidence_role"),
             "authority": "vendor_controller",
-            "event_type": ev.get("event_type") or "",
-            "interface_name": iface,
-            "tunnel_id": tunnel,
-            **({"correlation_hints": ev["correlation_hints"]} if ev.get("correlation_hints") else {}),
+            "event_type": cap_label(ev.get("event_type") or "", where="controller", field_name="event_type"),
+            "interface_name": cap_label(iface, where="controller", field_name="interface_name"),
+            "tunnel_id": cap_label(tunnel, where="controller", field_name="tunnel_id"),
+            **({"correlation_hints": _bounded_hints(ev["correlation_hints"])}
+               if ev.get("correlation_hints") else {}),
         },
     )

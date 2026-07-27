@@ -42,6 +42,50 @@ func stripComments(src string) string {
 	return strings.Join(lines, "\n")
 }
 
+// goSourcesRaw returns every non-test .go file in the backend module UNMODIFIED.
+//
+// AST-based guards must use this, never goSources: stripComments truncates each
+// line at the first "//", so any line containing a URL literal ("https://…")
+// becomes syntactically broken, parser.ParseFile fails, and a guard that skips
+// unparseable files silently stops covering them. That hid 54 files — 8 with
+// live findings — from the conflation guard until 2026-07-27. go/parser handles
+// comments natively, so there is no reason to pre-strip for an AST scan.
+// (Text/regex guards still want the stripped form: a pattern in a comment is
+// not a finding.)
+func goSourcesRaw(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	skipDir := map[string]bool{"vendor": true, "testdata": true, "node_modules": true}
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDir[d.Name()] || (strings.HasPrefix(d.Name(), ".") && d.Name() != ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		b, rerr := os.ReadFile(filepath.Clean(path))
+		if rerr != nil {
+			return rerr
+		}
+		out[filepath.ToSlash(path)] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk backend module: %v", err)
+	}
+	if len(out) < 400 {
+		t.Fatalf("only %d source files scanned — the guard is not seeing the whole module", len(out))
+	}
+	return out
+}
+
 // goSources returns every non-test .go file in the backend module — the root
 // package AND its subpackages — with comments stripped.
 //

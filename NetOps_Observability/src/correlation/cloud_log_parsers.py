@@ -27,6 +27,14 @@ import re
 import shlex
 from datetime import datetime, timezone
 
+# Untrusted-string caps (audit PIPE-MED-11). Cloud log records are the most
+# ATTACKER-PROXIMATE input the platform has: the WAF `host` is a request Host
+# header, `sample_uri` is a request path, and a DNS query name is whatever the
+# client asked for. Every one of them lands in a ClickHouse String column and an
+# OpenSearch document, so each is bounded by field class at the parse boundary —
+# `sample_uri` was the ONLY one capped before (a lone [:200]).
+from signals import cap_label
+
 # arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/billing-tg/abc
 _ARN_RE = re.compile(r"^arn:aws[^:]*:[^:]*:([^:]*):([^:]*):")
 
@@ -109,8 +117,8 @@ def alb_lb_signal(rec: dict) -> dict | None:
             "provider": "aws",
             "elb_status_code": code,
             "target_status_code": str(rec.get("target_status_code") or ""),
-            "target": str(rec.get("target") or ""),
-            "domain": str(rec.get("domain_name") or ""),
+            "target": cap_label(rec.get("target") or "", where="alb", field_name="target"),
+            "domain": cap_label(rec.get("domain_name") or "", where="alb", field_name="domain"),
         },
     }
 
@@ -198,9 +206,9 @@ def vpc_flow_signal(rec: dict) -> dict | None:
         "attrs": {
             # VPC flow logs are an AWS-only format — a parse fact (audit P0-7).
             "provider": "aws",
-            "srcaddr": str(rec.get("srcaddr") or ""),
-            "dstaddr": str(rec.get("dstaddr") or ""),
-            "dstport": str(rec.get("dstport") or ""),
+            "srcaddr": cap_label(rec.get("srcaddr") or "", where="vpc", field_name="srcaddr"),
+            "dstaddr": cap_label(rec.get("dstaddr") or "", where="vpc", field_name="dstaddr"),
+            "dstport": cap_label(rec.get("dstport") or "", where="vpc", field_name="dstport"),
             "protocol": _PROTO_NAME.get(proto, proto),
             "action": "REJECT",
             "packets": str(rec.get("packets") or ""),
@@ -378,8 +386,9 @@ def waf_block_rollup(records: list[dict]) -> list[dict]:
                 "provider": "aws",
                 "rule": rule,
                 "sample_uri": a["uri"][:200],
-                "sample_client": a["client"],
-                "host": a["host"],
+                # clientIp and the Host HEADER are both attacker-controlled.
+                "sample_client": cap_label(a["client"], where="waf", field_name="sample_client"),
+                "host": cap_label(a["host"], where="waf", field_name="host"),
                 "action": "BLOCK",
             },
         })
@@ -434,8 +443,9 @@ def dns_error_rollup(records: list[dict]) -> list[dict]:
     for (name, rcode), a in sorted(agg.items()):
         out.append({
             "kind": "cloud_dns_log",
-            "resource_id": name,
-            "account": str(a["vpc"]),
+            # The query NAME is client-supplied and becomes the entity id.
+            "resource_id": cap_label(name, where="dns", field_name="query_name"),
+            "account": cap_label(a["vpc"], where="dns", field_name="vpc"),
             "region": "",
             "severity": "warn",
             "metric_name": "dns_resolution_failed",
@@ -444,9 +454,9 @@ def dns_error_rollup(records: list[dict]) -> list[dict]:
             "attrs": {
                 "provider": "aws",
                 "rcode": rcode,
-                "query_type": a["qtype"],
-                "sample_client": a["src"],
-                "vpc": a["vpc"],
+                "query_type": cap_label(a["qtype"], where="dns", field_name="query_type"),
+                "sample_client": cap_label(a["src"], where="dns", field_name="srcaddr"),
+                "vpc": cap_label(a["vpc"], where="dns", field_name="vpc"),
             },
         })
     return out

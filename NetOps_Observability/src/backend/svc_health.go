@@ -132,8 +132,17 @@ func (s *server) fetchServiceFlowClass(r *http.Request, svc Service) healthClass
 	res := healthClassResult{Class: "flow_health"}
 	now := time.Now().UTC()
 	rows, err := s.chRows(r, svcRollupLatestVersionSQL(svc.TenantID, svc.ServiceID, now.Add(-serviceHealthWindow)))
-	if err != nil || len(rows) == 0 {
-		return res // rollup dark for this service → class not live (honest)
+	if err != nil {
+		// The rollup did not ANSWER. The class still drops out (a health score
+		// must never be invented from a failed read), but "we could not ask" and
+		// "this service has no attributed traffic" are different facts and no
+		// longer share a branch — the first one is now visible (§10).
+		logWarn("svc.health", "flow-health class dropped: the rollup did not answer",
+			map[string]any{"service": svc.ServiceID, "tenant": svc.TenantID, "err": err.Error()})
+		return res
+	}
+	if len(rows) == 0 {
+		return res // answered: rollup dark for this service → class not live (honest)
 	}
 	recentCut := float64(now.Add(-15 * time.Minute).Unix())
 	var recent, older float64

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -58,11 +59,20 @@ type verifyConfigStore struct {
 	cfgs  map[string]verifyTenantConfig
 	path  string
 	vault *Vault
+	// loadErr is set when the stored config could NOT be read (I/O error or
+	// corrupt bytes) — which is a different fact from "no tenant has opted in
+	// yet". §10: without it an unreadable file made verification read "off" for
+	// EVERY tenant while suspected cases piled up, and the next single-tenant
+	// PUT flushed a map containing only that tenant over the survivors.
+	loadErr error
 }
 
 func newVerifyConfigStore(path string, v *Vault) *verifyConfigStore {
 	s := &verifyConfigStore{cfgs: map[string]verifyTenantConfig{}, path: path, vault: v}
-	s.load()
+	if err := s.load(); err != nil {
+		s.loadErr = err
+		logError("verify", "verification config unreadable — every tenant will read as OPTED OUT and writes are refused until it is repaired", errf(err))
+	}
 	return s
 }
 
@@ -73,20 +83,41 @@ func verifyConfigPath() string {
 	return "/data/verify_config.json"
 }
 
-func (s *verifyConfigStore) load() {
+// load reads the stored per-tenant config. THREE states, never two
+// (cloud_monitor_eval.go shape): the store did not answer (error) / it answered
+// with nothing (absent key or empty blob — genuinely no opt-in yet) / loaded.
+func (s *verifyConfigStore) load() error {
 	b, err := kvLoad(s.path)
-	if err != nil || len(b) == 0 {
-		return
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // absent key = no tenant has configured verification yet
+	}
+	if err != nil {
+		return fmt.Errorf("read verification config: %w", err)
+	}
+	if len(b) == 0 {
+		return nil // present but empty = nothing stored yet
 	}
 	var m map[string]verifyTenantConfig
-	if json.Unmarshal(b, &m) != nil {
-		return
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("decode verification config: %w", err)
 	}
 	for id, c := range m {
 		c.TenantID = id
 		m[id] = c
 	}
 	s.cfgs = m
+	return nil
+}
+
+// unavailable reports the load failure, if any. Callers use it to say "unknown"
+// instead of reporting the empty map as an operator's deliberate "off".
+func (s *verifyConfigStore) unavailable() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 // F-62/F-63: returns error. A swallowed persist failure here made the
@@ -95,6 +126,11 @@ func (s *verifyConfigStore) load() {
 func (s *verifyConfigStore) saveLocked() error {
 	if s.path == "" {
 		return nil
+	}
+	// The in-memory map is NOT the stored state when the read failed: flushing it
+	// would delete every other tenant's opt-in and SSH credential. Fail closed.
+	if s.loadErr != nil {
+		return fmt.Errorf("refusing to overwrite verification config: its stored contents were never read: %w", s.loadErr)
 	}
 	b, err := json.MarshalIndent(s.cfgs, "", "  ")
 	if err != nil {
@@ -241,7 +277,7 @@ func (s *verifyConfigStore) sshCredFor(tenant string) *verifySSHCred {
 // publicView is the API/UI projection — never any secret material.
 func (s *verifyConfigStore) publicView(tenant string) map[string]any {
 	c := s.get(tenant)
-	return map[string]any{
+	out := map[string]any{
 		"tenant_id":      tenant,
 		"enabled":        c.Enabled,
 		"feature":        envBool("FEATURE_ACTIVE_VERIFICATION"),
@@ -249,6 +285,13 @@ func (s *verifyConfigStore) publicView(tenant string) map[string]any {
 		"ssh_user":       c.SSHUser,
 		"ssh_port":       c.SSHPort,
 	}
+	// An unreadable store must never render as a deliberate "off": the operator
+	// sees UNKNOWN plus the reason, and the settings surface stays read-only.
+	if s.unavailable() != nil {
+		out["config_unavailable"] = true
+		out["config_error"] = "stored verification config could not be read — settings shown are not the stored state"
+	}
+	return out
 }
 
 // ---- run store (bounded; latest run per case) -------------------------------
@@ -379,8 +422,16 @@ func (s *server) verifyCaseLookup(ctx context.Context, scope, caseID string) (ve
  LIMIT 1
 FORMAT JSONEachRow`, chISO("window_start"), caseID)
 	rows, err := s.chRowsScope(ctx, scope, sql, "verify_case_lookup")
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		// The projection did not answer. That is NOT "this case does not exist":
+		// the caller still gets a not-found (never invent a case), but the reason
+		// is recorded so a ClickHouse outage cannot masquerade as a 404 storm.
+		logWarn("verify", "case lookup failed — reporting not-found for a case whose existence is UNKNOWN",
+			map[string]any{"case": caseID, "err": err.Error()})
 		return verifyCaseRow{}, false
+	}
+	if len(rows) == 0 {
+		return verifyCaseRow{}, false // answered: no such case in this scope
 	}
 	row := rows[0]
 	return verifyCaseRow{

@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -319,15 +320,26 @@ func (s *server) handleAppIDCatalogByID(w http.ResponseWriter, r *http.Request) 
 }
 
 // overridesFor loads the caller's tenant override entries and builds the per-tenant
-// prefix + domain override structures (SrcOperator). Empty on error/none (resolve
-// still works off the global feeds + NGFW). Cheap: app_catalog is operator-curated.
-func (s *server) overridesFor(ctx context.Context, tenant string, cross bool) tenantOverrides {
+// prefix + domain override structures (SrcOperator). Cheap: app_catalog is
+// operator-curated.
+//
+// THREE states, never two (the cloud_monitor_eval.go shape). Operator overrides
+// are the HIGHEST-precedence attribution source, so "the store did not answer"
+// and "this tenant declared no overrides" must not share a branch: they used to,
+// and a Postgres blip silently dropped the authoritative layer while the answer
+// still carried a provenance/confidence as if the ladder had been complete.
+// Callers that publish an attribution ANSWER must refuse on error; callers that
+// merely enrich a list may continue, but must say so.
+func (s *server) overridesFor(ctx context.Context, tenant string, cross bool) (tenantOverrides, error) {
 	if s.appOverrides == nil {
-		return tenantOverrides{}
+		return tenantOverrides{}, nil // no override backend configured at all
 	}
 	entries, err := s.appOverrides.List(ctx, tenant, cross)
-	if err != nil || len(entries) == 0 {
-		return tenantOverrides{}
+	if err != nil {
+		return tenantOverrides{}, fmt.Errorf("read operator app overrides: %w", err)
 	}
-	return buildOverrides(entries)
+	if len(entries) == 0 {
+		return tenantOverrides{}, nil // answered: this tenant declared none
+	}
+	return buildOverrides(entries), nil
 }
