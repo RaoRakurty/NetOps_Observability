@@ -1,4 +1,4 @@
-package main
+package segclass
 
 // segment_classifier.go — Go mirror of the address-space segment/device classifier
 // (path-causality RCA P0; Python source of truth: src/correlation/segment_classifier.py).
@@ -212,6 +212,14 @@ type snapshotPrefix struct {
 	Provider string `json:"provider"`
 	Region   string `json:"region"`
 	Service  string `json:"service"`
+}
+
+// orDefault returns s when non-empty, else def (local copy per the no-utils rule).
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func newProviderTrie() *providerTrie {

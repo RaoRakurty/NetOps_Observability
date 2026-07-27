@@ -88,7 +88,10 @@ import (
 //	                  prebuilt modules — closed command tables, deterministic
 //	                  parsers, injected Dialers; the SSH runner, service,
 //	                  trigger and HTTP stayed)
-const rootPackageCeiling = 260
+//	2026-07-27  259  internal/segclass (the ingest segment/device classifier
+//	                  mirror + its embedded provider-CIDR snapshot; zero Go
+//	                  consumers found — flagged in the plan for the owner)
+const rootPackageCeiling = 259
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -2,14 +2,14 @@
 """refresh_provider_ranges — refresh the bundled cloud-provider CIDR snapshot.
 
 The segment classifier (path-causality RCA P0, src/correlation/segment_classifier.py +
-src/backend/segment_classifier.go) classifies a hop into cloud/lan/wan/... by longest-prefix
+src/backend/internal/segclass/classifier.go) classifies a hop into cloud/lan/wan/... by longest-prefix
 match over a BUNDLED snapshot of the providers' published IP-range feeds. The classifier NEVER
 fetches at runtime — it reads the local snapshot. This job refreshes that snapshot out-of-band
 (run weekly on a cron; the feeds change several times a week).
 
 It writes TWO byte-identical copies from ONE fetch so Python and the Go embed never drift:
   * src/correlation/segmentdata/provider_ip_ranges.json (Python reads this)
-  * src/backend/segmentdata/provider_ip_ranges.json (go:embed reads this)
+  * src/backend/internal/segclass/segmentdata/provider_ip_ranges.json (go:embed reads this)
 
 Offline-safe: if a provider feed can't be fetched (no network, TLS interception, feed down),
 that provider is SKIPPED and its prefixes are preserved from the existing snapshot — the job
@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)  # .../NetOps_Observability
 PY_SNAPSHOT = os.path.join(_ROOT, "src", "correlation", "segmentdata", "provider_ip_ranges.json")
-GO_SNAPSHOT = os.path.join(_ROOT, "src", "backend", "segmentdata", "provider_ip_ranges.json")
+GO_SNAPSHOT = os.path.join(_ROOT, "src", "backend", "internal", "segclass", "segmentdata", "provider_ip_ranges.json")
 
 AWS_URL = "https://ip-ranges.amazonaws.com/ip-ranges.json"
 GCP_URL = "https://www.gstatic.com/ipranges/cloud.json"
