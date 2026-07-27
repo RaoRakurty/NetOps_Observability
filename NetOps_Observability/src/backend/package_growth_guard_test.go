@@ -53,7 +53,8 @@ import (
 //
 //	2026-07-27  296  pinned
 //	2026-07-27  290  internal/chschema extracted (6 ClickHouse schema/DDL files)
-const rootPackageCeiling = 290
+//	2026-07-27  289  internal/openapi (spec builder) + internal/totp (2FA primitive)
+const rootPackageCeiling = 289
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -29,6 +29,26 @@ So "move a file" is never the unit of work. **The unit is a domain**, chosen by
 *low fan-out* (it can move cleanly) plus a real conceptual boundary — not by
 smallest-file-first, which just relocates coupling.
 
+### The screen that actually predicts a clean extraction (added after step 2)
+
+Fan-in alone is **not** sufficient — it ranked `geomap.go` as an easy win, and
+the move exposed nine leaks straight into the auth/tenancy core. The reliable
+signal is whether a file is LIBRARY code or HANDLER code:
+
+    grep -c 'func (s \*server)'                      # handler methods
+    grep -cE 'jwtClaims|principalTenant|visibleDevices|requirePerm|http.ResponseWriter'
+
+A file with **zero of both** is library code and moves cleanly. A file dominated
+by `*server` methods is entrypoint code that should STAY — extract its pure core
+instead and leave a thin handler behind (`internal/openapi` is the worked
+example: the document builder moved, `handleOpenAPI` stayed as four lines).
+
+**Measured on the tree: 113 of 289 files (39%) are pure library code by that
+screen.** That is the real extractable surface, and it is where the remaining
+steps should be drawn from. `wan_circuits.go` (11 handler methods) and
+`geomap.go` are NOT in it, despite low fan-in — both were listed above on the
+weaker criterion and are struck below.
+
 ## The method, proven on step 1
 
 1. **Measure.** Recompute the graph (`scripts/…/pkgmap.py` idiom: symbol →
@@ -61,11 +81,12 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | # | Domain | Files | LOC | Max fan-in | Notes |
 |---|---|---|---|---|---|
 | ✅ 1 | `internal/chschema` | 6 | ~730 | 1 | **Done.** Surfaced a duplicated 8 MiB response cap. |
+| ✅ 2 | `internal/openapi` | 1 | 126 | 1 | **Done.** Pure `Spec(version)`; handler stayed in main. |
+| ✅ 3 | `internal/totp` | 1 | 89 | 1 | **Done.** Zero coupling — the cleanest move so far. |
+| ✗ — | `internal/geo`, `internal/wan` | — | — | — | **Rejected on inspection.** Low fan-in but handler-dominated (`wan_circuits.go` has 11 `*server` methods; `geomap.go` leaked 9 symbols into auth/tenancy). Kept here as the worked example of why the fan-in-only screen was wrong. |
 | 2 | `internal/chsql` (`chISO` + query fragments) | 1 | 23 | 21 | Cheap logic, 23 import updates. Consider folding into `chschema` and widening its doc to "the ClickHouse SQL this platform emits". |
 | 3 | `internal/compliance` + `internal/vuln` **together** | 2 | ~1090 | 1 | Single caller and an already dependency-inverted seam (`evaluateCompliance` takes its collaborators as parameters, and the only `*server` method is the HTTP handler, which STAYS in package main). **But `vulnEntry` is defined in `vulns.go` and appears in that seam's signature**, so compliance cannot move alone without either dragging the type or inventing a narrow duplicate. Verified 2026-07-27. Move the pair, or give compliance its own input type and adapt at the call site — a design decision, not a mechanical move. |
 | 4 | `internal/openapi` | 1 | 126 | 1 | Trivial; good warm-up for a new contributor. |
-| 5 | `internal/geo` | 1 | 183 | 2 | Self-contained. |
-| 6 | `internal/wan` | 1 | 795 | 2 | Large, low coupling. |
 | 7 | `internal/portintel` (extend existing) | 2 | 640 | 2 | A `portintel` package already exists — move these in rather than creating a sibling. |
 | 8 | `internal/svc` | 3 | 725 | 2 | Service rollup/health. |
 | 9 | `internal/breakglass` | 1 | 198 | 3 | Security-sensitive; move with tests, no behaviour change. |

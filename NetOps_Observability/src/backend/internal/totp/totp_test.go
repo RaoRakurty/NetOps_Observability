@@ -1,4 +1,4 @@
-package main
+package totp
 
 import (
 	"testing"
@@ -18,32 +18,32 @@ func TestTOTPRFC6238Vectors(t *testing.T) {
 		2000000000: "279037",
 	}
 	for ts, want := range cases {
-		if got := totpAt(secret, time.Unix(ts, 0)); got != want {
-			t.Errorf("totpAt(%d) = %q, want %q", ts, got, want)
+		if got := At(secret, time.Unix(ts, 0)); got != want {
+			t.Errorf("At(%d) = %q, want %q", ts, got, want)
 		}
 	}
 }
 
 func TestVerifyTOTP(t *testing.T) {
-	secret, err := newTOTPSecret()
+	secret, err := NewSecret()
 	if err != nil {
-		t.Fatalf("newTOTPSecret: %v", err)
+		t.Fatalf("NewSecret: %v", err)
 	}
-	code := totpAt(secret, time.Now())
-	if !verifyTOTP(secret, code) {
+	code := At(secret, time.Now())
+	if !Verify(secret, code) {
 		t.Error("current code must verify")
 	}
 	// ±1 step (clock drift) accepted; a step beyond rejected.
-	if !verifyTOTP(secret, totpAt(secret, time.Now().Add(-30*time.Second))) {
+	if !Verify(secret, At(secret, time.Now().Add(-30*time.Second))) {
 		t.Error("previous-step code must verify (drift tolerance)")
 	}
-	if verifyTOTP(secret, totpAt(secret, time.Now().Add(-5*time.Minute))) {
+	if Verify(secret, At(secret, time.Now().Add(-5*time.Minute))) {
 		t.Error("a far-past code must NOT verify")
 	}
-	if verifyTOTP(secret, "000000") && totpAt(secret, time.Now()) != "000000" {
+	if Verify(secret, "000000") && At(secret, time.Now()) != "000000" {
 		t.Error("wrong code must not verify")
 	}
-	if verifyTOTP(secret, "12345") {
+	if Verify(secret, "12345") {
 		t.Error("malformed (5-digit) code must not verify")
 	}
 }

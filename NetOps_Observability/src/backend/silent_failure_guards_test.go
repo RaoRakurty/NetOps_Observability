@@ -142,7 +142,7 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		"collectors/redis.go":       "byte-level RESP parse: a malformed entry is skipped, the scan continues",
 		"integration_reconciler.go": "documented dedup skip; the reconcile outcome is counted separately",
 		"pgstore.go":                "file-import migration: ENOENT-shaped absence is genuinely 'nothing to import'",
-		"totp.go":                   "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way",
+		"internal/totp/totp.go":     "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way (path updated when the primitive moved out of package main, 2026-07-27)",
 		"self_heal.go":              "diskUsedPct returns an explicit -1 'unmeasurable' sentinel for both statfs failure and a zero-block filesystem — the healer refuses to act on unmeasurable disk, which is the safe branch",
 	}
 

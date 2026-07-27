@@ -1,7 +1,7 @@
 package main
 
 // mfa_throttle_test.go — the TOTP second factor must be as brute-force-resistant
-// as the first. /api/auth/mfa/login is PUBLIC and verifyTOTP accepts a ±1-step
+// as the first. /api/auth/mfa/login is PUBLIC and totp.Verify accepts a ±1-step
 // window, so an attacker holding a stolen password could mint fresh 5-minute
 // challenge tokens and grind six-digit codes forever — and because a successful
 // password check CLEARS the login counter, the password throttle never sees it.
@@ -11,6 +11,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"netops/backend/internal/totp"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func enrollMFAUser(t *testing.T, srv *httptest.Server, admin, username string) s
 		t.Fatalf("no secret in setup response: %s", b)
 	}
 	if st, b := do(t, srv, "POST", "/api/auth/mfa/activate", token,
-		map[string]string{"code": totpAt(setup.Secret, time.Now())}); st != 200 {
+		map[string]string{"code": totp.At(setup.Secret, time.Now())}); st != 200 {
 		t.Fatalf("mfa activate: %d %s", st, b)
 	}
 	return setup.Secret
@@ -64,7 +65,7 @@ func mfaChallenge(t *testing.T, srv *httptest.Server, username string) string {
 
 // wrongCode returns a six-digit code guaranteed not to be the live one.
 func wrongCode(secret string) string {
-	if totpAt(secret, time.Now()) == "000000" {
+	if totp.At(secret, time.Now()) == "000000" {
 		return "111111"
 	}
 	return "000000"
@@ -90,9 +91,9 @@ func TestMFALoginLocksOutAfterRepeatedBadCodes(t *testing.T) {
 		}
 	}
 
-	// Now the CORRECT code is refused: the lockout is enforced before verifyTOTP.
+	// Now the CORRECT code is refused: the lockout is enforced before totp.Verify.
 	st, b := do(t, srv, "POST", "/api/auth/mfa/login", "", map[string]string{
-		"mfa_token": challenge, "code": totpAt(secret, time.Now())})
+		"mfa_token": challenge, "code": totp.At(secret, time.Now())})
 	if st != 429 {
 		t.Fatalf("correct code while locked: status %d, want 429 (%s)", st, b)
 	}
@@ -117,7 +118,7 @@ func TestMFALoginSuccessClearsFailureCounter(t *testing.T) {
 		t.Fatalf("first bad code: status %d, want 401 (%s)", st, b)
 	}
 	st, b := do(t, srv, "POST", "/api/auth/mfa/login", "", map[string]string{
-		"mfa_token": challenge, "code": totpAt(secret, time.Now())})
+		"mfa_token": challenge, "code": totp.At(secret, time.Now())})
 	if st != 200 {
 		t.Fatalf("correct code: status %d, want 200 (%s)", st, b)
 	}

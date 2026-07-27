@@ -1,4 +1,4 @@
-package main
+package totp
 
 import (
 	"crypto/hmac"
@@ -25,9 +25,9 @@ const (
 	totpSkew = 1
 )
 
-// newTOTPSecret returns a fresh base32 (no-padding) secret suitable for an
+// NewSecret returns a fresh base32 (no-padding) secret suitable for an
 // authenticator app. 20 bytes = 160 bits, the RFC 4226 recommendation.
-func newTOTPSecret() (string, error) {
+func NewSecret() (string, error) {
 	b := make([]byte, 20)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -35,9 +35,9 @@ func newTOTPSecret() (string, error) {
 	return strings.ToUpper(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
 }
 
-// totpURI builds the otpauth:// provisioning URI an authenticator app scans (as a
+// URI builds the otpauth:// provisioning URI an authenticator app scans (as a
 // QR code). issuer + account label the entry in the user's app.
-func totpURI(secret, issuer, account string) string {
+func URI(secret, issuer, account string) string {
 	label := url.PathEscape(issuer + ":" + account)
 	q := url.Values{}
 	q.Set("secret", secret)
@@ -48,9 +48,9 @@ func totpURI(secret, issuer, account string) string {
 	return "otpauth://totp/" + label + "?" + q.Encode()
 }
 
-// totpAt computes the TOTP code for a secret at a point in time. Returns "" if the
+// At computes the TOTP code for a secret at a point in time. Returns "" if the
 // secret can't be decoded.
-func totpAt(secret string, t time.Time) string {
+func At(secret string, t time.Time) string {
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 	if err != nil || len(key) == 0 {
 		return ""
@@ -70,16 +70,16 @@ func totpAt(secret string, t time.Time) string {
 	return fmt.Sprintf("%0*d", totpDigits, bin%mod)
 }
 
-// verifyTOTP reports whether code matches the secret within ±totpSkew steps of
+// Verify reports whether code matches the secret within ±totpSkew steps of
 // now (clock-drift tolerance), using a constant-time compare per candidate.
-func verifyTOTP(secret, code string) bool {
+func Verify(secret, code string) bool {
 	code = strings.TrimSpace(code)
 	if len(code) != totpDigits || secret == "" {
 		return false
 	}
 	now := time.Now()
 	for i := -totpSkew; i <= totpSkew; i++ {
-		want := totpAt(secret, now.Add(time.Duration(i)*totpPeriod))
+		want := At(secret, now.Add(time.Duration(i)*totpPeriod))
 		if want != "" && subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
 			return true
 		}

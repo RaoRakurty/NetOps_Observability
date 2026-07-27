@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/totp"
 	"strings"
 	"time"
 )
@@ -61,7 +62,7 @@ func (s *server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("MFA for federated accounts is managed by your identity provider"))
 		return
 	}
-	secret, err := newTOTPSecret()
+	secret, err := totp.NewSecret()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -77,7 +78,7 @@ func (s *server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"secret": secret, // shown once for manual entry; pairs with the QR
-		"uri":    totpURI(secret, mfaIssuer(), u.Username),
+		"uri":    totp.URI(secret, mfaIssuer(), u.Username),
 	})
 }
 
@@ -96,7 +97,7 @@ func (s *server) handleMFAActivate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("could not read MFA secret"))
 		return
 	}
-	if !verifyTOTP(secret, code) {
+	if !totp.Verify(secret, code) {
 		writeError(w, http.StatusBadRequest, errors.New("that code didn't match — check your authenticator and try again"))
 		return
 	}
@@ -119,7 +120,7 @@ func (s *server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, err := s.openMFA(u.Username, u.MFASecret)
-	if err != nil || !verifyTOTP(secret, code) {
+	if err != nil || !totp.Verify(secret, code) {
 		writeError(w, http.StatusBadRequest, errors.New("that code didn't match — MFA was not disabled"))
 		return
 	}
@@ -169,7 +170,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The second factor gets the SAME brute-force protection as the first (auth.go).
-	// verifyTOTP accepts a ±1-step window, so an attacker holding a stolen password
+	// totp.Verify accepts a ±1-step window, so an attacker holding a stolen password
 	// could otherwise mint a fresh 5-minute challenge at will and grind six-digit
 	// codes — and a successful password check CLEARS the counter, so the login
 	// throttle alone never sees the guessing. Checked BEFORE the code is verified,
@@ -185,7 +186,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret, err := s.openMFA(u.Username, u.MFASecret)
-	if err != nil || !verifyTOTP(secret, req.Code) {
+	if err != nil || !totp.Verify(secret, req.Code) {
 		// Count the failure against the account's lockout policy. An UNCOUNTED
 		// failure is an unlimited guess (F-25), so a saturated throttle refuses the
 		// attempt instead. Same wording as the password path — never reveal whether

@@ -1,8 +1,6 @@
-package main
+package openapi
 
-import (
-	"net/http"
-)
+import ()
 
 // openapi.go — a self-describing OpenAPI 3.0 document for the public REST API.
 //
@@ -65,7 +63,11 @@ var apiRoutes = []apiRoute{
 	{"POST", "/api/graphql", "Query", "GraphQL endpoint (devices/alerts/findings/health)"},
 }
 
-func (s *server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
+// Spec builds the OpenAPI document. Pure: it takes the build version rather
+// than reading a package-main global, so the document can be generated and
+// asserted without standing up a server. The HTTP handler stays in package
+// main, where the routing layer belongs (CLAUDE.md §2).
+func Spec(version string) map[string]any {
 	paths := map[string]any{}
 	for _, rt := range apiRoutes {
 		op := map[string]any{
@@ -104,7 +106,7 @@ func (s *server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 		},
 		"paths": paths,
 	}
-	writeJSON(w, http.StatusOK, doc)
+	return doc
 }
 
 func lowerMethod(m string) string {
