@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"netops/backend/internal/vuln"
 	"netops/backend/models"
 )
 
@@ -56,7 +57,7 @@ arista,eos,CVE-2024-0002,high,8.1,4.30.0,,,4.33.2,,0,2024-02-20,Range DoS
 	if err := os.WriteFile(path, []byte(csvData), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s.vulns = newVulnFeed(path)
+	s.vulns = vuln.NewFeed(path, nil, nil)
 	for i := 0; i < n; i++ {
 		s.discovery.Upsert(models.Device{
 			ID:       fmt.Sprintf("%s-%04d", prefix, i),

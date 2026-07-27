@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/internal/vault"
+	"netops/backend/internal/vuln"
 	"os"
 	"os/signal"
 	"sort"
@@ -154,7 +155,7 @@ type server struct {
 	netboxCfg       *netboxConfigStore     // NetBox source-of-truth discovery config
 	discoveryCfg    *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
 	netboxSync      *netboxSyncer          // reconciles discovered devices INTO NetBox (write-through)
-	vulns           *vulnFeed              // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
+	vulns           *vuln.Feed             // #13: advisory feed for /api/vulns (lazy, mtime hot-reload)
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
@@ -547,7 +548,9 @@ func newServer() *server {
 		hub:              NewHub(),
 		// #13 Vulnerability Management: operator-prepared advisory feed
 		// (scripts/vuln-feed-prepare.py → data/vuln/, mounted ro at /data/vuln).
-		vulns: newVulnFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv")),
+		vulns: vuln.NewFeed(envOr("VULN_FEED_PATH", "/data/vuln/advisories.csv"),
+			func(msg string, fields map[string]any) { logWarn("vulns", msg, fields) },
+			func(msg string, fields map[string]any) { logInfo("vulns", msg, fields) }),
 	}
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.

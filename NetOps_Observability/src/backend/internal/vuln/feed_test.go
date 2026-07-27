@@ -1,4 +1,4 @@
-package main
+package vuln
 
 import (
 	"os"
@@ -24,36 +24,36 @@ func TestCompareVersions(t *testing.T) {
 		{"17.9.4", "17.9.4a", -1},
 	}
 	for _, c := range cases {
-		if got := compareVersions(c.a, c.b); got != c.want {
-			t.Errorf("compareVersions(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		if got := CompareVersions(c.a, c.b); got != c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
 		}
-		if got := compareVersions(c.b, c.a); got != -c.want {
-			t.Errorf("compareVersions(%q, %q) = %d, want %d (antisymmetry)", c.b, c.a, got, -c.want)
+		if got := CompareVersions(c.b, c.a); got != -c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d (antisymmetry)", c.b, c.a, got, -c.want)
 		}
 	}
 }
 
 func TestVersionMatches(t *testing.T) {
-	rng := func(si, se, ei, ee string) vulnEntry {
-		return vulnEntry{StartIncl: si, StartExcl: se, EndIncl: ei, EndExcl: ee}
+	rng := func(si, se, ei, ee string) Entry {
+		return Entry{StartIncl: si, StartExcl: se, EndIncl: ei, EndExcl: ee}
 	}
 	cases := []struct {
 		name string
 		v    string
-		e    vulnEntry
+		e    Entry
 		want bool
 	}{
-		{"exact hit", "4.33.1F", vulnEntry{Exact: "4.33.1f"}, true},
-		{"exact miss", "4.33.2F", vulnEntry{Exact: "4.33.1f"}, false},
-		{"exact + numeric build suffix", "21.4R3-S4.9", vulnEntry{Exact: "21.4r3-s4"}, true},
-		{"exact rejects lettered suffix", "17.9.4a", vulnEntry{Exact: "17.9.4"}, false},
+		{"exact hit", "4.33.1F", Entry{Exact: "4.33.1f"}, true},
+		{"exact miss", "4.33.2F", Entry{Exact: "4.33.1f"}, false},
+		{"exact + numeric build suffix", "21.4R3-S4.9", Entry{Exact: "21.4r3-s4"}, true},
+		{"exact rejects lettered suffix", "17.9.4a", Entry{Exact: "17.9.4"}, false},
 		{"range end-excl inside", "7.2.8", rng("", "", "", "7.4.0"), true},
 		{"range end-excl boundary", "7.4.0", rng("", "", "", "7.4.0"), false},
 		{"range end-incl boundary", "7.4.0", rng("", "", "7.4.0", ""), true},
 		{"range start-incl below", "7.0.1", rng("7.2.0", "", "", "7.4.0"), false},
 		{"range both bounds inside", "7.2.5", rng("7.2.0", "", "", "7.4.0"), true},
-		{"unconstrained row matches nothing", "7.2.5", vulnEntry{}, false},
-		{"empty device version never matches", "", vulnEntry{Exact: "7.2.5"}, false},
+		{"unconstrained row matches nothing", "7.2.5", Entry{}, false},
+		{"empty device version never matches", "", Entry{Exact: "7.2.5"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,8 +76,8 @@ func TestNormProduct(t *testing.T) {
 		"junos":                                "junos",
 	}
 	for in, want := range cases {
-		if got := normProduct(in); got != want {
-			t.Errorf("normProduct(%q) = %q, want %q", in, got, want)
+		if got := NormProduct(in); got != want {
+			t.Errorf("NormProduct(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -95,37 +95,37 @@ cisco,ios_xe,not-a-cve,high,8.0,,,,,1.0,0,2024-01-01,Malformed row (bad CVE id) 
 	if err := os.WriteFile(path, []byte(csvData), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f := newVulnFeed(path)
-	if !f.ensure() {
+	f := NewFeed(path, nil, nil)
+	if !f.Ensure() {
 		t.Fatal("ensure() = false for a valid feed file")
 	}
-	if entries, kev, _ := f.info(); entries != 3 || kev != 2 {
+	if entries, kev, _ := f.Info(); entries != 3 || kev != 2 {
 		t.Fatalf("info() = %d entries / %d kev, want 3 / 2", entries, kev)
 	}
 
 	// Exact + build suffix (JunOS build of the advisory release).
-	if hits := f.match("juniper", "junos", "21.4R3-S4.9"); len(hits) != 1 || hits[0].CVE != "CVE-2023-0001" {
+	if hits := f.Match("juniper", "junos", "21.4R3-S4.9"); len(hits) != 1 || hits[0].CVE != "CVE-2023-0001" {
 		t.Fatalf("junos match = %+v, want CVE-2023-0001", hits)
 	}
 	// Range hit, punctuation-insensitive product key (ios_xe vs ios-xe).
-	if hits := f.match("cisco", "ios-xe", "17.9.3"); len(hits) != 1 || hits[0].CVE != "CVE-2023-20198" {
+	if hits := f.Match("cisco", "ios-xe", "17.9.3"); len(hits) != 1 || hits[0].CVE != "CVE-2023-20198" {
 		t.Fatalf("ios-xe match = %+v, want CVE-2023-20198", hits)
 	}
 	// Above the inclusive end bound → no hit.
-	if hits := f.match("cisco", "ios_xe", "17.12.1"); len(hits) != 0 {
+	if hits := f.Match("cisco", "ios_xe", "17.12.1"); len(hits) != 0 {
 		t.Fatalf("ios_xe 17.12.1 match = %+v, want none", hits)
 	}
 	// Range with both bounds.
-	if hits := f.match("arista", "eos", "4.33.1F"); len(hits) != 1 || hits[0].CVE != "CVE-2024-0002" {
+	if hits := f.Match("arista", "eos", "4.33.1F"); len(hits) != 1 || hits[0].CVE != "CVE-2024-0002" {
 		t.Fatalf("eos match = %+v, want CVE-2024-0002", hits)
 	}
-	if hits := f.match("arista", "eos", "4.29.0F"); len(hits) != 0 {
+	if hits := f.Match("arista", "eos", "4.29.0F"); len(hits) != 0 {
 		t.Fatalf("eos 4.29.0F match = %+v, want none", hits)
 	}
 
 	// Missing file → not provisioned.
-	missing := newVulnFeed(filepath.Join(dir, "nope.csv"))
-	if missing.ensure() {
+	missing := NewFeed(filepath.Join(dir, "nope.csv"), nil, nil)
+	if missing.Ensure() {
 		t.Fatal("ensure() = true for a missing file")
 	}
 }

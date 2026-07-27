@@ -1,15 +1,16 @@
-package main
+package compliance
 
 import (
 	"strings"
 	"testing"
 
+	"netops/backend/internal/vuln"
 	"netops/backend/models"
 )
 
 // findingsByCheck buckets findings for assertion convenience.
-func findingsByCheck(fs []complianceFinding) map[string][]complianceFinding {
-	out := map[string][]complianceFinding{}
+func findingsByCheck(fs []Finding) map[string][]Finding {
+	out := map[string][]Finding{}
 	for _, f := range fs {
 		out[f.Check] = append(out[f.Check], f)
 	}
@@ -107,10 +108,10 @@ func TestPlatformDrift(t *testing.T) {
 func TestEvalSNMPPolicy(t *testing.T) {
 	d := models.Device{ID: "x", Name: "sw1", Address: "10.0.0.1", CredentialRef: "lab"}
 
-	if fs := evalSNMPPolicy(d, SNMPCredential{Name: "lab", Version: "v2c", Community: "public"}); len(fs) != 1 || fs[0].Check != ckSnmpVersion {
+	if fs := evalSNMPPolicy(d, SNMPProfile{Name: "lab", Version: "v2c"}); len(fs) != 1 || fs[0].Check != ckSnmpVersion {
 		t.Fatalf("v2c: findings = %+v, want one %s", fs, ckSnmpVersion)
 	}
-	weak := SNMPCredential{Name: "lab", Version: "v3", SecurityLevel: "authNoPriv", AuthProtocol: "MD5", PrivProtocol: "DES"}
+	weak := SNMPProfile{Name: "lab", Version: "v3", SecurityLevel: "authNoPriv", AuthProtocol: "MD5", PrivProtocol: "DES"}
 	fs := evalSNMPPolicy(d, weak)
 	if len(fs) != 1 || fs[0].Check != ckSnmpV3Weak {
 		t.Fatalf("weak v3: findings = %+v, want one %s", fs, ckSnmpV3Weak)
@@ -120,7 +121,7 @@ func TestEvalSNMPPolicy(t *testing.T) {
 			t.Errorf("weak v3 observed %q missing %q", fs[0].Observed, want)
 		}
 	}
-	strong := SNMPCredential{Name: "lab", Version: "v3", SecurityLevel: "authPriv", AuthProtocol: "SHA256", PrivProtocol: "AES256"}
+	strong := SNMPProfile{Name: "lab", Version: "v3", SecurityLevel: "authPriv", AuthProtocol: "SHA256", PrivProtocol: "AES256"}
 	if fs := evalSNMPPolicy(d, strong); len(fs) != 0 {
 		t.Fatalf("strong v3 must produce no findings, got %+v", fs)
 	}
@@ -151,17 +152,17 @@ func TestEvaluateComplianceChecksAndGaps(t *testing.T) {
 		{ID: "d1", Name: "leaf1", Address: "10.0.0.1", Vendor: "arista", OS: "Arista Networks EOS version 4.33.1F", CredentialRef: "lab"},
 		{ID: "d2", Name: "mystery", Address: "10.0.0.2"}, // no vendor, no creds → gaps only
 	}
-	resolve := func(ref string) (SNMPCredential, bool) {
+	resolve := func(ref string) (SNMPProfile, bool) {
 		if ref == "lab" {
-			return SNMPCredential{Name: "lab", Version: "v2c", Community: "x"}, true
+			return SNMPProfile{Name: "lab", Version: "v2c"}, true
 		}
-		return SNMPCredential{}, false
+		return SNMPProfile{}, false
 	}
 
 	// No declared SoT records (sotSource "") + no vuln feed → drift and KEV
 	// checks inactive, with reasons.
-	res := evaluateCompliance(merged, merged, "", resolve, nil)
-	status := map[string]complianceCheck{}
+	res := Evaluate(merged, merged, "", resolve, nil)
+	status := map[string]Check{}
 	for _, c := range res.Checks {
 		status[c.ID] = c
 	}
@@ -179,13 +180,13 @@ func TestEvaluateComplianceChecksAndGaps(t *testing.T) {
 	}
 
 	// With a KEV-bearing feed match, the policy finding appears, severity high.
-	match := func(vendor, product, version string) []vulnEntry {
+	match := func(vendor, product, version string) []vuln.Entry {
 		if vendor == "arista" && product == "eos" {
-			return []vulnEntry{{CVE: "CVE-2024-0001", KEV: true, Severity: "critical"}, {CVE: "CVE-2024-0002"}}
+			return []vuln.Entry{{CVE: "CVE-2024-0001", KEV: true, Severity: "critical"}, {CVE: "CVE-2024-0002"}}
 		}
 		return nil
 	}
-	res = evaluateCompliance(merged, merged, "", resolve, match)
+	res = Evaluate(merged, merged, "", resolve, match)
 	got := findingsByCheck(res.Findings)
 	if len(got[ckKEV]) != 1 || got[ckKEV][0].Severity != "high" {
 		t.Fatalf("kev findings = %+v, want one high", got[ckKEV])
@@ -204,10 +205,10 @@ func TestEvaluateCompliancePhysicalAggregation(t *testing.T) {
 		{ID: "leaf1", Name: "leaf1", Address: "10.0.0.1", Vendor: "arista", OS: "Arista Networks EOS version 4.33.1F", CredentialRef: "lab", Source: "static"},
 		{ID: "netbox-9", Name: "leaf1", Vendor: "Arista", OS: "Arista EOS", Source: "netbox"},
 	}
-	resolve := func(ref string) (SNMPCredential, bool) {
-		return SNMPCredential{Name: "lab", Version: "v3", SecurityLevel: "authPriv", AuthProtocol: "SHA256", PrivProtocol: "AES256"}, ref == "lab"
+	resolve := func(ref string) (SNMPProfile, bool) {
+		return SNMPProfile{Name: "lab", Version: "v3", SecurityLevel: "authPriv", AuthProtocol: "SHA256", PrivProtocol: "AES256"}, ref == "lab"
 	}
-	res := evaluateCompliance(merged, merged, "", resolve, nil)
+	res := Evaluate(merged, merged, "", resolve, nil)
 	if res.Physical != 1 {
 		t.Fatalf("physical = %d, want 1", res.Physical)
 	}
@@ -229,7 +230,7 @@ func TestEvaluateComplianceDriftEndToEnd(t *testing.T) {
 		{ID: "netbox-1", Name: "core-1", Address: "10.0.0.1", Vendor: "cisco", OS: "Cisco IOS XE Software, Version 17.09.04a"},
 		{ID: "manual-1", Name: "rogue", Address: "10.0.0.50"},
 	}
-	res := evaluateCompliance(merged, raw, "netbox", nil, nil)
+	res := Evaluate(merged, raw, "netbox", nil, nil)
 	got := findingsByCheck(res.Findings)
 	if len(got[ckSotRegistered]) != 1 || got[ckSotRegistered][0].DeviceName != "rogue" {
 		t.Fatalf("registered findings = %+v", got[ckSotRegistered])
@@ -258,14 +259,14 @@ func TestEvaluateComplianceProviderAgnostic(t *testing.T) {
 	}
 
 	// sotSource = the provider's own label → declared/observed partition works.
-	got := findingsByCheck(evaluateCompliance(merged, raw, "servicenow", nil, nil).Findings)
+	got := findingsByCheck(Evaluate(merged, raw, "servicenow", nil, nil).Findings)
 	if len(got[ckSotRegistered]) != 1 || got[ckSotRegistered][0].DeviceName != "rogue" {
 		t.Fatalf("servicenow-sourced SoT: registered findings = %+v, want one for rogue", got[ckSotRegistered])
 	}
 
 	// Empty sotSource (internal authority) → no record is "declared", so even the
 	// servicenow-sourced record is treated as observed and NO drift fires.
-	res := evaluateCompliance(merged, raw, "", nil, nil)
+	res := Evaluate(merged, raw, "", nil, nil)
 	if n := len(findingsByCheck(res.Findings)[ckSotRegistered]); n != 0 {
 		t.Fatalf("internal SoT: drift must be inactive, got %d registered findings", n)
 	}

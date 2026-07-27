@@ -1,7 +1,11 @@
 # `package main` decomposition — the executable plan
 
-**Status:** step 1 shipped (`internal/chschema`, 2026-07-27). 290 non-test files
-remain in `package main`. This document is the ordered sequence for the rest.
+**Status:** seven domains shipped (`internal/chschema`, `internal/openapi`,
+`internal/totp`, `internal/rca`, `internal/vault`, `internal/vuln` +
+`internal/compliance`, all 2026-07-27). 283 non-test files remain in
+`package main` (the vuln/compliance step moved ~900 LOC but left two thin
+`*_http.go` handlers, so the file count held). This document is the ordered
+sequence for the rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
 /config` and forbids business logic in the entrypoint package. ~98k LOC of it
@@ -85,7 +89,9 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 3 | `internal/totp` | 1 | 89 | 1 | **Done.** Zero coupling — the cleanest move so far. |
 | ✗ — | `internal/geo`, `internal/wan` | — | — | — | **Rejected on inspection.** Low fan-in but handler-dominated (`wan_circuits.go` has 11 `*server` methods; `geomap.go` leaked 9 symbols into auth/tenancy). Kept here as the worked example of why the fan-in-only screen was wrong. |
 | 2 | `internal/chsql` (`chISO` + query fragments) | 1 | 23 | 21 | Cheap logic, 23 import updates. Consider folding into `chschema` and widening its doc to "the ClickHouse SQL this platform emits". |
-| 3 | `internal/compliance` + `internal/vuln` **together** | 2 | ~1090 | 1 | Single caller and an already dependency-inverted seam (`evaluateCompliance` takes its collaborators as parameters, and the only `*server` method is the HTTP handler, which STAYS in package main). **But `vulnEntry` is defined in `vulns.go` and appears in that seam's signature**, so compliance cannot move alone without either dragging the type or inventing a narrow duplicate. Verified 2026-07-27. Move the pair, or give compliance its own input type and adapt at the call site — a design decision, not a mechanical move. |
+| ✅ 3 | `internal/compliance` + `internal/vuln` **together** | 2 | ~1090 | 1 | **Done** (2026-07-27). Moved as a pair; the seam kept `vuln.Entry` (compliance imports vuln), and the `SNMPCredential` coupling was resolved the *other* way: compliance got its own `SNMPProfile` input type carrying only identity + crypto parameters, so secrets (community/keys) can no longer cross the boundary. Thin `vulns_http.go` / `compliance_http.go` handlers stayed in main. |
+| ✅ — | `internal/rca` (5 pure analysis files) | 5 | — | — | **Done** (2026-07-27, drawn from the 13+ pool). |
+| ✅ — | `internal/vault` (secret custody) | 1 | — | — | **Done** (2026-07-27). Storage + warn logging INJECTED (`vault.Store`, `vault.Warnf`) — the wiring adapter idiom later steps reuse. |
 | 4 | `internal/openapi` | 1 | 126 | 1 | Trivial; good warm-up for a new contributor. |
 | 7 | `internal/portintel` (extend existing) | 2 | 640 | 2 | A `portintel` package already exists — move these in rather than creating a sibling. |
 | 8 | `internal/svc` | 3 | 725 | 2 | Service rollup/health. |

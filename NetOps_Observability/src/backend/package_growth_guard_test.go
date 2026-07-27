@@ -57,6 +57,9 @@ import (
 //	2026-07-27  284  internal/rca (5 pure analysis files: independence, observer registry,
 //	                  path attribution, recovery, report icons)
 //	2026-07-27  283  internal/vault (secret custody; storage+logging now INJECTED)
+//	2026-07-27  283  internal/vuln + internal/compliance (~900 LOC of evaluation
+//	                  moved; count unchanged because each left a thin *_http.go
+//	                  handler behind — the ratchet measures files, not LOC)
 const rootPackageCeiling = 283
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {

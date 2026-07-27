@@ -1,9 +1,9 @@
-package main
-
-// compliance.go — Compliance Monitoring (build-order #14): drift between the
-// declared intent (the active Source-of-Truth provider) and the observed/operator
-// inventory, plus management-plane policy baselines — all agentless, computed from
-// data the platform already holds (no config pull yet; that's a later phase).
+// Package compliance implements Compliance Monitoring (build-order #14): drift
+// between the declared intent (the active Source-of-Truth provider) and the
+// observed/operator inventory, plus management-plane policy baselines — all
+// agentless, computed from data the platform already holds (no config pull yet;
+// that's a later phase). The HTTP surface (/api/compliance) stays in package
+// main; this package is the evaluation only, with its collaborators passed in.
 //
 // The SoT is a ROLE, not a product (docs/design/sot-provider-model.md): drift
 // pairs against whichever provider is active. The active provider is the INTERNAL
@@ -14,7 +14,7 @@ package main
 // "unregistered". NetBox is an automation connector, NOT a drift authority. The
 // pairing stays provider-agnostic: if a future external authority were ever wired
 // into activeSoT it would report its own source label and the same logic runs
-// unchanged (evaluateCompliance takes the source as a parameter).
+// unchanged (Evaluate takes the source as a parameter).
 //
 // Two check classes:
 //
@@ -32,20 +32,33 @@ package main
 // (no external SoT records, no credential profiles, feed not provisioned) — an
 // unrun check is "cannot assess", never "compliant". Same honesty rule as the
 // Vulnerability Management board.
+package compliance
 
 import (
-	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/vuln"
 	"netops/backend/models"
 )
 
-// complianceFinding is one device × check violation.
-type complianceFinding struct {
+// SNMPProfile is the slice of a management credential this package judges:
+// the profile's identity and its cryptographic parameters. Deliberately NOT
+// the platform's full credential record — community strings and keys never
+// cross this boundary, so the package that reports on credentials cannot
+// leak one (§3 zero trust, §8 no secrets). The caller adapts at the seam.
+type SNMPProfile struct {
+	Name          string
+	Version       string // v1 | v2c | v3
+	SecurityLevel string // noAuthNoPriv|authNoPriv|authPriv
+	AuthProtocol  string
+	PrivProtocol  string
+}
+
+// Finding is one device × check violation.
+type Finding struct {
 	Check      string `json:"check"`
 	Title      string `json:"title"`
 	Class      string `json:"class"`    // drift | policy
@@ -58,9 +71,9 @@ type complianceFinding struct {
 	Detail     string `json:"detail,omitempty"`
 }
 
-// complianceCheck describes one check's status for the board: whether it could
+// Check describes one check's status for the board: whether it could
 // run, why not, and how many findings it produced.
-type complianceCheck struct {
+type Check struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Class     string `json:"class"`
@@ -70,17 +83,17 @@ type complianceCheck struct {
 	Findings  int    `json:"findings"`
 }
 
-// complianceGap is a device some checks had to skip, and why. Unassessed ≠ ok.
-type complianceGap struct {
+// Gap is a device some checks had to skip, and why. Unassessed ≠ ok.
+type Gap struct {
 	DeviceID   string `json:"device_id"`
 	DeviceName string `json:"device_name"`
 	Reason     string `json:"reason"`
 }
 
-type complianceResult struct {
-	Findings []complianceFinding
-	Checks   []complianceCheck
-	Gaps     []complianceGap
+type Result struct {
+	Findings []Finding
+	Checks   []Check
+	Gaps     []Gap
 	Physical int // unique physical devices (merged records folded by identity)
 }
 
@@ -97,7 +110,7 @@ const (
 	ckKEV           = "kev-exposure"
 )
 
-var complianceChecks = []complianceCheck{
+var checkCatalog = []Check{
 	{ID: ckSotRegistered, Title: "Device registered in Source of Truth", Class: "drift", Framework: "NIST CSF ID.AM-1"},
 	{ID: ckSotName, Title: "Name matches Source of Truth", Class: "drift", Framework: "NIST CSF ID.AM-1"},
 	{ID: ckSotMgmtIP, Title: "Management IP matches Source of Truth", Class: "drift", Framework: "NIST CSF ID.AM-1"},
@@ -109,7 +122,12 @@ var complianceChecks = []complianceCheck{
 	{ID: ckKEV, Title: "No known-exploited vulnerabilities", Class: "policy", Framework: "CISA BOD 22-01"},
 }
 
-// evaluateCompliance runs every check it has data for. merged is the
+// sevRank orders finding severities worst-first. Duplicated from the /api/vulns
+// handler's copy (one line, two owners) rather than shared — CLAUDE.md §2
+// forbids a utils package, and the two surfaces rank independently.
+var sevRank = map[string]int{"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+// Evaluate runs every check it has data for. merged is the
 // de-duplicated inventory (one record per physical device — policy checks);
 // raw is the per-source inventory (drift pairing). resolveCred and vulnMatch
 // are nil-able seams: nil means that data source isn't available, and the
@@ -118,13 +136,13 @@ var complianceChecks = []complianceCheck{
 // (SoTProvider.DeviceRecordSource()): records carrying it are the declared intent,
 // every other record is observed. "" means no declared records exist (internal
 // provider, or an external one not read back) → drift checks stay inactive.
-func evaluateCompliance(
+func Evaluate(
 	merged, raw []models.Device,
 	sotSource string,
-	resolveCred func(string) (SNMPCredential, bool),
-	vulnMatch func(vendor, product, version string) []vulnEntry,
-) complianceResult {
-	var findings []complianceFinding
+	resolveCred func(string) (SNMPProfile, bool),
+	vulnMatch func(vendor, product, version string) []vuln.Entry,
+) Result {
+	var findings []Finding
 
 	// ── drift: pair SoT-declared records against the observed records ────────
 	driftable := sotSource != ""
@@ -150,7 +168,7 @@ func evaluateCompliance(
 	type physical struct {
 		rep        models.Device // record findings/gaps are attributed to
 		hasAddr    bool
-		cred       *SNMPCredential // first resolvable profile across records
+		cred       *SNMPProfile // first resolvable profile across records
 		credDev    models.Device
 		badCredRef string             // a ref that matched no profile (only reported if no record resolved one)
 		osi        *collectors.OSInfo // first parseable OS across records
@@ -215,7 +233,7 @@ func evaluateCompliance(
 			addGap(key, "no OS version in sysDescr — version checks skipped")
 			continue
 		}
-		k := osKey{strings.ToLower(p.vendor), normProduct(p.osi.Product)}
+		k := osKey{strings.ToLower(p.vendor), vuln.NormProduct(p.osi.Product)}
 		consensus[k] = append(consensus[k], osVersionSeen{p.osiDev, p.osi.Version})
 
 		if vulnMatch != nil {
@@ -236,8 +254,8 @@ func evaluateCompliance(
 	for _, f := range findings {
 		counts[f.Check]++
 	}
-	checks := make([]complianceCheck, 0, len(complianceChecks))
-	for _, c := range complianceChecks {
+	checks := make([]Check, 0, len(checkCatalog))
+	for _, c := range checkCatalog {
 		c.Findings = counts[c.ID]
 		switch {
 		case c.Class == "drift" && !driftable:
@@ -268,14 +286,14 @@ func evaluateCompliance(
 		return a.DeviceName < b.DeviceName
 	})
 
-	gaps := make([]complianceGap, 0, len(gapReasons))
+	gaps := make([]Gap, 0, len(gapReasons))
 	for key, reasons := range gapReasons {
 		rep := byPhys[key].rep
-		gaps = append(gaps, complianceGap{DeviceID: rep.ID, DeviceName: deviceDisplayName(rep), Reason: strings.Join(reasons, "; ")})
+		gaps = append(gaps, Gap{DeviceID: rep.ID, DeviceName: deviceDisplayName(rep), Reason: strings.Join(reasons, "; ")})
 	}
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i].DeviceName < gaps[j].DeviceName })
 
-	return complianceResult{Findings: findings, Checks: checks, Gaps: gaps, Physical: len(byPhys)}
+	return Result{Findings: findings, Checks: checks, Gaps: gaps, Physical: len(byPhys)}
 }
 
 func deviceDisplayName(d models.Device) string {
@@ -290,7 +308,7 @@ func deviceDisplayName(d models.Device) string {
 // deviceKey (mgmt IP → serial → normalized name); a field is only diffed when
 // the pair matched on a DIFFERENT field (a name-matched pair can't have name
 // drift by construction).
-func evalDrift(sot, observed []models.Device) []complianceFinding {
+func evalDrift(sot, observed []models.Device) []Finding {
 	byIP, bySerial, byName := map[string]models.Device{}, map[string]models.Device{}, map[string]models.Device{}
 	for _, d := range sot {
 		if ip := strings.TrimSpace(d.Address); ip != "" {
@@ -304,13 +322,13 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 		}
 	}
 
-	var out []complianceFinding
+	var out []Finding
 	for _, o := range observed {
 		nb, matchedOn := matchSot(o, byIP, bySerial, byName)
 		if matchedOn == "" {
 			// The SoT supplies declared records (caller gates on that) — a device
 			// absent from them is drift even when the SoT is otherwise empty.
-			out = append(out, complianceFinding{
+			out = append(out, Finding{
 				Check: ckSotRegistered, Title: "Device not registered in Source of Truth", Class: "drift",
 				Severity: "medium", Framework: "NIST CSF ID.AM-1",
 				DeviceID: o.ID, DeviceName: deviceDisplayName(o),
@@ -322,7 +340,7 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 
 		oName, nName := strings.TrimSpace(o.Name), strings.TrimSpace(nb.Name)
 		if matchedOn != "name" && oName != "" && nName != "" && !strings.EqualFold(oName, nName) {
-			out = append(out, complianceFinding{
+			out = append(out, Finding{
 				Check: ckSotName, Title: "Name differs from Source of Truth", Class: "drift",
 				Severity: "low", Framework: "NIST CSF ID.AM-1",
 				DeviceID: o.ID, DeviceName: deviceDisplayName(o),
@@ -331,7 +349,7 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 		}
 		oIP, nIP := strings.TrimSpace(o.Address), strings.TrimSpace(nb.Address)
 		if matchedOn != "ip" && oIP != "" && nIP != "" && oIP != nIP {
-			out = append(out, complianceFinding{
+			out = append(out, Finding{
 				Check: ckSotMgmtIP, Title: "Management IP differs from Source of Truth", Class: "drift",
 				Severity: "high", Framework: "NIST CSF ID.AM-1",
 				DeviceID: o.ID, DeviceName: deviceDisplayName(o),
@@ -340,7 +358,7 @@ func evalDrift(sot, observed []models.Device) []complianceFinding {
 		}
 		oSN, nSN := strings.TrimSpace(o.Labels["serial"]), strings.TrimSpace(nb.Labels["serial"])
 		if matchedOn != "serial" && oSN != "" && nSN != "" && !strings.EqualFold(oSN, nSN) {
-			out = append(out, complianceFinding{
+			out = append(out, Finding{
 				Check: ckSotSerial, Title: "Serial differs from Source of Truth", Class: "drift",
 				Severity: "high", Framework: "NIST CSF ID.AM-1",
 				DeviceID: o.ID, DeviceName: deviceDisplayName(o),
@@ -381,25 +399,25 @@ func matchSot(o models.Device, byIP, bySerial, byName map[string]models.Device) 
 // free-form ("Cisco IOS-XE", "IOS XE 17", "Arista EOS"), so both sides reduce
 // to a vendor-stripped, digit-stripped product token before comparing —
 // "Cisco IOS-XE 17" and ParseOS's "ios_xe" both become "iosxe".
-func platformDrift(o, nb models.Device) (complianceFinding, bool) {
+func platformDrift(o, nb models.Device) (Finding, bool) {
 	intended := strings.TrimSpace(nb.OS) // SoT record maps Platform → OS
 	vendor := o.Vendor
 	if vendor == "" {
 		vendor = nb.Vendor
 	}
 	if intended == "" || vendor == "" || o.OS == "" {
-		return complianceFinding{}, false
+		return Finding{}, false
 	}
 	osi := collectors.ParseOS(strings.ToLower(vendor), o.OS)
 	if osi.Product == "" {
-		return complianceFinding{}, false
+		return Finding{}, false
 	}
 	want := platformToken(intended, vendor)
 	got := platformToken(osi.Product, vendor)
 	if want == "" || got == "" || want == got {
-		return complianceFinding{}, false
+		return Finding{}, false
 	}
-	return complianceFinding{
+	return Finding{
 		Check: ckSotPlatform, Title: "Running OS differs from intended platform", Class: "drift",
 		Severity: "medium", Framework: "NIST CSF ID.AM-2",
 		DeviceID: o.ID, DeviceName: deviceDisplayName(o),
@@ -409,7 +427,9 @@ func platformDrift(o, nb models.Device) (complianceFinding, bool) {
 
 // platformToken reduces a platform/product string to a comparable token:
 // lowercase, vendor name removed, digits and separators stripped, then the
-// same alias fold the vulnerability matcher uses (sr_os/timos → sros).
+// same alias fold the vulnerability matcher uses (sr_os/timos → sros) — a
+// letters-only token passes through vuln.NormProduct unchanged except for
+// that fold.
 func platformToken(s, vendor string) string {
 	low := strings.ToLower(s)
 	for _, v := range []string{strings.ToLower(vendor), "cisco", "juniper", "arista", "fortinet", "nokia", "huawei", "mikrotik", "paloalto", "palo alto"} {
@@ -423,19 +443,15 @@ func platformToken(s, vendor string) string {
 			b.WriteRune(r)
 		}
 	}
-	n := b.String()
-	if a, ok := vulnProductAlias[n]; ok {
-		return a
-	}
-	return n
+	return vuln.NormProduct(b.String())
 }
 
 // evalSNMPPolicy checks one device's management-plane credential profile.
-func evalSNMPPolicy(d models.Device, c SNMPCredential) []complianceFinding {
-	var out []complianceFinding
+func evalSNMPPolicy(d models.Device, c SNMPProfile) []Finding {
+	var out []Finding
 	switch strings.ToLower(c.Version) {
 	case "v1", "v2c":
-		out = append(out, complianceFinding{
+		out = append(out, Finding{
 			Check: ckSnmpVersion, Title: "Community-based SNMP in use", Class: "policy",
 			Severity: "medium", Framework: "CIS · NIST 800-53 IA-5",
 			DeviceID: d.ID, DeviceName: deviceDisplayName(d),
@@ -454,7 +470,7 @@ func evalSNMPPolicy(d models.Device, c SNMPCredential) []complianceFinding {
 			weak = append(weak, "DES privacy")
 		}
 		if len(weak) > 0 {
-			out = append(out, complianceFinding{
+			out = append(out, Finding{
 				Check: ckSnmpV3Weak, Title: "Weak SNMPv3 parameters", Class: "policy",
 				Severity: "low", Framework: "CIS · NIST 800-53 SC-8",
 				DeviceID: d.ID, DeviceName: deviceDisplayName(d),
@@ -469,7 +485,7 @@ func evalSNMPPolicy(d models.Device, c SNMPCredential) []complianceFinding {
 // evalKEV flags devices whose running OS matches a CISA known-exploited CVE.
 // The full CVE list lives on the Vulnerability Management board; compliance
 // surfaces the pass/fail with a short evidence trail.
-func evalKEV(d models.Device, osi collectors.OSInfo, match func(vendor, product, version string) []vulnEntry) []complianceFinding {
+func evalKEV(d models.Device, osi collectors.OSInfo, match func(vendor, product, version string) []vuln.Entry) []Finding {
 	var kev []string
 	for _, e := range match(strings.ToLower(d.Vendor), osi.Product, osi.Version) {
 		if e.KEV {
@@ -488,7 +504,7 @@ func evalKEV(d models.Device, osi collectors.OSInfo, match func(vendor, product,
 	if len(kev) > len(shown) {
 		detail += fmt.Sprintf(" (+%d more)", len(kev)-len(shown))
 	}
-	return []complianceFinding{{
+	return []Finding{{
 		Check: ckKEV, Title: "Known-exploited vulnerability present", Class: "policy",
 		Severity: "high", Framework: "CISA BOD 22-01",
 		DeviceID: d.ID, DeviceName: deviceDisplayName(d),
@@ -508,7 +524,7 @@ type osVersionSeen struct {
 // The "golden" version is the strict-majority version of a group of ≥3 — an
 // agentless stand-in for an operator-pinned baseline. ran reports whether the
 // group was big enough to establish a baseline at all.
-func evalConsensus(group []osVersionSeen) (out []complianceFinding, ran bool) {
+func evalConsensus(group []osVersionSeen) (out []Finding, ran bool) {
 	if len(group) < 3 {
 		return nil, false
 	}
@@ -518,7 +534,7 @@ func evalConsensus(group []osVersionSeen) (out []complianceFinding, ran bool) {
 	}
 	golden, best := "", 0
 	for v, n := range tally {
-		if n > best || (n == best && compareVersions(v, golden) > 0) {
+		if n > best || (n == best && vuln.CompareVersions(v, golden) > 0) {
 			golden, best = v, n
 		}
 	}
@@ -529,7 +545,7 @@ func evalConsensus(group []osVersionSeen) (out []complianceFinding, ran bool) {
 		if g.version == golden {
 			continue
 		}
-		out = append(out, complianceFinding{
+		out = append(out, Finding{
 			Check: ckOSConsensus, Title: "OS version off fleet baseline", Class: "policy",
 			Severity: "low", Framework: "Internal golden baseline",
 			DeviceID: g.dev.ID, DeviceName: deviceDisplayName(g.dev),
@@ -538,85 +554,4 @@ func evalConsensus(group []osVersionSeen) (out []complianceFinding, ran bool) {
 		})
 	}
 	return out, true
-}
-
-// ── HTTP ─────────────────────────────────────────────────────────────────────
-
-// handleCompliance — GET /api/compliance. Tenant-scoped posture assessment.
-func (s *server) handleCompliance(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
-		return
-	}
-	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-	if !ok {
-		return
-	}
-	merged := visibleDevices(s.discovery.Devices(), claims)
-	if len(merged) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"compliance_enabled": false})
-		return
-	}
-	limit, errLimit := intQuery(r, "limit", 500, 1, 2000)
-	if errLimit != nil {
-		writeError(w, http.StatusBadRequest, errLimit)
-		return
-	}
-
-	raw := visibleDevices(s.discovery.RawDevices(), claims)
-	// Drift pairs against whichever SoT provider is active (internal | netbox | …),
-	// not a NetBox-specific flag. The provider names the Device.Source its declared
-	// records carry; "" means none exist → drift inactive.
-	sotp := s.activeSoT()
-	sotSource := sotp.DeviceRecordSource()
-
-	var vulnMatch func(vendor, product, version string) []vulnEntry
-	if s.vulns.ensure() {
-		vulnMatch = s.vulns.match
-	}
-	res := evaluateCompliance(merged, raw, sotSource, s.snmpCreds.Resolve, vulnMatch)
-
-	affected := map[string]bool{}
-	drift, policy, high := 0, 0, 0
-	for _, f := range res.Findings {
-		affected[f.DeviceID] = true
-		if f.Class == "drift" {
-			drift++
-		} else {
-			policy++
-		}
-		if f.Severity == "high" {
-			high++
-		}
-	}
-	// Findings pair to raw per-source records; cap affected at the physical count.
-	affectedN := len(affected)
-	if affectedN > res.Physical {
-		affectedN = res.Physical
-	}
-	checksActive := 0
-	for _, c := range res.Checks {
-		if c.Active {
-			checksActive++
-		}
-	}
-	total := len(res.Findings)
-	findings := res.Findings
-	if len(findings) > limit {
-		findings = findings[:limit]
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"compliance_enabled": true,
-		// configured = drift has declared records to compare against (an external
-		// SoT read into the inventory); provider = the active SoT role-holder.
-		"sot": map[string]any{"configured": sotSource != "", "provider": sotp.Name()},
-		"summary": map[string]any{
-			"devices": res.Physical, "affected": affectedN, "compliant": res.Physical - affectedN,
-			"findings": total, "drift": drift, "policy": policy, "high": high,
-			"checks_active": checksActive, "checks_total": len(res.Checks),
-		},
-		"checks":   res.Checks,
-		"findings": findings,
-		"gaps":     res.Gaps,
-	})
 }
