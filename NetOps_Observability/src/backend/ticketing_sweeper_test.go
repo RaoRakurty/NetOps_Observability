@@ -2,12 +2,45 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
 )
+
+// Local copies of the rca test-fixture builders (testSig/testMeta moved into
+// internal/rca with the wave-2 report family; test helpers cannot cross
+// package boundaries). Kept in the sweeper's shape only.
+func testSig(kind, lane, observer, entityType, entityID, sev, ts string, attached bool, extra map[string]any) map[string]any {
+	sig := map[string]any{
+		"signal_id": "s-" + kind + "-" + ts, "kind": kind, "modality_class": lane,
+		"observer_id": observer, "entity_type": entityType, "entity_id": entityID,
+		"severity": sev, "ts": ts, "attached": attached,
+		"value": float64(0), "baseline": float64(0), "metric_name": "", "attrs": "{}",
+		"probe_scope": "", "clear_ts": "",
+	}
+	for k, v := range extra {
+		sig[k] = v
+	}
+	return sig
+}
+
+func testMeta(state, verdict, topHyp string, hyp map[string]any) map[string]any {
+	blob := "{}"
+	if hyp != nil {
+		b, _ := json.Marshal(map[string]any{"ranking": map[string]any{"hypotheses": []any{hyp}}})
+		blob = string(b)
+	}
+	return map[string]any{
+		"version": float64(3), "state": state, "verdict_tier": verdict,
+		"top_hypothesis": topHyp, "top_confidence": 0.5,
+		"window_start": "2026-07-12 18:10:00", "window_end": "2026-07-12 18:30:00",
+		"hypotheses": blob, "affected": "{}", "app_impact": "{}", "evidence_missing": "[]",
+	}
+}
 
 // ticketing_sweeper_test.go — the policy→enqueue sweeper (#78 P3). Covers the
 // pure per-object decision (create / hold / update), tenant-scoped policy
@@ -131,7 +164,7 @@ func TestDecideSweepActionConsistencyGate(t *testing.T) {
 	}
 }
 
-// ticketFactConsistencyIssues — the cheap fact-level P1 validation the sweeper
+// rca.TicketFactConsistencyIssues — the cheap fact-level P1 validation the sweeper
 // consumes, exercised over raw signal rows (no report recomposition).
 func TestTicketFactConsistencyIssues(t *testing.T) {
 	anom := func(ts string) map[string]any {
@@ -144,19 +177,19 @@ func TestTicketFactConsistencyIssues(t *testing.T) {
 
 	// closed object, recovery evidence PRECEDING later anomalies → P1 issue.
 	rows := []map[string]any{anom("2026-07-12 18:00:00"), clear("2026-07-12 18:05:00"), anom("2026-07-12 18:20:00")}
-	issues := ticketFactConsistencyIssues("closed", rows)
+	issues := rca.TicketFactConsistencyIssues("closed", rows)
 	if len(issues) != 1 || !strings.Contains(issues[0], "recovered_before_last_anomaly") {
 		t.Fatalf("issues = %v", issues)
 	}
 
 	// same evidence on an OPEN object: no closure claim, no contradiction.
-	if issues := ticketFactConsistencyIssues("open", rows); len(issues) != 0 {
+	if issues := rca.TicketFactConsistencyIssues("open", rows); len(issues) != 0 {
 		t.Fatalf("open object flagged: %v", issues)
 	}
 
 	// clean closed recovery (clear after last anomaly) → no issue.
 	cleanRows := []map[string]any{anom("2026-07-12 18:00:00"), clear("2026-07-12 18:25:00")}
-	if issues := ticketFactConsistencyIssues("closed", cleanRows); len(issues) != 0 {
+	if issues := rca.TicketFactConsistencyIssues("closed", cleanRows); len(issues) != 0 {
 		t.Fatalf("clean closure flagged: %v", issues)
 	}
 

@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/rca"
 	"os"
 	"strconv"
 	"strings"
@@ -177,10 +178,10 @@ SELECT entity_id, count() AS n
 			switch st.Health {
 			case "healthy":
 				st.Health = "degraded"
-				st.HealthBasis = fmt.Sprintf("provider status checks pass, but %s failed against this resource's address", countNoun(fails, "active check"))
+				st.HealthBasis = fmt.Sprintf("provider status checks pass, but %s failed against this resource's address", rca.CountNoun(fails, "active check"))
 			case "unknown":
 				st.Health = "degraded"
-				st.HealthBasis = fmt.Sprintf("%s failed against this resource's address; no provider telemetry to corroborate", countNoun(fails, "active check"))
+				st.HealthBasis = fmt.Sprintf("%s failed against this resource's address; no provider telemetry to corroborate", rca.CountNoun(fails, "active check"))
 			}
 		}
 		out[r.ResourceID] = st

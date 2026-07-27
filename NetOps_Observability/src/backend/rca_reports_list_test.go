@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/rca"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestRcaLibraryPrefilterSQLIsBounded(t *testing.T) {
 		"verdict_tier = 'confirmed'",
 		"state != 'merged'",
 		// duration reuses the promotion constant (owner-tuned 2m) — never drifts
-		fmt.Sprintf("dateDiff('second', window_start, window_end) >= %d", int(rcaPromotionMinDuration.Seconds())),
+		fmt.Sprintf("dateDiff('second', window_start, window_end) >= %d", int(rca.PromotionMinDuration.Seconds())),
 		"window_end >= now() - INTERVAL 2592000 SECOND", // 30 days, bounded window
 		"ORDER BY window_end DESC",
 		fmt.Sprintf("LIMIT %d", rcaLibraryEvalCap),
@@ -178,7 +179,7 @@ func libObjs() map[string]libFakeObj {
 func TestRcaLibraryAutoManualUnionAndPhaseBFilter(t *testing.T) {
 	libFakeCH(t, map[string][]string{"acme": {libAutoID, libSuspectID}}, libObjs())
 	s := promoServer(t)
-	_ = s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libManualID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
@@ -228,7 +229,7 @@ func TestRcaLibraryDedupesManualAlsoInPrefilter(t *testing.T) {
 	libFakeCH(t, map[string][]string{"acme": {libAutoID}}, libObjs())
 	s := promoServer(t)
 	// the same id is BOTH prefiltered and manually promoted — one row, manual wins
-	_ = s.rcaPromotions.set("acme", libAutoID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libAutoID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.handleRcaReportsLibrary(w, req(http.MethodGet, "/api/correlations/rca-reports", "", acme()))
@@ -281,8 +282,8 @@ func TestRcaLibraryTenantIsolation(t *testing.T) {
 	// own manual promotion. Each caller's library is exactly its own view.
 	scopes := libFakeCH(t, map[string][]string{"acme": {libAutoID}}, libObjs())
 	s := promoServer(t)
-	_ = s.rcaPromotions.set("acme", libManualID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
-	_ = s.rcaPromotions.set("globex", libGlobexOwnID, rcaPromotionRecord{PromotedBy: "ops@globex", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", libManualID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("globex", libGlobexOwnID, rca.PromotionRecord{PromotedBy: "ops@globex", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	// acme: its two promoted cases, nothing of globex's.
 	w := httptest.NewRecorder()

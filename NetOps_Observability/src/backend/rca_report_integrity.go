@@ -9,71 +9,19 @@ package main
 // live status flows through the action register or a NEW revision.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/rca"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-// rcaReportPolicyVersion names the honesty/derivation policy that produced the
-// report — bump when promotion criteria or state-derivation rules change.
-const rcaReportPolicyVersion = "rca-policy-2026.07.19-p1"
-
-// rcaReportIntegrity is the immutability block a generated document embeds.
-type rcaReportIntegrity struct {
-	// AnalysisSnapshotHash: sha256 over the canonical report JSON with
-	// volatile generation-time display fields normalized — it identifies the
-	// ANALYSIS the document was generated from.
-	AnalysisSnapshotHash string `json:"analysis_snapshot_hash"`
-	PolicyVersion        string `json:"policy_version"`
-	TemplateVersion      string `json:"template_version"`
-	// ContentHash: sha256 of the rendered artifact bytes. Set only when a
-	// document (html/pdf source) was actually rendered.
-	ContentHash string `json:"content_hash,omitempty"`
-	GeneratedAt string `json:"generated_at"`
-	// StatusAsOf: the workflow states AT generation time — a published
-	// document is a snapshot "as of", never a live view.
-	StatusAsOf string `json:"status_as_of"`
-}
-
-// computeReportIntegrity derives the integrity block from a finished report.
-// Volatile fields that change with the wall clock but not the analysis
-// (generated-at, freshness strings, still-active elapsed duration) are
-// normalized so re-rendering an unchanged analysis yields the same hash.
-func computeReportIntegrity(rep rcaReport) (rcaReportIntegrity, error) {
-	cp := rep
-	cp.GeneratedAt = ""
-	cp.Integrity = nil
-	cp.Evidence.LastObservation = ""
-	if cp.Times.DurationBasis == "elapsed_still_active" {
-		cp.Times.DurationMS = 0
-	}
-	b, err := json.Marshal(cp)
-	if err != nil {
-		return rcaReportIntegrity{}, fmt.Errorf("integrity snapshot marshal: %w", err)
-	}
-	sum := sha256.Sum256(b)
-	return rcaReportIntegrity{
-		AnalysisSnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
-		PolicyVersion:        rcaReportPolicyVersion,
-		TemplateVersion:      rcaReportTemplateVersion,
-		GeneratedAt:          rep.GeneratedAt,
-		StatusAsOf: fmt.Sprintf("incident %s · analysis %s · impact %s · ticket %s · promotion %s · class %s",
-			rep.States.Incident, rep.States.Analysis, rep.States.Impact,
-			rep.States.Ticket, orDefault(rep.Promotion.Basis, "not_promoted"), rep.Maturity.Class),
-	}, nil
-}
-
-func hashContent(b []byte) string {
-	sum := sha256.Sum256(b)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
+// The pure half — the ReportIntegrity block, ComputeReportIntegrity and the
+// policy/template version constants — lives in internal/rca (rca_integrity.go).
 
 // ---- revision register --------------------------------------------------------
 
@@ -81,12 +29,12 @@ func hashContent(b []byte) string {
 // analysis or content differs is a NEW revision; an identical regeneration
 // reuses the existing revision (idempotent).
 type rcaReportRevision struct {
-	Revision  int                `json:"revision"`
-	ReportID  string             `json:"report_id"`
-	Format    string             `json:"format"` // html | pdf
-	Integrity rcaReportIntegrity `json:"integrity"`
-	CreatedAt string             `json:"created_at"`
-	CreatedBy string             `json:"created_by"`
+	Revision  int                 `json:"revision"`
+	ReportID  string              `json:"report_id"`
+	Format    string              `json:"format"` // html | pdf
+	Integrity rca.ReportIntegrity `json:"integrity"`
+	CreatedAt string              `json:"created_at"`
+	CreatedBy string              `json:"created_by"`
 }
 
 // rcaRevisionsMaxPerCase bounds the register (§9). When full, generation still
@@ -219,7 +167,7 @@ SELECT tenant_id FROM netops.corr_objects
 // recordReportRevision computes+embeds nothing itself; it stores the register
 // row for a document generation. Failures are logged, never fatal to the
 // response (the document was already produced) — but they are observable.
-func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, rep rcaReport, integ rcaReportIntegrity, format string) {
+func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, rep rca.Report, integ rca.ReportIntegrity, format string) {
 	if s.rcaRevisions == nil {
 		return
 	}
@@ -227,7 +175,7 @@ func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, r
 		ReportID:  rep.ReportID,
 		Format:    format,
 		Integrity: integ,
-		CreatedAt: fmtUTC(time.Now().UTC()),
+		CreatedAt: rca.FmtUTC(time.Now().UTC()),
 		CreatedBy: claims.Sub,
 	})
 	if err != nil {

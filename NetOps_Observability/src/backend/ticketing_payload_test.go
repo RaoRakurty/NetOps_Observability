@@ -4,6 +4,7 @@ import (
 	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildCorrTicketFacts_DerivesFromViewAndSignals(t *testing.T) {
@@ -75,7 +76,7 @@ func TestBuildCorrTicketFacts_SingleStreamCritCapped(t *testing.T) {
 	if f.PeakSeverity == "crit" {
 		t.Fatalf("single uncorroborated stream kept crit: %+v", f)
 	}
-	dec := ticketing.EvalDecision(f, ticketing.DefaultIncidentPolicy("t_a"), nil, rcaTestNow)
+	dec := ticketing.EvalDecision(f, ticketing.DefaultIncidentPolicy("t_a"), nil, time.Date(2026, 7, 12, 20, 0, 0, 0, time.UTC))
 	if dec.Create {
 		t.Fatalf("single-stream suspected anomaly must not open a ticket: %+v", dec)
 	}

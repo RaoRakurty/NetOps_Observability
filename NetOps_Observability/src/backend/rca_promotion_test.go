@@ -12,59 +12,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/rca"
 	"strings"
 	"testing"
-	"time"
 )
-
-// ---- evaluation --------------------------------------------------------------
-
-func promoReport(analysis, impact string, dur time.Duration, validation bool) rcaReport {
-	return rcaReport{
-		Validation: validation,
-		States:     rcaReportStates{Analysis: analysis, Impact: impact, ImpactRealUser: "unknown", ImpactSynthetic: "confirmed"},
-		Times:      rcaReportTimes{DurationMS: dur.Milliseconds()},
-	}
-}
-
-func TestPromotionAutoRequiresAllCriteria(t *testing.T) {
-	rep := promoReport("confirmed", "confirmed", 10*time.Minute, false)
-	st := evaluateRcaPromotion(&rep, nil)
-	if !st.Promoted || st.Basis != "auto" {
-		t.Fatalf("real outage must auto-promote: %+v", st)
-	}
-
-	for name, r := range map[string]rcaReport{
-		"unconfirmed verdict": promoReport("suspected", "confirmed", 10*time.Minute, false),
-		"no user impact":      promoReport("confirmed", "detected", 10*time.Minute, false),
-		"blip duration":       promoReport("confirmed", "confirmed", 90*time.Second, false),
-		"validation scenario": promoReport("confirmed", "confirmed", 10*time.Minute, true),
-	} {
-		rr := r
-		st := evaluateRcaPromotion(&rr, nil)
-		if st.Promoted {
-			t.Fatalf("%s must NOT auto-promote: %+v", name, st)
-		}
-		if st.Basis != "not_promoted" || !strings.Contains(st.Reason, "reserved for promoted real outages") {
-			t.Fatalf("%s: refusal must explain the policy: %+v", name, st)
-		}
-	}
-}
-
-func TestPromotionManualOverrides(t *testing.T) {
-	rep := promoReport("suspected", "detected", time.Minute, false)
-	rec := &rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"}
-	st := evaluateRcaPromotion(&rep, rec)
-	if !st.Promoted || st.Basis != "manual" || !strings.Contains(st.Reason, "ops@acme") {
-		t.Fatalf("manual promotion must win with attribution: %+v", st)
-	}
-}
 
 // ---- store ------------------------------------------------------------------
 
 func TestPromotionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaPromotionStore("") // in-memory
-	_ = st.set("acme", "c-1", rcaPromotionRecord{PromotedBy: "a"})
+	_ = st.set("acme", "c-1", rca.PromotionRecord{PromotedBy: "a"})
 	if _, ok := st.get("globex", "c-1"); ok {
 		t.Fatal("TENANT LEAK: another tenant read acme's promotion")
 	}
@@ -216,7 +173,7 @@ func TestRcaDocumentGateBlocksUnpromotedHTML(t *testing.T) {
 		t.Fatalf("candidate JSON = %d (%s)", w.Code, w.Body.String())
 	}
 	var rep struct {
-		Promotion rcaPromotionStatus `json:"promotion"`
+		Promotion rca.PromotionStatus `json:"promotion"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&rep); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -244,7 +201,7 @@ func TestRcaDocumentGateBlocksUnpromotedHTML(t *testing.T) {
 func TestRcaDocumentGateOpensAfterManualPromotion(t *testing.T) {
 	promoFakeCH(t, "acme")
 	s := promoServer(t)
-	_ = s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)

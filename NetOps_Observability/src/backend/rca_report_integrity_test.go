@@ -9,69 +9,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/rca"
 	"strings"
 	"testing"
-	"time"
 )
 
-func integrityReport(t *testing.T) rcaReport {
+// integrityReport builds a minimal report for the register tests — the store
+// cares about hashes and revisions, not report semantics; the full-builder
+// integrity-stability contract lives in internal/rca (rca_integrity_test.go).
+func integrityReport(t *testing.T) rca.Report {
 	t.Helper()
-	meta := testMeta("closed", "suspected", "undetermined",
-		testHyp("sig.x", 0.4, "suspected", []string{"probe_loss"}, nil, nil, "netops", false))
-	sigs := []map[string]any{
-		testSig("probe_loss", "active_probe", "prober", "path", "prober->svc", "high", "2026-07-12 18:12:00", true, nil),
-		testSig("probe_loss_clear", "active_probe", "prober", "path", "prober->svc", "info", "2026-07-12 18:15:15", false,
-			map[string]any{"clear_ts": "2026-07-12 18:15:15"}),
-	}
-	return buildTestReport(t, meta, sigs)
-}
-
-func TestIntegrityBlockCompleteAndStable(t *testing.T) {
-	rep := integrityReport(t)
-	integ, err := computeReportIntegrity(rep)
-	if err != nil {
-		t.Fatalf("integrity: %v", err)
-	}
-	if !strings.HasPrefix(integ.AnalysisSnapshotHash, "sha256:") || len(integ.AnalysisSnapshotHash) != len("sha256:")+64 {
-		t.Fatalf("snapshot hash malformed: %q", integ.AnalysisSnapshotHash)
-	}
-	if integ.PolicyVersion != rcaReportPolicyVersion || integ.TemplateVersion != rcaReportTemplateVersion {
-		t.Fatalf("versions missing: %+v", integ)
-	}
-	if integ.StatusAsOf == "" || !strings.Contains(integ.StatusAsOf, "incident ") {
-		t.Fatalf("status-as-of missing: %q", integ.StatusAsOf)
-	}
-	if integ.ContentHash != "" {
-		t.Fatal("content hash must be set only when a document is rendered")
-	}
-
-	// The SAME analysis re-generated later hashes identically (generated-at and
-	// freshness strings are normalized out) — the register can be idempotent.
-	rep2 := rep
-	rep2.GeneratedAt = fmtUTC(rcaTestNow.Add(45 * time.Minute))
-	rep2.Evidence.LastObservation = "45m ago"
-	integ2, err := computeReportIntegrity(rep2)
-	if err != nil {
-		t.Fatalf("integrity2: %v", err)
-	}
-	if integ2.AnalysisSnapshotHash != integ.AnalysisSnapshotHash {
-		t.Fatal("unchanged analysis must keep its snapshot hash across re-renders")
-	}
-
-	// A CHANGED analysis is a different snapshot.
-	rep3 := rep
-	rep3.States.Analysis = "confirmed"
-	integ3, _ := computeReportIntegrity(rep3)
-	if integ3.AnalysisSnapshotHash == integ.AnalysisSnapshotHash {
-		t.Fatal("a changed analysis must change the snapshot hash")
-	}
+	rep := rca.Report{ReportID: "RCA-test-1", GeneratedAt: "2026-07-12 20:00:00 UTC"}
+	return rep
 }
 
 func TestRevisionRegisterAppendOnlyAndIdempotent(t *testing.T) {
 	st := newRcaRevisionStore("") // in-memory
 	rep := integrityReport(t)
-	integ, _ := computeReportIntegrity(rep)
-	integ.ContentHash = hashContent([]byte("<html>doc v1</html>"))
+	integ, _ := rca.ComputeReportIntegrity(rep)
+	integ.ContentHash = rca.HashContent([]byte("<html>doc v1</html>"))
 
 	rev1, created, err := st.record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ, CreatedAt: "t1", CreatedBy: "a@acme"})
 	if err != nil || !created || rev1.Revision != 1 {
@@ -84,7 +40,7 @@ func TestRevisionRegisterAppendOnlyAndIdempotent(t *testing.T) {
 	}
 	// Changed content → a NEW revision object; revision 1 is never mutated.
 	integ2 := integ
-	integ2.ContentHash = hashContent([]byte("<html>doc v2</html>"))
+	integ2.ContentHash = rca.HashContent([]byte("<html>doc v2</html>"))
 	rev2, created, err := st.record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ2, CreatedAt: "t3", CreatedBy: "a@acme"})
 	if err != nil || !created || rev2.Revision != 2 {
 		t.Fatalf("changed content must append revision 2: %+v", rev2)
@@ -98,7 +54,7 @@ func TestRevisionRegisterAppendOnlyAndIdempotent(t *testing.T) {
 func TestRevisionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaRevisionStore("")
 	rep := integrityReport(t)
-	integ, _ := computeReportIntegrity(rep)
+	integ, _ := rca.ComputeReportIntegrity(rep)
 	if _, _, err := st.record("acme", "c-1", rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
@@ -117,7 +73,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	s := corrTestServer(t)
 	s.rcaPromotions = newRcaPromotionStore("")
 	s.rcaRevisions = newRcaRevisionStore("")
-	_ = s.rcaPromotions.set("acme", promoCorrID, rcaPromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	// JSON: integrity embedded, no revision recorded.
 	w := httptest.NewRecorder()
@@ -126,7 +82,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 		t.Fatalf("json = %d (%s)", w.Code, w.Body.String())
 	}
 	var rep struct {
-		Integrity *rcaReportIntegrity `json:"integrity"`
+		Integrity *rca.ReportIntegrity `json:"integrity"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&rep); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -172,7 +128,7 @@ func TestRcaRevisionsEndpointTenantScoped(t *testing.T) {
 	s := corrTestServer(t)
 	s.rcaRevisions = newRcaRevisionStore("")
 	rep := integrityReport(t)
-	integ, _ := computeReportIntegrity(rep)
+	integ, _ := rca.ComputeReportIntegrity(rep)
 	if _, _, err := s.rcaRevisions.record("acme", promoCorrID, rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

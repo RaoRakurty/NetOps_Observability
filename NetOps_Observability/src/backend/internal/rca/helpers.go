@@ -2,16 +2,22 @@ package rca
 
 // helpers.go — small pure conversions this package needs.
 //
-// These are duplicated from package main (asString from health_score.go,
-// parseChTS/fmtUTC from rca_report.go) rather than shared through a common
-// package, because CLAUDE.md §2 forbids a "utils" dumping ground outright and
-// three one-liners do not justify inventing a package to hold them. If a fourth
-// consumer appears, that is the signal to give them a real home with a real
-// name (e.g. a chtime package), not to grow this file.
+// parseChTS and FmtUTC arrived with the wave-1 files as duplicates of the
+// rca_report.go originals; the wave-2 move brought the originals home, so
+// these ARE now the single definitions. asString/asFloat (health_score.go),
+// orDefault (ticketing_store.go) and envDuration (report_pipeline.go) are
+// duplicated one-liners rather than shared through a common package, because
+// CLAUDE.md §2 forbids a "utils" dumping ground outright and one-liners do not
+// justify inventing a package to hold them. If a shared helper grows real
+// behavior, that is the signal to give it a real home with a real name
+// (asFloat's F-21 sanitisation already has one: internal/metricval).
 
 import (
+	"os"
 	"strings"
 	"time"
+
+	"netops/backend/internal/metricval"
 )
 
 // asString returns v when it is a string, otherwise "".
@@ -20,6 +26,22 @@ func asString(v any) string {
 		return s
 	}
 	return ""
+}
+
+// asFloat reads a numeric value that may arrive as a float, a numeric string,
+// or garbage — non-finite values sanitise to 0 (F-21) via metricval.
+func asFloat(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		// ClickHouse can hand back a non-finite float directly (nan/inf in a
+		// JSON number position); sanitise it here too, not just the string form.
+		return metricval.Sanitize(x)
+	case string:
+		// F-21: ParseFloat("NaN") succeeds and the NaN would land in a report
+		// field, failing the JSON encode and comparing false everywhere.
+		return metricval.FiniteOrZero(x)
+	}
+	return 0
 }
 
 // parseChTS accepts both the RFC 3339 form chISO now emits and the legacy
@@ -34,5 +56,24 @@ func parseChTS(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// fmtUTC renders an instant for operators, always in UTC and always labelled.
-func fmtUTC(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05") + " UTC" }
+// FmtUTC renders an instant for operators, always in UTC and always labelled.
+func FmtUTC(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05") + " UTC" }
+
+// orDefault returns s when non-empty, else def.
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// envDuration reads a positive duration knob from the environment, falling
+// back to def — the package owns its own coverage-window knobs.
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}

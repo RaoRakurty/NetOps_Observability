@@ -18,6 +18,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"os"
 	"strings"
@@ -28,16 +29,16 @@ import (
 
 // buildRcaReportForID is THE shared report-build path: tenant-scoped slice load
 // → timeline-evidence merge → ticket/policy → path block → merge-chain →
-// buildRcaReport → promotion evaluation (#113 point 3). Both the per-case
+// rca.BuildReport → promotion evaluation (#113 point 3). Both the per-case
 // endpoint (serveRcaReport) and the RCA-reports library list call it — the
 // pipeline exists exactly once. Every ClickHouse read runs under the CALLER's
 // chTenantScope (row policies), every store read is RLS/tenant-scoped. On
 // failure it returns the HTTP status to answer with (404 for an invisible or
 // absent id — never revealing whether it exists elsewhere).
-func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id string, version int) (rcaReport, int, error) {
+func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id string, version int) (rca.Report, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
-		return rcaReport{}, status, err
+		return rca.Report{}, status, err
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// stamps attached/link_status onto sigRows (the same derivation the timeline uses)
@@ -64,7 +65,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	// tenant-scoped and cycle-safe (resolveMergeChain never crosses the owning
 	// tenant boundary). The builder derives the merge record from this + meta.
 	survivingID := ""
-	if _, isMerged := rcaMergeIncidentState(asString(meta["state"])); isMerged {
+	if _, isMerged := rca.MergeIncidentState(asString(meta["state"])); isMerged {
 		if first := asString(meta["merged_into"]); first != "" {
 			owner := canonicalCorrTenant(asString(meta["tenant_id"]))
 			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first)
@@ -76,7 +77,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	if !s.manualLifecycle(r, claims, id, lc) {
 		lc = nil
 	}
-	rep := buildRcaReport(rcaReportInput{
+	rep := rca.BuildReport(rca.ReportInput{
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,
 		Path:                pathBlock,
@@ -85,23 +86,23 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 		Lifecycle:           lc,
 	})
 	rep.Topology = rcaTopologyFromSpine(pathBlock)
-	stampTopologyTemporalRole(&rep)
+	rca.StampTopologyTemporalRole(&rep)
 
 	// #113 point 3 — RCA creation policy. Candidates and RCA documents are
 	// different tiers: JSON (the workspace's data) stays fully readable, but the
 	// DOCUMENT (html/pdf) renders only for a promoted real outage — auto
 	// (confirmed verdict + confirmed user/app impact + duration) or an explicit,
 	// audited manual promotion. The refusal names the unmet criteria.
-	var manual *rcaPromotionRecord
+	var manual *rca.PromotionRecord
 	if rec, has := s.rcaPromotions.get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
 		manual = &rec
 	}
-	rep.Promotion = evaluateRcaPromotion(&rep, manual)
+	rep.Promotion = rca.EvaluatePromotion(&rep, manual)
 	// Artifact class depends on promotion — re-stamp now that it is known
 	// (postmortem spec: operational/validation/preliminary; interim/final are
 	// Phase 3 human lifecycle advances, none recorded yet).
-	stampReportMaturity(&rep, "")
-	rep.ownerTenant = canonicalCorrTenant(asString(meta["tenant_id"]))
+	rca.StampReportMaturity(&rep, "")
+	rep.SetOwnerTenant(canonicalCorrTenant(asString(meta["tenant_id"])))
 	return rep, http.StatusOK, nil
 }
 
@@ -133,7 +134,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	// A rendered DOCUMENT additionally lands in the tenant-scoped revision
 	// register with its content hash; an identical regeneration reuses the
 	// existing (immutable) revision.
-	integ, ierr := computeReportIntegrity(rep)
+	integ, ierr := rca.ComputeReportIntegrity(rep)
 	if ierr != nil {
 		writeError(w, http.StatusInternalServerError, ierr)
 		return
@@ -144,19 +145,19 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	case "", "json":
 		writeJSON(w, http.StatusOK, rep)
 	case "html":
-		html, err := renderRcaReportHTML(rep)
+		html, err := rca.RenderReportHTML(rep)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		integ.ContentHash = hashContent(html)
-		s.recordReportRevision(claims, rep.ownerTenant, id, rep, integ, "html")
+		integ.ContentHash = rca.HashContent(html)
+		s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(html) // #nosec G705 -- html/template output (auto-escaped) served under a default-src 'none' CSP
 	case "pdf":
-		html, err := renderRcaReportHTML(rep)
+		html, err := rca.RenderReportHTML(rep)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -169,8 +170,8 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 				fmt.Errorf("pdf renderer unavailable: %w (fetch ?format=html and print, or start the pdf sidecar)", err))
 			return
 		}
-		integ.ContentHash = hashContent(pdf)
-		s.recordReportRevision(claims, rep.ownerTenant, id, rep, integ, "pdf")
+		integ.ContentHash = rca.HashContent(pdf)
+		s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "pdf")
 		fname := fmt.Sprintf("%s-%s.pdf", strings.ToLower(strings.ReplaceAll(rep.ReportType, " ", "-")), rep.DisplayID)
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
@@ -185,7 +186,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 // controlled header/footer (report type · display id · page X of Y · generated
 // timestamp · confidentiality marking). Fails closed when the sidecar is not
 // configured — the endpoint degrades to the HTML view, never to browser chrome.
-func (s *server) rcaReportPDF(ctx context.Context, rep rcaReport, html []byte) ([]byte, error) {
+func (s *server) rcaReportPDF(ctx context.Context, rep rca.Report, html []byte) ([]byte, error) {
 	url := strings.TrimSpace(os.Getenv("REPORT_PDF_SIDECAR_URL"))
 	if url == "" {
 		return nil, errors.New("REPORT_PDF_SIDECAR_URL not configured")
@@ -248,21 +249,21 @@ func (s *server) rcaReportPDF(ctx context.Context, rep rcaReport, html []byte) (
 
 // rcaTopologyFromSpine projects the §7 spine block onto the report's topology
 // view (§15): measured hops only, honest absence otherwise.
-func rcaTopologyFromSpine(block any) rcaTopologyView {
+func rcaTopologyFromSpine(block any) rca.TopologyView {
 	resp, ok := block.(pathSpineResponse)
 	if !ok || resp.Spine == nil || !resp.SpineAvailable {
 		reason := "No measured path is attached to this case — the topology is omitted, not inferred."
 		if ok && resp.Reason != "" {
 			reason = resp.Reason
 		}
-		return rcaTopologyView{Available: false, Reason: reason}
+		return rca.TopologyView{Available: false, Reason: reason}
 	}
-	out := rcaTopologyView{
+	out := rca.TopologyView{
 		Available: true, VantageID: resp.VantageID,
 		ObservedAt: resp.ObservedAt, Stale: resp.Stale,
 	}
 	for _, n := range resp.Spine.Spine {
-		out.Hops = append(out.Hops, rcaSpineHopView{
+		out.Hops = append(out.Hops, rca.SpineHopView{
 			Index: n.Index, Label: n.Label, Address: n.Address,
 			Kind: n.Kind, Boundary: n.Boundary, State: n.State, SeamID: n.SeamID,
 			Fault: n.Fault, Provider: n.Provider,

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"netops/backend/internal/rca"
 	"os"
 	"sort"
 	"strings"
@@ -31,38 +32,10 @@ import (
 	"time"
 )
 
-// rcaPromotionMinDuration — the shortest incident an AUTO-promotion accepts. A
-// blip shorter than this never self-promotes; a human may still promote it.
-// 2m (owner decision 2026-07-18, was 5m): in a single-WAN-link deployment a
-// total loss of app access is an outage well before 5 minutes; 2m still keeps
-// sub-minute reconvergence blips out of the management tier.
-const rcaPromotionMinDuration = 2 * time.Minute
-
 // ---- interfaces / model -----------------------------------------------------
 
-// rcaPromotionRecord is one manual promotion: who, when, why. Non-secret.
-type rcaPromotionRecord struct {
-	PromotedBy string `json:"promoted_by"`
-	PromotedAt string `json:"promoted_at"` // UTC, canonical fmtUTC
-	Note       string `json:"note,omitempty"`
-}
-
-// rcaPromotionCriterion is one auto-promotion gate with its honest state.
-type rcaPromotionCriterion struct {
-	Name   string `json:"name"`
-	Met    bool   `json:"met"`
-	Detail string `json:"detail"`
-}
-
-// rcaPromotionStatus is the report's promotion block — the UI's single source
-// for "is this an RCA document or a candidate, and why".
-type rcaPromotionStatus struct {
-	Promoted bool                    `json:"promoted"`
-	Basis    string                  `json:"basis"` // auto | manual | not_promoted
-	Reason   string                  `json:"reason"`
-	Criteria []rcaPromotionCriterion `json:"criteria"`
-	Manual   *rcaPromotionRecord     `json:"manual,omitempty"`
-}
+// The promotion model types (rca.PromotionStatus / PromotionCriterion /
+// PromotionRecord) live in internal/rca — they are part of the report's shape.
 
 // ---- store ------------------------------------------------------------------
 
@@ -71,7 +44,7 @@ type rcaPromotionStatus struct {
 // cross-tenant listing exists.
 type rcaPromotionStore struct {
 	mu   sync.RWMutex
-	m    map[string]map[string]rcaPromotionRecord
+	m    map[string]map[string]rca.PromotionRecord
 	path string
 }
 
@@ -83,9 +56,9 @@ func rcaPromotionsPath() string {
 }
 
 func newRcaPromotionStore(path string) *rcaPromotionStore {
-	s := &rcaPromotionStore{m: map[string]map[string]rcaPromotionRecord{}, path: path}
+	s := &rcaPromotionStore{m: map[string]map[string]rca.PromotionRecord{}, path: path}
 	if b, err := kvLoad(path); err == nil && len(b) > 0 {
-		var m map[string]map[string]rcaPromotionRecord
+		var m map[string]map[string]rca.PromotionRecord
 		if json.Unmarshal(b, &m) == nil {
 			s.m = m
 		}
@@ -112,9 +85,9 @@ func (s *rcaPromotionStore) saveLocked() error {
 }
 
 // get returns the tenant's manual promotion for one correlation. Nil-safe.
-func (s *rcaPromotionStore) get(tenant, id string) (rcaPromotionRecord, bool) {
+func (s *rcaPromotionStore) get(tenant, id string) (rca.PromotionRecord, bool) {
 	if s == nil {
-		return rcaPromotionRecord{}, false
+		return rca.PromotionRecord{}, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -139,11 +112,11 @@ func (s *rcaPromotionStore) list(tenant string) []string {
 	return ids
 }
 
-func (s *rcaPromotionStore) set(tenant, id string, rec rcaPromotionRecord) error {
+func (s *rcaPromotionStore) set(tenant, id string, rec rca.PromotionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.m[tenant] == nil {
-		s.m[tenant] = map[string]rcaPromotionRecord{}
+		s.m[tenant] = map[string]rca.PromotionRecord{}
 	}
 	prev, had := s.m[tenant][id]
 	s.m[tenant][id] = rec
@@ -173,7 +146,7 @@ func (s *rcaPromotionStore) remove(tenant, id string) error {
 		}
 		if had {
 			if s.m[tenant] == nil {
-				s.m[tenant] = map[string]rcaPromotionRecord{}
+				s.m[tenant] = map[string]rca.PromotionRecord{}
 			}
 			s.m[tenant][id] = prev
 		}
@@ -184,59 +157,8 @@ func (s *rcaPromotionStore) remove(tenant, id string) error {
 
 // ---- evaluation -------------------------------------------------------------
 
-// evaluateRcaPromotion decides the case's tier from the FINISHED report (the
-// states/times there are already derived honestly) plus any manual record. A
-// manual promotion is an explicit human decision and always wins; auto requires
-// every criterion. The reason strings are user-facing — they say exactly what
-// is unmet and how to promote, never a bare refusal.
-func evaluateRcaPromotion(rep *rcaReport, manual *rcaPromotionRecord) rcaPromotionStatus {
-	crit := []rcaPromotionCriterion{
-		{
-			Name: "production incident", Met: !rep.Validation,
-			Detail: map[bool]string{true: "not a validation scenario", false: "validation scenario — never a customer RCA"}[!rep.Validation],
-		},
-		{
-			Name: "confirmed verdict", Met: rep.States.Analysis == "confirmed",
-			Detail: "analysis is " + orDefault(rep.States.Analysis, "unknown"),
-		},
-		{
-			Name: "user/application impact", Met: rep.States.Impact == "confirmed",
-			Detail: fmt.Sprintf("impact is %s (real-user: %s, synthetic: %s)",
-				orDefault(rep.States.Impact, "unknown"),
-				orDefault(rep.States.ImpactRealUser, "unknown"),
-				orDefault(rep.States.ImpactSynthetic, "unknown")),
-		},
-		{
-			Name: "duration", Met: time.Duration(rep.Times.DurationMS)*time.Millisecond >= rcaPromotionMinDuration,
-			Detail: fmt.Sprintf("%s observed; auto-promotion requires ≥ %s",
-				fmtDur(time.Duration(rep.Times.DurationMS)*time.Millisecond), fmtDur(rcaPromotionMinDuration)),
-		},
-	}
-	st := rcaPromotionStatus{Criteria: crit, Manual: manual}
-	if manual != nil {
-		st.Promoted = true
-		st.Basis = "manual"
-		st.Reason = fmt.Sprintf("manually promoted by %s at %s", manual.PromotedBy, manual.PromotedAt)
-		return st
-	}
-	var unmet []string
-	for _, c := range crit {
-		if !c.Met {
-			unmet = append(unmet, c.Name)
-		}
-	}
-	if len(unmet) == 0 {
-		st.Promoted = true
-		st.Basis = "auto"
-		st.Reason = "meets the real-outage criteria: confirmed verdict, confirmed user/application impact, duration ≥ " + fmtDur(rcaPromotionMinDuration)
-		return st
-	}
-	st.Basis = "not_promoted"
-	st.Reason = "RCA documents are reserved for promoted real outages; this candidate does not meet: " +
-		strings.Join(unmet, ", ") + ". An operator with write permission can promote it explicitly (audited)."
-	return st
-}
-
+// The evaluation (rca.EvaluatePromotion + rca.PromotionMinDuration) lives in
+// internal/rca — it reads only the finished report and the manual record.
 // ---- HTTP -------------------------------------------------------------------
 
 // handleRcaPromotion serves /api/correlations/{id}/rca-promotion:
@@ -301,7 +223,7 @@ SELECT tenant_id FROM netops.corr_objects
 			writeError(w, http.StatusBadRequest, errors.New("note must be at most 500 characters"))
 			return
 		}
-		rec := rcaPromotionRecord{PromotedBy: claims.Sub, PromotedAt: fmtUTC(time.Now().UTC()), Note: strings.TrimSpace(body.Note)}
+		rec := rca.PromotionRecord{PromotedBy: claims.Sub, PromotedAt: rca.FmtUTC(time.Now().UTC()), Note: strings.TrimSpace(body.Note)}
 		if err := s.rcaPromotions.set(objTenant, id, rec); err != nil {
 			writeError(w, http.StatusInternalServerError, errors.New("promotion was not saved"))
 			return

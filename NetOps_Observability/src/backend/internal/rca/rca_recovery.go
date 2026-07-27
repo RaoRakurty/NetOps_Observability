@@ -140,12 +140,12 @@ func ReconcileRecovery(anomalous, recoveries []map[string]any) RecoveryAssessmen
 		ra.Component = RecoveryScopeState{State: "not_observed",
 			Basis: "No component recovery evidence was captured."}
 	case !ra.lastComponentAnomaly.After(ra.componentAt):
-		ra.Component = RecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.componentAt),
-			Basis: fmt.Sprintf("Component status recovery observed at %s.", fmtUTC(ra.componentAt))}
+		ra.Component = RecoveryScopeState{State: "explicitly_confirmed", At: FmtUTC(ra.componentAt),
+			Basis: fmt.Sprintf("Component status recovery observed at %s.", FmtUTC(ra.componentAt))}
 	default:
-		ra.Component = RecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.componentAt),
+		ra.Component = RecoveryScopeState{State: "failed_validation", At: FmtUTC(ra.componentAt),
 			Basis: fmt.Sprintf("A component recovery was observed at %s, but component-scope anomalies continued through %s.",
-				fmtUTC(ra.componentAt), fmtUTC(ra.lastComponentAnomaly))}
+				FmtUTC(ra.componentAt), FmtUTC(ra.lastComponentAnomaly))}
 	}
 
 	// service scope
@@ -154,16 +154,16 @@ func ReconcileRecovery(anomalous, recoveries []map[string]any) RecoveryAssessmen
 		ra.Service = RecoveryScopeState{State: "not_applicable",
 			Basis: "No service-scope (end-to-end) evidence participated in this incident."}
 	case !ra.serviceAt.IsZero() && !ra.lastServiceAnomaly.After(ra.serviceAt):
-		ra.Service = RecoveryScopeState{State: "explicitly_confirmed", At: fmtUTC(ra.serviceAt),
-			Basis: fmt.Sprintf("Service-level recovery evidence observed at %s, after the last failing check.", fmtUTC(ra.serviceAt))}
+		ra.Service = RecoveryScopeState{State: "explicitly_confirmed", At: FmtUTC(ra.serviceAt),
+			Basis: fmt.Sprintf("Service-level recovery evidence observed at %s, after the last failing check.", FmtUTC(ra.serviceAt))}
 	case !ra.serviceAt.IsZero():
-		ra.Service = RecoveryScopeState{State: "failed_validation", At: fmtUTC(ra.serviceAt),
+		ra.Service = RecoveryScopeState{State: "failed_validation", At: FmtUTC(ra.serviceAt),
 			Basis: fmt.Sprintf("Service-scope checks continued failing through %s after the recovery evidence at %s.",
-				fmtUTC(ra.lastServiceAnomaly), fmtUTC(ra.serviceAt))}
+				FmtUTC(ra.lastServiceAnomaly), FmtUTC(ra.serviceAt))}
 	case !ra.componentAt.IsZero() && ra.lastServiceAnomaly.After(ra.componentAt):
 		ra.Service = RecoveryScopeState{State: "failed_validation",
 			Basis: fmt.Sprintf("Component status recovered at %s, but end-to-end checks continued failing through %s. Service recovery is not confirmed.",
-				fmtUTC(ra.componentAt), fmtUTC(ra.lastServiceAnomaly))}
+				FmtUTC(ra.componentAt), FmtUTC(ra.lastServiceAnomaly))}
 	default:
 		ra.Service = RecoveryScopeState{State: "not_observed",
 			Basis: "No service-level recovery evidence was captured."}
@@ -206,7 +206,7 @@ func BuildIncidentPhases(firstObs time.Time, ra RecoveryAssessment, monitoringUn
 	}
 	var phases []IncidentPhase
 	phases = append(phases, IncidentPhase{
-		Type: "detection", StartAt: fmtUTC(firstObs),
+		Type: "detection", StartAt: FmtUTC(firstObs),
 		Summary: "First anomalous evidence observed.",
 	})
 	degEnd := ra.lastAnomaly
@@ -215,31 +215,31 @@ func BuildIncidentPhases(firstObs time.Time, ra RecoveryAssessment, monitoringUn
 	}
 	if degEnd.After(firstObs) {
 		phases = append(phases, IncidentPhase{
-			Type: "degradation", StartAt: fmtUTC(firstObs), EndAt: fmtUTC(degEnd),
+			Type: "degradation", StartAt: FmtUTC(firstObs), EndAt: FmtUTC(degEnd),
 			Summary: "Anomalous evidence persisted across the participating evidence classes.",
 		})
 	}
 	if !ra.componentAt.IsZero() {
 		phases = append(phases, IncidentPhase{
-			Type: "component_recovery", StartAt: fmtUTC(ra.componentAt),
+			Type: "component_recovery", StartAt: FmtUTC(ra.componentAt),
 			Summary: "Component status recovery observed.",
 		})
 	}
 	if ra.ResidualAfterComponent {
 		phases = append(phases, IncidentPhase{
-			Type: "residual_degradation", StartAt: fmtUTC(ra.componentAt), EndAt: fmtUTC(ra.lastAnomaly),
+			Type: "residual_degradation", StartAt: FmtUTC(ra.componentAt), EndAt: FmtUTC(ra.lastAnomaly),
 			Summary: fmt.Sprintf("Component status recovered at %s, but end-to-end evidence continued failing through %s — the incident entered residual degradation rather than full recovery.",
-				fmtUTC(ra.componentAt), fmtUTC(ra.lastAnomaly)),
+				FmtUTC(ra.componentAt), FmtUTC(ra.lastAnomaly)),
 		})
 	}
 	if ra.Confirmed {
 		phases = append(phases, IncidentPhase{
-			Type: "service_recovery", StartAt: fmtUTC(ra.At),
+			Type: "service_recovery", StartAt: FmtUTC(ra.At),
 			Summary: "Recovery evidence observed after the last qualifying anomaly in every participating scope.",
 		})
 		if monitoringUntil != "" {
 			phases = append(phases, IncidentPhase{
-				Type: "monitoring", StartAt: fmtUTC(ra.At), EndAt: monitoringUntil,
+				Type: "monitoring", StartAt: FmtUTC(ra.At), EndAt: monitoringUntil,
 				Summary: "Post-recovery stability window.",
 			})
 		}

@@ -25,10 +25,9 @@ func TestCHWireParsersAcceptBothFormats(t *testing.T) {
 		if got := parseCHTime(s); !got.Equal(want) {
 			t.Errorf("parseCHTime(%q) = %v, want %v", s, got, want)
 		}
-		if got, ok := parseChTS(s); !ok || !got.Equal(want) {
-			t.Errorf("parseChTS(%q) = %v ok=%v, want %v", s, got, ok, want)
-		}
 	}
+	// internal/rca's private parseChTS carries the same both-formats contract;
+	// asserted in internal/rca/helpers_test.go since the wave-2 move.
 	// Second-precision variants (DateTime columns).
 	wantSec := want.Truncate(time.Second)
 	for _, s := range []string{"2026-07-16T21:56:03Z", "2026-07-16 21:56:03"} {

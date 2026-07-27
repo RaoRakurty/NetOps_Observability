@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"sort"
 	"strings"
@@ -104,7 +105,7 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 	// Emitter-side consistency gate (audit D11 follow-through): the same facts
 	// every destination system's message is built from are validated once, here,
 	// so the sweeper/notify emitters can hold contradictory state with a reason.
-	f.ConsistencyIssues = ticketFactConsistencyIssues(
+	f.ConsistencyIssues = rca.TicketFactConsistencyIssues(
 		strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", meta["state"]))), sigRows)
 	return f
 }

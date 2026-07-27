@@ -74,7 +74,14 @@ import (
 //	2026-07-27  276  internal/ticketing (model + pure policy decision + the
 //	                  CorrFacts type; the payload BUILDERS stayed — they read
 //	                  rcaPathView, a domain that has not moved)
-const rootPackageCeiling = 276
+//	2026-07-27  263  rca wave 2: the 13-file report/analysis family (report
+//	                  builder, semantics, wording, html, coverage, accounting,
+//	                  consistency, actions, merge, postmortem, issue context,
+//	                  impact provenance) — moved as ONE commit because the
+//	                  family is one strongly-connected component. Six rca_*
+//	                  handler/store files stayed and consume the exported
+//	                  surface (rca.Report, rca.BuildReport, …).
+const rootPackageCeiling = 263
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

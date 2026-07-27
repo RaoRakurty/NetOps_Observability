@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/rca"
 	"strings"
 	"sync"
 	"testing"
@@ -95,7 +96,7 @@ func TestSettingsWritesFailLoudlyWhenTheStoreIsBroken(t *testing.T) {
 		}},
 		{"display.setTimeDisplay", func() error { _, err := disp.setTimeDisplay("t-a", "utc"); return err }},
 		{"slo.set", func() error { return slo.set("t-a", []cloudSLO{{AppName: "checkout", TargetPct: 99.9, WindowDays: 7}}) }},
-		{"promotion.set", func() error { return promo.set("t-a", "c-1", rcaPromotionRecord{PromotedBy: "ops"}) }},
+		{"promotion.set", func() error { return promo.set("t-a", "c-1", rca.PromotionRecord{PromotedBy: "ops"}) }},
 		{"promotion.remove", func() error { return promo.remove("t-a", "c-1") }},
 	}
 

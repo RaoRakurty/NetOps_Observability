@@ -13,7 +13,7 @@ package main
 //	    auto-promote, newest first, hard-capped at rcaLibraryEvalCap;
 //	(b) per candidate, the SHARED report pipeline (buildRcaReportForID —
 //	    the same path serveRcaReport uses, never a duplicate) builds the
-//	    report and evaluateRcaPromotion keeps promoted cases only.
+//	    report and rca.EvaluatePromotion keeps promoted cases only.
 //
 // The caller-tenant's MANUAL promotions are unioned in (they are promoted by
 // definition, even outside the prefilter window/criteria) and deduped. The
@@ -24,6 +24,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"netops/backend/internal/rca"
 	"sort"
 )
 
@@ -31,18 +32,18 @@ import (
 // build/evaluate — each evaluation is a full report build (§9 bounded work).
 const rcaLibraryEvalCap = 100
 
-// rcaLibraryReport is one library row, projected from the BUILT rcaReport so
+// rcaLibraryReport is one library row, projected from the BUILT rca.Report so
 // the list can never disagree with the document it links to.
 type rcaLibraryReport struct {
-	CorrelationID string             `json:"correlation_id"`
-	DisplayID     string             `json:"display_id"`
-	ReportType    string             `json:"report_type"`
-	Title         string             `json:"title"`
-	AtAGlance     rcaAtAGlance       `json:"at_a_glance"`
-	States        rcaLibraryStates   `json:"states"`
-	Times         rcaLibraryTimes    `json:"times"`
-	Promotion     rcaPromotionStatus `json:"promotion"`
-	Validation    bool               `json:"validation"`
+	CorrelationID string              `json:"correlation_id"`
+	DisplayID     string              `json:"display_id"`
+	ReportType    string              `json:"report_type"`
+	Title         string              `json:"title"`
+	AtAGlance     rca.AtAGlance       `json:"at_a_glance"`
+	States        rcaLibraryStates    `json:"states"`
+	Times         rcaLibraryTimes     `json:"times"`
+	Promotion     rca.PromotionStatus `json:"promotion"`
+	Validation    bool                `json:"validation"`
 }
 
 type rcaLibraryStates struct {
@@ -57,7 +58,7 @@ type rcaLibraryTimes struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
-func rcaLibraryRow(rep rcaReport) rcaLibraryReport {
+func rcaLibraryRow(rep rca.Report) rcaLibraryReport {
 	return rcaLibraryReport{
 		CorrelationID: rep.CorrelationID,
 		DisplayID:     rep.DisplayID,
@@ -90,7 +91,7 @@ SELECT toString(correlation_id) AS correlation_id
   FROM netops.corr_current FINAL
  WHERE verdict_tier = 'confirmed'
    AND state != 'merged'
-   AND dateDiff('second', window_start, window_end) >= ` + intToString(int(rcaPromotionMinDuration.Seconds())) + `
+   AND dateDiff('second', window_start, window_end) >= ` + intToString(int(rca.PromotionMinDuration.Seconds())) + `
    AND window_end >= now() - INTERVAL ` + intToString(days*86400) + ` SECOND
  ORDER BY window_end DESC
  LIMIT ` + intToString(rcaLibraryEvalCap) + `

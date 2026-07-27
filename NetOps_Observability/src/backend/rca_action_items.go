@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/rca"
 	"os"
 	"sort"
 	"strings"
@@ -372,7 +373,7 @@ func stampActionDerived(it *rcaActionItem, now time.Time) {
 // owner class (first match in the closed vocabulary), "" when unknown.
 func ownerClassForLabel(label string) string {
 	for _, class := range seamOwnerClasses {
-		if rcaOwnerTeam[class] == label {
+		if rca.OwnerTeam[class] == label {
 			return class
 		}
 	}
@@ -383,7 +384,7 @@ func ownerClassForLabel(label string) string {
 // seam ownership names the suggested owner; the accountable owner stays empty
 // until a human accepts. Suggestions only state what the report already
 // establishes (localization, coverage gaps, recovery gaps) — never new claims.
-func suggestRcaActionItems(rep rcaReport, seamOwners map[string]seamOwnerEntry) []rcaActionItem {
+func suggestRcaActionItems(rep rca.Report, seamOwners map[string]seamOwnerEntry) []rcaActionItem {
 	suggestOwner := func(teamLabel string) string {
 		if teamLabel == "" {
 			return ""
@@ -496,7 +497,7 @@ SELECT tenant_id FROM netops.corr_objects
 		it.Source = "human_created"
 		it.SuggestedOwner = ""
 		it.Status = "proposed"
-		it.CreatedAt, it.CreatedBy = fmtUTC(now), claims.Sub
+		it.CreatedAt, it.CreatedBy = rca.FmtUTC(now), claims.Sub
 		it.UpdatedAt, it.UpdatedBy = "", ""
 		it.AcceptedAt, it.AcceptedBy, it.CompletedAt, it.VerifiedAt = "", "", "", ""
 		if err := validateActionItemFields(&it); err != nil {
@@ -535,7 +536,7 @@ SELECT tenant_id FROM netops.corr_objects
 			}
 			it.ID = randID()
 			it.CorrelationID = id
-			it.CreatedAt, it.CreatedBy = fmtUTC(now), "correlix (machine-suggested)"
+			it.CreatedAt, it.CreatedBy = rca.FmtUTC(now), "correlix (machine-suggested)"
 			if err := validateActionItemFields(&it); err != nil {
 				continue // a malformed suggestion is dropped, never half-written
 			}
@@ -575,12 +576,12 @@ SELECT tenant_id FROM netops.corr_objects
 			return
 		}
 		if body.Status != "" {
-			if err := applyActionStatusChange(&next, body.Status, claims.Sub, fmtUTC(now)); err != nil {
+			if err := applyActionStatusChange(&next, body.Status, claims.Sub, rca.FmtUTC(now)); err != nil {
 				writeError(w, http.StatusBadRequest, err)
 				return
 			}
 		}
-		next.UpdatedAt, next.UpdatedBy = fmtUTC(now), claims.Sub
+		next.UpdatedAt, next.UpdatedBy = rca.FmtUTC(now), claims.Sub
 		if err := s.rcaActionItems.put(objTenant, id, next); err != nil {
 			writeError(w, http.StatusConflict, err)
 			return

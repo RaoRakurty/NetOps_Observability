@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/rca"
 	"strings"
 	"testing"
 	"time"
@@ -116,11 +117,11 @@ func TestActionOverdueIsDerived(t *testing.T) {
 // ---- machine suggestions ------------------------------------------------------
 
 func TestSuggestionsCarrySuggestedOwnerNeverAssign(t *testing.T) {
-	rep := rcaReport{
-		FaultLocalization: rcaFaultLocalization{Localized: true, Object: "sm-ipsec-1"},
-		RootCause:         rcaRootCause{Identified: false, Statement: "Root cause has not been identified."},
-		Ownership:         rcaOwnership{TriageOwner: "NOC", TechnicalOwner: "ISP / carrier"},
-		States:            rcaReportStates{Recovery: "component_only", RecoveryBasis: "component up; service checks still failing"},
+	rep := rca.Report{
+		FaultLocalization: rca.FaultLocalization{Localized: true, Object: "sm-ipsec-1"},
+		RootCause:         rca.RootCause{Identified: false, Statement: "Root cause has not been identified."},
+		Ownership:         rca.Ownership{TriageOwner: "NOC", TechnicalOwner: "ISP / carrier"},
+		States:            rca.ReportStates{Recovery: "component_only", RecoveryBasis: "component up; service checks still failing"},
 	}
 	items := suggestRcaActionItems(rep, map[string]seamOwnerEntry{
 		"isp": {Name: "Lumen (DIA circuit #12345)"},
