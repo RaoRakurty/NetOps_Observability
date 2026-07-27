@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/seam"
 	"testing"
 	"time"
 
@@ -56,7 +57,7 @@ func labNetContext() netContext {
 
 // labSeams: the ACTIVE lab↔AWS VPN seam, with the endpoints the seam inventory holds.
 func labSeams() seamIndex {
-	return buildSeamIndex([]Seam{{
+	return buildSeamIndex([]seam.Seam{{
 		SeamID: "sm-f36b592d4e76", TenantID: "t_a", SeamType: "VPN", State: "active",
 		Endpoints: map[string]string{"on_prem": "10.70.245.122", "remote": "10.60.1.10"},
 	}})
@@ -112,7 +113,7 @@ func TestIngestResolvesTheLivePath(t *testing.T) {
 			t.Fatalf("hop %d resolved by a non-authoritative method %s", i+1, h.ResolutionMethod)
 		}
 	}
-	// Seam membership + explicit transformation at the seam (§4 of the build brief).
+	// seam.Seam membership + explicit transformation at the seam (§4 of the build brief).
 	if recs.Hops[1].SeamID != "sm-f36b592d4e76" || recs.Hops[1].Transformation != pathgraph.TransformTunnelIngress {
 		t.Fatalf("WAN edge hop = seam %q transform %q, want the seam's near side (tunnel_ingress)",
 			recs.Hops[1].SeamID, recs.Hops[1].Transformation)
@@ -302,7 +303,7 @@ func TestSyntheticRunIsClassStamped(t *testing.T) {
 // (its endpoints), not from address arithmetic, and a non-tunnel seam type never
 // claims a tunnel transformation.
 func TestSeamIndexOnlyUsesTheInventory(t *testing.T) {
-	si := buildSeamIndex([]Seam{{
+	si := buildSeamIndex([]seam.Seam{{
 		SeamID: "sm-dia", SeamType: "DIA", State: "active",
 		Endpoints: map[string]string{"on_prem": "10.70.245.122", "provider_edge": "203.0.113.1"},
 	}})
@@ -323,7 +324,7 @@ func TestSeamIndexOnlyUsesTheInventory(t *testing.T) {
 // the NOC to the wrong tunnel). Uses the live inventory's a_ip/b_ip vocabulary,
 // and non-address endpoint metadata must never index.
 func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
-	si := buildSeamIndex([]Seam{
+	si := buildSeamIndex([]seam.Seam{
 		{SeamID: "sm-aws", SeamType: "VPN", State: "active",
 			Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.60.1.10",
 				"a_name": "netops-lab-edge", "b_host": "aws-app-host-01", "b_public_ip": "100.21.102.86"}},

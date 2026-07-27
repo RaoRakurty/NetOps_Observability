@@ -36,6 +36,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/seam"
 	"os"
 	"path/filepath"
 	"sort"
@@ -90,7 +91,7 @@ func (s *server) startSeamBootstrap(ctx context.Context) {
 // rules still run (a dead VictoriaMetrics must not stop flow-based seams).
 func (s *server) runSeamBootstrapOnce(ctx context.Context) {
 	devices := s.discovery.Devices()
-	var suggestions []Seam
+	var suggestions []seam.Seam
 
 	paths, err := seamFetchProbePaths(ctx)
 	if err != nil {
@@ -243,8 +244,8 @@ func seamPrivateIP(ip net.IP) bool {
 // breakout (DIA); a private destination reached across public space means a
 // provider underlay carries us back into private territory (DX candidate —
 // colo/leased-line/cloud-interconnect semantics).
-func ruleTracerouteBoundary(paths []collectors.PathResult) []Seam {
-	var out []Seam
+func ruleTracerouteBoundary(paths []collectors.PathResult) []seam.Seam {
+	var out []seam.Seam
 	for _, p := range paths {
 		if len(p.Hops) == 0 {
 			continue
@@ -288,7 +289,7 @@ func ruleTracerouteBoundary(paths []collectors.PathResult) []Seam {
 			owner = "enterprise" // deterministic backbone is enterprise-contracted; owner edits if carrier-managed
 			name = fmt.Sprintf("Provider underlay toward %s", p.Dst)
 		}
-		out = append(out, Seam{
+		out = append(out, seam.Seam{
 			TenantID:          "", // probe paths are platform vantage measurements
 			SeamType:          seamType,
 			DisplayName:       name,
@@ -336,7 +337,7 @@ type seamBGPPeer struct {
 // ruleBGPPeers suggests a carrier/cloud seam (DX/ER semantics) per eBGP-looking
 // neighbor: a peer address that is not itself an inventory device. iBGP
 // neighbors between our own devices are internal topology, not seams.
-func ruleBGPPeers(peers []seamBGPPeer, devices []models.Device) []Seam {
+func ruleBGPPeers(peers []seamBGPPeer, devices []models.Device) []seam.Seam {
 	known := make(map[string]models.Device, len(devices))
 	byName := make(map[string]models.Device, len(devices))
 	for _, d := range devices {
@@ -346,7 +347,7 @@ func ruleBGPPeers(peers []seamBGPPeer, devices []models.Device) []Seam {
 		byName[d.Name] = d
 		byName[d.ID] = d
 	}
-	var out []Seam
+	var out []seam.Seam
 	for _, p := range peers {
 		if p.PeerIP == "" || net.ParseIP(p.PeerIP) == nil {
 			continue
@@ -363,7 +364,7 @@ func ruleBGPPeers(peers []seamBGPPeer, devices []models.Device) []Seam {
 		if d, ok := byName[p.Device]; ok {
 			tenant = d.TenantID
 		}
-		out = append(out, Seam{
+		out = append(out, seam.Seam{
 			TenantID:          tenant,
 			SeamType:          "DX",
 			DisplayName:       fmt.Sprintf("BGP provider seam %s ↔ %s", p.Device, p.PeerIP),
@@ -400,8 +401,8 @@ type seamFlowBoundary struct {
 // that edge. Typed DIA: a sustained private↔public flow boundary is internet
 // breakout semantics (a DX boundary shows up as private↔private and is R1/R2's
 // job). Confidence scales with crossing volume.
-func ruleFlowBoundary(rows []seamFlowBoundary) []Seam {
-	var out []Seam
+func ruleFlowBoundary(rows []seamFlowBoundary) []seam.Seam {
+	var out []seam.Seam
 	for _, r := range rows {
 		if r.Sampler == "" || r.Crossing < 50 {
 			continue
@@ -413,7 +414,7 @@ func ruleFlowBoundary(rows []seamFlowBoundary) []Seam {
 			conf = 0.55
 		}
 		ifs := fmt.Sprintf("%d", r.WanIf)
-		out = append(out, Seam{
+		out = append(out, seam.Seam{
 			TenantID:          r.TenantID,
 			SeamType:          "DIA",
 			DisplayName:       fmt.Sprintf("WAN boundary %s if%s", r.Sampler, ifs),
@@ -454,13 +455,13 @@ type seamTunnel struct {
 // multiple simultaneous overlays from one edge is the SD-WAN shape (#68 §4.1
 // "overlay + each underlay it rides"; per-underlay members are what we can see
 // without a controller integration).
-func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]Seam, []SeamGroup) {
+func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]seam.Seam, []seam.SeamGroup) {
 	byName := make(map[string]models.Device, len(devices))
 	for _, d := range devices {
 		byName[d.Name] = d
 		byName[d.ID] = d
 	}
-	var out []Seam
+	var out []seam.Seam
 	perDevice := map[string][]seamTunnel{}
 	for _, t := range tunnels {
 		if t.ID == "" || t.LocalDevice == "" {
@@ -481,7 +482,7 @@ func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]Seam, []SeamG
 		if remote == "" {
 			remote = "unknown"
 		}
-		out = append(out, Seam{
+		out = append(out, seam.Seam{
 			TenantID:          tenant,
 			SeamType:          "VPN",
 			DisplayName:       fmt.Sprintf("Tunnel %s → %s", t.ID, remote),
@@ -499,7 +500,7 @@ func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]Seam, []SeamG
 		})
 	}
 
-	var groups []SeamGroup
+	var groups []seam.SeamGroup
 	devNames := make([]string, 0, len(perDevice))
 	for name := range perDevice {
 		devNames = append(devNames, name)
@@ -511,15 +512,15 @@ func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]Seam, []SeamG
 			continue
 		}
 		tenant := ts[0].TenantID
-		members := make([]SeamMember, 0, len(ts))
+		members := make([]seam.SeamMember, 0, len(ts))
 		ids := make([]string, 0, len(ts))
 		for _, t := range ts {
 			// Roles are owner-assigned at confirm; bootstrap cannot honestly
 			// rank primaries, so members enter unranked.
-			members = append(members, SeamMember{MemberID: seamIDForKey(tenant, "r4:"+t.ID), Role: "member", SeamType: "VPN"})
+			members = append(members, seam.SeamMember{MemberID: seam.IDForKey(tenant, "r4:"+t.ID), Role: "member", SeamType: "VPN"})
 			ids = append(ids, t.ID)
 		}
-		groups = append(groups, SeamGroup{
+		groups = append(groups, seam.SeamGroup{
 			TenantID:        tenant,
 			SeamType:        "SDWAN",
 			RedundancyModel: "active_active",
@@ -544,9 +545,9 @@ func ruleTunnels(tunnels []seamTunnel, devices []models.Device) ([]Seam, []SeamG
 // ≥2 DX seams sharing an on-prem endpoint → redundant circuits of one group;
 // a VPN sharing an on-prem endpoint with a DX → hybrid fallback shadowing it.
 // Rejected/retired seams never join a group.
-func ruleRedundancyGroups(inventory []Seam) []SeamGroup {
+func ruleRedundancyGroups(inventory []seam.Seam) []seam.SeamGroup {
 	type bucket struct {
-		dx, vpn []Seam
+		dx, vpn []seam.Seam
 		tenant  string
 	}
 	buckets := map[string]*bucket{}
@@ -576,16 +577,16 @@ func ruleRedundancyGroups(inventory []Seam) []SeamGroup {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var out []SeamGroup
+	var out []seam.SeamGroup
 	for _, k := range keys {
 		b := buckets[k]
 		site := strings.SplitN(k, "|", 2)[1]
 		if len(b.dx) >= 2 {
-			members := make([]SeamMember, 0, len(b.dx))
+			members := make([]seam.SeamMember, 0, len(b.dx))
 			for _, s := range b.dx {
-				members = append(members, SeamMember{MemberID: s.SeamID, Role: "member", SeamType: "DX"})
+				members = append(members, seam.SeamMember{MemberID: s.SeamID, Role: "member", SeamType: "DX"})
 			}
-			out = append(out, SeamGroup{
+			out = append(out, seam.SeamGroup{
 				TenantID:        b.tenant,
 				SeamType:        "DX",
 				RedundancyModel: "active_active",
@@ -598,17 +599,17 @@ func ruleRedundancyGroups(inventory []Seam) []SeamGroup {
 			})
 		}
 		if len(b.dx) >= 1 && len(b.vpn) >= 1 {
-			members := make([]SeamMember, 0, len(b.dx)+len(b.vpn))
+			members := make([]seam.SeamMember, 0, len(b.dx)+len(b.vpn))
 			for _, s := range b.dx {
-				members = append(members, SeamMember{MemberID: s.SeamID, Role: "primary", SeamType: "DX"})
+				members = append(members, seam.SeamMember{MemberID: s.SeamID, Role: "primary", SeamType: "DX"})
 			}
 			for _, s := range b.vpn {
 				// Cross-type fallback member: while carrying traffic it
 				// inherits the WORSE visibility class (#68 §4) — the engine
 				// enforces that; here we just record the shape.
-				members = append(members, SeamMember{MemberID: s.SeamID, Role: "fallback", SeamType: "VPN"})
+				members = append(members, seam.SeamMember{MemberID: s.SeamID, Role: "fallback", SeamType: "VPN"})
 			}
-			out = append(out, SeamGroup{
+			out = append(out, seam.SeamGroup{
 				TenantID:        b.tenant,
 				SeamType:        "DX",
 				RedundancyModel: "hybrid_fallback",

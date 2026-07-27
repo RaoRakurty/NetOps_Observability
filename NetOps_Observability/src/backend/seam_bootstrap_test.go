@@ -8,6 +8,7 @@ package main
 
 import (
 	"net"
+	"netops/backend/internal/seam"
 	"os"
 	"strings"
 	"testing"
@@ -182,13 +183,13 @@ func TestRuleTunnels(t *testing.T) {
 		t.Errorf("unexpected group key %q", g.SuggestionKey)
 	}
 	// Member ids must reference the deterministic per-tunnel seam ids.
-	if g.Members[0].MemberID != seamIDForKey("", "r4:branch1/Tunnel1") {
+	if g.Members[0].MemberID != seam.IDForKey("", "r4:branch1/Tunnel1") {
 		t.Errorf("group member does not reference tunnel seam id: %+v", g.Members[0])
 	}
 }
 
 func TestRuleRedundancyGroups(t *testing.T) {
-	inv := []Seam{
+	inv := []seam.Seam{
 		{SeamID: "sm-a", TenantID: "acme", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "dallas-edge"}},
 		{SeamID: "sm-b", TenantID: "acme", SeamType: "DX", State: "suggested", Endpoints: map[string]string{"on_prem": "dallas-edge"}},
 		{SeamID: "sm-c", TenantID: "acme", SeamType: "VPN", State: "confirmed", Endpoints: map[string]string{"on_prem": "dallas-edge"}},
@@ -200,7 +201,7 @@ func TestRuleRedundancyGroups(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("want dx-redundancy + hybrid at dallas-edge only, got %d: %+v", len(groups), groups)
 	}
-	var dx, hybrid *SeamGroup
+	var dx, hybrid *seam.SeamGroup
 	for i := range groups {
 		switch groups[i].RedundancyModel {
 		case "active_active":
@@ -226,7 +227,7 @@ func TestRuleRedundancyGroups(t *testing.T) {
 }
 
 func TestRuleRedundancyGroupsDeterministic(t *testing.T) {
-	inv := []Seam{
+	inv := []seam.Seam{
 		{SeamID: "s1", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "b"}},
 		{SeamID: "s2", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "b"}},
 		{SeamID: "s3", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "a"}},
@@ -248,76 +249,6 @@ func TestRuleRedundancyGroupsDeterministic(t *testing.T) {
 
 // ── lifecycle / normalization ─────────────────────────────────────────────────
 
-func TestSeamTransitions(t *testing.T) {
-	allowed := []struct{ from, to string }{
-		{"suggested", "confirmed"}, {"suggested", "active"}, {"suggested", "rejected"},
-		{"confirmed", "active"}, {"confirmed", "rejected"},
-		{"active", "retired"}, {"retired", "active"},
-		{"active", "active"}, // PATCH without a transition
-	}
-	for _, c := range allowed {
-		if !seamTransitionAllowed(c.from, c.to) {
-			t.Errorf("%s → %s should be allowed", c.from, c.to)
-		}
-	}
-	denied := []struct{ from, to string }{
-		{"rejected", "suggested"}, {"rejected", "active"}, // rejection is permanent memory
-		{"active", "suggested"}, {"retired", "suggested"},
-		{"active", "rejected"}, // reject only pre-activation; retire instead
-	}
-	for _, c := range denied {
-		if seamTransitionAllowed(c.from, c.to) {
-			t.Errorf("%s → %s must be denied", c.from, c.to)
-		}
-	}
-}
-
-func TestNormalizeSeamForWriteDefaults(t *testing.T) {
-	s := Seam{SeamType: "cloud_backbone"}
-	if err := normalizeSeamForWrite(&s); err != nil {
-		t.Fatal(err)
-	}
-	if s.SeamType != "CLOUD_BACKBONE" {
-		t.Error("seam_type must normalize to upper case")
-	}
-	if s.Visibility != "blind" {
-		t.Errorf("CLOUD_BACKBONE must default to blind visibility (honesty), got %s", s.Visibility)
-	}
-	if len(s.ProbeStrategy) == 0 || s.ControlPlaneOwner != "enterprise" {
-		t.Error("defaults not applied")
-	}
-
-	for _, bad := range []Seam{
-		{SeamType: "MPLS"},
-		{SeamType: "DX", Visibility: "perfect"},
-		{SeamType: "DX", ControlPlaneOwner: "aliens"},
-		{SeamType: "DX", Confidence: 1.5},
-	} {
-		b := bad
-		if err := normalizeSeamForWrite(&b); err == nil {
-			t.Errorf("expected validation error for %+v", bad)
-		}
-	}
-}
-
-func TestSeamIDForKeyDeterministic(t *testing.T) {
-	a := seamIDForKey("acme", "r1:8.8.8.8")
-	b := seamIDForKey("acme", "r1:8.8.8.8")
-	c := seamIDForKey("other", "r1:8.8.8.8")
-	if a != b {
-		t.Error("same (tenant,key) must map to the same seam_id")
-	}
-	if a == c {
-		t.Error("different tenants must not collide")
-	}
-	if !strings.HasPrefix(a, "sm-") || len(a) != 15 {
-		t.Errorf("unexpected id shape %q", a)
-	}
-}
-
-// The migration is the schema contract for everything above: the rejection
-// memory and idempotency live in the partial-unique index, isolation in RLS.
-// Pin their presence so a refactor can't silently drop them.
 func TestSeamMigrationContract(t *testing.T) {
 	sql, err := os.ReadFile("migrations/0010_seam_inventory.sql")
 	if err != nil {

@@ -91,7 +91,11 @@ import (
 //	2026-07-27  259  internal/segclass (the ingest segment/device classifier
 //	                  mirror + its embedded provider-CIDR snapshot; zero Go
 //	                  consumers found — flagged in the plan for the owner)
-const rootPackageCeiling = 259
+//	2026-07-27  258  internal/seam (the canonical seam inventory: model,
+//	                  lifecycle, validation + pg store with seam.DB INJECTED
+//	                  via the portintel idiom; bootstrap rules, handlers and
+//	                  backend selection stayed)
+const rootPackageCeiling = 258
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

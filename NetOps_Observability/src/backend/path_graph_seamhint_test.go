@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/seam"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestSeamHintFromEndpointRule(t *testing.T) {
 		respond(2, "10.60.1.10", "sm-f36b592d4e76", pathgraph.TransformTunnelEgress),
 		respond(3, "10.60.10.10", "", ""),
 	}
-	seams := []Seam{{
+	seams := []seam.Seam{{
 		SeamID: "sm-f36b592d4e76", SeamType: "VPN",
 		Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.60.1.10", "b_public_ip": "100.21.102.86"},
 	}}
@@ -140,7 +141,7 @@ func TestSeamHintFromEndpointRule(t *testing.T) {
 
 	// A DIA (non-tunnel) seam hints membership without a transformation.
 	diaHops := []pathgraph.PathHop{respond(1, "10.5.0.1", "sm-dia", pathgraph.TransformNone)}
-	dia := []Seam{{SeamID: "sm-dia", SeamType: "DIA", Endpoints: map[string]string{"on_prem": "172.40.40.52"}}}
+	dia := []seam.Seam{{SeamID: "sm-dia", SeamType: "DIA", Endpoints: map[string]string{"on_prem": "172.40.40.52"}}}
 	if h := seamHintFrom(prior, diaHops, "172.40.40.52", dia); h == nil || h.SeamID != "sm-dia" || h.Transformation != pathgraph.TransformNone {
 		t.Fatalf("non-tunnel seam hints membership only, got %+v", h)
 	}

@@ -1,4 +1,4 @@
-package main
+package seam
 
 // seams.go — the canonical seam inventory (#67 build ⑤ / #68 §4). A seam is an
 // OWNERSHIP TRANSITION in packet-forwarding responsibility; instances of the
@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -112,9 +113,9 @@ type SeamGroup struct {
 	UpdatedBy       string         `json:"updated_by"`
 }
 
-var errSeamNotFound = errors.New("seam not found")
+var ErrNotFound = errors.New("seam not found")
 
-func validSeamEnum(v string, allowed []string) bool {
+func ValidEnum(v string, allowed []string) bool {
 	for _, a := range allowed {
 		if v == a {
 			return true
@@ -123,9 +124,9 @@ func validSeamEnum(v string, allowed []string) bool {
 	return false
 }
 
-// seamTransitionAllowed reports whether from→to is a legal lifecycle step.
+// TransitionAllowed reports whether from→to is a legal lifecycle step.
 // from→from (no state change in a PATCH) is always fine.
-func seamTransitionAllowed(from, to string) bool {
+func TransitionAllowed(from, to string) bool {
 	if from == to {
 		return true
 	}
@@ -137,30 +138,50 @@ func seamTransitionAllowed(from, to string) bool {
 	return false
 }
 
-// seamIDForKey derives the deterministic row id for a suggestion, so the same
+// IDForKey derives the deterministic row id for a suggestion, so the same
 // evidence always maps to the same (tenant_id, seam_id) and re-suggesting is a
 // clean ON CONFLICT no-op against either the PK or the suggestion_key index.
-func seamIDForKey(tenant, key string) string {
+func IDForKey(tenant, key string) string {
 	sum := sha256.Sum256([]byte(tenant + "|" + key))
 	return "sm-" + hex.EncodeToString(sum[:6])
 }
 
-func seamGroupIDForKey(tenant, key string) string {
+func GroupIDForKey(tenant, key string) string {
 	sum := sha256.Sum256([]byte(tenant + "|" + key))
 	return "sg-" + hex.EncodeToString(sum[:6])
 }
 
 // ── store ─────────────────────────────────────────────────────────────────────
 
-type pgSeamStore struct {
-	db *pgDB
+// DB is the injected Postgres seam (§5): the integrator supplies the
+// tenant-scoped transaction runner (withTenant + FORCE-RLS on its side), the
+// store supplies the SQL. Mirrors the portintel.DB idiom.
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-func newSeamStore() *pgSeamStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgSeamStore{db: ps.db}
+// Store is the Postgres-backed canonical seam inventory.
+type Store struct {
+	db DB
+}
+
+// NewPGStore wires the inventory onto an injected DB.
+func NewPGStore(db DB) *Store { return &Store{db: db} }
+
+// actorOr returns a or "system" (local copy; original in incidents_pg.go).
+func actorOr(a string) string {
+	if strings.TrimSpace(a) == "" {
+		return "system"
 	}
-	return nil // Postgres backend only, like incidents
+	return a
+}
+
+// randHex returns nBytes of crypto randomness, hex-encoded (local copy;
+// original in refresh.go).
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 const selectSeamCols = `
@@ -196,9 +217,9 @@ func scanSeam(row pgx.Row) (Seam, bool, error) {
 
 // List returns seams visible to the principal, newest first, optionally
 // filtered by state and/or type. RLS scopes rows; filters are belt-and-braces.
-func (st *pgSeamStore) List(ctx context.Context, tenant string, cross bool, state, seamType string) ([]Seam, error) {
+func (st *Store) List(ctx context.Context, tenant string, cross bool, state, seamType string) ([]Seam, error) {
 	out := make([]Seam, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		sql := selectSeamCols + ` FROM seams WHERE ($1 = '' OR state = $1) AND ($2 = '' OR seam_type = $2)
 		       ORDER BY updated_at DESC LIMIT 2000`
 		rows, err := tx.Query(ctx, sql, state, seamType)
@@ -220,10 +241,10 @@ func (st *pgSeamStore) List(ctx context.Context, tenant string, cross bool, stat
 	return out, err
 }
 
-func (st *pgSeamStore) Get(ctx context.Context, tenant string, cross bool, id string) (Seam, bool, error) {
+func (st *Store) Get(ctx context.Context, tenant string, cross bool, id string) (Seam, bool, error) {
 	var s Seam
 	var found bool
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectSeamCols+` FROM seams WHERE seam_id = $1`, id)
 		r, ok, err := scanSeam(row)
 		if err != nil {
@@ -237,8 +258,8 @@ func (st *pgSeamStore) Get(ctx context.Context, tenant string, cross bool, id st
 
 // Create inserts an owner-authored seam (state defaults to active — a manually
 // defined seam IS the inventory; there is nobody upstream to confirm it).
-func (st *pgSeamStore) Create(ctx context.Context, tenant string, cross bool, s Seam) (Seam, error) {
-	if err := normalizeSeamForWrite(&s); err != nil {
+func (st *Store) Create(ctx context.Context, tenant string, cross bool, s Seam) (Seam, error) {
+	if err := NormalizeForWrite(&s); err != nil {
 		return Seam{}, err
 	}
 	if s.SeamID == "" {
@@ -254,7 +275,7 @@ func (st *pgSeamStore) Create(ctx context.Context, tenant string, cross bool, s 
 	if err != nil {
 		return Seam{}, err
 	}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO seams (seam_id, tenant_id, seam_type, state, display_name, endpoints,
                    control_plane_owner, visibility, probe_strategy, suggested_by,
@@ -277,21 +298,21 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 // idempotency and the rejection memory: once a key exists — in ANY state,
 // including rejected — it is never raised again. Returns whether a new row
 // was inserted.
-func (st *pgSeamStore) Suggest(ctx context.Context, s Seam) (bool, error) {
+func (st *Store) Suggest(ctx context.Context, s Seam) (bool, error) {
 	if s.SuggestionKey == "" {
 		return false, errors.New("suggestion requires a suggestion_key")
 	}
-	if err := normalizeSeamForWrite(&s); err != nil {
+	if err := NormalizeForWrite(&s); err != nil {
 		return false, err
 	}
-	s.SeamID = seamIDForKey(s.TenantID, s.SuggestionKey)
+	s.SeamID = IDForKey(s.TenantID, s.SuggestionKey)
 	s.State = "suggested"
 	endpoints, probes, evidence, err := seamJSONCols(s)
 	if err != nil {
 		return false, err
 	}
 	var inserted bool
-	err = st.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 INSERT INTO seams (seam_id, tenant_id, seam_type, state, display_name, endpoints,
                    control_plane_owner, visibility, probe_strategy, suggested_by,
@@ -324,22 +345,22 @@ type SeamPatch struct {
 
 // Update applies a patch under the lifecycle state machine. The read and write
 // share one transaction so concurrent transitions serialize on the row.
-func (st *pgSeamStore) Update(ctx context.Context, tenant string, cross bool, id, actor string, p SeamPatch) (Seam, error) {
+func (st *Store) Update(ctx context.Context, tenant string, cross bool, id, actor string, p SeamPatch) (Seam, error) {
 	var out Seam
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectSeamCols+` FROM seams WHERE seam_id = $1 FOR UPDATE`, id)
 		s, ok, err := scanSeam(row)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return errSeamNotFound
+			return ErrNotFound
 		}
 		if p.State != nil {
-			if !validSeamEnum(*p.State, SeamStates) {
+			if !ValidEnum(*p.State, SeamStates) {
 				return fmt.Errorf("invalid state %q", *p.State)
 			}
-			if !seamTransitionAllowed(s.State, *p.State) {
+			if !TransitionAllowed(s.State, *p.State) {
 				return fmt.Errorf("illegal transition %s → %s", s.State, *p.State)
 			}
 			s.State = *p.State
@@ -362,7 +383,7 @@ func (st *pgSeamStore) Update(ctx context.Context, tenant string, cross bool, id
 		if p.ProbeStrategy != nil {
 			s.ProbeStrategy = *p.ProbeStrategy
 		}
-		if err := normalizeSeamForWrite(&s); err != nil {
+		if err := NormalizeForWrite(&s); err != nil {
 			return err
 		}
 		endpoints, probes, evidence, err := seamJSONCols(s)
@@ -383,26 +404,26 @@ UPDATE seams SET seam_type=$2, state=$3, display_name=$4, endpoints=$5,
 	return out, err
 }
 
-// normalizeSeamForWrite validates enums and fills honest per-type defaults for
+// NormalizeForWrite validates enums and fills honest per-type defaults for
 // anything the caller left empty. All external input passes through here.
-func normalizeSeamForWrite(s *Seam) error {
+func NormalizeForWrite(s *Seam) error {
 	s.SeamType = strings.ToUpper(strings.TrimSpace(s.SeamType))
-	if !validSeamEnum(s.SeamType, SeamTypes) {
+	if !ValidEnum(s.SeamType, SeamTypes) {
 		return fmt.Errorf("invalid seam_type %q (want one of %s)", s.SeamType, strings.Join(SeamTypes, "|"))
 	}
-	if s.State != "" && !validSeamEnum(s.State, SeamStates) {
+	if s.State != "" && !ValidEnum(s.State, SeamStates) {
 		return fmt.Errorf("invalid state %q", s.State)
 	}
 	if s.ControlPlaneOwner == "" {
 		s.ControlPlaneOwner = "enterprise"
 	}
-	if !validSeamEnum(s.ControlPlaneOwner, SeamOwners) {
+	if !ValidEnum(s.ControlPlaneOwner, SeamOwners) {
 		return fmt.Errorf("invalid control_plane_owner %q", s.ControlPlaneOwner)
 	}
 	if s.Visibility == "" {
 		s.Visibility = seamVisibilityDefault[s.SeamType]
 	}
-	if !validSeamEnum(s.Visibility, SeamVisibilities) {
+	if !ValidEnum(s.Visibility, SeamVisibilities) {
 		return fmt.Errorf("invalid visibility %q", s.Visibility)
 	}
 	if len(s.ProbeStrategy) == 0 {
@@ -469,9 +490,9 @@ func scanSeamGroup(row pgx.Row) (SeamGroup, bool, error) {
 	return g, true, nil
 }
 
-func (st *pgSeamStore) ListGroups(ctx context.Context, tenant string, cross bool, state string) ([]SeamGroup, error) {
+func (st *Store) ListGroups(ctx context.Context, tenant string, cross bool, state string) ([]SeamGroup, error) {
 	out := make([]SeamGroup, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, selectGroupCols+` FROM seam_groups
 		       WHERE ($1 = '' OR state = $1) ORDER BY updated_at DESC LIMIT 500`, state)
 		if err != nil {
@@ -494,16 +515,16 @@ func (st *pgSeamStore) ListGroups(ctx context.Context, tenant string, cross bool
 
 func normalizeGroupForWrite(g *SeamGroup) error {
 	g.SeamType = strings.ToUpper(strings.TrimSpace(g.SeamType))
-	if !validSeamEnum(g.SeamType, SeamTypes) {
+	if !ValidEnum(g.SeamType, SeamTypes) {
 		return fmt.Errorf("invalid seam_type %q", g.SeamType)
 	}
 	if g.RedundancyModel == "" {
 		g.RedundancyModel = "single"
 	}
-	if !validSeamEnum(g.RedundancyModel, SeamRedundancyModels) {
+	if !ValidEnum(g.RedundancyModel, SeamRedundancyModels) {
 		return fmt.Errorf("invalid redundancy_model %q", g.RedundancyModel)
 	}
-	if g.State != "" && !validSeamEnum(g.State, SeamStates) {
+	if g.State != "" && !ValidEnum(g.State, SeamStates) {
 		return fmt.Errorf("invalid state %q", g.State)
 	}
 	if g.Confidence < 0 || g.Confidence > 1 {
@@ -523,14 +544,14 @@ func normalizeGroupForWrite(g *SeamGroup) error {
 
 // SuggestGroup mirrors Suggest for redundancy groups (same idempotency +
 // rejection-memory mechanism).
-func (st *pgSeamStore) SuggestGroup(ctx context.Context, g SeamGroup) (bool, error) {
+func (st *Store) SuggestGroup(ctx context.Context, g SeamGroup) (bool, error) {
 	if g.SuggestionKey == "" {
 		return false, errors.New("group suggestion requires a suggestion_key")
 	}
 	if err := normalizeGroupForWrite(&g); err != nil {
 		return false, err
 	}
-	g.GroupID = seamGroupIDForKey(g.TenantID, g.SuggestionKey)
+	g.GroupID = GroupIDForKey(g.TenantID, g.SuggestionKey)
 	members, err := json.Marshal(g.Members)
 	if err != nil {
 		return false, err
@@ -543,7 +564,7 @@ func (st *pgSeamStore) SuggestGroup(ctx context.Context, g SeamGroup) (bool, err
 		return false, errors.New("evidence too large (8 KiB cap)")
 	}
 	var inserted bool
-	err = st.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 INSERT INTO seam_groups (group_id, tenant_id, seam_type, redundancy_model, state,
                          display_name, members, suggested_by, evidence, confidence,
@@ -570,22 +591,22 @@ type GroupPatch struct {
 	Members         *[]SeamMember `json:"members"`
 }
 
-func (st *pgSeamStore) UpdateGroup(ctx context.Context, tenant string, cross bool, id, actor string, p GroupPatch) (SeamGroup, error) {
+func (st *Store) UpdateGroup(ctx context.Context, tenant string, cross bool, id, actor string, p GroupPatch) (SeamGroup, error) {
 	var out SeamGroup
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectGroupCols+` FROM seam_groups WHERE group_id = $1 FOR UPDATE`, id)
 		g, ok, err := scanSeamGroup(row)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return errSeamNotFound
+			return ErrNotFound
 		}
 		if p.State != nil {
-			if !validSeamEnum(*p.State, SeamStates) {
+			if !ValidEnum(*p.State, SeamStates) {
 				return fmt.Errorf("invalid state %q", *p.State)
 			}
-			if !seamTransitionAllowed(g.State, *p.State) {
+			if !TransitionAllowed(g.State, *p.State) {
 				return fmt.Errorf("illegal transition %s → %s", g.State, *p.State)
 			}
 			g.State = *p.State

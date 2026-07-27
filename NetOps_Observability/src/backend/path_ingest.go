@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"netops/backend/internal/seam"
 	"os"
 	"strings"
 	"time"
@@ -163,7 +164,7 @@ type seamIndex map[string][]seamSide
 var seamNearKeys = map[string]bool{"on_prem": true, "local": true, "a_ip": true}
 var seamFarKeys = map[string]bool{"remote": true, "b_ip": true, "b_public_ip": true, "cloud": true}
 
-func buildSeamIndex(seams []Seam) seamIndex {
+func buildSeamIndex(seams []seam.Seam) seamIndex {
 	idx := seamIndex{}
 	for _, s := range seams {
 		var near, far []string
@@ -706,7 +707,7 @@ func (s *server) ingestPathsOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var seams []Seam
+	var seams []seam.Seam
 	if s.seams != nil {
 		seams, err = s.seams.List(ctx, cfg.Tenant, false, "active", "")
 		if err != nil {

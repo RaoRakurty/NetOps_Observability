@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/seam"
 	"strings"
 	"time"
 
@@ -446,7 +447,7 @@ func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross b
 	if !found {
 		return nil // answered: no prior complete run to derive a hint from
 	}
-	var seams []Seam
+	var seams []seam.Seam
 	if s.seams != nil {
 		if inv, serr := s.seams.List(ctx, tenant, cross, "active", ""); serr == nil {
 			seams = inv
@@ -466,7 +467,7 @@ func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross b
 // co-located vantage never sees its own edge as a hop when healthy, but the dying
 // run terminates on it). The transformation follows the side the inventory names,
 // tunnel types only — same rule as ingest's transformAt.
-func seamHintFrom(prior pathgraph.PathObservation, priorHops []pathgraph.PathHop, terminal string, seams []Seam) *pathgraph.SeamHint {
+func seamHintFrom(prior pathgraph.PathObservation, priorHops []pathgraph.PathHop, terminal string, seams []seam.Seam) *pathgraph.SeamHint {
 	hint := func(seamID, transformation string) *pathgraph.SeamHint {
 		return &pathgraph.SeamHint{
 			SeamID: seamID, Transformation: transformation,

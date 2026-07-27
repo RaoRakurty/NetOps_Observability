@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
+	"netops/backend/internal/seam"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
@@ -102,7 +103,7 @@ type server struct {
 	tktPolicyConflicts    atomic.Int64
 	tktPolicyMultiEnabled atomic.Int64
 	tktMergedRedirects    atomic.Int64
-	seams                 *pgSeamStore             // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	seams                 *seam.Store              // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services              *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
 	cloudConn             cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
 	cloudBroker           *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
@@ -564,7 +565,7 @@ func newServer() *server {
 	srv.ticketing = newTicketingStore()
 	// Incident system (Postgres only) + its alert-ingestion hook.
 	srv.incidents = newIncidentStore()
-	// Seam inventory (#67 build ⑤): the correlation engine's grounding targets.
+	// seam.Seam inventory (#67 build ⑤): the correlation engine's grounding targets.
 	// Postgres only, like incidents; the bootstrap loop starts in main().
 	srv.seams = newSeamStore()
 	srv.services = newServiceStore()
@@ -957,7 +958,7 @@ func main() {
 	if envOr("FUSION_WORKER_ENABLED", "") == "true" {
 		srv.fusion.start(ctx)
 	}
-	// Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
+	// seam.Seam bootstrap engine (#67 build ⑤ / cloud-ingestion §4.1): auto-suggest
 	// seam instances from telemetry so the grounding gate has an inventory.
 	srv.startSeamBootstrap(ctx)
 	// Export active seams to the enrichment dir for the correlation engine's
@@ -1349,7 +1350,7 @@ func (s *server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/incidents", s.handleIncidents)     // GET list (tenant-scoped)
 	mux.HandleFunc("/api/incidents/", s.handleIncidentByID) // GET {id}; POST {id}/ack|resolve|note|assign|…
-	// Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
+	// seam.Seam inventory (#67 build ⑤): suggest→confirm→active lifecycle; the
 	// correlation engine pulls ?state=active as its grounding targets.
 	// Correlation Engine v2 objects — read-only inspector + replay proxy (#67).
 	// Workload OIDC issuer trust material (Wave 4 #13) — anonymous BY DESIGN:

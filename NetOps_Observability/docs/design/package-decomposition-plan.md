@@ -4,8 +4,8 @@
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
-`internal/verify`, `internal/segclass`, all 2026-07-27). **259** non-test
-files remain in `package main`. This document is the ordered sequence for the
+`internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27).
+**258** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -105,7 +105,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 14 | `internal/gqlparse` | 1 | 581 | 1 | **Done** (2026-07-27). The F-72 GraphQL subset parser: ZERO real external deps (the 2026-07-27 re-measure of all 263 root files ranked it cleanest), one consumer (`graphql.go`, which kept the handler + RBAC gate). Parser-contract tests moved; handler/isolation tests stayed; the F-72 source guard now pins `gqlparse.Parse`. |
 | ✅ 15 | `internal/verify` | 2 | ~1250 | ~4 | **Done** (2026-07-27). The Active Verification engine + prebuilt modules (closed command tables, deterministic parsers). `Dialers` was already an injected seam, so the SSH runner (`verify_ssh.go`, TOFU host store), service, trigger and HTTP stayed cleanly. Helper knob-readers duplicated per the no-utils rule. The `User` "dependency" was a struct-field false positive. Test split: engine/modules/parser contracts moved; the fake-SSH transport + TOFU tests and boundedBuf overflow (SILENT-CRITICAL-1's runner half) stayed with the integrator. |
 | ✅ 16 | `internal/segclass` | 1 | 697 | **0** | **Done** (2026-07-27). The Go mirror of the Python segment/device classifier, with its go:embed'd provider-CIDR snapshot (`segmentdata/` moved with it; `scripts/refresh_provider_ranges.py` re-pointed and dry-run-verified). Every mapped seam (`tierRank`, `Region`, `Service`, `Confidence`) was a field-name false positive; only `orDefault` was real (duplicated). ⚠️ **Finding for the owner: the classifier has ZERO production consumers in Go** — only its own test references it. The file says it stamps segment/role at ingest; that wiring either never landed or lives Python-side only. Worth deciding whether the ingest-side stamping is still planned or the mirror should be retired. |
-| 17+ | `seam`, `session`, `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The `jwt` security change (see below) gates the auth tier. |
+| ✅ 17 | `internal/seam` | 1 | 640 | ~5 | **Done** (2026-07-27). The canonical seam inventory (five FINAL types, lifecycle state machine, validation, deterministic ids) + its pg store, with `seam.DB` INJECTED via the portintel adapter idiom — the store moved WITH its SQL, main kept backend selection, handlers and the bootstrap suggestion rules. Watch for handler locals named `seam` shadowing the package (two renamed). Pure lifecycle/validation/id tests moved; rule tests stayed. |
+| 18+ | `session`, `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The `jwt` security change (see below) gates the auth tier. |
 
 ## Deferred deliberately, with reasons
 
