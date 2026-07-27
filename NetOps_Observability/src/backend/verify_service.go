@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/vault"
 	"os"
 	"sort"
@@ -421,7 +422,7 @@ func (s *server) verifyCaseLookup(ctx context.Context, scope, caseID string) (ve
   FROM netops.corr_current FINAL
  WHERE correlation_id = toUUID('%s')
  LIMIT 1
-FORMAT JSONEachRow`, chISO("window_start"), caseID)
+FORMAT JSONEachRow`, chschema.ISO("window_start"), caseID)
 	rows, err := s.chRowsScope(ctx, scope, sql, "verify_case_lookup")
 	if err != nil {
 		// The projection did not answer. That is NOT "this case does not exist":

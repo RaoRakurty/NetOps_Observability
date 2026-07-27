@@ -32,6 +32,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/internal/chschema"
 )
 
 // serviceHealthWindow is the flow_health lookback (norm window + liveness gate).
@@ -186,7 +188,7 @@ func (s *server) fetchServiceCorrelationClass(r *http.Request, serviceID string,
 	}
 	sql := `
 SELECT toString(c.correlation_id) AS id, c.top_hypothesis AS hyp, c.top_confidence AS conf,
-       c.verdict_tier AS tier, ` + chISO("c.created_at") + ` AS created_at,
+       c.verdict_tier AS tier, ` + chschema.ISO("c.created_at") + ` AS created_at,
        c.plane_count AS planes,
        c.debug_excluded > 0 AS debug_excluded,
        c.low_authority > 0 AS low_authority

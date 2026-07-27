@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"netops/backend/cloud"
+	"netops/backend/internal/chschema"
 )
 
 const (
@@ -114,7 +115,7 @@ func (s *server) handleCloudIngestion(w http.ResponseWriter, r *http.Request) {
 	globalKind := map[string]kindStat{}            // any provider
 	sql := fmt.Sprintf(`
 SELECT JSONExtractString(attrs,'provider') AS prov, kind,
-       count() AS volume, `+chISO("max(ts)")+` AS last_seen
+       count() AS volume, `+chschema.ISO("max(ts)")+` AS last_seen
   FROM netops.corr_signals
  WHERE source = 'cloud' AND ts > now() - INTERVAL %d HOUR
  GROUP BY prov, kind

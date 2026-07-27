@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/metricval"
 )
 
@@ -448,7 +449,7 @@ WITH picked AS (
       LIMIT 200
 )
 SELECT toString(c.correlation_id) AS id, c.top_hypothesis AS hyp, c.top_confidence AS conf,
-       c.verdict_tier AS tier, ` + chISO("c.created_at") + ` AS created_at,
+       c.verdict_tier AS tier, ` + chschema.ISO("c.created_at") + ` AS created_at,
        coalesce(e.grounding,'none') AS grounding,
        c.plane_count AS planes,
        c.debug_excluded > 0 AS debug_excluded,

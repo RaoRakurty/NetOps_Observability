@@ -12,6 +12,7 @@ import (
 
 	"netops/backend/cloud"
 	"netops/backend/collectors"
+	"netops/backend/internal/chschema"
 	"netops/backend/pathgraph"
 )
 
@@ -630,7 +631,7 @@ func (s *server) appEndpointBindings(ctx context.Context, tenant string, nc netC
 	if envOr("CLICKHOUSE_URL", "") == "" {
 		return nil
 	}
-	sql := `SELECT dst_ip, app, ` + chISO("max(fused_at)") + ` AS last_seen
+	sql := `SELECT dst_ip, app, ` + chschema.ISO("max(fused_at)") + ` AS last_seen
   FROM netops.app_identities
  WHERE app != 'unknown' AND app != '' AND dst_ip != ''
  GROUP BY dst_ip, app

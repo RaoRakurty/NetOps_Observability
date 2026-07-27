@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -10,19 +11,8 @@ import (
 
 // S3 (log-time standard): every ClickHouse-backed SELECT renders datetimes as
 // explicit-UTC RFC 3339 — never zone-less toString() strings a JS Date would
-// parse as browser-local.
-
-func TestChISOFragment(t *testing.T) {
-	got := chISO("ts")
-	want := "concat(replaceOne(toString(ts, 'UTC'), ' ', 'T'), 'Z')"
-	if got != want {
-		t.Fatalf("chISO(ts) = %q, want %q", got, want)
-	}
-	// Aggregates pass through as expressions.
-	if !strings.Contains(chISO("max(fused_at)"), "toString(max(fused_at), 'UTC')") {
-		t.Fatalf("chISO must accept aggregate expressions: %q", chISO("max(fused_at)"))
-	}
-}
+// parse as browser-local. The fragment itself (chschema.ISO) is tested in its
+// package; these tests cover THIS package's consumers of the wire format.
 
 // The server-side consumers of CH wire strings must accept BOTH the new RFC
 // 3339 form and the legacy zone-less form (mixed fleets during rollout).
@@ -74,22 +64,31 @@ func TestIsDatetimeTokenAcceptsRFC3339(t *testing.T) {
 }
 
 // Regression guard: no ClickHouse SELECT may reintroduce a zone-less
-// toString() around a datetime column. Comments are exempt; chISO is the only
-// sanctioned wrapper (it embeds toString with an explicit 'UTC' zone).
+// toString() around a datetime column. Comments are exempt; chschema.ISO is
+// the only sanctioned wrapper (it embeds toString with an explicit 'UTC'
+// zone). The walk is RECURSIVE (root + all subpackages, vendor excluded) —
+// SQL-emitting code now lives under internal/ too, and a root-only scan is
+// exactly the guard-scope mistake the 2026-07-27 audit documented.
 func TestNoZonelessDatetimeToStringInSQL(t *testing.T) {
 	re := regexp.MustCompile(`toString\((min\(|max\(|any\()?([a-z]+\.)?(ts|created_at|window_start|window_end|ingest_ts|fused_at|observed_at)[),]`)
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		data, err := os.ReadFile(name)
+	seen := 0
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "vendor" || d.Name() == "testdata" || d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		seen++
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
 		}
 		for i, line := range strings.Split(string(data), "\n") {
 			trimmed := strings.TrimSpace(line)
@@ -97,11 +96,19 @@ func TestNoZonelessDatetimeToStringInSQL(t *testing.T) {
 				continue
 			}
 			if strings.Contains(line, "toString(") && strings.Contains(line, ", 'UTC')") {
-				continue // chISO-generated shape
+				continue // chschema.ISO-generated shape
 			}
 			if re.MatchString(line) {
-				t.Errorf("%s:%d: zone-less toString() around a datetime column — use chISO (log-time standard S3): %s", name, i+1, trimmed)
+				t.Errorf("%s:%d: zone-less toString() around a datetime column — use chschema.ISO (log-time standard S3): %s", path, i+1, trimmed)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Anti-vacuity: the recursive walk must cover more than the root package.
+	if seen < 300 {
+		t.Fatalf("guard walked only %d non-test .go files — the scan is not reaching the subpackages", seen)
 	}
 }

@@ -19,6 +19,26 @@ func envOr(key, def string) string {
 	return def
 }
 
+// ISO wraps a ClickHouse DateTime/DateTime64 SQL expression (a column, or an
+// aggregate like max(ts)) so it is SELECTed as an RFC 3339 UTC string
+// (log-time standard, docs/design/log-time-standard.md rule R1 / slice S3).
+//
+// ClickHouse's toString(DateTime64) renders a ZONE-LESS string
+// ("2026-07-16 21:56:03.562") in the server timezone. JavaScript — and any
+// naive consumer — parses such strings as LOCAL time, which is exactly the
+// mixed-zone display defect audited as F11/F12. Every ClickHouse-backed
+// SELECT therefore renders datetimes with ISO: explicit UTC, RFC 3339
+// ("2026-07-16T21:56:03.562Z"), so the instant is unambiguous on the wire
+// regardless of the ClickHouse server timezone. Sub-second precision follows
+// the column type, exactly as toString did.
+//
+// Server-side consumers of these strings (parseChTS, parseCHTime,
+// ticketing/report layouts) accept both RFC 3339 and the legacy zone-less
+// form, so mixed fleets during rollout stay readable.
+func ISO(expr string) string {
+	return "concat(replaceOne(toString(" + expr + ", 'UTC'), ' ', 'T'), 'Z')"
+}
+
 // StrictRowPolicyDDL is the STRICT tenant row policy: a row is visible only to
 // its own tenant, or to a caller that explicitly asked for the cross-tenant
 // scope. No lenient untagged-shared escape — that distinction is asserted by

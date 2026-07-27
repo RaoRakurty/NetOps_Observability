@@ -39,6 +39,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"netops/backend/internal/chschema"
 )
 
 const (
@@ -760,7 +762,7 @@ func providerOf(a signalAttrs) string {
 
 func cloudHealthSQL(windowHours int, appFilter string, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT `+chISO("ts")+`         AS ts_s,
+SELECT `+chschema.ISO("ts")+`         AS ts_s,
        toString(signal_id)     AS signal_id_s,
        kind                    AS kind,
        toString(entity_type)   AS entity_type_s,
@@ -795,7 +797,7 @@ func cloudChangesSQL(windowHours int, appFilter, having string, limit int, scope
 	// `having` carries the keyset-cursor fragment (#10): it must run AFTER the
 	// GROUP BY collapse because the row's time IS min(ts).
 	return fmt.Sprintf(`
-SELECT `+chISO("min(ts)")+`       AS ts_s,
+SELECT `+chschema.ISO("min(ts)")+`       AS ts_s,
        toString(signal_id)        AS signal_id_s,
        any(kind)                  AS kind,
        toString(any(entity_type)) AS entity_type_s,
@@ -833,7 +835,7 @@ SELECT toString(correlation_id)  AS cid,
        top_hypothesis            AS top_hypothesis,
        signal_count              AS signal_count,
        toString(state)           AS state_s,
-       `+chISO("window_start")+` AS window_start_s,
+       `+chschema.ISO("window_start")+` AS window_start_s,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
@@ -850,7 +852,7 @@ func cloudEvidenceSignalsSQL(windowHours int, idList, extra string, limit int, s
 	return fmt.Sprintf(`
 SELECT toString(archived_for)   AS cid,
        toString(signal_id)      AS signal_id_s,
-       `+chISO("ts")+`          AS ts_s,
+       `+chschema.ISO("ts")+`          AS ts_s,
        kind                     AS kind,
        toString(entity_type)    AS entity_type_s,
        entity_id                AS entity_id,

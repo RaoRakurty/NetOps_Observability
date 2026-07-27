@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"netops/backend/appid"
+	"netops/backend/internal/chschema"
 )
 
 // Allowlists for the enum columns — shape-validate, never quote-escape (SR-011).
@@ -245,7 +246,7 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 
 	itemSQL := `
 SELECT toString(signal_id) AS signal_id,
-       ` + chISO("ts") + ` AS ts_iso,
+       ` + chschema.ISO("ts") + ` AS ts_iso,
        toUnixTimestamp64Milli(ts) AS ts_ms,
        source, kind, severity, entity_type, entity_id, site,
        observer_type, modality_class, metric_name, value, deviation

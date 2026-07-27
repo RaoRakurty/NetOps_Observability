@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/chschema"
 	"netops/backend/timeintel"
 )
 
@@ -148,8 +149,8 @@ func confidenceLabel(tier string) string {
 // serveCorrelationTimeMetrics handles GET /api/correlations/{id}/time-metrics.
 func (s *server) serveCorrelationTimeMetrics(w http.ResponseWriter, r *http.Request, id string) {
 	objSQL := `
-SELECT ` + chISO("window_start") + ` AS window_start,
-       ` + chISO("created_at") + `   AS created_at,
+SELECT ` + chschema.ISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("created_at") + `   AS created_at,
        verdict_tier, top_confidence,
        hypotheses, evidence_missing, affected
   FROM netops.corr_objects
@@ -237,7 +238,7 @@ SELECT ` + chISO("window_start") + ` AS window_start,
 // minIngestTS returns the earliest signal ingest time for the object (detection
 // latency input). Best-effort: zero time on any error / no archive rows.
 func (s *server) minIngestTS(r *http.Request, id string) time.Time {
-	sql := `SELECT ` + chISO("min(ingest_ts)") + ` AS fi
+	sql := `SELECT ` + chschema.ISO("min(ingest_ts)") + ` AS fi
               FROM netops.corr_signals_archive
              WHERE toString(archived_for) = '` + id + `'
              FORMAT JSON`

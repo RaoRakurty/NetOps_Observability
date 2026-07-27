@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"netops/backend/internal/chschema"
 )
 
 // securityLaneKinds maps each fidelity lane to the signal kinds that prove it.
@@ -76,7 +78,7 @@ func sqlKindList(kinds []string) string {
 
 func cloudSecuritySQL(windowHours int, extra string, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT `+chISO("ts")+`         AS ts_s,
+SELECT `+chschema.ISO("ts")+`         AS ts_s,
        toString(signal_id)     AS signal_id_s,
        kind                    AS kind,
        toString(entity_type)   AS entity_type_s,
@@ -105,7 +107,7 @@ SELECT `+chISO("ts")+`         AS ts_s,
 // cloudChangesSQL, where the FIRST observation is the truth).
 func cloudProviderEventsSQL(windowHours int, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT `+chISO("max(ts)")+`            AS ts_s,
+SELECT `+chschema.ISO("max(ts)")+`            AS ts_s,
        toString(signal_id)             AS signal_id_s,
        any(kind)                       AS kind,
        toString(any(entity_type))      AS entity_type_s,
@@ -139,7 +141,7 @@ func cloudSeamTelemetrySQL(windowHours int, limit int, scope string) string {
 SELECT entity_id                      AS entity_id,
        argMax(kind, ts)               AS kind,
        toString(argMax(severity, ts)) AS severity_s,
-       `+chISO("max(ts)")+`           AS ts_s,
+       `+chschema.ISO("max(ts)")+`           AS ts_s,
        count()                        AS events,
        argMax(value, ts)              AS value,
        argMax(attrs, ts)              AS attrs

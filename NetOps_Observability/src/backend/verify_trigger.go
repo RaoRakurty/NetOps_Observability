@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"netops/backend/internal/chschema"
 )
 
 func verifyScanInterval() time.Duration {
@@ -56,7 +58,7 @@ func (s *server) verifyTickOnce(ctx context.Context) {
 		// scope server-side as well).
 		sql := `SELECT toString(correlation_id) AS cid, affected,
        toString(owner) AS owner, top_hypothesis,
-       ` + chISO("window_start") + ` AS window_start
+       ` + chschema.ISO("window_start") + ` AS window_start
   FROM netops.corr_current FINAL
  WHERE state = 'open' AND verdict_tier = 'suspected'
  ORDER BY window_end DESC

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"netops/backend/internal/chschema"
 	"netops/backend/timeintel"
 )
 
@@ -151,8 +152,8 @@ WITH picked AS (
 )
 SELECT toString(o.tenant_id)      AS tenant_id,
        toString(o.correlation_id) AS correlation_id,
-       ` + chISO("o.window_start") + ` AS window_start,
-       ` + chISO("o.created_at") + `   AS created_at,
+       ` + chschema.ISO("o.window_start") + ` AS window_start,
+       ` + chschema.ISO("o.created_at") + `   AS created_at,
        o.verdict_tier             AS verdict_tier,
        o.top_confidence           AS top_confidence,
        o.top_hypothesis           AS top_hypothesis,

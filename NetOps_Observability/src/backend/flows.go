@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netops/backend/chhttp"
+	"netops/backend/internal/chschema"
 )
 
 // isAlphaToken reports whether s is non-empty and contains only ASCII letters.
@@ -410,7 +411,7 @@ func (s *server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		where = " WHERE " + strings.Join(conds, " AND ") + " "
 	}
 	sql := `
-SELECT ` + chISO("ts") + ` AS ts, id, kind, severity, score, device,
+SELECT ` + chschema.ISO("ts") + ` AS ts, id, kind, severity, score, device,
        component, summary, description
   FROM netops.findings
 ` + where + `
@@ -599,7 +600,7 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	sql := `
 SELECT id, type, local_device, local_addr, remote_device, remote_addr,
        status, latency_ms, jitter_ms, loss_pct, qoe, uptime_s,
-       ` + chISO("ts") + ` AS ts
+       ` + chschema.ISO("ts") + ` AS ts
   FROM netops.tunnels
 ` + where + `
  ORDER BY ts DESC

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"netops/backend/chhttp"
+	"netops/backend/internal/chschema"
 	"netops/backend/internal/metricval"
 )
 
@@ -240,8 +241,8 @@ WITH picked AS (
 SELECT toString(c.correlation_id)  AS correlation_id,
        c.version                    AS version,
        c.state                      AS state,
-       ` + chISO("c.window_start") + ` AS window_start,
-       ` + chISO("c.window_end") + `   AS window_end,
+       ` + chschema.ISO("c.window_start") + ` AS window_start,
+       ` + chschema.ISO("c.window_end") + `   AS window_end,
        c.top_hypothesis             AS top_hypothesis,
        c.top_confidence             AS top_confidence,
        c.verdict_tier               AS verdict_tier,
@@ -252,7 +253,7 @@ SELECT toString(c.correlation_id)  AS correlation_id,
        c.node_count                 AS node_count,
        c.engine_version             AS engine_version,
        c.catalog_version            AS catalog_version,
-       ` + chISO("c.created_at") + ` AS created_at,
+       ` + chschema.ISO("c.created_at") + ` AS created_at,
        toUnixTimestamp64Milli(c.created_at) AS created_at_ms,
        coalesce(e.edge_count, 0)    AS edge_count,
        coalesce(e.grounding, 'none') AS grounding,
@@ -585,8 +586,8 @@ func (s *server) loadCorrSlice(ctx context.Context, scope, id string, version in
 	metaSQL := `
 SELECT version, tenant_id, state,
        coalesce(toString(merged_into), '') AS merged_into,
-       ` + chISO("window_start") + ` AS window_start,
-       ` + chISO("window_end") + `   AS window_end,
+       ` + chschema.ISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("window_end") + `   AS window_end,
        toString(trigger_signal) AS trigger_signal,
        verdict_tier, top_hypothesis, top_confidence, evidence_missing,
        hypotheses, affected, layer_coverage, app_impact, attribution
@@ -654,8 +655,8 @@ SELECT version, tenant_id, state,
 	// 2) Full window slice (attached or not), ordered by event time = the cascade.
 	sigSQL := `
 SELECT toString(signal_id)  AS signal_id,
-       ` + chISO("ts") + `         AS ts_iso,
-       ` + chISO("ingest_ts") + `  AS ingest_ts_iso,
+       ` + chschema.ISO("ts") + `         AS ts_iso,
+       ` + chschema.ISO("ingest_ts") + `  AS ingest_ts_iso,
        source, kind, observer_type, observer_id, collection_path, modality_class,
        source_clock_quality AS clock_quality,
        entity_type, entity_id, entity_tokens, severity,
@@ -994,14 +995,14 @@ func (s *server) serveCorrelationDetail(w http.ResponseWriter, r *http.Request, 
 	objSQL := `
 SELECT toString(correlation_id)  AS correlation_id,
        version, state,
-       ` + chISO("window_start") + ` AS window_start,
-       ` + chISO("window_end") + `   AS window_end,
+       ` + chschema.ISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("window_end") + `   AS window_end,
        toString(trigger_signal)  AS trigger_signal,
        top_hypothesis, top_confidence, verdict_tier,
        hypotheses, evidence_missing, affected,
        signal_count, node_count,
        engine_version, topology_version, catalog_version,
-       ` + chISO("created_at") + `   AS created_at
+       ` + chschema.ISO("created_at") + `   AS created_at
   FROM netops.corr_objects
  WHERE correlation_id = '` + id + `'` + verCond + `
  ORDER BY version DESC

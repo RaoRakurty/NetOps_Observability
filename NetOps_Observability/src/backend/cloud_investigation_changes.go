@@ -33,6 +33,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/internal/chschema"
 )
 
 const (
@@ -92,7 +94,7 @@ SELECT toString(correlation_id)  AS cid,
        top_hypothesis            AS top_hypothesis,
        signal_count              AS signal_count,
        toString(state)           AS state_s,
-       `+chISO("window_start")+` AS window_start_s,
+       `+chschema.ISO("window_start")+` AS window_start_s,
        affected                  AS affected,
        evidence_missing          AS evidence_missing
   FROM netops.corr_current FINAL
@@ -107,7 +109,7 @@ SELECT toString(correlation_id)  AS cid,
 // ("2006-01-02 15:04:05"), never caller input.
 func investigationChangesSQL(onsetLit, scopePred string, limit int, scope string) string {
 	return fmt.Sprintf(`
-SELECT `+chISO("min(ts)")+`       AS ts_s,
+SELECT `+chschema.ISO("min(ts)")+`       AS ts_s,
        toString(signal_id)        AS signal_id_s,
        any(kind)                  AS kind,
        toString(any(entity_type)) AS entity_type_s,

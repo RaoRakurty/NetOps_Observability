@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/chschema"
 	"netops/backend/models"
 	"netops/backend/notify"
 )
@@ -157,7 +158,7 @@ SELECT toString(correlation_id)  AS correlation_id,
        toString(verdict_tier)    AS verdict_tier,
        top_hypothesis            AS top_hypothesis,
        affected                  AS affected,
-       `+chISO("created_at")+`   AS created_at_s
+       `+chschema.ISO("created_at")+`   AS created_at_s
   FROM netops.corr_current FINAL
  WHERE correlation_id IN (SELECT archived_for FROM cloud_objs)
    AND state = 'open'

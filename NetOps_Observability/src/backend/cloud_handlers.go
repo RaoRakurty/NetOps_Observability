@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"netops/backend/cloud"
+	"netops/backend/internal/chschema"
 )
 
 // isCloudAppToken bounds an app id used in a SQL literal: real app names carry
@@ -400,8 +401,8 @@ SELECT toString(o.correlation_id)                   AS correlation_id,
        any(o.top_hypothesis)                        AS top_hypothesis,
        any(o.signal_count)                          AS signal_count,
        any(o.state)                                 AS state,
-       ` + chISO("any(o.window_start)") + `         AS window_start,
-       ` + chISO("any(o.created_at)") + `           AS created_at,
+       ` + chschema.ISO("any(o.window_start)") + `         AS window_start,
+       ` + chschema.ISO("any(o.created_at)") + `           AS created_at,
        any(o.affected)                              AS affected,
        arraySort(groupUniqArray(a.source))          AS sources,
        uniqExact(a.observer_id)                     AS observer_count,

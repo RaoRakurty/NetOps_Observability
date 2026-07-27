@@ -66,7 +66,9 @@ import (
 //	                  now pass their budget — the env read left the package)
 //	2026-07-27  280  internal/metricval (the F-21 metric-value parse boundary;
 //	                  counter exposed read-only via NonFinite())
-const rootPackageCeiling = 280
+//	2026-07-27  279  chISO folded into chschema.ISO (21 call sites qualified);
+//	                  the zone-less-toString guard now walks subpackages too
+const rootPackageCeiling = 279
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

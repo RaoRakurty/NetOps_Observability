@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/internal/chschema"
 )
 
 // corr_undetermined.go — #80 signature-governance: the DYNAMIC undetermined-frequency
@@ -249,7 +251,7 @@ func (s *server) handleUndeterminedFrequency(w http.ResponseWriter, r *http.Requ
 	}
 	sql := `
 SELECT toString(correlation_id) AS correlation_id,
-       ` + chISO("window_start") + ` AS window_start,
+       ` + chschema.ISO("window_start") + ` AS window_start,
        evidence_missing         AS evidence_missing,
        affected                 AS affected,
        signal_count             AS signal_count
