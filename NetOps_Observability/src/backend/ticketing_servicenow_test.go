@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/noclabel"
 	"strings"
 	"sync"
 	"testing"
@@ -173,7 +174,7 @@ func samplePayload(corrID string) ticketPayload {
 // ServiceNow share one handle (#10).
 func TestSnowFriendlyProblemID(t *testing.T) {
 	corrID := "5564d162-c891-5480-800b-9b7fbcdd59b2"
-	pid := problemDisplayID(corrID) // P-5564D1
+	pid := noclabel.ProblemDisplayID(corrID) // P-5564D1
 	f := snowIncidentFields(ticketSystemConfig{}, samplePayload(corrID))
 	sd, _ := f["short_description"].(string)
 	if !strings.HasPrefix(sd, "["+pid+"] ") {

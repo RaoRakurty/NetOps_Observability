@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/noclabel"
 	"strings"
 	"time"
 
@@ -104,7 +105,7 @@ func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
 	seen := map[string]map[string]bool{}
 	ids := make([]string, 0, len(objRows))
 	for _, o := range objRows {
-		title := signatureNocTitle(o.TopHypothesis)
+		title := noclabel.SignatureTitle(o.TopHypothesis)
 		is := cloud.OverviewIssue{ID: o.CorrelationID, Title: title}
 		byID[o.CorrelationID] = len(issues)
 		seen[o.CorrelationID] = map[string]bool{}

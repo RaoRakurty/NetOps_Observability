@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"strings"
 )
 
@@ -84,9 +85,9 @@ func buildIncidentMerge(sourceID, mergedInto, survivorID, serviceRecovery string
 	}
 	m := &rcaIncidentMerge{
 		SourceIncidentID:       sourceID,
-		SourceDisplayID:        problemDisplayID(sourceID),
+		SourceDisplayID:        noclabel.ProblemDisplayID(sourceID),
 		SurvivingIncidentID:    survivor,
-		SurvivingDisplayID:     problemDisplayID(survivor),
+		SurvivingDisplayID:     noclabel.ProblemDisplayID(survivor),
 		SurvivorResolved:       survivor != "",
 		SharedScope:            scope.Services,
 		TransferredEvidenceIDs: evidenceIDs,
@@ -104,7 +105,7 @@ func buildIncidentMerge(sourceID, mergedInto, survivorID, serviceRecovery string
 	}
 	if survivor != "" {
 		m.AuthoritativeIncidentID = survivor
-		m.AuthoritativeDisplayID = problemDisplayID(survivor)
+		m.AuthoritativeDisplayID = noclabel.ProblemDisplayID(survivor)
 	}
 	m.Statement = rcaMergeStatement(m, serviceRecovery)
 	return m

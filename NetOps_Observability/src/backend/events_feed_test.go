@@ -63,10 +63,6 @@ func TestFeedTitle(t *testing.T) {
 	if got := feedTitle("unknown", "unknown", "metric"); got != "Unknown" {
 		t.Errorf("unknown-entity title = %q", got)
 	}
-	// unmapped kind humanizes
-	if got := kindNoc("qos_drops"); got != "Qos drops" {
-		t.Errorf("kindNoc fallback = %q", got)
-	}
 }
 
 // The unified feed's honesty contract (owner directive: DON'T HIDE): the

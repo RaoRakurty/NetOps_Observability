@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"netops/backend/internal/noclabel"
 	"strconv"
 	"strings"
 	"time"
@@ -85,7 +86,7 @@ func (a *slackTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSyst
 	// (tenant:corr:system) this adapter stores as SysID.
 	handle := ref.Number
 	if parts := strings.Split(ref.SysID, ":"); len(parts) == 3 && parts[1] != "" {
-		handle = problemDisplayID(parts[1])
+		handle = noclabel.ProblemDisplayID(parts[1])
 	}
 	return a.post(ctx, cfg, map[string]any{
 		"text": ":white_check_mark: *Resolved* — incident " + handle + " cleared in Correlix.",
@@ -110,7 +111,7 @@ func slackTicketMessage(phase string, p ticketPayload) map[string]any {
 	// Lead with the friendly Correlix Problem ID (P-XXXXXX) — the SAME handle the
 	// RCA Inspector, Iris AI and ServiceNow tickets carry (#103 UX-2: no raw hex
 	// identifiers in notifications; the UUID stays canonical in the dedupe key).
-	pid := problemDisplayID(p.CorrObjectID)
+	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	title := strings.ToUpper(phase[:1]) + phase[1:] + ": " + p.Title
 	if pid != "" {
 		title = strings.ToUpper(phase[:1]) + phase[1:] + ": [" + pid + "] " + p.Title

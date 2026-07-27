@@ -26,6 +26,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/noclabel"
 	"sort"
 	"strings"
 	"time"
@@ -325,7 +326,7 @@ SELECT toString(correlation_id) AS id, state, top_hypothesis
 		if id == "" {
 			continue
 		}
-		disp := problemDisplayID(id)
+		disp := noclabel.ProblemDisplayID(id)
 		// Exact when the query names at least the full 6-hex display handle
 		// (the row already matched the prefix), else a prefix match.
 		rank := 1

@@ -35,6 +35,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/noclabel"
 	"strconv"
 	"strings"
 	"time"
@@ -292,7 +293,7 @@ func (a *jiraTicketAdapter) resolveTransitionID(ctx context.Context, cfg ticketS
 // the dedupe label. Priority is deliberately NOT set: priority schemes are
 // per-instance and an unknown name fails the whole create with a 400.
 func jiraIssueFields(cfg ticketSystemConfig, p ticketPayload, withLabels bool) map[string]any {
-	pid := problemDisplayID(p.CorrObjectID)
+	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	summary := orDefault(p.Title, "Correlix RCA incident")
 	if pid != "" {
 		summary = "[" + pid + "] " + summary

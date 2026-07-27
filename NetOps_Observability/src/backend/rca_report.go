@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"netops/backend/internal/noclabel"
 	"netops/backend/internal/rca"
 	"sort"
 	"strings"
@@ -34,7 +35,7 @@ import (
 type rcaReport struct {
 	ReportID      string `json:"report_id"`
 	CorrelationID string `json:"correlation_id"`
-	DisplayID     string `json:"display_id"` // P-XXXXXX (problemDisplayID)
+	DisplayID     string `json:"display_id"` // P-XXXXXX (noclabel.ProblemDisplayID)
 	Version       int    `json:"version"`
 	ReportType    string `json:"report_type"` // see reportTypeFor
 	Title         string `json:"title"`
@@ -1556,7 +1557,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 		if !loc.Localized && locus != "" {
 			loc = rcaFaultLocalization{
 				Localized:  true,
-				Statement:  fmt.Sprintf("Fault localized to %s by independent evidence.", aiEntityLabel(locus)),
+				Statement:  fmt.Sprintf("Fault localized to %s by independent evidence.", noclabel.Entity(locus)),
 				Object:     locus,
 				ObjectType: "grounded entity (localization boundary)",
 			}
@@ -1658,7 +1659,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	rep := rcaReport{
 		ReportID:      "rr-" + strings.ReplaceAll(in.ID, "-", "")[:12] + fmt.Sprintf("-v%d", version),
 		CorrelationID: in.ID,
-		DisplayID:     problemDisplayID(in.ID),
+		DisplayID:     noclabel.ProblemDisplayID(in.ID),
 		Version:       version,
 		ReportType:    reportTypeFor(rootState, analysis, incident, validation),
 		Title:         title,

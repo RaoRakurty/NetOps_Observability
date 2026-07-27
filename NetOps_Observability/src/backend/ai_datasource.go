@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"strings"
 
 	"netops/backend/ai"
@@ -70,15 +71,15 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 	r := rows[0]
 	pr := &ai.Problem{
 		ID:              id,
-		DisplayID:       problemDisplayID(id),
-		Title:           aiProblemTitle(asStr(r["top_hypothesis"]), id),
+		DisplayID:       noclabel.ProblemDisplayID(id),
+		Title:           noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
 		Verdict:         asStr(r["verdict_tier"]),
 		Confidence:      asFloat(r["top_confidence"]),
 		SignalCount:     int(asFloat(r["signal_count"])),
 		NodeCount:       int(asFloat(r["node_count"])),
 		CreatedAt:       asStr(r["created_at"]),
-		Devices:         aiEntityLabels(affectedDevices(r["affected"])),
-		MissingEvidence: aiHumanizeMissing(jsonStrings(r["evidence_missing"])),
+		Devices:         noclabel.Entities(affectedDevices(r["affected"])),
+		MissingEvidence: noclabel.HumanizeMissing(jsonStrings(r["evidence_missing"])),
 	}
 	// v1 NOC catalog voice contract: the matched signature's own operator
 	// wording + lexical confidence label ride the hypotheses blob — the AI
@@ -138,7 +139,7 @@ SELECT hypotheses, affected, tenant_id
 				continue
 			}
 			if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
-				name = signatureNocTitle(name)
+				name = noclabel.SignatureTitle(name)
 			}
 			text := "candidate cause: " + name
 			if sc := asFloat(h["score"]); sc > 0 {
@@ -151,7 +152,7 @@ SELECT hypotheses, affected, tenant_id
 		}
 	}
 	// Affected entities — humanized + de-duplicated for NOC readability.
-	if devs := aiEntityLabels(affectedDevices(rows[0]["affected"])); len(devs) > 0 {
+	if devs := noclabel.Entities(affectedDevices(rows[0]["affected"])); len(devs) > 0 {
 		items = append(items, ai.EvidenceItem{
 			CitationID: "affected:" + shortID(id), Kind: "topology",
 			Text: "impacted entities: " + strings.Join(devs, ", "), Href: href,
@@ -189,8 +190,8 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 		id := asStr(r["correlation_id"])
 		out = append(out, ai.Problem{
 			ID:          id,
-			DisplayID:   problemDisplayID(id),
-			Title:       aiProblemTitle(asStr(r["top_hypothesis"]), id),
+			DisplayID:   noclabel.ProblemDisplayID(id),
+			Title:       noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
 			Verdict:     asStr(r["verdict_tier"]),
 			Confidence:  asFloat(r["top_confidence"]),
 			SignalCount: int(asFloat(r["signal_count"])),
@@ -231,8 +232,8 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 		id := asStr(r["correlation_id"])
 		out = append(out, ai.Problem{
 			ID:          id,
-			DisplayID:   problemDisplayID(id),
-			Title:       aiProblemTitle(asStr(r["top_hypothesis"]), id),
+			DisplayID:   noclabel.ProblemDisplayID(id),
+			Title:       noclabel.ProblemTitle(asStr(r["top_hypothesis"]), id),
 			Verdict:     asStr(r["verdict_tier"]),
 			Confidence:  asFloat(r["top_confidence"]),
 			State:       asStr(r["state"]),

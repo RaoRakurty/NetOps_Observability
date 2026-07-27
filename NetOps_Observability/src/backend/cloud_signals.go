@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/noclabel"
 	"strconv"
 	"strings"
 
@@ -483,7 +484,7 @@ func evidenceReason(kind, metric, entity, severity, hypothesis, tier string, nam
 	}
 
 	return fmt.Sprintf("%s%s — %s evidence, %s %s.",
-		what, on, sev, verdict, signatureNocTitle(hypothesis))
+		what, on, sev, verdict, noclabel.SignatureTitle(hypothesis))
 }
 
 // ── wire types ───────────────────────────────────────────────────────────────

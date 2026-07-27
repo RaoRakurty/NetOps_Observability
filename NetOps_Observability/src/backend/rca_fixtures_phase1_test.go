@@ -60,7 +60,7 @@ func fixtureSnapshot(t *testing.T, name string, rep rcaReport) {
 
 // ---- P-3335CF ------------------------------------------------------------------
 
-// The correlation id whose display id is P-3335CF (problemDisplayID = first
+// The correlation id whose display id is P-3335CF (noclabel.ProblemDisplayID = first
 // six hex characters, uppercased).
 const fixtureP3335CFID = "3335cfaa-1111-4222-8333-000000000001"
 

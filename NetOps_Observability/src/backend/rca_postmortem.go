@@ -29,6 +29,7 @@ package main
 
 import (
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"sort"
 	"strings"
 )
@@ -183,7 +184,7 @@ func buildCausalChainView(hb rcaHypBlob, hyps []rcaHypothesis, anomalous []map[s
 				continue
 			}
 			total += ev.n
-			label := kindNoc(k)
+			label := noclabel.Kind(k)
 			if len(ev.observers) > 1 {
 				evidence = append(evidence, fmt.Sprintf("%s (%d observations from %d sources)", label, ev.n, len(ev.observers)))
 			} else {
@@ -234,7 +235,7 @@ func buildCausalChainView(hb rcaHypBlob, hyps []rcaHypothesis, anomalous []map[s
 			}
 		}
 		if top.Contradicted {
-			step.Contradictions = append(step.Contradictions, aiHumanizeMissing(humanizeClauses(top.Contradictions))...)
+			step.Contradictions = append(step.Contradictions, noclabel.HumanizeMissing(humanizeClauses(top.Contradictions))...)
 		}
 		out.Steps = append(out.Steps, step)
 	}

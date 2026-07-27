@@ -68,7 +68,10 @@ import (
 //	                  counter exposed read-only via NonFinite())
 //	2026-07-27  279  chISO folded into chschema.ISO (21 call sites qualified);
 //	                  the zone-less-toString guard now walks subpackages too
-const rootPackageCeiling = 279
+//	2026-07-27  278  internal/noclabel (ai_labels.go + kindNoc — the NOC display-
+//	                  language mirror of the frontend label library; rca wave-2
+//	                  seam pre-step, ~15 consumers qualified)
+const rootPackageCeiling = 278
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

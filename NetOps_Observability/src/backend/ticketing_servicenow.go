@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/noclabel"
 	"strconv"
 	"strings"
 	"time"
@@ -383,7 +384,7 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any 
 	// Stamp the friendly Correlix Problem ID (P-XXXXXX) into the short description
 	// and a custom field so NOC + ServiceNow share ONE handle (the UUID stays the
 	// dedupe anchor in correlation_id / u_correlix_object_id).
-	pid := problemDisplayID(p.CorrObjectID)
+	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	f := map[string]any{
 		"short_description": truncate("["+pid+"] "+p.Title, 160),
 		"description":       snowDescription(p),
@@ -417,7 +418,7 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any 
 // snowDescription is the human-readable RCA body (the diagnosis, not raw alerts).
 func snowDescription(p ticketPayload) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Correlix Problem: %s\n\n", problemDisplayID(p.CorrObjectID))
+	fmt.Fprintf(&b, "Correlix Problem: %s\n\n", noclabel.ProblemDisplayID(p.CorrObjectID))
 	fmt.Fprintf(&b, "%s\n\n", p.Summary)
 	fmt.Fprintf(&b, "Verdict: %s (confidence %.0f%%)\n", p.Verdict, p.Confidence*100)
 	if p.AffectedScope != "" {

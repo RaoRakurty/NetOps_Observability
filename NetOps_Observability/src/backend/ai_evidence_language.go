@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"strings"
 
 	"netops/backend/ai"
@@ -162,7 +163,7 @@ func rankedHypothesisItems(id, href string, hyps []rankedHypothesis) []ai.Eviden
 		}
 		name := aiFirst(h.Title, h.ID)
 		if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
-			name = signatureNocTitle(name)
+			name = noclabel.SignatureTitle(name)
 		}
 		if name == "" {
 			continue
@@ -202,7 +203,7 @@ func topHypothesisEvidenceItems(id, href string, h rankedHypothesis) []ai.Eviden
 		switch {
 		case len(v.IndependentPair) == 2:
 			basis += fmt.Sprintf("; independently confirmed by %s and %s",
-				aiEntityLabel(v.IndependentPair[0]), aiEntityLabel(v.IndependentPair[1]))
+				noclabel.Entity(v.IndependentPair[0]), noclabel.Entity(v.IndependentPair[1]))
 		case len(v.ModalityCoverage) == 1:
 			basis += " — a single evidence stream cannot confirm on its own"
 		}

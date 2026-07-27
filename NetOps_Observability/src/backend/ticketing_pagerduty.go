@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"netops/backend/internal/noclabel"
 	"strconv"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ func (a *pagerDutyTicketAdapter) send(ctx context.Context, cfg ticketSystemConfi
 		// across PagerDuty, ServiceNow, Slack and the RCA Inspector (#103 UX-2:
 		// no raw hex in the operator-facing summary; the UUID stays canonical in
 		// dedup_key / custom_details.correlation_id).
-		pid := problemDisplayID(p.CorrObjectID)
+		pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 		summary := orDefault(p.Title, "Correlix RCA incident")
 		if pid != "" {
 			summary = "[" + pid + "] " + summary

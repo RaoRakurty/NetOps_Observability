@@ -139,7 +139,7 @@ type Incident struct {
 
 // incidentDisplayID turns an internal incident id (16 hex chars) into the
 // human handle operators reference (INC-3FA2C1) — the incident-system sibling
-// of problemDisplayID (#103 UX-2: no raw hex in notifications or lists).
+// of noclabel.ProblemDisplayID (#103 UX-2: no raw hex in notifications or lists).
 // Byte-identical to the TS friendlyIncidentId. Display-only: the internal id
 // stays canonical for routes/dedup/buttons. Idempotent and safe on non-hex ids.
 func incidentDisplayID(id string) string {

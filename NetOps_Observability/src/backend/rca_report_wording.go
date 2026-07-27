@@ -9,6 +9,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/noclabel"
 	"netops/backend/internal/rca"
 	"sort"
 	"strings"
@@ -417,7 +418,7 @@ func humanizeClause(clause string) string {
 	seen := map[string]bool{}
 	var parts []string
 	for _, alt := range strings.Split(clause, "|") {
-		l := kindNoc(strings.TrimSpace(alt))
+		l := noclabel.Kind(strings.TrimSpace(alt))
 		if l != "" && !seen[l] {
 			seen[l] = true
 			parts = append(parts, l)
@@ -449,7 +450,7 @@ func clauseCaseEvidence(clause string, kindCounts map[string]int, kindObservers 
 			continue
 		}
 		obs := len(kindObservers[k])
-		label := kindNoc(k)
+		label := noclabel.Kind(k)
 		if obs > 1 {
 			parts = append(parts, fmt.Sprintf("%s (%d observations from %d sources)", label, n, obs))
 		} else {
@@ -480,7 +481,7 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 		if h.Confidence <= 0 && len(h.Satisfied) == 0 && !h.Contradicted {
 			continue
 		}
-		title := signatureNocTitle(h.ID)
+		title := noclabel.SignatureTitle(h.ID)
 		if title == "" || title == h.ID {
 			title = h.Title
 		}
@@ -491,7 +492,7 @@ func buildHypothesesView(hb rcaHypBlob, kindCounts map[string]int, kindObservers
 			Confidence: h.Confidence, Label: h.ConfidenceLabel,
 			Supporting:    supportingCaseEvidence(h.Satisfied, kindCounts, kindObservers),
 			Contradicted:  h.Contradicted,
-			Contradicting: aiHumanizeMissing(humanizeClauses(h.Contradictions)),
+			Contradicting: noclabel.HumanizeMissing(humanizeClauses(h.Contradictions)),
 			Missing:       humanizeClauses(h.Missing),
 			Owner:         rcaOwnerTeam[h.Verdict.Owner],
 		}
@@ -565,7 +566,7 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 		seen[team] = true
 		own.Candidates = append(own.Candidates, rcaOwnerCandidate{
 			Team:   team,
-			Reason: fmt.Sprintf("named by the %q hypothesis (%s)", signatureNocTitle(h.ID), strings.ToLower(orDefault(h.ConfidenceLabel, "candidate"))),
+			Reason: fmt.Sprintf("named by the %q hypothesis (%s)", noclabel.SignatureTitle(h.ID), strings.ToLower(orDefault(h.ConfidenceLabel, "candidate"))),
 		})
 	}
 	if len(hb.Ranking.Hypotheses) > 0 && (analysis == "confirmed" || analysis == "probable") {
@@ -597,11 +598,11 @@ func buildOwnership(analysis string, faultLocalized bool, serviceClassification 
 				// service — vendor escalation does, once the fault localizes there.
 				own.TechnicalOwner = team
 				own.EscalationOwner = "SaaS vendor escalation (via vendor management)"
-				own.EscalationReason = fmt.Sprintf("the fault localizes to %s — an external service this platform does not operate", signatureNocTitle(top.ID))
+				own.EscalationReason = fmt.Sprintf("the fault localizes to %s — an external service this platform does not operate", noclabel.SignatureTitle(top.ID))
 			case analysis == "confirmed" && faultLocalized:
 				own.TechnicalOwner = team
 				own.EscalationOwner = team
-				own.EscalationReason = fmt.Sprintf("the confirmed leading hypothesis (%s) places the fault in this team's domain", signatureNocTitle(top.ID))
+				own.EscalationReason = fmt.Sprintf("the confirmed leading hypothesis (%s) places the fault in this team's domain", noclabel.SignatureTitle(top.ID))
 			case analysis == "confirmed":
 				// §20 restraint: a confirmed CONDITION whose fault has not been
 				// localized to an object does not hand a team the pager — the
@@ -881,7 +882,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 	for _, k := range order {
 		a := byKind[k]
 		row := rcaSymptomRow{
-			Label: kindNoc(k), Kind: k,
+			Label: noclabel.Kind(k), Kind: k,
 			Source:       orDefault(rcaLaneLabel[a.lane], rcaTitleCase(a.lane)),
 			Observations: a.n,
 			Buckets:      bucketObservationTimes(a.times, firstObs, lastObs, rcaSymptomBuckets),
@@ -1029,7 +1030,7 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 	if len(scope.Services) > 0 {
 		service = scope.Services[0]
 	} else if len(scope.Targets) > 0 {
-		service = aiEntityLabel(scope.Targets[0])
+		service = noclabel.Entity(scope.Targets[0])
 	}
 	suffix := ""
 	switch incident {
@@ -1042,7 +1043,7 @@ func buildRcaTitle(topHyp, analysis, incident string, scope rcaReportScope, lane
 
 	// A matched signature names the condition (factual, not verdict-bearing).
 	if topHyp != "" && topHyp != "undetermined" && strings.HasPrefix(topHyp, "sig.") {
-		t := signatureNocTitle(topHyp)
+		t := noclabel.SignatureTitle(topHyp)
 		noun := strings.ToLower(t)
 		if service != "" {
 			return t + " — " + service + suffix, "Leading hypothesis; see analysis state for certainty", noun
@@ -1182,7 +1183,7 @@ func buildManagementSummary(problemNoun string, scope rcaReportScope, times rcaR
 	if len(scope.Services) > 0 {
 		subject = scope.Services[0]
 	} else if len(scope.Targets) > 0 {
-		subject = aiEntityLabel(scope.Targets[0])
+		subject = noclabel.Entity(scope.Targets[0])
 	}
 	// Sentences are collected with their trim priority (length discipline):
 	// what-happened / still-happening / impact are PROTECTED; the monitoring
