@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/verify"
 )
 
 // handleCorrelationVerify serves GET/POST /api/correlations/{id}/verify.
@@ -87,7 +88,7 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 		why := fmt.Sprintf("manual verify (case verdict %s)", row.Verdict)
 		rec, err := s.startVerificationRun(caseTenant, id, "manual", claims.Sub, why, row.Devices, row.caseContext())
 		switch {
-		case errors.Is(err, errVerifyDisabled):
+		case errors.Is(err, verify.ErrDisabled):
 			writeError(w, http.StatusForbidden, errors.New("active verification is not enabled for this tenant — opt in under Settings"))
 		case errors.Is(err, errVerifyRunning):
 			writeError(w, http.StatusConflict, err)

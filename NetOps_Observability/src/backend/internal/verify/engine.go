@@ -1,4 +1,4 @@
-package main
+package verify
 
 // verify_engine.go — Active Verification engine (RCA postmortem-enhancements
 // spec, item 8). When a correlation case sits at SUSPECTED ("needs a second
@@ -38,14 +38,14 @@ import (
 
 // ---- tunables (env-overridable; clamped to sane bounds) ---------------------
 
-func verifyCheckTimeout() time.Duration {
+func CheckTimeout() time.Duration {
 	return secEnvDuration("VERIFY_CHECK_TIMEOUT_SEC", 10, 1, 60)
 }
-func verifyRunBudget() time.Duration {
+func RunBudget() time.Duration {
 	return secEnvDuration("VERIFY_RUN_BUDGET_SEC", 60, 10, 300)
 }
 func verifyMaxConcurrent() int { return clampInt(envInt("VERIFY_MAX_CONCURRENT", 4), 1, 16) }
-func verifyMaxDevices() int    { return clampInt(envInt("VERIFY_MAX_DEVICES", 5), 1, 20) }
+func MaxDevices() int          { return clampInt(envInt("VERIFY_MAX_DEVICES", 5), 1, 20) }
 
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -60,15 +60,15 @@ func clampInt(v, lo, hi int) int {
 // ---- normalized results (the wire/UI contract) ------------------------------
 
 const (
-	verifyStatusPass        = "pass"
-	verifyStatusFail        = "fail"
+	StatusPass              = "pass"
+	StatusFail              = "fail"
 	verifyStatusUnreachable = "unreachable"
-	verifyStatusSkipped     = "skipped"
+	StatusSkipped           = "skipped"
 )
 
-// verifyCheckResult is one normalized check outcome:
+// CheckResult is one normalized check outcome:
 // {check, target, status pass/fail/unreachable/skipped, observed value, ts}.
-type verifyCheckResult struct {
+type CheckResult struct {
 	Check             string    `json:"check"`
 	DeviceID          string    `json:"device_id"`
 	DeviceName        string    `json:"device_name,omitempty"`
@@ -148,10 +148,10 @@ var verifyCommandTable = map[string]map[string]string{
 	},
 }
 
-// verifyCommandFor resolves (vendor, check) → the allowlisted command from the
+// CommandFor resolves (vendor, check) → the allowlisted command from the
 // core table, then the module table (verify_modules.go). Unknown vendor or
 // check ⇒ no command (the check is skipped, never guessed).
-func verifyCommandFor(vendor, checkID string) (string, bool) {
+func CommandFor(vendor, checkID string) (string, bool) {
 	if fam, ok := verifyCommandTable[strings.ToLower(strings.TrimSpace(vendor))]; ok {
 		if cmd, ok := fam[checkID]; ok {
 			return cmd, true
@@ -160,9 +160,9 @@ func verifyCommandFor(vendor, checkID string) (string, bool) {
 	return verifyModuleCommandFor(vendor, checkID)
 }
 
-// verifyCommandAllowed reports whether cmd appears VERBATIM in the closed
+// CommandAllowed reports whether cmd appears VERBATIM in the closed
 // core or module table — the SSH runner's defense-in-depth gate.
-func verifyCommandAllowed(cmd string) bool {
+func CommandAllowed(cmd string) bool {
 	for _, fam := range verifyCommandTable {
 		for _, c := range fam {
 			if c == cmd {
@@ -175,9 +175,9 @@ func verifyCommandAllowed(cmd string) bool {
 
 // ---- targets & executor seams (interfaces for tests, §5 injectable deps) ----
 
-// verifySSHCred is the tenant-configured, non-interactive read-only login the
+// SSHCred is the tenant-configured, non-interactive read-only login the
 // battery uses. Never logged; never echoed by any API.
-type verifySSHCred struct {
+type SSHCred struct {
 	User       string
 	Password   string
 	PrivateKey string
@@ -185,16 +185,16 @@ type verifySSHCred struct {
 	Port       int
 }
 
-// verifyTarget is one implicated device plus whatever management channels are
+// Target is one implicated device plus whatever management channels are
 // actually configured for it. Nil channel ⇒ those checks are skipped honestly.
-type verifyTarget struct {
+type Target struct {
 	Device models.Device
 	SNMP   *collectors.Target // nil ⇒ snmp checks skipped (no credential)
-	SSH    *verifySSHCred     // nil ⇒ ssh checks skipped (not configured)
+	SSH    *SSHCred           // nil ⇒ ssh checks skipped (not configured)
 }
 
-// verifySSHOut is one command's outcome from the SSH runner.
-type verifySSHOut struct {
+// SSHOut is one command's outcome from the SSH runner.
+type SSHOut struct {
 	Output string
 	Err    error
 	// Truncated marks output the runner could NOT read to completion — the
@@ -206,23 +206,23 @@ type verifySSHOut struct {
 	Truncated bool
 }
 
-// verifyDialers are the engine's injectable executors. Production wiring lives
+// Dialers are the engine's injectable executors. Production wiring lives
 // on the server (newVerifyDialers); tests inject fakes — the engine itself
 // performs no network IO of its own.
-type verifyDialers struct {
+type Dialers struct {
 	TCPReach   func(ctx context.Context, addr string) error
 	SNMPReach  func(ctx context.Context, t collectors.Target) error
 	SNMPUptime func(ctx context.Context, t collectors.Target) (int64, error)
 	// SSHRun executes the given allowlisted commands (check id → command) over
 	// ONE connection to the device and returns per-check outcomes. It must
-	// respect ctx and never execute a command that fails verifyCommandAllowed.
-	SSHRun func(ctx context.Context, dev models.Device, cred verifySSHCred, cmds map[string]string) map[string]verifySSHOut
+	// respect ctx and never execute a command that fails CommandAllowed.
+	SSHRun func(ctx context.Context, dev models.Device, cred SSHCred, cmds map[string]string) map[string]SSHOut
 }
 
 // ---- engine -----------------------------------------------------------------
 
 type verifyEngine struct {
-	dial         verifyDialers
+	dial         Dialers
 	checkTimeout time.Duration
 	runBudget    time.Duration
 	maxConc      int
@@ -230,26 +230,26 @@ type verifyEngine struct {
 	// caseCtx feeds the module parsers' window-relative verdicts; now is the
 	// injectable clock (§5) so parser recency math is testable.
 	battery []verifyCheckSpec
-	caseCtx verifyCaseContext
+	caseCtx CaseContext
 	now     func() time.Time
 }
 
-func newVerifyEngine(d verifyDialers) *verifyEngine {
+func NewEngine(d Dialers) *verifyEngine {
 	return &verifyEngine{
 		dial:         d,
-		checkTimeout: verifyCheckTimeout(),
-		runBudget:    verifyRunBudget(),
+		checkTimeout: CheckTimeout(),
+		runBudget:    RunBudget(),
 		maxConc:      verifyMaxConcurrent(),
 		battery:      verifyBattery(),
 		now:          time.Now,
 	}
 }
 
-// newVerifyEngineForCase builds an engine whose battery is the core set plus
+// NewEngineForCase builds an engine whose battery is the core set plus
 // the modules the case context fires (verify_modules.go trigger gates).
-func newVerifyEngineForCase(d verifyDialers, cc verifyCaseContext) *verifyEngine {
-	e := newVerifyEngine(d)
-	e.battery = verifyActiveBattery(cc)
+func NewEngineForCase(d Dialers, cc CaseContext) *verifyEngine {
+	e := NewEngine(d)
+	e.battery = ActiveBattery(cc)
 	e.caseCtx = cc
 	return e
 }
@@ -257,19 +257,19 @@ func newVerifyEngineForCase(d verifyDialers, cc verifyCaseContext) *verifyEngine
 // run executes the battery against every target: parallel across devices and
 // method groups, bounded by maxConc, each check under checkTimeout, the whole
 // run under runBudget. Deterministic result order (device, then battery order).
-func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verifyCheckResult {
-	if len(targets) > verifyMaxDevices() {
-		targets = targets[:verifyMaxDevices()]
+func (e *verifyEngine) Run(ctx context.Context, targets []Target) []CheckResult {
+	if len(targets) > MaxDevices() {
+		targets = targets[:MaxDevices()]
 	}
 	runCtx, cancel := context.WithTimeout(ctx, e.runBudget)
 	defer cancel()
 
 	sem := make(chan struct{}, e.maxConc)
 	var mu sync.Mutex
-	var out []verifyCheckResult
+	var out []CheckResult
 	var wg sync.WaitGroup
 
-	add := func(rs ...verifyCheckResult) {
+	add := func(rs ...CheckResult) {
 		mu.Lock()
 		out = append(out, rs...)
 		mu.Unlock()
@@ -281,12 +281,12 @@ func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verify
 	for i := range targets {
 		t := targets[i]
 		for _, group := range []string{"tcp", "snmp", "ssh"} {
-			specs := groupSpecsIn(e.battery, group)
+			specs := GroupSpecsIn(e.battery, group)
 			if len(specs) == 0 {
 				continue
 			}
 			wg.Add(1)
-			go func(t verifyTarget, group string, specs []verifyCheckSpec) {
+			go func(t Target, group string, specs []verifyCheckSpec) {
 				defer wg.Done()
 				select {
 				case sem <- struct{}{}:
@@ -330,8 +330,8 @@ func (e *verifyEngine) run(ctx context.Context, targets []verifyTarget) []verify
 	return out
 }
 
-// groupSpecsIn filters a battery down to one method group.
-func groupSpecsIn(battery []verifyCheckSpec, method string) []verifyCheckSpec {
+// GroupSpecsIn filters a battery down to one method group.
+func GroupSpecsIn(battery []verifyCheckSpec, method string) []verifyCheckSpec {
 	var out []verifyCheckSpec
 	for _, s := range battery {
 		if s.Method == method {
@@ -341,8 +341,8 @@ func groupSpecsIn(battery []verifyCheckSpec, method string) []verifyCheckSpec {
 	return out
 }
 
-func baseResult(t verifyTarget, spec verifyCheckSpec) verifyCheckResult {
-	return verifyCheckResult{
+func baseResult(t Target, spec verifyCheckSpec) CheckResult {
+	return CheckResult{
 		Check:      spec.ID,
 		DeviceID:   t.Device.ID,
 		DeviceName: t.Device.Name,
@@ -352,11 +352,11 @@ func baseResult(t verifyTarget, spec verifyCheckSpec) verifyCheckResult {
 	}
 }
 
-func skippedResults(t verifyTarget, specs []verifyCheckSpec, why string) []verifyCheckResult {
-	out := make([]verifyCheckResult, 0, len(specs))
+func skippedResults(t Target, specs []verifyCheckSpec, why string) []CheckResult {
+	out := make([]CheckResult, 0, len(specs))
 	for _, s := range specs {
 		r := baseResult(t, s)
-		r.Status = verifyStatusSkipped
+		r.Status = StatusSkipped
 		r.Observed = why
 		out = append(out, r)
 	}
@@ -366,25 +366,25 @@ func skippedResults(t verifyTarget, specs []verifyCheckSpec, why string) []verif
 // finalize stamps the evidence-semantics claim that matches the outcome: a
 // healthy check refutes, a failing/unreachable one corroborates. A skipped
 // check claims nothing.
-func finalize(r verifyCheckResult, spec verifyCheckSpec, started time.Time) verifyCheckResult {
+func finalize(r CheckResult, spec verifyCheckSpec, started time.Time) CheckResult {
 	r.DurationMS = time.Since(started).Milliseconds()
 	r.Ts = time.Now().UTC()
 	switch r.Status {
-	case verifyStatusPass:
+	case StatusPass:
 		r.RefutesKinds = append([]string(nil), spec.Refutes...)
-	case verifyStatusFail, verifyStatusUnreachable:
+	case StatusFail, verifyStatusUnreachable:
 		r.CorroboratesKinds = append([]string(nil), spec.Corroborates...)
 	}
 	return r
 }
 
-func (e *verifyEngine) runTCP(ctx context.Context, t verifyTarget, specs []verifyCheckSpec) []verifyCheckResult {
-	var out []verifyCheckResult
+func (e *verifyEngine) runTCP(ctx context.Context, t Target, specs []verifyCheckSpec) []CheckResult {
+	var out []CheckResult
 	for _, spec := range specs {
 		started := time.Now()
 		r := baseResult(t, spec)
 		if strings.TrimSpace(t.Device.Address) == "" {
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "device has no address"
 			out = append(out, finalize(r, spec, started))
 			continue
@@ -400,7 +400,7 @@ func (e *verifyEngine) runTCP(ctx context.Context, t verifyTarget, specs []verif
 			r.Status = verifyStatusUnreachable
 			r.Observed = "tcp connect failed: " + sanitizeObserved(err.Error())
 		} else {
-			r.Status = verifyStatusPass
+			r.Status = StatusPass
 			r.Observed = fmt.Sprintf("tcp port %d reachable", port)
 		}
 		out = append(out, finalize(r, spec, started))
@@ -408,13 +408,13 @@ func (e *verifyEngine) runTCP(ctx context.Context, t verifyTarget, specs []verif
 	return out
 }
 
-func (e *verifyEngine) runSNMP(ctx context.Context, t verifyTarget, specs []verifyCheckSpec) []verifyCheckResult {
-	var out []verifyCheckResult
+func (e *verifyEngine) runSNMP(ctx context.Context, t Target, specs []verifyCheckSpec) []CheckResult {
+	var out []CheckResult
 	for _, spec := range specs {
 		started := time.Now()
 		r := baseResult(t, spec)
 		if t.SNMP == nil {
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "no SNMP credential bound to device"
 			out = append(out, finalize(r, spec, started))
 			continue
@@ -426,7 +426,7 @@ func (e *verifyEngine) runSNMP(ctx context.Context, t verifyTarget, specs []veri
 				r.Status = verifyStatusUnreachable
 				r.Observed = "snmp get failed: " + sanitizeObserved(err.Error())
 			} else {
-				r.Status = verifyStatusPass
+				r.Status = StatusPass
 				r.Observed = "snmp sysUpTime answered"
 			}
 		case "snmp_uptime":
@@ -438,14 +438,14 @@ func (e *verifyEngine) runSNMP(ctx context.Context, t verifyTarget, specs []veri
 			case up < 900:
 				// A device that rebooted inside the last 15 minutes CORROBORATES
 				// a restart hypothesis; a long uptime refutes it.
-				r.Status = verifyStatusFail
+				r.Status = StatusFail
 				r.Observed = fmt.Sprintf("sysUpTime %ds — device restarted recently", up)
 			default:
-				r.Status = verifyStatusPass
+				r.Status = StatusPass
 				r.Observed = fmt.Sprintf("sysUpTime %ds — no recent restart", up)
 			}
 		default:
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "unknown snmp check"
 		}
 		cancel()
@@ -454,7 +454,7 @@ func (e *verifyEngine) runSNMP(ctx context.Context, t verifyTarget, specs []veri
 	return out
 }
 
-func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verifyCheckSpec) []verifyCheckResult {
+func (e *verifyEngine) runSSH(ctx context.Context, t Target, specs []verifyCheckSpec) []CheckResult {
 	started := time.Now()
 	if t.SSH == nil {
 		return skippedResults(t, specs, "no verification SSH credential configured for tenant")
@@ -462,12 +462,12 @@ func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verif
 	// Resolve every check's command from the CLOSED table for this vendor.
 	cmds := map[string]string{}
 	var runnable []verifyCheckSpec
-	var out []verifyCheckResult
+	var out []CheckResult
 	for _, spec := range specs {
-		cmd, ok := verifyCommandFor(t.Device.Vendor, spec.ID)
+		cmd, ok := CommandFor(t.Device.Vendor, spec.ID)
 		if !ok {
 			r := baseResult(t, spec)
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "no read-only command profile for vendor " + sanitizeObserved(t.Device.Vendor)
 			out = append(out, finalize(r, spec, started))
 			continue
@@ -490,7 +490,7 @@ func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verif
 		res, ok := results[spec.ID]
 		switch {
 		case !ok:
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "command did not run (budget or connection loss)"
 		case res.Err != nil:
 			r.Status = verifyStatusUnreachable
@@ -502,7 +502,7 @@ func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verif
 			// REFUTE a fault that appears further down — manufacturing
 			// counter-evidence instead of merely missing it. Skipped is the
 			// only honest verdict: it contributes nothing rather than lying.
-			r.Status = verifyStatusSkipped
+			r.Status = StatusSkipped
 			r.Observed = "output truncated before the command completed — not scored (a partial listing cannot confirm or refute)"
 		default:
 			if spec.Module != "" {
@@ -536,13 +536,13 @@ var (
 func parseVerifyOutput(checkID, output string) (status, observed string) {
 	txt := strings.TrimSpace(output)
 	if txt == "" {
-		return verifyStatusSkipped, "empty command output"
+		return StatusSkipped, "empty command output"
 	}
 	lines := strings.Count(txt, "\n") + 1
 	switch checkID {
 	case "ssh_interfaces":
 		if lines < 2 {
-			return verifyStatusSkipped, "unrecognized interface listing: " + sanitizeObserved(firstLine(txt))
+			return StatusSkipped, "unrecognized interface listing: " + sanitizeObserved(firstLine(txt))
 		}
 		var faults []string
 		for _, l := range strings.Split(txt, "\n") {
@@ -558,23 +558,23 @@ func parseVerifyOutput(checkID, output string) (status, observed string) {
 			if len(faults) > 8 {
 				faults = faults[:8]
 			}
-			return verifyStatusFail, "interfaces admin-up but not up: " + sanitizeObserved(strings.Join(faults, ", "))
+			return StatusFail, "interfaces admin-up but not up: " + sanitizeObserved(strings.Join(faults, ", "))
 		}
-		return verifyStatusPass, "no interface in an error or half-up state"
+		return StatusPass, "no interface in an error or half-up state"
 	case "ssh_routing":
 		if strings.Contains(strings.ToLower(txt), "not active") ||
 			strings.Contains(strings.ToLower(txt), "not running") {
-			return verifyStatusSkipped, "bgp not running on device — nothing to verify"
+			return StatusSkipped, "bgp not running on device — nothing to verify"
 		}
 		if m := reBGPDown.FindAllString(txt, -1); len(m) > 0 {
-			return verifyStatusFail, fmt.Sprintf("%d bgp neighbor(s) not established", len(m))
+			return StatusFail, fmt.Sprintf("%d bgp neighbor(s) not established", len(m))
 		}
 		if reBGPUp.MatchString(txt) || reBGPNum.MatchString(txt) {
-			return verifyStatusPass, "all bgp neighbors established"
+			return StatusPass, "all bgp neighbors established"
 		}
-		return verifyStatusSkipped, "unrecognized bgp summary output: " + sanitizeObserved(firstLine(txt))
+		return StatusSkipped, "unrecognized bgp summary output: " + sanitizeObserved(firstLine(txt))
 	default:
-		return verifyStatusSkipped, "no parser for check " + sanitizeObserved(checkID)
+		return StatusSkipped, "no parser for check " + sanitizeObserved(checkID)
 	}
 }
 
@@ -606,6 +606,6 @@ func sanitizeObserved(s string) string {
 	return out
 }
 
-// errVerifyDisabled distinguishes "feature off" from transient errors for
+// ErrDisabled distinguishes "feature off" from transient errors for
 // callers that surface run failures.
-var errVerifyDisabled = errors.New("active verification is not enabled")
+var ErrDisabled = errors.New("active verification is not enabled")

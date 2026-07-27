@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/vault"
+	"netops/backend/internal/verify"
 	"os"
 	"sort"
 	"strings"
@@ -258,12 +259,12 @@ func (s *verifyConfigStore) set(tenant string, p verifySettingsPatch) (verifyTen
 
 // sshCredFor unseals the tenant's verification SSH credential; nil when the
 // tenant has not configured one (ssh checks are then skipped honestly).
-func (s *verifyConfigStore) sshCredFor(tenant string) *verifySSHCred {
+func (s *verifyConfigStore) sshCredFor(tenant string) *verify.SSHCred {
 	c := s.get(tenant)
 	if c.SSHUser == "" {
 		return nil
 	}
-	cred := &verifySSHCred{
+	cred := &verify.SSHCred{
 		User:       c.SSHUser,
 		Password:   s.open(tenant, verifyFieldPassword, c.SSHPassword),
 		PrivateKey: s.open(tenant, verifyFieldKey, c.SSHKey),
@@ -299,17 +300,17 @@ func (s *verifyConfigStore) publicView(tenant string) map[string]any {
 // ---- run store (bounded; latest run per case) -------------------------------
 
 type verifyRunRecord struct {
-	RunID         string              `json:"run_id"`
-	TenantID      string              `json:"tenant_id"`
-	CorrelationID string              `json:"correlation_id"`
-	Trigger       string              `json:"trigger"` // manual | auto
-	Actor         string              `json:"actor"`
-	StartedAt     time.Time           `json:"started_at"`
-	FinishedAt    time.Time           `json:"finished_at,omitempty"`
-	Status        string              `json:"status"` // running | completed
-	Devices       []string            `json:"devices"`
-	Modules       []string            `json:"modules,omitempty"` // seam/fault-fired troubleshooting modules
-	Results       []verifyCheckResult `json:"results,omitempty"`
+	RunID         string               `json:"run_id"`
+	TenantID      string               `json:"tenant_id"`
+	CorrelationID string               `json:"correlation_id"`
+	Trigger       string               `json:"trigger"` // manual | auto
+	Actor         string               `json:"actor"`
+	StartedAt     time.Time            `json:"started_at"`
+	FinishedAt    time.Time            `json:"finished_at,omitempty"`
+	Status        string               `json:"status"` // running | completed
+	Devices       []string             `json:"devices"`
+	Modules       []string             `json:"modules,omitempty"` // seam/fault-fired troubleshooting modules
+	Results       []verify.CheckResult `json:"results,omitempty"`
 }
 
 const verifyRunsPerTenantCap = 200
@@ -399,8 +400,8 @@ type verifyCaseRow struct {
 }
 
 // caseContext projects the row into the module-trigger/parser context.
-func (r verifyCaseRow) caseContext() verifyCaseContext {
-	return verifyCaseContext{
+func (r verifyCaseRow) caseContext() verify.CaseContext {
+	return verify.CaseContext{
 		Owner:         r.Owner,
 		TopHypothesis: r.TopHyp,
 		VerdictTier:   r.Verdict,
@@ -450,7 +451,7 @@ FORMAT JSONEachRow`, chschema.ISO("window_start"), caseID)
 // resolveVerifyTargets maps the case's implicated device names/ids to
 // discovered devices VISIBLE TO THE CASE'S TENANT, with whatever management
 // channels are configured. Devices the tenant cannot see never become targets.
-func (s *server) resolveVerifyTargets(tenant string, names []string) []verifyTarget {
+func (s *server) resolveVerifyTargets(tenant string, names []string) []verify.Target {
 	if len(names) == 0 || s.discovery == nil {
 		return nil
 	}
@@ -461,7 +462,7 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verifyTar
 		}
 	}
 	sshCred := s.verifyCfg.sshCredFor(tenant)
-	var out []verifyTarget
+	var out []verify.Target
 	for _, dev := range s.discovery.Devices() {
 		if !want[strings.ToLower(dev.ID)] && !want[strings.ToLower(dev.Name)] {
 			continue
@@ -469,7 +470,7 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verifyTar
 		if !canSeeDevice(dev, tenant, false) || strings.TrimSpace(dev.Address) == "" {
 			continue
 		}
-		t := verifyTarget{Device: dev, SSH: sshCred}
+		t := verify.Target{Device: dev, SSH: sshCred}
 		if s.snmpCreds != nil && dev.CredentialRef != "" {
 			ref := dev.CredentialRef
 			if s.credOverrides != nil {
@@ -484,7 +485,7 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verifyTar
 			}
 		}
 		out = append(out, t)
-		if len(out) >= verifyMaxDevices() {
+		if len(out) >= verify.MaxDevices() {
 			break
 		}
 	}
@@ -499,12 +500,12 @@ var errVerifyNoTargets = errors.New("no verifiable devices resolved from the cas
 // startVerificationRun validates, records and launches one bounded run for the
 // case. Async: returns the RUNNING record immediately; the engine's run budget
 // bounds the background work. Every run is audited with who/what/why.
-func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string, devices []string, cc verifyCaseContext) (verifyRunRecord, error) {
+func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string, devices []string, cc verify.CaseContext) (verifyRunRecord, error) {
 	if !s.verifyEnabledFor(tenant) {
-		return verifyRunRecord{}, errVerifyDisabled
+		return verifyRunRecord{}, verify.ErrDisabled
 	}
 	if last, ok := s.verifyRuns.latest(tenant, caseID); ok && last.Status == "running" &&
-		time.Since(last.StartedAt) < verifyRunBudget()+time.Minute {
+		time.Since(last.StartedAt) < verify.RunBudget()+time.Minute {
 		return verifyRunRecord{}, errVerifyRunning
 	}
 	targets := s.resolveVerifyTargets(tenant, devices)
@@ -512,14 +513,14 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		return verifyRunRecord{}, errVerifyNoTargets
 	}
 	// The battery this case earns: core checks + seam/fault-fired modules.
-	battery := verifyActiveBattery(cc)
+	battery := verify.ActiveBattery(cc)
 	devIDs := make([]string, 0, len(targets))
 	cmds := map[string]any{}
 	for _, t := range targets {
 		devIDs = append(devIDs, t.Device.ID)
 		if t.SSH != nil {
-			for _, spec := range groupSpecsIn(battery, "ssh") {
-				if cmd, ok := verifyCommandFor(t.Device.Vendor, spec.ID); ok {
+			for _, spec := range verify.GroupSpecsIn(battery, "ssh") {
+				if cmd, ok := verify.CommandFor(t.Device.Vendor, spec.ID); ok {
 					cmds[t.Device.ID+"/"+spec.ID] = cmd
 				}
 			}
@@ -534,7 +535,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		StartedAt:     time.Now().UTC(),
 		Status:        "running",
 		Devices:       devIDs,
-		Modules:       verifyModulesFor(cc),
+		Modules:       verify.ModulesFor(cc),
 	}
 	s.verifyRuns.put(rec)
 	s.auditVerifyRun(rec, "start", why, cmds)
@@ -545,8 +546,8 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 	// than fail one verification run.
 	safeGo("verify-run", func() {
 		// Bounded by the engine's own run budget; independent of the request.
-		engine := newVerifyEngineForCase(s.newVerifyDialers(), cc)
-		results := engine.run(context.Background(), targets)
+		engine := verify.NewEngineForCase(s.newVerifyDialers(), cc)
+		results := engine.Run(context.Background(), targets)
 		run.Results = results
 		run.FinishedAt = time.Now().UTC()
 		run.Status = "completed"
@@ -600,7 +601,7 @@ func (s *server) auditVerifyRun(rec verifyRunRecord, phase, why string, cmds map
 func (s *server) emitVerificationResults(rec verifyRunRecord) {
 	recs := make([]proxyRecord, 0, len(rec.Results))
 	for _, r := range rec.Results {
-		if r.Status == verifyStatusSkipped {
+		if r.Status == verify.StatusSkipped {
 			continue // a skipped check is an operational fact, not evidence
 		}
 		recs = append(recs, proxyRecord{Key: rec.TenantID, Value: map[string]any{

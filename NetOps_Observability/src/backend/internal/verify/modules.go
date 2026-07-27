@@ -1,4 +1,4 @@
-package main
+package verify
 
 // verify_modules.go — prebuilt deterministic troubleshooting MODULES for the
 // Active Verification engine (verify_engine.go). A module is a set of extra
@@ -40,10 +40,10 @@ import (
 
 // ---- case context: what a run knows about the case it verifies --------------
 
-// verifyCaseContext carries the case attributes module triggers and parsers
+// CaseContext carries the case attributes module triggers and parsers
 // key on. Zero values are honest unknowns — modules that need a field a case
 // does not carry simply do not fire (or fall back to wide, documented slack).
-type verifyCaseContext struct {
+type CaseContext struct {
 	Owner         string    // corr_current.owner — seam-ownership badge (netops/isp/carrier/…)
 	TopHypothesis string    // corr_current.top_hypothesis — winning template id
 	VerdictTier   string    // undetermined | suspected | confirmed
@@ -112,7 +112,7 @@ var verifyModuleCommandTable = map[string]map[string]string{
 
 // ---- trigger gates ----------------------------------------------------------
 
-// verifyModulesFor decides which modules a case's context earns:
+// ModulesFor decides which modules a case's context earns:
 //   - iface_deep:    every case that reached target resolution at all (a run
 //     only exists when the case localized at least one device)
 //   - bgp_edge:      the case's seam is edge/ISP/middle-mile — by seam owner
@@ -120,7 +120,7 @@ var verifyModuleCommandTable = map[string]map[string]string{
 //   - recent_change: the case is at the SUSPECTED tier — still hunting a
 //     cause, where "a config change landed just before" is a top-tier
 //     "possibly because of" signal
-func verifyModulesFor(cc verifyCaseContext) []string {
+func ModulesFor(cc CaseContext) []string {
 	mods := []string{verifyModuleIfaceDeep}
 	if verifyEdgeSeamCase(cc) {
 		mods = append(mods, verifyModuleBGPEdge)
@@ -135,7 +135,7 @@ func verifyModulesFor(cc verifyCaseContext) []string {
 // seam. Owner is authoritative (the engine's seam-ownership attribution);
 // hypothesis-id domain tokens are the fallback for cases owned by netops but
 // diagnosed at the edge (e.g. sig.ent.wan-edge.routing-instability).
-func verifyEdgeSeamCase(cc verifyCaseContext) bool {
+func verifyEdgeSeamCase(cc CaseContext) bool {
 	switch strings.ToLower(strings.TrimSpace(cc.Owner)) {
 	case "isp", "carrier":
 		return true
@@ -149,12 +149,12 @@ func verifyEdgeSeamCase(cc verifyCaseContext) bool {
 	return false
 }
 
-// verifyActiveBattery is the check set one run actually executes: the fixed
+// ActiveBattery is the check set one run actually executes: the fixed
 // core battery plus the checks of every module the case context fires.
-func verifyActiveBattery(cc verifyCaseContext) []verifyCheckSpec {
+func ActiveBattery(cc CaseContext) []verifyCheckSpec {
 	out := verifyBattery()
 	fired := map[string]bool{}
-	for _, m := range verifyModulesFor(cc) {
+	for _, m := range ModulesFor(cc) {
 		fired[m] = true
 	}
 	for _, s := range verifyModuleSpecs() {
@@ -166,7 +166,7 @@ func verifyActiveBattery(cc verifyCaseContext) []verifyCheckSpec {
 }
 
 // verifyModuleCommandFor resolves (vendor, check) → command from the module
-// table; same unknown ⇒ skip contract as verifyCommandFor.
+// table; same unknown ⇒ skip contract as CommandFor.
 func verifyModuleCommandFor(vendor, checkID string) (string, bool) {
 	fam, ok := verifyModuleCommandTable[strings.ToLower(strings.TrimSpace(vendor))]
 	if !ok {
@@ -194,7 +194,7 @@ func verifyModuleCommandAllowed(cmd string) bool {
 // verifyRecentWindow is how far back from now a flap / session reset / config
 // change still counts as "inside or shortly before the incident window":
 // incident age plus one hour of slack; 24h when the window is unknown.
-func verifyRecentWindow(now time.Time, cc verifyCaseContext) time.Duration {
+func verifyRecentWindow(now time.Time, cc CaseContext) time.Duration {
 	if cc.WindowStart.IsZero() || now.Before(cc.WindowStart) {
 		return 24 * time.Hour
 	}
@@ -277,10 +277,10 @@ func parseDeviceTime(s string) (time.Time, bool) {
 // parseVerifyModuleOutput classifies one module check's output. Device output
 // is untrusted input: bounded upstream, sanitized before storage. Conservative
 // by contract: unparseable ⇒ skipped.
-func parseVerifyModuleOutput(checkID, vendor, output string, now time.Time, cc verifyCaseContext) (status, observed string) {
+func parseVerifyModuleOutput(checkID, vendor, output string, now time.Time, cc CaseContext) (status, observed string) {
 	txt := strings.TrimSpace(output)
 	if txt == "" && !(checkID == "ssh_config_change" && strings.ToLower(vendor) == "arista") {
-		return verifyStatusSkipped, "empty command output"
+		return StatusSkipped, "empty command output"
 	}
 	switch checkID {
 	case "ssh_iface_deep":
@@ -290,7 +290,7 @@ func parseVerifyModuleOutput(checkID, vendor, output string, now time.Time, cc v
 	case "ssh_config_change":
 		return parseConfigChange(txt, vendor, now, cc)
 	default:
-		return verifyStatusSkipped, "no module parser for check " + sanitizeObserved(checkID)
+		return StatusSkipped, "no module parser for check " + sanitizeObserved(checkID)
 	}
 }
 
@@ -340,7 +340,7 @@ func ifaceHeader(line string) (name string, adminDown, ok bool) {
 	return "", false, false
 }
 
-func parseIfaceDeep(txt string, now time.Time, cc verifyCaseContext) (string, string) {
+func parseIfaceDeep(txt string, now time.Time, cc CaseContext) (string, string) {
 	recent := verifyRecentWindow(now, cc)
 	iface, adminDown := "", false
 	sawHeader := false
@@ -429,12 +429,12 @@ func parseIfaceDeep(txt string, now time.Time, cc verifyCaseContext) (string, st
 		}
 	}
 	if len(faults) > 0 {
-		return verifyStatusFail, "interface deep-dive faults: " + sanitizeObserved(strings.Join(faults, "; "))
+		return StatusFail, "interface deep-dive faults: " + sanitizeObserved(strings.Join(faults, "; "))
 	}
 	if !sawHeader {
-		return verifyStatusSkipped, "unrecognized interface detail output: " + sanitizeObserved(firstLine(txt))
+		return StatusSkipped, "unrecognized interface detail output: " + sanitizeObserved(firstLine(txt))
 	}
-	return verifyStatusPass, "interface counters clean — no CRC/input/output errors, drops, duplex mismatch or recent flap"
+	return StatusPass, "interface counters clean — no CRC/input/output errors, drops, duplex mismatch or recent flap"
 }
 
 // ---- module 2: BGP/edge seam ------------------------------------------------
@@ -459,11 +459,11 @@ var (
 	reRcvTotal    = regexp.MustCompile(`(?i)\breceived total routes:\s*(\d+)`)
 )
 
-func parseBGPEdge(txt string, now time.Time, cc verifyCaseContext) (string, string) {
+func parseBGPEdge(txt string, now time.Time, cc CaseContext) (string, string) {
 	low := strings.ToLower(txt)
 	if strings.Contains(low, "not active") || strings.Contains(low, "not running") ||
 		strings.Contains(low, "% bgp") {
-		return verifyStatusSkipped, "bgp not running on device — nothing to verify"
+		return StatusSkipped, "bgp not running on device — nothing to verify"
 	}
 	recent := verifyRecentWindow(now, cc)
 	var reasons []string
@@ -531,12 +531,12 @@ func parseBGPEdge(txt string, now time.Time, cc verifyCaseContext) (string, stri
 		addReason(fmt.Sprintf("%d bgp neighbor(s) not established", downCount))
 	}
 	if len(reasons) > 0 {
-		return verifyStatusFail, "bgp edge faults: " + sanitizeObserved(strings.Join(reasons, "; "))
+		return StatusFail, "bgp edge faults: " + sanitizeObserved(strings.Join(reasons, "; "))
 	}
 	if established {
-		return verifyStatusPass, "all bgp neighbors established — no recent reset, no prefix collapse"
+		return StatusPass, "all bgp neighbors established — no recent reset, no prefix collapse"
 	}
-	return verifyStatusSkipped, "unrecognized bgp output: " + sanitizeObserved(firstLine(txt))
+	return StatusSkipped, "unrecognized bgp output: " + sanitizeObserved(firstLine(txt))
 }
 
 // ---- module 3: recent-change detector ---------------------------------------
@@ -558,18 +558,18 @@ func stripBySuffix(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func parseConfigChange(txt, vendor string, now time.Time, cc verifyCaseContext) (string, string) {
+func parseConfigChange(txt, vendor string, now time.Time, cc CaseContext) (string, string) {
 	// Arista EOS reads change evidence as a running↔startup diff: any diff
 	// hunk means an UNSAVED change is present right now; empty output means
 	// the configs match (EOS prints nothing when there is no difference).
 	if strings.ToLower(strings.TrimSpace(vendor)) == "arista" {
 		if strings.TrimSpace(txt) == "" {
-			return verifyStatusPass, "running-config matches startup-config — no unsaved configuration change"
+			return StatusPass, "running-config matches startup-config — no unsaved configuration change"
 		}
 		if reDiffMarker.MatchString(txt) {
-			return verifyStatusFail, "running-config differs from startup-config — unsaved configuration change present"
+			return StatusFail, "running-config differs from startup-config — unsaved configuration change present"
 		}
-		return verifyStatusSkipped, "unrecognized config-diff output: " + sanitizeObserved(firstLine(txt))
+		return StatusSkipped, "unrecognized config-diff output: " + sanitizeObserved(firstLine(txt))
 	}
 
 	var newest time.Time
@@ -592,17 +592,17 @@ func parseConfigChange(txt, vendor string, now time.Time, cc verifyCaseContext) 
 		consider(raw)
 	}
 	if newest.IsZero() {
-		return verifyStatusSkipped, "no configuration-change timestamp recognized: " + sanitizeObserved(firstLine(txt))
+		return StatusSkipped, "no configuration-change timestamp recognized: " + sanitizeObserved(firstLine(txt))
 	}
 	// "Inside or shortly before the incident window": window start minus 1h of
 	// slack (24h lookback when the window is unknown). Device clocks are
 	// compared as UTC — verifyRecentWindow's slack absorbs small zone drift.
 	boundary := now.Add(-verifyRecentWindow(now, cc))
 	if newest.After(boundary) {
-		return verifyStatusFail, "configuration change at " + sanitizeObserved(newestRaw) +
+		return StatusFail, "configuration change at " + sanitizeObserved(newestRaw) +
 			" — inside or shortly before the incident window (possible cause)"
 	}
-	return verifyStatusPass, "last configuration change at " + sanitizeObserved(newestRaw) +
+	return StatusPass, "last configuration change at " + sanitizeObserved(newestRaw) +
 		" — predates the incident window"
 }
 

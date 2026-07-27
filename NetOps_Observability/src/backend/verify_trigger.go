@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/verify"
 	"time"
 
 	"netops/backend/internal/chschema"
@@ -87,7 +88,7 @@ FORMAT JSONEachRow`
 				continue // localization unknown — nothing to interrogate
 			}
 			// Module-trigger context: the scan itself guarantees the tier.
-			cc := verifyCaseContext{
+			cc := verify.CaseContext{
 				Owner:         asStr(row["owner"]),
 				TopHypothesis: asStr(row["top_hypothesis"]),
 				VerdictTier:   "suspected",
@@ -101,7 +102,7 @@ FORMAT JSONEachRow`
 				logInfo("verify", "auto verification launched", map[string]any{
 					"tenant": tenant, "correlation_id": cid, "run_id": rec.RunID,
 				})
-			case errors.Is(err, errVerifyNoTargets), errors.Is(err, errVerifyRunning), errors.Is(err, errVerifyDisabled):
+			case errors.Is(err, errVerifyNoTargets), errors.Is(err, errVerifyRunning), errors.Is(err, verify.ErrDisabled):
 				// expected paces/gates — quiet skip
 			default:
 				logWarn("verify", "auto verification failed to start", map[string]any{
@@ -110,4 +111,16 @@ FORMAT JSONEachRow`
 			}
 		}
 	}
+}
+
+// clampInt bounds v to [lo, hi] (local copy; the original moved into
+// internal/verify with the engine).
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }

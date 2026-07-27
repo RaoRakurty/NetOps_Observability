@@ -84,7 +84,11 @@ import (
 //	2026-07-27  262  internal/gqlparse (the F-72 GraphQL subset parser — zero
 //	                  external deps, one consumer; the handler and its RBAC
 //	                  gate stayed)
-const rootPackageCeiling = 262
+//	2026-07-27  260  internal/verify (the Active Verification engine + its
+//	                  prebuilt modules — closed command tables, deterministic
+//	                  parsers, injected Dialers; the SSH runner, service,
+//	                  trigger and HTTP stayed)
+const rootPackageCeiling = 260
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

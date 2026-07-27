@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"netops/backend/internal/verify"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -26,8 +27,8 @@ import (
 )
 
 // newVerifyDialers wires the engine's executor seams to the real network.
-func (s *server) newVerifyDialers() verifyDialers {
-	return verifyDialers{
+func (s *server) newVerifyDialers() verify.Dialers {
+	return verify.Dialers{
 		TCPReach: func(ctx context.Context, addr string) error {
 			d := net.Dialer{}
 			conn, err := d.DialContext(ctx, "tcp", addr)
@@ -48,14 +49,14 @@ const verifySSHOutputCap = 256 << 10 // 256 KiB
 // verifySSHRun opens ONE SSH connection to the device and executes the given
 // allowlisted commands, each in its own exec session under its own timeout.
 // Session content beyond the bounded command output is never logged.
-func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verifySSHCred, cmds map[string]string) map[string]verifySSHOut {
-	out := map[string]verifySSHOut{}
+func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verify.SSHCred, cmds map[string]string) map[string]verify.SSHOut {
+	out := map[string]verify.SSHOut{}
 	ids := make([]string, 0, len(cmds))
 	for id, cmd := range cmds {
-		if !verifyCommandAllowed(cmd) {
+		if !verify.CommandAllowed(cmd) {
 			// Impossible via the engine (commands come from the table), kept as
 			// a hard runtime guarantee regardless of caller.
-			out[id] = verifySSHOut{Err: errors.New("command not in read-only allowlist — refused")}
+			out[id] = verify.SSHOut{Err: errors.New("command not in read-only allowlist — refused")}
 			continue
 		}
 		ids = append(ids, id)
@@ -70,7 +71,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 		signer, err := parsePrivateKey(cred.PrivateKey, cred.Passphrase)
 		if err != nil {
 			for _, id := range ids {
-				out[id] = verifySSHOut{Err: fmt.Errorf("invalid verification ssh key: %w", err)}
+				out[id] = verify.SSHOut{Err: fmt.Errorf("invalid verification ssh key: %w", err)}
 			}
 			return out
 		}
@@ -90,7 +91,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	}
 	if len(auth) == 0 {
 		for _, id := range ids {
-			out[id] = verifySSHOut{Err: errors.New("no verification ssh credential material")}
+			out[id] = verify.SSHOut{Err: errors.New("no verification ssh credential material")}
 		}
 		return out
 	}
@@ -121,7 +122,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		for _, id := range ids {
-			out[id] = verifySSHOut{Err: fmt.Errorf("connect failed: %w", err)}
+			out[id] = verify.SSHOut{Err: fmt.Errorf("connect failed: %w", err)}
 		}
 		return out
 	}
@@ -129,7 +130,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	if err != nil {
 		_ = conn.Close()
 		for _, id := range ids {
-			out[id] = verifySSHOut{Err: fmt.Errorf("ssh handshake failed: %w", err)}
+			out[id] = verify.SSHOut{Err: fmt.Errorf("ssh handshake failed: %w", err)}
 		}
 		return out
 	}
@@ -148,7 +149,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 		}
 	}()
 
-	perCmd := verifyCheckTimeout()
+	perCmd := verify.CheckTimeout()
 	for _, id := range ids {
 		if ctx.Err() != nil {
 			// remaining commands stay absent — the engine reports them skipped
@@ -161,10 +162,10 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 
 // runOneSSHCommand executes a single allowlisted command in a fresh exec
 // session with a hard timeout and a bounded output buffer.
-func runOneSSHCommand(client *ssh.Client, cmd string, timeout time.Duration) verifySSHOut {
+func runOneSSHCommand(client *ssh.Client, cmd string, timeout time.Duration) verify.SSHOut {
 	session, err := client.NewSession()
 	if err != nil {
-		return verifySSHOut{Err: fmt.Errorf("session open failed: %w", err)}
+		return verify.SSHOut{Err: fmt.Errorf("session open failed: %w", err)}
 	}
 	defer session.Close()
 
@@ -188,11 +189,11 @@ func runOneSSHCommand(client *ssh.Client, cmd string, timeout time.Duration) ver
 		// from a full listing, and that prefix would refute a real fault
 		// appearing further down. Mark it so the engine refuses to score it.
 		if buf.Len() > 0 {
-			return verifySSHOut{Output: buf.String(), Truncated: killed.Load() || buf.overflowed}
+			return verify.SSHOut{Output: buf.String(), Truncated: killed.Load() || buf.overflowed}
 		}
-		return verifySSHOut{Err: fmt.Errorf("exec failed: %w", err)}
+		return verify.SSHOut{Err: fmt.Errorf("exec failed: %w", err)}
 	}
-	return verifySSHOut{Output: buf.String(), Truncated: buf.overflowed}
+	return verify.SSHOut{Output: buf.String(), Truncated: buf.overflowed}
 }
 
 // boundedBuf keeps at most cap bytes and silently drops the rest (bounded IO —

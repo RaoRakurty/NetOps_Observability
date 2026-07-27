@@ -1,4 +1,4 @@
-package main
+package verify
 
 // verify_modules_test.go — troubleshooting-module checks (verify_modules.go):
 // closed-table invariants, seam/fault trigger gates, and the deterministic
@@ -16,7 +16,7 @@ import (
 // window is 1h30m (incident age + 1h slack).
 var (
 	modNow = time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
-	modCC  = verifyCaseContext{
+	modCC  = CaseContext{
 		Owner:         "isp",
 		TopHypothesis: "sig.ent.wan-edge.routing-instability",
 		VerdictTier:   "suspected",
@@ -34,7 +34,7 @@ func TestModuleCommandTableCoversAllVendorsAndChecks(t *testing.T) {
 			if !ok || cmd == "" {
 				t.Fatalf("%s/%s: no module command", v, spec.ID)
 			}
-			if !verifyCommandAllowed(cmd) {
+			if !CommandAllowed(cmd) {
 				t.Fatalf("%s/%s: module command %q must pass the allowlist gate", v, spec.ID, cmd)
 			}
 		}
@@ -51,10 +51,10 @@ func TestModuleCommandTableCoversAllVendorsAndChecks(t *testing.T) {
 }
 
 func TestVerifyCommandForFallsThroughToModuleTable(t *testing.T) {
-	if cmd, ok := verifyCommandFor("cisco", "ssh_config_change"); !ok || cmd != "show running-config" {
-		t.Fatalf("module check must resolve through verifyCommandFor, got %q %v", cmd, ok)
+	if cmd, ok := CommandFor("cisco", "ssh_config_change"); !ok || cmd != "show running-config" {
+		t.Fatalf("module check must resolve through CommandFor, got %q %v", cmd, ok)
 	}
-	if cmd, ok := verifyCommandFor("cisco", "ssh_interfaces"); !ok || cmd != "show ip interface brief" {
+	if cmd, ok := CommandFor("cisco", "ssh_interfaces"); !ok || cmd != "show ip interface brief" {
 		t.Fatalf("core table must stay authoritative for core checks, got %q %v", cmd, ok)
 	}
 }
@@ -72,22 +72,22 @@ func TestVerifyModulesForTriggerGates(t *testing.T) {
 	}
 	cases := []struct {
 		name       string
-		cc         verifyCaseContext
+		cc         CaseContext
 		wantBGP    bool
 		wantChange bool
 	}{
-		{"isp owner fires bgp_edge", verifyCaseContext{Owner: "isp", VerdictTier: "confirmed"}, true, false},
-		{"carrier owner fires bgp_edge", verifyCaseContext{Owner: "carrier"}, true, false},
-		{"netops owner alone does not", verifyCaseContext{Owner: "netops", TopHypothesis: "sig.ent.campus.stp-loop"}, false, false},
-		{"wan-edge hypothesis fires bgp_edge", verifyCaseContext{Owner: "netops", TopHypothesis: "sig.ent.wan-edge.routing-instability"}, true, false},
-		{"middle-mile hypothesis fires bgp_edge", verifyCaseContext{TopHypothesis: "sig.ent.middle-mile.physical-degradation"}, true, false},
-		{"bgp hypothesis fires bgp_edge", verifyCaseContext{TopHypothesis: "sig.ent.dc.bgp-session-flap"}, true, false},
-		{"suspected tier fires recent_change", verifyCaseContext{VerdictTier: "suspected"}, false, true},
-		{"confirmed tier does not fire recent_change", verifyCaseContext{VerdictTier: "confirmed"}, false, false},
-		{"empty context fires only iface_deep", verifyCaseContext{}, false, false},
+		{"isp owner fires bgp_edge", CaseContext{Owner: "isp", VerdictTier: "confirmed"}, true, false},
+		{"carrier owner fires bgp_edge", CaseContext{Owner: "carrier"}, true, false},
+		{"netops owner alone does not", CaseContext{Owner: "netops", TopHypothesis: "sig.ent.campus.stp-loop"}, false, false},
+		{"wan-edge hypothesis fires bgp_edge", CaseContext{Owner: "netops", TopHypothesis: "sig.ent.wan-edge.routing-instability"}, true, false},
+		{"middle-mile hypothesis fires bgp_edge", CaseContext{TopHypothesis: "sig.ent.middle-mile.physical-degradation"}, true, false},
+		{"bgp hypothesis fires bgp_edge", CaseContext{TopHypothesis: "sig.ent.dc.bgp-session-flap"}, true, false},
+		{"suspected tier fires recent_change", CaseContext{VerdictTier: "suspected"}, false, true},
+		{"confirmed tier does not fire recent_change", CaseContext{VerdictTier: "confirmed"}, false, false},
+		{"empty context fires only iface_deep", CaseContext{}, false, false},
 	}
 	for _, c := range cases {
-		mods := verifyModulesFor(c.cc)
+		mods := ModulesFor(c.cc)
 		if !has(mods, verifyModuleIfaceDeep) {
 			t.Errorf("%s: iface_deep must always fire for a localized case", c.name)
 		}
@@ -102,11 +102,11 @@ func TestVerifyModulesForTriggerGates(t *testing.T) {
 
 func TestVerifyActiveBatteryComposition(t *testing.T) {
 	core := len(verifyBattery())
-	all := verifyActiveBattery(modCC) // isp + suspected ⇒ all three modules
+	all := ActiveBattery(modCC) // isp + suspected ⇒ all three modules
 	if len(all) != core+3 {
 		t.Fatalf("want core+3 checks, got %d (core %d)", len(all), core)
 	}
-	none := verifyActiveBattery(verifyCaseContext{VerdictTier: "confirmed", Owner: "netops"})
+	none := ActiveBattery(CaseContext{VerdictTier: "confirmed", Owner: "netops"})
 	if len(none) != core+1 { // iface_deep only
 		t.Fatalf("want core+1 checks, got %d", len(none))
 	}
@@ -204,13 +204,13 @@ func TestParseIfaceDeep(t *testing.T) {
 	cases := []struct {
 		name, in, wantStatus, wantSub string
 	}{
-		{"cisco CRC+duplex faults; admin-down ignored has own faults suppressed", ciscoIfFaulty, verifyStatusFail, "CRC"},
-		{"cisco clean passes", ciscoIfClean, verifyStatusPass, "clean"},
-		{"arista recent flap + link changes", aristaIfFlap, verifyStatusFail, "link status changes"},
-		{"junos errors + carrier transitions", junosIfErrors, verifyStatusFail, "carrier transitions"},
-		{"vrp CRC + recent physical up", vrpIfCRC, verifyStatusFail, "CRC"},
-		{"nokia CRC + half duplex", nokiaPortFault, verifyStatusFail, "half-duplex"},
-		{"gibberish skipped", "% Invalid input detected", verifyStatusSkipped, "unrecognized"},
+		{"cisco CRC+duplex faults; admin-down ignored has own faults suppressed", ciscoIfFaulty, StatusFail, "CRC"},
+		{"cisco clean passes", ciscoIfClean, StatusPass, "clean"},
+		{"arista recent flap + link changes", aristaIfFlap, StatusFail, "link status changes"},
+		{"junos errors + carrier transitions", junosIfErrors, StatusFail, "carrier transitions"},
+		{"vrp CRC + recent physical up", vrpIfCRC, StatusFail, "CRC"},
+		{"nokia CRC + half duplex", nokiaPortFault, StatusFail, "half-duplex"},
+		{"gibberish skipped", "% Invalid input detected", StatusSkipped, "unrecognized"},
 	}
 	for _, c := range cases {
 		got, obs := parseIfaceDeep(strings.TrimSpace(c.in), modNow, modCC)
@@ -222,13 +222,13 @@ func TestParseIfaceDeep(t *testing.T) {
 	// fails: strip the up interface from the cisco fixture and keep only the
 	// administratively down one — expect PASS (its faults are intended state).
 	adminOnly := "GigabitEthernet0/1 is administratively down, line protocol is down\n     99 input errors, 99 CRC, 0 frame, 0 overrun, 0 ignored\n"
-	if st, obs := parseIfaceDeep(adminOnly, modNow, modCC); st != verifyStatusPass {
+	if st, obs := parseIfaceDeep(adminOnly, modNow, modCC); st != StatusPass {
 		t.Errorf("admin-down-only counters must pass, got %s %q", st, obs)
 	}
 	// Arista up-duration far older than the incident window must not fail.
 	old := strings.Replace(aristaIfFlap, "Up 12 minutes, 40 seconds", "Up 5 days, 3 hours", 1)
 	old = strings.Replace(old, "4 link status changes", "1 link status changes", 1)
-	if st, obs := parseIfaceDeep(old, modNow, modCC); st != verifyStatusPass {
+	if st, obs := parseIfaceDeep(old, modNow, modCC); st != StatusPass {
 		t.Errorf("old up-time must pass, got %s %q", st, obs)
 	}
 }
@@ -280,15 +280,15 @@ func TestParseBGPEdge(t *testing.T) {
 	cases := []struct {
 		name, in, wantStatus, wantSub string
 	}{
-		{"cisco recent session reset", ciscoBGPRecentReset, verifyStatusFail, "reset inside the incident window"},
-		{"cisco idle neighbor", ciscoBGPDown, verifyStatusFail, "not established"},
-		{"arista prefix collapse", aristaBGPCollapse, verifyStatusFail, "prefix-count collapse"},
-		{"junos down peer + active", junosBGPMixed, verifyStatusFail, "down peer"},
-		{"vrp idle row", vrpBGPIdle, verifyStatusFail, "not established"},
-		{"vrp healthy", vrpBGPHealthy, verifyStatusPass, "established"},
-		{"nokia recent uptime + active peer", nokiaBGPSummary, verifyStatusFail, "reset inside the incident window"},
-		{"bgp not running", "% BGP not active\n", verifyStatusSkipped, "not running"},
-		{"gibberish", "hello world", verifyStatusSkipped, "unrecognized"},
+		{"cisco recent session reset", ciscoBGPRecentReset, StatusFail, "reset inside the incident window"},
+		{"cisco idle neighbor", ciscoBGPDown, StatusFail, "not established"},
+		{"arista prefix collapse", aristaBGPCollapse, StatusFail, "prefix-count collapse"},
+		{"junos down peer + active", junosBGPMixed, StatusFail, "down peer"},
+		{"vrp idle row", vrpBGPIdle, StatusFail, "not established"},
+		{"vrp healthy", vrpBGPHealthy, StatusPass, "established"},
+		{"nokia recent uptime + active peer", nokiaBGPSummary, StatusFail, "reset inside the incident window"},
+		{"bgp not running", "% BGP not active\n", StatusSkipped, "not running"},
+		{"gibberish", "hello world", StatusSkipped, "unrecognized"},
 	}
 	for _, c := range cases {
 		got, obs := parseBGPEdge(strings.TrimSpace(c.in), modNow, modCC)
@@ -300,7 +300,7 @@ func TestParseBGPEdge(t *testing.T) {
 	healthy := `Neighbor        V           AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State/PfxRcd
 10.0.0.6        4        65002    9021    9033        5    0    0 5d02h         120
 `
-	if st, obs := parseBGPEdge(healthy, modNow, modCC); st != verifyStatusPass {
+	if st, obs := parseBGPEdge(healthy, modNow, modCC); st != StatusPass {
 		t.Errorf("healthy summary must pass, got %s %q", st, obs)
 	}
 }
@@ -315,30 +315,30 @@ func TestParseConfigChange(t *testing.T) {
 	}{
 		{"ios-xe change inside window", "cisco",
 			"Building configuration...\n! Last configuration change at " + inWindow + " by admin\n! NVRAM config last updated at 09:00:00 UTC Tue Jun 30 2026\nhostname edge-1\n",
-			verifyStatusFail, "inside or shortly before"},
+			StatusFail, "inside or shortly before"},
 		{"ios-xe old change", "cisco",
 			"! Last configuration change at " + old + " by admin\nhostname edge-1\n",
-			verifyStatusPass, "predates"},
+			StatusPass, "predates"},
 		{"ios-xr format inside window", "cisco",
 			"!! IOS XR Configuration 7.5.2\n!! Last configuration change at Fri Jul 18 11:41:00 2026 by admin\n",
-			verifyStatusFail, "inside or shortly before"},
+			StatusFail, "inside or shortly before"},
 		{"junos commit inside window", "juniper",
 			"0   2026-07-18 11:42:33 UTC by admin via cli\n1   2026-07-01 08:00:00 UTC by admin via cli\n",
-			verifyStatusFail, "inside or shortly before"},
+			StatusFail, "inside or shortly before"},
 		{"junos old commits", "juniper",
 			"0   2026-06-20 08:00:00 UTC by admin via cli\n1   2026-06-01 08:00:00 UTC by admin via cli\n",
-			verifyStatusPass, "predates"},
+			StatusPass, "predates"},
 		{"vrp commit list inside window", "huawei",
 			"Slot  CommitId      Label  User   TimeStamp\n1     1000000042    -      admin  2026-07-18 11:39:00\n",
-			verifyStatusFail, "inside or shortly before"},
+			StatusFail, "inside or shortly before"},
 		{"nokia rollback inside window", "nokia",
 			"Rollback Files\nIdx Suffix   Comment      Date\nlatest-rb    pre-change   2026/07/18 11:38:00\n",
-			verifyStatusFail, "inside or shortly before"},
+			StatusFail, "inside or shortly before"},
 		{"arista unsaved diff", "arista",
 			"--- flash:startup-config\n+++ system:running-config\n@@ -10,2 +10,3 @@\n+ntp server 10.9.9.9\n",
-			verifyStatusFail, "unsaved"},
-		{"arista no diff (empty output)", "arista", "", verifyStatusPass, "matches startup-config"},
-		{"cisco nothing recognizable", "cisco", "hostname edge-1\ninterface Gi0/0\n", verifyStatusSkipped, "no configuration-change timestamp"},
+			StatusFail, "unsaved"},
+		{"arista no diff (empty output)", "arista", "", StatusPass, "matches startup-config"},
+		{"cisco nothing recognizable", "cisco", "hostname edge-1\ninterface Gi0/0\n", StatusSkipped, "no configuration-change timestamp"},
 	}
 	for _, c := range cases {
 		got, obs := parseVerifyModuleOutput("ssh_config_change", c.vendor, c.in, modNow, modCC)
@@ -347,11 +347,11 @@ func TestParseConfigChange(t *testing.T) {
 		}
 	}
 	// Unknown incident window falls back to a 24h lookback.
-	noWin := verifyCaseContext{}
-	if st, _ := parseConfigChange("! Last configuration change at 13:00:00 UTC Fri Jul 17 2026 by x", "cisco", modNow, noWin); st != verifyStatusFail {
+	noWin := CaseContext{}
+	if st, _ := parseConfigChange("! Last configuration change at 13:00:00 UTC Fri Jul 17 2026 by x", "cisco", modNow, noWin); st != StatusFail {
 		t.Errorf("change 23h ago with unknown window must fail, got %s", st)
 	}
-	if st, _ := parseConfigChange("! Last configuration change at 09:00:00 UTC Tue Jun 30 2026 by x", "cisco", modNow, noWin); st != verifyStatusPass {
+	if st, _ := parseConfigChange("! Last configuration change at 09:00:00 UTC Tue Jun 30 2026 by x", "cisco", modNow, noWin); st != StatusPass {
 		t.Errorf("old change with unknown window must pass, got %s", st)
 	}
 }
@@ -359,7 +359,7 @@ func TestParseConfigChange(t *testing.T) {
 // ---- engine integration: module checks run only when fired ------------------
 
 func TestEngineRunsFiredModulesWithEvidenceStamping(t *testing.T) {
-	e := newVerifyEngineForCase(fakeDialers(map[string]verifySSHOut{
+	e := NewEngineForCase(fakeDialers(map[string]SSHOut{
 		"ssh_interfaces":    {Output: "Interface Status Protocol\nGi0/0 10.0.0.1 YES NVRAM up up\n"},
 		"ssh_routing":       {Output: "Neighbor V AS Up/Down State/PfxRcd\n10.0.0.2 4 65001 00:10:11 42\n"},
 		"ssh_iface_deep":    {Output: ciscoIfFaulty},
@@ -367,39 +367,39 @@ func TestEngineRunsFiredModulesWithEvidenceStamping(t *testing.T) {
 		"ssh_config_change": {Output: "! Last configuration change at 11:40:10 UTC Fri Jul 18 2026 by admin\n"},
 	}), modCC)
 	e.now = func() time.Time { return modNow }
-	m := resultsByCheck(e.run(context.Background(), []verifyTarget{testTarget()}))
+	m := resultsByCheck(e.Run(context.Background(), []Target{testTarget()}))
 
 	deep := m["ssh_iface_deep"]
-	if deep.Status != verifyStatusFail || len(deep.CorroboratesKinds) != 3 {
+	if deep.Status != StatusFail || len(deep.CorroboratesKinds) != 3 {
 		t.Fatalf("ssh_iface_deep: %+v", deep)
 	}
 	if deep.Command != "show interfaces" {
 		t.Fatalf("executed module command must be recorded, got %q", deep.Command)
 	}
 	bgp := m["ssh_bgp_edge"]
-	if bgp.Status != verifyStatusFail || len(bgp.CorroboratesKinds) != 3 {
+	if bgp.Status != StatusFail || len(bgp.CorroboratesKinds) != 3 {
 		t.Fatalf("ssh_bgp_edge: %+v", bgp)
 	}
 	chg := m["ssh_config_change"]
-	if chg.Status != verifyStatusFail || len(chg.CorroboratesKinds) != 1 || chg.CorroboratesKinds[0] != "config_change" {
+	if chg.Status != StatusFail || len(chg.CorroboratesKinds) != 1 || chg.CorroboratesKinds[0] != "config_change" {
 		t.Fatalf("ssh_config_change: %+v", chg)
 	}
 }
 
 func TestEngineSkipsUnfiredModules(t *testing.T) {
 	// confirmed + netops + campus hypothesis ⇒ only iface_deep fires.
-	cc := verifyCaseContext{Owner: "netops", TopHypothesis: "sig.ent.campus.stp-loop", VerdictTier: "confirmed"}
-	e := newVerifyEngineForCase(fakeDialers(map[string]verifySSHOut{
+	cc := CaseContext{Owner: "netops", TopHypothesis: "sig.ent.campus.stp-loop", VerdictTier: "confirmed"}
+	e := NewEngineForCase(fakeDialers(map[string]SSHOut{
 		"ssh_iface_deep": {Output: ciscoIfClean},
 	}), cc)
-	m := resultsByCheck(e.run(context.Background(), []verifyTarget{testTarget()}))
+	m := resultsByCheck(e.Run(context.Background(), []Target{testTarget()}))
 	if _, present := m["ssh_bgp_edge"]; present {
 		t.Fatal("bgp_edge must not run for a non-edge case")
 	}
 	if _, present := m["ssh_config_change"]; present {
 		t.Fatal("recent_change must not run for a confirmed case")
 	}
-	if m["ssh_iface_deep"].Status != verifyStatusPass {
+	if m["ssh_iface_deep"].Status != StatusPass {
 		t.Fatalf("ssh_iface_deep: %+v", m["ssh_iface_deep"])
 	}
 	// Healthy module checks refute their declared vocabulary.
