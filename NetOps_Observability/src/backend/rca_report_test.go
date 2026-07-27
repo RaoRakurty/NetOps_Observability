@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func buildTestReport(t *testing.T, meta map[string]any, sigs []map[string]any) r
 	t.Helper()
 	return buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 	})
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/ticketing"
 	"os"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	st := &pgTicketingStore{db: ps.db}
 
 	// A policy round-trips (PutPolicy → ListPolicies scoped to the tenant).
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "acme", Name: "n", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}); err != nil {
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "n", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}); err != nil {
 		t.Fatalf("PutPolicy: %v", err)
 	}
 	if ps, err := st.ListPolicies(ctx, "acme", false); err != nil || len(ps) != 1 {
@@ -36,7 +37,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 
 	// Enqueue is idempotent on idempotency_key.
-	item := ticketOutboxItem{TenantID: "acme", ID: "o1", CorrObjectID: "obj-a", ExternalSystem: "servicenow",
+	item := ticketing.OutboxItem{TenantID: "acme", ID: "o1", CorrObjectID: "obj-a", ExternalSystem: "servicenow",
 		Action: "create", IdempotencyKey: "servicenow:create:acme:obj-a", Status: "pending", Payload: map[string]any{"k": "v"}}
 	if err := st.EnqueueOutbox(ctx, item); err != nil {
 		t.Fatalf("EnqueueOutbox: %v", err)
@@ -80,14 +81,14 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 
 	// Audit + link round-trip (the success-path writers).
-	if err := st.AppendAudit(ctx, ticketAuditEntry{TenantID: "acme", ID: "au1", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Action: "create", Result: "ok"}); err != nil {
+	if err := st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "acme", ID: "au1", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Action: "create", Result: "ok"}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
 	if a, _, _ := st.ListAudit(ctx, "acme", false, "obj-a", ticketMaxPage, 0); len(a) != 1 {
 		t.Fatalf("ListAudit = %d, want 1", len(a))
 	}
 	now := time.Now().UTC()
-	if err := st.PutLink(ctx, ticketLink{TenantID: "acme", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC1", SysID: "s1", LastSyncedAt: &now}); err != nil {
+	if err := st.PutLink(ctx, ticketing.Link{TenantID: "acme", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC1", SysID: "s1", LastSyncedAt: &now}); err != nil {
 		t.Fatalf("PutLink: %v", err)
 	}
 	if l, found, _ := st.GetLink(ctx, "acme", false, "obj-a", "servicenow"); !found || l.TicketNumber != "INC1" {
@@ -125,21 +126,21 @@ func TestPgTicketingStore_SingleEnabledPolicyInvariant(t *testing.T) {
 	st := &pgTicketingStore{db: ps.db}
 
 	// ── live invariant: index rejects the second enable as errPolicyConflict ──
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "acme", Name: "strict",
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "strict",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
 		t.Fatalf("first enabled policy: %v", err)
 	}
-	err = st.PutPolicy(ctx, incidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
+	err = st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"})
 	if !errors.Is(err, errPolicyConflict) {
 		t.Fatalf("second enabled policy: err = %v, want errPolicyConflict", err)
 	}
 	// Disabled coexists; another tenant is independent.
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
 		ExternalSystem: "servicenow", Enabled: false, MinVerdict: "suspected"}); err != nil {
 		t.Fatalf("second DISABLED policy: %v", err)
 	}
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "q1", TenantID: "globex", Name: "own",
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "q1", TenantID: "globex", Name: "own",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
 		t.Fatalf("other tenant enabled policy: %v", err)
 	}

@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"netops/backend/internal/ticketing"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +82,7 @@ func buildFixtureP3335CF(t *testing.T) rcaReport {
 	}
 	rep := buildRcaReport(rcaReportInput{
 		ID: fixtureP3335CFID, Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 	})
 	return rep
 }
@@ -160,7 +161,7 @@ func buildFixturePD96E4C(t *testing.T) rcaReport {
 	}
 	return buildRcaReport(rcaReportInput{
 		ID: fixturePD96E4CID, Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 	})
 }
 

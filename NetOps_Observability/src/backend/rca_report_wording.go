@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/ticketing"
 	"sort"
 	"strings"
 	"time"
@@ -924,7 +925,7 @@ func buildEvidenceSummary(anomalous []map[string]any, laneAnomalous map[string]i
 
 // ---- decision --------------------------------------------------------------------------------
 
-func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol incidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
+func buildDecision(analysis, incident, recoveryState, impact, monitoring string, generatedAt string, pol ticketing.IncidentPolicy, configured bool, monitorWindow time.Duration) rcaDecision {
 	polName := pol.Name
 	if !configured {
 		polName = pol.Name + " (platform default — no tenant policy configured)"

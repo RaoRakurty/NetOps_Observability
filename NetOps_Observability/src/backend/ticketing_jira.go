@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -97,7 +98,7 @@ func jiraDedupeLabel(corrID string) string {
 	return "correlix-id-" + truncate(b.String(), 200)
 }
 
-func (a *jiraTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
+func (a *jiraTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
 	body := map[string]any{"fields": jiraIssueFields(cfg, p, true)}
 	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/rest/api/2/issue", body)
 	if err != nil {
@@ -120,7 +121,7 @@ func (a *jiraTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystem
 	}, nil
 }
 
-func (a *jiraTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error {
+func (a *jiraTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("jira: update requires an issue id")
 	}
@@ -292,7 +293,7 @@ func (a *jiraTicketAdapter) resolveTransitionID(ctx context.Context, cfg ticketS
 // destination and the RCA Inspector (#103 UX-2); the UUID stays canonical in
 // the dedupe label. Priority is deliberately NOT set: priority schemes are
 // per-instance and an unknown name fails the whole create with a 400.
-func jiraIssueFields(cfg ticketSystemConfig, p ticketPayload, withLabels bool) map[string]any {
+func jiraIssueFields(cfg ticketSystemConfig, p ticketing.Payload, withLabels bool) map[string]any {
 	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	summary := orDefault(p.Title, "Correlix RCA incident")
 	if pid != "" {

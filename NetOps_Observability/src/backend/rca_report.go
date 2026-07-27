@@ -23,6 +23,7 @@ import (
 	"net"
 	"netops/backend/internal/noclabel"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/ticketing"
 	"sort"
 	"strings"
 	"time"
@@ -891,7 +892,7 @@ type rcaReportInput struct {
 	Signals []map[string]any // AFTER mergeTimelineEvidence (attached/link_status stamped)
 	Edges   []map[string]any
 	Ticket  map[string]any // ticketStatusView output ("state": …)
-	Policy  incidentPolicy
+	Policy  ticketing.IncidentPolicy
 	// PolicyConfigured: false → Policy is the platform default, and the report
 	// says so instead of implying tenant intent.
 	PolicyConfigured bool
@@ -1385,7 +1386,7 @@ func buildRcaReport(in rcaReportInput) rcaReport {
 	wEnd, _ := parseChTS(fmt.Sprintf("%v", meta["window_end"]))
 	// The policy consumes the RECONCILED incident severity (P1.11) — a capped
 	// single-stream anomaly must not open tickets as if it were CRIT.
-	ticketRec := evalTicketDecision(corrTicketFacts{
+	ticketRec := ticketing.EvalDecision(ticketing.CorrFacts{
 		Verdict: verdict, Validation: validation, ProbeOnly: probeOnly,
 		PeakSeverity: sevIncident, HasAffectedEntity: len(anomalous) > 0,
 		WindowStart: wStart, WindowEnd: wEnd,

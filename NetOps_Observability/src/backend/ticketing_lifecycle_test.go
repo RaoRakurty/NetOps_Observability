@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/ticketing"
 	"testing"
 	"time"
 
@@ -15,21 +16,21 @@ func tAt(s string) time.Time {
 	return ts
 }
 
-func auditEntry(action, result, at string) ticketAuditEntry {
-	return ticketAuditEntry{Action: action, Result: result, At: tAt(at), ExternalSystem: "servicenow"}
+func auditEntry(action, result, at string) ticketing.AuditEntry {
+	return ticketing.AuditEntry{Action: action, Result: result, At: tAt(at), ExternalSystem: "servicenow"}
 }
 
 // TestTicketAudit_OutboundToday: with only the outbound worker's create+resolve
 // rows (what exists with NO real ServiceNow — against the mock or a real instance),
 // the timeline gets real "ticket filed" + "resolved" timings and reads connected.
 func TestTicketAudit_OutboundToday(t *testing.T) {
-	audit := []ticketAuditEntry{
+	audit := []ticketing.AuditEntry{
 		auditEntry("create", "ok", "2026-06-28T10:00:00Z"),
 		auditEntry("update", "ok", "2026-06-28T10:05:00Z"),        // not a phase → ignored
 		auditEntry("add_work_note", "ok", "2026-06-28T10:06:00Z"), // ignored
 		auditEntry("resolve", "ok", "2026-06-28T10:30:00Z"),
 	}
-	f, connected := ticketAuditToITSMFacts(audit, ticketLink{}, false)
+	f, connected := ticketAuditToITSMFacts(audit, ticketing.Link{}, false)
 	if !connected {
 		t.Fatal("a filed ticket must read workflowConnected=true")
 	}
@@ -48,11 +49,11 @@ func TestTicketAudit_OutboundToday(t *testing.T) {
 // TestTicketAudit_FailedRowsIgnored: a failed/retrying attempt didn't move the
 // ticket, so it must not stamp a phase.
 func TestTicketAudit_FailedRowsIgnored(t *testing.T) {
-	audit := []ticketAuditEntry{
+	audit := []ticketing.AuditEntry{
 		auditEntry("create", "dead_letter", "2026-06-28T10:00:00Z"),
 		auditEntry("create", "", "2026-06-28T10:01:00Z"),
 	}
-	f, connected := ticketAuditToITSMFacts(audit, ticketLink{}, false)
+	f, connected := ticketAuditToITSMFacts(audit, ticketing.Link{}, false)
 	if !f.TicketCreated.IsZero() {
 		t.Fatalf("non-ok create must not stamp ticket_created, got %v", f.TicketCreated)
 	}
@@ -65,7 +66,7 @@ func TestTicketAudit_FailedRowsIgnored(t *testing.T) {
 // is absent (the at-most-once correlation-id recovery path) — fall back to the link.
 func TestTicketAudit_LinkFallback(t *testing.T) {
 	synced := tAt("2026-06-28T11:00:00Z")
-	link := ticketLink{
+	link := ticketing.Link{
 		Status:       "resolved",
 		CreatedAt:    tAt("2026-06-28T09:45:00Z"),
 		LastSyncedAt: &synced,
@@ -88,7 +89,7 @@ func TestTicketAudit_LinkFallback(t *testing.T) {
 // WHOLE incident timeline — no #84 rework. This is what makes "connect ServiceNow
 // tomorrow and it just works" true.
 func TestTicketAudit_SeamlessWhenServiceNowConnected(t *testing.T) {
-	audit := []ticketAuditEntry{
+	audit := []ticketing.AuditEntry{
 		auditEntry(auditActionCreate, "ok", "2026-06-28T10:00:00Z"),
 		auditEntry(auditActionAcknowledged, "ok", "2026-06-28T10:04:00Z"),
 		auditEntry(auditActionMitigationStarted, "ok", "2026-06-28T10:09:00Z"),
@@ -97,7 +98,7 @@ func TestTicketAudit_SeamlessWhenServiceNowConnected(t *testing.T) {
 		auditEntry(auditActionResolve, "ok", "2026-06-28T10:30:00Z"),
 		auditEntry(auditActionClosed, "ok", "2026-06-28T11:00:00Z"),
 	}
-	f, connected := ticketAuditToITSMFacts(audit, ticketLink{}, true)
+	f, connected := ticketAuditToITSMFacts(audit, ticketing.Link{}, true)
 	if !connected {
 		t.Fatal("connected")
 	}
@@ -130,7 +131,7 @@ func TestTicketAudit_SeamlessWhenServiceNowConnected(t *testing.T) {
 // TestTicketAudit_EmptyIsHonest: no ticket at all → everything incomplete, not
 // connected (the calculator then names the gap rather than inventing a zero).
 func TestTicketAudit_EmptyIsHonest(t *testing.T) {
-	f, connected := ticketAuditToITSMFacts(nil, ticketLink{}, false)
+	f, connected := ticketAuditToITSMFacts(nil, ticketing.Link{}, false)
 	if connected {
 		t.Fatal("no link, no audit → not connected")
 	}

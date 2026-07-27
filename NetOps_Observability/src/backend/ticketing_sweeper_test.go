@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ import (
 
 // confirmedCustomerFacts is the minimal facts a customer-facing confirmed fault
 // presents — enough to pass the default policy.
-func confirmedCustomerFacts() corrTicketFacts {
-	return corrTicketFacts{
+func confirmedCustomerFacts() ticketing.CorrFacts {
+	return ticketing.CorrFacts{
 		Verdict:           "confirmed",
 		Confidence:        0.9,
 		PeakSeverity:      "crit",
@@ -42,7 +43,7 @@ func sampleView() rcaPathView {
 
 func TestDecideSweepAction(t *testing.T) {
 	now := time.Date(2026, 6, 27, 10, 11, 0, 0, time.UTC)
-	policy := defaultIncidentPolicy("t_a")
+	policy := ticketing.DefaultIncidentPolicy("t_a")
 	view := sampleView()
 
 	// 1) Confirmed customer-facing fault, no existing link → CREATE.
@@ -68,7 +69,7 @@ func TestDecideSweepAction(t *testing.T) {
 
 	// 4) Already-open ticket whose state is unchanged → hold (no churn).
 	created := buildTicketPayload(view, confirmedCustomerFacts(), policy, "")
-	openLink := &ticketLink{
+	openLink := &ticketing.Link{
 		TenantID: "t_a", CorrObjectID: view.CorrObjectID, ExternalSystem: "servicenow",
 		Status: "open", LastPayloadHash: payloadHash(created),
 	}
@@ -90,7 +91,7 @@ func TestDecideSweepAction(t *testing.T) {
 // validation-scenario suppression (rca-canary contract) is untouched.
 func TestDecideSweepActionConsistencyGate(t *testing.T) {
 	now := time.Date(2026, 6, 27, 10, 11, 0, 0, time.UTC)
-	policy := defaultIncidentPolicy("t_a")
+	policy := ticketing.DefaultIncidentPolicy("t_a")
 	view := sampleView()
 
 	// P1-contradictory facts → create suppressed with reason.
@@ -106,7 +107,7 @@ func TestDecideSweepActionConsistencyGate(t *testing.T) {
 
 	// Update path is gated too.
 	created := buildTicketPayload(view, confirmedCustomerFacts(), policy, "")
-	stale := &ticketLink{
+	stale := &ticketing.Link{
 		TenantID: "t_a", CorrObjectID: view.CorrObjectID, ExternalSystem: "servicenow",
 		Status: "open", LastPayloadHash: "deadbeefdeadbeef",
 	}
@@ -180,7 +181,7 @@ func TestSweeperResolvePolicy(t *testing.T) {
 
 	// Tenant A configures a (disabled) policy → it is honored, NOT overridden by
 	// the default — a tenant can opt OUT.
-	_ = st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: false})
+	_ = st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: false})
 	if p := sw.resolvePolicy(ctx, "t_a", "servicenow"); p.Enabled {
 		t.Fatalf("an explicit disabled policy must be honored, got enabled=%v", p.Enabled)
 	}
@@ -214,7 +215,7 @@ func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
 	sw := &ticketSweeper{store: st}
 
 	// The platform admin's global policy is stored under the canonical "global" id.
-	gp := incidentPolicy{ID: "g1", TenantID: TenantGlobal, ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
+	gp := ticketing.IncidentPolicy{ID: "g1", TenantID: TenantGlobal, ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
 	if err := st.PutPolicy(ctx, gp); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
 func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	st := newMemTicketingStore()
-	policy := defaultIncidentPolicy("")
+	policy := ticketing.DefaultIncidentPolicy("")
 	view := sampleView()
 
 	// Two tenants' objects both decide CREATE; the sweep enqueues each under the
@@ -302,7 +303,7 @@ func TestResolvePolicy_OrderIndependent(t *testing.T) {
 
 		store := newMemTicketingStore()
 		for _, id := range order {
-			if err := store.PutPolicy(context.Background(), incidentPolicy{
+			if err := store.PutPolicy(context.Background(), ticketing.IncidentPolicy{
 				ID: id, TenantID: "t_prop", Name: id, ExternalSystem: "servicenow",
 				Enabled: id == winner, MinVerdict: "confirmed",
 			}); err != nil {

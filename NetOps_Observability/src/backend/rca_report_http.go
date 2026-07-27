@@ -18,6 +18,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"netops/backend/internal/ticketing"
 	"os"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	// ticket + policy — RLS-scoped store reads; default policy is labelled as such.
 	ticket := s.ticketStatusForObject(r, id)
 	tenant, cross := principalTenant(claims)
-	pol := defaultIncidentPolicy(tenant)
+	pol := ticketing.DefaultIncidentPolicy(tenant)
 	configured := false
 	if s.ticketing != nil {
 		if pols, err := s.ticketing.ListPolicies(r.Context(), tenant, cross); err == nil {

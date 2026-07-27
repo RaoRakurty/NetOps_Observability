@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/ticketing"
 	"testing"
 	"time"
 )
@@ -94,7 +95,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	_ = st.PutLink(ctx, ticketLink{
+	_ = st.PutLink(ctx, ticketing.Link{
 		TenantID: "t_a", CorrObjectID: "obj-1", ExternalSystem: "servicenow",
 		SysID: ref.SysID, TicketNumber: ref.Number, InstanceURL: m.srv.URL, Status: "open",
 	})
@@ -159,7 +160,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	}
 }
 
-func auditActions(a []ticketAuditEntry) []string {
+func auditActions(a []ticketing.AuditEntry) []string {
 	out := make([]string, 0, len(a))
 	for _, e := range a {
 		out = append(out, e.Action)
@@ -167,7 +168,7 @@ func auditActions(a []ticketAuditEntry) []string {
 	return out
 }
 
-func hasAuditAction(a []ticketAuditEntry, action string) bool {
+func hasAuditAction(a []ticketing.AuditEntry, action string) bool {
 	for _, e := range a {
 		if e.Action == action && e.Result == "ok" {
 			return true

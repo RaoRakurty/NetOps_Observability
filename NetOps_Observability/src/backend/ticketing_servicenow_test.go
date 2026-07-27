@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"sync"
 	"testing"
@@ -150,8 +151,8 @@ func readMockBody(r *http.Request) map[string]any {
 
 // ── adapter tests ────────────────────────────────────────────────────────────
 
-func samplePayload(corrID string) ticketPayload {
-	return ticketPayload{
+func samplePayload(corrID string) ticketing.Payload {
+	return ticketing.Payload{
 		CorrObjectID:      corrID,
 		ExternalSystem:    "servicenow",
 		Title:             "Confirmed local link fault on edge1 Gi0/1",

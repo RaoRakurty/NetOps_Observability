@@ -12,7 +12,7 @@ import (
 
 // persisted_fields_test.go — the CLASS guard behind F-77.
 //
-// `allow_validation_scenarios` lived on the incidentPolicy struct, was accepted
+// `allow_validation_scenarios` lived on the ticketing.IncidentPolicy struct, was accepted
 // by the API, and was echoed back in the response as though it had been saved.
 // It appeared in NO column list and NO migration. The in-memory store kept it —
 // which is why every unit test passed — and the Postgres store silently dropped
@@ -44,7 +44,7 @@ type persistedStruct struct {
 
 var persistedStructs = []persistedStruct{
 	{
-		file: "ticketing_model.go", structName: "incidentPolicy",
+		file: "internal/ticketing/model.go", structName: "IncidentPolicy",
 		colsFile: "ticketing_store.go", colsConst: "policyCols",
 		exempt: map[string]string{},
 	},

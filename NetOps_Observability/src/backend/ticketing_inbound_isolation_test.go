@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/ticketing"
 	"testing"
 	"time"
 )
@@ -27,7 +28,7 @@ func (a *stubFetchAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig
 func seedInboundLinks(t *testing.T, st *memTicketingStore) {
 	t.Helper()
 	ctx := context.Background()
-	for _, l := range []ticketLink{
+	for _, l := range []ticketing.Link{
 		{TenantID: "t_a", CorrObjectID: "obj-a", ExternalSystem: "servicenow",
 			SysID: "sysA001", TicketNumber: "INC0000001", InstanceURL: "https://t-a.example", Status: "open"},
 		{TenantID: "t_b", CorrObjectID: "obj-b", ExternalSystem: "servicenow",

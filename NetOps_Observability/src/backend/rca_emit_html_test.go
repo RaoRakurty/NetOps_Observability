@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/internal/ticketing"
 	"os"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestEmitMergedReportHTML(t *testing.T) {
 	}
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"), Now: time.Date(2026, 7, 12, 13, 45, 0, 0, time.UTC),
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: time.Date(2026, 7, 12, 13, 45, 0, 0, time.UTC),
 		SurvivingIncidentID: "11112222-3333-4444-5555-666677778888",
 	})
 	// attach a responding-hop path to exercise the boundary rendering
@@ -163,7 +164,7 @@ func buildRichFixtureReport(t *testing.T) rcaReport {
 	)
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"),
+		Policy: ticketing.DefaultIncidentPolicy("t1"),
 		Now:    time.Date(2026, 7, 12, 19, 0, 0, 0, time.UTC),
 	})
 	rep.Topology = rcaTopologyView{

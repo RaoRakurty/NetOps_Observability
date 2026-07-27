@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/ticketing"
 	"testing"
 )
 
@@ -16,16 +17,16 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 	st := newMemTicketingStore()
 
 	// Tenant A and B each own a policy + a ticket link.
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: true}); err != nil {
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t_b", ExternalSystem: "servicenow", Enabled: true}); err != nil {
+	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t_b", ExternalSystem: "servicenow", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutLink(ctx, ticketLink{TenantID: "t_a", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0001"}); err != nil {
+	if err := st.PutLink(ctx, ticketing.Link{TenantID: "t_a", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0001"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutLink(ctx, ticketLink{TenantID: "t_b", CorrObjectID: "obj-b", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0002"}); err != nil {
+	if err := st.PutLink(ctx, ticketing.Link{TenantID: "t_b", CorrObjectID: "obj-b", ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0002"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,7 +58,7 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 
 	// A "p1" delete from A must not have removed B's identically-keyed policy:
 	// re-create A's and confirm both still resolve independently.
-	_ = st.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t_a", Enabled: true})
+	_ = st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t_a", Enabled: true})
 
 	// Platform cross-tenant view sees both.
 	all, err := st.ListPolicies(ctx, "", true)
@@ -69,15 +70,15 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 	}
 
 	// Outbox + audit scope the same way.
-	_ = st.EnqueueOutbox(ctx, ticketOutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "servicenow:create:t_a:obj-a"})
-	_ = st.EnqueueOutbox(ctx, ticketOutboxItem{TenantID: "t_b", ID: "o2", CorrObjectID: "obj-b", Action: "create", IdempotencyKey: "servicenow:create:t_b:obj-b"})
+	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "servicenow:create:t_a:obj-a"})
+	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_b", ID: "o2", CorrObjectID: "obj-b", Action: "create", IdempotencyKey: "servicenow:create:t_b:obj-b"})
 	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
 	if len(aOut) != 1 || aOut[0].TenantID != "t_a" {
 		t.Fatalf("outbox leaked across tenants: %+v", aOut)
 	}
 
-	_ = st.AppendAudit(ctx, ticketAuditEntry{TenantID: "t_a", ID: "au1", CorrObjectID: "obj-a", Action: "create"})
-	_ = st.AppendAudit(ctx, ticketAuditEntry{TenantID: "t_b", ID: "au2", CorrObjectID: "obj-b", Action: "create"})
+	_ = st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "t_a", ID: "au1", CorrObjectID: "obj-a", Action: "create"})
+	_ = st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "t_b", ID: "au2", CorrObjectID: "obj-b", Action: "create"})
 	aAudit, _, _ := st.ListAudit(ctx, "t_a", false, "", ticketMaxPage, 0)
 	if len(aAudit) != 1 || aAudit[0].TenantID != "t_a" {
 		t.Fatalf("audit leaked across tenants: %+v", aAudit)
@@ -87,7 +88,7 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 func TestTicketingStore_OutboxIdempotent(t *testing.T) {
 	ctx := context.Background()
 	st := newMemTicketingStore()
-	item := ticketOutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "k1"}
+	item := ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "k1"}
 	_ = st.EnqueueOutbox(ctx, item)
 	dup := item
 	dup.ID = "o2" // different id, same idempotency key

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"netops/backend/internal/ticketing"
 	"sort"
 	"strings"
 	"time"
@@ -18,38 +19,6 @@ import (
 // brain that can drift). The functions below are deterministic and I/O-free, so
 // they are unit-tested in isolation.
 
-// corrTicketFacts is the minimal, decision-relevant projection of one RCA
-// object: enough for the policy to decide ticket-worthiness without re-running
-// correlation. Derived from the same (meta, signals) the RCA view consumes.
-type corrTicketFacts struct {
-	Verdict           string // undetermined | suspected | confirmed
-	Confidence        float64
-	Internal          bool   // internal/debug-only monitoring (kept out of customer tickets)
-	Validation        bool   // §11 validation/lab/fault-injection scenario — never production side effects
-	ProbeOnly         bool   // every attached signal is an active probe
-	LowAuthorityProbe bool   // probe-only AND no probe carried real authority
-	PeakSeverity      string // info | warn | high | crit (max over attached signals)
-	HasAffectedEntity bool   // a meaningful affected device/interface/path/app exists
-	AffectedScope     string // human scope, e.g. "leaf1 → wan-r2" or "edge1 Gi0/1"
-	AffectedEntities  []string
-	ImpactedApps      []string
-	Signature         string
-	WindowStart       time.Time
-	WindowEnd         time.Time
-	// ConsistencyIssues: P1 fact-level contradictions found while projecting
-	// the facts (ticketFactConsistencyIssues — the emitter-side quality gate).
-	// Non-empty holds every RCA-derived emission with an observable reason.
-	ConsistencyIssues []string
-}
-
-// persistenceSeconds is how long the incident has been observed (window span).
-func (f corrTicketFacts) persistenceSeconds() int {
-	if f.WindowStart.IsZero() || f.WindowEnd.IsZero() || !f.WindowEnd.After(f.WindowStart) {
-		return 0
-	}
-	return int(f.WindowEnd.Sub(f.WindowStart).Seconds())
-}
-
 var corrSevRank = map[string]int{"info": 0, "warn": 1, "high": 2, "crit": 3}
 
 // buildCorrTicketFacts projects the RCA object into policy-relevant facts. It
@@ -57,8 +26,8 @@ var corrSevRank = map[string]int{"info": 0, "warn": 1, "high": 2, "crit": 3}
 // signals it was built from (for severity, authority and window, which the view
 // doesn't surface). No RCA re-decision — verdict/confidence/internal come
 // straight from the view.
-func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rcaPathView) corrTicketFacts {
-	f := corrTicketFacts{
+func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rcaPathView) ticketing.CorrFacts {
+	f := ticketing.CorrFacts{
 		Verdict:    view.Verdict,
 		Confidence: view.Confidence,
 		Internal:   view.Internal,
@@ -144,8 +113,8 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 // view + facts + the deciding policy. Title is the RCA narration's title
 // (already "Suspected|Confirmed <fault> on <entity>"); the body carries the
 // diagnosis and a deep link, never raw alert text.
-func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incidentPolicy, rcaBaseURL string) ticketPayload {
-	p := ticketPayload{
+func buildTicketPayload(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, rcaBaseURL string) ticketing.Payload {
+	p := ticketing.Payload{
 		CorrObjectID:      view.CorrObjectID,
 		ExternalSystem:    policy.ExternalSystem,
 		Title:             view.Title,
@@ -194,7 +163,7 @@ func buildTicketPayload(view rcaPathView, facts corrTicketFacts, policy incident
 //
 // A confirmed root cause filing at the same P3 as a tentative suspicion was the
 // 2026-07-11 operator complaint — the verdict was never consulted.
-func ticketImpactUrgency(p incidentPolicy, verdict, peakSeverity string) (int, int) {
+func ticketImpactUrgency(p ticketing.IncidentPolicy, verdict, peakSeverity string) (int, int) {
 	if verdict != "confirmed" {
 		return p.DefaultImpact, p.DefaultUrgency
 	}

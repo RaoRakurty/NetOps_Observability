@@ -1,20 +1,23 @@
-package main
+// Package ticketing holds the pure domain core of RCA-driven auto-ticketing
+// (#78): the data records, the corr-object fact projection, and the I/O-free
+// incident-policy decision.
+//
+// One RCA correlation object → at most one external ticket. Every type here is
+// keyed by corr_object_id, never by a raw alert id (the primary rule). These
+// are plain data records; the pure decision logic lives in policy.go. The
+// payload assembly (buildCorrTicketFacts / buildTicketPayload) stays with the
+// integrator in package main — it is built on rcaPathView, which belongs to a
+// domain that has not moved.
+package ticketing
 
 import "time"
 
-// ticketing_model.go — domain types for RCA-driven auto-ticketing (#78).
-//
-// One RCA correlation object → at most one external ticket. Every type here is
-// keyed by corr_object_id, never by a raw alert id (the primary rule). These are
-// plain data records; the pure decision logic lives in ticketing_policy.go and
-// the payload assembly in ticketing_payload.go, both reusing buildRcaPathView.
-
-// incidentPolicy decides ticket-worthiness for one (tenant, external system).
+// IncidentPolicy decides ticket-worthiness for one (tenant, external system).
 // The MVP predicate (see EvalTicketDecision): customer-facing AND
 // (verdict ≥ min_verdict) AND (a suspected verdict additionally needs critical
 // severity when suspected_requires_critical). Internal/debug-only and
 // probe-only objects are excluded unless explicitly allowed.
-type incidentPolicy struct {
+type IncidentPolicy struct {
 	ID                      string `json:"id"`
 	TenantID                string `json:"tenant_id"`
 	Name                    string `json:"name"`
@@ -45,11 +48,11 @@ type incidentPolicy struct {
 	UpdatedAt                time.Time      `json:"updated_at"`
 }
 
-// defaultIncidentPolicy is the MVP policy used when a tenant has configured none:
+// DefaultIncidentPolicy is the MVP policy used when a tenant has configured none:
 // customer-facing confirmed faults (and suspected-critical) open a ServiceNow
 // incident; everything internal/probe-only/undetermined is held.
-func defaultIncidentPolicy(tenant string) incidentPolicy {
-	return incidentPolicy{
+func DefaultIncidentPolicy(tenant string) IncidentPolicy {
+	return IncidentPolicy{
 		ID:                        "default",
 		TenantID:                  tenant,
 		Name:                      "Default ServiceNow incident policy",
@@ -66,9 +69,9 @@ func defaultIncidentPolicy(tenant string) incidentPolicy {
 	}
 }
 
-// ticketLink binds an RCA object to its external ticket — the dedupe anchor.
+// Link binds an RCA object to its external ticket — the dedupe anchor.
 // One per (TenantID, CorrObjectID, ExternalSystem).
-type ticketLink struct {
+type Link struct {
 	TenantID        string     `json:"tenant_id"`
 	CorrObjectID    string     `json:"corr_object_id"`
 	ExternalSystem  string     `json:"external_system"`
@@ -85,16 +88,16 @@ type ticketLink struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
-// openTicket reports whether the link represents a live ticket (so the policy
+// Open reports whether the link represents a live ticket (so the policy
 // must not open a second). pending/failed are NOT live — a failed create may
 // retry, a pending one is mid-flight in the outbox (idempotency-keyed there).
-func (l ticketLink) openTicket() bool {
+func (l Link) Open() bool {
 	return l.Status == "open" || l.Status == "updated"
 }
 
-// ticketOutboxItem is one reliable, retryable external action. The worker (P2)
+// OutboxItem is one reliable, retryable external action. The worker (P2)
 // claims due rows with SKIP LOCKED so ticketing never blocks correlation.
-type ticketOutboxItem struct {
+type OutboxItem struct {
 	TenantID       string         `json:"tenant_id"`
 	ID             string         `json:"id"`
 	CorrObjectID   string         `json:"corr_object_id"`
@@ -111,8 +114,8 @@ type ticketOutboxItem struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
-// ticketAuditEntry records one action for the compliance trail.
-type ticketAuditEntry struct {
+// AuditEntry records one action for the compliance trail.
+type AuditEntry struct {
 	TenantID       string    `json:"tenant_id"`
 	ID             string    `json:"id"`
 	CorrObjectID   string    `json:"corr_object_id"`
@@ -129,10 +132,10 @@ type ticketAuditEntry struct {
 
 // ── payload + decision (assembled/decided by the pure functions) ─────────────
 
-// ticketPayload is the provider-agnostic ticket body built from the RCA object.
+// Payload is the provider-agnostic ticket body built from the RCA object.
 // The ServiceNow adapter (P2) maps this onto u_correlix_* fields; Jira/PD later
 // reuse the same payload. Carries the RCA diagnosis, not raw alert noise.
-type ticketPayload struct {
+type Payload struct {
 	CorrObjectID      string   `json:"corr_object_id"`
 	ExternalSystem    string   `json:"external_system"`
 	Title             string   `json:"title"`   // "Suspected|Confirmed <fault> on <entity/path>"
@@ -153,10 +156,10 @@ type ticketPayload struct {
 	AssignmentGroup   string   `json:"assignment_group,omitempty"`
 }
 
-// ticketDecision is the pure verdict of the incident policy: open a ticket or
+// Decision is the pure verdict of the incident policy: open a ticket or
 // hold, with an operator-readable reason (surfaced verbatim in the UI's
 // Recommended-Action blocked-reason text — no raw-alert language).
-type ticketDecision struct {
+type Decision struct {
 	Create bool   `json:"create"`
 	Reason string `json:"reason"`
 }

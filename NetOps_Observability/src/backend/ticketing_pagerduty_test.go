@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"sync"
 	"testing"
@@ -69,8 +70,8 @@ func (f *fakePD) all() []map[string]any {
 	return out
 }
 
-func pdPayload(corr string) ticketPayload {
-	return ticketPayload{CorrObjectID: corr, ExternalSystem: "pagerduty",
+func pdPayload(corr string) ticketing.Payload {
+	return ticketing.Payload{CorrObjectID: corr, ExternalSystem: "pagerduty",
 		Title: "Confirmed local link fault on edge1", Verdict: "confirmed",
 		Confidence: 0.91, Summary: "two planes agree", Urgency: 1,
 		RCAURL: "https://correlix.example/app/correlations/" + corr}
@@ -173,9 +174,9 @@ func TestResolvePolicyState_PerSystem(t *testing.T) {
 	store := newMemTicketingStore()
 	sw := &ticketSweeper{store: store}
 
-	sn := incidentPolicy{ID: "sn1", TenantID: "t_a", Name: "sn", Enabled: true,
+	sn := ticketing.IncidentPolicy{ID: "sn1", TenantID: "t_a", Name: "sn", Enabled: true,
 		ExternalSystem: "servicenow", MinVerdict: "suspected"}
-	pd := incidentPolicy{ID: "pd1", TenantID: "t_a", Name: "pd", Enabled: true,
+	pd := ticketing.IncidentPolicy{ID: "pd1", TenantID: "t_a", Name: "pd", Enabled: true,
 		ExternalSystem: "pagerduty", MinVerdict: "confirmed"}
 	if err := store.PutPolicy(ctx, sn); err != nil {
 		t.Fatalf("put sn: %v", err)
@@ -294,20 +295,20 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 // Policy gates: undetermined/low-severity RCA objects never page when the PD
 // policy requires confirmed (spec: alert-storm + gate regressions).
 func TestPDPolicy_GatesBlockPaging(t *testing.T) {
-	pol := incidentPolicy{ID: "pd1", TenantID: "t_a", Enabled: true,
+	pol := ticketing.IncidentPolicy{ID: "pd1", TenantID: "t_a", Enabled: true,
 		ExternalSystem: "pagerduty", MinVerdict: "confirmed"}
-	und := corrTicketFacts{Verdict: "undetermined", PeakSeverity: "critical", HasAffectedEntity: true}
-	if d := evalTicketDecision(und, pol, nil, time.Now()); d.Create {
+	und := ticketing.CorrFacts{Verdict: "undetermined", PeakSeverity: "critical", HasAffectedEntity: true}
+	if d := ticketing.EvalDecision(und, pol, nil, time.Now()); d.Create {
 		t.Fatal("undetermined must not page")
 	}
-	susp := corrTicketFacts{Verdict: "suspected", PeakSeverity: "critical", HasAffectedEntity: true}
-	if d := evalTicketDecision(susp, pol, nil, time.Now()); d.Create {
+	susp := ticketing.CorrFacts{Verdict: "suspected", PeakSeverity: "critical", HasAffectedEntity: true}
+	if d := ticketing.EvalDecision(susp, pol, nil, time.Now()); d.Create {
 		t.Fatal("suspected must not page under confirmed-only policy")
 	}
 	disabled := pol
 	disabled.Enabled = false
-	conf := corrTicketFacts{Verdict: "confirmed", PeakSeverity: "critical", HasAffectedEntity: true}
-	if d := evalTicketDecision(conf, disabled, nil, time.Now()); d.Create {
+	conf := ticketing.CorrFacts{Verdict: "confirmed", PeakSeverity: "critical", HasAffectedEntity: true}
+	if d := ticketing.EvalDecision(conf, disabled, nil, time.Now()); d.Create {
 		t.Fatal("disabled policy must not page")
 	}
 }
@@ -428,7 +429,7 @@ func TestResolvePolicyState_TripleSystem(t *testing.T) {
 	store := newMemTicketingStore()
 	sw := &ticketSweeper{store: store}
 	for i, sys := range []string{"servicenow", "pagerduty", "slack"} {
-		p := incidentPolicy{ID: sys[:2] + "1", TenantID: "t_tri", Name: sys, Enabled: true,
+		p := ticketing.IncidentPolicy{ID: sys[:2] + "1", TenantID: "t_tri", Name: sys, Enabled: true,
 			ExternalSystem: sys, MinVerdict: "confirmed"}
 		if err := store.PutPolicy(ctx, p); err != nil {
 			t.Fatalf("put %d %s: %v", i, sys, err)
@@ -478,7 +479,7 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 	ctx := context.Background()
 	tstore := newMemTicketingStore()
 	sw := &ticketSweeper{store: tstore}
-	if err := tstore.PutPolicy(ctx, incidentPolicy{ID: "gpd", TenantID: canon, Name: "g-pd",
+	if err := tstore.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "gpd", TenantID: canon, Name: "g-pd",
 		Enabled: true, ExternalSystem: "pagerduty", MinVerdict: "confirmed"}); err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 )
@@ -47,7 +48,7 @@ func TestBuildCorrTicketFacts_DerivesFromViewAndSignals(t *testing.T) {
 	if f.Signature != "local-link-fault" {
 		t.Fatalf("signature = %q", f.Signature)
 	}
-	if got := f.persistenceSeconds(); got != 150 {
+	if got := f.PersistenceSeconds(); got != 150 {
 		t.Fatalf("persistence = %ds want 150", got)
 	}
 }
@@ -74,7 +75,7 @@ func TestBuildCorrTicketFacts_SingleStreamCritCapped(t *testing.T) {
 	if f.PeakSeverity == "crit" {
 		t.Fatalf("single uncorroborated stream kept crit: %+v", f)
 	}
-	dec := evalTicketDecision(f, defaultIncidentPolicy("t_a"), nil, rcaTestNow)
+	dec := ticketing.EvalDecision(f, ticketing.DefaultIncidentPolicy("t_a"), nil, rcaTestNow)
 	if dec.Create {
 		t.Fatalf("single-stream suspected anomaly must not open a ticket: %+v", dec)
 	}
@@ -108,8 +109,8 @@ func TestBuildTicketPayload_ReusesRcaView(t *testing.T) {
 			"confirming_pair": []string{"if_oper_down", "probe_loss"},
 		},
 	}
-	facts := corrTicketFacts{Signature: "local-link-fault", AffectedScope: "edge1 Gi0/1"}
-	pol := defaultIncidentPolicy("t_a")
+	facts := ticketing.CorrFacts{Signature: "local-link-fault", AffectedScope: "edge1 Gi0/1"}
+	pol := ticketing.DefaultIncidentPolicy("t_a")
 	pol.AssignmentGroup = "NOC-L2"
 	pol.DefaultImpact, pol.DefaultUrgency = 1, 1
 
@@ -136,7 +137,7 @@ func TestBuildTicketPayload_ReusesRcaView(t *testing.T) {
 }
 
 func TestBuildTicketPayload_DefensiveTitleWhenBlank(t *testing.T) {
-	p := buildTicketPayload(rcaPathView{Verdict: "suspected"}, corrTicketFacts{AffectedScope: "leaf1"}, defaultIncidentPolicy("t_a"), "")
+	p := buildTicketPayload(rcaPathView{Verdict: "suspected"}, ticketing.CorrFacts{AffectedScope: "leaf1"}, ticketing.DefaultIncidentPolicy("t_a"), "")
 	if !strings.HasPrefix(p.Title, "Suspected") || !strings.Contains(p.Title, "leaf1") {
 		t.Fatalf("defensive title = %q", p.Title)
 	}
@@ -147,7 +148,7 @@ func TestBuildTicketPayload_DefensiveTitleWhenBlank(t *testing.T) {
 // same P3 Moderate as everything else because only the policy defaults were sent).
 // Policy defaults are the baseline; escalation only ever raises severity.
 func TestTicketSeverityMapping(t *testing.T) {
-	pol := defaultIncidentPolicy("t_a") // impact 2 / urgency 2
+	pol := ticketing.DefaultIncidentPolicy("t_a") // impact 2 / urgency 2
 	cases := []struct {
 		name, verdict, sev      string
 		wantImpact, wantUrgency int
@@ -158,7 +159,7 @@ func TestTicketSeverityMapping(t *testing.T) {
 		{"undetermined keeps policy defaults", "undetermined", "warn", 2, 2},
 	}
 	for _, c := range cases {
-		facts := corrTicketFacts{PeakSeverity: c.sev}
+		facts := ticketing.CorrFacts{PeakSeverity: c.sev}
 		p := buildTicketPayload(rcaPathView{Verdict: c.verdict, Title: "x"}, facts, pol, "")
 		if p.Impact != c.wantImpact || p.Urgency != c.wantUrgency {
 			t.Fatalf("%s: impact/urgency = %d/%d, want %d/%d", c.name, p.Impact, p.Urgency, c.wantImpact, c.wantUrgency)
@@ -166,9 +167,9 @@ func TestTicketSeverityMapping(t *testing.T) {
 	}
 
 	// Escalation never DEMOTES an operator's stricter configuration.
-	strict := defaultIncidentPolicy("t_a")
+	strict := ticketing.DefaultIncidentPolicy("t_a")
 	strict.DefaultImpact, strict.DefaultUrgency = 1, 1
-	p := buildTicketPayload(rcaPathView{Verdict: "suspected", Title: "x"}, corrTicketFacts{PeakSeverity: "warn"}, strict, "")
+	p := buildTicketPayload(rcaPathView{Verdict: "suspected", Title: "x"}, ticketing.CorrFacts{PeakSeverity: "warn"}, strict, "")
 	if p.Impact != 1 || p.Urgency != 1 {
 		t.Fatalf("suspected under a 1/1 policy = %d/%d, must keep 1/1", p.Impact, p.Urgency)
 	}
@@ -179,7 +180,7 @@ func TestTicketSeverityMapping(t *testing.T) {
 // outright — including DEMOTING below the automatic escalation — and 0 keeps
 // the automatic behavior per slot.
 func TestTicketSeverityMapping_CustomerOverrides(t *testing.T) {
-	pol := defaultIncidentPolicy("t_a")                              // defaults 2/2
+	pol := ticketing.DefaultIncidentPolicy("t_a")                    // defaults 2/2
 	pol.ImpactConfirmedCritical, pol.UrgencyConfirmedCritical = 2, 2 // customer demotes P1→P3
 	pol.ImpactConfirmed = 3                                          // partial: urgency stays automatic (1)
 

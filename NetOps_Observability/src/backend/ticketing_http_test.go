@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"sync"
 	"testing"
@@ -60,7 +61,7 @@ func TestIncidentPolicyAPI_TenantIsolation(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("A create policy: %d %s", st, body)
 	}
-	var aPol incidentPolicy
+	var aPol ticketing.IncidentPolicy
 	if err := json.Unmarshal(body, &aPol); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestIncidentPolicyAPI_TenantIsolation(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("B create policy: %d %s", st, body)
 	}
-	bPol := incidentPolicy{}
+	bPol := ticketing.IncidentPolicy{}
 	_ = json.Unmarshal(body, &bPol)
 
 	// A lists → sees ONLY its own policy.
@@ -84,7 +85,7 @@ func TestIncidentPolicyAPI_TenantIsolation(t *testing.T) {
 		t.Fatalf("A list: %d %s", st, body)
 	}
 	var listed struct {
-		Policies []incidentPolicy `json:"policies"`
+		Policies []ticketing.IncidentPolicy `json:"policies"`
 	}
 	_ = json.Unmarshal(body, &listed)
 	if len(listed.Policies) != 1 || listed.Policies[0].TenantID != a.tenantID {
@@ -117,7 +118,7 @@ func TestIncidentPolicyAPI_Simulator(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("create: %d %s", st, body)
 	}
-	pol := incidentPolicy{}
+	pol := ticketing.IncidentPolicy{}
 	_ = json.Unmarshal(body, &pol)
 
 	// A confirmed, customer-facing fault should be ticket-worthy.
@@ -127,7 +128,7 @@ func TestIncidentPolicyAPI_Simulator(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("simulate: %d %s", st, body)
 	}
-	var dec ticketDecision
+	var dec ticketing.Decision
 	_ = json.Unmarshal(body, &dec)
 	if !dec.Create {
 		t.Fatalf("confirmed customer fault should create, got hold: %q", dec.Reason)
@@ -149,10 +150,10 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed an outbox item for each tenant directly in the store.
-	_ = s.ticketing.EnqueueOutbox(ctx, ticketOutboxItem{
+	_ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID: a.tenantID, ID: "oa", CorrObjectID: "obj-a", Action: "create",
 		IdempotencyKey: "servicenow:create:" + a.tenantID + ":obj-a", Status: "pending"})
-	_ = s.ticketing.EnqueueOutbox(ctx, ticketOutboxItem{
+	_ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID: b.tenantID, ID: "ob", CorrObjectID: "obj-b", Action: "create",
 		IdempotencyKey: "servicenow:create:" + b.tenantID + ":obj-b", Status: "pending"})
 
@@ -161,7 +162,7 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 		t.Fatalf("A outbox: %d %s", st, body)
 	}
 	var out struct {
-		Outbox []ticketOutboxItem `json:"outbox"`
+		Outbox []ticketing.OutboxItem `json:"outbox"`
 	}
 	_ = json.Unmarshal(body, &out)
 	if len(out.Outbox) != 1 || out.Outbox[0].TenantID != a.tenantID {
@@ -330,7 +331,7 @@ func TestManualTicketSync_OwnerKeyedUpdate(t *testing.T) {
 	srv, s, _ := setupTicketingTenants(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
-	if err := s.ticketing.PutLink(context.Background(), ticketLink{
+	if err := s.ticketing.PutLink(context.Background(), ticketing.Link{
 		TenantID: TenantGlobal, CorrObjectID: tktStrictCorrID, ExternalSystem: "servicenow",
 		Status: "open", TicketNumber: "INC0000042", SysID: "sysabc",
 	}); err != nil {
@@ -379,7 +380,7 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 	sw := &ticketSweeper{store: store}
 	ctx := context.Background()
 
-	if err := store.PutPolicy(ctx, incidentPolicy{ID: "p1", TenantID: "t-x", Name: "strict",
+	if err := store.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t-x", Name: "strict",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +390,7 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 	// Seed a second ENABLED policy directly (legacy/drifted data — PutPolicy and
 	// the pg unique index both refuse this shape now).
 	store.mu.Lock()
-	store.policies[memKey("t-x", "p2")] = incidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
+	store.policies[memKey("t-x", "p2")] = ticketing.IncidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
 	store.mu.Unlock()
 	got := sw.resolvePolicy(ctx, "t-x", "servicenow")
@@ -411,7 +412,7 @@ func TestPutPolicy_ConcurrentEnableSingleWinner(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			errs <- store.PutPolicy(ctx, incidentPolicy{ID: id, TenantID: "t-race",
+			errs <- store.PutPolicy(ctx, ticketing.IncidentPolicy{ID: id, TenantID: "t-race",
 				ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"})
 		}(id)
 	}
@@ -491,7 +492,7 @@ func TestTicketStatusView_URLNotDoubled(t *testing.T) {
 		"bare-instance":         inst,
 		"legacy-full-deep-link": inst + "/nav_to.do?uri=incident.do?sys_id=" + sys,
 	} {
-		v := ticketStatusView(ticketLink{
+		v := ticketStatusView(ticketing.Link{
 			ExternalSystem: "servicenow", TicketNumber: "INC0010001",
 			SysID: sys, InstanceURL: stored, Status: "open",
 		}, true)
@@ -604,7 +605,7 @@ func TestSimulator_ReportsRuntimeState(t *testing.T) {
 	// Legacy multi-enabled drift (seeded past the store guard) → held.
 	mem := s.ticketing.(*memTicketingStore)
 	mem.mu.Lock()
-	mem.policies[memKey(a.tenantID, "drift")] = incidentPolicy{ID: "drift", TenantID: a.tenantID,
+	mem.policies[memKey(a.tenantID, "drift")] = ticketing.IncidentPolicy{ID: "drift", TenantID: a.tenantID,
 		Name: "drifted", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
 	mem.mu.Unlock()
 	if out := simulate(a.token, "act-1"); out.RuntimeState != "held" {
@@ -630,7 +631,7 @@ func TestTicketStatusRead_AgreesAcrossPaths(t *testing.T) {
 	srv, s, fix := setupTicketingTenants(t)
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
-	if err := s.ticketing.PutLink(context.Background(), ticketLink{
+	if err := s.ticketing.PutLink(context.Background(), ticketing.Link{
 		TenantID: TenantGlobal, CorrObjectID: tktStrictCorrID, ExternalSystem: "servicenow",
 		Status: "open", TicketNumber: "INC0000077", SysID: "sys77",
 	}); err != nil {

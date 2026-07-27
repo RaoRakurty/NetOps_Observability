@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"netops/backend/internal/rca"
+	"netops/backend/internal/ticketing"
 	"os"
 	"strings"
 	"testing"
@@ -523,7 +524,7 @@ func buildP027379Report(t *testing.T) rcaReport {
 	}
 	return buildRcaReport(rcaReportInput{
 		ID: "02737923-1f7a-57a2-ae88-6d650c608b51", Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("global"), Now: win.Add(20 * time.Minute),
+		Policy: ticketing.DefaultIncidentPolicy("global"), Now: win.Add(20 * time.Minute),
 	})
 }
 

@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func (a *slackTicketAdapter) HealthCheck(_ context.Context, cfg ticketSystemConf
 	return a.ValidateConfig(cfg) // a real probe would post a visible message
 }
 
-func (a *slackTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
+func (a *slackTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
 	if err := a.post(ctx, cfg, slackTicketMessage("opened", p)); err != nil {
 		return ticketRef{}, err
 	}
@@ -69,7 +70,7 @@ func (a *slackTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSyste
 	return ticketRef{Number: shortPDRef(key), SysID: key, URL: ""}, nil
 }
 
-func (a *slackTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, _ ticketRef, p ticketPayload) error {
+func (a *slackTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, _ ticketRef, p ticketing.Payload) error {
 	return a.post(ctx, cfg, slackTicketMessage("updated", p))
 }
 
@@ -103,7 +104,7 @@ func (a *slackTicketAdapter) FetchIncident(_ context.Context, _ ticketSystemConf
 
 // slackTicketMessage renders the lifecycle message (classic attachment format —
 // the one incoming webhooks fully support).
-func slackTicketMessage(phase string, p ticketPayload) map[string]any {
+func slackTicketMessage(phase string, p ticketing.Payload) map[string]any {
 	color := map[string]string{"opened": "#d63031", "updated": "#f39c12"}[phase]
 	if color == "" {
 		color = "#2eaa60"

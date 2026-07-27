@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ import (
 
 // ticketing_servicenow.go — the RCA-object ServiceNow adapter (#78 P2). Unlike
 // notify.ServiceNow (one incident per ALERT fingerprint), this adapter speaks
-// the ticketPayload built from ONE RCA correlation object and uses ServiceNow's
+// the ticketing.Payload built from ONE RCA correlation object and uses ServiceNow's
 // native correlation_id as the dedupe anchor (= corr_object_id). The worker
 // (ticketing_worker.go) drives it; ticketing never blocks correlation.
 //
@@ -34,8 +35,8 @@ type ticketAdapter interface {
 	Name() string
 	ValidateConfig(cfg ticketSystemConfig) error
 	HealthCheck(ctx context.Context, cfg ticketSystemConfig) error
-	CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error)
-	UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error
+	CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error)
+	UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error
 	AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
 	ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
 	LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error)
@@ -146,7 +147,7 @@ func (a *serviceNowAdapter) HealthCheck(ctx context.Context, cfg ticketSystemCon
 	return err
 }
 
-func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
+func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
 	body := snowIncidentFields(cfg, p)
 	body["work_notes"] = snowWorkNote("Correlix opened this incident from RCA correlation object "+p.CorrObjectID, p)
 	// sysparm_input_display_value=true: reference fields (assignment_group,
@@ -159,7 +160,7 @@ func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystem
 	return a.parseRef(cfg, raw)
 }
 
-func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error {
+func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("servicenow: update requires sys_id")
 	}
@@ -376,7 +377,7 @@ func (a *serviceNowAdapter) parseRef(cfg ticketSystemConfig, raw []byte) (ticket
 // snowIncidentFields maps the RCA payload onto ServiceNow incident fields,
 // including the native correlation_id dedupe key and the u_correlix_* custom
 // fields the design specifies. Never carries raw-alert text.
-func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any {
+func snowIncidentFields(cfg ticketSystemConfig, p ticketing.Payload) map[string]any {
 	group := p.AssignmentGroup
 	if group == "" {
 		group = cfg.AssignmentGroup
@@ -416,7 +417,7 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketPayload) map[string]any 
 }
 
 // snowDescription is the human-readable RCA body (the diagnosis, not raw alerts).
-func snowDescription(p ticketPayload) string {
+func snowDescription(p ticketing.Payload) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Correlix Problem: %s\n\n", noclabel.ProblemDisplayID(p.CorrObjectID))
 	fmt.Fprintf(&b, "%s\n\n", p.Summary)
@@ -442,7 +443,7 @@ func snowDescription(p ticketPayload) string {
 	return b.String()
 }
 
-func snowWorkNote(headline string, p ticketPayload) string {
+func snowWorkNote(headline string, p ticketing.Payload) string {
 	if p.RCAURL == "" {
 		return headline
 	}

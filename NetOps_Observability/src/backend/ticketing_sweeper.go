@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/ticketing"
 	"os"
 	"strings"
 	"time"
@@ -201,7 +202,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 				map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 			continue
 		}
-		var lp *ticketLink
+		var lp *ticketing.Link
 		if found {
 			lp = &link
 		}
@@ -241,7 +242,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 // otherwise have emitted; the caller must surface it (log), never drop it.
 type sweepAction struct {
 	kind              string // "" | "create" | "update"
-	payload           ticketPayload
+	payload           ticketing.Payload
 	suppressionReason string // non-empty = consistency gate held the action
 }
 
@@ -254,19 +255,19 @@ type sweepAction struct {
 // approves is still HELD when the object's facts carry a P1 contradiction
 // (facts.ConsistencyIssues) — contradictory state never reaches an external
 // system. The hold carries its reason; validation-scenario suppression (§11,
-// the rca-canary contract) already happened inside evalTicketDecision and is
+// the rca-canary contract) already happened inside ticketing.EvalDecision and is
 // unaffected: a canary never gets this far.
-func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentPolicy, link *ticketLink, baseURL string, now time.Time) sweepAction {
+func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, link *ticketing.Link, baseURL string, now time.Time) sweepAction {
 	held := func() sweepAction {
 		return sweepAction{suppressionReason: "consistency gate (P1): " + strings.Join(facts.ConsistencyIssues, "; ")}
 	}
-	if dec := evalTicketDecision(facts, policy, link, now); dec.Create {
+	if dec := ticketing.EvalDecision(facts, policy, link, now); dec.Create {
 		if len(facts.ConsistencyIssues) > 0 {
 			return held()
 		}
 		return sweepAction{kind: "create", payload: buildTicketPayload(view, facts, policy, baseURL)}
 	}
-	if link != nil && link.openTicket() {
+	if link != nil && link.Open() {
 		p := buildTicketPayload(view, facts, policy, baseURL)
 		if payloadHash(p) != link.LastPayloadHash {
 			if len(facts.ConsistencyIssues) > 0 {
@@ -288,7 +289,7 @@ func decideSweepAction(view rcaPathView, facts corrTicketFacts, policy incidentP
 var ticketSystems = []string{"servicenow", "pagerduty", "slack", "jira"}
 
 type policyResolution struct {
-	policy incidentPolicy
+	policy ticketing.IncidentPolicy
 	state  string // policyStateDefault | policyStateActive | policyStateOptedOut | policyStateHeld
 }
 
@@ -303,7 +304,7 @@ const (
 // enabled policy wins; an explicitly configured (but disabled) policy is honored
 // so a tenant can opt OUT; only a tenant with NO policy at all falls back to the
 // default-on MVP policy.
-func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system string) incidentPolicy {
+func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system string) ticketing.IncidentPolicy {
 	return sw.resolvePolicyState(ctx, tenant, system).policy
 }
 
@@ -312,7 +313,7 @@ func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system strin
 func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant, system string) policyResolution {
 	system = orDefault(system, "servicenow")
 	all, err := sw.store.ListPolicies(ctx, tenant, false)
-	var policies []incidentPolicy
+	var policies []ticketing.IncidentPolicy
 	for _, p := range all {
 		if orDefault(p.ExternalSystem, "servicenow") == system {
 			policies = append(policies, p)
@@ -321,16 +322,16 @@ func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant, system 
 	if err != nil || len(policies) == 0 {
 		if system == "servicenow" {
 			// ServiceNow keeps the historical default-on MVP policy.
-			return policyResolution{policy: defaultIncidentPolicy(tenant), state: policyStateDefault}
+			return policyResolution{policy: ticketing.DefaultIncidentPolicy(tenant), state: policyStateDefault}
 		}
 		// Paging (and any future system) is OPT-IN: no policy, no delivery.
-		off := defaultIncidentPolicy(tenant)
+		off := ticketing.DefaultIncidentPolicy(tenant)
 		off.Enabled = false
 		off.ExternalSystem = system
 		off.Name = "no " + system + " policy (opt-in)"
 		return policyResolution{policy: off, state: policyStateOptedOut}
 	}
-	var enabled []incidentPolicy
+	var enabled []ticketing.IncidentPolicy
 	for _, p := range policies {
 		if p.Enabled {
 			enabled = append(enabled, p)
@@ -357,7 +358,7 @@ func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant, system 
 	if sw.srv != nil {
 		sw.srv.tktPolicyMultiEnabled.Add(1)
 	}
-	held := defaultIncidentPolicy(tenant)
+	held := ticketing.DefaultIncidentPolicy(tenant)
 	held.Enabled = false
 	held.Name = "HELD: conflicting enabled policies"
 	return policyResolution{policy: held, state: policyStateHeld}

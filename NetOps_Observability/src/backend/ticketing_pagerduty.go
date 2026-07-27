@@ -32,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -72,7 +73,7 @@ func pdTicketDedupKey(tenantID, corrObjectID string) string {
 	return "correlix:" + dedupeKey(tenantID, corrObjectID, "pagerduty")
 }
 
-func (a *pagerDutyTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketPayload) (ticketRef, error) {
+func (a *pagerDutyTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
 	key := pdTicketDedupKey(cfg.TenantID, p.CorrObjectID)
 	if err := a.send(ctx, cfg, "trigger", key, &p); err != nil {
 		return ticketRef{}, err
@@ -83,7 +84,7 @@ func (a *pagerDutyTicketAdapter) CreateIncident(ctx context.Context, cfg ticketS
 	return ticketRef{Number: shortPDRef(key), SysID: key, URL: ""}, nil
 }
 
-func (a *pagerDutyTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketPayload) error {
+func (a *pagerDutyTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error {
 	return a.send(ctx, cfg, "trigger", ref.SysID, &p)
 }
 
@@ -116,7 +117,7 @@ func (a *pagerDutyTicketAdapter) FetchIncident(_ context.Context, _ ticketSystem
 // pdEventSeverity maps the policy-mapped urgency (1 highest..3) + verdict to
 // the Events v2 severity enum. Deterministic; PD-side urgency derives from
 // this via the PD service's own rules.
-func pdEventSeverity(p ticketPayload) string {
+func pdEventSeverity(p ticketing.Payload) string {
 	switch {
 	case p.Urgency <= 1:
 		return "critical"
@@ -127,7 +128,7 @@ func pdEventSeverity(p ticketPayload) string {
 	}
 }
 
-func (a *pagerDutyTicketAdapter) send(ctx context.Context, cfg ticketSystemConfig, action, dedupKey string, p *ticketPayload) error {
+func (a *pagerDutyTicketAdapter) send(ctx context.Context, cfg ticketSystemConfig, action, dedupKey string, p *ticketing.Payload) error {
 	if err := a.ValidateConfig(cfg); err != nil {
 		return permanentDeliveryError{err}
 	}

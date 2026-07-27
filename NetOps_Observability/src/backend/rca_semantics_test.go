@@ -4,6 +4,7 @@ package main
 // (docs/design/rca-postmortem-enhancements-spec.md §1 + artifact classes).
 
 import (
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
@@ -200,7 +201,7 @@ func TestMilestonesFromLifecycleCarryLineage(t *testing.T) {
 	ack := time.Date(2026, 7, 12, 18, 20, 0, 0, time.UTC)
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
-		Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 		Lifecycle: timeintel.Lifecycle{
 			timeintel.EvAcknowledged: {At: ack, Source: timeintel.SrcUserEntered, Confidence: 1},
 		},

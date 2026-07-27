@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"time"
 )
@@ -119,7 +120,7 @@ func (s *server) handleIncidentPolicyByID(w http.ResponseWriter, r *http.Request
 // upsertIncidentPolicy decodes, stamps the tenant from the token, validates, and
 // persists. id != "" pins the id (PUT); otherwise a create mints one.
 func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, claims jwtClaims, id string) {
-	var in incidentPolicy
+	var in ticketing.IncidentPolicy
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -181,7 +182,7 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 }
 
 // validateIncidentPolicy bounds the operator-supplied policy (zero-trust input).
-func validateIncidentPolicy(p incidentPolicy) error {
+func validateIncidentPolicy(p ticketing.IncidentPolicy) error {
 	switch p.ExternalSystem {
 	case "servicenow", "pagerduty", "slack", "jira":
 	default:
@@ -214,7 +215,7 @@ func validateIncidentPolicy(p incidentPolicy) error {
 }
 
 // handleIncidentPolicyTest simulates a policy against caller-supplied facts. Pure:
-// no object load, no external call, no enqueue — it just runs evalTicketDecision
+// no object load, no external call, no enqueue — it just runs ticketing.EvalDecision
 // so an operator can see WHY a hypothetical object would or wouldn't ticket.
 func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
@@ -248,7 +249,7 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	facts := corrTicketFacts{
+	facts := ticketing.CorrFacts{
 		Verdict: in.Verdict, Internal: in.Internal, ProbeOnly: in.ProbeOnly,
 		LowAuthorityProbe: in.LowAuthorityProbe, PeakSeverity: in.PeakSeverity,
 		HasAffectedEntity: in.HasAffectedEntity,
@@ -259,7 +260,7 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 	// simulator verdict is only trustworthy if the operator can tell which
 	// configuration produced it (2026-07-10: a shadowed policy made the active
 	// configuration ambiguous). Additive keys — create/reason stay top-level.
-	dec := evalTicketDecision(facts, policy, nil, time.Now().UTC())
+	dec := ticketing.EvalDecision(facts, policy, nil, time.Now().UTC())
 	out := map[string]any{
 		"create":            dec.Create,
 		"reason":            dec.Reason,
@@ -405,7 +406,7 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	if action == "update" {
 		// Sync only makes sense for an existing open ticket.
 		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system)
-		if !found || !link.openTicket() {
+		if !found || !link.Open() {
 			writeError(w, http.StatusConflict, errors.New("no open ticket to sync for this object"))
 			return
 		}
@@ -432,10 +433,10 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 // mergedInto is non-empty when the object was merged into another correlation —
 // the caller decides how to surface that (only AFTER its ownership guard, so a
 // leaked foreign row never discloses another tenant's canonical id).
-func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketPayload, incidentPolicy, string, string, int, error) {
+func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id string) (ticketing.Payload, ticketing.IncidentPolicy, string, string, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(ctx, scope, id, 0)
 	if err != nil {
-		return ticketPayload{}, incidentPolicy{}, "", "", status, err
+		return ticketing.Payload{}, ticketing.IncidentPolicy{}, "", "", status, err
 	}
 	owner := canonicalCorrTenant(asString(meta["tenant_id"]))
 	mergedInto := ""
@@ -658,7 +659,7 @@ func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
 
 // ticketStatusView projects a ticket link into the status surface the correlation
 // detail + RCA Inspector render. No link → not_created (an honest empty state).
-func ticketStatusView(l ticketLink, found bool) map[string]any {
+func ticketStatusView(l ticketing.Link, found bool) map[string]any {
 	if !found {
 		return map[string]any{"state": "not_created"}
 	}

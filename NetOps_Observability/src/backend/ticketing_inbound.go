@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"time"
 )
@@ -75,7 +76,7 @@ func (sy *ticketStateSyncer) tick(ctx context.Context, now time.Time) (int, erro
 
 // syncLink polls one link's incident state and appends any newly-observed phases.
 // Returns the number of audit rows appended.
-func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketLink, now time.Time) int {
+func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketing.Link, now time.Time) int {
 	system := orDefault(l.ExternalSystem, "servicenow")
 	adapter := sy.adapters[system]
 	if adapter == nil || l.SysID == "" {
@@ -119,7 +120,7 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketLink, now tim
 		if seen[key] {
 			continue
 		}
-		if err := sy.store.AppendAudit(ctx, ticketAuditEntry{
+		if err := sy.store.AppendAudit(ctx, ticketing.AuditEntry{
 			TenantID: l.TenantID, ID: randID(), CorrObjectID: l.CorrObjectID,
 			ExternalSystem: system, Action: o.Action, Actor: "servicenow:sync",
 			NewStatus: o.Action, Result: "ok", At: o.At,
@@ -137,7 +138,7 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketLink, now tim
 // advanceLinkStatus reflects a ServiceNow resolve/close back onto the link so the
 // UI status + the sweeper's open-ticket guard stay consistent with the provider.
 // Only moves toward terminal — never resurrects a closed link or downgrades.
-func (sy *ticketStateSyncer) advanceLinkStatus(ctx context.Context, l ticketLink, inc snowIncident, now time.Time) {
+func (sy *ticketStateSyncer) advanceLinkStatus(ctx context.Context, l ticketing.Link, inc snowIncident, now time.Time) {
 	target := ""
 	switch {
 	case inc.State >= snowStateClosed:

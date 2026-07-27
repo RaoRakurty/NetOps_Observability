@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func runRcaScenario(t *testing.T, sc rcaScenario) rcaReport {
 	t.Helper()
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: sc.meta, Signals: sc.sigs,
-		Ticket: sc.ticket, Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Ticket: sc.ticket, Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 		SurvivingIncidentID: sc.survivingID,
 	})
 	if sc.incident != "" && rep.States.Incident != sc.incident {
@@ -1080,7 +1081,7 @@ func TestRcaReportPropertyInvariants(t *testing.T) {
 		}
 		rep := buildRcaReport(rcaReportInput{
 			ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: sigs,
-			Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+			Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 			SurvivingIncidentID: survivingID,
 		})
 		assertRcaInvariants(t, rep)

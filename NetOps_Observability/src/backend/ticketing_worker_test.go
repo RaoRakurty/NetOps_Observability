@@ -42,7 +42,7 @@ func TestOutboxWorker_CreateHappyPath(t *testing.T) {
 	}
 	// Link advanced to open with the ticket number + sys id.
 	link, found, _ := store.GetLink(ctx, "t_a", false, "obj-1", "servicenow")
-	if !found || !link.openTicket() || link.TicketNumber == "" || link.SysID == "" {
+	if !found || !link.Open() || link.TicketNumber == "" || link.SysID == "" {
 		t.Fatalf("link not advanced: found=%v %+v", found, link)
 	}
 	// Audit trail recorded the create.

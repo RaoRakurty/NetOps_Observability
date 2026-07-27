@@ -1,4 +1,4 @@
-package main
+package ticketing
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ticketing_policy.go — the pure incident-policy decision: given the RCA facts,
+// policy.go — the pure incident-policy decision: given the RCA facts,
 // the deciding policy, and any existing ticket link, decide whether to OPEN a
 // new external ticket and why. I/O-free and deterministic, so it is unit-tested
 // against the guardrail matrix (decision #76: internal/debug, active-check-only
@@ -18,10 +18,10 @@ import (
 
 var verdictRank = map[string]int{"undetermined": 0, "suspected": 1, "confirmed": 2}
 
-// evalTicketDecision applies the policy. The Reason is operator-readable and is
+// EvalDecision applies the policy. The Reason is operator-readable and is
 // surfaced verbatim in the UI's blocked-reason text — no raw-alert language.
-func evalTicketDecision(facts corrTicketFacts, policy incidentPolicy, link *ticketLink, now time.Time) ticketDecision {
-	hold := func(reason string) ticketDecision { return ticketDecision{Create: false, Reason: reason} }
+func EvalDecision(facts CorrFacts, policy IncidentPolicy, link *Link, now time.Time) Decision {
+	hold := func(reason string) Decision { return Decision{Create: false, Reason: reason} }
 
 	if !policy.Enabled {
 		return hold("ticketing policy disabled")
@@ -75,14 +75,14 @@ func evalTicketDecision(facts corrTicketFacts, policy incidentPolicy, link *tick
 	}
 
 	// Persistence gate (flap suppression on the way in).
-	if policy.RequirePersistenceSeconds > 0 && facts.persistenceSeconds() < policy.RequirePersistenceSeconds {
+	if policy.RequirePersistenceSeconds > 0 && facts.PersistenceSeconds() < policy.RequirePersistenceSeconds {
 		return hold(fmt.Sprintf("not yet persistent (%ds < required %ds)",
-			facts.persistenceSeconds(), policy.RequirePersistenceSeconds))
+			facts.PersistenceSeconds(), policy.RequirePersistenceSeconds))
 	}
 
 	// Dedupe / suppression against any existing link for this object+system.
 	if link != nil {
-		if link.openTicket() {
+		if link.Open() {
 			ref := link.TicketNumber
 			if ref == "" {
 				ref = "pending"
@@ -100,7 +100,7 @@ func evalTicketDecision(facts corrTicketFacts, policy incidentPolicy, link *tick
 		system = "servicenow"
 	}
 	verdict := facts.Verdict
-	return ticketDecision{
+	return Decision{
 		Create: true,
 		Reason: fmt.Sprintf("customer-facing %s fault — opening %s incident", verdict, strings.ToLower(system)),
 	}

@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 	"time"
@@ -210,7 +211,7 @@ func TestMemTicketingAuditIsRingBuffered(t *testing.T) {
 	m := newMemTicketingStore()
 	total := memTicketAuditMax + 500
 	for i := 0; i < total; i++ {
-		if err := m.AppendAudit(context.Background(), ticketAuditEntry{
+		if err := m.AppendAudit(context.Background(), ticketing.AuditEntry{
 			TenantID: "t1", ID: fmt.Sprintf("c%d", i),
 		}); err != nil {
 			t.Fatal(err)

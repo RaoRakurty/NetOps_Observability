@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/ticketing"
 	"strings"
 	"sync"
 	"testing"
@@ -124,7 +125,7 @@ func (f *fakeJira) adapter() *jiraTicketAdapter {
 	return &jiraTicketAdapter{httpClient: f.srv.Client()}
 }
 
-func jiraPayload(corr string) ticketPayload {
+func jiraPayload(corr string) ticketing.Payload {
 	p := pdPayload(corr)
 	p.ExternalSystem = "jira"
 	return p
@@ -446,7 +447,7 @@ func TestResolvePolicyState_QuadSystemAndJiraOptIn(t *testing.T) {
 	store := newMemTicketingStore()
 	sw := &ticketSweeper{store: store}
 	for _, sys := range ticketSystems {
-		p := incidentPolicy{ID: "q-" + sys, TenantID: "t_quad", Name: sys, Enabled: true,
+		p := ticketing.IncidentPolicy{ID: "q-" + sys, TenantID: "t_quad", Name: sys, Enabled: true,
 			ExternalSystem: sys, MinVerdict: "confirmed"}
 		if err := store.PutPolicy(ctx, p); err != nil {
 			t.Fatalf("put %s: %v", sys, err)
@@ -462,7 +463,7 @@ func TestResolvePolicyState_QuadSystemAndJiraOptIn(t *testing.T) {
 		t.Fatalf("jira must be opt-in, got %+v", res)
 	}
 	// The policy validator accepts jira as a first-class destination.
-	if err := validateIncidentPolicy(incidentPolicy{ExternalSystem: "jira", MinVerdict: "confirmed"}); err != nil {
+	if err := validateIncidentPolicy(ticketing.IncidentPolicy{ExternalSystem: "jira", MinVerdict: "confirmed"}); err != nil {
 		t.Fatalf("validateIncidentPolicy(jira): %v", err)
 	}
 }

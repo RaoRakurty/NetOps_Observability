@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/ticketing"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func seedLinks(t *testing.T, st ticketingStore, tenant string, n int) {
 	t.Helper()
 	base := time.Now().UTC().Add(-time.Duration(n) * time.Minute)
 	for i := 0; i < n; i++ {
-		l := ticketLink{
+		l := ticketing.Link{
 			TenantID:       tenant,
 			CorrObjectID:   "corr-" + intToString(i),
 			ExternalSystem: "servicenow",
@@ -139,14 +140,14 @@ func TestOutboxAndAuditAreBounded(t *testing.T) {
 	ctx := context.Background()
 	const seeded = 60
 	for i := 0; i < seeded; i++ {
-		if err := st.EnqueueOutbox(ctx, ticketOutboxItem{
+		if err := st.EnqueueOutbox(ctx, ticketing.OutboxItem{
 			TenantID: "t_a", ID: "o-" + intToString(i), CorrObjectID: "c-" + intToString(i),
 			ExternalSystem: "servicenow", Action: "create", IdempotencyKey: "k-" + intToString(i),
 			CreatedAt: time.Now().UTC().Add(time.Duration(i) * time.Second),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.AppendAudit(ctx, ticketAuditEntry{
+		if err := st.AppendAudit(ctx, ticketing.AuditEntry{
 			TenantID: "t_a", ID: "a-" + intToString(i), CorrObjectID: "c-1",
 			ExternalSystem: "servicenow", Action: "create", Result: "ok",
 			At: time.Now().UTC().Add(time.Duration(i) * time.Second),

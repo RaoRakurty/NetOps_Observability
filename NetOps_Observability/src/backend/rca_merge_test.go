@@ -6,6 +6,7 @@ package main
 // cased. Generic: no P-E22C5E ids, ips, timestamps or seam names.
 
 import (
+	"netops/backend/internal/ticketing"
 	"strings"
 	"testing"
 )
@@ -142,7 +143,7 @@ func TestScenarioMergedMissingSurvivor(t *testing.T) {
 	// no merged_into, no resolved survivor
 	rep := buildRcaReport(rcaReportInput{
 		ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", Meta: meta, Signals: mergedIpsecResidualSigs(),
-		Policy: defaultIncidentPolicy("t1"), Now: rcaTestNow,
+		Policy: ticketing.DefaultIncidentPolicy("t1"), Now: rcaTestNow,
 	})
 	if rep.States.Incident != "merged" {
 		t.Fatalf("incident = %q, want merged", rep.States.Incident)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"netops/backend/internal/ticketing"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestTicketLinksAPI_TenantIsolation(t *testing.T) {
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	ctx := context.Background()
 
-	seed := []ticketLink{
+	seed := []ticketing.Link{
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0000001", SysID: "sysA1"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "slack", Status: "open", TicketNumber: "corrA1"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA2, ExternalSystem: "pagerduty", Status: "resolved", TicketNumber: "corrA2"},
@@ -93,7 +94,7 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 	a := fix["A"]
 	ctx := context.Background()
 
-	for _, l := range []ticketLink{
+	for _, l := range []ticketing.Link{
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "servicenow", Status: "open", TicketNumber: "INC0000042", SysID: "sys42"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "pagerduty", Status: "resolved", TicketNumber: "corrA1"},
 		{TenantID: a.tenantID, CorrObjectID: tktLinksCorrA1, ExternalSystem: "slack", Status: "open", TicketNumber: "corrA1"},
