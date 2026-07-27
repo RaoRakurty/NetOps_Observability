@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/ratelimit"
 )
 
 // ai_tenant_config_test.go — per-tenant Iris AI settings (P4a): store
@@ -40,7 +42,7 @@ func aiCfgTestServer(t *testing.T) *server {
 		roles:          rs,
 		tenants:        ts,
 		audit:          au,
-		copilotLimiter: newTenantRateLimiter(),
+		copilotLimiter: ratelimit.New(),
 		aiToolBudget:   newAIDailyBudget(),
 		copilotCfg:     newCopilotConfigStore(dir+"/copilot_config.json", nil),
 		aiTenantCfg:    newAITenantConfigStore(dir+"/ai_tenant_config.json", nil),

@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
@@ -137,15 +138,15 @@ type server struct {
 	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
-	exportLimiter   *tenantRateLimiter    // per-tenant export rate limit
-	copilotLimiter  *tenantRateLimiter    // per-principal copilot rate limit (SR-021)
+	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
+	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
 	aiToolBudget    *aiDailyBudget        // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
 	verifyCfg       *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
 	verifyRuns      *verifyRunStore        // spec #8: latest verification run per case (bounded)
-	verifyLimiter   *tenantRateLimiter     // spec #8: manual-verify per-tenant rate limit
+	verifyLimiter   *ratelimit.Limiter     // spec #8: manual-verify per-tenant rate limit
 	governance      *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
 	cloudSLOs       *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
 	cloudMonitors   *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
@@ -630,8 +631,8 @@ func newServer() *server {
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
-	srv.exportLimiter = newTenantRateLimiter()
-	srv.copilotLimiter = newTenantRateLimiter()
+	srv.exportLimiter = ratelimit.New()
+	srv.copilotLimiter = ratelimit.New()
 	srv.aiToolBudget = newAIDailyBudget()
 	engine.OnFire = srv.ingestAlertIncident
 	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
@@ -647,7 +648,7 @@ func newServer() *server {
 	// secrets vault-sealed), bounded run store, per-tenant rate limiter.
 	srv.verifyCfg = newVerifyConfigStore(verifyConfigPath(), vault)
 	srv.verifyRuns = newVerifyRunStore(envOr("VERIFY_RUNS_FILE", "/data/verify_runs.json"))
-	srv.verifyLimiter = newTenantRateLimiter()
+	srv.verifyLimiter = ratelimit.New()
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
 	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
 	srv.cloudMonitors = newCloudMonitorStore(cloudMonitorsPath())

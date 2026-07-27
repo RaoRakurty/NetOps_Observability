@@ -75,7 +75,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Per-principal rate limit — each ask may be a paid provider call (SR-021).
-	if !s.copilotLimiter.allowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+	if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("Iris AI rate limit exceeded — slow down"))
 		return
 	}

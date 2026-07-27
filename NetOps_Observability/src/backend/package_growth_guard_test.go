@@ -62,7 +62,9 @@ import (
 //	                  handler behind — the ratchet measures files, not LOC)
 //	2026-07-27  282  portintel gains the port store (pg plumbing INJECTED via
 //	                  portintel.DB); handlers + backend selection stayed
-const rootPackageCeiling = 282
+//	2026-07-27  281  internal/ratelimit (the F-33 fixed-window limiter; callers
+//	                  now pass their budget — the env read left the package)
+const rootPackageCeiling = 281
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

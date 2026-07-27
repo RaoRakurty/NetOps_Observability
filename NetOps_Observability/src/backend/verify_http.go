@@ -67,7 +67,7 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 			scope = "__all__"
 		}
 		// Rate limit keyed by the AUTHENTICATED tenant (never client IP).
-		if !s.verifyLimiter.allowN("verify:"+tenant, envInt("VERIFY_RATE_PER_MIN", 6)) {
+		if !s.verifyLimiter.AllowN("verify:"+tenant, envInt("VERIFY_RATE_PER_MIN", 6)) {
 			writeError(w, http.StatusTooManyRequests, errors.New("verification rate limit reached — try again shortly"))
 			return
 		}

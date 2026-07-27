@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/ratelimit"
 	"netops/backend/models"
 )
 
@@ -70,7 +71,7 @@ func setupVerifyServer(t *testing.T) (*httptest.Server, *server, map[string]*ver
 	dir := t.TempDir()
 	s.verifyCfg = newVerifyConfigStore(filepath.Join(dir, "verify_config.json"), nil)
 	s.verifyRuns = newVerifyRunStore(filepath.Join(dir, "verify_runs.json"))
-	s.verifyLimiter = newTenantRateLimiter()
+	s.verifyLimiter = ratelimit.New()
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	fix := map[string]*verifyFixture{}

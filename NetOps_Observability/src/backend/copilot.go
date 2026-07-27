@@ -135,7 +135,7 @@ func (s *server) handleCopilot(w http.ResponseWriter, r *http.Request) {
 	// Keyed by tenant|user (authenticated identity, not a spoofable IP);
 	// COPILOT_RATE_PER_MIN tunes the budget (default 20/min, ≤0 disables).
 	claims, _ := userFrom(r.Context())
-	if !s.copilotLimiter.allowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
+	if !s.copilotLimiter.AllowN(claims.Tenant+"|"+claims.Sub, envInt("COPILOT_RATE_PER_MIN", 20)) {
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("copilot rate limit exceeded — slow down"))
 		return
 	}

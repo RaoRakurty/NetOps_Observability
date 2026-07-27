@@ -363,7 +363,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	if !s.exportLimiter.allow(tenant) {
+	if !s.exportLimiter.AllowN(tenant, envInt("EXPORT_RATE_PER_MIN", 10)) {
 		writeError(w, http.StatusTooManyRequests, errors.New("export rate limit exceeded for this tenant — try again shortly"))
 		return
 	}
@@ -470,7 +470,7 @@ func (s *server) handleLogsExportRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	if !s.exportLimiter.allow(tenant) {
+	if !s.exportLimiter.AllowN(tenant, envInt("EXPORT_RATE_PER_MIN", 10)) {
 		writeError(w, http.StatusTooManyRequests, errors.New("export rate limit exceeded for this tenant — try again shortly"))
 		return
 	}

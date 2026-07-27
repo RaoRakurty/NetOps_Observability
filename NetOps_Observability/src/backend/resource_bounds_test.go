@@ -229,48 +229,8 @@ func TestCHQueryCountsFailures(t *testing.T) {
 }
 
 // ── F-33 ─────────────────────────────────────────────────────────────────────
-
-// TestRateLimiterReclaimsExpiredWindows: the windows map had no deletion path,
-// so it grew with every principal that ever made one request.
-func TestRateLimiterReclaimsExpiredWindows(t *testing.T) {
-	l := newTenantRateLimiter()
-	// A day's worth of principals that each made one request and never came
-	// back. Under the old code every one of them stayed in the map forever.
-	for i := 0; i < rlSweepThreshold; i++ {
-		l.allowN(fmt.Sprintf("tenant-%d|user-%d", i, i), 10)
-	}
-	l.mu.Lock()
-	for _, w := range l.windows {
-		w.start = time.Now().Add(-2 * time.Minute) // their minute has long passed
-	}
-	l.mu.Unlock()
-
-	// The next request crosses the sweep threshold and must reclaim them.
-	l.allowN("live|user", 10)
-	if got := l.size(); got > 2 {
-		t.Fatalf("windows map holds %d entries; %d expired ones should have been reclaimed — "+
-			"this map had NO deletion path at all (F-33)", got, rlSweepThreshold)
-	}
-}
-
-// TestRateLimiterSweepDoesNotWeakenTheLimit: reclaiming memory must never hand
-// out extra budget inside a live window.
-func TestRateLimiterSweepDoesNotWeakenTheLimit(t *testing.T) {
-	l := newTenantRateLimiter()
-	const key = "t1|u1"
-	for i := 0; i < 3; i++ {
-		if !l.allowN(key, 3) {
-			t.Fatalf("request %d refused inside budget", i+1)
-		}
-	}
-	// Fill the map so the next call triggers a sweep, then re-check the limit.
-	for i := 0; i < rlSweepThreshold; i++ {
-		l.allowN(fmt.Sprintf("filler-%d", i), 100)
-	}
-	if l.allowN(key, 3) {
-		t.Fatal("the sweep reset a LIVE window — the rate limit can be bypassed by filling the map")
-	}
-}
+// The rate-limiter leak tests moved into internal/ratelimit with the limiter
+// (they are white-box: they reach into the windows map).
 
 // TestMemTicketingAuditIsRingBuffered: the in-memory ticketing audit slice was
 // append-only forever, while its sibling audit store ring-buffers at 5000.
