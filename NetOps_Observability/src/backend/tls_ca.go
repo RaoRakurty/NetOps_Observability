@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
 	"time"
@@ -40,7 +41,7 @@ var (
 )
 
 type caManager struct {
-	vault       *Vault
+	vault       *vault.Vault
 	ca          *internalca.CA
 	trustDomain string
 	ttl         time.Duration // SVID lifetime (set at bootstrap; the re-issue loop reuses it)
@@ -48,7 +49,7 @@ type caManager struct {
 
 // loadOrCreateCA loads the internal CA from the kv store (cert plaintext, key
 // Vault-decrypted) or, on first run, generates one and persists it (key sealed).
-func loadOrCreateCA(vault *Vault, trustDomain string) (*caManager, error) {
+func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) {
 	m := &caManager{vault: vault, trustDomain: trustDomain}
 	certPEM, cerr := kvLoad(kvCACertKey)
 	keyEnc, kerr := kvLoad(kvCAKeyKey)
@@ -113,7 +114,7 @@ func (m *caManager) writeBundle(path string) error {
 // bootstrapInternalCA self-provisions the mesh on boot when TLS_INTERNAL_CA=true:
 // CA bundle + the API's own server SVID (at the serving paths) + the nginx client
 // SVID. Fail-closed — TLS was explicitly requested, so an error aborts boot.
-func bootstrapInternalCA(vault *Vault) (*caManager, error) {
+func bootstrapInternalCA(vault *vault.Vault) (*caManager, error) {
 	if os.Getenv("TLS_INTERNAL_CA") != "true" {
 		return nil, nil
 	}

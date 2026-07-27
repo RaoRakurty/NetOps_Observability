@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"netops/backend/internal/vault"
 	"strings"
 	"sync"
 	"time"
@@ -110,7 +111,7 @@ func (ct cachedToken) fresh(now time.Time) bool {
 // and never logged.
 type cloudIdentityBroker struct {
 	store   cloudConnRepo
-	vault   *Vault
+	vault   *vault.Vault
 	adapter func(cloudconn.Provider) cloudconn.CloudIdentityProvider // DI seam
 	auditFn func(AuditEvent)                                         // nil = no audit sink
 	now     func() time.Time
@@ -121,7 +122,7 @@ type cloudIdentityBroker struct {
 	cache map[string]cachedToken
 }
 
-func newCloudIdentityBroker(store cloudConnRepo, vault *Vault, auditFn func(AuditEvent)) *cloudIdentityBroker {
+func newCloudIdentityBroker(store cloudConnRepo, vault *vault.Vault, auditFn func(AuditEvent)) *cloudIdentityBroker {
 	return &cloudIdentityBroker{
 		store:   store,
 		vault:   vault,
@@ -134,15 +135,15 @@ func newCloudIdentityBroker(store cloudConnRepo, vault *Vault, auditFn func(Audi
 	}
 }
 
-// ccnSecretFieldID binds a Vault ciphertext to the connector + secret kind (the
-// Vault also binds the tenant via AAD). Changing it makes existing ciphertext
+// ccnSecretFieldID binds a vault.Vault ciphertext to the connector + secret kind (the
+// vault.Vault also binds the tenant via AAD). Changing it makes existing ciphertext
 // undecryptable — keep stable.
 func ccnSecretFieldID(connectorID, kind string) string {
 	return "cloudconn.secret." + connectorID + "." + kind
 }
 
 // StoreSecret encrypts an UNAVOIDABLE legacy secret via the existing envelope
-// Vault (per-tenant DEK) and persists ONLY the ciphertext + non-secret metadata.
+// vault.Vault (per-tenant DEK) and persists ONLY the ciphertext + non-secret metadata.
 // Returns the opaque secret reference handle. The plaintext is never stored or
 // logged. keyHint is a NON-secret identifier (AccessKeyId / SA key id) for age
 // display. Audits SECRET_CREATED.

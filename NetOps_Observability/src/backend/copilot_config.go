@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"strings"
 	"sync"
@@ -39,10 +40,10 @@ type copilotConfigStore struct {
 	mu    sync.RWMutex
 	cfg   copilotConfig
 	path  string
-	vault *Vault
+	vault *vault.Vault
 }
 
-func newCopilotConfigStore(path string, v *Vault) *copilotConfigStore {
+func newCopilotConfigStore(path string, v *vault.Vault) *copilotConfigStore {
 	s := &copilotConfigStore{path: path, vault: v}
 	if err := s.load(); err != nil {
 		logError("copilot.config", "stored assistant config unreadable — the assistant falls back to env defaults", errf(err))

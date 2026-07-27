@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/vault"
 	"strings"
 
 	"netops/backend/cloudconn"
@@ -56,7 +57,7 @@ type workloadIssuer struct {
 // loadOrCreateWorkloadIssuer loads the sealed signing key from the kv store
 // or, on first run, generates and persists one. issuerURL must be an absolute
 // http(s) URL — it becomes the `iss` every relying provider pins.
-func loadOrCreateWorkloadIssuer(vault *Vault, issuerURL string) (*workloadIssuer, error) {
+func loadOrCreateWorkloadIssuer(vault *vault.Vault, issuerURL string) (*workloadIssuer, error) {
 	u := strings.TrimRight(strings.TrimSpace(issuerURL), "/")
 	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
 		return nil, fmt.Errorf("workload issuer: CLOUD_WORKLOAD_ISSUER_URL must be an absolute http(s) URL, got %q", issuerURL)
@@ -163,7 +164,7 @@ func (s *server) handleWorkloadJWKS(w http.ResponseWriter, r *http.Request) {
 // configured. Called from newServer after the broker exists. Never aborts
 // boot: a broken explicit config logs loudly and leaves the feature dormant
 // (exchanges then surface the standard deferral — observable, not silent).
-func (s *server) bootstrapWorkloadIssuer(vault *Vault, issuerURL string) {
+func (s *server) bootstrapWorkloadIssuer(vault *vault.Vault, issuerURL string) {
 	if strings.TrimSpace(issuerURL) == "" {
 		return
 	}

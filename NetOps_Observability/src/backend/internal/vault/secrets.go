@@ -1,4 +1,4 @@
-package main
+package vault
 
 import (
 	"context"
@@ -37,9 +37,9 @@ import (
 // the design's migration step 1 ("ship the Vault dormant").
 
 const (
-	secretVersionPrefix = "v1:" // versioned, self-describing ciphertext
-	kekLen              = 32    // AES-256
-	dekLen              = 32    // AES-256
+	VersionPrefix = "v1:" // versioned, self-describing ciphertext
+	kekLen        = 32    // AES-256
+	dekLen        = 32    // AES-256
 )
 
 // wrappedKeysKey is the kv key under which the platform-custody store of wrapped
@@ -59,19 +59,35 @@ type SealingProvider interface {
 }
 
 // Vault encrypts/decrypts reversible secrets under per-tenant DEKs. The zero
-// value is not usable — construct via newVault / newVaultWithProvider.
+// value is not usable — construct via New / NewWithProvider.
 type Vault struct {
 	mu       sync.RWMutex
+	store    Store             // injected persistence (see Store)
+	warn     Warnf             // injected operator-visible warning (see Warnf)
 	provider SealingProvider   // nil → dormant (plaintext passthrough)
 	kek      []byte            // root KEK, unwrapped, memory only
 	deks     map[string][]byte // tenant → unwrapped DEK (memory cache)
 	wrapped  map[string]string // tenant → base64 wrapped DEK (persisted)
 }
 
-// newVault selects the sealing provider from SEAL_PROVIDER and activates custody,
+// New selects the sealing provider from SEAL_PROVIDER and activates custody,
 // or returns a dormant (passthrough) Vault when unset. Fail-closed: a configured
 // provider that can't unseal the KEK returns an error so the caller aborts boot.
-func newVault(ctx context.Context) (*Vault, error) {
+// Store is the persistence the vault needs. It is INJECTED rather than reached
+// for: the vault is security-critical code and must be testable against a
+// failing/empty store without standing up the platform's kv layer, and a
+// package that owns key custody should not also know how the platform happens
+// to persist bytes today.
+type Store interface {
+	Load(key string) ([]byte, error)
+	Save(key string, b []byte) error
+}
+
+// Warnf reports a condition an operator must see (a dormant vault leaves
+// reversible secrets in cleartext at rest). Injected for the same reason.
+type Warnf func(component, msg string, fields map[string]any)
+
+func New(ctx context.Context, store Store, warn Warnf) (*Vault, error) {
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("SEAL_PROVIDER")))
 	switch name {
 	case "", "none", "off":
@@ -82,20 +98,20 @@ func newVault(ctx context.Context) (*Vault, error) {
 		if os.Getenv("REQUIRE_SEAL") == "true" {
 			return nil, errors.New("REQUIRE_SEAL=true but SEAL_PROVIDER is unset — refusing to start storing reversible secrets in cleartext; set SEAL_PROVIDER=swtpm")
 		}
-		logWarn("secrets", "secret-custody Vault is DORMANT (no SEAL_PROVIDER) — reversible secrets (SMTP/Slack/PagerDuty/OIDC/LDAP/TACACS/SNMP/webhook/internal-CA key) are stored in cleartext at rest. Set SEAL_PROVIDER=swtpm to encrypt, or REQUIRE_SEAL=true to fail closed.", nil)
-		return &Vault{deks: map[string][]byte{}, wrapped: map[string]string{}}, nil
+		warn("secrets", "secret-custody Vault is DORMANT (no SEAL_PROVIDER) — reversible secrets (SMTP/Slack/PagerDuty/OIDC/LDAP/TACACS/SNMP/webhook/internal-CA key) are stored in cleartext at rest. Set SEAL_PROVIDER=swtpm to encrypt, or REQUIRE_SEAL=true to fail closed.", nil)
+		return &Vault{store: store, warn: warn, deks: map[string][]byte{}, wrapped: map[string]string{}}, nil
 	case "swtpm":
-		return newVaultWithProvider(ctx, newSwtpmSidecarProvider())
+		return NewWithProvider(ctx, newSwtpmSidecarProvider(), store, warn)
 	default:
 		return nil, fmt.Errorf("unknown SEAL_PROVIDER %q (want swtpm|none)", name)
 	}
 }
 
-// newVaultWithProvider activates a Vault against a concrete provider (used by
-// newVault and by tests with an in-memory provider). It unseals (or, first run,
+// NewWithProvider activates a Vault against a concrete provider (used by
+// New and by tests with an in-memory provider). It unseals (or, first run,
 // generates+seals) the root KEK and loads the persisted wrapped DEKs.
-func newVaultWithProvider(ctx context.Context, p SealingProvider) (*Vault, error) {
-	v := &Vault{provider: p, deks: map[string][]byte{}, wrapped: map[string]string{}}
+func NewWithProvider(ctx context.Context, p SealingProvider, store Store, warn Warnf) (*Vault, error) {
+	v := &Vault{provider: p, store: store, warn: warn, deks: map[string][]byte{}, wrapped: map[string]string{}}
 	kek, err := p.Unseal(ctx)
 	if err != nil || len(kek) != kekLen {
 		// First run: no sealed KEK yet → generate one and seal it.
@@ -139,20 +155,20 @@ func (v *Vault) Encrypt(tenant, fieldID, plaintext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return secretVersionPrefix + base64.StdEncoding.EncodeToString(blob), nil
+	return VersionPrefix + base64.StdEncoding.EncodeToString(blob), nil
 }
 
 // Decrypt reverses Encrypt. Plaintext-passthrough: a value lacking the "v1:"
 // prefix is returned as-is (legacy plaintext, or a dormant Vault), so encryption
 // can be rolled out encrypt-on-next-write without a flag day.
 func (v *Vault) Decrypt(tenant, fieldID, stored string) (string, error) {
-	if !strings.HasPrefix(stored, secretVersionPrefix) {
+	if !strings.HasPrefix(stored, VersionPrefix) {
 		return stored, nil // legacy plaintext / dormant
 	}
 	if !v.active() {
 		return "", errors.New("vault: encrypted secret present but custody is not configured (set SEAL_PROVIDER)")
 	}
-	blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, secretVersionPrefix))
+	blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, VersionPrefix))
 	if err != nil {
 		return "", fmt.Errorf("vault: malformed ciphertext: %w", err)
 	}
@@ -259,7 +275,7 @@ func (v *Vault) wrappedMAC(keys map[string]string) (string, error) {
 }
 
 func (v *Vault) loadWrapped() error {
-	b, err := kvLoad(wrappedKeysKey)
+	b, err := v.store.Load(wrappedKeysKey)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // first run — no wrapped keys yet
@@ -303,7 +319,7 @@ func (v *Vault) saveWrappedLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(wrappedKeysKey, b)
+	return v.store.Save(wrappedKeysKey, b)
 }
 
 // aad binds a ciphertext to its owning tenant and field, defeating cross-tenant

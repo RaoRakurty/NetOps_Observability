@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"strconv"
 	"strings"
@@ -161,7 +162,7 @@ func (s *notifyConfigStore) seedFromEnv() {
 
 // vault returns the secret-custody Vault (nil → dormant/passthrough; e.g. tests
 // without a wired server).
-func (s *notifyConfigStore) vault() *Vault {
+func (s *notifyConfigStore) vault() *vault.Vault {
 	if s.srv == nil {
 		return nil
 	}

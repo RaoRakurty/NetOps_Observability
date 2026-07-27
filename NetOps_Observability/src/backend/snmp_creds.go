@@ -14,6 +14,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/vault"
 	"os"
 	"sort"
 	"strings"
@@ -144,11 +145,11 @@ func validateSNMPCredential(c *SNMPCredential) error {
 type snmpCredStore struct {
 	mu    sync.RWMutex
 	path  string
-	vault *Vault                    // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
+	vault *vault.Vault              // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
 	creds map[string]SNMPCredential // id -> credential
 }
 
-func newSNMPCredStore(path string, v *Vault) (*snmpCredStore, error) {
+func newSNMPCredStore(path string, v *vault.Vault) (*snmpCredStore, error) {
 	if path == "" {
 		path = "/data/snmp_credentials.json"
 	}
@@ -240,7 +241,7 @@ func (s *snmpCredStore) flushLocked() error {
 }
 
 // encryptSecrets returns a copy of c with its reversible secret fields encrypted
-// at rest under the owning tenant's DEK. Dormant Vault → unchanged (plaintext).
+// at rest under the owning tenant's DEK. Dormant vault.Vault → unchanged (plaintext).
 func (s *snmpCredStore) encryptSecrets(c SNMPCredential) (SNMPCredential, error) {
 	var err error
 	if c.Community, err = s.vault.Encrypt(c.TenantID, snmpFieldCommunity, c.Community); err != nil {

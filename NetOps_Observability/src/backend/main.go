@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"os/signal"
 	"sort"
@@ -131,7 +132,7 @@ type server struct {
 	wireless        wirelessStore         // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
 	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
 	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
-	vault           *Vault                // secret-custody envelope (dormant unless SEAL_PROVIDER set)
+	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
 	exportLimiter   *tenantRateLimiter    // per-tenant export rate limit
@@ -223,7 +224,8 @@ func newServer() *server {
 	// Secret-custody Vault (#17). Dormant (plaintext passthrough) unless
 	// SEAL_PROVIDER is set; fail closed if a configured provider can't unseal the
 	// root KEK — never silently fall back to storing secrets in the clear.
-	vault, err := newVault(context.Background())
+	vaultStore, vaultWarn := vaultDeps()
+	vault, err := vault.New(context.Background(), vaultStore, vaultWarn)
 	if err != nil {
 		log.Fatalf("secret custody: %v", err)
 	}

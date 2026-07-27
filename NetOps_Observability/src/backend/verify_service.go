@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/vault"
 	"os"
 	"sort"
 	"strings"
@@ -58,7 +59,7 @@ type verifyConfigStore struct {
 	mu    sync.RWMutex
 	cfgs  map[string]verifyTenantConfig
 	path  string
-	vault *Vault
+	vault *vault.Vault
 	// loadErr is set when the stored config could NOT be read (I/O error or
 	// corrupt bytes) — which is a different fact from "no tenant has opted in
 	// yet". §10: without it an unreadable file made verification read "off" for
@@ -67,7 +68,7 @@ type verifyConfigStore struct {
 	loadErr error
 }
 
-func newVerifyConfigStore(path string, v *Vault) *verifyConfigStore {
+func newVerifyConfigStore(path string, v *vault.Vault) *verifyConfigStore {
 	s := &verifyConfigStore{cfgs: map[string]verifyTenantConfig{}, path: path, vault: v}
 	if err := s.load(); err != nil {
 		s.loadErr = err

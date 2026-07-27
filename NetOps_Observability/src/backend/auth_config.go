@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"strconv"
 	"strings"
@@ -38,14 +39,14 @@ type ldapConfigStore struct {
 	mu    sync.RWMutex
 	cfg   *ldapConfig // nil until an operator saves; falls back to env defaults
 	path  string
-	vault *Vault // secret-custody envelope for bind_password at rest (nil = dormant/passthrough)
+	vault *vault.Vault // secret-custody envelope for bind_password at rest (nil = dormant/passthrough)
 	// loadErr records that the stored bind password could not be UNSEALED. The
 	// in-memory copy is blank in that case, so the "empty PUT preserves the
 	// stored secret" shortcut would silently WIPE it — set() refuses instead.
 	loadErr error
 }
 
-func newLDAPConfigStore(path string, v *Vault) *ldapConfigStore {
+func newLDAPConfigStore(path string, v *vault.Vault) *ldapConfigStore {
 	s := &ldapConfigStore{path: path, vault: v}
 	if err := s.load(); err != nil {
 		s.loadErr = err
@@ -425,12 +426,12 @@ type tacacsConfigStore struct {
 	mu    sync.RWMutex
 	cfg   *tacacsConfig
 	path  string
-	vault *Vault // secret-custody envelope for the shared secret at rest (nil = dormant)
+	vault *vault.Vault // secret-custody envelope for the shared secret at rest (nil = dormant)
 	// loadErr: the stored shared secret could not be unsealed — see ldapConfigStore.
 	loadErr error
 }
 
-func newTACACSConfigStore(path string, v *Vault) *tacacsConfigStore {
+func newTACACSConfigStore(path string, v *vault.Vault) *tacacsConfigStore {
 	s := &tacacsConfigStore{path: path, vault: v}
 	if err := s.load(); err != nil {
 		s.loadErr = err

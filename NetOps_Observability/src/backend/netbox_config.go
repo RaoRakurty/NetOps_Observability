@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/vault"
 	"os"
 	"strings"
 	"sync"
@@ -14,7 +15,7 @@ import (
 // discovery integration (Automation → Source of Truth in the UI). Previously
 // NetBox was env-only (NETBOX_URL/NETBOX_TOKEN); operators can now configure it
 // from the admin UI. The API token is a reversible secret, encrypted at rest via
-// the secret-custody Vault (platform DEK, like the notify/OIDC/LDAP secrets) and
+// the secret-custody vault.Vault (platform DEK, like the notify/OIDC/LDAP secrets) and
 // never returned to the client. Platform-owner scoped: discovery is platform
 // infrastructure, not a per-tenant concern.
 
@@ -51,10 +52,10 @@ type netboxConfigStore struct {
 	mu    sync.RWMutex
 	cfg   *netboxConfig
 	path  string
-	vault *Vault
+	vault *vault.Vault
 }
 
-func newNetboxConfigStore(path string, v *Vault) *netboxConfigStore {
+func newNetboxConfigStore(path string, v *vault.Vault) *netboxConfigStore {
 	s := &netboxConfigStore{path: path, vault: v}
 	s.load()
 	return s
@@ -69,7 +70,7 @@ func (s *netboxConfigStore) load() {
 	if json.Unmarshal(b, &c) != nil {
 		return
 	}
-	// Decrypt the token (no-op when the Vault is dormant / nil).
+	// Decrypt the token (no-op when the vault.Vault is dormant / nil).
 	if out, err := mapNetbox(c, openFn(s.vault)); err == nil {
 		c = out
 	}

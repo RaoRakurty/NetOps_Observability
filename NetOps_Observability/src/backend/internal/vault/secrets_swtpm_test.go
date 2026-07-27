@@ -1,4 +1,4 @@
-package main
+package vault
 
 import (
 	"context"
@@ -38,7 +38,8 @@ func TestSwtpmSealUnseal(t *testing.T) {
 	}
 
 	// A Vault built on the live provider must round-trip a secret too.
-	v, err := newVaultWithProvider(ctx, p)
+	st, wn := testDeps()
+	v, err := NewWithProvider(ctx, p, st, wn)
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}

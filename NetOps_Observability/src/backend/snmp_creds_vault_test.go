@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +13,7 @@ import (
 // fields are ciphertext on disk (not the plaintext community/keys), yet Resolve
 // still returns the plaintext in memory and a reopened store decrypts them back.
 func TestSNMPCredsEncryptedAtRest(t *testing.T) {
-	withTempKV(t) // isolate the wrapped-keys blob
-	v, err := newVaultWithProvider(context.Background(), &memSealing{})
+	v, err := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestSNMPCredsEncryptedAtRest(t *testing.T) {
 	if strings.Contains(string(raw), "auth-secret-123") || strings.Contains(string(raw), "priv-secret-456") {
 		t.Fatalf("secret stored in plaintext on disk:\n%s", raw)
 	}
-	if !strings.Contains(string(raw), secretVersionPrefix) {
+	if !strings.Contains(string(raw), vault.VersionPrefix) {
 		t.Fatal("expected versioned ciphertext on disk")
 	}
 

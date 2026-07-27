@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/vault"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,10 +21,10 @@ import (
 
 type integrationStore struct {
 	db    *pgDB
-	vault *Vault // secret-custody envelope for webhook_secret at rest (nil/dormant = plaintext)
+	vault *vault.Vault // secret-custody envelope for webhook_secret at rest (nil/dormant = plaintext)
 }
 
-func newIntegrationStore(db *pgDB, v *Vault) *integrationStore {
+func newIntegrationStore(db *pgDB, v *vault.Vault) *integrationStore {
 	return &integrationStore{db: db, vault: v}
 }
 

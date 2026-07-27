@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"sort"
 	"strings"
@@ -26,7 +27,7 @@ import (
 // server-side (IPv4 unicast, private-only unless explicitly acknowledged,
 // hard host cap), the scan engine is
 // bounded (worker cap, per-host timeout, cooldown between sweeps), and the
-// probe community is a secret: encrypted at rest via the Vault, never echoed
+// probe community is a secret: encrypted at rest via the vault.Vault, never echoed
 // back to a client. Env vars (ENABLE_SNMP_DISCOVERY / SNMP_CIDR_RANGES /
 // SNMP_COMMUNITY) remain only as the bootstrap default when nothing has been
 // configured from the console.
@@ -56,7 +57,7 @@ type discoveryScanConfig struct {
 	// list (real fleets use per-vendor communities, e.g. "arista-public,
 	// cisco-public"); each host is tried in order until one answers. Write-only
 	// through the API (GETs report only whether one is set); sealed at rest via
-	// the Vault. Empty falls back to SNMP_COMMUNITY, then "public".
+	// the vault.Vault. Empty falls back to SNMP_COMMUNITY, then "public".
 	Community string `json:"community,omitempty"`
 	// AllowNonPrivate acknowledges scanning ranges outside RFC 1918. Enterprises
 	// routinely squat on unrouted public space internally; requiring an explicit
@@ -148,7 +149,7 @@ type discoveryConfigStore struct {
 	mu    sync.RWMutex
 	cfg   *discoveryScanConfig
 	path  string
-	vault *Vault
+	vault *vault.Vault
 	// loadErr is set when the SAVED config could not be read or unsealed. That is
 	// not "no config saved": falling through to the env bootstrap would sweep a
 	// range and community the operator never chose (the shipped default is
@@ -158,7 +159,7 @@ type discoveryConfigStore struct {
 	loadErr error
 }
 
-func newDiscoveryConfigStore(path string, v *Vault) *discoveryConfigStore {
+func newDiscoveryConfigStore(path string, v *vault.Vault) *discoveryConfigStore {
 	s := &discoveryConfigStore{path: path, vault: v}
 	if err := s.load(); err != nil {
 		s.loadErr = err

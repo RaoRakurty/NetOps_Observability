@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"netops/backend/internal/vault"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,14 +24,13 @@ func withTempCAKeys(t *testing.T) string {
 	return dir
 }
 
-// TestCAManagerSealsKeyAndIssues proves: (1) the CA private key is Vault-sealed at
+// TestCAManagerSealsKeyAndIssues proves: (1) the CA private key is vault.Vault-sealed at
 // rest (ciphertext, not the EC key PEM); (2) a reload decrypts it and yields a CA
 // that issues SVIDs which load via tlsconfig and chain to the CA bundle. End to
 // end: secret-custody → internal CA → tlsconfig.
 func TestCAManagerSealsKeyAndIssues(t *testing.T) {
-	withTempKV(t) // isolate the Vault's wrapped-keys blob
 	dir := withTempCAKeys(t)
-	v, err := newVaultWithProvider(context.Background(), &memSealing{})
+	v, err := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
@@ -46,8 +46,8 @@ func TestCAManagerSealsKeyAndIssues(t *testing.T) {
 	if strings.Contains(string(raw), "EC PRIVATE KEY") {
 		t.Fatal("CA private key stored in plaintext")
 	}
-	if !strings.HasPrefix(string(raw), secretVersionPrefix) {
-		t.Fatalf("CA key not Vault-sealed (no %s prefix)", secretVersionPrefix)
+	if !strings.HasPrefix(string(raw), vault.VersionPrefix) {
+		t.Fatalf("CA key not vault.Vault-sealed (no %s prefix)", vault.VersionPrefix)
 	}
 
 	// Reload decrypts the key and re-instantiates the SAME root.
@@ -82,7 +82,7 @@ func TestCAManagerSealsKeyAndIssues(t *testing.T) {
 // TestBootstrapInternalCADormant: without TLS_INTERNAL_CA the bootstrap is a no-op.
 func TestBootstrapInternalCADormant(t *testing.T) {
 	t.Setenv("TLS_INTERNAL_CA", "")
-	m, err := bootstrapInternalCA(&Vault{deks: map[string][]byte{}, wrapped: map[string]string{}})
+	m, err := bootstrapInternalCA(vault.Dormant())
 	if err != nil || m != nil {
 		t.Fatalf("dormant bootstrap: want (nil,nil), got (%v,%v)", m, err)
 	}
@@ -91,7 +91,6 @@ func TestBootstrapInternalCADormant(t *testing.T) {
 // TestBootstrapInternalCAIssuesCerts drives the full boot flow and checks the
 // served cert + bundle land and load.
 func TestBootstrapInternalCAIssuesCerts(t *testing.T) {
-	withTempKV(t)
 	withTempCAKeys(t)
 	dir := t.TempDir()
 	certF := filepath.Join(dir, "api.crt")
@@ -105,7 +104,7 @@ func TestBootstrapInternalCAIssuesCerts(t *testing.T) {
 	t.Setenv("TLS_NGINX_CERT_DIR", ngDir)
 	t.Setenv("TLS_SVID_TTL", "1h")
 
-	v, _ := newVaultWithProvider(context.Background(), &memSealing{})
+	v, _ := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	if _, err := bootstrapInternalCA(v); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

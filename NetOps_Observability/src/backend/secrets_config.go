@@ -1,32 +1,34 @@
 package main
 
+import "netops/backend/internal/vault"
+
 // secrets_config.go — secret-custody (#17 phase 1c) for the PLATFORM-scoped
 // config singletons (notify / OIDC / LDAP / TACACS). Each map* function applies a
 // transform to that config's reversible secret fields and returns a COPY; stores
 // call it with sealFn(vault) before persisting and openFn(vault) after loading.
 //
-// Centralizing every at-rest config secret + its Vault field-id here makes the
+// Centralizing every at-rest config secret + its vault.Vault field-id here makes the
 // reversible-secret surface auditable in one place. All use the platform DEK
-// (tenant ""). A dormant Vault (or nil) passes values through unchanged, so the
+// (tenant ""). A dormant vault.Vault (or nil) passes values through unchanged, so the
 // default build + running stack are untouched until SEAL_PROVIDER is set.
 //
 // (Copilot's API key is env-only — never persisted — so it has no entry here;
 // moving env secrets into the sealed store is phase 3, not 1c.)
 
-// Vault AAD field-ids for config secrets. Stable strings — changing one would
+// vault.Vault AAD field-ids for config secrets. Stable strings — changing one would
 // make existing ciphertext for that field undecryptable (AAD mismatch).
 const (
-	fieldSMTPPass        = "notify.smtp.pass"         // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldTwilioAuthToken = "notify.twilio.auth_token" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldNtfyToken       = "notify.ntfy.token"        // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldSMTPPass        = "notify.smtp.pass"         // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldTwilioAuthToken = "notify.twilio.auth_token" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldNtfyToken       = "notify.ntfy.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldSlackWebhookURL = "notify.slack.webhook_url"
 	fieldPagerDutyKey    = "notify.pagerduty.routing_key"
-	fieldOIDCSecret      = "oidc.client_secret" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldLDAPBindPass    = "ldap.bind_password" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldOIDCSecret      = "oidc.client_secret" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldLDAPBindPass    = "ldap.bind_password" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldTACACSSecret    = "tacacs.secret"
-	fieldNetboxToken     = "netbox.token"        // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldCopilotKey      = "copilot.apikey"      // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
-	fieldDiscoveryComm   = "discovery.community" // #nosec G101 -- Vault AAD field-id (a config key name), not a credential value
+	fieldNetboxToken     = "netbox.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldCopilotKey      = "copilot.apikey"      // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldDiscoveryComm   = "discovery.community" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 )
 
 // mapCopilot transforms the assistant's provider API key (platform DEK).
@@ -43,20 +45,20 @@ func mapNetbox(c netboxConfig, f secretXform) (netboxConfig, error) {
 	return c, e
 }
 
-// secretXform is Vault.Encrypt or Vault.Decrypt (same signature), or a passthrough.
+// secretXform is vault.Vault.Encrypt or vault.Vault.Decrypt (same signature), or a passthrough.
 type secretXform = func(tenant, fieldID, val string) (string, error)
 
 func passthroughXform(_, _ string, val string) (string, error) { return val, nil }
 
-// sealFn / openFn pick the encrypt/decrypt transform from a Vault, treating a nil
-// Vault as passthrough so test stores constructed without one behave as plaintext.
-func sealFn(v *Vault) secretXform {
+// sealFn / openFn pick the encrypt/decrypt transform from a vault.Vault, treating a nil
+// vault.Vault as passthrough so test stores constructed without one behave as plaintext.
+func sealFn(v *vault.Vault) secretXform {
 	if v == nil {
 		return passthroughXform
 	}
 	return v.Encrypt
 }
-func openFn(v *Vault) secretXform {
+func openFn(v *vault.Vault) secretXform {
 	if v == nil {
 		return passthroughXform
 	}

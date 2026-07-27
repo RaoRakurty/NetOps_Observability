@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/vault"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,7 +44,6 @@ func TestCertValidMargin(t *testing.T) {
 // provisionFromEnv mints a fresh cert (new serial) at the same paths — which the
 // CertReloader then hot-swaps. No restart needed.
 func TestProvisionReissuesNewCert(t *testing.T) {
-	withTempKV(t)
 	withTempCAKeys(t)
 	dir := t.TempDir()
 	certF, keyF := filepath.Join(dir, "api.crt"), filepath.Join(dir, "api.key")
@@ -52,7 +52,7 @@ func TestProvisionReissuesNewCert(t *testing.T) {
 	t.Setenv("TLS_KEY_FILE", keyF)
 	t.Setenv("TLS_SVID_TTL", "1h")
 
-	v, _ := newVaultWithProvider(context.Background(), &memSealing{})
+	v, _ := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	m, err := bootstrapInternalCA(v)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)

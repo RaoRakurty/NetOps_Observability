@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/vault"
 	"sort"
 	"strings"
 	"sync"
@@ -20,7 +21,7 @@ import (
 // production. Isolation is enforced IN the store (§3a): every read is scoped by
 // the caller's tenant (PG via FORCE-RLS withTenant, mem via tenant-keyed maps);
 // cross-tenant reads happen only on the explicit platform-scope methods the
-// scheduler/webhook lookup use. Credentials are Vault-encrypted per-tenant DEK
+// scheduler/webhook lookup use. Credentials are vault.Vault-encrypted per-tenant DEK
 // and write-only: no method ever returns them to an API caller.
 
 // nmsIntegration is one configured controller integration (integrations table).
@@ -66,7 +67,7 @@ type nmsHealth struct {
 	Runs           []nmsRunRecord `json:"runs,omitempty"`
 }
 
-// nmsCredFieldID is the Vault AAD field-id for one credential field. Mirrors
+// nmsCredFieldID is the vault.Vault AAD field-id for one credential field. Mirrors
 // snmp_creds.go: static per-field ids, tenant DEK binds the ciphertext to the
 // owning tenant.
 func nmsCredFieldID(field string) string { return "nms." + field }
@@ -344,10 +345,12 @@ func (m *memNMSStore) Health(_ context.Context, tenant string, cross bool, id st
 
 type pgNMSStore struct {
 	db    *pgDB
-	vault *Vault
+	vault *vault.Vault
 }
 
-func newPGNMSStore(db *pgDB, vault *Vault) *pgNMSStore { return &pgNMSStore{db: db, vault: vault} }
+func newPGNMSStore(db *pgDB, vault *vault.Vault) *pgNMSStore {
+	return &pgNMSStore{db: db, vault: vault}
+}
 
 const nmsIntCols = `tenant_id, integration_id, vendor, product, display_name, enabled, base_url, auth_type, poll_interval_s, data_sources, data, created_at, updated_at`
 

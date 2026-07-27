@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/vault"
 	"os"
 	"strings"
 	"sync"
@@ -206,8 +207,8 @@ func (s *oidcConfigStore) load() error {
 	return loadErr
 }
 
-// vault returns the secret-custody Vault (nil → dormant/passthrough).
-func (s *oidcConfigStore) vault() *Vault {
+// vault returns the secret-custody vault.Vault (nil → dormant/passthrough).
+func (s *oidcConfigStore) vault() *vault.Vault {
 	if s.srv == nil {
 		return nil
 	}

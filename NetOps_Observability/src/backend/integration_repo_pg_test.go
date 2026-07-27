@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/vault"
 	"os"
 	"testing"
 	"time"
@@ -22,9 +23,9 @@ func TestIntegrationRepo(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	// Dormant Vault (no SEAL_PROVIDER) → webhook_secret stays plaintext, exercising
-	// the passthrough path; the Vault's crypto is covered by secrets_test.go.
-	st := newIntegrationStore(ps.db, &Vault{deks: map[string][]byte{}, wrapped: map[string]string{}})
+	// Dormant vault.Vault (no SEAL_PROVIDER) → webhook_secret stays plaintext, exercising
+	// the passthrough path; the vault.Vault's crypto is covered by secrets_test.go.
+	st := newIntegrationStore(ps.db, vault.Dormant())
 
 	// --- mapping upsert + watermark roundtrip ---
 	at := time.Now().UTC().Truncate(time.Second)

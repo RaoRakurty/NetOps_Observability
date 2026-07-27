@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,7 @@ import (
 // TestConfigSecretsRoundTrip proves each config type's secret fields survive a
 // seal→open round-trip and that sealing actually transforms them (active Vault).
 func TestConfigSecretsRoundTrip(t *testing.T) {
-	withTempKV(t)
-	v, err := newVaultWithProvider(context.Background(), &memSealing{})
+	v, err := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestConfigSecretsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal notify: %v", err)
 	}
-	if sealed.SMTP.Pass == notif.SMTP.Pass || !strings.HasPrefix(sealed.Slack.WebhookURL, secretVersionPrefix) {
+	if sealed.SMTP.Pass == notif.SMTP.Pass || !strings.HasPrefix(sealed.Slack.WebhookURL, vault.VersionPrefix) {
 		t.Fatalf("notify secrets not encrypted: %+v", sealed)
 	}
 	opened, err := mapNotify(sealed, openFn(v))
@@ -53,8 +53,7 @@ func TestConfigSecretsRoundTrip(t *testing.T) {
 // TestNotifyConfigEncryptedAtRest proves the notify store persists ciphertext and
 // decrypts it on reopen (the full store wiring, not just the map helpers).
 func TestNotifyConfigEncryptedAtRest(t *testing.T) {
-	withTempKV(t)
-	v, err := newVaultWithProvider(context.Background(), &memSealing{})
+	v, err := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}

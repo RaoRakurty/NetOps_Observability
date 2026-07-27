@@ -56,7 +56,8 @@ import (
 //	2026-07-27  289  internal/openapi (spec builder) + internal/totp (2FA primitive)
 //	2026-07-27  284  internal/rca (5 pure analysis files: independence, observer registry,
 //	                  path attribution, recovery, report icons)
-const rootPackageCeiling = 284
+//	2026-07-27  283  internal/vault (secret custody; storage+logging now INJECTED)
+const rootPackageCeiling = 283
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

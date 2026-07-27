@@ -1,4 +1,4 @@
-package main
+package vault
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 // while keeping the old MAC) must be DETECTED on load — fail closed rather than
 // silently minting a fresh DEK that orphans existing ciphertext.
 func TestVaultWrappedStoreIntegrity(t *testing.T) {
-	withTempKV(t)
 	prov := &memSealing{}
-	v1, err := newVaultWithProvider(context.Background(), prov)
+	st, wn := newMemStore(), discardWarn
+	v1, err := NewWithProvider(context.Background(), prov, st, wn)
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestVaultWrappedStoreIntegrity(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 	// Tamper: drop the tenant entry but leave the MAC (covering the original map).
-	raw, err := kvLoad(wrappedKeysKey)
+	raw, err := st.Load(wrappedKeysKey)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -31,10 +31,12 @@ func TestVaultWrappedStoreIntegrity(t *testing.T) {
 	}
 	delete(s.Keys, "acme")
 	b, _ := json.Marshal(s)
-	if err := kvSave(wrappedKeysKey, b); err != nil {
+	if err := st.Save(wrappedKeysKey, b); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if _, err := newVaultWithProvider(context.Background(), prov); err == nil {
+	// same store: the point is that the SECOND construction reads the
+	// tampered bytes the first one wrote.
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err == nil {
 		t.Fatal("tampered wrapped-DEK store must fail the integrity check")
 	}
 }
@@ -60,22 +62,12 @@ func (e errTest) Error() string { return string(e) }
 
 func newTestVault(t *testing.T) *Vault {
 	t.Helper()
-	withTempKV(t)
-	v, err := newVaultWithProvider(context.Background(), &memSealing{})
+	st, wn := testDeps()
+	v, err := NewWithProvider(context.Background(), &memSealing{}, st, wn)
 	if err != nil {
-		t.Fatalf("newVaultWithProvider: %v", err)
+		t.Fatalf("NewWithProvider: %v", err)
 	}
 	return v
-}
-
-// withTempKV isolates the wrapped-keys blob to a temp file (fileKV treats the kv
-// key as a path) so wrapped DEKs don't leak across tests or into the repo.
-func withTempKV(t *testing.T) {
-	t.Helper()
-	backend = fileKV{}
-	prev := wrappedKeysKey
-	wrappedKeysKey = t.TempDir() + "/wrapped.json"
-	t.Cleanup(func() { wrappedKeysKey = prev })
 }
 
 func TestVaultRoundTrip(t *testing.T) {
@@ -84,7 +76,7 @@ func TestVaultRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if !strings.HasPrefix(ct, secretVersionPrefix) {
+	if !strings.HasPrefix(ct, VersionPrefix) {
 		t.Fatalf("ciphertext not versioned: %q", ct)
 	}
 	if ct == "public123" {
@@ -116,9 +108,7 @@ func TestVaultAADBindsTenantAndField(t *testing.T) {
 }
 
 func TestVaultDormantPassthrough(t *testing.T) {
-	backend = fileKV{}
-	withTempKV(t)
-	v := &Vault{deks: map[string][]byte{}, wrapped: map[string]string{}} // no provider → dormant
+	v := &Vault{store: newMemStore(), warn: discardWarn, deks: map[string][]byte{}, wrapped: map[string]string{}} // no provider → dormant
 	ct, err := v.Encrypt("acme", "f", "plain")
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
