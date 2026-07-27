@@ -197,6 +197,13 @@ type verifyTarget struct {
 type verifySSHOut struct {
 	Output string
 	Err    error
+	// Truncated marks output the runner could NOT read to completion — the
+	// per-command timeout killed the session mid-listing, or the output
+	// exceeded the buffer cap. Such a prefix is indistinguishable from a
+	// complete listing by shape, so it must never be parsed as evidence: the
+	// first 40 lines of a 400-line "show ip interface brief" look perfectly
+	// healthy and would REFUTE a real down port further down the list.
+	Truncated bool
 }
 
 // verifyDialers are the engine's injectable executors. Production wiring lives
@@ -488,6 +495,15 @@ func (e *verifyEngine) runSSH(ctx context.Context, t verifyTarget, specs []verif
 		case res.Err != nil:
 			r.Status = verifyStatusUnreachable
 			r.Observed = "ssh exec failed: " + sanitizeObserved(res.Err.Error())
+		case res.Truncated:
+			// The runner could not read this command's output to completion
+			// (timeout kill or buffer cap). A prefix is shape-identical to a
+			// full listing, so parsing it would let the first clean lines
+			// REFUTE a fault that appears further down — manufacturing
+			// counter-evidence instead of merely missing it. Skipped is the
+			// only honest verdict: it contributes nothing rather than lying.
+			r.Status = verifyStatusSkipped
+			r.Observed = "output truncated before the command completed — not scored (a partial listing cannot confirm or refute)"
 		default:
 			if spec.Module != "" {
 				r.Status, r.Observed = parseVerifyModuleOutput(spec.ID, t.Device.Vendor, res.Output, e.now().UTC(), e.caseCtx)

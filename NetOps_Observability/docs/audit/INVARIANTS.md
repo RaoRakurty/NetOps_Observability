@@ -70,6 +70,10 @@ and thereby certified the blind scope as healthy.
 | Aspect | Status | Enforced by |
 |---|---|---|
 | Guards see the WHOLE module, not just the root package | ✅ | **BUILD** — `goSources()` now walks subpackages; floor raised to 400 so a regression to root-only (296) fails. Widening it immediately caught 3 real defects that had been invisible for months (two void persist funcs in `notify/`, an `Sscanf("%d")` in `collectors/`) |
+| Every background launch in main() is drained or explicitly listed | ✅ | **BUILD** — `TestEveryBackgroundLaunchIsTrackedOrDocumented` (AST over `func main()`): a new goroutine must either join `workerGroup` or be named in `cancelOnlyWorkers()`. Closes CONC-MED-3, where `drain()` reported success while collectors, discovery, the report pipeline and 30-minute backfills were still mid-write. Current honest state: **15 tracked, 30 cancel-only** (adoption backlog in TRACKER) |
+| gosec taint rules (G703/G704/G706) are excluded on a recorded basis | 🟡 | **PROSE** — the exclusion is not enforced by a gate. 35 findings triaged 2026-07-27 against pinned gosec v2.27.1: **zero reachable from untrusted HTTP input** (every sink is an env-configured URL/path, or is guarded by `isUUIDToken`/`indexBase`/`tenantSegRe`). Basis + reproduce command recorded in `src/backend/.golangci.yml`. Residual risk stated there: a genuinely tainted NEW sink would not be caught |
+| A guard cannot silently stop covering a file | ✅ | **BUILD** — AST guards parse RAW source and treat a parse failure as FATAL. `stripComments` truncates at the first `//`, so any file with a URL literal was unparseable and was being **skipped with `continue`** — 54 files invisible, 8 with live findings. The guard written to catch "an error treated as a benign state" contained that exact defect |
+| `package main` does not grow | 🟡 | **BUILD (ratchet, not a fix)** — `TestFlatPackageMainDoesNotGrow` pins the root package at 296 non-test files; a new file fails the build and must go in a subpackage, and moving files out requires lowering the ceiling in the same commit. Proven to fire both directions. **This does NOT satisfy §2**: 296 files / ~98k LOC of business logic remain in the entrypoint package, existing files can still grow, and coupling can still increase. It stops the bleeding while the decomposition is scheduled — see standing gap #8 |
 | An error is never conflated with a benign empty state | ✅ | **BUILD** — `TestErrorIsNotConflatedWithABenignState` (AST). Blocking for new code; 39-file frozen baseline, **shrink-only**, each entry to be triaged and fixed or moved to the reasoned allowlist |
 | A health flag can actually report unhealthy | ✅ | **BUILD** — `TestHealthFlagsCanBeFalsified`: a health bool assigned literal `true` and never falsified anywhere fails the build. Caught `alerts.Engine.healthy` (true at construction, never false, reported by `Health()` forever) |
 | A metric-based alerting engine exists at all | ✅ | vmalert (F-16); **RUNTIME** — was entirely absent before 2026-07-21 |
@@ -183,6 +187,18 @@ and thereby certified the blind scope as healthy.
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
 6. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
 7. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
+8. **`package main` holds ~98k LOC of business logic, against the repo's own §2.**
+   296 non-test files in the entrypoint package; `/internal`, `/pkg`, `/api`,
+   `/plugins`, `/config` do not exist (`cmd/` is empty and untracked). In one
+   package the compiler cannot enforce a boundary, so §13 (no cross-domain
+   imports) and §4 (plugin isolation) are *unenforceable*, not merely unenforced.
+   This is also the substrate that made the guard-scope bug possible: when "the
+   package" is "the whole product", a root-only scan looks complete.
+   **Growth is ratcheted** (`TestFlatPackageMainDoesNotGrow`), so the problem
+   cannot get bigger — but the decomposition is a multi-sprint program (leaf
+   domains first, one per PR, CI green at each step) and is DEFERRED by owner
+   decision (2026-07-27) until the rest of the audit remediation has settled.
+   Nothing is exposed by it today; the cost is future enforceability.
 
 ### Closed
 

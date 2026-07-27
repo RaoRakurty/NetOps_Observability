@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/collectors"
@@ -171,37 +172,53 @@ func runOneSSHCommand(client *ssh.Client, cmd string, timeout time.Duration) ver
 	session.Stdout = buf
 	session.Stderr = buf
 
-	timer := time.AfterFunc(timeout, func() { _ = session.Close() })
+	var killed atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		killed.Store(true)
+		_ = session.Close()
+	})
 	defer timer.Stop()
 
 	if err := session.Run(cmd); err != nil {
+		// A nonzero/aborted exec status after a COMPLETE listing is still
+		// evidence — several network OSes do that — and the parser decides
+		// (unparseable ⇒ skipped, never guessed). But output we could not read
+		// to the end is NOT evidence: a timeout kill or a buffer overflow
+		// yields a healthy-looking PREFIX that the parser cannot distinguish
+		// from a full listing, and that prefix would refute a real fault
+		// appearing further down. Mark it so the engine refuses to score it.
 		if buf.Len() > 0 {
-			// Some network OSes report a nonzero/aborted status on exec even
-			// after emitting the full listing — the output is still evidence;
-			// the parser decides (unparseable ⇒ skipped, never guessed).
-			return verifySSHOut{Output: buf.String()}
+			return verifySSHOut{Output: buf.String(), Truncated: killed.Load() || buf.overflowed}
 		}
 		return verifySSHOut{Err: fmt.Errorf("exec failed: %w", err)}
 	}
-	return verifySSHOut{Output: buf.String()}
+	return verifySSHOut{Output: buf.String(), Truncated: buf.overflowed}
 }
 
 // boundedBuf keeps at most cap bytes and silently drops the rest (bounded IO —
 // a chatty device cannot balloon memory).
 type boundedBuf struct {
-	cap int
-	b   []byte
+	cap        int
+	b          []byte
+	overflowed bool // set once the cap dropped bytes — the reader saw a PREFIX
 }
 
 func (w *boundedBuf) Write(p []byte) (int, error) {
-	if room := w.cap - len(w.b); room > 0 {
-		if len(p) > room {
-			w.b = append(w.b, p[:room]...)
-		} else {
-			w.b = append(w.b, p...)
-		}
+	room := w.cap - len(w.b)
+	if room <= 0 {
+		w.overflowed = true
+		return len(p), nil
 	}
-	return len(p), nil // report full write: dropping excess is intentional
+	if len(p) > room {
+		w.b = append(w.b, p[:room]...)
+		w.overflowed = true
+	} else {
+		w.b = append(w.b, p...)
+	}
+	// Report a full write: dropping excess is intentional (an unbounded device
+	// must not OOM us). The DROP is now recorded, because a silently truncated
+	// listing is parsed as a complete one and becomes false refuting evidence.
+	return len(p), nil
 }
 func (w *boundedBuf) Len() int       { return len(w.b) }
 func (w *boundedBuf) String() string { return string(w.b) }

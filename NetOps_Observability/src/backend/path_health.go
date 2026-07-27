@@ -52,6 +52,15 @@ const (
 	healthWatch    HealthState = "watch"
 	healthDegraded HealthState = "degraded"
 	healthSevere   HealthState = "severe"
+	// healthUnknown: NOTHING was measurable in this window. It is not a band on
+	// the same scale as the others — it means the question could not be asked.
+	// Before it existed, zero measurable signals produced score 0, which
+	// bandFor maps to "healthy", and the evidence builder then appended "All
+	// measured signals are within this path's normal range" — an affirmative
+	// all-clear manufactured from a blind probe lane. The heavy [5m] quantile
+	// queries are the first to time out under VM load while the cheap ones
+	// succeed, so this is the NORMAL partial-failure shape, not an edge case.
+	healthUnknown HealthState = "unknown"
 )
 
 type Confidence string
@@ -308,10 +317,15 @@ func ScorePathHealth(cur PathCurrent, base PathBaseline, w Weights) PathHealth {
 		}
 	}
 	score := 0.0
-	if den > 0 {
+	measured := den > 0
+	if measured {
 		score = math.Max(num/den, 0.8*maxSev) // anti-averaging floor: one severe dim can't be averaged away
 	}
-	state := bandFor(score)
+	// No measurable signal is UNKNOWN, never healthy — see healthUnknown.
+	state := healthUnknown
+	if measured {
+		state = bandFor(score)
+	}
 
 	// severities map with nil for unavailable signals (honest coverage)
 	sevOut := map[string]*float64{}
@@ -357,6 +371,11 @@ func buildEvidence(cur PathCurrent, base PathBaseline, sev map[string]float64, s
 	}
 	if base.SparseProbe {
 		ev = append(ev, "Probe data is sparse in this window — confidence reduced")
+	}
+	if state == healthUnknown {
+		// Say what is actually true: we could not measure, so we cannot claim.
+		return append(ev, "No signal could be measured for this path in this window — "+
+			"health is UNKNOWN, not healthy")
 	}
 	if len(ev) == 0 && state == healthHealthy {
 		ev = append(ev, "All measured signals are within this path's normal range")

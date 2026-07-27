@@ -44,19 +44,58 @@ linters:
         # (Secret/ClientSecret/AuthKey) are persisted only inside Vault-SEALED config
         # blobs (auth_config/oidc_config/snmp_creds), not logged or sent in the clear.
         - G117
-        # G124 — "cookie missing Secure/HttpOnly/SameSite": false positive. The auth
-        # cookies set HttpOnly + SameSite=Lax and Secure=secureCookies() (env-driven
-        # via SECURE_COOKIES because TLS may terminate at the nginx front door);
-        # gosec can't prove the variable is always true.
-        - G124
+        # G124 is NO LONGER excluded tree-wide — see the narrowed per-path rule in
+        # `exclusions.rules` below. The blanket form hid a real finding.
         # G602 — "slice index out of range": single hit in bounded protocol parsing
         # (tunnels.go length field), index provably within the parsed buffer.
         - G602
-        # G703/G704/G706 — gosec's new EXPERIMENTAL taint-analysis rules
-        # (path-traversal / SSRF / log-injection). They flag internally-constructed
-        # CA + kv paths and SERVER-CONFIGURED backend URLs (OpenSearch/ClickHouse/
-        # gNMI) — none are user-tainted web input. High false-positive; tracked for
-        # separate triage rather than enforced here.
+        # G703/G704/G706 — gosec's EXPERIMENTAL taint-analysis rules
+        # (path-traversal / SSRF / log-injection).
+        #
+        # TRIAGED 2026-07-27 (the deferral this comment used to promise was never
+        # recorded anywhere, so it is written down here). gosec v2 over the whole
+        # backend module reports 13 G703 + 14 G704 + 8 G706 = 35 findings. Every
+        # one was traced to its source. ZERO are reachable from untrusted HTTP
+        # input; all 35 are dismissed on the basis below.
+        #
+        #   G704 SSRF (14: rca_report_http×2, logs×2, correlations×2,
+        #   collectors/traceroute×2, collectors/poller, collectors/gnmi,
+        #   cloud_metrics_series×2, cloud_enrich×2) — the HOST of every sink comes
+        #   from a server-configured env var (OPENSEARCH_URL, CORRELATION_URL,
+        #   VICTORIA_URL/METRICS_URL, VM_QUERY_URL, REPORT_PDF_SIDECAR_URL,
+        #   PROBE_PATHS_PUSH_URL); no request can redirect it. The only
+        #   request-derived path/query components are (a) the correlation id, which
+        #   handleCorrelationByID refuses unless isUUIDToken(id), and (b) the
+        #   OpenSearch index pattern, built from a switch-allowlisted signal plus a
+        #   tenant run through tenantSegRe ([^a-z0-9_-] stripped); PromQL reaches
+        #   VictoriaMetrics only through url.QueryEscape. Note where the real SSRF
+        #   risk lives and how it is handled: the surfaces whose URL is supplied by
+        #   an operator (ITSM/ServiceNow/Jira/Slack/PagerDuty) dial through
+        #   safehttp.Client, whose dialer Control hook validates the RESOLVED IP
+        #   post-DNS/pre-connect (defeats DNS rebinding) — gosec's taint model
+        #   cannot see that guard, and it flags none of those calls anyway.
+        #
+        #   G703 path traversal (13: tls_ca×3, telemetry_enrichment×3,
+        #   collectors/traceroute×2, seam_bootstrap, probe_handlers, path_ingest,
+        #   pgstore, cloudconn/exchange) — every path is an operator-configured
+        #   location (TLS_* cert/key paths, TENANT_ENRICHMENT_DIR, PROBE_PATHS_FILE,
+        #   CLOUD_CONNECTOR_WORKLOAD_JWT_FILE) joined with a CONSTANT file name, or
+        #   filepath.Join(dir, filepath.Base(key)) over a fixed key list. No handler
+        #   contributes a path segment at any of the 13 sites.
+        #
+        #   G706 log injection (8: telemetry_enrichment×2, svc_backfill×2,
+        #   seam_bootstrap, collectors/traceroute, collectors/stamp,
+        #   collectors/poller) — what is formatted is env values, an upstream HTTP
+        #   status string, and (svc_backfill) a service id that had to RESOLVE in
+        #   the service catalog to get that far. No request body, header or
+        #   free-form query text reaches a log line at these sites.
+        #
+        # These stay EXCLUDED (not enforced) because the rules are experimental and
+        # flag the sink rather than the taint source, so every current hit is noise.
+        # The consequence is explicit: a genuinely tainted NEW sink would not be
+        # caught here — re-run this triage when a handler starts building a URL or
+        # a filesystem path from request input. Reproduce (CI's pinned gosec):
+        #   go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -quiet -fmt=json ./...
         - G703
         - G704
         - G706
@@ -97,6 +136,23 @@ linters:
           - errcheck
           - gosec
           - noctx
+      # G124 — "cookie missing Secure/HttpOnly/SameSite", NARROWED here on
+      # 2026-07-27 from a tree-wide `gosec.excludes` entry. The blanket exclusion
+      # was justified solely in terms of the session cookies ("Secure =
+      # secureCookies(), gosec can't prove the variable is always true") and it
+      # masked a cookie that genuinely had NO Secure field: the OIDC SSO state
+      # cookie (oidc.go), the CSRF defence for the whole SSO callback. Now scoped
+      # to the two files whose cookies do set Secure, per request, via
+      # cookieSecure(r) (SECURE_COOKIES=true | r.TLS | X-Forwarded-Proto=https —
+      # a variable gosec still cannot evaluate). ANYWHERE ELSE a G124 is a real
+      # finding and now fails the gate again. The flag itself is asserted by
+      # tests, not by this exclusion: TestCookieSecure (auth) and
+      # TestSSOStateCookieCarriesSecureOnHTTPS /
+      # TestSSOStateClearCookieMatchesSecureSemantics (oidc).
+      - path: (^|/)(auth|oidc)\.go$
+        linters:
+          - gosec
+        text: G124
       # Outbound clients that connect to SERVER-CONFIGURED endpoints behind explicit
       # client Timeouts (notification webhooks; LDAP/TACACS binds; the device-SSH
       # gateway; copilot/JWKS/OIDC/logs/reports/ClickHouse data calls). Each already

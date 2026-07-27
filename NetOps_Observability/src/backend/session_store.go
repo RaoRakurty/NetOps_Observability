@@ -55,10 +55,35 @@ type Session struct {
 	AbsoluteTimeoutSec int       `json:"absolute_timeout_sec"`
 }
 
+// sessionStore holds the live session set in memory and mirrors it to the kv
+// backend. Two locks, deliberately:
+//
+//   - mu (RWMutex) guards byID + seq and is NEVER held across IO. The hot path
+//     is IsActive, which withAuth calls on EVERY authenticated request; it takes
+//     a read lock, so per-request checks do not serialize against each other.
+//   - flushMu makes persistence single-writer. Snapshot AND kvSave happen inside
+//     it, so durable writes land in flushMu order (see persist for the ordering
+//     argument).
+//
+// CONC-HIGH-1: mu used to be a plain Mutex held across the whole flush —
+// marshal + os.WriteFile/os.Rename, or with STORE_BACKEND=postgres a
+// DELETE + N INSERTs bounded only by a 15 s context. One slow disk or a stalled
+// Postgres therefore froze IsActive, and with it every authenticated request of
+// every tenant, for up to 15 s. Durable writes now happen outside mu entirely.
 type sessionStore struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	path string
 	byID map[string]Session
+	// seq is a monotonic mutation counter, bumped under mu.Lock together with
+	// the mutation itself. A snapshot taken at version V provably contains every
+	// mutation numbered <= V; that is what makes out-of-order writes detectable
+	// and the coalescing fast path in persist safe.
+	seq uint64
+
+	flushMu sync.Mutex
+	// flushedSeq is the highest version already durably written. Guarded by
+	// flushMu (only ever read/written inside persist's critical section).
+	flushedSeq uint64
 }
 
 func newSessionStore(path string) (*sessionStore, error) {
@@ -87,17 +112,64 @@ func (s *sessionStore) load() error {
 	return nil
 }
 
-func (s *sessionStore) flushLocked() error {
+// bumpLocked stamps a mutation with the next version. Caller holds mu for write.
+func (s *sessionStore) bumpLocked() uint64 {
+	s.seq++
+	return s.seq
+}
+
+// persist durably writes the current session set. Callers MUST have released mu
+// first: the whole point is that no reader (IsActive) and no other mutator waits
+// on the backend's IO.
+//
+// `want` is the version the caller needs to see on disk. Ordering argument —
+// why two concurrent persists cannot write stale state:
+//
+//  1. Every mutation bumps seq under mu.Lock, atomically with the mutation, so a
+//     snapshot read under mu.RLock at version V contains exactly the mutations
+//     numbered <= V. Versions are monotonic and never reused.
+//  2. flushMu serializes snapshot AND kvSave as ONE critical section. A writer's
+//     snapshot is therefore taken after every previously-completed write has
+//     already returned, so the version handed to kvSave is non-decreasing in
+//     write order. An older snapshot can never overtake a newer one — the
+//     out-of-order hazard is structurally impossible, not merely unlikely.
+//  3. A caller's own mutation is always <= the version its persist snapshots
+//     (the snapshot happens after the caller released mu), so a nil return
+//     truthfully means "your change reached the store" — the F-70 contract.
+//  4. `want <= flushedSeq` is consequently safe, and it COALESCES: when N
+//     mutations pile up behind one slow write, the first waiter to acquire
+//     flushMu snapshots all of them at once and the remaining waiters return
+//     without writing. A burst costs 2 writes instead of N — the same win a
+//     timer-based debounce would buy, but with a zero loss window, since no
+//     caller returns before its own state is durable.
+//  5. A failed write does NOT advance flushedSeq, so the next mutation's persist
+//     retries the whole set (the write is a full-collection rewrite, so a later
+//     success subsumes every earlier failure).
+func (s *sessionStore) persist(want uint64) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	if want != 0 && want <= s.flushedSeq {
+		return nil // already durable, inside a snapshot at least as new
+	}
+	s.mu.RLock()
+	ver := s.seq
 	list := make([]Session, 0, len(s.byID))
 	for _, x := range s.byID {
 		list = append(list, x)
 	}
+	s.mu.RUnlock()
+	// Session is all value fields, so the copy above is a complete snapshot and
+	// the O(N) sort + marshal below run entirely outside mu.
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	if err := kvSave(s.path, b); err != nil {
+		return err
+	}
+	s.flushedSeq = ver
+	return nil
 }
 
 // gcLocked drops terminal sessions whose last activity is well in the past.
@@ -128,12 +200,31 @@ func (s *sessionStore) Create(userID, ip, ua string, idle, absolute time.Duratio
 		IdleTimeoutSec: int(idle.Seconds()), AbsoluteTimeoutSec: int(absolute.Seconds()),
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.gcLocked(now)
 	evicted := s.enforceCapLocked(userID)
 	s.byID[sess.ID] = sess
-	if err := s.flushLocked(); err != nil {
+	ver := s.bumpLocked()
+	s.mu.Unlock()
+
+	if err := s.persist(ver); err != nil {
+		// F-70: a create that did not reach the store must not report success.
+		// Roll the new session back out of memory, exactly as before.
+		s.mu.Lock()
 		delete(s.byID, sess.ID)
+		rollbackVer := s.bumpLocked()
+		s.mu.Unlock()
+		// The rollback needs its own write attempt, which the old
+		// lock-held-across-IO version did not: a CONCURRENT persist may have
+		// snapshotted and durably written this session between the mutation and
+		// the failure above, so dropping it from memory alone could leave it on
+		// disk. Best-effort by construction (the backend is already known
+		// broken and the caller is being told the create failed either way), but
+		// never silent — §10.
+		if rerr := s.persist(rollbackVer); rerr != nil {
+			logError("session", "create rollback did not persist", map[string]any{
+				"session": sess.ID, "err": rerr.Error(),
+			})
+		}
 		return Session{}, nil, err
 	}
 	return sess, evicted, nil
@@ -169,12 +260,13 @@ func (s *sessionStore) enforceCapLocked(userID string) []string {
 func (s *sessionStore) Validate(id string, enforceIdle, enforceAbsolute bool) (Session, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	x, ok := s.byID[id]
 	if !ok {
+		s.mu.Unlock()
 		return Session{}, errSessionNotFound
 	}
 	if x.Status != sessionActive {
+		s.mu.Unlock()
 		switch x.Status {
 		case sessionExpiredIdle:
 			return x, errSessionIdle
@@ -184,33 +276,74 @@ func (s *sessionStore) Validate(id string, enforceIdle, enforceAbsolute bool) (S
 			return x, errSessionRevoked
 		}
 	}
-	if enforceAbsolute && x.AbsoluteTimeoutSec > 0 &&
-		now.Sub(x.CreatedAt) > time.Duration(x.AbsoluteTimeoutSec)*time.Second {
+	var ver uint64
+	var verr error
+	switch {
+	case enforceAbsolute && x.AbsoluteTimeoutSec > 0 &&
+		now.Sub(x.CreatedAt) > time.Duration(x.AbsoluteTimeoutSec)*time.Second:
 		x.Status = sessionExpiredAbsolute
 		s.byID[id] = x
-		_ = s.flushLocked()
-		return x, errSessionAbsolute
-	}
-	if enforceIdle && x.IdleTimeoutSec > 0 &&
-		now.Sub(x.LastActivityAt) > time.Duration(x.IdleTimeoutSec)*time.Second {
+		ver, verr = s.bumpLocked(), errSessionAbsolute
+	case enforceIdle && x.IdleTimeoutSec > 0 &&
+		now.Sub(x.LastActivityAt) > time.Duration(x.IdleTimeoutSec)*time.Second:
 		x.Status = sessionExpiredIdle
 		s.byID[id] = x
-		_ = s.flushLocked()
-		return x, errSessionIdle
+		ver, verr = s.bumpLocked(), errSessionIdle
 	}
-	return x, nil
+	s.mu.Unlock()
+	if verr == nil {
+		return x, nil
+	}
+	// Persisting an EXPIRY stays best-effort — deliberately, and unlike Revoke.
+	// An expired status is not a fact that exists only here: it is DERIVED from
+	// CreatedAt / LastActivityAt, which are themselves durable. If this write is
+	// lost, a restart reloads the session as active with the same old timestamps
+	// and the very next Validate recomputes the identical verdict, so the
+	// externally visible behaviour (refresh refused with the same code) is
+	// unchanged. Revocation has no such fallback — nothing recomputes "an admin
+	// killed this" — which is why F-70 reports it and this does not. Reporting it
+	// here would also mean overloading Validate's error, whose sole meaning to
+	// auth.go is the SPA-facing session code. Logged, never swallowed (§10).
+	if err := s.persist(ver); err != nil {
+		logError("session", "session expiry did not persist", map[string]any{
+			"session": id, "status": x.Status, "err": err.Error(),
+		})
+	}
+	return x, verr
 }
 
 // Touch records activity at the refresh boundary (last_activity + last_refresh).
+//
+// Flush policy: Touch still writes, but it no longer holds the store lock while
+// doing so, and concurrent touches COALESCE inside persist (a burst behind one
+// slow write collapses to a single extra write). A time-based debounce was
+// considered and rejected: Touch fires only at /api/auth/refresh — once per
+// access-token TTL per session, not per request (see the file header) — so the
+// write amplification a debounce would remove is already small, while it would
+// buy a real loss window and a background timer to own. Coalescing gives the
+// same burst behaviour with a zero loss window.
+//
+// The persist error stays UNREPORTED (Touch has no error return, and auth.go's
+// refresh has already succeeded by this point). Losing it only moves
+// LastActivityAt backwards to its last durable value, which can only SHORTEN the
+// idle window on a restart — it fails closed, never open. Logged, not swallowed.
 func (s *sessionStore) Touch(id string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if x, ok := s.byID[id]; ok && x.Status == sessionActive {
-		x.LastActivityAt = now
-		x.LastRefreshAt = now
-		s.byID[id] = x
-		_ = s.flushLocked()
+	x, ok := s.byID[id]
+	if !ok || x.Status != sessionActive {
+		s.mu.Unlock()
+		return
+	}
+	x.LastActivityAt = now
+	x.LastRefreshAt = now
+	s.byID[id] = x
+	ver := s.bumpLocked()
+	s.mu.Unlock()
+	if err := s.persist(ver); err != nil {
+		logError("session", "session activity did not persist", map[string]any{
+			"session": id, "err": err.Error(),
+		})
 	}
 }
 
@@ -227,14 +360,18 @@ func (s *sessionStore) Touch(id string) {
 // restart — while an audit record asserted it had been killed.
 func (s *sessionStore) Revoke(id string) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	x, ok := s.byID[id]
 	if !ok || x.Status != sessionActive {
+		s.mu.Unlock()
 		return false, nil
 	}
 	x.Status = sessionRevoked
 	s.byID[id] = x
-	if err := s.flushLocked(); err != nil {
+	ver := s.bumpLocked()
+	s.mu.Unlock()
+	// Reported, not best-effort: persist(ver) returns nil only once a snapshot
+	// containing this revocation is on disk (persist §3).
+	if err := s.persist(ver); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -249,7 +386,6 @@ func (s *sessionStore) Revoke(id string) (bool, error) {
 // entirely on this error being surfaced.
 func (s *sessionStore) RevokeAllForUser(userID string) (int, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	n := 0
 	for id, x := range s.byID {
 		if x.UserID == userID && x.Status == sessionActive {
@@ -258,8 +394,13 @@ func (s *sessionStore) RevokeAllForUser(userID string) (int, error) {
 			n++
 		}
 	}
+	var ver uint64
 	if n > 0 {
-		if err := s.flushLocked(); err != nil {
+		ver = s.bumpLocked()
+	}
+	s.mu.Unlock()
+	if n > 0 {
+		if err := s.persist(ver); err != nil {
 			return n, err
 		}
 	}
@@ -268,25 +409,29 @@ func (s *sessionStore) RevokeAllForUser(userID string) (int, error) {
 
 // Get returns a session by id.
 func (s *sessionStore) Get(id string) (Session, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	x, ok := s.byID[id]
 	return x, ok
 }
 
 // IsActive reports whether a session is currently active — the cheap per-request
 // check withAuth uses for instant revocation (admin kill / logout / pw-change).
+//
+// CONC-HIGH-1: this runs on EVERY authenticated request. It takes a READ lock and
+// touches nothing but the map, so concurrent requests do not serialize against
+// each other and — critically — never wait on a durable write.
 func (s *sessionStore) IsActive(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	x, ok := s.byID[id]
 	return ok && x.Status == sessionActive
 }
 
 // List returns all sessions, most-recently-active first (admin/device UI).
 func (s *sessionStore) List() []Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]Session, 0, len(s.byID))
 	for _, x := range s.byID {
 		out = append(out, x)
@@ -297,8 +442,8 @@ func (s *sessionStore) List() []Session {
 
 // ListForUser returns a user's sessions, newest first (for the admin/device UI).
 func (s *sessionStore) ListForUser(userID string) []Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var out []Session
 	for _, x := range s.byID {
 		if x.UserID == userID {

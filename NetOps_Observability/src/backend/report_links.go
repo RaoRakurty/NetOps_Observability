@@ -50,7 +50,7 @@ const reportLinkTTL = 7 * 24 * time.Hour
 // already sends the user's session JWT in that header, and honouring it here
 // would turn every authenticated browser request into a failed link
 // verification (403) on a route that works today.
-const linkTokenHeader = "X-Link-Token"
+const linkTokenHeader = "X-Link-Token" //nolint:gosec // G101 false positive: this is a header NAME, not a credential value
 
 // maskedTokenSegment is what a capability token becomes in a log line. It is
 // deliberately not a fixed-width blob of the same shape as a token: an operator

@@ -81,8 +81,15 @@ it enforce.
 - **Secrets in git history.** `deployment/docker/.env` is no longer tracked and is
   gitignored (commit `6c02200`), **but it remains in history** (e.g. `4f37c7b`), so
   its secrets are still readable via `git show <rev>:.../.env`. Remediate by:
-  1. **Rotating** every secret it held — `python3 scripts/install.py --reset-env`
-     regenerates them. Do this regardless.
+  1. **Rotating** every secret it held. Do this regardless.
+     `python3 scripts/install.py --rotate-app-secrets` covers everything that can
+     be rotated on a running install (application secrets + the store credentials
+     it reconciles against the live store and verifies); the handful that are
+     seeded into a store on first boot must be rotated in that product and copied
+     back into `.env`. Both halves are in
+     **`docs/runbooks/secret-rotation.md`** — do not reach for a bare
+     `--reset-env`, which refuses on a started install precisely because
+     regenerating those values would brick it (audit FUNC-HIGH-1).
   2. Optionally **scrubbing history** with `git filter-repo` / BFG (⚠️ destructive —
      rewrites SHAs, needs a force-push and coordination with every clone).
   A **secret-scan CI gate** (e.g. `gitleaks`) is recommended to catch the next leak

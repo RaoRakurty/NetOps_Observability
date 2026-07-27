@@ -170,6 +170,12 @@ type server struct {
 	// ticketing. nil = not configured for that tenant.
 	itsmCfg *itsmConfigStore
 	hub     *Hub
+	// workers is the shutdown drain group (see workerGroup below). It hangs off
+	// the server so ANY subsystem that starts a goroutine from a *server method
+	// can register it in one line — `s.workers.start("name", func(){…})` instead
+	// of a bare `go func(){…}()` — and shutdown will then WAIT for it instead of
+	// abandoning it mid-write. Never nil for a server built by newServer().
+	workers *workerGroup
 }
 
 // serviceNowFor / jiraFor resolve a tenant's live ITSM connector (nil when
@@ -505,6 +511,7 @@ func newServer() *server {
 
 	srv := &server{
 		startedAt:        time.Now().UTC(),
+		workers:          &workerGroup{},
 		discovery:        d,
 		collectors:       pool,
 		alerts:           engine,
@@ -692,22 +699,84 @@ func safeGo(name string, fn func()) { safego.GoWith(apiPanicLogger, name, fn) }
 // it, SIGTERM cancelled the root context and returned immediately: every
 // in-flight Postgres/ClickHouse write (ticketing outbox, report jobs, incident
 // sync) was abandoned mid-operation on every deploy.
-type workerGroup struct{ wg sync.WaitGroup }
+//
+// It also tracks each worker BY NAME while it runs. A drain that times out and
+// says only "workers did not drain" is unactionable — the operator cannot tell
+// whether a report render or a ClickHouse backfill was cut short. The names are
+// the difference between an observable shutdown and a shrug (§10).
+type workerGroup struct {
+	wg sync.WaitGroup
+
+	mu      sync.Mutex
+	running map[string]int // worker name → live goroutines under that name
+}
 
 // start launches a tracked worker. fn must return when the root context is
 // cancelled — a worker that ignores cancellation only costs the drain timeout.
+//
+// A nil group still runs the worker (a background loop must never be dropped
+// because wiring was missed) but says so: it will NOT be drained.
 func (g *workerGroup) start(name string, fn func()) {
+	if g == nil {
+		logWarn("shutdown", "worker started without a tracking group — it will NOT be waited for at shutdown",
+			map[string]any{"worker": name})
+		safeGo(name, fn)
+		return
+	}
 	g.wg.Add(1)
+	g.mark(name, 1)
 	safeGo(name, func() {
-		defer g.wg.Done()
+		// One deferred closure so the count and the WaitGroup are released on a
+		// panic too — safego recovers ABOVE this frame, so a panicking worker
+		// must not leave the drain waiting on a goroutine that is already gone.
+		defer func() {
+			g.mark(name, -1)
+			g.wg.Done()
+		}()
 		fn()
 	})
 }
 
-// drain waits up to d for the tracked workers to return after cancellation. It
-// reports whether they all finished; the caller logs a false rather than
-// hiding it, since it means work really was cut short.
-func (g *workerGroup) drain(d time.Duration) bool {
+// mark adjusts the live count for a worker name.
+func (g *workerGroup) mark(name string, delta int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running == nil {
+		g.running = map[string]int{}
+	}
+	if g.running[name] += delta; g.running[name] <= 0 {
+		delete(g.running, name)
+	}
+}
+
+// stillRunning lists the tracked workers that have not returned yet, sorted for
+// a stable log line.
+func (g *workerGroup) stillRunning() []string {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	names := make([]string, 0, len(g.running))
+	for n := range g.running {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// drain waits up to d for the tracked workers to return after cancellation and
+// returns the names of those still running when it gave up — empty means a
+// clean drain.
+//
+// It is bounded on purpose: a worker that ignores cancellation (or is parked on
+// a slow upstream) costs exactly d and then shutdown continues, so one stuck
+// loop can never hold the process open forever. What it must NOT do is exit
+// quietly, which is why the caller gets the names rather than a bare bool.
+func (g *workerGroup) drain(d time.Duration) []string {
+	if g == nil {
+		return nil
+	}
 	done := make(chan struct{})
 	go func() {
 		g.wg.Wait()
@@ -715,9 +784,62 @@ func (g *workerGroup) drain(d time.Duration) bool {
 	}()
 	select {
 	case <-done:
-		return true
+		return nil
 	case <-time.After(d):
-		return false
+		return g.stillRunning()
+	}
+}
+
+// cancelOnlyWorkers names the background subsystems main starts through their
+// OWN Start()/start*() entry points. Each of those spawns its goroutines inside
+// that call and hands main no handle to wait on, so they are cancel-only: the
+// root context stops them and the process then exits — they are NOT drained.
+//
+// This list exists so that is a stated decision instead of a silent omission,
+// and so the shutdown log names precisely what was cut short. Before it, the
+// drain returned "all workers finished" while collectors, discovery, the report
+// pipeline and the 30-minute backfills were still mid-write to ClickHouse and
+// Postgres — a shutdown that lies is the silent-failure class this release is
+// closing (§10).
+//
+// Adopting one is a one-line change IN ITS OWN FILE: replace the internal
+// `go func(){…}()` / `safeGo(name, …)` with `s.workers.start(name, …)` — the
+// group hangs off *server for exactly that reason — then delete the entry here.
+// Subsystems outside package main (collectors.Pool, alerts.Engine) cannot see
+// this type, so they need an additive `Wait()` over their own WaitGroup, which
+// main then waits on inside a tracked worker.
+func cancelOnlyWorkers() []string {
+	return []string{
+		"alerts-engine",            // alerts.Engine.Start → go e.loop(ctx)
+		"appid-catalog-refresh",    // appCatalogHolder.startRefresh
+		"audit-retention",          // startAuditRetention → safego.Go
+		"ch-row-policies",          // ensureCHRowPolicies (bounded retry, then exits)
+		"cloud-appid-refresh",      // cloudAppResolver.startRefresh
+		"cloud-inventory",          // server.startCloudInventory
+		"cloud-monitor-eval",       // cloudMonitorEvaluator.Start → go e.loop(ctx)
+		"collectors",               // collectors.Pool.Start → one goroutine per collector
+		"cred-cache-reload",        // server.startCredCacheReload
+		"discovery",                // DiscoveryAggregator.Start → per-source pollLoop + vendorLoop
+		"entity-resolver-enrich",   // server.startEntityResolverEnrichment
+		"fusion-worker",            // fusionWorker.start
+		"incident-time-backfill",   // server.startIncidentTimeMetricsBackfill (CH writes)
+		"itsm-drift-reconciler",    // server.startDriftReconciler → safeGo
+		"netbox-sync",              // netboxSyncer.Start (writes INTO NetBox)
+		"ngfw-appid-refresh",       // ngfwAppResolver.startRefresh
+		"path-baseline-precompute", // server.startPathBaselinePrecompute (CH writes)
+		"path-graph-enrich",        // server.startPathGraphEnrichment
+		"path-graph-ingest",        // server.startPathGraphIngest (CH/PG writes)
+		"probe-paths-enrich",       // server.startProbePathsEnrichment
+		"report-pipeline",          // reportPipeline.Start → scheduler + N render workers
+		"report-scheduler-file",    // reportScheduler.Start (file backend)
+		"routing-direction-enrich", // server.startRoutingDirectionEnrichment
+		"seam-bootstrap",           // server.startSeamBootstrap (PG writes)
+		"seam-enrich",              // server.startSeamEnrichment
+		"svc-flow-rollup",          // server.startSvcFlowRollup (CH writes)
+		"tenant-enrichment",        // server.startTenantEnrichment
+		"topology-links-enrich",    // server.startTopologyLinksEnrichment
+		"topology-reconciler",      // server.startTopologyReconciler (PG writes)
+		"wan-circuit-publish",      // server.startWANCircuitPublish
 	}
 }
 
@@ -762,8 +884,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// Background workers started through this group are waited for on shutdown
-	// (see the drain below) instead of being abandoned mid-write.
-	workers := &workerGroup{}
+	// (see the drain below) instead of being abandoned mid-write. The group is
+	// the server's own, so a subsystem that starts goroutines from a *server
+	// method can join the drain without main having to reach into it.
+	// Subsystems NOT in the group are listed by cancelOnlyWorkers().
+	workers := srv.workers
 	srv.discovery.Start(ctx)
 	srv.netboxSync.Start(ctx)
 	srv.collectors.Start(ctx)
@@ -972,7 +1097,10 @@ func main() {
 		httpSrv.Handler = hsts(handler) // HSTS only when actually serving TLS
 		// Count + structure-log handshake failures instead of the default logger.
 		httpSrv.ErrorLog = log.New(handshakeErrLog{tlsSrv.metrics}, "", 0)
-		safeGo("tls-cert-reloader", func() {
+		// Tracked (not bare safeGo): both loops select on ctx.Done and the reissue
+		// loop REWRITES cert/key files — abandoning it mid-write is how a restart
+		// finds a truncated key.
+		workers.start("tls-cert-reloader", func() {
 			tlsSrv.reloader.WatchInterval(ctx, tlsSrv.interval, func(e error) {
 				logError("tls", "cert reload", errf(e))
 			})
@@ -980,7 +1108,7 @@ func main() {
 		// Periodic SVID re-issue (#18 phase 4): re-mint + rewrite the API/nginx
 		// certs at ~half the TTL; the reloader hot-swaps them — rotation, no restart.
 		if caMgr != nil {
-			safeGo("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
+			workers.start("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
 		}
 	}
 
@@ -1015,8 +1143,22 @@ func main() {
 		logError("shutdown", "http graceful shutdown", errf(err))
 	}
 	cancel()
-	if !workers.drain(durationOr("WORKER_DRAIN_TIMEOUT", 15*time.Second)) {
-		logWarn("shutdown", "background workers did not drain before timeout", nil)
+	drainTimeout := durationOr("WORKER_DRAIN_TIMEOUT", 15*time.Second)
+	if stuck := workers.drain(drainTimeout); len(stuck) > 0 {
+		// Name them. "did not drain" with no names cannot be acted on, and the
+		// bounded wait means shutdown continues regardless — so this line is the
+		// only record that a tracked worker was cut short.
+		logWarn("shutdown", "background workers did not drain before timeout — their in-flight work was cut short",
+			map[string]any{"workers": stuck, "count": len(stuck), "timeout": drainTimeout.String()})
+	} else {
+		logInfo("shutdown", "tracked background workers drained", map[string]any{"timeout": drainTimeout.String()})
+	}
+	// Everything else is cancel-only: stopped by the context cancel above, never
+	// waited for. Stated explicitly so the drain above is not read as "all
+	// background work finished" — it never covered these (see cancelOnlyWorkers).
+	if names := cancelOnlyWorkers(); len(names) > 0 {
+		logInfo("shutdown", "cancel-only subsystems were signalled but NOT waited for",
+			map[string]any{"subsystems": names, "count": len(names)})
 	}
 	// F-22: drain queued notifications last. A deploy during an incident used to
 	// kill the fan-out goroutines mid-send; the pages simply never arrived.

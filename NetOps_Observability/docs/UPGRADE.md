@@ -71,13 +71,26 @@ The old redpanda container is removed automatically by `--remove-orphans`, and `
 
 ## When `.env` reconciliation isn't enough
 
-The reconciliation step appends new variables with safe defaults. It does **not** rotate existing secrets or change values you've set. If you want fresh secrets across the board (e.g., a known JWT_SECRET leak), there's no graceful path — rotating the DB password while Postgres has data, or rotating CLICKHOUSE_PASSWORD while ClickHouse has data, requires altering the running container's credentials first. The simplest path:
+The reconciliation step appends new variables with safe defaults. It does **not** rotate existing secrets or change values you've set. To rotate (e.g. a known JWT_SECRET leak) there **is** a graceful path now — the installer alters the live store's credential and verifies it before touching `.env`:
+
+```bash
+python3 scripts/install.py --rotate-app-secrets
+cd deployment/docker && docker compose up -d --force-recreate
+```
+
+That covers the application secrets and every store credential the tool can reconcile (`DB_PASSWORD`, `CLICKHOUSE_PASSWORD`, `NETBOX_DB_PASSWORD`, `GRAFANA_CH_PASSWORD`). It deliberately refuses to touch `KAFKA_CLUSTER_ID` (immutable once the broker volume is formatted) and the admin passwords seeded into Grafana / Keycloak / NetBox / the local user store on first boot — rotate those in the product itself and copy the value back into `.env`. Full matrix: **`docs/runbooks/secret-rotation.md`**.
+
+A wipe-and-restore is no longer required for rotation, and `docker compose down -v` + `--reset-env` remains the destructive option of last resort:
 
 ```bash
 # Take a backup, then dump
 docker compose exec postgres pg_dumpall -U $DB_USER > pg.sql
-docker compose down -v                    # wipe data
-python3 scripts/install.py --reset-env    # new secrets, new data dirs
+docker compose down
+# The stores are BIND MOUNTS under data/ — `down -v` does not remove them, and
+# install.py detects them and refuses to pretend it rotated their credentials.
+# A truly fresh install means deleting them:
+sudo rm -rf data/postgres data/clickhouse data/kafka data/grafana data/api/users.json
+python3 scripts/install.py --reset-env    # never-started install: rotates everything
 # After install: restore pg dump
 cat pg.sql | docker compose exec -T postgres psql -U $DB_USER
 ```

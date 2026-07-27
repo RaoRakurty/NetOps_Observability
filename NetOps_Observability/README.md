@@ -49,7 +49,8 @@ NetOps_Observability/
 │   ├── INGESTION.md         — device-side syslog / SNMP / NetFlow config
 │   └── QUICK_REFERENCE.md   — common operations
 ├── scripts/
-│   ├── install.py           — idempotent installer (--reset-env rotates secrets)
+│   ├── install.py           — idempotent installer (+ gated secret rotation)
+│   ├── secret_rotation.py   — what --reset-env may rotate, and how
 │   └── bootstrap-opensearch.sh
 ├── src/
 │   ├── backend/             — Go API (REST + GraphQL stub + Copilot proxy)
@@ -92,8 +93,9 @@ cd deployment/docker && docker compose restart api
 # Stop everything (keep data)
 cd deployment/docker && docker compose down
 
-# Rotate all secrets
-python3 scripts/install.py --reset-env
+# Rotate secrets (safe on a running stack; see docs/runbooks/secret-rotation.md)
+python3 scripts/install.py --rotate-app-secrets
+cd deployment/docker && docker compose up -d --force-recreate
 
 # Apply OpenSearch index templates (first time only)
 OPENSEARCH_URL=http://localhost:9200 scripts/bootstrap-opensearch.sh

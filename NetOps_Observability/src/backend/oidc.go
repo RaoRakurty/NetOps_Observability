@@ -226,11 +226,18 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Secure is decided per request by the SAME helper the session cookies use
+	// (cookieSecure: SECURE_COOKIES=true, direct TLS, or X-Forwarded-Proto=https
+	// from the TLS edge). This cookie is the CSRF defence for the whole SSO
+	// callback — without Secure it was emitted in the clear on an HTTPS
+	// deployment and became stealable off any plaintext request to the same
+	// host, which is exactly the login-CSRF the state parameter exists to stop.
 	http.SetCookie(w, &http.Cookie{
 		Name:     ssoStateCookie,
 		Value:    state,
 		Path:     "/api/auth/sso",
 		HttpOnly: true,
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
@@ -273,8 +280,18 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "invalid SSO state")
 		return
 	}
-	// Clear the state cookie.
-	http.SetCookie(w, &http.Cookie{Name: ssoStateCookie, Path: "/api/auth/sso", MaxAge: -1})
+	// Clear the state cookie. Same attributes as the one that was set (a delete
+	// is just a Set with MaxAge<0, and a browser will reject a Secure cookie
+	// arriving over plain HTTP) so the expiry lands on exactly the cookie above.
+	http.SetCookie(w, &http.Cookie{
+		Name:     ssoStateCookie,
+		Value:    "",
+		Path:     "/api/auth/sso",
+		HttpOnly: true,
+		Secure:   cookieSecure(r),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 
 	code := r.URL.Query().Get("code")
 	if code == "" {

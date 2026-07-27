@@ -134,7 +134,15 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// Dependency is a SERVICE graph from observed flows, not the physical fabric —
 	// it answers "who depends on whom" (the blast-radius-for-services question).
 	if mode == topology.ModeDependency {
-		writeJSON(w, http.StatusOK, s.projectDependencyView(r, claims, tenant, devs))
+		view, err := s.projectDependencyView(r, claims, tenant, devs)
+		if err != nil {
+			// Never a confident empty: the SPA renders an empty dependency view
+			// as a labeled sample, which during a flow-store outage would put
+			// demo topology in front of an operator working a real incident.
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
 

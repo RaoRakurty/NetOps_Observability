@@ -15,6 +15,7 @@ package main
 //     so the frontend degrades to the labeled sample, same contract as geo.
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -30,11 +31,12 @@ const depFlowConfidence = 0.6
 // projectDependencyView builds the dependency View from observed flows. Reuses the
 // inventory to resolve flow endpoints to managed devices; unresolved endpoints
 // become muted "host" nodes (the same treatment as an unresolved LLDP neighbour).
-func (s *server) projectDependencyView(r *http.Request, claims jwtClaims, tenant string, devs []models.Device) topology.View {
+func (s *server) projectDependencyView(r *http.Request, claims jwtClaims, tenant string, devs []models.Device) (topology.View, error) {
 	now := time.Now()
 	tenantClause, none := s.flowTenantClause(r)
 	if none {
-		return emptyDependencyView(tenant, now)
+		// Genuinely nothing visible to this principal — an honest empty, not a failure.
+		return emptyDependencyView(tenant, now), nil
 	}
 
 	// address → managed device, for endpoint resolution.
@@ -70,9 +72,16 @@ SELECT src_addr AS src,
  FORMAT JSON`
 	rows, err := s.chRows(r, sql)
 	if err != nil {
-		return emptyDependencyView(tenant, now)
+		// A flow-store failure is NOT "this tenant has no dependencies". The
+		// frontend degrades an empty view to a labeled sample, so returning
+		// empty here puts DEMO topology on screen during an outage while the
+		// operator is trying to work out their blast radius. Say we could not
+		// answer; the caller turns it into a 502 rather than a confident empty.
+		logError("topology", "dependency view unavailable — flow store did not answer",
+			map[string]any{"tenant": tenant, "err": err.Error()})
+		return topology.View{}, fmt.Errorf("dependency view unavailable: %w", err)
 	}
-	return buildDependencyView(tenant, now, byAddr, rows)
+	return buildDependencyView(tenant, now, byAddr, rows), nil
 }
 
 // emptyDependencyView is the well-formed empty result (non-nil slices) the frontend

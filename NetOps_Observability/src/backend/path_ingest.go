@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"strings"
@@ -708,7 +709,18 @@ func (s *server) ingestPathsOnce(ctx context.Context) error {
 	if s.seams != nil {
 		seams, err = s.seams.List(ctx, cfg.Tenant, false, "active", "")
 		if err != nil {
-			logWarn("pathgraph", "seam inventory unavailable", map[string]any{"err": err.Error()})
+			// ABORT the cycle — do not ingest unstamped. Path observations are
+			// IMMUTABLE: proceeding with an empty seam index stamps SeamID="" on
+			// every hop of this window, and those rows are never rewritten. Days
+			// later the RCA spine reports "no seam ownership" as a durable,
+			// evidence-backed-looking fact, and the history-based repair path
+			// cannot fix it because the "prior complete observation" it consults
+			// is itself unstamped. A skipped window is recoverable (the next
+			// cycle re-reads the same probe paths); a falsely-stamped one is not.
+			// A NIL store is different and still fine: seams are optional, and
+			// "not configured" genuinely means no seam crossings to record.
+			return fmt.Errorf("seam inventory unavailable — refusing to ingest "+
+				"unstamped path observations (they are immutable): %w", err)
 		}
 	}
 	si := buildSeamIndex(seams)

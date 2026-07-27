@@ -15,8 +15,18 @@ What this script does (and what it does NOT do):
 It does NOT regenerate source code. The scaffold under src/ is the source
 of truth — edit it in place rather than re-running this installer.
 
+SECRET ROTATION (audit FUNC-HIGH-1). `--reset-env` is not a blanket "write new
+random values" — that bricked running installs, because most of these secrets
+are validated by a store that only read them once, on the first boot of an
+empty volume. Every generated secret is classified in scripts/secret_rotation.py
+and `--reset-env` either genuinely rotates it (reconciling the live store and
+verifying the new credential) or REFUSES before writing anything. See
+docs/runbooks/secret-rotation.md.
+
 Usage:
     python3 install.py [--port 8000] [--no-start] [--reset-env]
+    python3 install.py --rotate-app-secrets       # rotate what is safe to rotate
+    python3 install.py --reset-env --rotate-kafka-cluster-id   # destructive
 """
 
 from __future__ import annotations
@@ -279,10 +289,44 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: "Path | None") 
 
 # ---- .env generation --------------------------------------------------------
 
+def generate_secrets() -> dict[str, str]:
+    """Every secret a fresh install mints.
+
+    Each key MUST also carry a rotation classification in
+    scripts/secret_rotation.py:POLICY — tests/test_secret_rotation.py fails the
+    build otherwise. An unclassified store credential is precisely how
+    `--reset-env` came to hand out passwords no store had ever been told about
+    (audit FUNC-HIGH-1).
+    """
+    return {
+        "DB_PASSWORD":              generate_password(28),
+        "JWT_SECRET":               generate_token(48),
+        "ENCRYPTION_KEY":           generate_token(32),
+        "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
+        "CLICKHOUSE_PASSWORD":      generate_password(24),
+        "GRAFANA_CH_PASSWORD":      generate_password(24),
+        "ADMIN_INITIAL_PASSWORD":   generate_password(16),
+        "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
+        # Bundled (internal) NetBox source-of-truth.
+        "NETBOX_SECRET_KEY":         generate_token(40),    # >=50 url-safe chars
+        "NETBOX_DB_PASSWORD":        generate_password(24),
+        "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
+        "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
+        # F-08 ingest credential shared by every in-stack telemetry producer.
+        "INGEST_TOKEN":              generate_token(32),
+        # KRaft storage id for the embedded Kafka broker (22-char base64url
+        # uuid, same format kafka-storage random-uuid emits). Generated ONCE
+        # per install: the data dir is formatted with it, and a changed id
+        # would make the broker refuse its own volume on recreation.
+        "KAFKA_CLUSTER_ID":          base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="),
+    }
+
+
 def write_env(env_path: Path, port: int, *, force: bool,
               profiles: str = DEFAULT_PROFILES,
               broker_urls: str | None = None,
-              retention_profile: str = "production") -> dict[str, str]:
+              retention_profile: str = "production",
+              preserve: dict[str, str] | None = None) -> dict[str, str]:
     if env_path.exists() and not force:
         info(f".env already exists at {env_path} — keeping existing secrets")
         env = _parse_env(env_path)
@@ -329,48 +373,34 @@ def write_env(env_path: Path, port: int, *, force: bool,
             env = _parse_env(env_path)
         return env
 
-    # When forcing a fresh .env, also wipe the user store. Otherwise the
-    # bootstrap admin keeps the password from the FIRST .env it was
-    # seeded with, and the new ADMIN_INITIAL_PASSWORD in .env won't
-    # unlock the dashboard. Removing users.json causes the api container
-    # to re-seed on its next start with the current .env value.
-    if force:
-        users_file = env_path.parent.parent.parent / "data" / "api" / "users.json"
-        if users_file.exists():
-            try:
-                users_file.unlink()
-                info(f"removed {users_file} so admin re-seeds with new password")
-            except OSError as e:
-                warn(f"couldn't remove {users_file}: {e} (run scripts/reset-admin.sh later)")
+    # NOTE (FUNC-HIGH-1): this path used to delete data/api/users.json on
+    # --reset-env so the api would re-seed the admin from the new
+    # ADMIN_INITIAL_PASSWORD. That destroys EVERY local account, not just the
+    # admin's password, and it contradicted the template's own "--reset-env does
+    # NOT rotate it" note. The user store is now a rotation store like any
+    # other: once it exists, ADMIN_INITIAL_PASSWORD is inert and the rotation
+    # gate refuses instead (scripts/reset-admin.sh remains the deliberate,
+    # explicitly destructive way to force a re-seed).
 
-    secrets_map = {
-        "DB_PASSWORD":              generate_password(28),
-        "JWT_SECRET":               generate_token(48),
-        "ENCRYPTION_KEY":           generate_token(32),
-        "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
-        "CLICKHOUSE_PASSWORD":      generate_password(24),
-        "GRAFANA_CH_PASSWORD":      generate_password(24),
-        "ADMIN_INITIAL_PASSWORD":   generate_password(16),
-        "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
-        # Bundled (internal) NetBox source-of-truth.
-        "NETBOX_SECRET_KEY":         generate_token(40),    # >=50 url-safe chars
-        "NETBOX_DB_PASSWORD":        generate_password(24),
-        "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
-        "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
-        # F-08 ingest credential shared by every in-stack telemetry producer.
-        "INGEST_TOKEN":              generate_token(32),
-        # KRaft storage id for the embedded Kafka broker (22-char base64url
-        # uuid, same format kafka-storage random-uuid emits). Generated ONCE
-        # per install: the data dir is formatted with it, and a changed id
-        # would make the broker refuse its own volume on recreation.
-        "KAFKA_CLUSTER_ID":          base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip("="),
-    }
+    secrets_map = generate_secrets()
+    # Values the rotation gate ruled un-rotatable keep their current value; a
+    # regenerated one would be a lie the stores never agreed to.
+    for key, value in (preserve or {}).items():
+        if key in secrets_map:
+            secrets_map[key] = value
 
     body = f"""# NetOps Observability — environment.
 # Generated by scripts/install.py at {datetime.now(timezone.utc).isoformat()}.
 #
-# Treat this file as a secret. Do not commit it. Re-run install.py with
-# --reset-env to roll a new copy.
+# Treat this file as a secret. Do not commit it.
+#
+# Rotating: `install.py --reset-env` regenerates this file, but ONLY while it
+# can honour every value it writes. Once the stack has started, most secrets
+# below are validated by a store that read them once and kept them, so
+# --reset-env reconciles those stores (and refuses, changing nothing, for the
+# ones it cannot). `install.py --rotate-app-secrets` rotates just the safe set
+# in place, keeping every operator edit in this file. Full matrix:
+# docs/runbooks/secret-rotation.md.
 
 BASE_PORT={port}
 
@@ -380,8 +410,11 @@ CORRELIX_UID={os.getuid()}
 CORRELIX_GID={os.getgid()}
 
 # Initial admin user. The API creates this on first start (only if the
-# user store is empty), then never again. Change the password from the
-# Settings tab in the dashboard; `--reset-env` does NOT rotate it.
+# user store is empty), then never again — so once data/api/users.json
+# exists this value is INERT and no longer the admin's password. Change
+# the password from the Settings tab in the dashboard. `--reset-env`
+# refuses to pretend it rotates this; scripts/reset-admin.sh wipes the
+# user store deliberately (destroying every local account) to re-seed it.
 ADMIN_USERNAME=admin
 ADMIN_INITIAL_PASSWORD={secrets_map["ADMIN_INITIAL_PASSWORD"]}
 
@@ -612,7 +645,12 @@ SFLOW_PORT=6343
 # COMPOSE_PROFILES below (install-correlix.sh --external-kafka does both).
 BROKER_URLS={broker_urls or "kafka:9092"}
 # KRaft storage id for the embedded broker. Do NOT change it after first
-# start — the broker's data dir is formatted with this id.
+# start — the broker's data dir is formatted with this id and would refuse
+# its own volume, taking the whole bus/ingest path down. install.py enforces
+# this: --reset-env leaves it alone and refuses; rotating it really does
+# require discarding the broker's data, which only
+# `install.py --reset-env --rotate-kafka-cluster-id` will do (it moves
+# data/kafka aside first).
 KAFKA_CLUSTER_ID={secrets_map["KAFKA_CLUSTER_ID"]}
 
 # Active compose profiles (additive; non-profiled services always start).
@@ -636,6 +674,234 @@ def _parse_env(path: Path) -> dict[str, str]:
         k, v = line.split("=", 1)
         out[k.strip()] = v.strip()
     return out
+
+
+# ---- secret rotation (FUNC-HIGH-1) ------------------------------------------
+
+def refuse(msg: str) -> "None":
+    """Refuse a rotation we cannot honour. Exit 2 (distinct from fail()'s 1)
+    so callers/CI can tell "refused, nothing changed" from "broke halfway"."""
+    print(f"[fail ] {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _rotation_module():
+    """Import scripts/secret_rotation.py the same way resource_planner is."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import secret_rotation as sr
+    return sr
+
+
+class ComposeRunner:
+    """Runs commands inside stack containers. The ONLY place rotation touches
+    docker — reconcilers take it as a parameter (CLAUDE.md §2: dependencies are
+    explicit and injectable), so the policy is testable without a stack.
+
+    Every call is bounded by a timeout (§9): a wedged store must fail the
+    rotation, never hang the installer forever."""
+
+    def __init__(self, compose_dir: Path) -> None:
+        self.compose_dir = compose_dir
+
+    def _run(self, argv: list[str], stdin: str, timeout: int):
+        sr = _rotation_module()
+        try:
+            r = subprocess.run(argv, cwd=str(self.compose_dir), input=stdin,
+                               capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return sr.ExecResult(124, "", f"timed out after {timeout}s: {argv[:4]}")
+        except (OSError, subprocess.SubprocessError) as e:
+            return sr.ExecResult(126, "", f"{type(e).__name__}: {e}")
+        return sr.ExecResult(r.returncode, r.stdout, r.stderr)
+
+    def exec(self, service: str, argv: list[str], stdin: str = "",
+             timeout: int = 60):
+        return self._run(["docker", "compose", "exec", "-T", service, *argv],
+                         stdin, timeout)
+
+    def recreate(self, service: str, timeout: int = 300):
+        return self._run(
+            ["docker", "compose", "up", "-d", "--force-recreate", "--no-deps",
+             service], "", timeout)
+
+
+def confirm(prompt: str, assume_yes: bool) -> bool:
+    """Interactive yes/no. Non-interactive (cron, CI, piped stdin) is always
+    NO — a destructive default must never be reachable by accident (§16.2)."""
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        warn("not a terminal — refusing to assume consent (pass --assume-yes)")
+        return False
+    try:
+        return input(f"  {prompt} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
+                   strict: bool, allow_kafka_wipe: bool, assume_yes: bool,
+                   runner=None, sleep=time.sleep) -> tuple[dict[str, str], int]:
+    """Rotate every secret that can be rotated for real, in place.
+
+    Returns (rotated_values, failures). Guarantees, in this order:
+      1. Nothing is written until the whole plan is known to be completable —
+         a blocked secret in `strict` mode refuses with exit 2 and an untouched
+         .env.
+      2. Store-catalog credentials (ALTER class) are changed on the LIVE store
+         and verified BEFORE .env is rewritten, so .env never advertises a
+         credential the store has not accepted.
+      3. Anything that fails afterwards is rolled back to its previous value in
+         .env, so the file always describes the running stores.
+    """
+    sr = _rotation_module()
+    if not env_path.exists():
+        refuse(f"no .env at {env_path} — nothing to rotate. Run a full install first.")
+    env = _parse_env(env_path)
+    profiles = env.get("COMPOSE_PROFILES", "")
+    runner = runner if runner is not None else ComposeRunner(compose_dir)
+
+    verdicts = sr.classify(root, profiles, allow_kafka_wipe=allow_kafka_wipe,
+                           names=generate_secrets().keys())
+    stuck = sr.blocked(verdicts)
+    if stuck and strict:
+        refuse(sr.refusal_text(stuck, len(verdicts)))
+    fresh = generate_secrets()
+    plan = [v for v in verdicts if v.rotatable]
+    new_values = {v.name: fresh[v.name] for v in plan}
+
+    # -- preflight: every live store this plan depends on must answer NOW -----
+    unreachable: list[str] = []
+    for v in plan:
+        if not v.reconcile or v.cls == sr.IMMUTABLE:
+            continue
+        okay, why = sr.preflight(runner, v.name, env, new_values.get(v.name, ""))
+        if not okay:
+            unreachable.append(
+                f"  {v.name}\n      {why}\n      -> {sr.POLICY[v.name].remedy}")
+    if unreachable:
+        refuse("rotation needs these stores and cannot reach them; nothing was "
+               "written:\n" + "\n".join(unreachable))
+
+    rotated: dict[str, str] = {}
+    failures: list[str] = []
+
+    # -- the one destructive opt-in, taken FIRST ------------------------------
+    # Consent and the volume move both happen before anything else is mutated:
+    # aborting here must leave the install exactly as it was found, and it
+    # cannot do that once a live store's password has already been ALTERed.
+    if allow_kafka_wipe and "KAFKA_CLUSTER_ID" in new_values and \
+            sr.store_initialized(root, "kafka", profiles):
+        kdir = root / "data" / "kafka"
+        dest = kdir.with_name(f"kafka.pre-rotate-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}")
+        print()
+        warn("--rotate-kafka-cluster-id is DESTRUCTIVE to the embedded bus.")
+        info(f"  will move {kdir}  ->  {dest}")
+        info("  every topic, consumer offset and in-flight message on the "
+             "embedded broker is discarded (durable copies in OpenSearch / "
+             "VictoriaMetrics / ClickHouse are untouched).")
+        if not confirm(f"move {kdir} aside and rotate the cluster id?", assume_yes):
+            refuse("aborted at the Kafka confirmation — nothing was written.")
+        try:
+            kdir.rename(dest)
+        except OSError as e:
+            refuse(f"could not move {kdir} aside ({e}); KAFKA_CLUSTER_ID was NOT "
+                   "rotated and nothing was written. Fix the permissions "
+                   f"(sudo mv {kdir} {dest}) and re-run.")
+        ok(f"moved {kdir} -> {dest} (delete it once the new broker is healthy)")
+
+    # -- phase A: live-catalog credentials, BEFORE .env moves ----------------
+    for name, service, user, db in (
+            ("DB_PASSWORD", "postgres", env.get("DB_USER", "netops"),
+             env.get("DB_NAME", "netops")),
+            ("NETBOX_DB_PASSWORD", "netbox-postgres", "netbox", "netbox")):
+        v = next((x for x in plan if x.name == name), None)
+        if v is None or not v.reconcile:
+            continue
+        done, msg = sr.reconcile_postgres(runner, service=service, user=user,
+                                          db=db, new_password=new_values[name])
+        if done:
+            ok(f"{name}: {msg}")
+        else:
+            warn(f"{name} NOT rotated — {msg}")
+            failures.append(name)
+            new_values.pop(name, None)
+
+    # -- write .env (line surgery: operator edits survive) -------------------
+    text = env_path.read_text()
+    backup = env_path.with_suffix(env_path.suffix + ".rotate.bak")
+    backup.write_text(text)
+    backup.chmod(0o600)
+    new_text, missing = sr.substitute_env(text, new_values)
+    if missing:
+        new_text += ("\n# ---- added by install.py secret rotation ----\n"
+                     + "".join(f"{k}={new_values[k]}\n" for k in missing))
+    env_path.write_text(new_text)
+    env_path.chmod(0o600)
+    rotated.update(new_values)
+    ok(f"{env_path} updated ({len(new_values)} secrets; previous copy at "
+       f"{backup.name}, mode 0600)")
+
+    # -- phase B: credentials the RUNNING container re-reads from .env -------
+    def _revert(name: str, why: str) -> None:
+        warn(f"{name} NOT rotated — {why}")
+        failures.append(name)
+        rotated.pop(name, None)
+        if name not in env:
+            warn(f"{name} had no previous value in .env — left as generated; "
+                 "verify the store before relying on it")
+            return
+        reverted, _ = sr.substitute_env(env_path.read_text(), {name: env[name]})
+        env_path.write_text(reverted)
+        env_path.chmod(0o600)
+        info(f"{name} rolled back in .env so it still matches the running store")
+
+    ch_admin_pw = env.get("CLICKHOUSE_PASSWORD", "")
+    v = next((x for x in plan if x.name == "CLICKHOUSE_PASSWORD" and x.reconcile), None)
+    if v is not None:
+        done, msg = sr.reconcile_clickhouse_admin(
+            runner, user=env.get("CLICKHOUSE_USER", "netops"),
+            old_password=ch_admin_pw, new_password=new_values["CLICKHOUSE_PASSWORD"],
+            sleep=sleep)
+        if done:
+            ch_admin_pw = new_values["CLICKHOUSE_PASSWORD"]
+            ok(f"CLICKHOUSE_PASSWORD: {msg}")
+        else:
+            _revert("CLICKHOUSE_PASSWORD", msg)
+            # Put the container back on the value .env still holds. Never
+            # swallowed: if this fails the operator must know the container and
+            # the file may now disagree (§16.1).
+            back = runner.recreate("clickhouse")
+            if back.returncode != 0:
+                warn("could not recreate clickhouse after the rollback: "
+                     + sr.redact(back.stderr or back.stdout,
+                                 [new_values.get("CLICKHOUSE_PASSWORD", ""),
+                                  env.get("CLICKHOUSE_PASSWORD", "")]))
+                warn("clickhouse may still be running with the ROLLED-BACK "
+                     "password; run: docker compose up -d --force-recreate clickhouse")
+
+    v = next((x for x in plan if x.name == "GRAFANA_CH_PASSWORD" and x.reconcile), None)
+    if v is not None:
+        done, msg = sr.reconcile_grafana_ch_user(
+            runner, admin_user=env.get("CLICKHOUSE_USER", "netops"),
+            admin_password=ch_admin_pw,
+            grafana_password=new_values["GRAFANA_CH_PASSWORD"])
+        if done:
+            ok(f"GRAFANA_CH_PASSWORD: {msg}")
+        else:
+            _revert("GRAFANA_CH_PASSWORD", msg)
+
+    # -- report (names only, never values) -----------------------------------
+    print()
+    ok("rotated: " + (", ".join(sorted(rotated)) or "(nothing)"))
+    if stuck:
+        info("kept (cannot be rotated on a started install — see "
+             "docs/runbooks/secret-rotation.md): "
+             + ", ".join(v.name for v in stuck))
+    if failures:
+        warn("FAILED to rotate: " + ", ".join(sorted(failures))
+             + " — these keep their previous value in .env")
+    return rotated, len(failures)
 
 
 # ---- data dirs --------------------------------------------------------------
@@ -803,7 +1069,8 @@ def write_offline_override(compose_dir: Path, env_path: Path) -> None:
     ok(f"offline image override written ({len(overrides)} digest-pinned images → tag-pinned)")
 
 
-def compose_up(compose_dir: Path, offline: bool = False) -> None:
+def compose_up(compose_dir: Path, offline: bool = False,
+               root: Path | None = None) -> None:
     # Profiles come from COMPOSE_PROFILES in the generated .env — NOT from a
     # --profile flag here: the CLI flag would OVERRIDE (not merge with) the env
     # var, silently dropping profiles like embedded-bus/prober. The .env is the
@@ -838,8 +1105,10 @@ def compose_up(compose_dir: Path, offline: bool = False) -> None:
     # `docker compose up -d` recreates from whatever image already exists; it
     # does not rebuild. Supplying these through the environment means the normal
     # install path CANNOT produce an unidentifiable image.
+    # `root` was a free variable here (NameError on every non-offline start) —
+    # it is the project root, not a global. Passed in explicitly now.
     build_env = dict(os.environ)
-    build_env.setdefault("GIT_SHA", _git_sha(root))
+    build_env.setdefault("GIT_SHA", _git_sha(root or compose_dir.parent.parent))
     build_env.setdefault("BUILD_TIME",
                          datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
@@ -970,28 +1239,18 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
 
     # 2. Create / update the read-only ClickHouse user. tenant_scope='' is pinned
     #    CONST so the row policies on netops.* return only untagged platform/infra
-    #    rows — the user cannot widen its own scope even if a query tries. Run as
-    #    the admin (netops) user; password embedded is safe (generator alphabet
-    #    has no quote/backslash) but we double single-quotes defensively.
+    #    rows — the user cannot widen its own scope even if a query tries. Runs
+    #    through the shared reconciler: idempotent, verified with the new
+    #    credential, and it keeps both passwords off the host command line (they
+    #    used to ride in the docker CLI argv, visible to any `ps` on the host).
+    sr = _rotation_module()
     admin_pw = (secrets_map.get("CLICKHOUSE_PASSWORD") or env.get("CLICKHOUSE_PASSWORD") or "").strip()
     admin_user = env.get("CLICKHOUSE_USER", "netops")
-    esc = ch_pw.replace("'", "''")
-    sql = (
-        f"CREATE USER IF NOT EXISTS grafana IDENTIFIED BY '{esc}';\n"
-        f"ALTER USER grafana IDENTIFIED BY '{esc}' "
-        f"SETTINGS tenant_scope = '' CONST, readonly = 2;\n"
-        "GRANT SELECT ON netops.flows TO grafana;\n"
-        "GRANT SELECT ON netops.findings TO grafana;\n"
-        "GRANT SELECT ON netops.tunnels TO grafana;\n"
-    )
-    res = subprocess.run(
-        ["docker", "compose", "exec", "-T", "clickhouse",
-         "clickhouse-client", "--user", admin_user, "--password", admin_pw,
-         "--multiquery"],
-        cwd=str(compose_dir), input=sql, capture_output=True, text=True,
-    )
-    if res.returncode != 0:
-        warn(f"grafana ClickHouse user not created (skipping): {res.stderr.strip()}")
+    done, msg = sr.reconcile_grafana_ch_user(
+        ComposeRunner(compose_dir), admin_user=admin_user,
+        admin_password=admin_pw, grafana_password=ch_pw)
+    if not done:
+        warn(f"grafana ClickHouse user not created (skipping): {msg}")
         info("re-run install.py once ClickHouse is healthy to finish Grafana wiring")
         return
     ok("read-only Grafana ClickHouse user ready (tenant_scope='' pinned)")
@@ -1031,7 +1290,22 @@ def main() -> None:
     ap.add_argument("--no-start", action="store_true",
                     help="Generate config but don't run docker compose up.")
     ap.add_argument("--reset-env", action="store_true",
-                    help="Regenerate .env (rotates secrets).")
+                    help="Rotate secrets. On an install that has never started this "
+                         "regenerates .env wholesale; on a started install it rotates "
+                         "in place (reconciling the live stores) and REFUSES, changing "
+                         "nothing, for any secret it cannot rotate for real.")
+    ap.add_argument("--rotate-app-secrets", action="store_true",
+                    help="Rotate only the secrets that can be rotated safely right now "
+                         "(application secrets + live store credentials this tool can "
+                         "reconcile and verify); keep the rest. Then exit.")
+    ap.add_argument("--rotate-kafka-cluster-id", action="store_true",
+                    help="DESTRUCTIVE opt-in: also rotate KAFKA_CLUSTER_ID, moving "
+                         "data/kafka aside (discards every topic/offset on the "
+                         "embedded bus). Only meaningful with --reset-env or "
+                         "--rotate-app-secrets.")
+    ap.add_argument("--assume-yes", action="store_true",
+                    help="Answer yes to the destructive-rotation confirmation "
+                         "(non-interactive runs otherwise refuse).")
     ap.add_argument("--offline", action="store_true",
                     help="Air-gapped install: start from pre-loaded images, never build or pull.")
     ap.add_argument("--bundle", type=Path, default=None, metavar="IMAGES.tar.zst",
@@ -1122,6 +1396,27 @@ def main() -> None:
         info("replan complete — apply with: cd deployment/docker && docker compose up -d")
         return
 
+    # Standalone rotation (#FUNC-HIGH-1): rotate what is safely rotatable and
+    # leave everything else — including every operator edit in .env — alone.
+    if args.rotate_app_secrets:
+        step("rotating secrets in place")
+        sr = _rotation_module()
+        # Reconciling a live store needs the compose CLI. Only demand it when
+        # something has actually started — a pre-start rotation is file-only.
+        if env_path.exists() and sr.install_started(
+                root, _parse_env(env_path).get("COMPOSE_PROFILES", "")):
+            check_docker()
+        _rotated, failures = rotate_secrets(
+            root, compose_dir, env_path, strict=False,
+            allow_kafka_wipe=args.rotate_kafka_cluster_id,
+            assume_yes=args.assume_yes)
+        print()
+        info("apply the new values (recreates the services that consume them):")
+        info("    cd deployment/docker && docker compose up -d --force-recreate")
+        if failures:
+            fail(f"{failures} secret(s) could not be rotated (details above)")
+        return
+
     step("checking prerequisites")
     check_docker()
 
@@ -1129,9 +1424,27 @@ def main() -> None:
     validate_scaffold(root)
 
     step("generating environment")
-    secrets_map = write_env(env_path, args.port, force=args.reset_env,
-                            profiles=args.profiles, broker_urls=args.broker_urls,
-                            retention_profile=args.retention_profile)
+    # --reset-env on a STARTED install is a rotation, not a regeneration: the
+    # stores already hold most of these credentials, and rewriting the template
+    # would also revert every operator setting in .env.
+    sr = _rotation_module()
+    if args.reset_env and env_path.exists() and sr.install_started(
+            root, _parse_env(env_path).get("COMPOSE_PROFILES", "")):
+        info("this install has already started — rotating in place "
+             "(see docs/runbooks/secret-rotation.md)")
+        secrets_map, failures = rotate_secrets(
+            root, compose_dir, env_path, strict=True,
+            allow_kafka_wipe=args.rotate_kafka_cluster_id,
+            assume_yes=args.assume_yes)
+        if failures:
+            fail(f"{failures} secret(s) could not be rotated (details above)")
+    else:
+        if args.reset_env and args.rotate_kafka_cluster_id:
+            info("nothing has started yet — KAFKA_CLUSTER_ID rotates with the "
+                 "rest; no data to discard")
+        secrets_map = write_env(env_path, args.port, force=args.reset_env,
+                                profiles=args.profiles, broker_urls=args.broker_urls,
+                                retention_profile=args.retention_profile)
 
     if args.plan_resources:
         step("planning resources (#102)")
@@ -1152,7 +1465,7 @@ def main() -> None:
         write_offline_override(compose_dir, env_path)
 
     step("starting stack")
-    compose_up(compose_dir, offline=args.offline)
+    compose_up(compose_dir, offline=args.offline, root=root)
 
     step("status")
     compose_status(compose_dir)

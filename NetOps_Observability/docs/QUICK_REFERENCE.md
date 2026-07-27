@@ -29,12 +29,24 @@ curl -fs http://localhost:8000/admin/version
 From the project root:
 
 ```
-python3 scripts/install.py --reset-env
-docker compose -f deployment/docker/docker-compose.yml up -d
+python3 scripts/install.py --rotate-app-secrets
+cd deployment/docker && docker compose up -d --force-recreate
 ```
 
-`--reset-env` overwrites `deployment/docker/.env` with a fresh set of
-random values. The next `up` rolls every service that consumes them.
+This rotates every secret that can be rotated **for real** on a running install:
+the application secrets (`JWT_SECRET`, `INGEST_TOKEN`, …) plus the store
+credentials it can reconcile against the live store and verify (`DB_PASSWORD`,
+`CLICKHOUSE_PASSWORD`, `NETBOX_DB_PASSWORD`, `GRAFANA_CH_PASSWORD`). Operator
+edits in `.env` are preserved; the previous file is kept as `.env.rotate.bak`.
+
+`--reset-env` is still the "rotate everything" switch, but on a **started**
+install it refuses (exit 2, `.env` untouched) for anything it cannot honour —
+`KAFKA_CLUSTER_ID` is immutable once the broker's volume is formatted, and the
+Grafana/Keycloak/NetBox/dashboard admin passwords are seeded into their stores on
+first boot only. `docker compose restart` does **not** pick up a new `.env`; use
+`up -d --force-recreate`.
+
+Full matrix and the per-secret manual paths: `docs/runbooks/secret-rotation.md`.
 
 ## Adding a device manually
 

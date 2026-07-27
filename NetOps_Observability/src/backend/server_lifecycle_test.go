@@ -71,8 +71,8 @@ func TestWorkerGroupDrainsOnCancel(t *testing.T) {
 	}
 
 	cancel()
-	if !g.drain(5 * time.Second) {
-		t.Fatal("drain timed out on workers that do honour cancellation")
+	if stuck := g.drain(5 * time.Second); len(stuck) > 0 {
+		t.Fatalf("drain timed out on workers that do honour cancellation: %v", stuck)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -82,18 +82,22 @@ func TestWorkerGroupDrainsOnCancel(t *testing.T) {
 }
 
 // A worker that ignores cancellation must cost the drain timeout and be
-// reported, not hang the shutdown forever.
+// reported BY NAME, not hang the shutdown forever.
 func TestWorkerGroupDrainReportsTimeout(t *testing.T) {
 	g := &workerGroup{}
 	release := make(chan struct{})
 	g.start("stuck-worker", func() { <-release })
 
-	if g.drain(100 * time.Millisecond) {
+	stuck := g.drain(100 * time.Millisecond)
+	if len(stuck) == 0 {
 		t.Fatal("drain claimed success while a worker was still running")
 	}
+	if stuck[0] != "stuck-worker" {
+		t.Fatalf("drain reported %v, want the stuck worker named", stuck)
+	}
 	close(release)
-	if !g.drain(5 * time.Second) {
-		t.Fatal("drain never completed after the worker returned")
+	if again := g.drain(5 * time.Second); len(again) > 0 {
+		t.Fatalf("drain never completed after the worker returned: %v", again)
 	}
 }
 
@@ -102,8 +106,8 @@ func TestWorkerGroupDrainReportsTimeout(t *testing.T) {
 func TestWorkerGroupSurvivesPanickingWorker(t *testing.T) {
 	g := &workerGroup{}
 	g.start("panicking-worker", func() { panic(errors.New("worker exploded")) })
-	if !g.drain(5 * time.Second) {
-		t.Fatal("a panicking worker left the drain group blocked")
+	if stuck := g.drain(5 * time.Second); len(stuck) > 0 {
+		t.Fatalf("a panicking worker left the drain group blocked: %v", stuck)
 	}
 }
 

@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"testing"
 )
@@ -23,7 +24,7 @@ func TestGate1ProposalRequiresParticipatingEvidence(t *testing.T) {
 	// does not interrogate that family; proposing it must be refused.
 	_, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
 		[]string{"wireless_onboarding_dhcp_failure"}, confirmedTier)
-	if err != errWActEvidence {
+	if !errors.Is(err, errWActEvidence) {
 		t.Fatalf("want gate-1 refusal, got %v", err)
 	}
 	if _, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
@@ -37,7 +38,7 @@ func TestGate2AllowlistDefaultsEmpty(t *testing.T) {
 	st := gateStore()
 	_, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
 		rfKinds, confirmedTier)
-	if err != errWActNotAllowed {
+	if !errors.Is(err, errWActNotAllowed) {
 		t.Fatalf("empty allowlist must refuse EVERY kind, got %v", err)
 	}
 }
@@ -47,7 +48,7 @@ func TestGate2VerdictMustBeConfirmed(t *testing.T) {
 	st := gateStore()
 	for _, tier := range []string{"suspected", "undetermined", ""} {
 		if _, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
-			rfKinds, tier); err != errWActNotConfirmed {
+			rfKinds, tier); !errors.Is(err, errWActNotConfirmed) {
 			t.Fatalf("tier %q must refuse, got %v", tier, err)
 		}
 	}
@@ -59,13 +60,13 @@ func TestGate2BlastRadiusOneTypedTarget(t *testing.T) {
 	cases := []string{"", "sw1:Gi1/0/1", "ap-a,ap-b", "wcl-c1"}
 	for _, target := range cases {
 		if _, err := st.propose("t1", "op", WirelessActionRRMChannel, target, "c1",
-			rfKinds, confirmedTier); err != errWActBlastRadius {
+			rfKinds, confirmedTier); !errors.Is(err, errWActBlastRadius) {
 			t.Fatalf("target %q must refuse on blast radius, got %v", target, err)
 		}
 	}
 	// The deauth action targets a CLIENT, never an AP.
 	if _, err := st.propose("t1", "op", WirelessActionClientDeauth, "ap-abc", "c1",
-		[]string{"wireless_roam_storm"}, confirmedTier); err != errWActBlastRadius {
+		[]string{"wireless_roam_storm"}, confirmedTier); !errors.Is(err, errWActBlastRadius) {
 		t.Fatalf("client action on an AP target must refuse, got %v", err)
 	}
 }
@@ -79,7 +80,7 @@ func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Executing an unapproved action refuses (gate 3).
-	if _, err := st.execute("t1", a.ID); err != errWActNotApproved {
+	if _, err := st.execute("t1", a.ID); !errors.Is(err, errWActNotApproved) {
 		t.Fatalf("unapproved execute must refuse, got %v", err)
 	}
 	if _, err := st.approve("t1", a.ID, "admin"); err != nil {
@@ -87,7 +88,7 @@ func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
 	}
 	// v1 has NO executor: execution fails CLOSED and records FAILED (gate 4).
 	got, err := st.execute("t1", a.ID)
-	if err != errWActNoExecutor {
+	if !errors.Is(err, errWActNoExecutor) {
 		t.Fatalf("no-executor execute must refuse, got %v", err)
 	}
 	if got.State != wactFailed || got.Error == "" {
@@ -99,7 +100,7 @@ func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
 	if _, err := st.reject("t1", b.ID, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.approve("t1", b.ID, "admin"); err != errWActWrongState {
+	if _, err := st.approve("t1", b.ID, "admin"); !errors.Is(err, errWActWrongState) {
 		t.Fatalf("approving a rejected action must refuse, got %v", err)
 	}
 }
@@ -114,10 +115,10 @@ func TestActionsTenantScoped(t *testing.T) {
 	if got := st.list("tB", false); len(got) != 0 {
 		t.Fatalf("cross-tenant list leaked: %+v", got)
 	}
-	if _, err := st.approve("tB", a.ID, "admin"); err != errNotFound {
+	if _, err := st.approve("tB", a.ID, "admin"); !errors.Is(err, errNotFound) {
 		t.Fatalf("cross-tenant approve must be notFound, got %v", err)
 	}
-	if _, err := st.execute("tB", a.ID); err != errNotFound {
+	if _, err := st.execute("tB", a.ID); !errors.Is(err, errNotFound) {
 		t.Fatalf("cross-tenant execute must be notFound, got %v", err)
 	}
 	if got := st.list("tA", false); len(got) != 1 {

@@ -52,7 +52,11 @@ func TestWLANControllerScopedSSIDNot(t *testing.T) {
 	if w1 == w2 {
 		t.Fatal("WLANID must be controller-scoped")
 	}
-	if SSIDID("t1", "corp") != SSIDID("t1", "corp") {
+	// Bound to variables so the comparison is not two identical expressions
+	// (staticcheck SA4000) — the point is that two SEPARATE calls with the same
+	// inputs agree, which is what determinism means.
+	s1, s2 := SSIDID("t1", "corp"), SSIDID("t1", "corp")
+	if s1 != s2 {
 		t.Fatal("SSIDID must be stable")
 	}
 }

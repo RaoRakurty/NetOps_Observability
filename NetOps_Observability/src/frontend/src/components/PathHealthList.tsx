@@ -11,6 +11,10 @@ const STATE_META: Record<string, { label: string; color: string }> = {
   watch: { label: "Watch", color: "#D97706" },
   degraded: { label: "Degraded", color: "#EA580C" },
   severe: { label: "Severe", color: "#F43F5E" },
+  // Nothing could be measured for this path in the window. NOT a band on the
+  // same scale — grey, never green, because "we could not ask" must never read
+  // as "we asked and it was fine".
+  unknown: { label: "Unknown", color: "#64748B" },
 };
 const CONF_LABEL: Record<string, string> = {
   low: "Low", medium_low: "Medium-low", medium: "Medium", high: "High",
@@ -25,7 +29,10 @@ const FAULT_LABEL: Record<string, string> = {
 };
 
 function PathHealthCard({ p }: { p: PathHealthItem }) {
-  const st = STATE_META[p.health_state] ?? STATE_META.healthy;
+  // Fall back to UNKNOWN, never healthy: an unrecognised state is a state we
+  // do not understand, and defaulting it to green is how a blind lane renders
+  // as a clean bill of health.
+  const st = STATE_META[p.health_state] ?? STATE_META.unknown;
   const badge: React.CSSProperties = {
     fontSize: 11, fontWeight: 800, letterSpacing: 0.3, padding: "1px 7px", borderRadius: 4,
     color: "#fff", background: st.color, whiteSpace: "nowrap",
