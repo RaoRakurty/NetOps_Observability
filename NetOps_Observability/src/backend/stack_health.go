@@ -209,7 +209,7 @@ func (s *server) handleStackHealth(w http.ResponseWriter, r *http.Request) {
 	// Appliance self-health guard state (disk watermark + search-store read-only
 	// blocks + last heal action) — a heal is an event the operator must SEE.
 	if s.selfHeal != nil {
-		out["self_heal"] = s.selfHeal.snapshot()
+		out["self_heal"] = s.selfHeal.CurrentSnapshot()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

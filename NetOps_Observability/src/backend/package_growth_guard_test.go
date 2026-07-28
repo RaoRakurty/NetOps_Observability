@@ -199,6 +199,9 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  212  self_heal.go → internal/selfheal (the disk-pressure/
+//	                  read-only-block ingest healer; env + HTTP client + log
+//	                  sinks injected via Config; Run/CurrentSnapshot exported)
 //	2026-07-28  213  ticketing_worker.go → internal/ticketing/worker.go (the
 //	                  outbox worker: claim → resolve → dispatch with #103
 //	                  error classification, backoff+jitter, dead-letter,
@@ -249,7 +252,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 213
+const rootPackageCeiling = 212
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

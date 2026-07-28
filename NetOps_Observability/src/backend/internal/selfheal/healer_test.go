@@ -1,4 +1,4 @@
-package main
+package selfheal
 
 // self_heal_test.go — the guard's two pure decision points. The heal rule is
 // safety-critical in BOTH directions: failing to heal leaves ingest silently
@@ -90,26 +90,19 @@ func TestSelfHealerHealsBlockedIndices(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := &selfHealer{
-		osURL:    srv.URL,
-		diskPath: "/test",
-		clearPct: 90,
-		enabled:  true,
-		interval: 10 * time.Millisecond,
-		// Inject a disk reading below the watermark rather than measuring the real
-		// host filesystem. The old test used t.TempDir() and so passed or failed on
-		// whatever the host's /tmp happened to be — it failed at 91% real usage,
-		// which is a genuine disk problem, not a code fault. The heal DECISION is
-		// what this test is about, so the disk input must be deterministic.
-		diskPctFn: func(string) int { return 40 },
-	}
+	h := NewHealer(nil, Config{OSURL: srv.URL, DiskPath: "/test", ClearPct: 90, Enabled: true})
+	h.interval = 10 * time.Millisecond
+	// Inject a disk reading below the watermark rather than measuring the real
+	// host filesystem (the heal DECISION is what this test is about, so the
+	// disk input must be deterministic).
+	h.diskPctFn = func(string) int { return 40 }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go h.run(ctx)
+	go h.Run(ctx)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := h.snapshot(); s.LastHealResult == "healed" {
+		if s := h.CurrentSnapshot(); s.LastHealResult == "healed" {
 			if s.LastHealCount != 1 {
 				t.Fatalf("healed count = %d, want 1", s.LastHealCount)
 			}
@@ -122,7 +115,7 @@ func TestSelfHealerHealsBlockedIndices(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("healer never healed; snapshot: %+v", h.snapshot())
+	t.Fatalf("healer never healed; snapshot: %+v", h.CurrentSnapshot())
 }
 
 // SELF_HEAL=false keeps watching but never acts.
@@ -136,19 +129,20 @@ func TestSelfHealerDisabledOnlyWatches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := &selfHealer{osURL: srv.URL, diskPath: t.TempDir(), clearPct: 90, enabled: false, interval: 10 * time.Millisecond}
+	h := NewHealer(nil, Config{OSURL: srv.URL, DiskPath: t.TempDir(), ClearPct: 90, Enabled: false})
+	h.interval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go h.run(ctx)
+	go h.Run(ctx)
 
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := h.snapshot(); s.BlockedIndices == 1 { // it SAW the block
+		if s := h.CurrentSnapshot(); s.BlockedIndices == 1 { // it SAW the block
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if s := h.snapshot(); s.BlockedIndices != 1 {
+	if s := h.CurrentSnapshot(); s.BlockedIndices != 1 {
 		t.Fatalf("disabled healer must still WATCH; snapshot: %+v", s)
 	}
 	if clearCalls != 0 {

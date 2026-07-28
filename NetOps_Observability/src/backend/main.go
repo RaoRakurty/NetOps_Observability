@@ -26,6 +26,7 @@ import (
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/selfheal"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/tenant"
@@ -72,7 +73,7 @@ type server struct {
 	alertEpisodes    *alertEpisodeStore
 	userRules        *userRulesStore
 	notifier         *notify.Dispatcher
-	selfHeal         *selfHealer
+	selfHeal         *selfheal.Healer
 	users            usersRepo
 	roles            *roleStore
 	tenants          tenantRepo
@@ -1029,6 +1030,24 @@ func newAIFeedbackStore() ai.FeedbackStore {
 	return ai.NewMemFeedbackStore()
 }
 
+// newSelfHealer wires the ingest self-healer onto env config + the platform
+// mTLS-aware HTTP client and structured logs.
+func newSelfHealer(notifier *notify.Dispatcher) *selfheal.Healer {
+	clearPct := 90
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SELF_HEAL_CLEAR_PCT"))); err == nil && v > 0 && v < 100 {
+		clearPct = v
+	}
+	return selfheal.NewHealer(notifier, selfheal.Config{
+		OSURL:    envOr("OPENSEARCH_URL", "http://opensearch:9200"),
+		DiskPath: envOr("SELF_HEAL_DISK_PATH", "/data"),
+		ClearPct: clearPct,
+		Enabled:  strings.ToLower(strings.TrimSpace(os.Getenv("SELF_HEAL"))) != "false",
+		HTTP:     backendHTTPClient,
+		Infof:    logInfo,
+		Errorf:   logError,
+	})
+}
+
 func main() {
 	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
 	// measurement collectors (STAMP / traceroute) — the single component that
@@ -1090,7 +1109,7 @@ func main() {
 	srv.startCloudInventory(ctx)
 	// Appliance self-health guard: watches disk + OpenSearch read-only blocks,
 	// heals ingest after disk pressure, pages via the platform lane (self_heal.go).
-	workers.start("self-heal", func() { srv.selfHeal.run(ctx) })
+	workers.start("self-heal", func() { srv.selfHeal.Run(ctx) })
 	// Service Path Graph ingest (contract v1): the prober's traceroutes → immutable
 	// PathObservations + ordered PathHops, each hop resolved through the §3 ranked
 	// resolver. Opt-in (FEATURE_PATH_GRAPH=true), dormant by default.

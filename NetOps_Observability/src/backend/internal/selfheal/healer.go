@@ -1,4 +1,4 @@
-package main
+package selfheal
 
 // self_heal.go — appliance self-health guard (customer-grade, in-product).
 //
@@ -33,7 +33,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +43,7 @@ import (
 	"netops/backend/notify"
 )
 
-type selfHealSnapshot struct {
+type Snapshot struct {
 	Enabled        bool     `json:"enabled"`
 	DiskPct        int      `json:"disk_pct"` // -1 = not measurable
 	DiskPath       string   `json:"disk_path"`
@@ -56,7 +55,8 @@ type selfHealSnapshot struct {
 	LastHealResult string   `json:"last_heal_result,omitempty"` // healed | failed
 }
 
-type selfHealer struct {
+type Healer struct {
+	cfg      Config
 	notifier *notify.Dispatcher
 	osURL    string
 	diskPath string
@@ -73,29 +73,49 @@ type selfHealer struct {
 	diskPctFn func(string) int
 
 	mu    sync.Mutex
-	state selfHealSnapshot
+	state Snapshot
 }
 
 // measureDisk returns the disk usage percent, via the injected function when a
 // test set one, else the real filesystem measurement.
-func (h *selfHealer) measureDisk() int {
+func (h *Healer) measureDisk() int {
 	if h.diskPctFn != nil {
 		return h.diskPctFn(h.diskPath)
 	}
 	return diskUsedPct(h.diskPath)
 }
 
-func newSelfHealer(notifier *notify.Dispatcher) *selfHealer {
-	clearPct := 90
-	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("SELF_HEAL_CLEAR_PCT"))); err == nil && v > 0 && v < 100 {
-		clearPct = v
+// Config carries the healer's knobs (env reads live in the integrator).
+type Config struct {
+	OSURL    string // OpenSearch base URL
+	DiskPath string // filesystem to measure
+	ClearPct int    // heal only below this used%% (hysteresis)
+	Enabled  bool
+	HTTP     func(timeout time.Duration) *http.Client // platform mTLS-aware client
+	Infof    func(component, msg string, fields map[string]any)
+	Errorf   func(component, msg string, fields map[string]any)
+}
+
+func NewHealer(notifier *notify.Dispatcher, cfg Config) *Healer {
+	if cfg.ClearPct <= 0 || cfg.ClearPct >= 100 {
+		cfg.ClearPct = 90
 	}
-	return &selfHealer{
+	if cfg.HTTP == nil {
+		cfg.HTTP = func(timeout time.Duration) *http.Client { return &http.Client{Timeout: timeout} }
+	}
+	if cfg.Infof == nil {
+		cfg.Infof = func(string, string, map[string]any) {}
+	}
+	if cfg.Errorf == nil {
+		cfg.Errorf = func(string, string, map[string]any) {}
+	}
+	return &Healer{
 		notifier: notifier,
-		osURL:    strings.TrimRight(envOr("OPENSEARCH_URL", "http://opensearch:9200"), "/"),
-		diskPath: envOr("SELF_HEAL_DISK_PATH", "/data"),
-		clearPct: clearPct,
-		enabled:  strings.ToLower(strings.TrimSpace(os.Getenv("SELF_HEAL"))) != "false",
+		cfg:      cfg,
+		osURL:    strings.TrimRight(cfg.OSURL, "/"),
+		diskPath: cfg.DiskPath,
+		clearPct: cfg.ClearPct,
+		enabled:  cfg.Enabled,
 		interval: time.Minute,
 	}
 }
@@ -124,13 +144,13 @@ func shouldHeal(diskPct, clearPct, blocked int) bool {
 }
 
 // osBlockedIndices lists indices carrying read_only_allow_delete=true.
-func (h *selfHealer) osBlockedIndices(ctx context.Context) ([]string, error) {
+func (h *Healer) osBlockedIndices(ctx context.Context) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		h.osURL+"/_all/_settings/index.blocks.read_only_allow_delete", nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := backendHTTPClient(8 * time.Second).Do(req)
+	resp, err := h.cfg.HTTP(8 * time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -167,14 +187,14 @@ func parseBlockedIndices(body []byte) ([]string, error) {
 	return out, nil
 }
 
-func (h *selfHealer) clearBlocks(ctx context.Context) error {
+func (h *Healer) clearBlocks(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, h.osURL+"/_all/_settings",
 		strings.NewReader(`{"index.blocks.read_only_allow_delete": null}`))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := backendHTTPClient(15 * time.Second).Do(req)
+	resp, err := h.cfg.HTTP(15 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}
@@ -188,7 +208,7 @@ func (h *selfHealer) clearBlocks(ctx context.Context) error {
 // alert pages the operator through the platform self-health lane. layer=stack
 // is the typed marker notify.PlatformScopeFilter allowlists onto the global
 // channels — and keeps this OFF every tenant lane (it is platform plumbing).
-func (h *selfHealer) alert(severity, summary, detail string) {
+func (h *Healer) alert(severity, summary, detail string) {
 	if h.notifier == nil {
 		return
 	}
@@ -203,7 +223,8 @@ func (h *selfHealer) alert(severity, summary, detail string) {
 	})
 }
 
-func (h *selfHealer) snapshot() selfHealSnapshot {
+// CurrentSnapshot reports the last cycle for /api/stack/health.
+func (h *Healer) CurrentSnapshot() Snapshot {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.state
@@ -212,7 +233,8 @@ func (h *selfHealer) snapshot() selfHealSnapshot {
 // run is the 1-minute guard loop. Healing fires at most once per episode: the
 // action itself is the edge (blocks exist → cleared); a failed heal re-tries
 // next tick but only re-alerts when the failure is new.
-func (h *selfHealer) run(ctx context.Context) {
+// Run is the healer loop (integrator worker entrypoint).
+func (h *Healer) Run(ctx context.Context) {
 	lastFailAlert := time.Time{}
 	t := time.NewTicker(h.interval)
 	defer t.Stop()
@@ -248,13 +270,13 @@ func (h *selfHealer) run(ctx context.Context) {
 			}
 			h.mu.Unlock()
 			if healErr == nil {
-				logInfo("self_heal", "cleared read-only blocks", map[string]any{"indices": len(blocked), "disk_pct": diskPct})
+				h.cfg.Infof("self_heal", "cleared read-only blocks", map[string]any{"indices": len(blocked), "disk_pct": diskPct})
 				h.alert("warning",
 					fmt.Sprintf("Ingest self-healed: cleared read-only blocks on %d indices", len(blocked)),
 					fmt.Sprintf("The search store had flipped %d indices read-only during disk pressure; disk is back at %d%% so the platform cleared the blocks and log ingestion has resumed. Investigate what filled the disk.", len(blocked), diskPct))
 			} else if time.Since(lastFailAlert) > time.Hour {
 				lastFailAlert = time.Now()
-				logError("self_heal", "unblock failed", map[string]any{"error": healErr.Error()})
+				h.cfg.Errorf("self_heal", "unblock failed", map[string]any{"error": healErr.Error()})
 				h.alert("critical",
 					fmt.Sprintf("Ingest self-heal FAILED: %d indices remain read-only", len(blocked)),
 					"The search store has read-only index blocks and the automatic clear failed — log ingestion is dead until cleared. Error: "+healErr.Error())
