@@ -199,6 +199,10 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  214  appid_fusion_store.go split: the observation/identity
+//	                  builders → appid/fusion_store.go behind the CHWorker
+//	                  seam; the worker-scope CH plumbing (chWorkerExec/Query,
+//	                  shared by 3 other workers) STAYED; count unchanged
 //	2026-07-28  214  ai_feedback_store.go → ai/feedback_store.go (copilot
 //	                  answer feedback: mem + FORCE-RLS pg; FeedbackDB seam;
 //	                  selector stayed in main.go; contract tests moved)

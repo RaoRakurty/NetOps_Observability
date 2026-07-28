@@ -101,7 +101,12 @@ type fusionWorker struct {
 func newFusionWorker(src FusionSource) *fusionWorker {
 	return &fusionWorker{
 		reg: adapter.New(), source: src,
-		persistObs: insertObservations, persistID: insertIdentities,
+		persistObs: func(ctx context.Context, obs []appid.ApplicationObservation) error {
+			return appid.InsertObservations(ctx, chWorker(), obs)
+		},
+		persistID: func(ctx context.Context, ids []appid.FusedIdentity) error {
+			return appid.InsertIdentities(ctx, chWorker(), ids)
+		},
 		emitID: emitIdentities,
 		window: 10 * time.Minute, catVer: 1, metrics: newFusionMetrics(),
 	}

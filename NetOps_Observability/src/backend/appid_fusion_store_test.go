@@ -27,7 +27,7 @@ func TestInsertObservationsAndIdentities(t *testing.T) {
 		TenantID: "acme", ObservationID: "o1", Source: appid.SrcNGFWAppID,
 		VendorAppName: "Microsoft Teams", DstIP: "1.2.3.4", DstPort: 443, EventTime: time.Unix(0, 0).UTC(),
 	}}
-	if err := insertObservations(ctx, obs); err != nil {
+	if err := appid.InsertObservations(ctx, chWorker(), obs); err != nil {
 		t.Fatal(err)
 	}
 	if len(bodies) != 1 || !strings.Contains(bodies[0], "INSERT INTO netops.app_observations FORMAT JSONEachRow") {
@@ -42,7 +42,7 @@ func TestInsertObservationsAndIdentities(t *testing.T) {
 		EvidenceScore: 100, Explanations: []appid.ExplanationCode{appid.ExSessionUpstream},
 		FusedAt: time.Unix(0, 0).UTC(), Verdict: appid.Verdict{App: "Microsoft Teams", Tier: appid.Confirmed, Confidence: 1},
 	}}
-	if err := insertIdentities(ctx, ids); err != nil {
+	if err := appid.InsertIdentities(ctx, chWorker(), ids); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(bodies[1], "netops.app_identities") || !strings.Contains(bodies[1], `"app":"Microsoft Teams"`) {
@@ -53,7 +53,7 @@ func TestInsertObservationsAndIdentities(t *testing.T) {
 	}
 
 	// empty batch = no POST.
-	if err := insertObservations(ctx, nil); err != nil {
+	if err := appid.InsertObservations(ctx, chWorker(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(bodies) != 2 {
