@@ -1,12 +1,12 @@
 # `package main` decomposition — the executable plan
 
-**Status:** fifteen domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** sixteen domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
 `internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
-`internal/token`, 2026-07-28).
-**257** non-test files remain in `package main`. This document is the ordered sequence for the
+`internal/token` + `internal/session`, 2026-07-28).
+**256** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -108,7 +108,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 16 | `internal/segclass` | 1 | 697 | **0** | **Done** (2026-07-27). The Go mirror of the Python segment/device classifier, with its go:embed'd provider-CIDR snapshot (`segmentdata/` moved with it; `scripts/refresh_provider_ranges.py` re-pointed and dry-run-verified). Every mapped seam (`tierRank`, `Region`, `Service`, `Confidence`) was a field-name false positive; only `orDefault` was real (duplicated). ⚠️ **Finding for the owner: the classifier has ZERO production consumers in Go** — only its own test references it. The file says it stamps segment/role at ingest; that wiring either never landed or lives Python-side only. Worth deciding whether the ingest-side stamping is still planned or the mirror should be retired. |
 | ✅ 17 | `internal/seam` | 1 | 640 | ~5 | **Done** (2026-07-27). The canonical seam inventory (five FINAL types, lifecycle state machine, validation, deterministic ids) + its pg store, with `seam.DB` INJECTED via the portintel adapter idiom — the store moved WITH its SQL, main kept backend selection, handlers and the bootstrap suggestion rules. Watch for handler locals named `seam` shadowing the package (two renamed). Pure lifecycle/validation/id tests moved; rule tests stayed. |
 | ✅ — | `internal/token` (the `jwt` security change) | 1 | ~130 | 94 (via alias) | **Done** (2026-07-28) — see the formerly-deferred item below for the full record. |
-| 18+ | `session`, `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 18 | `internal/session` | 2 | ~720 | ~6 | **Done** (2026-07-28), first of the ungated auth tier. `session_store.go` + `refresh.go` (both 0-handler/0-authref by the screen) moved whole; kv persistence + error logging INJECTED (`session.KV`, `session.Errorf` — the vault idiom, wired in `session_wiring.go`); env reads (`SESSIONS_FILE`, `REFRESH_FILE`, `refreshTokenTTL`) stayed in main. `randHex` re-homed to `audit.go` for its 14 root users (package keeps its own copy per the no-utils rule). Test split: the CONC-HIGH-1 concurrency suite, refresh rotation/reuse contract and the store lifecycle unit test moved in — losing the process-global `withBackend`/`withFailingKV` swaps for real injection; HTTP-boundary suites (flow, logout/F-70, account-policy) stayed and use two documented test hooks (`RewindForTest`, `SetKVForTest`) where they used to poke unexported fields. `Status*`/`MaxSessionsPerUser` exported; `TTL()` accessor added for the token-policy live-update assertion. |
+| 18+ | `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

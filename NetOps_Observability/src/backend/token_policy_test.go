@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/session"
 	"os"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestTokenPolicyStoreClampPersistAndApply(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	rf, err := newRefreshStore(dir+"/r.json", time.Hour)
+	rf, err := session.NewRefreshStore(dir+"/r.json", time.Hour, kvSessionKV{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +96,8 @@ func TestTokenPolicyStoreClampPersistAndApply(t *testing.T) {
 	if out.RefreshTTLSeconds != int(refreshTTLMax.Seconds()) {
 		t.Fatalf("refresh not clamped to max: got %d want %d", out.RefreshTTLSeconds, int(refreshTTLMax.Seconds()))
 	}
-	if rf.ttl != refreshTTLMax {
-		t.Fatalf("refresh store ttl not updated live: %v", rf.ttl)
+	if rf.TTL() != refreshTTLMax {
+		t.Fatalf("refresh store ttl not updated live: %v", rf.TTL())
 	}
 
 	if _, err := st.set(tokenPolicyConfig{AccessTTLSeconds: 1800, RefreshTTLSeconds: 14 * 86400}); err != nil {

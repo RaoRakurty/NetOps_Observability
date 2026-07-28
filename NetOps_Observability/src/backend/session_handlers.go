@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"netops/backend/internal/session"
 )
 
 // session_handlers.go — admin visibility + control over live sessions (Phase 3):
@@ -13,7 +15,7 @@ import (
 // sessionView is the admin-facing projection of a Session. A session holds no
 // secrets, so this just enriches it with the user's display name + tenant.
 type sessionView struct {
-	Session
+	session.Session
 	DisplayName string `json:"display_name,omitempty"`
 	TenantID    string `json:"tenant_id,omitempty"`
 }

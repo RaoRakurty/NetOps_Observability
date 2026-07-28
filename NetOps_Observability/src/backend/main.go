@@ -18,6 +18,7 @@ import (
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/session"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
@@ -63,9 +64,9 @@ type server struct {
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)
-	sessions         *sessionStore  // server-side session lifecycle (idle/absolute/revocation)
+	sessions         *session.Store // server-side session lifecycle (idle/absolute/revocation)
 	apiKeys          *apiKeyStore
-	refresh          *refreshStore
+	refresh          *session.RefreshStore
 	snmpCreds        *snmpCredStore
 	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
 	credSentinel     *credSentinel      // self-healing credential resolution loop
@@ -449,7 +450,8 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("security settings store: %v", err)
 	}
-	sessions, err := newSessionStore(envOr("SESSIONS_FILE", "/data/sessions.json"))
+	sessionKV, sessionErrf := sessionDeps()
+	sessions, err := session.NewStore(envOr("SESSIONS_FILE", "/data/sessions.json"), sessionKV, sessionErrf)
 	if err != nil {
 		log.Fatalf("session store: %v", err)
 	}
@@ -457,7 +459,7 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
 	}
-	refresh, err := newRefreshStore(envOr("REFRESH_FILE", "/data/refresh_tokens.json"), refreshTokenTTL())
+	refresh, err := session.NewRefreshStore(envOr("REFRESH_FILE", "/data/refresh_tokens.json"), refreshTokenTTL(), sessionKV)
 	if err != nil {
 		log.Fatalf("refresh store: %v", err)
 	}

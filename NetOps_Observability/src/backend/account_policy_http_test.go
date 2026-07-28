@@ -11,6 +11,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"netops/backend/internal/session"
 	"strings"
 	"testing"
 	"time"
@@ -51,10 +52,10 @@ func setScopeSettings(t *testing.T, s *server, scope string, mod func(*SecurityS
 // activeSessions filters by status: ListForUser deliberately returns revoked
 // rows too (the admin UI shows them), so counting it directly would report a
 // revocation as a no-op.
-func activeSessions(s *server, userID string) []Session {
-	var out []Session
+func activeSessions(s *server, userID string) []session.Session {
+	var out []session.Session
 	for _, x := range s.sessions.ListForUser(userID) {
-		if x.Status == sessionActive {
+		if x.Status == session.StatusActive {
 			out = append(out, x)
 		}
 	}

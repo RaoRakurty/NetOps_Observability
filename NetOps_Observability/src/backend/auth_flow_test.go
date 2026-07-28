@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/session"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	ks, err := newAPIKeyStore(dir + "/apikeys.json")
 	must(err)
-	rf, err := newRefreshStore(dir+"/refresh.json", time.Hour)
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, kvSessionKV{})
 	must(err)
 	sv, err := newSavedStore(dir + "/saved.json")
 	must(err)
@@ -54,7 +55,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	ss, err := newSecuritySettingsStore(dir + "/security_settings.json")
 	must(err)
-	sessStore, err := newSessionStore(dir + "/sessions.json")
+	sessStore, err := session.NewStore(dir+"/sessions.json", kvSessionKV{}, func(string, string, map[string]any) {})
 	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,

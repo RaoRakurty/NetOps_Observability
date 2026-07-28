@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/session"
 	"netops/backend/internal/token"
 	"netops/backend/policy"
 )
@@ -396,7 +397,7 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if sid, ok := s.refresh.SessionOf(req.RefreshToken); ok && sid != "" && s.sessions != nil {
 		sess, verr := s.sessions.Validate(sid, true, true)
 		if verr != nil {
-			code := sessionErrorCode(verr)
+			code := session.ErrorCode(verr)
 			if code == "SESSION_IDLE_TIMEOUT" || code == "SESSION_ABSOLUTE_TIMEOUT" {
 				ev := "SESSION_IDLE_EXPIRED"
 				if code == "SESSION_ABSOLUTE_TIMEOUT" {

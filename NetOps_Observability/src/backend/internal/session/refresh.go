@@ -1,4 +1,4 @@
-package main
+package session
 
 // refresh.go — rotating refresh tokens with reuse detection.
 //
@@ -34,21 +34,25 @@ type refreshToken struct {
 	Revoked   bool      `json:"revoked"` // explicitly killed
 }
 
-type refreshStore struct {
+type RefreshStore struct {
 	mu   sync.Mutex
 	path string
+	kv   KV
 	ttl  time.Duration
 	toks map[string]refreshToken // keyed by ID
 }
 
-func newRefreshStore(path string, ttl time.Duration) (*refreshStore, error) {
+func NewRefreshStore(path string, ttl time.Duration, kv KV) (*RefreshStore, error) {
 	if path == "" {
 		path = "/data/refresh_tokens.json"
 	}
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
-	s := &refreshStore{path: path, ttl: ttl, toks: make(map[string]refreshToken)}
+	if kv == nil {
+		return nil, errors.New("session.NewRefreshStore: kv is required")
+	}
+	s := &RefreshStore{path: path, kv: kv, ttl: ttl, toks: make(map[string]refreshToken)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -61,8 +65,8 @@ func randHex(nBytes int) string {
 	return hex.EncodeToString(b)
 }
 
-func (s *refreshStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *RefreshStore) load() error {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -76,7 +80,7 @@ func (s *refreshStore) load() error {
 	return nil
 }
 
-func (s *refreshStore) flushLocked() error {
+func (s *RefreshStore) flushLocked() error {
 	list := make([]refreshToken, 0, len(s.toks))
 	for _, t := range s.toks {
 		list = append(list, t)
@@ -86,11 +90,11 @@ func (s *refreshStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
 // gcLocked drops tokens that expired more than a day ago, keeping the file small.
-func (s *refreshStore) gcLocked(now time.Time) {
+func (s *RefreshStore) gcLocked(now time.Time) {
 	for id, t := range s.toks {
 		if now.Sub(t.ExpiresAt) > 24*time.Hour {
 			delete(s.toks, id)
@@ -100,7 +104,7 @@ func (s *refreshStore) gcLocked(now time.Time) {
 
 // issueLocked mints a token in the given family (empty = new family), bound to
 // the given server-side session id (empty for legacy/federated logins).
-func (s *refreshStore) issueLocked(username, family, sessionID string) (string, error) {
+func (s *RefreshStore) issueLocked(username, family, sessionID string) (string, error) {
 	now := time.Now().UTC()
 	if family == "" {
 		family = randHex(8)
@@ -122,7 +126,7 @@ func (s *refreshStore) issueLocked(username, family, sessionID string) (string, 
 // SetTTL updates the refresh-token lifetime at runtime (token policy admin). It
 // affects tokens issued after the change; existing tokens keep their expiry. A
 // non-positive ttl is ignored.
-func (s *refreshStore) SetTTL(ttl time.Duration) {
+func (s *RefreshStore) SetTTL(ttl time.Duration) {
 	if ttl <= 0 {
 		return
 	}
@@ -131,15 +135,22 @@ func (s *refreshStore) SetTTL(ttl time.Duration) {
 	s.mu.Unlock()
 }
 
+// TTL returns the lifetime currently applied to newly issued tokens.
+func (s *RefreshStore) TTL() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ttl
+}
+
 // Issue creates a brand-new refresh token (and family) for a username, with no
 // server-side session (legacy / federated logins).
-func (s *refreshStore) Issue(username string) (string, error) {
+func (s *RefreshStore) Issue(username string) (string, error) {
 	return s.IssueForSession(username, "")
 }
 
 // IssueForSession creates a brand-new refresh token (and family) bound to a
 // server-side session id.
-func (s *refreshStore) IssueForSession(username, sessionID string) (string, error) {
+func (s *RefreshStore) IssueForSession(username, sessionID string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gcLocked(time.Now().UTC())
@@ -148,7 +159,7 @@ func (s *refreshStore) IssueForSession(username, sessionID string) (string, erro
 
 // SessionOf returns the session id a refresh token belongs to, without rotating
 // it (used by logout). ok=false if the token is unknown/malformed.
-func (s *refreshStore) SessionOf(secret string) (string, bool) {
+func (s *RefreshStore) SessionOf(secret string) (string, bool) {
 	id, ok := parseSecret(secret)
 	if !ok {
 		return "", false
@@ -169,7 +180,7 @@ func parseSecret(secret string) (string, bool) {
 	return secret[:i], true
 }
 
-func (s *refreshStore) revokeFamilyLocked(family string) {
+func (s *RefreshStore) revokeFamilyLocked(family string) {
 	for id, t := range s.toks {
 		if t.Family == family {
 			t.Revoked = true
@@ -181,7 +192,7 @@ func (s *refreshStore) revokeFamilyLocked(family string) {
 // Rotate validates a refresh token and swaps it for a fresh one (3-return form
 // kept for the store's own tests). On replay of an already-used/revoked token,
 // the whole family is revoked and an error returned.
-func (s *refreshStore) Rotate(secret string) (newSecret, username string, err error) {
+func (s *RefreshStore) Rotate(secret string) (newSecret, username string, err error) {
 	ns, u, _, e := s.RotateSession(secret)
 	return ns, u, e
 }
@@ -189,7 +200,7 @@ func (s *refreshStore) Rotate(secret string) (newSecret, username string, err er
 // RotateSession is Rotate plus the rotated token's server-side session id, so the
 // refresh handler can enforce the session lifecycle. The replacement token keeps
 // the same session id (and family) as the one it rotates away from.
-func (s *refreshStore) RotateSession(secret string) (newSecret, username, sessionID string, err error) {
+func (s *RefreshStore) RotateSession(secret string) (newSecret, username, sessionID string, err error) {
 	id, ok := parseSecret(secret)
 	if !ok {
 		return "", "", "", errors.New("malformed refresh token")
@@ -234,7 +245,7 @@ func (s *refreshStore) RotateSession(secret string) (newSecret, username, sessio
 // F-70: this returned nothing. A logout whose revoke never persisted — or
 // whose token was never recognised at all — was reported to the caller as
 // {"status":"ok"}, and the same token still minted a new access token.
-func (s *refreshStore) Revoke(secret string) (bool, error) {
+func (s *RefreshStore) Revoke(secret string) (bool, error) {
 	id, ok := parseSecret(secret)
 	if !ok {
 		return false, nil

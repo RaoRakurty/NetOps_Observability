@@ -1,4 +1,4 @@
-package main
+package session
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 
 // session_store_concurrency_test.go — CONC-HIGH-1.
 //
-// The defect: sessionStore used one plain Mutex and held it across the ENTIRE
+// The defect: Store used one plain Mutex and held it across the ENTIRE
 // durable write (marshal + os.WriteFile/os.Rename, or with STORE_BACKEND=postgres
 // a DELETE + N INSERTs bounded only by a 15 s context). IsActive — which withAuth
 // calls on EVERY authenticated request — took that same exclusive lock. So a
@@ -21,12 +21,10 @@ import (
 // Every happy-path session test stayed green through that defect, because none of
 // them ever had a write in flight while a read was attempted. These do.
 //
-// The backend is a process-wide var, so nothing in this file may run in parallel.
-
-// blockingKV is a kvBackend whose Save can be held open for as long as the test
-// wants — the fault-injection shape a "slow disk / stalled Postgres" needs, as
-// opposed to faultyKV (settings_persist_failure_test.go), which models a write
-// that FAILS rather than one that HANGS.
+// blockingKV implements KV with a Save that can be held open for as long as the
+// test wants — the fault-injection shape a "slow disk / stalled Postgres" needs,
+// as opposed to switchKV (below), which models a write that FAILS rather than
+// one that HANGS.
 type blockingKV struct {
 	mu      sync.Mutex
 	blobs   map[string][]byte
@@ -128,20 +126,63 @@ func (k *blockingKV) waitEntered(t *testing.T) {
 	}
 }
 
+// nopErrf is the error sink for tests that assert on returned errors directly.
+func nopErrf(string, string, map[string]any) {}
+
+// fileTestKV is a plain file backend for tests that reload from a real path.
+type fileTestKV struct{}
+
+func (fileTestKV) Load(key string) ([]byte, error)    { return os.ReadFile(key) }
+func (fileTestKV) Save(key string, data []byte) error { return os.WriteFile(key, data, 0o600) }
+
+// switchKV wraps a KV so a test can flip its Save into failure mid-test (the
+// injected replacement for the old process-global withFailingKV swap), counting
+// attempts so tests can prove the persist path was exercised.
+type switchKV struct {
+	inner KV
+	mu    sync.Mutex
+	fail  bool
+	tries int
+}
+
+func (k *switchKV) Load(key string) ([]byte, error) { return k.inner.Load(key) }
+
+func (k *switchKV) Save(key string, data []byte) error {
+	k.mu.Lock()
+	fail := k.fail
+	k.tries++
+	k.mu.Unlock()
+	if fail {
+		return errors.New("injected save failure")
+	}
+	return k.inner.Save(key, data)
+}
+
+func (k *switchKV) setFailing(v bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.fail = v
+}
+
+func (k *switchKV) attempts() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.tries
+}
+
 // newKVSessionStore builds a session store over the given backend.
-func newKVSessionStore(t *testing.T, b kvBackend) *sessionStore {
+func newKVSessionStore(t *testing.T, b KV) *Store {
 	t.Helper()
-	withBackend(t, b)
-	st, err := newSessionStore("kv://sessions")
+	st, err := NewStore("kv://sessions", b, nopErrf)
 	if err != nil {
-		t.Fatalf("newSessionStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	return st
 }
 
 // rewindSession backdates a session's timestamps to simulate elapsed time
 // (white-box, same package — server time only, no client clock involved).
-func rewindSession(st *sessionStore, id string, lastActivity, created time.Time) {
+func rewindSession(st *Store, id string, lastActivity, created time.Time) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	x := st.byID[id]
@@ -156,7 +197,7 @@ func rewindSession(st *sessionStore, id string, lastActivity, created time.Time)
 
 // storeSeq reads the mutation counter (white-box) — used to wait deterministically
 // for a set of in-memory mutations to have landed.
-func storeSeq(st *sessionStore) uint64 {
+func storeSeq(st *Store) uint64 {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	return st.seq
@@ -174,7 +215,7 @@ func decodeSessions(t *testing.T, b []byte) []Session {
 func countRevoked(list []Session) int {
 	n := 0
 	for _, x := range list {
-		if x.Status == sessionRevoked {
+		if x.Status == StatusRevoked {
 			n++
 		}
 	}
@@ -264,7 +305,7 @@ func TestIsActiveIsNotBlockedByASlowPersist(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	for _, x := range decodeSessions(t, blob) {
-		if x.ID == victim.ID && x.Status != sessionRevoked {
+		if x.ID == victim.ID && x.Status != StatusRevoked {
 			t.Errorf("Revoke returned nil but the persisted status is %q", x.Status)
 		}
 	}
@@ -431,9 +472,10 @@ func TestConcurrentPersistsCoalesce(t *testing.T) {
 // fire-and-forget. Create must additionally roll back.
 func TestSessionMutatorsStillReportPersistFailure(t *testing.T) {
 	dir := t.TempDir()
-	st, err := newSessionStore(dir + "/sessions.json")
+	f := &switchKV{inner: fileTestKV{}}
+	st, err := NewStore(dir+"/sessions.json", f, nopErrf)
 	if err != nil {
-		t.Fatalf("newSessionStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	live, _, err := st.Create("alice", "10.0.0.1", "ua", time.Hour, 12*time.Hour)
 	if err != nil {
@@ -444,7 +486,7 @@ func TestSessionMutatorsStillReportPersistFailure(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	f := withFailingKV(t)
+	f.setFailing(true)
 
 	// Create: reports the failure AND rolls the session back out of memory, so
 	// the process never serves a session the store does not have.
@@ -522,15 +564,15 @@ func TestSessionExpirySemanticsUnchanged(t *testing.T) {
 	// Idle: last activity beyond the window.
 	idle := mk("idle")
 	rewindSession(st, idle.ID, time.Now().UTC().Add(-31*time.Minute), time.Time{})
-	if _, err := st.Validate(idle.ID, true, true); !errors.Is(err, errSessionIdle) {
-		t.Errorf("idle session: %v, want errSessionIdle", err)
+	if _, err := st.Validate(idle.ID, true, true); !errors.Is(err, ErrIdle) {
+		t.Errorf("idle session: %v, want ErrIdle", err)
 	}
-	if sessionErrorCode(errSessionIdle) != "SESSION_IDLE_TIMEOUT" {
+	if ErrorCode(ErrIdle) != "SESSION_IDLE_TIMEOUT" {
 		t.Error("idle error code changed")
 	}
 	// The flip is sticky and now terminal.
-	if _, err := st.Validate(idle.ID, true, true); !errors.Is(err, errSessionIdle) {
-		t.Errorf("idle re-validate: %v, want errSessionIdle", err)
+	if _, err := st.Validate(idle.ID, true, true); !errors.Is(err, ErrIdle) {
+		t.Errorf("idle re-validate: %v, want ErrIdle", err)
 	}
 	if st.IsActive(idle.ID) {
 		t.Error("idle-expired session still reports active")
@@ -539,8 +581,8 @@ func TestSessionExpirySemanticsUnchanged(t *testing.T) {
 	// Absolute: created beyond the cap, and it wins over idle when both apply.
 	abs := mk("abs")
 	rewindSession(st, abs.ID, time.Now().UTC().Add(-31*time.Minute), time.Now().UTC().Add(-13*time.Hour))
-	if _, err := st.Validate(abs.ID, true, true); !errors.Is(err, errSessionAbsolute) {
-		t.Errorf("absolute session: %v, want errSessionAbsolute (absolute is checked first)", err)
+	if _, err := st.Validate(abs.ID, true, true); !errors.Is(err, ErrAbsolute) {
+		t.Errorf("absolute session: %v, want ErrAbsolute (absolute is checked first)", err)
 	}
 
 	// The enforce flags still gate each window independently.
@@ -549,24 +591,24 @@ func TestSessionExpirySemanticsUnchanged(t *testing.T) {
 	if _, err := st.Validate(off.ID, false, false); err != nil {
 		t.Errorf("both windows disabled: %v, want nil", err)
 	}
-	if _, err := st.Validate(off.ID, true, false); !errors.Is(err, errSessionIdle) {
-		t.Errorf("idle-only enforcement: %v, want errSessionIdle", err)
+	if _, err := st.Validate(off.ID, true, false); !errors.Is(err, ErrIdle) {
+		t.Errorf("idle-only enforcement: %v, want ErrIdle", err)
 	}
 
 	// Unknown and revoked ids keep their typed errors.
-	if _, err := st.Validate("nope", true, true); !errors.Is(err, errSessionNotFound) {
-		t.Errorf("unknown session: %v, want errSessionNotFound", err)
+	if _, err := st.Validate("nope", true, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown session: %v, want ErrNotFound", err)
 	}
 	rev := mk("rev")
 	if _, err := st.Revoke(rev.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := st.Validate(rev.ID, true, true); !errors.Is(err, errSessionRevoked) {
-		t.Errorf("revoked session: %v, want errSessionRevoked", err)
+	if _, err := st.Validate(rev.ID, true, true); !errors.Is(err, ErrRevoked) {
+		t.Errorf("revoked session: %v, want ErrRevoked", err)
 	}
 
 	// An expiry that DID persist survives a reload.
-	st2, err := newSessionStore("kv://sessions")
+	st2, err := NewStore("kv://sessions", kv, nopErrf)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -582,9 +624,10 @@ func TestSessionExpirySemanticsUnchanged(t *testing.T) {
 // nowhere else and therefore must be reported (F-70).
 func TestSessionExpiryIsBestEffortButNeverSilent(t *testing.T) {
 	dir := t.TempDir()
-	st, err := newSessionStore(dir + "/sessions.json")
+	f := &switchKV{inner: fileTestKV{}}
+	st, err := NewStore(dir+"/sessions.json", f, nopErrf)
 	if err != nil {
-		t.Fatalf("newSessionStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	sess, _, err := st.Create("alice", "10.0.0.1", "ua", 30*time.Minute, 12*time.Hour)
 	if err != nil {
@@ -597,10 +640,10 @@ func TestSessionExpiryIsBestEffortButNeverSilent(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	f := withFailingKV(t)
+	f.setFailing(true)
 	before := f.attempts()
-	if _, err := st.Validate(sess.ID, true, true); !errors.Is(err, errSessionIdle) {
-		t.Fatalf("Validate with a broken store: %v, want errSessionIdle", err)
+	if _, err := st.Validate(sess.ID, true, true); !errors.Is(err, ErrIdle) {
+		t.Fatalf("Validate with a broken store: %v, want ErrIdle", err)
 	}
 	if f.attempts() == before {
 		t.Fatal("expiry never attempted a save")
@@ -614,8 +657,7 @@ func TestSessionExpiryIsBestEffortButNeverSilent(t *testing.T) {
 	// The recomputation argument: reload from the last DURABLE state (the write
 	// never landed, so the session is active again there) and confirm the very
 	// next Validate reaches the identical verdict from the timestamps alone.
-	withBackend(t, fileKV{})
-	st2, err := newSessionStore(dir + "/sessions.json")
+	st2, err := NewStore(dir+"/sessions.json", fileTestKV{}, nopErrf)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -623,10 +665,10 @@ func TestSessionExpiryIsBestEffortButNeverSilent(t *testing.T) {
 	if !ok {
 		t.Fatal("session missing after reload")
 	}
-	if reloaded.Status != sessionActive {
+	if reloaded.Status != StatusActive {
 		t.Fatalf("precondition: the failed expiry write should NOT be on disk, got %q", reloaded.Status)
 	}
-	if _, err := st2.Validate(sess.ID, true, true); !errors.Is(err, errSessionIdle) {
-		t.Errorf("reloaded session: %v, want errSessionIdle — expiry must be recomputable", err)
+	if _, err := st2.Validate(sess.ID, true, true); !errors.Is(err, ErrIdle) {
+		t.Errorf("reloaded session: %v, want ErrIdle — expiry must be recomputable", err)
 	}
 }

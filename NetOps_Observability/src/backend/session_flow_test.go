@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+	"netops/backend/internal/session"
 	"testing"
 	"time"
 
@@ -32,19 +32,10 @@ func TestSessionPolicyPerRole(t *testing.T) {
 	}
 }
 
-// backdate mutates a session's timestamps to simulate the passage of time
-// (white-box: same package). Server time only — no client clock involved.
+// backdate mutates a session's timestamps to simulate the passage of time.
+// Server time only — no client clock involved.
 func backdate(s *server, sid string, lastActivity, created time.Time) {
-	s.sessions.mu.Lock()
-	defer s.sessions.mu.Unlock()
-	x := s.sessions.byID[sid]
-	if !lastActivity.IsZero() {
-		x.LastActivityAt = lastActivity
-	}
-	if !created.IsZero() {
-		x.CreatedAt = created
-	}
-	s.sessions.byID[sid] = x
+	s.sessions.RewindForTest(sid, lastActivity, created)
 }
 
 // Idle + absolute are enforced at the refresh boundary, with machine-readable codes.
@@ -75,7 +66,7 @@ func TestSessionIdleAndAbsoluteAtRefresh(t *testing.T) {
 	sess2 := s.sessions.ListForUser("admin")
 	var newID string
 	for _, x := range sess2 {
-		if x.Status == sessionActive {
+		if x.Status == session.StatusActive {
 			newID = x.ID
 			break
 		}
@@ -105,7 +96,7 @@ func TestSessionHappyRefresh(t *testing.T) {
 	}
 	// last_activity advanced.
 	for _, x := range s.sessions.ListForUser("admin") {
-		if x.Status == sessionActive && time.Since(x.LastActivityAt) > time.Minute {
+		if x.Status == session.StatusActive && time.Since(x.LastActivityAt) > time.Minute {
 			t.Errorf("refresh did not touch last_activity")
 		}
 	}
@@ -134,11 +125,11 @@ func TestSessionRevokeAllOnPasswordChange(t *testing.T) {
 // Concurrent sessions are capped per user; the oldest is evicted past the cap.
 func TestSessionMaxConcurrent(t *testing.T) {
 	srv, s := newTestServerState(t)
-	for i := 0; i < maxSessionsPerUser+2; i++ {
+	for i := 0; i < session.MaxSessionsPerUser+2; i++ {
 		login(t, srv, "admin", "Passw0rd!2345")
 	}
-	if n := countActive(s, "admin"); n != maxSessionsPerUser {
-		t.Errorf("active sessions = %d, want %d (cap)", n, maxSessionsPerUser)
+	if n := countActive(s, "admin"); n != session.MaxSessionsPerUser {
+		t.Errorf("active sessions = %d, want %d (cap)", n, session.MaxSessionsPerUser)
 	}
 }
 
@@ -179,76 +170,12 @@ func TestSessionAdminListAndRevoke(t *testing.T) {
 func countActive(s *server, user string) int {
 	n := 0
 	for _, x := range s.sessions.ListForUser(user) {
-		if x.Status == sessionActive {
+		if x.Status == session.StatusActive {
 			n++
 		}
 	}
 	return n
 }
 
-// Direct unit tests of the session store (no HTTP).
-func TestSessionStoreUnit(t *testing.T) {
-	ss, err := newSessionStore(t.TempDir() + "/s.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sess, ev, err := ss.Create("u", "1.2.3.4", "agent", 30*time.Minute, 12*time.Hour)
-	if err != nil || len(ev) != 0 {
-		t.Fatalf("create: %v evicted=%v", err, ev)
-	}
-	if _, err := ss.Validate(sess.ID, true, true); err != nil {
-		t.Fatalf("fresh session should validate: %v", err)
-	}
-	// Idle.
-	ss.byID[sess.ID] = withTimes(ss.byID[sess.ID], time.Now().Add(-31*time.Minute), time.Time{})
-	if _, err := ss.Validate(sess.ID, true, true); !errors.Is(err, errSessionIdle) {
-		t.Errorf("idle validate: %v, want errSessionIdle", err)
-	}
-	// Absolute (new session; backdate creation).
-	s2, _, _ := ss.Create("u2", "", "", 30*time.Minute, 12*time.Hour)
-	ss.byID[s2.ID] = withTimes(ss.byID[s2.ID], time.Now(), time.Now().Add(-13*time.Hour))
-	if _, err := ss.Validate(s2.ID, true, true); !errors.Is(err, errSessionAbsolute) {
-		t.Errorf("absolute validate: %v, want errSessionAbsolute", err)
-	}
-	// Revoke.
-	s3, _, _ := ss.Create("u3", "", "", time.Minute, time.Hour)
-	if _, err := ss.Revoke(s3.ID); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-	if _, err := ss.Validate(s3.ID, true, true); !errors.Is(err, errSessionRevoked) {
-		t.Errorf("revoked validate: %v, want errSessionRevoked", err)
-	}
-	// RevokeAllForUser.
-	ss.Create("multi", "", "", time.Minute, time.Hour)
-	ss.Create("multi", "", "", time.Minute, time.Hour)
-	n, err := ss.RevokeAllForUser("multi")
-	if err != nil {
-		t.Fatalf("RevokeAllForUser: %v", err)
-	}
-	if n != 2 {
-		t.Errorf("RevokeAllForUser = %d, want 2", n)
-	}
-	// Cap eviction.
-	for i := 0; i < maxSessionsPerUser+1; i++ {
-		ss.Create("capped", "", "", time.Minute, time.Hour)
-	}
-	active := 0
-	for _, x := range ss.ListForUser("capped") {
-		if x.Status == sessionActive {
-			active++
-		}
-	}
-	if active != maxSessionsPerUser {
-		t.Errorf("capped active = %d, want %d", active, maxSessionsPerUser)
-	}
-}
-
-func withTimes(x Session, lastActivity, created time.Time) Session {
-	if !lastActivity.IsZero() {
-		x.LastActivityAt = lastActivity
-	}
-	if !created.IsZero() {
-		x.CreatedAt = created
-	}
-	return x
-}
+// The store's direct lifecycle unit tests moved to internal/session with the
+// store (TestSessionStoreUnit); the HTTP-boundary assertions above stay here.

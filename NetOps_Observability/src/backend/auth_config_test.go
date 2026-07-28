@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/session"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 	must(err)
 	ts, err := newTenantStore(dir + "/tenants.json")
 	must(err)
-	rf, err := newRefreshStore(dir+"/refresh.json", time.Hour)
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, kvSessionKV{})
 	must(err)
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s := &server{

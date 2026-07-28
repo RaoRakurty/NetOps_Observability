@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,15 @@ import (
 	"sync"
 	"time"
 )
+
+// randHex mints a crypto-random lowercase-hex id of nBytes entropy. Used across
+// the root package for event/record ids (it lived in refresh.go until the
+// refresh store moved to internal/session, which keeps its own copy).
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // audit.go — a tamper-evident-ish append-only audit trail (Phase 3).
 //

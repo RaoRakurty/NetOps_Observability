@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -121,10 +122,14 @@ func TestLogoutWithAnUnknownTokenIsHonestlyIdempotent(t *testing.T) {
 
 // ---- fault injection at the persist seam -----------------------------------
 
-// breakPersistence points a store's file at an unwritable path, so the next
-// flush fails the way a full or read-only disk would.
-func breakSessionPersistence(s *server) { s.sessions.path = "/proc/self/no/such/dir/sessions.json" }
-func breakRefreshPersistence(s *server) { s.refresh.path = "/proc/self/no/such/dir/refresh.json" }
+// breakPersistence swaps a store's injected backend for one that refuses every
+// write, so the next flush fails the way a full or read-only disk would.
+func breakSessionPersistence(s *server) {
+	s.sessions.SetKVForTest(&faultyKV{failWith: errors.New("kv unavailable: injected")})
+}
+func breakRefreshPersistence(s *server) {
+	s.refresh.SetKVForTest(&faultyKV{failWith: errors.New("kv unavailable: injected")})
+}
 
 // The restart-shaped defect: in-memory revoke succeeds, disk write fails, and
 // the old code returned {"status":"ok"} anyway.

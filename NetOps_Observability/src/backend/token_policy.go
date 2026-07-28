@@ -9,6 +9,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"netops/backend/internal/session"
 )
 
 // token_policy.go — bounded, configurable token lifetimes.
@@ -78,10 +80,10 @@ type tokenPolicyConfig struct {
 type tokenPolicyStore struct {
 	mu      sync.Mutex
 	path    string
-	refresh *refreshStore
+	refresh *session.RefreshStore
 }
 
-func newTokenPolicyStore(path string, refresh *refreshStore) *tokenPolicyStore {
+func newTokenPolicyStore(path string, refresh *session.RefreshStore) *tokenPolicyStore {
 	s := &tokenPolicyStore{path: path, refresh: refresh}
 	if err := s.load(); err != nil {
 		// The stored lifetimes are a security control: an unreadable file leaves

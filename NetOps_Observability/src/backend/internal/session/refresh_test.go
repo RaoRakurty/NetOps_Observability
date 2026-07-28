@@ -1,4 +1,4 @@
-package main
+package session
 
 import (
 	"path/filepath"
@@ -7,9 +7,9 @@ import (
 )
 
 func TestRefreshRotateAndReuseDetection(t *testing.T) {
-	rs, err := newRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour)
+	rs, err := NewRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour, fileTestKV{})
 	if err != nil {
-		t.Fatalf("newRefreshStore: %v", err)
+		t.Fatalf("NewRefreshStore: %v", err)
 	}
 	s1, err := rs.Issue("alice")
 	if err != nil {
@@ -31,9 +31,9 @@ func TestRefreshRotateAndReuseDetection(t *testing.T) {
 }
 
 func TestRefreshExpired(t *testing.T) {
-	rs, err := newRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour)
+	rs, err := NewRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour, fileTestKV{})
 	if err != nil {
-		t.Fatalf("newRefreshStore: %v", err)
+		t.Fatalf("NewRefreshStore: %v", err)
 	}
 	s1, _ := rs.Issue("bob")
 	id, _ := parseSecret(s1)
@@ -46,9 +46,9 @@ func TestRefreshExpired(t *testing.T) {
 }
 
 func TestRefreshRevokeAndMalformed(t *testing.T) {
-	rs, err := newRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour)
+	rs, err := NewRefreshStore(filepath.Join(t.TempDir(), "r.json"), time.Hour, fileTestKV{})
 	if err != nil {
-		t.Fatalf("newRefreshStore: %v", err)
+		t.Fatalf("NewRefreshStore: %v", err)
 	}
 	s1, _ := rs.Issue("carol")
 	if _, err := rs.Revoke(s1); err != nil {
@@ -67,10 +67,10 @@ func TestRefreshRevokeAndMalformed(t *testing.T) {
 
 func TestRefreshPersistAcrossReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "r.json")
-	rs, _ := newRefreshStore(path, time.Hour)
+	rs, _ := NewRefreshStore(path, time.Hour, fileTestKV{})
 	s1, _ := rs.Issue("dave")
 	// Reopen the store from disk; the token should still rotate.
-	rs2, err := newRefreshStore(path, time.Hour)
+	rs2, err := NewRefreshStore(path, time.Hour, fileTestKV{})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

@@ -99,7 +99,12 @@ import (
 //	                  sign/verify; jwtClaims stays as a type alias for the 90+
 //	                  consumers; the actingTenant unmarshal-immunity is now the
 //	                  json:"-" tag, pinned by TestCraftedTokenCannotSetActingTenant)
-const rootPackageCeiling = 257
+//	2026-07-28  256  internal/session (session lifecycle Store + rotating
+//	                  RefreshStore; kv + error-log INJECTED via session.KV /
+//	                  session.Errorf — the vault idiom, wired in
+//	                  session_wiring.go; the CONC-HIGH-1/F-70 white-box suites
+//	                  moved in and dropped the process-global backend swap)
+const rootPackageCeiling = 256
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")
