@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"strings"
@@ -100,7 +100,7 @@ func findEvidenceText(t *testing.T, texts []string, want string) string {
 }
 
 func renderTexts(blob string) []string {
-	items := rankedHypothesisItems("11111111-2222-3333-4444-555555555555", "#/x", parseRankedHypotheses(blob))
+	items := RankedHypothesisItems("11111111-2222-3333-4444-555555555555", "#/x", ParseRankedHypotheses(blob))
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		out = append(out, it.Text)
@@ -208,31 +208,31 @@ func TestSplitControllerKindsAlternations(t *testing.T) {
 
 func TestParseRankedHypothesesShapes(t *testing.T) {
 	// Legacy pre-v1 blob (bare array) → nil, so the caller takes the legacy path.
-	if got := parseRankedHypotheses(`[{"signature":"sig.x","score":0.5}]`); got != nil {
+	if got := ParseRankedHypotheses(`[{"signature":"sig.x","score":0.5}]`); got != nil {
 		t.Errorf("bare-array blob must parse as nil (legacy path), got %d hypotheses", len(got))
 	}
-	if got := parseRankedHypotheses(""); got != nil {
+	if got := ParseRankedHypotheses(""); got != nil {
 		t.Errorf("empty blob must parse as nil")
 	}
-	if got := parseRankedHypotheses("{not json"); got != nil {
+	if got := ParseRankedHypotheses("{not json"); got != nil {
 		t.Errorf("garbage must parse as nil, never panic")
 	}
 	// Already-parsed map (ClickHouse FORMAT JSON can hand back objects).
 	m := map[string]any{"ranking": map[string]any{"hypotheses": []any{
 		map[string]any{"id": "sig.y", "confidence_label": "likely"},
 	}}}
-	got := parseRankedHypotheses(m)
+	got := ParseRankedHypotheses(m)
 	if len(got) != 1 || got[0].ID != "sig.y" || got[0].ConfidenceLabel != "likely" {
 		t.Errorf("map-shaped blob should parse: %+v", got)
 	}
 }
 
 func TestTopHypothesisVoiceFromBlob(t *testing.T) {
-	phrase, label := topHypothesisVoice(v1CorroboratedBlob)
+	phrase, label := TopHypothesisVoice(v1CorroboratedBlob)
 	if phrase != "Tunnel to branch degraded; controller and probes agree." || label != "confirmed" {
 		t.Errorf("topHypothesisVoice = (%q, %q)", phrase, label)
 	}
-	if p, l := topHypothesisVoice(`[]`); p != "" || l != "" {
+	if p, l := TopHypothesisVoice(`[]`); p != "" || l != "" {
 		t.Errorf("legacy blob voice should be empty, got (%q, %q)", p, l)
 	}
 }

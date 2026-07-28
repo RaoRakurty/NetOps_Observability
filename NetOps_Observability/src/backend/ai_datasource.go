@@ -85,20 +85,8 @@ SELECT toString(correlation_id) AS correlation_id, tenant_id,
 	// v1 NOC catalog voice contract: the matched signature's own operator
 	// wording + lexical confidence label ride the hypotheses blob — the AI
 	// narrates the engine's phrase instead of re-deriving a cause statement.
-	pr.OperatorPhrase, pr.ConfidenceLabel = topHypothesisVoice(r["hypotheses"])
+	pr.OperatorPhrase, pr.ConfidenceLabel = ai.TopHypothesisVoice(r["hypotheses"])
 	return pr, nil
-}
-
-// topHypothesisVoice pulls the matched signature's operator_phrase and
-// confidence_label from the corr object's hypotheses blob (ranking.hypotheses[0]
-// — the top hypothesis). Empty for pre-v1 signatures; the wording engine's
-// derived phrasing remains the fallback.
-func topHypothesisVoice(raw any) (operatorPhrase, confidenceLabel string) {
-	hyps := parseRankedHypotheses(raw)
-	if len(hyps) == 0 {
-		return "", ""
-	}
-	return strings.TrimSpace(hyps[0].OperatorPhrase), strings.TrimSpace(hyps[0].ConfidenceLabel)
 }
 
 // GetProblemEvidence derives bounded, cited evidence items for the problem from
@@ -127,8 +115,8 @@ SELECT hypotheses, affected, tenant_id
 
 	// Candidate root-cause hypotheses + evidence basis (modalities, controller
 	// corroboration, contradictions) from the engine's ranking blob.
-	if hyps := parseRankedHypotheses(rows[0]["hypotheses"]); len(hyps) > 0 {
-		items = append(items, rankedHypothesisItems(id, href, hyps)...)
+	if hyps := ai.ParseRankedHypotheses(rows[0]["hypotheses"]); len(hyps) > 0 {
+		items = append(items, ai.RankedHypothesisItems(id, href, hyps)...)
 	} else {
 		// Legacy pre-v1 blob: a bare array of {signature|hypothesis|name, score}.
 		for i, h := range jsonObjects(rows[0]["hypotheses"]) {

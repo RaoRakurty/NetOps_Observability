@@ -199,6 +199,10 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  216  ai_evidence_language.go → ai/evidence_language.go (the
+//	                  ranking-blob → cited-evidence renderer + the top-
+//	                  hypothesis operator voice join the ai package whose
+//	                  EvidenceItem they produce; noclabel already a package)
 //	2026-07-28  217  saved.go + saved_pg.go → internal/saved (the saved-objects
 //	                  store: file + FORCE-RLS pg; kv/DB/errf INJECTED; backend
 //	                  selection stayed in main.go; randID re-homed to audit.go
@@ -230,7 +234,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 217
+const rootPackageCeiling = 216
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** forty-two domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** forty-three domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -13,8 +13,8 @@
 `pathgraph/health`, `cloud/bizsvc`, `internal/loginguard`,
 `appid/appstore`, `timeintel/store`, `internal/incident`,
 `internal/discovery` (+ devstore), `reports` pg stores, `integration`
-pg stores, `internal/saved`, 2026-07-28).
-**217** non-test files remain in `package main`. This document is the ordered sequence for the
+pg stores, `internal/saved`, `ai/evidence_language`, 2026-07-28).
+**216** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -136,6 +136,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
 | ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| ✅ 47 | `ai_evidence_language.go` → `ai/evidence_language.go` | 1 | ~260 | 2 | **Done** (2026-07-28). The ranking-contract renderer (frozen `scoring.py` hypotheses blob → cited `ai.EvidenceItem`s with NOC modality/controller language) plus `TopHypothesisVoice` (operator phrase + confidence label) join the `ai` package whose types they produce. `firstNonBlank`/`shortID` duplicated — shortID's dash-prefix branch initially missed and caught on review (citation-id stability). Full fixture suite moved with it. |
 | ✅ 46 | `saved.go` + `saved_pg.go` → `internal/saved` | 2 | ~370 | ~11 | **Done** (2026-07-28). The saved-objects store (dashboards/report specs; file + FORCE-RLS pg). Kv/DB/errf INJECTED; backend selection stayed in `main.go`; `SavedObject` → `saved.Object` via direct qualification; `randID` re-homed to `audit.go` — at its TRUE 16-byte width (a first shim mistakenly halved it; caught on review before commit). |
 | ✅ 45 | `device_persist.go` → `internal/discovery/devstore.go` | 1 | ~240 | 3 | **Done** (2026-07-28). The manual-device + F-69 tombstone store joins the aggregator it backs (the earlier adapter shims dissolved — the exported methods ARE the store surface now). Kv + errf INJECTED; `Unreadable()` exported (the three-state boot contract: absent ≠ corrupt ≠ loaded — writes refused while unreadable so deletes can't resurrect); `DEVICES_STORE_PATH` env read moved to main. Persistence + corrupt-store suites updated in place. |
 | ✅ 44 | `integration_repo_pg.go` + `config_pg.go` + `timeline.go` → `integration/` | 3 | ~490 | ~6 | **Done** (2026-07-28). The #43 ITSM-sync repository joins its provider package: mapping rows with ordering watermarks (§4a), vault-enveloped webhook secrets, per-provider configs (`MappingEngineFor` exported — was an unexported method), and the merged per-incident timeline (now consuming `incident.Event` across the two extracted domains). `DB` seam via `rlsPG`. Reconciler/handlers/sync worker stayed. |

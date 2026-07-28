@@ -1,12 +1,10 @@
-package main
+package ai
 
 import (
 	"encoding/json"
 	"fmt"
 	"netops/backend/internal/noclabel"
 	"strings"
-
-	"netops/backend/ai"
 )
 
 // ai_evidence_language.go — renders the corr object's hypotheses blob (the
@@ -17,10 +15,31 @@ import (
 // which sources agree" straight from what the engine already persisted — no
 // new retrieval, no re-derivation (the engine reasons, the AI narrates).
 
-// rankedHypothesis mirrors the fields of HypothesisScore.to_dict the AI
+// RankedHypothesis mirrors the fields of HypothesisScore.to_dict the AI
 // narrates. Unknown fields are ignored; absent ones stay zero — the renderer
 // degrades to fewer items, never wrong ones.
-type rankedHypothesis struct {
+// firstNonBlank / shortID mirror the integrator's small helpers (duplicated
+// per the no-shared-utils rule).
+func firstNonBlank(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func shortID(id string) string {
+	if i := strings.IndexByte(id, '-'); i > 0 {
+		return id[:i]
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+type RankedHypothesis struct {
 	ID              string   `json:"id"`
 	Title           string   `json:"title"`
 	Confidence      float64  `json:"confidence"`
@@ -39,10 +58,10 @@ type rankedHypothesis struct {
 	} `json:"verdict"`
 }
 
-// parseRankedHypotheses extracts ranking.hypotheses from the blob (string or
+// ParseRankedHypotheses extracts ranking.hypotheses from the blob (string or
 // already-parsed map). Returns nil for legacy pre-v1 blobs (bare arrays) and
 // for anything unparsable — callers fall back, never fail.
-func parseRankedHypotheses(raw any) []rankedHypothesis {
+func ParseRankedHypotheses(raw any) []RankedHypothesis {
 	var data []byte
 	switch x := raw.(type) {
 	case string:
@@ -61,7 +80,7 @@ func parseRankedHypotheses(raw any) []rankedHypothesis {
 	}
 	var blob struct {
 		Ranking struct {
-			Hypotheses []rankedHypothesis `json:"hypotheses"`
+			Hypotheses []RankedHypothesis `json:"hypotheses"`
 		} `json:"ranking"`
 	}
 	if err := json.Unmarshal(data, &blob); err != nil {
@@ -150,18 +169,18 @@ func controllerClauseNoc(kind string) string {
 	return strings.Join(out, " / ")
 }
 
-// rankedHypothesisItems renders the ranked hypotheses into cited evidence
+// RankedHypothesisItems renders the ranked hypotheses into cited evidence
 // items: every candidate cause (bounded), and for the TOP hypothesis the
 // evidence basis (modalities + independence), any controller-reported clauses
 // with an explicit corroboration verdict, and contradictions. All wording is
 // derived from persisted engine output — nothing is re-scored here.
-func rankedHypothesisItems(id, href string, hyps []rankedHypothesis) []ai.EvidenceItem {
-	var items []ai.EvidenceItem
+func RankedHypothesisItems(id, href string, hyps []RankedHypothesis) []EvidenceItem {
+	var items []EvidenceItem
 	for i, h := range hyps {
 		if i >= 5 {
 			break
 		}
-		name := aiFirst(h.Title, h.ID)
+		name := firstNonBlank(h.Title, h.ID)
 		if strings.HasPrefix(name, "sig.") { // humanize the engine signature to NOC language
 			name = noclabel.SignatureTitle(name)
 		}
@@ -174,7 +193,7 @@ func rankedHypothesisItems(id, href string, hyps []rankedHypothesis) []ai.Eviden
 		} else if h.Confidence > 0 {
 			text += fmt.Sprintf(" (score %.2f)", h.Confidence)
 		}
-		items = append(items, ai.EvidenceItem{
+		items = append(items, EvidenceItem{
 			CitationID: fmt.Sprintf("hypothesis:%s:%d", shortID(id), i),
 			Kind:       "finding", Text: text, Href: href,
 		})
@@ -190,8 +209,8 @@ func rankedHypothesisItems(id, href string, hyps []rankedHypothesis) []ai.Eviden
 // telemetry corroborates it — the independence-gate story), and what
 // contradicts. These are the citations behind "is this confirmed by telemetry
 // or controller-only?".
-func topHypothesisEvidenceItems(id, href string, h rankedHypothesis) []ai.EvidenceItem {
-	var items []ai.EvidenceItem
+func topHypothesisEvidenceItems(id, href string, h RankedHypothesis) []EvidenceItem {
+	var items []EvidenceItem
 	v := h.Verdict
 
 	if len(v.ModalityCoverage) > 0 {
@@ -207,7 +226,7 @@ func topHypothesisEvidenceItems(id, href string, h rankedHypothesis) []ai.Eviden
 		case len(v.ModalityCoverage) == 1:
 			basis += " — a single evidence stream cannot confirm on its own"
 		}
-		items = append(items, ai.EvidenceItem{
+		items = append(items, EvidenceItem{
 			CitationID: "evidence-basis:" + shortID(id), Kind: "finding",
 			Text: basis, Href: href,
 		})
@@ -234,7 +253,7 @@ func topHypothesisEvidenceItems(id, href string, h rankedHypothesis) []ai.Eviden
 		} else if mgmtOnly || len(direct) == 0 {
 			text += " — controller-only evidence; held at suspected until direct telemetry corroborates"
 		}
-		items = append(items, ai.EvidenceItem{
+		items = append(items, EvidenceItem{
 			CitationID: "controller:" + shortID(id), Kind: "finding",
 			Text: text, Href: href,
 		})
@@ -249,10 +268,22 @@ func topHypothesisEvidenceItems(id, href string, h rankedHypothesis) []ai.Eviden
 				human = append(human, strings.ReplaceAll(strings.ReplaceAll(k, "|", " / "), "_", " "))
 			}
 		}
-		items = append(items, ai.EvidenceItem{
+		items = append(items, EvidenceItem{
 			CitationID: "contradiction:" + shortID(id), Kind: "finding",
 			Text: "contradicting evidence present: " + strings.Join(human, ", "), Href: href,
 		})
 	}
 	return items
+}
+
+// topHypothesisVoice pulls the matched signature's operator_phrase and
+// confidence_label from the corr object's hypotheses blob (ranking.hypotheses[0]
+// — the top hypothesis). Empty for pre-v1 signatures; the wording engine's
+// derived phrasing remains the fallback.
+func TopHypothesisVoice(raw any) (operatorPhrase, confidenceLabel string) {
+	hyps := ParseRankedHypotheses(raw)
+	if len(hyps) == 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(hyps[0].OperatorPhrase), strings.TrimSpace(hyps[0].ConfidenceLabel)
 }
