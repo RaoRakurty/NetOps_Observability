@@ -111,11 +111,11 @@ func TestSetStatusGuards(t *testing.T) {
 	if _, err := ts.SetStatus("acme", "bogus"); err == nil {
 		t.Error("invalid status should be rejected")
 	}
-	if got, err := ts.SetStatus(tn.ID, TenantStatusSuspended); err != nil || got.status() != TenantStatusSuspended {
+	if got, err := ts.SetStatus(tn.ID, TenantStatusSuspended); err != nil || got.EffectiveStatus() != TenantStatusSuspended {
 		t.Errorf("suspend by id: %+v err=%v", got, err)
 	}
 	// resolve by slug too
-	if got, err := ts.SetStatus("acme", TenantStatusActive); err != nil || got.status() != TenantStatusActive {
+	if got, err := ts.SetStatus("acme", TenantStatusActive); err != nil || got.EffectiveStatus() != TenantStatusActive {
 		t.Errorf("reactivate by slug: %+v err=%v", got, err)
 	}
 	if _, err := ts.SetStatus(TenantGlobal, TenantStatusSuspended); err == nil {

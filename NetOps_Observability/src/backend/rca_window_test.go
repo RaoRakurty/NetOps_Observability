@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/tenant"
 	"testing"
 	"time"
 )
@@ -141,11 +142,11 @@ func TestSetOperatorRestrictedReportsAPersistFailure(t *testing.T) {
 	}
 	// Break the persist path on the CONCRETE store (the seam is an interface;
 	// this store-level test deliberately reaches through it).
-	st, ok := s.tenants.(*tenantStore)
+	st, ok := s.tenants.(*tenant.Store)
 	if !ok {
-		t.Fatalf("test server tenants is %T, want *tenantStore", s.tenants)
+		t.Fatalf("test server tenants is %T, want *tenant.Store", s.tenants)
 	}
-	st.path = "/proc/self/no/such/dir/tenants.json"
+	st.SetKVForTest(&faultyKV{failWith: errors.New("kv unavailable: injected")})
 
 	if _, err := s.tenants.SetOperatorRestricted(tn.ID, true); err == nil {
 		t.Fatal("SetOperatorRestricted must return a persist failure — the handler " +

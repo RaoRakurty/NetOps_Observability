@@ -69,7 +69,7 @@ func (s *server) effectiveRestrictedIDs(principalID string) []string {
 	if s.tenants == nil {
 		return nil
 	}
-	restricted := s.tenants.restrictedIDs()
+	restricted := s.tenants.RestrictedIDs()
 	if len(restricted) == 0 {
 		return nil
 	}

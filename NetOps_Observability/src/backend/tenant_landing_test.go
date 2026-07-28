@@ -5,28 +5,6 @@ import "testing"
 // Administratively-configurable default landing (Increment 2): sanitization, the
 // per-tenant setter, and the resolution order (tenant → global default → none).
 
-func TestSanitizeLandingRoute(t *testing.T) {
-	ok := []string{"", "#/incident/overview", "#/dashboards/home", "#/infrastructure/topology-canvas"}
-	for _, r := range ok {
-		if _, err := sanitizeLandingRoute(r); err != nil {
-			t.Errorf("sanitizeLandingRoute(%q) unexpected error: %v", r, err)
-		}
-	}
-	bad := []string{
-		"https://evil.com",               // open-redirect attempt
-		"//evil.com",                     // scheme-relative
-		"#/foo bar",                      // whitespace
-		"javascript:alert(1)",            // no hash route
-		"/incident/overview",             // missing hash
-		"#/" + string(make([]byte, 200)), // too long / control bytes
-	}
-	for _, r := range bad {
-		if _, err := sanitizeLandingRoute(r); err == nil {
-			t.Errorf("sanitizeLandingRoute(%q) should have been rejected", r)
-		}
-	}
-}
-
 func TestSetDefaultLandingPersistsAndValidates(t *testing.T) {
 	s, err := newTenantStore(t.TempDir() + "/tenants.json")
 	if err != nil {

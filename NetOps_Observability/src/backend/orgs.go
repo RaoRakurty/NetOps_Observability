@@ -25,6 +25,17 @@ import (
 // defaults. It can never be deleted.
 const OrgGlobal = "global"
 
+// orgOf returns the org a tenant belongs to, treating blank as the Global org
+// (tenants predating the org layer). Centralizes the backward-compat default on
+// main's side of the tenant boundary (tenant.Store keeps the same rule
+// internally against its injected DefaultOrg).
+func orgOf(t Tenant) string {
+	if t.OrgID == "" {
+		return OrgGlobal
+	}
+	return t.OrgID
+}
+
 type Org struct {
 	ID   string `json:"id"` // slug, stable
 	Name string `json:"name"`

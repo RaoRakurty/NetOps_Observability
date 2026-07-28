@@ -187,7 +187,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// lifecycle). The platform owner / global realm is never suspendable, so the
 	// operator can never lock itself out.
 	if user.TenantID != "" && user.TenantID != TenantGlobal && s.tenants != nil {
-		if t, ok := s.tenants.Get(user.TenantID); ok && t.status() == TenantStatusSuspended {
+		if t, ok := s.tenants.Get(user.TenantID); ok && t.EffectiveStatus() == TenantStatusSuspended {
 			logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.Username, "tenant_id": t.ID})
 			writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
 			return
@@ -1042,7 +1042,7 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 	// restricted tenant's indices directly. When ANY tenant is operator-restricted we
 	// deny the raw console — the operator uses the in-app Logs view, which enforces
 	// the restriction. /netbox (no c=search) is unaffected.
-	if r.URL.Query().Get("c") == "search" && len(s.tenants.restrictedIDs()) > 0 {
+	if r.URL.Query().Get("c") == "search" && len(s.tenants.RestrictedIDs()) > 0 {
 		writeError(w, http.StatusForbidden, errors.New("raw search console disabled while operator-restricted tenants exist — use the in-app Logs view"))
 		return
 	}

@@ -1,4 +1,4 @@
-package main
+package tenant
 
 // tenants.go — multi-tenancy. A tenant is a logical isolation boundary; users,
 // devices, dashboards and alerts are scoped to one. File-backed (tenants.json),
@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// TenantGlobal is the seeded root tenant that owns shared defaults.
-const TenantGlobal = "global"
+// Global is the seeded root tenant that owns shared defaults.
+const Global = "global"
 
 type Tenant struct {
 	ID   string `json:"id"`
@@ -74,31 +74,31 @@ var landingRoutePattern = regexp.MustCompile(`^#/[A-Za-z0-9][A-Za-z0-9/_-]*$`)
 
 // Tenant lifecycle states.
 const (
-	TenantStatusActive    = "active"
-	TenantStatusSuspended = "suspended"
+	StatusActive    = "active"
+	StatusSuspended = "suspended"
 )
 
 // status returns the tenant's lifecycle state, defaulting a blank (legacy) value
 // to active so existing tenants behave unchanged.
-func (t Tenant) status() string {
+func (t Tenant) EffectiveStatus() string {
 	if t.Status == "" {
-		return TenantStatusActive
+		return StatusActive
 	}
 	return t.Status
 }
 
-// tenantRepo is the seam the server depends on for tenant state. It exists so a
+// Repo is the seam the server depends on for tenant state. It exists so a
 // mid-request failure can be injected in tests (INVARIANTS gap #3: the F-81
 // tenant-create rollback was compile-reviewed only while `s.tenants` was a
-// concrete *tenantStore). *tenantStore is the production implementation; tests
+// concrete *Store). *Store is the production implementation; tests
 // may wrap it to fail a single method while the rest keep working.
-type tenantRepo interface {
+type Repo interface {
 	List() []Tenant
 	Get(ref string) (Tenant, bool)
 	Resolve(ref string) (Tenant, bool)
 	ListByOrg(orgID string) []Tenant
 	CountByOrg(orgID string) int
-	restrictedIDs() []string
+	RestrictedIDs() []string
 	Create(name, slug, note, isolationMode, orgID string) (Tenant, error)
 	Delete(ref string) error
 	SetRegion(ref, region string) (Tenant, error)
@@ -107,25 +107,56 @@ type tenantRepo interface {
 	SetStatus(ref, status string) (Tenant, error)
 }
 
-type tenantStore struct {
+// KV abstracts where the store persists its JSON blob. The integrator supplies
+// the platform kv layer (file or postgres); a missing key must return an
+// os.ErrNotExist-wrapped error.
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
+}
+
+// Deps are the cross-domain dependencies the store needs but this package must
+// not own: persistence, the org-layer default, identity-id minting/slug rules
+// (identity_ids.go) and region validation (regions.go). All fields required.
+type Deps struct {
+	KV             KV
+	DefaultOrg     string                       // org assigned when blank (the Global org)
+	MintID         func() string                // opaque, immutable tenant id
+	SlugFromName   func(string) string          // derive a candidate slug from a display name
+	ValidateSlug   func(string) (string, error) // full slug contract (untrusted input)
+	ValidateRegion func(string) error           // region-domain membership check
+}
+
+func (d Deps) validate() error {
+	if d.KV == nil || d.MintID == nil || d.SlugFromName == nil || d.ValidateSlug == nil || d.ValidateRegion == nil || d.DefaultOrg == "" {
+		return errors.New("tenant.NewStore: all Deps fields are required")
+	}
+	return nil
+}
+
+type Store struct {
 	mu      sync.RWMutex
 	path    string
+	deps    Deps
 	tenants map[string]Tenant
 }
 
-var _ tenantRepo = (*tenantStore)(nil)
+var _ Repo = (*Store)(nil)
 
-func newTenantStore(path string) (*tenantStore, error) {
+func NewStore(path string, d Deps) (*Store, error) {
 	if path == "" {
 		path = "/data/tenants.json"
 	}
-	s := &tenantStore{path: path, tenants: make(map[string]Tenant)}
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	s := &Store{path: path, deps: d, tenants: make(map[string]Tenant)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if _, ok := s.tenants[TenantGlobal]; !ok {
-		s.tenants[TenantGlobal] = Tenant{
-			ID: TenantGlobal, Name: "Provider", Slug: TenantGlobal, OrgID: OrgGlobal,
+	if _, ok := s.tenants[Global]; !ok {
+		s.tenants[Global] = Tenant{
+			ID: Global, Name: "Provider", Slug: Global, OrgID: d.DefaultOrg,
 			Note:          "The provider (platform-owner) realm.",
 			IsolationMode: IsolationShared, CreatedAt: time.Now().UTC(),
 		}
@@ -136,8 +167,8 @@ func newTenantStore(path string) (*tenantStore, error) {
 	return s, nil
 }
 
-func (s *tenantStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *Store) load() error {
+	b, err := s.deps.KV.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -151,7 +182,7 @@ func (s *tenantStore) load() error {
 	return nil
 }
 
-func (s *tenantStore) flushLocked() error {
+func (s *Store) flushLocked() error {
 	list := make([]Tenant, 0, len(s.tenants))
 	for _, t := range s.tenants {
 		list = append(list, t)
@@ -161,10 +192,10 @@ func (s *tenantStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.deps.KV.Save(s.path, b)
 }
 
-func (s *tenantStore) List() []Tenant {
+func (s *Store) List() []Tenant {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Tenant, 0, len(s.tenants))
@@ -172,8 +203,8 @@ func (s *tenantStore) List() []Tenant {
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].ID == TenantGlobal != (out[j].ID == TenantGlobal) {
-			return out[i].ID == TenantGlobal // Global first
+		if out[i].ID == Global != (out[j].ID == Global) {
+			return out[i].ID == Global // Global first
 		}
 		return out[i].Name < out[j].Name
 	})
@@ -185,12 +216,12 @@ func (s *tenantStore) List() []Tenant {
 // (scope parents, bindings, seed/demo data) working until they migrate. It is
 // RESOLUTION only — authorization still happens on the resolved tenant's opaque
 // ID, never on the slug. See Resolve (the canonical boundary name).
-func (s *tenantStore) Get(ref string) (Tenant, bool) { return s.Resolve(ref) }
+func (s *Store) Get(ref string) (Tenant, bool) { return s.Resolve(ref) }
 
 // restrictedIDs returns the (lower-cased) ids of tenants the platform operator may
 // NOT view (OperatorRestricted). Used to exclude their telemetry from the
 // operator's cross-tenant view. Empty when no tenant is restricted (the default).
-func (s *tenantStore) restrictedIDs() []string {
+func (s *Store) RestrictedIDs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []string
@@ -204,10 +235,10 @@ func (s *tenantStore) restrictedIDs() []string {
 
 // SetRegion assigns a tenant to a data-residency region (blank = inherit the
 // org's home_region). Validated against the known region set.
-func (s *tenantStore) SetRegion(ref, region string) (Tenant, error) {
+func (s *Store) SetRegion(ref, region string) (Tenant, error) {
 	reg := strings.ToLower(strings.TrimSpace(region))
 	if reg != "" {
-		if _, err := normalizeRegion(reg); err != nil {
+		if err := s.deps.ValidateRegion(reg); err != nil {
 			return Tenant{}, err
 		}
 	}
@@ -228,7 +259,7 @@ func (s *tenantStore) SetRegion(ref, region string) (Tenant, error) {
 // SetDefaultLanding sets the tenant's administratively-configured landing route
 // (blank = inherit the platform default). Setting it on the GLOBAL tenant defines
 // the platform-wide default. The route is sanitized; existence is the SPA's job.
-func (s *tenantStore) SetDefaultLanding(ref, route string) (Tenant, error) {
+func (s *Store) SetDefaultLanding(ref, route string) (Tenant, error) {
 	clean, err := sanitizeLandingRoute(route)
 	if err != nil {
 		return Tenant{}, err
@@ -249,14 +280,14 @@ func (s *tenantStore) SetDefaultLanding(ref, route string) (Tenant, error) {
 
 // SetOperatorRestricted toggles a tenant's operator-visibility (compliance). The
 // global tenant can never be restricted (it IS the platform/operator namespace).
-func (s *tenantStore) SetOperatorRestricted(ref string, restricted bool) (Tenant, error) {
+func (s *Store) SetOperatorRestricted(ref string, restricted bool) (Tenant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.resolveLocked(ref) // id or slug
 	if !ok {
 		return Tenant{}, errors.New("tenant not found")
 	}
-	if t.ID == TenantGlobal {
+	if t.ID == Global {
 		return Tenant{}, errors.New("the global tenant cannot be operator-restricted")
 	}
 	t.OperatorRestricted = restricted
@@ -269,10 +300,10 @@ func (s *tenantStore) SetOperatorRestricted(ref string, restricted bool) (Tenant
 
 // SetStatus changes a tenant's lifecycle state (active|suspended). The global
 // tenant is the platform realm and can never be suspended. Resolves id-or-slug.
-func (s *tenantStore) SetStatus(ref, status string) (Tenant, error) {
+func (s *Store) SetStatus(ref, status string) (Tenant, error) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	switch status {
-	case TenantStatusActive, TenantStatusSuspended:
+	case StatusActive, StatusSuspended:
 	default:
 		return Tenant{}, errors.New("status must be active or suspended")
 	}
@@ -282,7 +313,7 @@ func (s *tenantStore) SetStatus(ref, status string) (Tenant, error) {
 	if !ok {
 		return Tenant{}, errors.New("tenant not found")
 	}
-	if t.ID == TenantGlobal {
+	if t.ID == Global {
 		return Tenant{}, errors.New("the global tenant cannot be suspended")
 	}
 	t.Status = status
@@ -298,40 +329,40 @@ func (s *tenantStore) SetStatus(ref, status string) (Tenant, error) {
 // boundary is stable across renames and not guessable. The slug is a human handle:
 // taken from `slug` if supplied, else derived from the display name, and validated
 // to the full contract either way (untrusted input). Slugs are globally unique.
-func (s *tenantStore) Create(name, slug, note, isolationMode, orgID string) (Tenant, error) {
+func (s *Store) Create(name, slug, note, isolationMode, orgID string) (Tenant, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Tenant{}, errors.New("tenant name required")
 	}
 	cand := strings.TrimSpace(slug)
 	if cand == "" {
-		cand = slugFromName(name)
+		cand = s.deps.SlugFromName(name)
 	}
-	cleanSlug, err := validateSlug(cand)
+	cleanSlug, err := s.deps.ValidateSlug(cand)
 	if err != nil {
 		return Tenant{}, err
 	}
-	mode, err := normalizeIsolationMode(isolationMode)
+	mode, err := NormalizeIsolationMode(isolationMode)
 	if err != nil {
 		return Tenant{}, err
 	}
 	org := strings.ToLower(strings.TrimSpace(orgID))
 	if org == "" {
-		org = OrgGlobal
+		org = s.deps.DefaultOrg
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.slugTakenLocked(cleanSlug) {
 		return Tenant{}, errors.New("tenant slug already exists")
 	}
-	id := mintTenantID()
+	id := s.deps.MintID()
 	for {
 		if _, ok := s.tenants[id]; !ok {
 			break
 		}
-		id = mintTenantID() // astronomically unlikely; guard anyway
+		id = s.deps.MintID() // astronomically unlikely; guard anyway
 	}
-	t := Tenant{ID: id, Name: name, Slug: cleanSlug, Note: note, OrgID: org, IsolationMode: mode, Status: TenantStatusActive, CreatedAt: time.Now().UTC()}
+	t := Tenant{ID: id, Name: name, Slug: cleanSlug, Note: note, OrgID: org, IsolationMode: mode, Status: StatusActive, CreatedAt: time.Now().UTC()}
 	s.tenants[id] = t
 	if err := s.flushLocked(); err != nil {
 		delete(s.tenants, id)
@@ -344,7 +375,7 @@ func (s *tenantStore) Create(name, slug, note, isolationMode, orgID string) (Ten
 // unique). Checks both the Slug field and the id map key — legacy tenants have
 // id==slug, so a new slug must also not collide with an existing readable id.
 // Caller holds the write lock.
-func (s *tenantStore) slugTakenLocked(slug string) bool {
+func (s *Store) slugTakenLocked(slug string) bool {
 	if _, ok := s.tenants[slug]; ok {
 		return true
 	}
@@ -360,7 +391,7 @@ func (s *tenantStore) slugTakenLocked(slug string) bool {
 // the compatibility resolver: a ref is tried as an id first (opaque t_ id, the
 // global sentinel, or a legacy id==slug), then as a slug. Callers MUST resolve
 // before authorizing — never authorize on the raw slug.
-func (s *tenantStore) Resolve(ref string) (Tenant, bool) {
+func (s *Store) Resolve(ref string) (Tenant, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.resolveLocked(ref)
@@ -369,7 +400,7 @@ func (s *tenantStore) Resolve(ref string) (Tenant, bool) {
 // resolveLocked is Resolve's lock-free core, so write methods (Set*/Delete) can
 // resolve an id-or-slug ref to the canonical record while already holding the
 // write lock. Caller must hold s.mu (read or write).
-func (s *tenantStore) resolveLocked(ref string) (Tenant, bool) {
+func (s *Store) resolveLocked(ref string) (Tenant, bool) {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	if ref == "" {
 		return Tenant{}, false
@@ -385,30 +416,31 @@ func (s *tenantStore) resolveLocked(ref string) (Tenant, bool) {
 	return Tenant{}, false
 }
 
-// orgOf returns the org a tenant belongs to, treating blank as the Global org
-// (tenants predating the org layer). Centralizes the backward-compat default.
-func orgOf(t Tenant) string {
+// orgOf returns the org a tenant belongs to, treating blank as the injected
+// default (Global) org — tenants predating the org layer. The integrator keeps
+// its own orgOf for the same rule on its side of the boundary.
+func (s *Store) orgOf(t Tenant) string {
 	if t.OrgID == "" {
-		return OrgGlobal
+		return s.deps.DefaultOrg
 	}
 	return t.OrgID
 }
 
 // ListByOrg returns the tenants belonging to the given org, Global tenant first
 // then alphabetical. Used by org-scoped views and delete-guard counting.
-func (s *tenantStore) ListByOrg(orgID string) []Tenant {
+func (s *Store) ListByOrg(orgID string) []Tenant {
 	orgID = strings.ToLower(strings.TrimSpace(orgID))
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Tenant, 0)
 	for _, t := range s.tenants {
-		if strings.EqualFold(orgOf(t), orgID) {
+		if strings.EqualFold(s.orgOf(t), orgID) {
 			out = append(out, t)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if (out[i].ID == TenantGlobal) != (out[j].ID == TenantGlobal) {
-			return out[i].ID == TenantGlobal
+		if (out[i].ID == Global) != (out[j].ID == Global) {
+			return out[i].ID == Global
 		}
 		return out[i].Name < out[j].Name
 	})
@@ -417,27 +449,27 @@ func (s *tenantStore) ListByOrg(orgID string) []Tenant {
 
 // CountByOrg reports how many tenants belong to an org — used to refuse deleting
 // an org that still owns tenants.
-func (s *tenantStore) CountByOrg(orgID string) int {
+func (s *Store) CountByOrg(orgID string) int {
 	orgID = strings.ToLower(strings.TrimSpace(orgID))
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	n := 0
 	for _, t := range s.tenants {
-		if strings.EqualFold(orgOf(t), orgID) {
+		if strings.EqualFold(s.orgOf(t), orgID) {
 			n++
 		}
 	}
 	return n
 }
 
-func (s *tenantStore) Delete(ref string) error {
+func (s *Store) Delete(ref string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.resolveLocked(ref) // id or slug
 	if !ok {
 		return errors.New("no such tenant")
 	}
-	if t.ID == TenantGlobal {
+	if t.ID == Global {
 		return errors.New("cannot delete the Global tenant")
 	}
 	delete(s.tenants, t.ID)

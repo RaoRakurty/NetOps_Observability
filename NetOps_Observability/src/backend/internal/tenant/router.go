@@ -1,4 +1,4 @@
-package main
+package tenant
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 // Today every tenant shares one set of backends (one Postgres/OpenSearch/
 // ClickHouse), isolated logically by tenant_id + the central Authorize() policy.
 // This file is where a tenant graduates to stronger PHYSICAL isolation without an
-// app rewrite: a Tenant carries an IsolationMode, and TenantRouter resolves a
+// app rewrite: a Tenant carries an IsolationMode, and Router resolves a
 // tenant to the storage handle it should use. Only "shared" is implemented; the
 // dedicated modes are accepted and persisted so the data model + admin UI are
 // ready, and BackendFor is the single place to extend when dedicated infra is
@@ -26,8 +26,8 @@ const (
 	IsolationDedicatedCluster IsolationMode = "dedicated_cluster" // per-tenant cluster (planned)
 )
 
-// normalizeIsolationMode defaults blank → shared and rejects unknown values.
-func normalizeIsolationMode(m string) (IsolationMode, error) {
+// NormalizeIsolationMode defaults blank → shared and rejects unknown values.
+func NormalizeIsolationMode(m string) (IsolationMode, error) {
 	switch strings.ToLower(strings.TrimSpace(m)) {
 	case "", IsolationShared:
 		return IsolationShared, nil
@@ -49,26 +49,26 @@ func normalizeIsolationMode(m string) (IsolationMode, error) {
 //lint:ignore U1000 guards the not-yet-implemented dedicated isolation modes
 func isolationImplemented(m IsolationMode) bool { return m == IsolationShared || m == "" }
 
-// TenantBackend identifies where a tenant's data physically lives. For shared
+// Backend identifies where a tenant's data physically lives. For shared
 // mode all fields are empty (= the default backends); dedicated modes will
 // populate the schema / DSN / cluster endpoint.
-type TenantBackend struct {
+type Backend struct {
 	Mode    IsolationMode
 	Schema  string // dedicated_schema
 	DSN     string // dedicated_db
 	Cluster string // dedicated_cluster
 }
 
-// TenantRouter resolves a tenant to its storage backend.
-type TenantRouter interface {
-	BackendFor(t Tenant) TenantBackend
+// Router resolves a tenant to its storage backend.
+type Router interface {
+	BackendFor(t Tenant) Backend
 }
 
-// sharedRouter maps every tenant to the shared default backend — the only router
+// SharedRouter maps every tenant to the shared default backend — the only router
 // wired today. A tenant flagged dedicated_* still resolves to shared until its
 // infra is actually provisioned: the flag captures intent, this captures reality.
-type sharedRouter struct{}
+type SharedRouter struct{}
 
-func (sharedRouter) BackendFor(_ Tenant) TenantBackend {
-	return TenantBackend{Mode: IsolationShared}
+func (SharedRouter) BackendFor(_ Tenant) Backend {
+	return Backend{Mode: IsolationShared}
 }

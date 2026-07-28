@@ -1,6 +1,43 @@
-package main
+package tenant
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+)
+
+// testDeps supplies minimal stand-ins for the injected cross-domain deps (the
+// real implementations live in the integrator's identity_ids.go / regions.go).
+func testDeps() Deps {
+	n := 0
+	return Deps{
+		KV:         fileKV{},
+		DefaultOrg: "global",
+		MintID: func() string {
+			n++
+			return fmt.Sprintf("t_%06d", n)
+		},
+		SlugFromName: func(name string) string {
+			return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), " ", "-")
+		},
+		ValidateSlug: func(raw string) (string, error) {
+			slug := strings.ToLower(strings.TrimSpace(raw))
+			if slug == "" {
+				return "", errors.New("slug required")
+			}
+			return slug, nil
+		},
+		ValidateRegion: func(string) error { return nil },
+	}
+}
+
+// fileKV is a plain file backend for tests.
+type fileKV struct{}
+
+func (fileKV) Load(key string) ([]byte, error)    { return os.ReadFile(key) }
+func (fileKV) Save(key string, data []byte) error { return os.WriteFile(key, data, 0o600) }
 
 func TestNormalizeIsolationMode(t *testing.T) {
 	cases := []struct {
@@ -16,7 +53,7 @@ func TestNormalizeIsolationMode(t *testing.T) {
 		{"bogus", "", true},
 	}
 	for _, c := range cases {
-		got, err := normalizeIsolationMode(c.in)
+		got, err := NormalizeIsolationMode(c.in)
 		if (err != nil) != c.err {
 			t.Errorf("normalize(%q) err=%v, want err=%v", c.in, err, c.err)
 		}
@@ -27,7 +64,7 @@ func TestNormalizeIsolationMode(t *testing.T) {
 }
 
 func TestTenantCreateIsolationMode(t *testing.T) {
-	s, err := newTenantStore(t.TempDir() + "/tenants.json")
+	s, err := NewStore(t.TempDir()+"/tenants.json", testDeps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +73,7 @@ func TestTenantCreateIsolationMode(t *testing.T) {
 	if err != nil || def.IsolationMode != IsolationShared {
 		t.Fatalf("default isolation = %q (err %v), want shared", def.IsolationMode, err)
 	}
-	if def.OrgID != OrgGlobal {
+	if def.OrgID != "global" {
 		t.Errorf("blank org should default to Global, got %q", def.OrgID)
 	}
 	// explicit dedicated mode persisted
@@ -49,7 +86,7 @@ func TestTenantCreateIsolationMode(t *testing.T) {
 		t.Error("invalid isolation_mode should be rejected")
 	}
 	// the seeded global tenant is shared
-	if g, ok := s.Get(TenantGlobal); !ok || g.IsolationMode != IsolationShared {
+	if g, ok := s.Get(Global); !ok || g.IsolationMode != IsolationShared {
 		t.Errorf("global tenant isolation = %q, want shared", g.IsolationMode)
 	}
 }
@@ -57,8 +94,8 @@ func TestTenantCreateIsolationMode(t *testing.T) {
 func TestSharedRouterAlwaysShared(t *testing.T) {
 	// A tenant flagged for dedicated infra still resolves to shared until that
 	// infra is provisioned (intent vs reality).
-	got := sharedRouter{}.BackendFor(Tenant{ID: "globex", IsolationMode: IsolationDedicatedCluster})
+	got := SharedRouter{}.BackendFor(Tenant{ID: "globex", IsolationMode: IsolationDedicatedCluster})
 	if got.Mode != IsolationShared {
-		t.Errorf("sharedRouter resolved %q, want shared", got.Mode)
+		t.Errorf("SharedRouter resolved %q, want shared", got.Mode)
 	}
 }

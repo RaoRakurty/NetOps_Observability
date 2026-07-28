@@ -45,7 +45,7 @@ func (s *server) tenantSuspended(c jwtClaims) bool {
 		return false
 	}
 	t, ok := s.tenants.Get(tenant)
-	return ok && t.status() == TenantStatusSuspended
+	return ok && t.EffectiveStatus() == TenantStatusSuspended
 }
 
 // principalTenant resolves the caller's tenant id and whether they may read

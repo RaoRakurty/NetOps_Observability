@@ -114,7 +114,13 @@ import (
 //	                  APIKEY_RATE_LIMIT_PER_MIN read + TenantGlobal default
 //	                  moved to the composition root; roleFromScopes stayed —
 //	                  it maps onto main's Role constants)
-const rootPackageCeiling = 254
+//	2026-07-28  253  internal/tenant (the tenant model + store + isolation-mode
+//	                  router; cross-domain inputs INJECTED as tenant.Deps — kv,
+//	                  DefaultOrg, id-mint/slug rules, region validation; the
+//	                  75-file fan-in handled by tenant_wiring.go aliases, the
+//	                  jwtClaims technique; tenantkv.go deliberately stayed for
+//	                  its own step)
+const rootPackageCeiling = 253
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")
