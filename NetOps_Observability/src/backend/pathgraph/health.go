@@ -1,4 +1,4 @@
-package main
+package pathgraph
 
 // Path Behavior Health — adaptive, baseline-relative path scoring.
 // Design: docs/design/path-behavior-health.md.
@@ -20,21 +20,21 @@ import (
 type BaselineSource string
 
 const (
-	baselinePathRouteHour BaselineSource = "path_route_hour" // tier 1 (V1)
-	baselinePathHour      BaselineSource = "path_hour"       // tier 2 (V1)
-	baselinePath          BaselineSource = "path"            // tier 3 (MVP)
-	baselineClass         BaselineSource = "class"           // tier 4 (MVP)
-	baselineGlobal        BaselineSource = "global"          // tier 5 (MVP)
+	BaselinePathRouteHour BaselineSource = "path_route_hour" // tier 1 (V1)
+	BaselinePathHour      BaselineSource = "path_hour"       // tier 2 (V1)
+	BaselinePath          BaselineSource = "path"            // tier 3 (MVP)
+	BaselineClass         BaselineSource = "class"           // tier 4 (MVP)
+	BaselineGlobal        BaselineSource = "global"          // tier 5 (MVP)
 )
 
-// sourceLabel is the NOC-facing wording for a baseline tier (no engine jargon).
-func (b BaselineSource) sourceLabel() string {
+// Label is the NOC-facing wording for a baseline tier (no engine jargon).
+func (b BaselineSource) Label() string {
 	switch b {
-	case baselinePathRouteHour, baselinePath:
+	case BaselinePathRouteHour, BaselinePath:
 		return "this path's normal behavior"
-	case baselinePathHour:
+	case BaselinePathHour:
 		return "this path at this time of week"
-	case baselineClass:
+	case BaselineClass:
 		return "similar paths"
 	default:
 		return "fallback baseline (new path)"
@@ -43,16 +43,16 @@ func (b BaselineSource) sourceLabel() string {
 
 // isFallback reports whether a baseline tier is a cold-start fallback (tier 4/5),
 // which is inherently Low confidence.
-func (b BaselineSource) isFallback() bool { return b == baselineClass || b == baselineGlobal }
+func (b BaselineSource) isFallback() bool { return b == BaselineClass || b == BaselineGlobal }
 
 type HealthState string
 
 const (
-	healthHealthy  HealthState = "healthy"
-	healthWatch    HealthState = "watch"
-	healthDegraded HealthState = "degraded"
-	healthSevere   HealthState = "severe"
-	// healthUnknown: NOTHING was measurable in this window. It is not a band on
+	HealthHealthy  HealthState = "healthy"
+	HealthWatch    HealthState = "watch"
+	HealthDegraded HealthState = "degraded"
+	HealthSevere   HealthState = "severe"
+	// HealthUnknown: NOTHING was measurable in this window. It is not a band on
 	// the same scale as the others — it means the question could not be asked.
 	// Before it existed, zero measurable signals produced score 0, which
 	// bandFor maps to "healthy", and the evidence builder then appended "All
@@ -60,29 +60,29 @@ const (
 	// all-clear manufactured from a blind probe lane. The heavy [5m] quantile
 	// queries are the first to time out under VM load while the cheap ones
 	// succeed, so this is the NORMAL partial-failure shape, not an edge case.
-	healthUnknown HealthState = "unknown"
+	HealthUnknown HealthState = "unknown"
 )
 
 type Confidence string
 
 const (
-	confLow       Confidence = "low"
-	confMediumLow Confidence = "medium_low"
-	confMedium    Confidence = "medium"
-	confHigh      Confidence = "high"
+	ConfLow       Confidence = "low"
+	ConfMediumLow Confidence = "medium_low"
+	ConfMedium    Confidence = "medium"
+	ConfHigh      Confidence = "high"
 )
 
 // ── inputs ─────────────────────────────────────────────────────────────────
 
-// metricBaseline holds the learned percentiles for one metric on a path.
-type metricBaseline struct{ P50, P90, P95, P99 float64 }
+// MetricBaseline holds the learned percentiles for one metric on a path.
+type MetricBaseline struct{ P50, P90, P95, P99 float64 }
 
 // PathBaseline is the SELECTED baseline for a path plus its provenance — enough
 // to compute severity AND to be honest about how much we trust it.
 type PathBaseline struct {
 	Source       BaselineSource
-	Latency      metricBaseline
-	Jitter       metricBaseline
+	Latency      MetricBaseline
+	Jitter       MetricBaseline
 	SampleCount  int
 	Days         float64
 	RouteStable  bool // V1: from route-fingerprint history (MVP: true, no route data)
@@ -107,11 +107,11 @@ type PathCurrent struct {
 // weights here: confidence is reported separately, congestion is not measured.
 type Weights struct{ Loss, Latency, Jitter, Route float64 }
 
-// weightsForClass returns the blend profile for a path's traffic class. MVP has no
+// WeightsForClass returns the blend profile for a path's traffic class. MVP has no
 // traffic-class label, so callers pass "" → enterprise default. AI/GPU-sensitive
 // paths weight loss + jitter higher (inference/RAG/agent flows feel loss and
 // microbursts more than steady latency).
-func weightsForClass(class string) Weights {
+func WeightsForClass(class string) Weights {
 	switch class {
 	case "ai", "gpu", "inference":
 		return Weights{Loss: 0.45, Latency: 0.15, Jitter: 0.25, Route: 0.05}
@@ -135,7 +135,7 @@ type PathHealth struct {
 
 // ── severity curves ──────────────────────────────────────────────────────────
 
-func clampF(v, lo, hi float64) float64 {
+func ClampF(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
 	}
@@ -145,26 +145,26 @@ func clampF(v, lo, hi float64) float64 {
 	return v
 }
 
-// severityPctDistance = (current − p50) / (p99 − p50), clamped [0,2]. ok=false on
+// SeverityPctDistance = (current − p50) / (p99 − p50), clamped [0,2]. ok=false on
 // a degenerate baseline (p99 ≤ p50) — that signal then contributes nothing rather
 // than dividing by zero or fabricating a value.
-func severityPctDistance(cur, p50, p99 float64) (float64, bool) {
+func SeverityPctDistance(cur, p50, p99 float64) (float64, bool) {
 	denom := p99 - p50
 	if denom <= 0 {
 		return 0, false
 	}
-	return clampF((cur-p50)/denom, 0, 2), true
+	return ClampF((cur-p50)/denom, 0, 2), true
 }
 
-// lossSeverity is log-scaled (loss is non-linear in user pain: 1% ≈ disaster for
+// LossSeverity is log-scaled (loss is non-linear in user pain: 1% ≈ disaster for
 // voice/inference) plus a burstiness bump. Retransmits/ECN/queue-drops are not
 // emitted today, so they are omitted (documented gap), not faked.
-func lossSeverity(lossPct, burst float64) float64 {
+func LossSeverity(lossPct, burst float64) float64 {
 	if lossPct < 0 {
 		lossPct = 0
 	}
 	base := math.Log(1+lossPct/0.1) / math.Log(1+100.0/0.1)
-	return clampF(base+0.3*clampF(burst, 0, 1), 0, 2)
+	return ClampF(base+0.3*ClampF(burst, 0, 1), 0, 2)
 }
 
 // ── baseline cascade selection ─────────────────────────────────────────────────
@@ -176,9 +176,10 @@ type BaselineCandidate struct {
 	Available bool
 }
 
-// baselineReady gates a per-path tier on enough history (≥500 samples OR ≥7 days);
+// (readiness rule:)
 // fallback tiers are always "ready" (they exist to be used, at Low confidence).
-func baselineReady(b PathBaseline) bool {
+// BaselineReady gates a per-path tier on enough history.
+func BaselineReady(b PathBaseline) bool {
 	if b.Source.isFallback() {
 		return true
 	}
@@ -190,7 +191,7 @@ func baselineReady(b PathBaseline) bool {
 // last so the page never fails to score a path.
 func SelectBaseline(cands []BaselineCandidate) (PathBaseline, bool) {
 	for _, c := range cands {
-		if c.Available && baselineReady(c.Baseline) {
+		if c.Available && BaselineReady(c.Baseline) {
 			return c.Baseline, true
 		}
 	}
@@ -199,7 +200,7 @@ func SelectBaseline(cands []BaselineCandidate) (PathBaseline, bool) {
 
 // ── confidence ───────────────────────────────────────────────────────────────
 
-var confOrder = []Confidence{confLow, confMediumLow, confMedium, confHigh}
+var confOrder = []Confidence{ConfLow, ConfMediumLow, ConfMedium, ConfHigh}
 
 func reduceConfidence(c Confidence) Confidence {
 	for i, v := range confOrder {
@@ -207,7 +208,7 @@ func reduceConfidence(c Confidence) Confidence {
 			return confOrder[i-1]
 		}
 	}
-	return confLow
+	return ConfLow
 }
 
 // deriveConfidence applies the §5 rules: fallback baselines are Low; otherwise
@@ -215,21 +216,21 @@ func reduceConfidence(c Confidence) Confidence {
 // one level for a recent route change or sparse probe data.
 func deriveConfidence(b PathBaseline) Confidence {
 	if b.Source.isFallback() {
-		return confLow
+		return ConfLow
 	}
 	var c Confidence
 	switch {
 	case b.Days >= 21 && b.RouteStable && !b.SparseProbe:
-		c = confHigh
+		c = ConfHigh
 	case b.Days >= 10:
-		c = confMedium
+		c = ConfMedium
 	case b.Days >= 3:
-		c = confMediumLow
+		c = ConfMediumLow
 	default:
-		c = confLow
+		c = ConfLow
 	}
 	if b.SampleCount < 100 || b.Days < 3 {
-		c = confLow
+		c = ConfLow
 	}
 	if b.RouteChanged || b.SparseProbe {
 		c = reduceConfidence(c)
@@ -239,21 +240,22 @@ func deriveConfidence(b PathBaseline) Confidence {
 
 // ── bands + wording ──────────────────────────────────────────────────────────
 
-func bandFor(score float64) HealthState {
+// BandFor maps a blended score to its health band.
+func BandFor(score float64) HealthState {
 	switch {
 	case score > 1.0:
-		return healthSevere
+		return HealthSevere
 	case score >= 0.75:
-		return healthDegraded
+		return HealthDegraded
 	case score >= 0.40:
-		return healthWatch
+		return HealthWatch
 	default:
-		return healthHealthy
+		return HealthHealthy
 	}
 }
 
 func buildReason(sev map[string]float64, src BaselineSource, state HealthState) string {
-	if state == healthHealthy {
+	if state == HealthHealthy {
 		if src.isFallback() {
 			return "This path looks normal so far — still learning its baseline (using a fallback for now)."
 		}
@@ -278,7 +280,7 @@ func buildReason(sev map[string]float64, src BaselineSource, state HealthState) 
 		degree = "is elevated"
 	}
 	switch src {
-	case baselineClass, baselineGlobal:
+	case BaselineClass, BaselineGlobal:
 		return fmt.Sprintf("%s %s, compared with similar paths (still learning this path's own baseline).", driver, degree)
 	default:
 		return fmt.Sprintf("%s %s, compared with this path's normal baseline.", driver, degree)
@@ -293,17 +295,17 @@ func buildReason(sev map[string]float64, src BaselineSource, state HealthState) 
 func ScorePathHealth(cur PathCurrent, base PathBaseline, w Weights) PathHealth {
 	sev := map[string]float64{}
 	if cur.HasLatency {
-		if s, ok := severityPctDistance(cur.LatencyP95_5m, base.Latency.P50, base.Latency.P99); ok {
+		if s, ok := SeverityPctDistance(cur.LatencyP95_5m, base.Latency.P50, base.Latency.P99); ok {
 			sev["latency"] = s
 		}
 	}
 	if cur.HasJitter {
-		if s, ok := severityPctDistance(cur.JitterP95_5m, base.Jitter.P50, base.Jitter.P99); ok {
+		if s, ok := SeverityPctDistance(cur.JitterP95_5m, base.Jitter.P50, base.Jitter.P99); ok {
 			sev["jitter"] = s
 		}
 	}
 	if cur.HasLoss {
-		sev["loss"] = lossSeverity(cur.LossPct5m, cur.LossBurst)
+		sev["loss"] = LossSeverity(cur.LossPct5m, cur.LossBurst)
 	}
 	// route instability has no source in MVP — excluded from the blend.
 
@@ -321,10 +323,10 @@ func ScorePathHealth(cur PathCurrent, base PathBaseline, w Weights) PathHealth {
 	if measured {
 		score = math.Max(num/den, 0.8*maxSev) // anti-averaging floor: one severe dim can't be averaged away
 	}
-	// No measurable signal is UNKNOWN, never healthy — see healthUnknown.
-	state := healthUnknown
+	// No measurable signal is UNKNOWN, never healthy — see HealthUnknown.
+	state := HealthUnknown
 	if measured {
-		state = bandFor(score)
+		state = BandFor(score)
 	}
 
 	// severities map with nil for unavailable signals (honest coverage)
@@ -372,12 +374,12 @@ func buildEvidence(cur PathCurrent, base PathBaseline, sev map[string]float64, s
 	if base.SparseProbe {
 		ev = append(ev, "Probe data is sparse in this window — confidence reduced")
 	}
-	if state == healthUnknown {
+	if state == HealthUnknown {
 		// Say what is actually true: we could not measure, so we cannot claim.
 		return append(ev, "No signal could be measured for this path in this window — "+
 			"health is UNKNOWN, not healthy")
 	}
-	if len(ev) == 0 && state == healthHealthy {
+	if len(ev) == 0 && state == HealthHealthy {
 		ev = append(ev, "All measured signals are within this path's normal range")
 	}
 	return ev

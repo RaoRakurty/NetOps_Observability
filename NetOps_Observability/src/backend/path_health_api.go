@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/pathgraph"
 	"sort"
 	"strconv"
 	"strings"
@@ -134,12 +135,12 @@ func classifyPathClass(dst string) string {
 }
 
 // classBaseline returns the conservative tier-4 baseline for a path class.
-func classBaseline(class string) PathBaseline {
+func classBaseline(class string) pathgraph.PathBaseline {
 	switch class {
 	case "internal":
-		return PathBaseline{Source: baselineClass, Latency: metricBaseline{P50: 5, P99: 40}, Jitter: metricBaseline{P50: 2, P99: 15}}
+		return pathgraph.PathBaseline{Source: pathgraph.BaselineClass, Latency: pathgraph.MetricBaseline{P50: 5, P99: 40}, Jitter: pathgraph.MetricBaseline{P50: 2, P99: 15}}
 	default: // external / cloud / SaaS
-		return PathBaseline{Source: baselineClass, Latency: metricBaseline{P50: 40, P99: 200}, Jitter: metricBaseline{P50: 5, P99: 50}}
+		return pathgraph.PathBaseline{Source: pathgraph.BaselineClass, Latency: pathgraph.MetricBaseline{P50: 40, P99: 200}, Jitter: pathgraph.MetricBaseline{P50: 5, P99: 50}}
 	}
 }
 
@@ -229,7 +230,7 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 		SourceLabel string         `json:"source_label"` // customer-facing source name
 		Current     map[string]any `json:"current"`
 		Base        map[string]any `json:"baseline"`
-		PathHealth
+		pathgraph.PathHealth
 	}
 	// V1 tier 2: hour-of-week precomputed baselines (path_health_baselines.go).
 	// Best-effort — nil (feature off / CH down / table empty) falls through to
@@ -240,10 +241,10 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	items := make([]item, 0, len(paths))
 	for k, a := range paths {
 		days := a.count * probeInterval / 86400
-		perPath := PathBaseline{
-			Source:      baselinePath,
-			Latency:     metricBaseline{P50: a.latP50, P99: a.latP99},
-			Jitter:      metricBaseline{P50: a.jitP50, P99: a.jitP99},
+		perPath := pathgraph.PathBaseline{
+			Source:      pathgraph.BaselinePath,
+			Latency:     pathgraph.MetricBaseline{P50: a.latP50, P99: a.latP99},
+			Jitter:      pathgraph.MetricBaseline{P50: a.jitP50, P99: a.jitP99},
 			SampleCount: int(a.count),
 			Days:        days,
 			RouteStable: true, // no route-change signal in MVP → treat as stable
@@ -253,17 +254,17 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 		classBase.Days = days
 		hb, hasHour := hourBase[k]
 		// §4 cascade, strongest→weakest; the class fallback is always last so a
-		// path never fails to score. SelectBaseline applies the readiness gates.
-		base, _ := SelectBaseline([]BaselineCandidate{
+		// path never fails to score. pathgraph.SelectBaseline applies the readiness gates.
+		base, _ := pathgraph.SelectBaseline([]pathgraph.BaselineCandidate{
 			{Baseline: hb, Available: hasHour},
 			{Baseline: perPath, Available: a.latP99 > a.latP50},
 			{Baseline: classBase, Available: true},
 		})
-		cur := PathCurrent{
+		cur := pathgraph.PathCurrent{
 			LatencyP95_5m: a.curLat, JitterP95_5m: a.curJit, LossPct5m: a.curLoss,
 			HasLatency: a.hasLat, HasJitter: a.hasJit, HasLoss: a.hasLoss,
 		}
-		h := ScorePathHealth(cur, base, weightsForClass(""))
+		h := pathgraph.ScorePathHealth(cur, base, pathgraph.WeightsForClass(""))
 		items = append(items, item{
 			PathID: k, Agent: a.agent, Dst: a.dst,
 			Source: string(a.source), SourceLabel: a.source.Label(),
@@ -271,7 +272,7 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 				"latency_p95_5m": round1(a.curLat), "jitter_p95_5m": round1(a.curJit), "loss_pct_5m": round2(a.curLoss),
 			},
 			Base: map[string]any{
-				"source": base.Source, "source_label": base.Source.sourceLabel(),
+				"source": base.Source, "source_label": base.Source.Label(),
 				"window": win, "sample_count": base.SampleCount,
 				"latency_p50": round1(base.Latency.P50), "latency_p99": round1(base.Latency.P99),
 				"jitter_p50": round1(base.Jitter.P50), "jitter_p99": round1(base.Jitter.P99),

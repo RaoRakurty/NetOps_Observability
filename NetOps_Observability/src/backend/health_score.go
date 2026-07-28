@@ -6,7 +6,7 @@ package main
 // INSUFFICIENT_TELEMETRY rather than a confident verdict from one source. Probes
 // alone never make the network look unhealthy. Every score is explainable
 // (per-contribution points) — never a black-box. Reuses the Path Behavior Health
-// primitives (path_health.go: lossSeverity / severityPctDistance / hinge-style).
+// primitives (path_health.go: pathgraph.LossSeverity / pathgraph.SeverityPctDistance / hinge-style).
 //
 //   GET /api/health/score?scope=global|site&id=<site>
 //
@@ -19,6 +19,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"netops/backend/pathgraph"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,7 +154,7 @@ func aggregateHealthScore(scope, id string, classes []healthClassResult, nowISO 
 	if den > 0 {
 		blend = math.Max(num/den, 0.8*maxB) // floor: worst class can't be averaged away
 	}
-	blend = clampF(blend, 0, 1)
+	blend = pathgraph.ClampF(blend, 0, 1)
 	score := int(math.Round(100 * (1 - blend)))
 	deficit := 100 - score
 
@@ -289,7 +290,7 @@ func (s *server) fetchAvailabilityClass(ctx context.Context, site string) health
 		if d <= 0 || tot <= 0 {
 			continue
 		}
-		b := clampF(d/tot, 0, 1)
+		b := pathgraph.ClampF(d/tot, 0, 1)
 		if b > res.Badness {
 			res.Badness = b
 		}
@@ -407,10 +408,10 @@ func (s *server) fetchPathHealthClassFiltered(ctx context.Context, allow map[str
 		}
 		considered++
 		var b float64
-		if sev, sevOK := severityPctDistance(lat, baseP50[dst], baseP99[dst]); sevOK {
+		if sev, sevOK := pathgraph.SeverityPctDistance(lat, baseP50[dst], baseP99[dst]); sevOK {
 			b = sev
 		}
-		if lb := lossSeverity(loss[dst], 0); lb > b {
+		if lb := pathgraph.LossSeverity(loss[dst], 0); lb > b {
 			b = lb
 		}
 		if b > res.Badness {

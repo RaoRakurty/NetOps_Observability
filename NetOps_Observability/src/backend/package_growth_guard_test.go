@@ -183,7 +183,11 @@ import (
 //	                  connector-credential repo: mem + FORCE-RLS pg via the DB
 //	                  seam; id prefixes + ErrVersionConflict exported; the
 //	                  durable-storage-required selector stayed in main.go)
-const rootPackageCeiling = 234
+//	2026-07-28  233  path_health.go → pathgraph/health.go (the pure Path
+//	                  Behavior Health scoring core: severity curves, blend,
+//	                  bands incl. the unknown-not-healthy rule, baseline
+//	                  cascade; VM fetcher + handler stayed in main)
+const rootPackageCeiling = 233
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

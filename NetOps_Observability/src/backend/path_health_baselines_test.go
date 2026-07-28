@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/pathgraph"
 	"strings"
 	"testing"
 	"time"
@@ -130,18 +131,18 @@ func TestFetchHourBaselinesGuardsDegenerate(t *testing.T) {
 	if !ok {
 		t.Fatal("good.example baseline missing")
 	}
-	if hb.Source != baselinePathHour {
-		t.Errorf("source = %s, want %s (tier 2)", hb.Source, baselinePathHour)
+	if hb.Source != pathgraph.BaselinePathHour {
+		t.Errorf("source = %s, want %s (tier 2)", hb.Source, pathgraph.BaselinePathHour)
 	}
-	if !baselineReady(hb) {
+	if !pathgraph.BaselineReady(hb) {
 		t.Error("a 28-day hour baseline must pass the readiness gate")
 	}
 	// The cascade must prefer this tier over the per-path tier 3.
-	base, ok := SelectBaseline([]BaselineCandidate{
+	base, ok := pathgraph.SelectBaseline([]pathgraph.BaselineCandidate{
 		{Baseline: hb, Available: true},
-		{Baseline: PathBaseline{Source: baselinePath, SampleCount: 9999, Days: 30, Latency: metricBaseline{P50: 10, P99: 20}}, Available: true},
+		{Baseline: pathgraph.PathBaseline{Source: pathgraph.BaselinePath, SampleCount: 9999, Days: 30, Latency: pathgraph.MetricBaseline{P50: 10, P99: 20}}, Available: true},
 	})
-	if !ok || base.Source != baselinePathHour {
+	if !ok || base.Source != pathgraph.BaselinePathHour {
 		t.Errorf("cascade picked %s, want path_hour first", base.Source)
 	}
 }

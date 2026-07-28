@@ -8,15 +8,15 @@ package main
 // buckets the samples by hour-of-week (UTC, Monday 00:00 = 0), computes exact
 // p50/p90/p95/p99 per (path, bucket), and writes netops.path_baselines.
 // handlePathsHealth then feeds the current bucket into the §4 cascade as the
-// baselinePathHour tier, above the live per-path tier 3.
+// pathgraph.BaselinePathHour tier, above the live per-path tier 3.
 //
-// HONEST SUBSET — tier 1 (baselinePathRouteHour) is NOT populated: there is no
+// HONEST SUBSET — tier 1 (pathgraph.BaselinePathRouteHour) is NOT populated: there is no
 // route-conditioned metric source. The VM probe series carry no route/
 // fingerprint label, and the traceroute path_observations stream does not
 // carry the probe RTT series being scored — conditioning these percentiles on
 // a fingerprint would fabricate a correlation we never measured. The
 // route_fingerprint column exists ('' on every row) so tier 1 lands without a
-// migration when probes learn route labels; until then baselinePathRouteHour
+// migration when probes learn route labels; until then pathgraph.BaselinePathRouteHour
 // stays a declared stub in the cascade.
 //
 // Rows are written with tenant_id='' under the STRICT row policy — the house
@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/chschema"
+	"netops/backend/pathgraph"
 	"sort"
 	"strconv"
 	"time"
@@ -367,7 +368,7 @@ func (s *server) startPathBaselinePrecompute(ctx context.Context) {
 // (tier 2 of the cascade). Best-effort: any error yields nil and the cascade
 // falls through to tiers 3–5 exactly as before. route_fingerprint=” rows only
 // (tier 1 is not populated — see file header).
-func (s *server) fetchHourBaselines(r *http.Request, now time.Time) map[string]PathBaseline {
+func (s *server) fetchHourBaselines(r *http.Request, now time.Time) map[string]pathgraph.PathBaseline {
 	if envOr("CLICKHOUSE_URL", "") == "" {
 		return nil
 	}
@@ -383,7 +384,7 @@ func (s *server) fetchHourBaselines(r *http.Request, now time.Time) map[string]P
 	if err != nil {
 		return nil
 	}
-	out := make(map[string]PathBaseline, len(rows))
+	out := make(map[string]pathgraph.PathBaseline, len(rows))
 	for _, row := range rows {
 		id, _ := row["path_id"].(string)
 		if id == "" {
@@ -393,10 +394,10 @@ func (s *server) fetchHourBaselines(r *http.Request, now time.Time) map[string]P
 		if p99 <= p50 {
 			continue // degenerate bucket — scoring against it would divide by zero trust
 		}
-		out[id] = PathBaseline{
-			Source:      baselinePathHour,
-			Latency:     metricBaseline{P50: p50, P99: p99},
-			Jitter:      metricBaseline{P50: asFloat(row["jitter_p50"]), P99: asFloat(row["jitter_p99"])},
+		out[id] = pathgraph.PathBaseline{
+			Source:      pathgraph.BaselinePathHour,
+			Latency:     pathgraph.MetricBaseline{P50: p50, P99: p99},
+			Jitter:      pathgraph.MetricBaseline{P50: asFloat(row["jitter_p50"]), P99: asFloat(row["jitter_p99"])},
 			SampleCount: int(asFloat(row["samples_total"])),
 			Days:        asFloat(row["window_days"]),
 			RouteStable: true, // no route-change signal wired yet (tier-1 gap)
