@@ -161,7 +161,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Account lockout (best-effort, in-memory): reject while locked, before we even
 	// check the password, so a brute-forcer can't keep guessing. Per the scope's
 	// Security Settings (login_attempts_allowed / unlock_time_seconds).
-	if locked, d := s.loginThrottle.locked(req.Username); locked {
+	if locked, d := s.loginThrottle.Locked(req.Username); locked {
 		w.Header().Set("Retry-After", intToString(int(d.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, errors.New("account temporarily locked due to failed sign-ins; try again later"))
 		return
@@ -174,7 +174,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// stop counting silently once its map was full, so a username spray turned
 		// brute-force lockout off platform-wide. Now it says so, and we refuse the
 		// attempt rather than serving a guess we cannot count.
-		if !s.loginThrottle.fail(req.Username, allowed, unlock) {
+		if !s.loginThrottle.Fail(req.Username, allowed, unlock) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, http.StatusTooManyRequests,
 				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
@@ -184,7 +184,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
-	s.loginThrottle.success(req.Username) // clear any prior failures on success
+	s.loginThrottle.Success(req.Username) // clear any prior failures on success
 	// A disabled account cannot sign in — parity with the refresh / MFA / SSO /
 	// LDAP / TACACS paths, which all reject status=="disabled". Checked AFTER the
 	// password verifies, so an unauthenticated probe can't use it to enumerate

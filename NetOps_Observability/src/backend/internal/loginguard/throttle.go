@@ -1,4 +1,4 @@
-package main
+package loginguard
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// loginThrottle is an in-memory, process-local failed-login counter that locks an
+// Throttle is an in-memory, process-local failed-login counter that locks an
 // account after too many consecutive failures, per the scope's Security Settings
 // (login_attempts_allowed / unlock_time_seconds). Best-effort by design: it
 // throttles online brute force without adding a persistent store, and resets on
@@ -45,7 +45,8 @@ import (
 //     lesser failure against silently disabling brute-force protection for
 //     every account. It self-heals as locks expire (default 300s), and it takes
 //     allowed×50k failures inside one unlock window to reach.
-type loginThrottle struct {
+type Throttle struct {
+	warn    func(msg string, fields map[string]any)
 	mu      sync.Mutex
 	entries map[string]*throttleEntry
 	max     int
@@ -72,8 +73,38 @@ const (
 	throttleSweepEvery  = 5 * time.Minute // janitor cadence
 )
 
-func newLoginThrottle() *loginThrottle {
-	return &loginThrottle{
+// Evictions reports how many tracked accounts were evicted by the cap.
+func (t *Throttle) Evictions() uint64 { return t.evictions.Load() }
+
+// Sweeps reports how many janitor sweeps have run.
+func (t *Throttle) Sweeps() uint64 { return t.sweeps.Load() }
+
+// Saturations reports how many sign-ins were refused because the tracker was
+// full of locked accounts (the F-25 fail-closed signal).
+func (t *Throttle) Saturations() uint64 { return t.saturation.Load() }
+
+// NewThrottleWithLimits is NewThrottle with an explicit tracker cap and clock —
+// test support for saturation/expiry scenarios without waiting real time.
+func NewThrottleWithLimits(max int, now func() time.Time, warn func(msg string, fields map[string]any)) *Throttle {
+	t := NewThrottle(warn)
+	if max > 0 {
+		t.max = max
+	}
+	if now != nil {
+		t.now = now
+	}
+	return t
+}
+
+// NewThrottle builds the in-memory lockout throttle. warn is the structured
+// warning sink for the F-25 saturation signal (nil → silent, but the refusal
+// behavior is unchanged).
+func NewThrottle(warn func(msg string, fields map[string]any)) *Throttle {
+	if warn == nil {
+		warn = func(string, map[string]any) {}
+	}
+	return &Throttle{
+		warn:    warn,
 		entries: map[string]*throttleEntry{},
 		max:     throttleMaxAccounts,
 		window:  throttleTrackWindow,
@@ -83,7 +114,7 @@ func newLoginThrottle() *loginThrottle {
 
 func throttleKey(user string) string { return strings.ToLower(strings.TrimSpace(user)) }
 
-func (t *loginThrottle) clock() time.Time {
+func (t *Throttle) clock() time.Time {
 	if t.now != nil {
 		return t.now()
 	}
@@ -92,7 +123,7 @@ func (t *loginThrottle) clock() time.Time {
 
 // locked reports whether the account is currently locked and the remaining time.
 // An expired lock is cleared lazily.
-func (t *loginThrottle) locked(user string) (bool, time.Duration) {
+func (t *Throttle) Locked(user string) (bool, time.Duration) {
 	if t == nil {
 		return false, 0
 	}
@@ -116,7 +147,7 @@ func (t *loginThrottle) locked(user string) (bool, time.Duration) {
 // tracked reports whether the failure was actually COUNTED. false means the
 // throttle is saturated (F-25) and the caller MUST refuse the attempt — an
 // uncounted failure is an unlimited guess.
-func (t *loginThrottle) fail(user string, allowed, unlockSeconds int) (tracked bool) {
+func (t *Throttle) Fail(user string, allowed, unlockSeconds int) (tracked bool) {
 	if t == nil || allowed <= 0 {
 		return true
 	}
@@ -133,7 +164,7 @@ func (t *loginThrottle) fail(user string, allowed, unlockSeconds int) (tracked b
 		if len(t.entries) >= t.max && !t.evictLRULocked(now) {
 			// Every slot is a live lock: no room, nothing evictable.
 			t.saturation.Add(1)
-			logWarn("auth", "login throttle saturated — sign-ins refused while every tracked account is locked",
+			t.warn("login throttle saturated — sign-ins refused while every tracked account is locked",
 				map[string]any{"tracked_accounts": len(t.entries), "max": t.max})
 			return false
 		}
@@ -153,7 +184,7 @@ func (t *loginThrottle) fail(user string, allowed, unlockSeconds int) (tracked b
 }
 
 // success clears any failure/lock state for the account.
-func (t *loginThrottle) success(user string) {
+func (t *Throttle) Success(user string) {
 	if t == nil {
 		return
 	}
@@ -164,7 +195,7 @@ func (t *loginThrottle) success(user string) {
 }
 
 // sweep drops stale state. Called by the janitor; also inline at the cap.
-func (t *loginThrottle) sweep() {
+func (t *Throttle) sweep() {
 	if t == nil {
 		return
 	}
@@ -178,7 +209,7 @@ func (t *loginThrottle) sweep() {
 // window. This is the deletion path the original had NO equivalent of: entries
 // were only ever removed on a successful login or a lock expiry check, so a
 // spray of usernames that never log in successfully accumulated forever.
-func (t *loginThrottle) sweepLocked(now time.Time) {
+func (t *Throttle) sweepLocked(now time.Time) {
 	removed := 0
 	for k, e := range t.entries {
 		switch {
@@ -200,7 +231,7 @@ func (t *loginThrottle) sweepLocked(now time.Time) {
 // evictLRULocked frees one slot by dropping the least-recently-touched UNLOCKED
 // entry, and reports whether it found one. Locked entries are deliberately not
 // candidates: evicting a lock would let a spray unlock the account under attack.
-func (t *loginThrottle) evictLRULocked(now time.Time) bool {
+func (t *Throttle) evictLRULocked(now time.Time) bool {
 	oldestKey := ""
 	var oldest time.Time
 	for k, e := range t.entries {
@@ -220,7 +251,7 @@ func (t *loginThrottle) evictLRULocked(now time.Time) bool {
 }
 
 // size reports the tracked-account count (metrics + tests).
-func (t *loginThrottle) size() int {
+func (t *Throttle) Size() int {
 	if t == nil {
 		return 0
 	}
@@ -232,7 +263,7 @@ func (t *loginThrottle) size() int {
 // runJanitor sweeps stale state until ctx is cancelled, so an idle process
 // releases the memory a spray parked in the map instead of holding it until
 // restart.
-func (t *loginThrottle) runJanitor(ctx context.Context) {
+func (t *Throttle) RunJanitor(ctx context.Context) {
 	if t == nil {
 		return
 	}

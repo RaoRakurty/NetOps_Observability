@@ -18,6 +18,7 @@ import (
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/seam"
@@ -72,8 +73,8 @@ type server struct {
 	orgs             *tenant.OrgStore
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
-	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)
-	sessions         *session.Store // server-side session lifecycle (idle/absolute/revocation)
+	loginThrottle    *loginguard.Throttle // in-memory failed-login lockout (best-effort)
+	sessions         *session.Store       // server-side session lifecycle (idle/absolute/revocation)
 	apiKeys          *apikey.Store
 	refresh          *session.RefreshStore
 	snmpCreds        *snmpcred.Store
@@ -548,7 +549,7 @@ func newServer() *server {
 		orgs:             orgs,
 		bindings:         bindings,
 		securitySettings: securitySettings,
-		loginThrottle:    newLoginThrottle(),
+		loginThrottle:    loginguard.NewThrottle(func(msg string, fields map[string]any) { logWarn("auth", msg, fields) }),
 		sessions:         sessions,
 		apiKeys:          apiKeys,
 		refresh:          refresh,
@@ -1148,7 +1149,7 @@ func main() {
 	// F-25: the failed-login map had no deletion path at all — a username spray
 	// filled it permanently and lockout then failed OPEN for every account not
 	// already tracked. The janitor is what keeps the cap reachable.
-	workers.start("login-throttle-janitor", func() { srv.loginThrottle.runJanitor(ctx) })
+	workers.start("login-throttle-janitor", func() { srv.loginThrottle.RunJanitor(ctx) })
 	// Multi-instance cache coherence for the cached-by-design stores: refresh
 	// API keys + SNMP creds from the shared backend so a revoke/rotate on another
 	// replica converges here (no-op for the single-writer file backend).
@@ -1964,16 +1965,16 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	if s.loginThrottle != nil {
 		fmt.Fprintf(w, "# HELP netops_login_throttle_accounts Accounts currently tracked by the failed-login throttle.\n")
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_accounts gauge\n")
-		fmt.Fprintf(w, "netops_login_throttle_accounts %d\n", s.loginThrottle.size())
+		fmt.Fprintf(w, "netops_login_throttle_accounts %d\n", s.loginThrottle.Size())
 		fmt.Fprintf(w, "# HELP netops_login_throttle_evictions_total Unlocked failure records evicted (LRU) to make room at the cap — a username spray in progress.\n")
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_evictions_total counter\n")
-		fmt.Fprintf(w, "netops_login_throttle_evictions_total %d\n", s.loginThrottle.evictions.Load())
+		fmt.Fprintf(w, "netops_login_throttle_evictions_total %d\n", s.loginThrottle.Evictions())
 		fmt.Fprintf(w, "# HELP netops_login_throttle_swept_total Stale failed-login records reclaimed by the janitor.\n")
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_swept_total counter\n")
-		fmt.Fprintf(w, "netops_login_throttle_swept_total %d\n", s.loginThrottle.sweeps.Load())
+		fmt.Fprintf(w, "netops_login_throttle_swept_total %d\n", s.loginThrottle.Sweeps())
 		fmt.Fprintf(w, "# HELP netops_login_throttle_saturated_total Sign-ins refused because every throttle slot held a live lock (fail-closed).\n")
 		fmt.Fprintf(w, "# TYPE netops_login_throttle_saturated_total counter\n")
-		fmt.Fprintf(w, "netops_login_throttle_saturated_total %d\n", s.loginThrottle.saturation.Load())
+		fmt.Fprintf(w, "netops_login_throttle_saturated_total %d\n", s.loginThrottle.Saturations())
 	}
 	// F-21: a response body that failed to encode used to be a 200 with zero
 	// bytes and no trace anywhere. This counter is that trace.

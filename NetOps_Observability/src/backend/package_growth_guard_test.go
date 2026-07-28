@@ -192,7 +192,11 @@ import (
 //	                  domain its mappings resolve against; DB seam via rlsPG;
 //	                  ErrNotFound/ErrConflict + MappingsByResource exported;
 //	                  the pg-only selector stayed in main.go)
-const rootPackageCeiling = 232
+//	2026-07-28  231  login_throttle.go → internal/loginguard (the F-25 account
+//	                  lockout throttle: fail-closed saturation, spray-eviction,
+//	                  janitor; warn sink injected; counters exported as
+//	                  accessors so /metrics keeps reading them)
+const rootPackageCeiling = 231
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

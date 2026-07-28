@@ -176,7 +176,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 	// codes — and a successful password check CLEARS the counter, so the login
 	// throttle alone never sees the guessing. Checked BEFORE the code is verified,
 	// so a locked account cannot be probed at all.
-	if locked, d := s.loginThrottle.locked(claims.Sub); locked {
+	if locked, d := s.loginThrottle.Locked(claims.Sub); locked {
 		w.Header().Set("Retry-After", intToString(int(d.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, errors.New("account temporarily locked due to failed sign-ins; try again later"))
 		return
@@ -193,7 +193,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		// attempt instead. Same wording as the password path — never reveal whether
 		// the code or the account was the problem.
 		allowed, unlock := s.lockoutPolicy(u, true)
-		if !s.loginThrottle.fail(u.Username, allowed, unlock) {
+		if !s.loginThrottle.Fail(u.Username, allowed, unlock) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, http.StatusTooManyRequests,
 				errors.New("sign-in temporarily unavailable due to failed-login pressure; try again shortly"))
@@ -202,7 +202,7 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid authentication code"))
 		return
 	}
-	s.loginThrottle.success(u.Username) // full sign-in succeeded — clear the counter
+	s.loginThrottle.Success(u.Username) // full sign-in succeeded — clear the counter
 	s.issueSession(w, r, u)
 }
 
