@@ -1,11 +1,12 @@
 # `package main` decomposition — the executable plan
 
-**Status:** fourteen domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** fifteen domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
-`internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27).
-**258** non-test files remain in `package main`. This document is the ordered sequence for the
+`internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
+`internal/token`, 2026-07-28).
+**257** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -106,20 +107,26 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 15 | `internal/verify` | 2 | ~1250 | ~4 | **Done** (2026-07-27). The Active Verification engine + prebuilt modules (closed command tables, deterministic parsers). `Dialers` was already an injected seam, so the SSH runner (`verify_ssh.go`, TOFU host store), service, trigger and HTTP stayed cleanly. Helper knob-readers duplicated per the no-utils rule. The `User` "dependency" was a struct-field false positive. Test split: engine/modules/parser contracts moved; the fake-SSH transport + TOFU tests and boundedBuf overflow (SILENT-CRITICAL-1's runner half) stayed with the integrator. |
 | ✅ 16 | `internal/segclass` | 1 | 697 | **0** | **Done** (2026-07-27). The Go mirror of the Python segment/device classifier, with its go:embed'd provider-CIDR snapshot (`segmentdata/` moved with it; `scripts/refresh_provider_ranges.py` re-pointed and dry-run-verified). Every mapped seam (`tierRank`, `Region`, `Service`, `Confidence`) was a field-name false positive; only `orDefault` was real (duplicated). ⚠️ **Finding for the owner: the classifier has ZERO production consumers in Go** — only its own test references it. The file says it stamps segment/role at ingest; that wiring either never landed or lives Python-side only. Worth deciding whether the ingest-side stamping is still planned or the mirror should be retired. |
 | ✅ 17 | `internal/seam` | 1 | 640 | ~5 | **Done** (2026-07-27). The canonical seam inventory (five FINAL types, lifecycle state machine, validation, deterministic ids) + its pg store, with `seam.DB` INJECTED via the portintel adapter idiom — the store moved WITH its SQL, main kept backend selection, handlers and the bootstrap suggestion rules. Watch for handler locals named `seam` shadowing the package (two renamed). Pure lifecycle/validation/id tests moved; rule tests stayed. |
-| 18+ | `session`, `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The `jwt` security change (see below) gates the auth tier. |
+| ✅ — | `internal/token` (the `jwt` security change) | 1 | ~130 | 94 (via alias) | **Done** (2026-07-28) — see the formerly-deferred item below for the full record. |
+| 18+ | `session`, `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 
-**`jwt` / `token` (auth crypto).** `jwtClaims` is used by **94 files**, which a
-Go **type alias** (`type jwtClaims = token.Claims`) would handle without
-touching any of them — the right technique. But the struct carries an
-**unexported** `actingTenant` field, and its unexportedness *is* the security
-control: it is what stops JSON unmarshal from populating a platform-owner
-tenant override from a token. Moving the type across a package boundary forces
-exporting it, and the property would then have to be re-established explicitly
-(`json:"-"`) **and asserted by a test**. That is a deliberate security change,
-not a mechanical move. Do it as its own commit, with a test proving a crafted
-token cannot set `actingTenant`.
+**`jwt` / `token` (auth crypto).** ✅ **Done** (2026-07-28) as `internal/token`,
+exactly per the deferral note: `jwtClaims` (94 consumer files) stayed source-
+compatible via `type jwtClaims = token.Claims`; `signJWT`/`verifyJWT`/`errJWT`
+became `token.Sign`/`token.Verify`/`token.ErrInvalid` (8 call sites qualified);
+the stale-commented `hasScope` (it was in fact live in auth/mfa/cloud-ingest)
+became `Claims.HasScope`. The security core: `actingTenant` had to become the
+exported `ActingTenant`, so its unmarshal-immunity was re-established as
+`json:"-"` and PINNED by `TestCraftedTokenCannotSetActingTenant` (a correctly
+HMAC-signed token carrying every key spelling must verify with the field empty
+— mutation-checked: removing the tag fails the test) plus
+`TestSignDoesNotEmitActingTenant` (the override never leaks into a minted
+token). Watch-fors that materialized: two `token` locals in `auth.go` shadowed
+the new package (the seam-step gotcha; renamed `access`/`bearer`), and
+`jwks_test.go` kept a local `b64url` for RS256 test-minting. Password hashing
+stayed in `password.go` — it is not token crypto.
 
 **Anything under `alerts/`, `notify/`, `collectors/`, `nms/`, `ai/`.** Already
 subpackages. Not part of this work.

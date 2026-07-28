@@ -95,7 +95,11 @@ import (
 //	                  lifecycle, validation + pg store with seam.DB INJECTED
 //	                  via the portintel idiom; bootstrap rules, handlers and
 //	                  backend selection stayed)
-const rootPackageCeiling = 258
+//	2026-07-28  257  internal/token (the auth-crypto boundary: Claims + HS256
+//	                  sign/verify; jwtClaims stays as a type alias for the 90+
+//	                  consumers; the actingTenant unmarshal-immunity is now the
+//	                  json:"-" tag, pinned by TestCraftedTokenCannotSetActingTenant)
+const rootPackageCeiling = 257
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

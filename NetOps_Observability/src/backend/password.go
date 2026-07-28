@@ -6,10 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"netops/backend/internal/token"
 )
 
 // PBKDF2-SHA256 password hashing implemented in pure stdlib so the
@@ -115,39 +116,11 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 }
 
 // ---- JWT (HS256) ---------------------------------------------------------
-
-var errJWT = errors.New("invalid token")
-
-type jwtClaims struct {
-	Sub    string   `json:"sub"`
-	Role   string   `json:"role"`
-	Tenant string   `json:"tenant,omitempty"` // tenant id the principal is bound to
-	Sid    string   `json:"sid,omitempty"`    // server-side session id (lifecycle source of truth)
-	Scopes []string `json:"scopes,omitempty"` // API-key scopes (empty for human sessions)
-	Iat    int64    `json:"iat"`
-	Nbf    int64    `json:"nbf,omitempty"` // not-before; enforced by verifyJWT (SR-024)
-	Exp    int64    `json:"exp"`
-
-	// actingTenant is the platform owner's "view as tenant" override, set
-	// server-side by withActingTenant from a request header — NEVER from the
-	// token (it is unexported, so JSON (un)marshal cannot populate it). Empty
-	// means no override (all-tenants view). See principalTenant.
-	actingTenant string
-}
-
-// hasScope reports whether the principal carries an API-key scope. Human
-// sessions carry none, so they fall through to RBAC role checks instead.
 //
-//nolint:unused // API-token scope check (#23); sessions use RBAC roles, so unwired until API tokens land
-func (c jwtClaims) hasScope(want string) bool {
-	for _, s := range c.Scopes {
-		if s == want || s == "admin:*" {
-			return true
-		}
-		// "read:*" satisfies any "read:<x>"; "write:*" any "write:<x>".
-		if strings.HasSuffix(s, ":*") && strings.HasPrefix(want, strings.TrimSuffix(s, "*")) {
-			return true
-		}
-	}
-	return false
-}
+// The claims model and HS256 signer/verifier live in internal/token. The alias
+// keeps the 90+ in-package consumers source-compatible; the security property
+// the old unexported actingTenant field carried (a token can never set the
+// platform-owner override) is now enforced by `json:"-"` on
+// token.Claims.ActingTenant and pinned by TestCraftedTokenCannotSetActingTenant.
+
+type jwtClaims = token.Claims

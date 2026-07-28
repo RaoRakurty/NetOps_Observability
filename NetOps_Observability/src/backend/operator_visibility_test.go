@@ -75,7 +75,7 @@ func TestOperatorTelemetryRestriction(t *testing.T) {
 // middleware would), to exercise the scoped-operator path. The override is the
 // opaque tenant id (what withActingTenant resolves a slug to).
 func ownerActing(owner jwtClaims, tenantID string) jwtClaims {
-	owner.actingTenant = tenantID
+	owner.ActingTenant = tenantID
 	return owner
 }
 

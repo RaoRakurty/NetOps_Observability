@@ -14,7 +14,11 @@ import (
 	"time"
 )
 
-// signRS256 mints a compact RS256 JWT for tests using the production base64url.
+// b64url mirrors the compact-JWT base64url encoding (the shared helper moved to
+// internal/token with the HS256 signer; RS256 test-minting stays here).
+func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+// signRS256 mints a compact RS256 JWT for tests.
 func signRS256(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
 	t.Helper()
 	hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": kid})

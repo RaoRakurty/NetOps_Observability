@@ -17,12 +17,12 @@ func TestPrincipalTenantOverride(t *testing.T) {
 	}
 	// Narrowed to a specific tenant → that tenant, not cross.
 	scoped := owner
-	scoped.actingTenant = "acme"
+	scoped.ActingTenant = "acme"
 	if tn, cross := principalTenant(scoped); cross || tn != "acme" {
 		t.Errorf("owner→acme = (%q,%v), want (acme,false)", tn, cross)
 	}
 	// A tenant's own super-admin can NOT widen via the override.
-	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme", actingTenant: "globex"}
+	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme", ActingTenant: "globex"}
 	if tn, cross := principalTenant(tenantAdmin); cross || tn != "acme" {
 		t.Errorf("tenant-admin override = (%q,%v), want (acme,false) — must be ignored", tn, cross)
 	}
@@ -53,28 +53,28 @@ func TestWithActingTenant(t *testing.T) {
 
 	// A slug in the header resolves to the opaque tenant id (the override is keyed
 	// on the id, never the slug).
-	if c := req("acme"); c.actingTenant != acme.ID {
-		t.Errorf("owner→acme: actingTenant=%q, want %s", c.actingTenant, acme.ID)
+	if c := req("acme"); c.ActingTenant != acme.ID {
+		t.Errorf("owner→acme: ActingTenant=%q, want %s", c.ActingTenant, acme.ID)
 	}
 	// "global" means the default Global (cross-tenant) view — NOT a narrowing.
-	if c := req("global"); c.actingTenant != "" {
-		t.Errorf("owner→global: actingTenant=%q, want empty (Global = cross-tenant)", c.actingTenant)
+	if c := req("global"); c.ActingTenant != "" {
+		t.Errorf("owner→global: ActingTenant=%q, want empty (Global = cross-tenant)", c.ActingTenant)
 	}
-	if c := req("all"); c.actingTenant != "" {
-		t.Errorf("owner→all: actingTenant=%q, want empty", c.actingTenant)
+	if c := req("all"); c.ActingTenant != "" {
+		t.Errorf("owner→all: ActingTenant=%q, want empty", c.ActingTenant)
 	}
-	if c := req("nope"); c.actingTenant != "" {
-		t.Errorf("owner→unknown tenant: actingTenant=%q, want empty (ignored)", c.actingTenant)
+	if c := req("nope"); c.ActingTenant != "" {
+		t.Errorf("owner→unknown tenant: ActingTenant=%q, want empty (ignored)", c.ActingTenant)
 	}
-	if c := req(""); c.actingTenant != "" {
-		t.Errorf("owner→no header: actingTenant=%q, want empty", c.actingTenant)
+	if c := req(""); c.ActingTenant != "" {
+		t.Errorf("owner→no header: ActingTenant=%q, want empty", c.ActingTenant)
 	}
 
 	// A non-owner principal can never set the override, even naming a real tenant.
 	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme"}
 	r := httptest.NewRequest("GET", "/api/logs", nil)
 	r.Header.Set("X-Acting-Tenant", "acme")
-	if c := s.withActingTenant(r, tenantAdmin); c.actingTenant != "" {
-		t.Errorf("non-owner override: actingTenant=%q, want empty (refused)", c.actingTenant)
+	if c := s.withActingTenant(r, tenantAdmin); c.ActingTenant != "" {
+		t.Errorf("non-owner override: ActingTenant=%q, want empty (refused)", c.ActingTenant)
 	}
 }

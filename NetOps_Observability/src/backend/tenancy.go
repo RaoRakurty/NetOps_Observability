@@ -53,7 +53,7 @@ func (s *server) tenantSuspended(c jwtClaims) bool {
 // active "view as tenant" override.
 //
 // The platform owner may narrow their view with the tenant switcher (carried as a
-// validated, server-set actingTenant — see withActingTenant): selecting a specific
+// validated, server-set ActingTenant — see withActingTenant): selecting a specific
 // tenant drops them to that tenant's scope (cross=false), and selecting "Global"
 // scopes them to the global/infra namespace only. The override can only NARROW —
 // it is honored solely for the platform owner, so no other principal can use it to
@@ -66,15 +66,15 @@ func principalTenant(c jwtClaims) (tenant string, crossTenant bool) {
 		// own devices). Selecting a specific tenant narrows to just that tenant.
 		// There is deliberately no "global-tenant-only" scope: "Global" == platform
 		// == cross-tenant, which is the user's mental model and shows their devices.
-		if act := strings.ToLower(strings.TrimSpace(c.actingTenant)); act != "" {
+		if act := strings.ToLower(strings.TrimSpace(c.ActingTenant)); act != "" {
 			return act, false
 		}
 		return TenantGlobal, true
 	}
-	// A non-owner is confined to its token tenant. Defense-in-depth: actingTenant is
+	// A non-owner is confined to its token tenant. Defense-in-depth: ActingTenant is
 	// NEVER trusted here for a non-owner — a multi-tenant switch is applied by
 	// withActingTenant rewriting the effective Tenant (after a reachesTenant check),
-	// so this function ignoring actingTenant for non-owners stays a hard invariant.
+	// so this function ignoring ActingTenant for non-owners stays a hard invariant.
 	return strings.ToLower(strings.TrimSpace(c.Tenant)), false
 }
 
@@ -124,12 +124,12 @@ func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 		return c // fail closed: an unresolvable reference is ignored
 	}
 	if isPlatformOwner(c) {
-		c.actingTenant = t.ID
+		c.ActingTenant = t.ID
 		return c
 	}
 	// Non-owner: honor the selection only if the principal is actually bound to a
 	// scope that reaches this tenant. We rewrite the EFFECTIVE tenant (not
-	// actingTenant) so principalTenant — which ignores actingTenant for non-owners
+	// ActingTenant) so principalTenant — which ignores ActingTenant for non-owners
 	// as a hard invariant — resolves to the target. The reach check is against the
 	// opaque tenant id, never the slug. A single-tenant user only reaches its own
 	// tenant, so this is a no-op for them.

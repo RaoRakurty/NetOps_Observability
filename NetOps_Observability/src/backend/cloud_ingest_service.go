@@ -79,7 +79,7 @@ func (s *server) requireCloudIngestService(w http.ResponseWriter, r *http.Reques
 	if isPlatformOwner(claims) {
 		return claims, true
 	}
-	if claims.hasScope(cloudIngestScope) && isPlatformRealm(claims.Tenant) {
+	if claims.HasScope(cloudIngestScope) && isPlatformRealm(claims.Tenant) {
 		return claims, true
 	}
 	writeError(w, http.StatusForbidden, errIngestForbidden)

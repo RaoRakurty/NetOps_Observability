@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/token"
 	"netops/backend/internal/totp"
 	"strings"
 	"time"
@@ -164,8 +165,8 @@ func (s *server) handleMFALogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	claims, err := verifyJWT(req.MFAToken, jwtSecret())
-	if err != nil || !claims.hasScope(mfaChallengeScope) {
+	claims, err := token.Verify(req.MFAToken, jwtSecret())
+	if err != nil || !claims.HasScope(mfaChallengeScope) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid or expired MFA challenge — sign in again"))
 		return
 	}

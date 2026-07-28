@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/token"
 	"netops/backend/policy"
 )
 
@@ -194,7 +195,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// session — they complete it at /api/auth/mfa/login with a one-time code.
 	if user.MFAEnabled {
 		now := time.Now()
-		ch, err := signJWT(jwtClaims{
+		ch, err := token.Sign(jwtClaims{
 			Sub: user.Username, Scopes: []string{mfaChallengeScope},
 			Iat: now.Unix(), Exp: now.Add(mfaChallengeTTL).Unix(),
 		}, jwtSecret())
@@ -293,7 +294,7 @@ func (s *server) recordSessionEvent(r *http.Request, event, userID, sessionID, t
 // idle/absolute policy) and returns a fresh access token carrying its sid plus a
 // refresh token bound to it. Shared by EVERY login path — password, MFA, LDAP,
 // TACACS and SSO — so all sessions get lifecycle enforcement + observability.
-func (s *server) mintSession(r *http.Request, user User) (token, refresh string, err error) {
+func (s *server) mintSession(r *http.Request, user User) (access, refresh string, err error) {
 	ttl := accessTokenTTL()
 	var sid string
 	if s.sessions != nil {
@@ -316,7 +317,7 @@ func (s *server) mintSession(r *http.Request, user User) (token, refresh string,
 			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, ev, user.TenantID, map[string]any{"reason": "max_sessions"})
 		}
 	}
-	token, err = signJWT(jwtClaims{
+	access, err = token.Sign(jwtClaims{
 		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
@@ -327,7 +328,7 @@ func (s *server) mintSession(r *http.Request, user User) (token, refresh string,
 	if err != nil {
 		return "", "", err
 	}
-	return token, refresh, nil
+	return access, refresh, nil
 }
 
 // issueSession mints a session and returns the standard JSON login response
@@ -428,7 +429,7 @@ func (s *server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		s.recordSessionEvent(r, "SESSION_REFRESHED", user.Username, sid, user.TenantID, nil)
 	}
 	ttl := accessTokenTTL()
-	tok, err := signJWT(jwtClaims{
+	tok, err := token.Sign(jwtClaims{
 		Sub: user.Username, Role: user.Role, Tenant: user.TenantID, Sid: sid,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
@@ -469,7 +470,7 @@ func (s *server) handleConsoleGate(w http.ResponseWriter, r *http.Request) {
 	// Re-sign a fresh session JWT for the cookie so it verifies at osd-gate
 	// regardless of how the caller authenticated (session/SSO).
 	ttl := accessTokenTTL()
-	tok, err := signJWT(jwtClaims{
+	tok, err := token.Sign(jwtClaims{
 		Sub: claims.Sub, Role: claims.Role, Tenant: claims.Tenant,
 		Iat: time.Now().Unix(), Exp: time.Now().Add(ttl).Unix(),
 	}, jwtSecret())
@@ -571,7 +572,7 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// hit on app load, so the bundled NetBox / Dashboards iframes always carry a
 	// valid, correctly-pathed cookie without a separate round-trip (no 403 wall).
 	if owner {
-		if tok, err := signJWT(jwtClaims{
+		if tok, err := token.Sign(jwtClaims{
 			Sub: claims.Sub, Role: claims.Role, Tenant: claims.Tenant,
 			Iat: time.Now().Unix(), Exp: time.Now().Add(accessTokenTTL()).Unix(),
 		}, jwtSecret()); err == nil {
@@ -801,14 +802,14 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		}
 		// /api/events is a WebSocket — the browser's WS API can't set the
 		// Authorization header, so we accept ?token=<jwt> there.
-		var token string
+		var bearer string
 		// WebSocket routes accept ?token=<jwt> (browsers can't set Authorization on
 		// a WS): the events hub and the device-SSH gateway (/api/devices/{id}/ssh).
 		if r.URL.Path == "/api/events" ||
 			(strings.HasPrefix(r.URL.Path, "/api/devices/") && strings.HasSuffix(r.URL.Path, "/ssh")) {
-			token = r.URL.Query().Get("token")
+			bearer = r.URL.Query().Get("token")
 		}
-		if token == "" {
+		if bearer == "" {
 			auth := r.Header.Get("Authorization")
 			if h := r.Header.Get("X-API-Key"); h != "" && auth == "" {
 				auth = "Bearer " + h
@@ -817,14 +818,14 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errors.New("missing bearer token"))
 				return
 			}
-			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+			bearer = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 		}
 		// Machine clients present an API key (ntk_…). Resolve it to a synthetic
 		// principal carrying the key's tenant + scopes; the RBAC role is derived
 		// from the scopes (see docs/API_ACCESS.md). Scope checks gate the
 		// scope-protected endpoints (e.g. write:incidents).
-		if strings.HasPrefix(token, keyPrefix) {
-			k, ok := s.apiKeys.Verify(token)
+		if strings.HasPrefix(bearer, keyPrefix) {
+			k, ok := s.apiKeys.Verify(bearer)
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
 				return
@@ -858,12 +859,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		// Our own session tokens are HS256. Try that first (the common path).
-		claims, err := verifyJWT(token, jwtSecret())
+		claims, err := token.Verify(bearer, jwtSecret())
 		if err == nil {
 			// An MFA challenge token is NOT a session: it's the half-authenticated
 			// token issued between password success and code entry. Reject it here so
 			// it can only be spent at /api/auth/mfa/login, never as a Bearer.
-			if claims.hasScope(mfaChallengeScope) {
+			if claims.HasScope(mfaChallengeScope) {
 				writeError(w, http.StatusUnauthorized, errors.New("MFA challenge token is not a session"))
 				return
 			}
@@ -898,7 +899,7 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// Otherwise, if SSO is configured, accept a Keycloak-signed RS256 Bearer
 		// (service accounts / direct API clients) verified against its JWKS.
 		if op := s.oidcProvider(); op.ready() {
-			if oc, verr := op.jwks.verifyRS256(token, op.issuer, op.clientID); verr == nil {
+			if oc, verr := op.jwks.verifyRS256(bearer, op.issuer, op.clientID); verr == nil {
 				ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, jwtClaims{
 					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
 					Role:   op.roleFor(oc),
@@ -1007,7 +1008,7 @@ func (s *server) handleOSDGate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
-	claims, err := verifyJWT(c.Value, jwtSecret())
+	claims, err := token.Verify(c.Value, jwtSecret())
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid or expired session"))
 		return

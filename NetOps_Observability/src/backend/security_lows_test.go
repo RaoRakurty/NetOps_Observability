@@ -4,34 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
-// SR-024: verifyJWT enforces nbf and a future-dated iat (with small skew).
-func TestJWTTimeBounds(t *testing.T) {
-	secret := "test-secret"
-	// A token whose nbf is far in the future must be rejected.
-	future := time.Now().Add(time.Hour).Unix()
-	tok, err := signJWT(jwtClaims{Sub: "u", Nbf: future, Iat: future, Exp: time.Now().Add(2 * time.Hour).Unix()}, secret)
-	if err != nil {
-		t.Fatalf("sign: %v", err)
-	}
-	if _, err := verifyJWT(tok, secret); err == nil {
-		t.Error("token not-yet-valid (future nbf) must be rejected")
-	}
-	// A normal token (iat/nbf auto-stamped now) verifies.
-	ok, err := signJWT(jwtClaims{Sub: "u", Exp: time.Now().Add(time.Hour).Unix()}, secret)
-	if err != nil {
-		t.Fatalf("sign: %v", err)
-	}
-	c, err := verifyJWT(ok, secret)
-	if err != nil {
-		t.Fatalf("valid token rejected: %v", err)
-	}
-	if c.Iat == 0 || c.Nbf == 0 {
-		t.Error("signJWT must stamp iat and nbf")
-	}
-}
+// SR-024 (TestJWTTimeBounds) moved to internal/token with the signer/verifier.
 
 // SR-029: a hash at a lower iteration count is flagged for rehash; current cost is not.
 func TestPasswordNeedsRehash(t *testing.T) {
