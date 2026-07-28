@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/nms"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestNMSCrossOrgIsolation(t *testing.T) {
 	// The harness doesn't wire the NMS runtime (feature-flagged in main); the
 	// handlers read it at request time, so setting it on the live *server is
 	// enough. Mem store = the same in-store tenant scoping contract as PG-RLS.
-	s.nms = newNMSRuntime(newMemNMSStore())
+	s.nms = newNMSRuntime(nms.NewMemStore())
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 

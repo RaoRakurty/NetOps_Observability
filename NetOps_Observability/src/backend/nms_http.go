@@ -45,7 +45,7 @@ type nmsIntegrationInput struct {
 }
 
 // nmsIntegrationPublic is the API projection — config + cred field names, never values.
-func (s *server) nmsIntegrationPublic(ctx context.Context, c nmsIntegration) map[string]any {
+func (s *server) nmsIntegrationPublic(ctx context.Context, c nms.Integration) map[string]any {
 	out := map[string]any{
 		"id":            c.ID,
 		"vendor":        c.Vendor,
@@ -151,7 +151,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown vendor", http.StatusBadRequest)
 			return
 		}
-		c := nmsIntegration{
+		c := nms.Integration{
 			Tenant:      tenant, // stamped from the principal, NEVER the payload (§3a)
 			ID:          "nmsi-" + randHex(8),
 			Vendor:      in.Vendor,
@@ -166,8 +166,8 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 		}
 		// F-76: refuse BEFORE writing the integration row, so a refused
 		// credential cannot leave a half-created, unusable integration behind.
-		if len(in.Credentials) > 0 && !nmsStoreDurable(s.nms.store) {
-			writeError(w, http.StatusNotImplemented, errNMSStorageNotDurable)
+		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.store) {
+			writeError(w, http.StatusNotImplemented, nms.ErrStorageNotDurable)
 			return
 		}
 		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
@@ -176,7 +176,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(in.Credentials) > 0 {
 			if err := s.nms.store.SetCredentials(r.Context(), tenant, c.ID, in.Credentials); err != nil {
-				if errors.Is(err, errNMSStorageNotDurable) {
+				if errors.Is(err, nms.ErrStorageNotDurable) {
 					writeError(w, http.StatusNotImplemented, err)
 					return
 				}
@@ -191,7 +191,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 }
 
 // applyNMSInput folds updatable fields into c, defaulting from the spec.
-func applyNMSInput(c *nmsIntegration, in nmsIntegrationInput, spec nms.ConnectorSpec) {
+func applyNMSInput(c *nms.Integration, in nmsIntegrationInput, spec nms.ConnectorSpec) {
 	if in.DisplayName != "" {
 		c.DisplayName = in.DisplayName
 	}
@@ -358,8 +358,8 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 		conn, _ := s.nms.reg.Get(c.Vendor)
 		applyNMSInput(&c, in, conn.Spec())
 		// F-76: same refusal as the create path — check before the config write.
-		if len(in.Credentials) > 0 && !nmsStoreDurable(s.nms.store) {
-			writeError(w, http.StatusNotImplemented, errNMSStorageNotDurable)
+		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.store) {
+			writeError(w, http.StatusNotImplemented, nms.ErrStorageNotDurable)
 			return
 		}
 		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
@@ -368,7 +368,7 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 		}
 		if len(in.Credentials) > 0 {
 			if err := s.nms.store.SetCredentials(r.Context(), c.Tenant, c.ID, in.Credentials); err != nil {
-				if errors.Is(err, errNMSStorageNotDurable) {
+				if errors.Is(err, nms.ErrStorageNotDurable) {
 					writeError(w, http.StatusNotImplemented, err)
 					return
 				}
@@ -505,7 +505,7 @@ func (s *server) handleNMSWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad payload", http.StatusBadRequest)
 		return
 	}
-	pipe := s.nms.pipeline(nmsKey(ic.Tenant, ic.ID))
+	pipe := s.nms.pipeline(nms.Key(ic.Tenant, ic.ID))
 	var accepted int64
 	for _, raw := range payloads {
 		batch, terr := conn.Transformer().Transform(ic.Tenant, ic.ID, raw)

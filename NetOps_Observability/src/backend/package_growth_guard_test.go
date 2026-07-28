@@ -137,7 +137,11 @@ import (
 //	                  inventory store joins its domain package; pg plumbing
 //	                  INJECTED via wireless.DB and the portintelPG adapter
 //	                  generalized to rlsPG — one adapter for every RLS seam)
-const rootPackageCeiling = 249
+//	2026-07-28  248  nms_store.go → nms/store.go (integration config + runs +
+//	                  states store, mem + FORCE-RLS pg, vault-enveloped creds;
+//	                  DB seam injected via rlsPG; durability marker exported —
+//	                  ErrStorageNotDurable/NonDurableStore/StoreDurable)
+const rootPackageCeiling = 248
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

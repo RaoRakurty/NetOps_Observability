@@ -1,19 +1,17 @@
-package main
+package nms
 
 import (
 	"context"
 	"testing"
 	"time"
-
-	"netops/backend/nms"
 )
 
 // memNMSStore enforces tenant scoping IN the store (§3a: in-memory stores have
 // no RLS backstop, so the store itself is the gate).
 func TestMemNMSStoreTenantScoping(t *testing.T) {
 	ctx := context.Background()
-	st := newMemNMSStore()
-	for _, c := range []nmsIntegration{
+	st := NewMemStore()
+	for _, c := range []Integration{
 		{Tenant: "t-a", ID: "i-a", Vendor: "generic", Enabled: true, WebhookToken: "tok-a"},
 		{Tenant: "t-b", ID: "i-b", Vendor: "generic", Enabled: false},
 	} {
@@ -69,13 +67,13 @@ func TestCredsFromFields(t *testing.T) {
 
 func TestMemNMSStoreHealthRollup(t *testing.T) {
 	ctx := context.Background()
-	st := newMemNMSStore()
-	if err := st.Upsert(ctx, nmsIntegration{Tenant: "t-a", ID: "i-a", Vendor: "generic"}); err != nil {
+	st := NewMemStore()
+	if err := st.Upsert(ctx, Integration{Tenant: "t-a", ID: "i-a", Vendor: "generic"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	_ = st.RecordRun(ctx, nmsRunRecord{Tenant: "t-a", IntegrationID: "i-a", RunID: "r1", Started: now, Finished: now, Status: "ok", Events: 5})
-	_ = st.RecordRun(ctx, nmsRunRecord{Tenant: "t-a", IntegrationID: "i-a", RunID: "r2", Started: now, Finished: now, Status: "error", Error: "boom"})
+	_ = st.RecordRun(ctx, RunRecord{Tenant: "t-a", IntegrationID: "i-a", RunID: "r1", Started: now, Finished: now, Status: "ok", Events: 5})
+	_ = st.RecordRun(ctx, RunRecord{Tenant: "t-a", IntegrationID: "i-a", RunID: "r2", Started: now, Finished: now, Status: "error", Error: "boom"})
 
 	h, found, _ := st.Health(ctx, "t-a", false, "i-a")
 	if !found {
@@ -93,42 +91,11 @@ func TestMemNMSStoreHealthRollup(t *testing.T) {
 	}
 }
 
-// due(): each integration polls on its own floored interval; a just-run
-// integration is not due again until the interval elapses.
-func TestNMSSchedulerDue(t *testing.T) {
-	rt := newNMSRuntime(newMemNMSStore())
-	ic := nmsIntegration{Tenant: "t-a", ID: "i-a", PollIntervalS: 60}
-	if !rt.due(ic) {
-		t.Fatal("first evaluation must be due")
-	}
-	if rt.due(ic) {
-		t.Fatal("must not be due again immediately")
-	}
-	// Backdate the last run beyond the interval → due again.
-	rt.mu.Lock()
-	rt.lastRun[nmsKey("t-a", "i-a")] = time.Now().Add(-2 * time.Minute)
-	rt.mu.Unlock()
-	if !rt.due(ic) {
-		t.Fatal("must be due after the interval elapses")
-	}
-	// Sub-floor intervals fall back to the default (5m), not a hot loop.
-	fast := nmsIntegration{Tenant: "t-a", ID: "i-fast", PollIntervalS: 1}
-	if !rt.due(fast) {
-		t.Fatal("first evaluation due")
-	}
-	rt.mu.Lock()
-	rt.lastRun[nmsKey("t-a", "i-fast")] = time.Now().Add(-2 * time.Minute)
-	rt.mu.Unlock()
-	if rt.due(fast) {
-		t.Fatal("1s interval must be floored to the default, so 2m ago is not due")
-	}
-}
-
 // State changes persist through the store seam the scheduler drives.
 func TestMemNMSStoreStateUpsert(t *testing.T) {
 	ctx := context.Background()
-	st := newMemNMSStore()
-	recs := []nms.StateRecord{{
+	st := NewMemStore()
+	recs := []StateRecord{{
 		EntityKey: "dev1|tunnel|t1", StateKind: "tunnel", CurrentState: "down",
 		PreviousState: "up", FlapCount: 1, DeviceID: "dev1",
 	}}

@@ -33,7 +33,7 @@ const (
 )
 
 type nmsRuntime struct {
-	store nmsConfigStore
+	store nms.ConfigStore
 	reg   *nms.Registry
 	// wireless receives canonical-inventory discoveries (#128) from wireless
 	// connectors (Routed.Wireless). Nil = inventory discarded with a warning —
@@ -49,7 +49,7 @@ type nmsRuntime struct {
 	sessions map[string]nms.Session   // tenant\x00id → cached controller session (reused until expiry)
 }
 
-func newNMSRuntime(store nmsConfigStore) *nmsRuntime {
+func newNMSRuntime(store nms.ConfigStore) *nmsRuntime {
 	strict := &http.Client{Timeout: 30 * time.Second}
 	// Controllers in labs/enterprises commonly present self-signed certs; this
 	// client is used ONLY for integrations that explicitly set tls_skip_verify.
@@ -108,12 +108,12 @@ func (rt *nmsRuntime) tickOnce(ctx context.Context) {
 // due reports whether an integration's poll interval has elapsed (and marks it
 // started — a failed run still waits a full interval; retry-with-backoff lives
 // INSIDE the run via RetryDoer, not by hammering the controller every tick).
-func (rt *nmsRuntime) due(ic nmsIntegration) bool {
+func (rt *nmsRuntime) due(ic nms.Integration) bool {
 	interval := time.Duration(ic.PollIntervalS) * time.Second
 	if interval < nmsMinPollInterval {
 		interval = nmsDefaultPollInterval
 	}
-	key := nmsKey(ic.Tenant, ic.ID)
+	key := nms.Key(ic.Tenant, ic.ID)
 	now := time.Now()
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -156,7 +156,7 @@ func (rt *nmsRuntime) storeSession(key string, s nms.Session, err error) {
 	rt.sessions[key] = s
 }
 
-func (rt *nmsRuntime) httpClient(ic nmsIntegration) *http.Client {
+func (rt *nmsRuntime) httpClient(ic nms.Integration) *http.Client {
 	if ic.TLSSkipVerify {
 		return rt.insecureClient
 	}
@@ -167,14 +167,14 @@ func (rt *nmsRuntime) httpClient(ic nmsIntegration) *http.Client {
 // outcome, and returns the run record (the scheduler discards it; the "Poll
 // now" API returns it to the operator). Marks lastRun so a manual poll also
 // resets the scheduler's interval.
-func (rt *nmsRuntime) pollIntegration(ctx context.Context, ic nmsIntegration) nmsRunRecord {
+func (rt *nmsRuntime) pollIntegration(ctx context.Context, ic nms.Integration) nms.RunRecord {
 	started := time.Now().UTC()
 	runID := fmt.Sprintf("%d-%s", started.UnixMilli(), randHex(4))
 	rt.mu.Lock()
-	rt.lastRun[nmsKey(ic.Tenant, ic.ID)] = started
+	rt.lastRun[nms.Key(ic.Tenant, ic.ID)] = started
 	rt.mu.Unlock()
 
-	rec := nmsRunRecord{Tenant: ic.Tenant, IntegrationID: ic.ID, RunID: runID, Started: started}
+	rec := nms.RunRecord{Tenant: ic.Tenant, IntegrationID: ic.ID, RunID: runID, Started: started}
 	events, err := rt.pollOnce(ctx, ic)
 	rec.Finished = time.Now().UTC()
 	rec.Events = events
@@ -195,7 +195,7 @@ func (rt *nmsRuntime) pollIntegration(ctx context.Context, ic nmsIntegration) nm
 // pollOnce runs nms.RunPoll and sinks the routed output. Returns the number of
 // controller events emitted. Partial stream failures surface in the error while
 // successful streams' output still flows (RunPoll contract).
-func (rt *nmsRuntime) pollOnce(ctx context.Context, ic nmsIntegration) (int64, error) {
+func (rt *nmsRuntime) pollOnce(ctx context.Context, ic nms.Integration) (int64, error) {
 	conn, ok := rt.reg.Get(ic.Vendor)
 	if !ok {
 		return 0, fmt.Errorf("unknown vendor %q", ic.Vendor)
@@ -223,7 +223,7 @@ func (rt *nmsRuntime) pollOnce(ctx context.Context, ic nmsIntegration) (int64, e
 	// 401 refreshes it inside the run) — steady 30-60s polls must not log in to
 	// the controller every cycle. An errored run clears the cache so the next
 	// attempt starts from a clean login.
-	key := nmsKey(ic.Tenant, ic.ID)
+	key := nms.Key(ic.Tenant, ic.ID)
 	res, sess, err := nms.RunPollSession(ctx, conn, cfg, do, rt.store.Checkpoints(), rt.pipeline(key), rt.session(key))
 	rt.storeSession(key, sess, err)
 	if err != nil {
@@ -243,7 +243,7 @@ func (rt *nmsRuntime) pollOnce(ctx context.Context, ic nmsIntegration) (int64, e
 // sinkRouted fans one Routed batch to the three sinks. Best-effort per lane —
 // a failed sink is logged and never blocks the others (metrics loss must not
 // stop events, and vice versa). Returns the count of events produced.
-func (rt *nmsRuntime) sinkRouted(ctx context.Context, ic nmsIntegration, routed nms.Routed) int64 {
+func (rt *nmsRuntime) sinkRouted(ctx context.Context, ic nms.Integration, routed nms.Routed) int64 {
 	if len(routed.MetricLines) > 0 {
 		if err := nmsEmitMetrics(ctx, routed.MetricLines); err != nil {
 			logWarn("nms", "metric sink", map[string]any{"integration": ic.ID, "error": err.Error()})

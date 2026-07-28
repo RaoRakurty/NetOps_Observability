@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/nms"
 	"testing"
 )
 
@@ -76,26 +77,26 @@ func TestCloudStoreReadyRefusesNilStore(t *testing.T) {
 // The NMS runtime stays wired off Postgres (the connector gallery must render
 // on a fresh install), but credential writes are refused.
 func TestNonDurableNMSStoreRefusesCredentials(t *testing.T) {
-	st := nonDurableNMSStore{newMemNMSStore()}
+	st := nms.NewNonDurableStore()
 	err := st.SetCredentials(context.Background(), "t-a", "nmsi-1", map[string]string{"password": "hunter2"})
 	if err == nil {
 		t.Fatal("a non-durable store must refuse credentials, not hold them in RAM")
 	}
-	if !errors.Is(err, errNMSStorageNotDurable) {
-		t.Errorf("err = %v, want errNMSStorageNotDurable", err)
+	if !errors.Is(err, nms.ErrStorageNotDurable) {
+		t.Errorf("err = %v, want nms.ErrStorageNotDurable", err)
 	}
 	if st.Durable() {
-		t.Error("nonDurableNMSStore.Durable() must be false")
+		t.Error("nms.NonDurableStore.Durable() must be false")
 	}
 }
 
 // The probe must not accidentally mark every store non-durable — that would
 // refuse credentials on Postgres too.
 func TestDurabilityProbeDefaultsToDurable(t *testing.T) {
-	if !nmsStoreDurable(newMemNMSStore()) {
+	if !nms.StoreDurable(nms.NewMemStore()) {
 		t.Error("the bare mem store (tests) must probe as durable")
 	}
-	if nmsStoreDurable(nonDurableNMSStore{newMemNMSStore()}) {
+	if nms.StoreDurable(nms.NewNonDurableStore()) {
 		t.Error("the production file-backend wrapper must probe as NOT durable")
 	}
 }
@@ -103,9 +104,9 @@ func TestDurabilityProbeDefaultsToDurable(t *testing.T) {
 // Config reads must still work — refusing credentials must not brick the
 // gallery, which is the reason the runtime is wired at all.
 func TestNonDurableNMSStoreStillServesConfig(t *testing.T) {
-	st := nonDurableNMSStore{newMemNMSStore()}
+	st := nms.NewNonDurableStore()
 	ctx := context.Background()
-	if err := st.Upsert(ctx, nmsIntegration{Tenant: "t-a", ID: "nmsi-1", Vendor: "meraki"}); err != nil {
+	if err := st.Upsert(ctx, nms.Integration{Tenant: "t-a", ID: "nmsi-1", Vendor: "meraki"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	list, err := st.List(ctx, "t-a", false)

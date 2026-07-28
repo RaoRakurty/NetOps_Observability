@@ -1,14 +1,14 @@
 # `package main` decomposition — the executable plan
 
-**Status:** twenty-one domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty-two domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
 `internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
 `internal/token`, `internal/session`, `internal/jwks`, `internal/apikey`,
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
-`ai/toolwire`, `wireless/store`, 2026-07-28).
-**249** non-test files remain in `package main`. This document is the ordered sequence for the
+`ai/toolwire`, `wireless/store`, `nms/store`, 2026-07-28).
+**248** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -118,7 +118,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 23 | `internal/snmpcred` | 1 | ~380 | 4 | **Done** (2026-07-28). SNMP credential profiles (v1/v2c/v3 USM): model, redacting `Public()` projection, validation, and the vault-enveloped store (encrypt-at-rest copies; in-memory stays plaintext for `Resolve`). Kv INJECTED; `internal/vault` imported directly (already a package, no cycle); `slugify` duplicated from rbac.go per the no-utils rule; `reload` → `Reload`. Four consumer files qualified directly — fan-in too small to justify aliases. Store-contract tests moved; vault-integration + tenancy + sentinel tests stayed with the integrator. |
 | ✅ 24 | `copilot_tools.go` → `ai/toolwire.go` | 1 | ~320 | 3 | **Done** (2026-07-28). The per-provider (OpenAI/Anthropic/Gemini) tool-calling wire codecs joined the `ai/` subpackage whose `ToolSpec`/`ToolCall`/`ToolReply` shapes they encode — `AgentTurn` + `CallTools` exported, transport INJECTED as `ai.DoFunc` (main's `providerDo` keeps timeout/retry/redaction policy). The §15 LLM04 output cap hoisted to `ai.MaxOutputTokens` so no provider body can be built without it (was `maxCopilotOutputTokens` in copilot.go). Wire-format fixture tests moved with the codecs. |
 | ✅ 25 | `wireless_store.go` → `wireless/store.go` | 1 | ~730 | 3 | **Done** (2026-07-28). The first BIG STORE gets the portintel treatment: the canonical wireless inventory store (mem + FORCE-RLS pg backends over `wireless.Controller/AccessPoint/WLAN/BSSID`) joins its domain package. Pg plumbing INJECTED via `wireless.DB`; main's `portintelPG` adapter GENERALIZED to `rlsPG` — one adapter now serves every extracted RLS seam. The data-column encoder contract test moved in. |
-| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), `ticketing_store`/`path_graph_store`/`nms_store`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 26 | `nms_store.go` → `nms/store.go` | 1 | ~760 | 4 | **Done** (2026-07-28). The NMS integration store (config + run records + external states + health rollup; mem + FORCE-RLS pg; vault-enveloped credentials) joins its connector package. `DB` seam injected via `rlsPG`; the F-76 durability marker exported (`ErrStorageNotDurable`, `NewNonDurableStore`, `StoreDurable`); `Key` exported (the scheduler's bookkeeping shares the composite key). Store contract tests moved in; `TestNMSSchedulerDue` shuttled back (the runtime is integrator code). |
+| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), `ticketing_store`/`path_graph_store`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

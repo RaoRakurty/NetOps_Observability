@@ -632,12 +632,12 @@ func newServer() *server {
 	// FORCE-RLS); in-memory store on the file backend (dev).
 	if nms.Enabled() {
 		if ps, ok := backend.(*pgStore); ok {
-			srv.nms = newNMSRuntime(newPGNMSStore(ps.db, vault))
+			srv.nms = newNMSRuntime(nms.NewPGStore(rlsPG{db: ps.db}, vault))
 		} else {
 			// F-76: the catalog + integration list still render on a fresh
 			// install, but credential writes are REFUSED rather than held as
 			// plaintext in a map that dies with the process.
-			srv.nms = newNMSRuntime(nonDurableNMSStore{newMemNMSStore()})
+			srv.nms = newNMSRuntime(nms.NewNonDurableStore())
 		}
 		srv.nms.wireless = srv.wireless // #128: wireless-inventory sink
 	}

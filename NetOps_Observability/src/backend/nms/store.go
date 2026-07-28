@@ -1,4 +1,4 @@
-package main
+package nms
 
 import (
 	"context"
@@ -11,22 +11,20 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"netops/backend/nms"
 )
 
 // nms_store.go — persistence for the NMS vendor-controller framework (#95 P3b,
 // migration 0020). Two backends behind one interface (topology_store.go
-// convention): memNMSStore for the file/dev backend + tests, pgNMSStore for
+// convention): memStore for the file/dev backend + tests, pgStore for
 // production. Isolation is enforced IN the store (§3a): every read is scoped by
 // the caller's tenant (PG via FORCE-RLS withTenant, mem via tenant-keyed maps);
 // cross-tenant reads happen only on the explicit platform-scope methods the
 // scheduler/webhook lookup use. Credentials are vault.Vault-encrypted per-tenant DEK
 // and write-only: no method ever returns them to an API caller.
 
-// nmsIntegration is one configured controller integration (integrations table).
+// Integration is one configured controller integration (integrations table).
 // Secrets never live on this struct.
-type nmsIntegration struct {
+type Integration struct {
 	Tenant        string    `json:"-"`
 	ID            string    `json:"id"`
 	Vendor        string    `json:"vendor"`
@@ -43,8 +41,8 @@ type nmsIntegration struct {
 	UpdatedAt     time.Time `json:"updatedAt,omitempty"`
 }
 
-// nmsRunRecord is one poll/webhook run (connector_run_history row).
-type nmsRunRecord struct {
+// RunRecord is one poll/webhook run (connector_run_history row).
+type RunRecord struct {
 	Tenant        string    `json:"-"`
 	IntegrationID string    `json:"-"`
 	RunID         string    `json:"runId"`
@@ -55,28 +53,28 @@ type nmsRunRecord struct {
 	Error         string    `json:"error,omitempty"`
 }
 
-// nmsHealth is the connector_health snapshot + recent runs.
-type nmsHealth struct {
-	Healthy        bool           `json:"healthy"`
-	LastSuccess    time.Time      `json:"lastSuccess,omitempty"`
-	LastError      string         `json:"lastError,omitempty"`
-	LastErrorAt    time.Time      `json:"lastErrorAt,omitempty"`
-	EventsIngested int64          `json:"eventsIngested"`
-	ErrorRate      float64        `json:"errorRate"`
-	UpdatedAt      time.Time      `json:"updatedAt,omitempty"`
-	Runs           []nmsRunRecord `json:"runs,omitempty"`
+// Health is the connector_health snapshot + recent runs.
+type Health struct {
+	Healthy        bool        `json:"healthy"`
+	LastSuccess    time.Time   `json:"lastSuccess,omitempty"`
+	LastError      string      `json:"lastError,omitempty"`
+	LastErrorAt    time.Time   `json:"lastErrorAt,omitempty"`
+	EventsIngested int64       `json:"eventsIngested"`
+	ErrorRate      float64     `json:"errorRate"`
+	UpdatedAt      time.Time   `json:"updatedAt,omitempty"`
+	Runs           []RunRecord `json:"runs,omitempty"`
 }
 
-// nmsCredFieldID is the vault.Vault AAD field-id for one credential field. Mirrors
+// credFieldID is the vault.Vault AAD field-id for one credential field. Mirrors
 // snmp_creds.go: static per-field ids, tenant DEK binds the ciphertext to the
 // owning tenant.
-func nmsCredFieldID(field string) string { return "nms." + field }
+func credFieldID(field string) string { return "" + field }
 
 // credsFromFields maps the operator-supplied credential fields onto
-// nms.Credentials. Known keys populate the struct; everything else (org,
+// Credentials. Known keys populate the struct; everything else (org,
 // domain, webhook_secret, …) rides in Extra.
-func credsFromFields(fields map[string]string) nms.Credentials {
-	c := nms.Credentials{}
+func credsFromFields(fields map[string]string) Credentials {
+	c := Credentials{}
 	for k, v := range fields {
 		switch k {
 		case "api_key":
@@ -101,63 +99,65 @@ func credsFromFields(fields map[string]string) nms.Credentials {
 	return c
 }
 
-// nmsConfigStore is the persistence seam the handlers + scheduler drive.
-type nmsConfigStore interface {
-	List(ctx context.Context, tenant string, cross bool) ([]nmsIntegration, error)
-	Get(ctx context.Context, tenant string, cross bool, id string) (nmsIntegration, bool, error)
+// ConfigStore is the persistence seam the handlers + scheduler drive.
+type ConfigStore interface {
+	List(ctx context.Context, tenant string, cross bool) ([]Integration, error)
+	Get(ctx context.Context, tenant string, cross bool, id string) (Integration, bool, error)
 	// Upsert writes c for c.Tenant (already stamped by the caller from the
 	// authenticated principal — never from the request body).
-	Upsert(ctx context.Context, c nmsIntegration) error
+	Upsert(ctx context.Context, c Integration) error
 	Delete(ctx context.Context, tenant string, cross bool, id string) (bool, error)
 	// SetCredentials replaces the stored credential fields (write-only surface).
 	SetCredentials(ctx context.Context, tenant, id string, fields map[string]string) error
 	// Credentials returns the DECRYPTED credentials (runtime use only — never
 	// serialized to an API response) plus the set field names (UI display).
-	Credentials(ctx context.Context, tenant, id string) (nms.Credentials, []string, error)
+	Credentials(ctx context.Context, tenant, id string) (Credentials, []string, error)
 	// ListEnabled returns every enabled integration across all tenants
 	// (platform scope — the scheduler's work list).
-	ListEnabled(ctx context.Context) ([]nmsIntegration, error)
+	ListEnabled(ctx context.Context) ([]Integration, error)
 	// ByWebhookToken resolves an integration from its opaque webhook token
 	// (platform scope — the webhook is unauthenticated until verified).
-	ByWebhookToken(ctx context.Context, token string) (nmsIntegration, bool, error)
-	Checkpoints() nms.CheckpointStore
-	RecordRun(ctx context.Context, rec nmsRunRecord) error
-	UpsertStates(ctx context.Context, tenant, integrationID string, recs []nms.StateRecord) error
+	ByWebhookToken(ctx context.Context, token string) (Integration, bool, error)
+	Checkpoints() CheckpointStore
+	RecordRun(ctx context.Context, rec RunRecord) error
+	UpsertStates(ctx context.Context, tenant, integrationID string, recs []StateRecord) error
 	// States returns the tracked controller-state rows for one integration
 	// (tenant-scoped read — the UI's state table).
-	States(ctx context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error)
-	Health(ctx context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error)
+	States(ctx context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error)
+	Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error)
 }
 
 // ── in-memory backend (dev/file backend + tests) ─────────────────────────────
 
-type memNMSStore struct {
+type memStore struct {
 	mu     sync.Mutex
-	ints   map[string]nmsIntegration    // tenant\x00id
+	ints   map[string]Integration       // tenant\x00id
 	creds  map[string]map[string]string // tenant\x00id → field→plaintext (mem = non-prod)
-	health map[string]nmsHealth         // tenant\x00id
-	runs   map[string][]nmsRunRecord    // tenant\x00id, bounded
-	states map[string]nms.StateRecord   // tenant\x00id\x00entity\x00kind
-	cks    *nms.MemCheckpoints
+	health map[string]Health            // tenant\x00id
+	runs   map[string][]RunRecord       // tenant\x00id, bounded
+	states map[string]StateRecord       // tenant\x00id\x00entity\x00kind
+	cks    *MemCheckpoints
 }
 
-func newMemNMSStore() *memNMSStore {
-	return &memNMSStore{
-		ints:   map[string]nmsIntegration{},
+func NewMemStore() *memStore {
+	return &memStore{
+		ints:   map[string]Integration{},
 		creds:  map[string]map[string]string{},
-		health: map[string]nmsHealth{},
-		runs:   map[string][]nmsRunRecord{},
-		states: map[string]nms.StateRecord{},
-		cks:    nms.NewMemCheckpoints(),
+		health: map[string]Health{},
+		runs:   map[string][]RunRecord{},
+		states: map[string]StateRecord{},
+		cks:    NewMemCheckpoints(),
 	}
 }
 
-func nmsKey(tenant, id string) string { return tenant + "\x00" + id }
+// Key is the composite (tenant, id) map key the store and its integrator's
+// scheduler bookkeeping share.
+func Key(tenant, id string) string { return tenant + "\x00" + id }
 
-func (m *memNMSStore) List(_ context.Context, tenant string, cross bool) ([]nmsIntegration, error) {
+func (m *memStore) List(_ context.Context, tenant string, cross bool) ([]Integration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []nmsIntegration
+	var out []Integration
 	for _, c := range m.ints {
 		if cross || c.Tenant == tenant {
 			out = append(out, c)
@@ -167,7 +167,7 @@ func (m *memNMSStore) List(_ context.Context, tenant string, cross bool) ([]nmsI
 	return out, nil
 }
 
-func (m *memNMSStore) Get(_ context.Context, tenant string, cross bool, id string) (nmsIntegration, bool, error) {
+func (m *memStore) Get(_ context.Context, tenant string, cross bool, id string) (Integration, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range m.ints {
@@ -175,26 +175,26 @@ func (m *memNMSStore) Get(_ context.Context, tenant string, cross bool, id strin
 			return c, true, nil
 		}
 	}
-	return nmsIntegration{}, false, nil
+	return Integration{}, false, nil
 }
 
-func (m *memNMSStore) Upsert(_ context.Context, c nmsIntegration) error {
+func (m *memStore) Upsert(_ context.Context, c Integration) error {
 	if c.Tenant == "" || c.ID == "" {
 		return errors.New("nms: tenant and id required")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c.UpdatedAt = time.Now().UTC()
-	if prev, ok := m.ints[nmsKey(c.Tenant, c.ID)]; ok {
+	if prev, ok := m.ints[Key(c.Tenant, c.ID)]; ok {
 		c.CreatedAt = prev.CreatedAt
 	} else if c.CreatedAt.IsZero() {
 		c.CreatedAt = c.UpdatedAt
 	}
-	m.ints[nmsKey(c.Tenant, c.ID)] = c
+	m.ints[Key(c.Tenant, c.ID)] = c
 	return nil
 }
 
-func (m *memNMSStore) Delete(_ context.Context, tenant string, cross bool, id string) (bool, error) {
+func (m *memStore) Delete(_ context.Context, tenant string, cross bool, id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for k, c := range m.ints {
@@ -209,21 +209,21 @@ func (m *memNMSStore) Delete(_ context.Context, tenant string, cross bool, id st
 	return false, nil
 }
 
-func (m *memNMSStore) SetCredentials(_ context.Context, tenant, id string, fields map[string]string) error {
+func (m *memStore) SetCredentials(_ context.Context, tenant, id string, fields map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := make(map[string]string, len(fields))
 	for k, v := range fields {
 		cp[k] = v
 	}
-	m.creds[nmsKey(tenant, id)] = cp
+	m.creds[Key(tenant, id)] = cp
 	return nil
 }
 
-func (m *memNMSStore) Credentials(_ context.Context, tenant, id string) (nms.Credentials, []string, error) {
+func (m *memStore) Credentials(_ context.Context, tenant, id string) (Credentials, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fields := m.creds[nmsKey(tenant, id)]
+	fields := m.creds[Key(tenant, id)]
 	names := make([]string, 0, len(fields))
 	for k := range fields {
 		names = append(names, k)
@@ -232,10 +232,10 @@ func (m *memNMSStore) Credentials(_ context.Context, tenant, id string) (nms.Cre
 	return credsFromFields(fields), names, nil
 }
 
-func (m *memNMSStore) ListEnabled(_ context.Context) ([]nmsIntegration, error) {
+func (m *memStore) ListEnabled(_ context.Context) ([]Integration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []nmsIntegration
+	var out []Integration
 	for _, c := range m.ints {
 		if c.Enabled {
 			out = append(out, c)
@@ -245,9 +245,9 @@ func (m *memNMSStore) ListEnabled(_ context.Context) ([]nmsIntegration, error) {
 	return out, nil
 }
 
-func (m *memNMSStore) ByWebhookToken(_ context.Context, token string) (nmsIntegration, bool, error) {
+func (m *memStore) ByWebhookToken(_ context.Context, token string) (Integration, bool, error) {
 	if token == "" {
-		return nmsIntegration{}, false, nil
+		return Integration{}, false, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -256,17 +256,17 @@ func (m *memNMSStore) ByWebhookToken(_ context.Context, token string) (nmsIntegr
 			return c, true, nil
 		}
 	}
-	return nmsIntegration{}, false, nil
+	return Integration{}, false, nil
 }
 
-func (m *memNMSStore) Checkpoints() nms.CheckpointStore { return m.cks }
+func (m *memStore) Checkpoints() CheckpointStore { return m.cks }
 
 const nmsRunHistoryCap = 50
 
-func (m *memNMSStore) RecordRun(_ context.Context, rec nmsRunRecord) error {
+func (m *memStore) RecordRun(_ context.Context, rec RunRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	k := nmsKey(rec.Tenant, rec.IntegrationID)
+	k := Key(rec.Tenant, rec.IntegrationID)
 	runs := append(m.runs[k], rec)
 	if len(runs) > nmsRunHistoryCap {
 		runs = runs[len(runs)-nmsRunHistoryCap:]
@@ -294,7 +294,7 @@ func (m *memNMSStore) RecordRun(_ context.Context, rec nmsRunRecord) error {
 	return nil
 }
 
-func (m *memNMSStore) UpsertStates(_ context.Context, tenant, integrationID string, recs []nms.StateRecord) error {
+func (m *memStore) UpsertStates(_ context.Context, tenant, integrationID string, recs []StateRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range recs {
@@ -303,10 +303,10 @@ func (m *memNMSStore) UpsertStates(_ context.Context, tenant, integrationID stri
 	return nil
 }
 
-func (m *memNMSStore) States(_ context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error) {
+func (m *memStore) States(_ context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []nms.StateRecord
+	var out []StateRecord
 	for k, r := range m.states {
 		parts := strings.SplitN(k, "\x00", 3)
 		if len(parts) < 3 {
@@ -324,7 +324,7 @@ func (m *memNMSStore) States(_ context.Context, tenant string, cross bool, integ
 	return out, nil
 }
 
-func (m *memNMSStore) Health(_ context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error) {
+func (m *memStore) Health(_ context.Context, tenant string, cross bool, id string) (Health, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for k, c := range m.ints {
@@ -338,30 +338,38 @@ func (m *memNMSStore) Health(_ context.Context, tenant string, cross bool, id st
 			return h, true, nil
 		}
 	}
-	return nmsHealth{}, false, nil
+	return Health{}, false, nil
 }
 
 // ── Postgres backend (migration 0020, FORCE-RLS) ─────────────────────────────
 
-type pgNMSStore struct {
-	db    *pgDB
+// DB is the injected relational seam: run fn inside a transaction whose
+// row-level security is scoped to tenant (or unscoped for a cross-tenant
+// principal). Implemented by package main's rlsPG adapter (the portintel.DB
+// idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+type pgStore struct {
+	db    DB
 	vault *vault.Vault
 }
 
-func newPGNMSStore(db *pgDB, vault *vault.Vault) *pgNMSStore {
-	return &pgNMSStore{db: db, vault: vault}
+func NewPGStore(db DB, vault *vault.Vault) *pgStore {
+	return &pgStore{db: db, vault: vault}
 }
 
 const nmsIntCols = `tenant_id, integration_id, vendor, product, display_name, enabled, base_url, auth_type, poll_interval_s, data_sources, data, created_at, updated_at`
 
-// nmsRowData is the integrations.data JSONB payload (non-column extras).
-type nmsRowData struct {
+// rowData is the integrations.data JSONB payload (non-column extras).
+type rowData struct {
 	WebhookToken  string `json:"webhook_token,omitempty"`
 	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
 }
 
-func scanNMSIntegration(row pgx.Row) (nmsIntegration, error) {
-	var c nmsIntegration
+func scanNMSIntegration(row pgx.Row) (Integration, error) {
+	var c Integration
 	var data []byte
 	err := row.Scan(&c.Tenant, &c.ID, &c.Vendor, &c.Product, &c.DisplayName, &c.Enabled,
 		&c.BaseURL, &c.AuthType, &c.PollIntervalS, &c.Streams, &data, &c.CreatedAt, &c.UpdatedAt)
@@ -369,7 +377,7 @@ func scanNMSIntegration(row pgx.Row) (nmsIntegration, error) {
 		return c, err
 	}
 	if len(data) > 0 {
-		var d nmsRowData
+		var d rowData
 		if json.Unmarshal(data, &d) == nil {
 			c.WebhookToken = d.WebhookToken
 			c.TLSSkipVerify = d.TLSSkipVerify
@@ -378,9 +386,9 @@ func scanNMSIntegration(row pgx.Row) (nmsIntegration, error) {
 	return c, nil
 }
 
-func (s *pgNMSStore) queryIntegrations(ctx context.Context, tenant string, cross bool, where string, args ...any) ([]nmsIntegration, error) {
-	var out []nmsIntegration
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (s *pgStore) queryIntegrations(ctx context.Context, tenant string, cross bool, where string, args ...any) ([]Integration, error) {
+	var out []Integration
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+nmsIntCols+` FROM integrations `+where, args...)
 		if err != nil {
 			return err
@@ -398,28 +406,28 @@ func (s *pgNMSStore) queryIntegrations(ctx context.Context, tenant string, cross
 	return out, err
 }
 
-func (s *pgNMSStore) List(ctx context.Context, tenant string, cross bool) ([]nmsIntegration, error) {
+func (s *pgStore) List(ctx context.Context, tenant string, cross bool) ([]Integration, error) {
 	return s.queryIntegrations(ctx, tenant, cross, `ORDER BY integration_id`)
 }
 
-func (s *pgNMSStore) Get(ctx context.Context, tenant string, cross bool, id string) (nmsIntegration, bool, error) {
+func (s *pgStore) Get(ctx context.Context, tenant string, cross bool, id string) (Integration, bool, error) {
 	rows, err := s.queryIntegrations(ctx, tenant, cross, `WHERE integration_id=$1`, id)
 	if err != nil || len(rows) == 0 {
-		return nmsIntegration{}, false, err
+		return Integration{}, false, err
 	}
 	return rows[0], true, nil
 }
 
-func (s *pgNMSStore) Upsert(ctx context.Context, c nmsIntegration) error {
+func (s *pgStore) Upsert(ctx context.Context, c Integration) error {
 	if c.Tenant == "" || c.ID == "" {
 		return errors.New("nms: tenant and id required")
 	}
-	data, err := json.Marshal(nmsRowData{WebhookToken: c.WebhookToken, TLSSkipVerify: c.TLSSkipVerify})
+	data, err := json.Marshal(rowData{WebhookToken: c.WebhookToken, TLSSkipVerify: c.TLSSkipVerify})
 	if err != nil {
 		return err
 	}
 	// System write at platform scope, stamping tenant_id (RLS WITH CHECK allows).
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO integrations
    (tenant_id, integration_id, vendor, product, display_name, enabled, base_url, auth_type, poll_interval_s, data_sources, data, created_at, updated_at)
@@ -435,9 +443,9 @@ INSERT INTO integrations
 	})
 }
 
-func (s *pgNMSStore) Delete(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+func (s *pgStore) Delete(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	var n int64
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// RLS bounds every statement to the caller's tenant.
 		for _, q := range []string{
 			`DELETE FROM integration_credentials_metadata WHERE integration_id=$1`,
@@ -457,12 +465,12 @@ func (s *pgNMSStore) Delete(ctx context.Context, tenant string, cross bool, id s
 	return n > 0, err
 }
 
-func (s *pgNMSStore) SetCredentials(ctx context.Context, tenant, id string, fields map[string]string) error {
-	// Encrypt each field under the OWNING tenant's DEK (AAD tenant|nms.<field>).
+func (s *pgStore) SetCredentials(ctx context.Context, tenant, id string, fields map[string]string) error {
+	// Encrypt each field under the OWNING tenant's DEK (AAD tenant|<field>).
 	enc := make(map[string]string, len(fields))
 	names := make([]string, 0, len(fields))
 	for k, v := range fields {
-		ct, err := s.vault.Encrypt(tenant, nmsCredFieldID(k), v)
+		ct, err := s.vault.Encrypt(tenant, credFieldID(k), v)
 		if err != nil {
 			return err
 		}
@@ -474,7 +482,7 @@ func (s *pgNMSStore) SetCredentials(ctx context.Context, tenant, id string, fiel
 	if err != nil {
 		return err
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO integration_credentials_metadata (tenant_id, integration_id, vault_ref, fields_set, rotated_at, updated_at)
  VALUES ($1,$2,$3,$4, now(), now())
@@ -485,10 +493,10 @@ INSERT INTO integration_credentials_metadata (tenant_id, integration_id, vault_r
 	})
 }
 
-func (s *pgNMSStore) Credentials(ctx context.Context, tenant, id string) (nms.Credentials, []string, error) {
+func (s *pgStore) Credentials(ctx context.Context, tenant, id string) (Credentials, []string, error) {
 	var blob string
 	var names []string
-	err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT vault_ref, fields_set FROM integration_credentials_metadata WHERE integration_id=$1`, id)
 		if err := row.Scan(&blob, &names); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -499,45 +507,45 @@ func (s *pgNMSStore) Credentials(ctx context.Context, tenant, id string) (nms.Cr
 		return nil
 	})
 	if err != nil || blob == "" {
-		return nms.Credentials{}, names, err
+		return Credentials{}, names, err
 	}
 	var enc map[string]string
 	if err := json.Unmarshal([]byte(blob), &enc); err != nil {
-		return nms.Credentials{}, names, err
+		return Credentials{}, names, err
 	}
 	fields := make(map[string]string, len(enc))
 	for k, ct := range enc {
-		pt, derr := s.vault.Decrypt(tenant, nmsCredFieldID(k), ct)
+		pt, derr := s.vault.Decrypt(tenant, credFieldID(k), ct)
 		if derr != nil {
-			return nms.Credentials{}, names, derr
+			return Credentials{}, names, derr
 		}
 		fields[k] = pt
 	}
 	return credsFromFields(fields), names, nil
 }
 
-func (s *pgNMSStore) ListEnabled(ctx context.Context) ([]nmsIntegration, error) {
+func (s *pgStore) ListEnabled(ctx context.Context) ([]Integration, error) {
 	return s.queryIntegrations(ctx, "", true, `WHERE enabled ORDER BY tenant_id, integration_id`)
 }
 
-func (s *pgNMSStore) ByWebhookToken(ctx context.Context, token string) (nmsIntegration, bool, error) {
+func (s *pgStore) ByWebhookToken(ctx context.Context, token string) (Integration, bool, error) {
 	if token == "" {
-		return nmsIntegration{}, false, nil
+		return Integration{}, false, nil
 	}
 	rows, err := s.queryIntegrations(ctx, "", true, `WHERE data->>'webhook_token' = $1`, token)
 	if err != nil || len(rows) == 0 {
-		return nmsIntegration{}, false, err
+		return Integration{}, false, err
 	}
 	return rows[0], true, nil
 }
 
-// pgNMSCheckpoints implements nms.CheckpointStore over connector_checkpoints.
-type pgNMSCheckpoints struct{ db *pgDB }
+// pgNMSCheckpoints implements CheckpointStore over connector_checkpoints.
+type pgNMSCheckpoints struct{ db DB }
 
-func (c pgNMSCheckpoints) Load(ctx context.Context, tenant, integrationID, stream string) (nms.Checkpoint, error) {
-	var cp nms.Checkpoint
+func (c pgNMSCheckpoints) Load(ctx context.Context, tenant, integrationID, stream string) (Checkpoint, error) {
+	var cp Checkpoint
 	var t *time.Time
-	err := c.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	err := c.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT last_event_time, last_seq FROM connector_checkpoints
 			WHERE integration_id=$1 AND stream=$2`, integrationID, stream)
 		if err := row.Scan(&t, &cp.LastSeq); err != nil {
@@ -554,8 +562,8 @@ func (c pgNMSCheckpoints) Load(ctx context.Context, tenant, integrationID, strea
 	return cp, err
 }
 
-func (c pgNMSCheckpoints) Save(ctx context.Context, tenant, integrationID, stream string, cp nms.Checkpoint) error {
-	return c.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (c pgNMSCheckpoints) Save(ctx context.Context, tenant, integrationID, stream string, cp Checkpoint) error {
+	return c.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO connector_checkpoints (tenant_id, integration_id, stream, last_event_time, last_seq, updated_at)
  VALUES ($1,$2,$3,$4,$5, now())
@@ -566,10 +574,10 @@ INSERT INTO connector_checkpoints (tenant_id, integration_id, stream, last_event
 	})
 }
 
-func (s *pgNMSStore) Checkpoints() nms.CheckpointStore { return pgNMSCheckpoints{db: s.db} }
+func (s *pgStore) Checkpoints() CheckpointStore { return pgNMSCheckpoints{db: s.db} }
 
-func (s *pgNMSStore) RecordRun(ctx context.Context, rec nmsRunRecord) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *pgStore) RecordRun(ctx context.Context, rec RunRecord) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 INSERT INTO connector_run_history (tenant_id, integration_id, run_id, started_at, finished_at, status, events, error)
  VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -616,11 +624,11 @@ INSERT INTO connector_health (tenant_id, integration_id, healthy, last_success, 
 	})
 }
 
-func (s *pgNMSStore) UpsertStates(ctx context.Context, tenant, integrationID string, recs []nms.StateRecord) error {
+func (s *pgStore) UpsertStates(ctx context.Context, tenant, integrationID string, recs []StateRecord) error {
 	if len(recs) == 0 {
 		return nil
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		for _, r := range recs {
 			if _, err := tx.Exec(ctx, `
 INSERT INTO controller_state_current
@@ -639,9 +647,9 @@ INSERT INTO controller_state_current
 	})
 }
 
-func (s *pgNMSStore) States(ctx context.Context, tenant string, cross bool, integrationID string) ([]nms.StateRecord, error) {
-	var out []nms.StateRecord
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (s *pgStore) States(ctx context.Context, tenant string, cross bool, integrationID string) ([]StateRecord, error) {
+	var out []StateRecord
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT entity_key, state_kind, current_state, previous_state,
 			first_seen, last_seen, flap_count, device_id, site_id
 			FROM controller_state_current WHERE integration_id=$1
@@ -651,7 +659,7 @@ func (s *pgNMSStore) States(ctx context.Context, tenant string, cross bool, inte
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var r nms.StateRecord
+			var r StateRecord
 			if err := rows.Scan(&r.EntityKey, &r.StateKind, &r.CurrentState, &r.PreviousState,
 				&r.FirstSeen, &r.LastSeen, &r.FlapCount, &r.DeviceID, &r.SiteID); err != nil {
 				return err
@@ -663,10 +671,10 @@ func (s *pgNMSStore) States(ctx context.Context, tenant string, cross bool, inte
 	return out, err
 }
 
-func (s *pgNMSStore) Health(ctx context.Context, tenant string, cross bool, id string) (nmsHealth, bool, error) {
-	var h nmsHealth
+func (s *pgStore) Health(ctx context.Context, tenant string, cross bool, id string) (Health, bool, error) {
+	var h Health
 	var found bool
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// Health row may not exist yet for a never-run integration — the
 		// integration row decides existence.
 		var one int
@@ -702,7 +710,7 @@ func (s *pgNMSStore) Health(ctx context.Context, tenant string, cross bool, id s
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var r nmsRunRecord
+			var r RunRecord
 			var fin *time.Time
 			if err := rows.Scan(&r.RunID, &r.Started, &fin, &r.Status, &r.Events, &r.Error); err != nil {
 				return err
@@ -719,13 +727,13 @@ func (s *pgNMSStore) Health(ctx context.Context, tenant string, cross bool, id s
 
 // ── non-durable guard (F-76) ────────────────────────────────────────────────
 
-// errNMSStorageNotDurable is returned when an NMS credential write is attempted
+// ErrStorageNotDurable is returned when an NMS credential write is attempted
 // against storage that cannot survive a restart.
-var errNMSStorageNotDurable = errors.New(
+var ErrStorageNotDurable = errors.New(
 	"NMS integrations require the Postgres backend (STORE_BACKEND=postgres) to store credentials; " +
 		"they are refused rather than held in memory")
 
-// nonDurableNMSStore is the in-memory store with credential writes REFUSED.
+// NonDurableStore is the in-memory store with credential writes REFUSED.
 //
 // F-76: on the file backend an operator pasted controller credentials, received
 // 201 Created, and had them held as PLAINTEXT in a Go map until the next
@@ -734,22 +742,26 @@ var errNMSStorageNotDurable = errors.New(
 // still served (a fresh install renders its gallery, which is why the runtime is
 // wired at all); only the credential write is refused, and it says why.
 //
-// Tests that need the permissive behaviour use newMemNMSStore() directly.
-type nonDurableNMSStore struct{ *memNMSStore }
+// Tests that need the permissive behaviour use NewMemStore() directly.
+type NonDurableStore struct{ *memStore }
 
-func (nonDurableNMSStore) SetCredentials(_ context.Context, _, _ string, _ map[string]string) error {
-	return errNMSStorageNotDurable
+// NewNonDurableStore wraps a fresh in-memory store with credential writes
+// refused (the file-backend deployment shape).
+func NewNonDurableStore() NonDurableStore { return NonDurableStore{NewMemStore()} }
+
+func (NonDurableStore) SetCredentials(_ context.Context, _, _ string, _ map[string]string) error {
+	return ErrStorageNotDurable
 }
 
 // Durable reports whether credentials written here survive a restart.
-func (nonDurableNMSStore) Durable() bool { return false }
-func (*memNMSStore) Durable() bool       { return true }
-func (*pgNMSStore) Durable() bool        { return true }
+func (NonDurableStore) Durable() bool { return false }
+func (*memStore) Durable() bool       { return true }
+func (*pgStore) Durable() bool        { return true }
 
-// nmsStoreDurable reports whether a store persists credentials across a
+// StoreDurable reports whether a store persists credentials across a
 // restart. Stores that do not implement the probe are assumed durable — only
 // the explicit non-durable wrapper opts out.
-func nmsStoreDurable(st nmsConfigStore) bool {
+func StoreDurable(st ConfigStore) bool {
 	if d, ok := st.(interface{ Durable() bool }); ok {
 		return d.Durable()
 	}
