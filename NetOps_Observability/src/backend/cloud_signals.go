@@ -186,7 +186,7 @@ func encodeSignalCursor(ts, id string) string {
 
 // decodeSignalCursor unpacks + validates a caller-supplied cursor. Both fields
 // are charset-checked BEFORE they may reach a SQL literal; anything off fails
-// closed (handler → 400), mirroring the resources surface's errBadCursor.
+// closed (handler → 400), mirroring the resources surface's cloud.ErrBadCursor.
 func decodeSignalCursor(raw string) (ts, id string, err error) {
 	b, err := base64.URLEncoding.DecodeString(strings.TrimSpace(raw))
 	if err != nil {

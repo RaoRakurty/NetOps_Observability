@@ -1,7 +1,7 @@
 package main
 
 // cloud_store_pg_test.go — CROSS-TENANT isolation for the Postgres cloud inventory
-// store (CLAUDE.md §3a.5, REQUIRED with the feature). Drives pgCloudStore as two
+// store (CLAUDE.md §3a.5, REQUIRED with the feature). Drives cloud.PGStore as two
 // scoped tenants through withTenant, run as the non-superuser app role so FORCE ROW
 // LEVEL SECURITY actually bites — the storage-layer backstop even if a handler authz
 // check were bypassed. Asserts: own-only list/query, cross-tenant query no-leak,
@@ -40,7 +40,7 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	st := &pgCloudStore{db: ps.db}
+	st := cloud.NewPGStore(rlsPG{db: ps.db})
 
 	// acme + globex each load their own inventory (per-tenant full refresh).
 	if err := st.ReplaceInventory(ctx, "acme", acmeInventory(),
@@ -56,7 +56,7 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 	if rs, _ := st.ListResources(ctx, "acme", false); len(rs) != 3 {
 		t.Fatalf("acme should see exactly its 3 resources, got %d", len(rs))
 	}
-	page, err := st.QueryResources(ctx, "acme", false, cloudResourceFilter{})
+	page, err := st.QueryResources(ctx, "acme", false, cloud.ResourceFilter{})
 	if err != nil || len(page.Resources) != 3 {
 		t.Fatalf("acme QueryResources: got %d err=%v, want 3", len(page.Resources), err)
 	}
@@ -65,7 +65,7 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 	}
 
 	// 2) globex sees NEITHER acme's resources nor its mapping — no cross-tenant leak.
-	if page, err := st.QueryResources(ctx, "globex", false, cloudResourceFilter{}); err != nil || len(page.Resources) != 1 || page.Resources[0].ResourceID != "globex-r1" {
+	if page, err := st.QueryResources(ctx, "globex", false, cloud.ResourceFilter{}); err != nil || len(page.Resources) != 1 || page.Resources[0].ResourceID != "globex-r1" {
 		t.Fatalf("globex must see only its own resource: %+v err=%v", page.Resources, err)
 	}
 	if maps, err := st.ListMappings(ctx, "globex", false); err != nil || len(maps) != 0 {
@@ -81,16 +81,16 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 	}
 
 	// 4) filters + keyset pagination hold under RLS (scoped scan).
-	if page, err := st.QueryResources(ctx, "acme", false, cloudResourceFilter{Provider: "aws"}); err != nil || len(page.Resources) != 2 {
+	if page, err := st.QueryResources(ctx, "acme", false, cloud.ResourceFilter{Provider: "aws"}); err != nil || len(page.Resources) != 2 {
 		t.Fatalf("acme provider=aws: got %d err=%v, want 2", len(page.Resources), err)
 	}
-	if page, err := st.QueryResources(ctx, "acme", false, cloudResourceFilter{Tag: "env=prod"}); err != nil || len(page.Resources) != 2 {
+	if page, err := st.QueryResources(ctx, "acme", false, cloud.ResourceFilter{Tag: "env=prod"}); err != nil || len(page.Resources) != 2 {
 		t.Fatalf("acme tag env=prod: got %d err=%v, want 2", len(page.Resources), err)
 	}
 	seen := map[string]bool{}
 	cursor := ""
 	for i := 0; i < 10; i++ {
-		p, err := st.QueryResources(ctx, "acme", false, cloudResourceFilter{Limit: 1, Cursor: cursor})
+		p, err := st.QueryResources(ctx, "acme", false, cloud.ResourceFilter{Limit: 1, Cursor: cursor})
 		if err != nil {
 			t.Fatalf("acme paged query: %v", err)
 		}
@@ -136,7 +136,7 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 	}
 
 	// 7) platform cross view sees both tenants' rows (control).
-	if all, err := st.QueryResources(ctx, "*", true, cloudResourceFilter{}); err != nil || len(all.Resources) != 2 {
+	if all, err := st.QueryResources(ctx, "*", true, cloud.ResourceFilter{}); err != nil || len(all.Resources) != 2 {
 		t.Fatalf("platform cross view should see both tenants' rows (1+1), got %d err=%v", len(all.Resources), err)
 	}
 }

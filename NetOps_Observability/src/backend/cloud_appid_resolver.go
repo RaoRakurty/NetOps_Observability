@@ -31,11 +31,11 @@ type cloudKeyEntry struct {
 type cloudKeyMap map[string]map[string]cloudKeyEntry
 
 type cloudAppResolver struct {
-	store cloudStore
+	store cloud.Store
 	cur   atomic.Pointer[cloudKeyMap]
 }
 
-func newCloudAppResolver(store cloudStore) *cloudAppResolver {
+func newCloudAppResolver(store cloud.Store) *cloudAppResolver {
 	r := &cloudAppResolver{store: store}
 	empty := cloudKeyMap{}
 	r.cur.Store(&empty)

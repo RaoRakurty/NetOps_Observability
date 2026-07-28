@@ -73,7 +73,7 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 	tenant, cross := principalTenant(claims)
 	page, err := s.cloud.QueryResources(r.Context(), tenant, cross, filter)
 	if err != nil {
-		if errors.Is(err, errBadCursor) {
+		if errors.Is(err, cloud.ErrBadCursor) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -133,12 +133,12 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 // parseCloudResourceFilter reads the /api/cloud/resources filter + pagination query
 // params, validating every one at the boundary (§3 zero-trust) so a bad value is a
 // clean 400 rather than a silently-empty result. Values are bounded and control-char
-// free; provider/attribution are enum-checked; limit is clamped to cloudPageMax.
-func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
+// free; provider/attribution are enum-checked; limit is clamped to cloud.PageMax.
+func parseCloudResourceFilter(r *http.Request) (cloud.ResourceFilter, error) {
 	q := r.URL.Query()
-	f := cloudResourceFilter{Cursor: strings.TrimSpace(q.Get("cursor"))}
+	f := cloud.ResourceFilter{Cursor: strings.TrimSpace(q.Get("cursor"))}
 	if len(f.Cursor) > 2048 {
-		return f, errBadCursor
+		return f, cloud.ErrBadCursor
 	}
 	get := func(key string) (string, error) {
 		v := strings.TrimSpace(q.Get(key))
@@ -153,7 +153,7 @@ func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
 	}
 	// provider is a multi-value OR set ("aws,azure" — Wave 2 #5 scope bar);
 	// every part must be a known cloud, so a typo is a clean 400.
-	for _, p := range filterValues(f.Provider) {
+	for _, p := range cloud.FilterValues(f.Provider) {
 		if !cloud.ValidProvider(cloud.Provider(strings.ToLower(p))) {
 			return f, errors.New("invalid provider (want aws|azure|gcp)")
 		}
@@ -192,8 +192,8 @@ func parseCloudResourceFilter(r *http.Request) (cloudResourceFilter, error) {
 		if e != nil || n <= 0 {
 			return f, errors.New("invalid limit")
 		}
-		if n > cloudPageMax {
-			n = cloudPageMax
+		if n > cloud.PageMax {
+			n = cloud.PageMax
 		}
 		f.Limit = n
 	}

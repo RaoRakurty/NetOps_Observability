@@ -13,7 +13,7 @@ import (
 	"netops/backend/cloud"
 )
 
-func seedCloudInventory(t *testing.T) cloudStore {
+func seedCloudInventory(t *testing.T) cloud.Store {
 	t.Helper()
 	st := newCloudStore() // mem backend (no STORE_BACKEND=postgres in unit tests)
 	res := []cloud.CloudResource{
@@ -34,32 +34,32 @@ func TestCloudQueryFilters(t *testing.T) {
 
 	cases := []struct {
 		name string
-		f    cloudResourceFilter
+		f    cloud.ResourceFilter
 		want int
 	}{
-		{"provider aws", cloudResourceFilter{Provider: "aws"}, 2},
-		{"provider case-insensitive", cloudResourceFilter{Provider: "AWS"}, 2},
-		{"account", cloudResourceFilter{Account: "111"}, 2},
-		{"region", cloudResourceFilter{Region: "eastus"}, 1},
-		{"type vm", cloudResourceFilter{Type: "vm"}, 1},
-		{"attribution unknown", cloudResourceFilter{Attribution: "unknown"}, 1},
-		{"attribution attributed", cloudResourceFilter{Attribution: "attributed"}, 3},
-		{"attribution unattributed", cloudResourceFilter{Attribution: "unattributed"}, 1},
-		{"attribution strong", cloudResourceFilter{Attribution: "strong"}, 1},
-		{"tag has env", cloudResourceFilter{Tag: "env"}, 3},
-		{"tag env=prod", cloudResourceFilter{Tag: "env=prod"}, 2},
-		{"tag app=billing", cloudResourceFilter{Tag: "app=billing"}, 1},
-		{"combined aws prod", cloudResourceFilter{Provider: "aws", Tag: "env=prod"}, 1},
-		{"no filter", cloudResourceFilter{}, 4},
+		{"provider aws", cloud.ResourceFilter{Provider: "aws"}, 2},
+		{"provider case-insensitive", cloud.ResourceFilter{Provider: "AWS"}, 2},
+		{"account", cloud.ResourceFilter{Account: "111"}, 2},
+		{"region", cloud.ResourceFilter{Region: "eastus"}, 1},
+		{"type vm", cloud.ResourceFilter{Type: "vm"}, 1},
+		{"attribution unknown", cloud.ResourceFilter{Attribution: "unknown"}, 1},
+		{"attribution attributed", cloud.ResourceFilter{Attribution: "attributed"}, 3},
+		{"attribution unattributed", cloud.ResourceFilter{Attribution: "unattributed"}, 1},
+		{"attribution strong", cloud.ResourceFilter{Attribution: "strong"}, 1},
+		{"tag has env", cloud.ResourceFilter{Tag: "env"}, 3},
+		{"tag env=prod", cloud.ResourceFilter{Tag: "env=prod"}, 2},
+		{"tag app=billing", cloud.ResourceFilter{Tag: "app=billing"}, 1},
+		{"combined aws prod", cloud.ResourceFilter{Provider: "aws", Tag: "env=prod"}, 1},
+		{"no filter", cloud.ResourceFilter{}, 4},
 		// Multi-value OR sets (Wave 2 #5 scope bar): comma-separated values OR
 		// within a dimension, AND across dimensions.
-		{"providers aws,azure", cloudResourceFilter{Provider: "aws,azure"}, 3},
-		{"providers all three", cloudResourceFilter{Provider: "aws,azure,gcp"}, 4},
-		{"accounts 111,sub-9", cloudResourceFilter{Account: "111,sub-9"}, 3},
-		{"regions us-east-1,eastus", cloudResourceFilter{Region: "us-east-1,eastus"}, 2},
-		{"multi-provider AND region", cloudResourceFilter{Provider: "aws,azure", Region: "us-west-2"}, 1},
-		{"multi with stray spaces/commas", cloudResourceFilter{Provider: " aws , azure ,"}, 3},
-		{"multi no match", cloudResourceFilter{Account: "111", Region: "eastus"}, 0},
+		{"providers aws,azure", cloud.ResourceFilter{Provider: "aws,azure"}, 3},
+		{"providers all three", cloud.ResourceFilter{Provider: "aws,azure,gcp"}, 4},
+		{"accounts 111,sub-9", cloud.ResourceFilter{Account: "111,sub-9"}, 3},
+		{"regions us-east-1,eastus", cloud.ResourceFilter{Region: "us-east-1,eastus"}, 2},
+		{"multi-provider AND region", cloud.ResourceFilter{Provider: "aws,azure", Region: "us-west-2"}, 1},
+		{"multi with stray spaces/commas", cloud.ResourceFilter{Provider: " aws , azure ,"}, 3},
+		{"multi no match", cloud.ResourceFilter{Account: "111", Region: "eastus"}, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestCloudQueryPagination(t *testing.T) {
 	cursor := ""
 	pages := 0
 	for {
-		page, err := st.QueryResources(ctx, "org-a", false, cloudResourceFilter{Limit: 2, Cursor: cursor})
+		page, err := st.QueryResources(ctx, "org-a", false, cloud.ResourceFilter{Limit: 2, Cursor: cursor})
 		if err != nil {
 			t.Fatalf("page %d: %v", pages, err)
 		}
@@ -114,7 +114,7 @@ func TestCloudQueryPagination(t *testing.T) {
 
 func TestCloudQueryBadCursor(t *testing.T) {
 	st := seedCloudInventory(t)
-	if _, err := st.QueryResources(context.Background(), "org-a", false, cloudResourceFilter{Cursor: "!!!not-base64!!!"}); err == nil {
+	if _, err := st.QueryResources(context.Background(), "org-a", false, cloud.ResourceFilter{Cursor: "!!!not-base64!!!"}); err == nil {
 		t.Fatal("a malformed cursor must be rejected, got nil error")
 	}
 }
@@ -142,12 +142,12 @@ func TestCloudQueryTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	st := seedCloudInventory(t)
 	// org-b has no inventory → an own-only query returns nothing (no leak of org-a).
-	page, err := st.QueryResources(ctx, "org-b", false, cloudResourceFilter{})
+	page, err := st.QueryResources(ctx, "org-b", false, cloud.ResourceFilter{})
 	if err != nil || len(page.Resources) != 0 {
 		t.Fatalf("org-b must see zero resources, got %d err=%v", len(page.Resources), err)
 	}
 	// platform cross view sees org-a's rows.
-	all, err := st.QueryResources(ctx, "", true, cloudResourceFilter{})
+	all, err := st.QueryResources(ctx, "", true, cloud.ResourceFilter{})
 	if err != nil || len(all.Resources) != 4 {
 		t.Fatalf("cross view should see 4, got %d err=%v", len(all.Resources), err)
 	}

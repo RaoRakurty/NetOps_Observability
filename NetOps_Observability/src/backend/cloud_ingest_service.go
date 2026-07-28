@@ -440,7 +440,7 @@ func (ci *cloudIngestInventory) put(tenant, connectorID string, res []cloud.Clou
 	var mergedMaps []cloud.CloudIdentityMapping
 	for _, id := range ids {
 		snap := ci.byConn[id]
-		if len(mergedRes)+len(snap.res) > cloudListHardCap {
+		if len(mergedRes)+len(snap.res) > cloud.ListHardCap {
 			break // bounded: never build an unbounded merge (§9)
 		}
 		mergedRes = append(mergedRes, snap.res...)

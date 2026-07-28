@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/cloud"
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
@@ -126,7 +127,7 @@ type server struct {
 	ngfw                  *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
 	fusion                *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
 	appOverrides          appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
-	cloud                 cloudStore               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	cloud                 cloud.Store              // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
 	bizServices           *pgBusinessServiceStore  // Business Service mapping + manual overrides #0024 (nil on file backend)
 	cloudApp              *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
@@ -929,6 +930,15 @@ func (chSeam) Exec(sql string) error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// newCloudStore picks the backend: RLS-scoped pg under STORE_BACKEND=postgres,
+// else in-memory (both enforce §3a tenant isolation in the store itself).
+func newCloudStore() cloud.Store {
+	if ps, ok := backend.(*pgStore); ok {
+		return cloud.NewPGStore(rlsPG{db: ps.db})
+	}
+	return cloud.NewMemStore()
 }
 
 func main() {

@@ -29,11 +29,7 @@ func newIngestTestServer(t *testing.T) (srv *httptest.Server, s *server, fake *f
 	fake = &fakeAdapter{provider: cloudconn.ProviderAWS}
 	st.cloudBroker = newCloudIdentityBroker(st.cloudConn, nil, nil)
 	st.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }
-	st.cloud = &memCloudStore{
-		res:   map[string][]cloud.CloudResource{},
-		maps:  map[string][]cloud.CloudIdentityMapping{},
-		conns: map[string][]cloud.ConnectorInfo{},
-	}
+	st.cloud = cloud.NewMemStore()
 	st.cloudIngestInv = newCloudIngestInventory()
 	st.cloudSourceStatus = newCloudSourceStatusStore() // poller error reports (Wave 2 #4)
 	return hs, st, fake

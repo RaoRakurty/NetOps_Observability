@@ -1,7 +1,7 @@
-package main
+package cloud
 
 // cloud_store_pg.go — Postgres backend for the Cloud App Observability inventory
-// (WAVE 1 #1, migration 0025). The durable replacement for memCloudStore: one row
+// (WAVE 1 #1, migration 0025). The durable replacement for memStore: one row
 // per resource/mapping/connector, tenant-isolated by the tenant_iso FORCE-RLS
 // policy. Every method runs through db.withTenant, so RLS is the storage-layer
 // backstop (CLAUDE.md §3a.4) even if a handler authz check were bypassed — a scoped
@@ -9,7 +9,7 @@ package main
 // + keyset-paginates in SQL (never a whole-inventory load into Go memory).
 //
 // The canonical filter/sort fields are typed columns; the lossless
-// cloud.CloudResource / CloudIdentityMapping is carried in a JSONB `data` column
+// CloudResource / CloudIdentityMapping is carried in a JSONB `data` column
 // (topology_store pattern) and is what a reader reconstructs each record from.
 
 import (
@@ -21,21 +21,37 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"netops/backend/cloud"
 )
 
-type pgCloudStore struct{ db *pgDB }
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+type PGStore struct{ db DB }
+
+// NewPGStore builds the FORCE-RLS pg repository over the injected seam.
+func NewPGStore(db DB) *PGStore { return &PGStore{db: db} }
+
+// orUnknown mirrors the integrator's display default (duplicated per the
+// no-shared-utils rule).
+func orUnknown(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "unknown"
+	}
+	return s
+}
 
 // ReplaceInventory swaps the whole inventory for ONE tenant (a provider snapshot is
 // a full refresh) in a single transaction: delete-then-upsert is atomic, so a
 // concurrent reader never sees a half-written inventory. The tenant is stamped from
 // the caller (never a row), and withTenant binds the RLS scope to it — the DELETE
 // only clears that tenant's rows and the WITH CHECK forbids stamping another's.
-func (s *pgCloudStore) ReplaceInventory(ctx context.Context, tenant string, res []cloud.CloudResource, maps []cloud.CloudIdentityMapping) error {
+func (s *PGStore) ReplaceInventory(ctx context.Context, tenant string, res []CloudResource, maps []CloudIdentityMapping) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	t := normTenant(tenant)
-	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM cloud_resources`); err != nil {
 			return err
 		}
@@ -86,15 +102,15 @@ func (s *pgCloudStore) ReplaceInventory(ctx context.Context, tenant string, res 
 	})
 }
 
-// ListResources returns the WHOLE tenant inventory (bounded by cloudListHardCap so
+// ListResources returns the WHOLE tenant inventory (bounded by ListHardCap so
 // it is never an unbounded SELECT) for the enrichment joins.
-func (s *pgCloudStore) ListResources(ctx context.Context, tenant string, cross bool) ([]cloud.CloudResource, error) {
+func (s *PGStore) ListResources(ctx context.Context, tenant string, cross bool) ([]CloudResource, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out := make([]cloud.CloudResource, 0)
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := make([]CloudResource, 0)
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT data FROM cloud_resources
-		    ORDER BY tenant_id, resource_id LIMIT $1`, cloudListHardCap)
+		    ORDER BY tenant_id, resource_id LIMIT $1`, ListHardCap)
 		if err != nil {
 			return err
 		}
@@ -115,16 +131,16 @@ func (s *pgCloudStore) ListResources(ctx context.Context, tenant string, cross b
 // the set filter fields (all parameterized — no string interpolation of caller
 // input), the keyset predicate resumes after the opaque cursor, and LIMIT is
 // page+1 so we detect whether a next page exists without a second COUNT query.
-func (s *pgCloudStore) QueryResources(ctx context.Context, tenant string, cross bool, f cloudResourceFilter) (cloudResourcePage, error) {
+func (s *PGStore) QueryResources(ctx context.Context, tenant string, cross bool, f ResourceFilter) (ResourcePage, error) {
 	limit := f.Limit
 	if limit <= 0 {
-		limit = cloudPageDefault
+		limit = PageDefault
 	}
 	where, args := buildCloudWhere(f)
 	if f.Cursor != "" {
-		curT, curR, ok := decodeCloudCursor(f.Cursor)
+		curT, curR, ok := DecodeCursor(f.Cursor)
 		if !ok {
-			return cloudResourcePage{}, errBadCursor
+			return ResourcePage{}, ErrBadCursor
 		}
 		args = append(args, curT, curR)
 		where = append(where, fmt.Sprintf("(tenant_id, resource_id) > ($%d, $%d)", len(args)-1, len(args)))
@@ -142,8 +158,8 @@ func (s *pgCloudStore) QueryResources(ctx context.Context, tenant string, cross 
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	page := make([]cloud.CloudResource, 0, limit)
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	page := make([]CloudResource, 0, limit)
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, q, args...)
 		if err != nil {
 			return err
@@ -159,25 +175,25 @@ func (s *pgCloudStore) QueryResources(ctx context.Context, tenant string, cross 
 		return rows.Err()
 	})
 	if err != nil {
-		return cloudResourcePage{}, err
+		return ResourcePage{}, err
 	}
 	next := ""
 	if len(page) > limit {
 		page = page[:limit]
 		last := page[len(page)-1]
-		next = encodeCloudCursor(last.TenantID, last.ResourceID)
+		next = EncodeCursor(last.TenantID, last.ResourceID)
 	}
-	return cloudResourcePage{Resources: page, NextCursor: next}, nil
+	return ResourcePage{Resources: page, NextCursor: next}, nil
 }
 
 // GetResource fetches one resource by id within the caller's RLS scope. Another
 // tenant's id is invisible under RLS → found=false → 404 upstream (never revealed).
-func (s *pgCloudStore) GetResource(ctx context.Context, tenant string, cross bool, resourceID string) (cloud.CloudResource, bool, error) {
+func (s *PGStore) GetResource(ctx context.Context, tenant string, cross bool, resourceID string) (CloudResource, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var out cloud.CloudResource
+	var out CloudResource
 	found := false
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var data []byte
 		err := tx.QueryRow(ctx, `SELECT data FROM cloud_resources WHERE resource_id = $1 LIMIT 1`, resourceID).Scan(&data)
 		if err != nil {
@@ -193,19 +209,19 @@ func (s *pgCloudStore) GetResource(ctx context.Context, tenant string, cross boo
 		return nil
 	})
 	if err != nil {
-		return cloud.CloudResource{}, false, err
+		return CloudResource{}, false, err
 	}
 	return out, found, nil
 }
 
 // ListMappings returns the tenant's (match_key → app) attributions (bounded).
-func (s *pgCloudStore) ListMappings(ctx context.Context, tenant string, cross bool) ([]cloud.CloudIdentityMapping, error) {
+func (s *PGStore) ListMappings(ctx context.Context, tenant string, cross bool) ([]CloudIdentityMapping, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out := make([]cloud.CloudIdentityMapping, 0)
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := make([]CloudIdentityMapping, 0)
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT data FROM cloud_identity_mappings
-		    ORDER BY tenant_id, match_key_type, match_key LIMIT $1`, cloudListHardCap)
+		    ORDER BY tenant_id, match_key_type, match_key LIMIT $1`, ListHardCap)
 		if err != nil {
 			return err
 		}
@@ -215,7 +231,7 @@ func (s *pgCloudStore) ListMappings(ctx context.Context, tenant string, cross bo
 			if err := rows.Scan(&data); err != nil {
 				return err
 			}
-			var m cloud.CloudIdentityMapping
+			var m CloudIdentityMapping
 			if err := json.Unmarshal(data, &m); err != nil {
 				return err
 			}
@@ -228,11 +244,11 @@ func (s *pgCloudStore) ListMappings(ctx context.Context, tenant string, cross bo
 
 // ReplaceConnectors swaps the inventory-source provenance for ONE tenant (same
 // full-refresh contract as ReplaceInventory).
-func (s *pgCloudStore) ReplaceConnectors(ctx context.Context, tenant string, conns []cloud.ConnectorInfo) error {
+func (s *PGStore) ReplaceConnectors(ctx context.Context, tenant string, conns []ConnectorInfo) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	t := normTenant(tenant)
-	return s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM cloud_inventory_connectors`); err != nil {
 			return err
 		}
@@ -256,25 +272,25 @@ func (s *pgCloudStore) ReplaceConnectors(ctx context.Context, tenant string, con
 }
 
 // ListConnectors returns the tenant's inventory-source provenance.
-func (s *pgCloudStore) ListConnectors(ctx context.Context, tenant string, cross bool) ([]cloud.ConnectorInfo, error) {
+func (s *PGStore) ListConnectors(ctx context.Context, tenant string, cross bool) ([]ConnectorInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out := make([]cloud.ConnectorInfo, 0)
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := make([]ConnectorInfo, 0)
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT provider, account_id, kind, collected_at, resource_count
-		    FROM cloud_inventory_connectors ORDER BY tenant_id, provider, account_id LIMIT $1`, cloudListHardCap)
+		    FROM cloud_inventory_connectors ORDER BY tenant_id, provider, account_id LIMIT $1`, ListHardCap)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var c cloud.ConnectorInfo
+			var c ConnectorInfo
 			var provider string
 			var collected *time.Time
 			if err := rows.Scan(&provider, &c.AccountID, &c.Kind, &collected, &c.ResourceCount); err != nil {
 				return err
 			}
-			c.Provider = cloud.Provider(provider)
+			c.Provider = Provider(provider)
 			if collected != nil {
 				c.CollectedAt = *collected
 			}
@@ -286,8 +302,8 @@ func (s *pgCloudStore) ListConnectors(ctx context.Context, tenant string, cross 
 }
 
 // buildCloudWhere turns the set filter fields into parameterized WHERE clauses +
-// their args (cursor/limit are appended by the caller). Mirrors matchCloudResource.
-func buildCloudWhere(f cloudResourceFilter) ([]string, []any) {
+// their args (cursor/limit are appended by the caller). Mirrors matchResource.
+func buildCloudWhere(f ResourceFilter) ([]string, []any) {
 	var where []string
 	var args []any
 	add := func(clause string, val any) {
@@ -297,30 +313,30 @@ func buildCloudWhere(f cloudResourceFilter) ([]string, []any) {
 	// Provider/Account/Region are multi-value (comma-separated OR sets, Wave 2 #5
 	// scope bar); pgx v5 binds []string as text[], so `= ANY($n)` stays fully
 	// parameterized — a value never reaches the SQL text.
-	if vals := filterValues(f.Provider); len(vals) > 0 {
+	if vals := FilterValues(f.Provider); len(vals) > 0 {
 		for i := range vals {
 			vals[i] = strings.ToLower(vals[i])
 		}
 		add("lower(cloud_provider) = ANY($%d)", vals)
 	}
-	if vals := filterValues(f.Account); len(vals) > 0 {
+	if vals := FilterValues(f.Account); len(vals) > 0 {
 		add("account_id = ANY($%d)", vals)
 	}
-	if vals := filterValues(f.Region); len(vals) > 0 {
+	if vals := FilterValues(f.Region); len(vals) > 0 {
 		add("region = ANY($%d)", vals)
 	}
 	if f.Type != "" {
 		add("resource_type = $%d", f.Type)
 	}
 	// Family / resource CLASS (Wave 5 #15): expressed over the SAME kinds.go
-	// vocabulary matchCloudResource uses. A named family is its (lowercased)
+	// vocabulary matchResource uses. A named family is its (lowercased)
 	// type set; "other" is the complement of every known type.
 	if f.Family != "" {
-		if f.Family == cloud.FamilyOther {
-			args = append(args, cloud.KnownComponentTypes())
+		if f.Family == FamilyOther {
+			args = append(args, KnownComponentTypes())
 			where = append(where, fmt.Sprintf("NOT (lower(resource_type) = ANY($%d))", len(args)))
 		} else {
-			add("lower(resource_type) = ANY($%d)", cloud.FamilyTypes(f.Family))
+			add("lower(resource_type) = ANY($%d)", FamilyTypes(f.Family))
 		}
 	}
 	switch f.Attribution {
@@ -345,14 +361,14 @@ func buildCloudWhere(f cloudResourceFilter) ([]string, []any) {
 	return where, args
 }
 
-func scanCloudResource(rows pgx.Rows) (cloud.CloudResource, error) {
+func scanCloudResource(rows pgx.Rows) (CloudResource, error) {
 	var data []byte
 	if err := rows.Scan(&data); err != nil {
-		return cloud.CloudResource{}, err
+		return CloudResource{}, err
 	}
-	var r cloud.CloudResource
+	var r CloudResource
 	if err := json.Unmarshal(data, &r); err != nil {
-		return cloud.CloudResource{}, err
+		return CloudResource{}, err
 	}
 	return r, nil
 }
@@ -370,4 +386,4 @@ func tagsJSON(tags map[string]string) []byte {
 	return b
 }
 
-var _ cloudStore = (*pgCloudStore)(nil)
+var _ Store = (*PGStore)(nil)

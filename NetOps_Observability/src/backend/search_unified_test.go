@@ -69,11 +69,7 @@ func searchTestServer(t *testing.T) *server {
 		t.Fatalf("roleStore: %v", err)
 	}
 	s := &server{discovery: d, roles: roles}
-	s.cloud = &memCloudStore{
-		res:   map[string][]cloud.CloudResource{},
-		maps:  map[string][]cloud.CloudIdentityMapping{},
-		conns: map[string][]cloud.ConnectorInfo{},
-	}
+	s.cloud = cloud.NewMemStore()
 	if err := s.cloud.ReplaceInventory(context.Background(), "acme", []cloud.CloudResource{
 		{Provider: cloud.AWS, AccountID: "111122223333", Region: "us-east-1", ResourceID: "i-0acme01", ResourceType: "ec2_instance",
 			ResourceName: "checkout-web-1", PrivateIPs: []string{"10.50.1.10"}, AppID: "checkout", AppName: "Checkout", Confidence: cloud.Confirmed},

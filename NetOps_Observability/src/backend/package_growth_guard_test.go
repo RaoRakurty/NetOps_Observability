@@ -166,7 +166,11 @@ import (
 //	                  tenant bounded context per §3a "org = its tenants";
 //	                  tenant.Deps extended with MintOrgID/NormalizeRegion/
 //	                  DefaultRegion; orgOf stays in tenancy.go)
-const rootPackageCeiling = 243
+//	2026-07-28  241  cloud_store.go + cloud_store_pg.go → cloud/ (the inventory
+//	                  store pair: keyset pagination, §3a in-store isolation;
+//	                  DB seam via rlsPG; paging bounds + ErrBadCursor +
+//	                  FilterValues exported; selector stayed in main.go)
+const rootPackageCeiling = 241
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

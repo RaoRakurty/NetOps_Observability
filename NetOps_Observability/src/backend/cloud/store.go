@@ -1,4 +1,4 @@
-package main
+package cloud
 
 // cloud_store.go — Cloud App Observability inventory store (#81 P3A; WAVE 1 #1).
 // Holds the per-tenant cloud resources + identity mappings + inventory-source
@@ -22,26 +22,24 @@ import (
 	"sort"
 	"strings"
 	"sync"
-
-	"netops/backend/cloud"
 )
 
 // Pagination bounds (reliability §9: bounded queries — never an unbounded SELECT).
 // The default page is generous so today's small fixture inventories render in a
 // single page (behaviorally identical to the pre-pagination surface); the hard cap
-// bounds a hostile/large limit, and cloudListHardCap bounds the whole-inventory
+// bounds a hostile/large limit, and ListHardCap bounds the whole-inventory
 // ListResources read used by the enrichment joins.
 const (
-	cloudPageDefault = 500
-	cloudPageMax     = 1000
-	cloudListHardCap = 100000
+	PageDefault = 500
+	PageMax     = 1000
+	ListHardCap = 100000
 )
 
-// errBadCursor is returned when an opaque pagination cursor fails to decode
+// ErrBadCursor is returned when an opaque pagination cursor fails to decode
 // (mapped to HTTP 400 by the handler — a client-supplied value, so validate it).
-var errBadCursor = errors.New("invalid cursor")
+var ErrBadCursor = errors.New("invalid cursor")
 
-// cloudResourceFilter is the server-side filter + pagination for /api/cloud/resources.
+// ResourceFilter is the server-side filter + pagination for /api/cloud/resources.
 // An empty string field means "no filter on this dimension". Limit/Cursor drive the
 // keyset page; the caller clamps Limit before handing it to the store.
 //
@@ -49,7 +47,7 @@ var errBadCursor = errors.New("invalid cursor")
 // scope bar: "aws,azure" = either cloud) — OR within a dimension, AND across
 // dimensions. Values never contain commas (provider enums, account ids, region
 // codes), so the separator is unambiguous.
-type cloudResourceFilter struct {
+type ResourceFilter struct {
 	Provider    string // cloud(s), comma-separated (aws|azure|gcp), case-insensitive
 	Account     string // account_id | subscription_id | project_id (exact, comma-separated)
 	Region      string // exact, comma-separated
@@ -57,26 +55,26 @@ type cloudResourceFilter struct {
 	Family      string // component family / resource CLASS (k8s|serverless|db|instance|lb|…, Wave 5 #15)
 	Tag         string // "key" (has tag) or "key=value" (exact value)
 	Attribution string // confidence bucket (confirmed|strong|suspected|weak|unknown) or attributed|unattributed
-	Limit       int    // page size (0 → cloudPageDefault)
+	Limit       int    // page size (0 → PageDefault)
 	Cursor      string // opaque keyset cursor; "" = first page
 }
 
-// cloudResourcePage is one page of resources plus the opaque cursor for the next
+// ResourcePage is one page of resources plus the opaque cursor for the next
 // page (empty when this is the last page).
-type cloudResourcePage struct {
-	Resources  []cloud.CloudResource
+type ResourcePage struct {
+	Resources  []CloudResource
 	NextCursor string
 }
 
-// encodeCloudCursor / decodeCloudCursor implement a STABLE keyset cursor over the
+// EncodeCursor / DecodeCursor implement a STABLE keyset cursor over the
 // (tenant_id, resource_id) sort order both backends share — stable under concurrent
 // inserts/deletes (unlike an offset), and it never leaks another tenant's ids
 // because the scan is already RLS/tenant-scoped before the cursor is applied.
-func encodeCloudCursor(tenant, resourceID string) string {
+func EncodeCursor(tenant, resourceID string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(tenant + "\x00" + resourceID))
 }
 
-func decodeCloudCursor(s string) (tenant, resourceID string, ok bool) {
+func DecodeCursor(s string) (tenant, resourceID string, ok bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return "", "", false
@@ -99,22 +97,22 @@ func cloudRowAfter(t, r, curT, curR string) bool {
 
 // attributionMatches applies the attribution filter to a resource's confidence.
 // "attributed" = evidence supports an app; "unattributed" = first-class unknown.
-func attributionMatches(attribution string, c cloud.Confidence) bool {
+func attributionMatches(attribution string, c Confidence) bool {
 	switch attribution {
 	case "":
 		return true
 	case "attributed":
-		return c != cloud.Unknown && c != ""
+		return c != Unknown && c != ""
 	case "unattributed":
-		return c == cloud.Unknown || c == ""
+		return c == Unknown || c == ""
 	default:
 		return string(c) == attribution
 	}
 }
 
-// filterValues splits a (possibly multi-value) filter field into its non-empty
+// FilterValues splits a (possibly multi-value) filter field into its non-empty
 // parts. "" → nil (no filter); "aws,azure" → the OR set for that dimension.
-func filterValues(s string) []string {
+func FilterValues(s string) []string {
 	if s == "" {
 		return nil
 	}
@@ -131,7 +129,7 @@ func filterValues(s string) []string {
 // matchesAny reports whether got equals ANY of the filter's values (fold decides
 // case sensitivity). An empty filter matches everything.
 func matchesAny(got, filter string, fold bool) bool {
-	vals := filterValues(filter)
+	vals := FilterValues(filter)
 	if len(vals) == 0 {
 		return true
 	}
@@ -143,10 +141,10 @@ func matchesAny(got, filter string, fold bool) bool {
 	return false
 }
 
-// matchCloudResource reports whether r passes every SET field of f (the pagination
+// matchResource reports whether r passes every SET field of f (the pagination
 // fields Limit/Cursor are handled by the caller, not here). Shared by the mem store
 // and the isolation/filter tests; the pg store mirrors this predicate in SQL.
-func matchCloudResource(r cloud.CloudResource, f cloudResourceFilter) bool {
+func matchResource(r CloudResource, f ResourceFilter) bool {
 	if !matchesAny(string(r.Provider), f.Provider, true) {
 		return false
 	}
@@ -159,7 +157,7 @@ func matchCloudResource(r cloud.CloudResource, f cloudResourceFilter) bool {
 	if f.Type != "" && r.ResourceType != f.Type {
 		return false
 	}
-	if f.Family != "" && cloud.ComponentFamily(r.ResourceType) != f.Family {
+	if f.Family != "" && ComponentFamily(r.ResourceType) != f.Family {
 		return false
 	}
 	if f.Attribution != "" && !attributionMatches(f.Attribution, r.Confidence) {
@@ -178,52 +176,52 @@ func matchCloudResource(r cloud.CloudResource, f cloudResourceFilter) bool {
 	return true
 }
 
-type cloudStore interface {
-	ReplaceInventory(ctx context.Context, tenant string, res []cloud.CloudResource, maps []cloud.CloudIdentityMapping) error
-	// ListResources returns the WHOLE tenant inventory (bounded by cloudListHardCap)
+type Store interface {
+	ReplaceInventory(ctx context.Context, tenant string, res []CloudResource, maps []CloudIdentityMapping) error
+	// ListResources returns the WHOLE tenant inventory (bounded by ListHardCap)
 	// — used by the enrichment joins (path ingest / path graph / apps / coverage).
-	ListResources(ctx context.Context, tenant string, cross bool) ([]cloud.CloudResource, error)
+	ListResources(ctx context.Context, tenant string, cross bool) ([]CloudResource, error)
 	// QueryResources returns one filtered, keyset-paginated page — the /resources surface.
-	QueryResources(ctx context.Context, tenant string, cross bool, f cloudResourceFilter) (cloudResourcePage, error)
+	QueryResources(ctx context.Context, tenant string, cross bool, f ResourceFilter) (ResourcePage, error)
 	// GetResource fetches a single resource by id within the caller's scope. found=false
 	// when it does not exist OR belongs to another tenant (the handler maps that to 404 —
 	// never reveal another tenant's id, CLAUDE.md §3a.1).
-	GetResource(ctx context.Context, tenant string, cross bool, resourceID string) (cloud.CloudResource, bool, error)
-	ListMappings(ctx context.Context, tenant string, cross bool) ([]cloud.CloudIdentityMapping, error)
-	ReplaceConnectors(ctx context.Context, tenant string, conns []cloud.ConnectorInfo) error
-	ListConnectors(ctx context.Context, tenant string, cross bool) ([]cloud.ConnectorInfo, error)
+	GetResource(ctx context.Context, tenant string, cross bool, resourceID string) (CloudResource, bool, error)
+	ListMappings(ctx context.Context, tenant string, cross bool) ([]CloudIdentityMapping, error)
+	ReplaceConnectors(ctx context.Context, tenant string, conns []ConnectorInfo) error
+	ListConnectors(ctx context.Context, tenant string, cross bool) ([]ConnectorInfo, error)
 }
 
-// newCloudStore picks the backend: a per-row RLS-scoped pg repository under
-// STORE_BACKEND=postgres, else the in-memory store. Always non-nil.
-func newCloudStore() cloudStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgCloudStore{db: ps.db}
-	}
-	return &memCloudStore{
-		res:   map[string][]cloud.CloudResource{},
-		maps:  map[string][]cloud.CloudIdentityMapping{},
-		conns: map[string][]cloud.ConnectorInfo{},
+// normTenant mirrors the integrator's tenant-id normalization (duplicated per
+// the no-shared-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// NewMemStore builds the in-memory backend (tenant-keyed maps).
+func NewMemStore() *memStore {
+	return &memStore{
+		res:   map[string][]CloudResource{},
+		maps:  map[string][]CloudIdentityMapping{},
+		conns: map[string][]ConnectorInfo{},
 	}
 }
 
-type memCloudStore struct {
+type memStore struct {
 	mu    sync.RWMutex
-	res   map[string][]cloud.CloudResource        // tenant → resources
-	maps  map[string][]cloud.CloudIdentityMapping // tenant → mappings
-	conns map[string][]cloud.ConnectorInfo        // tenant → inventory-source provenance
+	res   map[string][]CloudResource        // tenant → resources
+	maps  map[string][]CloudIdentityMapping // tenant → mappings
+	conns map[string][]ConnectorInfo        // tenant → inventory-source provenance
 }
 
 // ReplaceInventory swaps the whole inventory for a tenant (a provider snapshot is a
 // full refresh). The tenant is stamped from the caller, never trusted from a row.
-func (m *memCloudStore) ReplaceInventory(_ context.Context, tenant string, res []cloud.CloudResource, maps []cloud.CloudIdentityMapping) error {
+func (m *memStore) ReplaceInventory(_ context.Context, tenant string, res []CloudResource, maps []CloudIdentityMapping) error {
 	t := normTenant(tenant)
-	rc := make([]cloud.CloudResource, len(res))
+	rc := make([]CloudResource, len(res))
 	copy(rc, res)
 	for i := range rc {
 		rc[i].TenantID = t
 	}
-	mc := make([]cloud.CloudIdentityMapping, len(maps))
+	mc := make([]CloudIdentityMapping, len(maps))
 	copy(mc, maps)
 	for i := range mc {
 		mc[i].TenantID = t
@@ -235,22 +233,22 @@ func (m *memCloudStore) ReplaceInventory(_ context.Context, tenant string, res [
 	return nil
 }
 
-func (m *memCloudStore) ListResources(_ context.Context, tenant string, cross bool) ([]cloud.CloudResource, error) {
+func (m *memStore) ListResources(_ context.Context, tenant string, cross bool) ([]CloudResource, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []cloud.CloudResource{}
+	out := []CloudResource{}
 	if cross {
 		for _, rs := range m.res {
 			out = append(out, rs...)
-			if len(out) >= cloudListHardCap {
-				return out[:cloudListHardCap], nil
+			if len(out) >= ListHardCap {
+				return out[:ListHardCap], nil
 			}
 		}
 		return out, nil
 	}
 	out = append(out, m.res[normTenant(tenant)]...)
-	if len(out) > cloudListHardCap {
-		out = out[:cloudListHardCap]
+	if len(out) > ListHardCap {
+		out = out[:ListHardCap]
 	}
 	return out, nil
 }
@@ -258,22 +256,22 @@ func (m *memCloudStore) ListResources(_ context.Context, tenant string, cross bo
 // QueryResources filters + keyset-paginates the tenant's resources in a stable
 // (tenant_id, resource_id) order. Mirrors the pg store's SQL semantics so a caller
 // gets identical pages regardless of backend.
-func (m *memCloudStore) QueryResources(_ context.Context, tenant string, cross bool, f cloudResourceFilter) (cloudResourcePage, error) {
+func (m *memStore) QueryResources(_ context.Context, tenant string, cross bool, f ResourceFilter) (ResourcePage, error) {
 	curT, curR, hasCur := "", "", false
 	if f.Cursor != "" {
-		t, r, ok := decodeCloudCursor(f.Cursor)
+		t, r, ok := DecodeCursor(f.Cursor)
 		if !ok {
-			return cloudResourcePage{}, errBadCursor
+			return ResourcePage{}, ErrBadCursor
 		}
 		curT, curR, hasCur = t, r, true
 	}
 	limit := f.Limit
 	if limit <= 0 {
-		limit = cloudPageDefault
+		limit = PageDefault
 	}
 
 	m.mu.RLock()
-	var all []cloud.CloudResource
+	var all []CloudResource
 	if cross {
 		for _, rs := range m.res {
 			all = append(all, rs...)
@@ -290,29 +288,29 @@ func (m *memCloudStore) QueryResources(_ context.Context, tenant string, cross b
 		return all[i].ResourceID < all[j].ResourceID
 	})
 
-	out := make([]cloud.CloudResource, 0, limit)
+	out := make([]CloudResource, 0, limit)
 	next := ""
 	for _, r := range all {
 		if hasCur && !cloudRowAfter(r.TenantID, r.ResourceID, curT, curR) {
 			continue
 		}
-		if !matchCloudResource(r, f) {
+		if !matchResource(r, f) {
 			continue
 		}
 		if len(out) == limit {
 			// One more match beyond the page → hand back a cursor to resume from.
 			last := out[len(out)-1]
-			next = encodeCloudCursor(last.TenantID, last.ResourceID)
+			next = EncodeCursor(last.TenantID, last.ResourceID)
 			break
 		}
 		out = append(out, r)
 	}
-	return cloudResourcePage{Resources: out, NextCursor: next}, nil
+	return ResourcePage{Resources: out, NextCursor: next}, nil
 }
 
 // GetResource returns a single resource within scope. found=false for a missing id
 // OR another tenant's id (default-closed) — the handler renders both as 404.
-func (m *memCloudStore) GetResource(_ context.Context, tenant string, cross bool, resourceID string) (cloud.CloudResource, bool, error) {
+func (m *memStore) GetResource(_ context.Context, tenant string, cross bool, resourceID string) (CloudResource, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if cross {
@@ -323,20 +321,20 @@ func (m *memCloudStore) GetResource(_ context.Context, tenant string, cross bool
 				}
 			}
 		}
-		return cloud.CloudResource{}, false, nil
+		return CloudResource{}, false, nil
 	}
 	for _, r := range m.res[normTenant(tenant)] {
 		if r.ResourceID == resourceID {
 			return r, true, nil
 		}
 	}
-	return cloud.CloudResource{}, false, nil
+	return CloudResource{}, false, nil
 }
 
 // ReplaceConnectors swaps the inventory-source provenance for a tenant — same
 // full-refresh contract as ReplaceInventory (they come from the same load).
-func (m *memCloudStore) ReplaceConnectors(_ context.Context, tenant string, conns []cloud.ConnectorInfo) error {
-	cc := make([]cloud.ConnectorInfo, len(conns))
+func (m *memStore) ReplaceConnectors(_ context.Context, tenant string, conns []ConnectorInfo) error {
+	cc := make([]ConnectorInfo, len(conns))
 	copy(cc, conns)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -344,10 +342,10 @@ func (m *memCloudStore) ReplaceConnectors(_ context.Context, tenant string, conn
 	return nil
 }
 
-func (m *memCloudStore) ListConnectors(_ context.Context, tenant string, cross bool) ([]cloud.ConnectorInfo, error) {
+func (m *memStore) ListConnectors(_ context.Context, tenant string, cross bool) ([]ConnectorInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []cloud.ConnectorInfo{}
+	out := []ConnectorInfo{}
 	if cross {
 		for _, cs := range m.conns {
 			out = append(out, cs...)
@@ -357,10 +355,10 @@ func (m *memCloudStore) ListConnectors(_ context.Context, tenant string, cross b
 	return append(out, m.conns[normTenant(tenant)]...), nil
 }
 
-func (m *memCloudStore) ListMappings(_ context.Context, tenant string, cross bool) ([]cloud.CloudIdentityMapping, error) {
+func (m *memStore) ListMappings(_ context.Context, tenant string, cross bool) ([]CloudIdentityMapping, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []cloud.CloudIdentityMapping{}
+	out := []CloudIdentityMapping{}
 	if cross {
 		for _, ms := range m.maps {
 			out = append(out, ms...)
@@ -370,4 +368,4 @@ func (m *memCloudStore) ListMappings(_ context.Context, tenant string, cross boo
 	return append(out, m.maps[normTenant(tenant)]...), nil
 }
 
-var _ cloudStore = (*memCloudStore)(nil)
+var _ Store = (*memStore)(nil)
