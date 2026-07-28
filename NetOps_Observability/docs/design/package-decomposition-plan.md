@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** thirty-five domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** thirty-six domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -11,8 +11,8 @@
 `pathgraph/store`, `token/password`, `internal/users`, `tenant/org`,
 `cloud/store`, `ticketing` adapters, `policy/store`, `cloudconn/store`,
 `pathgraph/health`, `cloud/bizsvc`, `internal/loginguard`,
-`appid/appstore`, 2026-07-28).
-**230** non-test files remain in `package main`. This document is the ordered sequence for the
+`appid/appstore`, `timeintel/store`, 2026-07-28).
+**229** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -134,6 +134,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
 | ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| ✅ 40 | `timeintel_store.go` → `timeintel/store.go` | 1 | ~180 | 4 | **Done** (2026-07-28). The incident timeline store (guarded events keyed tenant+corr; mem + FORCE-RLS pg) joins `timeintel`; `DB` seam via `rlsPG`; selector stayed in `main.go`. |
 | ✅ 39 | `appid_store.go` → `appid/appstore.go` | 1 | ~240 | 4 | **Done** (2026-07-28). The Application catalog store (mem + FORCE-RLS pg) joins the `appid` package; `DB` seam via `rlsPG`; `ValidateApplicationInput` + backend constructors exported; the selector stayed in `main.go`. ⚠️ Lesson recorded: a rename sweep briefly leaked into six SUBPACKAGES that use the word `Application` — caught by the compiler, reverted via git before commit; future sweeps must exclude every package dir, not just internal/. |
 | ✅ 38 | `login_throttle.go` → `internal/loginguard` | 1 | ~250 | 4 | **Done** (2026-07-28) — the auth tier's last store-like piece. The F-25 account-lockout throttle (fail-closed saturation, spray-eviction under the cap, janitor sweep) moves whole; the warning sink is injected; the observability counters are exported as accessors (`Evictions`/`Sweeps`/`Saturations`) so `/metrics` keeps reading them; `NewThrottleWithLimits` provides the cap/clock injection the failure-path tests need. Pure white-box suite moved in; server-integration halves stayed. |
 | 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, … — the remainder is increasingly handler-/wiring-dominated; re-run the screen before each next step. | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |

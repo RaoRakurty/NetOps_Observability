@@ -8,8 +8,8 @@ import (
 	"netops/backend/timeintel"
 )
 
-func tev(tenant, corr string, et timeintel.EventType) incidentTimelineEvent {
-	return incidentTimelineEvent{
+func tev(tenant, corr string, et timeintel.EventType) timeintel.TimelineEvent {
+	return timeintel.TimelineEvent{
 		TenantID: tenant, ID: randID(), CorrelationID: corr, EventType: et,
 		EventTime: time.Now().UTC(), Source: timeintel.SrcUserEntered, Confidence: 1,
 		SourceSystem: "manual", CreatedBy: "u",
@@ -20,7 +20,7 @@ func tev(tenant, corr string, et timeintel.EventType) incidentTimelineEvent {
 // can read, edit, or delete another tenant's manual lifecycle events.
 func TestIncidentTimelineStoreIsolation(t *testing.T) {
 	ctx := context.Background()
-	st := &memIncidentTimelineStore{by: map[string]incidentTimelineEvent{}}
+	st := timeintel.NewMemTimelineStore()
 	const corr = "11111111-1111-1111-1111-111111111111"
 
 	a := tev("org-a", corr, timeintel.EvRecovered)
@@ -65,7 +65,7 @@ func TestIncidentTimelineStoreIsolation(t *testing.T) {
 // An edit upserts on the unique guard (one row per incident/type/system/source ids).
 func TestIncidentTimelineUpsertGuard(t *testing.T) {
 	ctx := context.Background()
-	st := &memIncidentTimelineStore{by: map[string]incidentTimelineEvent{}}
+	st := timeintel.NewMemTimelineStore()
 	const corr = "22222222-2222-2222-2222-222222222222"
 	e1 := tev("org-a", corr, timeintel.EvRecovered)
 	e1.EventTime = time.Unix(1000, 0).UTC()

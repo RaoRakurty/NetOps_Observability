@@ -148,7 +148,7 @@ func (s *server) createManualTimeEvent(w http.ResponseWriter, r *http.Request, c
 			note = closeVerificationLabels[verification]
 		}
 	}
-	ev := incidentTimelineEvent{
+	ev := timeintel.TimelineEvent{
 		TenantID:      tenant, // stamped from the TOKEN, never the body
 		ID:            randID(),
 		CorrelationID: id,

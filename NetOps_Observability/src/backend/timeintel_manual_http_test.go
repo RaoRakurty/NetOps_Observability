@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"netops/backend/timeintel"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ type timeEventWire struct {
 func setupTimeEventOrgs(t *testing.T) (srv *httptest.Server, tokens map[string]string) {
 	t.Helper()
 	hs, s := newTestServerState(t)
-	s.incidentTimeline = &memIncidentTimelineStore{by: map[string]incidentTimelineEvent{}}
+	s.incidentTimeline = timeintel.NewMemTimelineStore()
 
 	admin := login(t, hs, "admin", "Passw0rd!2345").Token
 	tokens = map[string]string{"admin": admin}

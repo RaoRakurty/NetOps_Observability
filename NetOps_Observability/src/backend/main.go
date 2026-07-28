@@ -32,6 +32,7 @@ import (
 	"netops/backend/pathgraph"
 	"netops/backend/policy"
 	"netops/backend/portintel"
+	"netops/backend/timeintel"
 	"netops/backend/wireless"
 	"os"
 	"os/signal"
@@ -123,7 +124,7 @@ type server struct {
 	cloudIngestInv        *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
 	cloudSourceStatus     *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
 	topology              topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline      incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeline      timeintel.TimelineStore  // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	aiFeedback            aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	applications          appid.AppStore           // Application Identification registry #81 P0 (in-memory or pg)
@@ -973,6 +974,15 @@ func newApplicationStore() appid.AppStore {
 		return appid.NewPGAppStore(rlsPG{db: ps.db})
 	}
 	return appid.NewMemAppStore()
+}
+
+// newIncidentTimelineStore picks the incident-timeline backend: RLS-scoped pg
+// under STORE_BACKEND=postgres, else in-memory.
+func newIncidentTimelineStore() timeintel.TimelineStore {
+	if ps, ok := backend.(*pgStore); ok {
+		return timeintel.NewPGTimelineStore(rlsPG{db: ps.db})
+	}
+	return timeintel.NewMemTimelineStore()
 }
 
 func main() {
