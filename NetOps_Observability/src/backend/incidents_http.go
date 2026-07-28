@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/integration"
 	"netops/backend/internal/incident"
 	"os"
 	"strings"
@@ -244,16 +245,16 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, incident.ErrNotFound)
 			return
 		}
-		var sync []timelineEntry
+		var sync []integration.TimelineEntry
 		if s.integrations != nil {
 			if sync, err = s.integrations.ListSyncEventsForIncident(r.Context(), tenant, cross, id); err != nil {
 				writeError(w, http.StatusBadGateway, err)
 				return
 			}
 		}
-		timeline := mergeTimeline(events, sync)
+		timeline := integration.MergeTimeline(events, sync)
 		if timeline == nil {
-			timeline = []timelineEntry{}
+			timeline = []integration.TimelineEntry{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"incident": inc, "timeline": timeline})
 		return

@@ -145,7 +145,7 @@ type server struct {
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
 	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
-	integrations    *integrationStore     // integration-platform persistence (nil on file backend)
+	integrations    *integration.Store    // integration-platform persistence (nil on file backend)
 	providers       *integration.Registry // inbound provider translators (registry)
 	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
 	wireless        wireless.Store        // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
@@ -624,7 +624,7 @@ func newServer() *server {
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
 	if ps, ok := backend.(*pgStore); ok {
-		srv.integrations = newIntegrationStore(ps.db, vault)
+		srv.integrations = integration.NewStore(rlsPG{db: ps.db}, vault)
 	}
 	srv.providers = integration.DefaultRegistry()
 	// Wireless canonical inventory (#128 Phase 1, migration 0030): PG-backed on

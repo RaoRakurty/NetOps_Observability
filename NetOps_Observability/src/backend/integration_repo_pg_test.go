@@ -25,11 +25,11 @@ func TestIntegrationRepo(t *testing.T) {
 	defer ps.db.close()
 	// Dormant vault.Vault (no SEAL_PROVIDER) → webhook_secret stays plaintext, exercising
 	// the passthrough path; the vault.Vault's crypto is covered by secrets_test.go.
-	st := newIntegrationStore(ps.db, vault.Dormant())
+	st := integration.NewStore(rlsPG{db: ps.db}, vault.Dormant())
 
 	// --- mapping upsert + watermark roundtrip ---
 	at := time.Now().UTC().Truncate(time.Second)
-	m := integrationMapping{
+	m := integration.Mapping{
 		Tenant: "acme", Provider: "servicenow", ExternalID: "INC42",
 		IncidentID: "inc-1", State: "acknowledged",
 		Applied: integration.Watermark{Seq: 5, At: at},

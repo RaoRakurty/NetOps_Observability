@@ -69,13 +69,13 @@ func (s *server) reconcileDriftOnce(ctx context.Context) {
 
 // reconcileProvider polls one tenant's open tickets for a provider and re-drives
 // any drift through the inbound pipeline.
-func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
+func (s *server) reconcileProvider(ctx context.Context, cfg integration.Config) {
 	maps, err := s.integrations.ListOpenMappings(ctx, cfg.Tenant, cfg.Provider, reconcileBatchPerProvider)
 	if err != nil {
 		logError("integration.reconcile", "list mappings", merge(map[string]any{"tenant": cfg.Tenant, "provider": cfg.Provider}, errf(err)))
 		return
 	}
-	engine := cfg.mappingEngine()
+	engine := cfg.MappingEngineFor()
 	for _, m := range maps {
 		state, version, found, perr := s.pollExternalState(cfg.Provider, cfg.Tenant, m.ExternalID)
 		// Rotate this mapping to the back of the stalest-first queue regardless.
@@ -130,7 +130,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 			logError("integration.reconcile", "outbound resolve", merge(map[string]any{"external_id": m.ExternalID}, errf(rerr)))
 			continue
 		}
-		_ = s.integrations.UpsertMapping(ctx, integrationMapping{
+		_ = s.integrations.UpsertMapping(ctx, integration.Mapping{
 			Tenant: cfg.Tenant, Provider: cfg.Provider, ExternalID: m.ExternalID,
 			IncidentID: m.IncidentID, State: inc.Status, Applied: m.Applied,
 		})

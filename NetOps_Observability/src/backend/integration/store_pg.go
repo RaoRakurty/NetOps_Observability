@@ -1,4 +1,4 @@
-package main
+package integration
 
 import (
 	"context"
@@ -9,7 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"netops/backend/integration"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 // integration_repo_pg.go — Postgres persistence for the Integration Platform
@@ -19,30 +20,43 @@ import (
 // incidents_pg.go (withTenant binds app.tenant_id; system writes run at
 // platform scope '*' and stamp tenant_id, which RLS WITH CHECK permits).
 
-type integrationStore struct {
-	db    *pgDB
+type Store struct {
+	db    DB
 	vault *vault.Vault // secret-custody envelope for webhook_secret at rest (nil/dormant = plaintext)
 }
 
-func newIntegrationStore(db *pgDB, v *vault.Vault) *integrationStore {
-	return &integrationStore{db: db, vault: v}
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-// integrationMapping is one external incident's correlation + watermark row.
-type integrationMapping struct {
+// NewStore builds the FORCE-RLS integration repository over the injected seam.
+func NewStore(db DB, v *vault.Vault) *Store {
+	return &Store{db: db, vault: v}
+}
+
+// randHex mirrors the integrator's id minting (duplicated per the no-utils rule).
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Mapping is one external incident's correlation + watermark row.
+type Mapping struct {
 	Tenant     string
 	Provider   string
 	ExternalID string
 	IncidentID string
 	State      string
-	Applied    integration.Watermark // Seq + At — the ordering high-water mark (§4a)
+	Applied    Watermark // Seq + At — the ordering high-water mark (§4a)
 }
 
 // GetMapping returns the mapping for (provider, externalID), tenant-scoped.
-func (s *integrationStore) GetMapping(ctx context.Context, tenant string, cross bool, provider, externalID string) (integrationMapping, bool, error) {
-	var m integrationMapping
+func (s *Store) GetMapping(ctx context.Context, tenant string, cross bool, provider, externalID string) (Mapping, bool, error) {
+	var m Mapping
 	var found bool
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var appliedAt *time.Time
 		row := tx.QueryRow(ctx, `
 SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
@@ -64,8 +78,8 @@ SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_se
 
 // UpsertMapping inserts or advances a mapping. System write → platform scope; the
 // row's tenant_id is stamped from m.Tenant. Advances the watermark + state.
-func (s *integrationStore) UpsertMapping(ctx context.Context, m integrationMapping) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *Store) UpsertMapping(ctx context.Context, m Mapping) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var at any
 		if !m.Applied.At.IsZero() {
 			at = m.Applied.At
@@ -88,9 +102,9 @@ INSERT INTO integration_mappings
 
 // ListOpenMappings returns a tenant's non-terminal mappings for a provider — the
 // drift-reconciler candidates — stalest first, bounded by limit.
-func (s *integrationStore) ListOpenMappings(ctx context.Context, tenant, provider string, limit int) ([]integrationMapping, error) {
-	var out []integrationMapping
-	err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+func (s *Store) ListOpenMappings(ctx context.Context, tenant, provider string, limit int) ([]Mapping, error) {
+	var out []Mapping
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_seq, applied_at
   FROM integration_mappings
@@ -102,7 +116,7 @@ SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_se
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var m integrationMapping
+			var m Mapping
 			var appliedAt *time.Time
 			if err := rows.Scan(&m.Tenant, &m.Provider, &m.ExternalID, &m.IncidentID, &m.State, &m.Applied.Seq, &appliedAt); err != nil {
 				return err
@@ -119,8 +133,8 @@ SELECT tenant_id, provider, external_id, internal_incident_id, state, applied_se
 
 // TouchMapping bumps last_synced_at so a polled mapping rotates to the back of the
 // reconciler's stalest-first queue (whether or not drift was found).
-func (s *integrationStore) TouchMapping(ctx context.Context, tenant, provider, externalID string) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *Store) TouchMapping(ctx context.Context, tenant, provider, externalID string) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE integration_mappings SET last_synced_at=now()
 			WHERE tenant_id=$1 AND provider=$2 AND external_id=$3`, tenant, provider, externalID)
 		return err
@@ -134,7 +148,7 @@ func (s *integrationStore) TouchMapping(ctx context.Context, tenant, provider, e
 // correlationID is the single id threaded end-to-end (§9): minted here per
 // recorded event and carried through enqueue → worker apply → incident
 // transition (and any resulting outbound re-push), so one grep spans the chain.
-func (s *integrationStore) RecordInbound(ctx context.Context, ev integration.IntegrationEvent) (id, correlationID string, inserted bool, err error) {
+func (s *Store) RecordInbound(ctx context.Context, ev IntegrationEvent) (id, correlationID string, inserted bool, err error) {
 	id = randHex(8)
 	correlationID = "ic-" + randHex(8)
 	payload, _ := json.Marshal(ev)
@@ -142,7 +156,7 @@ func (s *integrationStore) RecordInbound(ctx context.Context, ev integration.Int
 	if !ev.OccurredAt.IsZero() {
 		occurred = ev.OccurredAt
 	}
-	err = s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err = s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var returned string
 		qerr := tx.QueryRow(ctx, `
 INSERT INTO integration_events
@@ -167,10 +181,10 @@ INSERT INTO integration_events
 // GetInboundEvent reconstructs a recorded inbound event from its ledger row (the
 // canonical IntegrationEvent was stored as the payload). Used by the async apply
 // worker. Platform scope (the worker resolves tenant from the event).
-func (s *integrationStore) GetInboundEvent(ctx context.Context, id string) (integration.IntegrationEvent, bool, error) {
-	var ev integration.IntegrationEvent
+func (s *Store) GetInboundEvent(ctx context.Context, id string) (IntegrationEvent, bool, error) {
+	var ev IntegrationEvent
 	var found bool
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var payload []byte
 		e := tx.QueryRow(ctx, `SELECT payload FROM integration_events WHERE id=$1`, id).Scan(&payload)
 		if errors.Is(e, pgx.ErrNoRows) {
@@ -189,8 +203,8 @@ func (s *integrationStore) GetInboundEvent(ctx context.Context, id string) (inte
 }
 
 // MarkEvent records the reconciler's verdict (status + reason) for a ledger row.
-func (s *integrationStore) MarkEvent(ctx context.Context, id, status, reason string) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *Store) MarkEvent(ctx context.Context, id, status, reason string) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 UPDATE integration_events SET status=$2, reason=$3, updated_at=now() WHERE id=$1`, id, status, reason)
 		return err

@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** thirty-nine domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** forty domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -12,8 +12,9 @@
 `cloud/store`, `ticketing` adapters, `policy/store`, `cloudconn/store`,
 `pathgraph/health`, `cloud/bizsvc`, `internal/loginguard`,
 `appid/appstore`, `timeintel/store`, `internal/incident`,
-`internal/discovery`, `reports` pg stores, 2026-07-28).
-**223** non-test files remain in `package main`. This document is the ordered sequence for the
+`internal/discovery`, `reports` pg stores, `integration` pg stores,
+2026-07-28).
+**220** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -135,6 +136,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
 | ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| ✅ 44 | `integration_repo_pg.go` + `config_pg.go` + `timeline.go` → `integration/` | 3 | ~490 | ~6 | **Done** (2026-07-28). The #43 ITSM-sync repository joins its provider package: mapping rows with ordering watermarks (§4a), vault-enveloped webhook secrets, per-provider configs (`MappingEngineFor` exported — was an unexported method), and the merged per-incident timeline (now consuming `incident.Event` across the two extracted domains). `DB` seam via `rlsPG`. Reconciler/handlers/sync worker stayed. |
 | ✅ 43 | The three reports pg stores → `reports/` | 3 | ~550 | 3 | **Done** (2026-07-28). `report_jobs_pg.go` (durable queue: FOR UPDATE SKIP LOCKED claims, visibility-timeout leases, dead-lettering), `report_executions_pg.go` (immutable executions + phase timings) and `report_deliveries_pg.go` (per-destination delivery records, `DeliveryRecorder`) join the `reports` package whose `JobQueue`/`ExecutionStore` interfaces they implement. `DB` seam via `rlsPG`; `ErrLeaseLost` exported; helpers duplicated. The pipeline/scheduler/workers (`report_pipeline.go` — rejected, holds `srv`) stay in main and consume the exported surface. |
 | ✅ 42 | `discovery.go` → `internal/discovery` | 1 | ~815 | ~20 | **Done** (2026-07-28). The device-discovery domain: the §4 plugin CONTRACT (`DiscoverySource`), the aggregator (identity merge/dedupe, F-69 delete-suppression, vendor enrich, health stats), `StaticSource` (hand-rolled YAML subset) and `NetboxSource` (paginated pull with same-host guard). `DeviceStore` seam INJECTED (main's deviceStore gains adapter methods) — with a nil-interface guard where the old code leaned on a nil-pointer-receiver-tolerant method (found by a failing test, fixed before commit); `NetboxConfig` + direction doctrine moved (main aliases; store/handlers stayed); warn sink injected into NetboxSource; `PollOnceForTest` replaces test poking. Dedup + direction suites moved in; `fakeSource` fixture duplicated. ⚠️ Screen note: `report_pipeline.go` REJECTED same day — it holds `srv *server` (77 refs); the `func (s *server)` grep misses `p.srv` shapes, so read the file, not just the counters. |
 | ✅ 41 | `incidents.go` + `incidents_pg.go` → `internal/incident` | 2 | ~690 | ~14 | **Done** (2026-07-28). The incident domain: model, severity/status lifecycle rules (validated transitions, terminal states), dedup-key derivation, auto-ticket policy, and the FORCE-RLS pg repository (Ingest-dedup, true-total Count, ITSM sync/notify marks). `DB` seam via `rlsPG`; the lifecycle surface exported (`Status*`, `ValidTransition`, `DisplayID`, `DedupKeyFor`, `ClampLimit`, `ErrNotFound`/`ErrBadTransition`); aliases + the pg-only selector hosted in `incidents_http.go` (the port_handlers idiom). filterSQL contract tests moved in; handler/paging suites stayed. |

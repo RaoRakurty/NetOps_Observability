@@ -199,6 +199,10 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  220  integration_repo_pg.go + config_pg.go + timeline.go →
+//	                  integration/ (the ITSM-sync repository: mappings +
+//	                  watermarks, vault-enveloped webhook secrets, merged
+//	                  timeline; DB seam via rlsPG; MappingEngineFor exported)
 //	2026-07-28  223  report_jobs_pg.go + report_executions_pg.go +
 //	                  report_deliveries_pg.go → reports/ (the durable queue
 //	                  with SKIP LOCKED leases, immutable executions and
@@ -217,7 +221,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 223
+const rootPackageCeiling = 220
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -1,7 +1,8 @@
-package main
+package integration
 
 import (
 	"context"
+	"netops/backend/internal/incident"
 	"sort"
 	"time"
 
@@ -15,10 +16,10 @@ import (
 // time-ordered stream so a NOC sees "operator acked → ServiceNow resolved →
 // reconciler re-drove" as a single story, instead of two disjoint tables.
 
-// timelineEntry is one item in a merged incident timeline: either a lifecycle
+// TimelineEntry is one item in a merged incident timeline: either a lifecycle
 // event or an ITSM sync event. The Kind discriminator tells the UI which fields
 // are populated; At is the unifying sort key.
-type timelineEntry struct {
+type TimelineEntry struct {
 	Kind string    `json:"kind"` // "lifecycle" | "sync"
 	At   time.Time `json:"at"`
 	ID   string    `json:"id"`
@@ -41,9 +42,9 @@ type timelineEntry struct {
 // ListSyncEventsForIncident returns the ITSM sync events tied to an incident —
 // correlated either directly (Slack actions carry the incident id in alert_id)
 // or via the mapping reverse-index (provider, external_id). Tenant-scoped by RLS.
-func (s *integrationStore) ListSyncEventsForIncident(ctx context.Context, tenant string, cross bool, incidentID string) ([]timelineEntry, error) {
-	var out []timelineEntry
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (s *Store) ListSyncEventsForIncident(ctx context.Context, tenant string, cross bool, incidentID string) ([]TimelineEntry, error) {
+	var out []TimelineEntry
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT e.id, e.provider, e.direction, e.type, e.external_id, e.status, e.reason, e.correlation_id,
        COALESCE(e.occurred_at, e.created_at) AS at
@@ -59,7 +60,7 @@ SELECT e.id, e.provider, e.direction, e.type, e.external_id, e.status, e.reason,
 		}
 		defer rows.Close()
 		for rows.Next() {
-			e := timelineEntry{Kind: "sync"}
+			e := TimelineEntry{Kind: "sync"}
 			if err := rows.Scan(&e.ID, &e.Provider, &e.Direction, &e.Type, &e.ExternalID,
 				&e.Status, &e.Reason, &e.CorrelationID, &e.At); err != nil {
 				return err
@@ -71,13 +72,13 @@ SELECT e.id, e.provider, e.direction, e.type, e.external_id, e.status, e.reason,
 	return out, err
 }
 
-// mergeTimeline folds lifecycle events and sync events into one time-ordered
+// MergeTimeline folds lifecycle events and sync events into one time-ordered
 // stream (oldest first), stable on equal timestamps (lifecycle before sync, then
 // by id) so the order is deterministic across calls.
-func mergeTimeline(lifecycle []IncidentEvent, sync []timelineEntry) []timelineEntry {
-	merged := make([]timelineEntry, 0, len(lifecycle)+len(sync))
+func MergeTimeline(lifecycle []incident.Event, sync []TimelineEntry) []TimelineEntry {
+	merged := make([]TimelineEntry, 0, len(lifecycle)+len(sync))
 	for _, ev := range lifecycle {
-		merged = append(merged, timelineEntry{
+		merged = append(merged, TimelineEntry{
 			Kind: "lifecycle", At: ev.CreatedAt, ID: ev.ID,
 			EventType: ev.EventType, Actor: ev.Actor, Payload: ev.Payload,
 		})

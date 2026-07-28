@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/integration"
 	"testing"
 	"time"
 )
@@ -18,12 +19,12 @@ func TestMergeTimeline(t *testing.T) {
 		{ID: "l2", EventType: "acknowledged", Actor: "alice", CreatedAt: tie},
 		{ID: "l3", EventType: "resolved", Actor: "itsm:servicenow", CreatedAt: t0.Add(5 * time.Minute)},
 	}
-	sync := []timelineEntry{
+	sync := []integration.TimelineEntry{
 		{Kind: "sync", ID: "s1", Provider: "servicenow", Direction: "inbound", Status: "applied", At: tie},
 		{Kind: "sync", ID: "s2", Provider: "servicenow", Direction: "inbound", Status: "dropped", At: t0.Add(time.Minute)},
 	}
 
-	got := mergeTimeline(lifecycle, sync)
+	got := integration.MergeTimeline(lifecycle, sync)
 	if len(got) != 5 {
 		t.Fatalf("want 5 merged entries, got %d", len(got))
 	}
@@ -38,7 +39,7 @@ func TestMergeTimeline(t *testing.T) {
 	}
 }
 
-func entryIDs(es []timelineEntry) []string {
+func entryIDs(es []integration.TimelineEntry) []string {
 	out := make([]string, len(es))
 	for i, e := range es {
 		out[i] = e.ID

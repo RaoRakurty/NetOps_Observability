@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"netops/backend/integration"
 	"time"
 
 	"netops/backend/reports"
@@ -95,7 +96,7 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 	// ticket and so a future inbound webhook correlates by it. applied_seq starts
 	// at 0 — the first poll/webhook that observes a newer version drives state.
 	if p.srv.integrations != nil && ticketID != "" {
-		_ = p.srv.integrations.UpsertMapping(ctx, integrationMapping{
+		_ = p.srv.integrations.UpsertMapping(ctx, integration.Mapping{
 			Tenant: inc.TenantID, Provider: system, ExternalID: ticketID,
 			IncidentID: inc.ID, State: inc.Status,
 		})

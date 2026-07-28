@@ -43,7 +43,7 @@ type integrationConfigInput struct {
 	StateMap       map[string]string `json:"state_map"`
 }
 
-func integrationConfigPublic(c integrationConfig) map[string]any {
+func integrationConfigPublic(c integration.Config) map[string]any {
 	out := map[string]any{
 		"provider":           c.Provider,
 		"enabled":            c.Enabled,
@@ -113,7 +113,7 @@ func (s *server) putIntegrationConfig(w http.ResponseWriter, r *http.Request, te
 	}
 	// Merge against the stored row (preserve write-only secret + token).
 	prev, _, _ := s.integrations.GetConfig(r.Context(), tenant, false, provider)
-	cfg := integrationConfig{
+	cfg := integration.Config{
 		Tenant: tenant, Provider: provider,
 		Enabled: in.Enabled, SyncMode: in.SyncMode,
 		WebhookEnabled: in.WebhookEnabled,
@@ -292,7 +292,7 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 // error into permanent, unrecoverable loss.
 //
 // Split out as a value with no IO so the decision is testable: the concrete
-// *integrationStore is nil on the file backend, which is precisely why nothing
+// *integration.Store is nil on the file backend, which is precisely why nothing
 // exercised this path before.
 type inboundOutcome struct {
 	Parsed     int // events the provider's Normalize produced
@@ -327,7 +327,7 @@ func (o inboundOutcome) body() map[string]any {
 
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict
 // to the incident lifecycle. Returns true when it mutated an incident.
-func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, ev integration.IntegrationEvent, ledgerID, correlationID string) bool {
+func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, ev integration.IntegrationEvent, ledgerID, correlationID string) bool {
 	if s.incidents == nil {
 		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "no-incident-store")
 		return false
@@ -341,7 +341,7 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, e
 	// Watermark for this external incident (§4a).
 	m, _, _ := s.integrations.GetMapping(ctx, cfg.Tenant, false, ev.Provider, ev.ExternalID)
 
-	decision := cfg.mappingEngine().Reconcile(ev, integration.InternalState(inc.Status), m.Applied)
+	decision := cfg.MappingEngineFor().Reconcile(ev, integration.InternalState(inc.Status), m.Applied)
 	if !decision.Apply {
 		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", decision.Reason)
 		return false
@@ -377,7 +377,7 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integrationConfig, e
 	if state == "" {
 		state = inc.Status
 	}
-	_ = s.integrations.UpsertMapping(ctx, integrationMapping{
+	_ = s.integrations.UpsertMapping(ctx, integration.Mapping{
 		Tenant: cfg.Tenant, Provider: ev.Provider, ExternalID: ev.ExternalID,
 		IncidentID: inc.ID, State: state, Applied: decision.Watermark,
 	})
