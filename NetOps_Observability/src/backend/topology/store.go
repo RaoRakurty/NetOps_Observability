@@ -1,4 +1,4 @@
-package main
+package topology
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"netops/backend/topology"
+	"strings"
 )
 
 // topology_store.go — persistence seam for the topology graph (#77). The
@@ -20,38 +20,42 @@ import (
 // (CLAUDE.md §3a) — the in-memory store filters by tenant, the pg store relies on
 // the tenant_iso FORCE-RLS policy via withTenant.
 
-type topologyGraphStore interface {
+type GraphStore interface {
 	// Snapshot returns the persisted graph visible to the (tenant, cross) principal.
-	Snapshot(ctx context.Context, tenant string, cross bool) (topology.GraphRecords, error)
+	Snapshot(ctx context.Context, tenant string, cross bool) (GraphRecords, error)
 	// ReplaceAll replaces the ENTIRE persisted graph with the reconciler's full
 	// platform-wide set (the reconciler is the only writer; it always recomputes the
 	// whole set with first_seen preserved, so a wholesale replace is correct).
-	ReplaceAll(ctx context.Context, g topology.GraphRecords) error
-}
-
-// newTopologyStore picks the backend: a per-row RLS-scoped pg repository under
-// STORE_BACKEND=postgres, else an in-memory store. Always non-nil.
-func newTopologyStore() topologyGraphStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgTopologyStore{db: ps.db}
-	}
-	return &memTopologyStore{}
+	ReplaceAll(ctx context.Context, g GraphRecords) error
 }
 
 // ── in-memory backend ────────────────────────────────────────────────────────
 
-type memTopologyStore struct {
-	mu sync.RWMutex
-	g  topology.GraphRecords
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-func (m *memTopologyStore) Snapshot(_ context.Context, tenant string, cross bool) (topology.GraphRecords, error) {
+// NewMemStore / NewPGStore build the two backends.
+func NewMemStore() *memStore { return &memStore{} }
+
+func NewPGStore(db DB) *pgStore { return &pgStore{db: db} }
+
+// normTenant mirrors the integrator's normalization (duplicated).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+type memStore struct {
+	mu sync.RWMutex
+	g  GraphRecords
+}
+
+func (m *memStore) Snapshot(_ context.Context, tenant string, cross bool) (GraphRecords, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.g.FilterTenant(tenant, cross), nil
 }
 
-func (m *memTopologyStore) ReplaceAll(_ context.Context, g topology.GraphRecords) error {
+func (m *memStore) ReplaceAll(_ context.Context, g GraphRecords) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.g = g
@@ -60,15 +64,15 @@ func (m *memTopologyStore) ReplaceAll(_ context.Context, g topology.GraphRecords
 
 // ── Postgres backend ─────────────────────────────────────────────────────────
 
-type pgTopologyStore struct {
-	db *pgDB
+type pgStore struct {
+	db DB
 }
 
-func (s *pgTopologyStore) Snapshot(ctx context.Context, tenant string, cross bool) (topology.GraphRecords, error) {
+func (s *pgStore) Snapshot(ctx context.Context, tenant string, cross bool) (GraphRecords, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var g topology.GraphRecords
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	var g GraphRecords
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		nrows, err := tx.Query(ctx, `SELECT data FROM topology_nodes ORDER BY tenant_id, id`)
 		if err != nil {
 			return err
@@ -79,7 +83,7 @@ func (s *pgTopologyStore) Snapshot(ctx context.Context, tenant string, cross boo
 			if err := nrows.Scan(&data); err != nil {
 				return err
 			}
-			var n topology.NodeRecord
+			var n NodeRecord
 			if err := json.Unmarshal(data, &n); err != nil {
 				return err
 			}
@@ -98,7 +102,7 @@ func (s *pgTopologyStore) Snapshot(ctx context.Context, tenant string, cross boo
 			if err := erows.Scan(&data); err != nil {
 				return err
 			}
-			var e topology.EdgeRecord
+			var e EdgeRecord
 			if err := json.Unmarshal(data, &e); err != nil {
 				return err
 			}
@@ -107,7 +111,7 @@ func (s *pgTopologyStore) Snapshot(ctx context.Context, tenant string, cross boo
 		return erows.Err()
 	})
 	if err != nil {
-		return topology.GraphRecords{}, err
+		return GraphRecords{}, err
 	}
 	return g, nil
 }
@@ -116,10 +120,10 @@ func (s *pgTopologyStore) Snapshot(ctx context.Context, tenant string, cross boo
 // scope ('*' — the reconciler's set spans all tenants, each row carrying its own
 // tenant_id which RLS WITH CHECK validates). Delete-then-insert is atomic, so a
 // reader never sees a half-written graph.
-func (s *pgTopologyStore) ReplaceAll(ctx context.Context, g topology.GraphRecords) error {
+func (s *pgStore) ReplaceAll(ctx context.Context, g GraphRecords) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM topology_nodes`); err != nil {
 			return err
 		}
@@ -161,5 +165,5 @@ func orEmpty(s string) string {
 	return s
 }
 
-var _ topologyGraphStore = (*memTopologyStore)(nil)
-var _ topologyGraphStore = (*pgTopologyStore)(nil)
+var _ GraphStore = (*memStore)(nil)
+var _ GraphStore = (*pgStore)(nil)

@@ -35,6 +35,7 @@ import (
 	"netops/backend/policy"
 	"netops/backend/portintel"
 	"netops/backend/timeintel"
+	"netops/backend/topology"
 	"netops/backend/wireless"
 	"os"
 	"os/signal"
@@ -125,7 +126,7 @@ type server struct {
 	workloadIssuer        *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
 	cloudIngestInv        *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
 	cloudSourceStatus     *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology              topologyGraphStore       // persistent topology graph #77 (in-memory or pg)
+	topology              topology.GraphStore      // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline      timeintel.TimelineStore  // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	aiFeedback            aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
@@ -1007,6 +1008,15 @@ func newSavedStore(path string) (saved.Repo, error) {
 		return saved.NewPGStore(rlsPG{db: ps.db}, logError), nil
 	}
 	return saved.NewFileStore(path, platformKV{})
+}
+
+// newTopologyStore picks the graph-store backend: RLS-scoped pg under
+// STORE_BACKEND=postgres, else in-memory.
+func newTopologyStore() topology.GraphStore {
+	if ps, ok := backend.(*pgStore); ok {
+		return topology.NewPGStore(rlsPG{db: ps.db})
+	}
+	return topology.NewMemStore()
 }
 
 func main() {

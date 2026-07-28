@@ -10,7 +10,7 @@ import (
 
 // TestTopologyStoreIsolation: the in-memory store scopes a Snapshot to the tenant.
 func TestTopologyStoreIsolation(t *testing.T) {
-	m := &memTopologyStore{}
+	m := topology.NewMemStore()
 	if err := m.ReplaceAll(context.Background(), topology.GraphRecords{Nodes: []topology.NodeRecord{
 		{TenantID: "acme", ID: "a1"}, {TenantID: "globex", ID: "g1"},
 	}}); err != nil {
