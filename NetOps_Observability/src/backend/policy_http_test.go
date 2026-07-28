@@ -24,7 +24,7 @@ func policyServer(t *testing.T) *server {
 	}
 	return &server{
 		roles:     roles,
-		secPolicy: newSecurityPolicyStore(filepath.Join(t.TempDir(), "security_policies.json")),
+		secPolicy: policy.NewSecurityStore(filepath.Join(t.TempDir(), "security_policies.json"), platformKV{}, logError),
 	}
 }
 

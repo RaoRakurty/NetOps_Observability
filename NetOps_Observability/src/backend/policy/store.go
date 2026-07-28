@@ -1,4 +1,4 @@
-package main
+package policy
 
 import (
 	"encoding/json"
@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"netops/backend/policy"
 )
 
 // policy_store.go — Phase 2 of the Security Policy Configuration System.
@@ -29,7 +27,7 @@ import (
 //     that knows about kv persistence and tenancy. No hidden coupling.
 //   - Zero-trust at the boundary: a write is rejected unless its (scope,
 //     selector, tenant) reference is internally consistent AND the override
-//     passes policy.ValidateOverride against the value inherited from higher
+//     passes ValidateOverride against the value inherited from higher
 //     scopes. Unknown catalog keys are rejected.
 //   - Tenant isolation: a subject only ever resolves against the global System
 //     document plus documents tagged with its own tenant. A tenant can never
@@ -42,23 +40,42 @@ import (
 // Phase 3; the React UI is Phase 4. This file is unreferenced by the server
 // until then, exactly as Phase 1 was.
 
-// securityPolicyStore persists the security-policy override Documents and is the
+// SecurityStore persists the security-policy override Documents and is the
 // engine's Source. It is safe for concurrent use.
-type securityPolicyStore struct {
+type SecurityStore struct {
+	kv      KV
+	errlog  func(component, msg string, fields map[string]any)
 	mu      sync.RWMutex
-	catalog *policy.Catalog
-	docs    map[string]policy.Document // keyed by docKey(scope, tenant, selector)
+	catalog *Catalog
+	docs    map[string]Document // keyed by docKey(scope, tenant, selector)
 	path    string
 	now     func() time.Time // injectable clock; defaults to time.Now (UTC stamped at use)
 }
 
-// newSecurityPolicyStore builds the store over the built-in catalog and loads
+// NewSecurityStore builds the store over the built-in catalog and loads
 // any persisted documents from path.
-func newSecurityPolicyStore(path string) *securityPolicyStore {
-	s := &securityPolicyStore{
-		catalog: policy.BuiltinCatalog(),
-		docs:    make(map[string]policy.Document),
+// KV abstracts where the store persists its JSON blob (the platform kv layer;
+// a missing key must return an os.ErrNotExist-wrapped error).
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
+}
+
+// NewSecurityStore opens the security-policy document store. errf is the
+// structured error sink (no silent failures).
+func NewSecurityStore(path string, kv KV, errlog func(component, msg string, fields map[string]any)) *SecurityStore {
+	if kv == nil {
+		panic("policy.NewSecurityStore: kv is required") // programmer error at wiring time
+	}
+	if errlog == nil {
+		errlog = func(string, string, map[string]any) {}
+	}
+	s := &SecurityStore{
+		catalog: BuiltinCatalog(),
+		docs:    make(map[string]Document),
 		path:    path,
+		kv:      kv,
+		errlog:  errlog,
 		now:     time.Now,
 	}
 	s.load()
@@ -69,33 +86,33 @@ func newSecurityPolicyStore(path string) *securityPolicyStore {
 // (two tenants may each have a role "admin" or a user "alice"), so the owning
 // tenant is part of the key. System documents are global: tenant and selector
 // are both empty.
-func docKey(scope policy.Scope, tenant, selector string) string {
+func docKey(scope Scope, tenant, selector string) string {
 	return string(scope) + "\x1f" + tenant + "\x1f" + selector
 }
 
 // load reads the persisted document collection. A missing key is an empty store,
 // not an error (mirrors the other kv-backed stores).
-func (s *securityPolicyStore) load() {
-	b, err := kvLoad(s.path)
+func (s *SecurityStore) load() {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			logError("policy.store", "load", errf(err))
+			s.errlog("policy.store", "load", map[string]any{"error": err.Error()})
 		}
 		return
 	}
 	if len(b) == 0 {
 		return
 	}
-	var docs []policy.Document
+	var docs []Document
 	if err := json.Unmarshal(b, &docs); err != nil {
-		logError("policy.store", "unmarshal", errf(err))
+		s.errlog("policy.store", "unmarshal", map[string]any{"error": err.Error()})
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, d := range docs {
 		if d.Overrides == nil {
-			d.Overrides = map[string]policy.Override{}
+			d.Overrides = map[string]Override{}
 		}
 		s.docs[docKey(d.Scope, d.Tenant, d.Selector)] = d
 	}
@@ -104,8 +121,8 @@ func (s *securityPolicyStore) load() {
 // snapshotLocked returns the documents as a deterministically ordered slice
 // (scope rank, then tenant, then selector) so the persisted blob is stable
 // across writes and diffs cleanly. Caller holds the lock.
-func (s *securityPolicyStore) snapshotLocked() []policy.Document {
-	out := make([]policy.Document, 0, len(s.docs))
+func (s *SecurityStore) snapshotLocked() []Document {
+	out := make([]Document, 0, len(s.docs))
 	for _, d := range s.docs {
 		out = append(out, d)
 	}
@@ -122,12 +139,12 @@ func (s *securityPolicyStore) snapshotLocked() []policy.Document {
 }
 
 // flushLocked persists the current collection. Caller holds the lock.
-func (s *securityPolicyStore) flushLocked() error {
+func (s *SecurityStore) flushLocked() error {
 	b, err := json.MarshalIndent(s.snapshotLocked(), "", "  ")
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
 // ---------------------------------------------------------------------------
@@ -143,27 +160,27 @@ func (s *securityPolicyStore) flushLocked() error {
 //   - Tenant: selector is the tenant id; the owning tenant is set equal to it.
 //   - Role:   selector is the role; an owning tenant is required.
 //   - User:   selector is the username; an owning tenant is required.
-func normalizeRef(scope policy.Scope, selector, tenant string) (sel, ten string, err error) {
+func normalizeRef(scope Scope, selector, tenant string) (sel, ten string, err error) {
 	selector = strings.TrimSpace(selector)
 	tenant = strings.TrimSpace(tenant)
 	switch scope {
-	case policy.ScopeSystem:
+	case ScopeSystem:
 		if selector != "" || tenant != "" {
 			return "", "", errors.New("policy: system scope is global and takes no selector/tenant")
 		}
 		return "", "", nil
-	case policy.ScopeTenant:
+	case ScopeTenant:
 		if selector == "" {
 			return "", "", errors.New("policy: tenant scope requires a tenant selector")
 		}
 		// The tenant document's owning tenant is the tenant itself.
 		return selector, selector, nil
-	case policy.ScopeRole:
+	case ScopeRole:
 		if selector == "" || tenant == "" {
 			return "", "", errors.New("policy: role scope requires a role selector and an owning tenant")
 		}
 		return selector, tenant, nil
-	case policy.ScopeUser:
+	case ScopeUser:
 		if selector == "" || tenant == "" {
 			return "", "", errors.New("policy: user scope requires a user selector and an owning tenant")
 		}
@@ -180,16 +197,16 @@ func normalizeRef(scope policy.Scope, selector, tenant string) (sel, ten string,
 // resolver re-applies the harden/lock invariants at read time against the live
 // subject's real role, so a user override that slips past the System+Tenant gate
 // but is weaker than the user's role policy is simply clamped when resolved.
-func subjectForRef(scope policy.Scope, selector, tenant string) policy.Subject {
+func subjectForRef(scope Scope, selector, tenant string) Subject {
 	switch scope {
-	case policy.ScopeTenant:
-		return policy.Subject{Tenant: selector}
-	case policy.ScopeRole:
-		return policy.Subject{Tenant: tenant, Role: selector}
-	case policy.ScopeUser:
-		return policy.Subject{Tenant: tenant, User: selector}
+	case ScopeTenant:
+		return Subject{Tenant: selector}
+	case ScopeRole:
+		return Subject{Tenant: tenant, Role: selector}
+	case ScopeUser:
+		return Subject{Tenant: tenant, User: selector}
 	default: // System
-		return policy.Subject{}
+		return Subject{}
 	}
 }
 
@@ -197,21 +214,21 @@ func subjectForRef(scope policy.Scope, selector, tenant string) policy.Subject {
 // against: the global System document plus the subject's own tenant/role/user
 // documents. Documents tagged with any other tenant are never returned, which is
 // the read-side isolation guarantee. Caller holds (at least) the read lock.
-func (s *securityPolicyStore) chainForLocked(sub policy.Subject) []policy.Document {
-	var chain []policy.Document
-	add := func(scope policy.Scope, tenant, selector string) {
+func (s *SecurityStore) chainForLocked(sub Subject) []Document {
+	var chain []Document
+	add := func(scope Scope, tenant, selector string) {
 		if d, ok := s.docs[docKey(scope, tenant, selector)]; ok {
 			chain = append(chain, d)
 		}
 	}
-	add(policy.ScopeSystem, "", "")
+	add(ScopeSystem, "", "")
 	if sub.Tenant != "" {
-		add(policy.ScopeTenant, sub.Tenant, sub.Tenant)
+		add(ScopeTenant, sub.Tenant, sub.Tenant)
 		if sub.Role != "" {
-			add(policy.ScopeRole, sub.Tenant, sub.Role)
+			add(ScopeRole, sub.Tenant, sub.Role)
 		}
 		if sub.User != "" {
-			add(policy.ScopeUser, sub.Tenant, sub.User)
+			add(ScopeUser, sub.Tenant, sub.User)
 		}
 	}
 	return chain
@@ -223,40 +240,40 @@ func (s *securityPolicyStore) chainForLocked(sub policy.Subject) []policy.Docume
 
 // Catalog exposes the immutable built-in catalog so the API can render the
 // self-describing setting cards.
-func (s *securityPolicyStore) Catalog() *policy.Catalog { return s.catalog }
+func (s *SecurityStore) Catalog() *Catalog { return s.catalog }
 
 // Resolve returns the effective policy for a subject: every catalog setting with
 // its effective value, source scope and full inheritance trail. Deterministic.
-func (s *securityPolicyStore) Resolve(sub policy.Subject) []policy.Resolved {
+func (s *SecurityStore) Resolve(sub Subject) []Resolved {
 	s.mu.RLock()
 	chain := s.chainForLocked(sub)
 	s.mu.RUnlock()
-	return policy.Resolve(s.catalog, chain, sub)
+	return Resolve(s.catalog, chain, sub)
 }
 
 // ResolveSetting resolves a single setting for a subject. ok is false when key
 // is not in the catalog.
-func (s *securityPolicyStore) ResolveSetting(sub policy.Subject, key string) (policy.Resolved, bool) {
+func (s *SecurityStore) ResolveSetting(sub Subject, key string) (Resolved, bool) {
 	s.mu.RLock()
 	chain := s.chainForLocked(sub)
 	s.mu.RUnlock()
-	return policy.ResolveSetting(s.catalog, key, chain, sub)
+	return ResolveSetting(s.catalog, key, chain, sub)
 }
 
 // Document returns the raw overrides authored at one scope (for the editing UI).
 // found is false when no document exists there yet; the returned zero Document
 // then carries an initialised (empty) Overrides map so callers can render an
 // empty editor without a nil check.
-func (s *securityPolicyStore) Document(scope policy.Scope, selector, tenant string) (policy.Document, bool, error) {
+func (s *SecurityStore) Document(scope Scope, selector, tenant string) (Document, bool, error) {
 	sel, ten, err := normalizeRef(scope, selector, tenant)
 	if err != nil {
-		return policy.Document{}, false, err
+		return Document{}, false, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	d, ok := s.docs[docKey(scope, ten, sel)]
 	if !ok {
-		return policy.Document{Scope: scope, Selector: sel, Tenant: ten, Overrides: map[string]policy.Override{}}, false, nil
+		return Document{Scope: scope, Selector: sel, Tenant: ten, Overrides: map[string]Override{}}, false, nil
 	}
 	return cloneDocument(d), true, nil
 }
@@ -265,13 +282,13 @@ func (s *securityPolicyStore) Document(scope policy.Scope, selector, tenant stri
 // document plus every document owned by that tenant (tenant/role/user scopes).
 // An empty tenant returns only the System document. The result is in stable
 // snapshot order. This is the tenant-scoped admin listing used by Phase 3.
-func (s *securityPolicyStore) Documents(tenant string) []policy.Document {
+func (s *SecurityStore) Documents(tenant string) []Document {
 	tenant = strings.TrimSpace(tenant)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []policy.Document
+	var out []Document
 	for _, d := range s.snapshotLocked() {
-		if d.Scope == policy.ScopeSystem || d.Tenant == tenant {
+		if d.Scope == ScopeSystem || d.Tenant == tenant {
 			out = append(out, cloneDocument(d))
 		}
 	}
@@ -281,11 +298,11 @@ func (s *securityPolicyStore) Documents(tenant string) []policy.Document {
 // AllDocuments returns every stored document (deep-copied, stable order). This
 // is the cross-tenant listing reserved for the platform owner; tenant-scoped
 // callers must use Documents(tenant), which never crosses the tenant boundary.
-func (s *securityPolicyStore) AllDocuments() []policy.Document {
+func (s *SecurityStore) AllDocuments() []Document {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := s.snapshotLocked()
-	out := make([]policy.Document, len(snap))
+	out := make([]Document, len(snap))
 	for i, d := range snap {
 		out[i] = cloneDocument(d)
 	}
@@ -300,7 +317,7 @@ func (s *securityPolicyStore) AllDocuments() []policy.Document {
 // reference consistency, catalog membership, kind/constraint bounds, and the
 // monotonic harden rule against the value inherited from higher scopes. It backs
 // both SetOverride and the UI's pre-flight ("would this be accepted?").
-func (s *securityPolicyStore) Validate(scope policy.Scope, selector, tenant, key string, ov policy.Override) error {
+func (s *SecurityStore) Validate(scope Scope, selector, tenant, key string, ov Override) error {
 	sel, ten, err := normalizeRef(scope, selector, tenant)
 	if err != nil {
 		return err
@@ -313,24 +330,24 @@ func (s *securityPolicyStore) Validate(scope policy.Scope, selector, tenant, key
 	s.mu.RLock()
 	chain := s.chainForLocked(sub)
 	s.mu.RUnlock()
-	inherited, inheritedLocked, ok := policy.InheritedValue(s.catalog, key, chain, sub, scope)
+	inherited, inheritedLocked, ok := InheritedValue(s.catalog, key, chain, sub, scope)
 	if !ok {
 		return fmt.Errorf("policy: unknown setting %q", key)
 	}
-	return policy.ValidateOverride(setting, scope, ov, inherited, inheritedLocked)
+	return ValidateOverride(setting, scope, ov, inherited, inheritedLocked)
 }
 
 // SetOverride validates and persists a single override at one scope, stamping
 // the document's audit fields, and returns the setting's newly resolved value at
 // that scope. actor is recorded as the author.
-func (s *securityPolicyStore) SetOverride(scope policy.Scope, selector, tenant, key string, ov policy.Override, actor string) (policy.Resolved, error) {
+func (s *SecurityStore) SetOverride(scope Scope, selector, tenant, key string, ov Override, actor string) (Resolved, error) {
 	sel, ten, err := normalizeRef(scope, selector, tenant)
 	if err != nil {
-		return policy.Resolved{}, err
+		return Resolved{}, err
 	}
 	setting, ok := s.catalog.Setting(key)
 	if !ok {
-		return policy.Resolved{}, fmt.Errorf("policy: unknown setting %q", key)
+		return Resolved{}, fmt.Errorf("policy: unknown setting %q", key)
 	}
 	sub := subjectForRef(scope, sel, ten)
 
@@ -338,12 +355,12 @@ func (s *securityPolicyStore) SetOverride(scope policy.Scope, selector, tenant, 
 	defer s.mu.Unlock()
 
 	chain := s.chainForLocked(sub)
-	inherited, inheritedLocked, ok := policy.InheritedValue(s.catalog, key, chain, sub, scope)
+	inherited, inheritedLocked, ok := InheritedValue(s.catalog, key, chain, sub, scope)
 	if !ok {
-		return policy.Resolved{}, fmt.Errorf("policy: unknown setting %q", key)
+		return Resolved{}, fmt.Errorf("policy: unknown setting %q", key)
 	}
-	if err := policy.ValidateOverride(setting, scope, ov, inherited, inheritedLocked); err != nil {
-		return policy.Resolved{}, err
+	if err := ValidateOverride(setting, scope, ov, inherited, inheritedLocked); err != nil {
+		return Resolved{}, err
 	}
 
 	k := docKey(scope, ten, sel)
@@ -363,10 +380,10 @@ func (s *securityPolicyStore) SetOverride(scope policy.Scope, selector, tenant, 
 		} else {
 			delete(s.docs, k)
 		}
-		return policy.Resolved{}, err
+		return Resolved{}, err
 	}
 
-	r, _ := policy.ResolveSetting(s.catalog, key, s.chainForLocked(sub), sub)
+	r, _ := ResolveSetting(s.catalog, key, s.chainForLocked(sub), sub)
 	return r, nil
 }
 
@@ -374,7 +391,7 @@ func (s *securityPolicyStore) SetOverride(scope policy.Scope, selector, tenant, 
 // its inherited value. Removing the last override leaves an empty document on
 // record (still tenant-tagged) so its audit trail is preserved; pass pruneEmpty
 // to delete the document entirely when it becomes empty.
-func (s *securityPolicyStore) ClearOverride(scope policy.Scope, selector, tenant, key, actor string, pruneEmpty bool) error {
+func (s *SecurityStore) ClearOverride(scope Scope, selector, tenant, key, actor string, pruneEmpty bool) error {
 	sel, ten, err := normalizeRef(scope, selector, tenant)
 	if err != nil {
 		return err
@@ -408,8 +425,8 @@ func (s *securityPolicyStore) ClearOverride(scope policy.Scope, selector, tenant
 
 // cloneDocument returns a deep copy so callers cannot mutate stored state through
 // the returned map (the maps are otherwise shared by reference).
-func cloneDocument(d policy.Document) policy.Document {
-	ov := make(map[string]policy.Override, len(d.Overrides))
+func cloneDocument(d Document) Document {
+	ov := make(map[string]Override, len(d.Overrides))
 	for k, v := range d.Overrides {
 		ov[k] = v
 	}

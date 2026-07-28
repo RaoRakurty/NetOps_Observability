@@ -19,12 +19,12 @@ func intOv(n int64, locked bool) policy.Override {
 	return policy.Override{Value: policy.Value{Kind: policy.KindInt, Num: n}, Locked: locked}
 }
 
-func newTestPolicyStore(t *testing.T) *securityPolicyStore {
+func newTestPolicyStore(t *testing.T) *policy.SecurityStore {
 	t.Helper()
-	return newSecurityPolicyStore(filepath.Join(t.TempDir(), "security_policies.json"))
+	return policy.NewSecurityStore(filepath.Join(t.TempDir(), "security_policies.json"), platformKV{}, logError)
 }
 
-func resolvedFor(t *testing.T, s *securityPolicyStore, sub policy.Subject, key string) policy.Resolved {
+func resolvedFor(t *testing.T, s *policy.SecurityStore, sub policy.Subject, key string) policy.Resolved {
 	t.Helper()
 	r, ok := s.ResolveSetting(sub, key)
 	if !ok {
@@ -141,11 +141,11 @@ func TestPolicyStore_UnknownKeyRejected(t *testing.T) {
 // Overrides survive a store restart (durable round-trip through the kv blob).
 func TestPolicyStore_PersistenceRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "security_policies.json")
-	s1 := newSecurityPolicyStore(path)
+	s1 := policy.NewSecurityStore(path, platformKV{}, logError)
 	mustSet(t, s1, policy.ScopeSystem, "", "", keyMinLen, intOv(14, false))
 	mustSet(t, s1, policy.ScopeTenant, "acme", "", keyMinLen, intOv(18, false))
 
-	s2 := newSecurityPolicyStore(path)
+	s2 := policy.NewSecurityStore(path, platformKV{}, logError)
 	r := resolvedFor(t, s2, policy.Subject{Tenant: "acme"}, keyMinLen)
 	if r.Value.Num != 18 || r.Source != policy.ScopeTenant {
 		t.Fatalf("reloaded store lost tenant override: value=%d source=%s", r.Value.Num, r.Source)
@@ -187,7 +187,7 @@ func TestPolicyStore_DocumentReturnsCopy(t *testing.T) {
 	}
 }
 
-func mustSet(t *testing.T, s *securityPolicyStore, scope policy.Scope, selector, tenant, key string, ov policy.Override) {
+func mustSet(t *testing.T, s *policy.SecurityStore, scope policy.Scope, selector, tenant, key string, ov policy.Override) {
 	t.Helper()
 	if _, err := s.SetOverride(scope, selector, tenant, key, ov, "tester"); err != nil {
 		t.Fatalf("set %s@%s/%s: %v", key, scope, selector, err)

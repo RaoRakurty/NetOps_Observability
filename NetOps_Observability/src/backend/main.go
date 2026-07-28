@@ -27,6 +27,7 @@ import (
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/pathgraph"
+	"netops/backend/policy"
 	"netops/backend/portintel"
 	"netops/backend/wireless"
 	"os"
@@ -176,7 +177,7 @@ type server struct {
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
-	secPolicy   *securityPolicyStore // #24 security-policy engine Source (catalog + per-scope overrides)
+	secPolicy   *policy.SecurityStore // #24 security-policy engine Source (catalog + per-scope overrides)
 	// ITSM connectors (ServiceNow + Jira) are PER-TENANT and owned by itsmCfg
 	// (itsm_config.go), which builds + hot-swaps them on save. Resolve a tenant's
 	// connector via serviceNowFor()/jiraFor(); the incident-projection worker keys
@@ -689,7 +690,7 @@ func newServer() *server {
 	// resolution of NIST-aligned controls. The store (Phase 2) is the engine's
 	// persistence Source; the handlers (Phase 3, policy_http.go) expose the
 	// catalog, the effective-policy/simulator view, and per-scope editing.
-	srv.secPolicy = newSecurityPolicyStore(envOr("SECURITY_POLICY_FILE", "/data/security_policies.json"))
+	srv.secPolicy = policy.NewSecurityStore(envOr("SECURITY_POLICY_FILE", "/data/security_policies.json"), platformKV{}, logError)
 	// SSO/OIDC: runtime-configurable overlay over the env defaults. The store
 	// builds the initial live provider into the atomic pointer and swaps it on
 	// every admin save (see oidc_config.go).

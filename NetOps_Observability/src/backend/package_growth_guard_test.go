@@ -176,7 +176,10 @@ import (
 //	                  taxonomy and DedupeKey; worker/sweeper/http/itsm-config
 //	                  stayed; WithClient constructors added for integrator
 //	                  tests; shared fixtures duplicated across the boundary
-const rootPackageCeiling = 237
+//	2026-07-28  236  policy_store.go → policy/store.go (the #24 security-policy
+//	                  document store joins its engine package; kv + error sink
+//	                  INJECTED; main tests stayed as integration via wiring)
+const rootPackageCeiling = 236
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

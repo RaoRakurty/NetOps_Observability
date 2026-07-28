@@ -17,7 +17,7 @@ func TestSessionPolicyPerRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp := newSecurityPolicyStore(dir + "/policy.json")
+	sp := policy.NewSecurityStore(dir+"/policy.json", platformKV{}, logError)
 	// Role overrides are scoped within an owning tenant (per the policy model).
 	if _, err := sp.SetOverride(policy.ScopeRole, "operator", "acme", "session.idle_timeout",
 		policy.Override{Value: policy.Value{Kind: policy.KindDuration, Num: 600}}, "test"); err != nil {
