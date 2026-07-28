@@ -1,4 +1,4 @@
-package main
+package ticketing
 
 // ticketing_slack.go — Slack as a tenant-scoped RCA incident-policy
 // destination (#103-E). Human-collaboration lane: one rich message per
@@ -27,7 +27,6 @@ import (
 	"io"
 	"net/http"
 	"netops/backend/internal/noclabel"
-	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -35,19 +34,22 @@ import (
 	"netops/backend/safehttp"
 )
 
-const slackHooksOrigin = "https://hooks.slack.com"
+const SlackHooksOrigin = "https://hooks.slack.com"
 
-type slackTicketAdapter struct {
+type SlackAdapter struct {
 	httpClient *http.Client
 }
 
-func newSlackTicketAdapter() *slackTicketAdapter {
-	return &slackTicketAdapter{httpClient: safehttp.Client(10 * time.Second)}
+// NewSlackAdapterWithClient injects the HTTP client (integrator tests).
+func NewSlackAdapterWithClient(c *http.Client) *SlackAdapter { return &SlackAdapter{httpClient: c} }
+
+func NewSlackAdapter() *SlackAdapter {
+	return &SlackAdapter{httpClient: safehttp.Client(10 * time.Second)}
 }
 
-func (a *slackTicketAdapter) Name() string { return "slack" }
+func (a *SlackAdapter) Name() string { return "slack" }
 
-func (a *slackTicketAdapter) ValidateConfig(cfg ticketSystemConfig) error {
+func (a *SlackAdapter) ValidateConfig(cfg SystemConfig) error {
 	u := strings.TrimSpace(cfg.APIToken)
 	if u == "" {
 		return errors.New("slack: webhook URL is required")
@@ -58,30 +60,30 @@ func (a *slackTicketAdapter) ValidateConfig(cfg ticketSystemConfig) error {
 	return nil
 }
 
-func (a *slackTicketAdapter) HealthCheck(_ context.Context, cfg ticketSystemConfig) error {
+func (a *SlackAdapter) HealthCheck(_ context.Context, cfg SystemConfig) error {
 	return a.ValidateConfig(cfg) // a real probe would post a visible message
 }
 
-func (a *slackTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
+func (a *SlackAdapter) CreateIncident(ctx context.Context, cfg SystemConfig, p Payload) (Ref, error) {
 	if err := a.post(ctx, cfg, slackTicketMessage("opened", p)); err != nil {
-		return ticketRef{}, err
+		return Ref{}, err
 	}
-	key := dedupeKey(cfg.TenantID, p.CorrObjectID, "slack")
-	return ticketRef{Number: shortPDRef(key), SysID: key, URL: ""}, nil
+	key := DedupeKey(cfg.TenantID, p.CorrObjectID, "slack")
+	return Ref{Number: shortPDRef(key), SysID: key, URL: ""}, nil
 }
 
-func (a *slackTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, _ ticketRef, p ticketing.Payload) error {
+func (a *SlackAdapter) UpdateIncident(ctx context.Context, cfg SystemConfig, _ Ref, p Payload) error {
 	return a.post(ctx, cfg, slackTicketMessage("updated", p))
 }
 
-func (a *slackTicketAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemConfig, _ ticketRef, note string) error {
+func (a *SlackAdapter) AddWorkNote(ctx context.Context, cfg SystemConfig, _ Ref, note string) error {
 	if strings.TrimSpace(note) == "" {
 		return nil
 	}
-	return a.post(ctx, cfg, map[string]any{"text": ":memo: " + truncate(note, 800)})
+	return a.post(ctx, cfg, map[string]any{"text": ":memo: " + Truncate(note, 800)})
 }
 
-func (a *slackTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, _ string) error {
+func (a *SlackAdapter) ResolveIncident(ctx context.Context, cfg SystemConfig, ref Ref, _ string) error {
 	// Name the incident by its friendly Problem ID, never the raw dedupe-hash ref
 	// (#103 UX-2). The correlation UUID is the middle segment of the dedupe key
 	// (tenant:corr:system) this adapter stores as SysID.
@@ -94,17 +96,17 @@ func (a *slackTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSyst
 	})
 }
 
-func (a *slackTicketAdapter) LookupByCorrelationID(_ context.Context, _ ticketSystemConfig, _ string) (ticketRef, bool, error) {
-	return ticketRef{}, false, nil // webhooks cannot query; link store is the identity
+func (a *SlackAdapter) LookupByCorrelationID(_ context.Context, _ SystemConfig, _ string) (Ref, bool, error) {
+	return Ref{}, false, nil // webhooks cannot query; link store is the identity
 }
 
-func (a *slackTicketAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig, _ ticketRef) (snowIncident, bool, error) {
-	return snowIncident{}, false, nil
+func (a *SlackAdapter) FetchIncident(_ context.Context, _ SystemConfig, _ Ref) (RemoteIncident, bool, error) {
+	return RemoteIncident{}, false, nil
 }
 
 // slackTicketMessage renders the lifecycle message (classic attachment format —
 // the one incoming webhooks fully support).
-func slackTicketMessage(phase string, p ticketing.Payload) map[string]any {
+func slackTicketMessage(phase string, p Payload) map[string]any {
 	color := map[string]string{"opened": "#d63031", "updated": "#f39c12"}[phase]
 	if color == "" {
 		color = "#2eaa60"
@@ -122,30 +124,30 @@ func slackTicketMessage(phase string, p ticketing.Payload) map[string]any {
 		{"title": "Scope", "value": orDefault(p.AffectedScope, "—"), "short": true},
 	}
 	if p.RecommendedAction != "" && phase != "resolved" {
-		fields = append(fields, map[string]any{"title": "Recommended action", "value": truncate(p.RecommendedAction, 300), "short": false})
+		fields = append(fields, map[string]any{"title": "Recommended action", "value": Truncate(p.RecommendedAction, 300), "short": false})
 	}
 	att := map[string]any{
 		"color":      color,
 		"title":      title,
 		"title_link": p.RCAURL,
-		"text":       truncate(p.Summary, 600),
+		"text":       Truncate(p.Summary, 600),
 		"fields":     fields,
 		"footer":     "Correlix RCA · " + orDefault(pid, p.CorrObjectID),
 	}
 	return map[string]any{"text": title, "attachments": []map[string]any{att}}
 }
 
-func (a *slackTicketAdapter) post(ctx context.Context, cfg ticketSystemConfig, body map[string]any) error {
+func (a *SlackAdapter) post(ctx context.Context, cfg SystemConfig, body map[string]any) error {
 	if err := a.ValidateConfig(cfg); err != nil {
-		return permanentDeliveryError{err}
+		return PermanentDeliveryError{err}
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
-		return permanentDeliveryError{err}
+		return PermanentDeliveryError{err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSpace(cfg.APIToken), bytes.NewReader(buf))
 	if err != nil {
-		return permanentDeliveryError{errors.New("slack: invalid webhook URL")}
+		return PermanentDeliveryError{errors.New("slack: invalid webhook URL")}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client().Do(req)
@@ -162,17 +164,17 @@ func (a *slackTicketAdapter) post(ctx context.Context, cfg ticketSystemConfig, b
 		if ra, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && ra > 0 && ra <= 3600 {
 			delay = time.Duration(ra) * time.Second
 		}
-		return rateLimitedError{After: delay}
+		return RateLimitedError{After: delay}
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
 		// no_service / invalid_payload / channel_is_archived — retrying the
 		// same bytes cannot succeed. Secret-safe: never echo the URL.
-		return permanentDeliveryError{fmt.Errorf("slack: webhook rejected message (%d)", resp.StatusCode)}
+		return PermanentDeliveryError{fmt.Errorf("slack: webhook rejected message (%d)", resp.StatusCode)}
 	default:
 		return fmt.Errorf("slack: webhook status %d", resp.StatusCode)
 	}
 }
 
-func (a *slackTicketAdapter) client() *http.Client {
+func (a *SlackAdapter) client() *http.Client {
 	if a.httpClient != nil {
 		return a.httpClient
 	}

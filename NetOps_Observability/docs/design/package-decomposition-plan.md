@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** twenty-eight domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty-nine domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -9,8 +9,8 @@
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
 `ai/toolwire`, `wireless/store`, `nms/store`, `ticketing/store`,
 `pathgraph/store`, `token/password`, `internal/users`, `tenant/org`,
-`cloud/store`, 2026-07-28).
-**241** non-test files remain in `package main`. This document is the ordered sequence for the
+`cloud/store`, `ticketing` adapters, 2026-07-28).
+**237** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -127,7 +127,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 30 | `internal/users` | 2 | ~1040 | ~59 (via alias) | **Done** (2026-07-28). The identity store — file + per-row FORCE-RLS pg backends, the last-super-admin floor (shared pure helpers so the backends can't drift), federated JIT provisioning, MFA/lifecycle fields. Cross-domain inputs INJECTED as `users.Deps`: kv, `Errorf`, the SR-025 `GuardRole` (env-read stays in main), `IsSuperAdmin`, account_policy's `ApplyPasswordChange`, `DefaultTenant`, `MaxUsers`. `User`/`usersRepo` aliased in `users_wiring.go` (the jwtClaims technique); `sameTenant`/`normTenant`/`isUniqueViolation` duplicated at the boundary per the no-utils rule (business_service_store keeps its own unique-violation copy). Backdating tests use `MutateForTest`; cap tests set `Deps.MaxUsers` instead of poking the field; store CRUD/seed suites moved in with local `testDeps()`. |
 | ✅ 31 | `orgs.go` → `internal/tenant/org.go` | 1 | ~270 | ~8 | **Done** (2026-07-28). The Org layer (top-level customer boundary: SSO connection, home region, note) joins the tenant bounded context — §3a: org isolation is DERIVED from tenant isolation. `tenant.Deps` extended with the org-store inputs (`MintOrgID`, `NormalizeRegion`, `DefaultRegion`, checked by `NewOrgStore` only); `Org`/`orgUpdate`/`OrgGlobal` aliased in `tenant_wiring.go`; `orgOf` kept on main's side (tenancy.go). |
 | ✅ 32 | `cloud_store.go` + `cloud_store_pg.go` → `cloud/` | 2 | ~750 | ~8 | **Done** (2026-07-28). The Cloud App Observability inventory store pair (resources + identity mappings + provenance; server-side filter + keyset pagination) joins the `cloud` package that owns its types. `DB` seam via `rlsPG`; the paging surface exported (`PageDefault`/`PageMax`/`ListHardCap`, `ErrBadCursor`, `FilterValues`, cursor codecs); backend selector stayed in `main.go`; the family-match contract test moved in; white-box mem literals in two main tests replaced by `NewMemStore()`. |
-| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, ticketing connectors, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 33 | The four ITSM adapters → `internal/ticketing/adapter_*.go` | 4 | ~1550 | ~14 | **Done** (2026-07-28). ServiceNow, Jira, PagerDuty and Slack wire adapters join the ticketing package with the shared `Adapter`/`SystemConfig`/`Ref`/`RemoteIncident` types, the #103 delivery-error taxonomy (`PermanentDeliveryError`, `RateLimitedError`) and `DedupeKey`/`Truncate` — adapters produce the classifications the worker consumes, so they live together. Worker, sweeper, inbound, http and itsm-config (with its `systemConfig` resolver) STAYED. `NewXAdapterWithClient` constructors added so integrator tests inject their httptest clients; adapter wire-contract test files moved in; worker/sweeper/policy-resolution tests shuttled back with duplicated fixtures (test files cannot cross packages). |
+| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

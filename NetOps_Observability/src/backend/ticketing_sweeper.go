@@ -191,7 +191,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		// for one unconnected tenant at ~1/min). Skip; once connected the object
 		// re-enqueues naturally on the next sweep.
 		if sw.srv != nil && sw.srv.itsmCfg != nil {
-			if _, ok := sw.srv.itsmCfg.ticketSystemConfig(c.tenant, system); !ok {
+			if _, ok := sw.srv.itsmCfg.systemConfig(c.tenant, system); !ok {
 				continue
 			}
 		}

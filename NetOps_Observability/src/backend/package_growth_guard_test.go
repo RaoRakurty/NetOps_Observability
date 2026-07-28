@@ -170,7 +170,13 @@ import (
 //	                  store pair: keyset pagination, §3a in-store isolation;
 //	                  DB seam via rlsPG; paging bounds + ErrBadCursor +
 //	                  FilterValues exported; selector stayed in main.go)
-const rootPackageCeiling = 241
+//	2026-07-28  237  the four ITSM adapters (servicenow, jira, pagerduty,
+//	                  slack) → internal/ticketing/adapter_*.go with the shared
+//	                  Adapter/SystemConfig/Ref types, the #103 delivery-error
+//	                  taxonomy and DedupeKey; worker/sweeper/http/itsm-config
+//	                  stayed; WithClient constructors added for integrator
+//	                  tests; shared fixtures duplicated across the boundary
+const rootPackageCeiling = 237
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -1,4 +1,4 @@
-package main
+package ticketing
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/noclabel"
-	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +18,7 @@ import (
 
 // ticketing_servicenow.go — the RCA-object ServiceNow adapter (#78 P2). Unlike
 // notify.ServiceNow (one incident per ALERT fingerprint), this adapter speaks
-// the ticketing.Payload built from ONE RCA correlation object and uses ServiceNow's
+// the Payload built from ONE RCA correlation object and uses ServiceNow's
 // native correlation_id as the dedupe anchor (= corr_object_id). The worker
 // (ticketing_worker.go) drives it; ticketing never blocks correlation.
 //
@@ -28,28 +27,28 @@ import (
 // host, secrets travel only in the Authorization header and are NEVER logged or
 // echoed in errors, and the request/response bodies are bounded.
 
-// ticketAdapter is the provider-agnostic ticketing port (§5 interfaces for
+// Adapter is the provider-agnostic ticketing port (§5 interfaces for
 // external deps). ServiceNow is the first impl; Jira/PagerDuty reuse the same
 // outbox + worker against this interface.
-type ticketAdapter interface {
+type Adapter interface {
 	Name() string
-	ValidateConfig(cfg ticketSystemConfig) error
-	HealthCheck(ctx context.Context, cfg ticketSystemConfig) error
-	CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error)
-	UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error
-	AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
-	ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error
-	LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error)
+	ValidateConfig(cfg SystemConfig) error
+	HealthCheck(ctx context.Context, cfg SystemConfig) error
+	CreateIncident(ctx context.Context, cfg SystemConfig, p Payload) (Ref, error)
+	UpdateIncident(ctx context.Context, cfg SystemConfig, ref Ref, p Payload) error
+	AddWorkNote(ctx context.Context, cfg SystemConfig, ref Ref, note string) error
+	ResolveIncident(ctx context.Context, cfg SystemConfig, ref Ref, note string) error
+	LookupByCorrelationID(ctx context.Context, cfg SystemConfig, corrID string) (Ref, bool, error)
 	// FetchIncident reads an incident's current state + lifecycle timestamps back
 	// from the provider (the inbound state sync, #84). found=false when the record
 	// no longer exists. Read-only.
-	FetchIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef) (snowIncident, bool, error)
+	FetchIncident(ctx context.Context, cfg SystemConfig, ref Ref) (RemoteIncident, bool, error)
 }
 
-// snowIncident is the subset of incident fields the inbound state sync reads to map
+// RemoteIncident is the subset of incident fields the inbound state sync reads to map
 // a ticket's ServiceNow progress onto the RCA incident timeline. Times are UTC
 // (zero when unset). State is the numeric ServiceNow incident state.
-type snowIncident struct {
+type RemoteIncident struct {
 	Number     string
 	SysID      string
 	State      int       // 1 New · 2 In Progress · 3 On Hold · 6 Resolved · 7 Closed
@@ -68,14 +67,14 @@ type snowIncident struct {
 
 // ServiceNow incident state codes (default set).
 const (
-	snowStateInProgress = 2
-	snowStateResolved   = 6
-	snowStateClosed     = 7
+	SnowStateInProgress = 2
+	SnowStateResolved   = 6
+	SnowStateClosed     = 7
 )
 
-// ticketSystemConfig is the connection for one external system. Secrets
+// SystemConfig is the connection for one external system. Secrets
 // (Password/APIToken) are write-only and never serialized back out.
-type ticketSystemConfig struct {
+type SystemConfig struct {
 	System          string `json:"system"` // servicenow | pagerduty | slack | jira
 	TenantID        string `json:"-"`      // stamped by the resolver; identity for the worker's tenant assertion + PD dedup key
 	InstanceURL     string `json:"instance_url"`
@@ -91,8 +90,8 @@ type ticketSystemConfig struct {
 	ResolveTransition string `json:"resolve_transition,omitempty"`
 }
 
-// ticketRef identifies a created external ticket.
-type ticketRef struct {
+// Ref identifies a created external ticket.
+type Ref struct {
 	Number string `json:"number"`
 	SysID  string `json:"sys_id"`
 	URL    string `json:"url"`
@@ -100,19 +99,33 @@ type ticketRef struct {
 
 const snowMaxRespBytes = 1 << 20 // 1 MiB cap on a Table API response
 
-// serviceNowAdapter implements ticketAdapter against the ServiceNow Table API.
+// ServiceNowAdapter implements Adapter against the ServiceNow Table API.
 // httpClient is injectable so tests drive it against an httptest mock.
-type serviceNowAdapter struct {
+// asString mirrors the integrator's tolerant string extraction (duplicated per
+// the no-shared-utils rule).
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+type ServiceNowAdapter struct {
 	httpClient *http.Client
 }
 
-func newServiceNowAdapter() *serviceNowAdapter {
-	return &serviceNowAdapter{httpClient: safehttp.Client(20 * time.Second)}
+// NewServiceNowAdapterWithClient injects the HTTP client (integrator tests).
+func NewServiceNowAdapterWithClient(c *http.Client) *ServiceNowAdapter {
+	return &ServiceNowAdapter{httpClient: c}
 }
 
-func (a *serviceNowAdapter) Name() string { return "servicenow" }
+func NewServiceNowAdapter() *ServiceNowAdapter {
+	return &ServiceNowAdapter{httpClient: safehttp.Client(20 * time.Second)}
+}
 
-func (a *serviceNowAdapter) client() *http.Client {
+func (a *ServiceNowAdapter) Name() string { return "servicenow" }
+
+func (a *ServiceNowAdapter) client() *http.Client {
 	if a.httpClient != nil {
 		return a.httpClient
 	}
@@ -121,7 +134,7 @@ func (a *serviceNowAdapter) client() *http.Client {
 
 // ValidateConfig checks the connection is well-formed and the instance host is a
 // public, resolvable target (SSRF). Pure-ish (one DNS resolve, no ServiceNow call).
-func (a *serviceNowAdapter) ValidateConfig(cfg ticketSystemConfig) error {
+func (a *ServiceNowAdapter) ValidateConfig(cfg SystemConfig) error {
 	u, err := parseInstanceURL(cfg.InstanceURL)
 	if err != nil {
 		return err
@@ -142,12 +155,12 @@ func (a *serviceNowAdapter) ValidateConfig(cfg ticketSystemConfig) error {
 }
 
 // HealthCheck does a cheap, bounded GET that proves auth + reachability.
-func (a *serviceNowAdapter) HealthCheck(ctx context.Context, cfg ticketSystemConfig) error {
+func (a *ServiceNowAdapter) HealthCheck(ctx context.Context, cfg SystemConfig) error {
 	_, _, err := a.do(ctx, cfg, http.MethodGet, "/api/now/table/incident?sysparm_limit=1&sysparm_fields=sys_id", nil)
 	return err
 }
 
-func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
+func (a *ServiceNowAdapter) CreateIncident(ctx context.Context, cfg SystemConfig, p Payload) (Ref, error) {
 	body := snowIncidentFields(cfg, p)
 	body["work_notes"] = snowWorkNote("Correlix opened this incident from RCA correlation object "+p.CorrObjectID, p)
 	// sysparm_input_display_value=true: reference fields (assignment_group,
@@ -155,12 +168,12 @@ func (a *serviceNowAdapter) CreateIncident(ctx context.Context, cfg ticketSystem
 	// silently drops them and the incident lands unassigned/uncategorized.
 	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/api/now/table/incident?sysparm_input_display_value=true", body)
 	if err != nil {
-		return ticketRef{}, err
+		return Ref{}, err
 	}
 	return a.parseRef(cfg, raw)
 }
 
-func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error {
+func (a *ServiceNowAdapter) UpdateIncident(ctx context.Context, cfg SystemConfig, ref Ref, p Payload) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("servicenow: update requires sys_id")
 	}
@@ -171,7 +184,7 @@ func (a *serviceNowAdapter) UpdateIncident(ctx context.Context, cfg ticketSystem
 	return err
 }
 
-func (a *serviceNowAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+func (a *ServiceNowAdapter) AddWorkNote(ctx context.Context, cfg SystemConfig, ref Ref, note string) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("servicenow: work note requires sys_id")
 	}
@@ -180,7 +193,7 @@ func (a *serviceNowAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemCon
 	return err
 }
 
-func (a *serviceNowAdapter) ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+func (a *ServiceNowAdapter) ResolveIncident(ctx context.Context, cfg SystemConfig, ref Ref, note string) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("servicenow: resolve requires sys_id")
 	}
@@ -193,12 +206,12 @@ func (a *serviceNowAdapter) ResolveIncident(ctx context.Context, cfg ticketSyste
 // LookupByCorrelationID finds an existing incident by ServiceNow's native
 // correlation_id (= corr_object_id). This is the recovery path when a create
 // succeeded but our link store didn't persist — we never create a second ticket.
-func (a *serviceNowAdapter) LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error) {
+func (a *ServiceNowAdapter) LookupByCorrelationID(ctx context.Context, cfg SystemConfig, corrID string) (Ref, bool, error) {
 	q := "/api/now/table/incident?sysparm_limit=1&sysparm_fields=number,sys_id&sysparm_query=correlation_id=" +
 		url.QueryEscape(corrID)
 	raw, _, err := a.do(ctx, cfg, http.MethodGet, q, nil)
 	if err != nil {
-		return ticketRef{}, false, err
+		return Ref{}, false, err
 	}
 	var resp struct {
 		Result []struct {
@@ -207,21 +220,21 @@ func (a *serviceNowAdapter) LookupByCorrelationID(ctx context.Context, cfg ticke
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ticketRef{}, false, fmt.Errorf("servicenow: decode lookup: %w", err)
+		return Ref{}, false, fmt.Errorf("servicenow: decode lookup: %w", err)
 	}
 	if len(resp.Result) == 0 || resp.Result[0].SysID == "" {
-		return ticketRef{}, false, nil
+		return Ref{}, false, nil
 	}
-	return ticketRef{Number: resp.Result[0].Number, SysID: resp.Result[0].SysID,
+	return Ref{Number: resp.Result[0].Number, SysID: resp.Result[0].SysID,
 		URL: incidentURL(cfg.InstanceURL, resp.Result[0].SysID)}, true, nil
 }
 
 // FetchIncident reads one incident's state + lifecycle timestamps back from the
 // Table API (the inbound state sync). found=false on a 404 (record gone). The
 // composed query stays on the configured instance host (do() enforces it).
-func (a *serviceNowAdapter) FetchIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef) (snowIncident, bool, error) {
+func (a *ServiceNowAdapter) FetchIncident(ctx context.Context, cfg SystemConfig, ref Ref) (RemoteIncident, bool, error) {
 	if ref.SysID == "" {
-		return snowIncident{}, false, fmt.Errorf("servicenow: fetch requires sys_id")
+		return RemoteIncident{}, false, fmt.Errorf("servicenow: fetch requires sys_id")
 	}
 	fields := "number,sys_id,state,opened_at,work_start,resolved_at,closed_at,sys_updated_on," +
 		"u_correlix_acknowledged_at,u_correlix_mitigation_started_at,u_correlix_mitigated_at,u_correlix_recovered_at"
@@ -230,21 +243,21 @@ func (a *serviceNowAdapter) FetchIncident(ctx context.Context, cfg ticketSystemC
 	raw, status, err := a.do(ctx, cfg, http.MethodGet, path, nil)
 	if err != nil {
 		if status == http.StatusNotFound {
-			return snowIncident{}, false, nil
+			return RemoteIncident{}, false, nil
 		}
-		return snowIncident{}, false, err
+		return RemoteIncident{}, false, err
 	}
 	var resp struct {
 		Result map[string]any `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return snowIncident{}, false, fmt.Errorf("servicenow: decode incident: %w", err)
+		return RemoteIncident{}, false, fmt.Errorf("servicenow: decode incident: %w", err)
 	}
 	r := resp.Result
 	if len(r) == 0 {
-		return snowIncident{}, false, nil
+		return RemoteIncident{}, false, nil
 	}
-	inc := snowIncident{
+	inc := RemoteIncident{
 		Number:              asString(r["number"]),
 		SysID:               orDefault(asString(r["sys_id"]), ref.SysID),
 		State:               snowStateCode(r["state"]),
@@ -295,7 +308,7 @@ func parseSnowTime(v any) time.Time {
 
 // do performs one bounded, SSRF-guarded, authenticated Table API request. It
 // returns the response body (capped) and status. Errors never contain secrets.
-func (a *serviceNowAdapter) do(ctx context.Context, cfg ticketSystemConfig, method, path string, body map[string]any) ([]byte, int, error) {
+func (a *ServiceNowAdapter) do(ctx context.Context, cfg SystemConfig, method, path string, body map[string]any) ([]byte, int, error) {
 	base, err := parseInstanceURL(cfg.InstanceURL)
 	if err != nil {
 		return nil, 0, err
@@ -355,7 +368,7 @@ func (a *serviceNowAdapter) do(ctx context.Context, cfg ticketSystemConfig, meth
 	return raw, resp.StatusCode, nil
 }
 
-func (a *serviceNowAdapter) parseRef(cfg ticketSystemConfig, raw []byte) (ticketRef, error) {
+func (a *ServiceNowAdapter) parseRef(cfg SystemConfig, raw []byte) (Ref, error) {
 	var resp struct {
 		Result struct {
 			Number string `json:"number"`
@@ -363,12 +376,12 @@ func (a *serviceNowAdapter) parseRef(cfg ticketSystemConfig, raw []byte) (ticket
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ticketRef{}, fmt.Errorf("servicenow: decode create: %w", err)
+		return Ref{}, fmt.Errorf("servicenow: decode create: %w", err)
 	}
 	if resp.Result.SysID == "" {
-		return ticketRef{}, fmt.Errorf("servicenow: create returned no sys_id")
+		return Ref{}, fmt.Errorf("servicenow: create returned no sys_id")
 	}
-	return ticketRef{Number: resp.Result.Number, SysID: resp.Result.SysID,
+	return Ref{Number: resp.Result.Number, SysID: resp.Result.SysID,
 		URL: incidentURL(cfg.InstanceURL, resp.Result.SysID)}, nil
 }
 
@@ -377,7 +390,7 @@ func (a *serviceNowAdapter) parseRef(cfg ticketSystemConfig, raw []byte) (ticket
 // snowIncidentFields maps the RCA payload onto ServiceNow incident fields,
 // including the native correlation_id dedupe key and the u_correlix_* custom
 // fields the design specifies. Never carries raw-alert text.
-func snowIncidentFields(cfg ticketSystemConfig, p ticketing.Payload) map[string]any {
+func snowIncidentFields(cfg SystemConfig, p Payload) map[string]any {
 	group := p.AssignmentGroup
 	if group == "" {
 		group = cfg.AssignmentGroup
@@ -387,7 +400,7 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketing.Payload) map[string]
 	// dedupe anchor in correlation_id / u_correlix_object_id).
 	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	f := map[string]any{
-		"short_description": truncate("["+pid+"] "+p.Title, 160),
+		"short_description": Truncate("["+pid+"] "+p.Title, 160),
 		"description":       snowDescription(p),
 		// Every Correlix RCA ticket is a network fault — without this ServiceNow
 		// files the incident under its default category (Inquiry/Help), which
@@ -417,7 +430,7 @@ func snowIncidentFields(cfg ticketSystemConfig, p ticketing.Payload) map[string]
 }
 
 // snowDescription is the human-readable RCA body (the diagnosis, not raw alerts).
-func snowDescription(p ticketing.Payload) string {
+func snowDescription(p Payload) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Correlix Problem: %s\n\n", noclabel.ProblemDisplayID(p.CorrObjectID))
 	fmt.Fprintf(&b, "%s\n\n", p.Summary)
@@ -443,7 +456,7 @@ func snowDescription(p ticketing.Payload) string {
 	return b.String()
 }
 
-func snowWorkNote(headline string, p ticketing.Payload) string {
+func snowWorkNote(headline string, p Payload) string {
 	if p.RCAURL == "" {
 		return headline
 	}
@@ -484,9 +497,9 @@ func snowError(raw []byte) string {
 		} `json:"error"`
 	}
 	if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
-		return truncate(e.Error.Message, 240)
+		return Truncate(e.Error.Message, 240)
 	}
-	return truncate(strings.TrimSpace(string(raw)), 240)
+	return Truncate(strings.TrimSpace(string(raw)), 240)
 }
 
 // redactPath drops the query string from a logged path (correlation ids/filters
@@ -498,7 +511,9 @@ func redactPath(path string) string {
 	return path
 }
 
-func truncate(s string, n int) string {
+// Truncate bounds provider/display strings (shared with the worker's
+// last-error field).
+func Truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {
 		return s
@@ -506,4 +521,4 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-var _ ticketAdapter = (*serviceNowAdapter)(nil)
+var _ Adapter = (*ServiceNowAdapter)(nil)

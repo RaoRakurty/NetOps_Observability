@@ -1,4 +1,4 @@
-package main
+package ticketing
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/noclabel"
-	"netops/backend/internal/ticketing"
 	"strings"
 	"sync"
 	"testing"
@@ -43,15 +42,15 @@ func newMockServiceNow() *mockServiceNow {
 
 func (m *mockServiceNow) Close() { m.srv.Close() }
 
-func (m *mockServiceNow) cfg() ticketSystemConfig {
-	return ticketSystemConfig{
+func (m *mockServiceNow) cfg() SystemConfig {
+	return SystemConfig{
 		System: "servicenow", InstanceURL: m.srv.URL, AuthType: "basic",
 		User: m.wantUser, Password: m.wantPass,
 	}
 }
 
-func (m *mockServiceNow) adapter() *serviceNowAdapter {
-	return &serviceNowAdapter{httpClient: m.srv.Client()}
+func (m *mockServiceNow) adapter() *ServiceNowAdapter {
+	return &ServiceNowAdapter{httpClient: m.srv.Client()}
 }
 
 func (m *mockServiceNow) handle(w http.ResponseWriter, r *http.Request) {
@@ -151,8 +150,8 @@ func readMockBody(r *http.Request) map[string]any {
 
 // ── adapter tests ────────────────────────────────────────────────────────────
 
-func samplePayload(corrID string) ticketing.Payload {
-	return ticketing.Payload{
+func samplePayload(corrID string) Payload {
+	return Payload{
 		CorrObjectID:      corrID,
 		ExternalSystem:    "servicenow",
 		Title:             "Confirmed local link fault on edge1 Gi0/1",
@@ -176,7 +175,7 @@ func samplePayload(corrID string) ticketing.Payload {
 func TestSnowFriendlyProblemID(t *testing.T) {
 	corrID := "5564d162-c891-5480-800b-9b7fbcdd59b2"
 	pid := noclabel.ProblemDisplayID(corrID) // P-5564D1
-	f := snowIncidentFields(ticketSystemConfig{}, samplePayload(corrID))
+	f := snowIncidentFields(SystemConfig{}, samplePayload(corrID))
 	sd, _ := f["short_description"].(string)
 	if !strings.HasPrefix(sd, "["+pid+"] ") {
 		t.Fatalf("short_description must lead with the friendly id, got %q", sd)
@@ -240,14 +239,14 @@ func TestServiceNowAdapter_CreateLookupUpdateResolve(t *testing.T) {
 
 func TestServiceNowAdapter_ValidateConfig(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
-	a := newServiceNowAdapter()
-	if err := a.ValidateConfig(ticketSystemConfig{InstanceURL: "https://x.example", AuthType: "basic", User: "u", Password: "p"}); err != nil {
+	a := NewServiceNowAdapter()
+	if err := a.ValidateConfig(SystemConfig{InstanceURL: "https://x.example", AuthType: "basic", User: "u", Password: "p"}); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
-	if err := a.ValidateConfig(ticketSystemConfig{InstanceURL: "https://x.example", AuthType: "basic", User: "u"}); err == nil {
+	if err := a.ValidateConfig(SystemConfig{InstanceURL: "https://x.example", AuthType: "basic", User: "u"}); err == nil {
 		t.Fatal("missing password should fail")
 	}
-	if err := a.ValidateConfig(ticketSystemConfig{InstanceURL: "", AuthType: "basic"}); err == nil {
+	if err := a.ValidateConfig(SystemConfig{InstanceURL: "", AuthType: "basic"}); err == nil {
 		t.Fatal("missing instance_url should fail")
 	}
 }
@@ -273,7 +272,7 @@ func TestServiceNowAdapter_ErrorNeverLeaksSecret(t *testing.T) {
 // is a network fault — leaving category unset misrouted incidents to ServiceNow's
 // default queue (operator report 2026-07-11).
 func TestSnowIncidentCategory(t *testing.T) {
-	f := snowIncidentFields(ticketSystemConfig{}, samplePayload("936cc7fe-0000-0000-0000-0000000000aa"))
+	f := snowIncidentFields(SystemConfig{}, samplePayload("936cc7fe-0000-0000-0000-0000000000aa"))
 	if f["category"] != "network" {
 		t.Fatalf("category = %v, want network", f["category"])
 	}

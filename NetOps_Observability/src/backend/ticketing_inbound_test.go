@@ -10,8 +10,8 @@ import (
 // ── pure state→observation mapper ────────────────────────────────────────────
 
 func TestSnowIncidentObservations_InProgress(t *testing.T) {
-	obs := snowIncidentObservations(snowIncident{
-		State:     snowStateInProgress,
+	obs := snowIncidentObservations(ticketing.RemoteIncident{
+		State:     ticketing.SnowStateInProgress,
 		WorkStart: tAt("2026-06-28T10:05:00Z"),
 		UpdatedAt: tAt("2026-06-28T10:06:00Z"),
 	})
@@ -28,8 +28,8 @@ func TestSnowIncidentObservations_InProgress(t *testing.T) {
 }
 
 func TestSnowIncidentObservations_ResolvedAndClosed(t *testing.T) {
-	obs := snowIncidentObservations(snowIncident{
-		State:      snowStateClosed,
+	obs := snowIncidentObservations(ticketing.RemoteIncident{
+		State:      ticketing.SnowStateClosed,
 		WorkStart:  tAt("2026-06-28T10:05:00Z"),
 		ResolvedAt: tAt("2026-06-28T10:30:00Z"),
 		ClosedAt:   tAt("2026-06-28T11:00:00Z"),
@@ -44,8 +44,8 @@ func TestSnowIncidentObservations_ResolvedAndClosed(t *testing.T) {
 }
 
 func TestSnowIncidentObservations_CustomFields(t *testing.T) {
-	obs := snowIncidentObservations(snowIncident{
-		State:          snowStateResolved,
+	obs := snowIncidentObservations(ticketing.RemoteIncident{
+		State:          ticketing.SnowStateResolved,
 		AcknowledgedAt: tAt("2026-06-28T10:02:00Z"),
 		MitigatedAt:    tAt("2026-06-28T10:18:00Z"),
 		RecoveredAt:    tAt("2026-06-28T10:22:00Z"),
@@ -61,7 +61,7 @@ func TestSnowIncidentObservations_CustomFields(t *testing.T) {
 
 func TestSnowIncidentObservations_HonestEmpty(t *testing.T) {
 	// In progress but with NO timestamp anywhere → no acknowledged invented.
-	obs := snowIncidentObservations(snowIncident{State: snowStateInProgress})
+	obs := snowIncidentObservations(ticketing.RemoteIncident{State: ticketing.SnowStateInProgress})
 	if len(obs) != 0 {
 		t.Fatalf("no timestamps must yield no observations, got %+v", obs)
 	}
@@ -102,8 +102,8 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 
 	sy := &ticketStateSyncer{
 		store:    st,
-		adapters: map[string]ticketAdapter{"servicenow": m.adapter()},
-		resolveConn: func(context.Context, string, string) (ticketSystemConfig, bool, error) {
+		adapters: map[string]ticketing.Adapter{"servicenow": m.adapter()},
+		resolveConn: func(context.Context, string, string) (ticketing.SystemConfig, bool, error) {
 			return m.cfg(), true, nil
 		},
 		lookback: 14 * 24 * time.Hour,

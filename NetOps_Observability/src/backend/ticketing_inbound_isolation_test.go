@@ -15,12 +15,12 @@ import (
 // stubFetchAdapter implements only the read path the inbound syncer uses; the
 // embedded nil interface makes any other (unexpected) adapter call panic loudly.
 type stubFetchAdapter struct {
-	ticketAdapter
-	inc   snowIncident
+	ticketing.Adapter
+	inc   ticketing.RemoteIncident
 	calls int
 }
 
-func (a *stubFetchAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig, _ ticketRef) (snowIncident, bool, error) {
+func (a *stubFetchAdapter) FetchIncident(_ context.Context, _ ticketing.SystemConfig, _ ticketing.Ref) (ticketing.RemoteIncident, bool, error) {
 	a.calls++
 	return a.inc, true, nil
 }
@@ -48,16 +48,16 @@ func TestInboundSyncerIsolation_SyncOneTenantOnly(t *testing.T) {
 	st := ticketing.NewMemStore()
 	seedInboundLinks(t, st)
 
-	adapter := &stubFetchAdapter{inc: snowIncident{
-		State:      snowStateResolved,
+	adapter := &stubFetchAdapter{inc: ticketing.RemoteIncident{
+		State:      ticketing.SnowStateResolved,
 		WorkStart:  tAt("2026-06-28T10:05:00Z"),
 		ResolvedAt: tAt("2026-06-28T10:30:00Z"),
 	}}
 	sy := &ticketStateSyncer{
 		store:    st,
-		adapters: map[string]ticketAdapter{"servicenow": adapter},
-		resolveConn: func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
-			return ticketSystemConfig{System: system, InstanceURL: "https://" + tenant + ".example"}, true, nil
+		adapters: map[string]ticketing.Adapter{"servicenow": adapter},
+		resolveConn: func(_ context.Context, tenant, system string) (ticketing.SystemConfig, bool, error) {
+			return ticketing.SystemConfig{System: system, InstanceURL: "https://" + tenant + ".example"}, true, nil
 		},
 		lookback: 14 * 24 * time.Hour,
 	}
@@ -117,15 +117,15 @@ func TestInboundSyncerIsolation_DormantTenantNoWrites(t *testing.T) {
 	st := ticketing.NewMemStore()
 	seedInboundLinks(t, st)
 
-	adapter := &stubFetchAdapter{inc: snowIncident{
-		State:      snowStateResolved,
+	adapter := &stubFetchAdapter{inc: ticketing.RemoteIncident{
+		State:      ticketing.SnowStateResolved,
 		ResolvedAt: tAt("2026-06-28T10:30:00Z"),
 	}}
 	sy := &ticketStateSyncer{
 		store:    st,
-		adapters: map[string]ticketAdapter{"servicenow": adapter},
-		resolveConn: func(context.Context, string, string) (ticketSystemConfig, bool, error) {
-			return ticketSystemConfig{}, false, nil
+		adapters: map[string]ticketing.Adapter{"servicenow": adapter},
+		resolveConn: func(context.Context, string, string) (ticketing.SystemConfig, bool, error) {
+			return ticketing.SystemConfig{}, false, nil
 		},
 		lookback: 14 * 24 * time.Hour,
 	}

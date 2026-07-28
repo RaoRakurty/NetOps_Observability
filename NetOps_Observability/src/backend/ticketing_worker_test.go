@@ -12,7 +12,7 @@ func testWorker(t *testing.T, m *mockServiceNow) (*ticketWorker, ticketing.Store
 	t.Helper()
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	store := ticketing.NewMemStore()
-	resolve := func(_ context.Context, tenant, _ string) (ticketSystemConfig, bool, error) {
+	resolve := func(_ context.Context, tenant, _ string) (ticketing.SystemConfig, bool, error) {
 		c := m.cfg()
 		c.TenantID = tenant // mirror production: the resolver stamps tenant identity
 		return c, true, nil
@@ -136,8 +136,8 @@ func TestOutboxWorker_HoldsWhenNoConnection(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	store := ticketing.NewMemStore()
 	// resolver reports "not configured yet".
-	w := newTicketWorker(store, func(_ context.Context, _, _ string) (ticketSystemConfig, bool, error) {
-		return ticketSystemConfig{}, false, nil
+	w := newTicketWorker(store, func(_ context.Context, _, _ string) (ticketing.SystemConfig, bool, error) {
+		return ticketing.SystemConfig{}, false, nil
 	})
 	w.adapters["servicenow"] = m.adapter()
 	ctx := context.Background()

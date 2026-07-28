@@ -26,7 +26,7 @@ import (
 
 type ticketStateSyncer struct {
 	store       ticketing.Store
-	adapters    map[string]ticketAdapter
+	adapters    map[string]ticketing.Adapter
 	resolveConn ticketConnResolver
 	lookback    time.Duration // bound the polled set to recently-touched links
 }
@@ -34,7 +34,7 @@ type ticketStateSyncer struct {
 func newTicketStateSyncer(store ticketing.Store, resolve ticketConnResolver) *ticketStateSyncer {
 	return &ticketStateSyncer{
 		store:       store,
-		adapters:    map[string]ticketAdapter{"servicenow": newServiceNowAdapter()},
+		adapters:    map[string]ticketing.Adapter{"servicenow": ticketing.NewServiceNowAdapter()},
 		resolveConn: resolve,
 		lookback:    14 * 24 * time.Hour,
 	}
@@ -87,7 +87,7 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketing.Link, now
 		return 0 // no connection configured → dormant, not an error
 	}
 	inc, found, err := adapter.FetchIncident(ctx, cfg,
-		ticketRef{Number: l.TicketNumber, SysID: l.SysID, URL: l.InstanceURL})
+		ticketing.Ref{Number: l.TicketNumber, SysID: l.SysID, URL: l.InstanceURL})
 	if err != nil {
 		logWarn("ticketing", "inbound fetch failed",
 			map[string]any{"corr_object_id": l.CorrObjectID, "error": err.Error()})
@@ -138,12 +138,12 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketing.Link, now
 // advanceLinkStatus reflects a ServiceNow resolve/close back onto the link so the
 // UI status + the sweeper's open-ticket guard stay consistent with the provider.
 // Only moves toward terminal — never resurrects a closed link or downgrades.
-func (sy *ticketStateSyncer) advanceLinkStatus(ctx context.Context, l ticketing.Link, inc snowIncident, now time.Time) {
+func (sy *ticketStateSyncer) advanceLinkStatus(ctx context.Context, l ticketing.Link, inc ticketing.RemoteIncident, now time.Time) {
 	target := ""
 	switch {
-	case inc.State >= snowStateClosed:
+	case inc.State >= ticketing.SnowStateClosed:
 		target = "closed"
-	case inc.State >= snowStateResolved:
+	case inc.State >= ticketing.SnowStateResolved:
 		target = "resolved"
 	}
 	if target == "" || target == l.Status || l.Status == "closed" {
@@ -167,7 +167,7 @@ type lifecycleObservation struct {
 // ServiceNow gives a real timestamp; state gates which phases are plausible. The
 // optional u_correlix_* custom fields let a customer drive the Correlix-specific
 // phases (mitigated/recovered) precisely; absent ⇒ that phase stays incomplete.
-func snowIncidentObservations(inc snowIncident) []lifecycleObservation {
+func snowIncidentObservations(inc ticketing.RemoteIncident) []lifecycleObservation {
 	var obs []lifecycleObservation
 	add := func(action string, at time.Time) {
 		if !at.IsZero() {
@@ -178,17 +178,17 @@ func snowIncidentObservations(inc snowIncident) []lifecycleObservation {
 	// else, while the ticket sits at/after In Progress (but pre-resolution), the
 	// last update is the best available signal that it was picked up.
 	ack := firstNonZeroTime(inc.AcknowledgedAt, inc.WorkStart)
-	if ack.IsZero() && inc.State >= snowStateInProgress && inc.State < snowStateResolved {
+	if ack.IsZero() && inc.State >= ticketing.SnowStateInProgress && inc.State < ticketing.SnowStateResolved {
 		ack = inc.UpdatedAt
 	}
 	add(auditActionAcknowledged, ack)
 	add(auditActionMitigationStarted, firstNonZeroTime(inc.MitigationStartedAt, inc.WorkStart))
 	add(auditActionMitigated, inc.MitigatedAt)
 	add(auditActionRecovered, inc.RecoveredAt)
-	if inc.State >= snowStateResolved {
+	if inc.State >= ticketing.SnowStateResolved {
 		add(auditActionResolve, firstNonZeroTime(inc.ResolvedAt, inc.UpdatedAt))
 	}
-	if inc.State >= snowStateClosed {
+	if inc.State >= ticketing.SnowStateClosed {
 		add(auditActionClosed, firstNonZeroTime(inc.ClosedAt, inc.UpdatedAt))
 	}
 	return obs

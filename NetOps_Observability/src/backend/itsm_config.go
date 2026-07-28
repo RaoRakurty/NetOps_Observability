@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/ticketing"
 	"os"
 	"regexp"
 	"strings"
@@ -318,25 +319,25 @@ func (s *itsmConfigStore) jiraFor(tenant string) *notify.Jira {
 	return nil
 }
 
-// ticketSystemConfig resolves one tenant's external-ticketing connection for the
+// systemConfig resolves one tenant's external-ticketing connection for the
 // RCA auto-ticketing worker (#78). It returns the tenant's OWN ServiceNow config
 // (incl. write-only secrets, used only to dispatch) or ok=false when that tenant
 // has no enabled, configured connection — a transient hold, not a failure. Only
 // ServiceNow is wired today; other systems return ok=false.
-func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSystemConfig, bool) {
+func (s *itsmConfigStore) systemConfig(tenant, system string) (ticketing.SystemConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	cfg, ok := s.cfgs[itsmKey(tenant)]
 	if !ok {
-		return ticketSystemConfig{}, false
+		return ticketing.SystemConfig{}, false
 	}
 	switch orDefault(system, "servicenow") {
 	case "servicenow":
 		sn := cfg.ServiceNow
 		if !sn.Enabled || sn.InstanceURL == "" {
-			return ticketSystemConfig{}, false
+			return ticketing.SystemConfig{}, false
 		}
-		return ticketSystemConfig{
+		return ticketing.SystemConfig{
 			System:          "servicenow",
 			TenantID:        tenant,
 			InstanceURL:     sn.InstanceURL,
@@ -348,38 +349,38 @@ func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSyste
 	case "slack":
 		sl := cfg.Slack
 		if !sl.Enabled || sl.WebhookURL == "" {
-			return ticketSystemConfig{}, false
+			return ticketing.SystemConfig{}, false
 		}
 		// InstanceURL is the NON-SECRET origin only — it is persisted onto
 		// ticket links and surfaced by the UI; the webhook URL (the secret)
 		// travels solely in the write-only APIToken field.
-		return ticketSystemConfig{
+		return ticketing.SystemConfig{
 			System:      "slack",
 			TenantID:    tenant,
-			InstanceURL: slackHooksOrigin,
+			InstanceURL: ticketing.SlackHooksOrigin,
 			AuthType:    "webhook",
 			APIToken:    sl.WebhookURL,
 		}, true
 	case "pagerduty":
 		pd := cfg.PagerDuty
 		if !pd.Enabled || pd.RoutingKey == "" {
-			return ticketSystemConfig{}, false
+			return ticketing.SystemConfig{}, false
 		}
 		// InstanceURL doubles as the Events API base so tests can inject a
 		// fake server; the worker's "connected" check requires it non-empty.
-		return ticketSystemConfig{
+		return ticketing.SystemConfig{
 			System:      "pagerduty",
 			TenantID:    tenant,
-			InstanceURL: pdDefaultEventsBase,
+			InstanceURL: ticketing.PagerDutyEventsBase,
 			AuthType:    "routing_key",
 			APIToken:    pd.RoutingKey,
 		}, true
 	case "jira":
 		jr := cfg.Jira
 		if !jr.Enabled || jr.BaseURL == "" || jr.ProjectKey == "" {
-			return ticketSystemConfig{}, false
+			return ticketing.SystemConfig{}, false
 		}
-		return ticketSystemConfig{
+		return ticketing.SystemConfig{
 			System:            "jira",
 			TenantID:          tenant,
 			InstanceURL:       jr.BaseURL,
@@ -391,7 +392,7 @@ func (s *itsmConfigStore) ticketSystemConfig(tenant, system string) (ticketSyste
 			ResolveTransition: jr.ResolveTransition,
 		}, true
 	}
-	return ticketSystemConfig{}, false
+	return ticketing.SystemConfig{}, false
 }
 
 // setPagerDutyRCA mutates ONLY the tenant's PagerDuty RCA-paging destination

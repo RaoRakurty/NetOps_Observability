@@ -1,4 +1,4 @@
-package main
+package ticketing
 
 // ticketing_jira.go — Jira as a tenant-scoped RCA incident-policy destination
 // (#103). The ITSM work-tracking lane for Jira shops: one Jira issue per
@@ -36,7 +36,6 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/noclabel"
-	"netops/backend/internal/ticketing"
 	"strconv"
 	"strings"
 	"time"
@@ -46,26 +45,29 @@ import (
 
 const jiraMaxRespBytes = 1 << 20
 
-// jiraTicketAdapter implements ticketAdapter against the Jira REST v2 API.
+// JiraAdapter implements Adapter against the Jira REST v2 API.
 // httpClient is injectable so tests drive it against an httptest fake.
-type jiraTicketAdapter struct {
+type JiraAdapter struct {
 	httpClient *http.Client
 }
 
-func newJiraTicketAdapter() *jiraTicketAdapter {
-	return &jiraTicketAdapter{httpClient: safehttp.Client(20 * time.Second)}
+// NewJiraAdapterWithClient injects the HTTP client (integrator tests).
+func NewJiraAdapterWithClient(c *http.Client) *JiraAdapter { return &JiraAdapter{httpClient: c} }
+
+func NewJiraAdapter() *JiraAdapter {
+	return &JiraAdapter{httpClient: safehttp.Client(20 * time.Second)}
 }
 
-func (a *jiraTicketAdapter) Name() string { return "jira" }
+func (a *JiraAdapter) Name() string { return "jira" }
 
-func (a *jiraTicketAdapter) client() *http.Client {
+func (a *JiraAdapter) client() *http.Client {
 	if a.httpClient != nil {
 		return a.httpClient
 	}
 	return safehttp.Client(20 * time.Second)
 }
 
-func (a *jiraTicketAdapter) ValidateConfig(cfg ticketSystemConfig) error {
+func (a *JiraAdapter) ValidateConfig(cfg SystemConfig) error {
 	u, err := jiraBaseURL(cfg.InstanceURL)
 	if err != nil {
 		return err
@@ -80,7 +82,7 @@ func (a *jiraTicketAdapter) ValidateConfig(cfg ticketSystemConfig) error {
 }
 
 // HealthCheck proves auth + reachability with a cheap, bounded read.
-func (a *jiraTicketAdapter) HealthCheck(ctx context.Context, cfg ticketSystemConfig) error {
+func (a *JiraAdapter) HealthCheck(ctx context.Context, cfg SystemConfig) error {
 	_, _, err := a.do(ctx, cfg, http.MethodGet, "/rest/api/2/myself", nil)
 	return err
 }
@@ -88,40 +90,41 @@ func (a *jiraTicketAdapter) HealthCheck(ctx context.Context, cfg ticketSystemCon
 // jiraDedupeLabel is the label stamped on every Correlix issue that carries the
 // RCA object identity for the crash-recovery JQL lookup. Labels reject spaces,
 // so the id is sanitized to the label alphabet (UUIDs pass through unchanged).
-func jiraDedupeLabel(corrID string) string {
+// JiraDedupeLabel is the stable per-corr dedupe label.
+func JiraDedupeLabel(corrID string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(corrID) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
 			b.WriteRune(r)
 		}
 	}
-	return "correlix-id-" + truncate(b.String(), 200)
+	return "correlix-id-" + Truncate(b.String(), 200)
 }
 
-func (a *jiraTicketAdapter) CreateIncident(ctx context.Context, cfg ticketSystemConfig, p ticketing.Payload) (ticketRef, error) {
+func (a *JiraAdapter) CreateIncident(ctx context.Context, cfg SystemConfig, p Payload) (Ref, error) {
 	body := map[string]any{"fields": jiraIssueFields(cfg, p, true)}
 	raw, _, err := a.do(ctx, cfg, http.MethodPost, "/rest/api/2/issue", body)
 	if err != nil {
-		return ticketRef{}, err
+		return Ref{}, err
 	}
 	var resp struct {
 		ID  string `json:"id"`
 		Key string `json:"key"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ticketRef{}, fmt.Errorf("jira: decode create: %w", err)
+		return Ref{}, fmt.Errorf("jira: decode create: %w", err)
 	}
 	if resp.Key == "" {
-		return ticketRef{}, fmt.Errorf("jira: create returned no issue key")
+		return Ref{}, fmt.Errorf("jira: create returned no issue key")
 	}
-	return ticketRef{
+	return Ref{
 		Number: resp.Key,
 		SysID:  orDefault(resp.ID, resp.Key),
 		URL:    jiraBrowseURL(cfg.InstanceURL, resp.Key),
 	}, nil
 }
 
-func (a *jiraTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, p ticketing.Payload) error {
+func (a *JiraAdapter) UpdateIncident(ctx context.Context, cfg SystemConfig, ref Ref, p Payload) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("jira: update requires an issue id")
 	}
@@ -135,7 +138,7 @@ func (a *jiraTicketAdapter) UpdateIncident(ctx context.Context, cfg ticketSystem
 	return err
 }
 
-func (a *jiraTicketAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+func (a *JiraAdapter) AddWorkNote(ctx context.Context, cfg SystemConfig, ref Ref, note string) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("jira: comment requires an issue id")
 	}
@@ -144,7 +147,7 @@ func (a *jiraTicketAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemCon
 	}
 	_, _, err := a.do(ctx, cfg, http.MethodPost,
 		"/rest/api/2/issue/"+url.PathEscape(ref.SysID)+"/comment",
-		map[string]any{"body": truncate(note, 4000)})
+		map[string]any{"body": Truncate(note, 4000)})
 	return err
 }
 
@@ -154,7 +157,7 @@ func (a *jiraTicketAdapter) AddWorkNote(ctx context.Context, cfg ticketSystemCon
 // first transition whose name reads as done/resolve/close/complete. An issue
 // already in the "done" status category is a success no-op, so worker retries
 // and sweeper replays stay idempotent.
-func (a *jiraTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSystemConfig, ref ticketRef, note string) error {
+func (a *JiraAdapter) ResolveIncident(ctx context.Context, cfg SystemConfig, ref Ref, note string) error {
 	if ref.SysID == "" {
 		return fmt.Errorf("jira: resolve requires an issue id")
 	}
@@ -172,12 +175,12 @@ func (a *jiraTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSyste
 	if tid == "" {
 		// No resolve-like transition from the current state and none pinned —
 		// retrying cannot help; the operator must pin resolve_transition.
-		return permanentDeliveryError{fmt.Errorf("jira: no resolve transition available (pin one in the Jira connection settings)")}
+		return PermanentDeliveryError{fmt.Errorf("jira: no resolve transition available (pin one in the Jira connection settings)")}
 	}
 	body := map[string]any{"transition": map[string]string{"id": tid}}
 	if strings.TrimSpace(note) != "" {
 		body["update"] = map[string]any{
-			"comment": []map[string]any{{"add": map[string]string{"body": truncate(note, 4000)}}},
+			"comment": []map[string]any{{"add": map[string]string{"body": Truncate(note, 4000)}}},
 		}
 	}
 	_, _, err = a.do(ctx, cfg, http.MethodPost,
@@ -187,10 +190,10 @@ func (a *jiraTicketAdapter) ResolveIncident(ctx context.Context, cfg ticketSyste
 
 // LookupByCorrelationID recovers an existing issue by the dedupe label — the
 // path that keeps a crash-after-create from ever filing a second issue.
-func (a *jiraTicketAdapter) LookupByCorrelationID(ctx context.Context, cfg ticketSystemConfig, corrID string) (ticketRef, bool, error) {
+func (a *JiraAdapter) LookupByCorrelationID(ctx context.Context, cfg SystemConfig, corrID string) (Ref, bool, error) {
 	// The label is produced by jiraDedupeLabel's closed alphabet, so the quoted
 	// JQL term cannot break out of its quotes.
-	jql := `labels = "` + jiraDedupeLabel(corrID) + `" ORDER BY created ASC`
+	jql := `labels = "` + JiraDedupeLabel(corrID) + `" ORDER BY created ASC`
 	q := "/rest/api/2/search?maxResults=1&fields=key&jql=" + url.QueryEscape(jql)
 	raw, status, err := a.do(ctx, cfg, http.MethodGet, q, nil)
 	if err != nil {
@@ -198,9 +201,9 @@ func (a *jiraTicketAdapter) LookupByCorrelationID(ctx context.Context, cfg ticke
 		// clean 400 as "not found" rather than wedging creates permanently —
 		// the outbox idempotency key still bounds duplicates.
 		if status == http.StatusBadRequest {
-			return ticketRef{}, false, nil
+			return Ref{}, false, nil
 		}
-		return ticketRef{}, false, err
+		return Ref{}, false, err
 	}
 	var resp struct {
 		Issues []struct {
@@ -209,12 +212,12 @@ func (a *jiraTicketAdapter) LookupByCorrelationID(ctx context.Context, cfg ticke
 		} `json:"issues"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ticketRef{}, false, fmt.Errorf("jira: decode search: %w", err)
+		return Ref{}, false, fmt.Errorf("jira: decode search: %w", err)
 	}
 	if len(resp.Issues) == 0 || resp.Issues[0].Key == "" {
-		return ticketRef{}, false, nil
+		return Ref{}, false, nil
 	}
-	return ticketRef{
+	return Ref{
 		Number: resp.Issues[0].Key,
 		SysID:  orDefault(resp.Issues[0].ID, resp.Issues[0].Key),
 		URL:    jiraBrowseURL(cfg.InstanceURL, resp.Issues[0].Key),
@@ -223,12 +226,12 @@ func (a *jiraTicketAdapter) LookupByCorrelationID(ctx context.Context, cfg ticke
 
 // FetchIncident: the inbound state sync speaks ServiceNow's lifecycle model;
 // mapping Jira workflow categories onto it is future work (documented in #103).
-func (a *jiraTicketAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig, _ ticketRef) (snowIncident, bool, error) {
-	return snowIncident{}, false, nil
+func (a *JiraAdapter) FetchIncident(_ context.Context, _ SystemConfig, _ Ref) (RemoteIncident, bool, error) {
+	return RemoteIncident{}, false, nil
 }
 
 // issueDone reports whether the issue's status category is "done".
-func (a *jiraTicketAdapter) issueDone(ctx context.Context, cfg ticketSystemConfig, id string) (bool, error) {
+func (a *JiraAdapter) issueDone(ctx context.Context, cfg SystemConfig, id string) (bool, error) {
 	raw, status, err := a.do(ctx, cfg, http.MethodGet,
 		"/rest/api/2/issue/"+url.PathEscape(id)+"?fields=status", nil)
 	if err != nil {
@@ -255,7 +258,7 @@ func (a *jiraTicketAdapter) issueDone(ctx context.Context, cfg ticketSystemConfi
 
 // resolveTransitionID picks the transition used to close the issue: the
 // configured hint (by id or name) wins outright, else the first resolve-like name.
-func (a *jiraTicketAdapter) resolveTransitionID(ctx context.Context, cfg ticketSystemConfig, id string) (string, error) {
+func (a *JiraAdapter) resolveTransitionID(ctx context.Context, cfg SystemConfig, id string) (string, error) {
 	raw, _, err := a.do(ctx, cfg, http.MethodGet,
 		"/rest/api/2/issue/"+url.PathEscape(id)+"/transitions", nil)
 	if err != nil {
@@ -293,7 +296,7 @@ func (a *jiraTicketAdapter) resolveTransitionID(ctx context.Context, cfg ticketS
 // destination and the RCA Inspector (#103 UX-2); the UUID stays canonical in
 // the dedupe label. Priority is deliberately NOT set: priority schemes are
 // per-instance and an unknown name fails the whole create with a 400.
-func jiraIssueFields(cfg ticketSystemConfig, p ticketing.Payload, withLabels bool) map[string]any {
+func jiraIssueFields(cfg SystemConfig, p Payload, withLabels bool) map[string]any {
 	pid := noclabel.ProblemDisplayID(p.CorrObjectID)
 	summary := orDefault(p.Title, "Correlix RCA incident")
 	if pid != "" {
@@ -301,12 +304,12 @@ func jiraIssueFields(cfg ticketSystemConfig, p ticketing.Payload, withLabels boo
 	}
 	f := map[string]any{
 		"project":     map[string]string{"key": cfg.ProjectKey},
-		"summary":     truncate(summary, 240),
+		"summary":     Truncate(summary, 240),
 		"description": snowDescription(p), // provider-agnostic plain-text RCA body
 		"issuetype":   map[string]string{"name": orDefault(cfg.IssueType, "Task")},
 	}
 	if withLabels {
-		f["labels"] = []string{"correlix", "rca", "verdict-" + orDefault(p.Verdict, "unknown"), jiraDedupeLabel(p.CorrObjectID)}
+		f["labels"] = []string{"correlix", "rca", "verdict-" + orDefault(p.Verdict, "unknown"), JiraDedupeLabel(p.CorrObjectID)}
 	}
 	return f
 }
@@ -317,28 +320,28 @@ func jiraIssueFields(cfg ticketSystemConfig, p ticketing.Payload, withLabels boo
 // never contain the API token; failure classes map to the worker's typed
 // retry semantics (429 honors Retry-After; auth/payload rejections are
 // permanent; everything else retries with backoff).
-func (a *jiraTicketAdapter) do(ctx context.Context, cfg ticketSystemConfig, method, path string, body map[string]any) ([]byte, int, error) {
+func (a *JiraAdapter) do(ctx context.Context, cfg SystemConfig, method, path string, body map[string]any) ([]byte, int, error) {
 	base, err := jiraBaseURL(cfg.InstanceURL)
 	if err != nil {
-		return nil, 0, permanentDeliveryError{err}
+		return nil, 0, PermanentDeliveryError{err}
 	}
 	if err := safehttp.ValidateURL(base.Hostname()); err != nil {
-		return nil, 0, permanentDeliveryError{err}
+		return nil, 0, PermanentDeliveryError{err}
 	}
 	reqURL, err := url.Parse(strings.TrimRight(base.String(), "/") + path)
 	if err != nil {
-		return nil, 0, permanentDeliveryError{fmt.Errorf("jira: bad request url")}
+		return nil, 0, PermanentDeliveryError{fmt.Errorf("jira: bad request url")}
 	}
 	// Defense in depth: the composed URL must stay on the configured host.
 	if !strings.EqualFold(reqURL.Hostname(), base.Hostname()) {
-		return nil, 0, permanentDeliveryError{fmt.Errorf("jira: request host %q escaped configured base URL", reqURL.Hostname())}
+		return nil, 0, PermanentDeliveryError{fmt.Errorf("jira: request host %q escaped configured base URL", reqURL.Hostname())}
 	}
 
 	var rdr *bytes.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, 0, permanentDeliveryError{fmt.Errorf("jira: encode body: %w", err)}
+			return nil, 0, PermanentDeliveryError{fmt.Errorf("jira: encode body: %w", err)}
 		}
 		rdr = bytes.NewReader(b)
 	} else {
@@ -374,13 +377,13 @@ func (a *jiraTicketAdapter) do(ctx context.Context, cfg ticketSystemConfig, meth
 		if ra, perr := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); perr == nil && ra > 0 && ra <= 3600 {
 			delay = time.Duration(ra) * time.Second
 		}
-		return raw, resp.StatusCode, rateLimitedError{After: delay}
+		return raw, resp.StatusCode, RateLimitedError{After: delay}
 	case http.StatusBadRequest:
 		// Payload rejected — retrying identical bytes cannot succeed.
-		return raw, resp.StatusCode, permanentDeliveryError{err}
+		return raw, resp.StatusCode, PermanentDeliveryError{err}
 	case http.StatusUnauthorized, http.StatusForbidden:
 		// Credentials revoked/insufficient — retry won't fix it.
-		return raw, resp.StatusCode, permanentDeliveryError{err}
+		return raw, resp.StatusCode, PermanentDeliveryError{err}
 	default:
 		return raw, resp.StatusCode, err // transient: worker backoff (incl. 404 races)
 	}
@@ -427,10 +430,10 @@ func jiraError(raw []byte) string {
 			parts = append(parts, k+": "+v)
 		}
 		if len(parts) > 0 {
-			return truncate(strings.Join(parts, "; "), 240)
+			return Truncate(strings.Join(parts, "; "), 240)
 		}
 	}
-	return truncate(strings.TrimSpace(string(raw)), 240)
+	return Truncate(strings.TrimSpace(string(raw)), 240)
 }
 
-var _ ticketAdapter = (*jiraTicketAdapter)(nil)
+var _ Adapter = (*JiraAdapter)(nil)

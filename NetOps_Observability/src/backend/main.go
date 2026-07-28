@@ -1066,11 +1066,11 @@ func main() {
 	// never blocks correlation. The conn resolver reads each tenant's OWN ITSM
 	// connection (a tenant can only ticket via its own ServiceNow).
 	if os.Getenv("FEATURE_RCA_TICKETING") == "true" {
-		resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
+		resolve := func(_ context.Context, tenant, system string) (ticketing.SystemConfig, bool, error) {
 			if srv.itsmCfg == nil {
-				return ticketSystemConfig{}, false, nil
+				return ticketing.SystemConfig{}, false, nil
 			}
-			cfg, ok := srv.itsmCfg.ticketSystemConfig(tenant, system)
+			cfg, ok := srv.itsmCfg.systemConfig(tenant, system)
 			return cfg, ok, nil
 		}
 		tw := newTicketWorker(srv.ticketing, resolve)
