@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/saved"
 	"strings"
 	"testing"
 
@@ -202,7 +203,7 @@ func TestHTTPReportRunNowCrossTenantIs404(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("acme create report: %d", w.Code)
 	}
-	var obj SavedObject
+	var obj saved.Object
 	json.NewDecoder(w.Body).Decode(&obj)
 
 	// A globex TENANT super-admin (reports:write, but scoped to globex — not the
@@ -225,7 +226,7 @@ func TestHTTPSavedObjectsTenantScoped(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("acme create saved: %d", w.Code)
 	}
-	var obj SavedObject
+	var obj saved.Object
 	json.NewDecoder(w.Body).Decode(&obj)
 	if obj.TenantID != "acme" {
 		t.Errorf("saved object should be stamped acme, got %q", obj.TenantID)
@@ -234,7 +235,7 @@ func TestHTTPSavedObjectsTenantScoped(t *testing.T) {
 	// globex must NOT see it in the list.
 	w = httptest.NewRecorder()
 	s.handleSaved(w, req("GET", "/api/saved", "", globex()))
-	var list []SavedObject
+	var list []saved.Object
 	json.NewDecoder(w.Body).Decode(&list)
 	for _, o := range list {
 		if o.ID == obj.ID {

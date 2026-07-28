@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/saved"
 	"os"
 	"path/filepath"
 	"sort"
@@ -126,7 +127,7 @@ func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
 
 // Report scheduler — the server-side half of Phase 5.
 //
-// A report is a SavedObject of type "report" whose opaque body the frontend
+// A report is a saved.Object of type "report" whose opaque body the frontend
 // owns; the scheduler only reads the few fields it needs (reportSpec). On a
 // cadence it renders a point-in-time summary from in-memory state (active
 // alerts, device inventory, stack health) and delivers it through the same
@@ -186,7 +187,7 @@ type reportRun struct {
 
 type reportScheduler struct {
 	srv       *server // for lazily-constructed deps (notifyCfg, contactPoints)
-	saved     savedRepo
+	saved     saved.Repo
 	notifier  *notify.Dispatcher
 	discovery *discovery.DiscoveryAggregator
 	alerts    *alerts.Engine
@@ -284,7 +285,7 @@ func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, erro
 
 // deliver renders and dispatches a report, then records the outcome. Delivery
 // honours spec.Channels (empty => all configured channels).
-func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time) {
+func (rs *reportScheduler) deliver(o saved.Object, spec reportSpec, now time.Time) {
 	msg := rs.render(o, spec, now)
 	sent := rs.notifier.DispatchTo(msg, spec.Channels)
 
@@ -330,7 +331,7 @@ func (rs *reportScheduler) deliver(o SavedObject, spec reportSpec, now time.Time
 // so it cannot mint a secure link; rather than email the report body (and leak
 // tenant data in what the operator asked to be link-only), it records that link
 // mode needs the async pipeline. Switch STORE_BACKEND=postgres to use it.
-func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o SavedObject, spec reportSpec) (int, string) {
+func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o saved.Object, spec reportSpec) (int, string) {
 	if len(spec.ContactPoints) == 0 || rs.srv == nil || rs.srv.contactPoints == nil || rs.srv.notifyCfg == nil {
 		return 0, ""
 	}
@@ -358,7 +359,7 @@ func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o SavedObjec
 
 // render builds the models.Alert carrying the report content. Reusing the
 // alert shape lets every existing notify channel format it unchanged.
-func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time) models.Alert {
+func (rs *reportScheduler) render(o saved.Object, spec reportSpec, now time.Time) models.Alert {
 	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
 	if sev == "" {
 		sev = "info"
@@ -402,7 +403,7 @@ func (rs *reportScheduler) render(o SavedObject, spec reportSpec, now time.Time)
 // into a render-neutral, structured reports.ViewModel that every renderer (HTML,
 // Excel, PDF) consumes. Tabular kinds populate Section.Header+Rows (real tables,
 // so Excel exports cells, not a text blob); narrative kinds fall back to a Note.
-func (rs *reportScheduler) buildViewModel(o SavedObject, spec reportSpec, now time.Time) reports.ViewModel {
+func (rs *reportScheduler) buildViewModel(o saved.Object, spec reportSpec, now time.Time) reports.ViewModel {
 	sev := strings.ToLower(strings.TrimSpace(spec.Severity))
 	if sev == "" {
 		sev = "info"

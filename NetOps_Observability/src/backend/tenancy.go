@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"netops/backend/internal/saved"
 	"strings"
 
 	"netops/backend/models"
@@ -275,14 +276,14 @@ func canSeeDevice(d models.Device, tenant string, cross bool) bool {
 
 // ---- saved objects ---------------------------------------------------------
 
-func savedTenant(o SavedObject) string {
+func savedTenant(o saved.Object) string {
 	return strings.ToLower(strings.TrimSpace(o.TenantID))
 }
 
 // canSeeSaved reports whether a scoped principal may view a saved object.
 // Strict isolation: only the principal's own tenant (global/unassigned objects
 // are platform-owned, visible only cross-tenant). Routed through Authorize().
-func canSeeSaved(o SavedObject, tenant string, cross bool) bool {
+func canSeeSaved(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
 		Principal{Tenant: tenant, cross: cross},
 		ActionView,
@@ -293,7 +294,7 @@ func canSeeSaved(o SavedObject, tenant string, cross bool) bool {
 // canMutateSaved reports whether a scoped principal may modify/delete a saved
 // object. Scoped principals own only their own tenant's objects — never the
 // shared/global ones (which belong to no single tenant), mirroring devices.
-func canMutateSaved(o SavedObject, tenant string, cross bool) bool {
+func canMutateSaved(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
 		Principal{Tenant: tenant, cross: cross},
 		ActionUpdate,
@@ -302,12 +303,12 @@ func canMutateSaved(o SavedObject, tenant string, cross bool) bool {
 }
 
 // visibleSaved filters a saved-object list to those the principal may view.
-func visibleSaved(all []SavedObject, c jwtClaims) []SavedObject {
+func visibleSaved(all []saved.Object, c jwtClaims) []saved.Object {
 	tenant, cross := principalTenant(c)
 	if cross {
 		return all
 	}
-	out := make([]SavedObject, 0, len(all))
+	out := make([]saved.Object, 0, len(all))
 	for _, o := range all {
 		if canSeeSaved(o, tenant, cross) {
 			out = append(out, o)

@@ -17,6 +17,10 @@ import (
 // randHex mints a crypto-random lowercase-hex id of nBytes entropy. Used across
 // the root package for event/record ids (it lived in refresh.go until the
 // refresh store moved to internal/session, which keeps its own copy).
+// randID is a 32-hex (16-byte) crypto-random object id — re-homed from
+// saved.go when that store moved; the package keeps its own copy.
+func randID() string { return randHex(16) }
+
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
 	_, _ = rand.Read(b)

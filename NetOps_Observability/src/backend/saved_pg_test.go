@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"netops/backend/internal/saved"
 	"os"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestPgSavedStore(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := newPgSavedStore(ps.db)
+	s := saved.NewPGStore(rlsPG{db: ps.db}, logError)
 	body := json.RawMessage(`{"k":"v"}`)
 
 	acme1, _ := s.Create("report", "Acme Report", "u1", "acme", body)

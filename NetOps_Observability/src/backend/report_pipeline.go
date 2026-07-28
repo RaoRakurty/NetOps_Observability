@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"netops/backend/internal/saved"
 	"os"
 	"strconv"
 	"strings"
@@ -131,7 +132,7 @@ func (p *reportPipeline) enqueueDue(ctx context.Context, now time.Time) {
 // anchorFor is the lower bound for catch-up: the latest of the newest recorded
 // execution, the report's creation time (so a brand-new report doesn't backfill
 // history), and now-maxCatchupAge (so a long outage backfills at most that far).
-func (p *reportPipeline) anchorFor(ctx context.Context, o SavedObject, now time.Time) time.Time {
+func (p *reportPipeline) anchorFor(ctx context.Context, o saved.Object, now time.Time) time.Time {
 	anchor := now.Add(-p.maxCatchupAge)
 	if !o.CreatedAt.IsZero() && o.CreatedAt.After(anchor) {
 		anchor = o.CreatedAt
@@ -155,7 +156,7 @@ func (p *reportPipeline) firesDue(spec reportSpec, anchor, now time.Time) []time
 	return nil
 }
 
-func (p *reportPipeline) enqueueFire(ctx context.Context, o SavedObject, fire, now time.Time) {
+func (p *reportPipeline) enqueueFire(ctx context.Context, o saved.Object, fire, now time.Time) {
 	tenant := normTenant(o.TenantID)
 	execID := randHex(8)
 	job := reports.Job{TenantID: tenant, ScheduleID: o.ID, ExecutionID: execID, FireTime: fire}
@@ -179,7 +180,7 @@ func (p *reportPipeline) enqueueFire(ctx context.Context, o SavedObject, fire, n
 // EnqueueNow enqueues an immediate, out-of-band run of a report ("Send now"),
 // returning the new execution id. The synthetic fire_time keeps it from
 // colliding with a scheduled fire's idempotency key.
-func (p *reportPipeline) EnqueueNow(ctx context.Context, o SavedObject) (string, error) {
+func (p *reportPipeline) EnqueueNow(ctx context.Context, o saved.Object) (string, error) {
 	now := time.Now().UTC()
 	tenant := normTenant(o.TenantID)
 	execID := randHex(8)

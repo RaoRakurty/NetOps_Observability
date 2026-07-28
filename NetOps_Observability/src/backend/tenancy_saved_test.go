@@ -1,9 +1,13 @@
 package main
 
-import "testing"
+import (
+	"testing"
 
-func savedSet() []SavedObject {
-	return []SavedObject{
+	"netops/backend/internal/saved"
+)
+
+func savedSet() []saved.Object {
+	return []saved.Object{
 		{ID: "a", TenantID: "acme"},
 		{ID: "b", TenantID: "globex"},
 		{ID: "s"}, // unassigned (no tenant) — platform-owned
@@ -11,7 +15,7 @@ func savedSet() []SavedObject {
 	}
 }
 
-func savedIDs(os []SavedObject) map[string]bool {
+func savedIDs(os []saved.Object) map[string]bool {
 	m := map[string]bool{}
 	for _, o := range os {
 		m[o.ID] = true
@@ -52,27 +56,27 @@ func TestVisibleSavedTenantIsolation(t *testing.T) {
 
 // Strict view + mutate contract for a scoped tenant.
 func TestCanSeeAndMutateSavedStrict(t *testing.T) {
-	shared := SavedObject{ID: "s"} // no tenant → platform-owned
+	shared := saved.Object{ID: "s"} // no tenant → platform-owned
 	if canSeeSaved(shared, "acme", false) {
 		t.Error("LEAK: a scoped tenant must NOT see a global/unassigned object")
 	}
-	if !canSeeSaved(SavedObject{TenantID: "acme"}, "acme", false) {
+	if !canSeeSaved(saved.Object{TenantID: "acme"}, "acme", false) {
 		t.Error("scoped tenant should see its own object")
 	}
 	if canMutateSaved(shared, "acme", false) {
 		t.Error("LEAK: scoped tenant must NOT mutate a global/unassigned object")
 	}
-	if !canMutateSaved(SavedObject{ID: "a", TenantID: "acme"}, "acme", false) {
+	if !canMutateSaved(saved.Object{ID: "a", TenantID: "acme"}, "acme", false) {
 		t.Error("scoped tenant should mutate its own object")
 	}
-	if canMutateSaved(SavedObject{TenantID: "globex"}, "acme", false) {
+	if canMutateSaved(saved.Object{TenantID: "globex"}, "acme", false) {
 		t.Error("TENANT LEAK: acme must NOT mutate a globex object")
 	}
 }
 
 func TestCanMutateSavedCrossTenant(t *testing.T) {
 	// The platform owner may mutate anything.
-	if !canMutateSaved(SavedObject{TenantID: "globex"}, "", true) {
+	if !canMutateSaved(saved.Object{TenantID: "globex"}, "", true) {
 		t.Error("platform owner should mutate any object")
 	}
 }

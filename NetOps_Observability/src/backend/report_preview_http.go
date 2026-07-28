@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/saved"
 	"sync"
 	"time"
 
@@ -61,9 +62,9 @@ func (s *server) handleReportPreview(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "Preview"
 	}
-	// A synthetic, in-scope SavedObject so the dataset is gathered in the caller's
+	// A synthetic, in-scope saved.Object so the dataset is gathered in the caller's
 	// tenant view exactly as a scheduled run would be.
-	o := SavedObject{ID: "preview", Type: "report", Name: name, TenantID: tenant, Body: req.Body, CreatedAt: time.Now().UTC()}
+	o := saved.Object{ID: "preview", Type: "report", Name: name, TenantID: tenant, Body: req.Body, CreatedAt: time.Now().UTC()}
 	vm := s.reports.buildViewModel(o, spec, time.Now().UTC())
 
 	format := r.URL.Query().Get("format")

@@ -23,6 +23,7 @@ import (
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
+	"netops/backend/internal/saved"
 	"netops/backend/internal/seam"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
@@ -85,7 +86,7 @@ type server struct {
 	credSentinel     *credSentinel      // self-healing credential resolution loop
 	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
 	snmpProfiles     *snmpProfileStore
-	saved            savedRepo
+	saved            saved.Repo
 	audit            auditRepo
 	notifyCfg        *notifyConfigStore
 	contactPoints    *contactPointStore
@@ -997,6 +998,15 @@ func devicesPath() string {
 // newDeviceStore wires the manual-device store onto the platform kv + logger.
 func newDeviceStore(path string) *discovery.DevStore {
 	return discovery.NewDevStore(path, platformKV{}, logError)
+}
+
+// newSavedStore selects the saved-objects backend: RLS-scoped pg under
+// STORE_BACKEND=postgres, else the file store on the platform kv.
+func newSavedStore(path string) (saved.Repo, error) {
+	if ps, ok := backend.(*pgStore); ok {
+		return saved.NewPGStore(rlsPG{db: ps.db}, logError), nil
+	}
+	return saved.NewFileStore(path, platformKV{})
 }
 
 func main() {

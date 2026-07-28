@@ -1,4 +1,4 @@
-package main
+package saved
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"strings"
 )
 
 // saved_pg.go — the Postgres saved-object repository (#33). One row per object in
@@ -15,13 +16,22 @@ import (
 // replacing the load-all-into-memory + whole-collection rewrite of the blob
 // bridge. Modeled on users_pg.go / audit_pg.go. Writes run platform-scoped (the
 // HTTP layer already enforces per-object tenant authz); reads scope via withTenant.
-type pgSavedStore struct {
-	db *pgDB
+type PGStore struct {
+	errf func(component, msg string, fields map[string]any)
+	db   DB
 }
 
-func newPgSavedStore(db *pgDB) *pgSavedStore { return &pgSavedStore{db: db} }
+// normTenant mirrors the integrator's normalization (duplicated).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
 
-func (s *pgSavedStore) List(typ, tenant string, cross bool) []SavedObject {
+func NewPGStore(db DB, errf func(component, msg string, fields map[string]any)) *PGStore {
+	if errf == nil {
+		errf = func(string, string, map[string]any) {}
+	}
+	return &PGStore{db: db, errf: errf}
+}
+
+func (s *PGStore) List(typ, tenant string, cross bool) []Object {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sql := "SELECT data FROM saved_objects"
@@ -32,8 +42,8 @@ func (s *pgSavedStore) List(typ, tenant string, cross bool) []SavedObject {
 	}
 	sql += " ORDER BY updated_at DESC, id DESC"
 
-	out := make([]SavedObject, 0)
-	if err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := make([]Object, 0)
+	if err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
@@ -44,7 +54,7 @@ func (s *pgSavedStore) List(typ, tenant string, cross bool) []SavedObject {
 			if err := rows.Scan(&data); err != nil {
 				return err
 			}
-			var o SavedObject
+			var o Object
 			if err := json.Unmarshal(data, &o); err != nil {
 				return err
 			}
@@ -52,20 +62,20 @@ func (s *pgSavedStore) List(typ, tenant string, cross bool) []SavedObject {
 		}
 		return rows.Err()
 	}); err != nil {
-		logError("saved", "list", map[string]any{"error": err.Error()})
+		s.errf("saved", "list", map[string]any{"error": err.Error()})
 		return nil
 	}
 	return out
 }
 
-func (s *pgSavedStore) Get(id string) (SavedObject, bool) {
+func (s *PGStore) Get(id string) (Object, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var o SavedObject
+	var o Object
 	found := false
 	// Platform scope: the HTTP layer enforces per-object tenant authz (canSee/
 	// canMutateSaved), and the report scheduler reads any tenant's report by id.
-	if err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		err := tx.QueryRow(ctx, `SELECT data FROM saved_objects WHERE id=$1`, id).Scan(&data)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -80,43 +90,43 @@ func (s *pgSavedStore) Get(id string) (SavedObject, bool) {
 		found = true
 		return nil
 	}); err != nil {
-		logError("saved", "get", map[string]any{"error": err.Error()})
-		return SavedObject{}, false
+		s.errf("saved", "get", map[string]any{"error": err.Error()})
+		return Object{}, false
 	}
 	return o, found
 }
 
-func (s *pgSavedStore) Create(typ, name, owner, tenant string, body json.RawMessage) (SavedObject, error) {
+func (s *PGStore) Create(typ, name, owner, tenant string, body json.RawMessage) (Object, error) {
 	if !validSavedTypes[typ] {
-		return SavedObject{}, errors.New("invalid type")
+		return Object{}, errors.New("invalid type")
 	}
 	if name == "" {
-		return SavedObject{}, errors.New("name required")
+		return Object{}, errors.New("name required")
 	}
 	now := time.Now().UTC()
-	o := SavedObject{ID: randID(), Type: typ, Name: name, Owner: owner, TenantID: tenant, Body: body, CreatedAt: now, UpdatedAt: now}
+	o := Object{ID: randID(), Type: typ, Name: name, Owner: owner, TenantID: tenant, Body: body, CreatedAt: now, UpdatedAt: now}
 	data, err := json.Marshal(o)
 	if err != nil {
-		return SavedObject{}, err
+		return Object{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO saved_objects (id, tenant_id, type, data, updated_at) VALUES ($1,$2,$3,$4,$5)`,
 			o.ID, normTenant(o.TenantID), o.Type, data, o.UpdatedAt)
 		return err
 	}); err != nil {
-		return SavedObject{}, err
+		return Object{}, err
 	}
 	return o, nil
 }
 
-func (s *pgSavedStore) Update(id, name string, body json.RawMessage) (SavedObject, error) {
+func (s *PGStore) Update(id, name string, body json.RawMessage) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var out SavedObject
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	var out Object
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		if err := tx.QueryRow(ctx, `SELECT data FROM saved_objects WHERE id=$1 FOR UPDATE`, id).Scan(&data); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -124,7 +134,7 @@ func (s *pgSavedStore) Update(id, name string, body json.RawMessage) (SavedObjec
 			}
 			return err
 		}
-		var o SavedObject
+		var o Object
 		if err := json.Unmarshal(data, &o); err != nil {
 			return err
 		}
@@ -145,15 +155,15 @@ func (s *pgSavedStore) Update(id, name string, body json.RawMessage) (SavedObjec
 		return err
 	})
 	if err != nil {
-		return SavedObject{}, err
+		return Object{}, err
 	}
 	return out, nil
 }
 
-func (s *pgSavedStore) Delete(id string) error {
+func (s *PGStore) Delete(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM saved_objects WHERE id=$1`, id)
 		if err != nil {
 			return err
@@ -165,4 +175,4 @@ func (s *pgSavedStore) Delete(id string) error {
 	})
 }
 
-var _ savedRepo = (*pgSavedStore)(nil)
+var _ Repo = (*PGStore)(nil)

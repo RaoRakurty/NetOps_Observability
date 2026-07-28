@@ -1,12 +1,15 @@
-package main
+package saved
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,7 +23,7 @@ import (
 // no API-surface impact. Body is opaque JSON owned by the frontend (a saved
 // search's query+filters, a dashboard's panels, a report's schedule).
 
-type SavedObject struct {
+type Object struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"` // saved_search | dashboard | report
 	Name      string          `json:"name"`
@@ -37,48 +40,61 @@ var validSavedTypes = map[string]bool{
 	"report":       true,
 }
 
-// savedRepo is the saved-object store seam (mirroring usersRepo/auditRepo, #33).
+// Repo is the saved-object store seam (mirroring usersRepo/auditRepo, #33).
 // List is tenant-scoped: a scoped principal passes its tenant (RLS on the pg
 // backend / an in-memory filter on the file backend); infrastructure callers
 // (the report scheduler) pass ("", true) for the platform view. Get/Create/
 // Update/Delete operate by id; the HTTP layer enforces per-object authz
 // (canSeeSaved/canMutateSaved) before mutating, so they need no scope arg.
-type savedRepo interface {
-	List(typ, tenant string, cross bool) []SavedObject
-	Get(id string) (SavedObject, bool)
-	Create(typ, name, owner, tenant string, body json.RawMessage) (SavedObject, error)
-	Update(id, name string, body json.RawMessage) (SavedObject, error)
+type Repo interface {
+	List(typ, tenant string, cross bool) []Object
+	Get(id string) (Object, bool)
+	Create(typ, name, owner, tenant string, body json.RawMessage) (Object, error)
+	Update(id, name string, body json.RawMessage) (Object, error)
 	Delete(id string) error
 }
 
-type savedStore struct {
+type Store struct {
 	mu    sync.RWMutex
 	path  string
-	items map[string]SavedObject
+	kv    KV
+	items map[string]Object
 }
 
-// newSavedStore selects the saved-object backend: under STORE_BACKEND=postgres a
+// NewStore selects the saved-object backend: under STORE_BACKEND=postgres a
 // per-row, RLS-scoped repository (saved_pg.go); otherwise the file store.
-func newSavedStore(path string) (savedRepo, error) {
-	if ps, ok := backend.(*pgStore); ok {
-		return newPgSavedStore(ps.db), nil
+// KV abstracts persistence (the platform kv layer).
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
+}
+
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewFileStore opens the file-backed store (backend selection is main's job).
+func NewFileStore(path string, kv KV) (Repo, error) {
+	if kv == nil {
+		return nil, errors.New("saved.NewFileStore: kv is required")
 	}
 	if path == "" {
 		path = "/data/saved.json"
 	}
-	s := &savedStore{path: path, items: make(map[string]SavedObject)}
+	s := &Store{path: path, kv: kv, items: make(map[string]Object)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *savedStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *Store) load() error {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		return err
 	}
-	var list []SavedObject
+	var list []Object
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
@@ -88,8 +104,8 @@ func (s *savedStore) load() error {
 	return nil
 }
 
-func (s *savedStore) flushLocked() error {
-	list := make([]SavedObject, 0, len(s.items))
+func (s *Store) flushLocked() error {
+	list := make([]Object, 0, len(s.items))
 	for _, o := range s.items {
 		list = append(list, o)
 	}
@@ -97,17 +113,17 @@ func (s *savedStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
 // List returns objects, newest first, optionally filtered by type.
 // List returns saved objects of the given type visible to the tenant scope
 // (the file backend filters in memory; the pg backend uses RLS). typ=="" lists
 // all types; cross=true (platform) sees every tenant's objects.
-func (s *savedStore) List(typ, tenant string, cross bool) []SavedObject {
+func (s *Store) List(typ, tenant string, cross bool) []Object {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]SavedObject, 0, len(s.items))
+	out := make([]Object, 0, len(s.items))
 	for _, o := range s.items {
 		if typ != "" && o.Type != typ {
 			continue
@@ -121,22 +137,22 @@ func (s *savedStore) List(typ, tenant string, cross bool) []SavedObject {
 	return out
 }
 
-func (s *savedStore) Get(id string) (SavedObject, bool) {
+func (s *Store) Get(id string) (Object, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	o, ok := s.items[id]
 	return o, ok
 }
 
-func (s *savedStore) Create(typ, name, owner, tenant string, body json.RawMessage) (SavedObject, error) {
+func (s *Store) Create(typ, name, owner, tenant string, body json.RawMessage) (Object, error) {
 	if !validSavedTypes[typ] {
-		return SavedObject{}, errors.New("invalid type")
+		return Object{}, errors.New("invalid type")
 	}
 	if name == "" {
-		return SavedObject{}, errors.New("name required")
+		return Object{}, errors.New("name required")
 	}
 	now := time.Now().UTC()
-	o := SavedObject{
+	o := Object{
 		ID:        randID(),
 		Type:      typ,
 		Name:      name,
@@ -151,17 +167,17 @@ func (s *savedStore) Create(typ, name, owner, tenant string, body json.RawMessag
 	s.items[o.ID] = o
 	if err := s.flushLocked(); err != nil {
 		delete(s.items, o.ID)
-		return SavedObject{}, err
+		return Object{}, err
 	}
 	return o, nil
 }
 
-func (s *savedStore) Update(id, name string, body json.RawMessage) (SavedObject, error) {
+func (s *Store) Update(id, name string, body json.RawMessage) (Object, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.items[id]
 	if !ok {
-		return SavedObject{}, errors.New("not found")
+		return Object{}, errors.New("not found")
 	}
 	prev := o
 	if name != "" {
@@ -174,12 +190,12 @@ func (s *savedStore) Update(id, name string, body json.RawMessage) (SavedObject,
 	s.items[id] = o
 	if err := s.flushLocked(); err != nil {
 		s.items[id] = prev
-		return SavedObject{}, err
+		return Object{}, err
 	}
 	return o, nil
 }
 
-func (s *savedStore) Delete(id string) error {
+func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.items[id]
@@ -195,6 +211,14 @@ func (s *savedStore) Delete(id string) error {
 }
 
 // randID returns a 16-byte hex identifier (stdlib crypto/rand).
+// sameTenant mirrors the integrator's tenancy filter (duplicated).
+func sameTenant(resourceTenant, tenant string, cross bool) bool {
+	if cross {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(tenant))
+}
+
 func randID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/saved"
 	"os"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestPgSavedWriteLeakage(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := newPgSavedStore(ps.db)
+	s := saved.NewPGStore(rlsPG{db: ps.db}, logError)
 	body := json.RawMessage(`{"k":"v"}`)
 
 	// Seed a global (tenant_id="") and a cross-tenant (globex) row at platform scope.
