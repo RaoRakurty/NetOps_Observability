@@ -69,7 +69,7 @@ func (s *server) startCredCacheReload(ctx context.Context) {
 					}
 				}
 				if s.snmpCreds != nil {
-					if err := s.snmpCreds.reload(); err != nil {
+					if err := s.snmpCreds.Reload(); err != nil {
 						logError("snmp_creds", "cache reload", errf(err))
 					}
 				}

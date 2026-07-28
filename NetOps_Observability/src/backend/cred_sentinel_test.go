@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/snmpcred"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,18 +17,18 @@ import (
 // restored when the bound profile recovers, candidates never cross tenants,
 // and failed sweeps are rate-limited.
 
-func sentinelFixture(t *testing.T) (*credSentinel, *credOverrideStore, *snmpCredStore) {
+func sentinelFixture(t *testing.T) (*credSentinel, *credOverrideStore, *snmpcred.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	ov, err := newCredOverrideStore(filepath.Join(dir, "overrides.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := newSNMPCredStore(filepath.Join(dir, "creds.json"), nil)
+	creds, err := snmpcred.NewStore(filepath.Join(dir, "creds.json"), nil, platformKV{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := []SNMPCredential{
+	seed := []snmpcred.Credential{
 		{ID: "vendor-v3", Name: "Vendor v3", Version: "v3", SecurityName: "mon", SecurityLevel: "authPriv", AuthProtocol: "SHA", AuthKey: "k1", PrivProtocol: "AES128", PrivKey: "k2"},
 		{ID: "vendor-v2c", Name: "Vendor v2c", Version: "v2c", Community: "vendor-public"},
 		{ID: "other-tenant-v2c", Name: "Other tenant", Version: "v2c", Community: "other", TenantID: "t_other"},
@@ -146,11 +147,11 @@ func TestOverrideStorePersistsAcrossReload(t *testing.T) {
 func TestTargetBuilderHonorsOverride(t *testing.T) {
 	// applyCredToTarget is the single mapping both the builder and sentinel use.
 	var tgt collectors.Target
-	applyCredToTarget(&tgt, SNMPCredential{ID: "x", Version: "v3", SecurityName: "u", SecurityLevel: "authPriv", AuthProtocol: "SHA", AuthKey: "a", PrivProtocol: "AES128", PrivKey: "p"})
+	applyCredToTarget(&tgt, snmpcred.Credential{ID: "x", Version: "v3", SecurityName: "u", SecurityLevel: "authPriv", AuthProtocol: "SHA", AuthKey: "a", PrivProtocol: "AES128", PrivKey: "p"})
 	if tgt.SNMPVersion != 3 || tgt.V3User != "u" || tgt.V3PrivKey != "p" {
 		t.Fatalf("v3 mapping wrong: %+v", tgt)
 	}
-	applyCredToTarget(&tgt, SNMPCredential{ID: "y", Version: "v2c", Community: "c"})
+	applyCredToTarget(&tgt, snmpcred.Credential{ID: "y", Version: "v2c", Community: "c"})
 	if tgt.SNMPVersion != 0 || tgt.Community != "c" {
 		t.Fatalf("v2c mapping must reset v3 state: %+v", tgt)
 	}

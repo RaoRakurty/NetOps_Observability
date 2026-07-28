@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
@@ -19,11 +20,11 @@ func TestSNMPCredsEncryptedAtRest(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "snmp.json")
 
-	cs, err := newSNMPCredStore(path, v)
+	cs, err := snmpcred.NewStore(path, v, platformKV{})
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if _, err := cs.Upsert(SNMPCredential{
+	if _, err := cs.Upsert(snmpcred.Credential{
 		Name: "core-v3", TenantID: "acme", Version: "v3",
 		SecurityName: "noc", SecurityLevel: "authPriv",
 		AuthProtocol: "SHA", AuthKey: "auth-secret-123",
@@ -44,7 +45,7 @@ func TestSNMPCredsEncryptedAtRest(t *testing.T) {
 	}
 
 	// Reopen with the same Vault → secrets decrypt back for the poller (Resolve).
-	cs2, err := newSNMPCredStore(path, v)
+	cs2, err := snmpcred.NewStore(path, v, platformKV{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

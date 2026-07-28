@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/snmpcred"
 	"testing"
 )
 
@@ -17,14 +18,14 @@ func snmpTenantServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs, err := newSNMPCredStore(dir+"/snmp.json", nil)
+	cs, err := snmpcred.NewStore(dir+"/snmp.json", nil, platformKV{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cs.Upsert(SNMPCredential{ID: "acme-v2c", Name: "acme-v2c", TenantID: "acme", Version: "v2c", Community: "s3cret"}); err != nil {
+	if _, err := cs.Upsert(snmpcred.Credential{ID: "acme-v2c", Name: "acme-v2c", TenantID: "acme", Version: "v2c", Community: "s3cret"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cs.Upsert(SNMPCredential{ID: "platform-v2c", Name: "platform-v2c", Version: "v2c", Community: "rootpw"}); err != nil {
+	if _, err := cs.Upsert(snmpcred.Credential{ID: "platform-v2c", Name: "platform-v2c", Version: "v2c", Community: "rootpw"}); err != nil {
 		t.Fatal(err) // no tenant => global/platform-owned
 	}
 	return &server{roles: rs, snmpCreds: cs}
@@ -33,13 +34,13 @@ func snmpTenantServer(t *testing.T) *server {
 func TestSNMPCredsTenantScoped(t *testing.T) {
 	s := snmpTenantServer(t)
 
-	list := func(claims jwtClaims) []publicSNMPCredential {
+	list := func(claims jwtClaims) []snmpcred.Public {
 		w := httptest.NewRecorder()
 		s.handleSNMPCreds(w, req("GET", "/api/snmp/credentials", "", claims))
 		if w.Code != http.StatusOK {
 			t.Fatalf("list: %d (%s)", w.Code, w.Body.String())
 		}
-		var out []publicSNMPCredential
+		var out []snmpcred.Public
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +76,7 @@ func TestSNMPCredsTenantScoped(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("scoped create: %d (%s)", w.Code, w.Body.String())
 	}
-	var made publicSNMPCredential
+	var made snmpcred.Public
 	if err := json.Unmarshal(w.Body.Bytes(), &made); err != nil {
 		t.Fatal(err)
 	}

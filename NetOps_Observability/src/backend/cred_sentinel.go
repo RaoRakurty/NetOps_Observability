@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"netops/backend/internal/snmpcred"
 	"os"
 	"sort"
 	"strings"
@@ -141,7 +142,7 @@ func (s *credOverrideStore) flushLocked() error {
 // applyCredToTarget threads a resolved credential profile into a poll target —
 // the ONE place the profile→target mapping lives (used by the pool's target
 // builder and the sentinel's probes, so they can never drift apart).
-func applyCredToTarget(tgt *collectors.Target, c SNMPCredential) {
+func applyCredToTarget(tgt *collectors.Target, c snmpcred.Credential) {
 	if strings.EqualFold(c.Version, "v3") {
 		tgt.SNMPVersion = 3
 		tgt.V3User = c.SecurityName
@@ -163,7 +164,7 @@ func applyCredToTarget(tgt *collectors.Target, c SNMPCredential) {
 // device's working credential from the stored profiles.
 type credSentinel struct {
 	overrides *credOverrideStore
-	creds     *snmpCredStore
+	creds     *snmpcred.Store
 	devices   func() []models.Device
 	// probe is injectable for tests; production uses collectors.ProbeSNMP.
 	probe    func(ctx context.Context, t collectors.Target) error
@@ -174,7 +175,7 @@ type credSentinel struct {
 	nextSweep map[string]time.Time // device id -> earliest next full profile sweep
 }
 
-func newCredSentinel(overrides *credOverrideStore, creds *snmpCredStore, devices func() []models.Device) *credSentinel {
+func newCredSentinel(overrides *credOverrideStore, creds *snmpcred.Store, devices func() []models.Device) *credSentinel {
 	return &credSentinel{
 		overrides: overrides,
 		creds:     creds,
@@ -306,9 +307,9 @@ func (cs *credSentinel) checkDevice(ctx context.Context, dev models.Device) {
 
 // candidates returns the profiles worth probing for this device: same-tenant
 // only (default-closed §3a), bound profile first, then stable id order.
-func (cs *credSentinel) candidates(dev models.Device, bound SNMPCredential, boundOK bool) []SNMPCredential {
+func (cs *credSentinel) candidates(dev models.Device, bound snmpcred.Credential, boundOK bool) []snmpcred.Credential {
 	all := cs.creds.ResolveAll()
-	out := make([]SNMPCredential, 0, len(all))
+	out := make([]snmpcred.Credential, 0, len(all))
 	if boundOK {
 		out = append(out, bound)
 	}
@@ -325,7 +326,7 @@ func (cs *credSentinel) candidates(dev models.Device, bound SNMPCredential, boun
 }
 
 // probeWith runs one bounded credentialed probe of the device.
-func (cs *credSentinel) probeWith(ctx context.Context, dev models.Device, c SNMPCredential) error {
+func (cs *credSentinel) probeWith(ctx context.Context, dev models.Device, c snmpcred.Credential) error {
 	tgt := collectors.Target{ID: dev.ID, Address: dev.Address}
 	applyCredToTarget(&tgt, c)
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/session"
+	"netops/backend/internal/snmpcred"
 	"testing"
 	"time"
 )
@@ -48,7 +49,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	sv, err := newSavedStore(dir + "/saved.json")
 	must(err)
-	sc, err := newSNMPCredStore(dir+"/snmp.json", nil)
+	sc, err := snmpcred.NewStore(dir+"/snmp.json", nil, platformKV{})
 	must(err)
 	au, err := newAuditStore(dir + "/audit.json")
 	must(err)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/snmpcred"
 	"strings"
 )
 
@@ -71,8 +72,8 @@ func titleVendor(v string) string {
 // buildSNMPCredential builds the credential profile that matches a generated
 // config (pure; the caller persists it). v3 uses SHA + AES128 (the widest
 // interoperable pairing Correlix supports).
-func buildSNMPCredential(vendor, version, community, secName, authKey, privKey string) SNMPCredential {
-	c := SNMPCredential{
+func buildSNMPCredential(vendor, version, community, secName, authKey, privKey string) snmpcred.Credential {
+	c := snmpcred.Credential{
 		ID:      fmt.Sprintf("%s-%s-gen", vendor, version),
 		Name:    fmt.Sprintf("%s %s (generated)", titleVendor(vendor), version),
 		Version: version,
@@ -246,7 +247,7 @@ func (s *server) handleGenerateSNMPConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	res := snmpGenResult{Vendor: vendor, Version: version, Templated: snmpGenVendors[vendor]}
-	var cred SNMPCredential
+	var cred snmpcred.Credential
 	if version == "v2c" {
 		comm, err := genSecret(20)
 		if err != nil {

@@ -20,6 +20,7 @@ import (
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/seam"
 	"netops/backend/internal/session"
+	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
@@ -68,7 +69,7 @@ type server struct {
 	sessions         *session.Store // server-side session lifecycle (idle/absolute/revocation)
 	apiKeys          *apikey.Store
 	refresh          *session.RefreshStore
-	snmpCreds        *snmpCredStore
+	snmpCreds        *snmpcred.Store
 	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
 	credSentinel     *credSentinel      // self-healing credential resolution loop
 	sshHosts         *sshHostStore      // #20/device-ssh: TOFU host-key store for the SSH gateway
@@ -263,7 +264,7 @@ func newServer() *server {
 
 	// SNMP credential store is created below; capture a pointer the target
 	// builder can resolve device credential_refs against (set after init).
-	var snmpCredsRef *snmpCredStore
+	var snmpCredsRef *snmpcred.Store
 	// Learned credential overrides (credential sentinel): when a device's bound
 	// profile stops answering, the sentinel adopts a stored profile that does;
 	// the target builder honors that resolution so polling self-heals.
@@ -470,7 +471,7 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("refresh store: %v", err)
 	}
-	snmpCreds, err := newSNMPCredStore(envOr("SNMP_CREDS_FILE", "/data/snmp_credentials.json"), vault)
+	snmpCreds, err := snmpcred.NewStore(envOr("SNMP_CREDS_FILE", "/data/snmp_credentials.json"), vault, platformKV{})
 	if err != nil {
 		log.Fatalf("snmp cred store: %v", err)
 	}

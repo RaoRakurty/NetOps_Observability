@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/snmpcred"
 	"strings"
 	"testing"
 )
@@ -95,7 +96,7 @@ func genGenServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs, err := newSNMPCredStore(dir+"/creds.json", nil)
+	cs, err := snmpcred.NewStore(dir+"/creds.json", nil, platformKV{})
 	if err != nil {
 		t.Fatal(err)
 	}

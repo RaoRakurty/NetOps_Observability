@@ -124,7 +124,11 @@ import (
 //	                  per-tenant collection primitive joins internal/tenant; a
 //	                  generic alias + wrapper in tenant_wiring.go keeps the
 //	                  three consumers' call shape; Path() accessor added)
-const rootPackageCeiling = 252
+//	2026-07-28  251  internal/snmpcred (SNMP credential profiles: model,
+//	                  validation, vault-enveloped store with kv INJECTED;
+//	                  slugify duplicated per the no-utils rule; four consumer
+//	                  files qualified directly — no alias needed)
+const rootPackageCeiling = 251
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

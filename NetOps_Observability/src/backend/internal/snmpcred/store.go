@@ -1,4 +1,4 @@
-package main
+package snmpcred
 
 // snmp_creds.go — SNMP credential profiles (v1 / v2c / v3 USM).
 //
@@ -24,10 +24,10 @@ import (
 
 // Allowed enum values (surfaced to the UI via /api/snmp/options).
 var (
-	SNMPVersions       = []string{"v1", "v2c", "v3"}
-	SNMPSecurityLevels = []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
-	SNMPAuthProtocols  = []string{"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"}
-	SNMPPrivProtocols  = []string{"DES", "3DES", "AES128", "AES192", "AES256"}
+	Versions       = []string{"v1", "v2c", "v3"}
+	SecurityLevels = []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
+	AuthProtocols  = []string{"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"}
+	PrivProtocols  = []string{"DES", "3DES", "AES128", "AES192", "AES256"}
 )
 
 func inList(v string, list []string) bool {
@@ -39,7 +39,7 @@ func inList(v string, list []string) bool {
 	return false
 }
 
-type SNMPCredential struct {
+type Credential struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	TenantID string `json:"tenant_id,omitempty"` // owning tenant ("" = global/platform-owned)
@@ -63,8 +63,8 @@ type SNMPCredential struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// publicSNMPCredential redacts every secret to a boolean for safe display.
-type publicSNMPCredential struct {
+// Public redacts every secret to a boolean for safe display.
+type Public struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
 	TenantID      string    `json:"tenant_id,omitempty"`
@@ -83,8 +83,8 @@ type publicSNMPCredential struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-func (c SNMPCredential) public() publicSNMPCredential {
-	return publicSNMPCredential{
+func (c Credential) Public() Public {
+	return Public{
 		ID: c.ID, Name: c.Name, TenantID: c.TenantID, Version: c.Version, Port: c.Port, Timeout: c.Timeout, Retries: c.Retries,
 		HasCommunity: c.Community != "", SecurityName: c.SecurityName, SecurityLevel: c.SecurityLevel,
 		AuthProtocol: c.AuthProtocol, HasAuthKey: c.AuthKey != "", PrivProtocol: c.PrivProtocol,
@@ -92,12 +92,12 @@ func (c SNMPCredential) public() publicSNMPCredential {
 	}
 }
 
-func validateSNMPCredential(c *SNMPCredential) error {
+func validate(c *Credential) error {
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
 		return errors.New("credential name required")
 	}
-	if !inList(c.Version, SNMPVersions) {
+	if !inList(c.Version, Versions) {
 		return errors.New("version must be one of v1, v2c, v3")
 	}
 	if c.Port == 0 {
@@ -118,12 +118,12 @@ func validateSNMPCredential(c *SNMPCredential) error {
 		if c.SecurityName == "" {
 			return errors.New("security name required for v3")
 		}
-		if !inList(c.SecurityLevel, SNMPSecurityLevels) {
+		if !inList(c.SecurityLevel, SecurityLevels) {
 			return errors.New("invalid security level")
 		}
 		lvl := strings.ToLower(c.SecurityLevel)
 		if lvl == "authnopriv" || lvl == "authpriv" {
-			if !inList(c.AuthProtocol, SNMPAuthProtocols) {
+			if !inList(c.AuthProtocol, AuthProtocols) {
 				return errors.New("invalid auth protocol")
 			}
 			if c.AuthKey == "" {
@@ -131,7 +131,7 @@ func validateSNMPCredential(c *SNMPCredential) error {
 			}
 		}
 		if lvl == "authpriv" {
-			if !inList(c.PrivProtocol, SNMPPrivProtocols) {
+			if !inList(c.PrivProtocol, PrivProtocols) {
 				return errors.New("invalid privacy protocol")
 			}
 			if c.PrivKey == "" {
@@ -142,18 +142,30 @@ func validateSNMPCredential(c *SNMPCredential) error {
 	return nil
 }
 
-type snmpCredStore struct {
-	mu    sync.RWMutex
-	path  string
-	vault *vault.Vault              // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
-	creds map[string]SNMPCredential // id -> credential
+// KV abstracts where the store persists its JSON blob. The integrator supplies
+// the platform kv layer (file or postgres); a missing key must return an
+// os.ErrNotExist-wrapped error.
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
 }
 
-func newSNMPCredStore(path string, v *vault.Vault) (*snmpCredStore, error) {
+type Store struct {
+	mu    sync.RWMutex
+	path  string
+	kv    KV
+	vault *vault.Vault          // secret-custody envelope for community/auth/priv at rest (nil/dormant = plaintext)
+	creds map[string]Credential // id -> credential
+}
+
+func NewStore(path string, v *vault.Vault, kv KV) (*Store, error) {
 	if path == "" {
 		path = "/data/snmp_credentials.json"
 	}
-	s := &snmpCredStore{path: path, vault: v, creds: make(map[string]SNMPCredential)}
+	if kv == nil {
+		return nil, errors.New("snmpcred.NewStore: kv is required")
+	}
+	s := &Store{path: path, kv: kv, vault: v, creds: make(map[string]Credential)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -167,12 +179,12 @@ const (
 	snmpFieldPrivKey   = "snmp.priv_key"
 )
 
-func (s *snmpCredStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *Store) load() error {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		return err
 	}
-	var list []SNMPCredential
+	var list []Credential
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
@@ -194,22 +206,22 @@ func (s *snmpCredStore) load() error {
 // writes follow the blob store's last-writer-wins semantics (bounded config set;
 // see TRACKER #33). The collector already re-Resolves every poll, so a rotated
 // or deleted credential converges within max(reload interval, poll interval).
-func (s *snmpCredStore) reload() error {
-	b, err := kvLoad(s.path)
+func (s *Store) Reload() error {
+	b, err := s.kv.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		s.mu.Lock()
-		s.creds = make(map[string]SNMPCredential)
+		s.creds = make(map[string]Credential)
 		s.mu.Unlock()
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	var list []SNMPCredential
+	var list []Credential
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
-	next := make(map[string]SNMPCredential, len(list))
+	next := make(map[string]Credential, len(list))
 	for _, c := range list {
 		dec, err := s.decryptSecrets(c)
 		if err != nil {
@@ -223,8 +235,8 @@ func (s *snmpCredStore) reload() error {
 	return nil
 }
 
-func (s *snmpCredStore) flushLocked() error {
-	list := make([]SNMPCredential, 0, len(s.creds))
+func (s *Store) flushLocked() error {
+	list := make([]Credential, 0, len(s.creds))
 	for _, c := range s.creds {
 		enc, err := s.encryptSecrets(c) // encrypt a copy — the in-memory map stays plaintext for Resolve
 		if err != nil {
@@ -237,12 +249,12 @@ func (s *snmpCredStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
 // encryptSecrets returns a copy of c with its reversible secret fields encrypted
 // at rest under the owning tenant's DEK. Dormant vault.Vault → unchanged (plaintext).
-func (s *snmpCredStore) encryptSecrets(c SNMPCredential) (SNMPCredential, error) {
+func (s *Store) encryptSecrets(c Credential) (Credential, error) {
 	var err error
 	if c.Community, err = s.vault.Encrypt(c.TenantID, snmpFieldCommunity, c.Community); err != nil {
 		return c, err
@@ -257,7 +269,7 @@ func (s *snmpCredStore) encryptSecrets(c SNMPCredential) (SNMPCredential, error)
 }
 
 // decryptSecrets reverses encryptSecrets (legacy plaintext passes through).
-func (s *snmpCredStore) decryptSecrets(c SNMPCredential) (SNMPCredential, error) {
+func (s *Store) decryptSecrets(c Credential) (Credential, error) {
 	var err error
 	if c.Community, err = s.vault.Decrypt(c.TenantID, snmpFieldCommunity, c.Community); err != nil {
 		return c, err
@@ -271,12 +283,12 @@ func (s *snmpCredStore) decryptSecrets(c SNMPCredential) (SNMPCredential, error)
 	return c, nil
 }
 
-func (s *snmpCredStore) List() []publicSNMPCredential {
+func (s *Store) List() []Public {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]publicSNMPCredential, 0, len(s.creds))
+	out := make([]Public, 0, len(s.creds))
 	for _, c := range s.creds {
-		out = append(out, c.public())
+		out = append(out, c.Public())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -284,20 +296,20 @@ func (s *snmpCredStore) List() []publicSNMPCredential {
 
 // Get returns the redacted credential for an id (for tenant-ownership checks at
 // the API boundary), without exposing secrets.
-func (s *snmpCredStore) Get(id string) (publicSNMPCredential, bool) {
+func (s *Store) Get(id string) (Public, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c, ok := s.creds[id]
 	if !ok {
-		return publicSNMPCredential{}, false
+		return Public{}, false
 	}
-	return c.public(), true
+	return c.Public(), true
 }
 
 // Resolve returns the full (secret-bearing) credential for a device's
 // credential_ref. Matches by id or by name (case-insensitive). Used by the
 // poller, not the API.
-func (s *snmpCredStore) Resolve(ref string) (SNMPCredential, bool) {
+func (s *Store) Resolve(ref string) (Credential, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if c, ok := s.creds[ref]; ok {
@@ -308,16 +320,16 @@ func (s *snmpCredStore) Resolve(ref string) (SNMPCredential, bool) {
 			return c, true
 		}
 	}
-	return SNMPCredential{}, false
+	return Credential{}, false
 }
 
 // ResolveAll returns every stored credential (secrets included) in stable id
 // order — the credential sentinel's candidate set for bounded fallback probing.
 // Callers must keep tenant scoping: filter by the device's tenant before use.
-func (s *snmpCredStore) ResolveAll() []SNMPCredential {
+func (s *Store) ResolveAll() []Credential {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]SNMPCredential, 0, len(s.creds))
+	out := make([]Credential, 0, len(s.creds))
 	for _, c := range s.creds {
 		out = append(out, c)
 	}
@@ -327,14 +339,14 @@ func (s *snmpCredStore) ResolveAll() []SNMPCredential {
 
 // Upsert creates or replaces a credential. On update, empty secret fields keep
 // the existing stored secret (so the UI need not re-send them).
-func (s *snmpCredStore) Upsert(c SNMPCredential) (publicSNMPCredential, error) {
+func (s *Store) Upsert(c Credential) (Public, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if c.ID == "" {
 		c.ID = slugify(c.Name)
 	}
 	if c.ID == "" {
-		return publicSNMPCredential{}, errors.New("credential name must contain letters or digits")
+		return Public{}, errors.New("credential name must contain letters or digits")
 	}
 	if existing, ok := s.creds[c.ID]; ok {
 		if c.Community == "" {
@@ -356,17 +368,32 @@ func (s *snmpCredStore) Upsert(c SNMPCredential) (publicSNMPCredential, error) {
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
-	if err := validateSNMPCredential(&c); err != nil {
-		return publicSNMPCredential{}, err
+	if err := validate(&c); err != nil {
+		return Public{}, err
 	}
 	s.creds[c.ID] = c
 	if err := s.flushLocked(); err != nil {
-		return publicSNMPCredential{}, err
+		return Public{}, err
 	}
-	return c.public(), nil
+	return c.Public(), nil
 }
 
-func (s *snmpCredStore) Delete(id string) error {
+// slugify mirrors the integrator's identifier rule (rbac.go) for name-derived
+// ids; duplicated per the no-shared-utils rule.
+func slugify(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_':
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.creds[id]; !ok {

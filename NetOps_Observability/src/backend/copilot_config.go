@@ -17,7 +17,7 @@ import (
 // but the provider and model are now operator-configurable at runtime via the
 // admin UI instead of being env-only — so you can switch Claude models, or to
 // OpenAI, without editing .env and restarting. Persisted via the kv store (file
-// or postgres) under one key, mirroring tenantStore/snmpCredStore.
+// or postgres) under one key, mirroring tenantStore/snmpcred.Store.
 //
 // The API KEY may be supplied two ways: out-of-band via the COPILOT_API_KEY /
 // per-provider env vars (a secret never persisted by us), OR pasted in the

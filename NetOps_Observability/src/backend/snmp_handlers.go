@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/snmpcred"
 	"strings"
 )
 
@@ -18,10 +19,10 @@ func (s *server) handleSNMPOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"versions":        SNMPVersions,
-		"security_levels": SNMPSecurityLevels,
-		"auth_protocols":  SNMPAuthProtocols,
-		"priv_protocols":  SNMPPrivProtocols,
+		"versions":        snmpcred.Versions,
+		"security_levels": snmpcred.SecurityLevels,
+		"auth_protocols":  snmpcred.AuthProtocols,
+		"priv_protocols":  snmpcred.PrivProtocols,
 	})
 }
 
@@ -35,7 +36,7 @@ func (s *server) handleSNMPCreds(w http.ResponseWriter, r *http.Request) {
 		// Tenant isolation: a scoped principal sees only its own credentials;
 		// global/untagged creds are platform-owned (visible cross-tenant only).
 		tenant, cross := principalTenant(claims)
-		out := make([]publicSNMPCredential, 0)
+		out := make([]snmpcred.Public, 0)
 		for _, c := range s.snmpCreds.List() {
 			if sameTenant(c.TenantID, tenant, cross) {
 				out = append(out, c)
@@ -47,7 +48,7 @@ func (s *server) handleSNMPCreds(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		var c SNMPCredential
+		var c snmpcred.Credential
 		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -96,7 +97,7 @@ func (s *server) handleSNMPCredByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errors.New("no such credential"))
 			return
 		}
-		var c SNMPCredential
+		var c snmpcred.Credential
 		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
