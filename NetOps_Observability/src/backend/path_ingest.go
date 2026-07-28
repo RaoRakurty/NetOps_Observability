@@ -639,7 +639,7 @@ func (s *server) appEndpointBindings(ctx context.Context, tenant string, nc netC
  ORDER BY last_seen DESC
  LIMIT 500
  FORMAT JSON`
-	rows, err := chSelect(ctx, chScopeFor(tenant, false), sql, "worker:pathgraph-facts")
+	rows, err := chSelect(ctx, pathgraph.ScopeFor(tenant, false), sql, "worker:pathgraph-facts")
 	if err != nil {
 		logWarn("pathgraph", "app-identity facts unavailable", map[string]any{"err": err.Error()})
 		return nil

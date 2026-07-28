@@ -24,6 +24,7 @@ import (
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
+	"netops/backend/pathgraph"
 	"netops/backend/portintel"
 	"netops/backend/wireless"
 	"os"
@@ -132,7 +133,7 @@ type server struct {
 	// storage (PG registries + CH observation/hop streams, or in-memory on the file
 	// backend); pathFacts and corrPath are the DI seams for the §3 fact base and the
 	// correlation→path linkage (nil = the real inventories / ClickHouse).
-	pathGraph       pathGraphStore
+	pathGraph       pathgraph.Store
 	pathFacts       pathFactSource
 	corrPath        corrPathRef
 	remotePaths     *remotePathStore      // remote-vantage traceroute pushes (POST /api/probe/paths)
@@ -895,6 +896,38 @@ func newTicketingStore() ticketing.Store {
 		return ticketing.NewPGStore(rlsPG{db: ps.db})
 	}
 	return ticketing.NewMemStore()
+}
+
+// newPathGraphStore picks the backend: pg registries + ClickHouse streams under
+// STORE_BACKEND=postgres, else in-memory (with env-tunable retention).
+func newPathGraphStore() pathgraph.Store {
+	if ps, ok := backend.(*pgStore); ok {
+		return pathgraph.NewPGCHStore(rlsPG{db: ps.db}, chSeam{})
+	}
+	st := pathgraph.NewMemStoreWithRetention(envInt("PATH_GRAPH_MEM_RETENTION", pathgraph.DefaultObsRetention))
+	st.SetInfof(func(msg string, fields map[string]any) { logInfo("pathgraph", msg, fields) })
+	return st
+}
+
+// chSeam adapts main's ClickHouse plumbing to pathgraph.CH. Exec preserves the
+// no-ClickHouse-configured → no-op semantics the purge relied on.
+type chSeam struct{}
+
+func (chSeam) InsertJSON(ctx context.Context, table, scope string, rows []map[string]any) error {
+	return chInsertJSON(ctx, table, scope, rows)
+}
+func (chSeam) Select(ctx context.Context, scope, sql, comment string) ([]map[string]any, error) {
+	return chSelect(ctx, scope, sql, comment)
+}
+func (chSeam) Exec(sql string) error {
+	base := envOr("CLICKHOUSE_URL", "")
+	if base == "" {
+		return nil
+	}
+	if msg := chExecErr(base, sql); msg != "" {
+		return errors.New(msg)
+	}
+	return nil
 }
 
 func main() {

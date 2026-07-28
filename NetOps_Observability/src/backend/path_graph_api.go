@@ -209,7 +209,7 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 		out.Reason = "path graph storage is not enabled"
 		return out, http.StatusOK, nil
 	}
-	classes := liveOnly()
+	classes := pathgraph.LiveOnly()
 	if dc := strings.TrimSpace(dataClassParam); dc != "" {
 		if !cross {
 			// A tenant principal may never widen its own data-class window: synthetic /
@@ -242,7 +242,7 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 	// the path starts at the client). Rule: among FRESH observations of this
 	// destination, the most complete measured view (most hops) wins; ties go to
 	// the newest. With one vantage this degrades to plain newest.
-	cands, err := s.pathGraph.ListObservations(ctx, tenant, cross, ObservationFilter{
+	cands, err := s.pathGraph.ListObservations(ctx, tenant, cross, pathgraph.ObservationFilter{
 		DstAddress: ref.DstAddress, Protocol: ref.Protocol, VantageID: ref.VantageID,
 		DataClasses: classes, Limit: 20,
 	})
@@ -254,7 +254,7 @@ func (s *server) rcaPathSpine(ctx context.Context, tenant string, cross bool, sc
 		out.Reason = "no " + strings.Join(classes, "/") + " path observation exists for " + ref.DstAddress
 		return out, http.StatusOK, nil
 	}
-	obs, hops, def, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, ObservationFilter{
+	obs, hops, def, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, pathgraph.ObservationFilter{
 		PathID: pick.PathID, DstAddress: ref.DstAddress, VantageID: pick.VantageID,
 		DataClasses: classes, Limit: 1,
 	})
@@ -432,7 +432,7 @@ func (s *server) seamHintFromHistory(ctx context.Context, tenant string, cross b
 	if terminal == "" {
 		return nil
 	}
-	prior, priorHops, _, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, ObservationFilter{
+	prior, priorHops, _, found, err := s.pathGraph.LatestObservation(ctx, tenant, cross, pathgraph.ObservationFilter{
 		PathID: obs.PathID, Status: pathgraph.StatusComplete,
 		DataClasses: []string{obs.DataClass}, Limit: 1,
 	})

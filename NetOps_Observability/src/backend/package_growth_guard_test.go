@@ -146,7 +146,13 @@ import (
 //	                  pg via the DB seam; backend selection stayed in main.go;
 //	                  paging bounds + ErrPolicyConflict exported; orDefault
 //	                  stayed in main with its many consumers)
-const rootPackageCeiling = 247
+//	2026-07-28  246  path_graph_store.go → pathgraph/store.go (endpoints/
+//	                  definitions registries + observation/hop streams; mem
+//	                  with per-tenant retention + pg/CH hybrid backend; DB via
+//	                  rlsPG and a NEW pathgraph.CH seam — InsertJSON/Select/
+//	                  Exec — adapted by main's chSeam; token validators +
+//	                  ScopeFor/CHTime exported for the ingest boundary)
+const rootPackageCeiling = 246
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

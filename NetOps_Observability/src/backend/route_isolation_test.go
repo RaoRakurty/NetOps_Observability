@@ -88,7 +88,7 @@ var routeIsolationLedger = map[string]string{
 	// to the settings actions (tenant_governance_test.go).
 	"/api/settings/governance-audit":           "adminScoped",
 	"/api/correlations/undetermined-frequency": "scoped", // #80: chRows(chTenantScope) over corr_objects — a tenant ranks only its OWN undetermined gaps
-	"/api/rca/": "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathGraphStore (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
+	"/api/rca/": "scoped", // Service Path Graph §7 ordered spine: principalTenant → pathgraph.Store (tenant-keyed store / RLS+row-policy) + chTenantScope for the corr→path lookup; two-tenant isolation test = path_graph_isolation_test.go
 	// RCA Time Intelligence reliability rollups (#84) — aggregate ONLY the caller's
 	// own incidents: chRows injects chTenantScope, ClickHouse row policies enforce it
 	// (TestChTenantScope). A tenant never sees another tenant's MTTI/MTBF/offenders.

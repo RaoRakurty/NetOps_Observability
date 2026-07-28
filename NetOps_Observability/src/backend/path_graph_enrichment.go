@@ -303,7 +303,7 @@ func (s *server) startPathGraphEnrichment(ctx context.Context) {
 // and the engine's PathGraphView.for_tenant() slices it — the same trust model as
 // seams.json (the file never leaves the private enrichment volume).
 func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
-	classes := liveOnly()
+	classes := pathgraph.LiveOnly()
 	if raw := os.Getenv("PATH_GRAPH_EXPORT_CLASSES"); raw != "" {
 		classes = nil
 		for _, c := range splitAndTrim(raw) {
@@ -312,7 +312,7 @@ func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
 			}
 		}
 		if len(classes) == 0 {
-			classes = liveOnly() // an unparseable override fails CLOSED, to live-only
+			classes = pathgraph.LiveOnly() // an unparseable override fails CLOSED, to live-only
 		}
 	}
 	eps, err := s.pathGraph.ListEndpoints(ctx, "", true)
@@ -323,7 +323,7 @@ func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
 	if err != nil {
 		return pathGraphExport{}, err
 	}
-	obs, err := s.pathGraph.ListObservations(ctx, "", true, ObservationFilter{
+	obs, err := s.pathGraph.ListObservations(ctx, "", true, pathgraph.ObservationFilter{
 		DataClasses: classes, Limit: pathExportLimit(),
 	})
 	if err != nil {
@@ -341,7 +341,7 @@ func (s *server) pathGraphView(ctx context.Context) (pathGraphExport, error) {
 	hopsOf := map[string][]pathgraph.PathHop{}
 	picked := make([]pathgraph.PathObservation, 0, len(latest))
 	for _, o := range latest {
-		_, hops, _, found, err := s.pathGraph.LatestObservation(ctx, o.TenantID, false, ObservationFilter{
+		_, hops, _, found, err := s.pathGraph.LatestObservation(ctx, o.TenantID, false, pathgraph.ObservationFilter{
 			PathID: o.PathID, DataClasses: classes, Limit: 1,
 		})
 		if err != nil {

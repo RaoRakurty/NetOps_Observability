@@ -128,7 +128,7 @@ func getPath(t *testing.T, srv *httptest.Server, token, corrID, query string) (i
 // TestPathGraphTwoTenantIsolation is the §9 fixture.
 func TestPathGraphTwoTenantIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
@@ -225,8 +225,8 @@ func TestPathGraphTwoTenantIsolation(t *testing.T) {
 	// ── 5) the STORE itself never crosses (below the API, where the leak would be
 	//        invisible to a handler-level test) ──────────────────────────────────
 	ctx := context.Background()
-	obsA, _, _, ok, err := s.pathGraph.LatestObservation(ctx, a.tenant, false, ObservationFilter{
-		DstAddress: "10.60.10.10", DataClasses: liveOnly(), Limit: 1})
+	obsA, _, _, ok, err := s.pathGraph.LatestObservation(ctx, a.tenant, false, pathgraph.ObservationFilter{
+		DstAddress: "10.60.10.10", DataClasses: pathgraph.LiveOnly(), Limit: 1})
 	if err != nil || !ok || obsA.ObservationID != recA.Observation.ObservationID {
 		t.Fatalf("store: tenant A got %v (%v), want its own observation", obsA.ObservationID, err)
 	}
@@ -257,12 +257,12 @@ func TestPathGraphTwoTenantIsolation(t *testing.T) {
 	if err := s.pathGraph.PurgeRun(ctx, a.tenant, "", "run-A"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, ok, _ := s.pathGraph.LatestObservation(ctx, a.tenant, false, ObservationFilter{
-		DataClasses: liveOnly(), Limit: 1}); ok {
+	if _, _, _, ok, _ := s.pathGraph.LatestObservation(ctx, a.tenant, false, pathgraph.ObservationFilter{
+		DataClasses: pathgraph.LiveOnly(), Limit: 1}); ok {
 		t.Fatal("purge did not remove tenant A's run")
 	}
-	obsB, _, _, ok, err := s.pathGraph.LatestObservation(ctx, b.tenant, false, ObservationFilter{
-		DataClasses: liveOnly(), Limit: 1})
+	obsB, _, _, ok, err := s.pathGraph.LatestObservation(ctx, b.tenant, false, pathgraph.ObservationFilter{
+		DataClasses: pathgraph.LiveOnly(), Limit: 1})
 	if err != nil || !ok || obsB.ObservationID != recB.Observation.ObservationID {
 		t.Fatalf("purging tenant A's run destroyed tenant B's observation (%v, %v)", ok, err)
 	}
@@ -297,7 +297,7 @@ func assertRefs(t *testing.T, who string, sp pathSpineResponse, want []string) {
 // widen its own data-class window.
 func TestPathGraphDataClassExclusion(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	st, b := do(t, srv, "POST", "/api/orgs", admin, map[string]any{"name": "Org X"})
@@ -364,7 +364,7 @@ func TestPathGraphDataClassExclusion(t *testing.T) {
 // TestPathGraphStaleObservationDoesNotAnchor — §8, end to end through the API.
 func TestPathGraphStaleObservationDoesNotAnchor(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	facts := tenantFacts("", "i-LIVE", "i-NVA", "lan-sw", "wan-edge") // platform-tenant fixture
@@ -392,7 +392,7 @@ func TestPathGraphStaleObservationDoesNotAnchor(t *testing.T) {
 // must be explicit when there is nothing to render.
 func TestPathGraphNoObservationIsHonest(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	s.pathFacts = stubFacts{byTenant: map[string]pathgraph.PathFacts{}, nc: labNetContext()}
 	s.corrPath = stubCorrPath{byID: map[string]struct {
 		tenant string

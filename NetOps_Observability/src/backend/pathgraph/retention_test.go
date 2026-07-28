@@ -1,12 +1,10 @@
-package main
+package pathgraph
 
 import (
 	"context"
 	"fmt"
 	"testing"
 	"time"
-
-	"netops/backend/pathgraph"
 )
 
 // path_graph_retention_test.go — the in-memory path graph store is fed an
@@ -14,25 +12,25 @@ import (
 // Unbounded, that is a slow OOM whose read latency degrades in lockstep, so the
 // store must evict its oldest rows (and their hops) instead of growing.
 
-func retentionFixtures(tenant string) (pathgraph.PathDefinition, func(id string, at time.Time) (pathgraph.PathObservation, []pathgraph.PathHop)) {
-	def := pathgraph.PathDefinition{
+func retentionFixtures(tenant string) (PathDefinition, func(id string, at time.Time) (PathObservation, []PathHop)) {
+	def := PathDefinition{
 		PathID: "pd-retain", SrcAddress: "172.40.40.200", DstAddress: "10.60.10.10",
 		Direction: "forward", Protocol: "icmp", VantageID: "lan-vantage-1",
-		Provenance: pathgraph.Provenance{TenantID: tenant, DataClass: pathgraph.DataClassLive,
+		Provenance: Provenance{TenantID: tenant, DataClass: DataClassLive,
 			Environment: "lab", ProvenanceID: "pv-def", ProducerID: "test", RunID: "run-def"},
 	}
-	mk := func(id string, at time.Time) (pathgraph.PathObservation, []pathgraph.PathHop) {
-		o := pathgraph.PathObservation{
-			ObservationID: id, PathID: def.PathID, ObservedAt: at, Method: pathgraph.MethodTracerouteICMP,
-			VantageID: def.VantageID, Status: pathgraph.StatusComplete, ContractVersion: pathgraph.ContractVersion,
-			Provenance: pathgraph.Provenance{TenantID: tenant, DataClass: pathgraph.DataClassLive,
+	mk := func(id string, at time.Time) (PathObservation, []PathHop) {
+		o := PathObservation{
+			ObservationID: id, PathID: def.PathID, ObservedAt: at, Method: MethodTracerouteICMP,
+			VantageID: def.VantageID, Status: StatusComplete, ContractVersion: ContractVersion,
+			Provenance: Provenance{TenantID: tenant, DataClass: DataClassLive,
 				Environment: "lab", ProvenanceID: "pv-" + id, ProducerID: "test", RunID: "run-" + id},
 		}
-		hops := []pathgraph.PathHop{{
-			ObservationID: id, HopIndex: 1, State: pathgraph.HopResponding, ObservedAddress: "172.40.40.1",
-			Transformation: pathgraph.TransformNone, ResolutionMethod: pathgraph.MethodUnresolved,
-			Confidence: pathgraph.ConfUnknown, Kind: pathgraph.KindUnknown, EvidenceRef: "pv-" + id,
-			ObservedAt: at, TenantID: tenant, DataClass: pathgraph.DataClassLive,
+		hops := []PathHop{{
+			ObservationID: id, HopIndex: 1, State: HopResponding, ObservedAddress: "172.40.40.1",
+			Transformation: TransformNone, ResolutionMethod: MethodUnresolved,
+			Confidence: ConfUnknown, Kind: KindUnknown, EvidenceRef: "pv-" + id,
+			ObservedAt: at, TenantID: tenant, DataClass: DataClassLive,
 		}}
 		return o, hops
 	}
@@ -43,7 +41,7 @@ func TestMemPathGraphStoreEvictsOldestObservations(t *testing.T) {
 	const limit = 10
 	ctx := context.Background()
 	tenant := "t_retain"
-	m := newMemPathGraphStoreWithRetention(limit)
+	m := NewMemStoreWithRetention(limit)
 	def, mk := retentionFixtures(tenant)
 	if err := m.UpsertPathDefinition(ctx, def); err != nil {
 		t.Fatalf("upsert def: %v", err)
@@ -70,7 +68,7 @@ func TestMemPathGraphStoreEvictsOldestObservations(t *testing.T) {
 		t.Fatalf("hop sets retained = %d, want %d (orphaned hops leak)", gotHops, limit)
 	}
 
-	f := ObservationFilter{DataClasses: []string{pathgraph.DataClassLive}}
+	f := ObservationFilter{DataClasses: []string{DataClassLive}}
 	list, err := m.ListObservations(ctx, tenant, false, f)
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -101,7 +99,7 @@ func TestMemPathGraphStoreEvictsOldestObservations(t *testing.T) {
 // history out of the store.
 func TestMemPathGraphStoreEvictionIsPerTenant(t *testing.T) {
 	ctx := context.Background()
-	m := newMemPathGraphStoreWithRetention(3)
+	m := NewMemStoreWithRetention(3)
 	base := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
 
 	for _, tenant := range []string{"noisy", "quiet"} {
@@ -118,7 +116,7 @@ func TestMemPathGraphStoreEvictionIsPerTenant(t *testing.T) {
 		}
 	}
 
-	f := ObservationFilter{DataClasses: []string{pathgraph.DataClassLive}}
+	f := ObservationFilter{DataClasses: []string{DataClassLive}}
 	noisy, err := m.ListObservations(ctx, "noisy", false, f)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +138,7 @@ func TestMemPathGraphStoreEvictionIsPerTenant(t *testing.T) {
 func TestMemPathGraphStoreRetentionDisabled(t *testing.T) {
 	ctx := context.Background()
 	tenant := "t_unbounded"
-	m := newMemPathGraphStoreWithRetention(0)
+	m := NewMemStoreWithRetention(0)
 	def, mk := retentionFixtures(tenant)
 	base := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 25; i++ {
@@ -154,7 +152,7 @@ func TestMemPathGraphStoreRetentionDisabled(t *testing.T) {
 	if len(m.obs[tenant]) != 25 {
 		t.Fatalf("retained %d, want all 25 when the cap is disabled", len(m.obs[tenant]))
 	}
-	if got := newMemPathGraphStore().maxObs; got != defaultPathObsRetention {
-		t.Fatalf("default store retention = %d, want %d", got, defaultPathObsRetention)
+	if got := NewMemStore().maxObs; got != DefaultObsRetention {
+		t.Fatalf("default store retention = %d, want %d", got, DefaultObsRetention)
 	}
 }

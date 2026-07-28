@@ -1,4 +1,4 @@
-package main
+package pathgraph
 
 import (
 	"context"
@@ -14,16 +14,16 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"netops/backend/internal/chschema"
-	"netops/backend/pathgraph"
+	"netops/backend/internal/metricval"
 )
 
 // path_graph_store.go — persistence seam for the Service Path Graph (frozen
 // contract v1). Two backends, selected exactly like every other store:
 //
-//	memPathGraphStore  — the default dependency-free build (dev + tests). Tenant
+//	MemStore  — the default dependency-free build (dev + tests). Tenant
 //	                     isolation is enforced IN THE STORE (CLAUDE.md §3a.4): every
 //	                     map is keyed by tenant and there is no unscoped "list all".
-//	pgchPathGraphStore — STORE_BACKEND=postgres. Registries (Endpoint,
+//	PGCHStore — STORE_BACKEND=postgres. Registries (Endpoint,
 //	                     PathDefinition) in Postgres under the tenant_iso FORCE-RLS
 //	                     policy via withTenant; the immutable observation/hop streams
 //	                     in ClickHouse behind the strict tenant_scope row policy.
@@ -47,7 +47,8 @@ type ObservationFilter struct {
 }
 
 // liveOnly is the customer/default filter (§1).
-func liveOnly() []string { return []string{pathgraph.DataClassLive} }
+// LiveOnly is the default data-class filter (live observations only).
+func LiveOnly() []string { return []string{DataClassLive} }
 
 func (f ObservationFilter) allows(dataClass string) bool {
 	for _, c := range f.DataClasses {
@@ -58,7 +59,7 @@ func (f ObservationFilter) allows(dataClass string) bool {
 	return false
 }
 
-func (f ObservationFilter) matches(o pathgraph.PathObservation, d pathgraph.PathDefinition) bool {
+func (f ObservationFilter) matches(o PathObservation, d PathDefinition) bool {
 	if !f.allows(o.DataClass) {
 		return false
 	}
@@ -83,40 +84,32 @@ func (f ObservationFilter) matches(o pathgraph.PathObservation, d pathgraph.Path
 	return true
 }
 
-// pathGraphStore is the storage contract. Every method takes the principal's
+// Store is the storage contract. Every method takes the principal's
 // (tenant, cross) — there is no unscoped accessor, by design.
-type pathGraphStore interface {
-	UpsertEndpoint(ctx context.Context, ep pathgraph.Endpoint) error
-	ListEndpoints(ctx context.Context, tenant string, cross bool) ([]pathgraph.Endpoint, error)
-	UpsertPathDefinition(ctx context.Context, pd pathgraph.PathDefinition) error
-	ListPathDefinitions(ctx context.Context, tenant string, cross bool) ([]pathgraph.PathDefinition, error)
+type Store interface {
+	UpsertEndpoint(ctx context.Context, ep Endpoint) error
+	ListEndpoints(ctx context.Context, tenant string, cross bool) ([]Endpoint, error)
+	UpsertPathDefinition(ctx context.Context, pd PathDefinition) error
+	ListPathDefinitions(ctx context.Context, tenant string, cross bool) ([]PathDefinition, error)
 	// AppendObservation writes ONE immutable observation + its ordered hops. It never
 	// updates an existing observation (§2.3) — a new run is a new row. The path
 	// definition is passed alongside so the write can denormalize the path identity
 	// (src/dst/protocol/port/direction/context) into the observation row — that is
 	// what the read side filters on ("the latest live path to 10.60.10.10").
-	AppendObservation(ctx context.Context, def pathgraph.PathDefinition, obs pathgraph.PathObservation, hops []pathgraph.PathHop) error
+	AppendObservation(ctx context.Context, def PathDefinition, obs PathObservation, hops []PathHop) error
 	// LatestObservation returns the newest observation matching the filter, with its
 	// ordered hops and its path definition. "Current path" is this QUERY, never a
 	// mutable row.
-	LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error)
+	LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (PathObservation, []PathHop, PathDefinition, bool, error)
 	// ListObservations returns matching observations newest-first (route-change
 	// history, §8).
-	ListObservations(ctx context.Context, tenant string, cross bool, f ObservationFilter) ([]pathgraph.PathObservation, error)
+	ListObservations(ctx context.Context, tenant string, cross bool, f ObservationFilter) ([]PathObservation, error)
 	// PurgeRun deletes everything a scenario/run produced, keyed on (tenant,
 	// scenario_id/run_id) ONLY (§1) — never on names, IP patterns or substrings.
 	PurgeRun(ctx context.Context, tenant, scenarioID, runID string) error
 }
 
 var errPathScopeRequired = errors.New("path graph: a data_class filter is required (fail closed)")
-
-// newPathGraphStore picks the backend, like newTopologyStore. Always non-nil.
-func newPathGraphStore() pathGraphStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgchPathGraphStore{db: ps.db}
-	}
-	return newMemPathGraphStore()
-}
 
 // ── in-memory backend (default build, dev, tests) ────────────────────────────
 
@@ -126,41 +119,71 @@ func newPathGraphStore() pathGraphStore {
 // read latency degrades in lockstep with its memory. Oldest-first eviction
 // keeps the recent route-change history, which is all this backend is for
 // (Postgres is the durable one). PATH_GRAPH_MEM_RETENTION overrides.
-const defaultPathObsRetention = 5000
+const DefaultObsRetention = 5000
 
-type memPathGraphStore struct {
+type MemStore struct {
 	mu sync.RWMutex
 	// EVERY map is tenant-keyed. There is deliberately no flat collection to
 	// accidentally range over: a cross-tenant read has to be spelled out.
-	endpoints   map[string]map[string]pathgraph.Endpoint       // tenant → endpoint_id → ep
-	definitions map[string]map[string]pathgraph.PathDefinition // tenant → path_id → def
-	obs         map[string][]pathgraph.PathObservation         // tenant → observations, oldest-first, capped at maxObs
-	hops        map[string]map[string][]pathgraph.PathHop      // tenant → observation_id → ordered hops
-	maxObs      int                                            // per-tenant observation cap (0 = unbounded)
-	evicted     map[string]uint64                              // tenant → observations dropped by retention (for throttled logging)
+	endpoints   map[string]map[string]Endpoint       // tenant → endpoint_id → ep
+	definitions map[string]map[string]PathDefinition // tenant → path_id → def
+	obs         map[string][]PathObservation         // tenant → observations, oldest-first, capped at maxObs
+	hops        map[string]map[string][]PathHop      // tenant → observation_id → ordered hops
+	maxObs      int                                  // per-tenant observation cap (0 = unbounded)
+	evicted     map[string]uint64                    // tenant → observations dropped by retention (for throttled logging)
+	infof       func(msg string, fields map[string]any)
 }
 
-func newMemPathGraphStore() *memPathGraphStore {
-	return newMemPathGraphStoreWithRetention(envInt("PATH_GRAPH_MEM_RETENTION", defaultPathObsRetention))
+// SetInfof wires the throttled eviction log line to the integrator's structured
+// logger (default: silent — the counter still advances).
+func (m *MemStore) SetInfof(f func(msg string, fields map[string]any)) { m.infof = f }
+
+func NewMemStore() *MemStore {
+	return NewMemStoreWithRetention(DefaultObsRetention)
 }
 
-func newMemPathGraphStoreWithRetention(maxObs int) *memPathGraphStore {
+func NewMemStoreWithRetention(maxObs int) *MemStore {
 	if maxObs < 0 {
 		maxObs = 0
 	}
-	return &memPathGraphStore{
-		endpoints:   map[string]map[string]pathgraph.Endpoint{},
-		definitions: map[string]map[string]pathgraph.PathDefinition{},
-		obs:         map[string][]pathgraph.PathObservation{},
-		hops:        map[string]map[string][]pathgraph.PathHop{},
+	return &MemStore{
+		endpoints:   map[string]map[string]Endpoint{},
+		definitions: map[string]map[string]PathDefinition{},
+		obs:         map[string][]PathObservation{},
+		hops:        map[string]map[string][]PathHop{},
 		maxObs:      maxObs,
 		evicted:     map[string]uint64{},
 	}
 }
 
+func (m *MemStore) logInfof(msg string, fields map[string]any) {
+	if m.infof != nil {
+		m.infof(msg, fields)
+	}
+}
+
+// normTenant mirrors the integrator's tenant-id normalization (duplicated per
+// the no-shared-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// DB is the injected relational seam (the portintel.DB idiom): run fn inside a
+// FORCE-RLS transaction scoped to tenant (or unscoped for cross).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// CH is the injected ClickHouse seam. Exec covers the purge DELETEs; an
+// integrator with no ClickHouse configured returns nil from Exec and errors
+// from Select (matching the platform adapter's behavior).
+type CH interface {
+	InsertJSON(ctx context.Context, table, scope string, rows []map[string]any) error
+	Select(ctx context.Context, scope, sql, comment string) ([]map[string]any, error)
+	Exec(sql string) error
+}
+
 // tenantsFor is the ONLY place a cross-tenant read is expressible, and it demands
 // the caller pass cross=true explicitly (the platform principal).
-func (m *memPathGraphStore) tenantsFor(tenant string, cross bool) []string {
+func (m *MemStore) tenantsFor(tenant string, cross bool) []string {
 	if !cross {
 		return []string{normTenant(tenant)}
 	}
@@ -182,7 +205,7 @@ func (m *memPathGraphStore) tenantsFor(tenant string, cross bool) []string {
 	return out
 }
 
-func (m *memPathGraphStore) UpsertEndpoint(_ context.Context, ep pathgraph.Endpoint) error {
+func (m *MemStore) UpsertEndpoint(_ context.Context, ep Endpoint) error {
 	if err := ep.Validate(); err != nil {
 		return err
 	}
@@ -191,16 +214,16 @@ func (m *memPathGraphStore) UpsertEndpoint(_ context.Context, ep pathgraph.Endpo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.endpoints[t] == nil {
-		m.endpoints[t] = map[string]pathgraph.Endpoint{}
+		m.endpoints[t] = map[string]Endpoint{}
 	}
 	m.endpoints[t][ep.EndpointID] = ep
 	return nil
 }
 
-func (m *memPathGraphStore) ListEndpoints(_ context.Context, tenant string, cross bool) ([]pathgraph.Endpoint, error) {
+func (m *MemStore) ListEndpoints(_ context.Context, tenant string, cross bool) ([]Endpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []pathgraph.Endpoint{}
+	out := []Endpoint{}
 	for _, t := range m.tenantsFor(tenant, cross) {
 		for _, ep := range m.endpoints[t] {
 			out = append(out, ep)
@@ -210,7 +233,7 @@ func (m *memPathGraphStore) ListEndpoints(_ context.Context, tenant string, cros
 	return out, nil
 }
 
-func (m *memPathGraphStore) UpsertPathDefinition(_ context.Context, pd pathgraph.PathDefinition) error {
+func (m *MemStore) UpsertPathDefinition(_ context.Context, pd PathDefinition) error {
 	if err := pd.Validate(); err != nil {
 		return err
 	}
@@ -219,16 +242,16 @@ func (m *memPathGraphStore) UpsertPathDefinition(_ context.Context, pd pathgraph
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.definitions[t] == nil {
-		m.definitions[t] = map[string]pathgraph.PathDefinition{}
+		m.definitions[t] = map[string]PathDefinition{}
 	}
 	m.definitions[t][pd.PathID] = pd
 	return nil
 }
 
-func (m *memPathGraphStore) ListPathDefinitions(_ context.Context, tenant string, cross bool) ([]pathgraph.PathDefinition, error) {
+func (m *MemStore) ListPathDefinitions(_ context.Context, tenant string, cross bool) ([]PathDefinition, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []pathgraph.PathDefinition{}
+	out := []PathDefinition{}
 	for _, t := range m.tenantsFor(tenant, cross) {
 		for _, pd := range m.definitions[t] {
 			out = append(out, pd)
@@ -238,7 +261,7 @@ func (m *memPathGraphStore) ListPathDefinitions(_ context.Context, tenant string
 	return out, nil
 }
 
-func (m *memPathGraphStore) AppendObservation(_ context.Context, _ pathgraph.PathDefinition, o pathgraph.PathObservation, hops []pathgraph.PathHop) error {
+func (m *MemStore) AppendObservation(_ context.Context, _ PathDefinition, o PathObservation, hops []PathHop) error {
 	if err := o.Validate(); err != nil {
 		return err
 	}
@@ -258,9 +281,9 @@ func (m *memPathGraphStore) AppendObservation(_ context.Context, _ pathgraph.Pat
 	defer m.mu.Unlock()
 	m.obs[t] = append(m.obs[t], o)
 	if m.hops[t] == nil {
-		m.hops[t] = map[string][]pathgraph.PathHop{}
+		m.hops[t] = map[string][]PathHop{}
 	}
-	ordered := make([]pathgraph.PathHop, len(hops))
+	ordered := make([]PathHop, len(hops))
 	copy(ordered, hops)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].HopIndex < ordered[j].HopIndex })
 	for i := range ordered {
@@ -275,7 +298,7 @@ func (m *memPathGraphStore) AppendObservation(_ context.Context, _ pathgraph.Pat
 // each evicted observation's hops with it (they are unreachable once the
 // observation is gone, and leaving them behind would recreate the same leak one
 // map down). Caller holds m.mu.
-func (m *memPathGraphStore) evictOldestLocked(tenant string) {
+func (m *MemStore) evictOldestLocked(tenant string) {
 	if m.maxObs <= 0 {
 		return
 	}
@@ -286,7 +309,7 @@ func (m *memPathGraphStore) evictOldestLocked(tenant string) {
 	dropped := m.obs[tenant][:over]
 	// Re-slice into a fresh array so the evicted observations become garbage
 	// rather than staying alive behind the slice header.
-	kept := make([]pathgraph.PathObservation, len(m.obs[tenant])-over)
+	kept := make([]PathObservation, len(m.obs[tenant])-over)
 	copy(kept, m.obs[tenant][over:])
 	m.obs[tenant] = kept
 	for _, o := range dropped {
@@ -298,20 +321,20 @@ func (m *memPathGraphStore) evictOldestLocked(tenant string) {
 	prev := m.evicted[tenant]
 	m.evicted[tenant] = prev + uint64(over)
 	if prev == 0 || prev/uint64(m.maxObs) != m.evicted[tenant]/uint64(m.maxObs) {
-		logInfo("pathgraph", "evicting oldest in-memory path observations", map[string]any{
+		m.logInfof("evicting oldest in-memory path observations", map[string]any{
 			"tenant": tenant, "evicted_total": m.evicted[tenant], "retained": len(kept), "cap": m.maxObs,
 		})
 	}
 }
 
-func (m *memPathGraphStore) LatestObservation(_ context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error) {
+func (m *MemStore) LatestObservation(_ context.Context, tenant string, cross bool, f ObservationFilter) (PathObservation, []PathHop, PathDefinition, bool, error) {
 	if len(f.DataClasses) == 0 {
-		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, errPathScopeRequired
+		return PathObservation{}, nil, PathDefinition{}, false, errPathScopeRequired
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var best pathgraph.PathObservation
-	var bestDef pathgraph.PathDefinition
+	var best PathObservation
+	var bestDef PathDefinition
 	var bestTenant string
 	found := false
 	for _, t := range m.tenantsFor(tenant, cross) {
@@ -326,19 +349,19 @@ func (m *memPathGraphStore) LatestObservation(_ context.Context, tenant string, 
 		}
 	}
 	if !found {
-		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, nil
+		return PathObservation{}, nil, PathDefinition{}, false, nil
 	}
-	hops := append([]pathgraph.PathHop(nil), m.hops[bestTenant][best.ObservationID]...)
+	hops := append([]PathHop(nil), m.hops[bestTenant][best.ObservationID]...)
 	return best, hops, bestDef, true, nil
 }
 
-func (m *memPathGraphStore) ListObservations(_ context.Context, tenant string, cross bool, f ObservationFilter) ([]pathgraph.PathObservation, error) {
+func (m *MemStore) ListObservations(_ context.Context, tenant string, cross bool, f ObservationFilter) ([]PathObservation, error) {
 	if len(f.DataClasses) == 0 {
 		return nil, errPathScopeRequired
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := []pathgraph.PathObservation{}
+	out := []PathObservation{}
 	for _, t := range m.tenantsFor(tenant, cross) {
 		for _, o := range m.obs[t] {
 			if f.matches(o, m.definitions[t][o.PathID]) {
@@ -354,12 +377,12 @@ func (m *memPathGraphStore) ListObservations(_ context.Context, tenant string, c
 }
 
 // PurgeRun — cleanup on (tenant, scenario_id/run_id) ONLY (§1).
-func (m *memPathGraphStore) PurgeRun(_ context.Context, tenant, scenarioID, runID string) error {
+func (m *MemStore) PurgeRun(_ context.Context, tenant, scenarioID, runID string) error {
 	if scenarioID == "" && runID == "" {
 		return errors.New("purge requires a scenario_id or run_id (§1: never a name/IP pattern)")
 	}
 	t := normTenant(tenant)
-	match := func(p pathgraph.Provenance) bool {
+	match := func(p Provenance) bool {
 		if scenarioID != "" && p.ScenarioID != scenarioID {
 			return false
 		}
@@ -394,11 +417,16 @@ func (m *memPathGraphStore) PurgeRun(_ context.Context, tenant, scenarioID, runI
 
 // ── Postgres (registries) + ClickHouse (streams) backend ─────────────────────
 
-type pgchPathGraphStore struct {
-	db *pgDB
+type PGCHStore struct {
+	db DB
+	ch CH
 }
 
-func (s *pgchPathGraphStore) UpsertEndpoint(ctx context.Context, ep pathgraph.Endpoint) error {
+// NewPGCHStore builds the pg-registries + ClickHouse-streams backend over the
+// injected seams.
+func NewPGCHStore(db DB, ch CH) *PGCHStore { return &PGCHStore{db: db, ch: ch} }
+
+func (s *PGCHStore) UpsertEndpoint(ctx context.Context, ep Endpoint) error {
 	if err := ep.Validate(); err != nil {
 		return err
 	}
@@ -410,7 +438,7 @@ func (s *pgchPathGraphStore) UpsertEndpoint(ctx context.Context, ep pathgraph.En
 	}
 	// Written at platform scope: the writer (the ingester) spans tenants and each
 	// row carries its own tenant_id, which the RLS WITH CHECK validates.
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO path_endpoints (tenant_id, endpoint_id, address, address_family, network_context, kind,
         resolved_entity_ref, resolution_method, confidence, valid_from, valid_to, evidence_ref,
@@ -428,16 +456,16 @@ ON CONFLICT (tenant_id, endpoint_id) DO UPDATE SET
 			normTenant(ep.TenantID), ep.EndpointID, ep.Address, ep.AddressFamily, ep.NetworkContext, ep.Kind,
 			ep.ResolvedEntityRef, ep.ResolutionMethod, ep.Confidence, ep.ValidFrom, ep.ValidTo, ep.EvidenceRef,
 			ep.DataClass, ep.Environment, ep.ScenarioID, ep.RunID, ep.ProducerID, ep.ProvenanceID,
-			pathgraph.ContractVersion, data)
+			ContractVersion, data)
 		return err
 	})
 }
 
-func (s *pgchPathGraphStore) ListEndpoints(ctx context.Context, tenant string, cross bool) ([]pathgraph.Endpoint, error) {
+func (s *PGCHStore) ListEndpoints(ctx context.Context, tenant string, cross bool) ([]Endpoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out := []pathgraph.Endpoint{}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := []Endpoint{}
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT data FROM path_endpoints ORDER BY tenant_id, endpoint_id LIMIT 5000`)
 		if err != nil {
 			return err
@@ -448,7 +476,7 @@ func (s *pgchPathGraphStore) ListEndpoints(ctx context.Context, tenant string, c
 			if err := rows.Scan(&raw); err != nil {
 				return err
 			}
-			var ep pathgraph.Endpoint
+			var ep Endpoint
 			if err := json.Unmarshal(raw, &ep); err != nil {
 				return err
 			}
@@ -459,7 +487,7 @@ func (s *pgchPathGraphStore) ListEndpoints(ctx context.Context, tenant string, c
 	return out, err
 }
 
-func (s *pgchPathGraphStore) UpsertPathDefinition(ctx context.Context, pd pathgraph.PathDefinition) error {
+func (s *PGCHStore) UpsertPathDefinition(ctx context.Context, pd PathDefinition) error {
 	if err := pd.Validate(); err != nil {
 		return err
 	}
@@ -469,7 +497,7 @@ func (s *pgchPathGraphStore) UpsertPathDefinition(ctx context.Context, pd pathgr
 	if err != nil {
 		return err
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO path_definitions (tenant_id, path_id, src_endpoint_ref, dst_endpoint_ref, src_address, dst_address,
         direction, protocol, dst_port, vantage_id, network_context,
@@ -479,16 +507,16 @@ ON CONFLICT (tenant_id, path_id) DO UPDATE SET last_seen = now(), data = EXCLUDE
 			normTenant(pd.TenantID), pd.PathID, pd.SrcEndpointRef, pd.DstEndpointRef, pd.SrcAddress, pd.DstAddress,
 			pd.Direction, pd.Protocol, pd.DstPort, pd.VantageID, pd.NetworkContext,
 			pd.DataClass, pd.Environment, pd.ScenarioID, pd.RunID, pd.ProducerID, pd.ProvenanceID,
-			pathgraph.ContractVersion, data)
+			ContractVersion, data)
 		return err
 	})
 }
 
-func (s *pgchPathGraphStore) ListPathDefinitions(ctx context.Context, tenant string, cross bool) ([]pathgraph.PathDefinition, error) {
+func (s *PGCHStore) ListPathDefinitions(ctx context.Context, tenant string, cross bool) ([]PathDefinition, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out := []pathgraph.PathDefinition{}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	out := []PathDefinition{}
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT data FROM path_definitions ORDER BY tenant_id, path_id LIMIT 5000`)
 		if err != nil {
 			return err
@@ -499,7 +527,7 @@ func (s *pgchPathGraphStore) ListPathDefinitions(ctx context.Context, tenant str
 			if err := rows.Scan(&raw); err != nil {
 				return err
 			}
-			var pd pathgraph.PathDefinition
+			var pd PathDefinition
 			if err := json.Unmarshal(raw, &pd); err != nil {
 				return err
 			}
@@ -515,22 +543,22 @@ func (s *pgchPathGraphStore) ListPathDefinitions(ctx context.Context, tenant str
 // definition's identity fields are denormalized into the row — the read side
 // (LatestObservation / ListObservations) filters on dst_address/protocol/vantage,
 // so an observation written without them is unreachable by every query.
-func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgraph.PathDefinition, o pathgraph.PathObservation, hops []pathgraph.PathHop) error {
+func (s *PGCHStore) AppendObservation(ctx context.Context, def PathDefinition, o PathObservation, hops []PathHop) error {
 	if err := o.Validate(); err != nil {
 		return err
 	}
 	obsRow := map[string]any{
 		"tenant_id": normTenant(o.TenantID), "observation_id": o.ObservationID, "path_id": o.PathID,
-		"observed_at": chTime(o.ObservedAt), "method": o.Method, "vantage_id": o.VantageID,
+		"observed_at": CHTime(o.ObservedAt), "method": o.Method, "vantage_id": o.VantageID,
 		"status": o.Status, "hop_count": o.HopCount, "data_class": o.DataClass,
 		"environment": o.Environment, "scenario_id": o.ScenarioID, "run_id": o.RunID,
 		"producer_id": o.ProducerID, "provenance_id": o.ProvenanceID,
-		"contract_version": pathgraph.ContractVersion,
+		"contract_version": ContractVersion,
 		"src_address":      def.SrcAddress, "dst_address": def.DstAddress,
 		"protocol": def.Protocol, "dst_port": def.DstPort,
 		"direction": def.Direction, "network_context": def.NetworkContext,
 	}
-	if err := chInsertJSON(ctx, "netops.path_observations", normTenant(o.TenantID), []map[string]any{obsRow}); err != nil {
+	if err := s.ch.InsertJSON(ctx, "netops.path_observations", normTenant(o.TenantID), []map[string]any{obsRow}); err != nil {
 		return err
 	}
 	rows := make([]map[string]any, 0, len(hops))
@@ -547,80 +575,80 @@ func (s *pgchPathGraphStore) AppendObservation(ctx context.Context, def pathgrap
 			"resolution_method": h.ResolutionMethod, "confidence": h.Confidence, "kind": h.Kind,
 			"network_context": h.NetworkContext, "seam_id": h.SeamID, "rtt_ms": h.RTTms, "loss_pct": h.LossPct,
 			"transformation": h.Transformation, "candidate_ref": h.CandidateRef, "evidence_ref": h.EvidenceRef,
-			"observed_at": chTime(h.ObservedAt), "data_class": dataClassOrDefault(h.DataClass, o.DataClass),
+			"observed_at": CHTime(h.ObservedAt), "data_class": dataClassOrDefault(h.DataClass, o.DataClass),
 		})
 	}
 	if len(rows) == 0 {
 		return nil
 	}
 	// every hop was checked above to share the observation's tenant
-	return chInsertJSON(ctx, "netops.path_hops", normTenant(o.TenantID), rows)
+	return s.ch.InsertJSON(ctx, "netops.path_hops", normTenant(o.TenantID), rows)
 }
 
-func (s *pgchPathGraphStore) LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (pathgraph.PathObservation, []pathgraph.PathHop, pathgraph.PathDefinition, bool, error) {
+func (s *PGCHStore) LatestObservation(ctx context.Context, tenant string, cross bool, f ObservationFilter) (PathObservation, []PathHop, PathDefinition, bool, error) {
 	obs, err := s.ListObservations(ctx, tenant, cross, ObservationFilter{
 		PathID: f.PathID, DstAddress: f.DstAddress, Protocol: f.Protocol, VantageID: f.VantageID,
 		Direction: f.Direction, Status: f.Status, DataClasses: f.DataClasses, Limit: 1,
 	})
 	if err != nil || len(obs) == 0 {
-		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, err
+		return PathObservation{}, nil, PathDefinition{}, false, err
 	}
 	o := obs[0]
 	hops, err := s.hopsOf(ctx, tenant, cross, o.ObservationID)
 	if err != nil {
-		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, err
+		return PathObservation{}, nil, PathDefinition{}, false, err
 	}
 	def, _, err := s.pathDefinition(ctx, tenant, cross, o.PathID)
 	if err != nil {
-		return pathgraph.PathObservation{}, nil, pathgraph.PathDefinition{}, false, err
+		return PathObservation{}, nil, PathDefinition{}, false, err
 	}
 	return o, hops, def, true, nil
 }
 
-func (s *pgchPathGraphStore) pathDefinition(ctx context.Context, tenant string, cross bool, pathID string) (pathgraph.PathDefinition, bool, error) {
+func (s *PGCHStore) pathDefinition(ctx context.Context, tenant string, cross bool, pathID string) (PathDefinition, bool, error) {
 	defs, err := s.ListPathDefinitions(ctx, tenant, cross)
 	if err != nil {
-		return pathgraph.PathDefinition{}, false, err
+		return PathDefinition{}, false, err
 	}
 	for _, d := range defs {
 		if d.PathID == pathID {
 			return d, true, nil
 		}
 	}
-	return pathgraph.PathDefinition{}, false, nil
+	return PathDefinition{}, false, nil
 }
 
-func (s *pgchPathGraphStore) ListObservations(ctx context.Context, tenant string, cross bool, f ObservationFilter) ([]pathgraph.PathObservation, error) {
+func (s *PGCHStore) ListObservations(ctx context.Context, tenant string, cross bool, f ObservationFilter) ([]PathObservation, error) {
 	if len(f.DataClasses) == 0 {
 		return nil, errPathScopeRequired
 	}
 	conds := []string{"data_class IN (" + chStringList(f.DataClasses) + ")"}
 	if f.PathID != "" {
-		if !isPathToken(f.PathID) {
+		if !IsPathToken(f.PathID) {
 			return nil, errors.New("invalid path_id")
 		}
 		conds = append(conds, "path_id = '"+f.PathID+"'")
 	}
 	if f.DstAddress != "" {
-		if !isAddressToken(f.DstAddress) {
+		if !IsAddressToken(f.DstAddress) {
 			return nil, errors.New("invalid dst address")
 		}
 		conds = append(conds, "dst_address = '"+f.DstAddress+"'")
 	}
 	if f.Protocol != "" {
-		if !isPathToken(f.Protocol) {
+		if !IsPathToken(f.Protocol) {
 			return nil, errors.New("invalid protocol")
 		}
 		conds = append(conds, "protocol = '"+f.Protocol+"'")
 	}
 	if f.VantageID != "" {
-		if !isPathToken(f.VantageID) {
+		if !IsPathToken(f.VantageID) {
 			return nil, errors.New("invalid vantage_id")
 		}
 		conds = append(conds, "vantage_id = '"+f.VantageID+"'")
 	}
 	if f.Status != "" {
-		if !isPathToken(f.Status) {
+		if !IsPathToken(f.Status) {
 			return nil, errors.New("invalid status")
 		}
 		conds = append(conds, "status = '"+f.Status+"'")
@@ -634,20 +662,20 @@ func (s *pgchPathGraphStore) ListObservations(ctx context.Context, tenant string
   FROM netops.path_observations FINAL
  WHERE ` + strings.Join(conds, " AND ") + `
  ORDER BY observed_at DESC
- LIMIT ` + intToString(limit) + `
+ LIMIT ` + strconv.Itoa(limit) + `
  FORMAT JSON`
-	rows, err := chSelect(ctx, chScopeFor(tenant, cross), sql, "api:/api/rca/path")
+	rows, err := s.ch.Select(ctx, ScopeFor(tenant, cross), sql, "api:/api/rca/path")
 	if err != nil {
 		return nil, err
 	}
-	out := make([]pathgraph.PathObservation, 0, len(rows))
+	out := make([]PathObservation, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, pathgraph.PathObservation{
+		out = append(out, PathObservation{
 			ObservationID: str(r["observation_id"]), PathID: str(r["path_id"]),
 			ObservedAt: parseCHTime(r["observed_at"]), Method: str(r["method"]),
 			VantageID: str(r["vantage_id"]), Status: str(r["status"]), HopCount: asInt(r["hop_count"]),
-			ContractVersion: pathgraph.ContractVersion,
-			Provenance: pathgraph.Provenance{
+			ContractVersion: ContractVersion,
+			Provenance: Provenance{
 				TenantID: str(r["tenant_id"]), DataClass: str(r["data_class"]), Environment: str(r["environment"]),
 				ScenarioID: str(r["scenario_id"]), RunID: str(r["run_id"]), ProducerID: str(r["producer_id"]),
 				ProvenanceID: str(r["provenance_id"]),
@@ -657,8 +685,8 @@ func (s *pgchPathGraphStore) ListObservations(ctx context.Context, tenant string
 	return out, nil
 }
 
-func (s *pgchPathGraphStore) hopsOf(ctx context.Context, tenant string, cross bool, observationID string) ([]pathgraph.PathHop, error) {
-	if !isPathToken(observationID) {
+func (s *PGCHStore) hopsOf(ctx context.Context, tenant string, cross bool, observationID string) ([]PathHop, error) {
+	if !IsPathToken(observationID) {
 		return nil, errors.New("invalid observation_id")
 	}
 	sql := `SELECT hop_index, state, observed_address, resolved_entity_ref, resolution_method, confidence,
@@ -669,13 +697,13 @@ func (s *pgchPathGraphStore) hopsOf(ctx context.Context, tenant string, cross bo
  ORDER BY hop_index ASC
  LIMIT 128
  FORMAT JSON`
-	rows, err := chSelect(ctx, chScopeFor(tenant, cross), sql, "api:/api/rca/path")
+	rows, err := s.ch.Select(ctx, ScopeFor(tenant, cross), sql, "api:/api/rca/path")
 	if err != nil {
 		return nil, err
 	}
-	out := make([]pathgraph.PathHop, 0, len(rows))
+	out := make([]PathHop, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, pathgraph.PathHop{
+		out = append(out, PathHop{
 			ObservationID: observationID, HopIndex: asInt(r["hop_index"]), State: str(r["state"]),
 			ObservedAddress: str(r["observed_address"]), ResolvedEntityRef: str(r["resolved_entity_ref"]),
 			ResolutionMethod: str(r["resolution_method"]), Confidence: str(r["confidence"]),
@@ -690,17 +718,17 @@ func (s *pgchPathGraphStore) hopsOf(ctx context.Context, tenant string, cross bo
 }
 
 // PurgeRun — (tenant, scenario/run) keyed cleanup across both stores (§1).
-func (s *pgchPathGraphStore) PurgeRun(ctx context.Context, tenant, scenarioID, runID string) error {
+func (s *PGCHStore) PurgeRun(ctx context.Context, tenant, scenarioID, runID string) error {
 	if scenarioID == "" && runID == "" {
 		return errors.New("purge requires a scenario_id or run_id (§1: never a name/IP pattern)")
 	}
-	if (scenarioID != "" && !isPathToken(scenarioID)) || (runID != "" && !isPathToken(runID)) {
+	if (scenarioID != "" && !IsPathToken(scenarioID)) || (runID != "" && !IsPathToken(runID)) {
 		return errors.New("invalid scenario_id/run_id")
 	}
 	t := normTenant(tenant)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		for _, tbl := range []string{"path_endpoints", "path_definitions"} {
 			if _, err := tx.Exec(ctx, "DELETE FROM "+tbl+
 				" WHERE ($1 = '' OR scenario_id = $1) AND ($2 = '' OR run_id = $2)", scenarioID, runID); err != nil {
@@ -719,18 +747,14 @@ func (s *pgchPathGraphStore) PurgeRun(ctx context.Context, tenant, scenarioID, r
 	if runID != "" {
 		where += " AND run_id = '" + runID + "'"
 	}
-	base := envOr("CLICKHOUSE_URL", "")
-	if base == "" {
-		return nil
-	}
-	if msg := chExecErr(base, "DELETE FROM netops.path_observations WHERE "+where); msg != "" {
-		return errors.New(msg)
+	if err := s.ch.Exec("DELETE FROM netops.path_observations WHERE " + where); err != nil {
+		return err
 	}
 	// path_hops carries no scenario/run of its own (it is a child of the run) — it is
 	// purged by observation_id, resolved from the same keyed predicate.
-	if msg := chExecErr(base, "DELETE FROM netops.path_hops WHERE tenant_id = '"+t+
-		"' AND observation_id IN (SELECT observation_id FROM netops.path_observations WHERE "+where+")"); msg != "" {
-		return errors.New(msg)
+	if err := s.ch.Exec("DELETE FROM netops.path_hops WHERE tenant_id = '" + t +
+		"' AND observation_id IN (SELECT observation_id FROM netops.path_observations WHERE " + where + ")"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -739,10 +763,10 @@ func (s *pgchPathGraphStore) PurgeRun(ctx context.Context, tenant, scenarioID, r
 
 // chInsertJSON writes rows to a ClickHouse table as JSONEachRow. Table names come
 // only from this file's constants — never from user input.
-// chScopeFor maps a (tenant, cross) principal to the ClickHouse tenant_scope
+// ScopeFor maps a (tenant, cross) principal to the ClickHouse tenant_scope
 // setting the row policies enforce on. Fails CLOSED: an empty, non-cross tenant
 // sees '__none__' rather than everything.
-func chScopeFor(tenant string, cross bool) string {
+func ScopeFor(tenant string, cross bool) string {
 	if cross {
 		return "__all__"
 	}
@@ -753,15 +777,15 @@ func chScopeFor(tenant string, cross bool) string {
 	return t
 }
 
-// chTime renders a DateTime64(3) insert value as UTC epoch milliseconds — a
+// CHTime renders a DateTime64(3) insert value as UTC epoch milliseconds — a
 // scaled-integer Unix timestamp ClickHouse can never re-interpret in the
 // server/column timezone (log-time standard S4/R1).
-func chTime(t time.Time) int64 { return t.UTC().UnixMilli() }
+func CHTime(t time.Time) int64 { return t.UTC().UnixMilli() }
 
 func chStringList(vals []string) string {
 	out := make([]string, 0, len(vals))
 	for _, v := range vals {
-		if isPathToken(v) {
+		if IsPathToken(v) {
 			out = append(out, "'"+v+"'")
 		}
 	}
@@ -773,7 +797,44 @@ func chStringList(vals []string) string {
 
 // isPathToken allowlists an identifier before it is interpolated into ClickHouse
 // SQL (SR-011 discipline: shape-validate, never quote-escape).
-func isPathToken(s string) bool {
+// str / parseCHTime are CH row-decode helpers duplicated from the integrator
+// (no-shared-utils rule): tolerant string extraction and the zone-safe
+// DateTime64 parse.
+func str(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func parseCHTime(v any) time.Time {
+	s := strings.TrimSpace(str(v))
+	if s == "" || strings.HasPrefix(s, "0000-00-00") || strings.HasPrefix(s, "1970-01-01") {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05", time.RFC3339Nano} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+// asFloat mirrors the integrator's F-21-safe numeric extraction (duplicated;
+// non-finite floats sanitized via metricval like every other CH read path).
+func asFloat(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return metricval.Sanitize(x)
+	case string:
+		return metricval.FiniteOrZero(x)
+	}
+	return 0
+}
+
+// IsPathToken reports whether s is a safe path-domain token (shared with the
+// ingest boundary).
+func IsPathToken(s string) bool {
 	if s == "" || len(s) > 128 {
 		return false
 	}
@@ -788,7 +849,9 @@ func isPathToken(s string) bool {
 }
 
 // isAddressToken allowlists an IPv4/IPv6 literal for the same purpose.
-func isAddressToken(s string) bool {
+// IsAddressToken reports whether s is a safe address-shaped token (shared with
+// the ingest boundary).
+func IsAddressToken(s string) bool {
 	if s == "" || len(s) > 45 {
 		return false
 	}
@@ -822,5 +885,5 @@ func dataClassOrDefault(c, def string) string {
 	return c
 }
 
-var _ pathGraphStore = (*memPathGraphStore)(nil)
-var _ pathGraphStore = (*pgchPathGraphStore)(nil)
+var _ Store = (*MemStore)(nil)
+var _ Store = (*PGCHStore)(nil)

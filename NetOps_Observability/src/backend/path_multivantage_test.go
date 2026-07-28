@@ -98,7 +98,7 @@ func TestVantageWithoutDeclaredAddressStaysUnresolved(t *testing.T) {
 // TestRemoteVantagePushIsAuthenticatedAndAttributed — the LAN vantage's transport.
 func TestRemoteVantagePushIsAuthenticatedAndAttributed(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	s.remotePaths = newRemotePathStore()
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
@@ -168,7 +168,7 @@ func TestRemoteVantagePushIsAuthenticatedAndAttributed(t *testing.T) {
 // silently becomes rank 7 (candidate), so a rename on either side is a real outage.
 func TestPathGraphEnrichmentExportShape(t *testing.T) {
 	_, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	facts := tenantFacts("t_x", "i-APP", "i-NVA", "lan-sw", "wan-edge")
 	s.pathFacts = stubFacts{byTenant: map[string]pathgraph.PathFacts{"t_x": facts}, nc: labNetContext()}
 	ingestFor(t, s, "t_x", facts, pathgraph.DataClassLive, time.Now().UTC().Add(-time.Minute), "run-x", "")
@@ -229,7 +229,7 @@ func TestPathGraphEnrichmentExportShape(t *testing.T) {
 // must not be ABLE to confirm a live verdict from lab evidence, so we don't ship it.
 func TestPathGraphExportExcludesNonLive(t *testing.T) {
 	_, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	facts := tenantFacts("t_x", "i-APP", "i-NVA", "lan-sw", "wan-edge")
 	s.pathFacts = stubFacts{byTenant: map[string]pathgraph.PathFacts{"t_x": facts}, nc: labNetContext()}
 	ingestFor(t, s, "t_x", facts, pathgraph.DataClassLab, time.Now().UTC(), "run-lab", "")

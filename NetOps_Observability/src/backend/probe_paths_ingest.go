@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/pathgraph"
 	"strings"
 	"sync"
 	"time"
@@ -139,7 +140,7 @@ func validatePushedPaths(in []collectors.PathResult) (string, []collectors.PathR
 	out := make([]collectors.PathResult, 0, len(in))
 	for _, p := range in {
 		v := strings.TrimSpace(p.VantageID)
-		if v == "" || !isPathToken(v) {
+		if v == "" || !pathgraph.IsPathToken(v) {
 			return "", nil, errors.New("every pushed path must carry a valid vantage_id")
 		}
 		if vantage == "" {
@@ -147,7 +148,7 @@ func validatePushedPaths(in []collectors.PathResult) (string, []collectors.PathR
 		} else if vantage != v {
 			return "", nil, errors.New("a push must come from ONE vantage")
 		}
-		if strings.TrimSpace(p.Dst) == "" || !isAddressToken(p.Dst) {
+		if strings.TrimSpace(p.Dst) == "" || !pathgraph.IsAddressToken(p.Dst) {
 			return "", nil, errors.New("pushed path has an invalid destination")
 		}
 		if len(p.Hops) > maxPushedHops {
@@ -156,7 +157,7 @@ func validatePushedPaths(in []collectors.PathResult) (string, []collectors.PathR
 		for _, h := range p.Hops {
 			// A non-responding hop legitimately has an EMPTY ip — that is the fact being
 			// reported and it must survive (§2.4). Anything non-empty must be an address.
-			if h.IP != "" && !isAddressToken(h.IP) {
+			if h.IP != "" && !pathgraph.IsAddressToken(h.IP) {
 				return "", nil, errors.New("pushed hop has an invalid address")
 			}
 		}

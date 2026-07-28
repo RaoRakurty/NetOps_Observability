@@ -14,7 +14,7 @@ import (
 // run, or a different terminal address, yields NO hint (an honest absence).
 func TestSeamHintFromHistory(t *testing.T) {
 	_, s := newTestServerState(t)
-	s.pathGraph = newMemPathGraphStore()
+	s.pathGraph = pathgraph.NewMemStore()
 	ctx := context.Background()
 	tenant := "t_hint"
 	now := time.Date(2026, 7, 12, 22, 0, 0, 0, time.UTC)
