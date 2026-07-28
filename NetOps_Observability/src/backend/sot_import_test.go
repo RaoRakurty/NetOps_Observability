@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/internal/discovery"
 	"path/filepath"
 	"testing"
 
@@ -65,7 +66,7 @@ func TestParseImportBindings(t *testing.T) {
 func newImportTestServer(t *testing.T) *server {
 	t.Helper()
 	dir := t.TempDir()
-	s := &server{discovery: NewDiscoveryAggregator()}
+	s := &server{discovery: discovery.NewDiscoveryAggregator()}
 	var err error
 	if s.sites, err = newSitesStore(filepath.Join(dir, "sites.json")); err != nil {
 		t.Fatal(err)

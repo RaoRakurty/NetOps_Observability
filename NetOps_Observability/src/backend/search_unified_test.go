@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestCaseSearchHex(t *testing.T) {
 // attributed apps) and connector scopes for two tenants.
 func searchTestServer(t *testing.T) *server {
 	t.Helper()
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", Vendor: "cisco", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "acme-edge", Name: "acme-edge", Address: "10.1.0.2", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})

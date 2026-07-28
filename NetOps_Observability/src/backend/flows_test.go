@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +127,7 @@ func TestWriteEmptyClickHouse(t *testing.T) {
 // flow-scoping tests (uniquely named to avoid clashing with tenantServer).
 func flowsTestServer(t *testing.T) *server {
 	t.Helper()
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
 	d.Upsert(models.Device{ID: "shared-dns", Name: "shared-dns", Address: "10.9.0.1"})
@@ -173,7 +174,7 @@ func TestFlowTenantClauseScoped(t *testing.T) {
 // so a scoped principal of an unknown tenant has zero visible addresses.
 func flowsServerNoShared(t *testing.T) *server {
 	t.Helper()
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	return &server{discovery: d}
 }

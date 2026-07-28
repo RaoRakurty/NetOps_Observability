@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
@@ -64,7 +65,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,
-		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
+		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: discovery.NewDiscoveryAggregator(),
 		securitySettings: ss, loginThrottle: loginguard.NewThrottle(func(msg string, fields map[string]any) { logWarn("auth", msg, fields) }), sessions: sessStore,
 		audit: au, startedAt: time.Now().UTC(),
 		wireless:        wireless.NewMemStore(),   // #128: always set, like the runtime wiring

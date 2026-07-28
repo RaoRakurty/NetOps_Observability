@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"netops/backend/internal/discovery"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ func buildGeomap(sites []SoTSite, devices []models.Device, assign map[string]str
 		deviceSite[d.ID] = g.Slug // record which bubble each device folded into
 	}
 	for _, d := range devices {
-		toks := deviceIdentities(d)
+		toks := discovery.DeviceIdentities(d)
 		// Explicit device→site assignment (operator binding or NetBox map) is
 		// first-class intent and wins over a discovery-stamped inventory label.
 		var slug string

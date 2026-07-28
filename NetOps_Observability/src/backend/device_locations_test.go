@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ import (
 
 func locServer(t *testing.T) *server {
 	t.Helper()
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
 	dir := t.TempDir()

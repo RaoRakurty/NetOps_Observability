@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/discovery"
 	"sort"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 // metricsServerWithDevices builds a server whose inventory spans two tenants
 // plus a platform-owned (untagged) device, to exercise metrics scoping.
 func metricsServerWithDevices() *server {
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "core-1", Name: "core-1.acme", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "edge-2", Name: "edge-2.globex", Address: "10.2.0.1", TenantID: "globex"})
 	d.Upsert(models.Device{ID: "shared", Name: "shared", Address: "10.9.0.1"}) // platform-owned

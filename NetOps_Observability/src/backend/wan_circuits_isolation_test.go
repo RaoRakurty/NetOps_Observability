@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/discovery"
 	"path/filepath"
 	"testing"
 
@@ -28,7 +29,7 @@ func newWanTestServer(t *testing.T, ifaddr map[string]map[string]string, neighbo
 		t.Fatalf("device sites store: %v", err)
 	}
 	return &server{
-		discovery:   NewDiscoveryAggregator(),
+		discovery:   discovery.NewDiscoveryAggregator(),
 		wanPolicy:   wp,
 		sites:       sites,
 		deviceSites: ds,

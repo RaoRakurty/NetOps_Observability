@@ -14,9 +14,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"netops/backend/alerts"
 	"netops/backend/models"
@@ -45,8 +47,8 @@ func (q *queryRecorder) all() []string {
 // owns leaf-a, tenant t-b owns leaf-b.
 func isoReportScheduler(t *testing.T) *reportScheduler {
 	t.Helper()
-	agg := NewDiscoveryAggregator()
-	agg.pollOnce(context.Background(), &fakeSource{name: "static", devices: []models.Device{
+	agg := discovery.NewDiscoveryAggregator()
+	agg.PollOnceForTest(context.Background(), &fakeSource{name: "static", devices: []models.Device{
 		{ID: "dev-a", Name: "leaf-a", Address: "10.0.0.1", TenantID: "t-a"},
 		{ID: "dev-b", Name: "leaf-b", Address: "10.0.0.2", TenantID: "t-b"},
 	}})
@@ -215,3 +217,15 @@ func TestDeviceUtilizationFilteredToTenant(t *testing.T) {
 		t.Errorf("platform utilization report should list all devices:\n%s", body)
 	}
 }
+
+// fakeSource duplicates the package-test fixture (test files cannot be
+// imported across packages).
+type fakeSource struct {
+	name    string
+	devices []models.Device
+	err     error
+}
+
+func (f *fakeSource) Name() string                                  { return f.name }
+func (f *fakeSource) Interval() time.Duration                       { return time.Minute }
+func (f *fakeSource) Poll(context.Context) ([]models.Device, error) { return f.devices, f.err }

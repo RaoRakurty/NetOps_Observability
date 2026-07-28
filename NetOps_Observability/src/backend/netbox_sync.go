@@ -1,7 +1,7 @@
 package main
 
 // netbox_sync.go — reconciles DISCOVERED devices INTO NetBox as the source of
-// truth (the reverse of NetboxSource, which reads FROM NetBox). REST + idempotent
+// truth (the reverse of discovery.NetboxSource, which reads FROM NetBox). REST + idempotent
 // + restart-safe. Runs only when the NetBox integration is enabled+configured.
 //
 // Why REST, not the Kafka bus: this is low-volume control-plane CRUD (devices
@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/discovery"
 	"strings"
 	"sync"
 	"time"
@@ -113,7 +114,7 @@ func (s *netboxSyncer) SyncOnce(ctx context.Context) (netboxSyncStatus, error) {
 	// Sync direction: only push discovered devices up when writes are enabled
 	// (write/both). In read-only mode NetBox is authoritative and we never
 	// create records from discovery.
-	if !netboxWritesDevices(cfg) {
+	if !discovery.NetboxWritesDevices(cfg) {
 		return s.Status(), nil
 	}
 	if bu, err := url.Parse(base); err != nil || bu.Host == "" {

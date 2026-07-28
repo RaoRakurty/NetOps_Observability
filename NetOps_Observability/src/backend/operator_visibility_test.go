@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/discovery"
 	"path/filepath"
 	"testing"
 
@@ -92,7 +93,7 @@ func TestRestrictedTelemetryDeviceKeyed(t *testing.T) {
 
 	// Devices are tagged with the OPAQUE tenant id (as the device-create boundary
 	// stamps them from the principal's resolved tenant).
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: acme.ID})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: globex.ID})
 	s := &server{discovery: d, tenants: ts}

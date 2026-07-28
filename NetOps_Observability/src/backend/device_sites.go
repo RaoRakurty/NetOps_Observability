@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/discovery"
 	"strings"
 	"time"
 )
@@ -155,7 +156,7 @@ func (s *server) handleDeviceSite(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("no such site in this tenant"))
 			return
 		}
-		tokens := deviceIdentities(d)
+		tokens := discovery.DeviceIdentities(d)
 		if len(tokens) == 0 {
 			writeError(w, http.StatusBadRequest, errors.New("device has no stable identity token"))
 			return

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/discovery"
 	"os"
 	"path/filepath"
 	"sort"
@@ -187,7 +188,7 @@ type reportScheduler struct {
 	srv       *server // for lazily-constructed deps (notifyCfg, contactPoints)
 	saved     savedRepo
 	notifier  *notify.Dispatcher
-	discovery *DiscoveryAggregator
+	discovery *discovery.DiscoveryAggregator
 	alerts    *alerts.Engine
 	startedAt time.Time
 

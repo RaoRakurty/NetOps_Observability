@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/discovery"
 	"sort"
 	"strings"
 	"sync"
@@ -197,7 +198,7 @@ func (s *server) handleDeviceLocation(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tokens := deviceIdentities(d)
+	tokens := discovery.DeviceIdentities(d)
 
 	switch r.Method {
 	case http.MethodGet:
@@ -271,7 +272,7 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 	rows := make([]row, 0, len(devices))
 	for _, d := range devices {
 		x := row{ID: d.ID, Name: d.Name, Vendor: d.Labels["vendor"], Source: "none"}
-		toks := deviceIdentities(d)
+		toks := discovery.DeviceIdentities(d)
 		if slug := sotSiteFor(d, assign); slug != "" && resolvable[slug] {
 			x.Source, x.Site = "sot", slug
 		} else if l, ok := s.deviceLocations.Lookup(toks); ok {
@@ -293,7 +294,7 @@ func (s *server) handleDeviceLocations(w http.ResponseWriter, r *http.Request) {
 // NetBox device→site map) wins, then a discovery-stamped inventory label. The
 // explicit assignment is first-class intent and must override a stale label.
 func sotSiteFor(d models.Device, assign map[string]string) string {
-	for _, tok := range deviceIdentities(d) {
+	for _, tok := range discovery.DeviceIdentities(d) {
 		if s, ok := assign[tok]; ok && s != "" {
 			return s
 		}

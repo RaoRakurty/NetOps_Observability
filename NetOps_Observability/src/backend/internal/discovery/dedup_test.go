@@ -1,4 +1,4 @@
-package main
+package discovery
 
 import (
 	"context"
@@ -105,7 +105,7 @@ func TestDedupeBlankFieldsDontUnion(t *testing.T) {
 }
 
 func TestDeviceIdentities(t *testing.T) {
-	got := deviceIdentities(models.Device{Address: "10.0.0.1", Name: "Leaf1", Labels: map[string]string{"serial": "ABC123"}})
+	got := DeviceIdentities(models.Device{Address: "10.0.0.1", Name: "Leaf1", Labels: map[string]string{"serial": "ABC123"}})
 	want := map[string]bool{"ip:10.0.0.1": true, "sn:abc123": true, "name:leaf1": true}
 	if len(got) != len(want) {
 		t.Fatalf("identities = %v, want keys %v", got, want)
@@ -116,7 +116,7 @@ func TestDeviceIdentities(t *testing.T) {
 		}
 	}
 	// No identities at all → empty (can't accidentally union).
-	if ids := deviceIdentities(models.Device{}); len(ids) != 0 {
+	if ids := DeviceIdentities(models.Device{}); len(ids) != 0 {
 		t.Errorf("empty device should yield no identities, got %v", ids)
 	}
 }

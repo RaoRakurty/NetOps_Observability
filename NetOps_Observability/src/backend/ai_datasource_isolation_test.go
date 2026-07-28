@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func TestAICorrRowVisibleStrict(t *testing.T) {
 func TestAIModulesFailClosedWithoutDevices(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URL", "http://127.0.0.1:9") // dial = guard failed
 	s := aiCfgTestServer(t)
-	s.discovery = &DiscoveryAggregator{} // no devices exist
+	s.discovery = &discovery.DiscoveryAggregator{} // no devices exist
 	d := aiDataSource{
 		srv: s, ctx: context.Background(), scope: "t-a",
 		claims: jwtClaims{Role: "viewer", Tenant: "t-a", Sub: "u"},
@@ -80,7 +81,7 @@ func TestAIAskStrictForForeignTenant(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URL", ch.URL)
 	t.Setenv("FEATURE_AI", "true")
 	s := aiCfgTestServer(t)
-	s.discovery = &DiscoveryAggregator{}
+	s.discovery = &discovery.DiscoveryAggregator{}
 
 	r := httptest.NewRequest(http.MethodPost, "/api/ai/ask", strings.NewReader(`{"question":"what is going on right now?"}`))
 	w := httptest.NewRecorder()

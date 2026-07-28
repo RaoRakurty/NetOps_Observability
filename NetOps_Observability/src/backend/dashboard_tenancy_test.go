@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/discovery"
 	"testing"
 
 	"netops/backend/models"
@@ -10,7 +11,7 @@ import (
 // "Devices" / "Sites" counts reflect ONLY its own devices, never the global
 // fleet (the reported leak). The platform owner still sees the whole fleet.
 func TestMetricTilesTenantScoped(t *testing.T) {
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-1", Name: "acme-1", TenantID: "acme", Labels: map[string]string{"site": "nyc"}})
 	d.Upsert(models.Device{ID: "acme-2", Name: "acme-2", TenantID: "acme", Labels: map[string]string{"site": "sfo"}})
 	d.Upsert(models.Device{ID: "globex-1", Name: "globex-1", TenantID: "globex", Labels: map[string]string{"site": "lon"}})

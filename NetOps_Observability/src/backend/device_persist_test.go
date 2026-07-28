@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/discovery"
 	"testing"
 
 	"netops/backend/models"
@@ -9,7 +10,7 @@ import (
 // device_persist_test.go — devices created through the API must survive a
 // restart, and a deleted device must stay deleted.
 //
-// The defect these pin: DiscoveryAggregator.Upsert wrote to an in-memory map
+// The defect these pin: discovery.DiscoveryAggregator.Upsert wrote to an in-memory map
 // with no persistence anywhere, so POST /api/devices returned 201 Created for a
 // device that evaporated on the next restart, container recreate, crash, deploy
 // or documented UPGRADE.md upgrade. On the lab stack a single API restart
@@ -22,7 +23,7 @@ import (
 func TestManualDeviceSurvivesRestart(t *testing.T) {
 	withBackend(t, newMemKV())
 
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	a.SetStore(newDeviceStore(devicesPath()))
 
 	d := models.Device{ID: "walmart-br1-core-sw01", Name: "walmart-br1-core-sw01",
@@ -32,7 +33,7 @@ func TestManualDeviceSurvivesRestart(t *testing.T) {
 	}
 
 	// --- process restart ---
-	b := NewDiscoveryAggregator()
+	b := discovery.NewDiscoveryAggregator()
 	b.SetStore(newDeviceStore(devicesPath()))
 
 	got := b.Devices()
@@ -53,7 +54,7 @@ func TestManualDeviceSurvivesRestart(t *testing.T) {
 func TestDeletedDeviceStaysDeleted(t *testing.T) {
 	withBackend(t, newMemKV())
 
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	st := newDeviceStore(devicesPath())
 	a.SetStore(st)
 
@@ -88,7 +89,7 @@ func TestDeletedDeviceStaysDeleted(t *testing.T) {
 func TestRecreatingADeletedDeviceClearsTheTombstone(t *testing.T) {
 	withBackend(t, newMemKV())
 
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	st := newDeviceStore(devicesPath())
 	a.SetStore(st)
 
@@ -116,7 +117,7 @@ func TestRecreatingADeletedDeviceClearsTheTombstone(t *testing.T) {
 // device that disappears at the next restart.
 func TestUpsertReportsPersistFailure(t *testing.T) {
 	withBackend(t, newMemKV())
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	a.SetStore(newDeviceStore(devicesPath()))
 
 	withFailingKV(t) // every Save now fails
@@ -141,7 +142,7 @@ func TestUpsertReportsPersistFailure(t *testing.T) {
 // stops reporting them (a disabled NetBox sync, a decommissioned subnet).
 func TestSourceDevicesAreNotPersisted(t *testing.T) {
 	withBackend(t, newMemKV())
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	st := newDeviceStore(devicesPath())
 	a.SetStore(st)
 
@@ -160,7 +161,7 @@ func TestSourceDevicesAreNotPersisted(t *testing.T) {
 // store has to.
 func TestManualDevicesAreTenantScoped(t *testing.T) {
 	withBackend(t, newMemKV())
-	a := NewDiscoveryAggregator()
+	a := discovery.NewDiscoveryAggregator()
 	a.SetStore(newDeviceStore(devicesPath()))
 
 	if err := a.Upsert(models.Device{ID: "a1", Name: "a1", TenantID: "t_a"}); err != nil {
@@ -170,7 +171,7 @@ func TestManualDevicesAreTenantScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := NewDiscoveryAggregator()
+	b := discovery.NewDiscoveryAggregator()
 	b.SetStore(newDeviceStore(devicesPath()))
 
 	owners := map[string]string{}

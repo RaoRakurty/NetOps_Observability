@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/vault"
 	"os"
 	"sort"
@@ -402,7 +403,7 @@ func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
 					Name:    name,
 					Address: addr,
 					Vendor:  vendor,
-					OS:      truncateDescr(descr),
+					OS:      discovery.TruncateDescr(descr),
 					Source:  "snmp",
 					// TenantID deliberately empty: discovered infrastructure is
 					// platform-scoped until an operator assigns it (untagged =

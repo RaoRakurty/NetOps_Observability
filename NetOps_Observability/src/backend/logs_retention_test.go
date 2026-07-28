@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/discovery"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func fakeOS(t *testing.T, reply string) (paths *[]string, bodies *[]string) {
 
 func logsTestServer(t *testing.T) *server {
 	t.Helper()
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "acme-core", Name: "acme-core", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "globex-core", Name: "globex-core", Address: "10.2.0.1", TenantID: "globex"})
 	return &server{discovery: d}

@@ -19,6 +19,7 @@ import (
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
@@ -62,7 +63,7 @@ const version = "0.1.0-scaffold"
 // store for auth, and the live-events WebSocket hub).
 type server struct {
 	startedAt        time.Time
-	discovery        *DiscoveryAggregator
+	discovery        *discovery.DiscoveryAggregator
 	collectors       *collectors.Pool
 	alerts           *alerts.Engine
 	alertEpisodes    *alertEpisodeStore
@@ -254,13 +255,13 @@ func newServer() *server {
 		log.Fatalf("backend TLS: %v", err)
 	}
 
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	// Operator-created devices persist here and are seeded into the cache before
 	// any source polls or the API serves a request. Without this, POST
 	// /api/devices returned 201 for a device that existed only until the process
 	// exited (see device_persist.go).
 	d.SetStore(newDeviceStore(devicesPath()))
-	d.Register(NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
+	d.Register(discovery.NewStaticSource(os.Getenv("STATIC_DEVICES_PATH")))
 	// SNMP subnet discovery: registered always with a LIVE config getter
 	// (console-set store, env bootstrap fallback) so operators can scope and
 	// enable it at runtime without a restart. Poll is a no-op while disabled.
@@ -270,7 +271,7 @@ func newServer() *server {
 	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
 	// honors runtime changes from Automation → Source of Truth without a restart.
 	netboxCfg := newNetboxConfigStore(envOr("NETBOX_CONFIG_FILE", "/data/netbox_config.json"), vault)
-	d.Register(NewNetboxSource(netboxCfg.effective))
+	d.Register(discovery.NewNetboxSource(netboxCfg.effective, func(msg string, fields map[string]any) { logWarn("discovery", msg, fields) }))
 
 	// SNMP credential store is created below; capture a pointer the target
 	// builder can resolve device credential_refs against (set after init).
@@ -848,7 +849,7 @@ func cancelOnlyWorkers() []string {
 		"cloud-monitor-eval",       // cloudMonitorEvaluator.Start → go e.loop(ctx)
 		"collectors",               // collectors.Pool.Start → one goroutine per collector
 		"cred-cache-reload",        // server.startCredCacheReload
-		"discovery",                // DiscoveryAggregator.Start → per-source pollLoop + vendorLoop
+		"discovery",                // discovery.DiscoveryAggregator.Start → per-source pollLoop + vendorLoop
 		"entity-resolver-enrich",   // server.startEntityResolverEnrichment
 		"fusion-worker",            // fusionWorker.start
 		"incident-time-backfill",   // server.startIncidentTimeMetricsBackfill (CH writes)

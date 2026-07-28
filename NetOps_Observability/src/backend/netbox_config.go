@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/discovery"
 	"netops/backend/internal/vault"
 	"os"
 	"strings"
@@ -19,34 +20,9 @@ import (
 // never returned to the client. Platform-owner scoped: discovery is platform
 // infrastructure, not a per-tenant concern.
 
-type netboxConfig struct {
-	Enabled     bool   `json:"enabled"`
-	URL         string `json:"url"`
-	Token       string `json:"token,omitempty"`
-	IntervalSec int    `json:"interval_sec"` // poll cadence; 0 → default 60s
-	// Direction controls which way devices flow between the platform and NetBox:
-	//   "none"  — automatic device sync OFF: NetBox stays available (embedded
-	//             console, geo intent) but discovery neither pushes nor pulls
-	//             devices. For a customer who already runs an external SoT we'll
-	//             sync via that SoT's API instead of auto-populating NetBox.
-	//             DEFAULT — opt-in before any data flows into the inventory.
-	//   "write" — devices → NetBox only (NetBox is a downstream documentation
-	//             mirror; it is NEVER read back as a device source, so synced
-	//             devices can't reappear in the inventory). Building inventory
-	//             from scratch off SNMP discovery.
-	//   "read"  — NetBox → platform only: NetBox-declared devices are pulled in
-	//             ALONGSIDE SNMP-discovered ones; the reconciler does not push
-	//             discovered devices up. NetBox is a connector here, NOT the
-	//             authority — the platform's own inventory stays the source of
-	//             truth (see activeSoT).
-	//   "both"  — bidirectional (pull NetBox devices in + reconcile discoveries up).
-	// Empty normalizes to "none" (see netboxDirection).
-	Direction string `json:"direction,omitempty"`
-	// Managed is derived (not persisted): true when the connection is the
-	// platform-bundled internal NetBox (auto-wired URL+token), so the UI needs no
-	// URL/token — just an enable toggle.
-	Managed bool `json:"managed,omitempty"`
-}
+// netboxConfig moved to internal/discovery (the source reads it); the store
+// and direction doctrine stay here.
+type netboxConfig = discovery.NetboxConfig
 
 type netboxConfigStore struct {
 	mu    sync.RWMutex
@@ -111,8 +87,8 @@ func (s *netboxConfigStore) effective() netboxConfig {
 
 func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	in.URL = strings.TrimRight(strings.TrimSpace(in.URL), "/")
-	in.Managed = false                 // never persisted; derived in effective()
-	in.Direction = netboxDirection(in) // normalize ("" → "none")
+	in.Managed = false                           // never persisted; derived in effective()
+	in.Direction = discovery.NetboxDirection(in) // normalize ("" → "none")
 	if in.URL != "" {
 		u, err := url.Parse(in.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -156,8 +132,8 @@ type publicNetboxConfig struct {
 	Direction   string `json:"direction"` // "none" | "write" | "read" | "both" (normalized)
 }
 
-func (c netboxConfig) public() publicNetboxConfig {
-	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != "", Managed: c.Managed, Direction: netboxDirection(c)}
+func netboxPublic(c netboxConfig) publicNetboxConfig {
+	return publicNetboxConfig{Enabled: c.Enabled, URL: c.URL, IntervalSec: c.IntervalSec, TokenSet: c.Token != "", Managed: c.Managed, Direction: discovery.NetboxDirection(c)}
 }
 
 // netboxDirection normalizes the configured sync direction. The default is
@@ -166,30 +142,10 @@ func (c netboxConfig) public() publicNetboxConfig {
 // product role is still being decided; don't push data into it by default).
 // Operators choose "write" (devices → NetBox only; never read back, no
 // duplicates), "read" (NetBox is the authoritative intent SoT), or "both".
-func netboxDirection(c netboxConfig) string {
-	switch strings.ToLower(strings.TrimSpace(c.Direction)) {
-	case "write":
-		return "write"
-	case "read":
-		return "read"
-	case "both":
-		return "both"
-	default: // "", "none", "off", or anything unknown → safe default: no sync
-		return "none"
-	}
-}
 
 // netboxReadsDevices reports whether NetBox should be polled as a device source
 // (read or both). netboxWritesDevices reports whether discovered devices should
 // be reconciled up into NetBox (write or both).
-func netboxReadsDevices(c netboxConfig) bool {
-	d := netboxDirection(c)
-	return d == "read" || d == "both"
-}
-func netboxWritesDevices(c netboxConfig) bool {
-	d := netboxDirection(c)
-	return d == "write" || d == "both"
-}
 
 // handleNetboxConfig serves GET/PUT /api/automation/netbox (platform-owner only).
 func (s *server) handleNetboxConfig(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +154,7 @@ func (s *server) handleNetboxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": s.netboxCfg.effective().public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": netboxPublic(s.netboxCfg.effective())})
 	case http.MethodPut:
 		var in netboxConfig
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
@@ -210,7 +166,7 @@ func (s *server) handleNetboxConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"config": out.public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": netboxPublic(out)})
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/discovery"
 	"sort"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 )
 
 func serverWithDevices() *server {
-	d := NewDiscoveryAggregator()
+	d := discovery.NewDiscoveryAggregator()
 	d.Upsert(models.Device{ID: "core-1", Name: "core-1", Address: "10.1.0.1", TenantID: "acme"})
 	d.Upsert(models.Device{ID: "edge-2", Name: "edge-2", Address: "10.2.0.1", TenantID: "globex"})
 	d.Upsert(models.Device{ID: "shared", Name: "shared", Address: "10.9.0.1"}) // global/untagged (platform-owned)

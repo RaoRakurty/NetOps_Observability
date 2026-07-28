@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/discovery"
 	"sort"
 	"strconv"
 	"strings"
@@ -455,7 +456,7 @@ func (s *server) runBindingsImport(claims jwtClaims, tenant string, cross, overw
 // the DEVICE (server-side trusted state) and the identity tokens for geomap
 // resolution — the same contract as handleDeviceSite.
 func (s *server) bindDeviceSite(d models.Device, slug string, claims jwtClaims) error {
-	tokens := deviceIdentities(d)
+	tokens := discovery.DeviceIdentities(d)
 	if len(tokens) == 0 {
 		return errors.New("device has no stable identity token")
 	}

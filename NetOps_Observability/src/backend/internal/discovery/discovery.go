@@ -1,4 +1,4 @@
-package main
+package discovery
 
 import (
 	"context"
@@ -47,7 +47,7 @@ type DiscoveryAggregator struct {
 	// devices are deliberately NOT persisted — their source is their authority
 	// and a persisted shadow would resurrect what pollOnce legitimately prunes.
 	// See device_persist.go.
-	store *deviceStore
+	store DeviceStore
 }
 
 type sourceStats struct {
@@ -138,7 +138,7 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 		if d, ok := a.cache[p.id]; ok && d.Vendor == "" {
 			d.Vendor = vendor
 			if d.OS == "" && descr != "" {
-				d.OS = truncateDescr(descr)
+				d.OS = TruncateDescr(descr)
 			}
 			a.cache[p.id] = d
 		}
@@ -149,7 +149,8 @@ func (a *DiscoveryAggregator) enrichVendors(ctx context.Context, community strin
 // truncateDescr keeps sysDescr short enough for the inventory's OS column
 // while preserving the version phrase Vulnerability Management parses out of
 // it — Cisco's verbose sysDescrs put "Version x.y" past the 120-char mark.
-func truncateDescr(s string) string {
+// TruncateDescr bounds a sysDescr-style string for display.
+func TruncateDescr(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 200 {
 		return s[:200]
@@ -203,7 +204,7 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 	for _, d := range devices {
 		// An operator deleted this device: honour that instead of resurrecting
 		// it every poll (F-69). Recreating it via POST clears the tombstone.
-		if a.store.isSuppressed(d.ID) {
+		if a.store != nil && a.store.IsSuppressed(d.ID) {
 			continue
 		}
 		existing, ok := a.cache[d.ID]
@@ -225,6 +226,12 @@ func (a *DiscoveryAggregator) pollOnce(ctx context.Context, src DiscoverySource)
 			delete(a.cache, id)
 		}
 	}
+}
+
+// PollOnceForTest runs a single synchronous poll of src into the cache — test
+// support for seeding an aggregator without the poll loop.
+func (a *DiscoveryAggregator) PollOnceForTest(ctx context.Context, src DiscoverySource) {
+	a.pollOnce(ctx, src)
 }
 
 func (a *DiscoveryAggregator) RefreshNow() {
@@ -282,7 +289,7 @@ func dedupeDevices(cache map[string]models.Device) []models.Device {
 	// First record that claimed each identity token; subsequent claimants union.
 	seen := make(map[string]int, len(ids)*2)
 	for i, id := range ids {
-		for _, tok := range deviceIdentities(cache[id]) {
+		for _, tok := range DeviceIdentities(cache[id]) {
 			if j, ok := seen[tok]; ok {
 				union(i, j)
 			} else {
@@ -330,7 +337,8 @@ func (a *DiscoveryAggregator) RawDevices() []models.Device {
 // poll) has an IP the other (an IP-less synced NetBox record) lacks, they still
 // collapse via the shared name or serial. Empty/normalized-empty tokens are
 // dropped so a missing field can't accidentally union unrelated devices.
-func deviceIdentities(d models.Device) []string {
+// DeviceIdentities lists a device's stable identity keys (id, name, address).
+func DeviceIdentities(d models.Device) []string {
 	var out []string
 	if ip := strings.TrimSpace(d.Address); ip != "" {
 		out = append(out, "ip:"+ip)
@@ -412,11 +420,55 @@ func (a *DiscoveryAggregator) Get(id string) (models.Device, bool) {
 // SetStore attaches the persistence layer and seeds the cache from it. Called
 // once at startup, before Start(), so operator-created devices exist before the
 // first poll and before the API serves a request.
-func (a *DiscoveryAggregator) SetStore(st *deviceStore) {
+// NetboxConfig is the NetBox connection + sync-direction config (persisted by
+// the integrator's netbox_config store; the source only reads it).
+type NetboxConfig struct {
+	Enabled     bool   `json:"enabled"`
+	URL         string `json:"url"`
+	Token       string `json:"token,omitempty"`
+	IntervalSec int    `json:"interval_sec"` // poll cadence; 0 → default 60s
+	// Direction: "none" (default) | "write" | "read" | "both" — see the
+	// integrator's netbox_config.go for the full doctrine.
+	Direction string `json:"direction,omitempty"`
+	// Managed is derived (not persisted): the platform-bundled internal NetBox.
+	Managed bool `json:"managed,omitempty"`
+}
+
+// NetboxDirection normalizes the direction ("" → none).
+func NetboxDirection(c NetboxConfig) string {
+	switch d := strings.ToLower(strings.TrimSpace(c.Direction)); d {
+	case "write", "read", "both":
+		return d
+	default:
+		return "none"
+	}
+}
+
+// NetboxReadsDevices / NetboxWritesDevices report which way devices flow.
+func NetboxReadsDevices(c NetboxConfig) bool {
+	d := NetboxDirection(c)
+	return d == "read" || d == "both"
+}
+
+func NetboxWritesDevices(c NetboxConfig) bool {
+	d := NetboxDirection(c)
+	return d == "write" || d == "both"
+}
+
+// DeviceStore is the injected persistence seam for manual devices and F-69
+// delete-suppression (implemented by main's deviceStore).
+type DeviceStore interface {
+	IsSuppressed(id string) bool
+	Put(d models.Device) error
+	Remove(id string) error
+	Devices() []models.Device
+}
+
+func (a *DiscoveryAggregator) SetStore(st DeviceStore) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.store = st
-	for _, d := range st.devices() {
+	for _, d := range st.Devices() {
 		if d.Source == "" {
 			d.Source = "manual"
 		}
@@ -442,7 +494,7 @@ func (a *DiscoveryAggregator) Upsert(d models.Device) error {
 	// Only manual devices persist; a source-owned record is rebuilt by its
 	// source and must not be shadowed here.
 	if d.Source == "manual" && a.store != nil {
-		if err := a.store.put(d); err != nil {
+		if err := a.store.Put(d); err != nil {
 			return err
 		}
 	}
@@ -460,7 +512,7 @@ func (a *DiscoveryAggregator) Delete(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.store != nil {
-		if err := a.store.remove(id); err != nil {
+		if err := a.store.Remove(id); err != nil {
 			return err
 		}
 	}
@@ -644,15 +696,20 @@ func unquoteValue(s string) string {
 // =============================================================================
 
 type NetboxSource struct {
-	cfg    func() netboxConfig // live config (UI-set store, env fallback)
+	warn   func(msg string, fields map[string]any)
+	cfg    func() NetboxConfig // live config (UI-set store, env fallback)
 	client *http.Client
 }
 
 // NewNetboxSource takes a live config getter so the poller honors runtime changes
 // from the Automation → Source of Truth UI without a restart, falling back to env.
-func NewNetboxSource(cfg func() netboxConfig) *NetboxSource {
+func NewNetboxSource(cfg func() NetboxConfig, warn func(msg string, fields map[string]any)) *NetboxSource {
+	if warn == nil {
+		warn = func(string, map[string]any) {}
+	}
 	return &NetboxSource{
 		cfg:    cfg,
+		warn:   warn,
 		client: &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -708,7 +765,7 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 	// Sync direction: in write-only mode (the default) NetBox is a downstream
 	// mirror, never a device source — so synced devices can't flow back into the
 	// inventory as duplicates. Only "read"/"both" poll devices.
-	if !netboxReadsDevices(cfg) {
+	if !NetboxReadsDevices(cfg) {
 		return nil, nil
 	}
 
@@ -799,9 +856,9 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 			nu, perr := url.Parse(*page.Next)
 			switch {
 			case perr != nil || (nu.Scheme != "http" && nu.Scheme != "https"):
-				logWarn("discovery", "netbox: ignoring malformed pagination URL", nil)
+				n.warn("netbox: ignoring malformed pagination URL", nil)
 			case !strings.EqualFold(nu.Host, base.Host):
-				logWarn("discovery", "netbox: ignoring cross-host pagination URL", map[string]any{"got": nu.Host, "want": base.Host})
+				n.warn("netbox: ignoring cross-host pagination URL", map[string]any{"got": nu.Host, "want": base.Host})
 			default:
 				next = *page.Next
 			}

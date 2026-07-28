@@ -15,7 +15,7 @@ import (
 // device_persist.go — durable storage for OPERATOR-DEFINED devices.
 //
 // THE DEFECT. The discovery aggregator's inventory lived only in
-// `DiscoveryAggregator.cache`, a plain in-memory map with no persistence
+// `discovery.DiscoveryAggregator.cache`, a plain in-memory map with no persistence
 // anywhere. Devices that a SOURCE reports (SNMP scan, NetBox, static YAML) are
 // rebuilt on the next poll, so they survive by accident. Devices created
 // through `POST /api/devices` have no source to rebuild them: the API returned
@@ -230,3 +230,10 @@ func (s *deviceStore) isSuppressed(id string) bool {
 	_, ok := s.suppressed[id]
 	return ok
 }
+
+// discovery.DeviceStore adapter surface: the aggregator's injected persistence
+// seam delegates to the unexported store internals.
+func (s *deviceStore) IsSuppressed(id string) bool { return s.isSuppressed(id) }
+func (s *deviceStore) Put(d models.Device) error   { return s.put(d) }
+func (s *deviceStore) Remove(id string) error      { return s.remove(id) }
+func (s *deviceStore) Devices() []models.Device    { return s.devices() }
