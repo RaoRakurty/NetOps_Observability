@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/users"
 	"path/filepath"
 	"testing"
 )
@@ -8,11 +9,12 @@ import (
 // A configured MAX_USERS cap must block both create paths once reached, while an
 // unset/zero cap means unlimited (default behavior).
 func TestUserLimitEnforced(t *testing.T) {
-	us, err := newUserStore(filepath.Join(t.TempDir(), "users.json"))
+	d := userDeps()
+	d.MaxUsers = 2 // simulate MAX_USERS=2
+	us, err := users.NewFileStore(filepath.Join(t.TempDir(), "users.json"), d)
 	if err != nil {
-		t.Fatalf("newUserStore: %v", err)
+		t.Fatalf("NewFileStore: %v", err)
 	}
-	us.maxUsers = 2 // simulate MAX_USERS=2
 
 	if _, err := us.Create("alice", "Passw0rd!2345", RoleReadOnly); err != nil {
 		t.Fatalf("1st user should succeed: %v", err)
@@ -38,13 +40,12 @@ func TestUserLimitEnforced(t *testing.T) {
 }
 
 func TestUserLimitUnlimitedByDefault(t *testing.T) {
-	us, err := newUserStore(filepath.Join(t.TempDir(), "users.json"))
+	us, err := users.NewFileStore(filepath.Join(t.TempDir(), "users.json"), userDeps())
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
-	if us.maxUsers != 0 {
-		t.Fatalf("default cap should be 0 (unlimited), got %d", us.maxUsers)
-	}
+	// userDeps() reads MAX_USERS from env — unset in tests, so the cap is 0
+	// (unlimited); the loop below proves the behavior.
 	for i := 0; i < 25; i++ {
 		if _, err := us.Create("u"+itoa(i), "Passw0rd!2345", RoleReadOnly); err != nil {
 			t.Fatalf("unlimited store should accept user %d: %v", i, err)

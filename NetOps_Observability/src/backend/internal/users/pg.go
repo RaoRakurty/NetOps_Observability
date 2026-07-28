@@ -1,4 +1,4 @@
-package main
+package users
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 //   - Mutations are partial UPDATEs of a single row, not a rewrite of the whole
 //     collection, and there is no in-process cache to go stale across instances.
 //
-// Scope rules (see the usersRepo doc in users.go):
+// Scope rules (see the Repo doc in users.go):
 //   - Get / Count / every mutation run at PLATFORM scope ('*'). username is the
 //     global primary key, so existence/uniqueness checks and the platform-wide
 //     last-super-admin invariant must see across tenants. Login also resolves a
@@ -36,18 +36,31 @@ import (
 // The domain invariants (patch application, federated refresh, last-super-admin
 // guard, password validation, create defaults) come from the shared pure helpers
 // in users.go, so this backend and the file backend cannot drift.
-type pgUsersStore struct {
-	db       *pgDB
-	maxUsers int // 0 = unlimited; mirrors userStore.maxUsers
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-func newPgUsersStore(db *pgDB) *pgUsersStore {
-	return &pgUsersStore{db: db, maxUsers: maxUsersLimit()}
+type PGStore struct {
+	db   DB
+	deps Deps
 }
+
+// NewPGStore builds the per-row RLS-backed store (Deps.KV unused here).
+func NewPGStore(db DB, d Deps) (*PGStore, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	return &PGStore{db: db, deps: d}, nil
+}
+
+// normTenant mirrors the integrator's tenant-id normalization (duplicated per
+// the no-shared-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
 
 // userID is the primary-key form of a username: lowercased to match the
 // case-insensitive keying the file store uses (and the lowerID rowSpec the M0
-// importer applied). It does NOT trim — mirroring userStore's map-key lookup, so
+// importer applied). It does NOT trim — mirroring FileStore's map-key lookup, so
 // the two backends resolve the same string to the same (or no) row.
 func userID(username string) string { return strings.ToLower(username) }
 
@@ -62,14 +75,14 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (s *pgUsersStore) Get(username string) (User, bool) {
+func (s *PGStore) Get(username string) (User, bool) {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	var u User
 	found := false
 	// Platform scope: username is the global key; login resolves tenant from the
 	// row, and authorization on the result is the handler's job.
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var data []byte
 		err := tx.QueryRow(ctx, `SELECT data FROM users WHERE id=$1`, userID(username)).Scan(&data)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -85,18 +98,18 @@ func (s *pgUsersStore) Get(username string) (User, bool) {
 		return nil
 	})
 	if err != nil {
-		logError("users", "get", map[string]any{"error": err.Error()})
+		s.deps.Errorf("users", "get", map[string]any{"error": err.Error()})
 		return User{}, false
 	}
 	return u, found
 }
 
-func (s *pgUsersStore) List(tenant string, cross bool) []User {
+func (s *PGStore) List(tenant string, cross bool) []User {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	var out []User
 	// RLS scopes the read: a scoped admin sees only its own tenant; '*' sees all.
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT data FROM users`)
 		if err != nil {
 			return err
@@ -116,33 +129,33 @@ func (s *pgUsersStore) List(tenant string, cross bool) []User {
 		return rows.Err()
 	})
 	if err != nil {
-		logError("users", "list", map[string]any{"error": err.Error()})
+		s.deps.Errorf("users", "list", map[string]any{"error": err.Error()})
 		return nil
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out
 }
 
-func (s *pgUsersStore) Count() int {
+func (s *PGStore) Count() int {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	var n int
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
 	})
 	if err != nil {
-		logError("users", "count", map[string]any{"error": err.Error()})
+		s.deps.Errorf("users", "count", map[string]any{"error": err.Error()})
 		return 0
 	}
 	return n
 }
 
-func (s *pgUsersStore) Create(username, password, role string) (User, error) {
+func (s *PGStore) Create(username, password, role string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
 	}
-	if err := validatePassword(password); err != nil {
+	if err := ValidatePassword(password); err != nil {
 		return User{}, err
 	}
 	hash, err := token.HashPassword(password)
@@ -153,13 +166,13 @@ func (s *pgUsersStore) Create(username, password, role string) (User, error) {
 	return s.insertNew(u, false)
 }
 
-func (s *pgUsersStore) CreateFull(u User, password string) (User, error) {
+func (s *PGStore) CreateFull(u User, password string) (User, error) {
 	u.Username = strings.TrimSpace(u.Username)
 	if u.Username == "" {
 		return User{}, errors.New("username required")
 	}
 	if password != "" {
-		if err := validatePassword(password); err != nil {
+		if err := ValidatePassword(password); err != nil {
 			return User{}, err
 		}
 		hash, err := token.HashPassword(password)
@@ -168,7 +181,7 @@ func (s *pgUsersStore) CreateFull(u User, password string) (User, error) {
 		}
 		u.PasswordHash = hash
 	}
-	u = applyCreateDefaults(u)
+	u = ApplyCreateDefaults(u)
 	u.CreatedAt = time.Now().UTC()
 	return s.insertNew(u, false)
 }
@@ -178,11 +191,11 @@ func (s *pgUsersStore) CreateFull(u User, password string) (User, error) {
 // unique-violation is the race backstop. exemptCap skips the MAX_USERS gate
 // (federated JIT provisioning must never be locked out — same rule as the file
 // store).
-func (s *pgUsersStore) insertNew(u User, exemptCap bool) (User, error) {
+func (s *PGStore) insertNew(u User, exemptCap bool) (User, error) {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(u.Username)
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, id).Scan(&exists); err != nil {
 			return err
@@ -190,13 +203,13 @@ func (s *pgUsersStore) insertNew(u User, exemptCap bool) (User, error) {
 		if exists {
 			return fmt.Errorf("user %q already exists", u.Username)
 		}
-		if !exemptCap && s.maxUsers > 0 {
+		if !exemptCap && s.deps.MaxUsers > 0 {
 			var n int
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
 				return err
 			}
-			if n >= s.maxUsers {
-				return fmt.Errorf("user limit reached (MAX_USERS=%d)", s.maxUsers)
+			if n >= s.deps.MaxUsers {
+				return fmt.Errorf("user limit reached (MAX_USERS=%d)", s.deps.MaxUsers)
 			}
 		}
 		data, err := json.Marshal(u)
@@ -216,26 +229,26 @@ func (s *pgUsersStore) insertNew(u User, exemptCap bool) (User, error) {
 	return u, nil
 }
 
-func (s *pgUsersStore) Update(username string, patch User) (User, error) {
+func (s *PGStore) Update(username string, patch User) (User, error) {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(username)
 	var out User
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if updateTouchesLastSuperAdmin(u, patch) {
-			n, err := countSuperAdminsTx(ctx, tx)
+		if UpdateTouchesLastSuperAdmin(u, patch, s.deps.IsSuperAdmin) {
+			n, err := countSuperAdminsTx(ctx, tx, s.deps.IsSuperAdmin)
 			if err != nil {
 				return err
 			}
 			if n <= 1 {
-				return errLastSuperAdmin
+				return ErrLastSuperAdmin
 			}
 		}
-		u = applyUserPatch(u, patch)
+		u = ApplyUserPatch(u, patch)
 		out = u
 		return writeUserTx(ctx, tx, u)
 	})
@@ -245,11 +258,11 @@ func (s *pgUsersStore) Update(username string, patch User) (User, error) {
 	return out, nil
 }
 
-func (s *pgUsersStore) SetMFA(username string, enabled bool, secret, pending string) error {
+func (s *PGStore) SetMFA(username string, enabled bool, secret, pending string) error {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(username)
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -259,22 +272,22 @@ func (s *pgUsersStore) SetMFA(username string, enabled bool, secret, pending str
 	})
 }
 
-func (s *pgUsersStore) Delete(username string) error {
+func (s *PGStore) Delete(username string) error {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(username)
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if isSuperAdminRole(u.Role) {
-			n, err := countSuperAdminsTx(ctx, tx)
+		if s.deps.IsSuperAdmin(u.Role) {
+			n, err := countSuperAdminsTx(ctx, tx, s.deps.IsSuperAdmin)
 			if err != nil {
 				return err
 			}
 			if n <= 1 {
-				return errLastSuperAdminDelete
+				return ErrLastSuperAdminDelete
 			}
 		}
 		_, err = tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, id)
@@ -282,20 +295,20 @@ func (s *pgUsersStore) Delete(username string) error {
 	})
 }
 
-func (s *pgUsersStore) ChangePassword(username, newPassword string) error {
+func (s *PGStore) ChangePassword(username, newPassword string) error {
 	return s.setPassword(username, newPassword, true)
 }
 
 // RehashPassword re-wraps the same secret at the current cost — hash only.
-func (s *pgUsersStore) RehashPassword(username, samePassword string) error {
+func (s *PGStore) RehashPassword(username, samePassword string) error {
 	return s.setPassword(username, samePassword, false)
 }
 
-// setPassword mirrors userStore.setPassword exactly; `stamp` separates a real
+// setPassword mirrors FileStore.setPassword exactly; `stamp` separates a real
 // change (history + expiry clock) from a cost rehash. The User row is a JSON
 // `data` column, so the new lifecycle fields need no migration.
-func (s *pgUsersStore) setPassword(username, newPassword string, stamp bool) error {
-	if err := validatePassword(newPassword); err != nil {
+func (s *PGStore) setPassword(username, newPassword string, stamp bool) error {
+	if err := ValidatePassword(newPassword); err != nil {
 		return err
 	}
 	hash, err := token.HashPassword(newPassword)
@@ -305,13 +318,13 @@ func (s *pgUsersStore) setPassword(username, newPassword string, stamp bool) err
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(username)
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if stamp {
-			applyPasswordChange(&u, hash, time.Now().UTC())
+			s.deps.ApplyPasswordChange(&u, hash, time.Now().UTC())
 		} else {
 			u.PasswordHash = hash
 		}
@@ -321,17 +334,17 @@ func (s *pgUsersStore) setPassword(username, newPassword string, stamp bool) err
 
 // ResetPassword is the admin variant of ChangePassword (no current password
 // required); identical persistence, mirroring the file store.
-func (s *pgUsersStore) ResetPassword(username, newPassword string) error {
+func (s *PGStore) ResetPassword(username, newPassword string) error {
 	return s.ChangePassword(username, newPassword)
 }
 
-func (s *pgUsersStore) TouchLogin(username string) {
+func (s *PGStore) TouchLogin(username string) {
 	ctx, cancel := usersCtx()
 	defer cancel()
 	id := userID(username)
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
-		if errors.Is(err, errNoSuchUser) {
+		if errors.Is(err, ErrNoSuchUser) {
 			return nil // best-effort: a removed account shouldn't error a login record
 		}
 		if err != nil {
@@ -341,11 +354,11 @@ func (s *pgUsersStore) TouchLogin(username string) {
 		return writeUserTx(ctx, tx, u)
 	})
 	if err != nil {
-		logError("users", "touch login", map[string]any{"error": err.Error()})
+		s.deps.Errorf("users", "touch login", map[string]any{"error": err.Error()})
 	}
 }
 
-func (s *pgUsersStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
+func (s *PGStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
@@ -357,25 +370,25 @@ func (s *pgUsersStore) UpsertFederated(username, email, displayName, role, sourc
 	defer cancel()
 	id := userID(username)
 	var out User
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		u, err := loadUserTx(ctx, tx, id)
 		switch {
 		case err == nil:
 			// Existing account. A LOCAL account is never re-roled by federation —
 			// local management wins; the federated login is just accepted against it.
 			if u.AuthSource != "local" {
-				u = mergeFederated(u, email, displayName, role, source)
+				u = MergeFederated(u, email, displayName, role, source)
 				if err := writeUserTx(ctx, tx, u); err != nil {
 					return err
 				}
 			}
 			out = u
 			return nil
-		case errors.Is(err, errNoSuchUser):
+		case errors.Is(err, ErrNoSuchUser):
 			// First federated login — provision a passwordless account. Cap-exempt
 			// so SSO never locks out at MAX_USERS.
 			if tenant == "" {
-				tenant = TenantGlobal
+				tenant = s.deps.DefaultTenant
 			}
 			nu := User{
 				Username: username, Role: role, Email: email, DisplayName: displayName,
@@ -401,7 +414,7 @@ func (s *pgUsersStore) UpsertFederated(username, email, displayName, role, sourc
 	return out, nil
 }
 
-func (s *pgUsersStore) SeedAdmin(username, password string) error {
+func (s *PGStore) SeedAdmin(username, password string) error {
 	if username == "" || password == "" {
 		return nil
 	}
@@ -416,12 +429,12 @@ func (s *pgUsersStore) SeedAdmin(username, password string) error {
 
 // loadUserTx reads one user FOR UPDATE inside the caller's transaction, so a
 // read-modify-write (Update/Delete/ChangePassword/TouchLogin) holds the row
-// against a concurrent writer. Absent → errNoSuchUser (shared sentinel).
+// against a concurrent writer. Absent → ErrNoSuchUser (shared sentinel).
 func loadUserTx(ctx context.Context, tx pgx.Tx, id string) (User, error) {
 	var data []byte
 	err := tx.QueryRow(ctx, `SELECT data FROM users WHERE id=$1 FOR UPDATE`, id).Scan(&data)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, errNoSuchUser
+		return User{}, ErrNoSuchUser
 	}
 	if err != nil {
 		return User{}, err
@@ -449,7 +462,7 @@ func writeUserTx(ctx context.Context, tx pgx.Tx, u User) error {
 // caller's (platform-scope) transaction — the super-admin floor is a
 // platform-wide invariant, so it must not be tenant-scoped. Uses the shared
 // isSuperAdminRole so the count matches the file store exactly.
-func countSuperAdminsTx(ctx context.Context, tx pgx.Tx) (int, error) {
+func countSuperAdminsTx(ctx context.Context, tx pgx.Tx, isSuper func(string) bool) (int, error) {
 	rows, err := tx.Query(ctx, `SELECT data FROM users`)
 	if err != nil {
 		return 0, err
@@ -465,7 +478,7 @@ func countSuperAdminsTx(ctx context.Context, tx pgx.Tx) (int, error) {
 		if err := json.Unmarshal(data, &u); err != nil {
 			return 0, err
 		}
-		if isSuperAdminRole(u.Role) && u.Status != "disabled" {
+		if isSuper(u.Role) && u.Status != "disabled" {
 			n++
 		}
 	}

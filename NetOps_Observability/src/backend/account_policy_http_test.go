@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"netops/backend/internal/session"
+	"netops/backend/internal/users"
 	"strings"
 	"testing"
 	"time"
@@ -22,21 +23,12 @@ import (
 // exactly what these rules need to be provable without sleeping.
 func backdateUser(t *testing.T, s *server, username string, mod func(*User)) {
 	t.Helper()
-	us, ok := s.users.(*userStore)
+	us, ok := s.users.(*users.FileStore)
 	if !ok {
-		t.Fatalf("expected the file-backed userStore, got %T", s.users)
+		t.Fatalf("expected the file-backed users.FileStore, got %T", s.users)
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
-	key := strings.ToLower(username)
-	u, ok := us.users[key]
-	if !ok {
-		t.Fatalf("no such user %q", username)
-	}
-	mod(&u)
-	us.users[key] = u
-	if err := us.flushLocked(); err != nil {
-		t.Fatalf("flush: %v", err)
+	if err := us.MutateForTest(username, mod); err != nil {
+		t.Fatalf("mutate %q: %v", username, err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/session"
+	"netops/backend/internal/users"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 			t.Fatal(err)
 		}
 	}
-	us, err := newUserStore(dir + "/users.json")
+	us, err := users.NewFileStore(dir+"/users.json", userDeps())
 	must(err)
 	rs, err := newRoleStore(dir + "/roles.json")
 	must(err)

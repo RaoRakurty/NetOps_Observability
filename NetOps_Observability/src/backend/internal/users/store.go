@@ -1,4 +1,4 @@
-package main
+package users
 
 import (
 	"encoding/json"
@@ -14,10 +14,10 @@ import (
 
 // User store.
 //
-// Two backends implement the usersRepo seam (mirroring auditRepo, #32):
-//   - userStore (file/default, below): the whole collection lives in memory and
+// Two backends implement the Repo seam (mirroring auditRepo, #32):
+//   - FileStore (file/default, below): the whole collection lives in memory and
 //     is flushed as one JSON blob. Fine for single-node dev/lab.
-//   - pgUsersStore (STORE_BACKEND=postgres, users_pg.go): one row per user in an
+//   - PGStore (STORE_BACKEND=postgres, users_pg.go): one row per user in an
 //     RLS-protected table; reads are query-driven, the tenant-scoped List is
 //     enforced per request by Row-Level Security (not just an app-layer filter),
 //     and mutations are partial UPDATEs instead of rewrite-the-whole-collection.
@@ -27,7 +27,7 @@ import (
 // password validation — are factored into the pure helpers near the bottom of
 // this file and shared by both implementations so they cannot drift.
 
-// usersRepo is the user-store seam. Reads split by tenant scope:
+// Repo is the user-store seam. Reads split by tenant scope:
 //   - List(tenant, cross) is PER-REQUEST tenant-scoped: a scoped admin sees only
 //     its own tenant's users (RLS-enforced on the pg backend; the same
 //     sameTenant filter on the file backend). The platform owner ('*') sees all.
@@ -38,7 +38,7 @@ import (
 //
 // Mutations likewise run at platform scope on the pg backend (global username PK,
 // platform-wide super-admin invariant); the handler gates who may mutate whom.
-type usersRepo interface {
+type Repo interface {
 	Get(username string) (User, bool)
 	List(tenant string, cross bool) []User
 	Create(username, password, role string) (User, error)
@@ -58,18 +58,6 @@ type usersRepo interface {
 	TouchLogin(username string)
 	Count() int
 	SeedAdmin(username, password string) error
-}
-
-// newUsersStore selects the user-store backend, mirroring newAuditStore: under
-// STORE_BACKEND=postgres it returns the per-row pgUsersStore; otherwise the
-// file-backed userStore. The choice keys off the already-initialized process
-// backend, so initStoreBackend must have run first (it does — main.go wires it
-// before constructing stores).
-func newUsersStore(path string) (usersRepo, error) {
-	if ps, ok := backend.(*pgStore); ok {
-		return newPgUsersStore(ps.db), nil
-	}
-	return newUserStore(path)
 }
 
 type User struct {
@@ -110,46 +98,68 @@ type User struct {
 	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
 
-type userStore struct {
-	mu       sync.RWMutex
-	path     string
-	users    map[string]User
-	maxUsers int // 0 = unlimited
+// KV abstracts where the file backend persists its JSON blob (the platform kv
+// layer; a missing key must return an os.ErrNotExist-wrapped error).
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
 }
 
-func newUserStore(path string) (*userStore, error) {
+// Deps are the cross-domain inputs the store must not own: persistence, the
+// structured error sink, the SR-025 federated-role guard, the role predicate
+// behind the last-super-admin invariant, account_policy's password-change
+// stamping, the tenant default for federated JIT, and the MAX_USERS cap.
+type Deps struct {
+	KV                  KV
+	Errorf              func(component, msg string, fields map[string]any)
+	GuardRole           func(role, tenant, username, source string) string
+	IsSuperAdmin        func(role string) bool
+	ApplyPasswordChange func(u *User, hash string, now time.Time)
+	DefaultTenant       string
+	MaxUsers            int // 0 = unlimited
+}
+
+func (d Deps) validate() error {
+	if d.Errorf == nil || d.GuardRole == nil || d.IsSuperAdmin == nil || d.ApplyPasswordChange == nil || d.DefaultTenant == "" {
+		return errors.New("users: Errorf, GuardRole, IsSuperAdmin, ApplyPasswordChange and DefaultTenant are required")
+	}
+	return nil
+}
+
+type FileStore struct {
+	mu    sync.RWMutex
+	path  string
+	deps  Deps
+	users map[string]User
+}
+
+// NewFileStore opens the file-backed store (Deps.KV required).
+func NewFileStore(path string, d Deps) (*FileStore, error) {
 	if path == "" {
 		path = "/data/users.json"
 	}
-	s := &userStore{path: path, users: make(map[string]User), maxUsers: maxUsersLimit()}
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	if d.KV == nil {
+		return nil, errors.New("users.NewFileStore: Deps.KV is required")
+	}
+	s := &FileStore{path: path, deps: d, users: make(map[string]User)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return s, nil
 }
 
-// maxUsersLimit reads the configurable account cap from MAX_USERS (0/unset =
-// unlimited). A cap is best practice for abuse/resource control and licensing —
-// e.g. Versa caps a single VOS at 256 tenants — so the limit is exposed but
-// defaults to unlimited to preserve existing behavior. Negative/garbage → 0.
-func maxUsersLimit() int {
-	if v := os.Getenv("MAX_USERS"); v != "" {
-		if n, err := parseIntStrict(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
 // atCapLocked reports whether adding another LOCAL/admin-created account would
 // exceed the configured cap. Caller must hold s.mu. Federated JIT provisioning
 // (UpsertFederated) is intentionally exempt so the cap never locks out SSO.
-func (s *userStore) atCapLocked() bool {
-	return s.maxUsers > 0 && len(s.users) >= s.maxUsers
+func (s *FileStore) atCapLocked() bool {
+	return s.deps.MaxUsers > 0 && len(s.users) >= s.deps.MaxUsers
 }
 
-func (s *userStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *FileStore) load() error {
+	b, err := s.deps.KV.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -163,7 +173,7 @@ func (s *userStore) load() error {
 	return nil
 }
 
-func (s *userStore) flushLocked() error {
+func (s *FileStore) flushLocked() error {
 	list := make([]User, 0, len(s.users))
 	for _, u := range s.users {
 		list = append(list, u)
@@ -172,22 +182,22 @@ func (s *userStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.deps.KV.Save(s.path, b)
 }
 
-func (s *userStore) Get(username string) (User, bool) {
+func (s *FileStore) Get(username string) (User, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	u, ok := s.users[strings.ToLower(username)]
 	return u, ok
 }
 
-func (s *userStore) Create(username, password, role string) (User, error) {
+func (s *FileStore) Create(username, password, role string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
 	}
-	if err := validatePassword(password); err != nil {
+	if err := ValidatePassword(password); err != nil {
 		return User{}, err
 	}
 	hash, err := token.HashPassword(password)
@@ -206,7 +216,7 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 		return User{}, fmt.Errorf("user %q already exists", username)
 	}
 	if s.atCapLocked() {
-		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.maxUsers)
+		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.deps.MaxUsers)
 	}
 	s.users[strings.ToLower(username)] = u
 	if err := s.flushLocked(); err != nil {
@@ -220,7 +230,7 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 // never included by the handler, which maps through toPublic). The platform
 // owner ('*') sees all; a scoped admin sees only its own tenant's users —
 // strict isolation, mirroring the RLS the pg backend enforces in-database.
-func (s *userStore) List(tenant string, cross bool) []User {
+func (s *FileStore) List(tenant string, cross bool) []User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]User, 0, len(s.users))
@@ -237,13 +247,13 @@ func (s *userStore) List(tenant string, cross bool) []User {
 // CreateFull creates a user with the richer identity fields. An empty password
 // produces an account with no usable local password (e.g. an invited or
 // federated user) — login simply never matches until a password is set.
-func (s *userStore) CreateFull(u User, password string) (User, error) {
+func (s *FileStore) CreateFull(u User, password string) (User, error) {
 	u.Username = strings.TrimSpace(u.Username)
 	if u.Username == "" {
 		return User{}, errors.New("username required")
 	}
 	if password != "" {
-		if err := validatePassword(password); err != nil {
+		if err := ValidatePassword(password); err != nil {
 			return User{}, err
 		}
 		hash, err := token.HashPassword(password)
@@ -252,7 +262,7 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 		}
 		u.PasswordHash = hash
 	}
-	u = applyCreateDefaults(u)
+	u = ApplyCreateDefaults(u)
 	u.CreatedAt = time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,7 +270,7 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 		return User{}, fmt.Errorf("user %q already exists", u.Username)
 	}
 	if s.atCapLocked() {
-		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.maxUsers)
+		return User{}, fmt.Errorf("user limit reached (MAX_USERS=%d)", s.deps.MaxUsers)
 	}
 	s.users[strings.ToLower(u.Username)] = u
 	if err := s.flushLocked(); err != nil {
@@ -276,20 +286,8 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 // IdP-derived role so Keycloak role/group changes propagate. A pre-existing
 // LOCAL account of the same name is never silently converted or re-roled — the
 // federated login is accepted against it but local management wins.
-// guardFederatedRole prevents a federated identity from SILENTLY becoming the
-// platform owner (global tenant + super-admin) via an IdP role/tenant mapping
-// (SR-025). A mis-mapped IdP group must not seize cross-tenant control; require
-// an explicit FEDERATION_ALLOW_PLATFORM_OWNER=true opt-in, otherwise downgrade.
-func guardFederatedRole(role, tenant, username, source string) string {
-	if tenant == TenantGlobal && role == RoleSuperAdmin && os.Getenv("FEDERATION_ALLOW_PLATFORM_OWNER") != "true" {
-		logWarn("auth", "refused federated platform-owner mapping — downgrading role; set FEDERATION_ALLOW_PLATFORM_OWNER=true to allow",
-			map[string]any{"user": username, "source": source})
-		return RoleReadOnly
-	}
-	return role
-}
 
-func (s *userStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
+func (s *FileStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return User{}, errors.New("username required")
@@ -305,7 +303,7 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 			// Federated account — keep it in sync with the IdP (SR-025: guard the
 			// IdP-mapped role against silent platform-owner escalation, using the
 			// account's existing tenant).
-			u = mergeFederated(u, email, displayName, guardFederatedRole(role, u.TenantID, username, source), source)
+			u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
 			s.users[key] = u
 			if err := s.flushLocked(); err != nil {
 				return User{}, err
@@ -314,9 +312,9 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 		return u, nil
 	}
 	if tenant == "" {
-		tenant = TenantGlobal
+		tenant = s.deps.DefaultTenant
 	}
-	role = guardFederatedRole(role, tenant, username, source)
+	role = s.deps.GuardRole(role, tenant, username, source)
 	u := User{
 		Username: username, Role: role, Email: email, DisplayName: displayName,
 		TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
@@ -332,18 +330,18 @@ func (s *userStore) UpsertFederated(username, email, displayName, role, source, 
 // Update applies a patch to mutable profile fields (role, email, display name,
 // tenant, status). Admin-safe: refuses to demote or disable the last user who
 // holds the super-admin role, so an operator can never lock everyone out.
-func (s *userStore) Update(username string, patch User) (User, error) {
+func (s *FileStore) Update(username string, patch User) (User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := strings.ToLower(username)
 	u, ok := s.users[key]
 	if !ok {
-		return User{}, errNoSuchUser
+		return User{}, ErrNoSuchUser
 	}
-	if updateTouchesLastSuperAdmin(u, patch) && s.countSuperAdminsLocked() <= 1 {
-		return User{}, errLastSuperAdmin
+	if UpdateTouchesLastSuperAdmin(u, patch, s.deps.IsSuperAdmin) && s.countSuperAdminsLocked() <= 1 {
+		return User{}, ErrLastSuperAdmin
 	}
-	u = applyUserPatch(u, patch)
+	u = ApplyUserPatch(u, patch)
 	s.users[key] = u
 	if err := s.flushLocked(); err != nil {
 		return User{}, err
@@ -352,25 +350,25 @@ func (s *userStore) Update(username string, patch User) (User, error) {
 }
 
 // Delete removes a user. Admin-safe: the last super-admin cannot be deleted.
-func (s *userStore) Delete(username string) error {
+func (s *FileStore) Delete(username string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := strings.ToLower(username)
 	u, ok := s.users[key]
 	if !ok {
-		return errNoSuchUser
+		return ErrNoSuchUser
 	}
-	if isSuperAdminRole(u.Role) && s.countSuperAdminsLocked() <= 1 {
-		return errLastSuperAdminDelete
+	if s.deps.IsSuperAdmin(u.Role) && s.countSuperAdminsLocked() <= 1 {
+		return ErrLastSuperAdminDelete
 	}
 	delete(s.users, key)
 	return s.flushLocked()
 }
 
-func (s *userStore) countSuperAdminsLocked() int {
+func (s *FileStore) countSuperAdminsLocked() int {
 	n := 0
 	for _, u := range s.users {
-		if isSuperAdminRole(u.Role) && u.Status != "disabled" {
+		if s.deps.IsSuperAdmin(u.Role) && u.Status != "disabled" {
 			n++
 		}
 	}
@@ -379,23 +377,23 @@ func (s *userStore) countSuperAdminsLocked() int {
 
 // ResetPassword sets a new password for any user (admin action — no current
 // password required). Distinct from ChangePassword, which is self-service.
-func (s *userStore) ResetPassword(username, newPassword string) error {
+func (s *FileStore) ResetPassword(username, newPassword string) error {
 	return s.ChangePassword(username, newPassword)
 }
 
-func (s *userStore) ChangePassword(username, newPassword string) error {
+func (s *FileStore) ChangePassword(username, newPassword string) error {
 	return s.setPassword(username, newPassword, true)
 }
 
 // RehashPassword re-wraps the same secret at the current cost — hash only.
-func (s *userStore) RehashPassword(username, samePassword string) error {
+func (s *FileStore) RehashPassword(username, samePassword string) error {
 	return s.setPassword(username, samePassword, false)
 }
 
 // setPassword is the single write path for both. `stamp` distinguishes a real
 // change (history + expiry clock) from a cost rehash (hash only).
-func (s *userStore) setPassword(username, newPassword string, stamp bool) error {
-	if err := validatePassword(newPassword); err != nil {
+func (s *FileStore) setPassword(username, newPassword string, stamp bool) error {
+	if err := ValidatePassword(newPassword); err != nil {
 		return err
 	}
 	hash, err := token.HashPassword(newPassword)
@@ -406,10 +404,10 @@ func (s *userStore) setPassword(username, newPassword string, stamp bool) error 
 	defer s.mu.Unlock()
 	u, ok := s.users[strings.ToLower(username)]
 	if !ok {
-		return errNoSuchUser
+		return ErrNoSuchUser
 	}
 	if stamp {
-		applyPasswordChange(&u, hash, time.Now().UTC())
+		s.deps.ApplyPasswordChange(&u, hash, time.Now().UTC())
 	} else {
 		u.PasswordHash = hash
 	}
@@ -417,19 +415,19 @@ func (s *userStore) setPassword(username, newPassword string, stamp bool) error 
 	return s.flushLocked()
 }
 
-func (s *userStore) SetMFA(username string, enabled bool, secret, pending string) error {
+func (s *FileStore) SetMFA(username string, enabled bool, secret, pending string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.users[strings.ToLower(username)]
 	if !ok {
-		return errNoSuchUser
+		return ErrNoSuchUser
 	}
 	u.MFAEnabled, u.MFASecret, u.MFAPending = enabled, secret, pending
 	s.users[strings.ToLower(username)] = u
 	return s.flushLocked()
 }
 
-func (s *userStore) TouchLogin(username string) {
+func (s *FileStore) TouchLogin(username string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.users[strings.ToLower(username)]
@@ -444,12 +442,12 @@ func (s *userStore) TouchLogin(username string) {
 	// used account. Still best-effort (a login must not fail because the
 	// timestamp did not write), but never silent.
 	if err := s.flushLocked(); err != nil {
-		logError("users", "login timestamp persist failed — account_inactivity_days reads this field",
+		s.deps.Errorf("users", "login timestamp persist failed — account_inactivity_days reads this field",
 			map[string]any{"user": username, "err": err.Error()})
 	}
 }
 
-func (s *userStore) Count() int {
+func (s *FileStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.users)
@@ -457,7 +455,7 @@ func (s *userStore) Count() int {
 
 // SeedAdmin creates the bootstrap admin user if the store is empty.
 // Called once on server start with credentials from env.
-func (s *userStore) SeedAdmin(username, password string) error {
+func (s *FileStore) SeedAdmin(username, password string) error {
 	if username == "" || password == "" {
 		return nil // nothing to do
 	}
@@ -468,40 +466,51 @@ func (s *userStore) SeedAdmin(username, password string) error {
 	return err
 }
 
+// sameTenant mirrors the integrator's tenancy filter (duplicated per the
+// no-shared-utils rule): cross sees all; otherwise the resource's tenant must
+// equal the caller's (case-insensitive; blank resource = global/platform-owned,
+// visible only cross).
+func sameTenant(resourceTenant, tenant string, cross bool) bool {
+	if cross {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(resourceTenant), strings.TrimSpace(tenant))
+}
+
 // ---- shared domain logic (backend-agnostic) --------------------------------
 //
 // These pure helpers and sentinel errors encode the user-store invariants that
 // MUST behave identically whether the backing store is the in-memory file map
-// or normalized Postgres rows. Both userStore and pgUsersStore call them so the
+// or normalized Postgres rows. Both FileStore and PGStore call them so the
 // rules can't drift apart.
 
 // The password length cap (SR-013 amplification-DoS bound) lives with the KDF
-// as token.MaxPasswordLen; validatePassword below enforces it at creation/change.
+// as token.MaxPasswordLen; ValidatePassword below enforces it at creation/change.
 
 var (
-	errShortPassword        = errors.New("password must be at least 8 characters")
-	errLongPassword         = errors.New("password must be at most 128 characters")
-	errLastSuperAdmin       = errors.New("cannot demote or disable the last super-admin")
-	errLastSuperAdminDelete = errors.New("cannot delete the last super-admin")
-	errNoSuchUser           = errors.New("no such user")
+	ErrShortPassword        = errors.New("password must be at least 8 characters")
+	ErrLongPassword         = errors.New("password must be at most 128 characters")
+	ErrLastSuperAdmin       = errors.New("cannot demote or disable the last super-admin")
+	ErrLastSuperAdminDelete = errors.New("cannot delete the last super-admin")
+	ErrNoSuchUser           = errors.New("no such user")
 )
 
-// validatePassword enforces the minimum password length (a non-empty password
+// ValidatePassword enforces the minimum password length (a non-empty password
 // must be at least 8 characters). Empty is handled by the callers (CreateFull
 // permits a passwordless/invited account; Create/ChangePassword require one).
-func validatePassword(password string) error {
+func ValidatePassword(password string) error {
 	if len(password) < 8 {
-		return errShortPassword
+		return ErrShortPassword
 	}
 	if len(password) > token.MaxPasswordLen {
-		return errLongPassword
+		return ErrLongPassword
 	}
 	return nil
 }
 
-// applyCreateDefaults fills the create-time defaults for a rich-profile user:
+// ApplyCreateDefaults fills the create-time defaults for a rich-profile user:
 // an active, local account unless the caller said otherwise. Pure.
-func applyCreateDefaults(u User) User {
+func ApplyCreateDefaults(u User) User {
 	if u.Status == "" {
 		u.Status = "active"
 	}
@@ -511,10 +520,10 @@ func applyCreateDefaults(u User) User {
 	return u
 }
 
-// applyUserPatch applies a mutable-field patch (role, email, display name,
+// ApplyUserPatch applies a mutable-field patch (role, email, display name,
 // tenant, status) onto a user; empty patch fields leave the current value. Pure
 // — the last-super-admin guard is the caller's responsibility (it needs a count).
-func applyUserPatch(u, patch User) User {
+func ApplyUserPatch(u, patch User) User {
 	if patch.Role != "" {
 		u.Role = patch.Role
 	}
@@ -533,20 +542,20 @@ func applyUserPatch(u, patch User) User {
 	return u
 }
 
-// updateTouchesLastSuperAdmin reports whether a patch would demote (change the
+// UpdateTouchesLastSuperAdmin reports whether a patch would demote (change the
 // role of) or disable a super-admin — the two operations that must be refused
 // when only one super-admin remains, so an operator can never lock everyone out.
-func updateTouchesLastSuperAdmin(u, patch User) bool {
-	demoting := patch.Role != "" && patch.Role != u.Role && isSuperAdminRole(u.Role)
-	disabling := patch.Status == "disabled" && isSuperAdminRole(u.Role)
+func UpdateTouchesLastSuperAdmin(u, patch User, isSuper func(string) bool) bool {
+	demoting := patch.Role != "" && patch.Role != u.Role && isSuper(u.Role)
+	disabling := patch.Status == "disabled" && isSuper(u.Role)
 	return demoting || disabling
 }
 
-// mergeFederated refreshes a federated (non-local) account from its IdP: any
+// MergeFederated refreshes a federated (non-local) account from its IdP: any
 // non-empty incoming attribute overwrites, and the auth source is updated so a
 // user that moved IdPs (oidc→ldap) is re-tagged. Pure. A pre-existing LOCAL
 // account is never passed here — local management wins (see UpsertFederated).
-func mergeFederated(u User, email, displayName, role, source string) User {
+func MergeFederated(u User, email, displayName, role, source string) User {
 	if email != "" {
 		u.Email = email
 	}

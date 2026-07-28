@@ -2,6 +2,7 @@ package main
 
 import (
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/users"
 	"path/filepath"
 	"testing"
 )
@@ -59,7 +60,7 @@ func TestCustomRoleUpsertAndProtectBuiltin(t *testing.T) {
 }
 
 func TestUserStoreAdminSafe(t *testing.T) {
-	us, err := newUserStore(filepath.Join(t.TempDir(), "users.json"))
+	us, err := users.NewFileStore(filepath.Join(t.TempDir(), "users.json"), userDeps())
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestUserStoreAdminSafe(t *testing.T) {
 }
 
 func TestUserCRUD(t *testing.T) {
-	us, err := newUserStore(filepath.Join(t.TempDir(), "users.json"))
+	us, err := users.NewFileStore(filepath.Join(t.TempDir(), "users.json"), userDeps())
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}

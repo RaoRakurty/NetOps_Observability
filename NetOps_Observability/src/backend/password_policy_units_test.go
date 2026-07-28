@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"netops/backend/internal/users"
 	"strings"
 	"testing"
 
@@ -14,13 +15,13 @@ import (
 // by token.VerifyPassword BEFORE the 600k-round KDF runs (pre-hash amplification DoS).
 func TestPasswordLengthBounds(t *testing.T) {
 	long := strings.Repeat("a", token.MaxPasswordLen+1)
-	if err := validatePassword(long); !errors.Is(err, errLongPassword) {
-		t.Errorf("over-long password should be errLongPassword, got %v", err)
+	if err := users.ValidatePassword(long); !errors.Is(err, users.ErrLongPassword) {
+		t.Errorf("over-long password should be users.ErrLongPassword, got %v", err)
 	}
-	if err := validatePassword("short"); !errors.Is(err, errShortPassword) {
-		t.Errorf("short password should be errShortPassword, got %v", err)
+	if err := users.ValidatePassword("short"); !errors.Is(err, users.ErrShortPassword) {
+		t.Errorf("short password should be users.ErrShortPassword, got %v", err)
 	}
-	if err := validatePassword("a-perfectly-fine-passphrase"); err != nil {
+	if err := users.ValidatePassword("a-perfectly-fine-passphrase"); err != nil {
 		t.Errorf("valid password rejected: %v", err)
 	}
 	hash, err := token.HashPassword("correct-horse-battery-staple")

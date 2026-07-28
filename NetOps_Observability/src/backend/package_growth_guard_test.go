@@ -156,7 +156,13 @@ import (
 //	                  joined internal/token (the auth-crypto boundary), the
 //	                  jwtClaims alias moved to auth.go; password POLICY
 //	                  (length rules, history) stayed in main
-const rootPackageCeiling = 245
+//	2026-07-28  244  internal/users (the identity store: file + per-row RLS pg
+//	                  backends, last-super-admin floor, federated JIT, MFA/
+//	                  lifecycle fields; cross-domain inputs INJECTED as
+//	                  users.Deps — kv, Errorf, SR-025 GuardRole, IsSuperAdmin,
+//	                  account_policy's ApplyPasswordChange, DefaultTenant,
+//	                  MaxUsers; User/usersRepo aliased in users_wiring.go)
+const rootPackageCeiling = 244
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

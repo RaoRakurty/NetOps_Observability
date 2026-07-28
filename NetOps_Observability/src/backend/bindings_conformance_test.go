@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/users"
 	"testing"
 	"time"
 )
@@ -10,7 +11,7 @@ import (
 func newPBACTestServer(t *testing.T) *server {
 	t.Helper()
 	dir := t.TempDir()
-	us, err := newUserStore(dir + "/users.json")
+	us, err := users.NewFileStore(dir+"/users.json", userDeps())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
+	"netops/backend/internal/users"
 	"netops/backend/wireless"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 			t.Fatal(err)
 		}
 	}
-	us, err := newUserStore(dir + "/users.json")
+	us, err := users.NewFileStore(dir+"/users.json", userDeps())
 	must(err)
 	rs, err := newRoleStore(dir + "/roles.json")
 	must(err)

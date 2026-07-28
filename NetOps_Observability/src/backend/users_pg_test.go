@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"netops/backend/internal/token"
+	"netops/backend/internal/users"
 	"os"
 	"testing"
 )
@@ -26,7 +27,10 @@ func TestPgUsersStore(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := &pgUsersStore{db: ps.db}
+	s, err := users.NewPGStore(rlsPG{db: ps.db}, userDeps())
+	if err != nil {
+		t.Fatalf("NewPGStore: %v", err)
+	}
 
 	// Seed two tenants' users (mixed case to prove tenant-id normalization), plus
 	// a platform user with no tenant.
@@ -132,7 +136,12 @@ func TestPgUsersStoreCapAndFederated(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := &pgUsersStore{db: ps.db, maxUsers: 2}
+	d := userDeps()
+	d.MaxUsers = 2
+	s, err := users.NewPGStore(rlsPG{db: ps.db}, d)
+	if err != nil {
+		t.Fatalf("NewPGStore: %v", err)
+	}
 
 	if _, err := s.Create("alice", "Passw0rd!2345", RoleReadOnly); err != nil {
 		t.Fatalf("1st create: %v", err)

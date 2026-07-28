@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // BusinessService is a named, tenant-owned service in the registry.
@@ -58,6 +59,12 @@ var errConflict = errors.New("already exists")
 
 type pgBusinessServiceStore struct{ db *pgDB }
 
+// isUniqueViolation reports a Postgres unique-constraint failure (SQLSTATE
+// 23505); duplicated from the users store when it moved to internal/users.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 func newBusinessServiceStore() *pgBusinessServiceStore {
 	if ps, ok := backend.(*pgStore); ok {
 		return &pgBusinessServiceStore{db: ps.db}

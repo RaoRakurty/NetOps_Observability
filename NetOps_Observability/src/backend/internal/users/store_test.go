@@ -1,14 +1,37 @@
-package main
+package users
 
 import (
 	"netops/backend/internal/token"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
+// fileKV is a plain file backend for tests.
+type fileKV struct{}
+
+func (fileKV) Load(key string) ([]byte, error)    { return os.ReadFile(key) }
+func (fileKV) Save(key string, data []byte) error { return os.WriteFile(key, data, 0o600) }
+
+// testDeps supplies minimal stand-ins for the injected cross-domain deps.
+func testDeps() Deps {
+	return Deps{
+		KV:           fileKV{},
+		Errorf:       func(string, string, map[string]any) {},
+		GuardRole:    func(role, _, _, _ string) string { return role },
+		IsSuperAdmin: func(role string) bool { return role == "super-admin" || role == "admin" },
+		ApplyPasswordChange: func(u *User, hash string, now time.Time) {
+			u.PasswordHash = hash
+			u.PasswordChangedAt = now
+		},
+		DefaultTenant: "global",
+	}
+}
+
 func TestUserStoreCRUD(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	s, err := newUserStore(path)
+	path := filepath.Join(t.TempDir(), "json")
+	s, err := NewFileStore(path, testDeps())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -38,7 +61,7 @@ func TestUserStoreCRUD(t *testing.T) {
 	}
 
 	// Reload from disk and make sure state survived.
-	s2, err := newUserStore(path)
+	s2, err := NewFileStore(path, testDeps())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -51,8 +74,8 @@ func TestUserStoreCRUD(t *testing.T) {
 }
 
 func TestSeedAdminOnlyOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	s, _ := newUserStore(path)
+	path := filepath.Join(t.TempDir(), "json")
+	s, _ := NewFileStore(path, testDeps())
 	if err := s.SeedAdmin("admin", "initial-password"); err != nil {
 		t.Fatalf("first seed: %v", err)
 	}

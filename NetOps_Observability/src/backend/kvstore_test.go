@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/internal/users"
 	"os"
 	"testing"
 )
@@ -74,7 +75,7 @@ func TestSavedStoreRoundTripsThroughBackend(t *testing.T) {
 
 func TestUserStoreRoundTripsThroughBackend(t *testing.T) {
 	withBackend(t, newMemKV())
-	us, err := newUserStore("kv://users")
+	us, err := users.NewFileStore("kv://users", userDeps())
 	if err != nil {
 		t.Fatalf("newUserStore: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestUserStoreRoundTripsThroughBackend(t *testing.T) {
 		t.Fatalf("CreateFull: %v", err)
 	}
 	// Reload through the same in-memory backend.
-	us2, err := newUserStore("kv://users")
+	us2, err := users.NewFileStore("kv://users", userDeps())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

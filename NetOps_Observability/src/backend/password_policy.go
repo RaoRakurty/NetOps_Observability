@@ -11,7 +11,7 @@ import (
 
 // password_policy.go wires the #24 Security Policy engine into self-service
 // password changes. Previously change-password enforced only a hardcoded 8-char
-// floor (validatePassword); now the new password is validated against the
+// floor (users.ValidatePassword); now the new password is validated against the
 // caller's *resolved* policy — `password.min_length` and
 // `password.complexity_classes` (System → Tenant → Role → User). The same
 // resolved rules are exposed read-only at GET /api/auth/password-policy so the
