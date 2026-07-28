@@ -198,3 +198,23 @@ func TestReloadPropagatesRevocation(t *testing.T) {
 		t.Fatalf("after reload, B must reject the revoked key (multi-instance gap)")
 	}
 }
+
+// Moved back from jwks_test.go when the JWKS verifier left for internal/jwks:
+// roleFromScopes is API-key (main-package) logic, not JWKS logic.
+func TestRoleFromScopes(t *testing.T) {
+	cases := []struct {
+		scopes []string
+		want   string
+	}{
+		{[]string{"read:metrics"}, RoleReadOnly},
+		{[]string{"read:*"}, RoleReadOnly},
+		{[]string{"write:incidents"}, RoleOperator},
+		{[]string{"admin:*"}, RoleSuperAdmin},
+		{nil, RoleReadOnly},
+	}
+	for _, c := range cases {
+		if got := roleFromScopes(c.scopes); got != c.want {
+			t.Errorf("roleFromScopes(%v)=%s want %s", c.scopes, got, c.want)
+		}
+	}
+}

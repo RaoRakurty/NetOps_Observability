@@ -8,7 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"time"
+
+	"netops/backend/internal/jwks"
 )
 
 // oidc.go — Single Sign-On via Keycloak (broker-and-reissue model).
@@ -53,7 +57,23 @@ type oidcProvider struct {
 	requireMFA    bool
 	mfaAcr        map[string]bool // acr values that count as MFA (IdP-specific)
 
-	jwks *jwksCache
+	jwks  *jwks.Cache
+	httpc *http.Client // token-exchange client (the JWKS cache keeps its own)
+}
+
+// jwksTTL is how long signing keys are cached before a refresh. This is the IdP
+// cert-rollover refresh interval (best practice: hours). We default to 10 minutes
+// — well within range and more current than typical — and the cache also refreshes
+// on an unknown-kid miss, so a rotation is picked up immediately regardless.
+// Tunable via OIDC_JWKS_TTL_MIN (minutes); clamped to [1, 1440].
+func jwksTTL() time.Duration {
+	m := 10
+	if v := os.Getenv("OIDC_JWKS_TTL_MIN"); v != "" {
+		if n, err := parseIntStrict(v); err == nil && n >= 1 && n <= 1440 {
+			m = n
+		}
+	}
+	return time.Duration(m) * time.Minute
 }
 
 // mfaAmrMethods are amr values that indicate a SECOND factor was used (anything
@@ -69,7 +89,7 @@ var mfaAmrMethods = map[string]bool{
 // mfaSatisfied reports whether the IdP token asserts a second factor: an amr entry
 // in mfaAmrMethods, or an acr value the operator listed as MFA. Used only when
 // requireMFA is on.
-func (p *oidcProvider) mfaSatisfied(c oidcClaims) bool {
+func (p *oidcProvider) mfaSatisfied(c jwks.Claims) bool {
 	for _, m := range c.Amr {
 		if mfaAmrMethods[strings.ToLower(strings.TrimSpace(m))] {
 			return true
@@ -144,9 +164,10 @@ func newOIDCProviderFromConfig(c oidcConfig) *oidcProvider {
 		providers:     parseProviders(c.Providers),
 		requireMFA:    c.RequireMFA,
 		mfaAcr:        splitSet(strings.TrimSpace(c.MFAAcr)),
+		httpc:         &http.Client{Timeout: 10 * time.Second},
 	}
 	if p.enabled && p.issuer != "" {
-		p.jwks = newJWKSCache(p.issuer)
+		p.jwks = jwks.New(p.issuer, jwksTTL())
 	}
 	// Always offer at least the realm-default OIDC button when enabled.
 	if p.enabled && len(p.providers) == 0 {
@@ -160,7 +181,7 @@ func (p *oidcProvider) ready() bool {
 }
 
 // roleFor maps Keycloak realm roles / groups onto a NetOps built-in role.
-func (p *oidcProvider) roleFor(c oidcClaims) string {
+func (p *oidcProvider) roleFor(c jwks.Claims) string {
 	names := append([]string{}, c.RealmAccess.Roles...)
 	names = append(names, c.Groups...)
 	for _, n := range names {
@@ -216,7 +237,7 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
 		return
 	}
-	disc, err := p.jwks.discovery()
+	disc, err := p.jwks.Discovery()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -303,7 +324,7 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "token exchange failed: "+err.Error())
 		return
 	}
-	claims, err := p.jwks.verifyRS256(idToken, p.issuer, p.clientID)
+	claims, err := p.jwks.VerifyRS256(idToken, p.issuer, p.clientID)
 	if err != nil {
 		s.ssoFail(w, r, "id token rejected: "+err.Error())
 		return
@@ -362,7 +383,7 @@ func (s *server) ssoFail(w http.ResponseWriter, r *http.Request, msg string) {
 // exchange trades an authorization code for tokens at Keycloak's token endpoint
 // and returns the raw ID token.
 func (p *oidcProvider) exchange(code, redirectURI string) (string, error) {
-	disc, err := p.jwks.discovery()
+	disc, err := p.jwks.Discovery()
 	if err != nil {
 		return "", err
 	}
@@ -380,7 +401,7 @@ func (p *oidcProvider) exchange(code, redirectURI string) (string, error) {
 	if p.clientSecret != "" {
 		req.SetBasicAuth(url.QueryEscape(p.clientID), url.QueryEscape(p.clientSecret))
 	}
-	resp, err := p.jwks.client.Do(req)
+	resp, err := p.httpc.Do(req)
 	if err != nil {
 		return "", err
 	}

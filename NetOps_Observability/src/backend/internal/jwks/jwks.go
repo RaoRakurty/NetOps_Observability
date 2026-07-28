@@ -1,4 +1,4 @@
-package main
+package jwks
 
 import (
 	"crypto"
@@ -12,7 +12,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +31,7 @@ import (
 // to Keycloak (see docs/IDENTITY_ACCESS.md): the backend "only learns to verify
 // RS256 against a JWKS URL".
 
-type oidcDiscovery struct {
+type Discovery struct {
 	Issuer        string `json:"issuer"`
 	AuthEndpoint  string `json:"authorization_endpoint"`
 	TokenEndpoint string `json:"token_endpoint"`
@@ -50,9 +49,9 @@ type jwk struct {
 	E   string `json:"e"`
 }
 
-// oidcClaims are the subset of standard + Keycloak claims we consume. Aud is
+// Claims are the subset of standard + Keycloak claims we consume. Aud is
 // kept raw because the spec allows either a string or an array.
-type oidcClaims struct {
+type Claims struct {
 	Sub               string          `json:"sub"`
 	Email             string          `json:"email"`
 	EmailVerified     bool            `json:"email_verified"`
@@ -74,7 +73,7 @@ type oidcClaims struct {
 	Acr string   `json:"acr"`
 }
 
-func (c oidcClaims) audiences() []string {
+func (c Claims) Audiences() []string {
 	if len(c.Aud) == 0 {
 		return nil
 	}
@@ -87,44 +86,37 @@ func (c oidcClaims) audiences() []string {
 	return many
 }
 
-// jwksCache fetches and caches an issuer's discovery doc and signing keys.
+// Cache fetches and caches an issuer's discovery doc and signing keys.
 // Keys are refreshed on a TTL and on a cache miss (Keycloak rotates kids).
-type jwksCache struct {
+type Cache struct {
 	issuer string
 	client *http.Client
 	ttl    time.Duration
 
 	mu        sync.RWMutex
-	disc      *oidcDiscovery
+	disc      *Discovery
 	keys      map[string]*rsa.PublicKey // kid -> key
 	fetchedAt time.Time
 }
 
-func newJWKSCache(issuer string) *jwksCache {
-	return &jwksCache{
+// New builds a cache for one issuer. ttl is how long signing keys are cached
+// before a refresh (the IdP cert-rollover interval; the integrator reads it
+// from config — see jwksTTL in the entrypoint package). Keys are additionally
+// refreshed on an unknown-kid miss, so a rotation is picked up immediately
+// regardless. A non-positive ttl falls back to 10 minutes.
+func New(issuer string, ttl time.Duration) *Cache {
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	return &Cache{
 		issuer: strings.TrimRight(issuer, "/"),
 		client: &http.Client{Timeout: 10 * time.Second},
-		ttl:    jwksTTL(),
+		ttl:    ttl,
 		keys:   make(map[string]*rsa.PublicKey),
 	}
 }
 
-// jwksTTL is how long signing keys are cached before a refresh. This is the IdP
-// cert-rollover refresh interval (best practice: hours). We default to 10 minutes
-// — well within range and more current than typical — and also refresh on an
-// unknown-kid miss, so a rotation is picked up immediately regardless. Tunable via
-// OIDC_JWKS_TTL_MIN (minutes); clamped to [1, 1440].
-func jwksTTL() time.Duration {
-	m := 10
-	if v := os.Getenv("OIDC_JWKS_TTL_MIN"); v != "" {
-		if n, err := parseIntStrict(v); err == nil && n >= 1 && n <= 1440 {
-			m = n
-		}
-	}
-	return time.Duration(m) * time.Minute
-}
-
-func (c *jwksCache) discovery() (*oidcDiscovery, error) {
+func (c *Cache) Discovery() (*Discovery, error) {
 	c.mu.RLock()
 	d := c.disc
 	c.mu.RUnlock()
@@ -132,7 +124,7 @@ func (c *jwksCache) discovery() (*oidcDiscovery, error) {
 		return d, nil
 	}
 	url := c.issuer + "/.well-known/openid-configuration"
-	var got oidcDiscovery
+	var got Discovery
 	if err := c.getJSON(url, &got); err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
@@ -147,7 +139,7 @@ func (c *jwksCache) discovery() (*oidcDiscovery, error) {
 
 // keyFor returns the signing key for kid, refreshing the JWKS if it's unknown
 // or the cache has gone stale.
-func (c *jwksCache) keyFor(kid string) (*rsa.PublicKey, error) {
+func (c *Cache) keyFor(kid string) (*rsa.PublicKey, error) {
 	c.mu.RLock()
 	k, ok := c.keys[kid]
 	fresh := time.Since(c.fetchedAt) < c.ttl
@@ -175,8 +167,19 @@ func (c *jwksCache) keyFor(kid string) (*rsa.PublicKey, error) {
 	return nil, fmt.Errorf("no JWKS key for kid %q", kid)
 }
 
-func (c *jwksCache) refresh() error {
-	disc, err := c.discovery()
+// Refresh eagerly fetches the discovery document and signing keys — useful to
+// pre-warm the cache or probe a live IdP; VerifyRS256 refreshes on demand.
+func (c *Cache) Refresh() error { return c.refresh() }
+
+// KeyCount reports how many signing keys are currently cached.
+func (c *Cache) KeyCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.keys)
+}
+
+func (c *Cache) refresh() error {
+	disc, err := c.Discovery()
 	if err != nil {
 		return err
 	}
@@ -207,7 +210,7 @@ func (c *jwksCache) refresh() error {
 	return nil
 }
 
-func (c *jwksCache) getJSON(url string, out any) error {
+func (c *Cache) getJSON(url string, out any) error {
 	resp, err := c.client.Get(url)
 	if err != nil {
 		return err
@@ -244,12 +247,12 @@ func rsaKeyFromJWK(k jwk) (*rsa.PublicKey, error) {
 	return &rsa.PublicKey{N: n, E: e}, nil
 }
 
-// verifyRS256 validates a compact JWT's signature against the issuer's JWKS and
+// VerifyRS256 validates a compact JWT's signature against the issuer's JWKS and
 // checks exp/iss/aud. It returns the decoded claims on success.
-func (c *jwksCache) verifyRS256(token, wantIssuer, wantAudience string) (oidcClaims, error) {
+func (c *Cache) VerifyRS256(token, wantIssuer, wantAudience string) (Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return oidcClaims{}, errors.New("malformed jwt")
+		return Claims{}, errors.New("malformed jwt")
 	}
 	var hdr struct {
 		Alg string `json:"alg"`
@@ -257,49 +260,49 @@ func (c *jwksCache) verifyRS256(token, wantIssuer, wantAudience string) (oidcCla
 	}
 	hb, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return oidcClaims{}, errors.New("bad jwt header")
+		return Claims{}, errors.New("bad jwt header")
 	}
 	if err := json.Unmarshal(hb, &hdr); err != nil {
-		return oidcClaims{}, errors.New("bad jwt header")
+		return Claims{}, errors.New("bad jwt header")
 	}
 	if hdr.Alg != "RS256" {
-		return oidcClaims{}, fmt.Errorf("unexpected jwt alg %q", hdr.Alg)
+		return Claims{}, fmt.Errorf("unexpected jwt alg %q", hdr.Alg)
 	}
 	pub, err := c.keyFor(hdr.Kid)
 	if err != nil {
-		return oidcClaims{}, err
+		return Claims{}, err
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return oidcClaims{}, errors.New("bad jwt signature encoding")
+		return Claims{}, errors.New("bad jwt signature encoding")
 	}
 	signed := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, signed[:], sig); err != nil {
-		return oidcClaims{}, errors.New("jwt signature invalid")
+		return Claims{}, errors.New("jwt signature invalid")
 	}
 	cb, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return oidcClaims{}, errors.New("bad jwt claims encoding")
+		return Claims{}, errors.New("bad jwt claims encoding")
 	}
-	var claims oidcClaims
+	var claims Claims
 	if err := json.Unmarshal(cb, &claims); err != nil {
-		return oidcClaims{}, errors.New("bad jwt claims")
+		return Claims{}, errors.New("bad jwt claims")
 	}
 	if claims.Exp != 0 && time.Now().Unix() > claims.Exp {
-		return oidcClaims{}, errors.New("token expired")
+		return Claims{}, errors.New("token expired")
 	}
 	if wantIssuer != "" && strings.TrimRight(claims.Iss, "/") != strings.TrimRight(wantIssuer, "/") {
-		return oidcClaims{}, fmt.Errorf("issuer mismatch: %s", claims.Iss)
+		return Claims{}, fmt.Errorf("issuer mismatch: %s", claims.Iss)
 	}
 	if wantAudience != "" {
 		ok := claims.Azp == wantAudience
-		for _, a := range claims.audiences() {
+		for _, a := range claims.Audiences() {
 			if a == wantAudience {
 				ok = true
 			}
 		}
 		if !ok {
-			return oidcClaims{}, errors.New("audience mismatch")
+			return Claims{}, errors.New("audience mismatch")
 		}
 	}
 	return claims, nil

@@ -1,12 +1,12 @@
 # `package main` decomposition — the executable plan
 
-**Status:** sixteen domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** seventeen domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
 `internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
-`internal/token` + `internal/session`, 2026-07-28).
-**256** non-test files remain in `package main`. This document is the ordered sequence for the
+`internal/token` + `internal/session` + `internal/jwks`, 2026-07-28).
+**255** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -109,7 +109,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 17 | `internal/seam` | 1 | 640 | ~5 | **Done** (2026-07-27). The canonical seam inventory (five FINAL types, lifecycle state machine, validation, deterministic ids) + its pg store, with `seam.DB` INJECTED via the portintel adapter idiom — the store moved WITH its SQL, main kept backend selection, handlers and the bootstrap suggestion rules. Watch for handler locals named `seam` shadowing the package (two renamed). Pure lifecycle/validation/id tests moved; rule tests stayed. |
 | ✅ — | `internal/token` (the `jwt` security change) | 1 | ~130 | 94 (via alias) | **Done** (2026-07-28) — see the formerly-deferred item below for the full record. |
 | ✅ 18 | `internal/session` | 2 | ~720 | ~6 | **Done** (2026-07-28), first of the ungated auth tier. `session_store.go` + `refresh.go` (both 0-handler/0-authref by the screen) moved whole; kv persistence + error logging INJECTED (`session.KV`, `session.Errorf` — the vault idiom, wired in `session_wiring.go`); env reads (`SESSIONS_FILE`, `REFRESH_FILE`, `refreshTokenTTL`) stayed in main. `randHex` re-homed to `audit.go` for its 14 root users (package keeps its own copy per the no-utils rule). Test split: the CONC-HIGH-1 concurrency suite, refresh rotation/reuse contract and the store lifecycle unit test moved in — losing the process-global `withBackend`/`withFailingKV` swaps for real injection; HTTP-boundary suites (flow, logout/F-70, account-policy) stayed and use two documented test hooks (`RewindForTest`, `SetKVForTest`) where they used to poke unexported fields. `Status*`/`MaxSessionsPerUser` exported; `TTL()` accessor added for the token-policy live-update assertion. |
-| 18+ | `oidc`, `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 19 | `internal/jwks` | 1 | ~300 | 2 | **Done** (2026-07-28). OIDC discovery + JWKS-based RS256 verification (pure stdlib — the reason federation lives in Keycloak). `Cache`/`Claims`/`Discovery` exported; the `OIDC_JWKS_TTL_MIN` env read moved to `oidc.go` (TTL injected, ratelimit precedent); main's token exchange got its own `http.Client` instead of borrowing the cache's unexported one. `Refresh()`/`KeyCount()` exported as real surface (pre-warm/probe — the live Duende test uses them); the hermetic SSO tests seed discovery via `SeedDiscoveryForTest`. `TestRoleFromScopes` shuttled back to `apikeys_test.go` — it was API-key logic co-located in the jwks test file. |
+| 18+ | `oidc` (rest), `tenant`, `copilot`, `snmp`, `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

@@ -25,7 +25,7 @@ func TestOIDCLiveDuende(t *testing.T) {
 	if !p.ready() {
 		t.Fatalf("provider should be ready (enabled+issuer+clientID+jwks)")
 	}
-	disc, err := p.jwks.discovery()
+	disc, err := p.jwks.Discovery()
 	if err != nil {
 		t.Fatalf("OIDC discovery against Duende failed: %v", err)
 	}
@@ -34,11 +34,12 @@ func TestOIDCLiveDuende(t *testing.T) {
 	}
 	t.Logf("discovery OK: auth=%s token=%s jwks=%s", disc.AuthEndpoint, disc.TokenEndpoint, disc.JWKSURI)
 
-	// Force a JWKS fetch (keyFor refreshes when the kid is unknown); ignore the
-	// lookup error — we only assert the live key set was retrieved.
-	_, _ = p.jwks.keyFor("probe-unknown-kid")
-	if len(p.jwks.keys) == 0 {
+	// Force a JWKS fetch and assert the live key set was retrieved.
+	if err := p.jwks.Refresh(); err != nil {
+		t.Fatalf("live JWKS refresh failed: %v", err)
+	}
+	if p.jwks.KeyCount() == 0 {
 		t.Fatal("expected ≥1 signing key fetched from the live JWKS endpoint")
 	}
-	t.Logf("JWKS OK: %d live signing key(s) loaded", len(p.jwks.keys))
+	t.Logf("JWKS OK: %d live signing key(s) loaded", p.jwks.KeyCount())
 }

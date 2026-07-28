@@ -1,4 +1,4 @@
-package main
+package jwks
 
 import (
 	"crypto"
@@ -14,8 +14,7 @@ import (
 	"time"
 )
 
-// b64url mirrors the compact-JWT base64url encoding (the shared helper moved to
-// internal/token with the HS256 signer; RS256 test-minting stays here).
+// b64url is the compact-JWT base64url encoding (test-local shorthand).
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 // signRS256 mints a compact RS256 JWT for tests.
@@ -76,14 +75,14 @@ func TestVerifyRS256RoundTrip(t *testing.T) {
 	srv := idpServer(t, key, kid)
 	defer srv.Close()
 
-	c := newJWKSCache(srv.URL)
+	c := New(srv.URL, 0)
 	tok := signRS256(t, key, kid, map[string]any{
 		"sub": "u1", "iss": srv.URL, "aud": "netops",
 		"preferred_username": "alice", "email": "alice@example.com",
 		"exp":          time.Now().Add(time.Hour).Unix(),
 		"realm_access": map[string]any{"roles": []string{"netops-admin"}},
 	})
-	claims, err := c.verifyRS256(tok, srv.URL, "netops")
+	claims, err := c.VerifyRS256(tok, srv.URL, "netops")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -97,12 +96,12 @@ func TestVerifyRS256RejectsBadAudience(t *testing.T) {
 	const kid = "k"
 	srv := idpServer(t, key, kid)
 	defer srv.Close()
-	c := newJWKSCache(srv.URL)
+	c := New(srv.URL, 0)
 	tok := signRS256(t, key, kid, map[string]any{
 		"sub": "u", "iss": srv.URL, "aud": "someone-else",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if _, err := c.verifyRS256(tok, srv.URL, "netops"); err == nil {
+	if _, err := c.VerifyRS256(tok, srv.URL, "netops"); err == nil {
 		t.Error("expected audience mismatch to be rejected")
 	}
 }
@@ -112,12 +111,12 @@ func TestVerifyRS256RejectsExpired(t *testing.T) {
 	const kid = "k"
 	srv := idpServer(t, key, kid)
 	defer srv.Close()
-	c := newJWKSCache(srv.URL)
+	c := New(srv.URL, 0)
 	tok := signRS256(t, key, kid, map[string]any{
 		"sub": "u", "iss": srv.URL, "aud": "netops",
 		"exp": time.Now().Add(-time.Minute).Unix(),
 	})
-	if _, err := c.verifyRS256(tok, srv.URL, "netops"); err == nil {
+	if _, err := c.VerifyRS256(tok, srv.URL, "netops"); err == nil {
 		t.Error("expected expired token to be rejected")
 	}
 }
@@ -128,31 +127,13 @@ func TestVerifyRS256RejectsWrongKey(t *testing.T) {
 	const kid = "k"
 	srv := idpServer(t, key, kid)
 	defer srv.Close()
-	c := newJWKSCache(srv.URL)
+	c := New(srv.URL, 0)
 	// Signed with a key the JWKS doesn't publish.
 	tok := signRS256(t, other, kid, map[string]any{
 		"sub": "u", "iss": srv.URL, "aud": "netops",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if _, err := c.verifyRS256(tok, srv.URL, "netops"); err == nil {
+	if _, err := c.VerifyRS256(tok, srv.URL, "netops"); err == nil {
 		t.Error("expected signature from an unknown key to be rejected")
-	}
-}
-
-func TestRoleFromScopes(t *testing.T) {
-	cases := []struct {
-		scopes []string
-		want   string
-	}{
-		{[]string{"read:metrics"}, RoleReadOnly},
-		{[]string{"read:*"}, RoleReadOnly},
-		{[]string{"write:incidents"}, RoleOperator},
-		{[]string{"admin:*"}, RoleSuperAdmin},
-		{nil, RoleReadOnly},
-	}
-	for _, c := range cases {
-		if got := roleFromScopes(c.scopes); got != c.want {
-			t.Errorf("roleFromScopes(%v)=%s want %s", c.scopes, got, c.want)
-		}
 	}
 }

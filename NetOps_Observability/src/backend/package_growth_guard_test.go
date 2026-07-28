@@ -104,7 +104,11 @@ import (
 //	                  session.Errorf — the vault idiom, wired in
 //	                  session_wiring.go; the CONC-HIGH-1/F-70 white-box suites
 //	                  moved in and dropped the process-global backend swap)
-const rootPackageCeiling = 256
+//	2026-07-28  255  internal/jwks (OIDC discovery + JWKS RS256 verification,
+//	                  pure stdlib; TTL now injected — the OIDC_JWKS_TTL_MIN env
+//	                  read moved to oidc.go; main's token exchange got its own
+//	                  http.Client instead of borrowing the cache's)
+const rootPackageCeiling = 255
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

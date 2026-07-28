@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/jwks"
 	"testing"
 )
 
@@ -36,12 +37,12 @@ func testSSOServer(t *testing.T, tokenEndpoint string) *server {
 	if p.jwks == nil {
 		t.Fatal("provider built without a JWKS cache — cannot exercise the SSO handlers")
 	}
-	p.jwks.disc = &oidcDiscovery{
+	p.jwks.SeedDiscoveryForTest(&jwks.Discovery{
 		Issuer:        p.issuer,
 		AuthEndpoint:  p.issuer + "/protocol/openid-connect/auth",
 		TokenEndpoint: tokenEndpoint,
 		JWKSURI:       p.issuer + "/protocol/openid-connect/certs",
-	}
+	})
 	if !p.ready() {
 		t.Fatal("test provider is not ready")
 	}
