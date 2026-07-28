@@ -1,4 +1,4 @@
-package main
+package tenant
 
 import (
 	"path/filepath"
@@ -11,9 +11,9 @@ type kvRec struct {
 	Val    string `json:"val"`
 }
 
-func newKV(t *testing.T) *tenantKV[kvRec] {
+func newKV(t *testing.T) *Collection[kvRec] {
 	t.Helper()
-	kv, err := newTenantKV[kvRec](filepath.Join(t.TempDir(), "kv.json"),
+	kv, err := NewCollection[kvRec](filepath.Join(t.TempDir(), "kv.json"), fileKV{},
 		func(r kvRec) string { return r.Tenant },
 		func(r kvRec) string { return r.ID })
 	if err != nil {
@@ -69,7 +69,7 @@ func TestTenantKVPersistAndDelete(t *testing.T) {
 	kv.Upsert(kvRec{"acme", "b", "B"})
 
 	// Reload from disk → same rows.
-	re, err := newTenantKV[kvRec](kv.path,
+	re, err := NewCollection[kvRec](kv.path, fileKV{},
 		func(r kvRec) string { return r.Tenant },
 		func(r kvRec) string { return r.ID })
 	if err != nil {

@@ -120,7 +120,11 @@ import (
 //	                  75-file fan-in handled by tenant_wiring.go aliases, the
 //	                  jwtClaims technique; tenantkv.go deliberately stayed for
 //	                  its own step)
-const rootPackageCeiling = 253
+//	2026-07-28  252  tenantkv.go → tenant.Collection[T] (the §3a default-closed
+//	                  per-tenant collection primitive joins internal/tenant; a
+//	                  generic alias + wrapper in tenant_wiring.go keeps the
+//	                  three consumers' call shape; Path() accessor added)
+const rootPackageCeiling = 252
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

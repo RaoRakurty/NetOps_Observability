@@ -48,3 +48,13 @@ func tenantDeps() tenant.Deps {
 func newTenantStore(path string) (*tenant.Store, error) {
 	return tenant.NewStore(path, tenantDeps())
 }
+
+// tenantKV keeps the historical name/shape of the §3a default-closed per-tenant
+// collection primitive (now tenant.Collection); the wrapper injects the shared
+// kv backend so the consumers (sites, device sites, WAN policies) only ever
+// vary their path + key funcs.
+type tenantKV[T any] = tenant.Collection[T]
+
+func newTenantKV[T any](path string, tenantOf, idOf func(T) string) (*tenantKV[T], error) {
+	return tenant.NewCollection[T](path, platformKV{}, tenantOf, idOf)
+}

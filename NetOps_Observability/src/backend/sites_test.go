@@ -102,7 +102,7 @@ func TestSitesStoreCRUD(t *testing.T) {
 	}
 
 	// Persistence: a fresh store at the same path reloads the rows.
-	reloaded, err := newSitesStore(s.kv.path)
+	reloaded, err := newSitesStore(s.kv.Path())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

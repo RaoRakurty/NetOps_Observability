@@ -1,4 +1,4 @@
-package main
+package tenant
 
 // tenantkv.go — a default-closed, tenant-scoped kv store for file/in-memory app
 // state. It exists so new per-tenant features are isolated BY CONSTRUCTION
@@ -7,11 +7,12 @@ package main
 // records. This is the safe default for the file/kv plane, which has no RLS
 // backstop (the plane where the sites store leaked before it was fixed).
 //
-// Persistence is the shared kvBackend (file or Postgres) via kvLoad/kvSave, so a
-// store built on this inherits the same durable-write contract as every other.
+// Persistence is the injected KV (the platform's shared file/Postgres backend),
+// so a store built on this inherits the same durable-write contract as every
+// other.
 //
 // Usage:
-//   kv, _ := newTenantKV[Site]("/data/sites.json",
+//   kv, _ := NewCollection[Site]("/data/sites.json", kv,
 //       func(s Site) string { return s.TenantID },
 //       func(s Site) string { return s.Slug })
 // The CALLER stamps the tenant on each record from the authenticated principal
@@ -19,30 +20,38 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 )
 
-type tenantKV[T any] struct {
+type Collection[T any] struct {
 	mu       sync.RWMutex
 	path     string
+	kv       KV
 	items    map[string]T   // (tenant\x00id) → record
 	tenantOf func(T) string // owning tenant of a record
 	idOf     func(T) string // within-tenant stable id (slug/id)
 }
 
-func newTenantKV[T any](path string, tenantOf, idOf func(T) string) (*tenantKV[T], error) {
-	s := &tenantKV[T]{path: path, items: map[string]T{}, tenantOf: tenantOf, idOf: idOf}
+func NewCollection[T any](path string, kv KV, tenantOf, idOf func(T) string) (*Collection[T], error) {
+	if kv == nil {
+		return nil, errors.New("tenant.NewCollection: kv is required")
+	}
+	s := &Collection[T]{path: path, kv: kv, items: map[string]T{}, tenantOf: tenantOf, idOf: idOf}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *tenantKV[T]) key(tenant, id string) string { return tenant + "\x00" + id }
+func (s *Collection[T]) key(tenant, id string) string { return tenant + "\x00" + id }
 
-func (s *tenantKV[T]) load() error {
-	b, err := kvLoad(s.path)
+// Path reports the backend key this collection persists under.
+func (s *Collection[T]) Path() string { return s.path }
+
+func (s *Collection[T]) load() error {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		return nil // absent store → empty
 	}
@@ -58,7 +67,7 @@ func (s *tenantKV[T]) load() error {
 	return nil
 }
 
-func (s *tenantKV[T]) flushLocked() error {
+func (s *Collection[T]) flushLocked() error {
 	list := make([]T, 0, len(s.items))
 	for _, r := range s.items {
 		list = append(list, r)
@@ -74,13 +83,13 @@ func (s *tenantKV[T]) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
 // All returns the records VISIBLE to the (tenant, cross) principal, sorted by id.
 // A non-cross caller sees ONLY its own tenant's records. There is deliberately no
 // unscoped variant — that absence is the isolation guarantee.
-func (s *tenantKV[T]) All(tenant string, cross bool) []T {
+func (s *Collection[T]) All(tenant string, cross bool) []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]T, 0, len(s.items))
@@ -95,7 +104,7 @@ func (s *tenantKV[T]) All(tenant string, cross bool) []T {
 
 // Get returns a record only if the (tenant, cross) principal may see it. A
 // non-cross caller can never read another tenant's id (caller maps !ok → 404).
-func (s *tenantKV[T]) Get(tenant string, cross bool, id string) (T, bool) {
+func (s *Collection[T]) Get(tenant string, cross bool, id string) (T, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if r, ok := s.items[s.key(tenant, id)]; ok {
@@ -114,7 +123,7 @@ func (s *tenantKV[T]) Get(tenant string, cross bool, id string) (T, bool) {
 
 // Upsert stores rec keyed by (tenantOf(rec), idOf(rec)). The caller MUST have
 // stamped tenantOf(rec) from the authenticated principal before calling.
-func (s *tenantKV[T]) Upsert(rec T) error {
+func (s *Collection[T]) Upsert(rec T) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.items[s.key(s.tenantOf(rec), s.idOf(rec))] = rec
@@ -123,7 +132,7 @@ func (s *tenantKV[T]) Upsert(rec T) error {
 
 // Delete removes a record within the caller's tenant (cross may delete any
 // tenant's). Returns false when the id isn't visible to the caller.
-func (s *tenantKV[T]) Delete(tenant string, cross bool, id string) bool {
+func (s *Collection[T]) Delete(tenant string, cross bool, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.items[s.key(tenant, id)]; ok {
@@ -144,7 +153,7 @@ func (s *tenantKV[T]) Delete(tenant string, cross bool, id string) bool {
 }
 
 // Count is the total record count across all tenants (admin/metrics use only).
-func (s *tenantKV[T]) Count() int {
+func (s *Collection[T]) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.items)
