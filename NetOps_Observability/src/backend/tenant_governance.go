@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/audit"
 	"os"
 	"strings"
 	"sync"
@@ -600,18 +601,18 @@ func (s *server) handleGovernanceAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fail closed on a malformed/out-of-range limit (F-71/F-74 rule): it used
 	// to be discarded, so `?limit=abc` silently became the default.
-	limit, lerr := intQuery(r, "limit", governanceAuditDefaultLimit, 1, auditMaxQueryLimit)
+	limit, lerr := intQuery(r, "limit", governanceAuditDefaultLimit, 1, audit.MaxQueryLimit)
 	if lerr != nil {
 		writeError(w, http.StatusBadRequest, lerr)
 		return
 	}
-	if limit > auditDefaultLimit {
-		limit = auditDefaultLimit
+	if limit > audit.DefaultLimit {
+		limit = audit.DefaultLimit
 	}
 	// One bounded page of the caller-visible trail, newest-first, then filter.
-	// If governance writes are older than the newest auditMaxQueryLimit events
+	// If governance writes are older than the newest audit.MaxQueryLimit events
 	// the view is honest about being a recent-changes window, not an archive.
-	events, err := s.auditScopedList(claims, auditQuery{Limit: auditMaxQueryLimit})
+	events, err := s.auditScopedList(claims, auditQuery{Limit: audit.MaxQueryLimit})
 	if err != nil {
 		// F-73: same rule as /api/audit — an unreadable trail must not render
 		// as "no governance changes were made".

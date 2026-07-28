@@ -1,4 +1,4 @@
-package main
+package audit
 
 import (
 	"context"
@@ -19,8 +19,22 @@ import (
 // admin's List runs inside withTenant(tenant) so Row-Level Security filters at
 // the database — the platform owner runs '*' and sees all. No app-side tenant
 // filtering, no full-table scan into memory.
-type pgAuditStore struct {
-	db *pgDB
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewPGStore builds the per-row RLS-backed trail over the injected seam.
+func NewPGStore(db DB, errf func(component, msg string, fields map[string]any)) *PGStore {
+	if errf == nil {
+		errf = func(string, string, map[string]any) {}
+	}
+	return &PGStore{db: db, errf: errf}
+}
+
+type PGStore struct {
+	errf func(component, msg string, fields map[string]any)
+	db   DB
 }
 
 // normTenant matches withTenant's GUC normalization (lower+trim) so the stored
@@ -29,23 +43,23 @@ type pgAuditStore struct {
 // casing) is preserved in the JSONB data column.
 func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
 
-func (s *pgAuditStore) Record(e AuditEvent) {
+func (s *PGStore) Record(e Event) {
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
 	}
 	if e.ID == "" {
-		e.ID = randHex(8)
+		e.ID = randHex8()
 	}
 	data, err := json.Marshal(e)
 	if err != nil {
-		logError("audit", "marshal event", map[string]any{"error": err.Error()})
+		s.errf("audit", "marshal event", map[string]any{"error": err.Error()})
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Record as platform owner ('*'): the middleware logs events across many
 	// tenants and the RLS WITH CHECK would reject any tenant_id != the scoped GUC.
-	if err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO audit_events (id, tenant_id, ts, data) VALUES ($1, $2, $3, $4)`,
 			e.ID, normTenant(e.Tenant), e.Time, data)
@@ -53,14 +67,14 @@ func (s *pgAuditStore) Record(e AuditEvent) {
 	}); err != nil {
 		// Best-effort: an audit write must never break the request, but the
 		// failure must be observable (no silent drop).
-		logError("audit", "persist event", map[string]any{"error": err.Error()})
+		s.errf("audit", "persist event", map[string]any{"error": err.Error()})
 	}
 }
 
-// auditWhere builds the shared time-window fragment for List and Count so a
+// pgWhere builds the shared time-window fragment for List and Count so a
 // page and its reported total are always computed under identical filters.
 // Fragments are constant (no user input) — only the parameterized values vary.
-func auditWhere(q auditQuery) (string, []any) {
+func pgWhere(q Query) (string, []any) {
 	args := []any{}
 	var conds []string
 	if !q.Before.IsZero() {
@@ -80,39 +94,39 @@ func auditWhere(q auditQuery) (string, []any) {
 // Count is the TRUE number of audit rows visible to this principal in the
 // window — the number that makes unbounded growth of an unbounded table
 // observable at all (F-57). RLS scopes it exactly like List.
-func (s *pgAuditStore) Count(tenant string, cross bool, q auditQuery) int {
+func (s *PGStore) Count(tenant string, cross bool, q Query) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	where, args := auditWhere(q)
+	where, args := pgWhere(q)
 	var n int
-	if err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, "SELECT count(*) FROM audit_events"+where, args...).Scan(&n)
 	}); err != nil {
 		// -1 is "unknown", never 0: on the audit surface, a failed count must
 		// not be able to render as "no privileged actions occurred" (F-73's
 		// lesson applied to the total).
-		logError("audit", "count trail", map[string]any{"error": err.Error()})
+		s.errf("audit", "count trail", map[string]any{"error": err.Error()})
 		return -1
 	}
 	return n
 }
 
-func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error) {
+func (s *PGStore) List(tenant string, cross bool, q Query) ([]Event, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	where, args := auditWhere(q)
+	where, args := pgWhere(q)
 	sql := "SELECT data FROM audit_events" + where
-	args = append(args, clampAuditLimit(q.Limit))
+	args = append(args, ClampLimit(q.Limit))
 	sql += fmt.Sprintf(" ORDER BY ts DESC, id DESC LIMIT $%d", len(args))
 	if q.Offset > 0 {
 		args = append(args, q.Offset)
 		sql += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
 
-	var out []AuditEvent
+	var out []Event
 	// RLS scopes the read: a scoped tenant sees only its own rows; '*' sees all.
-	if err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	if err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
@@ -123,7 +137,7 @@ func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) ([]AuditEve
 			if err := rows.Scan(&data); err != nil {
 				return err
 			}
-			var e AuditEvent
+			var e Event
 			if err := json.Unmarshal(data, &e); err != nil {
 				return err
 			}
@@ -134,7 +148,7 @@ func (s *pgAuditStore) List(tenant string, cross bool, q auditQuery) ([]AuditEve
 		// F-73: `return nil` here rendered as `{"events":[],"count":0}` with a
 		// 200 — a SIEM polling through a PG blip or an RLS regression recorded
 		// "no privileged actions occurred". The error must reach the caller.
-		logError("audit", "query trail", map[string]any{"error": err.Error()})
+		s.errf("audit", "query trail", map[string]any{"error": err.Error()})
 		return nil, err
 	}
 	return out, nil

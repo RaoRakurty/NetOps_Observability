@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/audit"
 	"os"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestPgAuditStore(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	a := &pgAuditStore{db: ps.db}
+	a := audit.NewPGStore(rlsPG{db: ps.db}, logError)
 
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	a.Record(AuditEvent{ID: "e1", Time: base, Tenant: "acme", Method: "POST", Decision: "allow"})
