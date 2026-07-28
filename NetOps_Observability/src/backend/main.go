@@ -21,6 +21,7 @@ import (
 	"netops/backend/internal/seam"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
+	"netops/backend/internal/tenant"
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
@@ -65,7 +66,7 @@ type server struct {
 	users            usersRepo
 	roles            *roleStore
 	tenants          tenantRepo
-	orgs             *orgStore
+	orgs             *tenant.OrgStore
 	bindings         *bindingStore
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)

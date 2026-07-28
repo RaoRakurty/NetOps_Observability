@@ -12,7 +12,7 @@ package main
 // ancestor-or-self, which walks parents (depth ≤ 4).
 //
 // Phase A keeps the tree DERIVED from the org + tenant stores (no redundant
-// persisted scope table): org:<id> parents come from orgStore, tenant:<id>
+// persisted scope table): org:<id> parents come from tenant.OrgStore, tenant:<id>
 // parents from the tenant's org. Resource scopes are lazy (minted on first use)
 // and parent onto their tenant. A scope id, once minted, is STABLE — never
 // re-mapped.

@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** twenty-six domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty-seven domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -8,8 +8,9 @@
 `internal/token`, `internal/session`, `internal/jwks`, `internal/apikey`,
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
 `ai/toolwire`, `wireless/store`, `nms/store`, `ticketing/store`,
-`pathgraph/store`, `token/password`, `internal/users`, 2026-07-28).
-**244** non-test files remain in `package main`. This document is the ordered sequence for the
+`pathgraph/store`, `token/password`, `internal/users`, `tenant/org`,
+2026-07-28).
+**243** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -124,6 +125,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 28 | `path_graph_store.go` → `pathgraph/store.go` | 1 | ~830 | ~8 | **Done** (2026-07-28). The last big store: endpoint/definition registries + observation/hop streams over the mem (per-tenant retention/eviction) and pg+ClickHouse hybrid backends. `DB` via `rlsPG`; a NEW `pathgraph.CH` seam (`InsertJSON`/`Select`/`Exec`) adapted by main's `chSeam{}` — Exec keeps the no-CH-configured→no-op purge semantics in main. Ingest-boundary validators exported (`IsPathToken`, `IsAddressToken`, `ScopeFor`, `CHTime`, `LiveOnly`); eviction logging injected via `SetInfof`; decode helpers (`str`/`parseCHTime`/`asFloat`-via-metricval) duplicated per the no-utils rule. Retention white-box suite moved in. |
 | ✅ 29 | `password.go` → `internal/token/password.go` | 1 | ~115 | ~10 | **Done** (2026-07-28). The PBKDF2-SHA256 KDF (hash/verify/needs-rehash + the SR-013 `MaxPasswordLen` amplification bound) consolidated into the auth-crypto boundary; `password.go` DISSOLVED — its only other content, the `jwtClaims` alias, moved to `auth.go`. Password POLICY (length rules, history, account predicates) stayed in main. KDF contract tests moved; policy tests shuttled back. |
 | ✅ 30 | `internal/users` | 2 | ~1040 | ~59 (via alias) | **Done** (2026-07-28). The identity store — file + per-row FORCE-RLS pg backends, the last-super-admin floor (shared pure helpers so the backends can't drift), federated JIT provisioning, MFA/lifecycle fields. Cross-domain inputs INJECTED as `users.Deps`: kv, `Errorf`, the SR-025 `GuardRole` (env-read stays in main), `IsSuperAdmin`, account_policy's `ApplyPasswordChange`, `DefaultTenant`, `MaxUsers`. `User`/`usersRepo` aliased in `users_wiring.go` (the jwtClaims technique); `sameTenant`/`normTenant`/`isUniqueViolation` duplicated at the boundary per the no-utils rule (business_service_store keeps its own unique-violation copy). Backdating tests use `MutateForTest`; cap tests set `Deps.MaxUsers` instead of poking the field; store CRUD/seed suites moved in with local `testDeps()`. |
+| ✅ 31 | `orgs.go` → `internal/tenant/org.go` | 1 | ~270 | ~8 | **Done** (2026-07-28). The Org layer (top-level customer boundary: SSO connection, home region, note) joins the tenant bounded context — §3a: org isolation is DERIVED from tenant isolation. `tenant.Deps` extended with the org-store inputs (`MintOrgID`, `NormalizeRegion`, `DefaultRegion`, checked by `NewOrgStore` only); `Org`/`orgUpdate`/`OrgGlobal` aliased in `tenant_wiring.go`; `orgOf` kept on main's side (tenancy.go). |
 | 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, cloud stores, ticketing connectors, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons

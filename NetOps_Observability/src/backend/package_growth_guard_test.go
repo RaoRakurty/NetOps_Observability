@@ -162,7 +162,11 @@ import (
 //	                  users.Deps — kv, Errorf, SR-025 GuardRole, IsSuperAdmin,
 //	                  account_policy's ApplyPasswordChange, DefaultTenant,
 //	                  MaxUsers; User/usersRepo aliased in users_wiring.go)
-const rootPackageCeiling = 244
+//	2026-07-28  243  orgs.go → internal/tenant/org.go (the Org layer joins the
+//	                  tenant bounded context per §3a "org = its tenants";
+//	                  tenant.Deps extended with MintOrgID/NormalizeRegion/
+//	                  DefaultRegion; orgOf stays in tenancy.go)
+const rootPackageCeiling = 243
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

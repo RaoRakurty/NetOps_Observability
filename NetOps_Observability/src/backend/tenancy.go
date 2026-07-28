@@ -139,6 +139,15 @@ func (s *server) withActingTenant(r *http.Request, c jwtClaims) jwtClaims {
 	return c
 }
 
+// orgOf returns the org a tenant belongs to, treating blank as the Global org
+// (tenants predating the org layer) — main's side of the tenant/org boundary.
+func orgOf(t Tenant) string {
+	if t.OrgID == "" {
+		return OrgGlobal
+	}
+	return t.OrgID
+}
+
 func deviceTenant(d models.Device) string {
 	return strings.ToLower(strings.TrimSpace(d.TenantID))
 }

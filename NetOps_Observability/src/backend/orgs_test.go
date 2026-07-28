@@ -1,11 +1,12 @@
 package main
 
 import (
+	"netops/backend/internal/tenant"
 	"path/filepath"
 	"testing"
 )
 
-func newTestOrgStore(t *testing.T) *orgStore {
+func newTestOrgStore(t *testing.T) *tenant.OrgStore {
 	t.Helper()
 	s, err := newOrgStore(filepath.Join(t.TempDir(), "orgs.json"))
 	if err != nil {

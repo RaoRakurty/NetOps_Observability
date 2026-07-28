@@ -15,9 +15,12 @@ type (
 	Tenant        = tenant.Tenant
 	IsolationMode = tenant.IsolationMode
 	tenantRepo    = tenant.Repo
+	Org           = tenant.Org
+	orgUpdate     = tenant.OrgUpdate
 )
 
 const (
+	OrgGlobal             = tenant.OrgGlobal
 	TenantGlobal          = tenant.Global
 	TenantStatusActive    = tenant.StatusActive
 	TenantStatusSuspended = tenant.StatusSuspended
@@ -40,7 +43,18 @@ func tenantDeps() tenant.Deps {
 			_, err := normalizeRegion(r)
 			return err
 		},
+		MintOrgID: mintOrgID,
+		NormalizeRegion: func(r string) (string, error) {
+			reg, err := normalizeRegion(r)
+			return reg, err
+		},
+		DefaultRegion: RegionDefault,
 	}
+}
+
+// newOrgStore keeps the historical constructor shape (path-only call sites).
+func newOrgStore(path string) (*tenant.OrgStore, error) {
+	return tenant.NewOrgStore(path, tenantDeps())
 }
 
 // newTenantStore keeps the historical constructor shape for the many call sites

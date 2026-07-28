@@ -125,6 +125,12 @@ type Deps struct {
 	SlugFromName   func(string) string          // derive a candidate slug from a display name
 	ValidateSlug   func(string) (string, error) // full slug contract (untrusted input)
 	ValidateRegion func(string) error           // region-domain membership check
+
+	// Org-store inputs (checked by NewOrgStore; NewStore does not require them —
+	// the org layer is the same bounded context, §3a: org = its tenants).
+	MintOrgID       func() string                // opaque, immutable org id
+	NormalizeRegion func(string) (string, error) // region normalize (org home_region)
+	DefaultRegion   string                       // seeded Global org's home region
 }
 
 func (d Deps) validate() error {
