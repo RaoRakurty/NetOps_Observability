@@ -175,9 +175,9 @@ func (s *server) bootstrapWorkloadIssuer(vault *vault.Vault, issuerURL string) {
 	}
 	s.workloadIssuer = wi
 	src := wi.source()
-	s.cloudBroker.adapter = func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
+	s.cloudBroker.SetAdapter(func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
 		return cloudconn.AdapterForWithAssertions(p, src)
-	}
+	})
 	logInfo("cloudconn", "workload OIDC issuer active", map[string]any{
 		"issuer": wi.issuer, "kid": wi.kid})
 }

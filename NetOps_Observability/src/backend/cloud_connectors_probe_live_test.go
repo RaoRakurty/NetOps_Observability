@@ -64,15 +64,15 @@ func newAWSProbeFixture(t *testing.T, allowed map[string]bool) *httptest.Server 
 // exchanger and the probe client pointed at the fixture.
 func wireProbeBroker(s *server, fixture *httptest.Server) {
 	s.cloudConn = cloudconn.NewMemStore()
-	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
+	s.cloudBroker = cloudconn.NewIdentityBroker(s.cloudConn, s.vault, nil)
 	ex := &cloudconn.AWSSTSExchanger{Client: fixture.Client(), Endpoint: fixture.URL, Platform: testPlatformCreds{}}
 	probe := &cloudconn.AWSProbeClient{Client: fixture.Client(), STSEndpoint: fixture.URL, IAMEndpoint: fixture.URL}
-	s.cloudBroker.adapter = func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
+	s.cloudBroker.SetAdapter(func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
 		if p != cloudconn.ProviderAWS {
 			return nil
 		}
 		return cloudconn.NewAWSAdapter(ex, probe)
-	}
+	})
 	if s.cloudSourceStatus == nil {
 		s.cloudSourceStatus = newCloudSourceStatusStore()
 	}
@@ -208,12 +208,12 @@ func TestCloudConnectorProbesDeferredWithoutPlatformIdentity(t *testing.T) {
 	defer fixture.Close()
 	srv, s := newTestServerState(t)
 	s.cloudConn = cloudconn.NewMemStore()
-	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
+	s.cloudBroker = cloudconn.NewIdentityBroker(s.cloudConn, s.vault, nil)
 	ex := &cloudconn.AWSSTSExchanger{Client: fixture.Client(), Endpoint: fixture.URL,
 		Platform: testPlatformCreds{err: cloudconn.ErrPlatformCredentialsMissing}}
-	s.cloudBroker.adapter = func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
+	s.cloudBroker.SetAdapter(func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
 		return cloudconn.NewAWSAdapter(ex, nil)
-	}
+	})
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 	id := buildAWSConnector(t, srv, admin)
 	if st, b := do(t, srv, "POST", "/api/cloud/connectors/"+id+"/validate", admin, nil); st != 200 {

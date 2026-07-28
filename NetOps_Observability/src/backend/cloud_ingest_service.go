@@ -259,7 +259,7 @@ func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, 
 
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
-	tok, err := s.cloudBroker.TokenFor(ctx, scopedTokenRequest{
+	tok, err := s.cloudBroker.TokenFor(ctx, cloudconn.ScopedTokenRequest{
 		Tenant:          c.TenantID, // from the row — NEVER from the request
 		ConnectorID:     c.ConnectorID,
 		ProviderAccount: account,
@@ -268,9 +268,9 @@ func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, 
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, errBrokerNotFound):
+		case errors.Is(err, cloudconn.ErrBrokerNotFound):
 			writeError(w, http.StatusNotFound, errCCNNotFound)
-		case errors.Is(err, errBrokerNotActive):
+		case errors.Is(err, cloudconn.ErrBrokerNotActive):
 			writeJSONError(w, http.StatusConflict, "connector cannot exchange tokens in its current state", "NOT_ACTIVE")
 		case errors.Is(err, cloudconn.ErrPlatformCredentialsMissing),
 			errors.Is(err, cloudconn.ErrWorkloadAssertionMissing),

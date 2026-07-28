@@ -121,25 +121,25 @@ type server struct {
 	tktPolicyConflicts    atomic.Int64
 	tktPolicyMultiEnabled atomic.Int64
 	tktMergedRedirects    atomic.Int64
-	seams                 *seam.Store              // canonical seam inventory, #67 build ⑤ (nil on file backend)
-	services              *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn             cloudconn.Repo           // multi-tenant cloud-connector framework (pg or in-memory)
-	cloudBroker           *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
-	workloadIssuer        *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
-	cloudIngestInv        *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
-	cloudSourceStatus     *cloudSourceStatusStore  // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
-	topology              topology.GraphStore      // persistent topology graph #77 (in-memory or pg)
-	incidentTimeline      timeintel.TimelineStore  // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
-	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	aiFeedback            ai.FeedbackStore         // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
-	applications          appid.AppStore           // Application Identification registry #81 P0 (in-memory or pg)
-	appCatalog            *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
-	ngfw                  *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
-	fusion                *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
-	appOverrides          appCatalogStore          // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
-	cloud                 cloud.Store              // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
-	bizServices           *cloud.BizSvcStore       // Business Service mapping + manual overrides #0024 (nil on file backend)
-	cloudApp              *cloudAppResolver        // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
+	seams                 *seam.Store               // canonical seam inventory, #67 build ⑤ (nil on file backend)
+	services              *pgServiceStore           // service catalog #69 §2 P2 (nil on file backend)
+	cloudConn             cloudconn.Repo            // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudBroker           *cloudconn.IdentityBroker // cloud identity broker: scoped short-lived provider tokens + vault secret custody
+	workloadIssuer        *workloadIssuer           // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
+	cloudIngestInv        *cloudIngestInventory     // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
+	cloudSourceStatus     *cloudSourceStatusStore   // poller-reported permission_denied/misconfigured per source (Wave 2 #4)
+	topology              topology.GraphStore       // persistent topology graph #77 (in-memory or pg)
+	incidentTimeline      timeintel.TimelineStore   // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
+	incidentTimeMetrics   incidentTimeMetricsStore  // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
+	aiFeedback            ai.FeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	applications          appid.AppStore            // Application Identification registry #81 P0 (in-memory or pg)
+	appCatalog            *appCatalogHolder         // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
+	ngfw                  *ngfwAppResolver          // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
+	fusion                *fusionWorker             // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
+	appOverrides          appCatalogStore           // Application Identification operator-defined overrides #81 P1c (in-memory or pg)
+	cloud                 cloud.Store               // Cloud App Observability inventory #81 P3A (in-memory; pg over migration 0016 next)
+	bizServices           *cloud.BizSvcStore        // Business Service mapping + manual overrides #0024 (nil on file backend)
+	cloudApp              *cloudAppResolver         // Cloud identity-map → appid bridge #81 P3F+1 (consumes the cloud inventory for app naming)
 	// Service Path Graph (frozen contract v1, docs/design/service-path-graph-contract.md):
 	// the ordered LAN→SD-WAN→carrier/cloud→application RCA spine. pathGraph is the
 	// storage (PG registries + CH observation/hop streams, or in-memory on the file
@@ -598,9 +598,13 @@ func newServer() *server {
 	// the Identity Broker (scoped short-lived provider tokens; the ONLY component
 	// that decrypts connector secrets, via the existing envelope Vault).
 	srv.cloudConn = newCloudConnStore()
-	srv.cloudBroker = newCloudIdentityBroker(srv.cloudConn, vault, func(e AuditEvent) {
+	srv.cloudBroker = cloudconn.NewIdentityBroker(srv.cloudConn, vault, func(event, tenant, connectorID, provider, decision, detail string) {
 		if srv.audit != nil {
-			srv.audit.Record(e)
+			srv.audit.Record(AuditEvent{
+				Actor: "broker", Tenant: tenant, Method: event, Path: "/cloudconn/broker/" + connectorID,
+				Status: 200, Decision: decision,
+				Detail: map[string]any{"event": event, "connector": connectorID, "provider": provider, "info": detail},
+			})
 		}
 	})
 	// Platform workload OIDC issuer (Wave 4 #13): minted federated assertions
@@ -2022,7 +2026,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 		s.tlsSrv.writeTLSMetrics(w)
 	}
 	if s.cloudBroker != nil {
-		s.cloudBroker.metrics.write(w)
+		s.cloudBroker.Metrics().Write(w)
 	}
 	if s.hub != nil {
 		fmt.Fprintf(w, "# HELP netops_ws_clients Currently connected WebSocket event clients.\n")

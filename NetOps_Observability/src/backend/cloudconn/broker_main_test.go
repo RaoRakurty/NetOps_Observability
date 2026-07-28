@@ -1,34 +1,40 @@
-package main
+package cloudconn
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
-
-	"netops/backend/cloudconn"
 )
 
 // fakeAdapter is a test double for a provider that returns a deterministic token
 // so the broker's caching / isolation / lifetime logic is testable without any
 // cloud network. It records the last ExchangeRequest so tests can assert the
 // broker passed the decrypted legacy secret only when appropriate.
+func testConnID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return ConnectorIDPrefix + hex.EncodeToString(b)
+}
+
 type fakeAdapter struct {
-	provider cloudconn.Provider
+	provider Provider
 	issued   int
-	lastReq  cloudconn.ExchangeRequest
+	lastReq  ExchangeRequest
 	ttl      time.Duration
 	now      func() time.Time // controllable clock; nil = time.Now
 }
 
-func (f *fakeAdapter) Provider() cloudconn.Provider { return f.provider }
-func (f *fakeAdapter) ValidateConfiguration(cloudconn.IdentityConfig) cloudconn.ValidationResult {
-	return cloudconn.ValidationResult{OK: true}
+func (f *fakeAdapter) Provider() Provider { return f.provider }
+func (f *fakeAdapter) ValidateConfiguration(IdentityConfig) ValidationResult {
+	return ValidationResult{OK: true}
 }
-func (f *fakeAdapter) SetupInstructions(cloudconn.IdentityConfig, cloudconn.CapabilityPack) (cloudconn.SetupBundle, error) {
-	return cloudconn.SetupBundle{}, nil
+func (f *fakeAdapter) SetupInstructions(IdentityConfig, CapabilityPack) (SetupBundle, error) {
+	return SetupBundle{}, nil
 }
-func (f *fakeAdapter) ExchangeCredential(_ context.Context, req cloudconn.ExchangeRequest) (cloudconn.ScopedToken, error) {
+func (f *fakeAdapter) ExchangeCredential(_ context.Context, req ExchangeRequest) (ScopedToken, error) {
 	f.issued++
 	f.lastReq = req
 	ttl := f.ttl
@@ -42,7 +48,7 @@ func (f *fakeAdapter) ExchangeCredential(_ context.Context, req cloudconn.Exchan
 	// The value is bound to the connector's ExternalId + mint count, so tests can
 	// prove WHICH connector a served credential was minted for (isolation) and
 	// WHEN it was refreshed.
-	return cloudconn.ScopedToken{
+	return ScopedToken{
 		Provider: f.provider,
 		Value:    "tok-" + req.Identity.ExternalID + "-" + itoaTest(f.issued),
 		Expiry:   now().UTC().Add(ttl),
@@ -60,28 +66,28 @@ func itoaTest(n int) string {
 	}
 	return s
 }
-func (f *fakeAdapter) DiscoverScopes(context.Context, cloudconn.DiscoverRequest) ([]cloudconn.Scope, error) {
+func (f *fakeAdapter) DiscoverScopes(context.Context, DiscoverRequest) ([]Scope, error) {
 	return nil, nil
 }
-func (f *fakeAdapter) ValidateCapabilities(context.Context, cloudconn.CapabilityCheckRequest) (cloudconn.CapabilityReport, error) {
-	return cloudconn.CapabilityReport{}, nil
+func (f *fakeAdapter) ValidateCapabilities(context.Context, CapabilityCheckRequest) (CapabilityReport, error) {
+	return CapabilityReport{}, nil
 }
-func (f *fakeAdapter) Revoke(context.Context, cloudconn.RevokeRequest) error { return nil }
+func (f *fakeAdapter) Revoke(context.Context, RevokeRequest) error { return nil }
 
-func newTestBroker(t *testing.T, fake *fakeAdapter) (*cloudIdentityBroker, cloudconn.Repo) {
+func newTestBroker(t *testing.T, fake *fakeAdapter) (*IdentityBroker, Repo) {
 	t.Helper()
-	store := cloudconn.NewMemStore()
-	b := newCloudIdentityBroker(store, nil /* dormant vault: passthrough */, nil)
-	b.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }
+	store := NewMemStore()
+	b := NewIdentityBroker(store, nil /* dormant vault: passthrough */, nil)
+	b.SetAdapter(func(Provider) CloudIdentityProvider { return fake })
 	return b, store
 }
 
-func mkActiveConnector(t *testing.T, store cloudconn.Repo, tenant, role string) cloudconn.Connector {
+func mkActiveConnector(t *testing.T, store Repo, tenant, role string) Connector {
 	t.Helper()
-	c := cloudconn.Connector{
-		TenantID: tenant, ConnectorID: newOpaqueID(cloudconn.ConnectorIDPrefix), Provider: cloudconn.ProviderAWS,
-		AuthMethod: cloudconn.AuthMethodCloudRole, State: cloudconn.StateActive,
-		Identity: cloudconn.IdentityConfig{Provider: cloudconn.ProviderAWS, RoleARN: role, ExternalID: cloudconn.NewExternalID()},
+	c := Connector{
+		TenantID: tenant, ConnectorID: testConnID(), Provider: ProviderAWS,
+		AuthMethod: AuthMethodCloudRole, State: StateActive,
+		Identity: IdentityConfig{Provider: ProviderAWS, RoleARN: role, ExternalID: NewExternalID()},
 	}
 	created, err := store.Create(context.Background(), c)
 	if err != nil {
@@ -91,7 +97,7 @@ func mkActiveConnector(t *testing.T, store cloudconn.Repo, tenant, role string) 
 }
 
 func TestBrokerTokenCacheTenantConnectorIsolation(t *testing.T) {
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	fake := &fakeAdapter{provider: ProviderAWS}
 	b, store := newTestBroker(t, fake)
 	// Two tenants, IDENTICAL role ARN + provider account — the cache must NOT
 	// collapse them into one entry.
@@ -99,8 +105,8 @@ func TestBrokerTokenCacheTenantConnectorIsolation(t *testing.T) {
 	ca := mkActiveConnector(t, store, "tenant-a", sameRole)
 	cb := mkActiveConnector(t, store, "tenant-b", sameRole)
 
-	reqA := scopedTokenRequest{Tenant: "tenant-a", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
-	reqB := scopedTokenRequest{Tenant: "tenant-b", ConnectorID: cb.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	reqA := ScopedTokenRequest{Tenant: "tenant-a", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	reqB := ScopedTokenRequest{Tenant: "tenant-b", ConnectorID: cb.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
 
 	if _, err := b.TokenFor(context.Background(), reqA); err != nil {
 		t.Fatalf("A token: %v", err)
@@ -120,7 +126,7 @@ func TestBrokerTokenCacheTenantConnectorIsolation(t *testing.T) {
 		t.Fatalf("cache miss on repeat: exchanges=%d", fake.issued)
 	}
 	// Cross-tenant request for A's connector under tenant B fails closed (Get scoped).
-	if _, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "tenant-b", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012"}); !errors.Is(err, errBrokerNotFound) {
+	if _, err := b.TokenFor(context.Background(), ScopedTokenRequest{Tenant: "tenant-b", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012"}); !errors.Is(err, ErrBrokerNotFound) {
 		t.Fatalf("cross-tenant token request must fail closed, got %v", err)
 	}
 }
@@ -131,14 +137,14 @@ func TestBrokerTokenCacheTenantConnectorIsolation(t *testing.T) {
 // minted for ITS OWN connector (bound to its ExternalId), from mint through
 // cache hit.
 func TestBrokerCachedCredentialNeverCrossesTenants(t *testing.T) {
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	fake := &fakeAdapter{provider: ProviderAWS}
 	b, store := newTestBroker(t, fake)
 	const sameRole = "arn:aws:iam::123456789012:role/correlix-observer"
 	ca := mkActiveConnector(t, store, "tenant-a", sameRole)
 	cb := mkActiveConnector(t, store, "tenant-b", sameRole)
 
-	reqA := scopedTokenRequest{Tenant: "tenant-a", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
-	reqB := scopedTokenRequest{Tenant: "tenant-b", ConnectorID: cb.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	reqA := ScopedTokenRequest{Tenant: "tenant-a", ConnectorID: ca.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	reqB := ScopedTokenRequest{Tenant: "tenant-b", ConnectorID: cb.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
 
 	// B mints first and warms the cache.
 	tokB, err := b.TokenFor(context.Background(), reqB)
@@ -178,11 +184,11 @@ func TestBrokerRefreshesAtEightyPercentTTL(t *testing.T) {
 	t0 := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	current := t0
 	clock := func() time.Time { return current }
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS, ttl: 10 * time.Minute, now: clock}
+	fake := &fakeAdapter{provider: ProviderAWS, ttl: 10 * time.Minute, now: clock}
 	b, store := newTestBroker(t, fake)
 	b.now = clock
 	c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
-	req := scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID}
+	req := ScopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID}
 
 	if _, err := b.TokenFor(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -212,11 +218,11 @@ func TestBrokerRefreshesAtEightyPercentTTL(t *testing.T) {
 func TestBrokerClampsFixedProviderLifetimes(t *testing.T) {
 	t0 := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return t0 }
-	fake := &fakeAdapter{provider: cloudconn.ProviderAzure, ttl: 90 * time.Minute, now: clock}
+	fake := &fakeAdapter{provider: ProviderAzure, ttl: 90 * time.Minute, now: clock}
 	b, store := newTestBroker(t, fake)
 	b.now = clock
 	c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
-	tok, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID, MaxLifetime: time.Hour})
+	tok, err := b.TokenFor(context.Background(), ScopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID, MaxLifetime: time.Hour})
 	if err != nil {
 		t.Fatalf("a 90m provider token must be clamped, not rejected: %v", err)
 	}
@@ -227,25 +233,25 @@ func TestBrokerClampsFixedProviderLifetimes(t *testing.T) {
 
 func TestBrokerMaxLifetimeCap(t *testing.T) {
 	// Provider returns a token valid far beyond the broker's max lifetime.
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS, ttl: 24 * time.Hour}
+	fake := &fakeAdapter{provider: ProviderAWS, ttl: 24 * time.Hour}
 	b, store := newTestBroker(t, fake)
 	c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
-	_, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID, MaxLifetime: 24 * time.Hour})
+	_, err := b.TokenFor(context.Background(), ScopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID, MaxLifetime: 24 * time.Hour})
 	if !errors.Is(err, errBrokerTokenTooLong) {
 		t.Fatalf("token exceeding max lifetime must be rejected, got %v", err)
 	}
 }
 
 func TestBrokerFailsClosedForDisabledRevoked(t *testing.T) {
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	fake := &fakeAdapter{provider: ProviderAWS}
 	b, store := newTestBroker(t, fake)
-	for _, state := range []cloudconn.LifecycleState{cloudconn.StateDisabled, cloudconn.StateRevoked, cloudconn.StateDraft, cloudconn.StateDeleted} {
+	for _, state := range []LifecycleState{StateDisabled, StateRevoked, StateDraft, StateDeleted} {
 		c := mkActiveConnector(t, store, "t", "arn:aws:iam::1:role/x")
 		c.State = state
 		if _, _, err := store.Update(context.Background(), c, 0); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := b.TokenFor(context.Background(), scopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID}); !errors.Is(err, errBrokerNotActive) {
+		if _, err := b.TokenFor(context.Background(), ScopedTokenRequest{Tenant: "t", ConnectorID: c.ConnectorID}); !errors.Is(err, ErrBrokerNotActive) {
 			t.Fatalf("state %s must fail closed, got %v", state, err)
 		}
 	}
@@ -255,19 +261,19 @@ func TestBrokerFailsClosedForDisabledRevoked(t *testing.T) {
 }
 
 func TestBrokerSecretEncryptStoreResolveRedaction(t *testing.T) {
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
+	fake := &fakeAdapter{provider: ProviderAWS}
 	b, store := newTestBroker(t, fake)
 	// Legacy static-key connector.
-	c := cloudconn.Connector{
-		TenantID: "t", ConnectorID: newOpaqueID(cloudconn.ConnectorIDPrefix), Provider: cloudconn.ProviderAWS,
-		AuthMethod: cloudconn.AuthMethodStaticKey, State: cloudconn.StateActive,
-		Identity: cloudconn.IdentityConfig{Provider: cloudconn.ProviderAWS},
+	c := Connector{
+		TenantID: "t", ConnectorID: testConnID(), Provider: ProviderAWS,
+		AuthMethod: AuthMethodStaticKey, State: StateActive,
+		Identity: IdentityConfig{Provider: ProviderAWS},
 	}
 	created, err := store.Create(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := b.StoreSecret(context.Background(), "t", created.ConnectorID, cloudconn.ProviderAWS, "aws_secret_access_key", "AKIA123", "top-secret-value")
+	ref, err := b.StoreSecret(context.Background(), "t", created.ConnectorID, ProviderAWS, "aws_secret_access_key", "AKIA123", "top-secret-value")
 	if err != nil {
 		t.Fatalf("store secret: %v", err)
 	}
@@ -303,7 +309,7 @@ func TestBrokerSecretEncryptStoreResolveRedaction(t *testing.T) {
 	}
 }
 
-func mkActiveConnectorWithRef(t *testing.T, store cloudconn.Repo, id string) cloudconn.Connector {
+func mkActiveConnectorWithRef(t *testing.T, store Repo, id string) Connector {
 	t.Helper()
 	c, found, err := store.Get(context.Background(), "t", false, id)
 	if err != nil || !found {

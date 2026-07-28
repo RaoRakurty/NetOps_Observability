@@ -25,9 +25,11 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 	// The shared harness doesn't wire the connector store/broker; the handlers
 	// read them at request time, so setting them on the live *server is enough.
 	s.cloudConn = cloudconn.NewMemStore()
-	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, func(e AuditEvent) {
+	s.cloudBroker = cloudconn.NewIdentityBroker(s.cloudConn, s.vault, func(event, tenant, connectorID, provider, decision, detail string) {
 		if s.audit != nil {
-			s.audit.Record(e)
+			s.audit.Record(AuditEvent{Actor: "broker", Tenant: tenant, Method: event,
+				Path: "/cloudconn/broker/" + connectorID, Status: 200, Decision: decision,
+				Detail: map[string]any{"event": event, "connector": connectorID, "provider": provider, "info": detail}})
 		}
 	})
 
@@ -170,7 +172,7 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 	//     fake provider, tenant A can neither mint a token for B's connector nor
 	//     ever be served B's cached credential.
 	fakeEx := &fakeAdapter{provider: cloudconn.ProviderAWS}
-	s.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fakeEx }
+	s.cloudBroker.SetAdapter(func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fakeEx })
 	for _, f := range []*ccnFixture{a, b} {
 		c, found, err := s.cloudConn.Get(t.Context(), f.tenantID, false, f.connID)
 		if err != nil || !found {
@@ -186,16 +188,16 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 		}
 	}
 	// B warms the cache first.
-	tokB, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: b.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"})
+	tokB, err := s.cloudBroker.TokenFor(t.Context(), cloudconn.ScopedTokenRequest{Tenant: b.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"})
 	if err != nil {
 		t.Fatalf("B mint: %v", err)
 	}
 	// A asking for B's connector id fails closed (404-equivalent, no mint).
-	if _, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: a.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"}); err == nil {
+	if _, err := s.cloudBroker.TokenFor(t.Context(), cloudconn.ScopedTokenRequest{Tenant: a.tenantID, ConnectorID: b.connID, ProviderAccount: "123456789012"}); err == nil {
 		t.Fatal("tenant A minted a token for tenant B's connector — cross-tenant exchange leak")
 	}
 	// A's own otherwise-identical request gets A's OWN credential, never B's.
-	tokA, err := s.cloudBroker.TokenFor(t.Context(), scopedTokenRequest{Tenant: a.tenantID, ConnectorID: a.connID, ProviderAccount: "123456789012"})
+	tokA, err := s.cloudBroker.TokenFor(t.Context(), cloudconn.ScopedTokenRequest{Tenant: a.tenantID, ConnectorID: a.connID, ProviderAccount: "123456789012"})
 	if err != nil {
 		t.Fatalf("A mint: %v", err)
 	}

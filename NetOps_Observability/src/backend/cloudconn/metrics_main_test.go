@@ -1,4 +1,4 @@
-package main
+package cloudconn
 
 // cloud_connectors_metrics_test.go — Wave 4 #13 slice 4: per-provider exchange
 // counters recorded by the Identity Broker and exposed in Prometheus text.
@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"netops/backend/cloudconn"
 )
 
 // failingAdapter returns a fixed error from every exchange.
@@ -18,8 +16,8 @@ type failingAdapter struct {
 	err error
 }
 
-func (f *failingAdapter) ExchangeCredential(context.Context, cloudconn.ExchangeRequest) (cloudconn.ScopedToken, error) {
-	return cloudconn.ScopedToken{}, f.err
+func (f *failingAdapter) ExchangeCredential(context.Context, ExchangeRequest) (ScopedToken, error) {
+	return ScopedToken{}, f.err
 }
 
 func TestExchangeOutcomeMapping(t *testing.T) {
@@ -28,13 +26,13 @@ func TestExchangeOutcomeMapping(t *testing.T) {
 		want string
 	}{
 		{nil, exOutcomeSuccess},
-		{&cloudconn.ExchangeError{Provider: cloudconn.ProviderAWS, Code: "denied"}, exOutcomeAuthFail},
-		{&cloudconn.ExchangeError{Provider: cloudconn.ProviderAWS, Code: "throttled"}, exOutcomeThrottled},
-		{&cloudconn.ExchangeError{Provider: cloudconn.ProviderAWS, Code: "provider_error"}, exOutcomeAPIError},
-		{&cloudconn.ExchangeError{Provider: cloudconn.ProviderAWS, Code: "network"}, exOutcomeAPIError},
-		{cloudconn.ErrPlatformCredentialsMissing, exOutcomeDeferred},
-		{cloudconn.ErrWorkloadAssertionMissing, exOutcomeDeferred},
-		{cloudconn.ErrProviderExchangeDeferred, exOutcomeDeferred},
+		{&ExchangeError{Provider: ProviderAWS, Code: "denied"}, exOutcomeAuthFail},
+		{&ExchangeError{Provider: ProviderAWS, Code: "throttled"}, exOutcomeThrottled},
+		{&ExchangeError{Provider: ProviderAWS, Code: "provider_error"}, exOutcomeAPIError},
+		{&ExchangeError{Provider: ProviderAWS, Code: "network"}, exOutcomeAPIError},
+		{ErrPlatformCredentialsMissing, exOutcomeDeferred},
+		{ErrWorkloadAssertionMissing, exOutcomeDeferred},
+		{ErrProviderExchangeDeferred, exOutcomeDeferred},
 	}
 	for i, c := range cases {
 		if got := exchangeOutcome(c.err); got != c.want {
@@ -44,10 +42,10 @@ func TestExchangeOutcomeMapping(t *testing.T) {
 }
 
 func TestBrokerRecordsExchangeMetrics(t *testing.T) {
-	fake := &fakeAdapter{provider: cloudconn.ProviderAWS, ttl: time.Hour}
+	fake := &fakeAdapter{provider: ProviderAWS, ttl: time.Hour}
 	b, store := newTestBroker(t, fake)
 	c := mkActiveConnector(t, store, "tenant-m", "arn:aws:iam::123456789012:role/correlix-observer")
-	req := scopedTokenRequest{Tenant: "tenant-m", ConnectorID: c.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
+	req := ScopedTokenRequest{Tenant: "tenant-m", ConnectorID: c.ConnectorID, ProviderAccount: "123456789012", CapabilitySetID: "aws-observer-v1"}
 
 	// One fresh mint + one cache hit.
 	if _, err := b.TokenFor(context.Background(), req); err != nil {
@@ -59,15 +57,15 @@ func TestBrokerRecordsExchangeMetrics(t *testing.T) {
 
 	// One denied exchange through a failing adapter (fresh broker, same metrics
 	// type — assert counters roll up independently per outcome).
-	deny := &failingAdapter{err: &cloudconn.ExchangeError{Provider: cloudconn.ProviderAWS, Code: "denied", Msg: "no"}}
-	b.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return deny }
+	deny := &failingAdapter{err: &ExchangeError{Provider: ProviderAWS, Code: "denied", Msg: "no"}}
+	b.SetAdapter(func(Provider) CloudIdentityProvider { return deny })
 	b.Invalidate(c.ConnectorID)
 	if _, err := b.TokenFor(context.Background(), req); err == nil {
 		t.Fatal("denied exchange must error")
 	}
 
 	var sb strings.Builder
-	b.metrics.write(&sb)
+	b.Metrics().Write(&sb)
 	out := sb.String()
 	for _, want := range []string{
 		`netops_cloudconn_exchange_total{provider="aws",outcome="auth_success"} 1`,

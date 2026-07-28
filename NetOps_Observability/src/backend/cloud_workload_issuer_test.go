@@ -129,7 +129,7 @@ func TestWorkloadWellKnownEndpoints(t *testing.T) {
 func TestBootstrapWorkloadIssuerSwapsBrokerAdapters(t *testing.T) {
 	redirectIssuerKV(t)
 	v := newTestVault(t)
-	s := &server{cloudBroker: newCloudIdentityBroker(nil, v, nil)}
+	s := &server{cloudBroker: cloudconn.NewIdentityBroker(nil, v, nil)}
 
 	// Unset env → dormant, adapter untouched.
 	s.bootstrapWorkloadIssuer(v, "")
@@ -148,7 +148,7 @@ func TestBootstrapWorkloadIssuerSwapsBrokerAdapters(t *testing.T) {
 		t.Fatal("issuer not activated")
 	}
 	for _, p := range []cloudconn.Provider{cloudconn.ProviderAWS, cloudconn.ProviderAzure, cloudconn.ProviderGCP} {
-		if s.cloudBroker.adapter(p) == nil {
+		if s.cloudBroker.AdapterFor(p) == nil {
 			t.Fatalf("broker adapter missing for %s after issuer activation", p)
 		}
 	}

@@ -199,6 +199,11 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  210  cloud_connectors_broker.go + metrics → cloudconn/ (the
+//	                  Identity Broker — the ONLY secret-decrypting component —
+//	                  with its scoped-token cache and exchange metrics; audit
+//	                  sink injected as a neutral AuditFn, main adapts onto
+//	                  AuditEvent; AdapterFor/SetAdapter/Metrics exported)
 //	2026-07-28  212  self_heal.go → internal/selfheal (the disk-pressure/
 //	                  read-only-block ingest healer; env + HTTP client + log
 //	                  sinks injected via Config; Run/CurrentSnapshot exported)
@@ -252,7 +257,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 212
+const rootPackageCeiling = 210
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

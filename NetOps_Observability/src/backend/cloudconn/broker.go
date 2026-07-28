@@ -1,4 +1,4 @@
-package main
+package cloudconn
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"netops/backend/cloudconn"
+	"crypto/rand"
 )
 
 // Connector security audit event names (recorded into the existing audit_events
@@ -45,17 +45,17 @@ const brokerRefreshFraction = 0.8
 const brokerLifetimeSlack = 2.0
 
 var (
-	errBrokerNotFound     = errors.New("cloudconn: connector not found for tenant")
-	errBrokerNotActive    = errors.New("cloudconn: connector cannot exchange tokens in its current state")
+	ErrBrokerNotFound     = errors.New("cloudconn: connector not found for tenant")
+	ErrBrokerNotActive    = errors.New("cloudconn: connector cannot exchange tokens in its current state")
 	errBrokerTokenTooLong = errors.New("cloudconn: provider returned a token exceeding the max lifetime")
 	errBrokerNoSecret     = errors.New("cloudconn: legacy secret reference is missing or empty")
 )
 
-// scopedTokenRequest is a request for ONE tenant, ONE connector, ONE provider
+// ScopedTokenRequest is a request for ONE tenant, ONE connector, ONE provider
 // account, ONE identity, ONE bounded capability set and ONE bounded lifetime.
 // The cache key is composed from ALL of these — never from role ARN / client id /
 // SA email / account id / tenant slug alone.
-type scopedTokenRequest struct {
+type ScopedTokenRequest struct {
 	Tenant          string
 	ConnectorID     string
 	ProviderAccount string        // scope ref (account/subscription/project) the token targets
@@ -69,7 +69,7 @@ type scopedTokenRequest struct {
 // tenant, connector, provider, provider account, identity ref, capability-set
 // hash, audience and region. Two tenants with identical provider ids / role names
 // / client ids therefore NEVER share a cache entry.
-func (r scopedTokenRequest) cacheKey(provider cloudconn.Provider, identityRef string) string {
+func (r ScopedTokenRequest) cacheKey(provider Provider, identityRef string) string {
 	h := sha256.New()
 	for _, part := range []string{
 		"t=" + normTenant(r.Tenant),
@@ -88,7 +88,7 @@ func (r scopedTokenRequest) cacheKey(provider cloudconn.Provider, identityRef st
 }
 
 type cachedToken struct {
-	token    cloudconn.ScopedToken
+	token    ScopedToken
 	mintedAt time.Time // for the 80%-TTL proactive refresh window
 }
 
@@ -105,32 +105,53 @@ func (ct cachedToken) fresh(now time.Time) bool {
 	return now.Sub(ct.mintedAt) < time.Duration(float64(life)*brokerRefreshFraction)
 }
 
-// cloudIdentityBroker is the ONLY component that decrypts connector secrets and
+// IdentityBroker is the ONLY component that decrypts connector secrets and
 // mints provider tokens. Collectors request a scoped token; they never store or
 // refresh credentials themselves. Tokens are cached in memory (never persisted)
 // and never logged.
-type cloudIdentityBroker struct {
-	store   cloudconn.Repo
+type IdentityBroker struct {
+	store   Repo
 	vault   *vault.Vault
-	adapter func(cloudconn.Provider) cloudconn.CloudIdentityProvider // DI seam
-	auditFn func(AuditEvent)                                         // nil = no audit sink
+	adapter func(Provider) CloudIdentityProvider // DI seam
+	auditFn AuditFn                              // nil = no audit sink
 	now     func() time.Time
 	maxLife time.Duration
-	metrics *cloudExchangeMetrics // per-provider exchange counters (/metrics)
+	metrics *ExchangeMetrics // per-provider exchange counters (/metrics)
 
 	mu    sync.Mutex
 	cache map[string]cachedToken
 }
 
-func newCloudIdentityBroker(store cloudconn.Repo, vault *vault.Vault, auditFn func(AuditEvent)) *cloudIdentityBroker {
-	return &cloudIdentityBroker{
+// AdapterFor resolves the provider adapter (handlers probe with it directly).
+func (b *IdentityBroker) AdapterFor(p Provider) CloudIdentityProvider { return b.adapter(p) }
+
+// SetAdapter overrides provider-adapter resolution (tests inject fakes; the
+// default maps providers to the built-in cloud SDK adapters).
+func (b *IdentityBroker) SetAdapter(fn func(Provider) CloudIdentityProvider) { b.adapter = fn }
+
+// Metrics exposes the exchange counters for the /metrics exposition.
+func (b *IdentityBroker) Metrics() *ExchangeMetrics { return b.metrics }
+
+// mintSecretRefID mirrors the integrator's opaque-id mint (csr_ prefix + 16
+// random bytes, hex) — duplicated per the no-utils rule.
+func mintSecretRefID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return SecretRefIDPrefix + hex.EncodeToString(b)
+}
+
+// AuditFn is the injected audit sink (main adapts it onto its AuditEvent).
+type AuditFn func(event, tenant, connectorID, provider, decision, detail string)
+
+func NewIdentityBroker(store Repo, vault *vault.Vault, auditFn AuditFn) *IdentityBroker {
+	return &IdentityBroker{
 		store:   store,
 		vault:   vault,
-		adapter: cloudconn.AdapterFor,
+		adapter: AdapterFor,
 		auditFn: auditFn,
 		now:     func() time.Time { return time.Now().UTC() },
 		maxLife: brokerMaxTokenLifetime,
-		metrics: newCloudExchangeMetrics(),
+		metrics: NewExchangeMetrics(),
 		cache:   map[string]cachedToken{},
 	}
 }
@@ -139,7 +160,7 @@ func newCloudIdentityBroker(store cloudconn.Repo, vault *vault.Vault, auditFn fu
 // vault.Vault also binds the tenant via AAD). Changing it makes existing ciphertext
 // undecryptable — keep stable.
 func ccnSecretFieldID(connectorID, kind string) string {
-	return "cloudconn.secret." + connectorID + "." + kind
+	return "secret." + connectorID + "." + kind
 }
 
 // StoreSecret encrypts an UNAVOIDABLE legacy secret via the existing envelope
@@ -147,16 +168,16 @@ func ccnSecretFieldID(connectorID, kind string) string {
 // Returns the opaque secret reference handle. The plaintext is never stored or
 // logged. keyHint is a NON-secret identifier (AccessKeyId / SA key id) for age
 // display. Audits SECRET_CREATED.
-func (b *cloudIdentityBroker) StoreSecret(ctx context.Context, tenant, connectorID string, provider cloudconn.Provider, kind, keyHint, plaintext string) (string, error) {
+func (b *IdentityBroker) StoreSecret(ctx context.Context, tenant, connectorID string, provider Provider, kind, keyHint, plaintext string) (string, error) {
 	if strings.TrimSpace(plaintext) == "" {
 		return "", errBrokerNoSecret
 	}
-	ref := newOpaqueID(cloudconn.SecretRefIDPrefix)
+	ref := mintSecretRefID()
 	ciphertext, err := b.vault.Encrypt(normTenant(tenant), ccnSecretFieldID(connectorID, kind), plaintext)
 	if err != nil {
 		return "", fmt.Errorf("cloudconn: encrypt secret: %w", err)
 	}
-	sr := cloudconn.SecretRef{
+	sr := SecretRef{
 		TenantID: normTenant(tenant), SecretRef: ref, ConnectorID: connectorID, Provider: provider,
 		Kind: kind, Ciphertext: ciphertext, FieldsSet: []string{kind}, KeyHint: keyHint, Version: 1,
 	}
@@ -171,7 +192,7 @@ func (b *cloudIdentityBroker) StoreSecret(ctx context.Context, tenant, connector
 // version (rotation overlap: the previous provider credential can stay valid until
 // the operator revokes it upstream) and invalidating any cached token. Audits
 // SECRET_ROTATED. Returns found=false if the ref is not visible to the tenant.
-func (b *cloudIdentityBroker) RotateSecret(ctx context.Context, tenant, ref, connectorID, keyHint, plaintext string) (bool, error) {
+func (b *IdentityBroker) RotateSecret(ctx context.Context, tenant, ref, connectorID, keyHint, plaintext string) (bool, error) {
 	if strings.TrimSpace(plaintext) == "" {
 		return false, errBrokerNoSecret
 	}
@@ -204,7 +225,7 @@ func (b *cloudIdentityBroker) RotateSecret(ctx context.Context, tenant, ref, con
 
 // resolveSecret decrypts the referenced legacy secret. ONLY the broker calls this.
 // Audits SECRET_ACCESSED. The returned plaintext is never logged.
-func (b *cloudIdentityBroker) resolveSecret(ctx context.Context, tenant string, c cloudconn.Connector) (string, error) {
+func (b *IdentityBroker) resolveSecret(ctx context.Context, tenant string, c Connector) (string, error) {
 	ref := c.Identity.LegacySecretRef
 	if ref == "" {
 		return "", errBrokerNoSecret
@@ -227,16 +248,16 @@ func (b *cloudIdentityBroker) resolveSecret(ctx context.Context, tenant string, 
 // TokenFor mints (or serves from cache) a short-lived, tenant+connector-scoped
 // provider token. Fails closed if the connector is not visible to the tenant or
 // its state cannot exchange tokens. Audits TOKEN_ISSUED on a fresh mint.
-func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenRequest) (cloudconn.ScopedToken, error) {
+func (b *IdentityBroker) TokenFor(ctx context.Context, req ScopedTokenRequest) (ScopedToken, error) {
 	c, found, err := b.store.Get(ctx, req.Tenant, false, req.ConnectorID)
 	if err != nil {
-		return cloudconn.ScopedToken{}, err
+		return ScopedToken{}, err
 	}
 	if !found {
-		return cloudconn.ScopedToken{}, errBrokerNotFound
+		return ScopedToken{}, ErrBrokerNotFound
 	}
 	if !c.State.CanExchangeToken() {
-		return cloudconn.ScopedToken{}, errBrokerNotActive
+		return ScopedToken{}, ErrBrokerNotActive
 	}
 
 	effLife := req.MaxLifetime
@@ -259,13 +280,13 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 
 	adapter := b.adapter(c.Provider)
 	if adapter == nil {
-		return cloudconn.ScopedToken{}, fmt.Errorf("cloudconn: no adapter for provider %s", c.Provider)
+		return ScopedToken{}, fmt.Errorf("cloudconn: no adapter for provider %s", c.Provider)
 	}
 
-	exReq := cloudconn.ExchangeRequest{
+	exReq := ExchangeRequest{
 		Identity:        c.Identity,
 		CapabilitySetID: req.CapabilitySetID,
-		Scope:           cloudconn.Scope{Ref: req.ProviderAccount},
+		Scope:           Scope{Ref: req.ProviderAccount},
 		Audience:        req.Audience,
 		Region:          req.Region,
 		MaxLifetime:     effLife,
@@ -274,7 +295,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 	if c.AuthMethod.HoldsStoredSecret() {
 		secret, err := b.resolveSecret(ctx, req.Tenant, c)
 		if err != nil {
-			return cloudconn.ScopedToken{}, err
+			return ScopedToken{}, err
 		}
 		exReq.LegacySecret = secret
 	}
@@ -288,7 +309,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 		log.Printf(`{"event":"cloudconn_exchange_failed","tenant":%q,"connector":%q,"provider":%q,"error":%q}`,
 			normTenant(req.Tenant), c.ConnectorID, string(c.Provider), err.Error())
 		b.audit(evTokenIssued, req.Tenant, c.ConnectorID, string(c.Provider), "deny", "exchange failed: "+err.Error())
-		return cloudconn.ScopedToken{}, err
+		return ScopedToken{}, err
 	}
 	now := b.now()
 	// Enforce the max-lifetime cap on the returned token. Providers with fixed
@@ -298,7 +319,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 		if tok.Expiry.Sub(now) > time.Duration(float64(effLife)*brokerLifetimeSlack)+brokerTokenMargin {
 			log.Printf(`{"event":"cloudconn_token_lifetime_rejected","tenant":%q,"connector":%q,"provider":%q,"lifetime":%q,"cap":%q}`,
 				normTenant(req.Tenant), c.ConnectorID, string(c.Provider), tok.Expiry.Sub(now).String(), effLife.String())
-			return cloudconn.ScopedToken{}, errBrokerTokenTooLong
+			return ScopedToken{}, errBrokerTokenTooLong
 		}
 		tok.Expiry = now.Add(effLife)
 	}
@@ -313,7 +334,7 @@ func (b *cloudIdentityBroker) TokenFor(ctx context.Context, req scopedTokenReque
 
 // Invalidate drops all cached tokens for a connector (called on disable/revoke/
 // rotate so a paused connector cannot keep serving a warm token).
-func (b *cloudIdentityBroker) Invalidate(connectorID string) {
+func (b *IdentityBroker) Invalidate(connectorID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for k := range b.cache {
@@ -328,19 +349,15 @@ func (b *cloudIdentityBroker) Invalidate(connectorID string) {
 
 // connectorIdentityRef returns the provider-native identity reference used in the
 // cache key (role ARN / client id / SA email). Never used as a cache key ALONE.
-// Resolution is registry-driven (cloudconn.ProviderDescriptor.IdentityRef) — no
+// Resolution is registry-driven (ProviderDescriptor.IdentityRef) — no
 // per-provider switch to extend when a provider is added.
-func connectorIdentityRef(c cloudconn.Connector) string {
-	return cloudconn.IdentityRefFor(c.Provider, c.Identity)
+func connectorIdentityRef(c Connector) string {
+	return IdentityRefFor(c.Provider, c.Identity)
 }
 
-func (b *cloudIdentityBroker) audit(event, tenant, connectorID, provider, decision, detail string) {
+func (b *IdentityBroker) audit(event, tenant, connectorID, provider, decision, detail string) {
 	if b.auditFn == nil {
 		return
 	}
-	b.auditFn(AuditEvent{
-		Actor: "broker", Tenant: normTenant(tenant), Method: event, Path: "/cloudconn/broker/" + connectorID,
-		Status: 200, Decision: decision,
-		Detail: map[string]any{"event": event, "connector": connectorID, "provider": provider, "info": detail},
-	})
+	b.auditFn(event, normTenant(tenant), connectorID, provider, decision, detail)
 }

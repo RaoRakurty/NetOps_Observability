@@ -541,7 +541,7 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	req := scopedTokenRequest{
+	req := cloudconn.ScopedTokenRequest{
 		Tenant:          tenant,
 		ConnectorID:     c.ConnectorID,
 		CapabilitySetID: c.PackFullID,
@@ -594,7 +594,7 @@ func (s *server) connectorProbeToken(r *http.Request, tenant string, c cloudconn
 	account, region := connectorDefaultScope(c)
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
-	tok, err := s.cloudBroker.TokenFor(ctx, scopedTokenRequest{
+	tok, err := s.cloudBroker.TokenFor(ctx, cloudconn.ScopedTokenRequest{
 		Tenant:          tenant,
 		ConnectorID:     c.ConnectorID,
 		ProviderAccount: account,
@@ -654,7 +654,7 @@ func (s *server) serveConnectorPermissions(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, base)
 		return
 	}
-	adapter := s.cloudBroker.adapter(c.Provider)
+	adapter := s.cloudBroker.AdapterFor(c.Provider)
 	if adapter == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("no adapter for provider"))
 		return
@@ -780,7 +780,7 @@ func (s *server) serveConnectorDiscover(w http.ResponseWriter, r *http.Request, 
 		writeJSON(w, http.StatusOK, base)
 		return
 	}
-	adapter := s.cloudBroker.adapter(c.Provider)
+	adapter := s.cloudBroker.AdapterFor(c.Provider)
 	if adapter == nil {
 		writeError(w, http.StatusInternalServerError, errors.New("no adapter for provider"))
 		return

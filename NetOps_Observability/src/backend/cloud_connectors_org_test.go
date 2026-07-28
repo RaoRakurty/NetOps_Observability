@@ -35,8 +35,8 @@ func TestConnectorOrgAnchorLifecycleAndIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
 	s.cloudConn = cloudconn.NewMemStore()
 	fake := &orgFakeAdapter{fakeAdapter: &fakeAdapter{provider: cloudconn.ProviderAWS}}
-	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
-	s.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }
+	s.cloudBroker = cloudconn.NewIdentityBroker(s.cloudConn, s.vault, nil)
+	s.cloudBroker.SetAdapter(func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake })
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 

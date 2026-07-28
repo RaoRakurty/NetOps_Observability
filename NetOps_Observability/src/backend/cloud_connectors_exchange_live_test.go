@@ -54,14 +54,16 @@ func newSTSFixture(t *testing.T, deny bool) (*httptest.Server, *string) {
 // backed by the given exchanger (the production wiring, minus the internet).
 func wireLiveBroker(s *server, ex cloudconn.TokenExchanger) {
 	s.cloudConn = cloudconn.NewMemStore()
-	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, func(e AuditEvent) {
+	s.cloudBroker = cloudconn.NewIdentityBroker(s.cloudConn, s.vault, func(event, tenant, connectorID, provider, decision, detail string) {
 		if s.audit != nil {
-			s.audit.Record(e)
+			s.audit.Record(AuditEvent{Actor: "broker", Tenant: tenant, Method: event,
+				Path: "/cloudconn/broker/" + connectorID, Status: 200, Decision: decision,
+				Detail: map[string]any{"event": event, "connector": connectorID, "provider": provider, "info": detail}})
 		}
 	})
-	s.cloudBroker.adapter = func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
+	s.cloudBroker.SetAdapter(func(p cloudconn.Provider) cloudconn.CloudIdentityProvider {
 		return cloudconn.NewAdapterWithExchanger(p, ex)
-	}
+	})
 }
 
 // buildAWSConnector drives the wizard APIs to a validated-ready AWS connector.

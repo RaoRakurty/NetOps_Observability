@@ -1,4 +1,4 @@
-package main
+package cloudconn
 
 // cloud_connectors_metrics.go — Wave 4 #13: per-provider-exchange metrics for
 // the Identity Broker, exposed on the existing /metrics Prometheus surface
@@ -19,8 +19,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"netops/backend/cloudconn"
 )
 
 // Exchange outcome tokens (stable — dashboards/alerts key on them).
@@ -32,8 +30,8 @@ const (
 	exOutcomeDeferred  = "deferred"
 )
 
-// cloudExchangeMetrics aggregates the broker's provider-exchange telemetry.
-type cloudExchangeMetrics struct {
+// ExchangeMetrics aggregates the broker's provider-exchange telemetry.
+type ExchangeMetrics struct {
 	mu        sync.Mutex
 	counts    map[string]map[string]uint64 // provider → outcome → n
 	latSum    map[string]float64           // provider → seconds (fresh mints)
@@ -41,8 +39,8 @@ type cloudExchangeMetrics struct {
 	cacheHits map[string]uint64 // provider → cache-served tokens
 }
 
-func newCloudExchangeMetrics() *cloudExchangeMetrics {
-	return &cloudExchangeMetrics{
+func NewExchangeMetrics() *ExchangeMetrics {
+	return &ExchangeMetrics{
 		counts:    map[string]map[string]uint64{},
 		latSum:    map[string]float64{},
 		latCount:  map[string]uint64{},
@@ -55,12 +53,12 @@ func exchangeOutcome(err error) string {
 	if err == nil {
 		return exOutcomeSuccess
 	}
-	if errors.Is(err, cloudconn.ErrPlatformCredentialsMissing) ||
-		errors.Is(err, cloudconn.ErrWorkloadAssertionMissing) ||
-		errors.Is(err, cloudconn.ErrProviderExchangeDeferred) {
+	if errors.Is(err, ErrPlatformCredentialsMissing) ||
+		errors.Is(err, ErrWorkloadAssertionMissing) ||
+		errors.Is(err, ErrProviderExchangeDeferred) {
 		return exOutcomeDeferred
 	}
-	var xe *cloudconn.ExchangeError
+	var xe *ExchangeError
 	if errors.As(err, &xe) {
 		switch xe.Code {
 		case "denied":
@@ -73,7 +71,7 @@ func exchangeOutcome(err error) string {
 }
 
 // recordExchange records one FRESH provider exchange (outcome + latency).
-func (m *cloudExchangeMetrics) recordExchange(provider cloudconn.Provider, err error, elapsed time.Duration) {
+func (m *ExchangeMetrics) recordExchange(provider Provider, err error, elapsed time.Duration) {
 	if m == nil {
 		return
 	}
@@ -90,7 +88,7 @@ func (m *cloudExchangeMetrics) recordExchange(provider cloudconn.Provider, err e
 }
 
 // recordCacheHit records a token served from the broker cache (no provider call).
-func (m *cloudExchangeMetrics) recordCacheHit(provider cloudconn.Provider) {
+func (m *ExchangeMetrics) recordCacheHit(provider Provider) {
 	if m == nil {
 		return
 	}
@@ -100,7 +98,8 @@ func (m *cloudExchangeMetrics) recordCacheHit(provider cloudconn.Provider) {
 }
 
 // write emits the Prometheus text exposition (called from /metrics).
-func (m *cloudExchangeMetrics) write(w io.Writer) {
+// Write renders the Prometheus exposition lines.
+func (m *ExchangeMetrics) Write(w io.Writer) {
 	if m == nil {
 		return
 	}
