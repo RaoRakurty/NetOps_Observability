@@ -1,4 +1,4 @@
-package main
+package incident
 
 import (
 	"context"
@@ -8,23 +8,49 @@ import (
 	"strings"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
 	"github.com/jackc/pgx/v5"
 )
 
-// incidents_pg.go — the Postgres-backed Incident store (incidentsRepo). Reads are
+// incidents_pg.go — the Postgres-backed Incident store (Repo). Reads are
 // RLS tenant-scoped; system writes (Ingest, MarkSync) run at platform scope and
 // stamp the row's tenant_id (RLS WITH CHECK passes under '*'). Modeled on
 // audit_pg.go / saved_pg.go.
 
-type pgIncidentStore struct {
-	db *pgDB
+type PGStore struct {
+	db DB
 }
 
-func newPgIncidentStore(db *pgDB) *pgIncidentStore { return &pgIncidentStore{db: db} }
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewPGStore builds the FORCE-RLS pg repository over the injected seam.
+func NewPGStore(db DB) *PGStore { return &PGStore{db: db} }
+
+// normTenant / nullText mirror the integrator's helpers (duplicated per the
+// no-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+func nullText(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
+// randHex mirrors the integrator's id minting (duplicated per the no-utils rule).
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 var (
-	errIncidentNotFound = errors.New("incident not found")
-	errBadTransition    = errors.New("invalid incident status transition")
+	ErrNotFound      = errors.New("incident not found")
+	ErrBadTransition = errors.New("invalid incident status transition")
 )
 
 func normalizeSourceType(s string) string {
@@ -36,7 +62,8 @@ func normalizeSourceType(s string) string {
 	}
 }
 
-func actorOr(a string) string {
+// ActorOr defaults a blank actor to "system" (shared with the seam handlers).
+func ActorOr(a string) string {
 	if strings.TrimSpace(a) == "" {
 		return "system"
 	}
@@ -65,17 +92,17 @@ DO UPDATE SET
    updated_at   = now()
 RETURNING id, (xmax = 0) AS inserted`
 
-func (s *pgIncidentStore) Ingest(ctx context.Context, in IncidentInput) (Incident, bool, error) {
+func (s *PGStore) Ingest(ctx context.Context, in Input) (Incident, bool, error) {
 	id := randHex(8)
-	dk := dedupKeyFor(in)
-	sev := normalizeSeverity(in.Severity)
+	dk := DedupKeyFor(in)
+	sev := NormalizeSeverity(in.Severity)
 	st := normalizeSourceType(in.SourceType)
 	tid := normTenant(in.TenantID)
 	now := time.Now().UTC()
 
 	var resultID string
 	var inserted bool
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, upsertIncidentSQL,
 			id, tid, in.Title, in.Description, sev, st, nullText(in.SourceID), dk, in.Owner, now)
 		if err := row.Scan(&resultID, &inserted); err != nil {
@@ -88,7 +115,7 @@ func (s *pgIncidentStore) Ingest(ctx context.Context, in IncidentInput) (Inciden
 		payload, _ := json.Marshal(map[string]any{
 			"severity": sev, "source_type": st, "source_id": in.SourceID, "title": in.Title,
 		})
-		return appendIncidentEvent(ctx, tx, resultID, tid, evType, payload, actorOr(in.Actor))
+		return appendIncidentEvent(ctx, tx, resultID, tid, evType, payload, ActorOr(in.Actor))
 	})
 	if err != nil {
 		return Incident{}, false, err
@@ -100,10 +127,10 @@ func (s *pgIncidentStore) Ingest(ctx context.Context, in IncidentInput) (Inciden
 // FindByExternalTicket resolves an incident from its external_ticket_id (the
 // forward link set on outbound projection). Used by inbound reconciliation to
 // correlate a webhook back to the originating incident. Tenant-scoped (RLS).
-func (s *pgIncidentStore) FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error) {
+func (s *PGStore) FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error) {
 	var inc Incident
 	var found bool
-	err := s.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectIncidentCols+`
 			FROM incidents WHERE external_system=$1 AND external_ticket_id=$2
 			ORDER BY created_at DESC LIMIT 1`, system, externalID)
@@ -119,11 +146,11 @@ func (s *pgIncidentStore) FindByExternalTicket(ctx context.Context, tenant, syst
 	return inc, found, err
 }
 
-func (s *pgIncidentStore) Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []IncidentEvent, bool, error) {
+func (s *PGStore) Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []Event, bool, error) {
 	var inc Incident
-	var events []IncidentEvent
+	var events []Event
 	found := false
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectIncidentCols+` FROM incidents WHERE id=$1`, id)
 		r, ok, err := scanIncident(row)
 		if err != nil {
@@ -142,7 +169,7 @@ func (s *pgIncidentStore) Get(ctx context.Context, tenant string, cross bool, id
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var ev IncidentEvent
+			var ev Event
 			var payload []byte
 			if err := rows.Scan(&ev.ID, &ev.IncidentID, &ev.EventType, &payload, &ev.Actor, &ev.CreatedAt); err != nil {
 				return err
@@ -160,29 +187,29 @@ func (s *pgIncidentStore) Get(ctx context.Context, tenant string, cross bool, id
 	return inc, events, found, nil
 }
 
-// incidentFilterSQL builds the shared WHERE fragment + args for List and Count,
+// filterSQL builds the shared WHERE fragment + args for List and Count,
 // so the total can never be computed under different filters than the page.
 //
 // It FAILS CLOSED on an unrecognised severity instead of substituting one
-// (F-74): normalizeSeverity used to be called right here, turning every
+// (F-74): NormalizeSeverity used to be called right here, turning every
 // unknown value into `info` and applying it as a real predicate. The handler
 // validates first; this is the storage-layer backstop required by §3a.4 — no
 // caller, internal or external, gets a silently different filter.
-func incidentFilterSQL(q IncidentQuery) (string, []any, error) {
+func filterSQL(q Query) (string, []any, error) {
 	var args []any
 	var conds []string
 	if q.Status != "" {
-		if !validIncidentStatus(q.Status) {
+		if !ValidStatus(q.Status) {
 			return "", nil, fmt.Errorf("unknown incident status %q", q.Status)
 		}
 		args = append(args, q.Status)
 		conds = append(conds, fmt.Sprintf("status = $%d", len(args)))
 	}
 	if q.Severity != "" {
-		if !validIncidentSeverity(q.Severity) {
+		if !ValidSeverity(q.Severity) {
 			return "", nil, fmt.Errorf("unknown incident severity %q", q.Severity)
 		}
-		args = append(args, canonicalIncidentSeverity(q.Severity))
+		args = append(args, CanonicalSeverity(q.Severity))
 		conds = append(conds, fmt.Sprintf("severity = $%d", len(args)))
 	}
 	if !q.Before.IsZero() {
@@ -195,13 +222,13 @@ func incidentFilterSQL(q IncidentQuery) (string, []any, error) {
 	return " WHERE " + strings.Join(conds, " AND "), args, nil
 }
 
-func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q IncidentQuery) ([]Incident, error) {
-	where, args, err := incidentFilterSQL(q)
+func (s *PGStore) List(ctx context.Context, tenant string, cross bool, q Query) ([]Incident, error) {
+	where, args, err := filterSQL(q)
 	if err != nil {
 		return nil, err
 	}
 	sql := selectIncidentCols + ` FROM incidents` + where
-	args = append(args, clampIncidentLimit(q.Limit))
+	args = append(args, ClampLimit(q.Limit))
 	sql += fmt.Sprintf(" ORDER BY last_seen_at DESC, id DESC LIMIT $%d", len(args))
 	// OFFSET completes the walk: a limit-only read could never reach row
 	// limit+1, which is how /api/vulns lost 5,560 of 7,560 findings (F-79).
@@ -211,7 +238,7 @@ func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q
 	}
 
 	var out []Incident
-	err = s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
@@ -233,13 +260,13 @@ func (s *pgIncidentStore) List(ctx context.Context, tenant string, cross bool, q
 }
 
 // Count is List's true total under the same filters and the same RLS scope.
-func (s *pgIncidentStore) Count(ctx context.Context, tenant string, cross bool, q IncidentQuery) (int, error) {
-	where, args, err := incidentFilterSQL(q)
+func (s *PGStore) Count(ctx context.Context, tenant string, cross bool, q Query) (int, error) {
+	where, args, err := filterSQL(q)
 	if err != nil {
 		return 0, err
 	}
 	var n int
-	err = s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT count(*) FROM incidents`+where, args...).Scan(&n)
 	})
 	if err != nil {
@@ -248,25 +275,25 @@ func (s *pgIncidentStore) Count(ctx context.Context, tenant string, cross bool, 
 	return n, nil
 }
 
-func (s *pgIncidentStore) Transition(ctx context.Context, tenant string, cross bool, id, to, actor, note string) (Incident, error) {
+func (s *PGStore) Transition(ctx context.Context, tenant string, cross bool, id, to, actor, note string) (Incident, error) {
 	to = strings.ToLower(strings.TrimSpace(to))
-	if !validIncidentStatus(to) {
-		return Incident{}, errBadTransition
+	if !ValidStatus(to) {
+		return Incident{}, ErrBadTransition
 	}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var cur, tid string
 		// RLS scopes this read: a tenant can only transition its own incidents.
 		if err := tx.QueryRow(ctx, `SELECT status, tenant_id FROM incidents WHERE id=$1`, id).Scan(&cur, &tid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errIncidentNotFound
+				return ErrNotFound
 			}
 			return err
 		}
 		if cur == to {
 			return nil // idempotent no-op
 		}
-		if !validTransition(cur, to) {
-			return errBadTransition
+		if !ValidTransition(cur, to) {
+			return ErrBadTransition
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE incidents
@@ -279,24 +306,24 @@ func (s *pgIncidentStore) Transition(ctx context.Context, tenant string, cross b
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"from": cur, "to": to, "note": note})
-		return appendIncidentEvent(ctx, tx, id, tid, "status_change", payload, actorOr(actor))
+		return appendIncidentEvent(ctx, tx, id, tid, "status_change", payload, ActorOr(actor))
 	})
 	if err != nil {
 		return Incident{}, err
 	}
 	inc, _, found, err := s.Get(ctx, tenant, cross, id)
 	if err == nil && !found {
-		return Incident{}, errIncidentNotFound
+		return Incident{}, ErrNotFound
 	}
 	return inc, err
 }
 
-func (s *pgIncidentStore) AddNote(ctx context.Context, tenant string, cross bool, id, actor, note string) (Incident, error) {
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (s *PGStore) AddNote(ctx context.Context, tenant string, cross bool, id, actor, note string) (Incident, error) {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var tid string
 		if err := tx.QueryRow(ctx, `SELECT tenant_id FROM incidents WHERE id=$1`, id).Scan(&tid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errIncidentNotFound
+				return ErrNotFound
 			}
 			return err
 		}
@@ -304,7 +331,7 @@ func (s *pgIncidentStore) AddNote(ctx context.Context, tenant string, cross bool
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"note": note})
-		return appendIncidentEvent(ctx, tx, id, tid, "note", payload, actorOr(actor))
+		return appendIncidentEvent(ctx, tx, id, tid, "note", payload, ActorOr(actor))
 	})
 	if err != nil {
 		return Incident{}, err
@@ -313,12 +340,12 @@ func (s *pgIncidentStore) AddNote(ctx context.Context, tenant string, cross bool
 	return inc, err
 }
 
-func (s *pgIncidentStore) Assign(ctx context.Context, tenant string, cross bool, id, owner, actor string) (Incident, error) {
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (s *PGStore) Assign(ctx context.Context, tenant string, cross bool, id, owner, actor string) (Incident, error) {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var tid string
 		if err := tx.QueryRow(ctx, `SELECT tenant_id FROM incidents WHERE id=$1`, id).Scan(&tid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errIncidentNotFound
+				return ErrNotFound
 			}
 			return err
 		}
@@ -326,7 +353,7 @@ func (s *pgIncidentStore) Assign(ctx context.Context, tenant string, cross bool,
 			return err
 		}
 		payload, _ := json.Marshal(map[string]any{"owner": owner})
-		return appendIncidentEvent(ctx, tx, id, tid, "assignment", payload, actorOr(actor))
+		return appendIncidentEvent(ctx, tx, id, tid, "assignment", payload, ActorOr(actor))
 	})
 	if err != nil {
 		return Incident{}, err
@@ -337,12 +364,12 @@ func (s *pgIncidentStore) Assign(ctx context.Context, tenant string, cross bool,
 
 // MarkSync records the external ITSM projection outcome (worker, platform scope).
 // The incident is the source of truth; this is bookkeeping only.
-func (s *pgIncidentStore) MarkSync(ctx context.Context, id, system, externalID, externalURL, syncStatus string, at time.Time) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *PGStore) MarkSync(ctx context.Context, id, system, externalID, externalURL, syncStatus string, at time.Time) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var tid string
 		if err := tx.QueryRow(ctx, `SELECT tenant_id FROM incidents WHERE id=$1`, id).Scan(&tid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errIncidentNotFound
+				return ErrNotFound
 			}
 			return err
 		}
@@ -368,16 +395,16 @@ func (s *pgIncidentStore) MarkSync(ctx context.Context, id, system, externalID, 
 // MarkNotified appends a `notified` delivery event (platform scope — the notify
 // path runs outside a request principal, like MarkSync). Only successful sends
 // are recorded, so notified_via is a delivery record, never an intent.
-func (s *pgIncidentStore) MarkNotified(ctx context.Context, id, channel string) error {
+func (s *PGStore) MarkNotified(ctx context.Context, id, channel string) error {
 	channel = strings.ToLower(strings.TrimSpace(channel))
 	if channel == "" {
 		return nil
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		var tid string
 		if err := tx.QueryRow(ctx, `SELECT tenant_id FROM incidents WHERE id=$1`, id).Scan(&tid); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errIncidentNotFound
+				return ErrNotFound
 			}
 			return err
 		}
@@ -430,11 +457,12 @@ func scanIncident(row pgx.Row) (Incident, bool, error) {
 	return r, true, nil
 }
 
-func clampIncidentLimit(n int) int {
+// ClampLimit bounds a page size (default/cap; F-74 class).
+func ClampLimit(n int) int {
 	if n <= 0 || n > 500 {
 		return 100
 	}
 	return n
 }
 
-var _ incidentsRepo = (*pgIncidentStore)(nil)
+var _ Repo = (*PGStore)(nil)

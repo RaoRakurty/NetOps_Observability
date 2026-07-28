@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/incident"
 	"os"
 	"strings"
 	"time"
@@ -57,7 +58,7 @@ func (s *server) ingestAlertIncident(a models.Alert) {
 		// Auto-policy: critical incidents promote to an ITSM ticket (dedup by the
 		// incident itself; the sync worker is idempotent). Skipped if no ITSM is
 		// configured so we don't enqueue jobs that only dead-letter.
-		if legacyAlertITSMEnabled() && autoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfiguredFor(inc.TenantID) {
+		if legacyAlertITSMEnabled() && incident.AutoTicketEligible(inc.Severity) && s.reportPipeline != nil && s.itsmConfiguredFor(inc.TenantID) {
 			if _, err := s.reportPipeline.EnqueueIncidentSync(ctx, inc.TenantID, inc.ID); err != nil {
 				logError("incidents", "auto-enqueue sync", map[string]any{"incident_id": inc.ID, "error": err.Error()})
 			}
@@ -88,7 +89,7 @@ func (s *server) notifyIncidentSlackActions(inc Incident) {
 	}
 	safeGo("incident-slack-notify", func() {
 		if err := notify.NewSlack(url).SendIncident(notify.IncidentNotice{
-			IncidentID: inc.ID, DisplayID: incidentDisplayID(inc.ID),
+			IncidentID: inc.ID, DisplayID: incident.DisplayID(inc.ID),
 			Title: inc.Title, Severity: inc.Severity, Status: inc.Status,
 		}); err != nil {
 			logError("incidents", "slack incident actions", map[string]any{"incident_id": inc.ID, "error": err.Error()})
@@ -141,14 +142,14 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		Limit:    page.Limit,
 		Offset:   page.Offset,
 	}
-	if q.Status != "" && !validIncidentStatus(q.Status) {
+	if q.Status != "" && !incident.ValidStatus(q.Status) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf(
 			"status must be one of open, acknowledged, investigating, resolved, closed (got %q)", q.Status))
 		return
 	}
-	if q.Severity != "" && !validIncidentSeverity(q.Severity) {
+	if q.Severity != "" && !incident.ValidSeverity(q.Severity) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf(
-			"severity must be one of %s (got %q)", strings.Join(incidentSeverities, ", "), q.Severity))
+			"severity must be one of %s (got %q)", strings.Join(incident.Severities, ", "), q.Severity))
 		return
 	}
 	if b := r.URL.Query().Get("before"); b != "" {
@@ -217,7 +218,7 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !found {
-			writeError(w, http.StatusNotFound, errIncidentNotFound)
+			writeError(w, http.StatusNotFound, incident.ErrNotFound)
 			return
 		}
 		if events == nil {
@@ -240,7 +241,7 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !found {
-			writeError(w, http.StatusNotFound, errIncidentNotFound)
+			writeError(w, http.StatusNotFound, incident.ErrNotFound)
 			return
 		}
 		var sync []timelineEntry
@@ -278,18 +279,18 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch action {
 	case "ack", "acknowledge":
-		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, statusAcknowledged, actor, body.Note)
+		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, incident.StatusAcknowledged, actor, body.Note)
 	case "resolve":
-		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, statusResolved, actor, body.Note)
+		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, incident.StatusResolved, actor, body.Note)
 		if err == nil {
 			s.incidentResolved()
 		}
 	case "investigate":
-		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, statusInvestigating, actor, body.Note)
+		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, incident.StatusInvestigating, actor, body.Note)
 	case "close":
-		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, statusClosed, actor, body.Note)
+		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, incident.StatusClosed, actor, body.Note)
 	case "reopen":
-		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, statusOpen, actor, body.Note)
+		inc, err = s.incidents.Transition(r.Context(), tenant, cross, id, incident.StatusOpen, actor, body.Note)
 	case "note":
 		if strings.TrimSpace(body.Note) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("note required"))
@@ -303,7 +304,7 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 		var found bool
 		inc, _, found, err = s.incidents.Get(r.Context(), tenant, cross, id)
 		if err == nil && !found {
-			err = errIncidentNotFound
+			err = incident.ErrNotFound
 		}
 		if err == nil && s.reportPipeline == nil {
 			err = errIncidentsUnavailable
@@ -320,9 +321,9 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		switch {
-		case errors.Is(err, errIncidentNotFound):
+		case errors.Is(err, incident.ErrNotFound):
 			writeError(w, http.StatusNotFound, err)
-		case errors.Is(err, errBadTransition):
+		case errors.Is(err, incident.ErrBadTransition):
 			writeError(w, http.StatusBadRequest, err)
 		case errors.Is(err, errIncidentsUnavailable):
 			writeError(w, http.StatusConflict, err)
@@ -336,3 +337,22 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 }
 
 var errIncidentsUnavailable = errors.New("the incident system requires the Postgres backend")
+
+// ── internal/incident wiring (source-compat shims + backend selector) ────────
+
+type (
+	Incident      = incident.Incident
+	IncidentInput = incident.Input
+	IncidentQuery = incident.Query
+	IncidentEvent = incident.Event
+	incidentsRepo = incident.Repo
+)
+
+// newIncidentStore selects the backend: Postgres only (RLS). Returns nil on the
+// file/dev backend — the incident system is a SaaS feature; handlers answer 409.
+func newIncidentStore() incidentsRepo {
+	if ps, ok := backend.(*pgStore); ok {
+		return incident.NewPGStore(rlsPG{db: ps.db})
+	}
+	return nil
+}

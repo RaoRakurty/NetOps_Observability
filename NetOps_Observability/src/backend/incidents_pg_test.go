@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/incident"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -28,7 +29,7 @@ func TestIncidentDedupAndRLS(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	store := newPgIncidentStore(ps.db)
+	store := incident.NewPGStore(rlsPG{db: ps.db})
 
 	base := IncidentInput{
 		TenantID: "acme", Title: "High CPU on core-1", Description: "cpu > 90%",
@@ -66,20 +67,20 @@ func TestIncidentDedupAndRLS(t *testing.T) {
 	if _, _, found, _ := store.Get(ctx, "", true, inc1.ID); !found {
 		t.Errorf("platform owner should see the incident")
 	}
-	if _, err := store.Transition(ctx, "globex", false, inc1.ID, statusAcknowledged, "eve", ""); !errors.Is(err, errIncidentNotFound) {
+	if _, err := store.Transition(ctx, "globex", false, inc1.ID, incident.StatusAcknowledged, "eve", ""); !errors.Is(err, incident.ErrNotFound) {
 		t.Errorf("cross-tenant transition must fail not-found, got %v", err)
 	}
 
 	// 3) lifecycle: ack → resolve (stamps resolved_at), bad transition rejected.
-	if _, err := store.Transition(ctx, "acme", false, inc1.ID, "bogus", "alice", ""); !errors.Is(err, errBadTransition) {
+	if _, err := store.Transition(ctx, "acme", false, inc1.ID, "bogus", "alice", ""); !errors.Is(err, incident.ErrBadTransition) {
 		t.Errorf("invalid status must be rejected, got %v", err)
 	}
-	ack, err := store.Transition(ctx, "acme", false, inc1.ID, statusAcknowledged, "alice", "looking")
-	if err != nil || ack.Status != statusAcknowledged {
+	ack, err := store.Transition(ctx, "acme", false, inc1.ID, incident.StatusAcknowledged, "alice", "looking")
+	if err != nil || ack.Status != incident.StatusAcknowledged {
 		t.Fatalf("ack: err=%v status=%q", err, ack.Status)
 	}
-	res, err := store.Transition(ctx, "acme", false, inc1.ID, statusResolved, "alice", "fixed")
-	if err != nil || res.Status != statusResolved || res.ResolvedAt == nil {
+	res, err := store.Transition(ctx, "acme", false, inc1.ID, incident.StatusResolved, "alice", "fixed")
+	if err != nil || res.Status != incident.StatusResolved || res.ResolvedAt == nil {
 		t.Fatalf("resolve: err=%v status=%q resolved_at=%v", err, res.Status, res.ResolvedAt)
 	}
 
@@ -144,7 +145,7 @@ func TestIncidentStormDedup(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	store := newPgIncidentStore(ps.db)
+	store := incident.NewPGStore(rlsPG{db: ps.db})
 
 	const n = 24
 	var createdCount int32

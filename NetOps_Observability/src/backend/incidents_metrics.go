@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"netops/backend/internal/incident"
 	"sync/atomic"
 )
 
@@ -19,7 +20,7 @@ type incidentMetrics struct {
 
 func (s *server) incidentCreated(inc Incident) {
 	if s.incMetrics != nil {
-		s.incMetrics.created[severityRankIncident(inc.Severity)].Add(1)
+		s.incMetrics.created[incident.SeverityRank(inc.Severity)].Add(1)
 	}
 }
 func (s *server) incidentDeduped() {
@@ -46,7 +47,7 @@ func (s *server) incidentSync(ok bool) {
 func (m *incidentMetrics) write(w io.Writer) {
 	fmt.Fprintf(w, "# HELP netops_incidents_created_total Incidents created, by severity.\n")
 	fmt.Fprintf(w, "# TYPE netops_incidents_created_total counter\n")
-	for i, sev := range incidentSeverities {
+	for i, sev := range incident.Severities {
 		fmt.Fprintf(w, "netops_incidents_created_total{severity=%q} %d\n", sev, m.created[i].Load())
 	}
 	fmt.Fprintf(w, "# HELP netops_incidents_deduplicated_total Detections folded into an existing incident.\n")

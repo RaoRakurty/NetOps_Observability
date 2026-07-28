@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/http"
+	"netops/backend/internal/incident"
 	"netops/backend/internal/seam"
 	"strings"
 )
@@ -93,7 +94,7 @@ func (s *server) handleSeams(w http.ResponseWriter, r *http.Request) {
 		if in.SuggestionKey != "" {
 			in.State = "suggested"
 		}
-		in.UpdatedBy = actorOr(claims.Sub)
+		in.UpdatedBy = incident.ActorOr(claims.Sub)
 		created, err := s.seams.Create(r.Context(), tenant, cross, in)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)

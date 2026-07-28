@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/incident"
 	"os"
 	"testing"
 )
@@ -18,8 +19,8 @@ func TestIncidentDisplayID(t *testing.T) {
 		{"deadbeefcafef00d", "INC-DEADBE"}, // randHex(8) shape
 	}
 	for _, c := range cases {
-		if got := incidentDisplayID(c.in); got != c.want {
-			t.Errorf("incidentDisplayID(%q) = %q, want %q", c.in, got, c.want)
+		if got := incident.DisplayID(c.in); got != c.want {
+			t.Errorf("incident.DisplayID(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -39,7 +40,7 @@ func TestIncidentNotifiedVia_PG(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	store := newPgIncidentStore(ps.db)
+	store := incident.NewPGStore(rlsPG{db: ps.db})
 
 	inc, _, err := store.Ingest(ctx, IncidentInput{
 		TenantID: "acme", Title: "Link flap on edge-2", Severity: "critical",

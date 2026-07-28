@@ -5,7 +5,7 @@ package main
 //
 // The measured defect: `?severity=warning`, `?severity=bogus` and
 // `?severity=WARN` all returned byte-identical 47,521-byte responses — the
-// `info` bucket. severityRankIncident maps every unrecognised string to 0, and
+// `info` bucket. incident.SeverityRank maps every unrecognised string to 0, and
 // 0 is not "no match", it is `info`; incidents_pg.go then applied that as a real
 // SQL predicate. A client filtering for warnings received INFO incidents
 // presented as warnings. Confidently wrong is worse than ignoring.
@@ -15,70 +15,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/incident"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 )
 
 // ── the substitution itself ──────────────────────────────────────────────────
-
-func TestIncidentSeverityFilterRejectsUnknownInsteadOfSubstituting(t *testing.T) {
-	// Every value the audit probed with. None is on the ladder; each used to
-	// become the `info` predicate.
-	for _, bad := range []string{"warning", "WARN", "bogus", "warn", "sev1", "0", " "} {
-		if validIncidentSeverity(bad) {
-			t.Errorf("validIncidentSeverity(%q) = true — it is not on the ladder %v", bad, incidentSeverities)
-		}
-		if _, _, err := incidentFilterSQL(IncidentQuery{Severity: bad}); err == nil {
-			t.Errorf("incidentFilterSQL(severity=%q) built a predicate instead of failing — "+
-				"this is the F-74 substitution: the caller's filter silently becomes a DIFFERENT one", bad)
-		}
-	}
-	// The ladder itself still works, case-insensitively, and canonicalises.
-	for _, good := range []string{"info", "LOW", "Medium", "high", "CRITICAL"} {
-		if !validIncidentSeverity(good) {
-			t.Fatalf("validIncidentSeverity(%q) = false", good)
-		}
-		where, args, err := incidentFilterSQL(IncidentQuery{Severity: good})
-		if err != nil {
-			t.Fatalf("severity=%q: %v", good, err)
-		}
-		if !strings.Contains(where, "severity = $1") {
-			t.Fatalf("severity=%q produced WHERE %q", good, where)
-		}
-		if got := fmt.Sprint(args[0]); got != strings.ToLower(good) {
-			t.Fatalf("severity=%q bound %q, want the canonical lowercase form", good, got)
-		}
-	}
-	// The status filter had the same shape of hole: an unknown status was
-	// passed straight into SQL and silently matched nothing.
-	if _, _, err := incidentFilterSQL(IncidentQuery{Status: "in-progress"}); err == nil {
-		t.Error("an unknown status must fail closed, not silently match zero rows")
-	}
-}
-
-// TestIncidentFilterSQLSharedByListAndCount pins the invariant that makes the
-// reported total trustworthy: the page and its total are built from the SAME
-// predicate.
-func TestIncidentFilterSQLSharedByListAndCount(t *testing.T) {
-	q := IncidentQuery{Status: statusOpen, Severity: "high", Before: time.Now().UTC(), Limit: 10, Offset: 20}
-	where, args, err := incidentFilterSQL(q)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(args) != 3 || !strings.Contains(where, "status = $1") ||
-		!strings.Contains(where, "severity = $2") || !strings.Contains(where, "last_seen_at < $3") {
-		t.Fatalf("filter = %q args=%d", where, len(args))
-	}
-	// Limit/offset must NOT be part of the shared filter — that is precisely
-	// what would make Count return the page size instead of the total.
-	if strings.Contains(strings.ToUpper(where), "LIMIT") || strings.Contains(strings.ToUpper(where), "OFFSET") {
-		t.Fatalf("the shared filter leaked paging into the count: %q", where)
-	}
-}
-
-// ── the HTTP boundary ────────────────────────────────────────────────────────
 
 func TestIncidentsHandlerRejectsBadFilters(t *testing.T) {
 	srv, _ := newTestServerState(t)
@@ -123,10 +66,10 @@ type fakeIncidents struct{ rows []Incident }
 var errFakeUnused = fmt.Errorf("fakeIncidents: write path not exercised by this test")
 
 func (f *fakeIncidents) visible(tenant string, cross bool, q IncidentQuery) ([]Incident, error) {
-	if q.Severity != "" && !validIncidentSeverity(q.Severity) {
+	if q.Severity != "" && !incident.ValidSeverity(q.Severity) {
 		return nil, fmt.Errorf("unknown incident severity %q", q.Severity)
 	}
-	if q.Status != "" && !validIncidentStatus(q.Status) {
+	if q.Status != "" && !incident.ValidStatus(q.Status) {
 		return nil, fmt.Errorf("unknown incident status %q", q.Status)
 	}
 	var out []Incident
@@ -134,7 +77,7 @@ func (f *fakeIncidents) visible(tenant string, cross bool, q IncidentQuery) ([]I
 		if !cross && r.TenantID != tenant {
 			continue // the RLS equivalent
 		}
-		if q.Severity != "" && r.Severity != canonicalIncidentSeverity(q.Severity) {
+		if q.Severity != "" && r.Severity != incident.CanonicalSeverity(q.Severity) {
 			continue
 		}
 		if q.Status != "" && r.Status != q.Status {
@@ -151,7 +94,7 @@ func (f *fakeIncidents) List(_ context.Context, tenant string, cross bool, q Inc
 	if err != nil {
 		return nil, err
 	}
-	limit := clampIncidentLimit(q.Limit)
+	limit := incident.ClampLimit(q.Limit)
 	if q.Offset >= len(rows) {
 		return nil, nil
 	}
@@ -206,7 +149,7 @@ func TestIncidentsPagingWalksEveryRowAndReportsTheTrueTotal(t *testing.T) {
 	fake := &fakeIncidents{}
 	for i := 0; i < total; i++ {
 		fake.rows = append(fake.rows, Incident{
-			ID: fmt.Sprintf("inc-%04d", i), TenantID: "", Severity: "high", Status: statusOpen,
+			ID: fmt.Sprintf("inc-%04d", i), TenantID: "", Severity: "high", Status: incident.StatusOpen,
 		})
 	}
 	s.incidents = fake
@@ -258,7 +201,7 @@ func TestIncidentsFilterAndTotalAgree(t *testing.T) {
 			sev = "critical"
 		}
 		fake.rows = append(fake.rows, Incident{
-			ID: fmt.Sprintf("inc-%04d", i), Severity: sev, Status: statusOpen})
+			ID: fmt.Sprintf("inc-%04d", i), Severity: sev, Status: incident.StatusOpen})
 	}
 	s.incidents = fake
 
@@ -292,11 +235,11 @@ func TestIncidentsTenantIsolation(t *testing.T) {
 	fake := &fakeIncidents{}
 	for i := 0; i < 8; i++ {
 		fake.rows = append(fake.rows, Incident{
-			ID: fmt.Sprintf("a-%02d", i), TenantID: tenantA, Severity: "high", Status: statusOpen})
+			ID: fmt.Sprintf("a-%02d", i), TenantID: tenantA, Severity: "high", Status: incident.StatusOpen})
 	}
 	for i := 0; i < 20; i++ {
 		fake.rows = append(fake.rows, Incident{
-			ID: fmt.Sprintf("b-%02d", i), TenantID: tenantB, Severity: "high", Status: statusOpen})
+			ID: fmt.Sprintf("b-%02d", i), TenantID: tenantB, Severity: "high", Status: incident.StatusOpen})
 	}
 	s.incidents = fake
 

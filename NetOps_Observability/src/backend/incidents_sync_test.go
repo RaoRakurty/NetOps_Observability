@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/incident"
 	"os"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestIncidentSyncFailureIsolation(t *testing.T) {
 	}
 	defer ps.db.close()
 
-	store := newPgIncidentStore(ps.db)
+	store := incident.NewPGStore(rlsPG{db: ps.db})
 	srv := &server{incidents: store, incMetrics: &incidentMetrics{}} // no ITSM configured
 	p := &reportPipeline{srv: srv, queue: newPgJobQueue(ps.db, 3), execs: newPgExecStore(ps.db), maxAttempts: 3}
 
@@ -52,7 +53,7 @@ func TestIncidentSyncFailureIsolation(t *testing.T) {
 
 	// The incident itself must be untouched; only sync_status flips to failed.
 	after, _, _, _ := store.Get(ctx, "acme", false, inc.ID)
-	if after.Status != statusOpen || after.Severity != "critical" || after.Title != "Core down" {
+	if after.Status != incident.StatusOpen || after.Severity != "critical" || after.Title != "Core down" {
 		t.Errorf("ITSM failure mutated the incident: %+v", after)
 	}
 	if after.SyncStatus != "failed" {

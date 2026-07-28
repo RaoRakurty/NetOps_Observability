@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/incident"
 	"os"
 	"strconv"
 	"time"
@@ -122,7 +123,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integrationConfig) {
 			continue
 		}
 		inc, _, incFound, _ := s.incidents.Get(ctx, cfg.Tenant, false, m.IncidentID)
-		if !incFound || !isTerminalStatus(inc.Status) {
+		if !incFound || !incident.IsTerminalStatus(inc.Status) {
 			continue
 		}
 		if rerr := s.resolveExternalTicket(cfg.Provider, cfg.Tenant, m.ExternalID); rerr != nil {

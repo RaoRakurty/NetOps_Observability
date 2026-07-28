@@ -1,4 +1,4 @@
-package main
+package incident
 
 import (
 	"context"
@@ -20,10 +20,10 @@ import (
 // repo is nil and the handlers answer 409 (mirrors the report pipeline).
 
 // Incident severity ladder (low→high) and status set.
-var incidentSeverities = []string{"info", "low", "medium", "high", "critical"}
+var Severities = []string{"info", "low", "medium", "high", "critical"}
 
-func severityRankIncident(s string) int {
-	for i, v := range incidentSeverities {
+func SeverityRank(s string) int {
+	for i, v := range Severities {
 		if strings.EqualFold(strings.TrimSpace(s), v) {
 			return i
 		}
@@ -31,8 +31,8 @@ func severityRankIncident(s string) int {
 	return 0 // unknown → info
 }
 
-// validIncidentSeverity reports whether s is EXACTLY one of the ladder values
-// (case-insensitively). It exists because severityRankIncident above maps every
+// ValidSeverity reports whether s is EXACTLY one of the ladder values
+// (case-insensitively). It exists because SeverityRank above maps every
 // unrecognised string to 0 — and 0 is not "no match", it is `info`.
 //
 // F-74: /api/incidents?severity=X ran that mapping and then applied the result
@@ -41,9 +41,9 @@ func severityRankIncident(s string) int {
 // bucket. A client filtering for warnings received info incidents labelled as
 // warnings — confidently wrong, which is worse than ignoring the parameter.
 // Filter parsing must use THIS, never the rank/normalize pair.
-func validIncidentSeverity(s string) bool {
+func ValidSeverity(s string) bool {
 	t := strings.TrimSpace(s)
-	for _, v := range incidentSeverities {
+	for _, v := range Severities {
 		if strings.EqualFold(t, v) {
 			return true
 		}
@@ -51,10 +51,10 @@ func validIncidentSeverity(s string) bool {
 	return false
 }
 
-// canonicalIncidentSeverity lowercases a severity already known to be valid.
-func canonicalIncidentSeverity(s string) string {
+// CanonicalSeverity lowercases a severity already known to be valid.
+func CanonicalSeverity(s string) string {
 	t := strings.TrimSpace(s)
-	for _, v := range incidentSeverities {
+	for _, v := range Severities {
 		if strings.EqualFold(t, v) {
 			return v
 		}
@@ -62,48 +62,48 @@ func canonicalIncidentSeverity(s string) string {
 	return ""
 }
 
-func normalizeSeverity(s string) string {
-	if r := severityRankIncident(s); r >= 0 && r < len(incidentSeverities) {
-		if strings.EqualFold(strings.TrimSpace(s), incidentSeverities[r]) {
-			return incidentSeverities[r]
+func NormalizeSeverity(s string) string {
+	if r := SeverityRank(s); r >= 0 && r < len(Severities) {
+		if strings.EqualFold(strings.TrimSpace(s), Severities[r]) {
+			return Severities[r]
 		}
 	}
 	return "info"
 }
 
 const (
-	statusOpen          = "open"
-	statusAcknowledged  = "acknowledged"
-	statusInvestigating = "investigating"
-	statusResolved      = "resolved"
-	statusClosed        = "closed"
+	StatusOpen          = "open"
+	StatusAcknowledged  = "acknowledged"
+	StatusInvestigating = "investigating"
+	StatusResolved      = "resolved"
+	StatusClosed        = "closed"
 )
 
-func isTerminalStatus(s string) bool { return s == statusResolved || s == statusClosed }
+func IsTerminalStatus(s string) bool { return s == StatusResolved || s == StatusClosed }
 
-func validIncidentStatus(s string) bool {
+func ValidStatus(s string) bool {
 	switch s {
-	case statusOpen, statusAcknowledged, statusInvestigating, statusResolved, statusClosed:
+	case StatusOpen, StatusAcknowledged, StatusInvestigating, StatusResolved, StatusClosed:
 		return true
 	}
 	return false
 }
 
-// validTransition enforces a lenient-but-sane lifecycle: forward progress plus
+// ValidTransition enforces a lenient-but-sane lifecycle: forward progress plus
 // reopen from a terminal state. A no-op (same status) is rejected by the caller.
-func validTransition(from, to string) bool {
-	if !validIncidentStatus(to) {
+func ValidTransition(from, to string) bool {
+	if !ValidStatus(to) {
 		return false
 	}
 	switch to {
-	case statusAcknowledged, statusInvestigating:
-		return from == statusOpen || from == statusAcknowledged || from == statusInvestigating
-	case statusResolved:
-		return !isTerminalStatus(from)
-	case statusClosed:
-		return from == statusResolved || from == statusOpen || from == statusAcknowledged || from == statusInvestigating
-	case statusOpen: // reopen
-		return isTerminalStatus(from)
+	case StatusAcknowledged, StatusInvestigating:
+		return from == StatusOpen || from == StatusAcknowledged || from == StatusInvestigating
+	case StatusResolved:
+		return !IsTerminalStatus(from)
+	case StatusClosed:
+		return from == StatusResolved || from == StatusOpen || from == StatusAcknowledged || from == StatusInvestigating
+	case StatusOpen: // reopen
+		return IsTerminalStatus(from)
 	}
 	return false
 }
@@ -137,12 +137,12 @@ type Incident struct {
 	NotifiedVia []string `json:"notified_via,omitempty"`
 }
 
-// incidentDisplayID turns an internal incident id (16 hex chars) into the
+// DisplayID turns an internal incident id (16 hex chars) into the
 // human handle operators reference (INC-3FA2C1) — the incident-system sibling
 // of noclabel.ProblemDisplayID (#103 UX-2: no raw hex in notifications or lists).
 // Byte-identical to the TS friendlyIncidentId. Display-only: the internal id
 // stays canonical for routes/dedup/buttons. Idempotent and safe on non-hex ids.
-func incidentDisplayID(id string) string {
+func DisplayID(id string) string {
 	if id == "" || strings.HasPrefix(id, "INC-") {
 		return id
 	}
@@ -152,8 +152,8 @@ func incidentDisplayID(id string) string {
 	return "INC-" + strings.ToUpper(id[:6])
 }
 
-// IncidentEvent is one append-only timeline entry.
-type IncidentEvent struct {
+// Event is one append-only timeline entry.
+type Event struct {
 	ID         string         `json:"id"`
 	IncidentID string         `json:"incident_id"`
 	EventType  string         `json:"event_type"`
@@ -162,8 +162,8 @@ type IncidentEvent struct {
 	CreatedAt  time.Time      `json:"created_at"`
 }
 
-// IncidentInput is a detection (or manual request) to be folded into an incident.
-type IncidentInput struct {
+// Input is a detection (or manual request) to be folded into an incident.
+type Input struct {
 	TenantID    string
 	Title       string
 	Description string
@@ -175,8 +175,8 @@ type IncidentInput struct {
 	Actor       string // who/what raised it (audit/timeline)
 }
 
-// IncidentQuery parameterizes a tenant-scoped listing (newest-last-seen first).
-type IncidentQuery struct {
+// Query parameterizes a tenant-scoped listing (newest-last-seen first).
+type Query struct {
 	Status   string
 	Severity string
 	Before   time.Time
@@ -184,20 +184,20 @@ type IncidentQuery struct {
 	Offset   int
 }
 
-// incidentsRepo is the Incident store seam (mirrors auditRepo/savedRepo). Reads
+// Repo is the Incident store seam (mirrors auditRepo/savedRepo). Reads
 // are RLS tenant-scoped; system writes (Ingest, MarkSync) run at platform scope
 // but stamp the row's tenant_id (RLS WITH CHECK passes under '*').
-type incidentsRepo interface {
+type Repo interface {
 	// Ingest creates a new incident or, when an active one shares the dedup key,
 	// folds the detection into it (occurrences++, last_seen bumped, severity
 	// escalated). created reports which happened — the dedup guarantee.
-	Ingest(ctx context.Context, in IncidentInput) (inc Incident, created bool, err error)
-	Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []IncidentEvent, bool, error)
-	List(ctx context.Context, tenant string, cross bool, q IncidentQuery) ([]Incident, error)
+	Ingest(ctx context.Context, in Input) (inc Incident, created bool, err error)
+	Get(ctx context.Context, tenant string, cross bool, id string) (Incident, []Event, bool, error)
+	List(ctx context.Context, tenant string, cross bool, q Query) ([]Incident, error)
 	// Count is List's TRUE total under the SAME filters and the SAME RLS tenant
 	// scope, ignoring limit/offset. Without it a capped page is indistinguishable
 	// from the whole set at the client (audit F-74/F-79 class).
-	Count(ctx context.Context, tenant string, cross bool, q IncidentQuery) (int, error)
+	Count(ctx context.Context, tenant string, cross bool, q Query) (int, error)
 	// Transition changes status (validated), stamps resolved_at on resolve, and
 	// appends a status_change event. Returns the updated incident.
 	Transition(ctx context.Context, tenant string, cross bool, id, to, actor, note string) (Incident, error)
@@ -214,37 +214,28 @@ type incidentsRepo interface {
 	FindByExternalTicket(ctx context.Context, tenant, system, externalID string) (Incident, bool, error)
 }
 
-// newIncidentStore selects the backend: Postgres only (RLS). Returns nil on the
-// file/dev backend — the incident system is a SaaS feature; handlers answer 409.
-func newIncidentStore() incidentsRepo {
-	if ps, ok := backend.(*pgStore); ok {
-		return newPgIncidentStore(ps.db)
-	}
-	return nil
-}
-
-// dedupKeyFor returns the deterministic grouping key for a detection: the explicit
+// DedupKeyFor returns the deterministic grouping key for a detection: the explicit
 // key when given, else a stable hash of (source_type | source_id | normalized
 // title). Two detections of the same root cause map to the same key.
-func dedupKeyFor(in IncidentInput) string {
+func DedupKeyFor(in Input) string {
 	if k := strings.TrimSpace(in.DedupKey); k != "" {
 		return k
 	}
 	seed := strings.ToLower(strings.TrimSpace(in.SourceType)) + "|" +
 		strings.ToLower(strings.TrimSpace(in.SourceID)) + "|" +
-		normalizeIncidentTitle(in.Title)
+		normalizeTitle(in.Title)
 	sum := sha256.Sum256([]byte(seed))
 	return "auto-" + hex.EncodeToString(sum[:8])
 }
 
-// normalizeIncidentTitle lowercases, collapses whitespace, and trims so titles
+// normalizeTitle lowercases, collapses whitespace, and trims so titles
 // that differ only cosmetically dedup together.
-func normalizeIncidentTitle(s string) string {
+func normalizeTitle(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
-// autoTicketEligible encodes the agreed auto-create policy: severity ≥ critical
+// AutoTicketEligible encodes the agreed auto-create policy: severity ≥ critical
 // (rca-confidence ≥ 0.8 is applied upstream where the score is known).
-func autoTicketEligible(severity string) bool {
-	return severityRankIncident(severity) >= severityRankIncident("critical")
+func AutoTicketEligible(severity string) bool {
+	return SeverityRank(severity) >= SeverityRank("critical")
 }
