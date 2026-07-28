@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -108,7 +109,7 @@ func newCloudMonitorStore(path string) *cloudMonitorStore {
 // cloud_monitor_eval.go shape, which this store feeds): the store did not
 // answer / it answered with nothing / loaded.
 func (s *cloudMonitorStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = no monitors defined yet
 	}
@@ -149,7 +150,7 @@ func (s *cloudMonitorStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode cloud monitors: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("monitors", "persist cloud monitors failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist cloud monitors: %w", err)
 	}

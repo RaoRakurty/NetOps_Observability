@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -24,12 +25,12 @@ func TestIncidentDedupAndRLS(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres incident test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	store := incident.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	store := incident.NewPGStore(ps.DB())
 
 	base := IncidentInput{
 		TenantID: "acme", Title: "High CPU on core-1", Description: "cpu > 90%",
@@ -140,12 +141,12 @@ func TestIncidentStormDedup(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres incident storm test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	store := incident.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	store := incident.NewPGStore(ps.DB())
 
 	const n = 24
 	var createdCount int32
@@ -178,7 +179,7 @@ func TestIncidentStormDedup(t *testing.T) {
 	}
 	// And exactly one active incident exists for that dedup key.
 	var active int
-	if err := ps.db.withTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+	if err := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT count(*) FROM incidents WHERE dedup_key='link:agg-2' AND status NOT IN ('resolved','closed')`).Scan(&active)
 	}); err != nil {
 		t.Fatalf("count active: %v", err)

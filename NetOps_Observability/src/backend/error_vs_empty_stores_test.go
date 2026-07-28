@@ -6,7 +6,7 @@ package main
 //
 // Every store below used to do:
 //
-//	b, err := kvLoad(s.path)
+//	b, err := platformdb.Load(s.path)
 //	if err != nil || len(b) == 0 { return }   // load() returned nothing at all
 //
 // so "the store did not answer" and "nothing has been saved yet" produced the

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/platformdb"
 	"path/filepath"
 	"testing"
 
@@ -138,7 +139,7 @@ func TestITSMLegacyMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.json")
 	// Legacy format: a bare itsmConfig object (no version envelope).
 	legacy := `{"servicenow":{"enabled":true,"instance_url":"https://legacy.service-now.com","user":"u","password":"p","min_severity":"critical"},"jira":{"enabled":false}}`
-	if err := kvSave(path, []byte(legacy)); err != nil {
+	if err := platformdb.Save(path, []byte(legacy)); err != nil {
 		t.Fatalf("seed legacy: %v", err)
 	}
 	st := newITSMConfigStore(srv, path)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/token"
 	"netops/backend/internal/users"
 	"os"
@@ -22,12 +23,12 @@ func TestPgUsersStore(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres users test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	s, err := users.NewPGStore(rlsPG{db: ps.db}, userDeps())
+	defer ps.DB().Close()
+	s, err := users.NewPGStore(ps.DB(), userDeps())
 	if err != nil {
 		t.Fatalf("NewPGStore: %v", err)
 	}
@@ -131,14 +132,14 @@ func TestPgUsersStoreCapAndFederated(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres users cap test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 	d := userDeps()
 	d.MaxUsers = 2
-	s, err := users.NewPGStore(rlsPG{db: ps.db}, d)
+	s, err := users.NewPGStore(ps.DB(), d)
 	if err != nil {
 		t.Fatalf("NewPGStore: %v", err)
 	}

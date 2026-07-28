@@ -1,4 +1,4 @@
-package main
+package platformdb
 
 import (
 	"context"
@@ -15,11 +15,11 @@ import (
 
 // pgstore.go — the normalized Postgres backend (M0).
 //
-// It implements the same blob-shaped kvBackend the stores already call
+// It implements the same blob-shaped Backend the stores already call
 // (Load/Save a JSON blob per key), so NO store logic and NO HTTP API changes —
 // exactly the "swap to Postgres with no API-surface change" promise in
 // kvstore.go. The difference is underneath: instead of dumping each store's
-// whole collection as one opaque blob (the old pgkv.go), pgStore EXPLODES the
+// whole collection as one opaque blob (the old pgkv.go), PGStore EXPLODES the
 // blob into one row per element in a normalized, RLS-protected table on Save and
 // REASSEMBLES those rows back into the array on Load. The element is stored
 // verbatim in a JSONB `data` column (lossless), with id/tenant/type/ts lifted
@@ -74,18 +74,22 @@ func specFor(key string) (rowSpec, bool) {
 	return s, ok
 }
 
-type pgStore struct {
-	db *pgDB
+// DB exposes the RLS transaction machinery (the seam every extracted
+// package's DB interface is satisfied by).
+func (p *PGStore) DB() *DB { return p.db }
+
+type PGStore struct {
+	db *DB
 }
 
-// newPgStore connects (running migrations via newPgDB) and imports any legacy
+// NewPGStore connects (running migrations via NewDB) and imports any legacy
 // blob app-state left by the old pgkv.go backend. Fails fast on a bad DSN.
-func newPgStore(ctx context.Context, dsn string) (*pgStore, error) {
-	db, err := newPgDB(ctx, dsn)
+func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
+	db, err := NewDB(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
-	ps := &pgStore{db: db}
+	ps := &PGStore{db: db}
 	if err := ps.importLegacy(ctx); err != nil {
 		// A usable database must still start even if the one-time import trips;
 		// surface it loudly rather than aborting (the import is idempotent and
@@ -109,7 +113,7 @@ func newPgStore(ctx context.Context, dsn string) (*pgStore, error) {
 // tokens, the audit ring, ITSM ticket dedup) is intentionally NOT imported — it
 // rebuilds. The durable config (users/tenants/roles/SNMP creds/SSO/contact
 // points/policies) carries over so a cutover preserves logins and secrets.
-func (p *pgStore) importFileState(ctx context.Context, dir string) error {
+func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 	keys := []string{
 		"/data/tenants.json", "/data/roles.json", "/data/users.json",
 		"/data/snmp_credentials.json", "/data/snmp_profiles.json",
@@ -150,10 +154,10 @@ func (p *pgStore) importFileState(ctx context.Context, dir string) error {
 // reads as empty. That exact blindness made the "idempotent" import re-clobber
 // live api_keys/saved/snmp_profiles with the stale pre-cutover file on EVERY
 // boot (any key minted since the cutover vanished on the next restart).
-func (p *pgStore) targetEmpty(ctx context.Context, key string) (bool, error) {
+func (p *PGStore) targetEmpty(ctx context.Context, key string) (bool, error) {
 	if spec, ok := specFor(key); ok {
 		var n int
-		err := p.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		err := p.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, "SELECT count(*) FROM "+spec.table).Scan(&n)
 		})
 		if err != nil {
@@ -170,8 +174,8 @@ func (p *pgStore) targetEmpty(ctx context.Context, key string) (bool, error) {
 
 // Load reassembles a normalized collection into the JSON array the store expects,
 // or reads a verbatim blob for non-normalized keys. A missing blob returns
-// os.ErrNotExist (the kvBackend contract); an empty collection returns "[]".
-func (p *pgStore) Load(key string) ([]byte, error) {
+// os.ErrNotExist (the Backend contract); an empty collection returns "[]".
+func (p *PGStore) Load(key string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if spec, ok := specFor(key); ok {
@@ -182,7 +186,7 @@ func (p *pgStore) Load(key string) ([]byte, error) {
 
 // Save explodes a collection blob into normalized rows, or writes a verbatim blob
 // for non-normalized keys.
-func (p *pgStore) Save(key string, data []byte) error {
+func (p *PGStore) Save(key string, data []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if spec, ok := specFor(key); ok {
@@ -191,12 +195,12 @@ func (p *pgStore) Save(key string, data []byte) error {
 	return p.saveBlob(ctx, key, data)
 }
 
-func (p *pgStore) loadRows(ctx context.Context, spec rowSpec) ([]byte, error) {
+func (p *PGStore) loadRows(ctx context.Context, spec rowSpec) ([]byte, error) {
 	var datas [][]byte
 	// Platform scope ('*'): the app holds and serves all tenants from one
 	// process today, so a full read is correct. RLS still scopes any future
 	// per-tenant connection.
-	err := p.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := p.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, "SELECT data FROM "+spec.table+" ORDER BY id")
 		if err != nil {
 			return err
@@ -217,7 +221,7 @@ func (p *pgStore) loadRows(ctx context.Context, spec rowSpec) ([]byte, error) {
 	return assemble(datas), nil
 }
 
-func (p *pgStore) saveRows(ctx context.Context, spec rowSpec, data []byte) error {
+func (p *PGStore) saveRows(ctx context.Context, spec rowSpec, data []byte) error {
 	rows, err := explode(spec, data)
 	if err != nil {
 		return fmt.Errorf("explode %s: %w", spec.table, err)
@@ -226,7 +230,7 @@ func (p *pgStore) saveRows(ctx context.Context, spec rowSpec, data []byte) error
 	// of the entire table under platform scope is the correct, simplest sync and
 	// handles deletions for free — same whole-collection rewrite the file backend
 	// already does, just transactional.
-	return p.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "DELETE FROM "+spec.table); err != nil {
 			return err
 		}
@@ -239,7 +243,7 @@ func (p *pgStore) saveRows(ctx context.Context, spec rowSpec, data []byte) error
 	})
 }
 
-func (p *pgStore) loadBlob(ctx context.Context, key string) ([]byte, error) {
+func (p *PGStore) loadBlob(ctx context.Context, key string) ([]byte, error) {
 	var data []byte
 	err := p.db.pool.QueryRow(ctx, `SELECT data FROM app_kv WHERE key = $1`, key).Scan(&data)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -251,7 +255,7 @@ func (p *pgStore) loadBlob(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-func (p *pgStore) saveBlob(ctx context.Context, key string, data []byte) error {
+func (p *PGStore) saveBlob(ctx context.Context, key string, data []byte) error {
 	_, err := p.db.pool.Exec(ctx, `INSERT INTO app_kv (key, data, updated_at)
 		VALUES ($1, $2, now())
 		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, key, data)
@@ -377,7 +381,7 @@ func strField(fields map[string]json.RawMessage, name string) (string, error) {
 // old blob backend (pgkv.go's netops_kv table) into the normalized tables /
 // app_kv. It only fills empty targets, so re-running it (every boot) is a no-op
 // once data has moved.
-func (p *pgStore) importLegacy(ctx context.Context) error {
+func (p *PGStore) importLegacy(ctx context.Context) error {
 	var exists bool
 	if err := p.db.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'netops_kv')`).Scan(&exists); err != nil {

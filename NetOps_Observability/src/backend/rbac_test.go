@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/platformdb"
 	"path/filepath"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestBuiltinPolicyRoles(t *testing.T) {
 // TestPolicyRolesSeededAndEnforced confirms the store seeds the new built-ins and
 // that Allows enforces their grids.
 func TestPolicyRolesSeededAndEnforced(t *testing.T) {
-	backend = fileKV{}
+	t.Cleanup(platformdb.SwapBackendForTest(platformdb.FileKV{}))
 	rs, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
 	if err != nil {
 		t.Fatalf("newRoleStore: %v", err)

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/seam"
 	"strings"
 )
@@ -22,18 +23,18 @@ import (
 // newSeamStore picks the store backend: Postgres only, like incidents — the
 // inventory rides FORCE-RLS via the seamPG adapter (nil on the file backend).
 func newSeamStore() *seam.Store {
-	if ps, ok := backend.(*pgStore); ok {
-		return seam.NewPGStore(seamPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return seam.NewPGStore(seamPG{db: ps.DB()})
 	}
 	return nil
 }
 
 // seamPG adapts package main's pg plumbing to the seam.DB seam — the package
 // owns the inventory, not how this platform scopes its transactions.
-type seamPG struct{ db *pgDB }
+type seamPG struct{ db *platformdb.DB }
 
 func (a seamPG) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
-	return a.db.withTenant(ctx, tenant, cross, fn)
+	return a.db.WithTenant(ctx, tenant, cross, fn)
 }
 
 // errSeamStoreOff is returned on the file backend: the inventory is

@@ -8,14 +8,17 @@ package main
 // against a hanging or failing store without the process-global kv layer.
 // Supplying them is the entrypoint package's job (§2: main is wiring).
 
-import "netops/backend/internal/session"
+import (
+	"netops/backend/internal/platformdb"
+	"netops/backend/internal/session"
+)
 
 // platformKV adapts the platform kv layer to the injected persistence seams of
 // the extracted stores (session.KV, apikey.KV — structurally identical).
 type platformKV struct{}
 
-func (platformKV) Load(key string) ([]byte, error) { return kvLoad(key) }
-func (platformKV) Save(key string, b []byte) error { return kvSave(key, b) }
+func (platformKV) Load(key string) ([]byte, error) { return platformdb.Load(key) }
+func (platformKV) Save(key string, b []byte) error { return platformdb.Save(key, b) }
 
 // sessionDeps returns the store backend and error sink the session stores run
 // against.

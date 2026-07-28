@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sort"
 	"strings"
@@ -95,7 +96,7 @@ func newCloudSLOStore(path string) *cloudSLOStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob) / loaded.
 func (s *cloudSLOStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = no SLOs defined yet
 	}
@@ -127,7 +128,7 @@ func (s *cloudSLOStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode cloud slos: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("settings", "persist cloud slos failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist cloud slos: %w", err)
 	}

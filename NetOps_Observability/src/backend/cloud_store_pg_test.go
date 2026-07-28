@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 
@@ -35,12 +36,12 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres cloud-inventory isolation test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	st := cloud.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	st := cloud.NewPGStore(ps.DB())
 
 	// acme + globex each load their own inventory (per-tenant full refresh).
 	if err := st.ReplaceInventory(ctx, "acme", acmeInventory(),
@@ -127,7 +128,7 @@ func TestCloudStorePgCrossTenantIsolation(t *testing.T) {
 		var pgErr *pgconn.PgError
 		return errors.As(err, &pgErr) && pgErr.Code == "42501"
 	}
-	err = ps.db.withTenant(ctx, "globex", false, func(tx pgx.Tx) error {
+	err = ps.DB().WithTenant(ctx, "globex", false, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `INSERT INTO cloud_resources (tenant_id, resource_id) VALUES ('acme', 'forged')`)
 		return e
 	})

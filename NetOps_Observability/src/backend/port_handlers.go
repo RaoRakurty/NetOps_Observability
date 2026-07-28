@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"strings"
-
-	"github.com/jackc/pgx/v5"
 
 	"netops/backend/portintel"
 )
@@ -23,19 +21,10 @@ import (
 // newPortStore picks the store backend: pg (RLS-scoped via the portintel.DB
 // adapter below) when the relational app-state store is active, else in-memory.
 func newPortStore() portintel.Store {
-	if ps, ok := backend.(*pgStore); ok {
-		return portintel.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return portintel.NewPGStore(ps.DB())
 	}
 	return portintel.NewMemStore()
-}
-
-// rlsPG adapts package main's pg plumbing to the injected DB seams of the
-// extracted stores (portintel.DB, wireless.DB — structurally identical): the
-// packages own their data, not how this platform scopes its transactions.
-type rlsPG struct{ db *pgDB }
-
-func (a rlsPG) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
-	return a.db.withTenant(ctx, tenant, cross, fn)
 }
 
 // handlePortInterfaces: GET /api/infrastructure/interfaces — the workbench table

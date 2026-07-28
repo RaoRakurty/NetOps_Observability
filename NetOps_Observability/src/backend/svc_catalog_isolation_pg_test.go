@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 )
@@ -24,12 +25,12 @@ func TestSvcCatalogCrossTenantIsolation(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres service-catalog isolation test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	st := &pgServiceStore{db: ps.db}
+	defer ps.DB().Close()
+	st := &pgServiceStore{db: ps.DB()}
 
 	mk := func(tenant, name string) Service {
 		t.Helper()

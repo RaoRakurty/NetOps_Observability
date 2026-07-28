@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 	"time"
@@ -19,12 +20,12 @@ func TestPgAuditStore(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres audit test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	a := audit.NewPGStore(rlsPG{db: ps.db}, logError)
+	defer ps.DB().Close()
+	a := audit.NewPGStore(ps.DB(), logError)
 
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	a.Record(AuditEvent{ID: "e1", Time: base, Tenant: "acme", Method: "POST", Decision: "allow"})

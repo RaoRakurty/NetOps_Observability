@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/verify"
 	"os"
@@ -90,7 +91,7 @@ func verifyConfigPath() string {
 // (cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — genuinely no opt-in yet) / loaded.
 func (s *verifyConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = no tenant has configured verification yet
 	}
@@ -139,7 +140,7 @@ func (s *verifyConfigStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode verification config: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("verify", "persist verification config failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist verification config: %w", err)
 	}
@@ -325,7 +326,7 @@ type verifyRunStore struct {
 
 func newVerifyRunStore(path string) *verifyRunStore {
 	s := &verifyRunStore{runs: map[string]map[string]verifyRunRecord{}, path: path}
-	if b, err := kvLoad(path); err == nil && len(b) > 0 {
+	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
 		_ = json.Unmarshal(b, &s.runs)
 	}
 	return s
@@ -370,7 +371,7 @@ func (s *verifyRunStore) put(rec verifyRunRecord) {
 	}
 	if s.path != "" {
 		if b, err := json.Marshal(s.runs); err == nil {
-			if err := kvSave(s.path, b); err != nil {
+			if err := platformdb.Save(s.path, b); err != nil {
 				logWarn("verify", "persist verification runs failed", map[string]any{"err": err.Error()})
 			}
 		}

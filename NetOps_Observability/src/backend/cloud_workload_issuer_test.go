@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"netops/backend/internal/platformdb"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestLoadOrCreateWorkloadIssuerPersists(t *testing.T) {
 		t.Fatalf("issuer: %q", wi.issuer)
 	}
 	// At rest the key is sealed — never plaintext PEM.
-	raw, err := kvLoad(kvWorkloadIssuerKeyKey)
+	raw, err := platformdb.Load(kvWorkloadIssuerKeyKey)
 	if err != nil {
 		t.Fatal(err)
 	}

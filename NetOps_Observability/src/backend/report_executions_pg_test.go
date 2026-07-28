@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 	"time"
@@ -19,12 +20,12 @@ func TestPgExecStore(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres execution-store test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	s := reports.NewPGExecStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	s := reports.NewPGExecStore(ps.DB())
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// ---- lifecycle: append → running → completed, with events ----

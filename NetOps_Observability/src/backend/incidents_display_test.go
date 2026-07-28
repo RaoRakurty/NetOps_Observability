@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 )
@@ -35,12 +36,12 @@ func TestIncidentNotifiedVia_PG(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres incident test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	store := incident.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	store := incident.NewPGStore(ps.DB())
 
 	inc, _, err := store.Ingest(ctx, IncidentInput{
 		TenantID: "acme", Title: "Link flap on edge-2", Severity: "critical",

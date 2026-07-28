@@ -1,4 +1,4 @@
-package main
+package platformdb
 
 import (
 	"context"
@@ -151,11 +151,11 @@ func TestPgStoreRLSIsolation(t *testing.T) {
 	ctx := context.Background()
 	appDSN := provisionAppRole(ctx, t, adminDSN)
 
-	ps, err := newPgStore(ctx, appDSN)
+	ps, err := NewPGStore(ctx, appDSN)
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 
 	// Start clean, then save two tenants' worth of users through the seam.
 	if err := ps.Save("/data/users.json", []byte(`[
@@ -167,7 +167,7 @@ func TestPgStoreRLSIsolation(t *testing.T) {
 
 	count := func(tenant string, cross bool) int {
 		var n int
-		if err := ps.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		if err := ps.DB().WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&n)
 		}); err != nil {
 			t.Fatalf("count(%q): %v", tenant, err)
@@ -225,11 +225,11 @@ func TestPgStoreImportsLegacyBlob(t *testing.T) {
 	}
 	conn.Close(ctx)
 
-	ps, err := newPgStore(ctx, appDSN) // migrates, then importLegacy runs
+	ps, err := NewPGStore(ctx, appDSN) // migrates, then importLegacy runs
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 
 	blob, err := ps.Load("/data/roles.json")
 	if err != nil {
@@ -252,7 +252,7 @@ func TestPgStoreRefusesSuperuser(t *testing.T) {
 	if adminDSN == "" {
 		t.Skip("set DATABASE_URL_TEST (a superuser) to run the RLS guard test")
 	}
-	_, err := newPgStore(context.Background(), adminDSN)
+	_, err := NewPGStore(context.Background(), adminDSN)
 	if err == nil {
 		t.Fatal("newPgStore as superuser must fail closed (RLS would be bypassed), but it succeeded")
 	}

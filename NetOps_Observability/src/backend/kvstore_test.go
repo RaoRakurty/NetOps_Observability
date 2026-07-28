@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/users"
 	"os"
 	"testing"
 )
 
-// memKV is an in-memory kvBackend standing in for Postgres in tests: it proves
+// memKV is an in-memory platformdb.Backend standing in for Postgres in tests: it proves
 // the stores are genuinely backend-pluggable (no file I/O) and that the
 // os.ErrNotExist contract holds for a missing key, exactly as pgKV guarantees.
 type memKV struct{ m map[string][]byte }
@@ -27,15 +28,13 @@ func (k *memKV) Save(key string, data []byte) error {
 }
 
 // withBackend swaps the process-wide backend for the duration of a test.
-func withBackend(t *testing.T, b kvBackend) {
+func withBackend(t *testing.T, b platformdb.Backend) {
 	t.Helper()
-	prev := backend
-	backend = b
-	t.Cleanup(func() { backend = prev })
+	t.Cleanup(platformdb.SwapBackendForTest(b))
 }
 
 func TestFileKVMissingKeyIsNotExist(t *testing.T) {
-	_, err := fileKV{}.Load(t.TempDir() + "/does-not-exist.json")
+	_, err := platformdb.FileKV{}.Load(t.TempDir() + "/does-not-exist.json")
 	if !os.IsNotExist(err) {
 		t.Errorf("missing file should report os.ErrNotExist, got %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/platformdb"
 	"sort"
 	"strings"
 	"sync"
@@ -70,7 +71,7 @@ func newDeviceLocationStore(path string) (*deviceLocationStore, error) {
 }
 
 func (s *deviceLocationStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return nil // absent store → empty
 	}
@@ -103,7 +104,7 @@ func (s *deviceLocationStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // Lookup resolves a device's annotation by ANY of its identity tokens.

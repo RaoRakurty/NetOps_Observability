@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"netops/backend/internal/platformdb"
 	"os"
 
 	"netops/backend/reports"
@@ -34,14 +35,14 @@ func (kvArtifactStore) Save(_ context.Context, execID string, a reports.Artifact
 		Summary:     a.Summary,
 		Key:         execID,
 	}
-	if err := kvSave(artifactKey(execID), a.Bytes); err != nil {
+	if err := platformdb.Save(artifactKey(execID), a.Bytes); err != nil {
 		return reports.ArtifactRef{}, err
 	}
 	return ref, nil
 }
 
 func (kvArtifactStore) Load(_ context.Context, ref reports.ArtifactRef) (reports.Artifact, error) {
-	b, err := kvLoad(artifactKey(ref.Key))
+	b, err := platformdb.Load(artifactKey(ref.Key))
 	if err != nil {
 		return reports.Artifact{}, err
 	}
@@ -57,7 +58,7 @@ func (kvArtifactStore) Delete(_ context.Context, ref reports.ArtifactRef) error 
 	// The kv backend has no delete primitive; overwrite with an empty tombstone.
 	// A real retention sweep (TTL + hard delete) belongs to the object-store
 	// implementation in a later phase.
-	err := kvSave(artifactKey(ref.Key), []byte{})
+	err := platformdb.Save(artifactKey(ref.Key), []byte{})
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

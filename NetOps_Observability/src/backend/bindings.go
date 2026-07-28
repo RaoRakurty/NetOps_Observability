@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sort"
 	"strings"
@@ -90,7 +91,7 @@ func newBindingStore(path string) (*bindingStore, error) {
 }
 
 func (s *bindingStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -115,7 +116,7 @@ func (s *bindingStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // bindingID is a stable, deterministic id for a (principal, role, scope, effect)

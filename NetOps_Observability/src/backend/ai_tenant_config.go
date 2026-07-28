@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -100,7 +101,7 @@ func newAITenantConfigStore(path string, v secretSealer) *aiTenantConfigStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — no tenant configured yet) / loaded.
 func (s *aiTenantConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = nothing configured yet
 	}
@@ -179,7 +180,7 @@ func (s *aiTenantConfigStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode ai tenant config: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return fmt.Errorf("persist ai tenant config: %w", err)
 	}
 	return nil

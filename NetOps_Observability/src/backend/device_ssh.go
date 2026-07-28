@@ -33,6 +33,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -73,7 +74,7 @@ func secEnvDuration(key string, def, lo, hi int) time.Duration {
 // ---- host-key TOFU store ----------------------------------------------------
 
 // sshHostStore persists the first SSH host-key fingerprint seen per address and
-// refuses a later change (trust on first use). Backed by the same kvBackend as
+// refuses a later change (trust on first use). Backed by the same platformdb.Backend as
 // the other small config stores; bounded (one row per device address).
 type sshHostStore struct {
 	mu     sync.Mutex
@@ -87,7 +88,7 @@ func newSSHHostStore(path string) *sshHostStore {
 		path = "/data/ssh_known_hosts.json"
 	}
 	s := &sshHostStore{path: path, hosts: map[string]string{}}
-	if b, err := kvLoad(path); err == nil {
+	if b, err := platformdb.Load(path); err == nil {
 		_ = json.Unmarshal(b, &s.hosts)
 	}
 	s.loaded = true
@@ -106,7 +107,7 @@ func (s *sshHostStore) check(addr, fp string) (firstSeen, ok bool) {
 	}
 	s.hosts[addr] = fp
 	if b, err := json.MarshalIndent(s.hosts, "", "  "); err == nil {
-		_ = kvSave(s.path, b)
+		_ = platformdb.Save(s.path, b)
 	}
 	return true, true
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func TestCAManagerSealsKeyAndIssues(t *testing.T) {
 		t.Fatalf("create CA: %v", err)
 	}
 	// The sealed key blob must be ciphertext, never the raw EC private key.
-	raw, err := kvLoad(kvCAKeyKey)
+	raw, err := platformdb.Load(kvCAKeyKey)
 	if err != nil {
 		t.Fatalf("load sealed key: %v", err)
 	}

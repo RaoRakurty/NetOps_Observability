@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/platformdb"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 )
 
-// kvconformance_test.go — a shared contract suite every kvBackend must satisfy,
+// kvconformance_test.go — a shared contract suite every platformdb.Backend must satisfy,
 // run identically against fileKV, memKV, and (gated) pgStore. This is the
 // backend-conformance layer that guards against behavioral drift between the
 // file and Postgres backends — the divergence risk called out in design review:
@@ -30,7 +31,7 @@ import (
 // identical across backends.
 type keyMaker func(name string) string
 
-func assertBackendConformance(t *testing.T, b kvBackend, key keyMaker) {
+func assertBackendConformance(t *testing.T, b platformdb.Backend, key keyMaker) {
 	t.Helper()
 
 	// 1. Collection round-trip — Save a multi-tenant set, Load it back. pgStore
@@ -83,7 +84,7 @@ func assertBackendConformance(t *testing.T, b kvBackend, key keyMaker) {
 		t.Errorf("blob not verbatim: got %s, want %s", rawGot, raw)
 	}
 
-	// 4. Absent blob key → os.ErrNotExist on every backend (the kvBackend
+	// 4. Absent blob key → os.ErrNotExist on every backend (the platformdb.Backend
 	//    contract the store constructors rely on).
 	if _, err := b.Load(key("never_written_blob")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("absent blob key: got %v, want os.ErrNotExist", err)
@@ -102,7 +103,7 @@ func assertBackendConformance(t *testing.T, b kvBackend, key keyMaker) {
 
 func TestBackendConformance_File(t *testing.T) {
 	dir := t.TempDir()
-	assertBackendConformance(t, fileKV{}, func(name string) string {
+	assertBackendConformance(t, platformdb.FileKV{}, func(name string) string {
 		return filepath.Join(dir, name+".json")
 	})
 }
@@ -119,11 +120,11 @@ func TestBackendConformance_Postgres(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres backend conformance test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 	assertBackendConformance(t, ps, func(name string) string {
 		return "/data/" + name + ".json"
 	})

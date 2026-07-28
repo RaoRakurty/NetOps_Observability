@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"sort"
 	"strings"
 	"sync"
@@ -69,8 +70,8 @@ type incidentTimeMetricsStore interface {
 
 // newIncidentTimeMetricsStore selects pg under STORE_BACKEND=postgres, else in-memory.
 func newIncidentTimeMetricsStore() incidentTimeMetricsStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgIncidentTimeMetricsStore{db: ps.db}
+	if ps, ok := platformdb.ActivePG(); ok {
+		return &pgIncidentTimeMetricsStore{db: ps.DB()}
 	}
 	return &memIncidentTimeMetricsStore{by: map[string]incidentTimeMetricRow{}}
 }
@@ -308,7 +309,7 @@ func (m *memIncidentTimeMetricsStore) ListWindow(_ context.Context, tenant strin
 
 // ── Postgres backend (tenant_iso FORCE-RLS via withTenant) ────────────────────
 
-type pgIncidentTimeMetricsStore struct{ db *pgDB }
+type pgIncidentTimeMetricsStore struct{ db *platformdb.DB }
 
 func (s *pgIncidentTimeMetricsStore) Upsert(ctx context.Context, row incidentTimeMetricRow) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -334,7 +335,7 @@ func (s *pgIncidentTimeMetricsStore) Upsert(ctx context.Context, row incidentTim
 	}
 	// Writer is tenant-scoped (owner stamped from the corr object's tenant_id);
 	// WITH CHECK enforces the row's tenant matches the bound scope.
-	return s.db.withTenant(ctx, row.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, row.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO incident_time_metrics
   (tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
@@ -360,7 +361,7 @@ func (s *pgIncidentTimeMetricsStore) List(ctx context.Context, tenant string, cr
 		limit = 500
 	}
 	out := []incidentTimeMetricRow{}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
        current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys
@@ -388,7 +389,7 @@ func (s *pgIncidentTimeMetricsStore) ListWindow(ctx context.Context, tenant stri
 		limit = timeIntelBackfillCap
 	}
 	out := []incidentTimeMetricRow{}
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// DISTINCT ON dedupes to one snapshot per (tenant, incident), preferring the
 		// current calculation version, then the freshest computation — a calc-version
 		// bump never double-counts. Outer ORDER BY keeps the most RECENT incidents

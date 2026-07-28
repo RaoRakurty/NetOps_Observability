@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"os"
 	"sort"
@@ -57,7 +58,7 @@ func rcaPromotionsPath() string {
 
 func newRcaPromotionStore(path string) *rcaPromotionStore {
 	s := &rcaPromotionStore{m: map[string]map[string]rca.PromotionRecord{}, path: path}
-	if b, err := kvLoad(path); err == nil && len(b) > 0 {
+	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
 		var m map[string]map[string]rca.PromotionRecord
 		if json.Unmarshal(b, &m) == nil {
 			s.m = m
@@ -77,7 +78,7 @@ func (s *rcaPromotionStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode rca promotions: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("rca", "persist rca promotions failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist rca promotions: %w", err)
 	}

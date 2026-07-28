@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -113,7 +114,7 @@ func tenantGovernancePath() string {
 // (the cloud_monitor_eval.go shape): the store did not answer (error) / it
 // answered with nothing (absent key or empty blob) / loaded.
 func (s *tenantGovernanceStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = no governance policy set yet
 	}
@@ -156,7 +157,7 @@ func (s *tenantGovernanceStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode tenant governance: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("settings", "persist tenant governance failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist tenant governance: %w", err)
 	}

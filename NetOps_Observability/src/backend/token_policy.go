@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sync"
 	"time"
@@ -98,7 +99,7 @@ func newTokenPolicyStore(path string, refresh *session.RefreshStore) *tokenPolic
 // with nothing (absent key or empty blob — env defaults are the policy) /
 // loaded and applied.
 func (s *tokenPolicyStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never customised; env defaults ARE the policy
 	}
@@ -157,7 +158,7 @@ func (s *tokenPolicyStore) set(c tokenPolicyConfig) (tokenPolicyConfig, error) {
 	if err != nil {
 		return tokenPolicyConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return tokenPolicyConfig{}, err
 	}
 	s.apply(c)

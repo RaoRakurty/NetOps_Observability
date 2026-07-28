@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"strconv"
@@ -103,7 +104,7 @@ func defaultNotifyConfig() notifyConfig {
 func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 	s := &notifyConfigStore{path: path, srv: srv}
 	s.cfg = defaultNotifyConfig()
-	if b, err := kvLoad(path); err == nil {
+	if b, err := platformdb.Load(path); err == nil {
 		_ = json.Unmarshal(b, &s.cfg)
 		if dec, derr := mapNotify(s.cfg, openFn(s.vault())); derr != nil {
 			logError("notify.config", "decrypt secrets", errf(derr))
@@ -194,7 +195,7 @@ func (s *notifyConfigStore) save() error {
 		logError("notify.config", "marshal config", errf(err))
 		return err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("notify.config", "persist config", errf(err))
 		return err
 	}

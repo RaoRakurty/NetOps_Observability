@@ -199,6 +199,15 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  206  THE INFRASTRUCTURE FINALE part 1: db.go + pgstore.go +
+//	                  kvstore.go (+ migrations/) → internal/platformdb. The
+//	                  kv Backend contract, FileKV, the per-row RLS PGStore
+//	                  (rowSpec registry, legacy import) and the DB pool/
+//	                  migrations/WithTenant machinery are ONE package; main
+//	                  keeps initStoreBackend (env switch) + platformKV; the
+//	                  rlsPG adapter DIED — DB.WithTenant satisfies every
+//	                  extracted package's seam directly; loggers injected
+//	                  via SetLoggers; Swap/BeginForTest test hooks
 //	2026-07-28  209  clickhouse_policies.go DDL builders → chschema/policies.go
 //	                  (RowPolicyDDL + ConvergeStmts(extra...); the retry loop
 //	                  + env stayed; domain DDL composed by the integrator —
@@ -266,7 +275,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 209
+const rootPackageCeiling = 206
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

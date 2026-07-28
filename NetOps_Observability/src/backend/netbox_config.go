@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"strings"
@@ -38,7 +39,7 @@ func newNetboxConfigStore(path string, v *vault.Vault) *netboxConfigStore {
 }
 
 func (s *netboxConfigStore) load() {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil || len(b) == 0 {
 		return
 	}
@@ -113,7 +114,7 @@ func (s *netboxConfigStore) set(in netboxConfig) (netboxConfig, error) {
 	if err != nil {
 		return netboxConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return netboxConfig{}, err
 	}
 	stored := in

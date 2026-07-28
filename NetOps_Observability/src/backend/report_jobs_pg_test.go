@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sync"
 	"testing"
@@ -25,12 +26,12 @@ func TestPgJobQueue(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres job-queue test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	q := reports.NewPGJobQueue(rlsPG{db: ps.db}, 3)
+	defer ps.DB().Close()
+	q := reports.NewPGJobQueue(ps.DB(), 3)
 	now := time.Now().UTC()
 	fire := func(i int) time.Time { return time.Date(2026, 6, 1, 0, i, 0, 0, time.UTC) }
 	mk := func(id, sched, tenant string, f time.Time) reports.Job {
@@ -161,7 +162,7 @@ func TestPgJobQueue(t *testing.T) {
 		t.Fatalf("enqueue globex: %v", err)
 	}
 	var acmeRows []string
-	if err := ps.db.withTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+	if err := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, tenant_id FROM report_jobs`)
 		if err != nil {
 			return err

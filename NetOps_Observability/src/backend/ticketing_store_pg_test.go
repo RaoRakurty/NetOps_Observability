@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/ticketing"
 	"os"
 	"testing"
@@ -21,12 +22,12 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres ticketing-store test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN)) // runs migration 0016
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN)) // runs migration 0016
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	st := ticketing.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	st := ticketing.NewPGStore(ps.DB())
 
 	// A policy round-trips (PutPolicy → ListPolicies scoped to the tenant).
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "n", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}); err != nil {
@@ -118,12 +119,12 @@ func TestPgTicketingStore_SingleEnabledPolicyInvariant(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres ticketing-store test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	st := ticketing.NewPGStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	st := ticketing.NewPGStore(ps.DB())
 
 	// ── live invariant: index rejects the second enable as ticketing.ErrPolicyConflict ──
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "strict",
@@ -146,11 +147,11 @@ func TestPgTicketingStore_SingleEnabledPolicyInvariant(t *testing.T) {
 	}
 
 	// ── migration replay against representative duplicate data ──
-	body, err := migrationsFS.ReadFile("migrations/0021_incident_policy_single_enabled.sql")
+	body, err := platformdb.MigrationsFS.ReadFile("migrations/0021_incident_policy_single_enabled.sql")
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}
-	tx, err := ps.db.pool.Begin(ctx)
+	tx, err := ps.DB().BeginForTest(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

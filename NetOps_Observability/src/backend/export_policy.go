@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strconv"
 	"sync"
@@ -52,7 +53,7 @@ func newExportPolicyStore(path string) *exportPolicyStore {
 // with nothing (absent key or empty blob — env defaults are the policy) /
 // loaded and applied.
 func (s *exportPolicyStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never customised; env defaults ARE the policy
 	}
@@ -115,7 +116,7 @@ func (s *exportPolicyStore) set(c exportPolicyConfig) (exportPolicyConfig, error
 	if err != nil {
 		return exportPolicyConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return exportPolicyConfig{}, err
 	}
 	return eff, nil

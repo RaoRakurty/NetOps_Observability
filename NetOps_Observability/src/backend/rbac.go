@@ -10,6 +10,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sort"
 	"strings"
@@ -212,7 +213,7 @@ func newRoleStore(path string) (*roleStore, error) {
 }
 
 func (s *roleStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -236,7 +237,7 @@ func (s *roleStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 func (s *roleStore) List() []Role {

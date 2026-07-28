@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/saved"
 	"os"
 	"strings"
@@ -19,12 +20,12 @@ func TestPgSavedStore(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres saved-store test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	s := saved.NewPGStore(rlsPG{db: ps.db}, logError)
+	defer ps.DB().Close()
+	s := saved.NewPGStore(ps.DB(), logError)
 	body := json.RawMessage(`{"k":"v"}`)
 
 	acme1, _ := s.Create("report", "Acme Report", "u1", "acme", body)

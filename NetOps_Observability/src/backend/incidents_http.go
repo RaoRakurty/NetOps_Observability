@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"netops/backend/integration"
 	"netops/backend/internal/incident"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"time"
@@ -352,8 +353,8 @@ type (
 // newIncidentStore selects the backend: Postgres only (RLS). Returns nil on the
 // file/dev backend — the incident system is a SaaS feature; handlers answer 409.
 func newIncidentStore() incidentsRepo {
-	if ps, ok := backend.(*pgStore); ok {
-		return incident.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return incident.NewPGStore(ps.DB())
 	}
 	return nil
 }

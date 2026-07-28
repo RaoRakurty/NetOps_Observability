@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"os"
 	"sort"
@@ -134,7 +135,7 @@ func rcaActionItemsPath() string {
 
 func newRcaActionItemStore(path string) *rcaActionItemStore {
 	s := &rcaActionItemStore{m: map[string]map[string]map[string]rcaActionItem{}, path: path}
-	if b, err := kvLoad(path); err == nil && len(b) > 0 {
+	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
 		var m map[string]map[string]map[string]rcaActionItem
 		if json.Unmarshal(b, &m) == nil {
 			s.m = m
@@ -154,7 +155,7 @@ func (s *rcaActionItemStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode rca action items: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("rca", "persist rca action items failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist rca action items: %w", err)
 	}

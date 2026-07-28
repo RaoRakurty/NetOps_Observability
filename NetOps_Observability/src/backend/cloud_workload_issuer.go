@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"strings"
 
@@ -62,7 +63,7 @@ func loadOrCreateWorkloadIssuer(vault *vault.Vault, issuerURL string) (*workload
 	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
 		return nil, fmt.Errorf("workload issuer: CLOUD_WORKLOAD_ISSUER_URL must be an absolute http(s) URL, got %q", issuerURL)
 	}
-	if enc, err := kvLoad(kvWorkloadIssuerKeyKey); err == nil && len(enc) > 0 {
+	if enc, err := platformdb.Load(kvWorkloadIssuerKeyKey); err == nil && len(enc) > 0 {
 		keyPEM, err := vault.Decrypt("", workloadIssuerKeyField, string(enc))
 		if err != nil {
 			return nil, fmt.Errorf("workload issuer: decrypt signing key: %w", err)
@@ -86,7 +87,7 @@ func loadOrCreateWorkloadIssuer(vault *vault.Vault, issuerURL string) (*workload
 	if err != nil {
 		return nil, fmt.Errorf("workload issuer: seal signing key: %w", err)
 	}
-	if err := kvSave(kvWorkloadIssuerKeyKey, []byte(sealed)); err != nil {
+	if err := platformdb.Save(kvWorkloadIssuerKeyKey, []byte(sealed)); err != nil {
 		return nil, fmt.Errorf("workload issuer: persist signing key: %w", err)
 	}
 	return &workloadIssuer{key: key, kid: cloudconn.RSAJWKThumbprintKid(&key.PublicKey), issuer: u}, nil

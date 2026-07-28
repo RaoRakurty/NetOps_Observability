@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
@@ -51,8 +52,8 @@ type caManager struct {
 // Vault-decrypted) or, on first run, generates one and persists it (key sealed).
 func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) {
 	m := &caManager{vault: vault, trustDomain: trustDomain}
-	certPEM, cerr := kvLoad(kvCACertKey)
-	keyEnc, kerr := kvLoad(kvCAKeyKey)
+	certPEM, cerr := platformdb.Load(kvCACertKey)
+	keyEnc, kerr := platformdb.Load(kvCAKeyKey)
 	if cerr == nil && kerr == nil && len(certPEM) > 0 && len(keyEnc) > 0 {
 		keyPEM, err := vault.Decrypt("", caKeyField, string(keyEnc))
 		if err != nil {
@@ -77,10 +78,10 @@ func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := kvSave(kvCACertKey, ca.CertPEM()); err != nil {
+	if err := platformdb.Save(kvCACertKey, ca.CertPEM()); err != nil {
 		return nil, err
 	}
-	if err := kvSave(kvCAKeyKey, []byte(sealed)); err != nil {
+	if err := platformdb.Save(kvCAKeyKey, []byte(sealed)); err != nil {
 		return nil, err
 	}
 	m.ca = ca

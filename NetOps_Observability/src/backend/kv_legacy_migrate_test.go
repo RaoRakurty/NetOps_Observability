@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/platformdb"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestMigrateRecoversOrphanedLegacyKeys(t *testing.T) {
 
 	recovered := migrateLegacyKVKeys()
 
-	got, err := kvLoad(tenantGovernancePath())
+	got, err := platformdb.Load(tenantGovernancePath())
 	if err != nil || string(got) != string(live) {
 		t.Fatalf("governance at %s = (%q, %v), want the legacy value recovered.\n"+
 			"Without this the F-63 key rename reads as total loss of every tenant's "+
@@ -34,7 +35,7 @@ func TestMigrateRecoversOrphanedLegacyKeys(t *testing.T) {
 	}
 
 	// COPY, not move: the legacy row survives as a backup.
-	if _, err := kvLoad("tenant_governance.json"); err != nil {
+	if _, err := platformdb.Load("tenant_governance.json"); err != nil {
 		t.Fatal("legacy key was removed — the migration must be reversible")
 	}
 }
@@ -51,7 +52,7 @@ func TestMigrateNeverOverwritesLiveData(t *testing.T) {
 
 	migrateLegacyKVKeys()
 
-	got, _ := kvLoad(tenantGovernancePath())
+	got, _ := platformdb.Load(tenantGovernancePath())
 	if string(got) != `{"current":true}` {
 		t.Fatalf("current key = %q, want the live value untouched — the migration "+
 			"overwrote live config with a stale legacy row", got)

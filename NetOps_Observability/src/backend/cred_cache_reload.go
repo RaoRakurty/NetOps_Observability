@@ -3,7 +3,7 @@ package main
 // cred_cache_reload.go — multi-instance cache coherence for the two stores that
 // stay in-memory by design: API keys and SNMP credentials (see TRACKER #33,
 // "bounded config stays cached"). Each API replica holds its own copy of these
-// sets hydrated from the shared kvBackend. A revoke/rotate/delete on instance A
+// sets hydrated from the shared platformdb.Backend. A revoke/rotate/delete on instance A
 // writes through to the shared store immediately, but instance B keeps serving
 // from its stale map until restart — a security gap for revocation (a revoked
 // API key would keep authenticating on B).

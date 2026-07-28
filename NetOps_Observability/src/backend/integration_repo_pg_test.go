@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"testing"
@@ -18,14 +19,14 @@ func TestIntegrationRepo(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres integration-repo test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 	// Dormant vault.Vault (no SEAL_PROVIDER) → webhook_secret stays plaintext, exercising
 	// the passthrough path; the vault.Vault's crypto is covered by secrets_test.go.
-	st := integration.NewStore(rlsPG{db: ps.db}, vault.Dormant())
+	st := integration.NewStore(ps.DB(), vault.Dormant())
 
 	// --- mapping upsert + watermark roundtrip ---
 	at := time.Now().UTC().Truncate(time.Second)

@@ -8,13 +8,16 @@ package main
 // layer. Supplying them is the entrypoint package's job, which is what §2 means
 // by keeping main to wiring.
 
-import "netops/backend/internal/vault"
+import (
+	"netops/backend/internal/platformdb"
+	"netops/backend/internal/vault"
+)
 
 // kvVaultStore adapts the platform kv layer to vault.Store.
 type kvVaultStore struct{}
 
-func (kvVaultStore) Load(key string) ([]byte, error) { return kvLoad(key) }
-func (kvVaultStore) Save(key string, b []byte) error { return kvSave(key, b) }
+func (kvVaultStore) Load(key string) ([]byte, error) { return platformdb.Load(key) }
+func (kvVaultStore) Save(key string, b []byte) error { return platformdb.Save(key, b) }
 
 // vaultDeps returns the store and warning sink the vault runs against.
 func vaultDeps() (vault.Store, vault.Warnf) {

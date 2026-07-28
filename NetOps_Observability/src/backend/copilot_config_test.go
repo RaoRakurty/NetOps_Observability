@@ -2,13 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"netops/backend/internal/platformdb"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // copilotTempStore returns a copilotConfigStore backed by a fresh temp kv path.
-// The global `backend` defaults to fileKV{}, whose Load/Save operate on the raw
+// The global `backend` defaults to platformdb.FileKV{}, whose Load/Save operate on the raw
 // path, so a tempdir file works as the kv key without any backend swap.
 func copilotTempStore(t *testing.T) *copilotConfigStore {
 	t.Helper()
@@ -102,7 +103,7 @@ func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 	s := newCopilotConfigStore(path, nil)
 	s.set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", System: "hi"})
 
-	raw, err := kvLoad(path)
+	raw, err := platformdb.Load(path)
 	if err != nil {
 		t.Fatalf("kvLoad: %v", err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strconv"
 	"time"
@@ -66,13 +67,13 @@ func auditRetentionDays() int {
 // sweepAuditRetention deletes at most auditSweepBatch rows older than `days`
 // and returns how many it removed. Platform scope ('*'): the trail spans every
 // tenant, and retention is a platform-wide policy.
-func sweepAuditRetention(ctx context.Context, db *pgDB, days int) (int64, error) {
+func sweepAuditRetention(ctx context.Context, db *platformdb.DB, days int) (int64, error) {
 	if db == nil || days <= 0 {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	var removed int64
-	err := db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM audit_events
 			 WHERE id IN (SELECT id FROM audit_events WHERE ts < $1 ORDER BY ts LIMIT $2)`,
 			cutoff, auditSweepBatch)
@@ -90,7 +91,7 @@ func sweepAuditRetention(ctx context.Context, db *pgDB, days int) (int64, error)
 // the API down: the goroutine runs under safego and every failure is logged.
 func startAuditRetention(ctx context.Context) {
 	days := auditRetentionDays()
-	ps, ok := backend.(*pgStore)
+	ps, ok := platformdb.ActivePG()
 	if !ok || ps == nil || days <= 0 {
 		return
 	}
@@ -104,7 +105,7 @@ func startAuditRetention(ctx context.Context) {
 				return
 			case <-t.C:
 				sctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-				removed, err := sweepAuditRetention(sctx, ps.db, days)
+				removed, err := sweepAuditRetention(sctx, ps.DB(), days)
 				cancel()
 				if err != nil {
 					logError("audit", "retention sweep", map[string]any{"error": err.Error()})

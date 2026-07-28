@@ -38,6 +38,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"testing"
@@ -61,13 +62,13 @@ func pgDSN(t *testing.T) string {
 	return dsn
 }
 
-// openPG builds a *pgDB the production way (connect + migrate + apply the F-60
+// openPG builds a *platformdb.DB the production way (connect + migrate + apply the F-60
 // runtime params). Any override of the timeout envs must be set BEFORE this.
-func openPG(t *testing.T) *pgDB {
+func openPG(t *testing.T) *platformdb.DB {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	db, err := newPgDB(ctx, pgDSN(t))
+	db, err := platformdb.NewDB(ctx, pgDSN(t))
 	if err != nil {
 		t.Fatalf("newPgDB: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	fresh := time.Now().UTC()
 	seed := func(n int, ts time.Time, actor string) {
 		t.Helper()
-		if err := db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+		if err := db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 			for i := 0; i < n; i++ {
 				if _, err := tx.Exec(ctx,
 					`INSERT INTO audit_events (id, tenant_id, ts, data)
@@ -269,7 +270,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	// filters every row out and the count reads 0 whether or not the sweep
 	// behaved.
 	var remaining int
-	if err := db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	if err := db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, "SELECT count(*) FROM audit_events").Scan(&remaining)
 	}); err != nil {
 		t.Fatalf("count: %v", err)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"sort"
@@ -173,7 +174,7 @@ func newDiscoveryConfigStore(path string, v *vault.Vault) *discoveryConfigStore 
 // cloud_monitor_eval.go shape): the store did not answer / it answered with
 // nothing (no operator config yet — the env bootstrap applies) / loaded.
 func (s *discoveryConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = no console config yet; effective() uses env
 	}
@@ -267,7 +268,7 @@ func (s *discoveryConfigStore) set(in discoveryScanConfig) (discoveryScanConfig,
 	if err != nil {
 		return discoveryScanConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return discoveryScanConfig{}, err
 	}
 	stored := in

@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"regexp"
 	"sort"
 	"strconv"
@@ -141,7 +142,7 @@ func newAlertEpisodeStore(path string) *alertEpisodeStore {
 	if s.flapFlips < 2 {
 		s.flapFlips = 2 // below 2 every clear would count as a flap
 	}
-	if b, err := kvLoad(path); err == nil {
+	if b, err := platformdb.Load(path); err == nil {
 		var list []AlertEpisode
 		if json.Unmarshal(b, &list) == nil {
 			for i := range list {
@@ -173,7 +174,7 @@ func (s *alertEpisodeStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // sweepLocked closes cleared episodes whose quiet gap exceeded the close

@@ -9,6 +9,7 @@ package main
 // stamping, and the env-derived limits — so those are supplied here.
 
 import (
+	"netops/backend/internal/platformdb"
 	"os"
 
 	"netops/backend/internal/users"
@@ -60,8 +61,8 @@ func userDeps() users.Deps {
 // newUsersStore selects the user-store backend: under STORE_BACKEND=postgres
 // the per-row RLS-backed PGStore; otherwise the file-backed store.
 func newUsersStore(path string) (usersRepo, error) {
-	if ps, ok := backend.(*pgStore); ok {
-		return users.NewPGStore(rlsPG{db: ps.db}, userDeps())
+	if ps, ok := platformdb.ActivePG(); ok {
+		return users.NewPGStore(ps.DB(), userDeps())
 	}
 	return users.NewFileStore(path, userDeps())
 }

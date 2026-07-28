@@ -8,8 +8,8 @@ package main
 
 import (
 	"net"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/seam"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -250,7 +250,7 @@ func TestRuleRedundancyGroupsDeterministic(t *testing.T) {
 // ── lifecycle / normalization ─────────────────────────────────────────────────
 
 func TestSeamMigrationContract(t *testing.T) {
-	sql, err := os.ReadFile("migrations/0010_seam_inventory.sql")
+	sql, err := platformdb.MigrationsFS.ReadFile("migrations/0010_seam_inventory.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

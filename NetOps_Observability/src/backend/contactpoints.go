@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"sort"
 	"strings"
 	"sync"
@@ -62,7 +63,7 @@ func newContactPointStore(path string) (*contactPointStore, error) {
 }
 
 func (s *contactPointStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return nil // absent store → empty (errors.Is(os.ErrNotExist) for both backends)
 	}
@@ -85,7 +86,7 @@ func (s *contactPointStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // List returns all contact points sorted by name (handler applies tenant scope).

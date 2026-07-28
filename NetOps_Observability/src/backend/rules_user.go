@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"regexp"
 	"strings"
@@ -51,7 +52,7 @@ func (s *userRulesStore) load() ([]alerts.Rule, error) {
 // the file with only the new one) / it answered with nothing (absent key or
 // empty blob = first run) / loaded.
 func (s *userRulesStore) loadLocked() ([]alerts.Rule, error) {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil // absent = no user rules yet (first run)
 	}
@@ -108,7 +109,7 @@ func (s *userRulesStore) saveLocked(rules []alerts.Rule) error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // ---- validation -------------------------------------------------------------

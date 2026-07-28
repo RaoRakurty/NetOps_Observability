@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -95,7 +96,7 @@ func newSecuritySettingsStore(path string) (*securitySettingsStore, error) {
 }
 
 func (s *securitySettingsStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return err
 	}
@@ -118,7 +119,7 @@ func (s *securitySettingsStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 // Get returns the scope's settings, or the defaults if unset.

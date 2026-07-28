@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ type faultyKV struct {
 	failWith error
 }
 
-func (f *faultyKV) Load(key string) ([]byte, error) { return fileKV{}.Load(key) }
+func (f *faultyKV) Load(key string) ([]byte, error) { return platformdb.FileKV{}.Load(key) }
 
 func (f *faultyKV) Save(key string, data []byte) error {
 	f.mu.Lock()
@@ -48,7 +49,7 @@ func (f *faultyKV) Save(key string, data []byte) error {
 	if f.failWith != nil {
 		return f.failWith
 	}
-	return fileKV{}.Save(key, data)
+	return platformdb.FileKV{}.Save(key, data)
 }
 
 func (f *faultyKV) attempts() int {
@@ -62,10 +63,8 @@ func (f *faultyKV) attempts() int {
 // disk, or Postgres down). Restored on cleanup.
 func withFailingKV(t *testing.T) *faultyKV {
 	t.Helper()
-	prev := backend
 	f := &faultyKV{failWith: errors.New("kv unavailable: permission denied")}
-	backend = f
-	t.Cleanup(func() { backend = prev })
+	t.Cleanup(platformdb.SwapBackendForTest(f))
 	return f
 }
 

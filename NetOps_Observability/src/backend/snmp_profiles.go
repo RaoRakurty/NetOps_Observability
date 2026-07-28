@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"sort"
 	"strings"
@@ -122,7 +123,7 @@ func newSNMPProfileStore(path string) (*snmpProfileStore, error) {
 		custom:   make(map[string]SNMPProfile),
 		overlays: make(map[string][]SNMPMetric),
 	}
-	if b, err := kvLoad(path); err == nil {
+	if b, err := platformdb.Load(path); err == nil {
 		s.loadPersisted(b)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -226,7 +227,7 @@ func (s *snmpProfileStore) flush() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 func (s *snmpProfileStore) List() []SNMPProfile {

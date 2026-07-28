@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"strings"
 	"time"
 
@@ -89,11 +90,11 @@ func validateServiceInput(name, criticality string) error {
 
 // ── store ─────────────────────────────────────────────────────────────────────
 
-type pgServiceStore struct{ db *pgDB }
+type pgServiceStore struct{ db *platformdb.DB }
 
 func newServiceStore() *pgServiceStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgServiceStore{db: ps.db}
+	if ps, ok := platformdb.ActivePG(); ok {
+		return &pgServiceStore{db: ps.DB()}
 	}
 	return nil // Postgres backend only
 }
@@ -106,7 +107,7 @@ func (st *pgServiceStore) ListServices(ctx context.Context, tenant string, cross
 		q += ` WHERE archived_at IS NULL`
 	}
 	q += ` ORDER BY created_at DESC`
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, q)
 		if err != nil {
 			return err
@@ -127,7 +128,7 @@ func (st *pgServiceStore) ListServices(ctx context.Context, tenant string, cross
 func (st *pgServiceStore) GetService(ctx context.Context, tenant string, cross bool, id string) (Service, bool, error) {
 	var s Service
 	found := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT service_id, tenant_id, name, criticality, description, created_at, archived_at
               FROM services WHERE service_id = $1`, id)
 		e := row.Scan(&s.ServiceID, &s.TenantID, &s.Name, &s.Criticality, &s.Description, &s.CreatedAt, &s.ArchivedAt)
@@ -152,7 +153,7 @@ func (st *pgServiceStore) CreateService(ctx context.Context, tenant string, cros
 	if in.Criticality == "" {
 		in.Criticality = "normal"
 	}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `INSERT INTO services (service_id, tenant_id, name, criticality, description)
               VALUES ($1,$2,$3,$4,$5) RETURNING created_at`, in.ServiceID, in.TenantID, in.Name, in.Criticality, in.Description)
 		return row.Scan(&in.CreatedAt)
@@ -164,7 +165,7 @@ func (st *pgServiceStore) CreateService(ctx context.Context, tenant string, cros
 // flow attribution history references the service_id. Returns false if not found.
 func (st *pgServiceStore) ArchiveService(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `UPDATE services SET archived_at = now() WHERE service_id = $1 AND archived_at IS NULL`, id)
 		if e != nil {
 			return e
@@ -177,7 +178,7 @@ func (st *pgServiceStore) ArchiveService(ctx context.Context, tenant string, cro
 
 func (st *pgServiceStore) ListSelectors(ctx context.Context, tenant string, cross bool, serviceID string) ([]ServiceSelector, error) {
 	out := make([]ServiceSelector, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT service_id, version, effective_from, spec, created_by, created_at
               FROM service_selectors WHERE service_id = $1 ORDER BY version DESC`, serviceID)
 		if err != nil {
@@ -211,7 +212,7 @@ func (st *pgServiceStore) AddSelector(ctx context.Context, tenant string, cross 
 		return ServiceSelector{}, err
 	}
 	sel := ServiceSelector{ServiceID: serviceID, Spec: spec, CreatedBy: createdBy}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// service must exist + be visible under RLS (FK-by-policy + honest 404 upstream)
 		var exists bool
 		if e := tx.QueryRow(ctx, `SELECT true FROM services WHERE service_id = $1`, serviceID).Scan(&exists); e != nil {
@@ -248,7 +249,7 @@ func (st *pgServiceStore) ActiveSelectorSets(ctx context.Context, limit int) ([]
 		limit = 200
 	}
 	out := make([]svcSelectorSet, 0)
-	err := st.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT s.tenant_id, s.service_id, sel.version, sel.spec
               FROM services s
               JOIN LATERAL (SELECT version, spec FROM service_selectors ss
@@ -279,7 +280,7 @@ func (st *pgServiceStore) ActiveSelectorSets(ctx context.Context, limit int) ([]
 
 func (st *pgServiceStore) ListBindings(ctx context.Context, tenant string, cross bool, serviceID string) ([]ServiceBinding, error) {
 	out := make([]ServiceBinding, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT binding_id, service_id, kind, ref, created_at
               FROM service_bindings WHERE service_id = $1 ORDER BY created_at`, serviceID)
 		if err != nil {
@@ -304,7 +305,7 @@ func (st *pgServiceStore) AddBinding(ctx context.Context, tenant string, cross b
 		return ServiceBinding{}, err
 	}
 	b := ServiceBinding{BindingID: id, ServiceID: serviceID, Kind: kind, Ref: ref}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		var exists bool
 		if e := tx.QueryRow(ctx, `SELECT true FROM services WHERE service_id = $1`, serviceID).Scan(&exists); e != nil {
 			if errors.Is(e, pgx.ErrNoRows) {
@@ -322,7 +323,7 @@ func (st *pgServiceStore) AddBinding(ctx context.Context, tenant string, cross b
 
 func (st *pgServiceStore) DeleteBinding(ctx context.Context, tenant string, cross bool, serviceID, bindingID string) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `DELETE FROM service_bindings WHERE binding_id = $1 AND service_id = $2`, bindingID, serviceID)
 		if e != nil {
 			return e

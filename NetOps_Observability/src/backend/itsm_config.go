@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/ticketing"
 	"os"
 	"regexp"
@@ -149,7 +150,7 @@ func newITSMConfigStore(srv *server, path string) *itsmConfigStore {
 // load reads the persisted config. Returns false when absent/empty so the caller
 // seeds from env. Migrates the legacy single-object format under the "" key.
 func (s *itsmConfigStore) load() bool {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil || len(b) == 0 {
 		return false
 	}
@@ -247,7 +248,7 @@ func (s *itsmConfigStore) persist() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return platformdb.Save(s.path, b)
 }
 
 var itsmTenantSlug = regexp.MustCompile(`[^a-z0-9_-]+`)

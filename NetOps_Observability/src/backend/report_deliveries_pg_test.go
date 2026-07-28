@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 	"time"
@@ -20,12 +21,12 @@ func TestPgDeliveryStore(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres delivery-ledger test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	s := reports.NewPGDeliveryStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	s := reports.NewPGDeliveryStore(ps.DB())
 	at := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// Attempt 1: a ok, b failed.
@@ -53,7 +54,7 @@ func TestPgDeliveryStore(t *testing.T) {
 	// Delivered runs platform-scoped (infra) so it sees ex9; the RLS guarantee is
 	// on tenant-scoped reads of the table — assert via a scoped query.
 	var leaked int
-	if err := ps.db.withTenant(ctx, "acme", false, func(tx pgx.Tx) error {
+	if err := ps.DB().WithTenant(ctx, "acme", false, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT count(*) FROM report_execution_deliveries WHERE tenant_id='globex'`).Scan(&leaked)
 	}); err != nil {
 		t.Fatalf("scoped count: %v", err)

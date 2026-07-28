@@ -23,6 +23,7 @@ import (
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/seam"
@@ -631,16 +632,16 @@ func newServer() *server {
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
-	if ps, ok := backend.(*pgStore); ok {
-		srv.integrations = integration.NewStore(rlsPG{db: ps.db}, vault)
+	if ps, ok := platformdb.ActivePG(); ok {
+		srv.integrations = integration.NewStore(ps.DB(), vault)
 	}
 	srv.providers = integration.DefaultRegistry()
 	// Wireless canonical inventory (#128 Phase 1, migration 0030): PG-backed on
 	// postgres (FORCE-RLS), in-memory on the file backend (dev/tests). Always
 	// set — the read APIs render an empty inventory until a connector runs.
 	// MUST init before the NMS runtime, which takes it as its inventory sink.
-	if ps, ok := backend.(*pgStore); ok {
-		srv.wireless = wireless.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		srv.wireless = wireless.NewPGStore(ps.DB())
 	} else {
 		srv.wireless = wireless.NewMemStore()
 	}
@@ -649,8 +650,8 @@ func newServer() *server {
 	// FEATURE_NMS_INTEGRATIONS=true. PG-backed on postgres (migration 0020,
 	// FORCE-RLS); in-memory store on the file backend (dev).
 	if nms.Enabled() {
-		if ps, ok := backend.(*pgStore); ok {
-			srv.nms = newNMSRuntime(nms.NewPGStore(rlsPG{db: ps.db}, vault))
+		if ps, ok := platformdb.ActivePG(); ok {
+			srv.nms = newNMSRuntime(nms.NewPGStore(ps.DB(), vault))
 		} else {
 			// F-76: the catalog + integration list still render on a fresh
 			// install, but credential writes are REFUSED rather than held as
@@ -908,8 +909,8 @@ func newAPIServer(addr string, handler http.Handler) *http.Server {
 // newTicketingStore picks the backend: an RLS-scoped pg repository under
 // STORE_BACKEND=postgres, else an in-memory store. Always non-nil.
 func newTicketingStore() ticketing.Store {
-	if ps, ok := backend.(*pgStore); ok {
-		return ticketing.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return ticketing.NewPGStore(ps.DB())
 	}
 	return ticketing.NewMemStore()
 }
@@ -917,8 +918,8 @@ func newTicketingStore() ticketing.Store {
 // newPathGraphStore picks the backend: pg registries + ClickHouse streams under
 // STORE_BACKEND=postgres, else in-memory (with env-tunable retention).
 func newPathGraphStore() pathgraph.Store {
-	if ps, ok := backend.(*pgStore); ok {
-		return pathgraph.NewPGCHStore(rlsPG{db: ps.db}, chSeam{})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return pathgraph.NewPGCHStore(ps.DB(), chSeam{})
 	}
 	st := pathgraph.NewMemStoreWithRetention(envInt("PATH_GRAPH_MEM_RETENTION", pathgraph.DefaultObsRetention))
 	st.SetInfof(func(msg string, fields map[string]any) { logInfo("pathgraph", msg, fields) })
@@ -949,8 +950,8 @@ func (chSeam) Exec(sql string) error {
 // newCloudStore picks the backend: RLS-scoped pg under STORE_BACKEND=postgres,
 // else in-memory (both enforce §3a tenant isolation in the store itself).
 func newCloudStore() cloud.Store {
-	if ps, ok := backend.(*pgStore); ok {
-		return cloud.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return cloud.NewPGStore(ps.DB())
 	}
 	return cloud.NewMemStore()
 }
@@ -958,8 +959,8 @@ func newCloudStore() cloud.Store {
 // newCloudConnStore picks the connector-credential backend: only the RLS-scoped
 // pg repository qualifies — credentials must not live only in RAM.
 func newCloudConnStore() cloudconn.Repo {
-	if ps, ok := backend.(*pgStore); ok {
-		return cloudconn.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return cloudconn.NewPGStore(ps.DB())
 	}
 	logWarn("cloud", "cloud connectors disabled: durable storage required", map[string]any{
 		"reason": "STORE_BACKEND is not postgres; credentials would live only in RAM",
@@ -970,8 +971,8 @@ func newCloudConnStore() cloudconn.Repo {
 // newBusinessServiceStore: Business Service Observability is Postgres-only
 // (nil on the file backend — handlers 503 with a clear message).
 func newBusinessServiceStore() *cloud.BizSvcStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return cloud.NewBizSvcStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return cloud.NewBizSvcStore(ps.DB())
 	}
 	return nil
 }
@@ -979,8 +980,8 @@ func newBusinessServiceStore() *cloud.BizSvcStore {
 // newApplicationStore picks the App Catalog backend: RLS-scoped pg under
 // STORE_BACKEND=postgres, else in-memory.
 func newApplicationStore() appid.AppStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return appid.NewPGAppStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return appid.NewPGAppStore(ps.DB())
 	}
 	return appid.NewMemAppStore()
 }
@@ -988,8 +989,8 @@ func newApplicationStore() appid.AppStore {
 // newIncidentTimelineStore picks the incident-timeline backend: RLS-scoped pg
 // under STORE_BACKEND=postgres, else in-memory.
 func newIncidentTimelineStore() timeintel.TimelineStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return timeintel.NewPGTimelineStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return timeintel.NewPGTimelineStore(ps.DB())
 	}
 	return timeintel.NewMemTimelineStore()
 }
@@ -1010,8 +1011,8 @@ func newDeviceStore(path string) *discovery.DevStore {
 // newSavedStore selects the saved-objects backend: RLS-scoped pg under
 // STORE_BACKEND=postgres, else the file store on the platform kv.
 func newSavedStore(path string) (saved.Repo, error) {
-	if ps, ok := backend.(*pgStore); ok {
-		return saved.NewPGStore(rlsPG{db: ps.db}, logError), nil
+	if ps, ok := platformdb.ActivePG(); ok {
+		return saved.NewPGStore(ps.DB(), logError), nil
 	}
 	return saved.NewFileStore(path, platformKV{})
 }
@@ -1019,8 +1020,8 @@ func newSavedStore(path string) (saved.Repo, error) {
 // newTopologyStore picks the graph-store backend: RLS-scoped pg under
 // STORE_BACKEND=postgres, else in-memory.
 func newTopologyStore() topology.GraphStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return topology.NewPGStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return topology.NewPGStore(ps.DB())
 	}
 	return topology.NewMemStore()
 }
@@ -1028,8 +1029,8 @@ func newTopologyStore() topology.GraphStore {
 // newAIFeedbackStore picks the copilot-feedback backend: RLS-scoped pg under
 // STORE_BACKEND=postgres, else in-memory.
 func newAIFeedbackStore() ai.FeedbackStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return ai.NewPGFeedbackStore(rlsPG{db: ps.db})
+	if ps, ok := platformdb.ActivePG(); ok {
+		return ai.NewPGFeedbackStore(ps.DB())
 	}
 	return ai.NewMemFeedbackStore()
 }
@@ -1050,6 +1051,23 @@ func newSelfHealer(notifier *notify.Dispatcher) *selfheal.Healer {
 		Infof:    logInfo,
 		Errorf:   logError,
 	})
+}
+
+// initStoreBackend selects the store backend from STORE_BACKEND (default
+// "file"); env stays here, the machinery lives in internal/platformdb.
+func initStoreBackend() error {
+	platformdb.SetLoggers(logInfo, logWarn, logError)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("STORE_BACKEND"))) {
+	case "", "file":
+		platformdb.UseFile()
+		return nil
+	case "postgres", "postgresql", "pg":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return platformdb.UsePostgres(ctx, os.Getenv("DATABASE_URL"))
+	default:
+		return fmt.Errorf("unknown STORE_BACKEND %q (want file|postgres)", os.Getenv("STORE_BACKEND"))
+	}
 }
 
 func main() {
@@ -1158,14 +1176,14 @@ func main() {
 		// On the Postgres backend, run the durable async pipeline (queue + workers
 		// + immutable execution history). On the file backend, keep the in-process
 		// scheduler so the offline/dev build still delivers scheduled reports.
-		if ps, ok := backend.(*pgStore); ok {
+		if ps, ok := platformdb.ActivePG(); ok {
 			renderer, err := reports.NewHTMLRenderer()
 			if err != nil {
 				log.Fatalf("report renderer: %v", err)
 			}
 			srv.reportPipeline = newReportPipeline(srv,
-				reports.NewPGJobQueue(rlsPG{db: ps.db}, 5), reports.NewPGExecStore(rlsPG{db: ps.db}), newKVArtifactStore(), renderer,
-				reports.NewPGDeliveryStore(rlsPG{db: ps.db}))
+				reports.NewPGJobQueue(ps.DB(), 5), reports.NewPGExecStore(ps.DB()), newKVArtifactStore(), renderer,
+				reports.NewPGDeliveryStore(ps.DB()))
 			srv.reportPipeline.Start(ctx)
 		} else {
 			srv.reports.Start(ctx)

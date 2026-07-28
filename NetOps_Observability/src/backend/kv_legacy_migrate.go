@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 )
@@ -66,10 +67,10 @@ func migrateLegacyKVKeys() []string {
 		}
 		// Never overwrite live data: if the current key already holds anything,
 		// it is authoritative and the legacy row is stale history.
-		if b, err := kvLoad(current); err == nil && len(b) > 0 {
+		if b, err := platformdb.Load(current); err == nil && len(b) > 0 {
 			continue
 		}
-		b, err := kvLoad(legacy)
+		b, err := platformdb.Load(legacy)
 		if err != nil {
 			// os.ErrNotExist is the normal case (fresh install, or the file
 			// backend where the relative path was never writable).
@@ -82,7 +83,7 @@ func migrateLegacyKVKeys() []string {
 		if len(b) == 0 {
 			continue
 		}
-		if err := kvSave(current, b); err != nil {
+		if err := platformdb.Save(current, b); err != nil {
 			logError("store", "could not recover legacy kv key — settings written under the old key stay invisible",
 				map[string]any{"legacy": legacy, "current": current, "err": err.Error()})
 			continue

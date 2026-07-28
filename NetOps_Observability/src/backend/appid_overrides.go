@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"strings"
 	"sync"
 	"time"
@@ -86,8 +87,8 @@ type appCatalogStore interface {
 }
 
 func newAppCatalogStore() appCatalogStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgAppCatalogStore{db: ps.db}
+	if ps, ok := platformdb.ActivePG(); ok {
+		return &pgAppCatalogStore{db: ps.DB()}
 	}
 	return &memAppCatalogStore{by: map[string]AppCatalogEntry{}}
 }
@@ -181,13 +182,13 @@ func (m *memAppCatalogStore) Delete(_ context.Context, tenant string, cross bool
 
 // ── Postgres backend (tenant_iso FORCE-RLS via withTenant) ──────────────────────
 
-type pgAppCatalogStore struct{ db *pgDB }
+type pgAppCatalogStore struct{ db *platformdb.DB }
 
 func (st *pgAppCatalogStore) List(ctx context.Context, tenant string, cross bool) ([]AppCatalogEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out := make([]AppCatalogEntry, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT catalog_id, tenant_id, match_kind, match_value, app_label, confidence, source, version, created_at
               FROM app_catalog ORDER BY created_at DESC`)
 		if err != nil {
@@ -223,7 +224,7 @@ func (st *pgAppCatalogStore) Create(ctx context.Context, tenant string, cross bo
 	if in.Version <= 0 {
 		in.Version = 1
 	}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `INSERT INTO app_catalog (catalog_id, tenant_id, match_kind, match_value, app_label, confidence, source, version)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`,
 			in.CatalogID, in.TenantID, in.MatchKind, in.MatchValue, in.AppLabel, in.Confidence, in.Source, in.Version)
@@ -236,7 +237,7 @@ func (st *pgAppCatalogStore) Delete(ctx context.Context, tenant string, cross bo
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `DELETE FROM app_catalog WHERE catalog_id = $1`, id)
 		if e != nil {
 			return e

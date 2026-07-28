@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
 	"sync"
@@ -70,7 +71,7 @@ func tenantDisplayPath() string {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob) / loaded.
 func (s *tenantDisplayStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = nothing customised yet
 	}
@@ -109,7 +110,7 @@ func (s *tenantDisplayStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode tenant display prefs: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("settings", "persist tenant display prefs failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist tenant display prefs: %w", err)
 	}

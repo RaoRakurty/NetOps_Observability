@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 	"time"
@@ -23,14 +24,14 @@ func TestExportSubstratePG(t *testing.T) {
 	}
 	ctx := context.Background()
 	appDSN := provisionAppRole(ctx, t, adminDSN)
-	ps, err := newPgStore(ctx, appDSN)
+	ps, err := platformdb.NewPGStore(ctx, appDSN)
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
+	defer ps.DB().Close()
 
-	q := reports.NewPGJobQueue(rlsPG{db: ps.db}, 5)
-	es := reports.NewPGExecStore(rlsPG{db: ps.db})
+	q := reports.NewPGJobQueue(ps.DB(), 5)
+	es := reports.NewPGExecStore(ps.DB())
 
 	// 1) queue round-trips job_type=export + the frozen payload.
 	spec := logExportSpec{Query: "*", Signal: "applogs", Format: "csv", Cross: true}

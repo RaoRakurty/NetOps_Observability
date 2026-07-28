@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"strings"
@@ -55,7 +56,7 @@ func newCopilotConfigStore(path string, v *vault.Vault) *copilotConfigStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — env defaults apply) / loaded.
 func (s *copilotConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never configured; env defaults apply
 	}
@@ -122,7 +123,7 @@ func (s *copilotConfigStore) set(c copilotConfig) copilotConfig {
 	s.cfg = c                                                      // in-memory stays plaintext
 	if sealed, err := mapCopilot(c, sealFn(s.vault)); err == nil { // encrypt at rest
 		if b, err := json.MarshalIndent(sealed, "", "  "); err == nil {
-			_ = kvSave(s.path, b)
+			_ = platformdb.Save(s.path, b)
 		}
 	}
 	s.mu.Unlock()

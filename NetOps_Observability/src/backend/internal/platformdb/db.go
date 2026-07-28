@@ -1,4 +1,4 @@
-package main
+package platformdb
 
 import (
 	"context"
@@ -30,12 +30,51 @@ import (
 // STORE_BACKEND=postgres; file mode stays the dependency-light default for dev.
 
 //go:embed migrations/*.sql
-var migrationsFS embed.FS
+var MigrationsFS embed.FS
 
 // boundedEnvInt reads an int from env, clamped to [min,max] and falling back to
 // def when unset or unparseable. Fail-CLOSED to the default rather than to a
 // value outside the safe range: pool sizing that silently accepts 0 or 100000
 // is a worse outcome than ignoring a typo (F-71 discipline applied to config).
+// Boot-time logging + env helpers. The PG_* tuning knobs are this package's
+// own configuration (plan rule: a package may own knobs that are genuinely
+// its); the loggers are injected once at boot via SetLoggers (before any DB
+// init) and default to silent.
+var (
+	logInfo  = func(component, msg string, fields map[string]any) {}
+	logWarn  = func(component, msg string, fields map[string]any) {}
+	logError = func(component, msg string, fields map[string]any) {}
+)
+
+// SetLoggers wires the structured log sinks (call once at boot, before Use*).
+func SetLoggers(info, warn, errf func(component, msg string, fields map[string]any)) {
+	if info != nil {
+		logInfo = info
+	}
+	if warn != nil {
+		logWarn = warn
+	}
+	if errf != nil {
+		logError = errf
+	}
+}
+
+func envOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
+
+func durationOr(key string, def time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
 func boundedEnvInt(key string, def, min, max int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -62,11 +101,11 @@ func setDefaultParam(rp map[string]string, key, val string) {
 	}
 }
 
-type pgDB struct {
+type DB struct {
 	pool *pgxpool.Pool
 }
 
-// newPgDB connects, verifies, and runs pending migrations. Fails fast (no silent
+// NewDB connects, verifies, and runs pending migrations. Fails fast (no silent
 // fallback) so a misconfigured Postgres aborts startup.
 //
 // ⚠️ RLS REQUIREMENT: DATABASE_URL must authenticate as a NON-superuser role
@@ -75,7 +114,7 @@ type pgDB struct {
 // `postgres` silently disables tenant isolation. Provision a dedicated
 // least-privilege role (e.g. CREATE ROLE netops_app LOGIN NOSUPERUSER) that owns
 // the app-state tables; FORCE RLS keeps even the owner subject to policy.
-func newPgDB(ctx context.Context, dsn string) (*pgDB, error) {
+func NewDB(ctx context.Context, dsn string) (*DB, error) {
 	if dsn == "" {
 		return nil, errors.New("STORE_BACKEND=postgres requires DATABASE_URL")
 	}
@@ -125,12 +164,12 @@ func newPgDB(ctx context.Context, dsn string) (*pgDB, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	db := &pgDB{pool: pool}
+	db := &DB{pool: pool}
 	if err := db.assertRLSCapable(pctx); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	if err := db.migrate(ctx); err != nil {
+	if err := db.Migrate(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -144,7 +183,7 @@ func newPgDB(ctx context.Context, dsn string) (*pgDB, error) {
 // silent hole into an unmissable abort. A single-tenant operator who knowingly
 // does not want isolation can override with STORE_PG_ALLOW_RLS_BYPASS=true,
 // which downgrades the abort to a loud warning.
-func (db *pgDB) assertRLSCapable(ctx context.Context) error {
+func (db *DB) assertRLSCapable(ctx context.Context) error {
 	var role string
 	var isSuper, bypassRLS bool
 	if err := db.pool.QueryRow(ctx,
@@ -186,7 +225,7 @@ const migrationStatementTimeout = "15min"
 // duplicate, and the loser's failure mode depended on what the migration did.
 // A session-level advisory lock serialises them: the second replica WAITS,
 // re-reads schema_migrations, and finds the work already done.
-func (db *pgDB) migrate(ctx context.Context) error {
+func (db *DB) Migrate(ctx context.Context) error {
 	// The lock must be held on ONE session for the whole migration, so take a
 	// dedicated connection rather than using the pool (which would hand
 	// different statements to different backends and silently drop the lock).
@@ -218,7 +257,7 @@ func (db *pgDB) migrate(ctx context.Context) error {
 	)`); err != nil {
 		return err
 	}
-	entries, err := migrationsFS.ReadDir("migrations")
+	entries, err := MigrationsFS.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
@@ -238,7 +277,7 @@ func (db *pgDB) migrate(ctx context.Context) error {
 		if done {
 			continue
 		}
-		body, err := migrationsFS.ReadFile("migrations/" + f)
+		body, err := MigrationsFS.ReadFile("migrations/" + f)
 		if err != nil {
 			return err
 		}
@@ -272,7 +311,7 @@ func (db *pgDB) migrate(ctx context.Context) error {
 // a scoped tenant sees only its rows; the platform owner ('*') sees all. The GUC
 // is set via set_config (parameterized — no SQL string interpolation), so RLS
 // enforces isolation even on a query that forgets `WHERE tenant_id = …`.
-func (db *pgDB) withTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
+func (db *DB) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
 	scope := strings.ToLower(strings.TrimSpace(tenant))
 	if cross {
 		scope = "*"
@@ -295,7 +334,7 @@ func (db *pgDB) withTenant(ctx context.Context, tenant string, cross bool, fn fu
 }
 
 // close releases the pool.
-func (db *pgDB) close() {
+func (db *DB) Close() {
 	if db != nil && db.pool != nil {
 		db.pool.Close()
 	}

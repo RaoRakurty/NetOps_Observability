@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"netops/backend/cloud"
+	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
 
@@ -27,12 +28,12 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 		t.Skip("set DATABASE_URL_TEST to run the Postgres business-service isolation test")
 	}
 	ctx := context.Background()
-	ps, err := newPgStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
 	if err != nil {
 		t.Fatalf("newPgStore: %v", err)
 	}
-	defer ps.db.close()
-	st := cloud.NewBizSvcStore(rlsPG{db: ps.db})
+	defer ps.DB().Close()
+	st := cloud.NewBizSvcStore(ps.DB())
 
 	// acme creates a named service and maps a resource to it.
 	svc, err := st.CreateService(ctx, "acme", false,
@@ -95,7 +96,7 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 		var pgErr *pgconn.PgError
 		return errors.As(err, &pgErr) && pgErr.Code == "42501"
 	}
-	err = ps.db.withTenant(ctx, "globex", false, func(tx pgx.Tx) error {
+	err = ps.DB().WithTenant(ctx, "globex", false, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `INSERT INTO business_services (business_service_id, tenant_id, name)
 		    VALUES (gen_random_uuid(), 'acme', 'forged')`)
 		return e

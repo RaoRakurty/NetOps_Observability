@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/cloudconn"
+	"netops/backend/internal/platformdb"
 	"netops/backend/nms"
 	"testing"
 )
@@ -25,7 +26,7 @@ import (
 // The constructor must refuse rather than substitute a RAM store. `backend` is
 // not a *pgStore in tests, which is exactly the production file-backend case.
 func TestCloudConnStoreRefusesWithoutDurableStorage(t *testing.T) {
-	if _, isPG := backend.(*pgStore); isPG {
+	if _, isPG := platformdb.ActivePG(); isPG {
 		t.Skip("postgres backend configured; the fallback path is not exercised")
 	}
 	if got := newCloudConnStore(); got != nil {

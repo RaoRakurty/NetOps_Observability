@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/internal/audit"
+	"netops/backend/internal/platformdb"
 	"sort"
 	"strings"
 	"time"
@@ -58,8 +59,8 @@ func clampAuditLimit(n int) int { return audit.ClampLimit(n) }
 // newAuditStore selects the audit backend: per-row RLS pg under
 // STORE_BACKEND=postgres, else the bounded file ring.
 func newAuditStore(path string) (auditRepo, error) {
-	if ps, ok := backend.(*pgStore); ok {
-		return audit.NewPGStore(rlsPG{db: ps.db}, logError), nil
+	if ps, ok := platformdb.ActivePG(); ok {
+		return audit.NewPGStore(ps.DB(), logError), nil
 	}
 	return audit.NewFileStore(path, platformKV{})
 }

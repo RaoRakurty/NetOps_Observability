@@ -16,6 +16,7 @@ package main
 // alert_episodes) that the audit never listed.
 
 import (
+	"netops/backend/internal/platformdb"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestNotifyConfigSaveSucceedsToAWritablePath(t *testing.T) {
 	}
 	// And it must round-trip — a save that writes nothing readable is not a save.
 	reloaded := newTestNotifyStore(t, s.path)
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

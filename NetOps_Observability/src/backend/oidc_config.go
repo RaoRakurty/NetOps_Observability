@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"strings"
@@ -178,7 +179,7 @@ func newOIDCConfigStore(path string, srv *server) *oidcConfigStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — env defaults apply) / loaded.
 func (s *oidcConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never configured; env defaults apply
 	}
@@ -259,7 +260,7 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 		s.mu.Unlock()
 		return oidcConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		s.mu.Unlock()
 		return oidcConfig{}, err
 	}

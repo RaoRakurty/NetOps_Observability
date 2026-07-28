@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"os"
 	"strings"
@@ -59,7 +60,7 @@ func rcaRevisionsPath() string {
 
 func newRcaRevisionStore(path string) *rcaRevisionStore {
 	s := &rcaRevisionStore{m: map[string]map[string][]rcaReportRevision{}, path: path}
-	if b, err := kvLoad(path); err == nil && len(b) > 0 {
+	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
 		var m map[string]map[string][]rcaReportRevision
 		if json.Unmarshal(b, &m) == nil {
 			s.m = m
@@ -79,7 +80,7 @@ func (s *rcaRevisionStore) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode rca revisions: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		logError("rca", "persist rca revisions failed", map[string]any{"err": err.Error()})
 		return fmt.Errorf("persist rca revisions: %w", err)
 	}

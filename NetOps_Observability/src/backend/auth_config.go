@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
 	"strconv"
@@ -63,7 +64,7 @@ func newLDAPConfigStore(path string, v *vault.Vault) *ldapConfigStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — env defaults apply) / loaded.
 func (s *ldapConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never configured; env defaults apply
 	}
@@ -130,7 +131,7 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 	if err != nil {
 		return ldapConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return ldapConfig{}, err
 	}
 	stored := in
@@ -444,7 +445,7 @@ func newTACACSConfigStore(path string, v *vault.Vault) *tacacsConfigStore {
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — env defaults apply) / loaded.
 func (s *tacacsConfigStore) load() error {
-	b, err := kvLoad(s.path)
+	b, err := platformdb.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = never configured; env defaults apply
 	}
@@ -508,7 +509,7 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	if err != nil {
 		return tacacsConfig{}, err
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := platformdb.Save(s.path, b); err != nil {
 		return tacacsConfig{}, err
 	}
 	stored := in
