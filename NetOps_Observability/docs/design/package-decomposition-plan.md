@@ -1,13 +1,14 @@
 # `package main` decomposition — the executable plan
 
-**Status:** nineteen domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
 `internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
 `internal/token`, `internal/session`, `internal/jwks`, `internal/apikey`,
-`internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`, 2026-07-28).
-**251** non-test files remain in `package main`. This document is the ordered sequence for the
+`internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
+`ai/toolwire`, 2026-07-28).
+**250** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -115,7 +116,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 21 | `internal/tenant` | 2 | ~520 | ~75 (via alias) | **Done** (2026-07-28). The tenant model, store and isolation-mode router. Cross-domain inputs INJECTED as `tenant.Deps` (kv via `platformKV`, `DefaultOrg`, id-mint + slug rules from `identity_ids.go`, region validation from `regions.go`) — main keeps a `newTenantStore(path)` wrapper so the ~10 constructor sites didn't change, and `tenant_wiring.go` aliases (`Tenant`, `tenantRepo`, `TenantGlobal`, isolation consts) keep the 75-file fan-in source-compatible — the jwtClaims technique. `status()` → `EffectiveStatus()`, `restrictedIDs()` → `RestrictedIDs()`; `orgOf` stayed in main (`orgs.go`, it bridges to the org domain) with the same rule internal to the store against the injected default. F-81 fault injection now uses `SetKVForTest` instead of assigning the unexported `path`. `tenantkv.go` deliberately NOT taken — separate step. |
 | ✅ 22 | `tenantkv.go` → `tenant.Collection[T]` | 1 | ~150 | 3 | **Done** (2026-07-28). The §3a default-closed per-tenant collection primitive joined `internal/tenant` (same bounded context — the tenant-isolation storage plane). Kv injected; a GENERIC alias `type tenantKV[T any] = tenant.Collection[T]` + wrapper in `tenant_wiring.go` kept the three consumers (sites, device sites, WAN policies) call-shape identical. `Path()` accessor replaced a white-box `.kv.path` reach in sites_test. |
 | ✅ 23 | `internal/snmpcred` | 1 | ~380 | 4 | **Done** (2026-07-28). SNMP credential profiles (v1/v2c/v3 USM): model, redacting `Public()` projection, validation, and the vault-enveloped store (encrypt-at-rest copies; in-memory stays plaintext for `Resolve`). Kv INJECTED; `internal/vault` imported directly (already a package, no cycle); `slugify` duplicated from rbac.go per the no-utils rule; `reload` → `Reload`. Four consumer files qualified directly — fan-in too small to justify aliases. Store-contract tests moved; vault-integration + tenancy + sentinel tests stayed with the integrator. |
-| 18+ | `oidc` (rest), `copilot`, `snmp` (rest), `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 24 | `copilot_tools.go` → `ai/toolwire.go` | 1 | ~320 | 3 | **Done** (2026-07-28). The per-provider (OpenAI/Anthropic/Gemini) tool-calling wire codecs joined the `ai/` subpackage whose `ToolSpec`/`ToolCall`/`ToolReply` shapes they encode — `AgentTurn` + `CallTools` exported, transport INJECTED as `ai.DoFunc` (main's `providerDo` keeps timeout/retry/redaction policy). The §15 LLM04 output cap hoisted to `ai.MaxOutputTokens` so no provider body can be built without it (was `maxCopilotOutputTokens` in copilot.go). Wire-format fixture tests moved with the codecs. |
+| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

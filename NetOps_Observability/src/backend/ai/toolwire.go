@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"context"
@@ -6,42 +6,49 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-
-	"netops/backend/ai"
 )
 
-// copilot_tools.go — per-provider tool-calling adapters (intelligence plan P2,
-// §3.d). One neutral shape (ai.ToolSpec / ai.ToolCall / ai.ToolReply + the
-// agentTurn conversation) is encoded to each provider's wire format and the
+// toolwire.go — per-provider tool-calling adapters (intelligence plan P2,
+// §3.d). One neutral shape (ToolSpec / ToolCall / ToolReply + the
+// AgentTurn conversation) is encoded to each provider's wire format and the
 // response decoded back. Pure stdlib; encode/parse are separated from the HTTP
 // call so they unit-test on fixtures. Tool-call turns are never streamed
 // (deliberate simplification — providers stream partial JSON differently).
 
-// agentTurn is one provider-neutral conversation turn in the agent loop.
+// AgentTurn is one provider-neutral conversation turn in the agent loop.
 // Exactly one of the shapes is populated:
 //   - user text:        Role="user", Content
 //   - assistant text:   Role="assistant", Content (and/or Calls)
 //   - assistant calls:  Role="assistant", Calls (Content may accompany)
 //   - tool results:     Role="user", Replies (the results for the previous
 //     assistant turn's Calls — Anthropic/Gemini carry them in a user message)
-type agentTurn struct {
+type AgentTurn struct {
 	Role    string
 	Content string
-	Calls   []ai.ToolCall
-	Replies []ai.ToolReply
+	Calls   []ToolCall
+	Replies []ToolReply
 }
 
-// callProviderTools performs ONE model round-trip with tools attached and
-// returns the assistant text and/or the tool calls it requested. specs may be
-// nil/empty for the final "answer with what you have" call.
-func callProviderTools(ctx context.Context, name, key, model, system string, turns []agentTurn, specs []ai.ToolSpec) (string, []ai.ToolCall, error) {
+// MaxOutputTokens caps every provider request body this package (and the
+// integrator's non-tool paths) builds — the OWASP LLM04 bounded-output-cost
+// control. One definition so no body can be built without it.
+const MaxOutputTokens = 1024
+
+// DoFunc is the transport the integrator supplies for provider round-trips —
+// it owns timeout, retry and log-redaction policy (main's providerDo).
+type DoFunc func(ctx context.Context, url string, headers map[string]string, body []byte, provider string) ([]byte, error)
+
+// CallTools performs ONE model round-trip with tools attached and returns the
+// assistant text and/or the tool calls it requested. specs may be nil/empty
+// for the final "answer with what you have" call.
+func CallTools(ctx context.Context, do DoFunc, name, key, model, system string, turns []AgentTurn, specs []ToolSpec) (string, []ToolCall, error) {
 	switch name {
 	case "openai":
 		body, err := buildOpenAIToolsBody(model, system, turns, specs)
 		if err != nil {
 			return "", nil, err
 		}
-		rb, err := providerDo(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
+		rb, err := do(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
 		if err != nil {
 			return "", nil, err
 		}
@@ -51,7 +58,7 @@ func callProviderTools(ctx context.Context, name, key, model, system string, tur
 		if err != nil {
 			return "", nil, err
 		}
-		rb, err := providerDo(ctx, "https://api.anthropic.com/v1/messages",
+		rb, err := do(ctx, "https://api.anthropic.com/v1/messages",
 			map[string]string{"x-api-key": key, "anthropic-version": "2023-06-01"}, body, "anthropic")
 		if err != nil {
 			return "", nil, err
@@ -63,7 +70,7 @@ func callProviderTools(ctx context.Context, name, key, model, system string, tur
 			return "", nil, err
 		}
 		endpoint := "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent?key=" + url.QueryEscape(key)
-		rb, err := providerDo(ctx, endpoint, nil, body, "gemini")
+		rb, err := do(ctx, endpoint, nil, body, "gemini")
 		if err != nil {
 			return "", nil, err
 		}
@@ -82,7 +89,7 @@ func rawArgsOrEmpty(raw json.RawMessage) json.RawMessage {
 
 // ---- OpenAI (chat/completions function calling) -----------------------------
 
-func buildOpenAIToolsBody(model, system string, turns []agentTurn, specs []ai.ToolSpec) ([]byte, error) {
+func buildOpenAIToolsBody(model, system string, turns []AgentTurn, specs []ToolSpec) ([]byte, error) {
 	msgs := []map[string]any{{"role": "system", "content": system}}
 	for _, t := range turns {
 		switch {
@@ -109,7 +116,7 @@ func buildOpenAIToolsBody(model, system string, turns []agentTurn, specs []ai.To
 			msgs = append(msgs, map[string]any{"role": t.Role, "content": t.Content})
 		}
 	}
-	body := map[string]any{"model": model, "messages": msgs, "max_tokens": maxCopilotOutputTokens}
+	body := map[string]any{"model": model, "messages": msgs, "max_tokens": MaxOutputTokens}
 	if len(specs) > 0 {
 		tools := make([]map[string]any, 0, len(specs))
 		for _, sp := range specs {
@@ -122,7 +129,7 @@ func buildOpenAIToolsBody(model, system string, turns []agentTurn, specs []ai.To
 	return json.Marshal(body)
 }
 
-func parseOpenAIToolsResp(rb []byte) (string, []ai.ToolCall, error) {
+func parseOpenAIToolsResp(rb []byte) (string, []ToolCall, error) {
 	var out struct {
 		Choices []struct {
 			Message struct {
@@ -144,20 +151,20 @@ func parseOpenAIToolsResp(rb []byte) (string, []ai.ToolCall, error) {
 		return "", nil, fmt.Errorf("openai: empty response")
 	}
 	msg := out.Choices[0].Message
-	calls := make([]ai.ToolCall, 0, len(msg.ToolCalls))
+	calls := make([]ToolCall, 0, len(msg.ToolCalls))
 	for i, c := range msg.ToolCalls {
 		id := c.ID
 		if id == "" {
 			id = fmt.Sprintf("call-%d", i)
 		}
-		calls = append(calls, ai.ToolCall{ID: id, Name: c.Function.Name, Args: rawArgsOrEmpty(json.RawMessage(c.Function.Arguments))})
+		calls = append(calls, ToolCall{ID: id, Name: c.Function.Name, Args: rawArgsOrEmpty(json.RawMessage(c.Function.Arguments))})
 	}
 	return msg.Content, calls, nil
 }
 
 // ---- Anthropic (Messages tool use) ------------------------------------------
 
-func buildAnthropicToolsBody(model, system string, turns []agentTurn, specs []ai.ToolSpec) ([]byte, error) {
+func buildAnthropicToolsBody(model, system string, turns []AgentTurn, specs []ToolSpec) ([]byte, error) {
 	msgs := make([]map[string]any, 0, len(turns))
 	for _, t := range turns {
 		switch {
@@ -187,7 +194,7 @@ func buildAnthropicToolsBody(model, system string, turns []agentTurn, specs []ai
 			msgs = append(msgs, map[string]any{"role": t.Role, "content": t.Content})
 		}
 	}
-	body := map[string]any{"model": model, "max_tokens": maxCopilotOutputTokens, "system": system, "messages": msgs}
+	body := map[string]any{"model": model, "max_tokens": MaxOutputTokens, "system": system, "messages": msgs}
 	if len(specs) > 0 {
 		tools := make([]map[string]any, 0, len(specs))
 		for _, sp := range specs {
@@ -198,7 +205,7 @@ func buildAnthropicToolsBody(model, system string, turns []agentTurn, specs []ai
 	return json.Marshal(body)
 }
 
-func parseAnthropicToolsResp(rb []byte) (string, []ai.ToolCall, error) {
+func parseAnthropicToolsResp(rb []byte) (string, []ToolCall, error) {
 	var out struct {
 		Content []struct {
 			Type  string          `json:"type"`
@@ -212,7 +219,7 @@ func parseAnthropicToolsResp(rb []byte) (string, []ai.ToolCall, error) {
 		return "", nil, err
 	}
 	var sb strings.Builder
-	var calls []ai.ToolCall
+	var calls []ToolCall
 	for i, c := range out.Content {
 		switch c.Type {
 		case "text":
@@ -222,7 +229,7 @@ func parseAnthropicToolsResp(rb []byte) (string, []ai.ToolCall, error) {
 			if id == "" {
 				id = fmt.Sprintf("call-%d", i)
 			}
-			calls = append(calls, ai.ToolCall{ID: id, Name: c.Name, Args: rawArgsOrEmpty(c.Input)})
+			calls = append(calls, ToolCall{ID: id, Name: c.Name, Args: rawArgsOrEmpty(c.Input)})
 		}
 	}
 	if sb.Len() == 0 && len(calls) == 0 {
@@ -233,7 +240,7 @@ func parseAnthropicToolsResp(rb []byte) (string, []ai.ToolCall, error) {
 
 // ---- Gemini (generateContent function calling) --------------------------------
 
-func buildGeminiToolsBody(system string, turns []agentTurn, specs []ai.ToolSpec) ([]byte, error) {
+func buildGeminiToolsBody(system string, turns []AgentTurn, specs []ToolSpec) ([]byte, error) {
 	contents := make([]map[string]any, 0, len(turns))
 	for _, t := range turns {
 		switch {
@@ -270,7 +277,7 @@ func buildGeminiToolsBody(system string, turns []agentTurn, specs []ai.ToolSpec)
 	body := map[string]any{
 		"system_instruction": map[string]any{"parts": []map[string]any{{"text": system}}},
 		"contents":           contents,
-		"generationConfig":   map[string]any{"maxOutputTokens": maxCopilotOutputTokens},
+		"generationConfig":   map[string]any{"maxOutputTokens": MaxOutputTokens},
 	}
 	if len(specs) > 0 {
 		decls := make([]map[string]any, 0, len(specs))
@@ -282,7 +289,7 @@ func buildGeminiToolsBody(system string, turns []agentTurn, specs []ai.ToolSpec)
 	return json.Marshal(body)
 }
 
-func parseGeminiToolsResp(rb []byte) (string, []ai.ToolCall, error) {
+func parseGeminiToolsResp(rb []byte) (string, []ToolCall, error) {
 	var out struct {
 		Candidates []struct {
 			Content struct {
@@ -303,10 +310,10 @@ func parseGeminiToolsResp(rb []byte) (string, []ai.ToolCall, error) {
 		return "", nil, fmt.Errorf("gemini: empty response")
 	}
 	var sb strings.Builder
-	var calls []ai.ToolCall
+	var calls []ToolCall
 	for i, p := range out.Candidates[0].Content.Parts {
 		if p.FunctionCall != nil {
-			calls = append(calls, ai.ToolCall{
+			calls = append(calls, ToolCall{
 				// Gemini has no call ids; synthesize one (replies key on Name anyway).
 				ID:   fmt.Sprintf("call-%d-%s", i, p.FunctionCall.Name),
 				Name: p.FunctionCall.Name,

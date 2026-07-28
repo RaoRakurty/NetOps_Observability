@@ -75,7 +75,7 @@ func TestAgentLoopHaltsRunawayModel(t *testing.T) {
 	rounds := 0
 	// A runaway model: requests another lookup on EVERY round it is offered
 	// tools; only answers when the loop withdraws them.
-	call := func(_ context.Context, _ string, _ []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+	call := func(_ context.Context, _ string, _ []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
 		rounds++
 		if len(sp) == 0 {
 			return "final answer with what I have", nil, nil
@@ -108,7 +108,7 @@ func TestAgentLoopCrossTenantProbeDenied(t *testing.T) {
 	s, p, reg, pol, specs := agentTestSetup("t-a")
 	var probeReply ai.ToolReply
 	round := 0
-	call := func(_ context.Context, _ string, turns []agentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
+	call := func(_ context.Context, _ string, turns []ai.AgentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
 		round++
 		if round == 1 {
 			return "", []ai.ToolCall{{ID: "c1", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"` + problemB + `"}`)}}, nil

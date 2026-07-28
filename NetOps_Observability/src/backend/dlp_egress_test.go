@@ -178,13 +178,13 @@ func TestToolResultCredentialNeverReachesProviderPayload(t *testing.T) {
 	copilotHTTP = &http.Client{Transport: cap}
 	defer func() { copilotHTTP = restore }()
 
-	turns := []agentTurn{
+	turns := []ai.AgentTurn{
 		{Role: "user", Content: "what changed on rtr1?"},
 		{Role: "assistant", Calls: []ai.ToolCall{{ID: "c1", Name: "search_logs", Args: []byte(`{"query":"rtr1"}`)}}},
 		{Role: "user", Replies: []ai.ToolReply{{ID: "c1", Name: "search_logs", Content: rendered}}},
 	}
-	if _, _, err := callProviderTools(context.Background(), "openai", "test-key", "gpt-4o-mini", "system", turns, nil); err != nil {
-		t.Fatalf("callProviderTools: %v", err)
+	if _, _, err := ai.CallTools(context.Background(), providerDo, "openai", "test-key", "gpt-4o-mini", "system", turns, nil); err != nil {
+		t.Fatalf("ai.CallTools: %v", err)
 	}
 	payload := string(cap.body)
 	if payload == "" {

@@ -121,7 +121,7 @@ func (b *aiDailyBudget) rollover() {
 
 // agentToolCaller is one model round-trip. Injected so tests drive the loop
 // with a mock model (runaway halt, cross-tenant probes) without HTTP.
-type agentToolCaller func(ctx context.Context, system string, turns []agentTurn, specs []ai.ToolSpec) (string, []ai.ToolCall, error)
+type agentToolCaller func(ctx context.Context, system string, turns []ai.AgentTurn, specs []ai.ToolSpec) (string, []ai.ToolCall, error)
 
 // agentLookup is the customer-facing record of one investigation step.
 type agentLookup struct {
@@ -140,7 +140,7 @@ type agentResult struct {
 }
 
 // estTokens is the coarse chars/4 token estimate used for budget metering.
-func estTokens(turns []agentTurn, text string) int {
+func estTokens(turns []ai.AgentTurn, text string) int {
 	n := len(text)
 	for _, t := range turns {
 		n += len(t.Content)
@@ -165,9 +165,9 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 	loopTenant, _ := principalTenant(claims)
 	maxCalls := s.maxCallsFor(loopTenant) // per-tenant guardrail, platform default fallback
 
-	turns := make([]agentTurn, 0, len(msgs)+2*maxCalls)
+	turns := make([]ai.AgentTurn, 0, len(msgs)+2*maxCalls)
 	for _, m := range msgs {
-		turns = append(turns, agentTurn{Role: m.Role, Content: m.Content})
+		turns = append(turns, ai.AgentTurn{Role: m.Role, Content: m.Content})
 	}
 
 	tenant, _ := principalTenant(claims)
@@ -210,8 +210,8 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 			evidence = append(evidence, items...)
 		}
 		turns = append(turns,
-			agentTurn{Role: "assistant", Content: text, Calls: calls},
-			agentTurn{Role: "user", Replies: replies},
+			ai.AgentTurn{Role: "assistant", Content: text, Calls: calls},
+			ai.AgentTurn{Role: "user", Replies: replies},
 		)
 	}
 	if strings.TrimSpace(res.Text) == "" {

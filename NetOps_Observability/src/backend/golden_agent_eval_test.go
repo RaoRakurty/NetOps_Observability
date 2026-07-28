@@ -136,7 +136,7 @@ func TestGoldenAgentToolPlumbing(t *testing.T) {
 			t.Fatalf("%s: marshal args: %v", it.ID, err)
 		}
 		var citedID string
-		call := func(_ context.Context, _ string, turns []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		call := func(_ context.Context, _ string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
 			if len(turns) > 0 && len(turns[len(turns)-1].Replies) > 0 {
 				rep := turns[len(turns)-1].Replies[0]
 				if rep.IsError {
@@ -187,7 +187,7 @@ func TestGoldenAgentInjectionLogCitation(t *testing.T) {
 		}
 		s, p, reg, pol, specs := goldenAgentSetup(goldenAgentDS{logLine: it.Payload})
 		round := 0
-		call := func(_ context.Context, _ string, _ []agentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		call := func(_ context.Context, _ string, _ []ai.AgentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
 			round++
 			if round == 1 {
 				return "", []ai.ToolCall{{ID: "c1", Name: "search_logs", Args: json.RawMessage(`{"device":"leaf1"}`)}}, nil
@@ -227,7 +227,7 @@ func TestGoldenAgentInjectionToolRequest(t *testing.T) {
 		s, p, reg, pol, specs := goldenAgentSetup(goldenAgentDS{logLine: it.Payload})
 		round := 0
 		var refusal ai.ToolReply
-		call := func(_ context.Context, _ string, turns []agentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		call := func(_ context.Context, _ string, turns []ai.AgentTurn, _ []ai.ToolSpec) (string, []ai.ToolCall, error) {
 			round++
 			switch round {
 			case 1:
@@ -286,8 +286,8 @@ func TestGoldenLiveToolSelection(t *testing.T) {
 	matched, total := 0, 0
 	for _, it := range gs.Category(ai.GoldenAgentTool) {
 		total++
-		turns := []agentTurn{{Role: "user", Content: it.Question}}
-		_, calls, err := callProviderTools(context.Background(), name, key, model, system, turns, specs)
+		turns := []ai.AgentTurn{{Role: "user", Content: it.Question}}
+		_, calls, err := ai.CallTools(context.Background(), providerDo, name, key, model, system, turns, specs)
 		switch {
 		case err != nil:
 			t.Logf("%s: provider error: %v", it.ID, err)

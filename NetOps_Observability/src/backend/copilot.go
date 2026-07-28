@@ -60,10 +60,9 @@ type copilotRequest struct {
 // is server-owned and the conversation is bounded so a client can't run up
 // unbounded provider cost or smuggle in a rogue system role.
 const (
-	maxCopilotBodyBytes    = 256 << 10 // 256 KiB request cap
-	maxCopilotMessages     = 64        // conversation-length cap
-	maxCopilotInputChars   = 200_000   // total message-content budget (~200 KB)
-	maxCopilotOutputTokens = 1024      // bounded output cost
+	maxCopilotBodyBytes  = 256 << 10 // 256 KiB request cap
+	maxCopilotMessages   = 64        // conversation-length cap
+	maxCopilotInputChars = 200_000   // total message-content budget (~200 KB)
 )
 
 // sanitizeCopilotMessages enforces the input guardrails: only user/assistant
@@ -270,8 +269,8 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 	// Server-owned investigation playbook + current-time anchor (models cannot
 	// resolve "last night" without knowing now).
 	system += "\n\n" + agentDoctrine(time.Now().UTC())
-	call := func(ctx context.Context, sys string, turns []agentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
-		return callProviderTools(ctx, name, key, model, sys, turns, sp)
+	call := func(ctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
+		return ai.CallTools(ctx, providerDo, name, key, model, sys, turns, sp)
 	}
 	preIDs := make([]string, 0, len(docRefs))
 	for _, dr := range docRefs {
@@ -537,7 +536,7 @@ func callOpenAI(ctx context.Context, key, model, system string, msgs []copilotMe
 	// The server-controlled system prompt goes in as a leading system-role
 	// message; msgs are already sanitized to user/assistant.
 	all := append([]copilotMessage{{Role: "system", Content: system}}, msgs...)
-	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": maxCopilotOutputTokens})
+	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": ai.MaxOutputTokens})
 	rb, err := providerDo(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
 	if err != nil {
 		return "", err
@@ -584,7 +583,7 @@ func callGemini(ctx context.Context, key, model, system string, msgs []copilotMe
 	body, _ := json.Marshal(map[string]any{
 		"system_instruction": map[string]any{"parts": []gpart{{Text: system}}},
 		"contents":           contents,
-		"generationConfig":   map[string]any{"maxOutputTokens": maxCopilotOutputTokens},
+		"generationConfig":   map[string]any{"maxOutputTokens": ai.MaxOutputTokens},
 	})
 	// Gemini authenticates via the API key in the query string (over HTTPS). The
 	// URL is never logged (providerDo logs provider/status/body only).
@@ -625,7 +624,7 @@ func parseGemini(rb []byte) (string, error) {
 func callAnthropic(ctx context.Context, key, model, system string, msgs []copilotMessage) (string, error) {
 	// Anthropic Messages API: "system" is separate from messages.
 	body, _ := json.Marshal(map[string]any{
-		"model": model, "max_tokens": maxCopilotOutputTokens, "system": system, "messages": msgs,
+		"model": model, "max_tokens": ai.MaxOutputTokens, "system": system, "messages": msgs,
 	})
 	rb, err := providerDo(ctx, "https://api.anthropic.com/v1/messages",
 		map[string]string{"x-api-key": key, "anthropic-version": "2023-06-01"}, body, "anthropic")

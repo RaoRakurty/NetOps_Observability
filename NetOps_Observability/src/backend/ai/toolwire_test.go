@@ -1,11 +1,9 @@
-package main
+package ai
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"netops/backend/ai"
 )
 
 // copilot_tools_test.go — wire-format tests for the provider tool-calling
@@ -13,15 +11,15 @@ import (
 // provider's response decodes back to neutral ToolCalls. Fixtures follow the
 // documented formats (plan §2.3).
 
-var wireSpecs = []ai.ToolSpec{{
+var wireSpecs = []ToolSpec{{
 	Name: "get_problem", Description: "Fetch one problem.",
 	InputSchema: json.RawMessage(`{"type":"object","properties":{"problem_id":{"type":"string"}},"required":["problem_id"]}`),
 }}
 
-var wireTurns = []agentTurn{
+var wireTurns = []AgentTurn{
 	{Role: "user", Content: "what is wrong with edge-1?"},
-	{Role: "assistant", Content: "checking", Calls: []ai.ToolCall{{ID: "c1", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"pa"}`)}}},
-	{Role: "user", Replies: []ai.ToolReply{{ID: "c1", Name: "get_problem", Content: "[problem:pa] BGP peer down"}}},
+	{Role: "assistant", Content: "checking", Calls: []ToolCall{{ID: "c1", Name: "get_problem", Args: json.RawMessage(`{"problem_id":"pa"}`)}}},
+	{Role: "user", Replies: []ToolReply{{ID: "c1", Name: "get_problem", Content: "[problem:pa] BGP peer down"}}},
 }
 
 func TestBuildOpenAIToolsBody(t *testing.T) {
