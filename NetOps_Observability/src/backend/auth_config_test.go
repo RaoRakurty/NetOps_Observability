@@ -32,7 +32,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 	must(err)
 	ts, err := newTenantStore(dir + "/tenants.json")
 	must(err)
-	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, kvSessionKV{})
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, platformKV{})
 	must(err)
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s := &server{

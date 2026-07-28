@@ -51,11 +51,9 @@ func (s *server) startCredCacheReload(ctx context.Context) {
 	}
 	// A reload loop means a shared backend with potentially >1 writer. Switch the
 	// API-key store off per-call usage flushing so a stale replica can't write its
-	// map back over a peer's revocation (see apiKeyStore.multiWriter).
+	// map back over a peer's revocation (see apikey.Store.SetMultiWriter).
 	if s.apiKeys != nil {
-		s.apiKeys.mu.Lock()
-		s.apiKeys.multiWriter = true
-		s.apiKeys.mu.Unlock()
+		s.apiKeys.SetMultiWriter(true)
 	}
 	go func() {
 		t := time.NewTicker(interval)
@@ -66,7 +64,7 @@ func (s *server) startCredCacheReload(ctx context.Context) {
 				return
 			case <-t.C:
 				if s.apiKeys != nil {
-					if err := s.apiKeys.reload(); err != nil {
+					if err := s.apiKeys.Reload(); err != nil {
 						logError("apikeys", "cache reload", errf(err))
 					}
 				}

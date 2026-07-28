@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/apikey"
 	"path/filepath"
 	"testing"
 )
@@ -135,11 +136,11 @@ func TestTenantStore(t *testing.T) {
 }
 
 func TestAPIKeyLifecycle(t *testing.T) {
-	ks, err := newAPIKeyStore(filepath.Join(t.TempDir(), "apikeys.json"))
+	ks, err := apikey.NewStore(filepath.Join(t.TempDir(), "apikeys.json"), apikey.DefaultRateLimit, TenantGlobal, platformKV{})
 	if err != nil {
 		t.Fatalf("newAPIKeyStore: %v", err)
 	}
-	rec, secret, err := ks.Create(apiKeyInput{TenantID: "acme", Label: "ci", Scopes: []string{"read:metrics"}}, "root")
+	rec, secret, err := ks.Create(apikey.Input{TenantID: "acme", Label: "ci", Scopes: []string{"read:metrics"}}, "root")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -161,17 +162,17 @@ func TestAPIKeyLifecycle(t *testing.T) {
 }
 
 func TestAPIKeyRateLimitAndUsage(t *testing.T) {
-	ks, err := newAPIKeyStore(filepath.Join(t.TempDir(), "apikeys.json"))
+	ks, err := apikey.NewStore(filepath.Join(t.TempDir(), "apikeys.json"), apikey.DefaultRateLimit, TenantGlobal, platformKV{})
 	if err != nil {
 		t.Fatalf("newAPIKeyStore: %v", err)
 	}
 	// A key capped at 3/min: the 4th call in the same window is rejected.
-	rec, secret, err := ks.Create(apiKeyInput{TenantID: "acme", Label: "tight", Scopes: []string{"read:metrics"}, RateLimitPerMin: 3}, "root")
+	rec, secret, err := ks.Create(apikey.Input{TenantID: "acme", Label: "tight", Scopes: []string{"read:metrics"}, RateLimitPerMin: 3}, "root")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	for i := 0; i < 3; i++ {
-		if ok, _ := ks.Allow(rec.ID, ks.effectiveLimit(mustKey(t, ks, rec.ID))); !ok {
+		if ok, _ := ks.Allow(rec.ID, ks.EffectiveLimit(mustKey(t, ks, rec.ID))); !ok {
 			t.Fatalf("call %d within cap should be allowed", i+1)
 		}
 	}
@@ -202,9 +203,28 @@ func TestAPIKeyRateLimitAndUsage(t *testing.T) {
 	}
 }
 
-func mustKey(t *testing.T, ks *apiKeyStore, id string) APIKey {
+func mustKey(t *testing.T, ks *apikey.Store, id string) apikey.Key {
 	t.Helper()
-	ks.mu.RLock()
-	defer ks.mu.RUnlock()
-	return ks.keys[id]
+	k, _ := ks.Get(id)
+	return k
+}
+
+// roleFromScopes maps API-key scopes onto main-package Role constants, so it
+// lives in auth.go and its test stays with the integrator.
+func TestRoleFromScopes(t *testing.T) {
+	cases := []struct {
+		scopes []string
+		want   string
+	}{
+		{[]string{"read:metrics"}, RoleReadOnly},
+		{[]string{"read:*"}, RoleReadOnly},
+		{[]string{"write:incidents"}, RoleOperator},
+		{[]string{"admin:*"}, RoleSuperAdmin},
+		{nil, RoleReadOnly},
+	}
+	for _, c := range cases {
+		if got := roleFromScopes(c.scopes); got != c.want {
+			t.Errorf("roleFromScopes(%v)=%s want %s", c.scopes, got, c.want)
+		}
+	}
 }

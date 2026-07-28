@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"netops/backend/internal/apikey"
 	"netops/backend/internal/session"
 	"netops/backend/internal/token"
 	"netops/backend/policy"
@@ -67,6 +68,24 @@ func accessTokenTTL() time.Duration {
 }
 func refreshTokenTTL() time.Duration {
 	return boundedDurEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour, refreshTTLMin, refreshTTLMax, refreshTTLRecommended)
+}
+
+// roleFromScopes derives the RBAC role an API key principal acts under from its
+// scope list. Keys are read-only by default; a write: scope grants operator-
+// level write on the product modules, and admin:* grants super-admin. This keeps
+// a key from ever exceeding what its scopes describe (see docs/API_ACCESS.md).
+func roleFromScopes(scopes []string) string {
+	role := RoleReadOnly
+	for _, s := range scopes {
+		s = strings.ToLower(strings.TrimSpace(s))
+		switch {
+		case s == "admin:*":
+			return RoleSuperAdmin
+		case strings.HasPrefix(s, "write:"):
+			role = RoleOperator
+		}
+	}
+	return role
 }
 
 type ctxKey int
@@ -825,7 +844,7 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// principal carrying the key's tenant + scopes; the RBAC role is derived
 		// from the scopes (see docs/API_ACCESS.md). Scope checks gate the
 		// scope-protected endpoints (e.g. write:incidents).
-		if strings.HasPrefix(bearer, keyPrefix) {
+		if strings.HasPrefix(bearer, apikey.KeyPrefix) {
 			k, ok := s.apiKeys.Verify(bearer)
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid or revoked API key"))
@@ -833,13 +852,13 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			}
 			// Source-IP allow-list (NetOps extension). Reject calls from outside
 			// the key's permitted CIDRs without authenticating.
-			if !k.sourceAllowed(clientIP(r)) {
+			if !k.SourceAllowed(clientIP(r)) {
 				writeError(w, http.StatusForbidden, errors.New("source address not permitted for this API key"))
 				return
 			}
 			// Per-key rate limit (fixed window / minute). 429 + Retry-After when
 			// the key exceeds its cap; surfaced live in Administration → API Access.
-			if ok, retry := s.apiKeys.Allow(k.ID, s.apiKeys.effectiveLimit(k)); !ok {
+			if ok, retry := s.apiKeys.Allow(k.ID, s.apiKeys.EffectiveLimit(k)); !ok {
 				w.Header().Set("Retry-After", intToString(retry))
 				writeError(w, http.StatusTooManyRequests, errors.New("API key rate limit exceeded"))
 				return

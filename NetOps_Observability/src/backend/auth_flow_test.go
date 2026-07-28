@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/apikey"
 	"netops/backend/internal/session"
 	"testing"
 	"time"
@@ -41,9 +42,9 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	bs, err := newBindingStore(dir + "/role_bindings.json")
 	must(err)
-	ks, err := newAPIKeyStore(dir + "/apikeys.json")
+	ks, err := apikey.NewStore(dir+"/apikeys.json", apikey.DefaultRateLimit, TenantGlobal, platformKV{})
 	must(err)
-	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, kvSessionKV{})
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, platformKV{})
 	must(err)
 	sv, err := newSavedStore(dir + "/saved.json")
 	must(err)
@@ -55,7 +56,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 	must(err)
 	ss, err := newSecuritySettingsStore(dir + "/security_settings.json")
 	must(err)
-	sessStore, err := session.NewStore(dir+"/sessions.json", kvSessionKV{}, func(string, string, map[string]any) {})
+	sessStore, err := session.NewStore(dir+"/sessions.json", platformKV{}, func(string, string, map[string]any) {})
 	must(err)
 	s := &server{
 		users: us, roles: rs, tenants: ts, orgs: os, bindings: bs, apiKeys: ks, refresh: rf,

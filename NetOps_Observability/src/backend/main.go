@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/internal/apikey"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/seam"
@@ -65,7 +66,7 @@ type server struct {
 	securitySettings *securitySettingsStore
 	loginThrottle    *loginThrottle // in-memory failed-login lockout (best-effort)
 	sessions         *session.Store // server-side session lifecycle (idle/absolute/revocation)
-	apiKeys          *apiKeyStore
+	apiKeys          *apikey.Store
 	refresh          *session.RefreshStore
 	snmpCreds        *snmpCredStore
 	credOverrides    *credOverrideStore // learned SNMP credential bindings (credential sentinel)
@@ -455,7 +456,13 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("session store: %v", err)
 	}
-	apiKeys, err := newAPIKeyStore(envOr("APIKEYS_FILE", "/data/apikeys.json"))
+	keyLimit := apikey.DefaultRateLimit
+	if v := os.Getenv("APIKEY_RATE_LIMIT_PER_MIN"); v != "" {
+		if n, perr := parseIntStrict(v); perr == nil && n >= 0 {
+			keyLimit = n
+		}
+	}
+	apiKeys, err := apikey.NewStore(envOr("APIKEYS_FILE", "/data/apikeys.json"), keyLimit, TenantGlobal, platformKV{})
 	if err != nil {
 		log.Fatalf("api key store: %v", err)
 	}

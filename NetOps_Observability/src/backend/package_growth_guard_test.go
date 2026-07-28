@@ -108,7 +108,13 @@ import (
 //	                  pure stdlib; TTL now injected — the OIDC_JWKS_TTL_MIN env
 //	                  read moved to oidc.go; main's token exchange got its own
 //	                  http.Client instead of borrowing the cache's)
-const rootPackageCeiling = 255
+//	2026-07-28  254  internal/apikey (scoped tenant-bound API keys: store,
+//	                  RFC 7591 validation, fixed-window limiter, multi-writer
+//	                  reload; kv INJECTED via the shared platformKV adapter,
+//	                  APIKEY_RATE_LIMIT_PER_MIN read + TenantGlobal default
+//	                  moved to the composition root; roleFromScopes stayed —
+//	                  it maps onto main's Role constants)
+const rootPackageCeiling = 254
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

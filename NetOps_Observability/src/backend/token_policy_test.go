@@ -76,7 +76,7 @@ func TestTokenPolicyStoreClampPersistAndApply(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	rf, err := session.NewRefreshStore(dir+"/r.json", time.Hour, kvSessionKV{})
+	rf, err := session.NewRefreshStore(dir+"/r.json", time.Hour, platformKV{})
 	if err != nil {
 		t.Fatal(err)
 	}

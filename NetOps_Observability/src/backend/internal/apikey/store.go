@@ -1,4 +1,4 @@
-package main
+package apikey
 
 // apikeys.go — scoped, tenant-bound API keys for non-interactive clients
 // (CI, datasources, sync jobs). The plaintext key is shown exactly once at
@@ -21,10 +21,10 @@ import (
 	"time"
 )
 
-// keyPrefix makes keys recognizable and greppable in logs/secret scanners.
-const keyPrefix = "ntk_" // "opsis key"
+// KeyPrefix makes keys recognizable and greppable in logs/secret scanners.
+const KeyPrefix = "ntk_" // "opsis key"
 
-type APIKey struct {
+type Key struct {
 	ID              string     `json:"id"`
 	TenantID        string     `json:"tenant_id"`
 	Label           string     `json:"label"`
@@ -49,10 +49,10 @@ type APIKey struct {
 	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 }
 
-// publicAPIKey omits the hash; it's what the API returns when listing. The
+// Public omits the hash; it's what the API returns when listing. The
 // window fields reflect the live (current-minute) rate-limit usage so the UI can
 // show how close a key is to its cap.
-type publicAPIKey struct {
+type Public struct {
 	ID              string     `json:"id"`
 	TenantID        string     `json:"tenant_id"`
 	Label           string     `json:"label"`
@@ -77,8 +77,8 @@ type publicAPIKey struct {
 	SecretExpiresAt *time.Time `json:"secret_expires_at,omitempty"`
 }
 
-func (k APIKey) public() publicAPIKey {
-	return publicAPIKey{
+func (k Key) Public() Public {
+	return Public{
 		ID: k.ID, TenantID: k.TenantID, Label: k.Label, Prefix: k.Prefix,
 		Scopes: k.Scopes, RateLimitPerMin: k.RateLimitPerMin, UseCount: k.UseCount,
 		CreatedBy: k.CreatedBy, CreatedAt: k.CreatedAt,
@@ -87,24 +87,6 @@ func (k APIKey) public() publicAPIKey {
 		Contacts: k.Contacts, ContactPhone: k.ContactPhone, SourceCIDRs: k.SourceCIDRs,
 		ClientExpiresAt: k.ClientExpiresAt, SecretExpiresAt: k.SecretExpiresAt,
 	}
-}
-
-// roleFromScopes derives the RBAC role an API key principal acts under from its
-// scope list. Keys are read-only by default; a write: scope grants operator-
-// level write on the product modules, and admin:* grants super-admin. This keeps
-// a key from ever exceeding what its scopes describe (see docs/API_ACCESS.md).
-func roleFromScopes(scopes []string) string {
-	role := RoleReadOnly
-	for _, s := range scopes {
-		s = strings.ToLower(strings.TrimSpace(s))
-		switch {
-		case s == "admin:*":
-			return RoleSuperAdmin
-		case strings.HasPrefix(s, "write:"):
-			role = RoleOperator
-		}
-	}
-	return role
 }
 
 func hashKey(secret string) string {
@@ -118,12 +100,14 @@ type keyWindow struct {
 	count int
 }
 
-type apiKeyStore struct {
-	mu           sync.RWMutex
-	path         string
-	keys         map[string]APIKey     // id -> key
-	windows      map[string]*keyWindow // id -> current rate-limit window
-	defaultLimit int                   // per-minute cap when a key sets none (0 = unlimited)
+type Store struct {
+	mu            sync.RWMutex
+	path          string
+	kv            KV
+	keys          map[string]Key        // id -> key
+	windows       map[string]*keyWindow // id -> current rate-limit window
+	defaultLimit  int                   // per-minute cap when a key sets none (0 = unlimited)
+	defaultTenant string                // owner of keys created without a tenant
 
 	// multiWriter is set when more than one API instance shares this backend
 	// store (the cred-cache reload loop is active). It makes Verify update its
@@ -136,25 +120,39 @@ type apiKeyStore struct {
 	multiWriter bool
 }
 
-// defaultKeyRateLimit is the fallback per-minute cap, overridable via
-// APIKEY_RATE_LIMIT_PER_MIN (0 disables app-level limiting by default).
-const defaultKeyRateLimit = 600
+// DefaultRateLimit is the fallback per-minute cap when the integrator supplies
+// a negative defaultLimit (the APIKEY_RATE_LIMIT_PER_MIN env read lives in the
+// entrypoint package; 0 means unlimited).
+const DefaultRateLimit = 600
 
-func newAPIKeyStore(path string) (*apiKeyStore, error) {
+// KV abstracts where the store persists its JSON blob. The integrator supplies
+// the platform kv layer (file or postgres); a missing key must return an
+// os.ErrNotExist-wrapped error.
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
+}
+
+// NewStore opens the key store. defaultLimit is the per-minute cap for keys
+// that set none (0 = unlimited, negative = DefaultRateLimit); defaultTenant
+// owns keys created without a tenant.
+func NewStore(path string, defaultLimit int, defaultTenant string, kv KV) (*Store, error) {
 	if path == "" {
 		path = "/data/apikeys.json"
 	}
-	limit := defaultKeyRateLimit
-	if v := os.Getenv("APIKEY_RATE_LIMIT_PER_MIN"); v != "" {
-		if n, err := parseIntStrict(v); err == nil && n >= 0 {
-			limit = n
-		}
+	if kv == nil {
+		return nil, errors.New("apikey.NewStore: kv is required")
 	}
-	s := &apiKeyStore{
-		path:         path,
-		keys:         make(map[string]APIKey),
-		windows:      make(map[string]*keyWindow),
-		defaultLimit: limit,
+	if defaultLimit < 0 {
+		defaultLimit = DefaultRateLimit
+	}
+	s := &Store{
+		path:          path,
+		kv:            kv,
+		keys:          make(map[string]Key),
+		windows:       make(map[string]*keyWindow),
+		defaultLimit:  defaultLimit,
+		defaultTenant: defaultTenant,
 	}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -164,7 +162,15 @@ func newAPIKeyStore(path string) (*apiKeyStore, error) {
 
 // effectiveLimit resolves a key's per-minute cap: its own override, else the
 // server default. 0 means unlimited.
-func (s *apiKeyStore) effectiveLimit(k APIKey) int {
+// SetMultiWriter switches Verify to in-memory-only usage stats — required when
+// several API instances share this backend store (see the multiWriter field).
+func (s *Store) SetMultiWriter(v bool) {
+	s.mu.Lock()
+	s.multiWriter = v
+	s.mu.Unlock()
+}
+
+func (s *Store) EffectiveLimit(k Key) int {
 	if k.RateLimitPerMin > 0 {
 		return k.RateLimitPerMin
 	}
@@ -174,7 +180,7 @@ func (s *apiKeyStore) effectiveLimit(k APIKey) int {
 // Allow applies a fixed-window-per-minute rate limit to key id. limit<=0 means
 // unlimited. Returns whether the call is allowed and, when not, the seconds
 // until the window resets (Retry-After). Counts the call when allowed.
-func (s *apiKeyStore) Allow(id string, limit int) (ok bool, retryAfter int) {
+func (s *Store) Allow(id string, limit int) (ok bool, retryAfter int) {
 	if limit <= 0 {
 		return true, 0
 	}
@@ -195,7 +201,7 @@ func (s *apiKeyStore) Allow(id string, limit int) (ok bool, retryAfter int) {
 
 // windowUsedLocked returns the current-minute call count for id (0 if the window
 // has rolled over). Caller must hold s.mu.
-func (s *apiKeyStore) windowUsedLocked(id string) int {
+func (s *Store) windowUsedLocked(id string) int {
 	w := s.windows[id]
 	if w == nil || time.Now().UTC().Sub(w.start) >= time.Minute {
 		return 0
@@ -203,12 +209,12 @@ func (s *apiKeyStore) windowUsedLocked(id string) int {
 	return w.count
 }
 
-func (s *apiKeyStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *Store) load() error {
+	b, err := s.kv.Load(s.path)
 	if err != nil {
 		return err
 	}
-	var list []APIKey
+	var list []Key
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
@@ -231,11 +237,11 @@ func (s *apiKeyStore) load() error {
 // follow the blob store's last-writer-wins semantics — acceptable for this
 // bounded, low-write config set (see the "cached by design" note in TRACKER #33).
 // A missing store (never written yet) is treated as empty, not an error.
-func (s *apiKeyStore) reload() error {
-	b, err := kvLoad(s.path)
+func (s *Store) Reload() error {
+	b, err := s.kv.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		s.mu.Lock()
-		s.keys = make(map[string]APIKey)
+		s.keys = make(map[string]Key)
 		s.windows = make(map[string]*keyWindow)
 		s.mu.Unlock()
 		return nil
@@ -243,11 +249,11 @@ func (s *apiKeyStore) reload() error {
 	if err != nil {
 		return err
 	}
-	var list []APIKey
+	var list []Key
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
-	next := make(map[string]APIKey, len(list))
+	next := make(map[string]Key, len(list))
 	for _, k := range list {
 		next[k.ID] = k
 	}
@@ -262,8 +268,8 @@ func (s *apiKeyStore) reload() error {
 	return nil
 }
 
-func (s *apiKeyStore) flushLocked() error {
-	list := make([]APIKey, 0, len(s.keys))
+func (s *Store) flushLocked() error {
+	list := make([]Key, 0, len(s.keys))
 	for _, k := range s.keys {
 		list = append(list, k)
 	}
@@ -272,16 +278,25 @@ func (s *apiKeyStore) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	return kvSave(s.path, b)
+	return s.kv.Save(s.path, b)
 }
 
-func (s *apiKeyStore) List() []publicAPIKey {
+// Get returns the stored record for id (hash included — callers expose only
+// Public() shapes to clients).
+func (s *Store) Get(id string) (Key, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]publicAPIKey, 0, len(s.keys))
+	k, ok := s.keys[id]
+	return k, ok
+}
+
+func (s *Store) List() []Public {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Public, 0, len(s.keys))
 	for _, k := range s.keys {
-		p := k.public()
-		p.RateLimitPerMin = s.effectiveLimit(k)
+		p := k.Public()
+		p.RateLimitPerMin = s.EffectiveLimit(k)
 		p.WindowUsed = s.windowUsedLocked(k.ID)
 		out = append(out, p)
 	}
@@ -289,10 +304,10 @@ func (s *apiKeyStore) List() []publicAPIKey {
 	return out
 }
 
-// apiKeyInput carries the RFC 7591-style registration request for a new key.
+// Input carries the RFC 7591-style registration request for a new key.
 // RateLimitPerMin <= 0 inherits the server default. GrantTypes defaults to
 // ["client_credentials"] when empty (these are machine-to-machine keys).
-type apiKeyInput struct {
+type Input struct {
 	TenantID        string
 	Label           string
 	Scopes          []string
@@ -317,13 +332,10 @@ var validGrantTypes = map[string]bool{
 
 // validate enforces the RFC 7591-style metadata rules. It normalizes the input
 // in place (trims label, defaults grant types) and returns the first error.
-func (in *apiKeyInput) validate() error {
+func (in *Input) validate() error {
 	in.Label = strings.TrimSpace(in.Label)
 	if in.Label == "" {
 		return errors.New("key label required")
-	}
-	if in.TenantID == "" {
-		in.TenantID = TenantGlobal
 	}
 	if in.RateLimitPerMin < 0 {
 		in.RateLimitPerMin = 0
@@ -373,19 +385,22 @@ func (in *apiKeyInput) validate() error {
 
 // Create mints a new key from a validated input and returns the one-time
 // plaintext secret alongside the stored (hashless) record.
-func (s *apiKeyStore) Create(in apiKeyInput, createdBy string) (publicAPIKey, string, error) {
+func (s *Store) Create(in Input, createdBy string) (Public, string, error) {
+	if in.TenantID == "" {
+		in.TenantID = s.defaultTenant
+	}
 	if err := in.validate(); err != nil {
-		return publicAPIKey{}, "", err
+		return Public{}, "", err
 	}
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
-		return publicAPIKey{}, "", err
+		return Public{}, "", err
 	}
-	secret := keyPrefix + hex.EncodeToString(raw)
+	secret := KeyPrefix + hex.EncodeToString(raw)
 	id := hex.EncodeToString(raw[:6])
-	k := APIKey{
+	k := Key{
 		ID: id, TenantID: in.TenantID, Label: in.Label, Hash: hashKey(secret),
-		Prefix: secret[:len(keyPrefix)+6] + "…", Scopes: in.Scopes,
+		Prefix: secret[:len(KeyPrefix)+6] + "…", Scopes: in.Scopes,
 		RateLimitPerMin: in.RateLimitPerMin,
 		CreatedBy:       createdBy, CreatedAt: time.Now().UTC(),
 		GrantTypes: in.GrantTypes, ClientURI: in.ClientURI, LogoURI: in.LogoURI,
@@ -397,16 +412,16 @@ func (s *apiKeyStore) Create(in apiKeyInput, createdBy string) (publicAPIKey, st
 	s.keys[id] = k
 	if err := s.flushLocked(); err != nil {
 		delete(s.keys, id)
-		return publicAPIKey{}, "", err
+		return Public{}, "", err
 	}
-	return k.public(), secret, nil
+	return k.Public(), secret, nil
 }
 
 // sourceAllowed reports whether ip is permitted to use this key. An empty
 // SourceCIDRs list means any source is allowed; otherwise ip must fall within
 // one of the configured CIDRs. Malformed CIDRs (already rejected at creation)
 // are skipped defensively.
-func (k APIKey) sourceAllowed(ip net.IP) bool {
+func (k Key) SourceAllowed(ip net.IP) bool {
 	if len(k.SourceCIDRs) == 0 {
 		return true
 	}
@@ -426,7 +441,7 @@ func (k APIKey) sourceAllowed(ip net.IP) bool {
 	return false
 }
 
-func (s *apiKeyStore) Revoke(id string) error {
+func (s *Store) Revoke(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k, ok := s.keys[id]
@@ -441,7 +456,7 @@ func (s *apiKeyStore) Revoke(id string) error {
 
 // Verify resolves a presented secret to its (active) key record. Used by the
 // auth middleware to authenticate machine clients. Updates last-used.
-func (s *apiKeyStore) Verify(secret string) (APIKey, bool) {
+func (s *Store) Verify(secret string) (Key, bool) {
 	h := hashKey(secret)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -450,10 +465,10 @@ func (s *apiKeyStore) Verify(secret string) (APIKey, bool) {
 			now := time.Now().UTC()
 			// Reject expired client identities or secrets (RFC 7591 lifecycle).
 			if k.ClientExpiresAt != nil && k.ClientExpiresAt.Before(now) {
-				return APIKey{}, false
+				return Key{}, false
 			}
 			if k.SecretExpiresAt != nil && k.SecretExpiresAt.Before(now) {
-				return APIKey{}, false
+				return Key{}, false
 			}
 			k.LastUsedAt = &now
 			k.UseCount++
@@ -467,5 +482,5 @@ func (s *apiKeyStore) Verify(secret string) (APIKey, bool) {
 			return k, true
 		}
 	}
-	return APIKey{}, false
+	return Key{}, false
 }

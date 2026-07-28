@@ -1,24 +1,31 @@
-package main
+package apikey
 
 import (
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-func newTestKeyStore(t *testing.T) *apiKeyStore {
+// fileKV is a plain file backend for tests.
+type fileKV struct{}
+
+func (fileKV) Load(key string) ([]byte, error)    { return os.ReadFile(key) }
+func (fileKV) Save(key string, data []byte) error { return os.WriteFile(key, data, 0o600) }
+
+func newTestKeyStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := newAPIKeyStore(t.TempDir() + "/k.json")
+	s, err := NewStore(t.TempDir()+"/k.json", DefaultRateLimit, "global", fileKV{})
 	if err != nil {
-		t.Fatalf("newAPIKeyStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
 	return s
 }
 
 func TestCreateHappyPath(t *testing.T) {
 	s := newTestKeyStore(t)
-	rec, secret, err := s.Create(apiKeyInput{
+	rec, secret, err := s.Create(Input{
 		Label:       "ci-pipeline",
 		Scopes:      []string{"read:metrics"},
 		GrantTypes:  []string{"client_credentials", "refresh_token"},
@@ -42,7 +49,7 @@ func TestCreateHappyPath(t *testing.T) {
 
 func TestCreateDefaultsGrantTypes(t *testing.T) {
 	s := newTestKeyStore(t)
-	rec, _, err := s.Create(apiKeyInput{Label: "machine"}, "admin")
+	rec, _, err := s.Create(Input{Label: "machine"}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -55,15 +62,15 @@ func TestCreateValidation(t *testing.T) {
 	s := newTestKeyStore(t)
 	cases := []struct {
 		name string
-		in   apiKeyInput
+		in   Input
 		want string
 	}{
-		{"password grant", apiKeyInput{Label: "x", GrantTypes: []string{"password"}}, "password grant is deprecated (RFC 9700 §2.4)"},
-		{"bad grant", apiKeyInput{Label: "x", GrantTypes: []string{"implicit"}}, "unsupported grant type"},
-		{"bad cidr", apiKeyInput{Label: "x", SourceCIDRs: []string{"not-a-cidr"}}, "invalid source CIDR"},
-		{"bad email", apiKeyInput{Label: "x", Contacts: []string{"no-at-sign"}}, "invalid contact email"},
-		{"bad client uri", apiKeyInput{Label: "x", ClientURI: "::::"}, "invalid client URI"},
-		{"missing label", apiKeyInput{}, "key label required"},
+		{"password grant", Input{Label: "x", GrantTypes: []string{"password"}}, "password grant is deprecated (RFC 9700 §2.4)"},
+		{"bad grant", Input{Label: "x", GrantTypes: []string{"implicit"}}, "unsupported grant type"},
+		{"bad cidr", Input{Label: "x", SourceCIDRs: []string{"not-a-cidr"}}, "invalid source CIDR"},
+		{"bad email", Input{Label: "x", Contacts: []string{"no-at-sign"}}, "invalid contact email"},
+		{"bad client uri", Input{Label: "x", ClientURI: "::::"}, "invalid client URI"},
+		{"missing label", Input{}, "key label required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -81,7 +88,7 @@ func TestCreateValidation(t *testing.T) {
 func TestVerifyExpiredSecret(t *testing.T) {
 	s := newTestKeyStore(t)
 	past := time.Now().UTC().Add(-time.Hour)
-	_, secret, err := s.Create(apiKeyInput{Label: "expired", SecretExpiresAt: &past}, "admin")
+	_, secret, err := s.Create(Input{Label: "expired", SecretExpiresAt: &past}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -93,7 +100,7 @@ func TestVerifyExpiredSecret(t *testing.T) {
 func TestVerifyExpiredClient(t *testing.T) {
 	s := newTestKeyStore(t)
 	past := time.Now().UTC().Add(-time.Hour)
-	_, secret, err := s.Create(apiKeyInput{Label: "expired", ClientExpiresAt: &past}, "admin")
+	_, secret, err := s.Create(Input{Label: "expired", ClientExpiresAt: &past}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -105,7 +112,7 @@ func TestVerifyExpiredClient(t *testing.T) {
 func TestVerifyValid(t *testing.T) {
 	s := newTestKeyStore(t)
 	future := time.Now().UTC().Add(time.Hour)
-	_, secret, err := s.Create(apiKeyInput{Label: "ok", SecretExpiresAt: &future}, "admin")
+	_, secret, err := s.Create(Input{Label: "ok", SecretExpiresAt: &future}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -116,21 +123,21 @@ func TestVerifyValid(t *testing.T) {
 
 func TestSourceAllowed(t *testing.T) {
 	// Empty list allows any source.
-	open := APIKey{}
-	if !open.sourceAllowed(net.ParseIP("203.0.113.5")) {
+	open := Key{}
+	if !open.SourceAllowed(net.ParseIP("203.0.113.5")) {
 		t.Fatalf("empty SourceCIDRs should allow any IP")
 	}
-	gated := APIKey{SourceCIDRs: []string{"10.0.0.0/8", "192.168.1.0/24"}}
-	if !gated.sourceAllowed(net.ParseIP("10.5.6.7")) {
+	gated := Key{SourceCIDRs: []string{"10.0.0.0/8", "192.168.1.0/24"}}
+	if !gated.SourceAllowed(net.ParseIP("10.5.6.7")) {
 		t.Fatalf("10.5.6.7 should be allowed by 10.0.0.0/8")
 	}
-	if !gated.sourceAllowed(net.ParseIP("192.168.1.42")) {
+	if !gated.SourceAllowed(net.ParseIP("192.168.1.42")) {
 		t.Fatalf("192.168.1.42 should be allowed by 192.168.1.0/24")
 	}
-	if gated.sourceAllowed(net.ParseIP("203.0.113.5")) {
+	if gated.SourceAllowed(net.ParseIP("203.0.113.5")) {
 		t.Fatalf("203.0.113.5 should be denied")
 	}
-	if gated.sourceAllowed(nil) {
+	if gated.SourceAllowed(nil) {
 		t.Fatalf("nil IP should be denied when CIDRs are set")
 	}
 }
@@ -141,7 +148,7 @@ func TestSourceAllowed(t *testing.T) {
 // dropping the RevokedAt check.
 func TestRevokeBlocksVerify(t *testing.T) {
 	s := newTestKeyStore(t)
-	rec, secret, err := s.Create(apiKeyInput{Label: "to-revoke"}, "admin")
+	rec, secret, err := s.Create(Input{Label: "to-revoke"}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -163,11 +170,11 @@ func TestRevokeBlocksVerify(t *testing.T) {
 // converges.
 func TestReloadPropagatesRevocation(t *testing.T) {
 	path := t.TempDir() + "/shared-keys.json"
-	a, err := newAPIKeyStore(path)
+	a, err := NewStore(path, DefaultRateLimit, "global", fileKV{})
 	if err != nil {
 		t.Fatalf("instance A: %v", err)
 	}
-	rec, secret, err := a.Create(apiKeyInput{Label: "shared"}, "admin")
+	rec, secret, err := a.Create(Input{Label: "shared"}, "admin")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -175,7 +182,7 @@ func TestReloadPropagatesRevocation(t *testing.T) {
 	// stale map on the auth hot path — exactly how the reload loop configures them.
 	a.multiWriter = true
 	// Instance B comes up after the key exists and loads it from the shared store.
-	b, err := newAPIKeyStore(path)
+	b, err := NewStore(path, DefaultRateLimit, "global", fileKV{})
 	if err != nil {
 		t.Fatalf("instance B: %v", err)
 	}
@@ -191,30 +198,10 @@ func TestReloadPropagatesRevocation(t *testing.T) {
 	if _, ok := b.Verify(secret); !ok {
 		t.Fatalf("precondition: B's cache should still be stale before reload")
 	}
-	if err := b.reload(); err != nil {
+	if err := b.Reload(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	if _, ok := b.Verify(secret); ok {
 		t.Fatalf("after reload, B must reject the revoked key (multi-instance gap)")
-	}
-}
-
-// Moved back from jwks_test.go when the JWKS verifier left for internal/jwks:
-// roleFromScopes is API-key (main-package) logic, not JWKS logic.
-func TestRoleFromScopes(t *testing.T) {
-	cases := []struct {
-		scopes []string
-		want   string
-	}{
-		{[]string{"read:metrics"}, RoleReadOnly},
-		{[]string{"read:*"}, RoleReadOnly},
-		{[]string{"write:incidents"}, RoleOperator},
-		{[]string{"admin:*"}, RoleSuperAdmin},
-		{nil, RoleReadOnly},
-	}
-	for _, c := range cases {
-		if got := roleFromScopes(c.scopes); got != c.want {
-			t.Errorf("roleFromScopes(%v)=%s want %s", c.scopes, got, c.want)
-		}
 	}
 }

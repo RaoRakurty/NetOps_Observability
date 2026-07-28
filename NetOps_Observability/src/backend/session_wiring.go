@@ -10,16 +10,17 @@ package main
 
 import "netops/backend/internal/session"
 
-// kvSessionKV adapts the platform kv layer to session.KV.
-type kvSessionKV struct{}
+// platformKV adapts the platform kv layer to the injected persistence seams of
+// the extracted stores (session.KV, apikey.KV — structurally identical).
+type platformKV struct{}
 
-func (kvSessionKV) Load(key string) ([]byte, error) { return kvLoad(key) }
-func (kvSessionKV) Save(key string, b []byte) error { return kvSave(key, b) }
+func (platformKV) Load(key string) ([]byte, error) { return kvLoad(key) }
+func (platformKV) Save(key string, b []byte) error { return kvSave(key, b) }
 
 // sessionDeps returns the store backend and error sink the session stores run
 // against.
 func sessionDeps() (session.KV, session.Errorf) {
-	return kvSessionKV{}, func(component, msg string, fields map[string]any) {
+	return platformKV{}, func(component, msg string, fields map[string]any) {
 		logError(component, msg, fields)
 	}
 }

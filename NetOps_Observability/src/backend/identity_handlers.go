@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/apikey"
 	"strings"
 	"time"
 )
@@ -527,7 +528,7 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		all := s.apiKeys.List()
-		out := make([]publicAPIKey, 0, len(all))
+		out := make([]apikey.Public, 0, len(all))
 		for _, k := range all {
 			if sameTenant(k.TenantID, tenant, cross) {
 				out = append(out, k)
@@ -544,7 +545,7 @@ func (s *server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		if !cross {
 			req.TenantID = tenant
 		}
-		rec, secret, err := s.apiKeys.Create(apiKeyInput{
+		rec, secret, err := s.apiKeys.Create(apikey.Input{
 			TenantID:        req.TenantID,
 			Label:           req.Label,
 			Scopes:          req.Scopes,
