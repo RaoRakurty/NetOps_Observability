@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/cloud"
+	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/ratelimit"
@@ -114,7 +115,7 @@ type server struct {
 	tktMergedRedirects    atomic.Int64
 	seams                 *seam.Store              // canonical seam inventory, #67 build ⑤ (nil on file backend)
 	services              *pgServiceStore          // service catalog #69 §2 P2 (nil on file backend)
-	cloudConn             cloudConnRepo            // multi-tenant cloud-connector framework (pg or in-memory)
+	cloudConn             cloudconn.Repo           // multi-tenant cloud-connector framework (pg or in-memory)
 	cloudBroker           *cloudIdentityBroker     // cloud identity broker: scoped short-lived provider tokens + vault secret custody
 	workloadIssuer        *workloadIssuer          // platform OIDC issuer for minted workload assertions (Wave 4 #13); nil = dormant
 	cloudIngestInv        *cloudIngestInventory    // per-connector inventory snapshots → per-tenant merged inventory (Wave 1 #2)
@@ -940,6 +941,18 @@ func newCloudStore() cloud.Store {
 		return cloud.NewPGStore(rlsPG{db: ps.db})
 	}
 	return cloud.NewMemStore()
+}
+
+// newCloudConnStore picks the connector-credential backend: only the RLS-scoped
+// pg repository qualifies — credentials must not live only in RAM.
+func newCloudConnStore() cloudconn.Repo {
+	if ps, ok := backend.(*pgStore); ok {
+		return cloudconn.NewPGStore(rlsPG{db: ps.db})
+	}
+	logWarn("cloud", "cloud connectors disabled: durable storage required", map[string]any{
+		"reason": "STORE_BACKEND is not postgres; credentials would live only in RAM",
+	})
+	return nil
 }
 
 func main() {

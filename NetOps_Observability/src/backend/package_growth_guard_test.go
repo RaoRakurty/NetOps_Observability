@@ -179,7 +179,11 @@ import (
 //	2026-07-28  236  policy_store.go → policy/store.go (the #24 security-policy
 //	                  document store joins its engine package; kv + error sink
 //	                  INJECTED; main tests stayed as integration via wiring)
-const rootPackageCeiling = 236
+//	2026-07-28  234  cloud_connectors_store.go + _pg.go → cloudconn/ (the
+//	                  connector-credential repo: mem + FORCE-RLS pg via the DB
+//	                  seam; id prefixes + ErrVersionConflict exported; the
+//	                  durable-storage-required selector stayed in main.go)
+const rootPackageCeiling = 234
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

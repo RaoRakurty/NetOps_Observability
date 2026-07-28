@@ -84,7 +84,7 @@ func searchTestServer(t *testing.T) *server {
 	}, nil); err != nil {
 		t.Fatalf("seed globex inventory: %v", err)
 	}
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	mustCreateConnector(t, s, "acme", "ccn-acme", "AWS prod", "111122223333", "Acme Prod")
 	mustCreateConnector(t, s, "globex", "ccn-globex", "Azure prod", "sub-globex", "Globex Prod")
 	return s
@@ -96,7 +96,7 @@ func mustCreateConnector(t *testing.T, s *server, tenant, id, name, scopeRef, sc
 	if strings.HasPrefix(scopeRef, "sub-") {
 		scopeType, provider = cloudconn.ScopeSubscription, cloudconn.Provider("azure")
 	}
-	c := cloudConnector{
+	c := cloudconn.Connector{
 		TenantID: tenant, ConnectorID: id, DisplayName: name, Provider: provider,
 		Scopes: []cloudconn.Scope{{Type: scopeType, Ref: scopeRef, Display: scopeDisplay}},
 	}

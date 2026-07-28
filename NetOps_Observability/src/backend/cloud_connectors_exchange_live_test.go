@@ -53,7 +53,7 @@ func newSTSFixture(t *testing.T, deny bool) (*httptest.Server, *string) {
 // wireLiveBroker points the server's broker at the REAL cloudconn adapters
 // backed by the given exchanger (the production wiring, minus the internet).
 func wireLiveBroker(s *server, ex cloudconn.TokenExchanger) {
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, func(e AuditEvent) {
 		if s.audit != nil {
 			s.audit.Record(e)

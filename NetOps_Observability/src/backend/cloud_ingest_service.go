@@ -168,7 +168,7 @@ func (s *server) handleCloudIngestConnectorByID(w http.ResponseWriter, r *http.R
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/cloud/ingest/connectors/")
 	id, action, _ := strings.Cut(rest, "/")
-	if !strings.HasPrefix(id, ccnIDPrefix) {
+	if !strings.HasPrefix(id, cloudconn.ConnectorIDPrefix) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid connector id"))
 		return
 	}
@@ -219,7 +219,7 @@ type ingestCredentialsResp struct {
 // connectorDefaultScope derives the default provider account + region from the
 // connector's declared scopes (same precedence as the validate handler's live
 // trust check).
-func connectorDefaultScope(c cloudConnector) (account, region string) {
+func connectorDefaultScope(c cloudconn.Connector) (account, region string) {
 	for _, sc := range c.Scopes {
 		if sc.Type == cloudconn.ScopeRegion && region == "" {
 			region = sc.Ref
@@ -235,7 +235,7 @@ func connectorDefaultScope(c cloudConnector) (account, region string) {
 	return account, region
 }
 
-func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, c cloudConnector) {
+func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, c cloudconn.Connector) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
 		return
@@ -316,7 +316,7 @@ type ingestInventoryDoc struct {
 	Resources  []cloud.CloudResource `json:"resources"`
 }
 
-func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c cloudConnector) {
+func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c cloudconn.Connector) {
 	if !s.cloudStoreReady(w) {
 		return
 	}
@@ -379,7 +379,7 @@ func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c 
 
 	// Telemetry health: inventory landing is MEASURED proof of data flow for
 	// this connector (identity health stays separate). Best-effort persist.
-	c.TelemetryHealth = healthStatus{State: "healthy", Detail: "inventory snapshot received", Checked: now}
+	c.TelemetryHealth = cloudconn.HealthStatus{State: "healthy", Detail: "inventory snapshot received", Checked: now}
 	if _, _, err := s.cloudConn.Update(r.Context(), c, 0); err != nil {
 		logError("cloud", "ingest telemetry-health update failed", map[string]any{
 			"connector": c.ConnectorID, "err": err.Error(),

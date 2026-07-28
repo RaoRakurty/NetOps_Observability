@@ -68,18 +68,18 @@ func (f *fakeAdapter) ValidateCapabilities(context.Context, cloudconn.Capability
 }
 func (f *fakeAdapter) Revoke(context.Context, cloudconn.RevokeRequest) error { return nil }
 
-func newTestBroker(t *testing.T, fake *fakeAdapter) (*cloudIdentityBroker, cloudConnRepo) {
+func newTestBroker(t *testing.T, fake *fakeAdapter) (*cloudIdentityBroker, cloudconn.Repo) {
 	t.Helper()
-	store := newMemCloudConnStore()
+	store := cloudconn.NewMemStore()
 	b := newCloudIdentityBroker(store, nil /* dormant vault: passthrough */, nil)
 	b.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }
 	return b, store
 }
 
-func mkActiveConnector(t *testing.T, store cloudConnRepo, tenant, role string) cloudConnector {
+func mkActiveConnector(t *testing.T, store cloudconn.Repo, tenant, role string) cloudconn.Connector {
 	t.Helper()
-	c := cloudConnector{
-		TenantID: tenant, ConnectorID: newOpaqueID(ccnIDPrefix), Provider: cloudconn.ProviderAWS,
+	c := cloudconn.Connector{
+		TenantID: tenant, ConnectorID: newOpaqueID(cloudconn.ConnectorIDPrefix), Provider: cloudconn.ProviderAWS,
 		AuthMethod: cloudconn.AuthMethodCloudRole, State: cloudconn.StateActive,
 		Identity: cloudconn.IdentityConfig{Provider: cloudconn.ProviderAWS, RoleARN: role, ExternalID: cloudconn.NewExternalID()},
 	}
@@ -258,8 +258,8 @@ func TestBrokerSecretEncryptStoreResolveRedaction(t *testing.T) {
 	fake := &fakeAdapter{provider: cloudconn.ProviderAWS}
 	b, store := newTestBroker(t, fake)
 	// Legacy static-key connector.
-	c := cloudConnector{
-		TenantID: "t", ConnectorID: newOpaqueID(ccnIDPrefix), Provider: cloudconn.ProviderAWS,
+	c := cloudconn.Connector{
+		TenantID: "t", ConnectorID: newOpaqueID(cloudconn.ConnectorIDPrefix), Provider: cloudconn.ProviderAWS,
 		AuthMethod: cloudconn.AuthMethodStaticKey, State: cloudconn.StateActive,
 		Identity: cloudconn.IdentityConfig{Provider: cloudconn.ProviderAWS},
 	}
@@ -303,7 +303,7 @@ func TestBrokerSecretEncryptStoreResolveRedaction(t *testing.T) {
 	}
 }
 
-func mkActiveConnectorWithRef(t *testing.T, store cloudConnRepo, id string) cloudConnector {
+func mkActiveConnectorWithRef(t *testing.T, store cloudconn.Repo, id string) cloudconn.Connector {
 	t.Helper()
 	c, found, err := store.Get(context.Background(), "t", false, id)
 	if err != nil || !found {

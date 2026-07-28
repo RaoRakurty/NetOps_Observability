@@ -1,4 +1,4 @@
-package main
+package cloudconn
 
 import (
 	"context"
@@ -7,19 +7,17 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"netops/backend/cloudconn"
 )
 
-// pgCloudConnStore is the Postgres-backed connector store. Every method runs
+// PGStore is the Postgres-backed connector store. Every method runs
 // inside withTenant so the tenant_iso FORCE-RLS policy (migration 0024) is the
 // backstop under the application-level tenant checks.
-type pgCloudConnStore struct{ db *pgDB }
+type PGStore struct{ db DB }
 
-var _ cloudConnRepo = (*pgCloudConnStore)(nil)
+var _ Repo = (*PGStore)(nil)
 
-func scanConnector(row pgx.Row) (cloudConnector, error) {
-	var c cloudConnector
+func scanConnector(row pgx.Row) (Connector, error) {
+	var c Connector
 	var identity, scopes, idHealth, telHealth, lastVal []byte
 	err := row.Scan(
 		&c.TenantID, &c.ConnectorID, &c.Provider, &c.DisplayName, &c.AuthMethod,
@@ -27,7 +25,7 @@ func scanConnector(row pgx.Row) (cloudConnector, error) {
 		&c.Version, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
-		return cloudConnector{}, err
+		return Connector{}, err
 	}
 	_ = json.Unmarshal(identity, &c.Identity)
 	_ = json.Unmarshal(scopes, &c.Scopes)
@@ -35,7 +33,7 @@ func scanConnector(row pgx.Row) (cloudConnector, error) {
 	_ = json.Unmarshal(telHealth, &c.TelemetryHealth)
 	_ = json.Unmarshal(lastVal, &c.LastValidation)
 	if c.Scopes == nil {
-		c.Scopes = []cloudconn.Scope{}
+		c.Scopes = []Scope{}
 	}
 	return c, nil
 }
@@ -44,9 +42,9 @@ const ccnCols = `tenant_id, connector_id, provider, display_name, auth_method, p
 	state, identity, scopes, identity_health, telemetry_health, last_validation,
 	row_version, created_at, updated_at`
 
-func (st *pgCloudConnStore) List(ctx context.Context, tenant string, cross bool) ([]cloudConnector, error) {
-	out := make([]cloudConnector, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (st *PGStore) List(ctx context.Context, tenant string, cross bool) ([]Connector, error) {
+	out := make([]Connector, 0)
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+ccnCols+` FROM cloud_connectors ORDER BY created_at DESC`)
 		if err != nil {
 			return err
@@ -64,10 +62,10 @@ func (st *pgCloudConnStore) List(ctx context.Context, tenant string, cross bool)
 	return out, err
 }
 
-func (st *pgCloudConnStore) Get(ctx context.Context, tenant string, cross bool, id string) (cloudConnector, bool, error) {
-	var c cloudConnector
+func (st *PGStore) Get(ctx context.Context, tenant string, cross bool, id string) (Connector, bool, error) {
+	var c Connector
 	found := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT `+ccnCols+` FROM cloud_connectors WHERE connector_id=$1`, id)
 		got, e := scanConnector(row)
 		if errors.Is(e, pgx.ErrNoRows) {
@@ -82,8 +80,8 @@ func (st *pgCloudConnStore) Get(ctx context.Context, tenant string, cross bool, 
 	return c, found, err
 }
 
-func (st *pgCloudConnStore) Create(ctx context.Context, c cloudConnector) (cloudConnector, error) {
-	err := st.db.withTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
+func (st *PGStore) Create(ctx context.Context, c Connector) (Connector, error) {
+	err := st.db.WithTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
 			`INSERT INTO cloud_connectors (tenant_id, connector_id, provider, display_name, auth_method,
 				pack_full_id, state, identity, scopes, identity_health, telemetry_health, last_validation)
@@ -97,9 +95,9 @@ func (st *pgCloudConnStore) Create(ctx context.Context, c cloudConnector) (cloud
 	return c, err
 }
 
-func (st *pgCloudConnStore) Update(ctx context.Context, c cloudConnector, expectVersion int64) (cloudConnector, bool, error) {
+func (st *PGStore) Update(ctx context.Context, c Connector, expectVersion int64) (Connector, bool, error) {
 	found := false
-	err := st.db.withTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
 		var curVersion int64
 		err := tx.QueryRow(ctx, `SELECT row_version FROM cloud_connectors WHERE connector_id=$1 FOR UPDATE`, c.ConnectorID).Scan(&curVersion)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -110,7 +108,7 @@ func (st *pgCloudConnStore) Update(ctx context.Context, c cloudConnector, expect
 		}
 		found = true
 		if expectVersion != 0 && curVersion != expectVersion {
-			return errCCNVersionConflict
+			return ErrVersionConflict
 		}
 		row := tx.QueryRow(ctx,
 			`UPDATE cloud_connectors SET provider=$2, display_name=$3, auth_method=$4, pack_full_id=$5,
@@ -123,14 +121,14 @@ func (st *pgCloudConnStore) Update(ctx context.Context, c cloudConnector, expect
 		return row.Scan(&c.Version, &c.CreatedAt, &c.UpdatedAt)
 	})
 	if err != nil {
-		return cloudConnector{}, found, err
+		return Connector{}, found, err
 	}
 	return c, found, nil
 }
 
-func (st *pgCloudConnStore) Delete(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+func (st *PGStore) Delete(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		if _, e := tx.Exec(ctx, `DELETE FROM cloud_secret_references WHERE connector_id=$1`, id); e != nil {
 			return e
 		}
@@ -144,8 +142,8 @@ func (st *pgCloudConnStore) Delete(ctx context.Context, tenant string, cross boo
 	return affected, err
 }
 
-func (st *pgCloudConnStore) PutSecretRef(ctx context.Context, ref cloudSecretRef) error {
-	return st.db.withTenant(ctx, ref.TenantID, false, func(tx pgx.Tx) error {
+func (st *PGStore) PutSecretRef(ctx context.Context, ref SecretRef) error {
+	return st.db.WithTenant(ctx, ref.TenantID, false, func(tx pgx.Tx) error {
 		var rotated any
 		if ref.RotatedAt != nil {
 			rotated = *ref.RotatedAt
@@ -163,10 +161,10 @@ func (st *pgCloudConnStore) PutSecretRef(ctx context.Context, ref cloudSecretRef
 	})
 }
 
-func (st *pgCloudConnStore) GetSecretRef(ctx context.Context, tenant string, cross bool, ref string) (cloudSecretRef, bool, error) {
-	var r cloudSecretRef
+func (st *PGStore) GetSecretRef(ctx context.Context, tenant string, cross bool, ref string) (SecretRef, bool, error) {
+	var r SecretRef
 	found := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
 			`SELECT tenant_id, secret_ref, connector_id, provider, kind, ciphertext, fields_set,
 				key_hint, secret_version, created_at, updated_at, rotated_at
@@ -187,9 +185,9 @@ func (st *pgCloudConnStore) GetSecretRef(ctx context.Context, tenant string, cro
 	return r, found, err
 }
 
-func (st *pgCloudConnStore) ListSecretRefs(ctx context.Context, tenant string, cross bool, connectorID string) ([]cloudSecretRef, error) {
-	out := make([]cloudSecretRef, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (st *PGStore) ListSecretRefs(ctx context.Context, tenant string, cross bool, connectorID string) ([]SecretRef, error) {
+	out := make([]SecretRef, 0)
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT tenant_id, secret_ref, connector_id, provider, kind, '' AS ciphertext, fields_set,
 				key_hint, secret_version, created_at, updated_at, rotated_at
@@ -199,7 +197,7 @@ func (st *pgCloudConnStore) ListSecretRefs(ctx context.Context, tenant string, c
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var r cloudSecretRef
+			var r SecretRef
 			var rotated *time.Time
 			var ct string
 			if e := rows.Scan(&r.TenantID, &r.SecretRef, &r.ConnectorID, &r.Provider, &r.Kind, &ct,
@@ -214,9 +212,9 @@ func (st *pgCloudConnStore) ListSecretRefs(ctx context.Context, tenant string, c
 	return out, err
 }
 
-func (st *pgCloudConnStore) DeleteSecretRefs(ctx context.Context, tenant string, cross bool, connectorID string) (int, error) {
+func (st *PGStore) DeleteSecretRefs(ctx context.Context, tenant string, cross bool, connectorID string) (int, error) {
 	n := 0
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `DELETE FROM cloud_secret_references WHERE connector_id=$1`, connectorID)
 		if e != nil {
 			return e

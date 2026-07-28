@@ -33,7 +33,7 @@ func (f *orgFakeAdapter) DiscoverScopes(_ context.Context, req cloudconn.Discove
 
 func TestConnectorOrgAnchorLifecycleAndIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	fake := &orgFakeAdapter{fakeAdapter: &fakeAdapter{provider: cloudconn.ProviderAWS}}
 	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
 	s.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }

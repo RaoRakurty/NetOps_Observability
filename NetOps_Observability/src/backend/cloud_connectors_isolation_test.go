@@ -24,7 +24,7 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
 	// The shared harness doesn't wire the connector store/broker; the handlers
 	// read them at request time, so setting them on the live *server is enough.
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, func(e AuditEvent) {
 		if s.audit != nil {
 			s.audit.Record(e)

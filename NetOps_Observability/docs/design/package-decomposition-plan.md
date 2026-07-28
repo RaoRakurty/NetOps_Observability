@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** thirty domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** thirty-one domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -9,8 +9,9 @@
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
 `ai/toolwire`, `wireless/store`, `nms/store`, `ticketing/store`,
 `pathgraph/store`, `token/password`, `internal/users`, `tenant/org`,
-`cloud/store`, `ticketing` adapters, `policy/store`, 2026-07-28).
-**236** non-test files remain in `package main`. This document is the ordered sequence for the
+`cloud/store`, `ticketing` adapters, `policy/store`, `cloudconn/store`,
+2026-07-28).
+**234** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -129,6 +130,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 32 | `cloud_store.go` + `cloud_store_pg.go` → `cloud/` | 2 | ~750 | ~8 | **Done** (2026-07-28). The Cloud App Observability inventory store pair (resources + identity mappings + provenance; server-side filter + keyset pagination) joins the `cloud` package that owns its types. `DB` seam via `rlsPG`; the paging surface exported (`PageDefault`/`PageMax`/`ListHardCap`, `ErrBadCursor`, `FilterValues`, cursor codecs); backend selector stayed in `main.go`; the family-match contract test moved in; white-box mem literals in two main tests replaced by `NewMemStore()`. |
 | ✅ 33 | The four ITSM adapters → `internal/ticketing/adapter_*.go` | 4 | ~1550 | ~14 | **Done** (2026-07-28). ServiceNow, Jira, PagerDuty and Slack wire adapters join the ticketing package with the shared `Adapter`/`SystemConfig`/`Ref`/`RemoteIncident` types, the #103 delivery-error taxonomy (`PermanentDeliveryError`, `RateLimitedError`) and `DedupeKey`/`Truncate` — adapters produce the classifications the worker consumes, so they live together. Worker, sweeper, inbound, http and itsm-config (with its `systemConfig` resolver) STAYED. `NewXAdapterWithClient` constructors added so integrator tests inject their httptest clients; adapter wire-contract test files moved in; worker/sweeper/policy-resolution tests shuttled back with duplicated fixtures (test files cannot cross packages). |
 | ✅ 34 | `policy_store.go` → `policy/store.go` | 1 | ~420 | 4 | **Done** (2026-07-28). The #24 security-policy document store (scope-chain resolution over the builtin catalog, hardening-only override validation) joins the `policy` engine package. Kv + error sink INJECTED (`policy.KV`, errlog func; nil-kv is a wiring-time panic like MustCompile); main's tests stayed as integration through the wiring. |
+| ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons

@@ -63,7 +63,7 @@ func newAWSProbeFixture(t *testing.T, allowed map[string]bool) *httptest.Server 
 // wireProbeBroker wires the broker to the REAL AWS adapter with both the
 // exchanger and the probe client pointed at the fixture.
 func wireProbeBroker(s *server, fixture *httptest.Server) {
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
 	ex := &cloudconn.AWSSTSExchanger{Client: fixture.Client(), Endpoint: fixture.URL, Platform: testPlatformCreds{}}
 	probe := &cloudconn.AWSProbeClient{Client: fixture.Client(), STSEndpoint: fixture.URL, IAMEndpoint: fixture.URL}
@@ -207,7 +207,7 @@ func TestCloudConnectorProbesDeferredWithoutPlatformIdentity(t *testing.T) {
 	fixture := newAWSProbeFixture(t, nil)
 	defer fixture.Close()
 	srv, s := newTestServerState(t)
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	s.cloudBroker = newCloudIdentityBroker(s.cloudConn, s.vault, nil)
 	ex := &cloudconn.AWSSTSExchanger{Client: fixture.Client(), Endpoint: fixture.URL,
 		Platform: testPlatformCreds{err: cloudconn.ErrPlatformCredentialsMissing}}

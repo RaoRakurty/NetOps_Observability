@@ -25,7 +25,7 @@ import (
 func newIngestTestServer(t *testing.T) (srv *httptest.Server, s *server, fake *fakeAdapter) {
 	t.Helper()
 	hs, st := newTestServerState(t)
-	st.cloudConn = newMemCloudConnStore()
+	st.cloudConn = cloudconn.NewMemStore()
 	fake = &fakeAdapter{provider: cloudconn.ProviderAWS}
 	st.cloudBroker = newCloudIdentityBroker(st.cloudConn, nil, nil)
 	st.cloudBroker.adapter = func(cloudconn.Provider) cloudconn.CloudIdentityProvider { return fake }

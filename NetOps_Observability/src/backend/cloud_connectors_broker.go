@@ -110,7 +110,7 @@ func (ct cachedToken) fresh(now time.Time) bool {
 // refresh credentials themselves. Tokens are cached in memory (never persisted)
 // and never logged.
 type cloudIdentityBroker struct {
-	store   cloudConnRepo
+	store   cloudconn.Repo
 	vault   *vault.Vault
 	adapter func(cloudconn.Provider) cloudconn.CloudIdentityProvider // DI seam
 	auditFn func(AuditEvent)                                         // nil = no audit sink
@@ -122,7 +122,7 @@ type cloudIdentityBroker struct {
 	cache map[string]cachedToken
 }
 
-func newCloudIdentityBroker(store cloudConnRepo, vault *vault.Vault, auditFn func(AuditEvent)) *cloudIdentityBroker {
+func newCloudIdentityBroker(store cloudconn.Repo, vault *vault.Vault, auditFn func(AuditEvent)) *cloudIdentityBroker {
 	return &cloudIdentityBroker{
 		store:   store,
 		vault:   vault,
@@ -151,12 +151,12 @@ func (b *cloudIdentityBroker) StoreSecret(ctx context.Context, tenant, connector
 	if strings.TrimSpace(plaintext) == "" {
 		return "", errBrokerNoSecret
 	}
-	ref := newOpaqueID(csrIDPrefix)
+	ref := newOpaqueID(cloudconn.SecretRefIDPrefix)
 	ciphertext, err := b.vault.Encrypt(normTenant(tenant), ccnSecretFieldID(connectorID, kind), plaintext)
 	if err != nil {
 		return "", fmt.Errorf("cloudconn: encrypt secret: %w", err)
 	}
-	sr := cloudSecretRef{
+	sr := cloudconn.SecretRef{
 		TenantID: normTenant(tenant), SecretRef: ref, ConnectorID: connectorID, Provider: provider,
 		Kind: kind, Ciphertext: ciphertext, FieldsSet: []string{kind}, KeyHint: keyHint, Version: 1,
 	}
@@ -204,7 +204,7 @@ func (b *cloudIdentityBroker) RotateSecret(ctx context.Context, tenant, ref, con
 
 // resolveSecret decrypts the referenced legacy secret. ONLY the broker calls this.
 // Audits SECRET_ACCESSED. The returned plaintext is never logged.
-func (b *cloudIdentityBroker) resolveSecret(ctx context.Context, tenant string, c cloudConnector) (string, error) {
+func (b *cloudIdentityBroker) resolveSecret(ctx context.Context, tenant string, c cloudconn.Connector) (string, error) {
 	ref := c.Identity.LegacySecretRef
 	if ref == "" {
 		return "", errBrokerNoSecret
@@ -330,7 +330,7 @@ func (b *cloudIdentityBroker) Invalidate(connectorID string) {
 // cache key (role ARN / client id / SA email). Never used as a cache key ALONE.
 // Resolution is registry-driven (cloudconn.ProviderDescriptor.IdentityRef) — no
 // per-provider switch to extend when a provider is added.
-func connectorIdentityRef(c cloudConnector) string {
+func connectorIdentityRef(c cloudconn.Connector) string {
 	return cloudconn.IdentityRefFor(c.Provider, c.Identity)
 }
 

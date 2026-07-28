@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/cloudconn"
 	"netops/backend/nms"
 	"testing"
 )
@@ -66,7 +67,7 @@ func TestCloudStoreReadyRefusesNilStore(t *testing.T) {
 		t.Errorf("guard wrote %d, want 501", rec.Code)
 	}
 	// And it must PASS when a store is present, or every endpoint is bricked.
-	s.cloudConn = newMemCloudConnStore()
+	s.cloudConn = cloudconn.NewMemStore()
 	if !s.cloudStoreReady(httptest.NewRecorder()) {
 		t.Error("cloudStoreReady must be true when a store is wired")
 	}

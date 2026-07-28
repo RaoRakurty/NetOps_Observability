@@ -41,8 +41,8 @@ type cloudConnectorView struct {
 	Collecting      bool                       `json:"collecting"`
 	Identity        cloudConnIdentityView      `json:"identity"`
 	Scopes          []cloudconn.Scope          `json:"scopes"`
-	IdentityHealth  healthStatus               `json:"identity_health"`
-	TelemetryHealth healthStatus               `json:"telemetry_health"`
+	IdentityHealth  cloudconn.HealthStatus     `json:"identity_health"`
+	TelemetryHealth cloudconn.HealthStatus     `json:"telemetry_health"`
 	LastValidation  cloudconn.ValidationResult `json:"last_validation"`
 	Version         int64                      `json:"version"`
 	CreatedAt       time.Time                  `json:"created_at"`
@@ -70,7 +70,7 @@ type cloudConnIdentityView struct {
 	Org *cloudconn.OrgScopeAnchor `json:"org,omitempty"`
 }
 
-func toConnectorView(c cloudConnector) cloudConnectorView {
+func toConnectorView(c cloudconn.Connector) cloudConnectorView {
 	return cloudConnectorView{
 		ID: c.ConnectorID, Provider: c.Provider, DisplayName: c.DisplayName,
 		AuthMethod: c.AuthMethod, AuthFederated: c.AuthMethod.IsFederated(), AuthLegacy: c.AuthMethod.IsLegacy(),
@@ -160,13 +160,13 @@ func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusBadRequest, "unknown provider ("+strings.Join(toks, "|")+")", "PROVIDER_INVALID")
 		return
 	}
-	c := cloudConnector{
-		TenantID: tenant, ConnectorID: newOpaqueID(ccnIDPrefix), Provider: provider,
+	c := cloudconn.Connector{
+		TenantID: tenant, ConnectorID: newOpaqueID(cloudconn.ConnectorIDPrefix), Provider: provider,
 		DisplayName: strings.TrimSpace(req.DisplayName), State: cloudconn.StateDraft,
 		Identity:        cloudconn.IdentityConfig{Provider: provider, TenantID: tenant},
 		Scopes:          []cloudconn.Scope{},
-		IdentityHealth:  healthStatus{State: "unknown"},
-		TelemetryHealth: healthStatus{State: "unknown"},
+		IdentityHealth:  cloudconn.HealthStatus{State: "unknown"},
+		TelemetryHealth: cloudconn.HealthStatus{State: "unknown"},
 	}
 	c.Identity.ConnectorID = c.ConnectorID
 	created, err := s.cloudConn.Create(r.Context(), c)
@@ -188,7 +188,7 @@ func (s *server) handleCloudConnectorByID(w http.ResponseWriter, r *http.Request
 	rest := strings.TrimPrefix(r.URL.Path, "/api/cloud/connectors/")
 	parts := strings.Split(rest, "/")
 	id := parts[0]
-	if !strings.HasPrefix(id, ccnIDPrefix) {
+	if !strings.HasPrefix(id, cloudconn.ConnectorIDPrefix) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid connector id"))
 		return
 	}
@@ -232,20 +232,20 @@ func (s *server) handleCloudConnectorByID(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *server) loadConnector(w http.ResponseWriter, r *http.Request, id string, level int) (cloudConnector, jwtClaims, bool) {
+func (s *server) loadConnector(w http.ResponseWriter, r *http.Request, id string, level int) (cloudconn.Connector, jwtClaims, bool) {
 	claims, ok := s.requirePerm(w, r, "infrastructure", level)
 	if !ok {
-		return cloudConnector{}, claims, false
+		return cloudconn.Connector{}, claims, false
 	}
 	tenant, cross := principalTenant(claims)
 	c, found, err := s.cloudConn.Get(r.Context(), tenant, cross, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
-		return cloudConnector{}, claims, false
+		return cloudconn.Connector{}, claims, false
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, errCCNNotFound)
-		return cloudConnector{}, claims, false
+		return cloudconn.Connector{}, claims, false
 	}
 	return c, claims, true
 }
@@ -504,12 +504,12 @@ func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, 
 	now := time.Now().UTC()
 	liveCheck := "deferred"
 	if res.OK {
-		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live trust proof pending", Checked: now}
+		c.IdentityHealth = cloudconn.HealthStatus{State: "config_validated", Detail: "configuration validated; live trust proof pending", Checked: now}
 		if cloudconn.CanTransition(c.State, cloudconn.StateValidating) {
 			c.State = cloudconn.StateValidating
 		}
 	} else {
-		c.IdentityHealth = healthStatus{State: "failed", Detail: "configuration has blocking findings", Checked: now}
+		c.IdentityHealth = cloudconn.HealthStatus{State: "failed", Detail: "configuration has blocking findings", Checked: now}
 	}
 	// Persist the config-validation outcome FIRST: the broker re-reads the
 	// connector (state gate + secret refs) from the store.
@@ -536,7 +536,7 @@ func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, 
 // 15s) and folds the outcome into identity health + the validation findings.
 // Returns the live_check marker and the re-persisted connector (zero-value
 // connector when persisting failed and an error response was already written).
-func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudConnector, res *cloudconn.ValidationResult) (string, cloudConnector) {
+func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudconn.Connector, res *cloudconn.ValidationResult) (string, cloudconn.Connector) {
 	tenant, _ := principalTenant(claims)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -564,17 +564,17 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 	_, err := s.cloudBroker.TokenFor(ctx, req)
 	switch {
 	case err == nil:
-		c.IdentityHealth = healthStatus{State: "live_verified", Detail: "live trust proven: provider issued a scoped short-lived credential", Checked: now}
+		c.IdentityHealth = cloudconn.HealthStatus{State: "live_verified", Detail: "live trust proven: provider issued a scoped short-lived credential", Checked: now}
 	case errors.Is(err, cloudconn.ErrPlatformCredentialsMissing),
 		errors.Is(err, cloudconn.ErrWorkloadAssertionMissing),
 		errors.Is(err, cloudconn.ErrProviderExchangeDeferred):
 		liveCheck = "deferred"
-		c.IdentityHealth = healthStatus{State: "config_validated", Detail: "configuration validated; live check deferred: " + err.Error(), Checked: now}
+		c.IdentityHealth = cloudconn.HealthStatus{State: "config_validated", Detail: "configuration validated; live check deferred: " + err.Error(), Checked: now}
 	default:
 		liveCheck = "failed"
 		// The error surface is sanitized by contract (ExchangeError / broker
 		// sentinels) — safe to persist and show as remediation.
-		c.IdentityHealth = healthStatus{State: "failed", Detail: "live trust check failed: " + err.Error(), Checked: now}
+		c.IdentityHealth = cloudconn.HealthStatus{State: "failed", Detail: "live trust check failed: " + err.Error(), Checked: now}
 		res.Add(cloudconn.SeverityWarning, "live_trust_failed",
 			"the provider refused to issue a credential for this identity",
 			"Verify the deployed trust (role/app/pool), the ExternalId/federated subject, and the stored secret, then validate again.")
@@ -582,7 +582,7 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 	}
 	saved, ok := s.persistConnector(w, r, c)
 	if !ok {
-		return liveCheck, cloudConnector{}
+		return liveCheck, cloudconn.Connector{}
 	}
 	return liveCheck, saved
 }
@@ -590,7 +590,7 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 // connectorProbeToken mints (or serves cached) the broker token a live probe
 // authenticates with, bounded to 20s. The deferral sentinels come back as
 // ("deferred", reason); a provider refusal comes back as an error.
-func (s *server) connectorProbeToken(r *http.Request, tenant string, c cloudConnector) (cloudconn.ScopedToken, string, string, string, error) {
+func (s *server) connectorProbeToken(r *http.Request, tenant string, c cloudconn.Connector) (cloudconn.ScopedToken, string, string, string, error) {
 	account, region := connectorDefaultScope(c)
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
@@ -689,7 +689,7 @@ func (s *server) serveConnectorPermissions(w http.ResponseWriter, r *http.Reques
 // becomes a permission_denied record on ITS source chip (per account/region
 // scope detail); a fully-granted capability clears its record. Tenant and
 // provider are stamped from the CONNECTOR ROW (§3a.2).
-func (s *server) recordPermissionSourceStatus(c cloudConnector, pack cloudconn.CapabilityPack, report cloudconn.CapabilityReport, account, region string) {
+func (s *server) recordPermissionSourceStatus(c cloudconn.Connector, pack cloudconn.CapabilityPack, report cloudconn.CapabilityReport, account, region string) {
 	if s.cloudSourceStatus == nil {
 		return
 	}
@@ -976,7 +976,7 @@ func (s *server) serveConnectorHealth(w http.ResponseWriter, r *http.Request, id
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudConnector) {
+func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request, claims jwtClaims, c cloudconn.Connector) {
 	saved, ok := s.persistConnector(w, r, c)
 	if !ok {
 		return
@@ -985,31 +985,31 @@ func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, toConnectorView(saved))
 }
 
-func (s *server) persistConnector(w http.ResponseWriter, r *http.Request, c cloudConnector) (cloudConnector, bool) {
+func (s *server) persistConnector(w http.ResponseWriter, r *http.Request, c cloudconn.Connector) (cloudconn.Connector, bool) {
 	if !s.cloudStoreReady(w) {
-		return cloudConnector{}, false
+		return cloudconn.Connector{}, false
 	}
 	// Anchor is derived at template time; never persist it.
 	c.Identity.Anchor = cloudconn.TrustAnchor{}
 	saved, found, err := s.cloudConn.Update(r.Context(), c, 0)
 	if err != nil {
-		if errors.Is(err, errCCNVersionConflict) {
+		if errors.Is(err, cloudconn.ErrVersionConflict) {
 			writeJSONError(w, http.StatusConflict, "connector changed concurrently; reload", "VERSION_CONFLICT")
-			return cloudConnector{}, false
+			return cloudconn.Connector{}, false
 		}
 		writeError(w, http.StatusInternalServerError, err)
-		return cloudConnector{}, false
+		return cloudconn.Connector{}, false
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, errCCNNotFound)
-		return cloudConnector{}, false
+		return cloudconn.Connector{}, false
 	}
 	return saved, true
 }
 
 // recordConnectorEvent writes a connector security event into the immutable audit
 // trail. NEVER logs secrets/tokens.
-func (s *server) recordConnectorEvent(r *http.Request, claims jwtClaims, event string, c cloudConnector, detail string) {
+func (s *server) recordConnectorEvent(r *http.Request, claims jwtClaims, event string, c cloudconn.Connector, detail string) {
 	if s.audit == nil {
 		return
 	}
