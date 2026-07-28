@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** thirty-two domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** thirty-three domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -10,8 +10,8 @@
 `ai/toolwire`, `wireless/store`, `nms/store`, `ticketing/store`,
 `pathgraph/store`, `token/password`, `internal/users`, `tenant/org`,
 `cloud/store`, `ticketing` adapters, `policy/store`, `cloudconn/store`,
-`pathgraph/health`, 2026-07-28).
-**233** non-test files remain in `package main`. This document is the ordered sequence for the
+`pathgraph/health`, `cloud/bizsvc`, 2026-07-28).
+**232** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -132,7 +132,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 34 | `policy_store.go` → `policy/store.go` | 1 | ~420 | 4 | **Done** (2026-07-28). The #24 security-policy document store (scope-chain resolution over the builtin catalog, hardening-only override validation) joins the `policy` engine package. Kv + error sink INJECTED (`policy.KV`, errlog func; nil-kv is a wiring-time panic like MustCompile); main's tests stayed as integration through the wiring. |
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
-| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), discovery, report_pipeline, … — the remainder is increasingly handler-/wiring-dominated; re-run the screen before each next step. | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

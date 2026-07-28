@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"netops/backend/cloud"
 	"os"
 	"testing"
 
@@ -31,11 +32,11 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	st := &pgBusinessServiceStore{db: ps.db}
+	st := cloud.NewBizSvcStore(rlsPG{db: ps.db})
 
 	// acme creates a named service and maps a resource to it.
 	svc, err := st.CreateService(ctx, "acme", false,
-		BusinessService{TenantID: "acme", Name: "payments", Owner: "payments-sre",
+		cloud.BusinessService{TenantID: "acme", Name: "payments", Owner: "payments-sre",
 			RunbookURL: "https://runbooks.acme.example/payments", CreatedBy: "u-acme"})
 	if err != nil {
 		t.Fatalf("acme CreateService: %v", err)
@@ -67,7 +68,7 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 
 	// 3) globex cannot rename/delete acme's service (RLS hides it → not found).
 	if found, err := st.UpdateService(ctx, "globex", false, svc.BusinessServiceID,
-		BusinessService{Name: "pwned"}); err != nil || found {
+		cloud.BusinessService{Name: "pwned"}); err != nil || found {
 		t.Fatalf("globex UpdateService of acme's service: found=%v err=%v, want found=false", found, err)
 	}
 	if found, err := st.DeleteService(ctx, "globex", false, svc.BusinessServiceID); err != nil || found {
@@ -105,7 +106,7 @@ func TestBusinessServiceCrossTenantIsolation(t *testing.T) {
 
 	// 7) platform cross-tenant view sees both tenants' rows (control).
 	svc2, err := st.CreateService(ctx, "globex", false,
-		BusinessService{TenantID: "globex", Name: "billing", CreatedBy: "u-globex"})
+		cloud.BusinessService{TenantID: "globex", Name: "billing", CreatedBy: "u-globex"})
 	if err != nil {
 		t.Fatalf("globex CreateService: %v", err)
 	}

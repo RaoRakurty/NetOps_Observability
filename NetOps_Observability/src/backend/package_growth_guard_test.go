@@ -187,7 +187,12 @@ import (
 //	                  Behavior Health scoring core: severity curves, blend,
 //	                  bands incl. the unknown-not-healthy rule, baseline
 //	                  cascade; VM fetcher + handler stayed in main)
-const rootPackageCeiling = 233
+//	2026-07-28  232  business_service_store.go → cloud/bizsvc_store.go (the
+//	                  Business Service Observability pg store joins the cloud
+//	                  domain its mappings resolve against; DB seam via rlsPG;
+//	                  ErrNotFound/ErrConflict + MappingsByResource exported;
+//	                  the pg-only selector stayed in main.go)
+const rootPackageCeiling = 232
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

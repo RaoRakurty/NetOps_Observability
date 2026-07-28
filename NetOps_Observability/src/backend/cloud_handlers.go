@@ -240,7 +240,7 @@ func (s *server) overlayManualMappings(r *http.Request, tenant string, cross boo
 	if s.bizServices == nil {
 		return nil // file backend: manual mappings are not a feature here
 	}
-	byID, err := s.bizServices.mappingsByResource(r.Context(), tenant, cross)
+	byID, err := s.bizServices.MappingsByResource(r.Context(), tenant, cross)
 	if err != nil {
 		return fmt.Errorf("read operator service mappings: %w", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"netops/backend/cloud"
 	"strings"
 )
 
@@ -89,7 +90,7 @@ func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
-		var in BusinessService
+		var in cloud.BusinessService
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -118,7 +119,7 @@ func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) 
 		}
 		in.CreatedBy = claims.Sub
 		out, err := s.bizServices.CreateService(r.Context(), tenant, cross, in)
-		if errors.Is(err, errConflict) {
+		if errors.Is(err, cloud.ErrConflict) {
 			writeError(w, http.StatusConflict, errors.New("a service with that name already exists"))
 			return
 		}
@@ -148,7 +149,7 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 		if !ok {
 			return
 		}
-		var in BusinessService
+		var in cloud.BusinessService
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -173,7 +174,7 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 		in.RunbookURL = strings.TrimSpace(in.RunbookURL)
 		tenant, cross := principalTenant(claims)
 		found, err := s.bizServices.UpdateService(r.Context(), tenant, cross, id, in)
-		if errors.Is(err, errConflict) {
+		if errors.Is(err, cloud.ErrConflict) {
 			writeError(w, http.StatusConflict, errors.New("a service with that name already exists"))
 			return
 		}
@@ -182,7 +183,7 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !found {
-			writeError(w, http.StatusNotFound, errNotFound)
+			writeError(w, http.StatusNotFound, cloud.ErrNotFound)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"updated": id})
@@ -198,7 +199,7 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !found {
-			writeError(w, http.StatusNotFound, errNotFound)
+			writeError(w, http.StatusNotFound, cloud.ErrNotFound)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
@@ -262,7 +263,7 @@ func (s *server) handleResourceMappings(w http.ResponseWriter, r *http.Request) 
 		tenant, cross := principalTenant(claims)
 		n, err := s.bizServices.AssignResources(r.Context(), tenant, cross,
 			in.BusinessServiceID, in.ServiceName, claims.Sub, in.ResourceIDs)
-		if errors.Is(err, errNotFound) {
+		if errors.Is(err, cloud.ErrNotFound) {
 			writeError(w, http.StatusNotFound, errors.New("business service not found"))
 			return
 		}
@@ -303,7 +304,7 @@ func (s *server) handleResourceMappingByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !found {
-		writeError(w, http.StatusNotFound, errNotFound)
+		writeError(w, http.StatusNotFound, cloud.ErrNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": resID})

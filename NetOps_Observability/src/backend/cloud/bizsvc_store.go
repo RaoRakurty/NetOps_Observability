@@ -1,4 +1,4 @@
-package main
+package cloud
 
 // business_service_store.go — persistent, tenant-isolated storage for the
 // Business Service mapping (Azure optional-tags epic, migration 0024).
@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"crypto/rand"
+	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -53,11 +55,11 @@ type ResourceMapping struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
-// errConflict is returned when a create/rename collides with the per-tenant
+// ErrConflict is returned when a create/rename collides with the per-tenant
 // unique service name (mapped to HTTP 409 by the handler).
-var errConflict = errors.New("already exists")
+var ErrConflict = errors.New("already exists")
 
-type pgBusinessServiceStore struct{ db *pgDB }
+type BizSvcStore struct{ db DB }
 
 // isUniqueViolation reports a Postgres unique-constraint failure (SQLSTATE
 // 23505); duplicated from the users store when it moved to internal/users.
@@ -65,17 +67,29 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
-func newBusinessServiceStore() *pgBusinessServiceStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgBusinessServiceStore{db: ps.db}
+
+// ErrNotFound is the biz-service store's typed miss (handlers map it to 404).
+var ErrNotFound = errors.New("not found")
+
+// newUUIDv4 mirrors the integrator's RFC-4122 v4 minting (duplicated per the
+// no-shared-utils rule).
+func newUUIDv4() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
 	}
-	return nil // Postgres backend only
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
+// NewBizSvcStore builds the FORCE-RLS pg repository over the injected seam.
+func NewBizSvcStore(db DB) *BizSvcStore { return &BizSvcStore{db: db} }
+
 // ListServices returns the tenant's named services (newest first).
-func (st *pgBusinessServiceStore) ListServices(ctx context.Context, tenant string, cross bool) ([]BusinessService, error) {
+func (st *BizSvcStore) ListServices(ctx context.Context, tenant string, cross bool) ([]BusinessService, error) {
 	out := make([]BusinessService, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT business_service_id, tenant_id, name, description,
 		        criticality, owner, runbook_url, created_by, created_at, updated_at
 		    FROM business_services ORDER BY created_at DESC`)
@@ -97,8 +111,8 @@ func (st *pgBusinessServiceStore) ListServices(ctx context.Context, tenant strin
 }
 
 // CreateService inserts a named service. The tenant is stamped from the caller's
-// principal, never a request body. Returns errConflict on a duplicate name.
-func (st *pgBusinessServiceStore) CreateService(ctx context.Context, tenant string, cross bool, in BusinessService) (BusinessService, error) {
+// principal, never a request body. Returns ErrConflict on a duplicate name.
+func (st *BizSvcStore) CreateService(ctx context.Context, tenant string, cross bool, in BusinessService) (BusinessService, error) {
 	id, err := newUUIDv4()
 	if err != nil {
 		return BusinessService{}, err
@@ -107,7 +121,7 @@ func (st *pgBusinessServiceStore) CreateService(ctx context.Context, tenant stri
 	if in.Criticality == "" {
 		in.Criticality = "normal"
 	}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `INSERT INTO business_services
 		        (business_service_id, tenant_id, name, description, criticality, owner, runbook_url, created_by)
 		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at, updated_at`,
@@ -115,16 +129,16 @@ func (st *pgBusinessServiceStore) CreateService(ctx context.Context, tenant stri
 		return row.Scan(&in.CreatedAt, &in.UpdatedAt)
 	})
 	if isUniqueViolation(err) {
-		return BusinessService{}, errConflict
+		return BusinessService{}, ErrConflict
 	}
 	return in, err
 }
 
 // RenameService edits a service's name/description/criticality. Returns false if
-// no visible row matched (cross-tenant id → 404 upstream). errConflict on a name clash.
-func (st *pgBusinessServiceStore) UpdateService(ctx context.Context, tenant string, cross bool, id string, in BusinessService) (bool, error) {
+// no visible row matched (cross-tenant id → 404 upstream). ErrConflict on a name clash.
+func (st *BizSvcStore) UpdateService(ctx context.Context, tenant string, cross bool, id string, in BusinessService) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		crit := in.Criticality
 		if crit == "" {
 			crit = "normal"
@@ -139,16 +153,16 @@ func (st *pgBusinessServiceStore) UpdateService(ctx context.Context, tenant stri
 		return nil
 	})
 	if isUniqueViolation(err) {
-		return false, errConflict
+		return false, ErrConflict
 	}
 	return affected, err
 }
 
 // DeleteService removes a named service AND clears any mappings that referenced
 // it (the resources revert to inference). Returns false if not found/visible.
-func (st *pgBusinessServiceStore) DeleteService(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+func (st *BizSvcStore) DeleteService(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// Unbind mappings first (same tenant scope; RLS keeps it in-tenant).
 		if _, e := tx.Exec(ctx, `DELETE FROM resource_mappings WHERE business_service_id = $1`, id); e != nil {
 			return e
@@ -164,9 +178,9 @@ func (st *pgBusinessServiceStore) DeleteService(ctx context.Context, tenant stri
 }
 
 // ListMappings returns the tenant's resource→service mappings.
-func (st *pgBusinessServiceStore) ListMappings(ctx context.Context, tenant string, cross bool) ([]ResourceMapping, error) {
+func (st *BizSvcStore) ListMappings(ctx context.Context, tenant string, cross bool) ([]ResourceMapping, error) {
 	out := make([]ResourceMapping, 0)
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT tenant_id, resource_id,
 		        coalesce(business_service_id::text,''), service_name, source, confidence,
 		        basis, is_manual_override, created_by, created_at, updated_at
@@ -194,16 +208,16 @@ func (st *pgBusinessServiceStore) ListMappings(ctx context.Context, tenant strin
 // service; the service_name is denormalized either way for display/attribution.
 // A manual assignment is authoritative (is_manual_override=true, confirmed).
 // Returns the number of resources mapped.
-func (st *pgBusinessServiceStore) AssignResources(ctx context.Context, tenant string, cross bool, serviceID, serviceName, createdBy string, resourceIDs []string) (int, error) {
+func (st *BizSvcStore) AssignResources(ctx context.Context, tenant string, cross bool, serviceID, serviceName, createdBy string, resourceIDs []string) (int, error) {
 	n := 0
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// If a named service id was given, it must exist + be visible under RLS.
 		var svcArg any
 		if serviceID != "" {
 			var exists bool
 			if e := tx.QueryRow(ctx, `SELECT true FROM business_services WHERE business_service_id = $1`, serviceID).Scan(&exists); e != nil {
 				if errors.Is(e, pgx.ErrNoRows) {
-					return errNotFound
+					return ErrNotFound
 				}
 				return e
 			}
@@ -237,9 +251,9 @@ func (st *pgBusinessServiceStore) AssignResources(ctx context.Context, tenant st
 
 // ClearMapping removes a resource's manual override (it reverts to inference).
 // Returns false when no visible row matched.
-func (st *pgBusinessServiceStore) ClearMapping(ctx context.Context, tenant string, cross bool, resourceID string) (bool, error) {
+func (st *BizSvcStore) ClearMapping(ctx context.Context, tenant string, cross bool, resourceID string) (bool, error) {
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `DELETE FROM resource_mappings WHERE resource_id = $1`, resourceID)
 		if e != nil {
 			return e
@@ -253,7 +267,7 @@ func (st *pgBusinessServiceStore) ClearMapping(ctx context.Context, tenant strin
 // mappingsByResource returns the tenant's manual mappings keyed by resource_id —
 // the overlay handleCloudResources applies so a confirmed override wins over the
 // inventory's inferred attribution.
-func (st *pgBusinessServiceStore) mappingsByResource(ctx context.Context, tenant string, cross bool) (map[string]ResourceMapping, error) {
+func (st *BizSvcStore) MappingsByResource(ctx context.Context, tenant string, cross bool) (map[string]ResourceMapping, error) {
 	list, err := st.ListMappings(ctx, tenant, cross)
 	if err != nil {
 		return nil, err
