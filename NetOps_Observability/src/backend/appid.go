@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/appid"
 	"strings"
 )
 
@@ -34,12 +35,12 @@ func (s *server) handleApplications(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		var in Application
+		var in appid.Application
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := validateApplicationInput(in.Name, in.Criticality); err != nil {
+		if err := appid.ValidateApplicationInput(in.Name, in.Criticality); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}

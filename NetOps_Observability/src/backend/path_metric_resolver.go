@@ -11,7 +11,7 @@ import "context"
 // experienced is the most authoritative SLA number; a device-native probe is
 // precise but a step removed; a flow-derived indicator is only an inference.
 //
-//	Tier 1  Application / user experience   HTTP/DNS/TLS synthetic · RUM · DB probe
+//	Tier 1  appid.Application / user experience   HTTP/DNS/TLS synthetic · RUM · DB probe
 //	Tier 2  Agent-to-agent active path      ICMP/UDP/TCP · custom UDP · TCP connect · HTTP-through-path
 //	Tier 3  Device-native active probe      STAMP · TWAMP · OWAMP · IP SLA · RPM
 //	Tier 4  Passive network telemetry       iface drops/errors · queue · tunnel · firewall · SD-WAN · BGP/OSPF/ISIS
@@ -39,7 +39,7 @@ const (
 func (t MeasurementTier) Label() string {
 	switch t {
 	case Tier1AppExperience:
-		return "Application experience"
+		return "appid.Application experience"
 	case Tier2AgentActive:
 		return "Active path probe"
 	case Tier3DeviceNative:

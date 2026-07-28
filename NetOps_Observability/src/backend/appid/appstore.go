@@ -1,4 +1,4 @@
-package main
+package appid
 
 // appid_store.go — Application Identification registry (#81 P0). An "application"
 // is a THIN PARENT over the #69 technical services (services.application_id links
@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"crypto/rand"
+	"fmt"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -34,8 +36,8 @@ type Application struct {
 	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
 }
 
-// validateApplicationInput is a pure guard (unit-tested) for create.
-func validateApplicationInput(name, criticality string) error {
+// ValidateApplicationInput is a pure guard (unit-tested) for create.
+func ValidateApplicationInput(name, criticality string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("application name is required")
@@ -49,33 +51,49 @@ func validateApplicationInput(name, criticality string) error {
 	return nil
 }
 
-type applicationStore interface {
+type AppStore interface {
 	List(ctx context.Context, tenant string, cross bool, includeArchived bool) ([]Application, error)
 	Get(ctx context.Context, tenant string, cross bool, id string) (Application, bool, error)
 	Create(ctx context.Context, tenant string, cross bool, in Application) (Application, error)
 	Archive(ctx context.Context, tenant string, cross bool, id string) (bool, error)
 }
 
-// newApplicationStore selects pg under the postgres backend, else in-memory.
-func newApplicationStore() applicationStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgApplicationStore{db: ps.db}
-	}
-	return &memApplicationStore{by: map[string]Application{}}
-}
-
 // ── in-memory backend ──────────────────────────────────────────────────────────
 
-type memApplicationStore struct {
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewMemAppStore / NewPGAppStore build the two backends.
+func NewMemAppStore() *memAppStore { return &memAppStore{by: map[string]Application{}} }
+
+func NewPGAppStore(db DB) *pgAppStore { return &pgAppStore{db: db} }
+
+// normTenant / newUUIDv4 mirror the integrator's helpers (duplicated per the
+// no-shared-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+func newUUIDv4() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+type memAppStore struct {
 	mu sync.RWMutex
 	by map[string]Application // key: tenant\x1fapplication_id
 }
 
-func (m *memApplicationStore) key(tenant, id string) string {
+func (m *memAppStore) key(tenant, id string) string {
 	return normTenant(tenant) + "\x1f" + id
 }
 
-func (m *memApplicationStore) List(_ context.Context, tenant string, cross bool, includeArchived bool) ([]Application, error) {
+func (m *memAppStore) List(_ context.Context, tenant string, cross bool, includeArchived bool) ([]Application, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t := normTenant(tenant)
@@ -92,7 +110,7 @@ func (m *memApplicationStore) List(_ context.Context, tenant string, cross bool,
 	return out, nil
 }
 
-func (m *memApplicationStore) Get(_ context.Context, tenant string, cross bool, id string) (Application, bool, error) {
+func (m *memAppStore) Get(_ context.Context, tenant string, cross bool, id string) (Application, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t := normTenant(tenant)
@@ -108,7 +126,7 @@ func (m *memApplicationStore) Get(_ context.Context, tenant string, cross bool, 
 	return Application{}, false, nil
 }
 
-func (m *memApplicationStore) Create(_ context.Context, _ string, _ bool, in Application) (Application, error) {
+func (m *memAppStore) Create(_ context.Context, _ string, _ bool, in Application) (Application, error) {
 	id, err := newUUIDv4()
 	if err != nil {
 		return Application{}, err
@@ -125,7 +143,7 @@ func (m *memApplicationStore) Create(_ context.Context, _ string, _ bool, in App
 	return in, nil
 }
 
-func (m *memApplicationStore) Archive(_ context.Context, tenant string, cross bool, id string) (bool, error) {
+func (m *memAppStore) Archive(_ context.Context, tenant string, cross bool, id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := normTenant(tenant)
@@ -149,9 +167,9 @@ func (m *memApplicationStore) Archive(_ context.Context, tenant string, cross bo
 
 // ── Postgres backend (tenant_iso FORCE-RLS via withTenant) ──────────────────────
 
-type pgApplicationStore struct{ db *pgDB }
+type pgAppStore struct{ db DB }
 
-func (st *pgApplicationStore) List(ctx context.Context, tenant string, cross bool, includeArchived bool) ([]Application, error) {
+func (st *pgAppStore) List(ctx context.Context, tenant string, cross bool, includeArchived bool) ([]Application, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out := make([]Application, 0)
@@ -161,7 +179,7 @@ func (st *pgApplicationStore) List(ctx context.Context, tenant string, cross boo
 		q += ` WHERE archived_at IS NULL`
 	}
 	q += ` ORDER BY created_at DESC`
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, q)
 		if err != nil {
 			return err
@@ -179,12 +197,12 @@ func (st *pgApplicationStore) List(ctx context.Context, tenant string, cross boo
 	return out, err
 }
 
-func (st *pgApplicationStore) Get(ctx context.Context, tenant string, cross bool, id string) (Application, bool, error) {
+func (st *pgAppStore) Get(ctx context.Context, tenant string, cross bool, id string) (Application, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var a Application
 	found := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `SELECT application_id, tenant_id, name, owner_team, criticality, description, created_at, archived_at
               FROM applications WHERE application_id = $1`, id)
 		e := row.Scan(&a.ApplicationID, &a.TenantID, &a.Name, &a.OwnerTeam, &a.Criticality, &a.Description, &a.CreatedAt, &a.ArchivedAt)
@@ -200,7 +218,7 @@ func (st *pgApplicationStore) Get(ctx context.Context, tenant string, cross bool
 	return a, found, err
 }
 
-func (st *pgApplicationStore) Create(ctx context.Context, tenant string, cross bool, in Application) (Application, error) {
+func (st *pgAppStore) Create(ctx context.Context, tenant string, cross bool, in Application) (Application, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	id, err := newUUIDv4()
@@ -211,7 +229,7 @@ func (st *pgApplicationStore) Create(ctx context.Context, tenant string, cross b
 	if in.Criticality == "" {
 		in.Criticality = "normal"
 	}
-	err = st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err = st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `INSERT INTO applications (application_id, tenant_id, name, owner_team, criticality, description)
               VALUES ($1,$2,$3,$4,$5,$6) RETURNING created_at`,
 			in.ApplicationID, in.TenantID, in.Name, in.OwnerTeam, in.Criticality, in.Description)
@@ -220,11 +238,11 @@ func (st *pgApplicationStore) Create(ctx context.Context, tenant string, cross b
 	return in, err
 }
 
-func (st *pgApplicationStore) Archive(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+func (st *pgAppStore) Archive(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	affected := false
-	err := st.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := st.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, e := tx.Exec(ctx, `UPDATE applications SET archived_at = now() WHERE application_id = $1 AND archived_at IS NULL`, id)
 		if e != nil {
 			return e

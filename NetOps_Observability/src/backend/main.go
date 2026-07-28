@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/appid"
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
@@ -125,7 +126,7 @@ type server struct {
 	incidentTimeline      incidentTimelineStore    // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
 	aiFeedback            aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
-	applications          applicationStore         // Application Identification registry #81 P0 (in-memory or pg)
+	applications          appid.AppStore           // Application Identification registry #81 P0 (in-memory or pg)
 	appCatalog            *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	ngfw                  *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
 	fusion                *fusionWorker            // Application Identity Fusion Layer #81 P4 worker (opt-in via FUSION_WORKER_ENABLED)
@@ -963,6 +964,15 @@ func newBusinessServiceStore() *cloud.BizSvcStore {
 		return cloud.NewBizSvcStore(rlsPG{db: ps.db})
 	}
 	return nil
+}
+
+// newApplicationStore picks the App Catalog backend: RLS-scoped pg under
+// STORE_BACKEND=postgres, else in-memory.
+func newApplicationStore() appid.AppStore {
+	if ps, ok := backend.(*pgStore); ok {
+		return appid.NewPGAppStore(rlsPG{db: ps.db})
+	}
+	return appid.NewMemAppStore()
 }
 
 func main() {

@@ -196,7 +196,10 @@ import (
 //	                  lockout throttle: fail-closed saturation, spray-eviction,
 //	                  janitor; warn sink injected; counters exported as
 //	                  accessors so /metrics keeps reading them)
-const rootPackageCeiling = 231
+//	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
+//	                  catalog store, mem + FORCE-RLS pg via the DB seam;
+//	                  selector stayed in main.go)
+const rootPackageCeiling = 230
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

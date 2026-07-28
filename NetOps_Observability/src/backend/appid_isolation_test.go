@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/appid"
 	"testing"
 )
 
@@ -10,8 +11,8 @@ import (
 // tenant's applications; the platform owner (cross) sees all. Mirrors the
 // incident-timeline isolation guard.
 
-func mkApp(st applicationStore, tenant, name string) Application {
-	a, err := st.Create(context.Background(), tenant, false, Application{TenantID: tenant, Name: name})
+func mkApp(st appid.AppStore, tenant, name string) appid.Application {
+	a, err := st.Create(context.Background(), tenant, false, appid.Application{TenantID: tenant, Name: name})
 	if err != nil {
 		panic(err)
 	}
@@ -20,7 +21,7 @@ func mkApp(st applicationStore, tenant, name string) Application {
 
 func TestApplicationStoreIsolation(t *testing.T) {
 	ctx := context.Background()
-	st := &memApplicationStore{by: map[string]Application{}}
+	st := appid.NewMemAppStore()
 
 	a := mkApp(st, "org-a", "Billing")
 	b := mkApp(st, "org-b", "Payroll")
@@ -67,7 +68,7 @@ func TestApplicationCreateStampsTenant(t *testing.T) {
 	// A scoped caller's app is stamped with its own tenant; a stray body tenant
 	// must not place the row in another tenant (the handler stamps in.TenantID,
 	// and the store normalizes — assert the row lands under the caller's tenant).
-	st := &memApplicationStore{by: map[string]Application{}}
+	st := appid.NewMemAppStore()
 	a := mkApp(st, "org-a", "X")
 	if a.TenantID != "org-a" {
 		t.Fatalf("create did not stamp caller tenant: %+v", a)
@@ -75,13 +76,13 @@ func TestApplicationCreateStampsTenant(t *testing.T) {
 }
 
 func TestValidateApplicationInput(t *testing.T) {
-	if err := validateApplicationInput("", "normal"); err == nil {
+	if err := appid.ValidateApplicationInput("", "normal"); err == nil {
 		t.Fatal("empty name should be rejected")
 	}
-	if err := validateApplicationInput("ok", "bogus"); err == nil {
+	if err := appid.ValidateApplicationInput("ok", "bogus"); err == nil {
 		t.Fatal("bad criticality should be rejected")
 	}
-	if err := validateApplicationInput("ok", ""); err != nil {
+	if err := appid.ValidateApplicationInput("ok", ""); err != nil {
 		t.Fatalf("valid input rejected: %v", err)
 	}
 }
