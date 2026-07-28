@@ -199,6 +199,9 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  214  ai_feedback_store.go → ai/feedback_store.go (copilot
+//	                  answer feedback: mem + FORCE-RLS pg; FeedbackDB seam;
+//	                  selector stayed in main.go; contract tests moved)
 //	2026-07-28  215  topology_store.go → topology/store.go (the graph-records
 //	                  store, mem + FORCE-RLS pg via the DB seam; selector
 //	                  stayed in main.go)
@@ -237,7 +240,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 215
+const rootPackageCeiling = 214
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

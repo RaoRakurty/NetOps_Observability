@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"strings"
 )
 
 // ai_feedback_store.go — persistence for the Iris AI feedback loop (spec §14).
@@ -14,7 +15,7 @@ import (
 // (default, tenant-filtered in the store) and Postgres (tenant_iso FORCE-RLS via
 // withTenant). Tenant isolation is enforced in the store itself (CLAUDE.md §3a).
 
-type aiFeedbackRow struct {
+type FeedbackRow struct {
 	TenantID       string    `json:"-"`
 	ID             string    `json:"id"`
 	ConversationID string    `json:"conversation_id,omitempty"`
@@ -25,38 +26,31 @@ type aiFeedbackRow struct {
 	At             time.Time `json:"at"`
 }
 
-// aiFeedbackStats is the aggregate the quality loop reads (tenant-scoped).
-type aiFeedbackStats struct {
+// FeedbackStats is the aggregate the quality loop reads (tenant-scoped).
+type FeedbackStats struct {
 	Up       int                      `json:"up"`
 	Down     int                      `json:"down"`
-	ByIntent map[string]*upDownCounts `json:"by_intent"`
+	ByIntent map[string]*UpDownCounts `json:"by_intent"`
 }
 
-type upDownCounts struct {
+type UpDownCounts struct {
 	Up   int `json:"up"`
 	Down int `json:"down"`
 }
 
-type aiFeedbackStore interface {
-	Put(ctx context.Context, row aiFeedbackRow) error
+type FeedbackStore interface {
+	Put(ctx context.Context, row FeedbackRow) error
 	// Stats aggregates the caller's OWN feedback over the window (default-closed
 	// unless cross). up/down totals + a per-intent breakdown.
-	Stats(ctx context.Context, tenant string, cross bool, sinceSeconds int) (aiFeedbackStats, error)
+	Stats(ctx context.Context, tenant string, cross bool, sinceSeconds int) (FeedbackStats, error)
 }
 
-func newAIFeedbackStore() aiFeedbackStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgAIFeedbackStore{db: ps.db}
-	}
-	return &memAIFeedbackStore{by: map[string]aiFeedbackRow{}}
-}
-
-func aggregateFeedback(rows []aiFeedbackRow) aiFeedbackStats {
-	st := aiFeedbackStats{ByIntent: map[string]*upDownCounts{}}
+func AggregateFeedback(rows []FeedbackRow) FeedbackStats {
+	st := FeedbackStats{ByIntent: map[string]*UpDownCounts{}}
 	for _, r := range rows {
 		c := st.ByIntent[r.Intent]
 		if c == nil {
-			c = &upDownCounts{}
+			c = &UpDownCounts{}
 			st.ByIntent[r.Intent] = c
 		}
 		if r.Rating == "down" {
@@ -72,12 +66,25 @@ func aggregateFeedback(rows []aiFeedbackRow) aiFeedbackStats {
 
 // ── in-memory backend ─────────────────────────────────────────────────────────
 
-type memAIFeedbackStore struct {
-	mu sync.RWMutex
-	by map[string]aiFeedbackRow // key: tenant\x1fid
+// normTenant mirrors the integrator's normalization (duplicated).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// FeedbackDB is the injected relational seam (the portintel.DB idiom).
+type FeedbackDB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
 }
 
-func (m *memAIFeedbackStore) Put(_ context.Context, row aiFeedbackRow) error {
+// NewMemFeedbackStore / NewPGFeedbackStore build the two backends.
+func NewMemFeedbackStore() *memFeedbackStore { return &memFeedbackStore{} }
+
+func NewPGFeedbackStore(db FeedbackDB) *pgFeedbackStore { return &pgFeedbackStore{db: db} }
+
+type memFeedbackStore struct {
+	mu sync.RWMutex
+	by map[string]FeedbackRow // key: tenant\x1fid
+}
+
+func (m *memFeedbackStore) Put(_ context.Context, row FeedbackRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	row.TenantID = normTenant(row.TenantID)
@@ -85,12 +92,12 @@ func (m *memAIFeedbackStore) Put(_ context.Context, row aiFeedbackRow) error {
 	return nil
 }
 
-func (m *memAIFeedbackStore) Stats(_ context.Context, tenant string, cross bool, sinceSeconds int) (aiFeedbackStats, error) {
+func (m *memFeedbackStore) Stats(_ context.Context, tenant string, cross bool, sinceSeconds int) (FeedbackStats, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t := normTenant(tenant)
 	cutoff := time.Now().Add(-time.Duration(sinceSeconds) * time.Second)
-	var rows []aiFeedbackRow
+	var rows []FeedbackRow
 	for _, r := range m.by {
 		if !cross && r.TenantID != t { // default-closed tenant filter
 			continue
@@ -100,21 +107,21 @@ func (m *memAIFeedbackStore) Stats(_ context.Context, tenant string, cross bool,
 		}
 		rows = append(rows, r)
 	}
-	return aggregateFeedback(rows), nil
+	return AggregateFeedback(rows), nil
 }
 
 // ── Postgres backend (tenant_iso FORCE-RLS via withTenant) ────────────────────
 
-type pgAIFeedbackStore struct{ db *pgDB }
+type pgFeedbackStore struct{ db FeedbackDB }
 
-func (s *pgAIFeedbackStore) Put(ctx context.Context, row aiFeedbackRow) error {
+func (s *pgFeedbackStore) Put(ctx context.Context, row FeedbackRow) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	at := row.At
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	return s.db.withTenant(ctx, row.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, row.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO ai_feedback (tenant_id, id, conversation_id, sub, intent, mode, rating, at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -124,14 +131,14 @@ ON CONFLICT (tenant_id, id) DO UPDATE SET rating = EXCLUDED.rating, at = EXCLUDE
 	})
 }
 
-func (s *pgAIFeedbackStore) Stats(ctx context.Context, tenant string, cross bool, sinceSeconds int) (aiFeedbackStats, error) {
+func (s *pgFeedbackStore) Stats(ctx context.Context, tenant string, cross bool, sinceSeconds int) (FeedbackStats, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if sinceSeconds <= 0 {
 		sinceSeconds = 30 * 24 * 3600
 	}
-	var rows []aiFeedbackRow
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	var rows []FeedbackRow
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rs, err := tx.Query(ctx, `
 SELECT tenant_id, id, intent, mode, rating, at
   FROM ai_feedback
@@ -141,7 +148,7 @@ SELECT tenant_id, id, intent, mode, rating, at
 		}
 		defer rs.Close()
 		for rs.Next() {
-			var r aiFeedbackRow
+			var r FeedbackRow
 			if err := rs.Scan(&r.TenantID, &r.ID, &r.Intent, &r.Mode, &r.Rating, &r.At); err != nil {
 				return err
 			}
@@ -150,7 +157,7 @@ SELECT tenant_id, id, intent, mode, rating, at
 		return rs.Err()
 	})
 	if err != nil {
-		return aiFeedbackStats{ByIntent: map[string]*upDownCounts{}}, err
+		return FeedbackStats{ByIntent: map[string]*UpDownCounts{}}, err
 	}
-	return aggregateFeedback(rows), nil
+	return AggregateFeedback(rows), nil
 }

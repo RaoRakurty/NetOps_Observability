@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"context"
@@ -7,11 +7,11 @@ import (
 )
 
 func TestMemAIFeedbackStoreIsolationAndAgg(t *testing.T) {
-	m := &memAIFeedbackStore{by: map[string]aiFeedbackRow{}}
+	m := &memFeedbackStore{by: map[string]FeedbackRow{}}
 	ctx := context.Background()
 	now := time.Now().UTC()
 	put := func(tenant, id, intent, rating string) {
-		_ = m.Put(ctx, aiFeedbackRow{TenantID: tenant, ID: id, Intent: intent, Rating: rating, At: now})
+		_ = m.Put(ctx, FeedbackRow{TenantID: tenant, ID: id, Intent: intent, Rating: rating, At: now})
 	}
 	put("acme", "1", "problem_explanation", "up")
 	put("acme", "2", "problem_explanation", "down")
@@ -37,7 +37,7 @@ func TestMemAIFeedbackStoreIsolationAndAgg(t *testing.T) {
 		t.Fatalf("cross view should count all 4, got %d", all.Up+all.Down)
 	}
 	// Window excludes old feedback.
-	_ = m.Put(ctx, aiFeedbackRow{TenantID: "acme", ID: "old", Intent: "x", Rating: "down", At: now.Add(-2 * time.Hour)})
+	_ = m.Put(ctx, FeedbackRow{TenantID: "acme", ID: "old", Intent: "x", Rating: "down", At: now.Add(-2 * time.Hour)})
 	if recent, _ := m.Stats(ctx, "acme", false, 3600); recent.Down != 1 {
 		t.Errorf("2h-old feedback should be outside a 1h window, got down=%d", recent.Down)
 	}

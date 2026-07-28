@@ -242,7 +242,7 @@ func (s *server) handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 	// can be measured over time — the feedback loop. Owner stamped from the token.
 	tenant, _ := principalTenant(claims)
 	if s.aiFeedback != nil {
-		row := aiFeedbackRow{
+		row := ai.FeedbackRow{
 			TenantID: tenant, ID: randID(), ConversationID: req.ConversationID,
 			Sub: claims.Sub, Intent: req.Intent, Rating: rating, At: time.Now().UTC(),
 		}
@@ -265,7 +265,7 @@ func (s *server) handleAIFeedbackStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.aiFeedback == nil {
-		writeJSON(w, http.StatusOK, aiFeedbackStats{ByIntent: map[string]*upDownCounts{}})
+		writeJSON(w, http.StatusOK, ai.FeedbackStats{ByIntent: map[string]*ai.UpDownCounts{}})
 		return
 	}
 	tenant, cross := principalTenant(claims)

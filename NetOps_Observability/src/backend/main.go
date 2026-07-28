@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"netops/backend/ai"
 	"netops/backend/appid"
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
@@ -129,7 +130,7 @@ type server struct {
 	topology              topology.GraphStore      // persistent topology graph #77 (in-memory or pg)
 	incidentTimeline      timeintel.TimelineStore  // RCA Time Intelligence manual lifecycle events #84 (in-memory or pg)
 	incidentTimeMetrics   incidentTimeMetricsStore // RCA Time Intelligence backfilled phase-metric snapshots #84 (in-memory or pg)
-	aiFeedback            aiFeedbackStore          // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
+	aiFeedback            ai.FeedbackStore         // Iris AI answer feedback (thumbs up/down), privacy-safe (in-memory or pg)
 	applications          appid.AppStore           // Application Identification registry #81 P0 (in-memory or pg)
 	appCatalog            *appCatalogHolder        // Application Identification IP→app resolver #81 P1 (in-memory LPM catalog)
 	ngfw                  *ngfwAppResolver         // Application Identification NGFW app-id overlay #81 P-NGFW pt2 (OpenSearch-fed)
@@ -1017,6 +1018,15 @@ func newTopologyStore() topology.GraphStore {
 		return topology.NewPGStore(rlsPG{db: ps.db})
 	}
 	return topology.NewMemStore()
+}
+
+// newAIFeedbackStore picks the copilot-feedback backend: RLS-scoped pg under
+// STORE_BACKEND=postgres, else in-memory.
+func newAIFeedbackStore() ai.FeedbackStore {
+	if ps, ok := backend.(*pgStore); ok {
+		return ai.NewPGFeedbackStore(rlsPG{db: ps.db})
+	}
+	return ai.NewMemFeedbackStore()
 }
 
 func main() {
