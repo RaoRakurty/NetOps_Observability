@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** forty-six domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** forty-seven domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -14,8 +14,8 @@
 `appid/appstore`, `timeintel/store`, `internal/incident`,
 `internal/discovery` (+ devstore), `reports` pg stores, `integration`
 pg stores, `internal/saved`, `ai/evidence_language`, `topology/store`, `ai/feedback_store`,
-2026-07-28).
-**214** non-test files remain in `package main`. This document is the ordered sequence for the
+`ticketing/worker`, 2026-07-28).
+**213** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -137,6 +137,7 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
 | ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| ✅ 51 | `ticketing_worker.go` → `internal/ticketing/worker.go` | 1 | ~475 | ~8 | **Done** (2026-07-28). The outbox worker joins its store + adapters: claim → resolve → dispatch with the #103 error classification (permanent → dead-letter, Retry-After honored), backoff+jitter, the tenant-mismatch delivery refusal, link upserts and audit entries. Log sinks injected; `Tick`/`RegisterAdapter`/`SetMaxRetries` exported (tests drove unexported internals before). Sweeper/inbound/HTTP stayed (they hold `srv`); `canonicalCorrTenant` + `randID` duplicated at the boundary. |
 | ½✅ 50 | `appid_fusion_store.go` split → `appid/fusion_store.go` | 1 | ~160 | 4 | **Done** (2026-07-28), the metricval-style split: the appid-specific observation/identity batch builders (deterministic-id idempotent inserts, tier codes) moved behind an `appid.CHWorker` seam; the worker-scope CH plumbing (`chWorkerExec`/`chWorkerQuery` — shared by the fusion, timeintel-backfill and svc-rollup workers) STAYED in main with `jsonEachRow` re-homed for its remaining user. Root count unchanged (the plumbing file remains). |
 | ✅ 49 | `ai_feedback_store.go` → `ai/feedback_store.go` | 1 | ~156 | 3 | **Done** (2026-07-28). Copilot answer feedback (per-tenant up/down rows + aggregation; mem + FORCE-RLS pg) joins `ai`; `FeedbackDB` seam via `rlsPG`; selector stayed in `main.go`; contract tests moved. |
 | ✅ 48 | `topology_store.go` → `topology/store.go` | 1 | ~165 | 3 | **Done** (2026-07-28). The graph-records store (mem + FORCE-RLS pg) joins `topology`; `DB` seam via `rlsPG`; selector stayed in `main.go`. |

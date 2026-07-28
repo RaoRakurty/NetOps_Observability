@@ -218,14 +218,14 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		}
 		switch act.kind {
 		case "create":
-			if err := enqueueTicketCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			if err := ticketing.EnqueueCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
 				logWarn("ticketing", "sweep enqueue create failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue
 			}
 			acted = true
 		case "update":
-			if err := enqueueTicketUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			if err := ticketing.EnqueueUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
 				logWarn("ticketing", "sweep enqueue update failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue
@@ -269,7 +269,7 @@ func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticke
 	}
 	if link != nil && link.Open() {
 		p := buildTicketPayload(view, facts, policy, baseURL)
-		if payloadHash(p) != link.LastPayloadHash {
+		if ticketing.PayloadHash(p) != link.LastPayloadHash {
 			if len(facts.ConsistencyIssues) > 0 {
 				return held()
 			}

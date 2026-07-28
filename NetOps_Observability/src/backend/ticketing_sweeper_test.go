@@ -104,7 +104,7 @@ func TestDecideSweepAction(t *testing.T) {
 	created := buildTicketPayload(view, confirmedCustomerFacts(), policy, "")
 	openLink := &ticketing.Link{
 		TenantID: "t_a", CorrObjectID: view.CorrObjectID, ExternalSystem: "servicenow",
-		Status: "open", LastPayloadHash: payloadHash(created),
+		Status: "open", LastPayloadHash: ticketing.PayloadHash(created),
 	}
 	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, openLink, "", now); act.kind != "" {
 		t.Fatalf("open ticket with unchanged state must not re-enqueue, got %q", act.kind)
@@ -273,10 +273,10 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	if act.kind != "create" {
 		t.Fatalf("precondition: expected create, got %q", act.kind)
 	}
-	if err := enqueueTicketCreate(ctx, st, "t_a", "servicenow", act.payload); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, st, "t_a", "servicenow", act.payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := enqueueTicketCreate(ctx, st, "t_b", "servicenow", act.payload); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, st, "t_b", "servicenow", act.payload); err != nil {
 		t.Fatal(err)
 	}
 

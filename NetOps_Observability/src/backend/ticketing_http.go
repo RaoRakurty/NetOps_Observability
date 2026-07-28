@@ -410,12 +410,12 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 			writeError(w, http.StatusConflict, errors.New("no open ticket to sync for this object"))
 			return
 		}
-		if err := enqueueTicketUpdate(r.Context(), s.ticketing, owner, system, payload); err != nil {
+		if err := ticketing.EnqueueUpdate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
 	} else {
-		if err := enqueueTicketCreate(r.Context(), s.ticketing, owner, system, payload); err != nil {
+		if err := ticketing.EnqueueCreate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}

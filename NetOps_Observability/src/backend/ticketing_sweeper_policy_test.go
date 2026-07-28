@@ -138,18 +138,18 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 		}
 		return ticketing.SystemConfig{}, false, nil
 	}
-	w := newTicketWorker(store, resolve)
-	w.adapters["pagerduty"] = fA.adapter() // same transport works for both fakes (URL comes from cfg)
+	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w.RegisterAdapter("pagerduty", fA.adapter()) // same transport works for both fakes (URL comes from cfg)
 
 	corrA := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	corrB := corrA // SAME local id in both tenants — keys must still differ
-	if err := enqueueTicketCreate(ctx, store, "t_a", "pagerduty", pdPayload(corrA)); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty", pdPayload(corrA)); err != nil {
 		t.Fatal(err)
 	}
-	if err := enqueueTicketCreate(ctx, store, "t_b", "pagerduty", pdPayload(corrB)); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_b", "pagerduty", pdPayload(corrB)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := w.tick(ctx, time.Now().UTC()); err != nil || n != 2 {
+	if n, err := w.Tick(ctx, time.Now().UTC()); err != nil || n != 2 {
 		t.Fatalf("runOnce: n=%d err=%v", n, err)
 	}
 
@@ -172,14 +172,14 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 	evil := func(_ context.Context, _ string, _ string) (ticketing.SystemConfig, bool, error) {
 		return fB.cfg("t_b"), true, nil // claims B's connection for A's delivery
 	}
-	w2 := newTicketWorker(store, evil)
-	w2.adapters["pagerduty"] = fA.adapter()
-	if err := enqueueTicketCreate(ctx, store, "t_a", "pagerduty",
+	w2 := ticketing.NewWorker(store, evil, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w2.RegisterAdapter("pagerduty", fA.adapter())
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty",
 		pdPayload("cccccccc-cccc-4ccc-8ccc-cccccccccccc")); err != nil {
 		t.Fatal(err)
 	}
 	before := len(fB.all())
-	if _, err := w2.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w2.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fB.all()) != before {
@@ -266,13 +266,13 @@ func TestSlackLink_NeverStoresWebhookSecret(t *testing.T) {
 		}
 		return f.cfg(tenant), true, nil
 	}
-	w := newTicketWorker(store, resolve)
-	w.adapters["slack"] = ticketing.NewSlackAdapterWithClient(f.srv.Client())
-	if err := enqueueTicketCreate(ctx, store, "t_a", "slack",
+	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w.RegisterAdapter("slack", ticketing.NewSlackAdapterWithClient(f.srv.Client()))
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "slack",
 		pdPayload("44444444-4444-4444-8444-444444444444")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	link, found, err := store.GetLink(ctx, "t_a", false, "44444444-4444-4444-8444-444444444444", "slack")

@@ -136,14 +136,14 @@ func TestJiraWorker_CreateAdoptsExistingIssue(t *testing.T) {
 		}
 		return f.cfg(tenant), true, nil
 	}
-	w := newTicketWorker(store, resolve)
-	w.adapters["jira"] = f.adapter()
+	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w.RegisterAdapter("jira", f.adapter())
 
 	const corr = "66666666-6666-4666-8666-666666666666"
-	if err := enqueueTicketCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.creates) != 0 {
@@ -213,17 +213,17 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 		}
 		return ticketing.SystemConfig{}, false, nil
 	}
-	w := newTicketWorker(store, resolve)
-	w.adapters["jira"] = fA.adapter() // transport shared; target URL comes from cfg
+	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w.RegisterAdapter("jira", fA.adapter()) // transport shared; target URL comes from cfg
 
 	const corr = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" // SAME local id in both tenants
-	if err := enqueueTicketCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
-	if err := enqueueTicketCreate(ctx, store, "t_b", "jira", jiraPayload(corr)); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_b", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := w.tick(ctx, time.Now().UTC()); err != nil || n != 2 {
+	if n, err := w.Tick(ctx, time.Now().UTC()); err != nil || n != 2 {
 		t.Fatalf("tick: n=%d err=%v", n, err)
 	}
 	if len(fA.creates) != 1 || len(fB.creates) != 1 {
@@ -240,14 +240,14 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 	evil := func(_ context.Context, _ string, _ string) (ticketing.SystemConfig, bool, error) {
 		return fB.cfg("t_b"), true, nil
 	}
-	w2 := newTicketWorker(store, evil)
-	w2.adapters["jira"] = fA.adapter()
-	if err := enqueueTicketCreate(ctx, store, "t_a", "jira",
+	w2 := ticketing.NewWorker(store, evil, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w2.RegisterAdapter("jira", fA.adapter())
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira",
 		jiraPayload("cccccccc-cccc-4ccc-8ccc-cccccccccccc")); err != nil {
 		t.Fatal(err)
 	}
 	before := len(fB.creates)
-	if _, err := w2.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w2.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fB.creates) != before {

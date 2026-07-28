@@ -199,6 +199,11 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  213  ticketing_worker.go → internal/ticketing/worker.go (the
+//	                  outbox worker: claim → resolve → dispatch with #103
+//	                  error classification, backoff+jitter, dead-letter,
+//	                  tenant-mismatch refusal; log sinks injected;
+//	                  Tick/RegisterAdapter/SetMaxRetries exported)
 //	2026-07-28  214  appid_fusion_store.go split: the observation/identity
 //	                  builders → appid/fusion_store.go behind the CHWorker
 //	                  seam; the worker-scope CH plumbing (chWorkerExec/Query,
@@ -244,7 +249,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 214
+const rootPackageCeiling = 213
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

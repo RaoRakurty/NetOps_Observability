@@ -27,11 +27,11 @@ import (
 type ticketStateSyncer struct {
 	store       ticketing.Store
 	adapters    map[string]ticketing.Adapter
-	resolveConn ticketConnResolver
+	resolveConn ticketing.ConnResolver
 	lookback    time.Duration // bound the polled set to recently-touched links
 }
 
-func newTicketStateSyncer(store ticketing.Store, resolve ticketConnResolver) *ticketStateSyncer {
+func newTicketStateSyncer(store ticketing.Store, resolve ticketing.ConnResolver) *ticketStateSyncer {
 	return &ticketStateSyncer{
 		store:       store,
 		adapters:    map[string]ticketing.Adapter{"servicenow": ticketing.NewServiceNowAdapter()},

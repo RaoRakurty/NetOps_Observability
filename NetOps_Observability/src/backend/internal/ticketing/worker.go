@@ -1,7 +1,8 @@
-package main
+package ticketing
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,14 +10,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"netops/backend/internal/ticketing"
 	"time"
 )
 
 // ticketing_worker.go — the outbox worker (#78 P2). It drains ticket_outbox so
 // external ticketing NEVER blocks correlation: the policy layer (P3) only
 // ENQUEUES; this worker claims due rows (SKIP LOCKED), dispatches through the
-// ticketing.Adapter, and on failure retries with exponential backoff + jitter,
+// Adapter, and on failure retries with exponential backoff + jitter,
 // dead-lettering after max_retries. Every action writes a ticket_audit_log
 // entry; a successful create/update advances the correlix_ticket_link.
 //
@@ -24,26 +24,67 @@ import (
 // logical action) and ServiceNow's native correlation_id (a create looks up an
 // existing incident first, so a lost link store never doubles a ticket).
 
-// ticketConnResolver yields the connection for a (tenant, system). Returns
+// ConnResolver yields the connection for a (tenant, system). Returns
 // ok=false when no connection is configured (a transient hold, not a failure).
-type ticketConnResolver func(ctx context.Context, tenant, system string) (ticketing.SystemConfig, bool, error)
+type ConnResolver func(ctx context.Context, tenant, system string) (SystemConfig, bool, error)
 
-type ticketWorker struct {
-	store       ticketing.Store
-	adapters    map[string]ticketing.Adapter
-	resolveConn ticketConnResolver
+type Worker struct {
+	warnf       func(msg string, fields map[string]any)
+	errf        func(msg string, fields map[string]any)
+	store       Store
+	adapters    map[string]Adapter
+	resolveConn ConnResolver
 	workerID    string
 	batch       int
 	lease       time.Duration
 	maxRetries  int
 }
 
-func newTicketWorker(store ticketing.Store, resolve ticketConnResolver) *ticketWorker {
-	return &ticketWorker{
+// SetMaxRetries overrides the dead-letter threshold (tests dead-letter fast;
+// ops could tune it the same way).
+func (w *Worker) SetMaxRetries(n int) {
+	if n > 0 {
+		w.maxRetries = n
+	}
+}
+
+// RegisterAdapter swaps/installs a provider adapter (tests inject
+// httptest-backed adapters; a future plugin path would land here too).
+func (w *Worker) RegisterAdapter(name string, a Adapter) { w.adapters[name] = a }
+
+// canonicalCorrTenant mirrors the sweeper's tenant canonicalization: blank and
+// "global" are the same platform realm (duplicated; the sweeper stays in main).
+func canonicalCorrTenant(t string) string {
+	t = normTenant(t)
+	if t == "" {
+		return "global"
+	}
+	return t
+}
+
+// randHexID mirrors the integrator's 32-hex object id (duplicated).
+func randHexID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// NewWorker builds the outbox worker. warnf/errf are the structured log sinks
+// (nil → silent; the store-error refusal behavior is unchanged).
+func NewWorker(store Store, resolve ConnResolver, warnf, errf func(msg string, fields map[string]any)) *Worker {
+	if warnf == nil {
+		warnf = func(string, map[string]any) {}
+	}
+	if errf == nil {
+		errf = func(string, map[string]any) {}
+	}
+	return &Worker{
+		warnf:       warnf,
+		errf:        errf,
 		store:       store,
-		adapters:    map[string]ticketing.Adapter{"servicenow": ticketing.NewServiceNowAdapter(), "pagerduty": ticketing.NewPagerDutyAdapter(), "slack": ticketing.NewSlackAdapter(), "jira": ticketing.NewJiraAdapter()},
+		adapters:    map[string]Adapter{"servicenow": NewServiceNowAdapter(), "pagerduty": NewPagerDutyAdapter(), "slack": NewSlackAdapter(), "jira": NewJiraAdapter()},
 		resolveConn: resolve,
-		workerID:    "ticket-" + randID()[:8],
+		workerID:    "ticket-" + randHexID()[:8],
 		batch:       16,
 		lease:       2 * time.Minute,
 		maxRetries:  8,
@@ -52,7 +93,7 @@ func newTicketWorker(store ticketing.Store, resolve ticketConnResolver) *ticketW
 
 // Run drives tick() on an interval until ctx is cancelled. Dormant unless wired
 // in (FEATURE_RCA_TICKETING) — ticketing is opt-in.
-func (w *ticketWorker) Run(ctx context.Context, interval time.Duration) {
+func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -60,15 +101,17 @@ func (w *ticketWorker) Run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
-				logWarn("ticketing", "outbox tick failed", map[string]any{"error": err.Error()})
+			if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
+				w.warnf("outbox tick failed", map[string]any{"error": err.Error()})
 			}
 		}
 	}
 }
 
 // tick claims one due batch and processes each item. Returns the count handled.
-func (w *ticketWorker) tick(ctx context.Context, now time.Time) (int, error) {
+// Tick claims due outbox work once and processes it (the Run loop cadence;
+// tests drive it directly).
+func (w *Worker) Tick(ctx context.Context, now time.Time) (int, error) {
 	items, err := w.store.ClaimDueOutbox(ctx, w.workerID, w.batch, w.lease)
 	if err != nil {
 		return 0, err
@@ -80,7 +123,7 @@ func (w *ticketWorker) tick(ctx context.Context, now time.Time) (int, error) {
 }
 
 // process dispatches one claimed item and writes back its next state.
-func (w *ticketWorker) process(ctx context.Context, it ticketing.OutboxItem, now time.Time) {
+func (w *Worker) process(ctx context.Context, it OutboxItem, now time.Time) {
 	adapter := w.adapters[orDefault(it.ExternalSystem, "servicenow")]
 	if adapter == nil {
 		w.deadLetter(ctx, it, "no adapter for "+it.ExternalSystem)
@@ -101,13 +144,13 @@ func (w *ticketWorker) process(ctx context.Context, it ticketing.OutboxItem, now
 	// the outbox item's tenant — on ANY mismatch, never call the provider.
 	if canonicalCorrTenant(cfg.TenantID) != canonicalCorrTenant(it.TenantID) {
 		w.deadLetter(ctx, it, "SECURITY: connection tenant mismatch (delivery quarantined)")
-		logWarn("ticketing", "SECURITY: outbox/connection tenant mismatch — delivery refused",
+		w.warnf("SECURITY: outbox/connection tenant mismatch — delivery refused",
 			map[string]any{"outbox_id": it.ID, "system": it.ExternalSystem})
 		return
 	}
 	if err := w.dispatch(ctx, adapter, cfg, it, now); err != nil {
-		var perm ticketing.PermanentDeliveryError
-		var rl ticketing.RateLimitedError
+		var perm PermanentDeliveryError
+		var rl RateLimitedError
 		switch {
 		case errors.As(err, &perm):
 			w.deadLetter(ctx, it, err.Error())
@@ -129,7 +172,7 @@ func (w *ticketWorker) process(ctx context.Context, it ticketing.OutboxItem, now
 //	(none) -> open -> updated* -> resolved   (reopen only via a NEW create
 //	decision from the sweeper after the flap-suppression window, never by a
 //	stale queued row from the previous life.)
-func (w *ticketWorker) dispatch(ctx context.Context, adapter ticketing.Adapter, cfg ticketing.SystemConfig, it ticketing.OutboxItem, now time.Time) error {
+func (w *Worker) dispatch(ctx context.Context, adapter Adapter, cfg SystemConfig, it OutboxItem, now time.Time) error {
 	link, linkFound, lerr := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
 	if lerr != nil {
 		return lerr // transient store trouble: retry
@@ -189,7 +232,7 @@ func (w *ticketWorker) dispatch(ctx context.Context, adapter ticketing.Adapter, 
 	}
 }
 
-func (w *ticketWorker) doCreate(ctx context.Context, adapter ticketing.Adapter, cfg ticketing.SystemConfig, it ticketing.OutboxItem, now time.Time) error {
+func (w *Worker) doCreate(ctx context.Context, adapter Adapter, cfg SystemConfig, it OutboxItem, now time.Time) error {
 	p, err := outboxPayload(it)
 	if err != nil {
 		return err
@@ -211,7 +254,7 @@ func (w *ticketWorker) doCreate(ctx context.Context, adapter ticketing.Adapter, 
 	return nil
 }
 
-func (w *ticketWorker) doUpdate(ctx context.Context, adapter ticketing.Adapter, cfg ticketing.SystemConfig, it ticketing.OutboxItem, now time.Time) error {
+func (w *Worker) doUpdate(ctx context.Context, adapter Adapter, cfg SystemConfig, it OutboxItem, now time.Time) error {
 	p, err := outboxPayload(it)
 	if err != nil {
 		return err
@@ -231,15 +274,15 @@ func (w *ticketWorker) doUpdate(ctx context.Context, adapter ticketing.Adapter, 
 // ── link + audit writers ─────────────────────────────────────────────────────
 
 // linkRef loads the existing ticket ref for an update/note/resolve action.
-func (w *ticketWorker) linkRef(ctx context.Context, it ticketing.OutboxItem) (ticketing.Ref, error) {
+func (w *Worker) linkRef(ctx context.Context, it OutboxItem) (Ref, error) {
 	l, found, err := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
 	if err != nil {
-		return ticketing.Ref{}, err
+		return Ref{}, err
 	}
 	if !found || l.SysID == "" {
-		return ticketing.Ref{}, fmt.Errorf("no ticket link for %s/%s", it.CorrObjectID, it.ExternalSystem)
+		return Ref{}, fmt.Errorf("no ticket link for %s/%s", it.CorrObjectID, it.ExternalSystem)
 	}
-	return ticketing.Ref{Number: l.TicketNumber, SysID: l.SysID, URL: l.InstanceURL}, nil
+	return Ref{Number: l.TicketNumber, SysID: l.SysID, URL: l.InstanceURL}, nil
 }
 
 // storeErr surfaces a ticketing-store write failure.
@@ -250,19 +293,19 @@ func (w *ticketWorker) linkRef(ctx context.Context, it ticketing.OutboxItem) (ti
 // record that simply never existed. §10 forbids a silent failure regardless of
 // whether the system recovers from it: an operator debugging a duplicate
 // notification needs to see that the outbox could not be marked done.
-func (w *ticketWorker) storeErr(op string, it ticketing.OutboxItem, err error) {
+func (w *Worker) storeErr(op string, it OutboxItem, err error) {
 	if err == nil {
 		return
 	}
-	logError("ticketing", "store write failed", map[string]any{
+	w.errf("store write failed", map[string]any{
 		"op": op, "corr_object_id": it.CorrObjectID, "external_system": it.ExternalSystem,
 		"action": it.Action, "status": it.Status, "err": err.Error(),
 	})
 }
 
-func (w *ticketWorker) upsertLink(ctx context.Context, it ticketing.OutboxItem, cfg ticketing.SystemConfig, ref ticketing.Ref, p ticketing.Payload, status string, now time.Time) {
+func (w *Worker) upsertLink(ctx context.Context, it OutboxItem, cfg SystemConfig, ref Ref, p Payload, status string, now time.Time) {
 	t := now
-	w.storeErr("PutLink", it, w.store.PutLink(ctx, ticketing.Link{
+	w.storeErr("PutLink", it, w.store.PutLink(ctx, Link{
 		TenantID:       it.TenantID,
 		CorrObjectID:   it.CorrObjectID,
 		ExternalSystem: it.ExternalSystem,
@@ -271,16 +314,16 @@ func (w *ticketWorker) upsertLink(ctx context.Context, it ticketing.OutboxItem, 
 		InstanceURL:     cfg.InstanceURL,
 		TicketNumber:    ref.Number,
 		SysID:           ref.SysID,
-		DedupeKey:       ticketing.DedupeKey(it.TenantID, it.CorrObjectID, it.ExternalSystem),
+		DedupeKey:       DedupeKey(it.TenantID, it.CorrObjectID, it.ExternalSystem),
 		Status:          status,
 		LastVerdict:     p.Verdict,
 		LastConfidence:  p.Confidence,
-		LastPayloadHash: payloadHash(p),
+		LastPayloadHash: PayloadHash(p),
 		LastSyncedAt:    &t,
 	}))
 }
 
-func (w *ticketWorker) markLinkStatus(ctx context.Context, it ticketing.OutboxItem, status string) {
+func (w *Worker) markLinkStatus(ctx context.Context, it OutboxItem, status string) {
 	l, found, err := w.store.GetLink(ctx, it.TenantID, false, it.CorrObjectID, it.ExternalSystem)
 	if err != nil {
 		// The link store did not answer. Skipping is the only safe action (we
@@ -299,24 +342,24 @@ func (w *ticketWorker) markLinkStatus(ctx context.Context, it ticketing.OutboxIt
 	w.storeErr("PutLink", it, w.store.PutLink(ctx, l))
 }
 
-func (w *ticketWorker) audit(ctx context.Context, it ticketing.OutboxItem, action, result, oldStatus, newStatus string) {
-	w.storeErr("AppendAudit", it, w.store.AppendAudit(ctx, ticketing.AuditEntry{
+func (w *Worker) audit(ctx context.Context, it OutboxItem, action, result, oldStatus, newStatus string) {
+	w.storeErr("AppendAudit", it, w.store.AppendAudit(ctx, AuditEntry{
 		TenantID:       it.TenantID,
-		ID:             randID(),
+		ID:             randHexID(),
 		CorrObjectID:   it.CorrObjectID,
 		ExternalSystem: it.ExternalSystem,
 		Action:         action,
 		Actor:          "system",
 		OldStatus:      oldStatus,
 		NewStatus:      newStatus,
-		PayloadHash:    payloadHashRaw(it.Payload),
+		PayloadHash:    PayloadHashRaw(it.Payload),
 		Result:         result,
 	}))
 }
 
 // ── retry / dead-letter ──────────────────────────────────────────────────────
 
-func (w *ticketWorker) succeed(ctx context.Context, it ticketing.OutboxItem) {
+func (w *Worker) succeed(ctx context.Context, it OutboxItem) {
 	it.Status = "sent"
 	it.LastError = ""
 	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
@@ -324,9 +367,9 @@ func (w *ticketWorker) succeed(ctx context.Context, it ticketing.OutboxItem) {
 
 // retryLater bumps the retry count and schedules the next attempt with capped
 // exponential backoff + deterministic jitter, dead-lettering past max_retries.
-func (w *ticketWorker) retryLater(ctx context.Context, it ticketing.OutboxItem, now time.Time, reason string) {
+func (w *Worker) retryLater(ctx context.Context, it OutboxItem, now time.Time, reason string) {
 	it.RetryCount++
-	it.LastError = ticketing.Truncate(reason, 480)
+	it.LastError = Truncate(reason, 480)
 	max := it.MaxRetries
 	if max == 0 {
 		max = w.maxRetries
@@ -335,7 +378,7 @@ func (w *ticketWorker) retryLater(ctx context.Context, it ticketing.OutboxItem, 
 		it.Status = "dead_letter"
 		w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 		w.audit(ctx, it, it.Action, "dead_letter", "", "")
-		logWarn("ticketing", "outbox item dead-lettered", map[string]any{
+		w.warnf("outbox item dead-lettered", map[string]any{
 			"corr_object_id": it.CorrObjectID, "action": it.Action, "retries": it.RetryCount})
 		return
 	}
@@ -344,9 +387,9 @@ func (w *ticketWorker) retryLater(ctx context.Context, it ticketing.OutboxItem, 
 	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 }
 
-func (w *ticketWorker) deadLetter(ctx context.Context, it ticketing.OutboxItem, reason string) {
+func (w *Worker) deadLetter(ctx context.Context, it OutboxItem, reason string) {
 	it.Status = "dead_letter"
-	it.LastError = ticketing.Truncate(reason, 480)
+	it.LastError = Truncate(reason, 480)
 	w.storeErr("FinishOutbox", it, w.store.FinishOutbox(ctx, it))
 	w.audit(ctx, it, it.Action, "dead_letter", "", "")
 }
@@ -380,12 +423,12 @@ func backoffDelay(attempt int, id string) time.Duration {
 
 // ── outbox payload helpers ───────────────────────────────────────────────────
 
-// enqueueTicketCreate enqueues a create action for an RCA object. Used by P3's
+// EnqueueCreate enqueues a create action for an RCA object. Used by P3's
 // policy layer and the P2/E2E tests. Idempotency-keyed so re-enqueue is a no-op.
-func enqueueTicketCreate(ctx context.Context, store ticketing.Store, tenant, system string, p ticketing.Payload) error {
-	return store.EnqueueOutbox(ctx, ticketing.OutboxItem{
+func EnqueueCreate(ctx context.Context, store Store, tenant, system string, p Payload) error {
+	return store.EnqueueOutbox(ctx, OutboxItem{
 		TenantID:       tenant,
-		ID:             randID(),
+		ID:             randHexID(),
 		CorrObjectID:   p.CorrObjectID,
 		ExternalSystem: system,
 		Action:         "create",
@@ -395,36 +438,36 @@ func enqueueTicketCreate(ctx context.Context, store ticketing.Store, tenant, sys
 	})
 }
 
-// enqueueTicketUpdate enqueues an update keyed by the payload hash (one row per
+// EnqueueUpdate enqueues an update keyed by the payload hash (one row per
 // distinct RCA state) so identical re-syncs collapse.
-func enqueueTicketUpdate(ctx context.Context, store ticketing.Store, tenant, system string, p ticketing.Payload) error {
-	return store.EnqueueOutbox(ctx, ticketing.OutboxItem{
+func EnqueueUpdate(ctx context.Context, store Store, tenant, system string, p Payload) error {
+	return store.EnqueueOutbox(ctx, OutboxItem{
 		TenantID:       tenant,
-		ID:             randID(),
+		ID:             randHexID(),
 		CorrObjectID:   p.CorrObjectID,
 		ExternalSystem: system,
 		Action:         "update",
-		IdempotencyKey: fmt.Sprintf("%s:update:%s:%s:%s", system, normTenant(tenant), p.CorrObjectID, payloadHash(p)),
+		IdempotencyKey: fmt.Sprintf("%s:update:%s:%s:%s", system, normTenant(tenant), p.CorrObjectID, PayloadHash(p)),
 		Payload:        payloadToMap(p),
 		Status:         "pending",
 	})
 }
 
-func payloadToMap(p ticketing.Payload) map[string]any {
+func payloadToMap(p Payload) map[string]any {
 	b, _ := json.Marshal(p)
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
 	return m
 }
 
-func outboxPayload(it ticketing.OutboxItem) (ticketing.Payload, error) {
+func outboxPayload(it OutboxItem) (Payload, error) {
 	b, err := json.Marshal(it.Payload)
 	if err != nil {
-		return ticketing.Payload{}, err
+		return Payload{}, err
 	}
-	var p ticketing.Payload
+	var p Payload
 	if err := json.Unmarshal(b, &p); err != nil {
-		return ticketing.Payload{}, fmt.Errorf("decode outbox payload: %w", err)
+		return Payload{}, fmt.Errorf("decode outbox payload: %w", err)
 	}
 	if p.CorrObjectID == "" {
 		p.CorrObjectID = it.CorrObjectID
@@ -432,7 +475,7 @@ func outboxPayload(it ticketing.OutboxItem) (ticketing.Payload, error) {
 	return p, nil
 }
 
-func outboxNote(it ticketing.OutboxItem) string {
+func outboxNote(it OutboxItem) string {
 	if n, ok := it.Payload["note"].(string); ok && n != "" {
 		return n
 	}
@@ -442,13 +485,13 @@ func outboxNote(it ticketing.OutboxItem) string {
 	return "Correlix RCA update"
 }
 
-func payloadHash(p ticketing.Payload) string {
+func PayloadHash(p Payload) string {
 	b, _ := json.Marshal(p)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-func payloadHashRaw(m map[string]any) string {
+func PayloadHashRaw(m map[string]any) string {
 	b, _ := json.Marshal(m)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:16]
@@ -456,9 +499,9 @@ func payloadHashRaw(m map[string]any) string {
 
 // retryAfter schedules the item's next attempt at an explicit provider-given
 // delay (429 Retry-After), still counting toward max_retries.
-func (w *ticketWorker) retryAfter(ctx context.Context, it ticketing.OutboxItem, now time.Time, after time.Duration, msg string) {
+func (w *Worker) retryAfter(ctx context.Context, it OutboxItem, now time.Time, after time.Duration, msg string) {
 	it.RetryCount++
-	it.LastError = ticketing.Truncate(msg, 480)
+	it.LastError = Truncate(msg, 480)
 	max := it.MaxRetries
 	if max == 0 {
 		max = w.maxRetries

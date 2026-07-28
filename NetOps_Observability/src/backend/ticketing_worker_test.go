@@ -8,7 +8,7 @@ import (
 )
 
 // testWorker builds a worker over an in-mem store + the mock ServiceNow adapter.
-func testWorker(t *testing.T, m *mockServiceNow) (*ticketWorker, ticketing.Store) {
+func testWorker(t *testing.T, m *mockServiceNow) (*ticketing.Worker, ticketing.Store) {
 	t.Helper()
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	store := ticketing.NewMemStore()
@@ -17,8 +17,8 @@ func testWorker(t *testing.T, m *mockServiceNow) (*ticketWorker, ticketing.Store
 		c.TenantID = tenant // mirror production: the resolver stamps tenant identity
 		return c, true, nil
 	}
-	w := newTicketWorker(store, resolve)
-	w.adapters["servicenow"] = m.adapter() // inject the mock-backed adapter
+	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
+	w.RegisterAdapter("servicenow", m.adapter()) // inject the mock-backed adapter
 	return w, store
 }
 
@@ -28,11 +28,11 @@ func TestOutboxWorker_CreateHappyPath(t *testing.T) {
 	w, store := testWorker(t, m)
 	ctx := context.Background()
 
-	if err := enqueueTicketCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-1")); err != nil {
+	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-1")); err != nil {
 		t.Fatal(err)
 	}
 
-	n, err := w.tick(ctx, time.Now().UTC())
+	n, err := w.Tick(ctx, time.Now().UTC())
 	if err != nil || n != 1 {
 		t.Fatalf("tick processed=%d err=%v", n, err)
 	}
@@ -75,8 +75,8 @@ func TestOutboxWorker_NeverDoubleCreates(t *testing.T) {
 		t.Fatalf("setup expected 1 create, got %d", m.creates)
 	}
 
-	_ = enqueueTicketCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-2"))
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-2"))
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,14 +93,14 @@ func TestOutboxWorker_RetryThenDeadLetter(t *testing.T) {
 	m := newMockServiceNow()
 	defer m.Close()
 	w, store := testWorker(t, m)
-	w.maxRetries = 2 // dead-letter fast
+	w.SetMaxRetries(2) // dead-letter fast
 	ctx := context.Background()
 
 	m.failNext = 10 // every create fails
-	_ = enqueueTicketCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-3"))
+	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-3"))
 
 	// First attempt fails → retrying, retry_count=1, future next_retry_at.
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	out, _, _ := store.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
@@ -117,7 +117,7 @@ func TestOutboxWorker_RetryThenDeadLetter(t *testing.T) {
 	due.Status = "pending"
 	_ = store.FinishOutbox(ctx, due)
 
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	out, _, _ = store.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
@@ -136,14 +136,14 @@ func TestOutboxWorker_HoldsWhenNoConnection(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	store := ticketing.NewMemStore()
 	// resolver reports "not configured yet".
-	w := newTicketWorker(store, func(_ context.Context, _, _ string) (ticketing.SystemConfig, bool, error) {
+	w := ticketing.NewWorker(store, func(_ context.Context, _, _ string) (ticketing.SystemConfig, bool, error) {
 		return ticketing.SystemConfig{}, false, nil
-	})
-	w.adapters["servicenow"] = m.adapter()
+	}, nil, nil)
+	w.RegisterAdapter("servicenow", m.adapter())
 	ctx := context.Background()
 
-	_ = enqueueTicketCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-4"))
-	if _, err := w.tick(ctx, time.Now().UTC()); err != nil {
+	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-4"))
+	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	out, _, _ := store.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)

@@ -1161,7 +1161,7 @@ func main() {
 			cfg, ok := srv.itsmCfg.systemConfig(tenant, system)
 			return cfg, ok, nil
 		}
-		tw := newTicketWorker(srv.ticketing, resolve)
+		tw := ticketing.NewWorker(srv.ticketing, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
 		workers.start("ticketing-worker", func() {
 			tw.Run(ctx, durationOr("RCA_TICKETING_WORKER_INTERVAL", 15*time.Second))
 		})
