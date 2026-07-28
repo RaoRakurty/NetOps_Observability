@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/token"
 	"testing"
 )
 
@@ -10,14 +11,14 @@ import (
 
 // SR-029: a hash at a lower iteration count is flagged for rehash; current cost is not.
 func TestPasswordNeedsRehash(t *testing.T) {
-	if !passwordNeedsRehash("pbkdf2_sha256$1000$c2FsdA==$aGFzaA==") {
+	if !token.PasswordNeedsRehash("pbkdf2_sha256$1000$c2FsdA==$aGFzaA==") {
 		t.Error("low-iteration hash should need rehash")
 	}
-	cur, err := hashPassword("a-fine-passphrase")
+	cur, err := token.HashPassword("a-fine-passphrase")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if passwordNeedsRehash(cur) {
+	if token.PasswordNeedsRehash(cur) {
 		t.Error("current-cost hash should NOT need rehash")
 	}
 }

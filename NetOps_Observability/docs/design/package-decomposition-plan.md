@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** twenty-four domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty-five domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -8,8 +8,8 @@
 `internal/token`, `internal/session`, `internal/jwks`, `internal/apikey`,
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
 `ai/toolwire`, `wireless/store`, `nms/store`, `ticketing/store`,
-`pathgraph/store`, 2026-07-28).
-**246** non-test files remain in `package main`. This document is the ordered sequence for the
+`pathgraph/store`, `token/password`, 2026-07-28).
+**245** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -122,7 +122,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 26 | `nms_store.go` → `nms/store.go` | 1 | ~760 | 4 | **Done** (2026-07-28). The NMS integration store (config + run records + external states + health rollup; mem + FORCE-RLS pg; vault-enveloped credentials) joins its connector package. `DB` seam injected via `rlsPG`; the F-76 durability marker exported (`ErrStorageNotDurable`, `NewNonDurableStore`, `StoreDurable`); `Key` exported (the scheduler's bookkeeping shares the composite key). Store contract tests moved in; `TestNMSSchedulerDue` shuttled back (the runtime is integrator code). |
 | ✅ 27 | `ticketing_store.go` → `internal/ticketing/store.go` | 1 | ~930 | ~10 | **Done** (2026-07-28). The ticketing repository (policies with the single-enabled invariant, links, leased outbox, ring-buffered audit; mem + FORCE-RLS pg) joins the model/policy package. `DB` seam via `rlsPG`; backend selection stayed in `main.go`; `ErrPolicyConflict` + paging bounds (`MaxPage`, `*DefaultPage`) exported; `orDefault` STAYED in main with its many non-ticketing consumers (package keeps its own copy); `intToString` → stdlib `strconv.Itoa` on the way through. Pagination (F-66/F-67) + ring-buffer (F-33) contract tests moved in; drift-seeding http tests use `SeedPolicyForTest` instead of writing the map. |
 | ✅ 28 | `path_graph_store.go` → `pathgraph/store.go` | 1 | ~830 | ~8 | **Done** (2026-07-28). The last big store: endpoint/definition registries + observation/hop streams over the mem (per-tenant retention/eviction) and pg+ClickHouse hybrid backends. `DB` via `rlsPG`; a NEW `pathgraph.CH` seam (`InsertJSON`/`Select`/`Exec`) adapted by main's `chSeam{}` — Exec keeps the no-CH-configured→no-op purge semantics in main. Ingest-boundary validators exported (`IsPathToken`, `IsAddressToken`, `ScopeFor`, `CHTime`, `LiveOnly`); eviction logging injected via `SetInfof`; decode helpers (`str`/`parseCHTime`/`asFloat`-via-metricval) duplicated per the no-utils rule. Retention white-box suite moved in. |
-| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 29 | `password.go` → `internal/token/password.go` | 1 | ~115 | ~10 | **Done** (2026-07-28). The PBKDF2-SHA256 KDF (hash/verify/needs-rehash + the SR-013 `MaxPasswordLen` amplification bound) consolidated into the auth-crypto boundary; `password.go` DISSOLVED — its only other content, the `jwtClaims` alias, moved to `auth.go`. Password POLICY (length rules, history, account predicates) stayed in main. KDF contract tests moved; policy tests shuttled back. |
+| 18+ | `users` (next: the identity store, session/apikey pattern), `oidc` (rest), `copilot` (rest), `snmp` (rest), … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

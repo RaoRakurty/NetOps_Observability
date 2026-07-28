@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"netops/backend/internal/token"
 	"os"
 	"testing"
 )
@@ -61,7 +62,7 @@ func TestPgUsersStore(t *testing.T) {
 	if u, ok := s.Get("ALICE"); !ok || normTenant(u.TenantID) != "acme" {
 		t.Errorf("Get(ALICE) = %+v ok=%v, want acme user found", u, ok)
 	}
-	if u, ok := s.Get("carol"); !ok || !verifyPassword("Passw0rd!2345", u.PasswordHash) {
+	if u, ok := s.Get("carol"); !ok || !token.VerifyPassword("Passw0rd!2345", u.PasswordHash) {
 		t.Errorf("Get(carol) should round-trip the password hash, got ok=%v", ok)
 	}
 	if _, ok := s.Get("nobody"); ok {
@@ -101,7 +102,7 @@ func TestPgUsersStore(t *testing.T) {
 	if err := s.ChangePassword("carol", "newpassword456"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
-	if u, _ := s.Get("carol"); !verifyPassword("newpassword456", u.PasswordHash) || verifyPassword("Passw0rd!2345", u.PasswordHash) {
+	if u, _ := s.Get("carol"); !token.VerifyPassword("newpassword456", u.PasswordHash) || token.VerifyPassword("Passw0rd!2345", u.PasswordHash) {
 		t.Error("password change did not take effect")
 	}
 	if err := s.ChangePassword("carol", "short"); err == nil {

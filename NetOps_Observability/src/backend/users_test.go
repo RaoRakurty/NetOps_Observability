@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/token"
 	"path/filepath"
 	"testing"
 )
@@ -44,7 +45,7 @@ func TestUserStoreCRUD(t *testing.T) {
 	if s2.Count() != 1 {
 		t.Fatalf("reloaded count = %d, want 1", s2.Count())
 	}
-	if !verifyPassword("longenoughpw", got.PasswordHash) {
+	if !token.VerifyPassword("longenoughpw", got.PasswordHash) {
 		t.Fatalf("stored hash doesn't verify the original password")
 	}
 }
@@ -63,7 +64,7 @@ func TestSeedAdminOnlyOnce(t *testing.T) {
 		t.Fatalf("second seed: %v", err)
 	}
 	u, _ := s.Get("admin")
-	if !verifyPassword("initial-password", u.PasswordHash) {
+	if !token.VerifyPassword("initial-password", u.PasswordHash) {
 		t.Fatalf("second seed silently overwrote the password")
 	}
 }

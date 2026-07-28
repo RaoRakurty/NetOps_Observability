@@ -152,7 +152,11 @@ import (
 //	                  rlsPG and a NEW pathgraph.CH seam — InsertJSON/Select/
 //	                  Exec — adapted by main's chSeam; token validators +
 //	                  ScopeFor/CHTime exported for the ingest boundary)
-const rootPackageCeiling = 246
+//	2026-07-28  245  password.go dissolved: the PBKDF2 hash/verify/rehash KDF
+//	                  joined internal/token (the auth-crypto boundary), the
+//	                  jwtClaims alias moved to auth.go; password POLICY
+//	                  (length rules, history) stayed in main
+const rootPackageCeiling = 245
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

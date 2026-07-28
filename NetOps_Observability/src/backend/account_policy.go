@@ -28,6 +28,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"netops/backend/internal/token"
 	"strings"
 	"time"
 )
@@ -203,7 +204,7 @@ func checkPasswordHistory(ss SecuritySettings, u User, candidate string) error {
 		if h == "" {
 			continue
 		}
-		if verifyPassword(candidate, h) {
+		if token.VerifyPassword(candidate, h) {
 			return errPasswordReused
 		}
 	}

@@ -1,4 +1,4 @@
-package main
+package token
 
 import (
 	"crypto/hmac"
@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"netops/backend/internal/token"
 )
+
+// MaxPasswordLen caps password length to bound the work the 600k-round KDF can
+// be asked to do (SR-013 pairs with this at the login boundary; creation/change
+// reject longer inputs via the integrator's policy).
+const MaxPasswordLen = 128
 
 // PBKDF2-SHA256 password hashing implemented in pure stdlib so the
 // scaffold builds without any extra Go modules.
@@ -29,7 +32,7 @@ const (
 	saltLen      = 16
 )
 
-func hashPassword(password string) (string, error) {
+func HashPassword(password string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -43,12 +46,12 @@ func hashPassword(password string) (string, error) {
 	), nil
 }
 
-func verifyPassword(password, encoded string) bool {
+func VerifyPassword(password, encoded string) bool {
 	// SR-013: bound the input BEFORE running the 600k-round KDF. An over-long
-	// password can never be valid (creation/change reject > maxPasswordLen), so
+	// password can never be valid (creation/change reject > MaxPasswordLen), so
 	// reject it cheaply rather than hashing megabytes 600k times — closes a
 	// pre-hash amplification DoS on the unauthenticated login path.
-	if len(password) > maxPasswordLen {
+	if len(password) > MaxPasswordLen {
 		return false
 	}
 	parts := strings.Split(encoded, "$")
@@ -72,12 +75,12 @@ func verifyPassword(password, encoded string) bool {
 	return hmac.Equal(actual, expected)
 }
 
-// passwordNeedsRehash reports whether a stored hash uses fewer PBKDF2 iterations
+// PasswordNeedsRehash reports whether a stored hash uses fewer PBKDF2 iterations
 // than the current cost (SR-029). When true, the caller should opportunistically
 // re-hash the just-verified plaintext at the current cost and persist it, so a
 // hash minted under a weaker (or attacker-supplied low) iteration count is
 // upgraded on next successful login.
-func passwordNeedsRehash(encoded string) bool {
+func PasswordNeedsRehash(encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != "pbkdf2_sha256" {
 		return false
@@ -114,13 +117,3 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	}
 	return out[:keyLen]
 }
-
-// ---- JWT (HS256) ---------------------------------------------------------
-//
-// The claims model and HS256 signer/verifier live in internal/token. The alias
-// keeps the 90+ in-package consumers source-compatible; the security property
-// the old unexported actingTenant field carried (a token can never set the
-// platform-owner override) is now enforced by `json:"-"` on
-// token.Claims.ActingTenant and pinned by TestCraftedTokenCannotSetActingTenant.
-
-type jwtClaims = token.Claims

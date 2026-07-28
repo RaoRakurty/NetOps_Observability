@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/token"
 	"os"
 	"sort"
 	"strings"
@@ -189,7 +190,7 @@ func (s *userStore) Create(username, password, role string) (User, error) {
 	if err := validatePassword(password); err != nil {
 		return User{}, err
 	}
-	hash, err := hashPassword(password)
+	hash, err := token.HashPassword(password)
 	if err != nil {
 		return User{}, err
 	}
@@ -245,7 +246,7 @@ func (s *userStore) CreateFull(u User, password string) (User, error) {
 		if err := validatePassword(password); err != nil {
 			return User{}, err
 		}
-		hash, err := hashPassword(password)
+		hash, err := token.HashPassword(password)
 		if err != nil {
 			return User{}, err
 		}
@@ -397,7 +398,7 @@ func (s *userStore) setPassword(username, newPassword string, stamp bool) error 
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
-	hash, err := hashPassword(newPassword)
+	hash, err := token.HashPassword(newPassword)
 	if err != nil {
 		return err
 	}
@@ -474,12 +475,8 @@ func (s *userStore) SeedAdmin(username, password string) error {
 // or normalized Postgres rows. Both userStore and pgUsersStore call them so the
 // rules can't drift apart.
 
-// maxPasswordLen caps password length to bound the work the PBKDF2 KDF
-// (pbkdf2Iter = 600k HMAC-SHA256 rounds) performs per login/change. Without an
-// upper bound, a multi-MB "password" forces the server to hash the whole input
-// 600k times per request — an amplification DoS on the (unauthenticated) login
-// path (SR-013). 128 chars comfortably exceeds any real passphrase.
-const maxPasswordLen = 128
+// The password length cap (SR-013 amplification-DoS bound) lives with the KDF
+// as token.MaxPasswordLen; validatePassword below enforces it at creation/change.
 
 var (
 	errShortPassword        = errors.New("password must be at least 8 characters")
@@ -496,7 +493,7 @@ func validatePassword(password string) error {
 	if len(password) < 8 {
 		return errShortPassword
 	}
-	if len(password) > maxPasswordLen {
+	if len(password) > token.MaxPasswordLen {
 		return errLongPassword
 	}
 	return nil

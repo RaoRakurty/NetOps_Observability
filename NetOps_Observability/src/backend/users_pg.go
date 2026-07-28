@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"netops/backend/internal/token"
 	"sort"
 	"strings"
 	"time"
@@ -144,7 +145,7 @@ func (s *pgUsersStore) Create(username, password, role string) (User, error) {
 	if err := validatePassword(password); err != nil {
 		return User{}, err
 	}
-	hash, err := hashPassword(password)
+	hash, err := token.HashPassword(password)
 	if err != nil {
 		return User{}, err
 	}
@@ -161,7 +162,7 @@ func (s *pgUsersStore) CreateFull(u User, password string) (User, error) {
 		if err := validatePassword(password); err != nil {
 			return User{}, err
 		}
-		hash, err := hashPassword(password)
+		hash, err := token.HashPassword(password)
 		if err != nil {
 			return User{}, err
 		}
@@ -297,7 +298,7 @@ func (s *pgUsersStore) setPassword(username, newPassword string, stamp bool) err
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
-	hash, err := hashPassword(newPassword)
+	hash, err := token.HashPassword(newPassword)
 	if err != nil {
 		return err
 	}

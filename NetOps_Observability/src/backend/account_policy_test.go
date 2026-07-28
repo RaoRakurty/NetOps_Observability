@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/internal/token"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,7 @@ func TestHardDenialWinsOverForcedChange(t *testing.T) {
 // ---- password history ------------------------------------------------------
 
 func TestPasswordHistoryRejectsReuseOnlyWhenEnabled(t *testing.T) {
-	oldHash, err := hashPassword("PriorPassw0rd!")
+	oldHash, err := token.HashPassword("PriorPassw0rd!")
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}

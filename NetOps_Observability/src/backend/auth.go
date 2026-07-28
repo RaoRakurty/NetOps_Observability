@@ -88,6 +88,17 @@ func roleFromScopes(scopes []string) string {
 	return role
 }
 
+// ---- JWT / password crypto ------------------------------------------------
+//
+// The claims model, HS256 signer/verifier and PBKDF2 password hashing live in
+// internal/token (the auth-crypto boundary). The alias keeps the 90+ in-package
+// consumers source-compatible; the security property the old unexported
+// actingTenant field carried (a token can never set the platform-owner
+// override) is enforced by json:"-" on token.Claims.ActingTenant and pinned by
+// TestCraftedTokenCannotSetActingTenant.
+
+type jwtClaims = token.Claims
+
 type ctxKey int
 
 const userCtxKey ctxKey = 0
@@ -141,7 +152,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// SR-012: login is unauthenticated — bound its body tightly (credentials are
-	// tiny). Pairs with the verifyPassword length cap (SR-013).
+	// tiny). Pairs with the token.VerifyPassword length cap (SR-013).
 	var req loginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -156,7 +167,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, ok := s.users.Get(req.Username)
-	if !ok || !verifyPassword(req.Password, user.PasswordHash) {
+	if !ok || !token.VerifyPassword(req.Password, user.PasswordHash) {
 		// Count the failure against the lockout policy for the account's scope.
 		allowed, unlock := s.lockoutPolicy(user, ok)
 		// F-25: an UNCOUNTED failure is an unlimited guess. The throttle used to
@@ -206,7 +217,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// rehashPassword deliberately does NOT stamp PasswordChangedAt: this is the
 	// same secret, re-wrapped. Treating it as a change would restart the
 	// password_expire_days clock on every sign-in and make expiry unreachable.
-	if passwordNeedsRehash(user.PasswordHash) {
+	if token.PasswordNeedsRehash(user.PasswordHash) {
 		if err := s.users.RehashPassword(user.Username, req.Password); err != nil {
 			logWarn("auth", "password rehash-on-login failed", map[string]any{"user": user.Username, "err": err.Error()})
 		}
@@ -697,7 +708,7 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("password is managed by your identity provider; change it there"))
 		return
 	}
-	if !verifyPassword(req.CurrentPassword, user.PasswordHash) {
+	if !token.VerifyPassword(req.CurrentPassword, user.PasswordHash) {
 		writeError(w, http.StatusUnauthorized, badCreds)
 		return
 	}
@@ -709,7 +720,7 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// No-reuse: the new password must differ from the current one.
-	if verifyPassword(req.NewPassword, user.PasswordHash) {
+	if token.VerifyPassword(req.NewPassword, user.PasswordHash) {
 		writeError(w, http.StatusBadRequest, errors.New("new password must differ from the current password"))
 		return
 	}
