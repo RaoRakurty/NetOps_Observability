@@ -14,6 +14,7 @@ import (
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
+	"netops/backend/wireless"
 	"testing"
 	"time"
 )
@@ -64,7 +65,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 		saved: sv, snmpCreds: sc, snmpProfiles: sp, discovery: NewDiscoveryAggregator(),
 		securitySettings: ss, loginThrottle: newLoginThrottle(), sessions: sessStore,
 		audit: au, startedAt: time.Now().UTC(),
-		wireless:        newMemWirelessStore(),    // #128: always set, like the runtime wiring
+		wireless:        wireless.NewMemStore(),   // #128: always set, like the runtime wiring
 		wirelessActions: newWirelessActionStore(), // #128 Phase 8: dormant unless FEATURE_WIRELESS_ACTIONS
 	}
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))

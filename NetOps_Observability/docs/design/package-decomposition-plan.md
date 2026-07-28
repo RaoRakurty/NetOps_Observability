@@ -1,14 +1,14 @@
 # `package main` decomposition — the executable plan
 
-**Status:** twenty domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** twenty-one domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
 `internal/verify`, `internal/segclass`, `internal/seam`, all 2026-07-27;
 `internal/token`, `internal/session`, `internal/jwks`, `internal/apikey`,
 `internal/tenant` (+ `tenant.Collection`), `internal/snmpcred`,
-`ai/toolwire`, 2026-07-28).
-**250** non-test files remain in `package main`. This document is the ordered sequence for the
+`ai/toolwire`, `wireless/store`, 2026-07-28).
+**249** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -117,7 +117,8 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 22 | `tenantkv.go` → `tenant.Collection[T]` | 1 | ~150 | 3 | **Done** (2026-07-28). The §3a default-closed per-tenant collection primitive joined `internal/tenant` (same bounded context — the tenant-isolation storage plane). Kv injected; a GENERIC alias `type tenantKV[T any] = tenant.Collection[T]` + wrapper in `tenant_wiring.go` kept the three consumers (sites, device sites, WAN policies) call-shape identical. `Path()` accessor replaced a white-box `.kv.path` reach in sites_test. |
 | ✅ 23 | `internal/snmpcred` | 1 | ~380 | 4 | **Done** (2026-07-28). SNMP credential profiles (v1/v2c/v3 USM): model, redacting `Public()` projection, validation, and the vault-enveloped store (encrypt-at-rest copies; in-memory stays plaintext for `Resolve`). Kv INJECTED; `internal/vault` imported directly (already a package, no cycle); `slugify` duplicated from rbac.go per the no-utils rule; `reload` → `Reload`. Four consumer files qualified directly — fan-in too small to justify aliases. Store-contract tests moved; vault-integration + tenancy + sentinel tests stayed with the integrator. |
 | ✅ 24 | `copilot_tools.go` → `ai/toolwire.go` | 1 | ~320 | 3 | **Done** (2026-07-28). The per-provider (OpenAI/Anthropic/Gemini) tool-calling wire codecs joined the `ai/` subpackage whose `ToolSpec`/`ToolCall`/`ToolReply` shapes they encode — `AgentTurn` + `CallTools` exported, transport INJECTED as `ai.DoFunc` (main's `providerDo` keeps timeout/retry/redaction policy). The §15 LLM04 output cap hoisted to `ai.MaxOutputTokens` so no provider body can be built without it (was `maxCopilotOutputTokens` in copilot.go). Wire-format fixture tests moved with the codecs. |
-| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), `wireless`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
+| ✅ 25 | `wireless_store.go` → `wireless/store.go` | 1 | ~730 | 3 | **Done** (2026-07-28). The first BIG STORE gets the portintel treatment: the canonical wireless inventory store (mem + FORCE-RLS pg backends over `wireless.Controller/AccessPoint/WLAN/BSSID`) joins its domain package. Pg plumbing INJECTED via `wireless.DB`; main's `portintelPG` adapter GENERALIZED to `rlsPG` — one adapter now serves every extracted RLS seam. The data-column encoder contract test moved in. |
+| 18+ | `oidc` (rest), `copilot` (rest), `snmp` (rest), `ticketing_store`/`path_graph_store`/`nms_store`, … | — | — | 4–10 | The big stores (`ticketing_store`, `path_graph_store`, `nms_store`, `wireless_store`) pass the auth screen but need the portintel-style pg-injection treatment. The auth tier is now UNGATED: the `jwt` security change shipped as `internal/token` (below). |
 
 ## Deferred deliberately, with reasons
 

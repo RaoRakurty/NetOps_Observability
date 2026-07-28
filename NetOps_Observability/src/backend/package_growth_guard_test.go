@@ -133,7 +133,11 @@ import (
 //	                  built around; transport INJECTED as ai.DoFunc so main
 //	                  keeps timeout/retry/redaction policy; the LLM04 output
 //	                  cap hoisted to ai.MaxOutputTokens — one definition)
-const rootPackageCeiling = 250
+//	2026-07-28  249  wireless_store.go → wireless/store.go (the canonical
+//	                  inventory store joins its domain package; pg plumbing
+//	                  INJECTED via wireless.DB and the portintelPG adapter
+//	                  generalized to rlsPG — one adapter for every RLS seam)
+const rootPackageCeiling = 249
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

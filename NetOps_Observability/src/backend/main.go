@@ -24,6 +24,7 @@ import (
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
+	"netops/backend/wireless"
 	"os"
 	"os/signal"
 	"sort"
@@ -137,7 +138,7 @@ type server struct {
 	integrations    *integrationStore     // integration-platform persistence (nil on file backend)
 	providers       *integration.Registry // inbound provider translators (registry)
 	nms             *nmsRuntime           // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
-	wireless        wirelessStore         // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
+	wireless        wireless.Store        // wireless canonical inventory #128 (always set: mem on file backend, PG on postgres)
 	wirelessActions *wirelessActionStore  // #128 Phase 8 guarded remediation (dormant unless FEATURE_WIRELESS_ACTIONS)
 	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
 	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
@@ -621,9 +622,9 @@ func newServer() *server {
 	// set — the read APIs render an empty inventory until a connector runs.
 	// MUST init before the NMS runtime, which takes it as its inventory sink.
 	if ps, ok := backend.(*pgStore); ok {
-		srv.wireless = newPGWirelessStore(ps.db)
+		srv.wireless = wireless.NewPGStore(rlsPG{db: ps.db})
 	} else {
-		srv.wireless = newMemWirelessStore()
+		srv.wireless = wireless.NewMemStore()
 	}
 	srv.wirelessActions = newWirelessActionStore()
 	// NMS vendor-controller framework (#95 P3b): dormant unless

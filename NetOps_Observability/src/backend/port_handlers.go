@@ -24,16 +24,17 @@ import (
 // adapter below) when the relational app-state store is active, else in-memory.
 func newPortStore() portintel.Store {
 	if ps, ok := backend.(*pgStore); ok {
-		return portintel.NewPGStore(portintelPG{db: ps.db})
+		return portintel.NewPGStore(rlsPG{db: ps.db})
 	}
 	return portintel.NewMemStore()
 }
 
-// portintelPG adapts package main's pg plumbing to the portintel.DB seam — the
-// package owns port data, not how this platform scopes its transactions.
-type portintelPG struct{ db *pgDB }
+// rlsPG adapts package main's pg plumbing to the injected DB seams of the
+// extracted stores (portintel.DB, wireless.DB — structurally identical): the
+// packages own their data, not how this platform scopes its transactions.
+type rlsPG struct{ db *pgDB }
 
-func (a portintelPG) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
+func (a rlsPG) WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error {
 	return a.db.withTenant(ctx, tenant, cross, fn)
 }
 

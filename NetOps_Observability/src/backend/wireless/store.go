@@ -1,9 +1,9 @@
-package main
+package wireless
 
 // wireless_store.go — persistence for the wireless canonical inventory
 // (tracker #128 Phase 1, migration 0030). Two backends behind one interface
-// (the nms_store.go convention): memWirelessStore for the file/dev backend +
-// tests, pgWirelessStore for production. Isolation is enforced IN the store
+// (the nms_store.go convention): memStore for the file/dev backend +
+// tests, pgStore for production. Isolation is enforced IN the store
 // (§3a): every read is scoped by the caller's tenant — PG via the FORCE-RLS
 // withTenant transaction, mem via tenant-keyed maps. There is no unscoped
 // "list all".
@@ -22,49 +22,47 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"netops/backend/wireless"
 )
 
-type wirelessStore interface {
-	UpsertController(ctx context.Context, c wireless.Controller) error
-	ListControllers(ctx context.Context, tenant string, cross bool) ([]wireless.Controller, error)
-	GetController(ctx context.Context, tenant string, cross bool, id string) (wireless.Controller, bool, error)
+type Store interface {
+	UpsertController(ctx context.Context, c Controller) error
+	ListControllers(ctx context.Context, tenant string, cross bool) ([]Controller, error)
+	GetController(ctx context.Context, tenant string, cross bool, id string) (Controller, bool, error)
 
-	UpsertAP(ctx context.Context, ap wireless.AccessPoint) error
-	ListAPs(ctx context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error)
-	GetAP(ctx context.Context, tenant string, cross bool, id string) (wireless.AccessPoint, bool, error)
+	UpsertAP(ctx context.Context, ap AccessPoint) error
+	ListAPs(ctx context.Context, tenant string, cross bool) ([]AccessPoint, error)
+	GetAP(ctx context.Context, tenant string, cross bool, id string) (AccessPoint, bool, error)
 
 	// UpsertRadios upserts radio rows independently of their AP (vendors report
 	// radios on a separate stream; a radio poll must not clobber AP fields it
 	// did not fetch). Reads overlay radios onto their AP by APID.
-	UpsertRadios(ctx context.Context, tenant string, radios []wireless.Radio) error
+	UpsertRadios(ctx context.Context, tenant string, radios []Radio) error
 
-	UpsertWLAN(ctx context.Context, wl wireless.WLAN) error
-	ListWLANs(ctx context.Context, tenant string, cross bool) ([]wireless.WLAN, error)
+	UpsertWLAN(ctx context.Context, wl WLAN) error
+	ListWLANs(ctx context.Context, tenant string, cross bool) ([]WLAN, error)
 
-	UpsertBSSID(ctx context.Context, b wireless.BSSID) error
-	ListBSSIDs(ctx context.Context, tenant string, cross bool) ([]wireless.BSSID, error)
+	UpsertBSSID(ctx context.Context, b BSSID) error
+	ListBSSIDs(ctx context.Context, tenant string, cross bool) ([]BSSID, error)
 }
 
 // ── in-memory backend (file/dev + tests) ────────────────────────────────────
 
-type memWirelessStore struct {
+type memStore struct {
 	mu          sync.RWMutex
-	controllers map[string]map[string]wireless.Controller // tenant → id → row
-	aps         map[string]map[string]wireless.AccessPoint
-	radios      map[string]map[string]wireless.Radio // tenant → radio_id → row (overlaid on APs at read)
-	wlans       map[string]map[string]wireless.WLAN
-	bssids      map[string]map[string]wireless.BSSID
+	controllers map[string]map[string]Controller // tenant → id → row
+	aps         map[string]map[string]AccessPoint
+	radios      map[string]map[string]Radio // tenant → radio_id → row (overlaid on APs at read)
+	wlans       map[string]map[string]WLAN
+	bssids      map[string]map[string]BSSID
 }
 
-func newMemWirelessStore() *memWirelessStore {
-	return &memWirelessStore{
-		controllers: map[string]map[string]wireless.Controller{},
-		aps:         map[string]map[string]wireless.AccessPoint{},
-		radios:      map[string]map[string]wireless.Radio{},
-		wlans:       map[string]map[string]wireless.WLAN{},
-		bssids:      map[string]map[string]wireless.BSSID{},
+func NewMemStore() *memStore {
+	return &memStore{
+		controllers: map[string]map[string]Controller{},
+		aps:         map[string]map[string]AccessPoint{},
+		radios:      map[string]map[string]Radio{},
+		wlans:       map[string]map[string]WLAN{},
+		bssids:      map[string]map[string]BSSID{},
 	}
 }
 
@@ -77,12 +75,12 @@ func upsertTimes(prevFirst time.Time, hadPrev bool) (first, last time.Time) {
 	return now, now
 }
 
-func (m *memWirelessStore) UpsertController(_ context.Context, c wireless.Controller) error {
+func (m *memStore) UpsertController(_ context.Context, c Controller) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := m.controllers[c.TenantID]
 	if t == nil {
-		t = map[string]wireless.Controller{}
+		t = map[string]Controller{}
 		m.controllers[c.TenantID] = t
 	}
 	prev, had := t[c.ControllerID]
@@ -92,10 +90,10 @@ func (m *memWirelessStore) UpsertController(_ context.Context, c wireless.Contro
 	return nil
 }
 
-func (m *memWirelessStore) ListControllers(_ context.Context, tenant string, cross bool) ([]wireless.Controller, error) {
+func (m *memStore) ListControllers(_ context.Context, tenant string, cross bool) ([]Controller, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []wireless.Controller
+	var out []Controller
 	for tid, rows := range m.controllers {
 		if !cross && tid != tenant {
 			continue
@@ -108,7 +106,7 @@ func (m *memWirelessStore) ListControllers(_ context.Context, tenant string, cro
 	return out, nil
 }
 
-func (m *memWirelessStore) GetController(_ context.Context, tenant string, cross bool, id string) (wireless.Controller, bool, error) {
+func (m *memStore) GetController(_ context.Context, tenant string, cross bool, id string) (Controller, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for tid, rows := range m.controllers {
@@ -119,15 +117,15 @@ func (m *memWirelessStore) GetController(_ context.Context, tenant string, cross
 			return c, true, nil
 		}
 	}
-	return wireless.Controller{}, false, nil
+	return Controller{}, false, nil
 }
 
-func (m *memWirelessStore) UpsertAP(_ context.Context, ap wireless.AccessPoint) error {
+func (m *memStore) UpsertAP(_ context.Context, ap AccessPoint) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := m.aps[ap.TenantID]
 	if t == nil {
-		t = map[string]wireless.AccessPoint{}
+		t = map[string]AccessPoint{}
 		m.aps[ap.TenantID] = t
 	}
 	prev, had := t[ap.APID]
@@ -137,16 +135,16 @@ func (m *memWirelessStore) UpsertAP(_ context.Context, ap wireless.AccessPoint) 
 	return nil
 }
 
-func (m *memWirelessStore) UpsertRadios(_ context.Context, tenant string, radios []wireless.Radio) error {
+func (m *memStore) UpsertRadios(_ context.Context, tenant string, radios []Radio) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := m.radios[tenant]
 	if t == nil {
-		t = map[string]wireless.Radio{}
+		t = map[string]Radio{}
 		m.radios[tenant] = t
 	}
 	for _, r := range radios {
-		id := wireless.RadioID(r.APID, r.Slot)
+		id := RadioID(r.APID, r.Slot)
 		prev, had := t[id]
 		r.TenantID = tenant
 		r.RadioID = id
@@ -159,12 +157,12 @@ func (m *memWirelessStore) UpsertRadios(_ context.Context, tenant string, radios
 
 // overlayRadios merges separately-stored radio rows onto an AP (slot wins over
 // any radio embedded at AP-upsert time).
-func (m *memWirelessStore) overlayRadios(tenant string, ap wireless.AccessPoint) wireless.AccessPoint {
+func (m *memStore) overlayRadios(tenant string, ap AccessPoint) AccessPoint {
 	rows := m.radios[tenant]
 	if len(rows) == 0 {
 		return ap
 	}
-	bySlot := map[int]wireless.Radio{}
+	bySlot := map[int]Radio{}
 	for _, r := range ap.Radios {
 		bySlot[r.Slot] = r
 	}
@@ -176,7 +174,7 @@ func (m *memWirelessStore) overlayRadios(tenant string, ap wireless.AccessPoint)
 	if len(bySlot) == 0 {
 		return ap
 	}
-	merged := make([]wireless.Radio, 0, len(bySlot))
+	merged := make([]Radio, 0, len(bySlot))
 	for _, r := range bySlot {
 		merged = append(merged, r)
 	}
@@ -185,10 +183,10 @@ func (m *memWirelessStore) overlayRadios(tenant string, ap wireless.AccessPoint)
 	return ap
 }
 
-func (m *memWirelessStore) ListAPs(_ context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error) {
+func (m *memStore) ListAPs(_ context.Context, tenant string, cross bool) ([]AccessPoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []wireless.AccessPoint
+	var out []AccessPoint
 	for tid, rows := range m.aps {
 		if !cross && tid != tenant {
 			continue
@@ -201,7 +199,7 @@ func (m *memWirelessStore) ListAPs(_ context.Context, tenant string, cross bool)
 	return out, nil
 }
 
-func (m *memWirelessStore) GetAP(_ context.Context, tenant string, cross bool, id string) (wireless.AccessPoint, bool, error) {
+func (m *memStore) GetAP(_ context.Context, tenant string, cross bool, id string) (AccessPoint, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for tid, rows := range m.aps {
@@ -212,15 +210,15 @@ func (m *memWirelessStore) GetAP(_ context.Context, tenant string, cross bool, i
 			return m.overlayRadios(tid, ap), true, nil
 		}
 	}
-	return wireless.AccessPoint{}, false, nil
+	return AccessPoint{}, false, nil
 }
 
-func (m *memWirelessStore) UpsertWLAN(_ context.Context, wl wireless.WLAN) error {
+func (m *memStore) UpsertWLAN(_ context.Context, wl WLAN) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := m.wlans[wl.TenantID]
 	if t == nil {
-		t = map[string]wireless.WLAN{}
+		t = map[string]WLAN{}
 		m.wlans[wl.TenantID] = t
 	}
 	prev, had := t[wl.WLANID]
@@ -230,10 +228,10 @@ func (m *memWirelessStore) UpsertWLAN(_ context.Context, wl wireless.WLAN) error
 	return nil
 }
 
-func (m *memWirelessStore) ListWLANs(_ context.Context, tenant string, cross bool) ([]wireless.WLAN, error) {
+func (m *memStore) ListWLANs(_ context.Context, tenant string, cross bool) ([]WLAN, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []wireless.WLAN
+	var out []WLAN
 	for tid, rows := range m.wlans {
 		if !cross && tid != tenant {
 			continue
@@ -246,12 +244,12 @@ func (m *memWirelessStore) ListWLANs(_ context.Context, tenant string, cross boo
 	return out, nil
 }
 
-func (m *memWirelessStore) UpsertBSSID(_ context.Context, b wireless.BSSID) error {
+func (m *memStore) UpsertBSSID(_ context.Context, b BSSID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t := m.bssids[b.TenantID]
 	if t == nil {
-		t = map[string]wireless.BSSID{}
+		t = map[string]BSSID{}
 		m.bssids[b.TenantID] = t
 	}
 	prev, had := t[b.BSSID]
@@ -261,10 +259,10 @@ func (m *memWirelessStore) UpsertBSSID(_ context.Context, b wireless.BSSID) erro
 	return nil
 }
 
-func (m *memWirelessStore) ListBSSIDs(_ context.Context, tenant string, cross bool) ([]wireless.BSSID, error) {
+func (m *memStore) ListBSSIDs(_ context.Context, tenant string, cross bool) ([]BSSID, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []wireless.BSSID
+	var out []BSSID
 	for tid, rows := range m.bssids {
 		if !cross && tid != tenant {
 			continue
@@ -279,9 +277,18 @@ func (m *memWirelessStore) ListBSSIDs(_ context.Context, tenant string, cross bo
 
 // ── Postgres backend (tenant_iso FORCE-RLS via withTenant, migration 0030) ──
 
-type pgWirelessStore struct{ db *pgDB }
+// DB is the injected relational seam: run fn inside a transaction whose
+// row-level security is scoped to tenant (or unscoped for a cross-tenant
+// principal). Implemented by package main's pg adapter — the package owns
+// wireless inventory, not how the platform scopes its transactions (the
+// portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
 
-func newPGWirelessStore(db *pgDB) *pgWirelessStore { return &pgWirelessStore{db: db} }
+type pgStore struct{ db DB }
+
+func NewPGStore(db DB) *pgStore { return &pgStore{db: db} }
 
 // jsonBlob encodes the record's full shape for the `data` column. It returns an
 // ERROR rather than substituting "{}": swallowing the encode failure wrote a row
@@ -297,12 +304,12 @@ func jsonBlob(v any) ([]byte, error) {
 	return b, nil
 }
 
-func (p *pgWirelessStore) UpsertController(ctx context.Context, c wireless.Controller) error {
+func (p *pgStore) UpsertController(ctx context.Context, c Controller) error {
 	ctlBlob, err := jsonBlob(c)
 	if err != nil {
 		return err
 	}
-	return p.db.withTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, c.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO wireless_controllers (tenant_id, controller_id, name, vendor, model, os_version,
     kind, cluster_role, management_address, forwarding_default, visibility, data, last_seen, stale)
@@ -341,9 +348,9 @@ ON CONFLICT (tenant_id, member_id) DO UPDATE SET
 }
 
 // fwdOrUnknown defaults an absent forwarding mode to the honest 'unknown'.
-func fwdOrUnknown(f wireless.ForwardingMode) string {
+func fwdOrUnknown(f ForwardingMode) string {
 	if f == "" {
-		return string(wireless.ForwardUnknown)
+		return string(ForwardUnknown)
 	}
 	return string(f)
 }
@@ -355,9 +362,9 @@ func orPartial(v string) string {
 	return v
 }
 
-func (p *pgWirelessStore) ListControllers(ctx context.Context, tenant string, cross bool) ([]wireless.Controller, error) {
-	var out []wireless.Controller
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (p *pgStore) ListControllers(ctx context.Context, tenant string, cross bool) ([]Controller, error) {
+	var out []Controller
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers ORDER BY controller_id`)
 		if err != nil {
@@ -365,7 +372,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers O
 		}
 		defer rows.Close()
 		for rows.Next() {
-			c, err := scanWirelessRow[wireless.Controller](rows)
+			c, err := scanRow[Controller](rows)
 			if err != nil {
 				return err
 			}
@@ -376,14 +383,14 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers O
 	return out, err
 }
 
-// scanWirelessRow rehydrates the lossless JSONB record and overlays the
+// scanRow rehydrates the lossless JSONB record and overlays the
 // store-owned lifecycle columns (first/last_seen, stale) — the columns are the
 // truth for lifecycle, the blob for everything else.
-type wirelessLifecycle interface {
-	wireless.Controller | wireless.AccessPoint | wireless.WLAN | wireless.BSSID
+type lifecycle interface {
+	Controller | AccessPoint | WLAN | BSSID
 }
 
-func scanWirelessRow[T wirelessLifecycle](rows pgx.Rows) (T, error) {
+func scanRow[T lifecycle](rows pgx.Rows) (T, error) {
 	var (
 		zero      T
 		tenantID  string
@@ -400,22 +407,22 @@ func scanWirelessRow[T wirelessLifecycle](rows pgx.Rows) (T, error) {
 		return zero, err
 	}
 	switch p := any(&v).(type) {
-	case *wireless.Controller:
+	case *Controller:
 		p.TenantID, p.FirstSeen, p.LastSeen, p.Stale = tenantID, first, last, staleFlag
-	case *wireless.AccessPoint:
+	case *AccessPoint:
 		p.TenantID, p.FirstSeen, p.LastSeen, p.Stale = tenantID, first, last, staleFlag
-	case *wireless.WLAN:
+	case *WLAN:
 		p.TenantID, p.FirstSeen, p.LastSeen, p.Stale = tenantID, first, last, staleFlag
-	case *wireless.BSSID:
+	case *BSSID:
 		p.TenantID, p.FirstSeen, p.LastSeen, p.Stale = tenantID, first, last, staleFlag
 	}
 	return v, nil
 }
 
-func (p *pgWirelessStore) GetController(ctx context.Context, tenant string, cross bool, id string) (wireless.Controller, bool, error) {
-	var c wireless.Controller
+func (p *pgStore) GetController(ctx context.Context, tenant string, cross bool, id string) (Controller, bool, error) {
+	var c Controller
 	found := false
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers WHERE controller_id = $1`, id)
 		if err != nil {
@@ -423,7 +430,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers W
 		}
 		defer rows.Close()
 		if rows.Next() {
-			if c, err = scanWirelessRow[wireless.Controller](rows); err != nil {
+			if c, err = scanRow[Controller](rows); err != nil {
 				return err
 			}
 			found = true
@@ -433,12 +440,12 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wireless_controllers W
 	return c, found, err
 }
 
-func (p *pgWirelessStore) UpsertAP(ctx context.Context, ap wireless.AccessPoint) error {
+func (p *pgStore) UpsertAP(ctx context.Context, ap AccessPoint) error {
 	apBlob, err := jsonBlob(ap)
 	if err != nil {
 		return err
 	}
-	return p.db.withTenant(ctx, ap.TenantID, false, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, ap.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO access_points (tenant_id, ap_id, name, mac_base, serial, model, vendor,
     controller_ref, site_id, floor_ref, x, y, uplink_switch_ref, uplink_port_ref,
@@ -474,7 +481,7 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
     admin_state=EXCLUDED.admin_state, oper_state=EXCLUDED.oper_state,
     generation=EXCLUDED.generation, mlo_capable=EXCLUDED.mlo_capable,
     data=EXCLUDED.data, last_seen=now(), stale=false`,
-				ap.TenantID, wireless.RadioID(ap.APID, r.Slot), ap.APID, r.Slot, r.Band,
+				ap.TenantID, RadioID(ap.APID, r.Slot), ap.APID, r.Slot, r.Band,
 				r.Channel, r.ChannelWidthMHz, r.TxPowerDBm, r.TxPowerMaxDBm,
 				r.AdminState, r.OperState, r.Generation, r.MLOCapable, radioBlob); err != nil {
 				return err
@@ -484,11 +491,11 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
 	})
 }
 
-func (p *pgWirelessStore) UpsertRadios(ctx context.Context, tenant string, radios []wireless.Radio) error {
+func (p *pgStore) UpsertRadios(ctx context.Context, tenant string, radios []Radio) error {
 	if len(radios) == 0 {
 		return nil
 	}
-	return p.db.withTenant(ctx, tenant, false, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, tenant, false, func(tx pgx.Tx) error {
 		for _, r := range radios {
 			radioBlob, err := jsonBlob(r)
 			if err != nil {
@@ -504,7 +511,7 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
     admin_state=EXCLUDED.admin_state, oper_state=EXCLUDED.oper_state,
     generation=EXCLUDED.generation, mlo_capable=EXCLUDED.mlo_capable,
     data=EXCLUDED.data, last_seen=now(), stale=false`,
-				tenant, wireless.RadioID(r.APID, r.Slot), r.APID, r.Slot, r.Band,
+				tenant, RadioID(r.APID, r.Slot), r.APID, r.Slot, r.Band,
 				r.Channel, r.ChannelWidthMHz, r.TxPowerDBm, r.TxPowerMaxDBm,
 				r.AdminState, r.OperState, r.Generation, r.MLOCapable, radioBlob); err != nil {
 				return err
@@ -517,7 +524,7 @@ ON CONFLICT (tenant_id, radio_id) DO UPDATE SET
 // pgOverlayRadios loads ap_radios rows in the SAME withTenant transaction and
 // merges them onto the AP list by (ap_id, slot) — the row store is the truth
 // for radios, the AP blob only a bootstrap.
-func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint) error {
+func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []AccessPoint) error {
 	if len(aps) == 0 {
 		return nil
 	}
@@ -526,7 +533,7 @@ func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint)
 		return err
 	}
 	defer rows.Close()
-	bySlotByAP := map[string]map[int]wireless.Radio{}
+	bySlotByAP := map[string]map[int]Radio{}
 	for rows.Next() {
 		var (
 			apID        string
@@ -537,13 +544,13 @@ func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint)
 		if err := rows.Scan(&apID, &blob, &first, &last, &stale); err != nil {
 			return err
 		}
-		var r wireless.Radio
+		var r Radio
 		if err := json.Unmarshal(blob, &r); err != nil {
 			return err
 		}
 		r.APID, r.FirstSeen, r.LastSeen, r.Stale = apID, first, last, stale
 		if bySlotByAP[apID] == nil {
-			bySlotByAP[apID] = map[int]wireless.Radio{}
+			bySlotByAP[apID] = map[int]Radio{}
 		}
 		bySlotByAP[apID][r.Slot] = r
 	}
@@ -555,14 +562,14 @@ func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint)
 		if len(slots) == 0 {
 			continue
 		}
-		merged := map[int]wireless.Radio{}
+		merged := map[int]Radio{}
 		for _, r := range aps[i].Radios {
 			merged[r.Slot] = r
 		}
 		for s, r := range slots {
 			merged[s] = r
 		}
-		out := make([]wireless.Radio, 0, len(merged))
+		out := make([]Radio, 0, len(merged))
 		for _, r := range merged {
 			out = append(out, r)
 		}
@@ -572,9 +579,9 @@ func pgOverlayRadios(ctx context.Context, tx pgx.Tx, aps []wireless.AccessPoint)
 	return nil
 }
 
-func (p *pgWirelessStore) ListAPs(ctx context.Context, tenant string, cross bool) ([]wireless.AccessPoint, error) {
-	var out []wireless.AccessPoint
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (p *pgStore) ListAPs(ctx context.Context, tenant string, cross bool) ([]AccessPoint, error) {
+	var out []AccessPoint
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points ORDER BY ap_id`)
 		if err != nil {
@@ -582,7 +589,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points ORDER BY
 		}
 		defer rows.Close()
 		for rows.Next() {
-			ap, err := scanWirelessRow[wireless.AccessPoint](rows)
+			ap, err := scanRow[AccessPoint](rows)
 			if err != nil {
 				return err
 			}
@@ -597,10 +604,10 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points ORDER BY
 	return out, err
 }
 
-func (p *pgWirelessStore) GetAP(ctx context.Context, tenant string, cross bool, id string) (wireless.AccessPoint, bool, error) {
-	var ap wireless.AccessPoint
+func (p *pgStore) GetAP(ctx context.Context, tenant string, cross bool, id string) (AccessPoint, bool, error) {
+	var ap AccessPoint
 	found := false
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap_id = $1`, id)
 		if err != nil {
@@ -608,7 +615,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap
 		}
 		defer rows.Close()
 		if rows.Next() {
-			if ap, err = scanWirelessRow[wireless.AccessPoint](rows); err != nil {
+			if ap, err = scanRow[AccessPoint](rows); err != nil {
 				return err
 			}
 			found = true
@@ -620,7 +627,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap
 		if !found {
 			return nil
 		}
-		one := []wireless.AccessPoint{ap}
+		one := []AccessPoint{ap}
 		if err := pgOverlayRadios(ctx, tx, one); err != nil {
 			return err
 		}
@@ -630,15 +637,15 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM access_points WHERE ap
 	return ap, found, err
 }
 
-func (p *pgWirelessStore) UpsertWLAN(ctx context.Context, wl wireless.WLAN) error {
+func (p *pgStore) UpsertWLAN(ctx context.Context, wl WLAN) error {
 	wlanBlob, err := jsonBlob(wl)
 	if err != nil {
 		return err
 	}
-	return p.db.withTenant(ctx, wl.TenantID, false, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, wl.TenantID, false, func(tx pgx.Tx) error {
 		ssidRef := wl.SSIDRef
 		if ssidRef == "" && wl.SSIDName != "" {
-			ssidRef = wireless.SSIDID(wl.TenantID, wl.SSIDName)
+			ssidRef = SSIDID(wl.TenantID, wl.SSIDName)
 		}
 		if ssidRef != "" {
 			if _, err := tx.Exec(ctx, `
@@ -669,9 +676,9 @@ ON CONFLICT (tenant_id, wlan_id) DO UPDATE SET
 	})
 }
 
-func (p *pgWirelessStore) ListWLANs(ctx context.Context, tenant string, cross bool) ([]wireless.WLAN, error) {
-	var out []wireless.WLAN
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (p *pgStore) ListWLANs(ctx context.Context, tenant string, cross bool) ([]WLAN, error) {
+	var out []WLAN
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM wlans ORDER BY wlan_id`)
 		if err != nil {
@@ -679,7 +686,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wlans ORDER BY wlan_id
 		}
 		defer rows.Close()
 		for rows.Next() {
-			wl, err := scanWirelessRow[wireless.WLAN](rows)
+			wl, err := scanRow[WLAN](rows)
 			if err != nil {
 				return err
 			}
@@ -690,12 +697,12 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM wlans ORDER BY wlan_id
 	return out, err
 }
 
-func (p *pgWirelessStore) UpsertBSSID(ctx context.Context, b wireless.BSSID) error {
+func (p *pgStore) UpsertBSSID(ctx context.Context, b BSSID) error {
 	bssidBlob, err := jsonBlob(b)
 	if err != nil {
 		return err
 	}
-	return p.db.withTenant(ctx, b.TenantID, false, func(tx pgx.Tx) error {
+	return p.db.WithTenant(ctx, b.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO bssids (tenant_id, bssid, radio_ref, wlan_ref, ap_ref, data, last_seen, stale)
 VALUES ($1,$2,$3,$4,$5,$6,now(),false)
@@ -707,9 +714,9 @@ ON CONFLICT (tenant_id, bssid) DO UPDATE SET
 	})
 }
 
-func (p *pgWirelessStore) ListBSSIDs(ctx context.Context, tenant string, cross bool) ([]wireless.BSSID, error) {
-	var out []wireless.BSSID
-	err := p.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+func (p *pgStore) ListBSSIDs(ctx context.Context, tenant string, cross bool) ([]BSSID, error) {
+	var out []BSSID
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, data, first_seen, last_seen, stale FROM bssids ORDER BY bssid`)
 		if err != nil {
@@ -717,7 +724,7 @@ SELECT tenant_id, data, first_seen, last_seen, stale FROM bssids ORDER BY bssid`
 		}
 		defer rows.Close()
 		for rows.Next() {
-			b, err := scanWirelessRow[wireless.BSSID](rows)
+			b, err := scanRow[BSSID](rows)
 			if err != nil {
 				return err
 			}

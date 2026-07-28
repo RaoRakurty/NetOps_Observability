@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"netops/backend/wireless"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +38,7 @@ type nmsRuntime struct {
 	// wireless receives canonical-inventory discoveries (#128) from wireless
 	// connectors (Routed.Wireless). Nil = inventory discarded with a warning —
 	// never silently (main.go wires it whenever the runtime exists).
-	wireless wirelessStore
+	wireless wireless.Store
 
 	client         *http.Client // strict TLS (default)
 	insecureClient *http.Client // per-integration opt-in for self-signed controllers
