@@ -21,6 +21,7 @@ import (
 	"netops/backend/internal/seam"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
+	"netops/backend/internal/ticketing"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/vuln"
 	"netops/backend/portintel"
@@ -100,7 +101,7 @@ type server struct {
 	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents      incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics     *incidentMetrics
-	ticketing      ticketingStore // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	ticketing      ticketing.Store // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	// ticketing invariant/contract counters (exposed on /metrics): enable attempts
 	// rejected by the one-enabled-policy rule, fail-closed holds on a violated
 	// invariant, and manual actions redirected off a merged object.
@@ -885,6 +886,15 @@ func newAPIServer(addr string, handler http.Handler) *http.Server {
 		IdleTimeout:    durationOr("HTTP_IDLE_TIMEOUT", 120*time.Second),
 		MaxHeaderBytes: 1 << 20, // 1 MiB header cap (SR-012); default is also 1 MiB, set explicitly.
 	}
+}
+
+// newTicketingStore picks the backend: an RLS-scoped pg repository under
+// STORE_BACKEND=postgres, else an in-memory store. Always non-nil.
+func newTicketingStore() ticketing.Store {
+	if ps, ok := backend.(*pgStore); ok {
+		return ticketing.NewPGStore(rlsPG{db: ps.db})
+	}
+	return ticketing.NewMemStore()
 }
 
 func main() {

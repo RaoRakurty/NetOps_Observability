@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"netops/backend/internal/ticketing"
 	"sort"
 	"strings"
 	"time"
@@ -279,7 +280,7 @@ func (s *server) itsmTimeFacts(r *http.Request, id string) (itsmTimeFacts, bool)
 		return itsmTimeFacts{}, false
 	}
 	// Per-object ledger (one row per action) — the max page covers it whole.
-	audit, _, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketMaxPage, 0)
+	audit, _, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketing.MaxPage, 0)
 	if err != nil {
 		audit = nil
 	}

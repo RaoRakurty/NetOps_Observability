@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"netops/backend/internal/noclabel"
+	"netops/backend/internal/ticketing"
 	"strings"
 
 	"netops/backend/ai"
@@ -348,7 +349,7 @@ func (d aiDataSource) moduleTicketStatus(p ai.Principal, problemID string) (ai.T
 	if d.srv.ticketing == nil || problemID == "" {
 		return ai.ToolResult{}, nil
 	}
-	audit, _, err := d.srv.ticketing.ListAudit(d.ctx, p.Tenant, p.Cross, problemID, ticketAuditDefaultPage, 0)
+	audit, _, err := d.srv.ticketing.ListAudit(d.ctx, p.Tenant, p.Cross, problemID, ticketing.AuditDefaultPage, 0)
 	if err != nil {
 		return ai.ToolResult{}, nil // degrade quietly — ticket status is enrichment, not core
 	}

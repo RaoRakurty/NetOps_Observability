@@ -141,7 +141,12 @@ import (
 //	                  states store, mem + FORCE-RLS pg, vault-enveloped creds;
 //	                  DB seam injected via rlsPG; durability marker exported —
 //	                  ErrStorageNotDurable/NonDurableStore/StoreDurable)
-const rootPackageCeiling = 248
+//	2026-07-28  247  ticketing_store.go → internal/ticketing/store.go (policies,
+//	                  links, leased outbox, ring-buffered audit; mem + FORCE-RLS
+//	                  pg via the DB seam; backend selection stayed in main.go;
+//	                  paging bounds + ErrPolicyConflict exported; orDefault
+//	                  stayed in main with its many consumers)
+const rootPackageCeiling = 247
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

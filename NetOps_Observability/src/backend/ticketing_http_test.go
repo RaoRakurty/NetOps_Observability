@@ -27,7 +27,7 @@ type tktFixture struct {
 func setupTicketingTenants(t *testing.T) (*httptest.Server, *server, map[string]*tktFixture) {
 	t.Helper()
 	srv, s := newTestServerState(t)
-	s.ticketing = newMemTicketingStore() // harness doesn't wire it; handlers read it live
+	s.ticketing = ticketing.NewMemStore() // harness doesn't wire it; handlers read it live
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	fix := map[string]*tktFixture{}
@@ -250,7 +250,7 @@ func TestManualTicketCreate_CrossTenantAdminReachesPlatformObject(t *testing.T) 
 	}
 	// The enqueued action is stamped with the object's OWNING tenant (""→global),
 	// mirroring the sweeper — never the raw read scope.
-	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
+	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("outbox after manual create: items=%d err=%v, want exactly 1", len(items), err)
 	}
@@ -279,7 +279,7 @@ func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
 	if st != 404 {
 		t.Fatalf("owner guard: tenant A ticketing a leaked platform object = %d %s, want 404", st, body)
 	}
-	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0); len(items) != 0 {
 		t.Fatalf("owner guard must not enqueue; outbox has %d items", len(items))
 	}
 }
@@ -306,7 +306,7 @@ func TestManualTicketCreate_TenantObjectOwnerStamped(t *testing.T) {
 	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", a.token, map[string]any{}); st != 202 {
 		t.Fatalf("owning tenant create on own object = %d %s, want 202", st, body)
 	}
-	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
+	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("outbox = %d items err=%v, want exactly 1 (same idempotency key)", len(items), err)
 	}
@@ -341,7 +341,7 @@ func TestManualTicketSync_OwnerKeyedUpdate(t *testing.T) {
 	if st != 202 {
 		t.Fatalf("manual sync with open link = %d %s, want 202", st, body)
 	}
-	items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0)
+	items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0)
 	if len(items) != 1 || items[0].Action != "update" || items[0].TenantID != TenantGlobal {
 		t.Fatalf("outbox after sync = %+v, want one update stamped %q", items, TenantGlobal)
 	}
@@ -366,7 +366,7 @@ func TestManualTicketCreate_MergedObject409(t *testing.T) {
 	if st != 409 || !strings.Contains(string(body), tktCanonCorrID) {
 		t.Fatalf("create on merged object = %d %s, want 409 carrying canonical id %s", st, body, tktCanonCorrID)
 	}
-	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketMaxPage, 0); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0); len(items) != 0 {
 		t.Fatalf("merged object must not enqueue; outbox has %d items", len(items))
 	}
 }
@@ -376,7 +376,7 @@ func TestManualTicketCreate_MergedObject409(t *testing.T) {
 // past the store guard as legacy data would be) NEVER picks a winner by row
 // order — ticketing holds (fail closed).
 func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: store}
 	ctx := context.Background()
 
@@ -389,10 +389,8 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 	}
 	// Seed a second ENABLED policy directly (legacy/drifted data — PutPolicy and
 	// the pg unique index both refuse this shape now).
-	store.mu.Lock()
-	store.policies[memKey("t-x", "p2")] = ticketing.IncidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
-		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
-	store.mu.Unlock()
+	store.SeedPolicyForTest(ticketing.IncidentPolicy{ID: "p2", TenantID: "t-x", Name: "permissive",
+		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"})
 	got := sw.resolvePolicy(ctx, "t-x", "servicenow")
 	if got.Enabled {
 		t.Fatalf("two enabled policies must fail CLOSED (Enabled=false hold), resolved %+v", got)
@@ -402,9 +400,9 @@ func TestResolvePolicy_FailsClosedOnMultipleEnabled(t *testing.T) {
 // TestPutPolicy_ConcurrentEnableSingleWinner proves the store-level invariant
 // closes the check-then-write race the HTTP pre-check cannot: of two concurrent
 // enables for one tenant+system, exactly one wins and the loser gets
-// errPolicyConflict.
+// ticketing.ErrPolicyConflict.
 func TestPutPolicy_ConcurrentEnableSingleWinner(t *testing.T) {
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	ctx := context.Background()
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
@@ -423,7 +421,7 @@ func TestPutPolicy_ConcurrentEnableSingleWinner(t *testing.T) {
 		switch {
 		case err == nil:
 			oks++
-		case errors.Is(err, errPolicyConflict):
+		case errors.Is(err, ticketing.ErrPolicyConflict):
 			conflicts++
 		default:
 			t.Fatalf("unexpected error: %v", err)
@@ -603,11 +601,9 @@ func TestSimulator_ReportsRuntimeState(t *testing.T) {
 	}
 
 	// Legacy multi-enabled drift (seeded past the store guard) → held.
-	mem := s.ticketing.(*memTicketingStore)
-	mem.mu.Lock()
-	mem.policies[memKey(a.tenantID, "drift")] = ticketing.IncidentPolicy{ID: "drift", TenantID: a.tenantID,
-		Name: "drifted", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}
-	mem.mu.Unlock()
+	mem := s.ticketing.(*ticketing.MemStore)
+	mem.SeedPolicyForTest(ticketing.IncidentPolicy{ID: "drift", TenantID: a.tenantID,
+		Name: "drifted", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"})
 	if out := simulate(a.token, "act-1"); out.RuntimeState != "held" {
 		t.Fatalf("multi-enabled sim runtime_state = %q, want held", out.RuntimeState)
 	}
@@ -685,7 +681,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	if sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
 		t.Fatal("sweeper must skip a tenant with no ticketing connection")
 	}
-	if items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketMaxPage, 0); len(items) != 0 {
+	if items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketing.MaxPage, 0); len(items) != 0 {
 		t.Fatalf("nothing may enqueue without a connection; outbox has %d items", len(items))
 	}
 
@@ -700,7 +696,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	if !sw.evaluate(ctx, sweepCandidate{id: tktStrictCorrID, tenant: TenantGlobal}, time.Now().UTC()) {
 		t.Fatal("sweeper must enqueue once the connection exists")
 	}
-	items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketMaxPage, 0)
+	items, _, _ := s.ticketing.ListOutbox(ctx, "", true, ticketing.MaxPage, 0)
 	if len(items) != 1 {
 		t.Fatalf("manual+sweeper collapse to ONE create via the idempotency key; outbox has %d", len(items))
 	}

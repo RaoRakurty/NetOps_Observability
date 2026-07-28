@@ -29,7 +29,7 @@ import (
 type ticketConnResolver func(ctx context.Context, tenant, system string) (ticketSystemConfig, bool, error)
 
 type ticketWorker struct {
-	store       ticketingStore
+	store       ticketing.Store
 	adapters    map[string]ticketAdapter
 	resolveConn ticketConnResolver
 	workerID    string
@@ -38,7 +38,7 @@ type ticketWorker struct {
 	maxRetries  int
 }
 
-func newTicketWorker(store ticketingStore, resolve ticketConnResolver) *ticketWorker {
+func newTicketWorker(store ticketing.Store, resolve ticketConnResolver) *ticketWorker {
 	return &ticketWorker{
 		store:       store,
 		adapters:    map[string]ticketAdapter{"servicenow": newServiceNowAdapter(), "pagerduty": newPagerDutyTicketAdapter(), "slack": newSlackTicketAdapter(), "jira": newJiraTicketAdapter()},
@@ -382,7 +382,7 @@ func backoffDelay(attempt int, id string) time.Duration {
 
 // enqueueTicketCreate enqueues a create action for an RCA object. Used by P3's
 // policy layer and the P2/E2E tests. Idempotency-keyed so re-enqueue is a no-op.
-func enqueueTicketCreate(ctx context.Context, store ticketingStore, tenant, system string, p ticketing.Payload) error {
+func enqueueTicketCreate(ctx context.Context, store ticketing.Store, tenant, system string, p ticketing.Payload) error {
 	return store.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID:       tenant,
 		ID:             randID(),
@@ -397,7 +397,7 @@ func enqueueTicketCreate(ctx context.Context, store ticketingStore, tenant, syst
 
 // enqueueTicketUpdate enqueues an update keyed by the payload hash (one row per
 // distinct RCA state) so identical re-syncs collapse.
-func enqueueTicketUpdate(ctx context.Context, store ticketingStore, tenant, system string, p ticketing.Payload) error {
+func enqueueTicketUpdate(ctx context.Context, store ticketing.Store, tenant, system string, p ticketing.Payload) error {
 	return store.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID:       tenant,
 		ID:             randID(),

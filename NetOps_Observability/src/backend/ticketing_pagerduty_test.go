@@ -171,7 +171,7 @@ func TestPDTicketAdapter_RetryClassification(t *testing.T) {
 // (no HELD), per-system conflict still fails closed, PD is opt-in.
 func TestResolvePolicyState_PerSystem(t *testing.T) {
 	ctx := context.Background()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: store}
 
 	sn := ticketing.IncidentPolicy{ID: "sn1", TenantID: "t_a", Name: "sn", Enabled: true,
@@ -194,7 +194,7 @@ func TestResolvePolicyState_PerSystem(t *testing.T) {
 	// second enabled PD policy → conflict at the store
 	pd2 := pd
 	pd2.ID = "pd2"
-	if err := store.PutPolicy(ctx, pd2); !errors.Is(err, errPolicyConflict) {
+	if err := store.PutPolicy(ctx, pd2); !errors.Is(err, ticketing.ErrPolicyConflict) {
 		t.Fatalf("second enabled pd policy: err=%v, want conflict", err)
 	}
 	// no PD policy → opt-in default is OFF (never a default-on pager)
@@ -215,7 +215,7 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 	fA, fB := newFakePD(), newFakePD()
 	defer fA.srv.Close()
 	defer fB.srv.Close()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	ctx := context.Background()
 
 	resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
@@ -277,7 +277,7 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 	if len(fB.all()) != before {
 		t.Fatal("SECURITY: mismatched-tenant delivery reached the external provider")
 	}
-	items, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
+	items, _, _ := store.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	found := false
 	for _, it := range items {
 		if it.CorrObjectID == "cccccccc-cccc-4ccc-8ccc-cccccccccccc" {
@@ -394,7 +394,7 @@ func TestSlackLink_NeverStoresWebhookSecret(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true")
 	f := newFakeSlackHook()
 	defer f.srv.Close()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	ctx := context.Background()
 	resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
 		if system != "slack" {
@@ -426,7 +426,7 @@ func TestSlackLink_NeverStoresWebhookSecret(t *testing.T) {
 // Triple-enable: SN + PD + Slack policies all active per system, no HELD.
 func TestResolvePolicyState_TripleSystem(t *testing.T) {
 	ctx := context.Background()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: store}
 	for i, sys := range []string{"servicenow", "pagerduty", "slack"} {
 		p := ticketing.IncidentPolicy{ID: sys[:2] + "1", TenantID: "t_tri", Name: sys, Enabled: true,
@@ -477,7 +477,7 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 	}
 	// Policies stored under the canonical global tenant resolve per system.
 	ctx := context.Background()
-	tstore := newMemTicketingStore()
+	tstore := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: tstore}
 	if err := tstore.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "gpd", TenantID: canon, Name: "g-pd",
 		Enabled: true, ExternalSystem: "pagerduty", MinVerdict: "confirmed"}); err != nil {

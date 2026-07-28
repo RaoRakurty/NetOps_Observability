@@ -26,7 +26,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	st := &pgTicketingStore{db: ps.db}
+	st := ticketing.NewPGStore(rlsPG{db: ps.db})
 
 	// A policy round-trips (PutPolicy → ListPolicies scoped to the tenant).
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "n", ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"}); err != nil {
@@ -47,7 +47,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.EnqueueOutbox(ctx, dup); err != nil {
 		t.Fatalf("EnqueueOutbox dup: %v", err)
 	}
-	if out, _, _ := st.ListOutbox(ctx, "acme", false, ticketMaxPage, 0); len(out) != 1 {
+	if out, _, _ := st.ListOutbox(ctx, "acme", false, ticketing.MaxPage, 0); len(out) != 1 {
 		t.Fatalf("idempotency: outbox has %d rows, want 1", len(out))
 	}
 
@@ -75,7 +75,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.FinishOutbox(ctx, fin); err != nil {
 		t.Fatalf("FinishOutbox: %v", err)
 	}
-	out, _, _ := st.ListOutbox(ctx, "acme", false, ticketMaxPage, 0)
+	out, _, _ := st.ListOutbox(ctx, "acme", false, ticketing.MaxPage, 0)
 	if len(out) != 1 || out[0].Status != "sent" {
 		t.Fatalf("after finish, outbox = %+v, want one row status=sent", out)
 	}
@@ -84,7 +84,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	if err := st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "acme", ID: "au1", CorrObjectID: "obj-a", ExternalSystem: "servicenow", Action: "create", Result: "ok"}); err != nil {
 		t.Fatalf("AppendAudit: %v", err)
 	}
-	if a, _, _ := st.ListAudit(ctx, "acme", false, "obj-a", ticketMaxPage, 0); len(a) != 1 {
+	if a, _, _ := st.ListAudit(ctx, "acme", false, "obj-a", ticketing.MaxPage, 0); len(a) != 1 {
 		t.Fatalf("ListAudit = %d, want 1", len(a))
 	}
 	now := time.Now().UTC()
@@ -96,7 +96,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 
 	// Tenant isolation through RLS: another tenant sees none of acme's rows.
-	if out, _, _ := st.ListOutbox(ctx, "globex", false, ticketMaxPage, 0); len(out) != 0 {
+	if out, _, _ := st.ListOutbox(ctx, "globex", false, ticketing.MaxPage, 0); len(out) != 0 {
 		t.Fatalf("RLS leak: globex sees acme outbox: %+v", out)
 	}
 	if _, found, _ := st.GetLink(ctx, "globex", false, "obj-a", "servicenow"); found {
@@ -108,7 +108,7 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 // policy-per-(tenant, system) invariant end to end against REAL Postgres:
 // (1) live writes — the incident_policies_one_enabled partial unique index
 // (migration 0021) rejects a second enable transactionally, surfaced as
-// errPolicyConflict; (2) the migration body itself — replayed against seeded
+// ticketing.ErrPolicyConflict; (2) the migration body itself — replayed against seeded
 // duplicate enabled policies (the representative pre-0021 data shape) it must
 // deterministically keep only the most recently updated one, under FORCE RLS
 // (the SET LOCAL '*' inside the file is what makes the dedupe UPDATE see rows).
@@ -123,17 +123,17 @@ func TestPgTicketingStore_SingleEnabledPolicyInvariant(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	st := &pgTicketingStore{db: ps.db}
+	st := ticketing.NewPGStore(rlsPG{db: ps.db})
 
-	// ── live invariant: index rejects the second enable as errPolicyConflict ──
+	// ── live invariant: index rejects the second enable as ticketing.ErrPolicyConflict ──
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "acme", Name: "strict",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "confirmed"}); err != nil {
 		t.Fatalf("first enabled policy: %v", err)
 	}
 	err = st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",
 		ExternalSystem: "servicenow", Enabled: true, MinVerdict: "suspected"})
-	if !errors.Is(err, errPolicyConflict) {
-		t.Fatalf("second enabled policy: err = %v, want errPolicyConflict", err)
+	if !errors.Is(err, ticketing.ErrPolicyConflict) {
+		t.Fatalf("second enabled policy: err = %v, want ticketing.ErrPolicyConflict", err)
 	}
 	// Disabled coexists; another tenant is independent.
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p2", TenantID: "acme", Name: "permissive",

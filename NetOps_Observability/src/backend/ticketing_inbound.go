@@ -25,13 +25,13 @@ import (
 // advance) is scoped to that owning tenant — never a request body.
 
 type ticketStateSyncer struct {
-	store       ticketingStore
+	store       ticketing.Store
 	adapters    map[string]ticketAdapter
 	resolveConn ticketConnResolver
 	lookback    time.Duration // bound the polled set to recently-touched links
 }
 
-func newTicketStateSyncer(store ticketingStore, resolve ticketConnResolver) *ticketStateSyncer {
+func newTicketStateSyncer(store ticketing.Store, resolve ticketConnResolver) *ticketStateSyncer {
 	return &ticketStateSyncer{
 		store:       store,
 		adapters:    map[string]ticketAdapter{"servicenow": newServiceNowAdapter()},
@@ -103,7 +103,7 @@ func (sy *ticketStateSyncer) syncLink(ctx context.Context, l ticketing.Link, now
 	// read would make an already-recorded action look unrecorded and append it
 	// again. One object's ledger is one row per action, so the max page is
 	// ample — but if it ever were not, say so rather than silently duplicating.
-	existing, existingTotal, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID, ticketMaxPage, 0)
+	existing, existingTotal, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID, ticketing.MaxPage, 0)
 	if existingTotal > len(existing) {
 		logError("ticketing", "audit ledger truncated during inbound dedupe — duplicate audit rows possible",
 			map[string]any{"corr_object_id": l.CorrObjectID, "total": existingTotal, "read": len(existing)})

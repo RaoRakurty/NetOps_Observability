@@ -1,11 +1,11 @@
-package main
+package ticketing
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"netops/backend/internal/ticketing"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,26 +22,26 @@ import (
 // tenant_iso FORCE-RLS policy via withTenant. A non-cross caller can never see,
 // fetch, write, or delete another tenant's policies, links, outbox, or audit.
 
-// errPolicyConflict is returned by PutPolicy when saving an ENABLED policy
+// ErrPolicyConflict is returned by PutPolicy when saving an ENABLED policy
 // while another policy is already enabled for the same (tenant, external
 // system). The HTTP layer pre-checks and 409s with the conflicting policy's
 // name; this store-level invariant closes the check-then-write race (and any
 // non-API write path). In Postgres it is enforced transactionally by the
 // incident_policies_one_enabled partial unique index (migration 0021).
-var errPolicyConflict = errors.New("another policy is already enabled for this tenant and external system")
+var ErrPolicyConflict = errors.New("another policy is already enabled for this tenant and external system")
 
-type ticketingStore interface {
+type Store interface {
 	// incident policies
-	ListPolicies(ctx context.Context, tenant string, cross bool) ([]ticketing.IncidentPolicy, error)
-	GetPolicy(ctx context.Context, tenant string, cross bool, id string) (ticketing.IncidentPolicy, bool, error)
-	// PutPolicy upserts one policy; returns errPolicyConflict when enabling it
+	ListPolicies(ctx context.Context, tenant string, cross bool) ([]IncidentPolicy, error)
+	GetPolicy(ctx context.Context, tenant string, cross bool, id string) (IncidentPolicy, bool, error)
+	// PutPolicy upserts one policy; returns ErrPolicyConflict when enabling it
 	// would violate the one-enabled-per-(tenant, external_system) invariant.
-	PutPolicy(ctx context.Context, p ticketing.IncidentPolicy) error
+	PutPolicy(ctx context.Context, p IncidentPolicy) error
 	DeletePolicy(ctx context.Context, tenant string, cross bool, id string) (bool, error)
 
 	// RCA object ↔ ticket links (the dedupe anchor)
-	GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (ticketing.Link, bool, error)
-	PutLink(ctx context.Context, l ticketing.Link) error
+	GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (Link, bool, error)
+	PutLink(ctx context.Context, l Link) error
 	// ListLinksForTenant returns the caller-visible ticket links, most recently
 	// updated first, capped at limit (bounded read — the notified-via join in the
 	// RCA candidate list only needs the recent working set).
@@ -52,43 +52,34 @@ type ticketingStore interface {
 	// ticket filed" and operators file duplicates against incidents that already
 	// have them. Returning the total lets a caller SEE that it holds a partial
 	// set; ListLinksForCorr avoids the question entirely for detail views.
-	ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.Link, int, error)
+	ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]Link, int, error)
 	// ListLinksForCorr returns every link for ONE correlation object — an exact
 	// lookup with no cliff, for the detail surfaces that must never guess.
-	ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketing.Link, error)
+	ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]Link, error)
 	// ListSyncableLinks returns the live, externally-filed links the inbound state
 	// syncer should poll (a real sys_id, non-terminal status, touched since `since`).
 	// Runs at platform scope (the syncer spans all tenants; each row carries its
 	// tenant_id) — like ClaimDueOutbox.
-	ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketing.Link, error)
+	ListSyncableLinks(ctx context.Context, since time.Time) ([]Link, error)
 
 	// outbox + audit
-	EnqueueOutbox(ctx context.Context, item ticketing.OutboxItem) error
+	EnqueueOutbox(ctx context.Context, item OutboxItem) error
 	// ListOutbox returns ONE page plus the true total. F-66: this had no LIMIT
 	// in the SQL at all and both tables are append-only, so the endpoint served
 	// a 22 MB response that grew forever and any infrastructure:read user could
 	// loop into a self-DoS while holding one of the pool's 10 PG connections.
-	ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.OutboxItem, int, error)
+	ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error)
 	// ClaimDueOutbox atomically leases up to n due items (status pending/retrying
 	// AND next_retry_at <= now) for the worker, advancing next_retry_at by lease so
 	// a concurrent/abandoned claim re-runs only after the lease expires. Runs at
 	// platform scope (the worker spans all tenants; each row carries its tenant_id).
-	ClaimDueOutbox(ctx context.Context, workerID string, n int, lease time.Duration) ([]ticketing.OutboxItem, error)
+	ClaimDueOutbox(ctx context.Context, workerID string, n int, lease time.Duration) ([]OutboxItem, error)
 	// FinishOutbox writes a claimed item's terminal/next state back (status,
 	// retry_count, next_retry_at, last_error), keyed by (tenant_id, id).
-	FinishOutbox(ctx context.Context, item ticketing.OutboxItem) error
-	AppendAudit(ctx context.Context, e ticketing.AuditEntry) error
+	FinishOutbox(ctx context.Context, item OutboxItem) error
+	AppendAudit(ctx context.Context, e AuditEntry) error
 	// ListAudit returns ONE page plus the true total (F-66, as ListOutbox).
-	ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketing.AuditEntry, int, error)
-}
-
-// newTicketingStore picks the backend: an RLS-scoped pg repository under
-// STORE_BACKEND=postgres, else an in-memory store. Always non-nil.
-func newTicketingStore() ticketingStore {
-	if ps, ok := backend.(*pgStore); ok {
-		return &pgTicketingStore{db: ps.db}
-	}
-	return newMemTicketingStore()
+	ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]AuditEntry, int, error)
 }
 
 // scopeVisible reports whether a (tenant, cross) principal may see a row owned
@@ -101,7 +92,7 @@ func scopeVisible(tenant string, cross bool, rowTenant string) bool {
 // be an externally-filed ticket (a real sys_id), in a non-terminal status (closed/
 // failed/pending are skipped), and touched since `since` (bounds the poll set). A
 // zero `since` includes everything (used by the in-memory store in tests).
-func syncableLink(l ticketing.Link, since time.Time) bool {
+func syncableLink(l Link, since time.Time) bool {
 	if l.SysID == "" {
 		return false
 	}
@@ -129,19 +120,19 @@ func syncableLink(l ticketing.Link, since time.Time) bool {
 // the auditMaxEvents ring the app audit store already uses.
 const memTicketAuditMax = 5000
 
-type memTicketingStore struct {
+type MemStore struct {
 	mu       sync.RWMutex
-	policies map[string]ticketing.IncidentPolicy // key: tenant\x00id
-	links    map[string]ticketing.Link           // key: tenant\x00corr\x00system
-	outbox   map[string]ticketing.OutboxItem     // key: tenant\x00id
-	audit    []ticketing.AuditEntry
+	policies map[string]IncidentPolicy // key: tenant\x00id
+	links    map[string]Link           // key: tenant\x00corr\x00system
+	outbox   map[string]OutboxItem     // key: tenant\x00id
+	audit    []AuditEntry
 }
 
-func newMemTicketingStore() *memTicketingStore {
-	return &memTicketingStore{
-		policies: map[string]ticketing.IncidentPolicy{},
-		links:    map[string]ticketing.Link{},
-		outbox:   map[string]ticketing.OutboxItem{},
+func NewMemStore() *MemStore {
+	return &MemStore{
+		policies: map[string]IncidentPolicy{},
+		links:    map[string]Link{},
+		outbox:   map[string]OutboxItem{},
 	}
 }
 
@@ -163,10 +154,10 @@ func joinNUL(parts []string) string {
 	return out
 }
 
-func (m *memTicketingStore) ListPolicies(_ context.Context, tenant string, cross bool) ([]ticketing.IncidentPolicy, error) {
+func (m *MemStore) ListPolicies(_ context.Context, tenant string, cross bool) ([]IncidentPolicy, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []ticketing.IncidentPolicy
+	var out []IncidentPolicy
 	for _, p := range m.policies {
 		if scopeVisible(tenant, cross, p.TenantID) {
 			out = append(out, p)
@@ -181,7 +172,7 @@ func (m *memTicketingStore) ListPolicies(_ context.Context, tenant string, cross
 	return out, nil
 }
 
-func (m *memTicketingStore) GetPolicy(_ context.Context, tenant string, cross bool, id string) (ticketing.IncidentPolicy, bool, error) {
+func (m *MemStore) GetPolicy(_ context.Context, tenant string, cross bool, id string) (IncidentPolicy, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	// A scoped caller can only ever address its own key; a cross caller may match
@@ -195,10 +186,10 @@ func (m *memTicketingStore) GetPolicy(_ context.Context, tenant string, cross bo
 			return p, true, nil
 		}
 	}
-	return ticketing.IncidentPolicy{}, false, nil
+	return IncidentPolicy{}, false, nil
 }
 
-func (m *memTicketingStore) PutPolicy(_ context.Context, p ticketing.IncidentPolicy) error {
+func (m *MemStore) PutPolicy(_ context.Context, p IncidentPolicy) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Same invariant the pg backend enforces via the incident_policies_one_enabled
@@ -208,7 +199,7 @@ func (m *memTicketingStore) PutPolicy(_ context.Context, p ticketing.IncidentPol
 		for _, ex := range m.policies {
 			if ex.Enabled && ex.ID != p.ID && ex.TenantID == p.TenantID &&
 				orDefault(ex.ExternalSystem, "servicenow") == orDefault(p.ExternalSystem, "servicenow") {
-				return errPolicyConflict
+				return ErrPolicyConflict
 			}
 		}
 	}
@@ -220,7 +211,7 @@ func (m *memTicketingStore) PutPolicy(_ context.Context, p ticketing.IncidentPol
 	return nil
 }
 
-func (m *memTicketingStore) DeletePolicy(_ context.Context, tenant string, cross bool, id string) (bool, error) {
+func (m *MemStore) DeletePolicy(_ context.Context, tenant string, cross bool, id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := memKey(tenant, id)
@@ -239,7 +230,7 @@ func (m *memTicketingStore) DeletePolicy(_ context.Context, tenant string, cross
 	return true, nil
 }
 
-func (m *memTicketingStore) GetLink(_ context.Context, tenant string, cross bool, corrID, system string) (ticketing.Link, bool, error) {
+func (m *MemStore) GetLink(_ context.Context, tenant string, cross bool, corrID, system string) (Link, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !cross {
@@ -251,10 +242,10 @@ func (m *memTicketingStore) GetLink(_ context.Context, tenant string, cross bool
 			return l, true, nil
 		}
 	}
-	return ticketing.Link{}, false, nil
+	return Link{}, false, nil
 }
 
-func (m *memTicketingStore) PutLink(_ context.Context, l ticketing.Link) error {
+func (m *MemStore) PutLink(_ context.Context, l Link) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if l.CreatedAt.IsZero() {
@@ -265,11 +256,11 @@ func (m *memTicketingStore) PutLink(_ context.Context, l ticketing.Link) error {
 	return nil
 }
 
-func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.Link, int, error) {
+func (m *MemStore) ListLinksForTenant(_ context.Context, tenant string, cross bool, limit, offset int) ([]Link, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	limit, offset = boundPage(limit, offset, ticketLinksDefaultPage)
-	var out []ticketing.Link
+	limit, offset = boundPage(limit, offset, LinksDefaultPage)
+	var out []Link
 	for _, l := range m.links {
 		if scopeVisible(tenant, cross, l.TenantID) {
 			out = append(out, l)
@@ -288,10 +279,10 @@ func (m *memTicketingStore) ListLinksForTenant(_ context.Context, tenant string,
 	return pageSlice(out, limit, offset), total, nil
 }
 
-func (m *memTicketingStore) ListLinksForCorr(_ context.Context, tenant string, cross bool, corrID string) ([]ticketing.Link, error) {
+func (m *MemStore) ListLinksForCorr(_ context.Context, tenant string, cross bool, corrID string) ([]Link, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []ticketing.Link
+	var out []Link
 	for _, l := range m.links {
 		if scopeVisible(tenant, cross, l.TenantID) && l.CorrObjectID == corrID {
 			out = append(out, l)
@@ -300,10 +291,10 @@ func (m *memTicketingStore) ListLinksForCorr(_ context.Context, tenant string, c
 	sort.Slice(out, func(i, j int) bool { return out[i].ExternalSystem < out[j].ExternalSystem })
 	return out, nil
 }
-func (m *memTicketingStore) ListSyncableLinks(_ context.Context, since time.Time) ([]ticketing.Link, error) {
+func (m *MemStore) ListSyncableLinks(_ context.Context, since time.Time) ([]Link, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []ticketing.Link
+	var out []Link
 	for _, l := range m.links {
 		if syncableLink(l, since) {
 			out = append(out, l)
@@ -312,7 +303,7 @@ func (m *memTicketingStore) ListSyncableLinks(_ context.Context, since time.Time
 	return out, nil
 }
 
-func (m *memTicketingStore) EnqueueOutbox(_ context.Context, item ticketing.OutboxItem) error {
+func (m *MemStore) EnqueueOutbox(_ context.Context, item OutboxItem) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Idempotency: an item with the same idempotency_key is a no-op (at-most-once).
@@ -329,11 +320,11 @@ func (m *memTicketingStore) EnqueueOutbox(_ context.Context, item ticketing.Outb
 	return nil
 }
 
-func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.OutboxItem, int, error) {
+func (m *MemStore) ListOutbox(_ context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	limit, offset = boundPage(limit, offset, ticketOutboxDefaultPage)
-	var out []ticketing.OutboxItem
+	limit, offset = boundPage(limit, offset, OutboxDefaultPage)
+	var out []OutboxItem
 	for _, it := range m.outbox {
 		if scopeVisible(tenant, cross, it.TenantID) {
 			out = append(out, it)
@@ -343,11 +334,11 @@ func (m *memTicketingStore) ListOutbox(_ context.Context, tenant string, cross b
 	total := len(out)
 	return pageSlice(out, limit, offset), total, nil
 }
-func (m *memTicketingStore) ClaimDueOutbox(_ context.Context, _ string, n int, lease time.Duration) ([]ticketing.OutboxItem, error) {
+func (m *MemStore) ClaimDueOutbox(_ context.Context, _ string, n int, lease time.Duration) ([]OutboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
-	var due []ticketing.OutboxItem
+	var due []OutboxItem
 	for _, it := range m.outbox {
 		if (it.Status == "pending" || it.Status == "retrying") && !it.NextRetryAt.After(now) {
 			due = append(due, it)
@@ -366,7 +357,7 @@ func (m *memTicketingStore) ClaimDueOutbox(_ context.Context, _ string, n int, l
 	return due, nil
 }
 
-func (m *memTicketingStore) FinishOutbox(_ context.Context, item ticketing.OutboxItem) error {
+func (m *MemStore) FinishOutbox(_ context.Context, item OutboxItem) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := memKey(item.TenantID, item.ID)
@@ -383,7 +374,7 @@ func (m *memTicketingStore) FinishOutbox(_ context.Context, item ticketing.Outbo
 	return nil
 }
 
-func (m *memTicketingStore) AppendAudit(_ context.Context, e ticketing.AuditEntry) error {
+func (m *MemStore) AppendAudit(_ context.Context, e AuditEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e.At.IsZero() {
@@ -397,16 +388,16 @@ func (m *memTicketingStore) AppendAudit(_ context.Context, e ticketing.AuditEntr
 	// Postgres backend is the durable one), so the honest bound is the same
 	// ring: keep the most recent entries and drop the oldest.
 	if len(m.audit) > memTicketAuditMax {
-		m.audit = append([]ticketing.AuditEntry(nil), m.audit[len(m.audit)-memTicketAuditMax:]...)
+		m.audit = append([]AuditEntry(nil), m.audit[len(m.audit)-memTicketAuditMax:]...)
 	}
 	return nil
 }
 
-func (m *memTicketingStore) ListAudit(_ context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketing.AuditEntry, int, error) {
+func (m *MemStore) ListAudit(_ context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]AuditEntry, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	limit, offset = boundPage(limit, offset, ticketAuditDefaultPage)
-	var out []ticketing.AuditEntry
+	limit, offset = boundPage(limit, offset, AuditDefaultPage)
+	var out []AuditEntry
 	for _, e := range m.audit {
 		if !scopeVisible(tenant, cross, e.TenantID) {
 			continue
@@ -423,15 +414,39 @@ func (m *memTicketingStore) ListAudit(_ context.Context, tenant string, cross bo
 
 // ── Postgres backend (RLS-scoped via withTenant) ─────────────────────────────
 
-type pgTicketingStore struct {
-	db *pgDB
+// SeedPolicyForTest inserts a policy directly into the in-memory map,
+// bypassing PutPolicy's single-enabled-policy conflict rule — for tests that
+// need pre-existing/drifted state. TEST SUPPORT ONLY.
+func (m *MemStore) SeedPolicyForTest(p IncidentPolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies[memKey(normTenant(p.TenantID), p.ID)] = p
 }
 
-func (s *pgTicketingStore) ListPolicies(ctx context.Context, tenant string, cross bool) ([]ticketing.IncidentPolicy, error) {
+// normTenant mirrors the integrator's tenant-id normalization (duplicated per
+// the no-shared-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// DB is the injected relational seam: run fn inside a transaction whose
+// row-level security is scoped to tenant (or unscoped for a cross-tenant
+// principal). Implemented by package main's rlsPG adapter (the portintel.DB
+// idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+// NewPGStore builds the FORCE-RLS pg repository over the injected seam.
+func NewPGStore(db DB) *PGStore { return &PGStore{db: db} }
+
+type PGStore struct {
+	db DB
+}
+
+func (s *PGStore) ListPolicies(ctx context.Context, tenant string, cross bool) ([]IncidentPolicy, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var out []ticketing.IncidentPolicy
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	var out []IncidentPolicy
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+policyCols+` FROM incident_policies ORDER BY tenant_id, id`)
 		if err != nil {
 			return err
@@ -449,12 +464,12 @@ func (s *pgTicketingStore) ListPolicies(ctx context.Context, tenant string, cros
 	return out, err
 }
 
-func (s *pgTicketingStore) GetPolicy(ctx context.Context, tenant string, cross bool, id string) (ticketing.IncidentPolicy, bool, error) {
+func (s *PGStore) GetPolicy(ctx context.Context, tenant string, cross bool, id string) (IncidentPolicy, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var p ticketing.IncidentPolicy
+	var p IncidentPolicy
 	found := false
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+policyCols+` FROM incident_policies WHERE id=$1`, id)
 		if err != nil {
 			return err
@@ -471,11 +486,11 @@ func (s *pgTicketingStore) GetPolicy(ctx context.Context, tenant string, cross b
 	return p, found, err
 }
 
-func (s *pgTicketingStore) PutPolicy(ctx context.Context, p ticketing.IncidentPolicy) error {
+func (s *PGStore) PutPolicy(ctx context.Context, p IncidentPolicy) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	filters, _ := json.Marshal(orEmptyMap(p.Filters))
-	return s.db.withTenant(ctx, p.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, p.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO incident_policies (tenant_id, id, name, external_system, enabled, min_verdict,
     require_customer_facing, allow_probe_only, allow_internal_monitoring, suspected_requires_critical,
@@ -505,17 +520,17 @@ ON CONFLICT (tenant_id, id) DO UPDATE SET
 		// 23505 on incident_policies_one_enabled = the one-enabled invariant
 		// (migration 0021) — surface the typed conflict, not a raw driver error.
 		if err != nil && strings.Contains(err.Error(), "incident_policies_one_enabled") {
-			return errPolicyConflict
+			return ErrPolicyConflict
 		}
 		return err
 	})
 }
 
-func (s *pgTicketingStore) DeletePolicy(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
+func (s *PGStore) DeletePolicy(ctx context.Context, tenant string, cross bool, id string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var n int64
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		ct, err := tx.Exec(ctx, `DELETE FROM incident_policies WHERE id=$1`, id)
 		if err != nil {
 			return err
@@ -526,12 +541,12 @@ func (s *pgTicketingStore) DeletePolicy(ctx context.Context, tenant string, cros
 	return n > 0, err
 }
 
-func (s *pgTicketingStore) GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (ticketing.Link, bool, error) {
+func (s *PGStore) GetLink(ctx context.Context, tenant string, cross bool, corrID, system string) (Link, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var l ticketing.Link
+	var l Link
 	found := false
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
             WHERE corr_object_id=$1 AND external_system=$2`, corrID, system)
 		if err != nil {
@@ -549,10 +564,10 @@ func (s *pgTicketingStore) GetLink(ctx context.Context, tenant string, cross boo
 	return l, found, err
 }
 
-func (s *pgTicketingStore) PutLink(ctx context.Context, l ticketing.Link) error {
+func (s *PGStore) PutLink(ctx context.Context, l Link) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, l.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, l.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO correlix_ticket_links (tenant_id, corr_object_id, external_system, instance_url, ticket_number,
     sys_id, dedupe_key, status, last_verdict, last_confidence, last_payload_hash, last_synced_at)
@@ -569,13 +584,13 @@ ON CONFLICT (tenant_id, corr_object_id, external_system) DO UPDATE SET
 	})
 }
 
-func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.Link, int, error) {
+func (s *PGStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]Link, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	limit, offset = boundPage(limit, offset, ticketLinksDefaultPage)
-	var out []ticketing.Link
+	limit, offset = boundPage(limit, offset, LinksDefaultPage)
+	var out []Link
 	var total int
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		// The COUNT runs under the same RLS-scoped transaction, so the total is
 		// the caller's total — never a cross-tenant row count.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM correlix_ticket_links`).Scan(&total); err != nil {
@@ -602,11 +617,11 @@ func (s *pgTicketingStore) ListLinksForTenant(ctx context.Context, tenant string
 // ListLinksForCorr is the exact per-object lookup that removes F-67's guess:
 // a detail surface asks for the links of the object it is rendering instead of
 // hoping that object appeared in a truncated top-N page.
-func (s *pgTicketingStore) ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]ticketing.Link, error) {
+func (s *PGStore) ListLinksForCorr(ctx context.Context, tenant string, cross bool, corrID string) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var out []ticketing.Link
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	var out []Link
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
             WHERE corr_object_id=$1 ORDER BY external_system`, corrID)
 		if err != nil {
@@ -624,13 +639,13 @@ func (s *pgTicketingStore) ListLinksForCorr(ctx context.Context, tenant string, 
 	})
 	return out, err
 }
-func (s *pgTicketingStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]ticketing.Link, error) {
+func (s *PGStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]Link, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	var out []ticketing.Link
+	var out []Link
 	// Platform scope (cross=true): the syncer spans all tenants; each row carries
 	// its tenant_id, used to scope every downstream write. Mirrors ClaimDueOutbox.
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
             WHERE sys_id <> '' AND status IN ('open','updated','resolved')
               AND COALESCE(last_synced_at, updated_at, created_at) >= $1
@@ -652,7 +667,7 @@ func (s *pgTicketingStore) ListSyncableLinks(ctx context.Context, since time.Tim
 	return out, err
 }
 
-func (s *pgTicketingStore) EnqueueOutbox(ctx context.Context, item ticketing.OutboxItem) error {
+func (s *PGStore) EnqueueOutbox(ctx context.Context, item OutboxItem) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	payload, _ := json.Marshal(orEmptyMap(item.Payload))
@@ -664,7 +679,7 @@ func (s *pgTicketingStore) EnqueueOutbox(ctx context.Context, item ticketing.Out
 	if next.IsZero() {
 		next = time.Now().UTC()
 	}
-	return s.db.withTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
 		// ON CONFLICT on the unique idempotency_key makes enqueue at-most-once.
 		_, err := tx.Exec(ctx, `
 INSERT INTO ticket_outbox (tenant_id, id, corr_object_id, external_system, action, idempotency_key,
@@ -678,13 +693,13 @@ ON CONFLICT (idempotency_key) DO NOTHING`,
 	})
 }
 
-func (s *pgTicketingStore) ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]ticketing.OutboxItem, int, error) {
+func (s *PGStore) ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	limit, offset = boundPage(limit, offset, ticketOutboxDefaultPage)
-	var out []ticketing.OutboxItem
+	limit, offset = boundPage(limit, offset, OutboxDefaultPage)
+	var out []OutboxItem
 	var total int
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ticket_outbox`).Scan(&total); err != nil {
 			return err
 		}
@@ -722,14 +737,14 @@ UPDATE ticket_outbox o
  WHERE o.id = c.claim_id
 RETURNING ` + outboxCols
 
-func (s *pgTicketingStore) ClaimDueOutbox(ctx context.Context, _ string, n int, lease time.Duration) ([]ticketing.OutboxItem, error) {
+func (s *PGStore) ClaimDueOutbox(ctx context.Context, _ string, n int, lease time.Duration) ([]OutboxItem, error) {
 	if n <= 0 {
 		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	var out []ticketing.OutboxItem
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	var out []OutboxItem
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, claimOutboxSQL, n, lease.Seconds())
 		if err != nil {
 			return err
@@ -747,10 +762,10 @@ func (s *pgTicketingStore) ClaimDueOutbox(ctx context.Context, _ string, n int, 
 	return out, err
 }
 
-func (s *pgTicketingStore) FinishOutbox(ctx context.Context, item ticketing.OutboxItem) error {
+func (s *PGStore) FinishOutbox(ctx context.Context, item OutboxItem) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 UPDATE ticket_outbox SET status=$3, retry_count=$4, next_retry_at=$5, last_error=$6, updated_at=now()
  WHERE tenant_id=$1 AND id=$2`,
@@ -759,10 +774,10 @@ UPDATE ticket_outbox SET status=$3, retry_count=$4, next_retry_at=$5, last_error
 	})
 }
 
-func (s *pgTicketingStore) AppendAudit(ctx context.Context, e ticketing.AuditEntry) error {
+func (s *PGStore) AppendAudit(ctx context.Context, e AuditEntry) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.db.withTenant(ctx, e.TenantID, false, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, e.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO ticket_audit_log (tenant_id, id, corr_object_id, external_system, action, actor,
     old_status, new_status, payload_hash, result, error)
@@ -773,13 +788,13 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 	})
 }
 
-func (s *pgTicketingStore) ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]ticketing.AuditEntry, int, error) {
+func (s *PGStore) ListAudit(ctx context.Context, tenant string, cross bool, corrID string, limit, offset int) ([]AuditEntry, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	limit, offset = boundPage(limit, offset, ticketAuditDefaultPage)
-	var out []ticketing.AuditEntry
+	limit, offset = boundPage(limit, offset, AuditDefaultPage)
+	var out []AuditEntry
 	var total int
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		countQ := `SELECT count(*) FROM ticket_audit_log`
 		q := `SELECT ` + auditCols + ` FROM ticket_audit_log`
 		args := []any{}
@@ -791,7 +806,7 @@ func (s *pgTicketingStore) ListAudit(ctx context.Context, tenant string, cross b
 		if err := tx.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 			return err
 		}
-		q += ` ORDER BY at LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)
+		q += ` ORDER BY at LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
 		args = append(args, limit, offset)
 		rows, err := tx.Query(ctx, q, args...)
 		if err != nil {
@@ -816,8 +831,8 @@ const policyCols = `tenant_id, id, name, external_system, enabled, min_verdict, 
     impact_confirmed_critical, urgency_confirmed_critical, impact_confirmed, urgency_confirmed,
     allow_validation_scenarios, filters, created_at, updated_at`
 
-func scanPolicy(rows pgx.Rows) (ticketing.IncidentPolicy, error) {
-	var p ticketing.IncidentPolicy
+func scanPolicy(rows pgx.Rows) (IncidentPolicy, error) {
+	var p IncidentPolicy
 	var filters []byte
 	if err := rows.Scan(&p.TenantID, &p.ID, &p.Name, &p.ExternalSystem, &p.Enabled, &p.MinVerdict,
 		&p.RequireCustomerFacing, &p.AllowProbeOnly, &p.AllowInternalMonitoring, &p.SuspectedRequiresCritical,
@@ -836,10 +851,10 @@ func scanPolicy(rows pgx.Rows) (ticketing.IncidentPolicy, error) {
 // what a UI actually renders; the max is what one caller may hold in memory and
 // in a PG connection at once.
 const (
-	ticketLinksDefaultPage  = 500
-	ticketOutboxDefaultPage = 200
-	ticketAuditDefaultPage  = 200
-	ticketMaxPage           = 2000
+	LinksDefaultPage  = 500
+	OutboxDefaultPage = 200
+	AuditDefaultPage  = 200 // exported: the AI datasource pages the audit trail with the same bound
+	MaxPage           = 2000
 )
 
 // pageSlice applies limit/offset to an already-sorted slice. Offsets past the
@@ -863,8 +878,8 @@ func boundPage(limit, offset, def int) (int, int) {
 	if limit <= 0 {
 		limit = def
 	}
-	if limit > ticketMaxPage {
-		limit = ticketMaxPage
+	if limit > MaxPage {
+		limit = MaxPage
 	}
 	if offset < 0 {
 		offset = 0
@@ -875,8 +890,8 @@ func boundPage(limit, offset, def int) (int, int) {
 const linkCols = `tenant_id, corr_object_id, external_system, instance_url, ticket_number, sys_id, dedupe_key,
     status, last_verdict, last_confidence, last_payload_hash, last_synced_at, created_at, updated_at`
 
-func scanLink(rows pgx.Rows) (ticketing.Link, error) {
-	var l ticketing.Link
+func scanLink(rows pgx.Rows) (Link, error) {
+	var l Link
 	if err := rows.Scan(&l.TenantID, &l.CorrObjectID, &l.ExternalSystem, &l.InstanceURL, &l.TicketNumber,
 		&l.SysID, &l.DedupeKey, &l.Status, &l.LastVerdict, &l.LastConfidence, &l.LastPayloadHash,
 		&l.LastSyncedAt, &l.CreatedAt, &l.UpdatedAt); err != nil {
@@ -888,8 +903,8 @@ func scanLink(rows pgx.Rows) (ticketing.Link, error) {
 const outboxCols = `tenant_id, id, corr_object_id, external_system, action, idempotency_key, payload, status,
     retry_count, max_retries, next_retry_at, last_error, created_at, updated_at`
 
-func scanOutbox(rows pgx.Rows) (ticketing.OutboxItem, error) {
-	var it ticketing.OutboxItem
+func scanOutbox(rows pgx.Rows) (OutboxItem, error) {
+	var it OutboxItem
 	var payload []byte
 	if err := rows.Scan(&it.TenantID, &it.ID, &it.CorrObjectID, &it.ExternalSystem, &it.Action,
 		&it.IdempotencyKey, &payload, &it.Status, &it.RetryCount, &it.MaxRetries, &it.NextRetryAt,
@@ -905,8 +920,8 @@ func scanOutbox(rows pgx.Rows) (ticketing.OutboxItem, error) {
 const auditCols = `tenant_id, id, corr_object_id, external_system, action, actor, old_status, new_status,
     payload_hash, result, error, at`
 
-func scanAudit(rows pgx.Rows) (ticketing.AuditEntry, error) {
-	var e ticketing.AuditEntry
+func scanAudit(rows pgx.Rows) (AuditEntry, error) {
+	var e AuditEntry
 	if err := rows.Scan(&e.TenantID, &e.ID, &e.CorrObjectID, &e.ExternalSystem, &e.Action, &e.Actor,
 		&e.OldStatus, &e.NewStatus, &e.PayloadHash, &e.Result, &e.Error, &e.At); err != nil {
 		return e, err
@@ -928,5 +943,5 @@ func orEmptyMap(m map[string]any) map[string]any {
 	return m
 }
 
-var _ ticketingStore = (*memTicketingStore)(nil)
-var _ ticketingStore = (*pgTicketingStore)(nil)
+var _ Store = (*MemStore)(nil)
+var _ Store = (*PGStore)(nil)

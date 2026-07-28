@@ -14,7 +14,7 @@ import (
 
 func TestTicketingStore_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 
 	// Tenant A and B each own a policy + a ticket link.
 	if err := st.PutPolicy(ctx, ticketing.IncidentPolicy{ID: "p1", TenantID: "t_a", ExternalSystem: "servicenow", Enabled: true}); err != nil {
@@ -72,14 +72,14 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 	// Outbox + audit scope the same way.
 	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "servicenow:create:t_a:obj-a"})
 	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_b", ID: "o2", CorrObjectID: "obj-b", Action: "create", IdempotencyKey: "servicenow:create:t_b:obj-b"})
-	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
+	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	if len(aOut) != 1 || aOut[0].TenantID != "t_a" {
 		t.Fatalf("outbox leaked across tenants: %+v", aOut)
 	}
 
 	_ = st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "t_a", ID: "au1", CorrObjectID: "obj-a", Action: "create"})
 	_ = st.AppendAudit(ctx, ticketing.AuditEntry{TenantID: "t_b", ID: "au2", CorrObjectID: "obj-b", Action: "create"})
-	aAudit, _, _ := st.ListAudit(ctx, "t_a", false, "", ticketMaxPage, 0)
+	aAudit, _, _ := st.ListAudit(ctx, "t_a", false, "", ticketing.MaxPage, 0)
 	if len(aAudit) != 1 || aAudit[0].TenantID != "t_a" {
 		t.Fatalf("audit leaked across tenants: %+v", aAudit)
 	}
@@ -87,13 +87,13 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 
 func TestTicketingStore_OutboxIdempotent(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	item := ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "k1"}
 	_ = st.EnqueueOutbox(ctx, item)
 	dup := item
 	dup.ID = "o2" // different id, same idempotency key
 	_ = st.EnqueueOutbox(ctx, dup)
-	out, _, _ := st.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
+	out, _, _ := st.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	if len(out) != 1 {
 		t.Fatalf("idempotency key should dedupe enqueue, got %d items", len(out))
 	}

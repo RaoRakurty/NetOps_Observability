@@ -203,7 +203,7 @@ func TestTicketFactConsistencyIssues(t *testing.T) {
 
 func TestSweeperResolvePolicy(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: st}
 
 	// No configured policy → default-on MVP policy, stamped with the tenant.
@@ -244,7 +244,7 @@ func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: st}
 
 	// The platform admin's global policy is stored under the canonical "global" id.
@@ -263,7 +263,7 @@ func TestSweeperCanonicalizesGlobalTenant(t *testing.T) {
 
 func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	policy := ticketing.DefaultIncidentPolicy("")
 	view := sampleView()
 
@@ -281,11 +281,11 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	}
 
 	// A scoped caller sees ONLY its own queued ticket — no cross-tenant leak.
-	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
+	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	if len(aOut) != 1 || aOut[0].TenantID != "t_a" {
 		t.Fatalf("tenant A outbox leaked across tenants: %+v", aOut)
 	}
-	bOut, _, _ := st.ListOutbox(ctx, "t_b", false, ticketMaxPage, 0)
+	bOut, _, _ := st.ListOutbox(ctx, "t_b", false, ticketing.MaxPage, 0)
 	if len(bOut) != 1 || bOut[0].TenantID != "t_b" {
 		t.Fatalf("tenant B outbox leaked across tenants: %+v", bOut)
 	}
@@ -334,7 +334,7 @@ func TestResolvePolicy_OrderIndependent(t *testing.T) {
 		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 		winner := ids[seed%len(ids)]
 
-		store := newMemTicketingStore()
+		store := ticketing.NewMemStore()
 		for _, id := range order {
 			if err := store.PutPolicy(context.Background(), ticketing.IncidentPolicy{
 				ID: id, TenantID: "t_prop", Name: id, ExternalSystem: "servicenow",

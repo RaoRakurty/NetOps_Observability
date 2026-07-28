@@ -31,7 +31,7 @@ import (
 
 type ticketSweeper struct {
 	srv     *server
-	store   ticketingStore
+	store   ticketing.Store
 	since   time.Duration // look-back window for "recently active" objects
 	limit   int           // max candidates per tick (bounds work)
 	baseURL string        // RCA deep-link base (RCA_BASE_URL); "" → "/app"
@@ -45,7 +45,7 @@ type sweepCandidate struct {
 	tenant string
 }
 
-func newTicketSweeper(srv *server, store ticketingStore) *ticketSweeper {
+func newTicketSweeper(srv *server, store ticketing.Store) *ticketSweeper {
 	since := 30 * time.Minute
 	if v := os.Getenv("RCA_TICKETING_LOOKBACK"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {

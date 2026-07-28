@@ -25,7 +25,7 @@ func (a *stubFetchAdapter) FetchIncident(_ context.Context, _ ticketSystemConfig
 	return a.inc, true, nil
 }
 
-func seedInboundLinks(t *testing.T, st *memTicketingStore) {
+func seedInboundLinks(t *testing.T, st *ticketing.MemStore) {
 	t.Helper()
 	ctx := context.Background()
 	for _, l := range []ticketing.Link{
@@ -45,7 +45,7 @@ func seedInboundLinks(t *testing.T, st *memTicketingStore) {
 // untouched, and every appended row carries the link's own TenantID.
 func TestInboundSyncerIsolation_SyncOneTenantOnly(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	seedInboundLinks(t, st)
 
 	adapter := &stubFetchAdapter{inc: snowIncident{
@@ -72,7 +72,7 @@ func TestInboundSyncerIsolation_SyncOneTenantOnly(t *testing.T) {
 
 	// t_a gained the phases, and every appended row is stamped with the link's
 	// TenantID (never the request/adapter side).
-	auditA, _, err := st.ListAudit(ctx, "t_a", false, "obj-a", ticketMaxPage, 0)
+	auditA, _, err := st.ListAudit(ctx, "t_a", false, "obj-a", ticketing.MaxPage, 0)
 	if err != nil {
 		t.Fatalf("list t_a audit: %v", err)
 	}
@@ -90,13 +90,13 @@ func TestInboundSyncerIsolation_SyncOneTenantOnly(t *testing.T) {
 	// t_b is untouched: nothing visible in its own scope, nothing under its
 	// object even at cross scope (no mis-stamped rows), and no leak of t_a's
 	// rows into t_b's view.
-	if got, _, _ := st.ListAudit(ctx, "t_b", false, "obj-b", ticketMaxPage, 0); len(got) != 0 {
+	if got, _, _ := st.ListAudit(ctx, "t_b", false, "obj-b", ticketing.MaxPage, 0); len(got) != 0 {
 		t.Fatalf("t_b audit must be empty, got %+v", auditActions(got))
 	}
-	if got, _, _ := st.ListAudit(ctx, "", true, "obj-b", ticketMaxPage, 0); len(got) != 0 {
+	if got, _, _ := st.ListAudit(ctx, "", true, "obj-b", ticketing.MaxPage, 0); len(got) != 0 {
 		t.Fatalf("no rows may exist under obj-b at any scope, got %+v", auditActions(got))
 	}
-	if got, _, _ := st.ListAudit(ctx, "t_b", false, "obj-a", ticketMaxPage, 0); len(got) != 0 {
+	if got, _, _ := st.ListAudit(ctx, "t_b", false, "obj-a", ticketing.MaxPage, 0); len(got) != 0 {
 		t.Fatalf("t_b must not see t_a's audit, got %+v", auditActions(got))
 	}
 
@@ -114,7 +114,7 @@ func TestInboundSyncerIsolation_SyncOneTenantOnly(t *testing.T) {
 // nothing — the dormant-tenant guarantee.
 func TestInboundSyncerIsolation_DormantTenantNoWrites(t *testing.T) {
 	ctx := context.Background()
-	st := newMemTicketingStore()
+	st := ticketing.NewMemStore()
 	seedInboundLinks(t, st)
 
 	adapter := &stubFetchAdapter{inc: snowIncident{
@@ -140,7 +140,7 @@ func TestInboundSyncerIsolation_DormantTenantNoWrites(t *testing.T) {
 	if adapter.calls != 0 {
 		t.Fatalf("dormant tenant must not reach the provider, got %d calls", adapter.calls)
 	}
-	if got, _, _ := st.ListAudit(ctx, "", true, "", ticketMaxPage, 0); len(got) != 0 {
+	if got, _, _ := st.ListAudit(ctx, "", true, "", ticketing.MaxPage, 0); len(got) != 0 {
 		t.Fatalf("dormant sync wrote audit rows: %+v", auditActions(got))
 	}
 	if l, _, _ := st.GetLink(ctx, "t_b", false, "obj-b", "servicenow"); l.Status != "open" {

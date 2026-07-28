@@ -113,6 +113,15 @@ type itsmConfigStore struct {
 // itsmKey normalizes a tenant id to the store/connector key. The global/platform
 // tenant ("" or "global") collapses to "" so an incident tagged TenantID="" and
 // the platform owner's config resolve to the same connector.
+// orDefault returns s unless blank, else def (kept in main with its many
+// consumers when the ticketing store moved; the package has its own copy).
+func orDefault(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
+}
+
 func itsmKey(tenant string) string {
 	t := normTenant(tenant)
 	if t == TenantGlobal {

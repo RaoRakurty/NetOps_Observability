@@ -168,7 +168,7 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 		// The store enforces the one-enabled invariant transactionally (partial
 		// unique index / in-store lock) — the pre-check above is only the friendly
 		// message; a racing enable that slips past it still lands here as 409.
-		if errors.Is(err, errPolicyConflict) {
+		if errors.Is(err, ticketing.ErrPolicyConflict) {
 			s.tktPolicyConflicts.Add(1)
 			writeError(w, http.StatusConflict, err)
 			return
@@ -323,7 +323,7 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 				pdView = v
 			}
 		}
-		audit, _, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketAuditDefaultPage, 0)
+		audit, _, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketing.AuditDefaultPage, 0)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       ticketStatusView(link, found),
 			"pagerduty":    pdView,
@@ -523,7 +523,7 @@ func (s *server) handleTicketsOutbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	limit, err := intQuery(r, "limit", ticketOutboxDefaultPage, 1, ticketMaxPage)
+	limit, err := intQuery(r, "limit", ticketing.OutboxDefaultPage, 1, ticketing.MaxPage)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -588,7 +588,7 @@ func (s *server) handleTicketsLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, err := intQuery(r, "limit", ticketLinksDefaultPage, 1, ticketMaxPage)
+	limit, err := intQuery(r, "limit", ticketing.LinksDefaultPage, 1, ticketing.MaxPage)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -634,7 +634,7 @@ func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid corr_object_id"))
 		return
 	}
-	limit, err := intQuery(r, "limit", ticketAuditDefaultPage, 1, ticketMaxPage)
+	limit, err := intQuery(r, "limit", ticketing.AuditDefaultPage, 1, ticketing.MaxPage)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

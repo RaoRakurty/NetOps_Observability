@@ -265,7 +265,7 @@ func TestJiraWorker_CreateAdoptsExistingIssue(t *testing.T) {
 	f := newFakeJira()
 	defer f.srv.Close()
 	f.searchKey = "NOC-42"
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	ctx := context.Background()
 	resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
 		if system != "jira" {
@@ -370,7 +370,7 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 	fA, fB := newFakeJira(), newFakeJira()
 	defer fA.srv.Close()
 	defer fB.srv.Close()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	ctx := context.Background()
 
 	resolve := func(_ context.Context, tenant, system string) (ticketSystemConfig, bool, error) {
@@ -425,7 +425,7 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 	if len(fB.creates) != before {
 		t.Fatal("SECURITY: mismatched-tenant delivery reached the external provider")
 	}
-	items, _, _ := store.ListOutbox(ctx, "t_a", false, ticketMaxPage, 0)
+	items, _, _ := store.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	found := false
 	for _, it := range items {
 		if it.CorrObjectID == "cccccccc-cccc-4ccc-8ccc-cccccccccccc" {
@@ -444,7 +444,7 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 // strictly opt-in (no policy → no delivery).
 func TestResolvePolicyState_QuadSystemAndJiraOptIn(t *testing.T) {
 	ctx := context.Background()
-	store := newMemTicketingStore()
+	store := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: store}
 	for _, sys := range ticketSystems {
 		p := ticketing.IncidentPolicy{ID: "q-" + sys, TenantID: "t_quad", Name: sys, Enabled: true,

@@ -1,8 +1,8 @@
-package main
+package ticketing
 
 import (
 	"context"
-	"netops/backend/internal/ticketing"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -18,15 +18,15 @@ import (
 // that already have them. Measured live at audit time: 973 links, 27 from the
 // cliff. These tests push a store past the boundary on purpose.
 
-func seedLinks(t *testing.T, st ticketingStore, tenant string, n int) {
+func seedLinks(t *testing.T, st Store, tenant string, n int) {
 	t.Helper()
 	base := time.Now().UTC().Add(-time.Duration(n) * time.Minute)
 	for i := 0; i < n; i++ {
-		l := ticketing.Link{
+		l := Link{
 			TenantID:       tenant,
-			CorrObjectID:   "corr-" + intToString(i),
+			CorrObjectID:   "corr-" + strconv.Itoa(i),
 			ExternalSystem: "servicenow",
-			TicketNumber:   "INC" + intToString(i),
+			TicketNumber:   "INC" + strconv.Itoa(i),
 			Status:         "open",
 			UpdatedAt:      base.Add(time.Duration(i) * time.Minute),
 		}
@@ -41,7 +41,7 @@ func seedLinks(t *testing.T, st ticketingStore, tenant string, n int) {
 // joining by correlation id cannot distinguish "no ticket for this object" from
 // "this object was past the cliff" — and those render identically today.
 func TestLinksPageReportsTheTrueTotal(t *testing.T) {
-	st := newMemTicketingStore()
+	st := NewMemStore()
 	const seeded = 120
 	seedLinks(t, st, "t_a", seeded)
 
@@ -86,7 +86,7 @@ func TestLinksPageReportsTheTrueTotal(t *testing.T) {
 // by updated_at, so it sorts last and is exactly the row a truncated top-N page
 // drops — the one that would have read as "not_created".
 func TestLinksForCorrHasNoCliff(t *testing.T) {
-	st := newMemTicketingStore()
+	st := NewMemStore()
 	seedLinks(t, st, "t_a", 120)
 
 	oldest := "corr-0"
@@ -115,7 +115,7 @@ func TestLinksForCorrHasNoCliff(t *testing.T) {
 // TestLinksForCorrIsTenantScoped: the new exact-lookup path is a new read
 // surface, so it carries the same 3a obligation as every other one.
 func TestLinksForCorrIsTenantScoped(t *testing.T) {
-	st := newMemTicketingStore()
+	st := NewMemStore()
 	seedLinks(t, st, "t_a", 3)
 	seedLinks(t, st, "t_b", 3)
 
@@ -136,19 +136,19 @@ func TestLinksForCorrIsTenantScoped(t *testing.T) {
 // TestOutboxAndAuditAreBounded guards F-66 directly: neither read may return an
 // unbounded table, and both must report the true total.
 func TestOutboxAndAuditAreBounded(t *testing.T) {
-	st := newMemTicketingStore()
+	st := NewMemStore()
 	ctx := context.Background()
 	const seeded = 60
 	for i := 0; i < seeded; i++ {
-		if err := st.EnqueueOutbox(ctx, ticketing.OutboxItem{
-			TenantID: "t_a", ID: "o-" + intToString(i), CorrObjectID: "c-" + intToString(i),
-			ExternalSystem: "servicenow", Action: "create", IdempotencyKey: "k-" + intToString(i),
+		if err := st.EnqueueOutbox(ctx, OutboxItem{
+			TenantID: "t_a", ID: "o-" + strconv.Itoa(i), CorrObjectID: "c-" + strconv.Itoa(i),
+			ExternalSystem: "servicenow", Action: "create", IdempotencyKey: "k-" + strconv.Itoa(i),
 			CreatedAt: time.Now().UTC().Add(time.Duration(i) * time.Second),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.AppendAudit(ctx, ticketing.AuditEntry{
-			TenantID: "t_a", ID: "a-" + intToString(i), CorrObjectID: "c-1",
+		if err := st.AppendAudit(ctx, AuditEntry{
+			TenantID: "t_a", ID: "a-" + strconv.Itoa(i), CorrObjectID: "c-1",
 			ExternalSystem: "servicenow", Action: "create", Result: "ok",
 			At: time.Now().UTC().Add(time.Duration(i) * time.Second),
 		}); err != nil {
@@ -177,10 +177,10 @@ func TestOutboxAndAuditAreBounded(t *testing.T) {
 	if _, _, err := st.ListOutbox(ctx, "t_a", false, 1<<30, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := boundPageFor(1 << 30); got != ticketMaxPage {
-		t.Fatalf("storage-layer clamp = %d, want the %d ceiling", got, ticketMaxPage)
+	if got, _ := boundPageFor(1 << 30); got != MaxPage {
+		t.Fatalf("storage-layer clamp = %d, want the %d ceiling", got, MaxPage)
 	}
 }
 
 // boundPageFor exposes the clamp for assertion.
-func boundPageFor(limit int) (int, int) { return boundPage(limit, 0, ticketLinksDefaultPage) }
+func boundPageFor(limit int) (int, int) { return boundPage(limit, 0, LinksDefaultPage) }
