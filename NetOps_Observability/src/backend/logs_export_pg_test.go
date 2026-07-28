@@ -29,8 +29,8 @@ func TestExportSubstratePG(t *testing.T) {
 	}
 	defer ps.db.close()
 
-	q := newPgJobQueue(ps.db, 5)
-	es := newPgExecStore(ps.db)
+	q := reports.NewPGJobQueue(rlsPG{db: ps.db}, 5)
+	es := reports.NewPGExecStore(rlsPG{db: ps.db})
 
 	// 1) queue round-trips job_type=export + the frozen payload.
 	spec := logExportSpec{Query: "*", Signal: "applogs", Format: "csv", Cross: true}

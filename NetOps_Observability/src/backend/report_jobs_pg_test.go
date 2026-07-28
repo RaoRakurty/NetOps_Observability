@@ -30,7 +30,7 @@ func TestPgJobQueue(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	q := newPgJobQueue(ps.db, 3)
+	q := reports.NewPGJobQueue(rlsPG{db: ps.db}, 3)
 	now := time.Now().UTC()
 	fire := func(i int) time.Time { return time.Date(2026, 6, 1, 0, i, 0, 0, time.UTC) }
 	mk := func(id, sched, tenant string, f time.Time) reports.Job {
@@ -131,8 +131,8 @@ func TestPgJobQueue(t *testing.T) {
 	if js, _ := q.Claim(ctx, "w2", 10, 30*time.Second); len(js) != 0 {
 		t.Fatalf("renewed lease must NOT be re-claimable, got %v", js)
 	}
-	if err := q.RenewLease(ctx, "ren1", "w-other", 60*time.Second); !errors.Is(err, errLeaseLost) {
-		t.Fatalf("renew by wrong worker = %v, want errLeaseLost", err)
+	if err := q.RenewLease(ctx, "ren1", "w-other", 60*time.Second); !errors.Is(err, reports.ErrLeaseLost) {
+		t.Fatalf("renew by wrong worker = %v, want reports.ErrLeaseLost", err)
 	}
 	_ = q.Complete(ctx, "ren1")
 

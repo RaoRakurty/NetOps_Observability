@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"netops/backend/internal/incident"
+	"netops/backend/reports"
 	"os"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestIncidentSyncFailureIsolation(t *testing.T) {
 
 	store := incident.NewPGStore(rlsPG{db: ps.db})
 	srv := &server{incidents: store, incMetrics: &incidentMetrics{}} // no ITSM configured
-	p := &reportPipeline{srv: srv, queue: newPgJobQueue(ps.db, 3), execs: newPgExecStore(ps.db), maxAttempts: 3}
+	p := &reportPipeline{srv: srv, queue: reports.NewPGJobQueue(rlsPG{db: ps.db}, 3), execs: reports.NewPGExecStore(rlsPG{db: ps.db}), maxAttempts: 3}
 
 	inc, _, err := store.Ingest(ctx, IncidentInput{
 		TenantID: "acme", Title: "Core down", Severity: "critical", SourceType: "alert", DedupKey: "core:down",

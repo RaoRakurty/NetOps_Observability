@@ -25,7 +25,7 @@ func TestPgDeliveryStore(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := newPgDeliveryStore(ps.db)
+	s := reports.NewPGDeliveryStore(rlsPG{db: ps.db})
 	at := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// Attempt 1: a ok, b failed.

@@ -30,7 +30,7 @@ type reportPipeline struct {
 	artifacts  reports.ArtifactStore
 	renderers  map[string]reports.Renderer // format -> renderer (html always; xlsx; pdf if sidecar)
 	delivery   *reportDelivery
-	deliveries deliveryRecorder // per-recipient ledger (skip-on-retry)
+	deliveries reports.DeliveryRecorder // per-recipient ledger (skip-on-retry)
 
 	workers     int
 	maxAttempts int
@@ -54,7 +54,7 @@ type reportPipeline struct {
 	metExportSeconds atomic.Int64
 }
 
-func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer, deliveries deliveryRecorder) *reportPipeline {
+func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore, art reports.ArtifactStore, html reports.Renderer, deliveries reports.DeliveryRecorder) *reportPipeline {
 	// Build the renderer set: HTML always; Excel in-process; PDF only when a
 	// sidecar URL is configured (nil renderer => format unavailable, skipped).
 	renderers := map[string]reports.Renderer{"html": html, "xlsx": reports.NewXLSXRenderer()}

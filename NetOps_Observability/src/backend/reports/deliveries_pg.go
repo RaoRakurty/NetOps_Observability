@@ -1,32 +1,30 @@
-package main
+package reports
 
 import (
 	"context"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"netops/backend/reports"
 )
 
 // report_deliveries_pg.go — per-recipient delivery ledger. It lets a retried
 // report skip recipients that already received it (resend only the failures).
 // One row per (execution, recipient): an UPSERT that refuses to downgrade an
 // 'ok' back to 'failed', so a success is sticky across attempts.
-type pgDeliveryStore struct {
-	db *pgDB
+type PGDeliveryStore struct {
+	db DB
 }
 
-func newPgDeliveryStore(db *pgDB) *pgDeliveryStore { return &pgDeliveryStore{db: db} }
+func NewPGDeliveryStore(db DB) *PGDeliveryStore { return &PGDeliveryStore{db: db} }
 
 // Record persists this attempt's per-recipient outcomes. Writes run platform-
 // scoped (the worker is infrastructure); the tenant_id column keeps RLS reads
 // scoped.
-func (s *pgDeliveryStore) Record(ctx context.Context, tenant, execID string, ds []reports.DeliveryStatus) error {
+func (s *PGDeliveryStore) Record(ctx context.Context, tenant, execID string, ds []DeliveryStatus) error {
 	if len(ds) == 0 {
 		return nil
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		for _, d := range ds {
 			status := "failed"
 			if d.OK {
@@ -54,9 +52,9 @@ func (s *pgDeliveryStore) Record(ctx context.Context, tenant, execID string, ds 
 
 // Delivered returns the set of recipients already successfully delivered for an
 // execution, so a retry can skip them.
-func (s *pgDeliveryStore) Delivered(ctx context.Context, execID string) (map[string]bool, error) {
+func (s *PGDeliveryStore) Delivered(ctx context.Context, execID string) (map[string]bool, error) {
 	out := map[string]bool{}
-	err := s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT recipient FROM report_execution_deliveries
 			 WHERE execution_id=$1 AND status='ok'`, execID)
@@ -76,11 +74,11 @@ func (s *pgDeliveryStore) Delivered(ctx context.Context, execID string) (map[str
 	return out, err
 }
 
-// deliveryRecorder is the slice of the ledger the pipeline depends on (kept as an
+// DeliveryRecorder is the slice of the ledger the pipeline depends on (kept as an
 // interface so the worker can be tested with a fake).
-type deliveryRecorder interface {
-	Record(ctx context.Context, tenant, execID string, ds []reports.DeliveryStatus) error
+type DeliveryRecorder interface {
+	Record(ctx context.Context, tenant, execID string, ds []DeliveryStatus) error
 	Delivered(ctx context.Context, execID string) (map[string]bool, error)
 }
 
-var _ deliveryRecorder = (*pgDeliveryStore)(nil)
+var _ DeliveryRecorder = (*PGDeliveryStore)(nil)

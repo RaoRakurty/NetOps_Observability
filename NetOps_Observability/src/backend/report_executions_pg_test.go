@@ -24,7 +24,7 @@ func TestPgExecStore(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.db.close()
-	s := newPgExecStore(ps.db)
+	s := reports.NewPGExecStore(rlsPG{db: ps.db})
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// ---- lifecycle: append → running → completed, with events ----

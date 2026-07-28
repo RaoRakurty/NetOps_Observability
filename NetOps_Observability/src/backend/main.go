@@ -1098,8 +1098,8 @@ func main() {
 				log.Fatalf("report renderer: %v", err)
 			}
 			srv.reportPipeline = newReportPipeline(srv,
-				newPgJobQueue(ps.db, 5), newPgExecStore(ps.db), newKVArtifactStore(), renderer,
-				newPgDeliveryStore(ps.db))
+				reports.NewPGJobQueue(rlsPG{db: ps.db}, 5), reports.NewPGExecStore(rlsPG{db: ps.db}), newKVArtifactStore(), renderer,
+				reports.NewPGDeliveryStore(rlsPG{db: ps.db}))
 			srv.reportPipeline.Start(ctx)
 		} else {
 			srv.reports.Start(ctx)

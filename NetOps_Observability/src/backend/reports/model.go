@@ -10,7 +10,7 @@ import (
 // and interfaces are deliberately free of any database/transport import so the
 // pipeline's moving parts (queue, execution history, renderer, artifact store)
 // can be tested against fakes, and so the Postgres-backed implementations live
-// in package main where the *pgDB / withTenant / RLS machinery is.
+// via the injected DB seam (implemented by package main's rlsPG adapter).
 
 // ---- lifecycle enums -------------------------------------------------------
 

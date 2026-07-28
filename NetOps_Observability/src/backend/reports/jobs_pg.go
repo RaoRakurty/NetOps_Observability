@@ -1,4 +1,4 @@
-package main
+package reports
 
 import (
 	"context"
@@ -7,11 +7,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"netops/backend/reports"
 )
 
-// report_jobs_pg.go — the Postgres-backed report job queue (reports.JobQueue).
+// report_jobs_pg.go — the Postgres-backed report job queue (JobQueue).
 //
 // This is queue *mechanics*: infrastructure, not tenant data. Every method runs
 // under the platform scope (withTenant(ctx,"",true,..)) so a worker can claim and
@@ -19,21 +17,26 @@ import (
 // later reads tenant data to render/deliver. Jobs are leased with a visibility
 // timeout (lease_until) and consumed with FOR UPDATE SKIP LOCKED, so concurrent
 // workers never double-claim and a crashed worker's job is automatically re-leased.
-type pgJobQueue struct {
-	db          *pgDB
+// DB is the injected relational seam (the portintel.DB idiom).
+type DB interface {
+	WithTenant(ctx context.Context, tenant string, cross bool, fn func(pgx.Tx) error) error
+}
+
+type PGJobQueue struct {
+	db          DB
 	maxAttempts int
 }
 
-func newPgJobQueue(db *pgDB, maxAttempts int) *pgJobQueue {
+func NewPGJobQueue(db DB, maxAttempts int) *PGJobQueue {
 	if maxAttempts <= 0 {
 		maxAttempts = 5
 	}
-	return &pgJobQueue{db: db, maxAttempts: maxAttempts}
+	return &PGJobQueue{db: db, maxAttempts: maxAttempts}
 }
 
-// errLeaseLost signals that a RenewLease found the job no longer leased by this
+// ErrLeaseLost signals that a RenewLease found the job no longer leased by this
 // worker (it expired and was re-claimed elsewhere) — the worker must abort.
-var errLeaseLost = errors.New("report job lease lost")
+var ErrLeaseLost = errors.New("report job lease lost")
 
 func payloadOrEmpty(p json.RawMessage) []byte {
 	if len(p) == 0 {
@@ -42,7 +45,7 @@ func payloadOrEmpty(p json.RawMessage) []byte {
 	return p
 }
 
-func (q *pgJobQueue) Enqueue(ctx context.Context, j reports.Job, runAfter time.Time) (reports.Job, bool, error) {
+func (q *PGJobQueue) Enqueue(ctx context.Context, j Job, runAfter time.Time) (Job, bool, error) {
 	if j.ID == "" {
 		j.ID = randHex(8)
 	}
@@ -54,7 +57,7 @@ func (q *pgJobQueue) Enqueue(ctx context.Context, j reports.Job, runAfter time.T
 		jobType = "report"
 	}
 	created := false
-	err := q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO report_jobs
 				(id, job_type, tenant_id, schedule_id, execution_id, fire_time, status, attempts, max_attempts, run_after, payload)
@@ -69,7 +72,7 @@ func (q *pgJobQueue) Enqueue(ctx context.Context, j reports.Job, runAfter time.T
 		return nil
 	})
 	if err != nil {
-		return reports.Job{}, false, err
+		return Job{}, false, err
 	}
 	return j, created, nil
 }
@@ -95,19 +98,19 @@ UPDATE report_jobs j
  WHERE j.id = c.id
 RETURNING j.id, j.job_type, j.tenant_id, j.schedule_id, j.execution_id, j.fire_time, j.attempts, j.payload`
 
-func (q *pgJobQueue) Claim(ctx context.Context, workerID string, n int, lease time.Duration) ([]reports.Job, error) {
+func (q *PGJobQueue) Claim(ctx context.Context, workerID string, n int, lease time.Duration) ([]Job, error) {
 	if n <= 0 {
 		return nil, nil
 	}
-	var out []reports.Job
-	err := q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	var out []Job
+	err := q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, claimSQL, workerID, n, lease.Seconds())
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var j reports.Job
+			var j Job
 			var payload []byte
 			if err := rows.Scan(&j.ID, &j.JobType, &j.TenantID, &j.ScheduleID, &j.ExecutionID, &j.FireTime, &j.Attempts, &payload); err != nil {
 				return err
@@ -123,8 +126,8 @@ func (q *pgJobQueue) Claim(ctx context.Context, workerID string, n int, lease ti
 	return out, nil
 }
 
-func (q *pgJobQueue) RenewLease(ctx context.Context, jobID, workerID string, lease time.Duration) error {
-	return q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (q *PGJobQueue) RenewLease(ctx context.Context, jobID, workerID string, lease time.Duration) error {
+	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET lease_until = now() + make_interval(secs => $3), updated_at = now()
@@ -134,14 +137,14 @@ func (q *pgJobQueue) RenewLease(ctx context.Context, jobID, workerID string, lea
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return errLeaseLost
+			return ErrLeaseLost
 		}
 		return nil
 	})
 }
 
-func (q *pgJobQueue) Complete(ctx context.Context, jobID string) error {
-	return q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (q *PGJobQueue) Complete(ctx context.Context, jobID string) error {
+	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status='done', lease_until=NULL, updated_at=now()
@@ -150,7 +153,7 @@ func (q *pgJobQueue) Complete(ctx context.Context, jobID string) error {
 	})
 }
 
-func (q *pgJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause string, retryAfter time.Time, dead bool) error {
+func (q *PGJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause string, retryAfter time.Time, dead bool) error {
 	status := "queued"
 	if dead {
 		status = "failed"
@@ -158,7 +161,7 @@ func (q *pgJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause 
 	if retryAfter.IsZero() {
 		retryAfter = time.Now().UTC()
 	}
-	return q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status=$2, last_error=$3, run_after=$4,
@@ -169,8 +172,8 @@ func (q *pgJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause 
 	})
 }
 
-func (q *pgJobQueue) Release(ctx context.Context, jobID string) error {
-	return q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (q *PGJobQueue) Release(ctx context.Context, jobID string) error {
+	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status='queued', locked_by=NULL, locked_at=NULL, lease_until=NULL, updated_at=now()
@@ -179,9 +182,9 @@ func (q *pgJobQueue) Release(ctx context.Context, jobID string) error {
 	})
 }
 
-func (q *pgJobQueue) RecoverExpiredLeases(ctx context.Context, now time.Time) (int, error) {
+func (q *PGJobQueue) RecoverExpiredLeases(ctx context.Context, now time.Time) (int, error) {
 	var n int64
-	err := q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status='queued', locked_by=NULL, locked_at=NULL, lease_until=NULL, updated_at=now()
@@ -195,9 +198,9 @@ func (q *pgJobQueue) RecoverExpiredLeases(ctx context.Context, now time.Time) (i
 	return int(n), err
 }
 
-func (q *pgJobQueue) Pending(ctx context.Context) (int, error) {
+func (q *PGJobQueue) Pending(ctx context.Context) (int, error) {
 	var n int
-	err := q.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	err := q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			SELECT count(*) FROM report_jobs
 			 WHERE status IN ('queued','running') AND run_after <= now()`).Scan(&n)
@@ -206,4 +209,4 @@ func (q *pgJobQueue) Pending(ctx context.Context) (int, error) {
 }
 
 // Compile-time assurance the repository satisfies the interface.
-var _ reports.JobQueue = (*pgJobQueue)(nil)
+var _ JobQueue = (*PGJobQueue)(nil)

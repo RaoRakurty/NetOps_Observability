@@ -1,4 +1,4 @@
-package main
+package reports
 
 import (
 	"context"
@@ -10,33 +10,45 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"netops/backend/reports"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 // report_executions_pg.go — the immutable report execution history + per-phase
-// event timeline (reports.ExecutionStore). Modeled on audit_pg.go: per-row writes
+// event timeline (ExecutionStore). Modeled on audit_pg.go: per-row writes
 // run as platform owner (infrastructure), reads run RLS tenant-scoped so a scoped
 // tenant sees only its own executions. The executions row is the denormalized
 // summary; report_execution_events carries the phase timestamps that answer
 // "where did the time go".
-type pgExecStore struct {
-	db *pgDB
+type PGExecStore struct {
+	db DB
 }
 
-func newPgExecStore(db *pgDB) *pgExecStore { return &pgExecStore{db: db} }
+// NewPGExecStore builds the execution store over the injected seam.
+func NewPGExecStore(db DB) *PGExecStore { return &PGExecStore{db: db} }
 
-func (s *pgExecStore) Append(ctx context.Context, e reports.ExecutionRecord) error {
+// normTenant / randHex mirror the integrator's helpers (duplicated per the
+// no-utils rule).
+func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+func randHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *PGExecStore) Append(ctx context.Context, e ExecutionRecord) error {
 	if e.ID == "" {
 		e.ID = randHex(8)
 	}
 	if e.Status == "" {
-		e.Status = reports.StatusQueued
+		e.Status = StatusQueued
 	}
 	kind := e.Kind
 	if kind == "" {
 		kind = "report"
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO report_executions (id, kind, tenant_id, schedule_id, job_id, fire_time, status)
 			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -45,13 +57,13 @@ func (s *pgExecStore) Append(ctx context.Context, e reports.ExecutionRecord) err
 	})
 }
 
-func (s *pgExecStore) MarkRunning(ctx context.Context, id string, at time.Time) error {
+func (s *PGExecStore) MarkRunning(ctx context.Context, id string, at time.Time) error {
 	return s.exec(ctx, `
 		UPDATE report_executions SET status='running', started_at=$2, updated_at=now()
 		 WHERE id=$1`, id, at)
 }
 
-func (s *pgExecStore) Complete(ctx context.Context, id string, at time.Time, refs []reports.ArtifactRef, deliveries []reports.DeliveryStatus) error {
+func (s *PGExecStore) Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus) error {
 	var refJSON []byte
 	if len(refs) > 0 {
 		var err error
@@ -69,7 +81,7 @@ func (s *pgExecStore) Complete(ctx context.Context, id string, at time.Time, ref
 		 WHERE id=$1`, id, at, refJSON, delJSON)
 }
 
-func (s *pgExecStore) FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []reports.DeliveryStatus) error {
+func (s *PGExecStore) FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus) error {
 	delJSON, err := marshalDeliveries(deliveries)
 	if err != nil {
 		return err
@@ -80,18 +92,18 @@ func (s *pgExecStore) FailExec(ctx context.Context, id string, at time.Time, cau
 		 WHERE id=$1`, id, at, cause, delJSON)
 }
 
-func (s *pgExecStore) Cancel(ctx context.Context, id string, at time.Time, reason string) error {
+func (s *PGExecStore) Cancel(ctx context.Context, id string, at time.Time, reason string) error {
 	return s.exec(ctx, `
 		UPDATE report_executions
 		   SET status='cancelled', completed_at=$2, error=$3, updated_at=now()
 		 WHERE id=$1`, id, at, reason)
 }
 
-func (s *pgExecStore) RecordEvent(ctx context.Context, tenant, execID string, phase reports.Phase, at time.Time, note string) error {
+func (s *PGExecStore) RecordEvent(ctx context.Context, tenant, execID string, phase Phase, at time.Time, note string) error {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO report_execution_events (id, tenant_id, execution_id, phase, at, note)
 			VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -100,11 +112,11 @@ func (s *pgExecStore) RecordEvent(ctx context.Context, tenant, execID string, ph
 	})
 }
 
-func (s *pgExecStore) Get(ctx context.Context, tenant string, cross bool, id string) (reports.ExecutionRecord, []reports.ExecEvent, bool, error) {
-	var rec reports.ExecutionRecord
-	var events []reports.ExecEvent
+func (s *PGExecStore) Get(ctx context.Context, tenant string, cross bool, id string) (ExecutionRecord, []ExecEvent, bool, error) {
+	var rec ExecutionRecord
+	var events []ExecEvent
 	found := false
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, selectExecCols+` FROM report_executions WHERE id=$1`, id)
 		r, ok, err := scanExec(row)
 		if err != nil {
@@ -124,23 +136,23 @@ func (s *pgExecStore) Get(ctx context.Context, tenant string, cross bool, id str
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var ev reports.ExecEvent
+			var ev ExecEvent
 			var phase string
 			if err := rows.Scan(&phase, &ev.At, &ev.Note); err != nil {
 				return err
 			}
-			ev.Phase = reports.Phase(phase)
+			ev.Phase = Phase(phase)
 			events = append(events, ev)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return reports.ExecutionRecord{}, nil, false, err
+		return ExecutionRecord{}, nil, false, err
 	}
 	return rec, events, found, nil
 }
 
-func (s *pgExecStore) List(ctx context.Context, tenant string, cross bool, q reports.ExecQuery) ([]reports.ExecutionRecord, error) {
+func (s *PGExecStore) List(ctx context.Context, tenant string, cross bool, q ExecQuery) ([]ExecutionRecord, error) {
 	sql := selectExecCols + ` FROM report_executions`
 	var args []any
 	var conds []string
@@ -162,8 +174,8 @@ func (s *pgExecStore) List(ctx context.Context, tenant string, cross bool, q rep
 	args = append(args, clampExecLimit(q.Limit))
 	sql += fmt.Sprintf(" ORDER BY fire_time DESC, id DESC LIMIT $%d", len(args))
 
-	var out []reports.ExecutionRecord
-	err := s.db.withTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+	var out []ExecutionRecord
+	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, sql, args...)
 		if err != nil {
 			return err
@@ -191,19 +203,19 @@ const selectExecCols = `SELECT id, COALESCE(kind,'report'), tenant_id, schedule_
 
 // scanExec reads one report_executions row. The bool is false only when a
 // QueryRow finds no row (pgx.ErrNoRows); for Query/rows.Next it is always true.
-func scanExec(row pgx.Row) (reports.ExecutionRecord, bool, error) {
-	var r reports.ExecutionRecord
+func scanExec(row pgx.Row) (ExecutionRecord, bool, error) {
+	var r ExecutionRecord
 	var status string
 	var started, completed *time.Time
 	var refJSON, delJSON []byte
 	if err := row.Scan(&r.ID, &r.Kind, &r.TenantID, &r.ScheduleID, &r.JobID, &r.FireTime,
 		&started, &completed, &status, &refJSON, &delJSON, &r.Error); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return reports.ExecutionRecord{}, false, nil
+			return ExecutionRecord{}, false, nil
 		}
-		return reports.ExecutionRecord{}, false, err
+		return ExecutionRecord{}, false, err
 	}
-	r.Status = reports.ExecStatus(status)
+	r.Status = ExecStatus(status)
 	if started != nil {
 		r.StartedAt = *started
 	}
@@ -220,14 +232,14 @@ func scanExec(row pgx.Row) (reports.ExecutionRecord, bool, error) {
 }
 
 // exec runs a by-id status transition as platform owner (worker is infrastructure).
-func (s *pgExecStore) exec(ctx context.Context, sql string, args ...any) error {
-	return s.db.withTenant(ctx, "", true, func(tx pgx.Tx) error {
+func (s *PGExecStore) exec(ctx context.Context, sql string, args ...any) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, sql, args...)
 		return err
 	})
 }
 
-func marshalDeliveries(d []reports.DeliveryStatus) ([]byte, error) {
+func marshalDeliveries(d []DeliveryStatus) ([]byte, error) {
 	if len(d) == 0 {
 		return nil, nil // store SQL NULL
 	}
@@ -248,4 +260,4 @@ func clampExecLimit(n int) int {
 	return n
 }
 
-var _ reports.ExecutionStore = (*pgExecStore)(nil)
+var _ ExecutionStore = (*PGExecStore)(nil)
