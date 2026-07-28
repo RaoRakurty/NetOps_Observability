@@ -70,7 +70,7 @@ func TestDeletedDeviceStaysDeleted(t *testing.T) {
 	}
 
 	// The tombstone is what stops the next source poll resurrecting it.
-	if !st.isSuppressed(id) {
+	if !st.IsSuppressed(id) {
 		t.Fatal("delete recorded no tombstone — the owning source will re-add this " +
 			"device on its next poll and the 204 was a lie (F-69)")
 	}
@@ -78,7 +78,7 @@ func TestDeletedDeviceStaysDeleted(t *testing.T) {
 	// And it survives a restart: a tombstone that forgets is a tombstone that
 	// lets the device return on the next deploy.
 	b := newDeviceStore(devicesPath())
-	if !b.isSuppressed(id) {
+	if !b.IsSuppressed(id) {
 		t.Fatal("tombstone did not persist — the device returns after a restart")
 	}
 }
@@ -103,7 +103,7 @@ func TestRecreatingADeletedDeviceClearsTheTombstone(t *testing.T) {
 	if err := a.Upsert(models.Device{ID: id, Name: id}); err != nil {
 		t.Fatal(err)
 	}
-	if st.isSuppressed(id) {
+	if st.IsSuppressed(id) {
 		t.Fatal("re-creating a deleted device left its tombstone in place — the " +
 			"device is invisible and the operator has no way to know why")
 	}
@@ -149,7 +149,7 @@ func TestSourceDevicesAreNotPersisted(t *testing.T) {
 	if err := a.Upsert(models.Device{ID: "netbox-1", Name: "netbox-1", Source: "netbox"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.devices(); len(got) != 0 {
+	if got := st.Devices(); len(got) != 0 {
 		t.Fatalf("source-owned device was persisted (%+v) — it would outlive its "+
 			"source and reappear as a ghost after the source drops it", got)
 	}

@@ -93,10 +93,10 @@ func TestDeviceStoreUnreadableDoesNotResurrectDeletedDevices(t *testing.T) {
 
 	// Control: absent file → empty store, writes work.
 	fresh := newDeviceStore(filepath.Join(dir, "absent.json"))
-	if err := fresh.unreadable(); err != nil {
+	if err := fresh.Unreadable(); err != nil {
 		t.Fatalf("an absent device store must load clean, got %v", err)
 	}
-	if err := fresh.put(models.Device{ID: "d1", Name: "sw1"}); err != nil {
+	if err := fresh.Put(models.Device{ID: "d1", Name: "sw1"}); err != nil {
 		t.Fatalf("write to a fresh store: %v", err)
 	}
 
@@ -109,13 +109,13 @@ func TestDeviceStoreUnreadableDoesNotResurrectDeletedDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := newDeviceStore(path)
-	if st.unreadable() == nil {
+	if st.Unreadable() == nil {
 		t.Fatal("a device store whose file could not be read must say so — an empty map is not the same fact")
 	}
-	if err := st.put(models.Device{ID: "d9", Name: "new"}); err == nil {
+	if err := st.Put(models.Device{ID: "d9", Name: "new"}); err == nil {
 		t.Fatal("a write against an unread device store must fail rather than flush empty maps over the stored devices and tombstones")
 	}
-	if err := st.remove("d9"); err == nil {
+	if err := st.Remove("d9"); err == nil {
 		t.Fatal("a delete against an unread device store must fail for the same reason")
 	}
 	after, err := os.ReadFile(path)

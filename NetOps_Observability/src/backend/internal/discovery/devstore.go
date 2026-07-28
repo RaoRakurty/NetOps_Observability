@@ -1,11 +1,10 @@
-package main
+package discovery
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -42,9 +41,17 @@ import (
 // means what it says. Suppressions are the reason this store is consulted even
 // when no manual device exists.
 
-// deviceStore holds operator-created devices and deletion tombstones, persisted
+// DevStore holds operator-created devices and deletion tombstones, persisted
 // through the shared kv backend (file or Postgres) like every other store.
-type deviceStore struct {
+// KV abstracts where the store persists its JSON blob.
+type KV interface {
+	Load(key string) ([]byte, error)
+	Save(key string, data []byte) error
+}
+
+type DevStore struct {
+	kv         KV
+	errf       func(component, msg string, fields map[string]any)
 	mu         sync.RWMutex
 	path       string
 	manual     map[string]models.Device
@@ -57,32 +64,29 @@ type deviceStore struct {
 	loadErr error
 }
 
-// devicesPath resolves the store's kv key. Absolute by construction — a
-// relative key resolves against the container WORKDIR rather than /data and is
-// silently lost (F-63); kv_paths_test.go guards this for the whole family.
-func devicesPath() string {
-	if p := strings.TrimSpace(os.Getenv("DEVICES_STORE_PATH")); p != "" {
-		return p
-	}
-	return "/data/devices.json"
-}
-
-// devicePersistFile is the on-disk shape. Split into two maps so a suppression
+// devPersistFile is the on-disk shape. Split into two maps so a suppression
 // survives independently of whether a manual record exists for the same id.
-type devicePersistFile struct {
+type devPersistFile struct {
 	Manual     map[string]models.Device `json:"manual"`
 	Suppressed map[string]time.Time     `json:"suppressed,omitempty"`
 }
 
-func newDeviceStore(path string) *deviceStore {
-	s := &deviceStore{
+// KV abstracts persistence (the platform kv layer); Errorf is the structured
+// error sink. Both required — this store fails loudly, never silently (F-69).
+func NewDevStore(path string, kv KV, errf func(component, msg string, fields map[string]any)) *DevStore {
+	if errf == nil {
+		errf = func(string, string, map[string]any) {}
+	}
+	s := &DevStore{
 		path:       path,
+		kv:         kv,
+		errf:       errf,
 		manual:     map[string]models.Device{},
 		suppressed: map[string]time.Time{},
 	}
 	if err := s.load(); err != nil {
 		s.loadErr = err
-		logError("devices", "device store unreadable at boot — deleted devices may reappear and writes are refused until it is repaired", errf(err))
+		s.errf("devices", "device store unreadable at boot — deleted devices may reappear and writes are refused until it is repaired", map[string]any{"error": err.Error()})
 	}
 	return s
 }
@@ -90,8 +94,8 @@ func newDeviceStore(path string) *deviceStore {
 // load reads the persisted file. THREE states, never two (the
 // cloud_monitor_eval.go shape): the store did not answer (error) / it answered
 // with nothing (absent key or empty blob — a fresh install) / loaded.
-func (s *deviceStore) load() error {
-	b, err := kvLoad(s.path)
+func (s *DevStore) load() error {
+	b, err := s.kv.Load(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil // absent key = fresh install, genuinely nothing persisted
 	}
@@ -101,7 +105,7 @@ func (s *deviceStore) load() error {
 	if len(b) == 0 {
 		return nil // present but empty = nothing persisted yet
 	}
-	var f devicePersistFile
+	var f devPersistFile
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fmt.Errorf("decode device store: %w", err)
 	}
@@ -117,7 +121,9 @@ func (s *deviceStore) load() error {
 // unreadable reports the boot-time load failure, if any. Callers use it to
 // distinguish "no tombstone for this id" from "we could not read the
 // tombstones".
-func (s *deviceStore) unreadable() error {
+// Unreadable reports the boot-time load failure, if any (writes are refused
+// while set — a deleted device must not resurrect; F-69/boot contract).
+func (s *DevStore) Unreadable() error {
 	if s == nil {
 		return nil
 	}
@@ -129,7 +135,7 @@ func (s *deviceStore) unreadable() error {
 // saveLocked persists both maps. Caller holds s.mu. Returns error so callers can
 // refuse to report success for a write that did not land (F-62 class); the
 // guard in architecture_guards_test.go enforces the shape.
-func (s *deviceStore) saveLocked() error {
+func (s *DevStore) saveLocked() error {
 	if s.path == "" {
 		return nil
 	}
@@ -139,11 +145,11 @@ func (s *deviceStore) saveLocked() error {
 	if s.loadErr != nil {
 		return fmt.Errorf("refusing to overwrite the device store: its stored contents were never read: %w", s.loadErr)
 	}
-	b, err := json.MarshalIndent(devicePersistFile{Manual: s.manual, Suppressed: s.suppressed}, "", "  ")
+	b, err := json.MarshalIndent(devPersistFile{Manual: s.manual, Suppressed: s.suppressed}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode device store: %w", err)
 	}
-	if err := kvSave(s.path, b); err != nil {
+	if err := s.kv.Save(s.path, b); err != nil {
 		return fmt.Errorf("persist device store: %w", err)
 	}
 	return nil
@@ -152,7 +158,7 @@ func (s *deviceStore) saveLocked() error {
 // put stores an operator-created device. The caller has already stamped
 // TenantID from the authenticated principal (never the request body, §3a rule
 // 2) — this layer keys by id and does not re-derive ownership.
-func (s *deviceStore) put(d models.Device) error {
+func (s *DevStore) Put(d models.Device) error {
 	if s == nil {
 		return nil
 	}
@@ -180,7 +186,7 @@ func (s *deviceStore) put(d models.Device) error {
 
 // remove deletes a manual device AND records a tombstone so a source-owned
 // device stays deleted instead of reappearing on the next poll (F-69).
-func (s *deviceStore) remove(id string) error {
+func (s *DevStore) Remove(id string) error {
 	if s == nil {
 		return nil
 	}
@@ -201,7 +207,7 @@ func (s *deviceStore) remove(id string) error {
 
 // devices returns the persisted manual inventory, for the aggregator to seed
 // its cache at startup.
-func (s *deviceStore) devices() []models.Device {
+func (s *DevStore) Devices() []models.Device {
 	if s == nil {
 		return nil
 	}
@@ -218,10 +224,10 @@ func (s *deviceStore) devices() []models.Device {
 //
 // When unreadable() != nil the tombstone set is UNKNOWN rather than empty: this
 // still answers false (there is no safe way to suppress an unknown set without
-// hiding the whole inventory), but the boot-time logError records exactly that
+// hiding the whole inventory), but the boot-time error log records exactly that
 // and saveLocked refuses to flush the empty map, so the on-disk tombstones
 // survive the degraded window instead of being erased by the first write.
-func (s *deviceStore) isSuppressed(id string) bool {
+func (s *DevStore) IsSuppressed(id string) bool {
 	if s == nil {
 		return false
 	}
@@ -230,10 +236,3 @@ func (s *deviceStore) isSuppressed(id string) bool {
 	_, ok := s.suppressed[id]
 	return ok
 }
-
-// discovery.DeviceStore adapter surface: the aggregator's injected persistence
-// seam delegates to the unexported store internals.
-func (s *deviceStore) IsSuppressed(id string) bool { return s.isSuppressed(id) }
-func (s *deviceStore) Put(d models.Device) error   { return s.put(d) }
-func (s *deviceStore) Remove(id string) error      { return s.remove(id) }
-func (s *deviceStore) Devices() []models.Device    { return s.devices() }

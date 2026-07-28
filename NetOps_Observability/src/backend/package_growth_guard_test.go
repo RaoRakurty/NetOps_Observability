@@ -199,6 +199,11 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  219  device_persist.go → internal/discovery/devstore.go (the
+//	                  manual-device + F-69 tombstone store joins its aggregator;
+//	                  kv + errf INJECTED; Unreadable() exported — the
+//	                  three-state boot contract; DEVICES_STORE_PATH env read
+//	                  moved to main)
 //	2026-07-28  220  integration_repo_pg.go + config_pg.go + timeline.go →
 //	                  integration/ (the ITSM-sync repository: mappings +
 //	                  watermarks, vault-enveloped webhook secrets, merged
@@ -221,7 +226,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 220
+const rootPackageCeiling = 219
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

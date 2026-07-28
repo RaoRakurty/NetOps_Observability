@@ -986,6 +986,19 @@ func newIncidentTimelineStore() timeintel.TimelineStore {
 	return timeintel.NewMemTimelineStore()
 }
 
+// devicesPath resolves the manual-device store location (env-overridable).
+func devicesPath() string {
+	if p := strings.TrimSpace(os.Getenv("DEVICES_STORE_PATH")); p != "" {
+		return p
+	}
+	return "/data/devices.json"
+}
+
+// newDeviceStore wires the manual-device store onto the platform kv + logger.
+func newDeviceStore(path string) *discovery.DevStore {
+	return discovery.NewDevStore(path, platformKV{}, logError)
+}
+
 func main() {
 	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
 	// measurement collectors (STAMP / traceroute) — the single component that
