@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/chschema"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func TestCloudCostsQueryIsTenantScoped(t *testing.T) {
 // is the STRICT form (billing data — no untagged-shared escape) applied
 // atomically (OR REPLACE, never DROP+CREATE).
 func TestCloudCostsSchemaIsStrictTenantIsolated(t *testing.T) {
-	stmts := chConvergeStmts()
+	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
 	var tableSeen, policySeen bool
 	for _, s := range stmts {
 		if strings.Contains(s, "CREATE TABLE IF NOT EXISTS netops.cloud_costs") {

@@ -199,6 +199,10 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-28  209  clickhouse_policies.go DDL builders → chschema/policies.go
+//	                  (RowPolicyDDL + ConvergeStmts(extra...); the retry loop
+//	                  + env stayed; domain DDL composed by the integrator —
+//	                  count unchanged)
 //	2026-07-28  209  audit_pg.go + audit.go's store core → internal/audit
 //	                  (Event/Query/Repo, the bounded file ring + per-row RLS
 //	                  pg trail, F-73/F-57 contracts; kv/DB/errf injected; the

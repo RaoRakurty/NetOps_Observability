@@ -9,6 +9,7 @@ package main
 // way is why the extraction did not lose any coverage.
 
 import (
+	"netops/backend/internal/chschema"
 	"os"
 	"regexp"
 	"strings"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestRetentionRunsAfterSchemaCreation(t *testing.T) {
-	stmts := chConvergeStmts()
+	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
 	createAt := map[string]int{}
 	reCreate := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS netops\.(\w+)`)
 	reAlterTTL := regexp.MustCompile(`ALTER TABLE netops\.(\w+) MODIFY TTL`)
@@ -47,7 +48,7 @@ func TestRetentionRunsAfterSchemaCreation(t *testing.T) {
 }
 
 func TestSvcRollupConvergeAndInitSQLInLockstep(t *testing.T) {
-	converge := strings.Join(chConvergeStmts(), "\n")
+	converge := strings.Join(chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL()), "\n")
 	for _, want := range []string{"netops.svc_flow_rollup_1m", "netops.path_baselines"} {
 		if !strings.Contains(converge, want) {
 			t.Errorf("boot converge list missing %s", want)

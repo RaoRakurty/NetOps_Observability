@@ -58,7 +58,7 @@ func TestChTenantScope(t *testing.T) {
 // lenient clause would leak platform-global rows into every tenant's view.
 // It asserts over the ACTUAL DDL strings the boot path executes.
 func TestCorrRowPoliciesStrict(t *testing.T) {
-	stmts := chConvergeStmts()
+	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
 
 	// Every ROW POLICY statement on a corr_* / path_* table: strict filter,
 	// no untagged escape.
@@ -158,10 +158,10 @@ func TestCorrRowPoliciesStrict(t *testing.T) {
 // the modifier fails here rather than in production.
 func TestRowPolicyGrammarShape(t *testing.T) {
 	stmts := []string{
-		chRowPolicyDDL("flows"),
+		chschema.RowPolicyDDL("flows"),
 		chschema.StrictRowPolicyDDL("corr_signals"),
 	}
-	for _, s := range chConvergeStmts() {
+	for _, s := range chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL()) {
 		if strings.Contains(s, "ROW POLICY") {
 			stmts = append(stmts, s)
 		}
