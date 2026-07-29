@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"netops/backend/internal/platformdb"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ type persistedStruct struct {
 var persistedStructs = []persistedStruct{
 	{
 		file: "internal/ticketing/model.go", structName: "IncidentPolicy",
-		colsFile: "ticketing_store.go", colsConst: "policyCols",
+		colsFile: "internal/ticketing/store.go", colsConst: "policyCols",
 		exempt: map[string]string{},
 	},
 }
@@ -158,12 +159,12 @@ func columnListHas(cols, col string) bool {
 
 // The specific field F-77 named, pinned so the regression is unmissable.
 func TestF77AllowValidationScenariosIsPersisted(t *testing.T) {
-	cols := constValue(t, "ticketing_store.go", "policyCols")
+	cols := constValue(t, "internal/ticketing/store.go", "policyCols")
 	if !columnListHas(cols, "allow_validation_scenarios") {
 		t.Fatal("F-77 regression: allow_validation_scenarios lost its column in policyCols")
 	}
 	// It must also be written, not merely read.
-	b, err := os.ReadFile("ticketing_store.go")
+	b, err := os.ReadFile("internal/ticketing/store.go")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestF77AllowValidationScenariosIsPersisted(t *testing.T) {
 // A migration must exist for the column, else a fresh deploy has the code and
 // no table to put it in.
 func TestF77MigrationExists(t *testing.T) {
-	entries, err := os.ReadDir("migrations")
+	entries, err := platformdb.MigrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestF77MigrationExists(t *testing.T) {
 		if e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Clean(filepath.Join("migrations", e.Name())))
+		b, err := platformdb.MigrationsFS.ReadFile("migrations/" + e.Name())
 		if err != nil {
 			continue
 		}

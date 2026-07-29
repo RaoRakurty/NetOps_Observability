@@ -138,12 +138,12 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	// the honest case — one malformed TLV must not abort the batch. Anything
 	// added here must say WHY, and must not be a dependency read.
 	allow := map[string]string{
-		"collectors/snmptrap.go":    "byte-level BER walk: a malformed varbind is skipped, the trap still lands",
-		"collectors/redis.go":       "byte-level RESP parse: a malformed entry is skipped, the scan continues",
-		"integration_reconciler.go": "documented dedup skip; the reconcile outcome is counted separately",
-		"pgstore.go":                "file-import migration: ENOENT-shaped absence is genuinely 'nothing to import'",
-		"internal/totp/totp.go":     "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way (path updated when the primitive moved out of package main, 2026-07-27)",
-		"self_heal.go":              "diskUsedPct returns an explicit -1 'unmeasurable' sentinel for both statfs failure and a zero-block filesystem — the healer refuses to act on unmeasurable disk, which is the safe branch",
+		"collectors/snmptrap.go":      "byte-level BER walk: a malformed varbind is skipped, the trap still lands",
+		"collectors/redis.go":         "byte-level RESP parse: a malformed entry is skipped, the scan continues",
+		"integration_reconciler.go":   "documented dedup skip; the reconcile outcome is counted separately",
+		"internal/platformdb/rows.go": "file-import migration: ENOENT-shaped absence is genuinely 'nothing to import' (path updated when the storage substrate moved to internal/platformdb, 2026-07-28)",
+		"internal/totp/totp.go":       "fail-closed crypto: a malformed secret and an empty key both mean 'no code can be computed'; the caller treats \"\" as invalid either way (path updated when the primitive moved out of package main, 2026-07-27)",
+		"internal/selfheal/healer.go": "diskUsedPct returns an explicit -1 'unmeasurable' sentinel for both statfs failure and a zero-block filesystem — the healer refuses to act on unmeasurable disk, which is the safe branch (path updated when the healer moved, 2026-07-28)",
 	}
 
 	// FROZEN BASELINE — the pre-existing backlog this guard found on the day it
