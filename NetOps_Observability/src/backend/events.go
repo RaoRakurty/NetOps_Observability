@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"netops/backend/internal/ws"
 )
 
 // events.go — WebSocket pub/sub for live dashboard updates.
@@ -31,8 +33,6 @@ import (
 // Authentication: the standard /api/auth bearer token is required, but
 // browsers can't set Authorization on WebSocket — so the client sends
 // `?token=<jwt>` and the auth middleware accepts that for this route.
-
-const wsMagic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 const (
 	// Keepalive: we send a ping every wsPingInterval and require ANY frame
@@ -311,7 +311,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Send 101 Switching Protocols.
 	h := sha1.New() // #nosec G401 -- RFC 6455 WebSocket Sec-WebSocket-Accept hash; protocol-mandated
-	_, _ = h.Write([]byte(key + wsMagic))
+	_, _ = h.Write([]byte(key + ws.Magic))
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +

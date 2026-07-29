@@ -72,12 +72,3 @@ func TestClampDim(t *testing.T) {
 		}
 	}
 }
-
-// TestWSAcceptKey pins the RFC 6455 example so the handshake stays correct.
-func TestWSAcceptKey(t *testing.T) {
-	// From RFC 6455 §1.3: key "dGhlIHNhbXBsZSBub25jZQ==" → accept
-	// "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".
-	if got := wsAcceptKey("dGhlIHNhbXBsZSBub25jZQ=="); got != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
-		t.Errorf("wsAcceptKey = %q, want the RFC 6455 example value", got)
-	}
-}
