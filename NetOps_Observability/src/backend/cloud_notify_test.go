@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"netops/backend/models"
+
+	"netops/backend/internal/ticketing"
 )
 
 // Routing decision: only enabled lanes WITH a secret route; nothing else does.
@@ -53,17 +55,15 @@ func TestCloudNotifyLanes(t *testing.T) {
 // never tenant B's, and an unknown tenant gets nothing (default-closed). Mirrors
 // the contact-point / ITSM per-tenant resolve assertions.
 func TestCloudNotifyTargetsAreTenantIsolated(t *testing.T) {
-	st := &itsmConfigStore{
-		cfgs: map[string]itsmConfig{
-			"acme": {Slack: slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/ACME"}},
-			"globex": {
-				Slack:     slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/GLOBEX"},
-				PagerDuty: pagerDutyRCAConfig{Enabled: true, RoutingKey: "rk-globex"},
-			},
-			"": {PagerDuty: pagerDutyRCAConfig{Enabled: true, RoutingKey: "rk-platform"}},
+	st := ticketing.NewITSMConfigStoreForTest(map[string]itsmConfig{
+		"acme": {Slack: slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/ACME"}},
+		"globex": {
+			Slack:     slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/GLOBEX"},
+			PagerDuty: pagerDutyRCAConfig{Enabled: true, RoutingKey: "rk-globex"},
 		},
-	}
-	acme := st.rcaNotifyTargets("acme")
+		"": {PagerDuty: pagerDutyRCAConfig{Enabled: true, RoutingKey: "rk-platform"}},
+	})
+	acme := rcaNotifyTargets(st, "acme")
 	if len(acme) != 1 || acme[0].System != "slack" {
 		t.Fatalf("acme targets = %+v, want exactly its own slack lane", acme)
 	}
@@ -72,15 +72,15 @@ func TestCloudNotifyTargetsAreTenantIsolated(t *testing.T) {
 			t.Fatalf("acme resolve leaked globex's secret: %+v", tg)
 		}
 	}
-	if got := st.rcaNotifyTargets("globex"); len(got) != 2 {
+	if got := rcaNotifyTargets(st, "globex"); len(got) != 2 {
 		t.Fatalf("globex targets = %+v, want its own two lanes", got)
 	}
 	// Unknown tenant: default-closed, NOT a fallback onto anyone else's config.
-	if got := st.rcaNotifyTargets("initech"); len(got) != 0 {
+	if got := rcaNotifyTargets(st, "initech"); len(got) != 0 {
 		t.Fatalf("unknown tenant must resolve zero targets, got %+v", got)
 	}
 	// ""/global collapse to the same platform key (itsmKey), like every ITSM resolve.
-	if got := st.rcaNotifyTargets(TenantGlobal); len(got) != 1 || got[0].Secret != "rk-platform" {
+	if got := rcaNotifyTargets(st, TenantGlobal); len(got) != 1 || got[0].Secret != "rk-platform" {
 		t.Fatalf("global tenant should resolve the platform config, got %+v", got)
 	}
 }

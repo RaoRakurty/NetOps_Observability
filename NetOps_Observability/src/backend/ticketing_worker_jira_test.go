@@ -165,15 +165,12 @@ func TestJiraWorker_CreateAdoptsExistingIssue(t *testing.T) {
 func TestJiraTicketSystemConfig_Resolution(t *testing.T) {
 	full := jiraConfig{Enabled: true, BaseURL: "https://acme.atlassian.net", Email: "noc@acme.example",
 		APIToken: "tok", ProjectKey: "NOC", IssueType: "Incident", ResolveTransition: "Done"}
-	store := &itsmConfigStore{
-		cfgs: map[string]itsmConfig{
-			"t_a": {Jira: full},
-			"t_b": {Jira: jiraConfig{Enabled: true, BaseURL: "https://b.atlassian.net"}},   // no project key
-			"t_c": {Jira: jiraConfig{BaseURL: "https://c.atlassian.net", ProjectKey: "X"}}, // disabled
-		},
-		live: map[string]*itsmLive{},
-	}
-	cfg, ok := store.systemConfig("t_a", "jira")
+	store := ticketing.NewITSMConfigStoreForTest(map[string]itsmConfig{
+		"t_a": {Jira: full},
+		"t_b": {Jira: jiraConfig{Enabled: true, BaseURL: "https://b.atlassian.net"}},   // no project key
+		"t_c": {Jira: jiraConfig{BaseURL: "https://c.atlassian.net", ProjectKey: "X"}}, // disabled
+	})
+	cfg, ok := store.SystemConfigFor("t_a", "jira")
 	if !ok {
 		t.Fatal("complete enabled jira config must resolve")
 	}
@@ -182,10 +179,10 @@ func TestJiraTicketSystemConfig_Resolution(t *testing.T) {
 		cfg.ResolveTransition != "Done" || cfg.TenantID != "t_a" {
 		t.Fatalf("resolved config incomplete: %+v", cfg)
 	}
-	if _, ok := store.systemConfig("t_b", "jira"); ok {
+	if _, ok := store.SystemConfigFor("t_b", "jira"); ok {
 		t.Fatal("jira without a project key must not resolve (would 400 every create)")
 	}
-	if _, ok := store.systemConfig("t_c", "jira"); ok {
+	if _, ok := store.SystemConfigFor("t_c", "jira"); ok {
 		t.Fatal("disabled jira must not resolve")
 	}
 }

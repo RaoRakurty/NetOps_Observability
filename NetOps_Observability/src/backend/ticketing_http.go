@@ -398,7 +398,7 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	// Honest refusal beats a 202 that dead-letters: an operator's manual create
 	// on a tenant with no ticketing connection can never reach ServiceNow.
 	if s.itsmCfg != nil {
-		if _, connOK := s.itsmCfg.systemConfig(owner, system); !connOK {
+		if _, connOK := s.itsmCfg.SystemConfigFor(owner, system); !connOK {
 			writeError(w, http.StatusConflict,
 				errors.New("no ticketing connection configured for this tenant — set up the ServiceNow connection under Incident Response → Integrations first"))
 			return

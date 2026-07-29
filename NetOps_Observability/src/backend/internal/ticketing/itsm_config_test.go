@@ -1,39 +1,38 @@
-package main
+package ticketing
 
 import (
 	"netops/backend/internal/platformdb"
+	"os"
 	"path/filepath"
 	"testing"
-
-	"netops/backend/notify"
 )
 
-func newTestITSMStore(t *testing.T) (*itsmConfigStore, *server) {
+func newTestITSMStore(t *testing.T) *ITSMConfigStore {
 	t.Helper()
-	srv := &server{notifier: notify.NewDispatcher()}
-	st := &itsmConfigStore{
-		path: filepath.Join(t.TempDir(), "itsm.json"), srv: srv,
-		cfgs: map[string]itsmConfig{}, live: map[string]*itsmLive{},
+	return &ITSMConfigStore{
+		path: filepath.Join(t.TempDir(), "itsm.json"),
+		cfgs: map[string]ITSMConfig{}, live: map[string]*itsmLive{},
+		envDefault:      func() ITSMConfig { return ITSMConfig{} },
+		stateFileFor:    func(system, tenant string) string { return filepath.Join(t.TempDir(), system+"_"+tenant+".json") },
+		legacyAlertITSM: func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" },
 	}
-	srv.itsmCfg = st
-	return st, srv
 }
 
 func TestValidateITSM(t *testing.T) {
 	cases := []struct {
 		name string
-		cfg  itsmConfig
+		cfg  ITSMConfig
 		ok   bool
 	}{
-		{"sn enabled needs url", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true}}, false},
-		{"sn url must be http", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "ftp://x"}}, false},
-		{"sn ok", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com"}}, true},
-		{"jira enabled needs base+project", itsmConfig{Jira: jiraConfig{Enabled: true, BaseURL: "https://x.atlassian.net"}}, false},
-		{"jira ok", itsmConfig{Jira: jiraConfig{Enabled: true, BaseURL: "https://x.atlassian.net", ProjectKey: "NOC"}}, true},
-		{"both disabled ok", itsmConfig{}, true},
+		{"sn enabled needs url", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true}}, false},
+		{"sn url must be http", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true, InstanceURL: "ftp://x"}}, false},
+		{"sn ok", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com"}}, true},
+		{"jira enabled needs base+project", ITSMConfig{Jira: JiraConfig{Enabled: true, BaseURL: "https://x.atlassian.net"}}, false},
+		{"jira ok", ITSMConfig{Jira: JiraConfig{Enabled: true, BaseURL: "https://x.atlassian.net", ProjectKey: "NOC"}}, true},
+		{"both disabled ok", ITSMConfig{}, true},
 	}
 	for _, c := range cases {
-		err := validateITSM(c.cfg)
+		err := ValidateITSM(c.cfg)
 		if (err == nil) != c.ok {
 			t.Errorf("%s: validate ok=%v, got err=%v", c.name, c.ok, err)
 		}
@@ -41,14 +40,14 @@ func TestValidateITSM(t *testing.T) {
 }
 
 func TestNormalizeJiraServiceNow(t *testing.T) {
-	sn := normalizeServiceNow(serviceNowConfig{InstanceURL: " https://dev.service-now.com/ ", MinSeverity: ""})
+	sn := NormalizeServiceNow(ServiceNowConfig{InstanceURL: " https://dev.service-now.com/ ", MinSeverity: ""})
 	if sn.InstanceURL != "https://dev.service-now.com" {
 		t.Errorf("instance url not trimmed: %q", sn.InstanceURL)
 	}
 	if sn.MinSeverity != "critical" {
 		t.Errorf("min severity default = %q, want critical", sn.MinSeverity)
 	}
-	jr := normalizeJira(jiraConfig{BaseURL: "https://x.atlassian.net/", ProjectKey: "noc"})
+	jr := NormalizeJira(JiraConfig{BaseURL: "https://x.atlassian.net/", ProjectKey: "noc"})
 	if jr.ProjectKey != "NOC" {
 		t.Errorf("project key not upper: %q", jr.ProjectKey)
 	}
@@ -56,18 +55,18 @@ func TestNormalizeJiraServiceNow(t *testing.T) {
 
 func TestITSMApplyAndPublic(t *testing.T) {
 	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
-	st, srv := newTestITSMStore(t)
+	st := newTestITSMStore(t)
 
 	// Enable ServiceNow for the global tenant → live connector resolvable.
-	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc", Password: "secret"}}); err != nil {
+	if err := st.Set("", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc", Password: "secret"}}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if srv.serviceNow() == nil {
+	if st.ServiceNowFor("") == nil {
 		t.Fatal("servicenow connector not live after enable")
 	}
 
 	// public() must redact the password but advertise that one is stored.
-	pub := st.public("")["servicenow"].(map[string]any)
+	pub := st.Public("")["servicenow"].(map[string]any)
 	if _, leaked := pub["password"]; leaked {
 		t.Error("public() leaked the password")
 	}
@@ -76,7 +75,7 @@ func TestITSMApplyAndPublic(t *testing.T) {
 	}
 
 	// Blank password on update KEEPS the stored secret (write-only field).
-	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc2", Password: ""}}); err != nil {
+	if err := st.Set("", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true, InstanceURL: "https://dev.service-now.com", User: "svc2", Password: ""}}); err != nil {
 		t.Fatalf("set2: %v", err)
 	}
 	if st.cfgs[""].ServiceNow.Password != "secret" {
@@ -84,10 +83,10 @@ func TestITSMApplyAndPublic(t *testing.T) {
 	}
 
 	// Disable → connector no longer resolvable.
-	if err := st.set("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: false}}); err != nil {
+	if err := st.Set("", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: false}}); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if srv.serviceNow() != nil {
+	if st.ServiceNowFor("") != nil {
 		t.Error("servicenow still live after disable")
 	}
 }
@@ -96,37 +95,37 @@ func TestITSMApplyAndPublic(t *testing.T) {
 // tenant — never another tenant, and never the global connector (and vice versa).
 func TestITSMPerTenantIsolation(t *testing.T) {
 	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
-	st, srv := newTestITSMStore(t)
+	st := newTestITSMStore(t)
 
 	// Acme configures its own ServiceNow; Globex configures its own Jira.
-	if err := st.set("acme", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://acme.service-now.com", User: "a", Password: "pa"}}); err != nil {
+	if err := st.Set("acme", ITSMConfig{ServiceNow: ServiceNowConfig{Enabled: true, InstanceURL: "https://acme.service-now.com", User: "a", Password: "pa"}}); err != nil {
 		t.Fatalf("set acme: %v", err)
 	}
-	if err := st.set("globex", itsmConfig{Jira: jiraConfig{Enabled: true, BaseURL: "https://globex.atlassian.net", Email: "g@x", APIToken: "tg", ProjectKey: "OPS"}}); err != nil {
+	if err := st.Set("globex", ITSMConfig{Jira: JiraConfig{Enabled: true, BaseURL: "https://globex.atlassian.net", Email: "g@x", APIToken: "tg", ProjectKey: "OPS"}}); err != nil {
 		t.Fatalf("set globex: %v", err)
 	}
 
-	if srv.serviceNowFor("acme") == nil {
+	if st.ServiceNowFor("acme") == nil {
 		t.Error("acme ServiceNow not resolvable")
 	}
-	if srv.serviceNowFor("globex") != nil {
+	if st.ServiceNowFor("globex") != nil {
 		t.Error("globex must NOT see a ServiceNow connector")
 	}
-	if srv.serviceNowFor("") != nil {
+	if st.ServiceNowFor("") != nil {
 		t.Error("global must NOT see acme's connector")
 	}
-	if srv.jiraFor("globex") == nil {
+	if st.JiraFor("globex") == nil {
 		t.Error("globex Jira not resolvable")
 	}
-	if srv.jiraFor("acme") != nil {
+	if st.JiraFor("acme") != nil {
 		t.Error("acme must NOT see globex's Jira")
 	}
 
 	// public() is per-tenant: acme sees its own config, globex sees none for SN.
-	if st.public("acme")["servicenow"].(map[string]any)["configured"] != true {
+	if st.Public("acme")["servicenow"].(map[string]any)["configured"] != true {
 		t.Error("acme public servicenow should be configured")
 	}
-	if st.public("globex")["servicenow"].(map[string]any)["configured"] != false {
+	if st.Public("globex")["servicenow"].(map[string]any)["configured"] != false {
 		t.Error("globex public servicenow should be unconfigured")
 	}
 }
@@ -135,15 +134,17 @@ func TestITSMPerTenantIsolation(t *testing.T) {
 // migrated under the global "" key on load.
 func TestITSMLegacyMigration(t *testing.T) {
 	t.Setenv("FEATURE_LEGACY_ALERT_ITSM", "true") // legacy lane coverage: deprecated path stays tested
-	_, srv := newTestITSMStore(t)
 	path := filepath.Join(t.TempDir(), "legacy.json")
 	// Legacy format: a bare itsmConfig object (no version envelope).
 	legacy := `{"servicenow":{"enabled":true,"instance_url":"https://legacy.service-now.com","user":"u","password":"p","min_severity":"critical"},"jira":{"enabled":false}}`
 	if err := platformdb.Save(path, []byte(legacy)); err != nil {
 		t.Fatalf("seed legacy: %v", err)
 	}
-	st := newITSMConfigStore(srv, path)
-	if st.serviceNowFor("") == nil {
+	st := NewITSMConfigStore(path,
+		func() ITSMConfig { return ITSMConfig{} },
+		func(system, tenant string) string { return filepath.Join(t.TempDir(), system+"_"+tenant+".json") },
+		func() bool { return os.Getenv("FEATURE_LEGACY_ALERT_ITSM") == "true" })
+	if st.ServiceNowFor("") == nil {
 		t.Fatal("legacy global ServiceNow not migrated/live")
 	}
 	if st.cfgs[""].ServiceNow.InstanceURL != "https://legacy.service-now.com" {

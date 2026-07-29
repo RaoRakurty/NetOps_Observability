@@ -213,14 +213,14 @@ func (s *server) serviceNowFor(tenant string) *notify.ServiceNow {
 	if s.itsmCfg == nil {
 		return nil
 	}
-	return s.itsmCfg.serviceNowFor(tenant)
+	return s.itsmCfg.ServiceNowFor(tenant)
 }
 
 func (s *server) jiraFor(tenant string) *notify.Jira {
 	if s.itsmCfg == nil {
 		return nil
 	}
-	return s.itsmCfg.jiraFor(tenant)
+	return s.itsmCfg.JiraFor(tenant)
 }
 
 func (s *server) serviceNow() *notify.ServiceNow { return s.serviceNowFor("") }
@@ -1205,7 +1205,7 @@ func main() {
 			if srv.itsmCfg == nil {
 				return ticketing.SystemConfig{}, false, nil
 			}
-			cfg, ok := srv.itsmCfg.systemConfig(tenant, system)
+			cfg, ok := srv.itsmCfg.SystemConfigFor(tenant, system)
 			return cfg, ok, nil
 		}
 		tw := ticketing.NewWorker(srv.ticketing, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
@@ -1234,7 +1234,7 @@ func main() {
 			if srv.itsmCfg == nil {
 				return nil
 			}
-			return srv.itsmCfg.rcaNotifyTargets(tenant)
+			return rcaNotifyTargets(srv.itsmCfg, tenant)
 		}
 		cn := newCloudNotifySweeper(srv, resolveNotify)
 		workers.start("cloud-notify-sweeper", func() {

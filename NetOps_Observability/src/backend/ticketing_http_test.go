@@ -671,7 +671,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	ctx := context.Background()
 
 	// Wire an ITSM config store with NO connections.
-	s.itsmCfg = &itsmConfigStore{cfgs: map[string]itsmConfig{}, live: map[string]*itsmLive{}}
+	s.itsmCfg = ticketing.NewITSMConfigStoreForTest(map[string]itsmConfig{})
 
 	st, body := do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", admin, map[string]any{})
 	if st != 409 || !strings.Contains(string(body), "connection") {
@@ -686,9 +686,7 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 	}
 
 	// Configure the platform connection → both paths unblock.
-	s.itsmCfg.mu.Lock()
-	s.itsmCfg.cfgs[""] = itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://test.example"}}
-	s.itsmCfg.mu.Unlock()
+	s.itsmCfg.SetConfigForTest("", itsmConfig{ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://test.example"}})
 
 	if st, body = do(t, srv, "POST", "/api/correlations/"+tktStrictCorrID+"/ticket", admin, map[string]any{}); st != 202 {
 		t.Fatalf("manual create with a connection = %d %s, want 202", st, body)

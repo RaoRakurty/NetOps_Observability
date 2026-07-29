@@ -313,24 +313,21 @@ func TestResolvePolicyState_TripleSystem(t *testing.T) {
 // resolve exactly as it does for a real tenant. Pins the itsmKey collapse for
 // servicenow, pagerduty, and slack + global policy resolution end to end.
 func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
-	store := &itsmConfigStore{
-		cfgs: map[string]itsmConfig{
-			"": { // platform-owner / single-org config key
-				ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.example.service-now.com", User: "u", Password: "p"},
-				PagerDuty:  pagerDutyRCAConfig{Enabled: true, RoutingKey: "RK-global"},
-				Slack:      slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/T/G/x"},
-				Jira:       jiraConfig{Enabled: true, BaseURL: "https://global.atlassian.net", Email: "noc@example.com", APIToken: "tok", ProjectKey: "NOC"},
-			},
+	store := ticketing.NewITSMConfigStoreForTest(map[string]itsmConfig{
+		"": { // platform-owner / single-org config key
+			ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.example.service-now.com", User: "u", Password: "p"},
+			PagerDuty:  pagerDutyRCAConfig{Enabled: true, RoutingKey: "RK-global"},
+			Slack:      slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/T/G/x"},
+			Jira:       jiraConfig{Enabled: true, BaseURL: "https://global.atlassian.net", Email: "noc@example.com", APIToken: "tok", ProjectKey: "NOC"},
 		},
-		live: map[string]*itsmLive{},
-	}
+	})
 	// The sweeper hands us the CANONICAL tenant ("global"), never "".
 	canon := canonicalCorrTenant("")
 	if canon != TenantGlobal {
 		t.Fatalf("canonicalCorrTenant(\"\") = %q, want %q", canon, TenantGlobal)
 	}
 	for _, sys := range []string{"servicenow", "pagerduty", "slack", "jira"} {
-		cfg, ok := store.systemConfig(canon, sys)
+		cfg, ok := store.SystemConfigFor(canon, sys)
 		if !ok {
 			t.Fatalf("global tenant cannot resolve %s connection — single-org deployments broken", sys)
 		}

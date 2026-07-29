@@ -82,10 +82,8 @@ func cloudNotifyLanes(cfg itsmConfig) []cloudNotifyTarget {
 // rcaNotifyTargets resolves ONE tenant's own notification lanes. The lookup is
 // keyed by itsmKey(tenant) exactly like every other per-tenant ITSM resolve —
 // an unknown tenant gets nothing, never another tenant's config.
-func (s *itsmConfigStore) rcaNotifyTargets(tenant string) []cloudNotifyTarget {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	cfg, ok := s.cfgs[itsmKey(tenant)]
+func rcaNotifyTargets(s *itsmConfigStore, tenant string) []cloudNotifyTarget {
+	cfg, ok := s.ConfigFor(tenant)
 	if !ok {
 		return nil
 	}
