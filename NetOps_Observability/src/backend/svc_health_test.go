@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/internal/healthscore"
 )
 
 func TestServiceFlowBadness(t *testing.T) {
@@ -147,7 +149,7 @@ func TestFetchServiceFlowClassDarkNotLive(t *testing.T) {
 // The service response keeps the shared explainability contract (arrays never
 // null, INSUFFICIENT_TELEMETRY with <2 live classes).
 func TestServiceScopeInsufficientTelemetryContract(t *testing.T) {
-	r := aggregateHealthScore("service", "svc-1", []healthClassResult{
+	r := healthscore.Aggregate("service", "svc-1", []healthscore.ClassResult{
 		{Class: "flow_health", Live: true, Badness: 0.2},
 		{Class: "path_health"}, {Class: "correlation"},
 	}, "now")

@@ -4,19 +4,21 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/healthscore"
 )
 
 // Regression lock: list fields must serialize as [] never null — a nil slice →
 // JSON null → the UI reads .length on null → white screen. Covers both branches.
 func TestHealth_ListFieldsNeverNull(t *testing.T) {
 	for _, name := range []string{"insufficient", "scored"} {
-		var classes []healthClassResult
+		var classes []healthscore.ClassResult
 		if name == "scored" {
-			classes = []healthClassResult{cls("availability", true, 0.0), cls("device_health", true, 0.1, contrib("device_health", "edge-1", 0.1))}
+			classes = []healthscore.ClassResult{cls("availability", true, 0.0), cls("device_health", true, 0.1, contrib("device_health", "edge-1", 0.1))}
 		} else {
-			classes = []healthClassResult{cls("device_health", true, 0.3, contrib("device_health", "edge-1", 0.3))}
+			classes = []healthscore.ClassResult{cls("device_health", true, 0.3, contrib("device_health", "edge-1", 0.3))}
 		}
-		b, err := json.Marshal(aggregateHealthScore("global", "", classes, "now"))
+		b, err := json.Marshal(healthscore.Aggregate("global", "", classes, "now"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -28,16 +30,16 @@ func TestHealth_ListFieldsNeverNull(t *testing.T) {
 	}
 }
 
-func cls(name string, live bool, badness float64, contribs ...healthContribution) healthClassResult {
-	return healthClassResult{Class: name, Live: live, Badness: badness, Contribs: contribs}
+func cls(name string, live bool, badness float64, contribs ...healthscore.Contribution) healthscore.ClassResult {
+	return healthscore.ClassResult{Class: name, Live: live, Badness: badness, Contribs: contribs}
 }
-func contrib(class, entity string, b float64) healthContribution {
-	return healthContribution{SignalClass: class, Entity: entity, Badness: b, Reason: entity}
+func contrib(class, entity string, b float64) healthscore.Contribution {
+	return healthscore.Contribution{SignalClass: class, Entity: entity, Badness: b, Reason: entity}
 }
 
 // Coverage honesty (§3): fewer than 2 live classes ⇒ INSUFFICIENT_TELEMETRY, no score.
 func TestHealth_InsufficientWhenOneClass(t *testing.T) {
-	r := aggregateHealthScore("global", "", []healthClassResult{
+	r := healthscore.Aggregate("global", "", []healthscore.ClassResult{
 		cls("device_health", true, 0.6, contrib("device_health", "edge-1", 0.6)),
 		cls("availability", false, 0),
 		cls("path_health", false, 0),
@@ -53,7 +55,7 @@ func TestHealth_InsufficientWhenOneClass(t *testing.T) {
 
 // Owner's caution: probes ALONE must never produce a confident unhealthy verdict.
 func TestHealth_ProbeOnlyIsInsufficientNotUnhealthy(t *testing.T) {
-	r := aggregateHealthScore("global", "", []healthClassResult{
+	r := healthscore.Aggregate("global", "", []healthscore.ClassResult{
 		cls("path_health", true, 0.95, contrib("path_health", "dallas->cloud", 0.95)),
 		cls("availability", false, 0),
 		cls("device_health", false, 0),
@@ -68,7 +70,7 @@ func TestHealth_ProbeOnlyIsInsufficientNotUnhealthy(t *testing.T) {
 }
 
 func TestHealth_HealthyWhenMultipleLowClasses(t *testing.T) {
-	r := aggregateHealthScore("global", "", []healthClassResult{
+	r := healthscore.Aggregate("global", "", []healthscore.ClassResult{
 		cls("availability", true, 0.0),
 		cls("device_health", true, 0.05, contrib("device_health", "edge-1", 0.05)),
 		cls("path_health", true, 0.1, contrib("path_health", "a->b", 0.1)),
@@ -83,7 +85,7 @@ func TestHealth_HealthyWhenMultipleLowClasses(t *testing.T) {
 
 // Anti-averaging floor (§7): one severe class must not be averaged away by calm ones.
 func TestHealth_HotspotNotAveragedAway(t *testing.T) {
-	r := aggregateHealthScore("global", "", []healthClassResult{
+	r := healthscore.Aggregate("global", "", []healthscore.ClassResult{
 		cls("availability", true, 0.0),
 		cls("device_health", true, 0.0),
 		cls("correlation", true, 0.9, contrib("correlation", "WAN path loss", 0.9)),
@@ -97,18 +99,18 @@ func TestHealth_HotspotNotAveragedAway(t *testing.T) {
 }
 
 func TestHealth_StaleReducesConfidence(t *testing.T) {
-	classes := []healthClassResult{
+	classes := []healthscore.ClassResult{
 		cls("availability", true, 0.0),
 		cls("device_health", true, 0.1, contrib("device_health", "edge-1", 0.1)),
 		cls("path_health", true, 0.1, contrib("path_health", "a->b", 0.1)),
 		cls("correlation", true, 0.1, contrib("correlation", "x", 0.1)),
 	}
-	fresh := aggregateHealthScore("global", "", classes, "now")
+	fresh := healthscore.Aggregate("global", "", classes, "now")
 	if fresh.Confidence != "high" { // 4 live
 		t.Fatalf("4 live classes → high, got %s", fresh.Confidence)
 	}
 	classes[1].Stale = true
-	staleR := aggregateHealthScore("global", "", classes, "now")
+	staleR := healthscore.Aggregate("global", "", classes, "now")
 	if staleR.Confidence == "high" {
 		t.Errorf("stale input should reduce confidence below high, got %s", staleR.Confidence)
 	}
@@ -119,7 +121,7 @@ func TestHealth_StaleReducesConfidence(t *testing.T) {
 
 // Explainability (§6): contributions present, sorted by points desc, summing ~deficit.
 func TestHealth_ContributionsSortedAndSum(t *testing.T) {
-	r := aggregateHealthScore("global", "", []healthClassResult{
+	r := healthscore.Aggregate("global", "", []healthscore.ClassResult{
 		cls("availability", true, 0.0),
 		cls("device_health", true, 0.5, contrib("device_health", "edge-1", 0.5)),
 		cls("correlation", true, 0.8, contrib("correlation", "WAN loss", 0.8)),
@@ -151,14 +153,14 @@ func TestHealth_ContributionsSortedAndSum(t *testing.T) {
 
 func TestHealth_BandsAndHinge(t *testing.T) {
 	for s, want := range map[int]string{95: "healthy", 70: "watch", 50: "degraded", 20: "critical"} {
-		if got := healthBandFromScore(s); got != want {
+		if got := healthscore.BandFromScore(s); got != want {
 			t.Errorf("band(%d)=%s want %s", s, got, want)
 		}
 	}
-	if hingeN(0.6, 0.7, 0.95) != 0 {
+	if healthscore.HingeN(0.6, 0.7, 0.95) != 0 {
 		t.Error("below-lo hinge should be 0")
 	}
-	if hingeN(0.99, 0.7, 0.95) != 1 {
+	if healthscore.HingeN(0.99, 0.7, 0.95) != 1 {
 		t.Error("above-hi hinge should be 1")
 	}
 }

@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+
+	"netops/backend/internal/healthscore"
 )
 
 // serviceHealthWindow is the flow_health lookback (norm window + liveness gate).
@@ -100,12 +102,12 @@ func (s *server) serveServiceHealthScore(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	classes := []healthClassResult{
+	classes := []healthscore.ClassResult{
 		s.fetchPathHealthClassFiltered(r.Context(), pathAllow),
 		s.fetchServiceFlowClass(r, svc),
 		s.fetchServiceCorrelationClass(r, serviceID, seams),
 	}
-	resp := aggregateHealthScore("service", serviceID, classes, time.Now().UTC().Format(time.RFC3339))
+	resp := healthscore.Aggregate("service", serviceID, classes, time.Now().UTC().Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -123,15 +125,15 @@ func serviceFlowBadness(recentBytes, olderBytes float64, olderMinutes float64) f
 		return 0
 	}
 	ratio := recentBytes / norm15
-	return hingeN(1-ratio, 0.75, 1.0)
+	return healthscore.HingeN(1-ratio, 0.75, 1.0)
 }
 
 // fetchServiceFlowClass reads the service's attributed rollup minutes
 // (latest-selector-version-wins) and scores traffic collapse. Best-effort: a
 // ClickHouse error or an empty rollup drops the class (not live), it never
 // errors the score.
-func (s *server) fetchServiceFlowClass(r *http.Request, svc Service) healthClassResult {
-	res := healthClassResult{Class: "flow_health"}
+func (s *server) fetchServiceFlowClass(r *http.Request, svc Service) healthscore.ClassResult {
+	res := healthscore.ClassResult{Class: "flow_health"}
 	now := time.Now().UTC()
 	rows, err := s.chRows(r, svcRollupLatestVersionSQL(svc.TenantID, svc.ServiceID, now.Add(-serviceHealthWindow)))
 	if err != nil {
@@ -165,7 +167,7 @@ func (s *server) fetchServiceFlowClass(r *http.Request, svc Service) healthClass
 	olderMinutes := (recentCut - oldest) / 60
 	if b := serviceFlowBadness(recent, older, olderMinutes); b > 0 {
 		res.Badness = b
-		res.Contribs = append(res.Contribs, healthContribution{
+		res.Contribs = append(res.Contribs, healthscore.Contribution{
 			SignalClass: "flow_health", Entity: svc.Name, Badness: b,
 			Reason: "Attributed traffic for " + svc.Name + " collapsed vs its 24h norm",
 		})
@@ -180,8 +182,8 @@ func (s *server) fetchServiceFlowClass(r *http.Request, svc Service) healthClass
 // decorate edge grounding (that join reads corr_edges per object; the verdict-
 // tier + plane gates already bound trust here and the read stays one narrow
 // keyed scan — #100 bounded-IO discipline).
-func (s *server) fetchServiceCorrelationClass(r *http.Request, serviceID string, seams []string) healthClassResult {
-	res := healthClassResult{Class: "correlation"}
+func (s *server) fetchServiceCorrelationClass(r *http.Request, serviceID string, seams []string) healthscore.ClassResult {
+	res := healthscore.ClassResult{Class: "correlation"}
 	match := []string{"positionCaseInsensitive(c.affected, '" + serviceID + "') > 0"}
 	for _, seam := range seams { // isSeamToken-validated by the caller
 		match = append(match, "positionCaseInsensitive(c.affected, '"+seam+"') > 0")
@@ -216,7 +218,7 @@ SELECT toString(c.correlation_id) AS id, c.top_hypothesis AS hyp, c.top_confiden
 		}
 		hyp, _ := row["hyp"].(string)
 		created, _ := row["created_at"].(string)
-		res.Contribs = append(res.Contribs, healthContribution{
+		res.Contribs = append(res.Contribs, healthscore.Contribution{
 			SignalClass: "correlation", Entity: hyp, Badness: conf,
 			Reason: "Trusted RCA affecting this service: " + hyp + " (" + asString(row["tier"]) + ")", Timestamp: created,
 		})
