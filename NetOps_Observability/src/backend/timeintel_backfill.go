@@ -122,7 +122,7 @@ SELECT toString(o.tenant_id)      AS tenant_id,
 			EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 			Confidence:      asFloat(o["top_confidence"]),
 		}
-		group := groupKeysFromAffected(asString(o["affected"]))
+		group := timeintel.GroupKeysFromAffected(asString(o["affected"]))
 		if owner != "" {
 			group["provider"] = owner
 		}

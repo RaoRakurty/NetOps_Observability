@@ -50,12 +50,12 @@ func TestSummariesFromSnapshots(t *testing.T) {
 	rows = append(rows, internalRow)
 
 	// Customer-impacting default: internal excluded.
-	out := summariesFromSnapshots(rows, reliabilityFilters{}, false)
+	out := timeintel.SummariesFromSnapshots(rows, timeintel.Filters{}, false)
 	if len(out) != 2 {
 		t.Fatalf("want 2 summaries (internal excluded), got %d", len(out))
 	}
 	// include_internal brings it back.
-	if all := summariesFromSnapshots(rows, reliabilityFilters{}, true); len(all) != 3 {
+	if all := timeintel.SummariesFromSnapshots(rows, timeintel.Filters{}, true); len(all) != 3 {
 		t.Fatalf("include_internal should yield 3, got %d", len(all))
 	}
 	// TTD is excluded (batch path has no ingest time → onset fallback would be a
@@ -80,12 +80,12 @@ func TestSummariesFromSnapshots(t *testing.T) {
 		}
 	}
 	// Dimension filter: device narrows to the matching incident only.
-	dev := summariesFromSnapshots(rows, reliabilityFilters{Device: "lan-sw1"}, false)
+	dev := timeintel.SummariesFromSnapshots(rows, timeintel.Filters{Device: "lan-sw1"}, false)
 	if len(dev) != 1 || dev[0].CorrelationID != "c2" {
 		t.Fatalf("device filter wrong: %+v", dev)
 	}
 	// Owner filter is case-normalized.
-	if o := summariesFromSnapshots(rows, reliabilityFilters{Owner: "isp"}, false); len(o) != 2 {
+	if o := timeintel.SummariesFromSnapshots(rows, timeintel.Filters{Owner: "isp"}, false); len(o) != 2 {
 		t.Fatalf("owner filter should keep both non-internal rows, got %d", len(o))
 	}
 }
@@ -164,7 +164,7 @@ func TestBuildIncidentSummariesSnapshotIsolation(t *testing.T) {
 
 	// Tenant-bound caller: own rows only, served from snapshots (no live scan).
 	res, err := s.buildIncidentSummaries(reliabilityReq(jwtClaims{Role: "admin", Tenant: "acme", Sub: "u"}),
-		30*86400, reliabilityFilters{}, false)
+		30*86400, timeintel.Filters{}, false)
 	if err != nil {
 		t.Fatalf("buildIncidentSummaries: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestBuildIncidentSummariesSnapshotIsolation(t *testing.T) {
 
 	// Platform owner (cross-tenant) aggregates all.
 	resAll, err := s.buildIncidentSummaries(reliabilityReq(jwtClaims{Role: RoleSuperAdmin, Tenant: TenantGlobal, Sub: "root"}),
-		30*86400, reliabilityFilters{}, false)
+		30*86400, timeintel.Filters{}, false)
 	if err != nil {
 		t.Fatalf("cross buildIncidentSummaries: %v", err)
 	}

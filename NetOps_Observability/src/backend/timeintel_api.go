@@ -171,7 +171,7 @@ SELECT ` + chschema.ISO("window_start") + ` AS window_start,
 	}
 	o := rows[0]
 	owner := ownerFromHypotheses(asString(o["hypotheses"]))
-	group := groupKeysFromAffected(asString(o["affected"]))
+	group := timeintel.GroupKeysFromAffected(asString(o["affected"]))
 	facts := timeintel.CorrTimeFacts{
 		WindowStart:     parseCHTime(o["window_start"]),
 		FirstIngest:     s.minIngestTS(r, id), // detection latency (best-effort)

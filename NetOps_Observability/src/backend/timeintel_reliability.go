@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -28,24 +27,15 @@ import (
 // first backfill pass hasn't run yet — mem store after a restart, or a fresh
 // install). Percentiles (p50/p90/p95), NOT just averages.
 
-// reliabilityFilters are the optional scoping filters (network-specific dimensions).
-type reliabilityFilters struct {
-	Owner     string // customer | isp | cloud_provider | ...
-	Provider  string
-	Device    string
-	Signature string // root_cause_signature (top_hypothesis)
-}
-
-// includeInternalFrom reads the "Include internal/platform events" toggle (default
-// OFF — customer-impacting incidents only).
+// timeintel.Filters are the optional scoping filters (network-specific dimensions).
 func includeInternalFrom(r *http.Request) bool {
 	v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_internal")))
 	return v == "1" || v == "true" || v == "yes"
 }
 
-func reliabilityFiltersFrom(r *http.Request) reliabilityFilters {
+func reliabilityFiltersFrom(r *http.Request) timeintel.Filters {
 	q := r.URL.Query()
-	return reliabilityFilters{
+	return timeintel.Filters{
 		Owner:     strings.ToLower(strings.TrimSpace(q.Get("owner"))),
 		Provider:  strings.TrimSpace(q.Get("provider")),
 		Device:    strings.TrimSpace(q.Get("device")),
@@ -67,7 +57,7 @@ type incidentSummariesResult struct {
 // window + dedupe + bound applied in the database). Fallback: the live ClickHouse
 // derivation — only when the snapshot store has no rows yet (cold start before the
 // first backfill pass) or errors (logged, never silent).
-func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) (incidentSummariesResult, error) {
+func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f timeintel.Filters, includeInternal bool) (incidentSummariesResult, error) {
 	if s.incidentTimeMetrics != nil {
 		if claims, ok := userFrom(r.Context()); ok {
 			tenant, cross := principalTenant(claims)
@@ -80,7 +70,7 @@ func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f rel
 				log.Printf("reliability rollup: snapshot read failed, falling back to live scan: %v", err)
 			case len(rows) > 0:
 				return incidentSummariesResult{
-					Incidents: summariesFromSnapshots(rows, f, includeInternal),
+					Incidents: timeintel.SummariesFromSnapshots(rows, f, includeInternal),
 					Source:    "snapshots",
 					ScanCap:   timeIntelBackfillCap,
 					Capped:    len(rows) >= timeIntelBackfillCap,
@@ -106,52 +96,6 @@ func (s *server) buildIncidentSummaries(r *http.Request, sinceSeconds int, f rel
 // filters. Pure — no IO. TTD is excluded for the same honesty reason as the live
 // path: the batch derivation has no per-object ingest time, so detection falls
 // back to onset → a misleading 0.
-func summariesFromSnapshots(rows []incidentTimeMetricRow, f reliabilityFilters, includeInternal bool) []timeintel.IncidentSummary {
-	out := make([]timeintel.IncidentSummary, 0, len(rows))
-	for _, row := range rows {
-		if row.Internal && !includeInternal {
-			continue
-		}
-		group := row.Group
-		if group == nil {
-			group = map[string]string{}
-		}
-		owner := strings.ToLower(strings.TrimSpace(row.Owner))
-		if f.Owner != "" && owner != f.Owner {
-			continue
-		}
-		if f.Provider != "" && group["provider"] != f.Provider {
-			continue
-		}
-		if f.Device != "" && group["device"] != f.Device {
-			continue
-		}
-		if f.Signature != "" && group["signature"] != f.Signature {
-			continue
-		}
-		durs := map[timeintel.MetricName]int64{}
-		for _, m := range row.Metrics {
-			if m.Complete && m.Name != timeintel.MetricTTD {
-				durs[m.Name] = m.DurationMs
-			}
-		}
-		out = append(out, timeintel.IncidentSummary{
-			CorrelationID:  row.CorrelationID,
-			Durations:      durs,
-			TimeLossDriver: timeintel.TimeLossDriver(row.Bottleneck),
-			Group:          group,
-			OccurredAt:     row.OccurredAt,
-			State:          row.State,
-			IsChild:        strings.EqualFold(row.State, "merged"),
-			OwnerDomain:    timeintel.OwnerDomain(row.OwnerDomain),
-			Internal:       row.Internal,
-		})
-	}
-	return out
-}
-
-// reliabilityLiveScanCap bounds the FALLBACK live ClickHouse scan (cold start
-// only); the primary snapshot path is bounded by timeIntelBackfillCap instead.
 const reliabilityLiveScanCap = 5000
 
 // buildIncidentSummariesLive is the cold-start FALLBACK: loads corr objects in the
@@ -160,7 +104,7 @@ const reliabilityLiveScanCap = 5000
 // to onset here — per-object ingest queries would be N+1), compute phase durations
 // + the time-loss driver, and extract grouping keys for MTBF / chronic offenders.
 // Maintenance/child classification: merged objects are children.
-func (s *server) buildIncidentSummariesLive(r *http.Request, sinceSeconds int, f reliabilityFilters, includeInternal bool) ([]timeintel.IncidentSummary, error) {
+func (s *server) buildIncidentSummariesLive(r *http.Request, sinceSeconds int, f timeintel.Filters, includeInternal bool) ([]timeintel.IncidentSummary, error) {
 	// Qualify with a table alias so WHERE references the real DateTime64 column, not
 	// the toString() SELECT alias of the same name (which would be String → type
 	// mismatch — the same gotcha handleCorrelations documents).
@@ -201,7 +145,7 @@ SELECT toString(o.correlation_id) AS correlation_id,
 			EvidenceMissing: evidenceMissingFromBlob(asString(o["evidence_missing"])),
 			Confidence:      asFloat(o["top_confidence"]),
 		}
-		group := groupKeysFromAffected(asString(o["affected"]))
+		group := timeintel.GroupKeysFromAffected(asString(o["affected"]))
 		if owner != "" {
 			group["provider"] = owner
 		}
@@ -261,34 +205,6 @@ SELECT toString(o.correlation_id) AS correlation_id,
 
 // groupKeysFromAffected extracts MTBF grouping keys from the corr object's affected
 // JSON ({devices,interfaces,paths}). First of each → the stable object identity.
-func groupKeysFromAffected(blob string) map[string]string {
-	g := map[string]string{}
-	blob = strings.TrimSpace(blob)
-	if blob == "" || blob == "{}" {
-		return g
-	}
-	var a struct {
-		Devices    []string `json:"devices"`
-		Interfaces []string `json:"interfaces"`
-		Paths      []string `json:"paths"`
-	}
-	if err := json.Unmarshal([]byte(blob), &a); err != nil {
-		return g
-	}
-	if len(a.Devices) > 0 {
-		g["device"] = a.Devices[0]
-		g["root_entity"] = a.Devices[0]
-	}
-	if len(a.Interfaces) > 0 {
-		g["interface"] = a.Interfaces[0]
-	}
-	if len(a.Paths) > 0 {
-		g["app_path"] = a.Paths[0]
-	}
-	return g
-}
-
-// handleReliabilityRollups serves GET /api/reliability/rollups.
 func (s *server) handleReliabilityRollups(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
