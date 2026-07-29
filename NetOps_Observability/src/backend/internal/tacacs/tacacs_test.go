@@ -1,4 +1,4 @@
-package main
+package tacacs
 
 import (
 	"bytes"
@@ -19,35 +19,8 @@ import (
 
 // ---- config -----------------------------------------------------------------
 
-func TestTACACSDisabledByDefault(t *testing.T) {
-	for _, k := range []string{"TACACS_ENABLED", "TACACS_HOST", "TACACS_SECRET"} {
-		t.Setenv(k, "")
-	}
-	if newTACACS().Enabled() {
-		t.Error("TACACS+ must be disabled with no config")
-	}
-}
-
-func TestTACACSConfigFromEnv(t *testing.T) {
-	t.Setenv("TACACS_ENABLED", "true")
-	t.Setenv("TACACS_HOST", "aaa.example.com")
-	t.Setenv("TACACS_PORT", "49")
-	t.Setenv("TACACS_SECRET", "s3cr3t")
-	c := newTACACS()
-	if !c.Enabled() {
-		t.Fatal("should be enabled")
-	}
-	if c.addr != "aaa.example.com:49" {
-		t.Errorf("addr = %q", c.addr)
-	}
-	if c.defaultRole != RoleReadOnly {
-		t.Errorf("default role should be read-only, got %q", c.defaultRole)
-	}
-}
-
-// Authenticate is a no-op (false,nil) when disabled — never blocks login.
 func TestTACACSDisabledAuthIsNoop(t *testing.T) {
-	c := &TACACS{enabled: false}
+	c := &Client{enabled: false}
 	ok, err := c.Authenticate("u", "p")
 	if ok || err != nil {
 		t.Errorf("disabled Authenticate should be (false,nil), got (%v,%v)", ok, err)
@@ -167,7 +140,7 @@ func mockTacacsServer(t *testing.T, secret, validUser, validPass string) (addr s
 func TestTACACSAuthenticatePAPSuccess(t *testing.T) {
 	addr, stop := mockTacacsServer(t, "topsecret", "noc-admin", "Cisco123")
 	defer stop()
-	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
+	c := &Client{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
 	ok, err := c.Authenticate("noc-admin", "Cisco123")
 	if err != nil || !ok {
 		t.Fatalf("expected PASS, got ok=%v err=%v", ok, err)
@@ -177,7 +150,7 @@ func TestTACACSAuthenticatePAPSuccess(t *testing.T) {
 func TestTACACSAuthenticatePAPFailure(t *testing.T) {
 	addr, stop := mockTacacsServer(t, "topsecret", "noc-admin", "Cisco123")
 	defer stop()
-	c := &TACACS{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
+	c := &Client{addr: addr, secret: "topsecret", enabled: true, timeout: 3 * time.Second}
 	ok, err := c.Authenticate("noc-admin", "wrong-password")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -189,7 +162,7 @@ func TestTACACSAuthenticatePAPFailure(t *testing.T) {
 
 // Empty credentials are rejected before any network I/O.
 func TestTACACSAuthenticateRejectsEmptyCreds(t *testing.T) {
-	c := &TACACS{addr: "127.0.0.1:1", secret: "x", enabled: true, timeout: time.Second}
+	c := &Client{addr: "127.0.0.1:1", secret: "x", enabled: true, timeout: time.Second}
 	if ok, err := c.Authenticate("", "p"); ok || err == nil {
 		t.Errorf("empty username: got ok=%v err=%v", ok, err)
 	}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/tacacs"
 	"netops/backend/internal/vault"
 	"os"
 	"strconv"
@@ -264,14 +265,14 @@ func (c tacacsConfig) client() *TACACS {
 	if strings.TrimSpace(role) == "" {
 		role = RoleReadOnly
 	}
-	return &TACACS{
-		addr:        net.JoinHostPort(c.Host, strconv.Itoa(port)),
-		secret:      c.Secret,
-		timeout:     timeout,
-		enabled:     c.Enabled && c.Host != "",
-		defaultRole: role,
-		tenant:      c.DefaultTenant,
-	}
+	return tacacs.New(
+		net.JoinHostPort(c.Host, strconv.Itoa(port)),
+		c.Secret,
+		timeout,
+		c.Enabled && c.Host != "",
+		role,
+		c.DefaultTenant,
+	)
 }
 
 type tacacsConfigStore struct {
@@ -450,13 +451,13 @@ func (s *server) handleTACACSTest(w http.ResponseWriter, r *http.Request) {
 	client := cfg.client()
 	// Connectivity-only probe when no sample user was supplied.
 	if strings.TrimSpace(req.Username) == "" {
-		conn, err := net.DialTimeout("tcp", client.addr, client.timeout)
+		conn, err := net.DialTimeout("tcp", client.Addr(), client.Timeout())
 		if err != nil {
 			writeJSON(w, http.StatusOK, tacacsTestResult{Stage: "connect", Message: "connect failed: " + err.Error()})
 			return
 		}
 		_ = conn.Close()
-		writeJSON(w, http.StatusOK, tacacsTestResult{OK: true, Stage: "connect", Message: "TCP connect to " + client.addr + " OK (supply a username to test authentication)"})
+		writeJSON(w, http.StatusOK, tacacsTestResult{OK: true, Stage: "connect", Message: "TCP connect to " + client.Addr() + " OK (supply a username to test authentication)"})
 		return
 	}
 	ok, err := client.Authenticate(req.Username, req.Password)

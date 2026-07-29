@@ -199,11 +199,11 @@ func TestTACACSConfigClientBuild(t *testing.T) {
 	if !cl.Enabled() {
 		t.Fatal("client should be enabled")
 	}
-	if cl.addr != "tac.example.com:49" {
-		t.Fatalf("addr: %q", cl.addr)
+	if cl.Addr() != "tac.example.com:49" {
+		t.Fatalf("addr: %q", cl.Addr())
 	}
-	if cl.timeout != 3*time.Second {
-		t.Fatalf("timeout: %v", cl.timeout)
+	if cl.Timeout() != 3*time.Second {
+		t.Fatalf("timeout: %v", cl.Timeout())
 	}
 	// Disabled when host empty even if Enabled flag set.
 	if (tacacsConfig{Enabled: true, Host: ""}).client().Enabled() {

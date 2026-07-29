@@ -1,4 +1,4 @@
-package main
+package tacacs
 
 import (
 	"crypto/md5" // #nosec G501 -- RFC 8907 §4.5: TACACS+ body obfuscation is MD5-based; protocol-mandated
@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -66,7 +64,7 @@ const (
 )
 
 // TACACS is the TACACS+ authentication client.
-type TACACS struct {
+type Client struct {
 	addr        string
 	secret      string
 	timeout     time.Duration
@@ -75,22 +73,24 @@ type TACACS struct {
 	tenant      string
 }
 
-func newTACACS() *TACACS {
-	t := &TACACS{
-		addr:        envOr("TACACS_HOST", "") + ":" + envOr("TACACS_PORT", "49"),
-		secret:      os.Getenv("TACACS_SECRET"),
-		timeout:     durEnv("TACACS_TIMEOUT", 5*time.Second),
-		enabled:     os.Getenv("TACACS_ENABLED") == "true" && os.Getenv("TACACS_HOST") != "",
-		defaultRole: envOr("TACACS_DEFAULT_ROLE", RoleReadOnly),
-		tenant:      os.Getenv("TACACS_DEFAULT_TENANT"),
-	}
-	return t
+// New builds a TACACS+ client. Env/kv resolution stays with the caller.
+func New(addr, secret string, timeout time.Duration, enabled bool, defaultRole, tenant string) *Client {
+	return &Client{addr: addr, secret: secret, timeout: timeout, enabled: enabled, defaultRole: defaultRole, tenant: tenant}
 }
 
-func (t *TACACS) Enabled() bool { return t != nil && t.enabled }
+func (t *Client) Enabled() bool { return t != nil && t.enabled }
+
+// DefaultRole and DefaultTenant expose the JIT-provisioning identity facts the
+// login handler stamps on a PASS.
+func (t *Client) DefaultRole() string { return t.defaultRole }
+
+// Addr and Timeout expose the dial parameters for status/diagnostic surfaces.
+func (t *Client) Addr() string           { return t.addr }
+func (t *Client) Timeout() time.Duration { return t.timeout }
+func (t *Client) DefaultTenant() string  { return t.tenant }
 
 // Host returns the configured server address (for status/diagnostics).
-func (t *TACACS) Host() string { return strings.TrimSuffix(t.addr, ":") }
+func (t *Client) Host() string { return strings.TrimSuffix(t.addr, ":") }
 
 // tacacsPad builds the MD5-chained pseudo-pad used to obfuscate a TACACS+ body
 // (RFC 8907 §4.5). The pad is the concatenation of MD5 hashes:
@@ -194,7 +194,7 @@ func tacacsSessionID() uint32 {
 // Returns (true,nil) on AUTHEN REPLY status PASS, (false,nil) on FAIL, and
 // (false,err) on protocol/IO errors. A multi-packet exchange (GETUSER/GETPASS/
 // GETDATA) is not expected for PAP and is treated as a protocol error.
-func (t *TACACS) Authenticate(username, password string) (bool, error) {
+func (t *Client) Authenticate(username, password string) (bool, error) {
 	if !t.Enabled() {
 		return false, nil
 	}
@@ -289,44 +289,3 @@ func (t *TACACS) Authenticate(username, password string) (bool, error) {
 // configured TACACS+ server via PAP, JIT-provisions a local user, and issues the
 // same access + refresh session as handleLogin. TACACS+ has no group model, so
 // the user always gets t.defaultRole.
-func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req loginRequest
-	// F-32: PRE-AUTH route — a TACACS+ sign-in is a username/password pair.
-	if err := decodeJSONBody(w, r, authCredentialBodyBytes, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	t := s.tacacs.effective().client()
-	if !t.Enabled() {
-		writeError(w, http.StatusNotFound, errors.New("tacacs authentication not configured"))
-		return
-	}
-	ok, err := t.Authenticate(req.Username, req.Password)
-	if err != nil {
-		logInfo("auth", "tacacs login error", map[string]any{"user": req.Username, "reason": err.Error()})
-		writeError(w, http.StatusBadGateway, errors.New("tacacs authentication unavailable"))
-		return
-	}
-	if !ok {
-		logInfo("auth", "tacacs login failed", map[string]any{"user": req.Username})
-		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
-		return
-	}
-	user, err := s.users.UpsertFederated(req.Username, "", req.Username, t.defaultRole, "tacacs", t.tenant)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.logBindingSync(user, "tacacs") // PBAC Phase A: mirror the provisioned identity
-	if user.Status == "disabled" {
-		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
-		return
-	}
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "tacacs"})
-	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
-}
