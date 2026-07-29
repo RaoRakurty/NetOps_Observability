@@ -282,7 +282,7 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	// Build the dataset once, then render every requested format in parallel.
 	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseRendering, time.Now().UTC(), "")
 	vm := p.srv.reports.buildViewModel(o, spec, job.FireTime)
-	alert := alertFromViewModel(vm, job.FireTime)
+	alert := reports.AlertFromViewModel(vm, job.FireTime)
 	refs, arts, err := p.renderAll(jctx, job.ExecutionID, vm, normalizeFormats(spec.Formats))
 	if err != nil {
 		p.fail(ctx, jctx, job, tenant, "render: "+err.Error(), nil, p.dead(job), fields)

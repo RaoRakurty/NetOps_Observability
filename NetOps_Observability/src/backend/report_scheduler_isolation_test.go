@@ -107,10 +107,10 @@ func TestTunnelReportQueriesAreDeviceScoped(t *testing.T) {
 	rec := &queryRecorder{}
 	fakeClickHouse(t, rec)
 
-	rs.datasetWAN("t-a")
-	rs.datasetLatency("t-a")
-	rs.renderWANUtilization("t-a")
-	rs.renderLatencyJitterSLA("t-a")
+	rs.ds.DatasetWAN("t-a")
+	rs.ds.DatasetLatency("t-a")
+	rs.ds.RenderWANUtilization("t-a")
+	rs.ds.RenderLatencyJitterSLA("t-a")
 	scoped := rec.all()
 	if len(scoped) != 4 {
 		t.Fatalf("expected 4 tunnels queries, got %d", len(scoped))
@@ -126,7 +126,7 @@ func TestTunnelReportQueriesAreDeviceScoped(t *testing.T) {
 
 	rec2 := &queryRecorder{}
 	fakeClickHouse(t, rec2)
-	rs.datasetWAN("")
+	rs.ds.DatasetWAN("")
 	for _, q := range rec2.all() {
 		if strings.Contains(q, "local_device IN (") {
 			t.Errorf("platform report must stay unscoped, got:\n%s", q)
@@ -141,8 +141,8 @@ func TestSecurityReportQueriesAreDeviceScoped(t *testing.T) {
 	rec := &queryRecorder{}
 	fakeClickHouse(t, rec)
 
-	rs.datasetSecurity("t-a")
-	rs.renderSecurityThreats("t-a")
+	rs.ds.DatasetSecurity("t-a")
+	rs.ds.RenderSecurityThreats("t-a")
 	qs := rec.all()
 	if len(qs) < 4 {
 		t.Fatalf("expected ≥4 findings queries, got %d", len(qs))
@@ -165,14 +165,14 @@ func TestDevicelessTenantReportsShortCircuit(t *testing.T) {
 	rec := &queryRecorder{}
 	fakeClickHouse(t, rec)
 
-	if _, body := rs.renderWANUtilization("t-none"); !strings.Contains(body, "No tunnel/overlay telemetry") {
+	if _, body := rs.ds.RenderWANUtilization("t-none"); !strings.Contains(body, "No tunnel/overlay telemetry") {
 		t.Errorf("deviceless tenant WAN report should carry the no-data note, got %q", body)
 	}
-	rs.datasetWAN("t-none")
-	rs.datasetLatency("t-none")
-	rs.renderLatencyJitterSLA("t-none")
-	rs.datasetSecurity("t-none")
-	rs.renderSecurityThreats("t-none")
+	rs.ds.DatasetWAN("t-none")
+	rs.ds.DatasetLatency("t-none")
+	rs.ds.RenderLatencyJitterSLA("t-none")
+	rs.ds.DatasetSecurity("t-none")
+	rs.ds.RenderSecurityThreats("t-none")
 	if got := rec.all(); len(got) != 0 {
 		t.Fatalf("deviceless tenant must issue NO telemetry queries, got %d:\n%s", len(got), strings.Join(got, "\n---\n"))
 	}
@@ -193,7 +193,7 @@ func TestDeviceUtilizationFilteredToTenant(t *testing.T) {
 	defer vm.Close()
 	t.Setenv("VICTORIA_URL", vm.URL)
 
-	_, body := rs.renderDeviceUtilization("t-a")
+	_, body := rs.ds.RenderDeviceUtilization("t-a")
 	if !strings.Contains(body, "leaf-a") {
 		t.Errorf("tenant's own device missing from utilization report:\n%s", body)
 	}
@@ -201,7 +201,7 @@ func TestDeviceUtilizationFilteredToTenant(t *testing.T) {
 		t.Errorf("CROSS-TENANT LEAK: t-a utilization report lists t-b's device:\n%s", body)
 	}
 
-	_, sections := rs.datasetDeviceUtil("t-a")
+	_, sections := rs.ds.DatasetDeviceUtil("t-a")
 	for _, sec := range sections {
 		for _, row := range sec.Rows {
 			for _, cell := range row {
@@ -213,7 +213,7 @@ func TestDeviceUtilizationFilteredToTenant(t *testing.T) {
 	}
 
 	// Platform report keeps the full fleet.
-	if _, body := rs.renderDeviceUtilization(""); !strings.Contains(body, "leaf-b") {
+	if _, body := rs.ds.RenderDeviceUtilization(""); !strings.Contains(body, "leaf-b") {
 		t.Errorf("platform utilization report should list all devices:\n%s", body)
 	}
 }
