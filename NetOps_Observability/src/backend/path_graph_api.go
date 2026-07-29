@@ -492,12 +492,12 @@ func seamHintFrom(prior pathgraph.PathObservation, priorHops []pathgraph.PathHop
 	if crossed == "" || crossed == "*" {
 		return nil
 	}
-	for _, side := range buildSeamIndex(seams)[terminal] {
+	for _, side := range pathgraph.BuildSeamIndex(seams)[terminal] {
 		if side.SeamID != crossed {
 			continue
 		}
 		transformation := pathgraph.TransformNone
-		if tunnelSeamTypes[side.SeamType] {
+		if pathgraph.TunnelSeamTypes[side.SeamType] {
 			if side.Near {
 				transformation = pathgraph.TransformTunnelIngress
 			} else {

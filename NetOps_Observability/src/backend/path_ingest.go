@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/netip"
 	"netops/backend/internal/seam"
 	"os"
 	"strings"
@@ -35,17 +33,13 @@ import (
 
 // pathIngestCfg is the ingester's provenance + vantage configuration (§1). It is
 // operator-supplied, never inferred from the data.
-type pathIngestCfg struct {
-	Tenant         string
-	DataClass      string // live | synthetic | replay | lab
-	Environment    string
-	ScenarioID     string
-	RunID          string
-	ProducerID     string
-	VantageID      string
-	VantageAddress string // the client/vantage the measurement starts at
-	Now            time.Time
-}
+// The ingest derivation core moved to pathgraph/ingest.go (Phase-2 W2.3).
+type (
+	pathIngestCfg = pathgraph.IngestConfig
+	netContext    = pathgraph.NetContext
+	seamIndex     = pathgraph.SeamIndex
+	pathRecords   = pathgraph.Records
+)
 
 // pathIngestConfigFromEnv reads the ingester's provenance block. Defaults are the
 // honest ones: platform tenant, live class, prod environment.
@@ -63,6 +57,9 @@ func pathIngestConfigFromEnv(now time.Time) pathIngestCfg {
 		VantageID:      envOr("PATH_GRAPH_VANTAGE_ID", "prober"),
 		VantageAddress: os.Getenv("PATH_GRAPH_VANTAGE_ADDRESS"),
 		Now:            now,
+
+		DefaultVantageID: envOr("PATH_GRAPH_VANTAGE_ID", "prober"),
+		VantageAddrFor:   vantageAddressFor,
 	}
 	if cfg.VantageAddress == "" {
 		// The per-vantage map (PATH_GRAPH_VANTAGE_ADDRESSES) is the single source of
@@ -74,391 +71,6 @@ func pathIngestConfigFromEnv(now time.Time) pathIngestCfg {
 	return cfg
 }
 
-// ── network context (§2.1: an address is meaningless without one) ────────────
-
-// netContext maps an address to its network context (VPC / VNet / VRF / LAN
-// segment). Cloud prefixes come from the DISCOVERED cloud topology (route-table
-// export); on-prem prefixes are operator-declared via PATH_GRAPH_LOCAL_CONTEXTS
-// ("lab-lan:172.40.40.0/24,lab-wan:10.70.245.0/24"). Anything unmapped falls back
-// to a single named default — an honest "we don't segment this space", never a
-// silent cross-context join (the tenant wall still holds either way).
-type netContext struct {
-	topos    []cloud.Topology
-	local    []localContext
-	fallback string
-}
-
-type localContext struct {
-	name   string
-	prefix netip.Prefix
-}
-
-func newNetContext(topos []cloud.Topology, spec string) netContext {
-	nc := netContext{topos: topos, fallback: envOr("PATH_GRAPH_DEFAULT_CONTEXT", "default")}
-	for _, part := range strings.Split(spec, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		// Canonical form "cidr=name" ("=" is IPv6-safe); legacy "name:cidr" still
-		// parses when the entry has no "=".
-		var name, cidr string
-		var ok bool
-		if cidr, name, ok = strings.Cut(part, "="); !ok {
-			name, cidr, ok = strings.Cut(part, ":")
-		}
-		if !ok {
-			continue
-		}
-		p, err := netip.ParsePrefix(strings.TrimSpace(cidr))
-		if err != nil {
-			logWarn("pathgraph", "ignoring bad PATH_GRAPH_LOCAL_CONTEXTS entry", map[string]any{"entry": part})
-			continue
-		}
-		nc.local = append(nc.local, localContext{name: strings.TrimSpace(name), prefix: p})
-	}
-	return nc
-}
-
-// Of resolves an address to its network context.
-func (n netContext) Of(addr string) string {
-	if addr == "" {
-		return n.fallback
-	}
-	for _, t := range n.topos {
-		if c := t.NetworkContextOf(addr); c != "" {
-			return c
-		}
-	}
-	if ip, err := netip.ParseAddr(strings.TrimSpace(addr)); err == nil {
-		for _, lc := range n.local {
-			if lc.prefix.Contains(ip) {
-				return lc.name
-			}
-		}
-	}
-	return n.fallback
-}
-
-// ── seam membership ──────────────────────────────────────────────────────────
-
-// seamSide names which side of an ownership seam an endpoint sits on. The seam
-// inventory already carries the endpoints (on_prem / provider_edge / local /
-// remote / dst); we do not re-derive them from addresses.
-type seamSide struct {
-	SeamID   string
-	SeamType string
-	Near     bool     // true = the enterprise-owned side (on_prem/local/a_ip)
-	FarSide  []string // the OTHER side's addresses — the disambiguator when one address terminates several seams
-}
-
-// seamIndex is address → the seam sides that address terminates, built from the
-// ACTIVE seam inventory. An address may terminate SEVERAL seams (the lab edge
-// 10.70.245.122 is the near end of both the AWS and the Azure VPN) — the index
-// keeps every candidate and the stamper disambiguates per path.
-type seamIndex map[string][]seamSide
-
-// seamEndpointSide classifies a seam endpoint KEY. Only known endpoint-address
-// keys are indexed; anything else (names, interfaces, probe_target, …) is skipped —
-// indexing a non-endpoint value would fabricate seam membership (§5).
-var seamNearKeys = map[string]bool{"on_prem": true, "local": true, "a_ip": true}
-var seamFarKeys = map[string]bool{"remote": true, "b_ip": true, "b_public_ip": true, "cloud": true}
-
-func buildSeamIndex(seams []seam.Seam) seamIndex {
-	idx := seamIndex{}
-	for _, s := range seams {
-		var near, far []string
-		for key, addr := range s.Endpoints {
-			addr = strings.ToLower(strings.TrimSpace(addr))
-			if addr == "" {
-				continue
-			}
-			if _, err := netip.ParseAddr(addr); err != nil {
-				continue // endpoint metadata (names, hosts) is not an address
-			}
-			switch {
-			case seamNearKeys[key]:
-				near = append(near, addr)
-			case seamFarKeys[key]:
-				far = append(far, addr)
-			}
-		}
-		for _, a := range near {
-			idx[a] = append(idx[a], seamSide{SeamID: s.SeamID, SeamType: s.SeamType, Near: true, FarSide: far})
-		}
-		for _, a := range far {
-			idx[a] = append(idx[a], seamSide{SeamID: s.SeamID, SeamType: s.SeamType, Near: false, FarSide: near})
-		}
-	}
-	return idx
-}
-
-// tunnelSeamTypes are the seam types where crossing the seam IS a tunnel
-// transformation (the packet is encapsulated). DIA and CLOUD_BACKBONE are not
-// tunnels — claiming one there would be a fabricated transformation.
-var tunnelSeamTypes = map[string]bool{"VPN": true, "SDWAN": true, "DX": true}
-
-// transformAt returns the explicit transformation recorded on a hop that sits on a
-// seam: ingress on the near side, egress on the far side. Nothing else is inferred.
-//
-// When the address terminates SEVERAL seams (a shared enterprise edge), the path
-// itself disambiguates: the seam actually crossed is the one whose far side also
-// appears among this path's hops. If that still leaves zero or several candidates,
-// NO seam is stamped — an edge that cannot state its evidence is not emitted (§5);
-// a wrong seam id would send the NOC to the wrong tunnel.
-func (si seamIndex) transformAt(addr string, hopAddrs map[string]bool) (seamID, transformation string) {
-	cands := si[strings.ToLower(strings.TrimSpace(addr))]
-	if len(cands) > 1 {
-		var onPath []seamSide
-		for _, c := range cands {
-			for _, far := range c.FarSide {
-				if hopAddrs[far] {
-					onPath = append(onPath, c)
-					break
-				}
-			}
-		}
-		cands = onPath
-	}
-	if len(cands) != 1 {
-		return "", pathgraph.TransformNone
-	}
-	s := cands[0]
-	if !tunnelSeamTypes[s.SeamType] {
-		return s.SeamID, pathgraph.TransformNone
-	}
-	if s.Near {
-		return s.SeamID, pathgraph.TransformTunnelIngress
-	}
-	return s.SeamID, pathgraph.TransformTunnelEgress
-}
-
-// ── probe → contract records (PURE: no I/O, fully unit-tested) ───────────────
-
-// pathRecords is one measurement run, fully modelled.
-type pathRecords struct {
-	Definition  pathgraph.PathDefinition
-	Observation pathgraph.PathObservation
-	Hops        []pathgraph.PathHop
-	SrcEndpoint pathgraph.Endpoint
-	DstEndpoint pathgraph.Endpoint
-	Service     *pathgraph.ServiceTail
-	Supporting  map[int][]pathgraph.SupportingRel
-}
-
-// buildPathRecords converts ONE prober traceroute into the contract's objects.
-// Deterministic given (cfg, facts, seams, contexts, probe) except for the freshly
-// minted ids — which is exactly what an immutable per-run record needs.
-func buildPathRecords(cfg pathIngestCfg, facts pathgraph.PathFacts, si seamIndex, nc netContext, p collectors.PathResult) (pathRecords, error) {
-	if strings.TrimSpace(p.Dst) == "" {
-		return pathRecords{}, errors.New("probe path has no destination")
-	}
-	// MULTI-VANTAGE (§2.2/§8): the path's identity carries the vantage that measured
-	// it. When the prober attributed the path (PROBER_ID), that attribution WINS over
-	// the ingester's default — otherwise every vantage's traces would collapse into
-	// one path_id again, which is precisely the bug the per-vantage publish fixed.
-	if v := strings.TrimSpace(p.VantageID); v != "" {
-		cfg.VantageID = v
-		// A remote vantage measures from ITS OWN address. Only trust an operator-declared
-		// source address for the vantage the operator declared it for; otherwise the
-		// client end of the spine stays unresolved (honest) rather than borrowed from
-		// another prober's vantage.
-		if cfg.VantageAddress != "" && v != envOr("PATH_GRAPH_VANTAGE_ID", "prober") {
-			cfg.VantageAddress = vantageAddressFor(v)
-		}
-	}
-	observedAt := p.TS
-	if observedAt.IsZero() {
-		observedAt = cfg.Now
-	}
-	protocol := "icmp"
-	method := pathgraph.MethodTracerouteICMP
-	if strings.EqualFold(p.Method, "tcp") {
-		protocol = "tcp"
-		method = pathgraph.MethodTracerouteTCP
-	}
-	runID := cfg.RunID
-	if runID == "" {
-		runID = "run-" + randHex(8) // §2.3: run_id is REQUIRED on an observation
-	}
-	prov := func() pathgraph.Provenance {
-		return pathgraph.Provenance{
-			TenantID: cfg.Tenant, DataClass: cfg.DataClass, Environment: cfg.Environment,
-			ScenarioID: cfg.ScenarioID, RunID: runID, ProducerID: cfg.ProducerID,
-			ProvenanceID: "pv-" + randHex(12),
-		}
-	}
-
-	srcCtx := nc.Of(cfg.VantageAddress)
-	dstCtx := nc.Of(p.Dst)
-
-	// Endpoints: src (the vantage/client) and dst. Both are BINDINGS — resolved by
-	// the ranked resolver, never assumed.
-	srcRes := facts.Resolve(pathgraph.Query{
-		TenantID: cfg.Tenant, Address: cfg.VantageAddress, NetworkContext: srcCtx, At: observedAt,
-		IncludeNonLive: cfg.DataClass != pathgraph.DataClassLive,
-	})
-	dstRes := facts.Resolve(pathgraph.Query{
-		TenantID: cfg.Tenant, Address: p.Dst, NetworkContext: dstCtx, At: observedAt,
-		IncludeNonLive: cfg.DataClass != pathgraph.DataClassLive,
-	})
-
-	srcEP := pathgraph.Endpoint{
-		EndpointID: pathgraph.EndpointID(cfg.Tenant, cfg.VantageAddress, srcCtx), Address: cfg.VantageAddress,
-		AddressFamily: addressFamily(cfg.VantageAddress), NetworkContext: srcCtx, Kind: pathgraph.KindClient,
-		ResolvedEntityRef: srcRes.EntityRef, ResolutionMethod: srcRes.Method, Confidence: srcRes.Confidence,
-		ValidFrom: observedAt, EvidenceRef: firstNonEmptyStr(srcRes.EvidenceRef, "probe:"+cfg.VantageID),
-		Provenance: prov(),
-	}
-	dstKind := pathgraph.KindUnknown
-	if dstRes.Authoritative {
-		dstKind = firstNonEmptyStr(dstRes.Kind, pathgraph.KindAppEndpoint)
-	}
-	dstEP := pathgraph.Endpoint{
-		EndpointID: pathgraph.EndpointID(cfg.Tenant, p.Dst, dstCtx), Address: p.Dst,
-		AddressFamily: addressFamily(p.Dst), NetworkContext: dstCtx, Kind: dstKind,
-		ResolvedEntityRef: dstRes.EntityRef, ResolutionMethod: dstRes.Method, Confidence: dstRes.Confidence,
-		ValidFrom: observedAt, EvidenceRef: firstNonEmptyStr(dstRes.EvidenceRef, "probe:"+cfg.VantageID),
-		Provenance: prov(),
-	}
-
-	// §2.2 — path identity. Any difference in ANY identity field is a different path.
-	pathID := pathgraph.PathID(cfg.Tenant, srcEP.EndpointID, dstEP.EndpointID, "forward", protocol, 0, cfg.VantageID, srcCtx)
-	def := pathgraph.PathDefinition{
-		PathID: pathID, SrcEndpointRef: srcEP.EndpointID, DstEndpointRef: dstEP.EndpointID,
-		SrcAddress: cfg.VantageAddress, DstAddress: p.Dst, Direction: "forward", Protocol: protocol,
-		VantageID: cfg.VantageID, NetworkContext: srcCtx, Provenance: prov(),
-	}
-
-	obsProv := prov()
-	obs := pathgraph.PathObservation{
-		ObservationID: "ob-" + randHex(12), PathID: pathID, ObservedAt: observedAt, Method: method,
-		VantageID: cfg.VantageID, HopCount: len(p.Hops), ContractVersion: pathgraph.ContractVersion,
-		Provenance: obsProv,
-	}
-	obs.Status = pathgraph.StatusPartial
-	switch {
-	case len(p.Hops) == 0:
-		obs.Status = pathgraph.StatusFailed
-	case p.Reached:
-		obs.Status = pathgraph.StatusComplete
-	}
-
-	recs := pathRecords{Definition: def, Observation: obs, SrcEndpoint: srcEP, DstEndpoint: dstEP,
-		Supporting: map[int][]pathgraph.SupportingRel{}}
-
-	// The path's own address set (hops + destination) — the seam disambiguator.
-	hopAddrs := map[string]bool{strings.ToLower(strings.TrimSpace(p.Dst)): true}
-	for _, h := range p.Hops {
-		if ip := strings.ToLower(strings.TrimSpace(h.IP)); ip != "" {
-			hopAddrs[ip] = true
-		}
-	}
-
-	firstResponding := true
-	for i, h := range p.Hops {
-		idx := h.TTL
-		if idx <= 0 {
-			idx = i + 1
-		}
-		hop := pathgraph.PathHop{
-			ObservationID: obs.ObservationID, HopIndex: idx, ObservedAt: observedAt,
-			TenantID: cfg.Tenant, DataClass: cfg.DataClass, Transformation: pathgraph.TransformNone,
-			ResolutionMethod: pathgraph.MethodUnresolved, Confidence: pathgraph.ConfUnknown,
-			Kind: pathgraph.KindUnknown, EvidenceRef: "pv-" + randHex(12),
-		}
-		if strings.TrimSpace(h.IP) == "" {
-			// A NON-RESPONDING HOP. It is a FACT about the path: preserved, addressless,
-			// explicitly unknown. Never dropped, never bridged.
-			hop.State = pathgraph.HopMissing
-			hop.NetworkContext = ""
-			recs.Hops = append(recs.Hops, hop)
-			continue
-		}
-		hop.State = pathgraph.HopResponding
-		hop.ObservedAddress = h.IP
-		hop.RTTms = h.RTTms
-		hop.LossPct = h.Loss
-		hop.NetworkContext = nc.Of(h.IP)
-
-		res := facts.Resolve(pathgraph.Query{
-			TenantID: cfg.Tenant, Address: h.IP, NetworkContext: hop.NetworkContext, At: observedAt,
-			// The rDNS name is rank-7 material ONLY. Passing it here is how the resolver
-			// can offer it as a candidate lead — and structurally cannot make it an edge.
-			Hostname:       h.Host,
-			IncludeNonLive: cfg.DataClass != pathgraph.DataClassLive,
-		})
-		hop.ResolutionMethod = res.Method
-		hop.Confidence = res.Confidence
-		hop.CandidateRef = res.CandidateRef
-		if res.Authoritative {
-			hop.ResolvedEntityRef = res.EntityRef // ranks 1–5 ONLY
-		}
-		if len(res.Supporting) > 0 {
-			recs.Supporting[hop.HopIndex] = res.Supporting
-		}
-
-		// seam membership + the explicit transformation at the seam. The path's own
-		// hop set disambiguates a shared seam endpoint (the far side must be on-path).
-		seamID, transform := si.transformAt(h.IP, hopAddrs)
-		hop.SeamID = seamID
-		hop.Transformation = transform
-		if res.Transformation != "" && res.Transformation != pathgraph.TransformNone {
-			hop.Transformation = res.Transformation // a rank-5 session stitch is more specific
-		}
-
-		hop.Kind = hopKindFor(res, seamID, transform, h.IP, hop.NetworkContext, srcCtx, p.Dst, firstResponding)
-		firstResponding = false
-		recs.Hops = append(recs.Hops, hop)
-	}
-
-	// The service tail — ONLY from rank 4 (the app declares its endpoint) or rank 2
-	// (the cloud inventory attributes the resource that owns the IP). There is NO
-	// name-similarity path to this node: that is the §10 acceptance requirement.
-	if tail := facts.ServiceOf(pathgraph.Query{
-		TenantID: cfg.Tenant, Address: p.Dst, NetworkContext: dstCtx, At: observedAt,
-		IncludeNonLive: cfg.DataClass != pathgraph.DataClassLive,
-	}); tail != nil {
-		recs.Service = tail
-	}
-	return recs, nil
-}
-
-// hopKindFor labels a hop. IDENTITY comes from the resolver; the LABEL may also come
-// from the seam inventory (which side of the ownership boundary this address sits on)
-// and from position (the first responding hop inside the client's own context is the
-// LAN gateway). A label never creates an edge, so an inferred label is safe where an
-// inferred identity would not be.
-func hopKindFor(res pathgraph.Resolution, seamID, transform string, addr, hopCtx, srcCtx, dst string, firstResponding bool) string {
-	if res.Kind != "" && res.Authoritative {
-		return res.Kind
-	}
-	if seamID != "" {
-		// The stamped transformation already encodes the side: ingress = the
-		// enterprise-owned near end (WAN edge), egress = the far end (cloud edge).
-		if transform == pathgraph.TransformTunnelIngress {
-			return pathgraph.KindWANEdge
-		}
-		return pathgraph.KindCloudEdge
-	}
-	if strings.EqualFold(addr, dst) && res.Authoritative {
-		return pathgraph.KindAppEndpoint
-	}
-	if firstResponding && hopCtx == srcCtx {
-		return pathgraph.KindLANGateway
-	}
-	if !res.Authoritative {
-		return pathgraph.KindUnknown // unresolved stays unknown (§8)
-	}
-	return pathgraph.KindTransit
-}
-
-// vantageAddressFor resolves a vantage's own source address from the operator's
-// declaration: PATH_GRAPH_VANTAGE_ADDRESSES="lan-vantage-1=172.40.40.200,prober=10.70.245.122".
-// "=" is the canonical separator (an IPv6 address contains ":"); the legacy
-// "vantage:addr" form still parses when the entry has no "=". An undeclared
-// vantage returns "" — its client node then renders as an unresolved endpoint
-// (honest) instead of inheriting somebody else's address.
 func vantageAddressFor(vantage string) string {
 	for _, part := range strings.Split(os.Getenv("PATH_GRAPH_VANTAGE_ADDRESSES"), ",") {
 		part = strings.TrimSpace(part)
@@ -474,13 +86,6 @@ func vantageAddressFor(vantage string) string {
 		}
 	}
 	return ""
-}
-
-func addressFamily(addr string) string {
-	if strings.Contains(addr, ":") {
-		return "ipv6"
-	}
-	return "ipv4"
 }
 
 // ── fact assembly from the live inventories ──────────────────────────────────
@@ -513,7 +118,7 @@ func (f serverPathFacts) Facts(ctx context.Context, tenant string, at time.Time)
 	if err != nil {
 		logWarn("pathgraph", "cloud topology load failed", map[string]any{"err": err.Error()})
 	}
-	nc := newNetContext(topos, os.Getenv("PATH_GRAPH_LOCAL_CONTEXTS"))
+	nc := pathgraph.NewNetContext(topos, os.Getenv("PATH_GRAPH_LOCAL_CONTEXTS"), envOr("PATH_GRAPH_DEFAULT_CONTEXT", "default"))
 	facts := pathgraph.PathFacts{SessionSourceAvailable: false}
 	dataClass := envOr("PATH_GRAPH_DATA_CLASS", pathgraph.DataClassLive)
 	if !pathgraph.ValidDataClass(dataClass) {
@@ -725,11 +330,11 @@ func (s *server) ingestPathsOnce(ctx context.Context) error {
 				"unstamped path observations (they are immutable): %w", err)
 		}
 	}
-	si := buildSeamIndex(seams)
+	si := pathgraph.BuildSeamIndex(seams)
 
 	written := 0
 	for _, p := range paths {
-		recs, err := buildPathRecords(cfg, facts, si, nc, p)
+		recs, err := pathgraph.BuildRecords(cfg, facts, si, nc, p)
 		if err != nil {
 			logWarn("pathgraph", "skipping unusable probe path", map[string]any{"err": err.Error()})
 			continue

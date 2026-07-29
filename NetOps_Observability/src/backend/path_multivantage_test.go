@@ -45,11 +45,11 @@ func TestPathsFromTwoVantagesAreDistinctObjects(t *testing.T) {
 	cfg.VantageID = "prober" // the ingester's default; each path's own id must win
 	t.Setenv("PATH_GRAPH_VANTAGE_ADDRESSES", "lan-vantage-1:172.40.40.200,prober:10.70.245.122")
 
-	lanRec, err := buildPathRecords(cfg, labFacts(), labSeams(), labNetContext(), lan)
+	lanRec, err := pathgraph.BuildRecords(cfg, labFacts(), labSeams(), labNetContext(), lan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wanRec, err := buildPathRecords(cfg, labFacts(), labSeams(), labNetContext(), wan)
+	wanRec, err := pathgraph.BuildRecords(cfg, labFacts(), labSeams(), labNetContext(), wan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestVantageWithoutDeclaredAddressStaysUnresolved(t *testing.T) {
 	p := labProbe()
 	p.VantageID = "unknown-vantage-9"
 
-	rec, err := buildPathRecords(cfg, labFacts(), labSeams(), labNetContext(), p)
+	rec, err := pathgraph.BuildRecords(cfg, labFacts(), labSeams(), labNetContext(), p)
 	if err != nil {
 		t.Fatal(err)
 	}

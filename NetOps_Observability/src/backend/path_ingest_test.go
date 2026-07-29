@@ -16,9 +16,12 @@ import (
 var ingestNow = time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 
 func labIngestCfg() pathIngestCfg {
-	return pathIngestCfg{
+	return pathgraph.IngestConfig{
 		Tenant: "t_a", DataClass: pathgraph.DataClassLive, Environment: "lab", RunID: "run-1",
 		ProducerID: "prober-lab", VantageID: "prober-lab", VantageAddress: "172.40.40.92", Now: ingestNow,
+
+		DefaultVantageID: "prober-lab",
+		VantageAddrFor:   vantageAddressFor,
 	}
 }
 
@@ -52,12 +55,12 @@ func labFacts() pathgraph.PathFacts {
 
 // labNetContext: the operator-declared on-prem contexts + the discovered AWS VPC.
 func labNetContext() netContext {
-	return newNetContext(nil, "lab-lan:172.40.40.0/24,lab-wan:10.70.245.0/24,vpc-aws:10.60.0.0/16")
+	return pathgraph.NewNetContext(nil, "lab-lan:172.40.40.0/24,lab-wan:10.70.245.0/24,vpc-aws:10.60.0.0/16", "default")
 }
 
 // labSeams: the ACTIVE lab↔AWS VPN seam, with the endpoints the seam inventory holds.
 func labSeams() seamIndex {
-	return buildSeamIndex([]seam.Seam{{
+	return pathgraph.BuildSeamIndex([]seam.Seam{{
 		SeamID: "sm-f36b592d4e76", TenantID: "t_a", SeamType: "VPN", State: "active",
 		Endpoints: map[string]string{"on_prem": "10.70.245.122", "remote": "10.60.1.10"},
 	}})
@@ -79,7 +82,7 @@ func labProbe() collectors.PathResult {
 
 func buildLab(t *testing.T, p collectors.PathResult) pathRecords {
 	t.Helper()
-	recs, err := buildPathRecords(labIngestCfg(), labFacts(), labSeams(), labNetContext(), p)
+	recs, err := pathgraph.BuildRecords(labIngestCfg(), labFacts(), labSeams(), labNetContext(), p)
 	if err != nil {
 		t.Fatalf("buildPathRecords: %v", err)
 	}
@@ -200,7 +203,7 @@ func TestDistinctPathsAreDistinctObjects(t *testing.T) {
 	// A second vantage measuring the same destination is a DIFFERENT path.
 	cfg2 := labIngestCfg()
 	cfg2.VantageID = "prober-dc2"
-	other, err := buildPathRecords(cfg2, labFacts(), labSeams(), labNetContext(), labProbe())
+	other, err := pathgraph.BuildRecords(cfg2, labFacts(), labSeams(), labNetContext(), labProbe())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +234,7 @@ func TestNATTransformationIsExplicitFromASession(t *testing.T) {
 	// best (rank-5) answer for that hop.
 	facts.InterfaceBindings = facts.InterfaceBindings[:1]
 
-	recs, err := buildPathRecords(labIngestCfg(), facts, seamIndex{}, labNetContext(), labProbe())
+	recs, err := pathgraph.BuildRecords(labIngestCfg(), facts, seamIndex{}, labNetContext(), labProbe())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +257,7 @@ func TestUnresolvedHopStaysUnknownThroughIngest(t *testing.T) {
 	// A carrier hop we know nothing about — but whose rDNS name matches a known NVA.
 	p.Hops[1] = collectors.Hop{TTL: 2, IP: "10.70.245.200", Host: "aws-nva.lab", RTTms: 4}
 
-	recs, err := buildPathRecords(labIngestCfg(), facts, seamIndex{}, labNetContext(), p)
+	recs, err := pathgraph.BuildRecords(labIngestCfg(), facts, seamIndex{}, labNetContext(), p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +280,7 @@ func TestSyntheticRunIsClassStamped(t *testing.T) {
 	cfg := labIngestCfg()
 	cfg.DataClass = pathgraph.DataClassSynthetic
 	cfg.ScenarioID = "scn-1"
-	recs, err := buildPathRecords(cfg, labFacts(), labSeams(), labNetContext(), labProbe())
+	recs, err := pathgraph.BuildRecords(cfg, labFacts(), labSeams(), labNetContext(), labProbe())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,16 +306,16 @@ func TestSyntheticRunIsClassStamped(t *testing.T) {
 // (its endpoints), not from address arithmetic, and a non-tunnel seam type never
 // claims a tunnel transformation.
 func TestSeamIndexOnlyUsesTheInventory(t *testing.T) {
-	si := buildSeamIndex([]seam.Seam{{
+	si := pathgraph.BuildSeamIndex([]seam.Seam{{
 		SeamID: "sm-dia", SeamType: "DIA", State: "active",
 		Endpoints: map[string]string{"on_prem": "10.70.245.122", "provider_edge": "203.0.113.1"},
 	}})
 	onPath := map[string]bool{"10.70.245.122": true, "203.0.113.1": true}
-	id, tr := si.transformAt("10.70.245.122", onPath)
+	id, tr := si.TransformAt("10.70.245.122", onPath)
 	if id != "sm-dia" || tr != pathgraph.TransformNone {
 		t.Fatalf("DIA seam produced {%s %s}, want the seam id with NO tunnel transformation", id, tr)
 	}
-	if id, tr := si.transformAt("198.51.100.1", onPath); id != "" || tr != pathgraph.TransformNone {
+	if id, tr := si.TransformAt("198.51.100.1", onPath); id != "" || tr != pathgraph.TransformNone {
 		t.Fatalf("an address that is not a seam endpoint got {%s %s}", id, tr)
 	}
 }
@@ -324,7 +327,7 @@ func TestSeamIndexOnlyUsesTheInventory(t *testing.T) {
 // the NOC to the wrong tunnel). Uses the live inventory's a_ip/b_ip vocabulary,
 // and non-address endpoint metadata must never index.
 func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
-	si := buildSeamIndex([]seam.Seam{
+	si := pathgraph.BuildSeamIndex([]seam.Seam{
 		{SeamID: "sm-aws", SeamType: "VPN", State: "active",
 			Endpoints: map[string]string{"a_ip": "10.70.245.122", "b_ip": "10.60.1.10",
 				"a_name": "netops-lab-edge", "b_host": "aws-app-host-01", "b_public_ip": "100.21.102.86"}},
@@ -333,25 +336,25 @@ func TestSharedSeamEndpointDisambiguatedByPath(t *testing.T) {
 				"probe_target": "192.0.2.120"}},
 	})
 	awsPath := map[string]bool{"172.40.40.1": true, "10.70.245.122": true, "10.60.1.10": true, "10.60.10.10": true}
-	if id, tr := si.transformAt("10.70.245.122", awsPath); id != "sm-aws" || tr != pathgraph.TransformTunnelIngress {
+	if id, tr := si.TransformAt("10.70.245.122", awsPath); id != "sm-aws" || tr != pathgraph.TransformTunnelIngress {
 		t.Fatalf("shared edge on the AWS path = {%s %s}, want sm-aws tunnel_ingress (near side)", id, tr)
 	}
 	azurePath := map[string]bool{"172.40.40.1": true, "10.70.245.122": true, "10.61.2.10": true, "10.61.10.10": true}
-	if id, tr := si.transformAt("10.70.245.122", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelIngress {
+	if id, tr := si.TransformAt("10.70.245.122", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelIngress {
 		t.Fatalf("shared edge on the Azure path = {%s %s}, want sm-azure tunnel_ingress", id, tr)
 	}
-	if id, tr := si.transformAt("10.61.2.10", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelEgress {
+	if id, tr := si.TransformAt("10.61.2.10", azurePath); id != "sm-azure" || tr != pathgraph.TransformTunnelEgress {
 		t.Fatalf("far side = {%s %s}, want sm-azure tunnel_egress", id, tr)
 	}
 	// Ambiguous (neither far side on the path) → honest omission, not a guess.
-	if id, tr := si.transformAt("10.70.245.122", map[string]bool{"192.0.2.7": true}); id != "" || tr != pathgraph.TransformNone {
+	if id, tr := si.TransformAt("10.70.245.122", map[string]bool{"192.0.2.7": true}); id != "" || tr != pathgraph.TransformNone {
 		t.Fatalf("ambiguous shared edge = {%s %s}, want NO seam", id, tr)
 	}
 	// probe_target / names must not have been indexed as seam endpoints.
-	if id, _ := si.transformAt("192.0.2.120", map[string]bool{"192.0.2.120": true}); id != "" {
+	if id, _ := si.TransformAt("192.0.2.120", map[string]bool{"192.0.2.120": true}); id != "" {
 		t.Fatalf("probe_target was indexed as a seam endpoint (%s)", id)
 	}
-	if id, _ := si.transformAt("100.21.102.86", awsPath); id != "sm-aws" {
+	if id, _ := si.TransformAt("100.21.102.86", awsPath); id != "sm-aws" {
 		t.Fatalf("b_public_ip should index as the seam's far side, got %q", id)
 	}
 }
@@ -374,7 +377,7 @@ func TestOperatorEnvSeparators(t *testing.T) {
 		t.Fatalf("undeclared vantage must resolve to empty, got %q", got)
 	}
 
-	nc := newNetContext(nil, "172.40.40.0/24=lan-campus, lab-wan:10.70.245.0/24, junk")
+	nc := pathgraph.NewNetContext(nil, "172.40.40.0/24=lan-campus, lab-wan:10.70.245.0/24, junk", "default")
 	if got := nc.Of("172.40.40.92"); got != "lan-campus" {
 		t.Fatalf("canonical cidr=name form: got %q", got)
 	}

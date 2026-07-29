@@ -92,7 +92,7 @@ func tenantFacts(tenant, instanceID, nvaID, lanDev, wanDev string) pathgraph.Pat
 // ingestFor writes one tenant's measurement run through the REAL ingest path.
 func ingestFor(t *testing.T, s *server, tenant string, facts pathgraph.PathFacts, dataClass string, at time.Time, runID string, dstOverride string) pathRecords {
 	t.Helper()
-	cfg := pathIngestCfg{
+	cfg := pathgraph.IngestConfig{
 		Tenant: tenant, DataClass: dataClass, Environment: "lab", RunID: runID,
 		ProducerID: "prober-" + tenant, VantageID: "prober-" + tenant,
 		VantageAddress: "172.40.40.92", Now: at,
@@ -103,7 +103,7 @@ func ingestFor(t *testing.T, s *server, tenant string, facts pathgraph.PathFacts
 		p.Dst = dstOverride
 		p.Hops[3] = collectors.Hop{TTL: 4, IP: dstOverride, RTTms: 25}
 	}
-	recs, err := buildPathRecords(cfg, facts, labSeams(), labNetContext(), p)
+	recs, err := pathgraph.BuildRecords(cfg, facts, labSeams(), labNetContext(), p)
 	if err != nil {
 		t.Fatalf("build %s: %v", tenant, err)
 	}
