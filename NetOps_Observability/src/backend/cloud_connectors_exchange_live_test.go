@@ -73,7 +73,7 @@ func buildAWSConnector(t *testing.T, srv *httptest.Server, token string) string 
 	if st != 201 {
 		t.Fatalf("create: %d %s", st, b)
 	}
-	var v cloudConnectorView
+	var v cloudconn.ConnectorView
 	if err := json.Unmarshal(b, &v); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func buildAWSConnector(t *testing.T, srv *httptest.Server, token string) string 
 }
 
 type validateResp struct {
-	Connector  cloudConnectorView         `json:"connector"`
+	Connector  cloudconn.ConnectorView    `json:"connector"`
 	Validation cloudconn.ValidationResult `json:"validation"`
 	LiveCheck  string                     `json:"live_check"`
 }

@@ -69,7 +69,7 @@ func TestConnectorOrgAnchorLifecycleAndIsolation(t *testing.T) {
 	if st != 201 {
 		t.Fatalf("create connector: %d %s", st, b)
 	}
-	var view cloudConnectorView
+	var view cloudconn.ConnectorView
 	if err := json.Unmarshal(b, &view); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestConnectorOrgAnchorLifecycleAndIsolation(t *testing.T) {
 	if st, b = do(t, srv, "POST", orgPath, fix["A"].token, map[string]any{"type": ""}); st != 200 {
 		t.Fatalf("clear org anchor: %d %s", st, b)
 	}
-	var cleared cloudConnectorView
+	var cleared cloudconn.ConnectorView
 	if err := json.Unmarshal(b, &cleared); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

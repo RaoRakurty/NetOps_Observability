@@ -28,71 +28,7 @@ var (
 	errCCNNotFound = errors.New("connector not found")
 )
 
-// cloudConnectorView is the API projection — trust metadata only, NEVER a secret.
-type cloudConnectorView struct {
-	ID              string                     `json:"id"`
-	Provider        cloudconn.Provider         `json:"provider"`
-	DisplayName     string                     `json:"display_name"`
-	AuthMethod      cloudconn.AuthMethod       `json:"auth_method"`
-	AuthFederated   bool                       `json:"auth_federated"`
-	AuthLegacy      bool                       `json:"auth_legacy"`
-	PackFullID      string                     `json:"capability_pack"`
-	State           cloudconn.LifecycleState   `json:"state"`
-	Collecting      bool                       `json:"collecting"`
-	Identity        cloudConnIdentityView      `json:"identity"`
-	Scopes          []cloudconn.Scope          `json:"scopes"`
-	IdentityHealth  cloudconn.HealthStatus     `json:"identity_health"`
-	TelemetryHealth cloudconn.HealthStatus     `json:"telemetry_health"`
-	LastValidation  cloudconn.ValidationResult `json:"last_validation"`
-	Version         int64                      `json:"version"`
-	CreatedAt       time.Time                  `json:"created_at"`
-	UpdatedAt       time.Time                  `json:"updated_at"`
-}
-
-// cloudConnIdentityView exposes only NON-secret trust metadata.
-type cloudConnIdentityView struct {
-	RoleARN          string `json:"role_arn,omitempty"`
-	ExternalID       string `json:"external_id,omitempty"`
-	AzureTenantID    string `json:"azure_tenant_id,omitempty"`
-	ClientID         string `json:"client_id,omitempty"`
-	Audience         string `json:"audience,omitempty"`
-	Issuer           string `json:"issuer,omitempty"`
-	FederatedSubject string `json:"federated_subject,omitempty"`
-	CertThumbprint   string `json:"cert_thumbprint,omitempty"`
-	ProjectNumber    string `json:"project_number,omitempty"`
-	WorkloadPool     string `json:"workload_pool,omitempty"`
-	WorkloadProvider string `json:"workload_provider,omitempty"`
-	ServiceAccount   string `json:"service_account,omitempty"`
-	HasLegacySecret  bool   `json:"has_legacy_secret"` // a secret is stored (never the value)
-	LegacyKeyHint    string `json:"legacy_key_hint,omitempty"`
-	// Org is the org-level (multi-account) enrollment anchor — non-secret
-	// deployment metadata (Wave 5 #17 slice 2). nil = single-account connector.
-	Org *cloudconn.OrgScopeAnchor `json:"org,omitempty"`
-}
-
-func toConnectorView(c cloudconn.Connector) cloudConnectorView {
-	return cloudConnectorView{
-		ID: c.ConnectorID, Provider: c.Provider, DisplayName: c.DisplayName,
-		AuthMethod: c.AuthMethod, AuthFederated: c.AuthMethod.IsFederated(), AuthLegacy: c.AuthMethod.IsLegacy(),
-		PackFullID: c.PackFullID, State: c.State, Collecting: c.State.Collecting(),
-		Identity: cloudConnIdentityView{
-			RoleARN: c.Identity.RoleARN, ExternalID: c.Identity.ExternalID,
-			AzureTenantID: c.Identity.AzureTenantID, ClientID: c.Identity.ClientID,
-			Audience: c.Identity.Audience, Issuer: c.Identity.Issuer,
-			FederatedSubject: c.Identity.FederatedSubject, CertThumbprint: c.Identity.CertThumbprint,
-			ProjectNumber: c.Identity.ProjectNumber, WorkloadPool: c.Identity.WorkloadPool,
-			WorkloadProvider: c.Identity.WorkloadProvider, ServiceAccount: c.Identity.ServiceAccount,
-			HasLegacySecret: c.Identity.LegacySecretRef != "", LegacyKeyHint: c.Identity.LegacyKeyID,
-			Org: c.Identity.Org,
-		},
-		Scopes: c.Scopes, IdentityHealth: c.IdentityHealth, TelemetryHealth: c.TelemetryHealth,
-		LastValidation: c.LastValidation, Version: c.Version, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
-	}
-}
-
-// cloudTrustAnchor builds Correlix's own trust anchor from PLATFORM env (never a
-// request body): the AWS principal customer roles trust, and the OIDC issuer for
-// Azure/GCP workload federation.
+// cloudconn.ConnectorView is the API projection — trust metadata only, NEVER a secret.
 func (s *server) cloudTrustAnchor(connectorID string) cloudconn.TrustAnchor {
 	return cloudconn.TrustAnchor{
 		AWSPrincipalARN: os.Getenv("CLOUD_CONNECTOR_AWS_PRINCIPAL_ARN"),
@@ -121,9 +57,9 @@ func (s *server) handleCloudConnectors(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		views := make([]cloudConnectorView, 0, len(list))
+		views := make([]cloudconn.ConnectorView, 0, len(list))
 		for _, c := range list {
-			views = append(views, toConnectorView(c))
+			views = append(views, cloudconn.ToConnectorView(c))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"connectors": views})
 	case http.MethodPost:
@@ -175,7 +111,7 @@ func (s *server) createCloudConnectorDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.recordConnectorEvent(r, claims, evConnectorCreated, created, "provider="+string(provider))
-	writeJSON(w, http.StatusCreated, toConnectorView(created))
+	writeJSON(w, http.StatusCreated, cloudconn.ToConnectorView(created))
 }
 
 // ── by-id subtree: /api/cloud/connectors/{id}[/action] ───────────────────────
@@ -257,7 +193,7 @@ func (s *server) serveConnectorRoot(w http.ResponseWriter, r *http.Request, id s
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, toConnectorView(c))
+		writeJSON(w, http.StatusOK, cloudconn.ToConnectorView(c))
 	case http.MethodDelete:
 		c, claims, ok := s.loadConnector(w, r, id, LevelWrite)
 		if !ok {
@@ -526,7 +462,7 @@ func (s *server) serveConnectorValidate(w http.ResponseWriter, r *http.Request, 
 	}
 	s.recordConnectorEvent(r, claims, evConnectorValidated, saved, "ok="+boolStr(res.OK)+" live="+liveCheck)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"connector":  toConnectorView(saved),
+		"connector":  cloudconn.ToConnectorView(saved),
 		"validation": res,
 		"live_check": liveCheck,
 	})
@@ -870,7 +806,7 @@ func (s *server) serveConnectorSecret(w http.ResponseWriter, r *http.Request, id
 		writeJSONError(w, http.StatusBadRequest, "secret is required", "SECRET_MISSING")
 		return
 	}
-	if isRootKeyHint(req.KeyHint) {
+	if cloudconn.IsRootKeyHint(req.KeyHint) {
 		writeJSONError(w, http.StatusBadRequest, "root/admin credentials are rejected — use a dedicated least-privilege identity", "ROOT_REJECTED")
 		return
 	}
@@ -938,7 +874,7 @@ func (s *server) serveConnectorRotate(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if isRootKeyHint(req.KeyHint) {
+	if cloudconn.IsRootKeyHint(req.KeyHint) {
 		writeJSONError(w, http.StatusBadRequest, "root/admin credentials are rejected", "ROOT_REJECTED")
 		return
 	}
@@ -982,7 +918,7 @@ func (s *server) saveConnectorAndRespond(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	_ = claims
-	writeJSON(w, http.StatusOK, toConnectorView(saved))
+	writeJSON(w, http.StatusOK, cloudconn.ToConnectorView(saved))
 }
 
 func (s *server) persistConnector(w http.ResponseWriter, r *http.Request, c cloudconn.Connector) (cloudconn.Connector, bool) {
@@ -1023,11 +959,6 @@ func (s *server) recordConnectorEvent(r *http.Request, claims jwtClaims, event s
 			"state": string(c.State), "info": detail,
 		},
 	})
-}
-
-func isRootKeyHint(hint string) bool {
-	h := strings.ToLower(strings.TrimSpace(hint))
-	return h == "root" || strings.HasPrefix(h, "root:") || strings.Contains(h, "administratoraccess")
 }
 
 func boolStr(b bool) string {

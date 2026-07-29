@@ -69,7 +69,7 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 		if st != 201 {
 			t.Fatalf("%s create connector: %d %s", name, st, b)
 		}
-		var v cloudConnectorView
+		var v cloudconn.ConnectorView
 		if err := json.Unmarshal(b, &v); err != nil {
 			t.Fatalf("decode connector: %v", err)
 		}
@@ -105,7 +105,7 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 			t.Fatalf("%s list: %d %s", name, st, body)
 		}
 		var r struct {
-			Connectors []cloudConnectorView `json:"connectors"`
+			Connectors []cloudconn.ConnectorView `json:"connectors"`
 		}
 		if err := json.Unmarshal(body, &r); err != nil {
 			t.Fatalf("decode list: %v", err)
@@ -143,7 +143,7 @@ func TestCloudConnectorCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("list with as_tenant: %d %s", st, body)
 	}
 	var widened struct {
-		Connectors []cloudConnectorView `json:"connectors"`
+		Connectors []cloudconn.ConnectorView `json:"connectors"`
 	}
 	_ = json.Unmarshal(body, &widened)
 	if len(widened.Connectors) != 1 || widened.Connectors[0].ID != a.connID {
