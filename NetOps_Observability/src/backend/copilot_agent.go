@@ -66,7 +66,7 @@ func (s *server) agentLoopEligible(claims jwtClaims) bool {
 	if cross || os.Getenv("AI_TOOLS_ALL_TENANTS") == "true" {
 		return true
 	}
-	return s.aiTenantCfg.agentToolsEnabled(tenant)
+	return s.aiTenantCfg.AgentToolsEnabled(tenant)
 }
 
 // ---- daily per-tenant token budget (LLM04/LLM10, plan §4.5) ------------------
