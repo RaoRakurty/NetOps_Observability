@@ -76,13 +76,15 @@ func ConvergeStmts(extra ...[]string) []string {
 	// policies — client MAC/session data is per-tenant PII). Same converge-on-
 	// boot contract; init.sql carries identical DDL for fresh installs.
 	stmts = append(stmts, WirelessSchemaDDL()...)
-	// F-58 retention contract for the TELEMETRY family. Must come LAST: every
-	// MODIFY TTL above targets a table the statements before it create, and a
-	// converge list that ALTERs before it CREATEs fails on a fresh volume.
-	// Same metadata-only, idempotent contract as CorrRetentionDDL.
-	stmts = append(stmts, RetentionDDL(RetentionConfig())...)
+	// Caller-supplied schema DDL (main's cloud_costs + path_baselines tables).
 	for _, e := range extra {
 		stmts = append(stmts, e...)
 	}
+	// F-58 retention contract for the TELEMETRY family. Must come LAST — after
+	// the extras too: RetentionDDL MODIFY-TTLs netops.cloud_costs and
+	// netops.path_baselines, which the extra statements CREATE, and a converge
+	// list that ALTERs before it CREATEs fails on a fresh volume.
+	// Same metadata-only, idempotent contract as CorrRetentionDDL.
+	stmts = append(stmts, RetentionDDL(RetentionConfig())...)
 	return stmts
 }
