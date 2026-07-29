@@ -13,9 +13,9 @@ import (
 )
 
 // A grounded incident: onset → correlation completed, evidence ready, ISP-owned.
-func backfillFacts() corrTimeFacts {
+func backfillFacts() timeintel.CorrTimeFacts {
 	base := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
-	return corrTimeFacts{
+	return timeintel.CorrTimeFacts{
 		WindowStart:     base,
 		CreatedAt:       base.Add(90 * time.Second),
 		VerdictTier:     "suspected",

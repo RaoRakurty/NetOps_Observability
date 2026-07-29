@@ -172,7 +172,7 @@ SELECT ` + chschema.ISO("window_start") + ` AS window_start,
 	o := rows[0]
 	owner := ownerFromHypotheses(asString(o["hypotheses"]))
 	group := groupKeysFromAffected(asString(o["affected"]))
-	facts := corrTimeFacts{
+	facts := timeintel.CorrTimeFacts{
 		WindowStart:     parseCHTime(o["window_start"]),
 		FirstIngest:     s.minIngestTS(r, id), // detection latency (best-effort)
 		CreatedAt:       parseCHTime(o["created_at"]),
@@ -189,9 +189,9 @@ SELECT ` + chschema.ISO("window_start") + ` AS window_start,
 	// the moment an inbound ServiceNow sync appends those audit rows. workflow
 	// Connected is true once a ticket exists, so the bottleneck logic stops reading
 	// "workflow not connected" instead of inventing a phase that can't move.
-	itsm, workflowConnected := s.itsmTimeFacts(r, id)
+	itsm, workflowConnected := s.itsmFactsFor(r, id)
 
-	lc := deriveLifecycle(facts, itsm)
+	lc := timeintel.DeriveLifecycle(facts, itsm)
 	// Overlay the caller's stored MANUAL events (operator-supplied recovery/closure/
 	// ack timestamps) — tenant-scoped, user-entered wins. Unblocks the human phases.
 	if claims, ok := userFrom(r.Context()); ok {
@@ -259,25 +259,25 @@ func (s *server) minIngestTS(r *http.Request, id string) time.Time {
 	return parseCHTime(rows[0]["fi"])
 }
 
-// itsmTimeFacts resolves the per-correlation ticket lifecycle from the #78 ticket
+// timeintel.ITSMTimeFacts resolves the per-correlation ticket lifecycle from the #78 ticket
 // audit ledger + link, scoped to the caller's tenant (a cross-tenant id simply
 // resolves to no link → empty facts, never a leak). Returns the human-phase
 // timestamps plus whether the ITSM workflow is connected (a ticket exists).
 // Best-effort: any store error degrades to empty/unconnected rather than failing
 // the whole time-metrics read. Phases with no timestamp stay INCOMPLETE in the
 // calculator — honest, never guessed.
-func (s *server) itsmTimeFacts(r *http.Request, id string) (itsmTimeFacts, bool) {
+func (s *server) itsmFactsFor(r *http.Request, id string) (timeintel.ITSMTimeFacts, bool) {
 	if s.ticketing == nil {
-		return itsmTimeFacts{}, false
+		return timeintel.ITSMTimeFacts{}, false
 	}
 	claims, ok := userFrom(r.Context())
 	if !ok {
-		return itsmTimeFacts{}, false
+		return timeintel.ITSMTimeFacts{}, false
 	}
 	tenant, cross := principalTenant(claims)
 	link, found, err := s.ticketing.GetLink(r.Context(), tenant, cross, id, "servicenow")
 	if err != nil {
-		return itsmTimeFacts{}, false
+		return timeintel.ITSMTimeFacts{}, false
 	}
 	// Per-object ledger (one row per action) — the max page covers it whole.
 	audit, _, err := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketing.MaxPage, 0)

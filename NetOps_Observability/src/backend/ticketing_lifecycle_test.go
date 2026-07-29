@@ -113,7 +113,7 @@ func TestTicketAudit_SeamlessWhenServiceNowConnected(t *testing.T) {
 	}
 
 	// And the #84 derive path must surface all seven human phases as itsm-sourced.
-	lc := deriveLifecycle(corrTimeFacts{}, f)
+	lc := timeintel.DeriveLifecycle(timeintel.CorrTimeFacts{}, f)
 	for _, ev := range []timeintel.EventType{
 		timeintel.EvTicketCreated, timeintel.EvAcknowledged, timeintel.EvMitigationStarted,
 		timeintel.EvMitigated, timeintel.EvRecovered, timeintel.EvResolved, timeintel.EvClosed,

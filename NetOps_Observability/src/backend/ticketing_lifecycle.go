@@ -2,6 +2,7 @@ package main
 
 import (
 	"netops/backend/internal/ticketing"
+	"netops/backend/timeintel"
 	"strings"
 	"time"
 )
@@ -48,8 +49,8 @@ const (
 // fallbacks cover the case where the link advanced but the matching audit row is
 // absent (e.g. an at-most-once create whose link store advanced via the
 // correlation-id recovery path rather than a fresh create audit).
-func ticketAuditToITSMFacts(audit []ticketing.AuditEntry, link ticketing.Link, linkFound bool) (itsmTimeFacts, bool) {
-	f := itsmTimeFacts{}
+func ticketAuditToITSMFacts(audit []ticketing.AuditEntry, link ticketing.Link, linkFound bool) (timeintel.ITSMTimeFacts, bool) {
+	f := timeintel.ITSMTimeFacts{}
 	setFirst := func(dst *time.Time, at time.Time) {
 		if at.IsZero() || !dst.IsZero() {
 			return // first non-zero wins

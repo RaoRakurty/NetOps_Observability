@@ -80,13 +80,13 @@ func newIncidentTimeMetricsStore() incidentTimeMetricsStore {
 
 // deriveIncidentTimeMetricRow computes the persisted snapshot for one corr object
 // from its engine-side facts — the SAME lifecycle/metric/driver derivation the live
-// per-incident view and rollups use (deriveLifecycle → ComputeTimeMetrics →
+// per-incident view and rollups use (timeintel.DeriveLifecycle → ComputeTimeMetrics →
 // DeriveTimeLossDriver), so a backfilled row equals the live computation. seamType
 // is the grounded seam type (may be ""); group carries the owner/identity keys for
 // owner-domain classification, MTBF grouping and dimension filters; state is the
 // corr object state (open|closed|merged — merged = child, excluded from MTBF).
-func deriveIncidentTimeMetricRow(tenant, corrID, version string, facts corrTimeFacts, group map[string]string, seamType, state string, now time.Time) incidentTimeMetricRow {
-	lc := deriveLifecycle(facts, itsmTimeFacts{})
+func deriveIncidentTimeMetricRow(tenant, corrID, version string, facts timeintel.CorrTimeFacts, group map[string]string, seamType, state string, now time.Time) incidentTimeMetricRow {
+	lc := timeintel.DeriveLifecycle(facts, timeintel.ITSMTimeFacts{})
 	metrics := timeintel.ComputeTimeMetrics(lc, version, now)
 	ownerDomain, internal := timeintel.ClassifyOwnerDomain(facts.Owner, group)
 	driver, _ := timeintel.DeriveTimeLossDriver(lc, timeintel.DriverContext{
@@ -180,7 +180,7 @@ SELECT toString(o.tenant_id)      AS tenant_id,
 		}
 		owner := strings.ToLower(strings.TrimSpace(asString(o["owner"])))
 		sig := asString(o["top_hypothesis"])
-		facts := corrTimeFacts{
+		facts := timeintel.CorrTimeFacts{
 			WindowStart:     parseCHTime(o["window_start"]),
 			CreatedAt:       parseCHTime(o["created_at"]),
 			VerdictTier:     asString(o["verdict_tier"]),

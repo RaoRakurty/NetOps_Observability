@@ -199,6 +199,12 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-29  205  timeintel_derive.go → timeintel/derive.go (the pure
+//	                  lifecycle derivation: CorrTimeFacts/ITSMTimeFacts →
+//	                  Lifecycle; the *server itsmTimeFacts method renamed
+//	                  itsmFactsFor to unshadow the exported type). Preceded
+//	                  by step 57: internal/applog (structured logger, a
+//	                  symbol extraction — count unchanged)
 //	2026-07-28  206  THE INFRASTRUCTURE FINALE part 1: db.go + pgstore.go +
 //	                  kvstore.go (+ migrations/) → internal/platformdb. The
 //	                  kv Backend contract, FileKV, the per-row RLS PGStore
@@ -275,7 +281,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 206
+const rootPackageCeiling = 205
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

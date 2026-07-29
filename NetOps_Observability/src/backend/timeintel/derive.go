@@ -1,10 +1,8 @@
-package main
+package timeintel
 
 import (
 	"strings"
 	"time"
-
-	"netops/backend/timeintel"
 )
 
 // timeintel_derive.go — derive an incident's lifecycle (RCA Time Intelligence) from
@@ -21,8 +19,8 @@ import (
 // time once evidence_missing is empty. impact_started is left ABSENT — the true onset
 // is unobservable, so the calculator infers it from first_signal and flags it.
 
-// corrTimeFacts are the engine-side facts pulled from a correlation object.
-type corrTimeFacts struct {
+// CorrTimeFacts are the engine-side facts pulled from a correlation object.
+type CorrTimeFacts struct {
 	WindowStart     time.Time // min signal ts (onset) — first_signal
 	FirstIngest     time.Time // min signal ingest_ts — detection (zero if unknown)
 	CreatedAt       time.Time // object persisted — correlation completed
@@ -32,9 +30,9 @@ type corrTimeFacts struct {
 	Confidence      float64   // top_confidence 0..1
 }
 
-// itsmTimeFacts are the human/ticket-side facts (ServiceNow/Jira/PagerDuty/Slack).
+// ITSMTimeFacts are the human/ticket-side facts (ServiceNow/Jira/PagerDuty/Slack).
 // Any zero time means the event has not occurred / is not linked yet.
-type itsmTimeFacts struct {
+type ITSMTimeFacts struct {
 	TicketCreated     time.Time
 	Acknowledged      time.Time
 	MitigationStarted time.Time
@@ -57,54 +55,54 @@ func ownerKnown(owner string) bool {
 	return o != "" && o != "unknown"
 }
 
-// deriveLifecycle builds the lifecycle map from engine + ITSM facts. Pure and
+// DeriveLifecycle builds the lifecycle map from engine + ITSM facts. Pure and
 // testable. Confidence floors at 0.5 when the object reports none, so a grounded
 // verdict never claims certainty it didn't have.
-func deriveLifecycle(c corrTimeFacts, t itsmTimeFacts) timeintel.Lifecycle {
-	lc := timeintel.Lifecycle{}
+func DeriveLifecycle(c CorrTimeFacts, t ITSMTimeFacts) Lifecycle {
+	lc := Lifecycle{}
 	conf := c.Confidence
 	if conf <= 0 || conf > 1 {
 		conf = 0.5
 	}
-	put := func(ev timeintel.EventType, at time.Time, src timeintel.TimestampSource, cf float64) {
+	put := func(ev EventType, at time.Time, src TimestampSource, cf float64) {
 		if at.IsZero() {
 			return
 		}
-		lc[ev] = timeintel.EventStamp{At: at.UTC(), Source: src, Confidence: cf}
+		lc[ev] = EventStamp{At: at.UTC(), Source: src, Confidence: cf}
 	}
 
 	if !c.WindowStart.IsZero() {
-		put(timeintel.EvFirstSignal, c.WindowStart, timeintel.SrcObserved, 1)
+		put(EvFirstSignal, c.WindowStart, SrcObserved, 1)
 		// Detection = when Correlix first ingested the onset. Never before the onset
 		// itself (clock skew guard); fall back to the onset when ingest is unknown.
 		det := c.FirstIngest
 		if det.IsZero() || det.Before(c.WindowStart) {
 			det = c.WindowStart
 		}
-		put(timeintel.EvDetected, det, timeintel.SrcObserved, 1)
+		put(EvDetected, det, SrcObserved, 1)
 	}
 	if !c.CreatedAt.IsZero() {
-		put(timeintel.EvCorrelationCompleted, c.CreatedAt, timeintel.SrcObserved, 1)
+		put(EvCorrelationCompleted, c.CreatedAt, SrcObserved, 1)
 		if verdictGrounded(c.VerdictTier) {
-			put(timeintel.EvRootDomainIdentified, c.CreatedAt, timeintel.SrcObserved, conf)
+			put(EvRootDomainIdentified, c.CreatedAt, SrcObserved, conf)
 			if ownerKnown(c.Owner) {
 				// Owner is intrinsic to the grounded hypothesis (no separate timestamp),
 				// so its timing is INFERRED at the grounding instant.
-				put(timeintel.EvOwnerIdentified, c.CreatedAt, timeintel.SrcInferred, conf)
+				put(EvOwnerIdentified, c.CreatedAt, SrcInferred, conf)
 			}
 		}
 		if !c.EvidenceMissing {
-			put(timeintel.EvEvidenceReady, c.CreatedAt, timeintel.SrcObserved, conf)
+			put(EvEvidenceReady, c.CreatedAt, SrcObserved, conf)
 		}
 	}
 
 	// Human / ticket lifecycle — all source=itsm.
-	put(timeintel.EvTicketCreated, t.TicketCreated, timeintel.SrcITSM, 1)
-	put(timeintel.EvAcknowledged, t.Acknowledged, timeintel.SrcITSM, 1)
-	put(timeintel.EvMitigationStarted, t.MitigationStarted, timeintel.SrcITSM, 1)
-	put(timeintel.EvMitigated, t.Mitigated, timeintel.SrcITSM, 1)
-	put(timeintel.EvRecovered, t.Recovered, timeintel.SrcITSM, 1)
-	put(timeintel.EvResolved, t.Resolved, timeintel.SrcITSM, 1)
-	put(timeintel.EvClosed, t.Closed, timeintel.SrcITSM, 1)
+	put(EvTicketCreated, t.TicketCreated, SrcITSM, 1)
+	put(EvAcknowledged, t.Acknowledged, SrcITSM, 1)
+	put(EvMitigationStarted, t.MitigationStarted, SrcITSM, 1)
+	put(EvMitigated, t.Mitigated, SrcITSM, 1)
+	put(EvRecovered, t.Recovered, SrcITSM, 1)
+	put(EvResolved, t.Resolved, SrcITSM, 1)
+	put(EvClosed, t.Closed, SrcITSM, 1)
 	return lc
 }

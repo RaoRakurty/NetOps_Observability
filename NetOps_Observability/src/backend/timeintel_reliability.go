@@ -193,7 +193,7 @@ SELECT toString(o.correlation_id) AS correlation_id,
 	for _, o := range rows {
 		owner := strings.ToLower(strings.TrimSpace(asString(o["owner"])))
 		sig := asString(o["top_hypothesis"])
-		facts := corrTimeFacts{
+		facts := timeintel.CorrTimeFacts{
 			WindowStart:     parseCHTime(o["window_start"]),
 			CreatedAt:       parseCHTime(o["created_at"]),
 			VerdictTier:     asString(o["verdict_tier"]),
@@ -230,7 +230,7 @@ SELECT toString(o.correlation_id) AS correlation_id,
 			continue
 		}
 
-		lc := deriveLifecycle(facts, itsmTimeFacts{})
+		lc := timeintel.DeriveLifecycle(facts, timeintel.ITSMTimeFacts{})
 		metrics := timeintel.ComputeTimeMetrics(lc, timeIntelCalcVersion, time.Now().UTC())
 		durs := map[timeintel.MetricName]int64{}
 		for _, m := range metrics {
