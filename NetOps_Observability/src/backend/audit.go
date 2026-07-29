@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/internal/httppage"
 )
 
 // randHex mints a crypto-random lowercase-hex id of nBytes entropy. Used across
@@ -249,11 +251,11 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// clamped, and a malformed `before`/`since` was silently dropped — so a SIEM
 	// asking for a window it mistyped got the FULL newest page and read it as
 	// the window. Every parameter is now applied as written or refused by name.
-	if err := rejectUnknownQuery(r, "before", "since"); err != nil {
+	if err := httppage.RejectUnknownQuery(r, "before", "since"); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	page, err := parsePage(r, audit.DefaultLimit, audit.MaxQueryLimit)
+	page, err := httppage.Parse(r, audit.DefaultLimit, audit.MaxQueryLimit)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -303,6 +305,6 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		events = []AuditEvent{}
 	}
 	total := s.auditScopedCount(claims, q)
-	logTruncatedPage("/api/audit", page, len(events), total)
-	writePage(w, "audit", events, page, len(events), total)
+	httppage.LogTruncated("/api/audit", page, len(events), total)
+	httppage.Write(w, "audit", events, page, len(events), total)
 }

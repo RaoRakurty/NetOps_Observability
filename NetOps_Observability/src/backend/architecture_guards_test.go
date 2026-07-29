@@ -437,18 +437,20 @@ func TestNoDiscardedIntParseInQueryHandling(t *testing.T) {
 // pagination_test.go) because dropping the total is exactly the change that
 // would compile fine and silently reintroduce F-61/F-79.
 func TestPaginatedReadsReportTheirTotal(t *testing.T) {
-	src, ok := goSources(t)["pagination.go"]
-	if !ok {
-		t.Fatal("pagination.go not found — the bounded-read contract may have moved; update this guard")
+	// The contract moved to internal/httppage (Phase-2 W4.1); the guard follows it.
+	raw, err := os.ReadFile("internal/httppage/page.go")
+	if err != nil {
+		t.Fatal("internal/httppage/page.go not found — the bounded-read contract may have moved; update this guard")
 	}
+	src := string(raw)
 	for _, want := range []string{
-		"func writePageHeaders(w http.ResponseWriter, p pageRequest, returned, total int)",
-		"func pageComplete(p pageRequest, returned, total int) bool",
-		"func rejectUnknownQuery(r *http.Request, allowed ...string) error",
-		`headerTotalCount = "X-Total-Count"`,
+		"func WriteHeaders(w http.ResponseWriter, p Request, returned, total int)",
+		"func Complete(p Request, returned, total int) bool",
+		"func RejectUnknownQuery(r *http.Request, allowed ...string) error",
+		`HeaderTotalCount = "X-Total-Count"`,
 	} {
 		if !strings.Contains(src, want) {
-			t.Errorf("pagination.go no longer declares %q.\n"+
+			t.Errorf("httppage no longer declares %q.\n"+
 				"Every bounded read must report the caller's TRUE total and refuse unknown "+
 				"parameters by name; without both, a truncated answer is indistinguishable "+
 				"from a complete one (audit F-57/F-61/F-74/F-79).", want)

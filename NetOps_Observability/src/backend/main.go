@@ -62,6 +62,8 @@ import (
 	"netops/backend/notify"
 	"netops/backend/reports"
 	"netops/backend/safego"
+
+	"netops/backend/internal/httppage"
 )
 
 const version = "0.1.0-scaffold"
@@ -1798,11 +1800,11 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// rejected by name, the page is bounded, and the TRUE fleet total rides
 		// on every response (headers; ?envelope=1 for the JSON form) so a client
 		// can tell a page from the whole fleet. See pagination.go.
-		if err := rejectUnknownQuery(r); err != nil {
+		if err := httppage.RejectUnknownQuery(r); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		page, err := parsePage(r, deviceDefaultPage, deviceMaxPage)
+		page, err := httppage.Parse(r, deviceDefaultPage, deviceMaxPage)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -1814,9 +1816,9 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		// Stable order: without one, paging over a map-backed aggregator can
 		// show the same device twice and never show another at all.
 		sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
-		rows := pageSliceOf(all, page)
-		logTruncatedPage("/api/devices", page, len(rows), len(all))
-		writePage(w, "devices", rows, page, len(rows), len(all))
+		rows := httppage.SliceOf(all, page)
+		httppage.LogTruncated("/api/devices", page, len(rows), len(all))
+		httppage.Write(w, "devices", rows, page, len(rows), len(all))
 	case http.MethodPost:
 		// SR-003: creating a device is a write — gate it. Previously any
 		// authenticated principal (incl. read-only) could create/overwrite devices.

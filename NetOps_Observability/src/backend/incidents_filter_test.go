@@ -19,6 +19,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"netops/backend/internal/httppage"
 )
 
 // ── the substitution itself ──────────────────────────────────────────────────
@@ -161,7 +163,7 @@ func TestIncidentsPagingWalksEveryRowAndReportsTheTrueTotal(t *testing.T) {
 		if st != 200 {
 			t.Fatalf("offset %d: status %d: %s", offset, st, truncBody(b))
 		}
-		if got := headerInt(t, h, headerTotalCount); got != total {
+		if got := headerInt(t, h, httppage.HeaderTotalCount); got != total {
 			t.Fatalf("offset %d: X-Total-Count = %d, want %d", offset, got, total)
 		}
 		var rows []Incident
@@ -206,7 +208,7 @@ func TestIncidentsFilterAndTotalAgree(t *testing.T) {
 	s.incidents = fake
 
 	_, b, h := doHead(t, srv, "GET", "/api/incidents?severity=critical&limit=5", admin)
-	if got := headerInt(t, h, headerTotalCount); got != 10 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 10 {
 		t.Fatalf("X-Total-Count = %d for severity=critical, want 10 (the filter's total, not the table's)", got)
 	}
 	var rows []Incident
@@ -245,7 +247,7 @@ func TestIncidentsTenantIsolation(t *testing.T) {
 
 	// own-only list + the caller's own total
 	_, b, h := doHead(t, srv, "GET", "/api/incidents?limit=500", tokA)
-	if got := headerInt(t, h, headerTotalCount); got != 8 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 8 {
 		t.Fatalf("tenant A total = %d, want its own 8 — the total must be scoped like the rows", got)
 	}
 	var rows []Incident
@@ -272,7 +274,7 @@ func TestIncidentsTenantIsolation(t *testing.T) {
 	}
 	// as_tenant into another org must be ignored
 	_, _, h = doHead(t, srv, "GET", "/api/incidents?limit=500&as_tenant="+tenantB, tokA)
-	if got := headerInt(t, h, headerTotalCount); got != 8 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 8 {
 		t.Fatalf("as_tenant into org B changed tenant A's total to %d — narrowing must never WIDEN", got)
 	}
 	// cross-tenant get by id is a 404, never a 403 that confirms the id exists

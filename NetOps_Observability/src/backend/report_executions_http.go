@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"netops/backend/reports"
+
+	"netops/backend/internal/httppage"
 )
 
 // report_executions_http.go — read API for the async pipeline's execution
@@ -32,7 +34,7 @@ func (s *server) handleReportExecutions(w http.ResponseWriter, r *http.Request) 
 	// class): a parameter is applied as written or refused by name. `limit` and
 	// `before` used to have their parse errors discarded, so `?limit=abc` and
 	// `?before=yesterday` silently became "no filter" behind a 200.
-	if err := rejectUnknownQuery(r, "schedule_id", "before"); err != nil {
+	if err := httppage.RejectUnknownQuery(r, "schedule_id", "before"); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

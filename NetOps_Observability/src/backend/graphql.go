@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"netops/backend/internal/gqlparse"
 	"sort"
+
+	"netops/backend/internal/httppage"
 )
 
 // graphql.go — the GraphQL endpoint, rebuilt to close audit F-72 (2026-07-21).
@@ -175,7 +177,7 @@ func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[st
 		// to the caller's tenant (plus shared/global) before anything is paged.
 		devs := s.withCredActive(withDeviceType(visibleDevices(s.discovery.Devices(), claims)))
 		sort.Slice(devs, func(i, j int) bool { return devs[i].ID < devs[j].ID })
-		return projectList(pageSliceOf(devs, page), f.Sel, "Device")
+		return projectList(httppage.SliceOf(devs, page), f.Sel, "Device")
 
 	case "alerts":
 		page, err := gqlPageArgs(f, vars, deviceDefaultPage, deviceMaxPage)
@@ -193,7 +195,7 @@ func (s *server) resolveGQLField(f gqlparse.Field, claims jwtClaims, vars map[st
 			active = filtered
 		}
 		sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
-		return projectList(pageSliceOf(active, page), f.Sel, "Alert")
+		return projectList(httppage.SliceOf(active, page), f.Sel, "Alert")
 
 	case "rules":
 		if err := noArgs(f); err != nil {
@@ -251,8 +253,8 @@ func noArgs(f gqlparse.Field) error {
 // bounded page the REST endpoints use — including refusing an unknown argument.
 // `first`/`last` are named explicitly because the audit's probe used `first:`
 // and got the entire table back with no complaint.
-func gqlPageArgs(f gqlparse.Field, vars map[string]any, defLimit, maxLimit int) (pageRequest, error) {
-	p := pageRequest{Limit: defLimit, Max: maxLimit}
+func gqlPageArgs(f gqlparse.Field, vars map[string]any, defLimit, maxLimit int) (httppage.Request, error) {
+	p := httppage.Request{Limit: defLimit, Max: maxLimit}
 	names := make([]string, 0, len(f.Args))
 	for k := range f.Args {
 		names = append(names, k)
@@ -262,19 +264,19 @@ func gqlPageArgs(f gqlparse.Field, vars map[string]any, defLimit, maxLimit int) 
 		switch k {
 		case "limit", "offset":
 		case "first", "last", "after", "before":
-			return pageRequest{}, fmt.Errorf(
+			return httppage.Request{}, fmt.Errorf(
 				"Unknown argument %q on field %q — this endpoint pages with limit/offset, not Relay connections", k, f.Name)
 		default:
-			return pageRequest{}, fmt.Errorf("Unknown argument %q on field %q (accepted: limit, offset)", k, f.Name)
+			return httppage.Request{}, fmt.Errorf("Unknown argument %q on field %q (accepted: limit, offset)", k, f.Name)
 		}
 	}
 	if v, ok := f.Args["limit"]; ok {
 		n, err := gqlparse.IntArg(v, vars, "limit")
 		if err != nil {
-			return pageRequest{}, err
+			return httppage.Request{}, err
 		}
 		if n < 1 || n > maxLimit {
-			return pageRequest{}, fmt.Errorf("argument \"limit\" must be between 1 and %d (got %d)", maxLimit, n)
+			return httppage.Request{}, fmt.Errorf("argument \"limit\" must be between 1 and %d (got %d)", maxLimit, n)
 		}
 		p.Limit = n
 		p.Explicit = true
@@ -282,10 +284,10 @@ func gqlPageArgs(f gqlparse.Field, vars map[string]any, defLimit, maxLimit int) 
 	if v, ok := f.Args["offset"]; ok {
 		n, err := gqlparse.IntArg(v, vars, "offset")
 		if err != nil {
-			return pageRequest{}, err
+			return httppage.Request{}, err
 		}
-		if n < 0 || n > pageMaxOffset {
-			return pageRequest{}, fmt.Errorf("argument \"offset\" must be between 0 and %d (got %d)", pageMaxOffset, n)
+		if n < 0 || n > httppage.MaxOffset {
+			return httppage.Request{}, fmt.Errorf("argument \"offset\" must be between 0 and %d (got %d)", httppage.MaxOffset, n)
 		}
 		p.Offset = n
 		p.Explicit = true

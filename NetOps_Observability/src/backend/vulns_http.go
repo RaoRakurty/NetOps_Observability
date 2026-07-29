@@ -12,6 +12,8 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/internal/vuln"
+
+	"netops/backend/internal/httppage"
 )
 
 type vulnFinding struct {
@@ -54,11 +56,11 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 	// summary.findings and is now also on the headers/envelope alongside an
 	// explicit `complete`. `unassessed` was fully unbounded — it is paged by the
 	// same window and reports its own true total.
-	if err := rejectUnknownQuery(r); err != nil {
+	if err := httppage.RejectUnknownQuery(r); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	page, err := parsePage(r, 500, 2000)
+	page, err := httppage.Parse(r, 500, 2000)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -124,11 +126,11 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 	})
 	totalFindings := len(findings)
 	totalUnassessed := len(unassessed)
-	findings = pageSliceOf(findings, page)
-	unassessed = pageSliceOf(unassessed, page)
-	logTruncatedPage("/api/vulns", page, len(findings), totalFindings)
+	findings = httppage.SliceOf(findings, page)
+	unassessed = httppage.SliceOf(unassessed, page)
+	httppage.LogTruncated("/api/vulns", page, len(findings), totalFindings)
 	entries, kevEntries, updated := s.vulns.Info()
-	writePageHeaders(w, page, len(findings), totalFindings)
+	httppage.WriteHeaders(w, page, len(findings), totalFindings)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"vuln_enabled": true,
 		"feed":         map[string]any{"entries": entries, "kev_entries": kevEntries, "updated_at": updated.UTC().Format(time.RFC3339)},
@@ -145,9 +147,9 @@ func (s *server) handleVulns(w http.ResponseWriter, r *http.Request) {
 		"page": map[string]any{
 			"limit": page.Limit, "offset": page.Offset, "max_limit": page.Max,
 			"returned": len(findings), "total": totalFindings,
-			"complete":           pageComplete(page, len(findings), totalFindings),
+			"complete":           httppage.Complete(page, len(findings), totalFindings),
 			"unassessed_total":   totalUnassessed,
-			"unassessed_partial": !pageComplete(page, len(unassessed), totalUnassessed),
+			"unassessed_partial": !httppage.Complete(page, len(unassessed), totalUnassessed),
 		},
 	})
 }

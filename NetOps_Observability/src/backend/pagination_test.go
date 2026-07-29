@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"netops/backend/models"
+
+	"netops/backend/internal/httppage"
 )
 
 // doHead is `do` but also returns the response headers, which is where the
@@ -106,7 +108,7 @@ func TestDevicesPaginationWalksEveryRowExactlyOnce(t *testing.T) {
 		if st != 200 {
 			t.Fatalf("offset %d: status %d: %s", offset, st, b)
 		}
-		if got := headerInt(t, h, headerTotalCount); got != total {
+		if got := headerInt(t, h, httppage.HeaderTotalCount); got != total {
 			t.Fatalf("offset %d: X-Total-Count = %d, want the TRUE total %d", offset, got, total)
 		}
 		rows := decodeDevices(t, b)
@@ -225,10 +227,10 @@ func TestDevicesDefaultShapeUnchanged(t *testing.T) {
 	if len(decodeDevices(t, b)) != 3 {
 		t.Fatalf("unparameterised GET must still return the bare array: %s", truncBody(b))
 	}
-	if h.Get(headerPageDone) != "true" {
-		t.Errorf("X-Page-Complete = %q, want true for a 3-of-3 response", h.Get(headerPageDone))
+	if h.Get(httppage.HeaderPageDone) != "true" {
+		t.Errorf("X-Page-Complete = %q, want true for a 3-of-3 response", h.Get(httppage.HeaderPageDone))
 	}
-	if got := headerInt(t, h, headerTotalCount); got != 3 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 3 {
 		t.Errorf("X-Total-Count = %d, want 3", got)
 	}
 }
@@ -258,7 +260,7 @@ func TestDevicesPaginationIsTenantScoped(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("status %d: %s", st, b)
 	}
-	if got := headerInt(t, h, headerTotalCount); got != 12 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 12 {
 		t.Fatalf("tenant A sees total=%d, want 12 — the total must be scoped like the rows", got)
 	}
 	for _, d := range decodeDevices(t, b) {
@@ -285,7 +287,7 @@ func TestDevicesPaginationIsTenantScoped(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("status %d: %s", st, b)
 	}
-	if got := headerInt(t, h, headerTotalCount); got != 12 {
+	if got := headerInt(t, h, httppage.HeaderTotalCount); got != 12 {
 		t.Fatalf("as_tenant=%s changed tenant A's total to %d — narrowing must never WIDEN", tenantB, got)
 	}
 	for _, d := range decodeDevices(t, b) {
@@ -313,7 +315,7 @@ func TestAuditPaginationAndParamValidation(t *testing.T) {
 	if st != 200 {
 		t.Fatalf("status %d: %s", st, b)
 	}
-	total := headerInt(t, h, headerTotalCount)
+	total := headerInt(t, h, httppage.HeaderTotalCount)
 	if total < seeded {
 		t.Fatalf("X-Total-Count = %d but at least %d events were recorded — "+
 			"the read path cannot report less than it holds (F-57)", total, seeded)
@@ -325,8 +327,8 @@ func TestAuditPaginationAndParamValidation(t *testing.T) {
 	if len(page) != 5 {
 		t.Fatalf("limit=5 returned %d events", len(page))
 	}
-	if h.Get(headerPageDone) != "false" {
-		t.Errorf("a 5-of-%d page reported X-Page-Complete=%q", total, h.Get(headerPageDone))
+	if h.Get(httppage.HeaderPageDone) != "false" {
+		t.Errorf("a 5-of-%d page reported X-Page-Complete=%q", total, h.Get(httppage.HeaderPageDone))
 	}
 
 	// The walk: every event exactly once, then an empty page past the end.
@@ -423,7 +425,7 @@ func TestPageSliceOfBoundaries(t *testing.T) {
 		{"limit larger than the set", 50, 0, []int{0, 1, 2, 3, 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := pageSliceOf(rows, pageRequest{Limit: tc.limit, Offset: tc.offset})
+			got := httppage.SliceOf(rows, httppage.Request{Limit: tc.limit, Offset: tc.offset})
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
@@ -437,32 +439,32 @@ func TestPageSliceOfBoundaries(t *testing.T) {
 }
 
 func TestPageCompleteOnlyWhenWhole(t *testing.T) {
-	if !pageComplete(pageRequest{Offset: 0}, 10, 10) {
+	if !httppage.Complete(httppage.Request{Offset: 0}, 10, 10) {
 		t.Error("offset 0 returning all 10 of 10 must be complete")
 	}
-	if pageComplete(pageRequest{Offset: 0}, 10, 11) {
+	if httppage.Complete(httppage.Request{Offset: 0}, 10, 11) {
 		t.Error("10 of 11 must NOT be complete — this is the bit that makes truncation visible")
 	}
-	if pageComplete(pageRequest{Offset: 5}, 5, 10) {
+	if httppage.Complete(httppage.Request{Offset: 5}, 5, 10) {
 		t.Error("a page at offset 5 is never the whole set, even when it happens to be full")
 	}
 }
 
 func TestRejectUnknownQueryNamesTheKey(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/x?limit=5&as_tenant=t1&frobnicate=9", nil)
-	err := rejectUnknownQuery(r, "status")
+	err := httppage.RejectUnknownQuery(r, "status")
 	if err == nil {
 		t.Fatal("an unrecognised query parameter must be an error — silent acceptance is the defect")
 	}
 	if !stringContains(err.Error(), "frobnicate") {
 		t.Errorf("error %q does not name the offending key", err)
 	}
-	if err := rejectUnknownQuery(r, "status", "frobnicate"); err != nil {
+	if err := httppage.RejectUnknownQuery(r, "status", "frobnicate"); err != nil {
 		t.Errorf("an allowlisted key must pass: %v", err)
 	}
 	// The always-allowed set must not need declaring at every call site.
 	r2 := httptest.NewRequest("GET", "/api/x?limit=5&offset=2&envelope=1&as_tenant=t", nil)
-	if err := rejectUnknownQuery(r2); err != nil {
+	if err := httppage.RejectUnknownQuery(r2); err != nil {
 		t.Errorf("paging/tenancy params must always be accepted: %v", err)
 	}
 }
@@ -470,13 +472,13 @@ func TestRejectUnknownQueryNamesTheKey(t *testing.T) {
 func TestBoolQueryIsStrict(t *testing.T) {
 	for _, v := range []string{"1", "true", "0", "false", ""} {
 		r := httptest.NewRequest("GET", "/api/x?envelope="+v, nil)
-		if _, err := boolQuery(r, "envelope"); err != nil {
+		if _, err := httppage.BoolQuery(r, "envelope"); err != nil {
 			t.Errorf("envelope=%q should parse: %v", v, err)
 		}
 	}
 	for _, v := range []string{"yes", "y", "TrUe", "2", "on"} {
 		r := httptest.NewRequest("GET", "/api/x?envelope="+v, nil)
-		if _, err := boolQuery(r, "envelope"); err == nil {
+		if _, err := httppage.BoolQuery(r, "envelope"); err == nil {
 			t.Errorf("envelope=%q must be rejected, not silently read as false", v)
 		}
 	}

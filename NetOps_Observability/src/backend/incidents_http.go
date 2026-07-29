@@ -15,6 +15,8 @@ import (
 
 	"netops/backend/models"
 	"netops/backend/notify"
+
+	"netops/backend/internal/httppage"
 )
 
 // incidents_http.go — the Incident ingestion hook (alert → incident) and the
@@ -129,11 +131,11 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	// predicate, a malformed `limit` or `before` was dropped on the floor, and
 	// an over-large `limit` was clamped. Each is now applied as written or
 	// refused by name with a 400.
-	if err := rejectUnknownQuery(r, "status", "severity", "before"); err != nil {
+	if err := httppage.RejectUnknownQuery(r, "status", "severity", "before"); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	page, err := parsePage(r, 100, 500)
+	page, err := httppage.Parse(r, 100, 500)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -180,8 +182,8 @@ func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []Incident{}
 	}
-	logTruncatedPage("/api/incidents", page, len(list), total)
-	writePage(w, "incidents", list, page, len(list), total)
+	httppage.LogTruncated("/api/incidents", page, len(list), total)
+	httppage.Write(w, "incidents", list, page, len(list), total)
 }
 
 // handleIncidentByID serves /api/incidents/{id} and /{id}/{action}.
