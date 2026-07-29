@@ -1,4 +1,4 @@
-package main
+package rca
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 )
 
 // fixtures mimic what loadCorrSlice + mergeTimelineEvidence produce: signal maps
-// with an authoritative `attached` flag and the raw fields buildRcaPathView reads.
+// with an authoritative `attached` flag and the raw fields BuildPathView reads.
 
 func pvSig(m map[string]any) map[string]any {
 	if _, ok := m["attached"]; !ok {
@@ -37,7 +37,7 @@ func goldenInputs() (map[string]any, []map[string]any, []map[string]any) {
 	return meta, sigs, edges
 }
 
-func findAnn(v rcaPathView, tt, tid string) *rcaAnnotation {
+func findAnn(v PathView, tt, tid string) *Annotation {
 	for i := range v.Annotations {
 		if v.Annotations[i].TargetType == tt && v.Annotations[i].TargetID == tid {
 			return &v.Annotations[i]
@@ -49,7 +49,7 @@ func findAnn(v rcaPathView, tt, tid string) *rcaAnnotation {
 // #7 link_state_change → exact interface edge annotation.
 func TestRcaPathView_LinkToEdge(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	a := findAnn(v, "edge", "e2e-edge1:GigabitEthernet0/1")
 	if a == nil {
 		t.Fatalf("no edge annotation for the interface; got %+v", v.Annotations)
@@ -62,7 +62,7 @@ func TestRcaPathView_LinkToEdge(t *testing.T) {
 // #8 BGP adjacency → BGP session edge (device->peer).
 func TestRcaPathView_BgpToSession(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	a := findAnn(v, "edge", "e2e-edge1->10.99.0.2")
 	if a == nil {
 		t.Fatalf("no BGP session annotation; got %+v", v.Annotations)
@@ -75,7 +75,7 @@ func TestRcaPathView_BgpToSession(t *testing.T) {
 // #9 probe loss → path_segment when the locus is known.
 func TestRcaPathView_ProbeToSegment(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	a := findAnn(v, "path_segment", "e2e-edge1")
 	if a == nil {
 		t.Fatalf("no path_segment annotation; got %+v", v.Annotations)
@@ -94,7 +94,7 @@ func TestRcaPathView_ProbeToWholePath(t *testing.T) {
 	sigs := []map[string]any{
 		pvSig(map[string]any{"signal_id": "p1", "entity_type": "path", "entity_id": "vantage-x->cloud-y", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "o1", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil) // no edges → no locus
+	v := BuildPathView("obj", meta, sigs, nil) // no edges → no locus
 	a := findAnn(v, "path", "vantage-x->cloud-y")
 	if a == nil {
 		t.Fatalf("expected whole-path annotation; got %+v", v.Annotations)
@@ -110,7 +110,7 @@ func TestRcaPathView_InternalExcluded(t *testing.T) {
 	sigs := []map[string]any{
 		pvSig(map[string]any{"signal_id": "d1", "entity_type": "path", "entity_id": "prober->clickhouse", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "o1", "probe_authority": "debug_only", "probe_scope": "internal_self_probe", "is_trigger": true}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil)
+	v := BuildPathView("obj", meta, sigs, nil)
 	if !v.Internal {
 		t.Fatal("debug-only probe object should be flagged internal")
 	}
@@ -133,7 +133,7 @@ func TestRcaPathView_LayerCoveragePassthrough(t *testing.T) {
 		`{"layer":"network","osi":"L3","observed":false,"kinds":[],"entities":[],"peak_severity":""},` +
 		`{"layer":"transport","osi":"L4","observed":true,"kinds":["probe_loss"],"entities":["vantage->e2e-edge1"],"peak_severity":"high"}],` +
 		`"root_layer":"link","impact_layer":"transport","unmapped_kinds":[]}`
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	if v.LayerCoverage == nil {
 		t.Fatal("layer_coverage present in meta but not on the view")
 	}
@@ -152,7 +152,7 @@ func TestRcaPathView_LayerCoverageAbsentOrMalformed(t *testing.T) {
 		if val != nil {
 			meta["layer_coverage"] = val
 		}
-		if v := buildRcaPathView("obj", meta, sigs, edges); v.LayerCoverage != nil {
+		if v := BuildPathView("obj", meta, sigs, edges); v.LayerCoverage != nil {
 			t.Fatalf("layer_coverage=%v (%T) should yield nil, got %+v", val, val, v.LayerCoverage)
 		}
 	}
@@ -164,12 +164,12 @@ func TestRcaPathView_NoBaseMutation(t *testing.T) {
 	edgeCount := len(edges)
 	firstEdgeRef := edges[0]["grounding_ref"]
 	sigKind := sigs[0]["kind"]
-	_ = buildRcaPathView("obj", meta, sigs, edges)
+	_ = BuildPathView("obj", meta, sigs, edges)
 	if len(edges) != edgeCount || edges[0]["grounding_ref"] != firstEdgeRef {
-		t.Fatal("buildRcaPathView mutated the base topology edges")
+		t.Fatal("BuildPathView mutated the base topology edges")
 	}
 	if sigs[0]["kind"] != sigKind {
-		t.Fatal("buildRcaPathView mutated the base signals")
+		t.Fatal("BuildPathView mutated the base signals")
 	}
 }
 
@@ -183,10 +183,10 @@ func TestRcaPathView_CloudProjection(t *testing.T) {
 		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:123:us-east-1"}),
 		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->edge1", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil)
+	v := BuildPathView("obj", meta, sigs, nil)
 
 	// the app node exists and reads as a cloud-typed affected endpoint.
-	var appNode, resNode *rcaPathNode
+	var appNode, resNode *PathNode
 	for i := range v.Path.Nodes {
 		switch v.Path.Nodes[i].ID {
 		case "billing":
@@ -228,7 +228,7 @@ func TestRcaPathView_CloudAppIsProbeDestination(t *testing.T) {
 		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
 		pvSig(map[string]any{"signal_id": "c3", "entity_type": "path", "entity_id": "branch->billing", "kind": "probe_loss", "modality_class": "active_probe", "observer_id": "vantage", "probe_authority": "high", "probe_scope": "customer_path", "is_trigger": true}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil)
+	v := BuildPathView("obj", meta, sigs, nil)
 	count, cloudTyped := 0, false
 	for _, n := range v.Path.Nodes {
 		if n.ID == "billing" {
@@ -250,7 +250,7 @@ func TestRcaPathView_CloudOnlyProjection(t *testing.T) {
 		pvSig(map[string]any{"signal_id": "c1", "source": "cloud", "entity_type": "app", "entity_id": "billing", "kind": "cloud_health", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
 		pvSig(map[string]any{"signal_id": "c2", "source": "cloud", "entity_type": "cloud_resource", "entity_id": "billing-db", "kind": "database_metric", "modality_class": "device_telemetry", "observer_id": "cloud:1:r"}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil)
+	v := BuildPathView("obj", meta, sigs, nil)
 	var app, res bool
 	for _, n := range v.Path.Nodes {
 		if n.ID == "billing" && n.Type == "cloud" {
@@ -284,7 +284,7 @@ func TestRcaPathView_CloudOnlyProjection(t *testing.T) {
 // (network RCA path is byte-identical to before).
 func TestRcaPathView_NoCloudProjectionForNetworkObject(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	for _, n := range v.Path.Nodes {
 		if n.Type == "cloud" {
 			t.Fatalf("network-only object grew a cloud node: %+v", n)
@@ -301,7 +301,7 @@ func TestRcaPathView_NoCloudProjectionForNetworkObject(t *testing.T) {
 func TestRcaPathView_ConfirmedTitleAndState(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
 	meta["verdict_tier"] = "confirmed"
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	if v.Title != "Likely fault location" {
 		t.Fatalf("confirmed title = %q", v.Title)
 	}
@@ -313,7 +313,7 @@ func TestRcaPathView_ConfirmedTitleAndState(t *testing.T) {
 // suspected → missing "independent observer".
 func TestRcaPathView_MissingIndependentObserver(t *testing.T) {
 	meta, sigs, edges := goldenInputs()
-	v := buildRcaPathView("obj", meta, sigs, edges)
+	v := BuildPathView("obj", meta, sigs, edges)
 	found := false
 	for _, m := range v.MissingEvidenceSummary {
 		if strings.Contains(m, "independent observer") {
@@ -336,7 +336,7 @@ func TestRcaPathView_AppImpactSurfaced(t *testing.T) {
 	sigs := []map[string]any{
 		pvSig(map[string]any{"signal_id": "t3", "entity_type": "device", "entity_id": "edge1", "kind": "device_cpu_high"}),
 	}
-	v := buildRcaPathView("obj", meta, sigs, nil)
+	v := BuildPathView("obj", meta, sigs, nil)
 	if v.AppImpact == nil || len(v.AppImpact.Apps) != 1 {
 		t.Fatalf("expected 1 impacted app, got %+v", v.AppImpact)
 	}
@@ -380,13 +380,13 @@ func TestRcaPathView_ValidationScenario(t *testing.T) {
 		"attrs": `{}`,
 	}
 
-	allVal := buildRcaPathView("obj", meta, []map[string]any{
+	allVal := BuildPathView("obj", meta, []map[string]any{
 		valSig("synthetic_http_5xx", "active_probe"), valSig("lb_5xx", "device_telemetry"),
 	}, nil)
 	if !allVal.Validation {
 		t.Fatal("all-validation case must set Validation")
 	}
-	mixed := buildRcaPathView("obj", meta, []map[string]any{
+	mixed := BuildPathView("obj", meta, []map[string]any{
 		valSig("synthetic_http_5xx", "active_probe"), prodSig,
 	}, nil)
 	if mixed.Validation {

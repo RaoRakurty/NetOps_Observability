@@ -199,6 +199,12 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-29  202  rca_path_view.go → internal/rca/path_view.go (the 97%-pure
+//	                  evidence→path-overlay mapping: BuildPathView, annotations,
+//	                  narration, evidence summary; handler + aliases stayed in
+//	                  correlations.go; the *rcaAppImpact apps() method became
+//	                  rca.(*AppImpact).AppNames — a method cannot live on an
+//	                  aliased foreign type; pure fixture suite moved wholesale)
 //	2026-07-29  203  PHASE 2 WAVE 0a: the shared ClickHouse read path
 //	                  (chQuery/chQueryCtx, chRows/chRowsScope/chSelect,
 //	                  chTenantScope/proxyClickHouse/writeEmptyClickHouse,
@@ -293,7 +299,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 203
+const rootPackageCeiling = 202
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

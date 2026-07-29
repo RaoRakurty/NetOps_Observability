@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/servicecat"
 	"os"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestSvcCatalogCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("newPgStore: %v", err)
 	}
 	defer ps.DB().Close()
-	st := &pgServiceStore{db: ps.DB()}
+	st := servicecat.NewStore(ps.DB())
 
 	mk := func(tenant, name string) Service {
 		t.Helper()

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"netops/backend/cloud"
+	"netops/backend/internal/servicecat"
 	"strings"
 )
 
@@ -99,7 +100,7 @@ func (s *server) handleBusinessServices(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, errors.New("invalid service name"))
 			return
 		}
-		if in.Criticality != "" && !validCriticality[in.Criticality] {
+		if in.Criticality != "" && !servicecat.ValidCriticality[in.Criticality] {
 			writeError(w, http.StatusBadRequest, errors.New("invalid criticality"))
 			return
 		}
@@ -158,7 +159,7 @@ func (s *server) handleBusinessServiceByID(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, errors.New("invalid service name"))
 			return
 		}
-		if in.Criticality != "" && !validCriticality[in.Criticality] {
+		if in.Criticality != "" && !servicecat.ValidCriticality[in.Criticality] {
 			writeError(w, http.StatusBadRequest, errors.New("invalid criticality"))
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"strings"
 	"time"
@@ -445,7 +446,7 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-	view := buildRcaPathView(id, meta, sigRows, edgeRows)
+	view := rca.BuildPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner, "servicenow")
 	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))

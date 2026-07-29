@@ -1,14 +1,12 @@
-package main
+package rca
 
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"netops/backend/internal/rca"
 	"strings"
 )
 
-// rca_path_view.go — the UI-ready RCA Path View contract (Layer 3 overlay).
+// path_view.go — the UI-ready RCA Path View contract (Layer 3 overlay).
 //
 //   GET /api/correlations/{id}/rca-path-view
 //
@@ -24,7 +22,7 @@ import (
 
 // ── response contract ───────────────────────────────────────────────────────
 
-type rcaPathNode struct {
+type PathNode struct {
 	ID     string `json:"id"`
 	Type   string `json:"type"`             // observer | device | interface | peer | endpoint | cloud | boundary
 	Kind   string `json:"kind"`             // shape hint: vantage|router|switch|firewall|gateway|cloud|target
@@ -33,7 +31,7 @@ type rcaPathNode struct {
 	Status string `json:"status,omitempty"` // overlay state for the node, if any
 }
 
-type rcaPathEdge struct {
+type PathEdge struct {
 	ID     string `json:"id"`
 	Source string `json:"source"`
 	Target string `json:"target"`
@@ -42,7 +40,7 @@ type rcaPathEdge struct {
 	Label  string `json:"label,omitempty"`
 }
 
-type rcaAnnotation struct {
+type Annotation struct {
 	TargetType      string   `json:"target_type"` // node | edge | path_segment | boundary | path
 	TargetID        string   `json:"target_id"`
 	Status          string   `json:"status"` // observed|degraded|suspected_down|confirmed_down|insufficient_visibility|missing_evidence|internal_only
@@ -55,31 +53,31 @@ type rcaAnnotation struct {
 	MissingEvidence []string `json:"missing_evidence"`
 }
 
-type rcaPathView struct {
+type PathView struct {
 	CorrObjectID string  `json:"corr_object_id"`
 	Verdict      string  `json:"verdict"`
 	Confidence   float64 `json:"confidence"`
 	Internal     bool    `json:"internal"`
 	// Validation: every attached signal declares a non-production purpose (§11)
 	// — the case renders (watermarked) but must not open production tickets.
-	Validation             bool              `json:"validation"`
-	Title                  string            `json:"title"`
-	Summary                string            `json:"summary"`
-	RecommendedAction      string            `json:"recommended_action"`
-	Path                   rcaPath           `json:"path"`
-	Annotations            []rcaAnnotation   `json:"annotations"`
-	EvidenceSummary        map[string]any    `json:"evidence_summary"`
-	MissingEvidenceSummary []string          `json:"missing_evidence_summary"`
-	LayerCoverage          *rcaLayerCoverage `json:"layer_coverage,omitempty"`
-	AppImpact              *rcaAppImpact     `json:"app_impact,omitempty"`
+	Validation             bool           `json:"validation"`
+	Title                  string         `json:"title"`
+	Summary                string         `json:"summary"`
+	RecommendedAction      string         `json:"recommended_action"`
+	Path                   Path           `json:"path"`
+	Annotations            []Annotation   `json:"annotations"`
+	EvidenceSummary        map[string]any `json:"evidence_summary"`
+	MissingEvidenceSummary []string       `json:"missing_evidence_summary"`
+	LayerCoverage          *LayerCoverage `json:"layer_coverage,omitempty"`
+	AppImpact              *AppImpact     `json:"app_impact,omitempty"`
 }
 
-// rcaAppImpact mirrors the engine's ObjectSnapshot.app_impact projection (#81 P5):
+// AppImpact mirrors the engine's ObjectSnapshot.app_impact projection (#81 P5):
 // the applications this object affects, named from fused identity with explainable
 // provenance, plus honest evidence_missing when a destination-bearing entity had no
 // admissible identity. Pass-through only — the engine owns the fusion; the API never
 // re-derives an app name. Absent/empty column → nil → the section is hidden honestly.
-type rcaImpactedApp struct {
+type ImpactedApp struct {
 	App            string   `json:"app"`
 	Band           string   `json:"band,omitempty"`
 	State          string   `json:"state,omitempty"`
@@ -90,20 +88,20 @@ type rcaImpactedApp struct {
 	Component      string   `json:"component,omitempty"`
 }
 
-type rcaAppImpact struct {
-	Apps            []rcaImpactedApp `json:"apps"`
-	EvidenceMissing []string         `json:"evidence_missing,omitempty"`
+type AppImpact struct {
+	Apps            []ImpactedApp `json:"apps"`
+	EvidenceMissing []string      `json:"evidence_missing,omitempty"`
 }
 
 // parseAppImpact decodes the corr_objects.app_impact column. Returns nil when
 // absent/empty/malformed or when it names no app AND records no missing-evidence —
 // the section renders only on real content (unknown-first-class, never empty noise).
-func parseAppImpact(meta map[string]any) *rcaAppImpact {
+func parseAppImpact(meta map[string]any) *AppImpact {
 	s, _ := meta["app_impact"].(string)
 	if s == "" || s == "{}" {
 		return nil
 	}
-	var ai rcaAppImpact
+	var ai AppImpact
 	if json.Unmarshal([]byte(s), &ai) != nil {
 		return nil
 	}
@@ -113,11 +111,11 @@ func parseAppImpact(meta map[string]any) *rcaAppImpact {
 	return &ai
 }
 
-// rcaLayerCoverage mirrors the engine's ObjectSnapshot.layer_coverage projection
+// LayerCoverage mirrors the engine's ObjectSnapshot.layer_coverage projection
 // (C4): the bottom-up causal stack the RCA Layer-Stack panel renders. Pass-through
 // only — the engine owns the taxonomy; the API never re-derives a layer (no
 // duplicated map to drift). Absent/empty column → nil → panel hidden, honestly.
-type rcaLayer struct {
+type Layer struct {
 	Layer        string   `json:"layer"`
 	OSI          string   `json:"osi"`
 	Observed     bool     `json:"observed"`
@@ -126,51 +124,46 @@ type rcaLayer struct {
 	PeakSeverity string   `json:"peak_severity"`
 }
 
-type rcaLayerCoverage struct {
-	Layers        []rcaLayer `json:"layers"`
-	RootLayer     string     `json:"root_layer"`
-	ImpactLayer   string     `json:"impact_layer"`
-	UnmappedKinds []string   `json:"unmapped_kinds"`
+type LayerCoverage struct {
+	Layers        []Layer  `json:"layers"`
+	RootLayer     string   `json:"root_layer"`
+	ImpactLayer   string   `json:"impact_layer"`
+	UnmappedKinds []string `json:"unmapped_kinds"`
 }
 
 // parseLayerCoverage decodes the corr_objects.layer_coverage column. Returns nil
 // when absent/empty/malformed/no-layers — the panel renders only on real coverage.
-func parseLayerCoverage(meta map[string]any) *rcaLayerCoverage {
+func parseLayerCoverage(meta map[string]any) *LayerCoverage {
 	s, _ := meta["layer_coverage"].(string)
 	if s == "" || s == "{}" {
 		return nil
 	}
-	var lc rcaLayerCoverage
+	var lc LayerCoverage
 	if json.Unmarshal([]byte(s), &lc) != nil || len(lc.Layers) == 0 {
 		return nil
 	}
 	return &lc
 }
 
-type rcaPath struct {
-	Source      string        `json:"source"`
-	Destination string        `json:"destination"`
-	Nodes       []rcaPathNode `json:"nodes"`
-	Edges       []rcaPathEdge `json:"edges"`
+type Path struct {
+	Source      string     `json:"source"`
+	Destination string     `json:"destination"`
+	Nodes       []PathNode `json:"nodes"`
+	Edges       []PathEdge `json:"edges"`
 }
 
-// ── handler ─────────────────────────────────────────────────────────────────
-
-func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id string) {
-	version, errVersion := intQuery(r, "version", 0, 0, 1<<30)
-	if errVersion != nil {
-		writeError(w, http.StatusBadRequest, errVersion)
-		return
+// AppNames returns the named impacted application labels (nil-safe).
+func (ai *AppImpact) AppNames() []string {
+	if ai == nil {
+		return nil
 	}
-	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
-	if err != nil {
-		writeError(w, status, err)
-		return
+	out := make([]string, 0, len(ai.Apps))
+	for _, a := range ai.Apps {
+		if a.App != "" {
+			out = append(out, a.App)
+		}
 	}
-	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
-	// enrich sigRows IN PLACE with attached/link_status (read-side derivation).
-	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-	writeJSON(w, http.StatusOK, buildRcaPathView(id, meta, sigRows, edgeRows))
+	return out
 }
 
 // ── pure mapping (unit-tested; no I/O) ──────────────────────────────────────
@@ -205,9 +198,9 @@ func isDebugProbe(sig map[string]any) bool {
 	return auth == "debug_only" || scope == "internal_self_probe" || scope == "synthetic_lab_probe"
 }
 
-// buildRcaPathView maps object evidence → UI-ready path + overlay annotations.
+// BuildPathView maps object evidence → UI-ready path + overlay annotations.
 // Pure: deterministic in (meta, signals, edges), no I/O, no engine re-decision.
-func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[string]any) rcaPathView {
+func BuildPathView(id string, meta map[string]any, sigRows, edgeRows []map[string]any) PathView {
 	verdict := strings.ToLower(fmt.Sprintf("%v", meta["verdict_tier"]))
 	if verdict == "" || verdict == "<nil>" {
 		verdict = "undetermined"
@@ -250,7 +243,7 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 	// traffic). Validation cases render, but must never page or file tickets.
 	validation := len(attached) > 0
 	for _, sig := range attached {
-		if !rca.IsValidationSignal(sig) {
+		if !IsValidationSignal(sig) {
 			validation = false
 			break
 		}
@@ -301,7 +294,7 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 		state = "internal_only"
 	}
 
-	view := rcaPathView{CorrObjectID: id, Verdict: verdict, Confidence: conf, Internal: internal, Validation: validation}
+	view := PathView{CorrObjectID: id, Verdict: verdict, Confidence: conf, Internal: internal, Validation: validation}
 	view.EvidenceSummary, view.MissingEvidenceSummary = summarizeEvidence(attached, meta, verdict)
 	view.Annotations = mapAnnotations(attached, edgeRows, locus, src, dst, verdict, conf, internal, seamRef)
 	view.Path = buildPath(attached, locus, src, dst, state, internal)
@@ -316,8 +309,8 @@ func buildRcaPathView(id string, meta map[string]any, sigRows, edgeRows []map[st
 
 // mapAnnotations turns each grounded evidence kind into an overlay annotation on
 // the right target (interface edge, BGP session, device node, or whole path).
-func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdict string, conf float64, internal bool, seamRef string) []rcaAnnotation {
-	var out []rcaAnnotation
+func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdict string, conf float64, internal bool, seamRef string) []Annotation {
+	var out []Annotation
 	owner := "network_ops"
 	visibility := "full"
 	if seamRef != "" {
@@ -327,7 +320,7 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 	if internal {
 		owner = "platform"
 	}
-	add := func(a rcaAnnotation) { out = append(out, a) }
+	add := func(a Annotation) { out = append(out, a) }
 	seenIface := map[string]bool{}
 
 	for _, sig := range attached {
@@ -346,7 +339,7 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 				continue
 			}
 			seenIface[eid] = true
-			add(rcaAnnotation{TargetType: "edge", TargetID: eid, Status: st, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: "edge", TargetID: eid, Status: st, Verdict: verdict, Confidence: conf,
 				Owner: owner, Visibility: visibility, Reason: "interface state change grounded on this link", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		case strings.Contains(kind, "bgp") || strings.Contains(kind, "adjacency") || strings.Contains(kind, "peer"):
 			// Example 2: BGP adjacency down → BGP session edge (device→peer).
@@ -359,7 +352,7 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 				dev = eid[:i]
 			}
 			tgt := dev + "->" + peer
-			add(rcaAnnotation{TargetType: "edge", TargetID: tgt, Status: st, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: "edge", TargetID: tgt, Status: st, Verdict: verdict, Confidence: conf,
 				Owner: owner, Visibility: visibility, Reason: "BGP adjacency change on this session", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		case et == "app":
 			// Cloud projection (#81 P3G): the application is the IMPACT surface —
@@ -368,11 +361,11 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 			if internal {
 				ast = "internal_only"
 			}
-			add(rcaAnnotation{TargetType: "node", TargetID: eid, Status: ast, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: "node", TargetID: eid, Status: ast, Verdict: verdict, Confidence: conf,
 				Owner: "app_team", Visibility: visibility, Reason: "cloud application impact observed", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		case et == "cloud_resource":
 			// a cloud resource health/metric/config change grounded on the resource node.
-			add(rcaAnnotation{TargetType: "node", TargetID: eid, Status: st, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: "node", TargetID: eid, Status: st, Verdict: verdict, Confidence: conf,
 				Owner: "app_team", Visibility: visibility, Reason: "cloud resource health change grounded here", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		case et == "path":
 			// Example 3: probe loss → segment if locus known, else whole path.
@@ -384,11 +377,11 @@ func mapAnnotations(attached, edgeRows []map[string]any, locus, src, dst, verdic
 			if internal {
 				pst = "internal_only"
 			}
-			add(rcaAnnotation{TargetType: tt, TargetID: tid, Status: pst, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: tt, TargetID: tid, Status: pst, Verdict: verdict, Confidence: conf,
 				Owner: owner, Visibility: visibility, Reason: reason, EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		default:
 			// device-area annotation (resource/other) — don't draw a fake broken link.
-			add(rcaAnnotation{TargetType: "node", TargetID: locusOrEntity(locus, eid), Status: st, Verdict: verdict, Confidence: conf,
+			add(Annotation{TargetType: "node", TargetID: locusOrEntity(locus, eid), Status: st, Verdict: verdict, Confidence: conf,
 				Owner: owner, Visibility: visibility, Reason: "issue localized to this device area", EvidenceRefs: []string{sid}, MissingEvidence: nil})
 		}
 	}
@@ -407,42 +400,42 @@ func locusOrEntity(locus, eid string) string {
 
 // buildPath assembles the ordered source→destination node/edge chain (overlay
 // states applied). BGP-only objects get device→peer (the "total path").
-func buildPath(attached []map[string]any, locus, src, dst, state string, internal bool) rcaPath {
-	p := rcaPath{Source: src, Destination: dst}
+func buildPath(attached []map[string]any, locus, src, dst, state string, internal bool) Path {
+	p := Path{Source: src, Destination: dst}
 	seen := map[string]bool{}
-	addNode := func(n rcaPathNode) {
+	addNode := func(n PathNode) {
 		if seen[n.ID] {
 			return
 		}
 		seen[n.ID] = true
 		p.Nodes = append(p.Nodes, n)
 	}
-	addEdge := func(e rcaPathEdge) { p.Edges = append(p.Edges, e) }
+	addEdge := func(e PathEdge) { p.Edges = append(p.Edges, e) }
 
 	prev := ""
 	if src != "" {
-		addNode(rcaPathNode{ID: src, Type: "observer", Kind: "vantage", Label: src, Role: "observed"})
+		addNode(PathNode{ID: src, Type: "observer", Kind: "vantage", Label: src, Role: "observed"})
 		prev = src
 	}
 	if locus != "" {
-		addNode(rcaPathNode{ID: locus, Type: "device", Kind: "router", Label: locus, Role: "fault", Status: state})
+		addNode(PathNode{ID: locus, Type: "device", Kind: "router", Label: locus, Role: "fault", Status: state})
 		if prev != "" {
-			addEdge(rcaPathEdge{ID: prev + "~" + locus, Source: prev, Target: locus, Type: "path_segment", State: edgeStateInto(state)})
+			addEdge(PathEdge{ID: prev + "~" + locus, Source: prev, Target: locus, Type: "path_segment", State: edgeStateInto(state)})
 		}
 		prev = locus
 	}
 	// BGP peer = the far end of the segment when there is no probe destination.
 	peer := bgpPeer(attached)
 	if peer != "" && dst == "" {
-		addNode(rcaPathNode{ID: peer, Type: "peer", Kind: "router", Label: peer, Role: "peer"})
+		addNode(PathNode{ID: peer, Type: "peer", Kind: "router", Label: peer, Role: "peer"})
 		if prev != "" {
-			addEdge(rcaPathEdge{ID: prev + "~" + peer, Source: prev, Target: peer, Type: "bgp_session", State: state, Label: "BGP session"})
+			addEdge(PathEdge{ID: prev + "~" + peer, Source: prev, Target: peer, Type: "bgp_session", State: state, Label: "BGP session"})
 		}
 		prev = peer
 	} else if dst != "" && dst != locus {
-		addNode(rcaPathNode{ID: dst, Type: "endpoint", Kind: "target", Label: dst, Role: "destination"})
+		addNode(PathNode{ID: dst, Type: "endpoint", Kind: "target", Label: dst, Role: "destination"})
 		if prev != "" {
-			addEdge(rcaPathEdge{ID: prev + "~" + dst, Source: prev, Target: dst, Type: "path_segment", State: "healthy"})
+			addEdge(PathEdge{ID: prev + "~" + dst, Source: prev, Target: dst, Type: "path_segment", State: "healthy"})
 		}
 		prev = dst
 	}
@@ -466,17 +459,17 @@ func buildPath(attached []map[string]any, locus, src, dst, state string, interna
 				}
 			}
 		} else {
-			addNode(rcaPathNode{ID: app, Type: "cloud", Kind: "cloud", Label: app, Role: "affected", Status: appState})
+			addNode(PathNode{ID: app, Type: "cloud", Kind: "cloud", Label: app, Role: "affected", Status: appState})
 			if prev != "" {
-				addEdge(rcaPathEdge{ID: prev + "~" + app, Source: prev, Target: app, Type: "provider_boundary", State: edgeStateInto(appState), Label: "cloud boundary"})
+				addEdge(PathEdge{ID: prev + "~" + app, Source: prev, Target: app, Type: "provider_boundary", State: edgeStateInto(appState), Label: "cloud boundary"})
 			}
 		}
 		for _, res := range resources {
 			if res == app {
 				continue
 			}
-			addNode(rcaPathNode{ID: res, Type: "cloud", Kind: "cloud", Label: res, Role: "affected", Status: state})
-			addEdge(rcaPathEdge{ID: app + "~" + res, Source: app, Target: res, Type: "path_segment", State: edgeStateInto(state)})
+			addNode(PathNode{ID: res, Type: "cloud", Kind: "cloud", Label: res, Role: "affected", Status: state})
+			addEdge(PathEdge{ID: app + "~" + res, Source: app, Target: res, Type: "path_segment", State: edgeStateInto(state)})
 		}
 	}
 	return p
@@ -591,13 +584,13 @@ func summarizeEvidence(attached []map[string]any, meta map[string]any, verdict s
 			// reasons ARE the explanation — surface them all (the "explain why not"
 			// product principle), friendly-mapped so no raw modality token leaks.
 			if verdict != "confirmed" && len(v.Reasons) > 0 {
-				summary["why_not_confirmed"] = rca.FriendlyReasons(v.Reasons)
+				summary["why_not_confirmed"] = FriendlyReasons(v.Reasons)
 			}
 			// Evidence ROLES beyond supporting/missing: discriminating/contradicting
 			// evidence the engine actually used to RULE OUT competing causes — shown so
 			// the operator sees Correlix reasoned, not just pattern-matched.
 			if len(top.Contradictions) > 0 {
-				summary["contradicting"] = rca.FriendlyReasons(top.Contradictions)
+				summary["contradicting"] = FriendlyReasons(top.Contradictions)
 			}
 			summary["contradicted"] = top.Contradicted
 			if len(v.FirstSteps) > 0 {
@@ -643,7 +636,7 @@ func distinctObserverClasses(attached []map[string]any) int {
 }
 
 // narrate produces the operator title/summary/next-action (NOC language).
-func narrate(verdict string, internal bool, locus, cloudApp string, ann []rcaAnnotation) (title, summary, action string) {
+func narrate(verdict string, internal bool, locus, cloudApp string, ann []Annotation) (title, summary, action string) {
 	switch {
 	case internal:
 		title = "Internal monitoring path"
@@ -669,7 +662,7 @@ func narrate(verdict string, internal bool, locus, cloudApp string, ann []rcaAnn
 	switch verdict {
 	case "confirmed":
 		summary = fmt.Sprintf("Fault localized to %s.", where)
-		action = fmt.Sprintf("Act on %s. Owner: %s.", where, ownerOf(ann))
+		action = fmt.Sprintf("Act on %s. Owner: %s.", where, OwnerOf(ann))
 	case "suspected":
 		summary = fmt.Sprintf("Possible fault on %s — evidence is grounded but not independently confirmed.", where)
 		action = fmt.Sprintf("Check %s and the adjacent peer/provider handoff. Confirm from the neighbor side or an independent probe before escalating.", where)
@@ -680,7 +673,7 @@ func narrate(verdict string, internal bool, locus, cloudApp string, ann []rcaAnn
 	return
 }
 
-func ownerOf(ann []rcaAnnotation) string {
+func OwnerOf(ann []Annotation) string {
 	for _, a := range ann {
 		if a.Owner != "" {
 			return a.Owner

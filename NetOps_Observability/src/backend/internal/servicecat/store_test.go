@@ -1,27 +1,50 @@
-package main
+package servicecat
 
 import "testing"
 
 func TestValidateServiceInput(t *testing.T) {
-	if err := validateServiceInput("Teams", "critical"); err != nil {
+	if err := ValidateInput("Teams", "critical"); err != nil {
 		t.Errorf("valid input rejected: %v", err)
 	}
-	if err := validateServiceInput("SAP", ""); err != nil {
+	if err := ValidateInput("SAP", ""); err != nil {
 		t.Errorf("empty criticality should default-ok: %v", err)
 	}
-	if err := validateServiceInput("  ", "normal"); err == nil {
+	if err := ValidateInput("  ", "normal"); err == nil {
 		t.Error("blank name should be rejected")
 	}
-	if err := validateServiceInput("x", "bogus"); err == nil {
+	if err := ValidateInput("x", "bogus"); err == nil {
 		t.Error("invalid criticality should be rejected")
 	}
 	long := make([]byte, 121)
 	for i := range long {
 		long[i] = 'a'
 	}
-	if err := validateServiceInput(string(long), "low"); err == nil {
+	if err := ValidateInput(string(long), "low"); err == nil {
 		t.Error("over-long name should be rejected")
 	}
+}
+
+// isUUIDToken mirrors main's SR-011 shape validator (duplicated test fixture —
+// test files cannot cross packages).
+func isUUIDToken(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			switch {
+			case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func TestNewUUIDv4(t *testing.T) {
@@ -49,12 +72,12 @@ func TestNewUUIDv4(t *testing.T) {
 
 func TestBindingKindAllowlist(t *testing.T) {
 	for _, k := range []string{"probe", "path", "seam"} {
-		if !validBindingKind[k] {
+		if !ValidBindingKind[k] {
 			t.Errorf("%q should be a valid binding kind", k)
 		}
 	}
 	for _, k := range []string{"", "device", "service", "url"} {
-		if validBindingKind[k] {
+		if ValidBindingKind[k] {
 			t.Errorf("%q should NOT be a valid binding kind", k)
 		}
 	}

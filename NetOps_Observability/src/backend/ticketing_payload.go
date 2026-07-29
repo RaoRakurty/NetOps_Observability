@@ -82,7 +82,7 @@ func buildCorrTicketFacts(meta map[string]any, sigRows []map[string]any, view rc
 	// already named. Path src→dst is the most operator-legible scope.
 	devices, paths, ifaces := parseAffectedScope(meta)
 	f.AffectedEntities = dedupeNonEmpty(append(append(append([]string{}, devices...), ifaces...), paths...))
-	f.ImpactedApps = append(f.ImpactedApps, view.AppImpact.apps()...)
+	f.ImpactedApps = append(f.ImpactedApps, view.AppImpact.AppNames()...)
 	switch {
 	case view.Path.Source != "" && view.Path.Destination != "":
 		f.AffectedScope = view.Path.Source + " → " + view.Path.Destination
@@ -124,7 +124,7 @@ func buildTicketPayload(view rcaPathView, facts ticketing.CorrFacts, policy tick
 		Signature:         facts.Signature,
 		Summary:           view.Summary,
 		RecommendedAction: view.RecommendedAction,
-		Owner:             ownerOf(view.Annotations),
+		Owner:             rca.OwnerOf(view.Annotations),
 		AffectedScope:     facts.AffectedScope,
 		AffectedEntities:  facts.AffectedEntities,
 		MissingEvidence:   view.MissingEvidenceSummary,
@@ -229,20 +229,6 @@ func parseAffectedScope(meta map[string]any) (devices, paths, ifaces []string) {
 		return nil, nil, nil
 	}
 	return af.Devices, af.Paths, af.Interfaces
-}
-
-// apps returns the named impacted application labels (nil-safe).
-func (ai *rcaAppImpact) apps() []string {
-	if ai == nil {
-		return nil
-	}
-	out := make([]string, 0, len(ai.Apps))
-	for _, a := range ai.Apps {
-		if a.App != "" {
-			out = append(out, a.App)
-		}
-	}
-	return out
 }
 
 // evidenceUsedLines surfaces the human-legible evidence the engine actually used

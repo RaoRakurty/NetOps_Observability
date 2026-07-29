@@ -25,7 +25,38 @@ import (
 
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/metricval"
+	"netops/backend/internal/rca"
 )
+
+// The RCA Path View mapping moved to internal/rca (path_view.go, Phase-2 W1).
+// Aliases keep the wide main-package consumers (ticketing payload/sweeper and
+// their tests) source-compatible — the jwtClaims technique.
+type (
+	rcaPathView   = rca.PathView
+	rcaPath       = rca.Path
+	rcaAnnotation = rca.Annotation
+	rcaAppImpact  = rca.AppImpact
+)
+
+// serveRcaPathView renders the UI-ready path view for one correlation object:
+// load the bounded object slice, enrich signals in place, then the pure
+// rca.BuildPathView mapping.
+func (s *server) serveRcaPathView(w http.ResponseWriter, r *http.Request, id string) {
+	version, errVersion := intQuery(r, "version", 0, 0, 1<<30)
+	if errVersion != nil {
+		writeError(w, http.StatusBadRequest, errVersion)
+		return
+	}
+	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
+	if err != nil {
+		writeError(w, status, err)
+		return
+	}
+	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
+	// enrich sigRows IN PLACE with attached/link_status (read-side derivation).
+	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	writeJSON(w, http.StatusOK, rca.BuildPathView(id, meta, sigRows, edgeRows))
+}
 
 // isUUIDToken allowlists a canonical UUID string before it is interpolated
 // into ClickHouse SQL or a proxied URL (SR-011 discipline: shape-validate,

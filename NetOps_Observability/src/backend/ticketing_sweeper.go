@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"os"
 	"strings"
@@ -20,7 +21,7 @@ import (
 // correlation. Dormant unless FEATURE_RCA_TICKETING.
 //
 // Reuse, no second brain: the ticket payload + policy facts come straight from
-// buildRcaPathView (the single RCA decision) via the request-free chRowsScope /
+// rca.BuildPathView (the single RCA decision) via the request-free chRowsScope /
 // loadCorrSlice read path, so the sweeper re-derives no RCA verdict.
 //
 // Tenant isolation (CLAUDE.md §3a): the candidate scan reads cross-tenant
@@ -173,7 +174,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
-	view := buildRcaPathView(c.id, meta, sigRows, edgeRows)
+	view := rca.BuildPathView(c.id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 
 	// #103: every destination system evaluates ITS OWN policy independently —
