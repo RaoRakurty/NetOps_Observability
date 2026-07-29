@@ -316,3 +316,4 @@ finale.
 | step | what | state |
 |---|---|---|
 | W0a | chquery consolidation: the shared CH read path (chQuery/chQueryCtx, chRows/chRowsScope/chSelect, chTenantScope/proxyClickHouse/writeEmptyClickHouse, chWorkerExec/chWorkerQuery/jsonEachRow) re-homed into `clickhouse_client.go`, the designated chhttp adapter. report_scheduler.go / correlations.go / flows.go no longer host package-wide plumbing; `appid_fusion_store.go` emptied and DELETED. Ceiling 204 → 203. | **Done** (2026-07-29) |
+| W0b | Utility hostages unpinned: `orDefault` (itsm_config), `secEnvDuration` (device_ssh), `envInt`/`envDuration`/`merge`/`errf`/`corr` (report_pipeline), `asStr`/`affectedDevices` (ai_datasource), `truthy`/`asFloat`/`asString` (health_score) re-homed to main.go beside envOr/envBool. `sleepCtx` stayed (single consumer); `fmtSscanf` was already in sscanf.go; wsMagic/wsOriginAllowed deferred to the ws-codec extraction. Count unchanged. | **Done** (2026-07-29) |

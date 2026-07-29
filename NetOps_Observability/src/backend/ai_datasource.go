@@ -551,17 +551,6 @@ func humanCount(v float64) string {
 
 // ---- small JSON/value helpers (ClickHouse FORMAT JSON yields any-typed cells) ----
 
-func asStr(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case nil:
-		return ""
-	default:
-		return fmt.Sprintf("%v", x)
-	}
-}
-
 // jsonStrings parses a value that is either a JSON array string or already a
 // []any into a []string (e.g. evidence_missing).
 func jsonStrings(v any) []string {
@@ -603,35 +592,6 @@ func jsonObjects(v any) []map[string]any {
 		var arr []map[string]any
 		if json.Unmarshal([]byte(x), &arr) == nil {
 			return arr
-		}
-	}
-	return nil
-}
-
-// affectedDevices extracts device names from the affected field, which is a
-// {"devices":[...],"paths":[...]} object (string-encoded or already parsed).
-func affectedDevices(v any) []string {
-	parse := func(m map[string]any) []string {
-		var out []string
-		if ds, ok := m["devices"].([]any); ok {
-			for _, e := range ds {
-				if s := asStr(e); s != "" {
-					out = append(out, s)
-				}
-			}
-		}
-		return out
-	}
-	switch x := v.(type) {
-	case map[string]any:
-		return parse(x)
-	case string:
-		if strings.TrimSpace(x) == "" {
-			return nil
-		}
-		var m map[string]any
-		if json.Unmarshal([]byte(x), &m) == nil {
-			return parse(m)
 		}
 	}
 	return nil

@@ -54,23 +54,6 @@ func sshMaxSession() time.Duration {
 	return secEnvDuration("DEVICE_SSH_MAX_SESSION_SEC", 3600, 60, 86400)
 }
 
-// secEnvDuration reads a positive integer-seconds env var, clamped to [min,max].
-func secEnvDuration(key string, def, lo, hi int) time.Duration {
-	v := def
-	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
-		if n, err := parseIntStrict(s); err == nil {
-			v = n
-		}
-	}
-	if v < lo {
-		v = lo
-	}
-	if v > hi {
-		v = hi
-	}
-	return time.Duration(v) * time.Second
-}
-
 // ---- host-key TOFU store ----------------------------------------------------
 
 // sshHostStore persists the first SSH host-key fingerprint seen per address and

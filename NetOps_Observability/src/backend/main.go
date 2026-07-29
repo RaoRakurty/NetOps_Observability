@@ -2180,6 +2180,161 @@ func envOr(key, fallback string) string {
 
 func envBool(key string) bool { return os.Getenv(key) == "true" }
 
+// ---------------------------------------------------------------------------
+// Package-wide helpers (Phase-2 Wave 0b consolidation, 2026-07-29).
+//
+// Each of these used to live in the file that first needed it — which pinned
+// that file in the root, because a file cannot be extracted while it hosts
+// helpers the whole package calls. They live with the composition root now;
+// per the §2 no-utils-package rule they stay in main rather than forming a
+// shared package.
+// ---------------------------------------------------------------------------
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
+// secEnvDuration reads a positive integer-seconds env var, clamped to [min,max].
+func secEnvDuration(key string, def, lo, hi int) time.Duration {
+	v := def
+	if s := strings.TrimSpace(os.Getenv(key)); s != "" {
+		if n, err := parseIntStrict(s); err == nil {
+			v = n
+		}
+	}
+	if v < lo {
+		v = lo
+	}
+	if v > hi {
+		v = hi
+	}
+	return time.Duration(v) * time.Second
+}
+
+// orDefault returns s unless blank, else def.
+func orDefault(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
+}
+
+// corr builds the correlation fields stamped on every pipeline log line so a
+// single `grep execution_id` reconstructs a report's whole lifecycle.
+func corr(execID, tenant, scheduleID, jobID, workerID string) map[string]any {
+	m := map[string]any{"execution_id": execID, "tenant_id": tenant, "schedule_id": scheduleID}
+	if jobID != "" {
+		m["job_id"] = jobID
+	}
+	if workerID != "" {
+		m["worker_id"] = workerID
+	}
+	return m
+}
+
+func merge(a, b map[string]any) map[string]any {
+	out := make(map[string]any, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+func errf(err error) map[string]any { return map[string]any{"error": err.Error()} }
+
+// ---- small JSON/value helpers (ClickHouse FORMAT JSON yields any-typed cells) ----
+
+func asStr(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func asFloat(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		// ClickHouse can hand back a non-finite float directly (nan/inf in a
+		// JSON number position); sanitise it here too, not just the string form.
+		return metricval.Sanitize(x)
+	case string:
+		// F-21: ParseFloat("NaN") succeeds and the NaN lands in a health-score
+		// response field, where it (a) fails the JSON encode for the entire
+		// response and (b) compares false against every threshold above.
+		return metricval.FiniteOrZero(x)
+	}
+	return 0
+}
+
+func truthy(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case float64:
+		return x != 0
+	case string:
+		return x == "1" || x == "true"
+	}
+	return false
+}
+
+// affectedDevices extracts device names from the affected field, which is a
+// {"devices":[...],"paths":[...]} object (string-encoded or already parsed).
+func affectedDevices(v any) []string {
+	parse := func(m map[string]any) []string {
+		var out []string
+		if ds, ok := m["devices"].([]any); ok {
+			for _, e := range ds {
+				if s := asStr(e); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		return parse(x)
+	case string:
+		if strings.TrimSpace(x) == "" {
+			return nil
+		}
+		var m map[string]any
+		if json.Unmarshal([]byte(x), &m) == nil {
+			return parse(m)
+		}
+	}
+	return nil
+}
+
 // corsAllowedOrigins is the explicit cross-origin allowlist (SR-005). The SPA is
 // served same-origin behind nginx on :8000, so by DEFAULT no CORS headers are
 // emitted (the previous wildcard `*` let any site read API JSON if it held a
