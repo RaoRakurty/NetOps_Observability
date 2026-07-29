@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 // ── Tenant isolation (CLAUDE.md §3a) ─────────────────────────────────────────
@@ -21,7 +23,7 @@ func TestCloudCostsQueryIsTenantScoped(t *testing.T) {
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return safeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

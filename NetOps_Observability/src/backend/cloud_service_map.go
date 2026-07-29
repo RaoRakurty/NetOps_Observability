@@ -38,6 +38,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 const (
@@ -412,7 +414,7 @@ func (s *server) handleCloudServiceMap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
-	scope := safeScopeLiteral(chTenantScope(r))
+	scope := cloud.SafeScopeLiteral(chTenantScope(r))
 	pairs := chJSONRows[chPairRow](cloudPairSQL(window, serviceMapMaxPairRows, scope))
 	rejects := chJSONRows[chPairRow](cloudRejectPairSQL(window, serviceMapMaxRejectRows, scope))
 	graph := buildServiceMap(pairs, rejects, s.cloudEndpointResolver(r), serviceMapMaxUnattributed)

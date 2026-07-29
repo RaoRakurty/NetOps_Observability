@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 // ── Tenant isolation (CLAUDE.md §3a) ─────────────────────────────────────────
@@ -20,7 +22,7 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return safeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(chTenantScope(r))
 	}
 	cases := []struct {
 		name  string
@@ -40,10 +42,10 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 				t.Fatalf("scope = %q, want %q", scope, tc.want)
 			}
 			queries := []string{
-				cloudHealthSQL(24, "", 100, scope),
-				cloudChangesSQL(24, "", "", 100, scope),
-				cloudEvidenceObjectsSQL(24, "", scope),
-				cloudEvidenceSignalsSQL(24, "'id'", "", 100, scope),
+				cloud.HealthSQL(24, "", 100, scope),
+				cloud.ChangesSQL(24, "", "", 100, scope),
+				cloud.EvidenceObjectsSQL(24, "", scope),
+				cloud.EvidenceSignalsSQL(24, "'id'", "", 100, scope),
 			}
 			for _, q := range queries {
 				if !strings.Contains(q, "SETTINGS tenant_scope = '"+tc.want+"'") {
@@ -68,14 +70,14 @@ func TestCloudSignalQueriesAreTenantScoped(t *testing.T) {
 // The evidence read must use the HOT projection (never the raw hypotheses/objects
 // table) and must prefilter the archive by the picked object ids — the #100 contract.
 func TestCloudEvidenceQueriesFollowHotReadContract(t *testing.T) {
-	obj := cloudEvidenceObjectsSQL(24, "", "acme")
+	obj := cloud.EvidenceObjectsSQL(24, "", "acme")
 	if !strings.Contains(obj, "netops.corr_current FINAL") {
 		t.Fatalf("object read must use corr_current FINAL:\n%s", obj)
 	}
 	if strings.Contains(obj, "netops.hypotheses") {
 		t.Fatalf("object read must never touch hypotheses near a fold:\n%s", obj)
 	}
-	sig := cloudEvidenceSignalsSQL(24, "'a','b'", "", 50, "acme")
+	sig := cloud.EvidenceSignalsSQL(24, "'a','b'", "", 50, "acme")
 	if !strings.Contains(sig, "archived_for IN ('a','b')") {
 		t.Fatalf("archive read must be prefiltered by the picked ids:\n%s", sig)
 	}
@@ -84,7 +86,7 @@ func TestCloudEvidenceQueriesFollowHotReadContract(t *testing.T) {
 // The app filter must bind the app to the signal's OWN identity fields — never a
 // LIKE/contains match that could pull in a neighbouring app's rows.
 func TestAppFilterSQLBindsExactly(t *testing.T) {
-	f := appFilterSQL("store-api")
+	f := cloud.AppFilterSQL("store-api")
 	for _, want := range []string{"entity_id = 'store-api'", "JSONExtractString(attrs,'app') = 'store-api'"} {
 		if !strings.Contains(f, want) {
 			t.Fatalf("appFilterSQL missing %q: %s", want, f)
@@ -93,7 +95,7 @@ func TestAppFilterSQLBindsExactly(t *testing.T) {
 	if strings.Contains(f, "LIKE") {
 		t.Fatalf("appFilterSQL must not fuzzy-match: %s", f)
 	}
-	if appFilterSQL("") != "" {
+	if cloud.AppFilterSQL("") != "" {
 		t.Fatal("no app ⇒ no predicate")
 	}
 }
@@ -111,8 +113,8 @@ func TestClampSignalLimit(t *testing.T) {
 		{"1000000", cloudSignalMaxLim},
 	}
 	for _, tc := range cases {
-		if got := clampSignalLimit(tc.in); got != tc.want {
-			t.Fatalf("clampSignalLimit(%q) = %d, want %d", tc.in, got, tc.want)
+		if got := cloud.ClampSignalLimit(tc.in); got != tc.want {
+			t.Fatalf("cloud.ClampSignalLimit(%q) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }
@@ -136,8 +138,8 @@ func TestClampWindowHours(t *testing.T) {
 		{"9999", cloudSignalWindowMaxHours},
 	}
 	for _, tc := range cases {
-		if got := clampWindowHours(tc.in); got != tc.want {
-			t.Fatalf("clampWindowHours(%q) = %d, want %d", tc.in, got, tc.want)
+		if got := cloud.ClampWindowHours(tc.in); got != tc.want {
+			t.Fatalf("cloud.ClampWindowHours(%q) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 }
@@ -146,12 +148,12 @@ func TestClampWindowHours(t *testing.T) {
 // killing the dishonest label): a 168h request reads 168h, not a hardwired 24.
 func TestSignalQueriesCarryWindow(t *testing.T) {
 	for _, q := range []string{
-		cloudHealthSQL(168, "", 100, "acme"),
-		cloudChangesSQL(168, "", "", 100, "acme"),
-		cloudEvidenceObjectsSQL(168, "", "acme"),
-		cloudEvidenceSignalsSQL(168, "'id'", "", 100, "acme"),
-		cloudOpenObjectCountSQL(168, "", "acme"),
-		cloudArchivedSignalCountSQL(168, "'id'", "acme"),
+		cloud.HealthSQL(168, "", 100, "acme"),
+		cloud.ChangesSQL(168, "", "", 100, "acme"),
+		cloud.EvidenceObjectsSQL(168, "", "acme"),
+		cloud.EvidenceSignalsSQL(168, "'id'", "", 100, "acme"),
+		cloud.OpenObjectCountSQL(168, "", "acme"),
+		cloud.ArchivedSignalCountSQL(168, "'id'", "acme"),
 	} {
 		if !strings.Contains(q, "INTERVAL 168 HOUR") {
 			t.Fatalf("query does not honor the requested window:\n%s", q)
@@ -164,14 +166,14 @@ func TestSignalQueriesCarryWindow(t *testing.T) {
 func TestSafeScopeLiteralFailsClosed(t *testing.T) {
 	ok := []string{"__all__", "t_9f3a", "global", "acme-prod", "a.b"}
 	for _, s := range ok {
-		if got := safeScopeLiteral(s); got != s {
-			t.Fatalf("safeScopeLiteral(%q) = %q, want passthrough", s, got)
+		if got := cloud.SafeScopeLiteral(s); got != s {
+			t.Fatalf("cloud.SafeScopeLiteral(%q) = %q, want passthrough", s, got)
 		}
 	}
 	bad := []string{"", "' OR 1=1 --", `t_1' UNION SELECT`, "a\\b", "a b", "t\n"}
 	for _, s := range bad {
-		if got := safeScopeLiteral(s); got != "__none__" {
-			t.Fatalf("safeScopeLiteral(%q) = %q, want __none__ (fail closed)", s, got)
+		if got := cloud.SafeScopeLiteral(s); got != "__none__" {
+			t.Fatalf("cloud.SafeScopeLiteral(%q) = %q, want __none__ (fail closed)", s, got)
 		}
 	}
 }
@@ -188,11 +190,11 @@ func TestCloudHealthStateAndSeverity(t *testing.T) {
 		{"", "unknown", "info"},
 	}
 	for _, tc := range cases {
-		if got := cloudHealthState(tc.sev); got != tc.state {
-			t.Fatalf("cloudHealthState(%q) = %q, want %q", tc.sev, got, tc.state)
+		if got := cloud.HealthState(tc.sev); got != tc.state {
+			t.Fatalf("cloud.HealthState(%q) = %q, want %q", tc.sev, got, tc.state)
 		}
-		if got := cloudHealthSeverity(tc.sev); got != tc.sevOut {
-			t.Fatalf("cloudHealthSeverity(%q) = %q, want %q", tc.sev, got, tc.sevOut)
+		if got := cloud.HealthSeverity(tc.sev); got != tc.sevOut {
+			t.Fatalf("cloud.HealthSeverity(%q) = %q, want %q", tc.sev, got, tc.sevOut)
 		}
 	}
 }
@@ -225,8 +227,8 @@ func TestCloudChangeType(t *testing.T) {
 		{"cloud_change", "", "unknown"},
 	}
 	for _, tc := range cases {
-		if got := cloudChangeType(tc.kind, tc.event); got != tc.want {
-			t.Fatalf("cloudChangeType(%q, %q) = %q, want %q", tc.kind, tc.event, got, tc.want)
+		if got := cloud.ChangeType(tc.kind, tc.event); got != tc.want {
+			t.Fatalf("cloud.ChangeType(%q, %q) = %q, want %q", tc.kind, tc.event, got, tc.want)
 		}
 	}
 }
@@ -239,12 +241,12 @@ func TestShortActor(t *testing.T) {
 		{"", "—"},
 	}
 	for _, tc := range cases {
-		if got := shortActor(tc.in); got != tc.want {
-			t.Fatalf("shortActor(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := cloud.ShortActor(tc.in); got != tc.want {
+			t.Fatalf("cloud.ShortActor(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 	// the account number must not survive into the UI
-	if got := shortActor("arn:aws:iam::945714973156:user/correlix"); strings.Contains(got, "945714973156") {
+	if got := cloud.ShortActor("arn:aws:iam::945714973156:user/correlix"); strings.Contains(got, "945714973156") {
 		t.Fatalf("shortActor leaked the account id: %q", got)
 	}
 }
@@ -263,20 +265,20 @@ func TestShortCloudName(t *testing.T) {
 		{"", ""},
 	}
 	for _, tc := range cases {
-		if got := shortCloudName(tc.in); got != tc.want {
-			t.Fatalf("shortCloudName(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := cloud.ShortCloudName(tc.in); got != tc.want {
+			t.Fatalf("cloud.ShortCloudName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
 
 func TestCloudChangeConfidence(t *testing.T) {
-	if got := cloudChangeConfidence("arn:...:user/x", "ec2.amazonaws.com", "req-1"); got != "confirmed" {
+	if got := cloud.ChangeConfidence("arn:...:user/x", "ec2.amazonaws.com", "req-1"); got != "confirmed" {
 		t.Fatalf("full provenance = %q, want confirmed", got)
 	}
-	if got := cloudChangeConfidence("", "ec2.amazonaws.com", ""); got != "strong" {
+	if got := cloud.ChangeConfidence("", "ec2.amazonaws.com", ""); got != "strong" {
 		t.Fatalf("no actor = %q, want strong", got)
 	}
-	if got := cloudChangeConfidence("actor", "", ""); got != "strong" {
+	if got := cloud.ChangeConfidence("actor", "", ""); got != "strong" {
 		t.Fatalf("no emitting service = %q, want strong", got)
 	}
 }
@@ -287,50 +289,50 @@ func TestVerdictConfidence(t *testing.T) {
 		"confirmed": "confirmed", "suspected": "suspected",
 		"undetermined": "unknown", "": "unknown", "recovered": "unknown",
 	} {
-		if got := verdictConfidence(in); got != want {
-			t.Fatalf("verdictConfidence(%q) = %q, want %q", in, got, want)
+		if got := cloud.VerdictConfidence(in); got != want {
+			t.Fatalf("cloud.VerdictConfidence(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 // A baseline the engine never computed reads "—", never a fabricated 0.
 func TestFmtBaselineNotMeasured(t *testing.T) {
-	if got := fmtBaseline(0, 0); got != "—" {
-		t.Fatalf("fmtBaseline(0,0) = %q, want —", got)
+	if got := cloud.FmtBaseline(0, 0); got != "—" {
+		t.Fatalf("cloud.FmtBaseline(0,0) = %q, want —", got)
 	}
-	if got := fmtBaseline(0.2, 6.2); got != "0.2" {
-		t.Fatalf("fmtBaseline(0.2, 6.2) = %q, want 0.2", got)
+	if got := cloud.FmtBaseline(0.2, 6.2); got != "0.2" {
+		t.Fatalf("cloud.FmtBaseline(0.2, 6.2) = %q, want 0.2", got)
 	}
-	if got := fmtSignalValue(6.4); got != "6.4" {
-		t.Fatalf("fmtSignalValue(6.4) = %q", got)
+	if got := cloud.FmtSignalValue(6.4); got != "6.4" {
+		t.Fatalf("cloud.FmtSignalValue(6.4) = %q", got)
 	}
 }
 
 func TestAppAndResourceResolution(t *testing.T) {
 	// app-centric health signal: entity IS the app
 	row := chSignalRow{EntityType: "app", EntityID: "booking-service"}
-	a := parseAttrs(`{"app":"booking-service","provider":"azure","host":"azure-host-01"}`)
-	if got := appOf(row, a); got != "booking-service" {
+	a := cloud.ParseAttrs(`{"app":"booking-service","provider":"azure","host":"azure-host-01"}`)
+	if got := cloud.AppOf(row, a); got != "booking-service" {
 		t.Fatalf("appOf = %q", got)
 	}
-	if got := resourceOf(row, a); got != "azure-host-01" {
+	if got := cloud.ResourceOf(row, a); got != "azure-host-01" {
 		t.Fatalf("resourceOf = %q, want the host it was measured on", got)
 	}
 	// resource-centric change: no app in attrs and the entity is a resource →
 	// unattributed, which must stay EMPTY (the caller renders "—"), never guessed.
 	row = chSignalRow{EntityType: "cloud_resource", EntityID: "i-025bac7de4e6be0a6"}
-	a = parseAttrs(`{"account":"945714973156","provider":"aws","resource_id":"i-025bac7de4e6be0a6"}`)
-	if got := appOf(row, a); got != "" {
+	a = cloud.ParseAttrs(`{"account":"945714973156","provider":"aws","resource_id":"i-025bac7de4e6be0a6"}`)
+	if got := cloud.AppOf(row, a); got != "" {
 		t.Fatalf("appOf on an unattributed resource = %q, want \"\"", got)
 	}
-	if got := resourceOf(row, a); got != "i-025bac7de4e6be0a6" {
+	if got := cloud.ResourceOf(row, a); got != "i-025bac7de4e6be0a6" {
 		t.Fatalf("resourceOf = %q", got)
 	}
-	if got := providerOf(a); got != "aws" {
+	if got := cloud.ProviderOf(a); got != "aws" {
 		t.Fatalf("providerOf = %q", got)
 	}
-	if got := providerOf(signalAttrs{}); got != "cloud" {
-		t.Fatalf("providerOf(empty) = %q, want cloud", got)
+	if got := cloud.ProviderOf(signalAttrs{}); got != "cloud" {
+		t.Fatalf("cloud.ProviderOf(empty) = %q, want cloud", got)
 	}
 }
 
@@ -356,12 +358,12 @@ func TestAffectedAppsAndMissingEvidence(t *testing.T) {
 
 // A value that could break out of the SQL literal list must be dropped, not quoted.
 func TestSQLListDropsUnsafeValues(t *testing.T) {
-	got := sqlList([]string{"0ad5e1ec-60ac-5832-8ffd-31cc6b798c16", "x'; DROP TABLE netops.corr_signals; --", ""})
+	got := cloud.SQLList([]string{"0ad5e1ec-60ac-5832-8ffd-31cc6b798c16", "x'; DROP TABLE netops.corr_signals; --", ""})
 	if got != "'0ad5e1ec-60ac-5832-8ffd-31cc6b798c16'" {
 		t.Fatalf("sqlList = %q", got)
 	}
-	if sqlList(nil) != "" {
-		t.Fatal("sqlList(nil) must be empty so the caller skips the query")
+	if cloud.SQLList(nil) != "" {
+		t.Fatal("cloud.SQLList(nil) must be empty so the caller skips the query")
 	}
 }
 
@@ -385,7 +387,7 @@ func TestEvidenceReasonIsOperatorReadable(t *testing.T) {
 		}
 		return ""
 	}
-	got := evidenceReason("cloud_flow_log", "rejected_flow", "eni-007542c1d61f44947", "warn",
+	got := cloud.EvidenceReason("cloud_flow_log", "rejected_flow", "eni-007542c1d61f44947", "warn",
 		"sig.ent.app.saas-experience-degraded", "suspected", namer)
 
 	for _, want := range []string{

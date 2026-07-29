@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 func TestClampExportLimit(t *testing.T) {
@@ -119,7 +121,7 @@ func TestExportSerializerWidths(t *testing.T) {
 // test locks the tenancy property at the only place export differs: the limit.
 // (Scope injection itself is covered by TestCloudSignalQueriesAreTenantScoped.)
 func TestExportUsesScopedBuilders(t *testing.T) {
-	q := cloudHealthSQL(24, "", clampExportLimit(""), "acme")
+	q := cloud.HealthSQL(24, "", clampExportLimit(""), "acme")
 	if !strings.Contains(q, "SETTINGS tenant_scope = 'acme'") {
 		t.Fatalf("export-sized health query lost tenant scope:\n%s", q)
 	}

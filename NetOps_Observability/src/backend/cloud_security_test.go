@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 // §3a: every Wave 5 #16 query carries the CALLER's scope; no claims fails
@@ -22,7 +24,7 @@ func TestCloudSecurityQueriesAreTenantScoped(t *testing.T) {
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return safeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

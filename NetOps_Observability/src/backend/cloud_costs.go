@@ -30,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 const (
@@ -182,7 +184,7 @@ func costFilterSQL(provider, account, service string) string {
 		fmt.Fprintf(&b, " AND account = '%s'", account)
 	}
 	if service != "" {
-		fmt.Fprintf(&b, " AND service = '%s'", escapeCHString(service))
+		fmt.Fprintf(&b, " AND service = '%s'", cloud.EscapeCH(service))
 	}
 	return b.String()
 }
@@ -247,7 +249,7 @@ func (s *server) handleCloudCosts(w http.ResponseWriter, r *http.Request) {
 	limit := clampCostLimit(q.Get("limit"))
 	rows := chJSONRows[chCostRow](cloudCostsSQL(
 		from, to, costFilterSQL(provider, account, service), limit,
-		safeScopeLiteral(chTenantScope(r))))
+		cloud.SafeScopeLiteral(chTenantScope(r))))
 	if rows == nil {
 		rows = []chCostRow{}
 	}

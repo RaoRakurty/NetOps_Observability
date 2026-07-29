@@ -35,6 +35,8 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+
+	"netops/backend/cloud"
 )
 
 const (
@@ -69,11 +71,11 @@ func affectedCloudResources(raw string) []string {
 // the handler then answers honestly instead of querying unscoped.
 func investigationScopeSQL(resources, apps []string) string {
 	preds := make([]string, 0, 2)
-	if list := sqlList(resources); list != "" {
+	if list := cloud.SQLList(resources); list != "" {
 		preds = append(preds,
 			fmt.Sprintf("entity_id IN (%[1]s) OR JSONExtractString(attrs,'resource_id') IN (%[1]s)", list))
 	}
-	if list := sqlList(apps); list != "" {
+	if list := cloud.SQLList(apps); list != "" {
 		preds = append(preds,
 			fmt.Sprintf("JSONExtractString(attrs,'app') IN (%[1]s) OR JSONExtractString(attrs,'app_id') IN (%[1]s)", list))
 	}
@@ -166,7 +168,7 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusNotFound, errNotFound)
 		return
 	}
-	scope := safeScopeLiteral(chTenantScope(r))
+	scope := cloud.SafeScopeLiteral(chTenantScope(r))
 
 	objs := chJSONRows[chObjectRow](investigationObjectSQL(id, scope))
 	if len(objs) == 0 {
@@ -205,9 +207,9 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 	inv := s.cloudResourceIndex(r)
 	out := make([]investigationChangeRow, 0, len(rows))
 	for _, row := range rows {
-		a := parseAttrs(row.Attrs)
-		resID := resourceOf(row, a)
-		appName := appOf(row, a)
+		a := cloud.ParseAttrs(row.Attrs)
+		resID := cloud.ResourceOf(row, a)
+		appName := cloud.AppOf(row, a)
 		resName := resID
 		if c, ok := lookupCloudResource(inv, resID); ok {
 			if appName == "" {
@@ -219,7 +221,7 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 		}
 		src := a.EventSource
 		if src == "" {
-			src = providerOf(a)
+			src = cloud.ProviderOf(a)
 		}
 		off := int64(0)
 		if ts, terr := time.Parse(time.RFC3339, row.TS); terr == nil {
@@ -230,10 +232,10 @@ func (s *server) handleCloudInvestigationChanges(w http.ResponseWriter, r *http.
 				Time:            isoTS(row.TS),
 				App:             orDash(appName),
 				Resource:        resName,
-				ChangeType:      cloudChangeType(row.Kind, row.MetricName),
-				Actor:           shortActor(a.Actor),
+				ChangeType:      cloud.ChangeType(row.Kind, row.MetricName),
+				Actor:           cloud.ShortActor(a.Actor),
 				Source:          src,
-				Confidence:      cloudChangeConfidence(a.Actor, a.EventSource, a.RequestID),
+				Confidence:      cloud.ChangeConfidence(a.Actor, a.EventSource, a.RequestID),
 				RelatedSymptoms: []string{},
 				CloudRef: enrichCloudRef(cloudEvidenceRef{
 					Provider:   a.Provider,

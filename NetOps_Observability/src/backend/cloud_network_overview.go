@@ -127,13 +127,13 @@ func (s *server) cloudOpenIssues(scope string) []cloud.OverviewIssue {
 	// The grounded evidence carries the provider-native identities (resource
 	// ids, ENIs, hosts) and the signal kinds (seam-lane kinds route the issue
 	// to a seam, §4a).
-	if list := sqlList(ids); list != "" {
-		for _, row := range chJSONRows[chSignalRow](cloudEvidenceSignalsSQL(cloudSignalWindowHours, list, "", overviewMaxIssueSignals, scope)) {
+	if list := cloud.SQLList(ids); list != "" {
+		for _, row := range chJSONRows[chSignalRow](cloud.EvidenceSignalsSQL(cloudSignalWindowHours, list, "", overviewMaxIssueSignals, scope)) {
 			i, ok := byID[row.CorrelationID]
 			if !ok {
 				continue
 			}
-			a := parseAttrs(row.Attrs)
+			a := cloud.ParseAttrs(row.Attrs)
 			addIssueHandle(seen[row.CorrelationID], &issues[i].Handles, a.ResourceID)
 			addIssueHandle(seen[row.CorrelationID], &issues[i].Handles, row.EntityID)
 			addIssueHandle(seen[row.CorrelationID], &issues[i].Handles, a.Host)
@@ -165,13 +165,13 @@ func (s *server) handleCloudNetworkOverview(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	scope := safeScopeLiteral(chTenantScope(r))
+	scope := cloud.SafeScopeLiteral(chTenantScope(r))
 	issues := s.cloudOpenIssues(scope)
 	ov := cloud.BuildNetworkOverview(res, issues, cloud.DefaultOverviewLimits(), time.Now().UTC())
 
 	// total_open is a dedicated COUNT (the same honesty rule as the evidence
 	// ledger): the bounded `considered` set can never masquerade as the total.
-	totalOpen := chScalarInt(cloudOpenObjectCountSQL(cloudSignalWindowHours, "", scope))
+	totalOpen := chScalarInt(cloud.OpenObjectCountSQL(cloudSignalWindowHours, "", scope))
 	if totalOpen < len(issues) {
 		totalOpen = len(issues) // a count the store failed to serve never understates what we hold
 	}

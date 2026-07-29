@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 // ── Tenant isolation (CLAUDE.md §3a) ─────────────────────────────────────────
@@ -19,7 +21,7 @@ func TestServiceMapQueriesAreTenantScoped(t *testing.T) {
 		if c != nil {
 			r = r.WithContext(context.WithValue(r.Context(), userCtxKey, *c))
 		}
-		return safeScopeLiteral(chTenantScope(r))
+		return cloud.SafeScopeLiteral(chTenantScope(r))
 	}
 	cases := []struct {
 		name  string

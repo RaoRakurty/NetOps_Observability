@@ -28,6 +28,8 @@ import (
 	"strings"
 
 	"netops/backend/internal/chschema"
+
+	"netops/backend/cloud"
 )
 
 // securityLaneKinds maps each fidelity lane to the signal kinds that prove it.
@@ -71,7 +73,7 @@ var seamTelemetryKinds = []string{
 }
 
 func sqlKindList(kinds []string) string {
-	return sqlList(kinds)
+	return cloud.SQLList(kinds)
 }
 
 // ── SQL builders (pure; carry the caller's tenant scope) ─────────────────────
@@ -274,7 +276,7 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	limit := cloud.ClampSignalLimit(r.URL.Query().Get("limit"))
 	window, werr := s.tenantWindowHours(r)
 	if werr != nil {
 		writeError(w, http.StatusBadRequest, werr)
@@ -282,14 +284,14 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 	}
 	inv := s.cloudResourceIndex(r)
 	rows := chJSONRows[chSignalRow](cloudSecuritySQL(
-		window, appFilterSQL(app), limit, safeScopeLiteral(chTenantScope(r))))
+		window, cloud.AppFilterSQL(app), limit, cloud.SafeScopeLiteral(chTenantScope(r))))
 	laneCounts := map[string]int{"waf": 0, "lb": 0, "dns": 0}
 	out := make([]cloudSecurityFinding, 0, len(rows))
 	for _, row := range rows {
-		a := parseAttrs(row.Attrs)
-		resID := resourceOf(row, a)
+		a := cloud.ParseAttrs(row.Attrs)
+		resID := cloud.ResourceOf(row, a)
 		resName := resID
-		appName := appOf(row, a)
+		appName := cloud.AppOf(row, a)
 		if c, ok := lookupCloudResource(inv, resID); ok {
 			if c.ResourceName != "" {
 				resName = c.ResourceName
@@ -299,7 +301,7 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if resName == resID {
-			resName = shortCloudName(resID)
+			resName = cloud.ShortCloudName(resID)
 		}
 		lane := securityLaneOf(row.Kind)
 		laneCounts[lane]++
@@ -313,8 +315,8 @@ func (s *server) handleCloudSecurity(w http.ResponseWriter, r *http.Request) {
 			Signal:   row.Kind,
 			App:      orDash(appName),
 			Resource: resName,
-			Source:   providerOf(a),
-			Severity: cloudHealthSeverity(row.Severity),
+			Source:   cloud.ProviderOf(a),
+			Severity: cloud.HealthSeverity(row.Severity),
 			Count:    count,
 			Detail:   securityDetail(row.Kind, a),
 		})
@@ -332,26 +334,26 @@ func (s *server) handleCloudProviderEvents(w http.ResponseWriter, r *http.Reques
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	limit := cloud.ClampSignalLimit(r.URL.Query().Get("limit"))
 	window, werr := s.tenantWindowHours(r)
 	if werr != nil {
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
 	rows := chJSONRows[chSignalRow](cloudProviderEventsSQL(
-		window, limit, safeScopeLiteral(chTenantScope(r))))
+		window, limit, cloud.SafeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudProviderEvent, 0, len(rows))
 	for _, row := range rows {
-		a := parseAttrs(row.Attrs)
+		a := cloud.ParseAttrs(row.Attrs)
 		out = append(out, cloudProviderEvent{
 			Time:     isoTS(row.TS),
-			Provider: providerOf(a),
+			Provider: cloud.ProviderOf(a),
 			Service:  orDash(a.Service),
 			Region:   orDash(a.Region),
 			Category: orDash(a.Category),
 			Status:   orDash(a.Status),
 			Summary:  strings.TrimSpace(a.Summary),
-			Severity: cloudHealthSeverity(row.Severity),
+			Severity: cloud.HealthSeverity(row.Severity),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -367,25 +369,25 @@ func (s *server) handleCloudSeamTelemetry(w http.ResponseWriter, r *http.Request
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	limit := clampSignalLimit(r.URL.Query().Get("limit"))
+	limit := cloud.ClampSignalLimit(r.URL.Query().Get("limit"))
 	window, werr := s.tenantWindowHours(r)
 	if werr != nil {
 		writeError(w, http.StatusBadRequest, werr)
 		return
 	}
 	rows := chJSONRows[chSeamGroupRow](cloudSeamTelemetrySQL(
-		window, limit, safeScopeLiteral(chTenantScope(r))))
+		window, limit, cloud.SafeScopeLiteral(chTenantScope(r))))
 	out := make([]cloudSeamTelemetryRow, 0, len(rows))
 	for _, row := range rows {
-		a := parseAttrs(row.Attrs)
+		a := cloud.ParseAttrs(row.Attrs)
 		out = append(out, cloudSeamTelemetryRow{
 			SeamID:        row.EntityID,
 			State:         seamStateOf(row.Kind, row.Value),
 			Kind:          row.Kind,
-			Severity:      cloudHealthSeverity(row.Severity),
+			Severity:      cloud.HealthSeverity(row.Severity),
 			LastSeen:      isoTS(row.TS),
 			Events:        row.Events,
-			Provider:      providerOf(a),
+			Provider:      cloud.ProviderOf(a),
 			EvidenceClass: a.EvidenceClass,
 		})
 	}

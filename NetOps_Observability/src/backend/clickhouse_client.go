@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -436,3 +437,35 @@ func chInsertTolerance() map[string]string {
 		"date_time_input_format":           "best_effort",
 	}
 }
+
+// chJSONRows and chScalarInt are the JSONEachRow/scalar conveniences over
+// chQuery (moved here from cloud_signals.go — CH plumbing, W2.2).
+func chJSONRows[T any](sql string) []T {
+	lines := chQuery(sql)
+	out := make([]T, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var row T
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func chScalarInt(sql string) int {
+	for _, line := range chQuery(sql) {
+		if n, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// ── handlers ─────────────────────────────────────────────────────────────────
+
+// appFilterSQL builds the (validated) app predicate for the signal tables.
