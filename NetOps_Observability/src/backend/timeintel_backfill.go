@@ -2,17 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"netops/backend/internal/platformdb"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"netops/backend/internal/chschema"
 	"netops/backend/timeintel"
 )
@@ -33,80 +29,21 @@ import (
 // request body — the worker spans tenants but each row is written default-closed
 // under its own scope.
 
-// incidentTimeMetricRow is one persisted phase-metrics snapshot per
-// (tenant, correlation_id, calculation_version) — the durable twin of what the
-// live per-incident view derives (timeIntelResponse).
-type incidentTimeMetricRow struct {
-	TenantID      string                 `json:"-"` // never serialized (caller's own scope)
-	CorrelationID string                 `json:"correlation_id"`
-	CalcVersion   string                 `json:"calculation_version"`
-	OccurredAt    time.Time              `json:"occurred_at"`
-	OwnerDomain   string                 `json:"owner_domain"`
-	SeamType      string                 `json:"seam_type,omitempty"`
-	Bottleneck    string                 `json:"current_bottleneck"`
-	Metrics       []timeintel.TimeMetric `json:"metrics"`
-	CalculatedAt  time.Time              `json:"calculated_at"`
-	// Rollup-source fields (migration 0027): everything the reliability rollups
-	// need so they can read snapshots instead of a capped live ClickHouse scan.
-	Owner    string            `json:"owner,omitempty"`      // raw seam owner (isp/cloud_provider/…) — owner filter
-	State    string            `json:"state,omitempty"`      // open|closed|merged — merged children excluded from MTBF
-	Internal bool              `json:"internal"`             // platform self-monitoring (excluded by default)
-	Group    map[string]string `json:"group_keys,omitempty"` // device/interface/provider/signature/… grouping keys
-}
+// The snapshot store moved to timeintel/metrics_store.go (Phase-2 W1.5).
+// Aliases keep the worker, reliability rollups and handler source-compatible.
+type (
+	incidentTimeMetricRow    = timeintel.MetricRow
+	incidentTimeMetricsStore = timeintel.MetricsStore
+)
 
-type incidentTimeMetricsStore interface {
-	// Upsert writes one snapshot, idempotent on the PK (re-backfill is safe).
-	Upsert(ctx context.Context, row incidentTimeMetricRow) error
-	// List returns the most recent snapshots for the caller, tenant-scoped
-	// (default-closed unless cross). Newest first, bounded by limit.
-	List(ctx context.Context, tenant string, cross bool, limit int) ([]incidentTimeMetricRow, error)
-	// ListWindow is the reliability-rollup read: tenant-scoped (default-closed
-	// unless cross), bounded to snapshots with occurred_at >= since, deduped to
-	// ONE row per correlation_id (preferring preferVersion, then the freshest
-	// calculated_at — so a calc-version bump never double-counts an incident),
-	// newest occurred_at first, hard-bounded by limit.
-	ListWindow(ctx context.Context, tenant string, cross bool, since time.Time, preferVersion string, limit int) ([]incidentTimeMetricRow, error)
-}
+const timeIntelBackfillCap = timeintel.SnapshotCap
 
 // newIncidentTimeMetricsStore selects pg under STORE_BACKEND=postgres, else in-memory.
 func newIncidentTimeMetricsStore() incidentTimeMetricsStore {
 	if ps, ok := platformdb.ActivePG(); ok {
-		return &pgIncidentTimeMetricsStore{db: ps.DB()}
+		return timeintel.NewPGMetricsStore(ps.DB())
 	}
-	return &memIncidentTimeMetricsStore{by: map[string]incidentTimeMetricRow{}}
-}
-
-// ── derivation (pure, no IO) ──────────────────────────────────────────────────
-
-// deriveIncidentTimeMetricRow computes the persisted snapshot for one corr object
-// from its engine-side facts — the SAME lifecycle/metric/driver derivation the live
-// per-incident view and rollups use (timeintel.DeriveLifecycle → ComputeTimeMetrics →
-// DeriveTimeLossDriver), so a backfilled row equals the live computation. seamType
-// is the grounded seam type (may be ""); group carries the owner/identity keys for
-// owner-domain classification, MTBF grouping and dimension filters; state is the
-// corr object state (open|closed|merged — merged = child, excluded from MTBF).
-func deriveIncidentTimeMetricRow(tenant, corrID, version string, facts timeintel.CorrTimeFacts, group map[string]string, seamType, state string, now time.Time) incidentTimeMetricRow {
-	lc := timeintel.DeriveLifecycle(facts, timeintel.ITSMTimeFacts{})
-	metrics := timeintel.ComputeTimeMetrics(lc, version, now)
-	ownerDomain, internal := timeintel.ClassifyOwnerDomain(facts.Owner, group)
-	driver, _ := timeintel.DeriveTimeLossDriver(lc, timeintel.DriverContext{
-		EvidenceMissing: facts.EvidenceMissing, Owner: facts.Owner,
-	})
-	return incidentTimeMetricRow{
-		TenantID:      normTenant(tenant),
-		CorrelationID: corrID,
-		CalcVersion:   version,
-		OccurredAt:    facts.WindowStart,
-		OwnerDomain:   string(ownerDomain),
-		SeamType:      strings.TrimSpace(seamType),
-		Bottleneck:    string(driver),
-		Metrics:       metrics,
-		CalculatedAt:  now,
-		Owner:         facts.Owner,
-		State:         strings.ToLower(strings.TrimSpace(state)),
-		Internal:      internal,
-		Group:         group,
-	}
+	return timeintel.NewMemMetricsStore()
 }
 
 // ── the backfill worker ───────────────────────────────────────────────────────
@@ -114,9 +51,6 @@ func deriveIncidentTimeMetricRow(tenant, corrID, version string, facts timeintel
 const (
 	// timeIntelBackfillLookback bounds how far back a single backfill pass scans.
 	timeIntelBackfillLookback = 30 * 24 * time.Hour
-	// timeIntelBackfillCap bounds rows per pass (a multiple of the live rollup cap;
-	// the whole point of the table is to persist beyond the live read window).
-	timeIntelBackfillCap = 20000
 )
 
 // backfillIncidentTimeMetrics scans corr objects across ALL tenants (worker scope)
@@ -195,7 +129,7 @@ SELECT toString(o.tenant_id)      AS tenant_id,
 		if sig != "" {
 			group["signature"] = sig
 		}
-		row := deriveIncidentTimeMetricRow(
+		row := timeintel.DeriveMetricRow(
 			asString(o["tenant_id"]), corrID, timeIntelCalcVersion,
 			facts, group, asString(o["seam_type"]), asString(o["state"]), now)
 		if err := s.incidentTimeMetrics.Upsert(ctx, row); err != nil {
@@ -233,225 +167,6 @@ func (s *server) startIncidentTimeMetricsBackfill(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-// ── in-memory backend ─────────────────────────────────────────────────────────
-
-type memIncidentTimeMetricsStore struct {
-	mu sync.RWMutex
-	by map[string]incidentTimeMetricRow // key: tenant\x1fcorrID\x1fversion
-}
-
-func (m *memIncidentTimeMetricsStore) key(tenant, corrID, version string) string {
-	return normTenant(tenant) + "\x1f" + corrID + "\x1f" + version
-}
-
-func (m *memIncidentTimeMetricsStore) Upsert(_ context.Context, row incidentTimeMetricRow) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row.TenantID = normTenant(row.TenantID)
-	m.by[m.key(row.TenantID, row.CorrelationID, row.CalcVersion)] = row
-	return nil
-}
-
-func (m *memIncidentTimeMetricsStore) List(_ context.Context, tenant string, cross bool, limit int) ([]incidentTimeMetricRow, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	t := normTenant(tenant)
-	out := []incidentTimeMetricRow{}
-	for _, row := range m.by {
-		if !cross && row.TenantID != t { // default-closed tenant filter
-			continue
-		}
-		out = append(out, row)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
-
-func (m *memIncidentTimeMetricsStore) ListWindow(_ context.Context, tenant string, cross bool, since time.Time, preferVersion string, limit int) ([]incidentTimeMetricRow, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	t := normTenant(tenant)
-	// Dedupe: one row per correlation_id, preferring preferVersion then the freshest
-	// calculated_at — a calc-version bump must never double-count an incident.
-	best := map[string]incidentTimeMetricRow{}
-	for _, row := range m.by {
-		if !cross && row.TenantID != t { // default-closed tenant filter (§3a)
-			continue
-		}
-		if !since.IsZero() && row.OccurredAt.Before(since) {
-			continue
-		}
-		cur, seen := best[row.TenantID+"\x1f"+row.CorrelationID]
-		if !seen {
-			best[row.TenantID+"\x1f"+row.CorrelationID] = row
-			continue
-		}
-		curPref, rowPref := cur.CalcVersion == preferVersion, row.CalcVersion == preferVersion
-		if (rowPref && !curPref) || (rowPref == curPref && row.CalculatedAt.After(cur.CalculatedAt)) {
-			best[row.TenantID+"\x1f"+row.CorrelationID] = row
-		}
-	}
-	out := make([]incidentTimeMetricRow, 0, len(best))
-	for _, row := range best {
-		out = append(out, row)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
-
-// ── Postgres backend (tenant_iso FORCE-RLS via withTenant) ────────────────────
-
-type pgIncidentTimeMetricsStore struct{ db *platformdb.DB }
-
-func (s *pgIncidentTimeMetricsStore) Upsert(ctx context.Context, row incidentTimeMetricRow) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	metricsJSON, err := json.Marshal(row.Metrics)
-	if err != nil {
-		return err
-	}
-	if len(metricsJSON) == 0 {
-		metricsJSON = []byte("[]")
-	}
-	group := row.Group
-	if group == nil {
-		group = map[string]string{}
-	}
-	groupJSON, err := json.Marshal(group)
-	if err != nil {
-		return err
-	}
-	calc := row.CalculatedAt
-	if calc.IsZero() {
-		calc = time.Now().UTC()
-	}
-	// Writer is tenant-scoped (owner stamped from the corr object's tenant_id);
-	// WITH CHECK enforces the row's tenant matches the bound scope.
-	return s.db.WithTenant(ctx, row.TenantID, false, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-INSERT INTO incident_time_metrics
-  (tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-   current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-ON CONFLICT (tenant_id, correlation_id, calculation_version)
-DO UPDATE SET occurred_at = EXCLUDED.occurred_at, owner_domain = EXCLUDED.owner_domain,
-              current_bottleneck = EXCLUDED.current_bottleneck, seam_type = EXCLUDED.seam_type,
-              metrics = EXCLUDED.metrics, calculated_at = EXCLUDED.calculated_at,
-              owner = EXCLUDED.owner, state = EXCLUDED.state,
-              internal = EXCLUDED.internal, group_keys = EXCLUDED.group_keys`,
-			normTenant(row.TenantID), row.CorrelationID, row.CalcVersion, nullableTime(row.OccurredAt),
-			row.OwnerDomain, row.Bottleneck, row.SeamType, string(metricsJSON), calc,
-			row.Owner, row.State, row.Internal, string(groupJSON))
-		return err
-	})
-}
-
-func (s *pgIncidentTimeMetricsStore) List(ctx context.Context, tenant string, cross bool, limit int) ([]incidentTimeMetricRow, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if limit <= 0 || limit > timeIntelBackfillCap {
-		limit = 500
-	}
-	out := []incidentTimeMetricRow{}
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-SELECT tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-       current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys
-  FROM incident_time_metrics
- ORDER BY occurred_at DESC NULLS LAST
- LIMIT `+intToString(limit))
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		var scanErr error
-		out, scanErr = scanIncidentTimeMetricRows(rows)
-		return scanErr
-	})
-	return out, err
-}
-
-// ListWindow is the rollup read: aggregate scoping in the DATABASE (RLS tenant
-// scope + occurred_at window + one-row-per-incident dedupe + hard bound), so the
-// API never live-scans ClickHouse for rollups and never loads unbounded history.
-func (s *pgIncidentTimeMetricsStore) ListWindow(ctx context.Context, tenant string, cross bool, since time.Time, preferVersion string, limit int) ([]incidentTimeMetricRow, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if limit <= 0 || limit > timeIntelBackfillCap {
-		limit = timeIntelBackfillCap
-	}
-	out := []incidentTimeMetricRow{}
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		// DISTINCT ON dedupes to one snapshot per (tenant, incident), preferring the
-		// current calculation version, then the freshest computation — a calc-version
-		// bump never double-counts. Outer ORDER BY keeps the most RECENT incidents
-		// when the window holds more than the bound (honest capping, newest first).
-		rows, err := tx.Query(ctx, `
-SELECT * FROM (
-    SELECT DISTINCT ON (tenant_id, correlation_id)
-           tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-           current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys
-      FROM incident_time_metrics
-     WHERE occurred_at >= $1
-     ORDER BY tenant_id, correlation_id, (calculation_version = $2) DESC, calculated_at DESC
-) d
- ORDER BY occurred_at DESC NULLS LAST
- LIMIT `+intToString(limit), since, preferVersion)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		var scanErr error
-		out, scanErr = scanIncidentTimeMetricRows(rows)
-		return scanErr
-	})
-	return out, err
-}
-
-// scanIncidentTimeMetricRows scans the shared 13-column snapshot row shape.
-func scanIncidentTimeMetricRows(rows pgx.Rows) ([]incidentTimeMetricRow, error) {
-	out := []incidentTimeMetricRow{}
-	for rows.Next() {
-		var row incidentTimeMetricRow
-		var occurred *time.Time
-		var metricsRaw, groupRaw []byte
-		if err := rows.Scan(&row.TenantID, &row.CorrelationID, &row.CalcVersion, &occurred,
-			&row.OwnerDomain, &row.Bottleneck, &row.SeamType, &metricsRaw, &row.CalculatedAt,
-			&row.Owner, &row.State, &row.Internal, &groupRaw); err != nil {
-			return out, err
-		}
-		if occurred != nil {
-			row.OccurredAt = *occurred
-		}
-		if len(metricsRaw) > 0 {
-			if err := json.Unmarshal(metricsRaw, &row.Metrics); err != nil {
-				return out, err
-			}
-		}
-		if len(groupRaw) > 0 {
-			if err := json.Unmarshal(groupRaw, &row.Group); err != nil {
-				return out, err
-			}
-		}
-		out = append(out, row)
-	}
-	return out, rows.Err()
-}
-
-// nullableTime returns nil for a zero time so a NULL is stored (not 0001-01-01).
-func nullableTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t
 }
 
 // ── HTTP: /api/reliability/time-metrics ───────────────────────────────────────

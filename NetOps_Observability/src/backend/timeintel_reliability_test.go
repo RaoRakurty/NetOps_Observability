@@ -91,7 +91,7 @@ func TestSummariesFromSnapshots(t *testing.T) {
 }
 
 func TestMemIncidentTimeMetricsListWindow(t *testing.T) {
-	m := &memIncidentTimeMetricsStore{by: map[string]incidentTimeMetricRow{}}
+	m := timeintel.NewMemMetricsStore()
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -155,7 +155,7 @@ func reliabilityReq(claims jwtClaims) *http.Request {
 // snapshot-backed rollup read: a tenant aggregates ONLY its own persisted rows;
 // the platform owner (cross) sees all; the source is reported honestly.
 func TestBuildIncidentSummariesSnapshotIsolation(t *testing.T) {
-	m := &memIncidentTimeMetricsStore{by: map[string]incidentTimeMetricRow{}}
+	m := timeintel.NewMemMetricsStore()
 	now := time.Now().UTC()
 	_ = m.Upsert(context.Background(), snapRow("acme", "a1", now.Add(-1*time.Hour)))
 	_ = m.Upsert(context.Background(), snapRow("acme", "a2", now.Add(-2*time.Hour)))
