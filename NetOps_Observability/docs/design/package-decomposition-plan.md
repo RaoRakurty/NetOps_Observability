@@ -26,15 +26,19 @@ cross-domain imports) and §4 (plugin isolation) are *unenforceable*, not merely
 unenforced. It is also the substrate that hid the guard-scope bug: when "the
 package" is "the whole product", a root-only scan looks complete.
 
-**PROGRAM STATE (2026-07-28, end of the continuous run): the decomposition's
-extractable surface is COMPLETE.** Fifty-three domains live behind compiler-
-enforced boundaries; the storage substrate is `internal/platformdb`; the root's
-204 remaining non-test files are the entrypoint layer the Definition of Done
-describes — handlers, selectors, adapters (`platformKV`, `chSeam`, `chWorker`,
-`initStoreBackend`, the CH/mTLS client wiring) and worker loops holding `srv`.
-Future work is of a different kind: shrinking handlers, splitting `main.go`
-itself into `/cmd`, and closing INVARIANTS gap #8 — each a deliberate follow-on,
-not more of this sequence.
+**PROGRAM STATE (revised 2026-07-29, after the Phase-2 measurement): Phase 1
+(the store/library extraction sequence, steps 18–59) is COMPLETE — but the
+2026-07-28 claim that the extractable surface was exhausted is WRONG.** A
+four-reader audit of all 35 files ≥500 LOC plus a 20-file sample of the 88
+mid-tier files (200–500 LOC) found **~23k LOC of genuine business logic still
+in the root** (~35% of its 64.7k LOC): protocol implementations (`ldap.go` is a
+950-LOC BER/LDAP client), pure algorithm files (`rca_path_view.go` is 97%
+pure), SQL-builder clusters, config stores with rollback semantics, and worker
+state machines. The sized, ordered Phase 2 sequence is at the bottom of this
+document (§ Phase 2). What is TRUE from the earlier verdict: fifty-three
+domains are behind compiler-enforced boundaries, the storage substrate is
+`internal/platformdb`, and `main.go`/`auth.go`/the `*_handlers.go` shape are
+already Definition-of-Done-compliant integrators.
 
 **Nothing is exposed by this today.** It is deferred by owner decision and
 sequenced behind live-risk work. Growth is ratcheted
@@ -200,3 +204,110 @@ subpackages. Not part of this work.
 registration, worker startup, shutdown — and the ratchet's ceiling reflects it.
 At that point §13 and §4 become enforceable by the compiler, and standing gap #8
 in `docs/audit/INVARIANTS.md` can close.
+
+---
+
+## Phase 2 — the measured follow-on (audited 2026-07-29)
+
+Four parallel readers audited every root file ≥500 LOC (all 35, in full) and a
+20-of-88 sample of the 200–500 LOC tier. Verdicts per file: THIN (already a
+DoD-compliant wrapper), FAT (real extractable core), INTEGRATOR (legitimately
+stays, may shed a little). Result:
+
+| tier | files | LOC | verdict mix | extractable |
+|---|---|---|---|---|
+| ≥500 LOC (read in full) | 35 | ~24.5k | 29 FAT · 3 THIN · 3 INTEGRATOR | **~12.4k LOC** |
+| 200–500 LOC (20 sampled + mechanical bucketing) | 88 | ~27.5k | ~75% FAT · ~10% THIN · ~15% INTEGRATOR | **~10–12k code LOC** |
+| <200 LOC (unaudited) | 81 | ~12.7k | presumed mostly thin | small |
+| **total root** | **204** | **64.7k** | | **~23k LOC** |
+
+The THIN exemplars prove the target shape exists: `auth.go`, `identity_handlers.go`,
+`nms_http.go`, `port_handlers.go`, `seam_handlers.go` — wrappers over extracted
+packages. The FAT majority is three recurring shapes: tenant-keyed config/stores
+with rollback semantics, bounded worker loops (budget/backoff/checkpoint), and
+SQL-builder + fold + validator clusters.
+
+### Cross-cutting enablers (do these FIRST — they unpin everything else)
+
+1. **`chquery`** — consolidate the shared ClickHouse read path (`chQuery`,
+   `chQueryCtx`, `chSelect`, `chRows`/`chRowsScope`, `proxyClickHouse`,
+   `chTenantScope`, `chClientFor`, `chWorkerBudget`) scattered across
+   report_scheduler.go / correlations.go / flows.go. Unblocks
+   report_scheduler, cloud_signals, correlations, path_ingest, seam_bootstrap,
+   flows, ai_datasource at once.
+2. **Unpin the utility hostages** — several files can't move because they HOST
+   package-wide helpers: `orDefault` (itsm_config.go), `envInt`/`envDuration`/
+   `merge`/`errf`/`corr`/`sleepCtx` (report_pipeline.go), `secEnvDuration`
+   (device_ssh.go), `asStr`/`affectedDevices` (ai_datasource.go), `fmtSscanf`
+   (flows.go), `wsMagic`/`wsOriginAllowed` (events.go). Consolidate into a
+   deliberate root util file (per the no-utils-package rule they stay in main —
+   the point is the *file* being extracted must not be their home).
+
+### Wave 1 — clean lifts, no prerequisites (~4.3k LOC)
+
+| move | LOC | target |
+|---|---|---|
+| ldap.go (whole BER/LDAP client, minus handler) | ~950 | NEW `internal/ldap` |
+| rca_path_view.go (97% pure; blocks ticketing_http later) | ~640 | `internal/rca` |
+| wan_circuits.go projection/policy/target derivation | ~500 | NEW `wan` |
+| services.go store+validation (deps: platformdb only) | ~300 | NEW `internal/servicecat` |
+| timeintel_backfill.go stores + derivation | ~320 | `timeintel` |
+| verify_service.go config+run stores | ~330 | `internal/verify` |
+| alert_episodes.go episode store/state machine | ~350 | `alerts` |
+| sot_import.go parsers (+ planner if Site moves) | ~290 | NEW `internal/sotimport` |
+| device_ssh.go WS codec + SSH bridge (dedups events.go WS) | ~460 | NEW `internal/ws` + `internal/devssh` |
+
+### Wave 2 — after `chquery` (~3.7k LOC)
+
+report_scheduler datasets+renderers → `reports` (~900) · cloud_signals
+classifiers/SQL/cursors → `cloud` (~650) · path_ingest buildPathRecords/seam
+index → `pathgraph` (~550) · correlations mergeTimelineEvidence → `internal/rca`
++ list SQL → `chschema` (~450) · seam_bootstrap R1–R5 rules → `internal/seam`
+(~450) · ai_datasource query bodies → NEW `aiquery` (~490) · flows SQL builders
+(~250).
+
+### Wave 3 — config stores + the rest of the top-35 (~4.4k LOC)
+
+itsm_config → `internal/ticketing` (~480; its `srv` field is never read) ·
+tenant_governance → `internal/tenant` (~420; needs cloud_signals consts injected)
+· auth_config + tacacs.go with the Wave-1 ldap move (~450) · rca_action_items →
+`internal/rca` (~380; needs seamOwnerEntry decoupled) · health_score → NEW
+`internal/healthscore` (~380 w/ fetcher ports) · copilot provider transport +
+prompt hygiene → `ai` (~360) · logs.go index-pattern/DSL builders → NEW
+`internal/oslog` (~230) · logs_export encode/fetch → NEW `logexport` (~350) ·
+ai_tenant_config store → `ai` (~250) · cloud_connectors_handlers projections →
+`cloudconn` (~250) · notify_config channel builders → `notify` (~200, plus ~250
+thinnable via a generic handler) · snmp_discovery scanner/policy →
+`internal/discovery`+`collectors` (~230).
+
+### Wave 4 — the mid-tier sweep (~65 FAT files, ~10–12k code LOC)
+
+Start with the 25 files that contain NO handler at all (pure stores/workers/
+evaluators — no HTTP surface to preserve). Confirmed FAT by reading:
+cloud_monitors, cloud_service_map, cloud_monitor_eval, copilot_agent,
+appid_catalog, bindings, access, rbac, wireless_actions, nms_scheduler,
+corr_current_reconcile, svc_rollup_worker, path_graph_enrichment, oidc,
+timeintel_reliability, search_unified, pagination (the bounded-read contract
+library), bindings_api, stack_health, flows_services, cloud_costs.
+
+### Wave 5 — the finale
+
+The `/cmd` split: root stops being `package main`; AST guards repointed; do it
+LAST, alone, like the infrastructure finale.
+
+### Sequencing invariants (learned in Phase 1, still binding)
+
+Same commit-per-step discipline; ship the isolation test with each move (§3a.5);
+env reads stay in main; `*ForTest` hooks not field pokes; duplicated helpers
+per the no-utils rule; rename sweeps must exclude every package dir; lower the
+ratchet ceiling in the same commit. Dependency edges found by the audit:
+rca_path_view **before** ticketing_http/ticketing_payload (shared `rcaPathView`
+type); ldap.go + auth_config.go + tacacs.go as ONE combined move; Site/
+DeviceSiteBinding must move for sot_import's planner half; `providerCandidates`
+(ai_tenant_config) can't move until copilot config is a package.
+
+**Size estimate: comparable to Phase 1** — ~23k LOC across ~90 fat files vs
+Phase 1's 92 files. At Phase-1 velocity (steps 18–59 in two continuous days),
+Phase 2 is plausibly 2–4 focused days of the same discipline, plus the /cmd
+finale. Deferred by owner decision until launched; the ratchet holds at 204
+meanwhile.

@@ -73,7 +73,7 @@ and thereby certified the blind scope as healthy.
 | Every background launch in main() is drained or explicitly listed | ✅ | **BUILD** — `TestEveryBackgroundLaunchIsTrackedOrDocumented` (AST over `func main()`): a new goroutine must either join `workerGroup` or be named in `cancelOnlyWorkers()`. Closes CONC-MED-3, where `drain()` reported success while collectors, discovery, the report pipeline and 30-minute backfills were still mid-write. Current honest state: **15 tracked, 30 cancel-only** (adoption backlog in TRACKER) |
 | gosec taint rules (G703/G704/G706) are excluded on a recorded basis | 🟡 | **PROSE** — the exclusion is not enforced by a gate. 35 findings triaged 2026-07-27 against pinned gosec v2.27.1: **zero reachable from untrusted HTTP input** (every sink is an env-configured URL/path, or is guarded by `isUUIDToken`/`indexBase`/`tenantSegRe`). Basis + reproduce command recorded in `src/backend/.golangci.yml`. Residual risk stated there: a genuinely tainted NEW sink would not be caught |
 | A guard cannot silently stop covering a file | ✅ | **BUILD** — AST guards parse RAW source and treat a parse failure as FATAL. `stripComments` truncates at the first `//`, so any file with a URL literal was unparseable and was being **skipped with `continue`** — 54 files invisible, 8 with live findings. The guard written to catch "an error treated as a benign state" contained that exact defect |
-| `package main` does not grow | 🟡 | **BUILD (ratchet, not a fix)** — `TestFlatPackageMainDoesNotGrow` pins the root package (originally 296 non-test files; **258 as of 2026-07-27** after the sixteen extractions listed in docs/design/package-decomposition-plan.md); a new file fails the build and must go in a subpackage, and moving files out requires lowering the ceiling in the same commit. Proven to fire both directions. **This does NOT yet satisfy §2**: ~258 files of business logic remain in the entrypoint package, existing files can still grow, and coupling can still increase. Progress + sequence: `docs/design/package-decomposition-plan.md`; see standing gap #8 |
+| `package main` does not grow | 🟡 | **BUILD (ratchet, not a fix)** — `TestFlatPackageMainDoesNotGrow` pins the root package (originally 296 non-test files; **204 as of 2026-07-29** after the fifty-three Phase-1 extractions listed in docs/design/package-decomposition-plan.md); a new file fails the build and must go in a subpackage, and moving files out requires lowering the ceiling in the same commit. Proven to fire both directions. **This does NOT yet satisfy §2**: the 2026-07-29 four-reader audit measured **~23k LOC of business logic still in the root** (protocol clients, pure algorithm files, SQL builders, config stores, worker state machines) — the sized Phase-2 sequence is in the plan doc; see standing gap #8 |
 | An error is never conflated with a benign empty state | ✅ | **BUILD** — `TestErrorIsNotConflatedWithABenignState` (AST). Blocking for new code; 39-file frozen baseline, **shrink-only**, each entry to be triaged and fixed or moved to the reasoned allowlist |
 | A health flag can actually report unhealthy | ✅ | **BUILD** — `TestHealthFlagsCanBeFalsified`: a health bool assigned literal `true` and never falsified anywhere fails the build. Caught `alerts.Engine.healthy` (true at construction, never false, reported by `Health()` forever) |
 | A metric-based alerting engine exists at all | ✅ | vmalert (F-16); **RUNTIME** — was entirely absent before 2026-07-21 |
@@ -187,18 +187,24 @@ and thereby certified the blind scope as healthy.
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
 6. **Documented env switches are unverified as a class.** One was found lying; nothing checks the rest. (§9)
 7. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
-8. **`package main` holds most of the business logic, against the repo's own §2.**
-   Originally 296 non-test files with no `/internal` at all; as of 2026-07-27
-   the decomposition program is UNDERWAY: **258 files remain** and `internal/`
-   holds sixteen compiler-enforced domains (chschema, openapi, totp, rca
-   waves 1+2 — the ~8.3k-LOC report family, vault, vuln, compliance, ratelimit,
-   metricval, noclabel, ticketing, gqlparse, verify, segclass, seam). For what remains in the root, §13 (no
-   cross-domain imports) and §4 (plugin isolation) are still *unenforceable*,
-   not merely unenforced — the substrate that made the guard-scope bug
-   possible. **Growth is ratcheted** (`TestFlatPackageMainDoesNotGrow`, ceiling
-   lowered with every extraction), and the ordered sequence for the rest lives
-   in `docs/design/package-decomposition-plan.md`. Nothing is exposed by it
-   today; the cost is future enforceability.
+8. **`package main` still holds substantial business logic, against the repo's
+   own §2.** Originally 296 non-test files with no `/internal` at all. Phase 1
+   of the decomposition (steps 18–59, 2026-07-27→29) is COMPLETE: **204 files
+   remain** and fifty-three compiler-enforced domains live behind boundaries
+   (auth tier, every store, the storage substrate `internal/platformdb` — full
+   list in `docs/design/package-decomposition-plan.md`). The 2026-07-28 belief
+   that what remained was "just the entrypoint layer" was **measured and
+   disproven on 2026-07-29**: a four-reader audit of the 35 largest files (in
+   full) plus a sampled sweep of the 88 mid-tier files found **~23k LOC of
+   genuine business logic** still in the root — a 950-LOC LDAP/BER client, pure
+   algorithm files, SQL-builder clusters, tenant-keyed config stores, worker
+   state machines. The gap CLOSES via the plan doc's sized **Phase 2** (five
+   waves: enablers → clean lifts → post-`chquery` extractions → config stores →
+   mid-tier sweep, then the `/cmd` split finale). Until then §13/§4 are
+   enforceable *for the extracted 53 domains* but not within the root itself.
+   **Growth is ratcheted** (`TestFlatPackageMainDoesNotGrow`, ceiling 204,
+   lowered with every extraction). Nothing is exposed by it today; the cost is
+   future enforceability.
 
 ### Closed
 
