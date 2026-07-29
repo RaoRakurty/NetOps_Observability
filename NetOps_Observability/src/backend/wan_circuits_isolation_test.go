@@ -8,6 +8,7 @@ import (
 
 	"netops/backend/collectors"
 	"netops/backend/models"
+	"netops/backend/wan"
 )
 
 // newWanTestServer builds a minimal server with just the stores the WAN projector
@@ -103,30 +104,30 @@ func TestWanProjectTenantIsolation(t *testing.T) {
 // TestWanDeriveTarget locks the target-derivation precedence:
 // operator next-hop → directly-connected peer → reachability anchor.
 func TestWanDeriveTarget(t *testing.T) {
-	neighbors := map[string]wanPeer{
-		wanIfKey("wan-r2", "Eth1"): {device: "spine1", iface: "Eth3", addr: "10.0.0.2"},
+	neighbors := map[string]wan.Peer{
+		wan.IfKey("wan-r2", "Eth1"): {Device: "spine1", Iface: "Eth3", Addr: "10.0.0.2"},
 	}
 
 	// 1. Operator next-hop override wins over everything.
-	pol := WanMeasurementPolicy{NextHops: map[string]string{"wan-r2/Eth1": "203.0.113.1"}}.withDefaults()
-	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "203.0.113.1" || kind != WanTargetNextHop {
+	pol := WanMeasurementPolicy{NextHops: map[string]string{"wan-r2/Eth1": "203.0.113.1"}}.WithDefaults()
+	if tgt, kind, _ := wan.DeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "203.0.113.1" || kind != WanTargetNextHop {
 		t.Errorf("next-hop override: got %q/%v, want 203.0.113.1/next_hop", tgt, kind)
 	}
 
 	// 2. Directly-connected peer when no override.
-	pol = WanMeasurementPolicy{}.withDefaults()
-	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "10.0.0.2" || kind != WanTargetDirectPeer {
+	pol = WanMeasurementPolicy{}.WithDefaults()
+	if tgt, kind, _ := wan.DeriveTarget("wan-r2", "Eth1", neighbors, pol); tgt != "10.0.0.2" || kind != WanTargetDirectPeer {
 		t.Errorf("direct peer: got %q/%v, want 10.0.0.2/direct_peer", tgt, kind)
 	}
 
 	// 3. Reachability anchor when no peer and no override (prod internet-facing).
-	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth9", neighbors, pol); tgt != "1.1.1.1" || kind != WanTargetAnchor {
+	if tgt, kind, _ := wan.DeriveTarget("wan-r2", "Eth9", neighbors, pol); tgt != "1.1.1.1" || kind != WanTargetAnchor {
 		t.Errorf("anchor default: got %q/%v, want 1.1.1.1/anchor", tgt, kind)
 	}
 
 	// Custom anchor is honoured.
-	pol2 := WanMeasurementPolicy{Anchors: []string{"9.9.9.9"}}.withDefaults()
-	if tgt, kind, _ := wanDeriveTarget("wan-r2", "Eth9", neighbors, pol2); tgt != "9.9.9.9" || kind != WanTargetAnchor {
+	pol2 := WanMeasurementPolicy{Anchors: []string{"9.9.9.9"}}.WithDefaults()
+	if tgt, kind, _ := wan.DeriveTarget("wan-r2", "Eth9", neighbors, pol2); tgt != "9.9.9.9" || kind != WanTargetAnchor {
 		t.Errorf("custom anchor: got %q/%v, want 9.9.9.9/anchor", tgt, kind)
 	}
 }
@@ -173,10 +174,10 @@ func TestWanConnectedInterfaceIncluded(t *testing.T) {
 // when a shared mgmt segment makes them LLDP neighbours of a WAN device. This is
 // the lab bug — the WAN router's mgmt0 must not pull the whole fabric in.
 func TestWanMgmtInterfacesExcluded(t *testing.T) {
-	if !isMgmtInterface("mgmt0") || !isMgmtInterface("Management0") || !isMgmtInterface("ma1") {
+	if !wan.IsMgmtInterface("mgmt0") || !wan.IsMgmtInterface("Management0") || !wan.IsMgmtInterface("ma1") {
 		t.Fatal("mgmt interface matcher must catch mgmt0/Management0/ma1")
 	}
-	if isMgmtInterface("Ethernet1") || isMgmtInterface("Eth3") {
+	if wan.IsMgmtInterface("Ethernet1") || wan.IsMgmtInterface("Eth3") {
 		t.Fatal("data interfaces must NOT be treated as management")
 	}
 	ifaddr := map[string]map[string]string{
@@ -192,7 +193,7 @@ func TestWanMgmtInterfacesExcluded(t *testing.T) {
 	s.discovery.Upsert(models.Device{ID: "leaf1", Name: "leaf1", TenantID: "acme"})
 	eps, _ := s.wanProject(context.Background(), "acme", false)
 	for _, e := range eps {
-		if isMgmtInterface(e.Interface) {
+		if wan.IsMgmtInterface(e.Interface) {
 			t.Fatalf("management interface leaked into WAN scope: %s/%s", e.Device, e.Interface)
 		}
 		if e.Device == "leaf1" {
@@ -241,11 +242,11 @@ func TestWanSparkSeries(t *testing.T) {
 	s := newWanTestServer(t, nil, nil)
 	s.vmRangeRaw = func(_ context.Context, _ string, _, _, _ int64) (map[string][]float64, error) {
 		return map[string][]float64{
-			wanIfKey("wan-r2", "Ethernet4"): {1e6, 2e6, 3.6e7},
+			wan.IfKey("wan-r2", "Ethernet4"): {1e6, 2e6, 3.6e7},
 		}, nil
 	}
 	got := s.wanSparkSeries(context.Background(), 1000, 600, 30)
-	sp := got[wanIfKey("wan-r2", "Ethernet4")]
+	sp := got[wan.IfKey("wan-r2", "Ethernet4")]
 	if len(sp) != 3 || sp[2] != 3.6e7 {
 		t.Fatalf("expected the injected throughput series, got %v", sp)
 	}
@@ -269,7 +270,7 @@ func TestWanPolicyStoreIsolation(t *testing.T) {
 	}
 	// A tenant with no policy gets the safe default, NOT another tenant's.
 	got := s.wanPolicy.Get("initech", false)
-	if got.TenantID != "initech" || got.WanPattern != defaultWanPattern || len(got.Anchors) == 0 {
+	if got.TenantID != "initech" || got.WanPattern != wan.DefaultPattern || len(got.Anchors) == 0 {
 		t.Errorf("unconfigured tenant should get the default baseline, got %+v", got)
 	}
 }
