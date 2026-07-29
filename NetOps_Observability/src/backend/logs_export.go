@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +13,12 @@ import (
 	"netops/backend/reports"
 
 	"netops/backend/internal/oslog"
+
+	"netops/backend/internal/logexport"
 )
+
+// jobTypeExport is the shared report-substrate job type for log exports.
+const jobTypeExport = "export"
 
 // logs_export.go — Explore→Logs export (Phase 1).
 //
@@ -33,320 +36,6 @@ import (
 // job for async so it reproduces exactly what they could see) and audited by the
 // request middleware. No browser ever talks to OpenSearch directly.
 
-const (
-	jobTypeReport = "report"
-	jobTypeExport = "export"
-)
-
-// errExportTooLarge is a deterministic (non-retryable) failure: the matched set
-// exceeds the configured caps. The caller surfaces an actionable message.
-var errExportTooLarge = errors.New("export exceeds configured size limit")
-
-// logExportSpec is the frozen, self-contained parameter set for one export — the
-// job payload for Mode B and the request shape for Mode A's query path.
-type logExportSpec struct {
-	Query  string `json:"query"`
-	From   string `json:"from"` // RFC3339 / unix
-	To     string `json:"to"`
-	Signal string `json:"signal"`
-	Format string `json:"format"` // csv | json | ndjson | xlsx
-
-	// Frozen tenant-visibility snapshot: the async worker reproduces exactly what
-	// the requester could see at request time (the device set may change later).
-	Tenant      string   `json:"tenant,omitempty"` // #20 Phase 3: caller's tenant for index routing + tenant_id filter
-	Cross       bool     `json:"cross"`
-	DeviceKeys  []string `json:"device_keys,omitempty"`
-	DeviceAddrs []string `json:"device_addrs,omitempty"`
-
-	// Compliance: operator-visibility restriction, frozen at request time so the
-	// async worker reproduces it. ExcludeTenants are tenant ids whose telemetry is
-	// filtered out of an operator's Global export; DenyAll empties the result when
-	// the operator scoped into a restricted tenant. See operatorTelemetryRestriction.
-	ExcludeTenants []string `json:"exclude_tenants,omitempty"`
-	DenyAll        bool     `json:"deny_all,omitempty"`
-}
-
-// exportColumns is the canonical tabular projection used for csv/xlsx (and for
-// json/ndjson when no raw document is available, i.e. Mode A selected rows).
-var exportColumns = []string{"time", "source", "level", "message"}
-
-func normalizeExportFormat(f string) string {
-	f = strings.ToLower(strings.TrimSpace(f))
-	switch f {
-	case "csv", "json", "ndjson", "xlsx":
-		return f
-	case "", "excel", "xls":
-		if f == "excel" || f == "xls" {
-			return "xlsx"
-		}
-		return "csv"
-	default:
-		return ""
-	}
-}
-
-func exportContentType(format string) (contentType, ext string) {
-	switch format {
-	case "csv":
-		return "text/csv; charset=utf-8", "csv"
-	case "json":
-		return "application/json", "json"
-	case "ndjson":
-		return "application/x-ndjson", "ndjson"
-	case "xlsx":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
-	default:
-		return "application/octet-stream", "bin"
-	}
-}
-
-// ---- query construction + paging -------------------------------------------
-
-// buildExportSearchBody mirrors handleLogsSearch's tenant scoping but sorts
-// ascending with an _id tiebreaker so search_after pages deterministically.
-func buildExportSearchBody(spec logExportSpec, start, end time.Time, size int, searchAfter []any) map[string]any {
-	filters := []any{
-		map[string]any{"range": map[string]any{"timestamp": map[string]string{
-			"gte": start.Format(time.RFC3339),
-			"lte": end.Format(time.RFC3339),
-		}}},
-	}
-	// Tenant isolation (#20 Phase 3) — same index-pattern + tenant_id/device clause
-	// as handleLogsSearch, frozen onto the spec. The platform owner (Cross) is
-	// unrestricted; the read index pattern (tenantIndexPattern) already excludes
-	// other tenants' indices at the storage layer.
-	if f := oslog.TenantFilter(spec.Tenant, spec.Cross, spec.DeviceKeys, spec.DeviceAddrs); f != nil {
-		filters = append(filters, f)
-	}
-	// Compliance: operator-visibility restriction frozen onto the spec (mirrors
-	// handleLogsSearch). DenyAll → empty result; ExcludeTenants → drop their docs.
-	boolQuery := map[string]any{
-		"must": []any{map[string]any{"query_string": map[string]any{
-			"query":            oslog.QueryOrAll(spec.Query),
-			"analyze_wildcard": true,
-		}}},
-		"filter": filters,
-	}
-	if spec.DenyAll {
-		boolQuery["filter"] = append(filters, map[string]any{"match_none": map[string]any{}})
-	} else if len(spec.ExcludeTenants) > 0 {
-		boolQuery["must_not"] = []any{map[string]any{"terms": map[string]any{"tenant_id": spec.ExcludeTenants}}}
-	}
-	body := map[string]any{
-		"size": size,
-		"sort": []any{
-			map[string]any{"timestamp": map[string]string{"order": "asc", "unmapped_type": "date"}},
-			map[string]any{"_id": "asc"}, // unique tiebreaker for search_after
-		},
-		"query": map[string]any{"bool": boolQuery},
-	}
-	if len(searchAfter) > 0 {
-		body["search_after"] = searchAfter
-	}
-	return body
-}
-
-// osHit is the slice of a _search response we consume.
-type osSearchResp struct {
-	Hits struct {
-		Hits []struct {
-			Index  string          `json:"_index"`
-			ID     string          `json:"_id"`
-			Source json.RawMessage `json:"_source"`
-			Sort   []any           `json:"sort"`
-		} `json:"hits"`
-	} `json:"hits"`
-}
-
-// exportData is the accumulated, bounded result of an export query. raw carries
-// the verbatim _source per row (lossless json/ndjson); rows carries the canonical
-// tabular projection (csv/xlsx). Both are bounded by the caps.
-type exportData struct {
-	rows  [][]string
-	raw   []json.RawMessage
-	bytes int
-}
-
-// fetchLogsBounded pages the tenant-scoped query with search_after, accumulating
-// rows under maxRows/maxBytes. Exceeding either cap is a deterministic failure
-// (errExportTooLarge) rather than a silent truncation. Memory is bounded by the
-// caps (the honest Phase-1 contract; a streaming sink is a later substrate add).
-func fetchLogsBounded(ctx context.Context, spec logExportSpec, start, end time.Time, maxRows, maxBytes int) (exportData, error) {
-	const batch = 1000
-	index := oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
-	var data exportData
-	var after []any
-	for {
-		select {
-		case <-ctx.Done():
-			return data, ctx.Err()
-		default:
-		}
-		body := buildExportSearchBody(spec, start, end, batch, after)
-		resp, err := openSearch("POST", "/"+index+"/_search", body)
-		if err != nil {
-			return data, err
-		}
-		var parsed osSearchResp
-		decErr := json.NewDecoder(resp.Body).Decode(&parsed)
-		_ = resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
-			return data, fmt.Errorf("opensearch search status %d", resp.StatusCode)
-		}
-		if decErr != nil {
-			return data, decErr
-		}
-		hits := parsed.Hits.Hits
-		if len(hits) == 0 {
-			break
-		}
-		for i := range hits {
-			h := hits[i]
-			data.bytes += len(h.Source)
-			data.rows = append(data.rows, flattenLogSource(h.Source, h.Index))
-			data.raw = append(data.raw, h.Source)
-			if len(data.rows) > maxRows {
-				return data, fmt.Errorf("%w: more than %d rows match — narrow the query or time range", errExportTooLarge, maxRows)
-			}
-			if data.bytes > maxBytes {
-				return data, fmt.Errorf("%w: result exceeds %d bytes — narrow the query or time range", errExportTooLarge, maxBytes)
-			}
-		}
-		after = hits[len(hits)-1].Sort
-		if len(hits) < batch || len(after) == 0 {
-			break
-		}
-	}
-	return data, nil
-}
-
-// flattenLogSource projects one log document to the canonical [time, source,
-// level, message] row, matching the Logs UI's resolution (flow rows show the
-// real source host, not the collector container).
-func flattenLogSource(raw json.RawMessage, index string) []string {
-	var s map[string]any
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return []string{"", "", "", string(raw)}
-	}
-	str := func(keys ...string) string {
-		for _, k := range keys {
-			if v, ok := s[k]; ok && v != nil {
-				if vs := fmt.Sprintf("%v", v); vs != "" {
-					return vs
-				}
-			}
-		}
-		return ""
-	}
-	ts := str("@timestamp", "timestamp", "ts", "time", "time_received_ns")
-	level := str("level", "severity")
-	source := str("src_addr") // flow source host wins over the collector container
-	if source == "" {
-		source = str("compose_service", "container_name", "hostname", "appname")
-	}
-	if source == "" {
-		source = index
-	}
-	message := str("message", "msg")
-	if message == "" {
-		message = string(raw)
-	}
-	return []string{ts, source, level, message}
-}
-
-// ---- encoders --------------------------------------------------------------
-
-// encodeExport renders accumulated data to the requested format. json/ndjson use
-// the verbatim documents when present (lossless), else the tabular projection.
-func encodeExport(ctx context.Context, format string, cols []string, data exportData) (reports.Artifact, error) {
-	contentType, _ := exportContentType(format)
-	switch format {
-	case "csv":
-		var buf bytes.Buffer
-		w := csv.NewWriter(&buf)
-		_ = w.Write(cols)
-		for _, r := range data.rows {
-			if err := w.Write(r); err != nil {
-				return reports.Artifact{}, err
-			}
-		}
-		w.Flush()
-		if err := w.Error(); err != nil {
-			return reports.Artifact{}, err
-		}
-		return reports.Artifact{Format: format, ContentType: contentType, Bytes: buf.Bytes(), Summary: exportSummary(len(data.rows))}, nil
-
-	case "ndjson":
-		var buf bytes.Buffer
-		if len(data.raw) > 0 {
-			for _, raw := range data.raw {
-				buf.Write(raw)
-				buf.WriteByte('\n')
-			}
-		} else {
-			enc := json.NewEncoder(&buf)
-			for _, r := range data.rows {
-				if err := enc.Encode(rowObject(cols, r)); err != nil {
-					return reports.Artifact{}, err
-				}
-			}
-		}
-		return reports.Artifact{Format: format, ContentType: contentType, Bytes: buf.Bytes(), Summary: exportSummary(len(data.rows))}, nil
-
-	case "json":
-		var out []byte
-		var err error
-		if len(data.raw) > 0 {
-			var buf bytes.Buffer
-			buf.WriteByte('[')
-			for i, raw := range data.raw {
-				if i > 0 {
-					buf.WriteByte(',')
-				}
-				buf.Write(raw)
-			}
-			buf.WriteByte(']')
-			out = buf.Bytes()
-		} else {
-			objs := make([]map[string]string, 0, len(data.rows))
-			for _, r := range data.rows {
-				objs = append(objs, rowObject(cols, r))
-			}
-			out, err = json.Marshal(objs)
-			if err != nil {
-				return reports.Artifact{}, err
-			}
-		}
-		return reports.Artifact{Format: format, ContentType: contentType, Bytes: out, Summary: exportSummary(len(data.rows))}, nil
-
-	case "xlsx":
-		vm := reports.ViewModel{
-			ReportName:  "Log export",
-			Kind:        "logs",
-			GeneratedAt: time.Now().UTC(),
-			Sections:    []reports.Section{{Title: "Logs", Header: cols, Rows: data.rows}},
-		}
-		return reports.NewXLSXRenderer().Render(ctx, vm)
-
-	default:
-		return reports.Artifact{}, fmt.Errorf("unsupported export format %q", format)
-	}
-}
-
-func rowObject(cols, row []string) map[string]string {
-	m := make(map[string]string, len(cols))
-	for i, c := range cols {
-		if i < len(row) {
-			m[c] = row[i]
-		}
-	}
-	return m
-}
-
-func exportSummary(n int) string { return fmt.Sprintf("%d log rows", n) }
-
-// ---- Mode B: GET /api/logs/export (entire result set) ----------------------
-
 func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -359,7 +48,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	format := normalizeExportFormat(q.Get("format"))
+	format := logexport.NormalizeFormat(q.Get("format"))
 	if format == "" {
 		writeError(w, http.StatusBadRequest, errors.New("format must be csv, json, ndjson, or xlsx"))
 		return
@@ -415,28 +104,28 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync: bounded fetch → encode → stream.
-	data, err := fetchLogsBounded(r.Context(), spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(r.Context(), openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
 	if err != nil {
-		if errors.Is(err, errExportTooLarge) {
+		if errors.Is(err, logexport.ErrTooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, err)
 			return
 		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	art, err := encodeExport(r.Context(), format, exportColumns, data)
+	art, err := logexport.Encode(r.Context(), format, logexport.Columns, data)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.auditExport(r, claims, tenant, cross, "sync", spec, len(data.rows), "")
-	logInfo("logs.export", "export delivered (sync)", map[string]any{"tenant_id": tenant, "signal": spec.Signal, "format": format, "rows": len(data.rows), "bytes": len(art.Bytes)})
+	s.auditExport(r, claims, tenant, cross, "sync", spec, len(data.Rows), "")
+	logInfo("logs.export", "export delivered (sync)", map[string]any{"tenant_id": tenant, "signal": spec.Signal, "format": format, "rows": len(data.Rows), "bytes": len(art.Bytes)})
 	writeDownload(w, art, "logs-export")
 }
 
 // auditExport records a sensitive export action into the immutable audit trail
 // with the query/size/execution-id detail the hardening spec requires.
-func (s *server) auditExport(r *http.Request, claims jwtClaims, tenant string, cross bool, mode string, spec logExportSpec, count int, execID string) {
+func (s *server) auditExport(r *http.Request, claims jwtClaims, tenant string, cross bool, mode string, spec logexport.Spec, count int, execID string) {
 	if s.audit == nil {
 		return
 	}
@@ -481,20 +170,20 @@ func (s *server) handleLogsExportRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	format := normalizeExportFormat(req.Format)
+	format := logexport.NormalizeFormat(req.Format)
 	if format == "" {
 		writeError(w, http.StatusBadRequest, errors.New("format must be csv, json, ndjson, or xlsx"))
 		return
 	}
 	cols := req.Columns
 	if len(cols) == 0 {
-		cols = exportColumns
+		cols = logexport.Columns
 	}
 	if len(req.Rows) > envInt("MAX_EXPORT_ROWS", 500_000) {
-		writeError(w, http.StatusRequestEntityTooLarge, errExportTooLarge)
+		writeError(w, http.StatusRequestEntityTooLarge, logexport.ErrTooLarge)
 		return
 	}
-	art, err := encodeExport(r.Context(), format, cols, exportData{rows: req.Rows})
+	art, err := logexport.Encode(r.Context(), format, cols, logexport.Data{Rows: req.Rows})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -503,7 +192,7 @@ func (s *server) handleLogsExportRows(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "logs-export"
 	}
-	s.auditExport(r, claims, tenant, cross, "rows", logExportSpec{Format: format}, len(req.Rows), "")
+	s.auditExport(r, claims, tenant, cross, "rows", logexport.Spec{Format: format}, len(req.Rows), "")
 	writeDownload(w, art, name)
 }
 
@@ -596,7 +285,7 @@ func (s *server) handleExportView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := rec.PrimaryArtifact()
-	if f := normalizeExportFormat(r.URL.Query().Get("format")); f != "" {
+	if f := logexport.NormalizeFormat(r.URL.Query().Get("format")); f != "" {
 		if a := rec.ArtifactByFormat(f); a != nil {
 			ref = a
 		}
@@ -623,7 +312,7 @@ func (s *server) handleExportView(w http.ResponseWriter, r *http.Request) {
 
 // writeDownload streams an artifact as a file attachment.
 func writeDownload(w http.ResponseWriter, art reports.Artifact, basename string) {
-	_, ext := exportContentType(art.Format)
+	_, ext := logexport.ContentType(art.Format)
 	w.Header().Set("Content-Type", art.ContentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", basename+"."+ext))
 	w.Header().Set("Content-Length", strconv.Itoa(len(art.Bytes)))
@@ -643,12 +332,12 @@ func exportMaxTimeRange() time.Duration {
 // exportSpecFor builds a spec with the caller's tenant-visibility frozen in,
 // including the operator-visibility compliance restriction (so an export can never
 // exfiltrate a restricted tenant's telemetry, even via the async worker later).
-func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logExportSpec {
+func (s *server) exportSpecFor(claims jwtClaims, query, from, to, signal, format string) logexport.Spec {
 	keys, cross := s.visibleDeviceKeys(claims)
 	addrs, _ := s.visibleDeviceAddrs(claims)
 	tenant, _ := principalTenant(claims)
 	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
-	return logExportSpec{
+	return logexport.Spec{
 		Query: query, From: from, To: to, Signal: signal, Format: format,
 		Tenant: tenant, Cross: cross, DeviceKeys: keys, DeviceAddrs: addrs,
 		ExcludeTenants: exclude, DenyAll: deny,
@@ -673,8 +362,8 @@ func exportTimeRange(from, to string) (time.Time, time.Time) {
 
 // countLogs returns the matched document count for an export query (cheap; used
 // to choose sync vs async). A failure returns 0 so the caller falls back to sync.
-func countLogs(ctx context.Context, spec logExportSpec, start, end time.Time) (int, error) {
-	body := buildExportSearchBody(spec, start, end, 0, nil)
+func countLogs(ctx context.Context, spec logexport.Spec, start, end time.Time) (int, error) {
+	body := logexport.BuildSearchBody(spec, start, end, 0, nil)
 	delete(body, "size")
 	delete(body, "sort")
 	resp, err := openSearch("POST", "/"+oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)+"/_count", map[string]any{"query": body["query"]})
@@ -696,7 +385,7 @@ func countLogs(ctx context.Context, spec logExportSpec, start, end time.Time) (i
 // EnqueueExport places a log-export job on the shared queue and records its
 // immutable execution (kind=export), owned by the requester's tenant so the
 // status poll is RLS-scoped to them. Returns the execution id to poll.
-func (p *reportPipeline) EnqueueExport(ctx context.Context, tenant string, spec logExportSpec) (string, error) {
+func (p *reportPipeline) EnqueueExport(ctx context.Context, tenant string, spec logexport.Spec) (string, error) {
 	now := time.Now().UTC()
 	tenant = normTenant(tenant)
 	execID := randHex(8)
@@ -723,13 +412,13 @@ func (p *reportPipeline) EnqueueExport(ctx context.Context, tenant string, spec 
 // timeout. The execution is already marked running by process().
 func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job reports.Job, tenant string, fields map[string]any) {
 	startedAt := time.Now().UTC()
-	var spec logExportSpec
+	var spec logexport.Spec
 	if err := json.Unmarshal(job.Payload, &spec); err != nil {
 		p.fail(ctx, jctx, job, tenant, "invalid export spec: "+err.Error(), nil, true, fields)
 		p.metExportFailed.Add(1)
 		return
 	}
-	format := normalizeExportFormat(spec.Format)
+	format := logexport.NormalizeFormat(spec.Format)
 	if format == "" {
 		p.fail(ctx, jctx, job, tenant, "unsupported export format: "+spec.Format, nil, true, fields)
 		p.metExportFailed.Add(1)
@@ -738,15 +427,15 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	start, end := exportTimeRange(spec.From, spec.To)
 
 	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseExporting, time.Now().UTC(), spec.Signal)
-	data, err := fetchLogsBounded(jctx, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
+	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
 	if err != nil {
 		// Size-cap breaches are deterministic → dead-letter, don't retry.
-		dead := errors.Is(err, errExportTooLarge) || p.dead(job)
+		dead := errors.Is(err, logexport.ErrTooLarge) || p.dead(job)
 		p.fail(ctx, jctx, job, tenant, "export query: "+err.Error(), nil, dead, fields)
 		p.metExportFailed.Add(1)
 		return
 	}
-	art, err := encodeExport(jctx, format, exportColumns, data)
+	art, err := logexport.Encode(jctx, format, logexport.Columns, data)
 	if err != nil {
 		p.fail(ctx, jctx, job, tenant, "export encode: "+err.Error(), nil, p.dead(job), fields)
 		p.metExportFailed.Add(1)
@@ -768,11 +457,11 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 		logError("logs.export", "finalize job", merge(fields, errf(err)))
 	}
 	p.metExportDone.Add(1)
-	p.metExportRows.Add(int64(len(data.rows)))
+	p.metExportRows.Add(int64(len(data.Rows)))
 	p.metExportBytes.Add(int64(len(art.Bytes)))
 	p.metExportSeconds.Add(int64(done.Sub(startedAt).Seconds()))
 	logInfo("logs.export", "export completed", merge(fields, map[string]any{
-		"signal": spec.Signal, "format": format, "rows": len(data.rows), "bytes": len(art.Bytes),
+		"signal": spec.Signal, "format": format, "rows": len(data.Rows), "bytes": len(art.Bytes),
 		"seconds": done.Sub(startedAt).Seconds(),
 	}))
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"netops/backend/reports"
+
+	"netops/backend/internal/logexport"
 )
 
 // TestExportSubstratePG validates the shared-substrate generalization (migration
@@ -34,7 +36,7 @@ func TestExportSubstratePG(t *testing.T) {
 	es := reports.NewPGExecStore(ps.DB())
 
 	// 1) queue round-trips job_type=export + the frozen payload.
-	spec := logExportSpec{Query: "*", Signal: "applogs", Format: "csv", Cross: true}
+	spec := logexport.Spec{Query: "*", Signal: "applogs", Format: "csv", Cross: true}
 	payload, _ := json.Marshal(spec)
 	job := reports.Job{JobType: jobTypeExport, TenantID: "acme", ScheduleID: "exp1", ExecutionID: "ex1", FireTime: time.Now().UTC(), Payload: payload}
 	if _, created, err := q.Enqueue(ctx, job, time.Now().UTC()); err != nil || !created {
@@ -47,7 +49,7 @@ func TestExportSubstratePG(t *testing.T) {
 	if claimed[0].JobType != jobTypeExport {
 		t.Errorf("claimed job_type=%q, want %q", claimed[0].JobType, jobTypeExport)
 	}
-	var got logExportSpec
+	var got logexport.Spec
 	if err := json.Unmarshal(claimed[0].Payload, &got); err != nil || got.Signal != "applogs" {
 		t.Errorf("payload round-trip wrong: err=%v spec=%+v", err, got)
 	}
