@@ -111,8 +111,8 @@ func (s *ldapConfigStore) effective() ldapConfig {
 // stored bind password is preserved (the redacted GET form does not round-trip
 // the secret). Returns the stored effective config.
 func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
-	in.normalize()
-	if err := in.validate(); err != nil {
+	in.Normalize()
+	if err := in.Validate(); err != nil {
 		return ldapConfig{}, err
 	}
 	s.mu.Lock()
@@ -140,101 +140,6 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 	return stored, nil
 }
 
-// normalize trims and defaults fields so stored config is canonical.
-func (c *ldapConfig) normalize() {
-	c.Host = strings.TrimSpace(c.Host)
-	c.BindDN = strings.TrimSpace(c.BindDN)
-	c.BaseDN = strings.TrimSpace(c.BaseDN)
-	c.UserFilter = strings.TrimSpace(c.UserFilter)
-	if c.UserFilter == "" {
-		c.UserFilter = "(uid=%s)"
-	}
-	c.GroupBaseDN = strings.TrimSpace(c.GroupBaseDN)
-	c.GroupFilter = strings.TrimSpace(c.GroupFilter)
-	if strings.TrimSpace(c.DefaultRole) == "" {
-		c.DefaultRole = RoleReadOnly
-	}
-	if strings.TrimSpace(c.DefaultTenant) == "" {
-		c.DefaultTenant = TenantGlobal
-	}
-	cleaned := make([]ldapRoleMapping, 0, len(c.RoleMappings))
-	for _, m := range c.RoleMappings {
-		m.Group = strings.TrimSpace(m.Group)
-		m.Role = strings.TrimSpace(m.Role)
-		if m.Group != "" && m.Role != "" {
-			cleaned = append(cleaned, m)
-		}
-	}
-	c.RoleMappings = cleaned
-}
-
-// validate enforces the invariants required for an enabled LDAP provider.
-func (c ldapConfig) validate() error {
-	if c.Port < 0 || c.Port > 65535 {
-		return errors.New("ldap: port out of range (0-65535)")
-	}
-	if c.UseTLS && c.StartTLS {
-		return errors.New("ldap: use_tls (LDAPS) and start_tls are mutually exclusive")
-	}
-	if !c.Enabled {
-		return nil
-	}
-	if c.Host == "" {
-		return errors.New("ldap: host is required when enabled")
-	}
-	if c.BaseDN == "" {
-		return errors.New("ldap: base_dn is required when enabled")
-	}
-	if !strings.Contains(c.UserFilter, "%s") {
-		return errors.New("ldap: user_filter must contain the %s username placeholder")
-	}
-	return nil
-}
-
-// publicLDAPConfig is the redacted view returned by GET: the bind password is
-// replaced by a boolean so the secret never leaves the server.
-type publicLDAPConfig struct {
-	Enabled            bool              `json:"enabled"`
-	Host               string            `json:"host"`
-	Port               int               `json:"port"`
-	UseTLS             bool              `json:"use_tls"`
-	StartTLS           bool              `json:"start_tls"`
-	BindDN             string            `json:"bind_dn"`
-	BindPasswordSet    bool              `json:"bind_password_set"`
-	BaseDN             string            `json:"base_dn"`
-	UserFilter         string            `json:"user_filter"`
-	GroupBaseDN        string            `json:"group_base_dn"`
-	GroupFilter        string            `json:"group_filter"`
-	RoleMappings       []ldapRoleMapping `json:"role_mappings"`
-	DefaultRole        string            `json:"default_role"`
-	DefaultTenant      string            `json:"default_tenant"`
-	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
-}
-
-func (c ldapConfig) public() publicLDAPConfig {
-	rm := c.RoleMappings
-	if rm == nil {
-		rm = []ldapRoleMapping{} // never emit JSON null — the UI maps over this
-	}
-	return publicLDAPConfig{
-		Enabled:            c.Enabled,
-		Host:               c.Host,
-		Port:               c.Port,
-		UseTLS:             c.UseTLS,
-		StartTLS:           c.StartTLS,
-		BindDN:             c.BindDN,
-		BindPasswordSet:    c.BindPassword != "",
-		BaseDN:             c.BaseDN,
-		UserFilter:         c.UserFilter,
-		GroupBaseDN:        c.GroupBaseDN,
-		GroupFilter:        c.GroupFilter,
-		RoleMappings:       rm,
-		DefaultRole:        c.DefaultRole,
-		DefaultTenant:      c.DefaultTenant,
-		InsecureSkipVerify: c.InsecureSkipVerify,
-	}
-}
-
 // handleLDAPConfig: GET/PUT /api/auth/ldap/config (admin-gated). GET returns the
 // redacted effective config; PUT validates and persists.
 func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
@@ -243,7 +148,7 @@ func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": s.ldap.effective().public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": s.ldap.effective().Public()})
 	case http.MethodPut:
 		var in ldapConfig
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -256,23 +161,11 @@ func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logInfo("auth", "ldap config updated", map[string]any{"enabled": out.Enabled, "host": out.Host})
-		writeJSON(w, http.StatusOK, map[string]any{"config": out.public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": out.Public()})
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-// ldapTestResult is the structured outcome of a test-connection probe. The
-// headline value operators care about is assigned_role: "what role would this
-// user get" (the Okta UX pattern).
-type ldapTestResult struct {
-	OK           bool     `json:"ok"`
-	Stage        string   `json:"stage"` // config|connect|service_bind|user_search|user_bind|done
-	Message      string   `json:"message"`
-	ResolvedDN   string   `json:"resolved_dn,omitempty"`
-	Groups       []string `json:"groups,omitempty"`
-	AssignedRole string   `json:"assigned_role,omitempty"`
 }
 
 // handleLDAPTest: POST /api/auth/ldap/test (admin-gated). With no body it checks
@@ -292,49 +185,7 @@ func (s *server) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.ldap.effective().test(req.Username, req.Password))
-}
-
-// test probes the directory. It never returns an error to the caller — every
-// outcome is encoded in the result so the UI can show exactly where it failed.
-func (c ldapConfig) test(username, password string) ldapTestResult {
-	if !c.Enabled {
-		return ldapTestResult{Stage: "config", Message: "LDAP is not enabled"}
-	}
-	if c.Host == "" || c.BaseDN == "" {
-		return ldapTestResult{Stage: "config", Message: "host and base_dn are required"}
-	}
-	conn, err := c.dial()
-	if err != nil {
-		return ldapTestResult{Stage: "connect", Message: "connect failed: " + err.Error()}
-	}
-	defer conn.Close()
-	if c.BindDN != "" {
-		if err := conn.simpleBind(c.BindDN, c.BindPassword); err != nil {
-			return ldapTestResult{Stage: "service_bind", Message: "service bind failed: " + err.Error()}
-		}
-	}
-	// Connectivity-only probe when no sample user was supplied.
-	if strings.TrimSpace(username) == "" {
-		msg := "connected; service bind OK"
-		if c.BindDN == "" {
-			msg = "connected (anonymous; no service bind configured)"
-		}
-		return ldapTestResult{OK: true, Stage: "service_bind", Message: msg}
-	}
-	id, err := c.authenticate(username, password)
-	if err != nil {
-		return ldapTestResult{Stage: "user_bind", Message: err.Error()}
-	}
-	role := ldapRoleFor(id.Groups, c.RoleMappings, c.DefaultRole)
-	return ldapTestResult{
-		OK:           true,
-		Stage:        "done",
-		Message:      "authentication succeeded",
-		ResolvedDN:   id.DN,
-		Groups:       id.Groups,
-		AssignedRole: role,
-	}
+	writeJSON(w, http.StatusOK, s.ldap.effective().Test(req.Username, req.Password))
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +226,7 @@ func newTACACSConfigFromEnv() tacacsConfig {
 	}
 }
 
-func (c tacacsConfig) normalize() tacacsConfig {
+func (c tacacsConfig) Normalize() tacacsConfig {
 	c.Host = strings.TrimSpace(c.Host)
 	if c.Port == 0 {
 		c.Port = 49
@@ -389,7 +240,7 @@ func (c tacacsConfig) normalize() tacacsConfig {
 	return c
 }
 
-func (c tacacsConfig) validate() error {
+func (c tacacsConfig) Validate() error {
 	if c.Port < 0 || c.Port > 65535 {
 		return errors.New("tacacs: port out of range (0-65535)")
 	}
@@ -485,8 +336,8 @@ func (s *tacacsConfigStore) effective() tacacsConfig {
 }
 
 func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
-	in = in.normalize()
-	if err := in.validate(); err != nil {
+	in = in.Normalize()
+	if err := in.Validate(); err != nil {
 		return tacacsConfig{}, err
 	}
 	s.mu.Lock()
@@ -528,7 +379,7 @@ type publicTACACSConfig struct {
 	DefaultTenant  string `json:"default_tenant"`
 }
 
-func (c tacacsConfig) public() publicTACACSConfig {
+func (c tacacsConfig) Public() publicTACACSConfig {
 	return publicTACACSConfig{
 		Enabled:        c.Enabled,
 		Host:           c.Host,
@@ -547,7 +398,7 @@ func (s *server) handleTACACSConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": s.tacacs.effective().public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": s.tacacs.effective().Public()})
 	case http.MethodPut:
 		var in tacacsConfig
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -560,7 +411,7 @@ func (s *server) handleTACACSConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logInfo("auth", "tacacs config updated", map[string]any{"enabled": out.Enabled, "host": out.Host})
-		writeJSON(w, http.StatusOK, map[string]any{"config": out.public()})
+		writeJSON(w, http.StatusOK, map[string]any{"config": out.Public()})
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

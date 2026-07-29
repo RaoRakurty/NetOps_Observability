@@ -1,4 +1,4 @@
-package main
+package ldap
 
 import (
 	"crypto/tls"
@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"netops/backend/internal/applog"
 	"netops/backend/tlsconfig"
 )
 
@@ -21,35 +20,35 @@ import (
 // re-issues a native session (same as handleLogin / the SSO callback) so the
 // hot-path middleware stays on a single verification path.
 
-// ldapConfig is the LDAP/AD backend configuration (built from LDAP_* env vars).
-type ldapConfig struct {
-	Enabled            bool              `json:"enabled"`
-	Host               string            `json:"host"`
-	Port               int               `json:"port"`
-	UseTLS             bool              `json:"use_tls"`   // LDAPS (TLS from connect, typically :636)
-	StartTLS           bool              `json:"start_tls"` // plain :389 then upgrade via StartTLS extended op
-	BindDN             string            `json:"bind_dn"`   // service account to search with (empty = anonymous search)
-	BindPassword       string            `json:"bind_password"`
-	BaseDN             string            `json:"base_dn"`
-	UserFilter         string            `json:"user_filter"` // e.g. (uid=%s) or (sAMAccountName=%s); %s = escaped username
-	GroupBaseDN        string            `json:"group_base_dn"`
-	GroupFilter        string            `json:"group_filter"` // e.g. (member=%s); %s = escaped user DN
-	RoleMappings       []ldapRoleMapping `json:"role_mappings"`
-	DefaultRole        string            `json:"default_role"`
-	DefaultTenant      string            `json:"default_tenant"`
-	CAFile             string            `json:"ca_file"` // explicit CA bundle for the LDAP server cert; empty → system trust pool
-	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
+// Config is the LDAP/AD backend configuration (built from LDAP_* env vars).
+type Config struct {
+	Enabled            bool          `json:"enabled"`
+	Host               string        `json:"host"`
+	Port               int           `json:"port"`
+	UseTLS             bool          `json:"use_tls"`   // LDAPS (TLS from connect, typically :636)
+	StartTLS           bool          `json:"start_tls"` // plain :389 then upgrade via StartTLS extended op
+	BindDN             string        `json:"bind_dn"`   // service account to search with (empty = anonymous search)
+	BindPassword       string        `json:"bind_password"`
+	BaseDN             string        `json:"base_dn"`
+	UserFilter         string        `json:"user_filter"` // e.g. (uid=%s) or (sAMAccountName=%s); %s = escaped username
+	GroupBaseDN        string        `json:"group_base_dn"`
+	GroupFilter        string        `json:"group_filter"` // e.g. (member=%s); %s = escaped user DN
+	RoleMappings       []RoleMapping `json:"role_mappings"`
+	DefaultRole        string        `json:"default_role"`
+	DefaultTenant      string        `json:"default_tenant"`
+	CAFile             string        `json:"ca_file"` // explicit CA bundle for the LDAP server cert; empty → system trust pool
+	InsecureSkipVerify bool          `json:"insecure_skip_verify"`
 }
 
-type ldapRoleMapping struct {
+type RoleMapping struct {
 	Group string `json:"group"`
 	Role  string `json:"role"`
 }
 
-const ldapDialTimeout = 8 * time.Second
+const dialTimeout = 8 * time.Second
 
-// ldapIdentity is the normalized result of a successful LDAP authentication.
-type ldapIdentity struct {
+// Identity is the normalized result of a successful LDAP authentication.
+type Identity struct {
 	Username    string
 	DN          string
 	Email       string
@@ -57,46 +56,10 @@ type ldapIdentity struct {
 	Groups      []string
 }
 
-// newLDAPConfig builds the LDAP config from the environment. It returns a
-// disabled config (Enabled=false) when LDAP_ENABLED!=true, so local accounts /
-// other providers remain the always-available fallback.
-//
-// LDAP_ROLE_MAP is a ";"-separated list of "<group>=<role>" pairs, where the
-// group is matched (case-insensitive) against either a full group DN or its
-// leading "cn=" component, e.g.:
-//
-//	cn=admins,ou=groups,dc=example,dc=com=super-admin;cn=netops,...=operator
-func newLDAPConfig() ldapConfig {
-	port := 0
-	if v := strings.TrimSpace(os.Getenv("LDAP_PORT")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			port = n
-		}
-	}
-	return ldapConfig{
-		Enabled:            os.Getenv("LDAP_ENABLED") == "true" && os.Getenv("LDAP_HOST") != "",
-		Host:               os.Getenv("LDAP_HOST"),
-		Port:               port,
-		UseTLS:             os.Getenv("LDAP_USE_TLS") == "true",
-		StartTLS:           os.Getenv("LDAP_START_TLS") == "true",
-		BindDN:             os.Getenv("LDAP_BIND_DN"),
-		BindPassword:       os.Getenv("LDAP_BIND_PASSWORD"),
-		BaseDN:             os.Getenv("LDAP_BASE_DN"),
-		UserFilter:         envOr("LDAP_USER_FILTER", "(uid=%s)"),
-		GroupBaseDN:        os.Getenv("LDAP_GROUP_BASE_DN"),
-		GroupFilter:        os.Getenv("LDAP_GROUP_FILTER"),
-		RoleMappings:       parseLDAPRoleMap(os.Getenv("LDAP_ROLE_MAP")),
-		DefaultRole:        envOr("LDAP_DEFAULT_ROLE", RoleReadOnly),
-		DefaultTenant:      envOr("LDAP_DEFAULT_TENANT", TenantGlobal),
-		CAFile:             os.Getenv("LDAP_CA_FILE"),
-		InsecureSkipVerify: os.Getenv("LDAP_INSECURE_SKIP_VERIFY") == "true",
-	}
-}
-
-// parseLDAPRoleMap turns "group=role;group2=role2" into role mappings. The
+// ParseRoleMap turns "group=role;group2=role2" into role mappings. The
 // group token may itself contain '=' (DNs do), so we split on the LAST '='.
-func parseLDAPRoleMap(csv string) []ldapRoleMapping {
-	var out []ldapRoleMapping
+func ParseRoleMap(csv string) []RoleMapping {
+	var out []RoleMapping
 	for _, raw := range strings.Split(csv, ";") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -109,7 +72,7 @@ func parseLDAPRoleMap(csv string) []ldapRoleMapping {
 		group := strings.TrimSpace(raw[:i])
 		role := strings.TrimSpace(raw[i+1:])
 		if group != "" && role != "" {
-			out = append(out, ldapRoleMapping{Group: group, Role: role})
+			out = append(out, RoleMapping{Group: group, Role: role})
 		}
 	}
 	return out
@@ -121,11 +84,11 @@ func parseLDAPRoleMap(csv string) []ldapRoleMapping {
 // over the default.
 func rolePrivilege(role string) int {
 	switch strings.ToLower(strings.TrimSpace(role)) {
-	case RoleSuperAdmin, "admin":
+	case "super-admin", "admin":
 		return 3
-	case RoleOperator:
+	case "operator":
 		return 2
-	case RoleReadOnly, "viewer", "":
+	case "read-only", "viewer", "":
 		return 0
 	default:
 		return 1
@@ -160,10 +123,10 @@ func leadingCN(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// ldapRoleFor resolves a SINGLE local role from the user's groups. If any group
+// RoleFor resolves a SINGLE local role from the user's groups. If any group
 // matches a mapping it returns the most privileged matched role; otherwise it
-// returns defaultRole (or RoleReadOnly when defaultRole is empty).
-func ldapRoleFor(groups []string, mappings []ldapRoleMapping, defaultRole string) string {
+// returns defaultRole (or "read-only" when defaultRole is empty).
+func RoleFor(groups []string, mappings []RoleMapping, defaultRole string) string {
 	best := ""
 	bestRank := -1
 	for _, g := range groups {
@@ -180,7 +143,7 @@ func ldapRoleFor(groups []string, mappings []ldapRoleMapping, defaultRole string
 		return best
 	}
 	if strings.TrimSpace(defaultRole) == "" {
-		return RoleReadOnly
+		return "read-only"
 	}
 	return defaultRole
 }
@@ -192,7 +155,7 @@ func ldapRoleFor(groups []string, mappings []ldapRoleMapping, defaultRole string
 // search BaseDN with UserFilter to resolve the user's DN and attributes → bind
 // as that DN with the supplied password (the actual credential check) → gather
 // group memberships (memberOf attr, else a GroupFilter search).
-func (lc ldapConfig) authenticate(username, password string) (*ldapIdentity, error) {
+func (lc Config) Authenticate(username, password string) (*Identity, error) {
 	if !lc.Enabled {
 		return nil, errors.New("ldap not enabled")
 	}
@@ -272,7 +235,7 @@ func (lc ldapConfig) authenticate(username, password string) (*ldapIdentity, err
 		}
 	}
 
-	return &ldapIdentity{
+	return &Identity{
 		Username:    username,
 		DN:          userDN,
 		Email:       first(entry.attr("mail")),
@@ -284,45 +247,14 @@ func (lc ldapConfig) authenticate(username, password string) (*ldapIdentity, err
 // handleLDAPLogin (public) authenticates {username,password} against the LDAP/AD
 // directory, JIT-provisions a local user, and issues the same access + refresh
 // session as handleLogin.
-func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+// firstNonEmpty returns the first non-blank value (duplicated at the boundary).
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
 	}
-	var req loginRequest
-	// F-32: PRE-AUTH route — an LDAP sign-in is a username/password pair. Same
-	// loginRequest struct as /api/auth/login, which caps at 64 KiB; this sibling
-	// was missed.
-	if err := decodeJSONBody(w, r, authCredentialBodyBytes, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	cfg := s.ldap.effective()
-	if !cfg.Enabled {
-		writeError(w, http.StatusNotFound, errors.New("ldap authentication not configured"))
-		return
-	}
-	id, err := cfg.authenticate(req.Username, req.Password)
-	if err != nil {
-		// Generic message: don't leak whether the username exists.
-		logInfo("auth", "ldap login failed", map[string]any{"user": req.Username, "reason": err.Error()})
-		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
-		return
-	}
-	role := ldapRoleFor(id.Groups, cfg.RoleMappings, cfg.DefaultRole)
-	user, err := s.users.UpsertFederated(req.Username, id.Email, firstNonEmpty(id.DisplayName, req.Username), role, "ldap", cfg.DefaultTenant)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.logBindingSync(user, "ldap") // PBAC Phase A: mirror the provisioned identity
-	if user.Status == "disabled" {
-		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
-		return
-	}
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "ldap"})
-	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
+	return ""
 }
 
 func first(ss []string) string {
@@ -336,12 +268,12 @@ func first(ss []string) string {
 // LDAP connection
 // ---------------------------------------------------------------------------
 
-type ldapConn struct {
+type conn struct {
 	conn  net.Conn
 	msgID int32
 }
 
-func (lc ldapConfig) addr() string {
+func (lc Config) addr() string {
 	port := lc.Port
 	if port == 0 {
 		if lc.UseTLS {
@@ -361,7 +293,7 @@ func (lc ldapConfig) addr() string {
 // corporate/public cert). InsecureSkipVerify is honored ONLY behind the loud
 // dev-only ALLOW_DEV_SECRETS gate — otherwise it is refused, because skipping
 // verification lets an attacker MITM the bind and harvest every user's password.
-func (lc ldapConfig) tlsConfig() (*tls.Config, error) {
+func (lc Config) tlsConfig() (*tls.Config, error) {
 	opts := tlsconfig.ClientOptions{ServerName: lc.Host}
 	if strings.TrimSpace(lc.CAFile) != "" {
 		bundle, err := tlsconfig.LoadTrustBundle(lc.CAFile)
@@ -380,14 +312,14 @@ func (lc ldapConfig) tlsConfig() (*tls.Config, error) {
 		if os.Getenv("ALLOW_DEV_SECRETS") != "true" {
 			return nil, errors.New("LDAP_INSECURE_SKIP_VERIFY=true requires ALLOW_DEV_SECRETS=true (dev only) — refusing to disable LDAP certificate verification, which would expose every user's password to a MITM")
 		}
-		logWarn("ldap", "LDAP certificate verification DISABLED (LDAP_INSECURE_SKIP_VERIFY + ALLOW_DEV_SECRETS) — bind credentials are MITM-able; dev only", nil)
+		applog.Warn("ldap", "LDAP certificate verification DISABLED (LDAP_INSECURE_SKIP_VERIFY + ALLOW_DEV_SECRETS) — bind credentials are MITM-able; dev only", nil)
 		cfg.InsecureSkipVerify = true // #nosec G402 -- explicit dev-only opt-in, gated behind ALLOW_DEV_SECRETS
 	}
 	return cfg, nil
 }
 
-func (lc ldapConfig) dial() (*ldapConn, error) {
-	d := &net.Dialer{Timeout: ldapDialTimeout}
+func (lc Config) dial() (*conn, error) {
+	d := &net.Dialer{Timeout: dialTimeout}
 	if lc.UseTLS {
 		cfg, err := lc.tlsConfig()
 		if err != nil {
@@ -397,13 +329,13 @@ func (lc ldapConfig) dial() (*ldapConn, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ldapConn{conn: c}, nil
+		return &conn{conn: c}, nil
 	}
 	c, err := d.Dial("tcp", lc.addr())
 	if err != nil {
 		return nil, err
 	}
-	lconn := &ldapConn{conn: c}
+	lconn := &conn{conn: c}
 	if lc.StartTLS {
 		cfg, err := lc.tlsConfig()
 		if err != nil {
@@ -418,16 +350,16 @@ func (lc ldapConfig) dial() (*ldapConn, error) {
 	return lconn, nil
 }
 
-func (c *ldapConn) Close() error { return c.conn.Close() }
+func (c *conn) Close() error { return c.conn.Close() }
 
-func (c *ldapConn) nextID() int32 {
+func (c *conn) nextID() int32 {
 	c.msgID++
 	return c.msgID
 }
 
 // startTLS issues the StartTLS extended request (OID 1.3.6.1.4.1.1466.20037)
 // and, on success, upgrades the connection to TLS in place.
-func (c *ldapConn) startTLS(tlsCfg *tls.Config) error {
+func (c *conn) startTLS(tlsCfg *tls.Config) error {
 	const startTLSOID = "1.3.6.1.4.1.1466.20037"
 	id := c.nextID()
 	req := berTLV(tagExtendedRequest, berTLV(0x80, []byte(startTLSOID)))
@@ -452,7 +384,7 @@ func (c *ldapConn) startTLS(tlsCfg *tls.Config) error {
 
 // simpleBind performs an LDAP simple bind. A non-zero resultCode means the
 // credentials (or DN) were rejected.
-func (c *ldapConn) simpleBind(dn, password string) error {
+func (c *conn) simpleBind(dn, password string) error {
 	id := c.nextID()
 	content := concat(
 		berInt(tagInteger, 3), // version 3
@@ -480,12 +412,12 @@ func (c *ldapConn) simpleBind(dn, password string) error {
 	return nil
 }
 
-type ldapEntry struct {
+type entry struct {
 	dn    string
 	attrs map[string][]string
 }
 
-func (e ldapEntry) attr(name string) []string {
+func (e entry) attr(name string) []string {
 	for k, v := range e.attrs {
 		if strings.EqualFold(k, name) {
 			return v
@@ -496,7 +428,7 @@ func (e ldapEntry) attr(name string) []string {
 
 // search runs a subtree search and returns the matched entries. attrs is the
 // list of attributes to retrieve (nil/empty = all user attributes).
-func (c *ldapConn) search(baseDN, filter string, attrs []string) ([]ldapEntry, error) {
+func (c *conn) search(baseDN, filter string, attrs []string) ([]entry, error) {
 	filterBER, err := parseFilter(filter)
 	if err != nil {
 		return nil, fmt.Errorf("invalid filter %q: %w", filter, err)
@@ -520,7 +452,7 @@ func (c *ldapConn) search(baseDN, filter string, attrs []string) ([]ldapEntry, e
 		return nil, err
 	}
 
-	var entries []ldapEntry
+	var entries []entry
 	for {
 		_, op, err := c.readMessage(id)
 		if err != nil {
@@ -559,17 +491,17 @@ type protocolOp struct {
 	content []byte
 }
 
-func (c *ldapConn) writeMessage(id int32, op []byte) error {
+func (c *conn) writeMessage(id int32, op []byte) error {
 	msg := berTLV(tagSequence, concat(berInt(tagInteger, int(id)), op))
-	_ = c.conn.SetWriteDeadline(time.Now().Add(ldapDialTimeout))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(dialTimeout))
 	_, err := c.conn.Write(msg)
 	return err
 }
 
 // readMessage reads one LDAPMessage, validates the messageID, and returns the
 // protocol-op tag and its content.
-func (c *ldapConn) readMessage(wantID int32) (int32, protocolOp, error) {
-	_ = c.conn.SetReadDeadline(time.Now().Add(ldapDialTimeout))
+func (c *conn) readMessage(wantID int32) (int32, protocolOp, error) {
+	_ = c.conn.SetReadDeadline(time.Now().Add(dialTimeout))
 	tag, body, err := readBERElement(c.conn)
 	if err != nil {
 		return 0, protocolOp{}, err
@@ -615,13 +547,13 @@ func parseLDAPResult(content []byte) (int, string) {
 }
 
 // parseSearchEntry parses a SearchResultEntry: objectName + PartialAttributeList.
-func parseSearchEntry(content []byte) (ldapEntry, error) {
+func parseSearchEntry(content []byte) (entry, error) {
 	r := &berReader{b: content}
 	_, dnBytes, err := r.next()
 	if err != nil {
-		return ldapEntry{}, errors.New("entry missing DN")
+		return entry{}, errors.New("entry missing DN")
 	}
-	e := ldapEntry{dn: string(dnBytes), attrs: map[string][]string{}}
+	e := entry{dn: string(dnBytes), attrs: map[string][]string{}}
 	_, attrList, err := r.next() // SEQUENCE OF PartialAttribute
 	if err != nil {
 		return e, nil // entry with no attributes is valid

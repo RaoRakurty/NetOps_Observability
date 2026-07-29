@@ -25,7 +25,7 @@ func TestLDAPLiveForumsys(t *testing.T) {
 		DefaultRole:  RoleReadOnly,
 	}
 
-	id, err := cfg.authenticate("tesla", "password")
+	id, err := cfg.Authenticate("tesla", "password")
 	if err != nil {
 		t.Fatalf("expected successful bind for tesla: %v", err)
 	}
@@ -34,10 +34,10 @@ func TestLDAPLiveForumsys(t *testing.T) {
 	}
 	t.Logf("OK login: user=%s dn=%s email=%s groups=%v", id.Username, id.DN, id.Email, id.Groups)
 
-	if _, err := cfg.authenticate("tesla", "wrong-password"); err == nil {
+	if _, err := cfg.Authenticate("tesla", "wrong-password"); err == nil {
 		t.Fatal("expected wrong password to be rejected")
 	}
-	if _, err := cfg.authenticate("nobody-here", "password"); err == nil {
+	if _, err := cfg.Authenticate("nobody-here", "password"); err == nil {
 		t.Fatal("expected unknown user to be rejected")
 	}
 }

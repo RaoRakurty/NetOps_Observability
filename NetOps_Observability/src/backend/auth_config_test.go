@@ -131,8 +131,8 @@ func TestLDAPConfigValidate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := tc.c
-			c.normalize()
-			err := c.validate()
+			c.Normalize()
+			err := c.Validate()
 			if tc.ok && err != nil {
 				t.Fatalf("want valid, got %v", err)
 			}
@@ -146,7 +146,7 @@ func TestLDAPConfigValidate(t *testing.T) {
 func TestLDAPConfigNormalizeDefaults(t *testing.T) {
 	c := ldapConfig{Enabled: true, Host: "  h  ", BaseDN: " dc=x ", UserFilter: "  ",
 		RoleMappings: []ldapRoleMapping{{Group: "cn=a", Role: "operator"}, {Group: " ", Role: "x"}, {Group: "cn=b", Role: ""}}}
-	c.normalize()
+	c.Normalize()
 	if c.Host != "h" || c.BaseDN != "dc=x" {
 		t.Fatalf("trim failed: %+v", c)
 	}
@@ -163,7 +163,7 @@ func TestLDAPConfigNormalizeDefaults(t *testing.T) {
 
 func TestLDAPPublicNeverLeaksPassword(t *testing.T) {
 	c := ldapConfig{Enabled: true, Host: "h", BindPassword: "topsecret"}
-	pub := c.public()
+	pub := c.Public()
 	if !pub.BindPasswordSet {
 		t.Fatal("BindPasswordSet should be true")
 	}
@@ -179,7 +179,7 @@ func TestLDAPPublicNeverLeaksPassword(t *testing.T) {
 // Regression: a nil RoleMappings slice must serialise as [] not null, else the
 // admin UI crashes (white screen) calling .map on null.
 func TestLDAPPublicRoleMappingsNeverNil(t *testing.T) {
-	pub := ldapConfig{Enabled: true}.public() // RoleMappings left nil
+	pub := ldapConfig{Enabled: true}.Public() // RoleMappings left nil
 	if pub.RoleMappings == nil {
 		t.Fatal("public().RoleMappings must be non-nil ([])")
 	}
@@ -232,7 +232,7 @@ func TestTACACSConfigSecretPreservedAndValidate(t *testing.T) {
 }
 
 func TestTACACSPublicNeverLeaksSecret(t *testing.T) {
-	pub := tacacsConfig{Enabled: true, Host: "h", Secret: "sharedkey"}.public()
+	pub := tacacsConfig{Enabled: true, Host: "h", Secret: "sharedkey"}.Public()
 	if !pub.SecretSet {
 		t.Fatal("SecretSet should be true")
 	}

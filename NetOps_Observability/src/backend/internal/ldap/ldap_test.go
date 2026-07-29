@@ -1,4 +1,4 @@
-package main
+package ldap
 
 import (
 	"bytes"
@@ -197,15 +197,15 @@ func TestParseLDAPResult(t *testing.T) {
 }
 
 func TestLDAPRoleForPrecedence(t *testing.T) {
-	mappings := []ldapRoleMapping{
-		{Group: "cn=netops,ou=groups,dc=example,dc=com", Role: RoleOperator},
-		{Group: "cn=admins,ou=groups,dc=example,dc=com", Role: RoleSuperAdmin},
-		{Group: "cn=viewers,ou=groups,dc=example,dc=com", Role: RoleReadOnly},
+	mappings := []RoleMapping{
+		{Group: "cn=netops,ou=groups,dc=example,dc=com", Role: "operator"},
+		{Group: "cn=admins,ou=groups,dc=example,dc=com", Role: "super-admin"},
+		{Group: "cn=viewers,ou=groups,dc=example,dc=com", Role: "read-only"},
 	}
 
 	// single match -> that role
-	if r := ldapRoleFor([]string{"cn=netops,ou=groups,dc=example,dc=com"}, mappings, RoleReadOnly); r != RoleOperator {
-		t.Errorf("single match: got %q want %q", r, RoleOperator)
+	if r := RoleFor([]string{"cn=netops,ou=groups,dc=example,dc=com"}, mappings, "read-only"); r != "operator" {
+		t.Errorf("single match: got %q want %q", r, "operator")
 	}
 
 	// multiple matches -> most privileged wins (super-admin > operator)
@@ -213,106 +213,39 @@ func TestLDAPRoleForPrecedence(t *testing.T) {
 		"cn=netops,ou=groups,dc=example,dc=com",
 		"cn=admins,ou=groups,dc=example,dc=com",
 	}
-	if r := ldapRoleFor(groups, mappings, RoleReadOnly); r != RoleSuperAdmin {
-		t.Errorf("precedence: got %q want %q", r, RoleSuperAdmin)
+	if r := RoleFor(groups, mappings, "read-only"); r != "super-admin" {
+		t.Errorf("precedence: got %q want %q", r, "super-admin")
 	}
 
 	// match on a bare cn (group value carries no DN) against a full-DN mapping
-	if r := ldapRoleFor([]string{"netops"}, mappings, RoleReadOnly); r != RoleOperator {
-		t.Errorf("bare cn match: got %q want %q", r, RoleOperator)
+	if r := RoleFor([]string{"netops"}, mappings, "read-only"); r != "operator" {
+		t.Errorf("bare cn match: got %q want %q", r, "operator")
 	}
 
 	// case-insensitive
-	if r := ldapRoleFor([]string{"CN=Admins,OU=Groups,DC=example,DC=com"}, mappings, RoleReadOnly); r != RoleSuperAdmin {
-		t.Errorf("case-insensitive: got %q want %q", r, RoleSuperAdmin)
+	if r := RoleFor([]string{"CN=Admins,OU=Groups,DC=example,DC=com"}, mappings, "read-only"); r != "super-admin" {
+		t.Errorf("case-insensitive: got %q want %q", r, "super-admin")
 	}
 
 	// no match -> default role
-	if r := ldapRoleFor([]string{"cn=other,dc=x"}, mappings, RoleOperator); r != RoleOperator {
-		t.Errorf("no match: got %q want default %q", r, RoleOperator)
+	if r := RoleFor([]string{"cn=other,dc=x"}, mappings, "operator"); r != "operator" {
+		t.Errorf("no match: got %q want default %q", r, "operator")
 	}
 
 	// no match + empty default -> read-only
-	if r := ldapRoleFor([]string{"cn=other,dc=x"}, mappings, ""); r != RoleReadOnly {
-		t.Errorf("empty default: got %q want %q", r, RoleReadOnly)
-	}
-}
-
-func TestNewLDAPConfigFromEnv(t *testing.T) {
-	t.Setenv("LDAP_ENABLED", "true")
-	t.Setenv("LDAP_HOST", "ad.example.com")
-	t.Setenv("LDAP_PORT", "636")
-	t.Setenv("LDAP_USE_TLS", "true")
-	t.Setenv("LDAP_START_TLS", "false")
-	t.Setenv("LDAP_BIND_DN", "cn=svc,dc=example,dc=com")
-	t.Setenv("LDAP_BIND_PASSWORD", "svcpass")
-	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
-	t.Setenv("LDAP_USER_FILTER", "(sAMAccountName=%s)")
-	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
-	t.Setenv("LDAP_GROUP_FILTER", "(member=%s)")
-	t.Setenv("LDAP_DEFAULT_ROLE", RoleOperator)
-	t.Setenv("LDAP_DEFAULT_TENANT", "acme")
-	t.Setenv("LDAP_INSECURE_SKIP_VERIFY", "true")
-	t.Setenv("LDAP_ROLE_MAP", "cn=admins,ou=groups,dc=example,dc=com=super-admin;cn=netops,ou=groups,dc=example,dc=com=operator")
-
-	c := newLDAPConfig()
-	if !c.Enabled {
-		t.Fatal("expected enabled")
-	}
-	if c.Host != "ad.example.com" || c.Port != 636 || !c.UseTLS || c.StartTLS {
-		t.Errorf("transport fields wrong: %+v", c)
-	}
-	if c.BindDN != "cn=svc,dc=example,dc=com" || c.BindPassword != "svcpass" {
-		t.Errorf("bind fields wrong: %+v", c)
-	}
-	if c.BaseDN != "dc=example,dc=com" || c.UserFilter != "(sAMAccountName=%s)" {
-		t.Errorf("base/filter wrong: %+v", c)
-	}
-	if c.GroupBaseDN != "ou=groups,dc=example,dc=com" || c.GroupFilter != "(member=%s)" {
-		t.Errorf("group fields wrong: %+v", c)
-	}
-	if c.DefaultRole != RoleOperator || c.DefaultTenant != "acme" || !c.InsecureSkipVerify {
-		t.Errorf("defaults wrong: %+v", c)
-	}
-	if len(c.RoleMappings) != 2 {
-		t.Fatalf("role map parse: got %d mappings: %+v", len(c.RoleMappings), c.RoleMappings)
-	}
-	if c.RoleMappings[0].Group != "cn=admins,ou=groups,dc=example,dc=com" || c.RoleMappings[0].Role != "super-admin" {
-		t.Errorf("role map[0] wrong: %+v", c.RoleMappings[0])
-	}
-	if c.RoleMappings[1].Role != "operator" {
-		t.Errorf("role map[1] wrong: %+v", c.RoleMappings[1])
-	}
-
-	// Resolving a role over the parsed mappings should respect precedence.
-	role := ldapRoleFor([]string{"cn=admins,ou=groups,dc=example,dc=com", "cn=netops,ou=groups,dc=example,dc=com"}, c.RoleMappings, c.DefaultRole)
-	if role != RoleSuperAdmin {
-		t.Errorf("resolved role = %q, want %q", role, RoleSuperAdmin)
-	}
-}
-
-// LDAP_ENABLED=false (or no host) must yield a disabled config.
-func TestNewLDAPConfigDisabled(t *testing.T) {
-	t.Setenv("LDAP_ENABLED", "false")
-	t.Setenv("LDAP_HOST", "ad.example.com")
-	if newLDAPConfig().Enabled {
-		t.Error("LDAP must be disabled when LDAP_ENABLED!=true")
-	}
-	t.Setenv("LDAP_ENABLED", "true")
-	t.Setenv("LDAP_HOST", "")
-	if newLDAPConfig().Enabled {
-		t.Error("LDAP must be disabled when LDAP_HOST is empty")
+	if r := RoleFor([]string{"cn=other,dc=x"}, mappings, ""); r != "read-only" {
+		t.Errorf("empty default: got %q want %q", r, "read-only")
 	}
 }
 
 // authenticate must reject empty credentials before any network I/O (the
 // empty-password LDAP unauthenticated-bind bypass).
 func TestLDAPAuthenticateRejectsEmptyCreds(t *testing.T) {
-	lc := ldapConfig{Enabled: true, Host: "ldap.invalid", BaseDN: "dc=x"}
-	if _, err := lc.authenticate("", "pw"); err == nil {
+	lc := Config{Enabled: true, Host: "ldap.invalid", BaseDN: "dc=x"}
+	if _, err := lc.Authenticate("", "pw"); err == nil {
 		t.Error("empty username must be rejected")
 	}
-	if _, err := lc.authenticate("user", ""); err == nil {
+	if _, err := lc.Authenticate("user", ""); err == nil {
 		t.Error("empty password must be rejected (unauthenticated-bind bypass)")
 	}
 }
