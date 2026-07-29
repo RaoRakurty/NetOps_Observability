@@ -445,7 +445,7 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 		mergedInto = asString(meta["merged_into"])
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
-	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 	view := rca.BuildPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner, "servicenow")

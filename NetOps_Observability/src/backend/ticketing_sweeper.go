@@ -173,7 +173,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		return false
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
-	mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 	view := rca.BuildPathView(c.id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 

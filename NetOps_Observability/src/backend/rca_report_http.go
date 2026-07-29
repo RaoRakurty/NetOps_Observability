@@ -42,7 +42,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// stamps attached/link_status onto sigRows (the same derivation the timeline uses)
-	_ = mergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	_ = rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
 
 	// ticket + policy — RLS-scoped store reads; default policy is labelled as such.
 	ticket := s.ticketStatusForObject(r, id)
