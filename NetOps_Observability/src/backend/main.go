@@ -20,6 +20,7 @@ import (
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/applog"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
@@ -380,7 +381,7 @@ func newServer() *server {
 	// Route them into the structured app log so a lost page is searchable next
 	// to the alert that produced it (§10).
 	notifier.SetLogger(func(level, msg string, fields map[string]any) {
-		appLog.log(level, "notify", msg, fields)
+		applog.Log(level, "notify", msg, fields)
 	})
 	// Slack + PagerDuty are now UI-configurable via the notifyConfigStore (created
 	// after srv exists), which seeds from FEATURE_SLACK_NOTIFICATIONS/SLACK_WEBHOOK_URL

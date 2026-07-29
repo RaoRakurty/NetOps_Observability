@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"netops/backend/internal/applog"
 	"netops/backend/reports"
 )
 
@@ -39,15 +40,7 @@ import (
 func captureAppLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	appLog.mu.Lock()
-	prev := appLog.w
-	appLog.w = buf
-	appLog.mu.Unlock()
-	t.Cleanup(func() {
-		appLog.mu.Lock()
-		appLog.w = prev
-		appLog.mu.Unlock()
-	})
+	t.Cleanup(applog.SwapWriterForTest(buf))
 	return buf
 }
 

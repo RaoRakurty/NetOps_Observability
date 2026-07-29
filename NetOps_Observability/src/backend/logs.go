@@ -8,52 +8,22 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"netops/backend/internal/applog"
 )
 
 // ----------------------------------------------------------------------------
-// Structured logger — emits one JSON line per event to stdout. Vector's
-// docker_logs source picks them up, parses the JSON, ships to the Kafka bus
-// (topic netops.applogs), and vector-router then writes them into the
-// `netops-applogs-YYYY.MM.DD` OpenSearch index.
+// Structured logging — the logger itself lives in internal/applog; these
+// wrappers keep the historical names for the root package's ~90 call sites.
 // ----------------------------------------------------------------------------
 
-type jsonLogger struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-var appLog = &jsonLogger{w: os.Stdout}
-
-func (l *jsonLogger) log(level, component, msg string, fields map[string]any) {
-	event := map[string]any{
-		"ts":        time.Now().UTC().Format(time.RFC3339Nano),
-		"level":     level,
-		"component": component,
-		"msg":       msg,
-	}
-	for k, v := range fields {
-		event[k] = v
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	_ = json.NewEncoder(l.w).Encode(event)
-}
-
-func logInfo(component, msg string, fields map[string]any) {
-	appLog.log("info", component, msg, fields)
-}
-func logWarn(component, msg string, fields map[string]any) {
-	appLog.log("warn", component, msg, fields)
-}
-func logError(component, msg string, fields map[string]any) {
-	appLog.log("error", component, msg, fields)
-}
+func logInfo(component, msg string, fields map[string]any)  { applog.Info(component, msg, fields) }
+func logWarn(component, msg string, fields map[string]any)  { applog.Warn(component, msg, fields) }
+func logError(component, msg string, fields map[string]any) { applog.Error(component, msg, fields) }
 
 // ----------------------------------------------------------------------------
 // Log search — OpenSearch query proxy.
