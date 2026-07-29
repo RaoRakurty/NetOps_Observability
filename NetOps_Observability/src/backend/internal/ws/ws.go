@@ -36,8 +36,11 @@ func OriginAllowed(r *http.Request, allowlist map[string]bool) bool {
 		return true
 	}
 	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
+	if err != nil {
+		return false // unparseable Origin — deny (fail closed, SR-006)
+	}
+	if u.Host == "" {
+		return false // an Origin with no host can never match r.Host — deny
 	}
 	if strings.EqualFold(u.Host, r.Host) {
 		return true
