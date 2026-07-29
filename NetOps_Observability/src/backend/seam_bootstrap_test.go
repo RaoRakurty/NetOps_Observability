@@ -37,11 +37,11 @@ func TestSeamPrivateIP(t *testing.T) {
 		{"2001:db8::1", false},
 	}
 	for _, c := range cases {
-		if got := seamPrivateIP(net.ParseIP(c.ip)); got != c.want {
-			t.Errorf("seamPrivateIP(%s) = %v, want %v", c.ip, got, c.want)
+		if got := seam.PrivateIP(net.ParseIP(c.ip)); got != c.want {
+			t.Errorf("seam.PrivateIP(%s) = %v, want %v", c.ip, got, c.want)
 		}
 	}
-	if seamPrivateIP(nil) {
+	if seam.PrivateIP(nil) {
 		t.Error("nil IP must not classify as private")
 	}
 }
@@ -55,7 +55,7 @@ func pathOf(dst string, reached, changed bool, hops ...string) collectors.PathRe
 }
 
 func TestRuleTracerouteBoundaryDIA(t *testing.T) {
-	out := ruleTracerouteBoundary([]collectors.PathResult{
+	out := seam.RuleTracerouteBoundary([]collectors.PathResult{
 		pathOf("8.8.8.8", true, false, "10.0.0.1", "10.0.1.1", "203.0.113.1", "8.8.8.8"),
 	})
 	if len(out) != 1 {
@@ -81,7 +81,7 @@ func TestRuleTracerouteBoundaryDIA(t *testing.T) {
 
 func TestRuleTracerouteBoundaryDXPrivateFarSide(t *testing.T) {
 	// Private dst reached across public space = provider underlay (DX candidate).
-	out := ruleTracerouteBoundary([]collectors.PathResult{
+	out := seam.RuleTracerouteBoundary([]collectors.PathResult{
 		pathOf("10.200.0.5", true, false, "10.0.0.1", "198.51.100.1", "198.51.100.9", "10.200.0.5"),
 	})
 	if len(out) != 1 || out[0].SeamType != "DX" {
@@ -90,7 +90,7 @@ func TestRuleTracerouteBoundaryDXPrivateFarSide(t *testing.T) {
 }
 
 func TestRuleTracerouteBoundarySkipsAndSilentHops(t *testing.T) {
-	out := ruleTracerouteBoundary([]collectors.PathResult{
+	out := seam.RuleTracerouteBoundary([]collectors.PathResult{
 		pathOf("10.0.9.9", true, false, "10.0.0.1", "10.0.1.1"), // never leaves private
 		pathOf("", false, false),                                // empty
 		// Silent hop ("") between private and public must not hide the boundary.
@@ -113,7 +113,7 @@ func TestRuleBGPPeers(t *testing.T) {
 		{ID: "edge1", Name: "edge1", Address: "10.0.0.1", TenantID: "acme"},
 		{ID: "core1", Name: "core1", Address: "10.0.0.2"},
 	}
-	out := ruleBGPPeers([]seamBGPPeer{
+	out := seam.RuleBGPPeers([]seam.BGPPeer{
 		{Device: "edge1", PeerIP: "10.0.0.2", State: 6},      // iBGP to inventory device → skip
 		{Device: "edge1", PeerIP: "169.254.255.1", State: 6}, // provider peering, established
 		{Device: "edge1", PeerIP: "203.0.113.33", State: 1},  // provider peering, down
@@ -134,7 +134,7 @@ func TestRuleBGPPeers(t *testing.T) {
 }
 
 func TestRuleFlowBoundary(t *testing.T) {
-	out := ruleFlowBoundary([]seamFlowBoundary{
+	out := seam.RuleFlowBoundary([]seam.FlowBoundary{
 		{Sampler: "10.0.0.1", WanIf: 3, TenantID: "acme", Crossing: 5000},
 		{Sampler: "10.0.0.2", WanIf: 7, Crossing: 60},
 		{Sampler: "10.0.0.3", WanIf: 1, Crossing: 10}, // under threshold
@@ -156,7 +156,7 @@ func TestRuleFlowBoundary(t *testing.T) {
 
 func TestRuleTunnels(t *testing.T) {
 	devices := []models.Device{{ID: "branch1", Name: "branch1", TenantID: "acme"}}
-	seams, groups := ruleTunnels([]seamTunnel{
+	seams, groups := seam.RuleTunnels([]seam.Tunnel{
 		{ID: "branch1/Tunnel1", Type: "ipsec", LocalDevice: "branch1", LocalAddr: "10.1.0.1", RemoteAddr: "198.51.100.1", Status: "up"},
 		{ID: "branch1/Tunnel2", Type: "gre", LocalDevice: "branch1", RemoteAddr: "203.0.113.1", Status: "up"},
 		{ID: "site2/Tunnel1", Type: "ipsec", LocalDevice: "site2", RemoteAddr: "198.51.100.9", Status: "down"},
@@ -197,7 +197,7 @@ func TestRuleRedundancyGroups(t *testing.T) {
 		{SeamID: "sm-e", TenantID: "acme", SeamType: "DIA", State: "active", Endpoints: map[string]string{"on_prem": "austin-edge"}},
 		{SeamID: "sm-f", TenantID: "", SeamType: "DX", State: "active"}, // no on_prem → ungroupable
 	}
-	groups := ruleRedundancyGroups(inv)
+	groups := seam.RuleRedundancyGroups(inv)
 	if len(groups) != 2 {
 		t.Fatalf("want dx-redundancy + hybrid at dallas-edge only, got %d: %+v", len(groups), groups)
 	}
@@ -233,9 +233,9 @@ func TestRuleRedundancyGroupsDeterministic(t *testing.T) {
 		{SeamID: "s3", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "a"}},
 		{SeamID: "s4", SeamType: "DX", State: "active", Endpoints: map[string]string{"on_prem": "a"}},
 	}
-	first := ruleRedundancyGroups(inv)
+	first := seam.RuleRedundancyGroups(inv)
 	for i := 0; i < 5; i++ {
-		again := ruleRedundancyGroups(inv)
+		again := seam.RuleRedundancyGroups(inv)
 		if len(again) != len(first) {
 			t.Fatal("non-deterministic group count")
 		}
