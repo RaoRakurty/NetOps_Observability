@@ -1,6 +1,9 @@
 package main
 
-import "netops/backend/internal/vault"
+import (
+	"netops/backend/internal/vault"
+	"netops/backend/notify"
+)
 
 // secrets_config.go — secret-custody (#17 phase 1c) for the PLATFORM-scoped
 // config singletons (notify / OIDC / LDAP / TACACS). Each map* function applies a
@@ -66,7 +69,7 @@ func openFn(v *vault.Vault) secretXform {
 }
 
 // mapNotify transforms the notify config's five secret fields (platform DEK).
-func mapNotify(c notifyConfig, f secretXform) (notifyConfig, error) {
+func mapNotify(c notify.ChannelConfig, f secretXform) (notify.ChannelConfig, error) {
 	var e error
 	if c.SMTP.Pass, e = f("", fieldSMTPPass, c.SMTP.Pass); e != nil {
 		return c, e

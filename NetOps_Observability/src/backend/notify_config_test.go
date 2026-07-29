@@ -1,9 +1,14 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"netops/backend/notify"
+)
 
 func TestPublicSlackMasksSecret(t *testing.T) {
-	s := &notifyConfigStore{cfg: notifyConfig{Slack: slackConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/XXX", MinSeverity: "warning"}}}
+	s := &notifyConfigStore{cfg: notify.ChannelConfig{Slack: notify.SlackConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/XXX", MinSeverity: "warning"}}}
 	p := s.publicSlack()
 	if !p.Enabled || !p.WebhookSet || p.MinSeverity != "warning" {
 		t.Fatalf("unexpected public slack: %+v", p)
@@ -12,19 +17,19 @@ func TestPublicSlackMasksSecret(t *testing.T) {
 	if got := s.publicSlack(); got.WebhookSet != true {
 		t.Fatalf("webhook_set should be true when configured")
 	}
-	empty := (&notifyConfigStore{cfg: notifyConfig{}}).publicSlack()
+	empty := (&notifyConfigStore{cfg: notify.ChannelConfig{}}).publicSlack()
 	if empty.WebhookSet {
 		t.Fatalf("webhook_set should be false when unset")
 	}
 }
 
 func TestPublicPagerDutyMasksSecret(t *testing.T) {
-	s := &notifyConfigStore{cfg: notifyConfig{PagerDuty: pagerDutyConfig{Enabled: true, RoutingKey: "abc123", MinSeverity: "critical"}}}
+	s := &notifyConfigStore{cfg: notify.ChannelConfig{PagerDuty: notify.PagerDutyConfig{Enabled: true, RoutingKey: "abc123", MinSeverity: "critical"}}}
 	p := s.publicPagerDuty()
 	if !p.Enabled || !p.RoutingSet || p.MinSeverity != "critical" {
 		t.Fatalf("unexpected public pagerduty: %+v", p)
 	}
-	if (&notifyConfigStore{cfg: notifyConfig{}}).publicPagerDuty().RoutingSet {
+	if (&notifyConfigStore{cfg: notify.ChannelConfig{}}).publicPagerDuty().RoutingSet {
 		t.Fatalf("routing_set should be false when unset")
 	}
 }
@@ -32,10 +37,10 @@ func TestPublicPagerDutyMasksSecret(t *testing.T) {
 func TestBuildSlackPagerDutyChannelNames(t *testing.T) {
 	// The dispatcher keys channels by Name() for Replace/Remove — the severity
 	// gate must preserve the inner channel's name.
-	if n := buildSlackChannel(slackConfig{WebhookURL: "x", MinSeverity: "warning"}).Name(); n != "slack" {
+	if n := notify.BuildSlackChannel(notify.SlackConfig{WebhookURL: "x", MinSeverity: "warning"}).Name(); n != "slack" {
 		t.Fatalf("slack channel name = %q, want slack", n)
 	}
-	if n := buildPagerDutyChannel(pagerDutyConfig{RoutingKey: "x", MinSeverity: "critical"}).Name(); n != "pagerduty" {
+	if n := notify.BuildPagerDutyChannel(notify.PagerDutyConfig{RoutingKey: "x", MinSeverity: "critical"}, os.Getenv("PLATFORM_ENV"), os.Getenv("PLATFORM_REGION")).Name(); n != "pagerduty" {
 		t.Fatalf("pagerduty channel name = %q, want pagerduty", n)
 	}
 }
@@ -95,11 +100,11 @@ func TestSeedNtfyRequiresTopic(t *testing.T) {
 func TestNtfyChannelDefaultsToCriticalGate(t *testing.T) {
 	// The recommended critical-push channel must default to min_severity
 	// critical (phone pushes for criticals only) and keep its dispatcher name.
-	c := defaultNotifyConfig().Ntfy
+	c := notify.DefaultChannelConfig().Ntfy
 	if c.MinSeverity != "critical" {
 		t.Fatalf("ntfy default min_severity = %q, want critical", c.MinSeverity)
 	}
-	if n := buildNtfyChannel(ntfyConfig{Topic: "x", MinSeverity: "critical"}).Name(); n != "ntfy" {
+	if n := notify.BuildNtfyChannel(notify.NtfyConfig{Topic: "x", MinSeverity: "critical"}).Name(); n != "ntfy" {
 		t.Fatalf("ntfy channel name = %q, want ntfy", n)
 	}
 }

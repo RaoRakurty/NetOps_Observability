@@ -18,11 +18,13 @@ package main
 import (
 	"netops/backend/internal/platformdb"
 	"testing"
+
+	"netops/backend/notify"
 )
 
 func newTestNotifyStore(t *testing.T, path string) *notifyConfigStore {
 	t.Helper()
-	return &notifyConfigStore{path: path, cfg: defaultNotifyConfig()}
+	return &notifyConfigStore{path: path, cfg: notify.DefaultChannelConfig()}
 }
 
 func TestNotifyConfigSaveReportsAPersistFailure(t *testing.T) {

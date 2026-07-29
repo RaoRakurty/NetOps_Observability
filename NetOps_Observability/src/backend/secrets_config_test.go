@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"netops/backend/notify"
 )
 
 // TestConfigSecretsRoundTrip proves each config type's secret fields survive a
@@ -17,7 +19,7 @@ func TestConfigSecretsRoundTrip(t *testing.T) {
 		t.Fatalf("vault: %v", err)
 	}
 
-	notif := notifyConfig{}
+	notif := notify.ChannelConfig{}
 	notif.SMTP.Pass = "smtp-pw"
 	notif.Twilio.AuthToken = "twilio-tok"
 	notif.Ntfy.Token = "ntfy-tok"

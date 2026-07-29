@@ -34,7 +34,7 @@ const (
 
 // ContactPoint is one reusable audience. Email-type points carry an address
 // list (a distribution group); slack/webhook carry a target URL. No secrets live
-// here — the SMTP transport/credentials stay in smtpConfig.
+// here — the SMTP transport/credentials stay in notify.SMTPConfig.
 type ContactPoint struct {
 	ID       string   `json:"id"`
 	TenantID string   `json:"tenant_id,omitempty"` // owner; "" = platform/global
