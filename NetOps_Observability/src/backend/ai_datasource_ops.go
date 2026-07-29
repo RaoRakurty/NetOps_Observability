@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"netops/backend/ai"
+
+	"netops/backend/internal/oslog"
 )
 
 // ai_datasource_ops.go — the P2 operational reads behind the agent loop's two
@@ -76,7 +78,7 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 	// own tagged docs + untagged docs from own devices only.
 	keys, _ := d.srv.visibleDeviceKeys(d.claims)
 	addrs, _ := d.srv.visibleDeviceAddrs(d.claims)
-	if f := osTenantFilter(p.Tenant, p.Cross, keys, addrs); f != nil {
+	if f := oslog.TenantFilter(p.Tenant, p.Cross, keys, addrs); f != nil {
 		filters = append(filters, f)
 	}
 	// Optional device narrowing — a filter clause, never string-built into the
@@ -93,7 +95,7 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 	}
 	boolQuery := map[string]any{
 		"must": []any{map[string]any{"query_string": map[string]any{
-			"query": queryOrAll(query), "analyze_wildcard": true,
+			"query": oslog.QueryOrAll(query), "analyze_wildcard": true,
 		}}},
 		"filter": filters,
 	}
@@ -109,7 +111,7 @@ func (d aiDataSource) moduleSearchLogs(p ai.Principal, args ai.ToolArgs) (ai.Too
 		"query": map[string]any{"bool": boolQuery},
 	}
 
-	resp, err := openSearch("POST", "/"+tenantIndexPattern("syslog", p.Tenant, p.Cross)+"/_search", body)
+	resp, err := openSearch("POST", "/"+oslog.TenantIndexPattern("syslog", p.Tenant, p.Cross)+"/_search", body)
 	if err != nil {
 		return ai.ToolResult{}, fmt.Errorf("log search unavailable")
 	}

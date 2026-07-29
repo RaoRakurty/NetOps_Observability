@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"netops/backend/reports"
+
+	"netops/backend/internal/oslog"
 )
 
 // logs_export.go — Explore→Logs export (Phase 1).
@@ -113,14 +115,14 @@ func buildExportSearchBody(spec logExportSpec, start, end time.Time, size int, s
 	// as handleLogsSearch, frozen onto the spec. The platform owner (Cross) is
 	// unrestricted; the read index pattern (tenantIndexPattern) already excludes
 	// other tenants' indices at the storage layer.
-	if f := osTenantFilter(spec.Tenant, spec.Cross, spec.DeviceKeys, spec.DeviceAddrs); f != nil {
+	if f := oslog.TenantFilter(spec.Tenant, spec.Cross, spec.DeviceKeys, spec.DeviceAddrs); f != nil {
 		filters = append(filters, f)
 	}
 	// Compliance: operator-visibility restriction frozen onto the spec (mirrors
 	// handleLogsSearch). DenyAll → empty result; ExcludeTenants → drop their docs.
 	boolQuery := map[string]any{
 		"must": []any{map[string]any{"query_string": map[string]any{
-			"query":            queryOrAll(spec.Query),
+			"query":            oslog.QueryOrAll(spec.Query),
 			"analyze_wildcard": true,
 		}}},
 		"filter": filters,
@@ -171,7 +173,7 @@ type exportData struct {
 // caps (the honest Phase-1 contract; a streaming sink is a later substrate add).
 func fetchLogsBounded(ctx context.Context, spec logExportSpec, start, end time.Time, maxRows, maxBytes int) (exportData, error) {
 	const batch = 1000
-	index := tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
+	index := oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)
 	var data exportData
 	var after []any
 	for {
@@ -383,7 +385,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
 		return
 	}
-	if !appLogPatternAllowed(tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross), claims) {
+	if !oslog.AppLogPatternAllowed(oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross), isPlatformOwner(claims)) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("app logs are restricted to the platform owner"))
 		return
 	}
@@ -657,12 +659,12 @@ func exportTimeRange(from, to string) (time.Time, time.Time) {
 	end := time.Now().UTC()
 	start := end.Add(-15 * time.Minute)
 	if from != "" {
-		if t, err := parseTimeFlexible(from); err == nil {
+		if t, err := oslog.ParseTimeFlexible(from); err == nil {
 			start = t
 		}
 	}
 	if to != "" {
-		if t, err := parseTimeFlexible(to); err == nil {
+		if t, err := oslog.ParseTimeFlexible(to); err == nil {
 			end = t
 		}
 	}
@@ -675,7 +677,7 @@ func countLogs(ctx context.Context, spec logExportSpec, start, end time.Time) (i
 	body := buildExportSearchBody(spec, start, end, 0, nil)
 	delete(body, "size")
 	delete(body, "sort")
-	resp, err := openSearch("POST", "/"+tenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)+"/_count", map[string]any{"query": body["query"]})
+	resp, err := openSearch("POST", "/"+oslog.TenantIndexPattern(spec.Signal, spec.Tenant, spec.Cross)+"/_count", map[string]any{"query": body["query"]})
 	if err != nil {
 		return 0, err
 	}

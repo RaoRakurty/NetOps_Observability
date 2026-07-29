@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"netops/backend/internal/oslog"
 )
 
 // TestIndexTenantSeg pins the tenant→index-segment sanitization. It MUST stay in
@@ -19,8 +21,8 @@ func TestIndexTenantSeg(t *testing.T) {
 		"tenant_1-2": "tenant_1-2", // underscore + dash preserved
 	}
 	for in, want := range cases {
-		if got := indexTenantSeg(in); got != want {
-			t.Errorf("indexTenantSeg(%q) = %q, want %q", in, got, want)
+		if got := oslog.IndexTenantSeg(in); got != want {
+			t.Errorf("oslog.IndexTenantSeg(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -28,29 +30,29 @@ func TestIndexTenantSeg(t *testing.T) {
 // TestTenantIndexPattern verifies a scoped tenant only ever names its own + the
 // untagged indices, while the platform owner names everything.
 func TestTenantIndexPattern(t *testing.T) {
-	if got := tenantIndexPattern("applogs", "acme", true); got != "netops-applogs-*" {
+	if got := oslog.TenantIndexPattern("applogs", "acme", true); got != "netops-applogs-*" {
 		t.Errorf("platform applogs = %q", got)
 	}
-	if got := tenantIndexPattern("applogs", "acme", false); got != "netops-applogs-acme-*,netops-applogs-untagged-*" {
+	if got := oslog.TenantIndexPattern("applogs", "acme", false); got != "netops-applogs-acme-*,netops-applogs-untagged-*" {
 		t.Errorf("scoped applogs = %q", got)
 	}
-	if got := tenantIndexPattern("syslog", "acme", false); got != "netops-syslog-acme-*,netops-syslog-untagged-*" {
+	if got := oslog.TenantIndexPattern("syslog", "acme", false); got != "netops-syslog-acme-*,netops-syslog-untagged-*" {
 		t.Errorf("scoped syslog = %q", got)
 	}
-	if got := tenantIndexPattern("flows", "globex", false); got != "netops-flows-globex-*,netops-flows-untagged-*" {
+	if got := oslog.TenantIndexPattern("flows", "globex", false); got != "netops-flows-globex-*,netops-flows-untagged-*" {
 		t.Errorf("scoped flows = %q", got)
 	}
 	// A scoped tenant's pattern must never name another tenant's index.
-	if pat := tenantIndexPattern("syslog", "acme", false); containsSub(pat, "globex") {
+	if pat := oslog.TenantIndexPattern("syslog", "acme", false); containsSub(pat, "globex") {
 		t.Errorf("acme pattern leaked another tenant: %q", pat)
 	}
 }
 
 func TestTenantCatPattern(t *testing.T) {
-	if got := tenantCatPattern("acme", true); got != "netops-*" {
+	if got := oslog.TenantCatPattern("acme", true); got != "netops-*" {
 		t.Errorf("platform cat = %q", got)
 	}
-	got := tenantCatPattern("acme", false)
+	got := oslog.TenantCatPattern("acme", false)
 	// Device-telemetry signals (syslog, snmp traps, flows) are tenant-visible:
 	// the caller's own + the shared untagged indices.
 	for _, want := range []string{
@@ -74,10 +76,10 @@ func TestTenantCatPattern(t *testing.T) {
 // TestOSTenantFilter checks the read clause: nil for the platform owner; for a
 // scoped caller, "my tenant_id OR (untagged AND my device)".
 func TestOSTenantFilter(t *testing.T) {
-	if f := osTenantFilter("acme", true, nil, nil); f != nil {
+	if f := oslog.TenantFilter("acme", true, nil, nil); f != nil {
 		t.Fatalf("platform owner must get no filter, got %v", f)
 	}
-	f := osTenantFilter("acme", false, []string{"leaf1"}, []string{"10.0.0.1"})
+	f := oslog.TenantFilter("acme", false, []string{"leaf1"}, []string{"10.0.0.1"})
 	b, ok := f["bool"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected bool clause, got %T", f["bool"])
@@ -100,7 +102,7 @@ func TestOSTenantFilter(t *testing.T) {
 // TestOSTenantFilterNoDevices: a scoped tenant with no visible devices still sees
 // its own tagged docs, but the untagged branch matches nothing (match_none).
 func TestOSTenantFilterNoDevices(t *testing.T) {
-	f := osTenantFilter("acme", false, nil, nil)
+	f := oslog.TenantFilter("acme", false, nil, nil)
 	b := f["bool"].(map[string]any)
 	should := b["should"].([]any)
 	untagged := should[1].(map[string]any)["bool"].(map[string]any)["must"].([]any)
@@ -124,22 +126,22 @@ func TestOSTenantFilterNoDevices(t *testing.T) {
 func TestTenantIndexPattern_AllExcludesAppLogs(t *testing.T) {
 	for _, sig := range []string{"", "all"} {
 		for _, cross := range []bool{true, false} {
-			pat := tenantIndexPattern(sig, "acme", cross)
+			pat := oslog.TenantIndexPattern(sig, "acme", cross)
 			if containsSub(pat, "applogs") {
-				t.Errorf("tenantIndexPattern(%q, acme, cross=%v) LEAKED app logs into 'all': %q", sig, cross, pat)
+				t.Errorf("oslog.TenantIndexPattern(%q, acme, cross=%v) LEAKED app logs into 'all': %q", sig, cross, pat)
 			}
 			if containsSub(pat, "netops-flows") {
-				t.Errorf("tenantIndexPattern(%q, acme, cross=%v) must NOT include flows in 'all' (drowns real logs): %q", sig, cross, pat)
+				t.Errorf("oslog.TenantIndexPattern(%q, acme, cross=%v) must NOT include flows in 'all' (drowns real logs): %q", sig, cross, pat)
 			}
 			for _, want := range []string{"netops-syslog", "netops-snmptrap"} {
 				if !containsSub(pat, want) {
-					t.Errorf("tenantIndexPattern(%q, acme, cross=%v) missing log signal %q: %q", sig, cross, want, pat)
+					t.Errorf("oslog.TenantIndexPattern(%q, acme, cross=%v) missing log signal %q: %q", sig, cross, want, pat)
 				}
 			}
 		}
 	}
 	// A scoped "all" must never name another tenant's indices.
-	if pat := tenantIndexPattern("", "acme", false); containsSub(pat, "globex") {
+	if pat := oslog.TenantIndexPattern("", "acme", false); containsSub(pat, "globex") {
 		t.Errorf("scoped 'all' leaked another tenant: %q", pat)
 	}
 }
@@ -153,14 +155,14 @@ func TestAppLogPatternAllowed(t *testing.T) {
 	tenantAdmin := jwtClaims{Sub: "a", Role: RoleSuperAdmin, Tenant: "acme"} // tenant super-admin ≠ platform owner
 	operator := jwtClaims{Sub: "o", Role: RoleOperator, Tenant: "acme"}
 
-	if !appLogPatternAllowed("netops-applogs-*", owner) {
+	if !oslog.AppLogPatternAllowed("netops-applogs-*", isPlatformOwner(owner)) {
 		t.Error("platform owner must be allowed to read app-log indices")
 	}
 	for _, c := range []jwtClaims{tenantAdmin, operator} {
-		if appLogPatternAllowed("netops-applogs-untagged-*", c) {
+		if oslog.AppLogPatternAllowed("netops-applogs-untagged-*", isPlatformOwner(c)) {
 			t.Errorf("non-owner %s must be DENIED an app-log pattern (leak guard)", c.Sub)
 		}
-		if !appLogPatternAllowed("netops-syslog-acme-*,netops-syslog-untagged-*", c) {
+		if !oslog.AppLogPatternAllowed("netops-syslog-acme-*,netops-syslog-untagged-*", isPlatformOwner(c)) {
 			t.Errorf("non-owner %s must be allowed device-telemetry patterns", c.Sub)
 		}
 	}

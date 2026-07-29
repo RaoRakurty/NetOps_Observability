@@ -8,12 +8,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"netops/backend/internal/applog"
+
+	"netops/backend/internal/oslog"
 )
 
 // ----------------------------------------------------------------------------
@@ -79,7 +80,7 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 		tenant, cross = principalTenant(claims)
 		keys, _ := s.visibleDeviceKeys(claims)
 		addrs, _ := s.visibleDeviceAddrs(claims)
-		if f := osTenantFilter(tenant, cross, keys, addrs); f != nil {
+		if f := oslog.TenantFilter(tenant, cross, keys, addrs); f != nil {
 			filters = append(filters, f)
 		}
 	}
@@ -88,10 +89,10 @@ func (s *server) logsScope(r *http.Request, signal string) (index string, filter
 	if sig := strings.ToLower(strings.TrimSpace(signal)); (sig == "applogs" || sig == "app") && !isPlatformOwner(claims) {
 		return "", nil, nil, false, true
 	}
-	index = tenantIndexPattern(signal, tenant, cross)
+	index = oslog.TenantIndexPattern(signal, tenant, cross)
 	// Defense-in-depth chokepoint: fail CLOSED if a non-owner's resolved pattern
 	// ever references an applogs index.
-	if !appLogPatternAllowed(index, claims) {
+	if !oslog.AppLogPatternAllowed(index, isPlatformOwner(claims)) {
 		return "", nil, nil, false, true
 	}
 	// Compliance: per-tenant operator-visibility (Tenant.OperatorRestricted).
@@ -143,12 +144,12 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	end := time.Now().UTC()
 	start := end.Add(-15 * time.Minute)
 	if req.From != "" {
-		if t, err := parseTimeFlexible(req.From); err == nil {
+		if t, err := oslog.ParseTimeFlexible(req.From); err == nil {
 			start = t
 		}
 	}
 	if req.To != "" {
-		if t, err := parseTimeFlexible(req.To); err == nil {
+		if t, err := oslog.ParseTimeFlexible(req.To); err == nil {
 			end = t
 		}
 	}
@@ -185,7 +186,7 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		"must": []any{
 			map[string]any{
 				"query_string": map[string]any{
-					"query":            queryOrAll(req.Query),
+					"query":            oslog.QueryOrAll(req.Query),
 					"analyze_wildcard": true,
 				},
 			},
@@ -318,7 +319,7 @@ func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
 		claims = c
 		tenant, cross = principalTenant(claims)
 	}
-	resp, err := openSearch("GET", "/_cat/indices/"+tenantCatPattern(tenant, cross)+"?format=json", nil)
+	resp, err := openSearch("GET", "/_cat/indices/"+oslog.TenantCatPattern(tenant, cross)+"?format=json", nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -350,7 +351,7 @@ func (s *server) writeFilteredIndices(w http.ResponseWriter, resp *http.Response
 	}
 	segs := make(map[string]bool, len(excludeTenants))
 	for _, t := range excludeTenants {
-		segs["-"+indexTenantSeg(t)+"-"] = true
+		segs["-"+oslog.IndexTenantSeg(t)+"-"] = true
 	}
 	kept := rows[:0]
 	for _, row := range rows {
@@ -370,159 +371,6 @@ func (s *server) writeFilteredIndices(w http.ResponseWriter, resp *http.Response
 }
 
 // indexBase maps a signal to its OpenSearch index base name (no tenant/date).
-func indexBase(signal string) string {
-	switch strings.ToLower(signal) {
-	case "applogs", "app":
-		return "netops-applogs"
-	case "syslog":
-		return "netops-syslog"
-	case "snmptrap", "trap", "traps":
-		return "netops-snmptrap"
-	case "flows", "netflow", "flow":
-		return "netops-flows"
-	case "cloud", "cloudlogs", "cloudlog":
-		// Tagged raw cloud logs (waf/lb/dns/flow/host/change/inventory), written
-		// by the cloud poller + aggregator into netops-cloudlogs-{tenant}-{date}.
-		return "netops-cloudlogs"
-	default:
-		return "netops"
-	}
-}
-
-// tenantSegRe strips any character not allowed in an OpenSearch index segment.
-var tenantSegRe = regexp.MustCompile(`[^a-z0-9_-]`)
-
-// indexTenantSeg sanitizes a tenant id into the per-tenant index segment. It MUST
-// match the derivation in deployment/docker/vector-router/vector.yaml (#20 Phase
-// 3) so reads name the same indices ingest writes. "" → "untagged".
-func indexTenantSeg(tenant string) string {
-	seg := strings.ToLower(strings.TrimSpace(tenant))
-	if seg == "" {
-		return "untagged"
-	}
-	return tenantSegRe.ReplaceAllString(seg, "-")
-}
-
-// tenantIndexPattern returns the comma-separated OpenSearch index pattern a caller
-// may read for a signal (#20 Phase 3 — at-rest separation). The platform owner
-// (cross) reads every tenant's indices; a scoped tenant reads ONLY its own tagged
-// indices plus the shared untagged indices (where the per-doc device matcher in
-// osTenantFilter still narrows results — the populate-time fallback, mirroring the
-// ClickHouse row policy). Another tenant's indices are never named, so its docs
-// are unreachable even if the query filter is ever dropped.
-// appLogPatternAllowed is the defense-in-depth chokepoint for the platform↔tenant
-// boundary: a non-platform-owner may NEVER read the platform's app-log indices,
-// regardless of how the index pattern was built. Returns false (deny) when a
-// non-owner's resolved pattern references any applogs index. Used by both the
-// interactive search and the export path so the rule is enforced identically.
-func appLogPatternAllowed(index string, c jwtClaims) bool {
-	return isPlatformOwner(c) || !strings.Contains(index, "applogs")
-}
-
-func tenantIndexPattern(signal, tenant string, cross bool) string {
-	// Empty/"all" = LOG signals only (device syslog + SNMP traps). Flows are
-	// deliberately EXCLUDED from "all": they're 5-tuple telemetry records (no
-	// message/level), they outnumber real logs by ~1000:1, and a flat
-	// timestamp-sorted top-N "all" view drowns out sparse-but-important log
-	// sources (e.g. firewall/fw_logs records in syslog) behind a wall of flows.
-	// Flows remain reachable via the explicit signal="flows" filter. App logs are
-	// the platform's own internal container/API logs — they must NEVER appear in an
-	// "all" search; they're reachable ONLY via signal="applogs", gated to the
-	// platform owner in the handler.
-	if s := strings.ToLower(strings.TrimSpace(signal)); s == "" || s == "all" {
-		bases := []string{"netops-syslog", "netops-snmptrap"}
-		parts := make([]string, 0, len(bases)*2)
-		for _, b := range bases {
-			if cross {
-				parts = append(parts, b+"-*")
-			} else {
-				parts = append(parts, b+"-"+indexTenantSeg(tenant)+"-*", b+"-untagged-*")
-			}
-		}
-		return strings.Join(parts, ",")
-	}
-	base := indexBase(signal)
-	if cross {
-		return base + "-*"
-	}
-	return base + "-" + indexTenantSeg(tenant) + "-*," + base + "-untagged-*"
-}
-
-// tenantCatPattern is the _cat/indices pattern a caller may enumerate: all
-// netops-* for the platform owner; only the caller's own + untagged indices
-// (across signals) for a scoped tenant, so index names/counts don't leak.
-func tenantCatPattern(tenant string, cross bool) string {
-	if cross {
-		return "netops-*"
-	}
-	seg := indexTenantSeg(tenant)
-	// App logs are platform-owner only (handled in the search path) — a scoped
-	// tenant doesn't even enumerate their index names. Device telemetry signals
-	// (syslog, snmp traps, flows) plus tagged cloud logs are tenant-visible
-	// (own + untagged-from-own-devices).
-	bases := []string{"netops-syslog", "netops-snmptrap", "netops-flows", "netops-cloudlogs"}
-	parts := make([]string, 0, len(bases)*2)
-	for _, b := range bases {
-		parts = append(parts, b+"-"+seg+"-*", b+"-untagged-*")
-	}
-	return strings.Join(parts, ",")
-}
-
-// osTenantFilter builds the OpenSearch query clause enforcing per-tenant isolation
-// for a scoped caller (#20 Phase 3), mirroring chTenantScope's ClickHouse policy:
-// a doc is visible iff its tenant_id == the caller's tenant, OR it is untagged
-// (tenant_id "" / missing) AND was emitted by one of the caller's devices
-// (host/hostname/source_ip). Returns nil for the platform owner (cross) — no
-// restriction. It is defense in depth UNDER tenantIndexPattern (which already
-// excludes other tenants' indices at the storage layer).
-func osTenantFilter(tenant string, cross bool, deviceKeys, deviceAddrs []string) map[string]any {
-	if cross {
-		return nil
-	}
-	var dev []any
-	if len(deviceKeys) > 0 {
-		dev = append(dev,
-			map[string]any{"terms": map[string]any{"host": deviceKeys}},
-			map[string]any{"terms": map[string]any{"hostname": deviceKeys}},
-		)
-	}
-	if len(deviceAddrs) > 0 {
-		dev = append(dev, map[string]any{"terms": map[string]any{"source_ip": deviceAddrs}})
-	}
-	if len(dev) == 0 {
-		dev = append(dev, map[string]any{"match_none": map[string]any{}})
-	}
-	untagged := map[string]any{"bool": map[string]any{
-		"should": []any{
-			map[string]any{"term": map[string]any{"tenant_id": ""}},
-			map[string]any{"bool": map[string]any{"must_not": []any{
-				map[string]any{"exists": map[string]any{"field": "tenant_id"}},
-			}}},
-		},
-		"minimum_should_match": 1,
-	}}
-	return map[string]any{"bool": map[string]any{
-		"should": []any{
-			map[string]any{"term": map[string]any{"tenant_id": normTenant(tenant)}},
-			map[string]any{"bool": map[string]any{"must": []any{
-				untagged,
-				map[string]any{"bool": map[string]any{"should": dev, "minimum_should_match": 1}},
-			}}},
-		},
-		"minimum_should_match": 1,
-	}}
-}
-
-func queryOrAll(q string) string {
-	q = strings.TrimSpace(q)
-	if q == "" {
-		return "*"
-	}
-	return q
-}
-
-// openSearch is a tiny HTTP client wrapper for the OpenSearch cluster.
-// Auth would go here once DISABLE_SECURITY_PLUGIN is flipped off.
 func openSearch(method, path string, body any) (*http.Response, error) {
 	base := envOr("OPENSEARCH_URL", "http://opensearch:9200")
 	u, err := url.Parse(strings.TrimRight(base, "/") + path)
@@ -547,15 +395,3 @@ func openSearch(method, path string, body any) (*http.Response, error) {
 }
 
 // parseTimeFlexible accepts RFC3339, Unix seconds, or Unix nanoseconds.
-func parseTimeFlexible(s string) (time.Time, error) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
-	}
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		if n > 1_000_000_000_000_000 {
-			return time.Unix(0, n).UTC(), nil
-		}
-		return time.Unix(n, 0).UTC(), nil
-	}
-	return time.Time{}, fmt.Errorf("unrecognized time format: %q", s)
-}
