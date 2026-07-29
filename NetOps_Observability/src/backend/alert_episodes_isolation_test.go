@@ -20,7 +20,7 @@ import (
 func TestAlertEpisodeCrossOrgIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
 	store := newAlertEpisodeStore(filepath.Join(t.TempDir(), "episodes.json"))
-	store.now = func() time.Time { return time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC) }
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC) })
 	s.alertEpisodes = store
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token

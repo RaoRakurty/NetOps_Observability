@@ -31,368 +31,45 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"netops/backend/internal/platformdb"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"netops/backend/alerts"
 	"netops/backend/models"
 )
 
-const (
-	episodeStatusActive  = "active"
-	episodeStatusCleared = "cleared"
-	episodeStatusClosed  = "closed"
-
-	episodeDefaultCloseWindow = 15 * time.Minute
-	episodeDefaultFlapFlips   = 6
-	episodeDefaultFlapWindow  = 15 * time.Minute
-
-	episodeMaxPerTenant   = 500  // per-tenant retention cap; oldest closed evicted first
-	episodeMaxNotes       = 50   // notes per episode
-	episodeMaxNoteChars   = 2000 // characters per note
-	episodeMaxFlipsKept   = 64   // flip-timestamp ring (flap detection only needs the window)
-	episodeDefaultLimit   = 200  // list default
-	episodeMaxQueryLimit  = 500  // list hard cap (disclosed via `truncated`)
-	episodeMaxSnoozeAhead = 7 * 24 * time.Hour
+// The episode store moved to alerts/episodes.go (Phase-2 W1.3) — it lives with
+// the Engine that feeds it via OnTransition/SuppressNotify. Aliases keep the
+// handlers, adapters and tests below source-compatible; the env knobs are read
+// here (entrypoint) and passed to the constructor.
+type (
+	AlertEpisode      = alerts.Episode
+	EpisodeNote       = alerts.EpisodeNote
+	episodeQuery      = alerts.EpisodeQuery
+	alertEpisodeStore = alerts.EpisodeStore
 )
 
-// EpisodeNote is one triage annotation (who/when/what).
-type EpisodeNote struct {
-	At   time.Time `json:"at"`
-	By   string    `json:"by"`
-	Text string    `json:"text"`
-}
+const (
+	episodeStatusActive   = alerts.EpisodeStatusActive
+	episodeStatusCleared  = alerts.EpisodeStatusCleared
+	episodeStatusClosed   = alerts.EpisodeStatusClosed
+	episodeMaxNotes       = alerts.EpisodeMaxNotes
+	episodeMaxNoteChars   = alerts.EpisodeMaxNoteChars
+	episodeMaxSnoozeAhead = alerts.EpisodeMaxSnoozeAhead
+)
 
-// AlertEpisode is the folded view of repeated firings of one
-// (tenant, resource, signal, state) plus its triage state.
-type AlertEpisode struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenant_id,omitempty"`
-	Resource string `json:"resource,omitempty"` // device id; "" = platform/stack-level
-	Signal   string `json:"signal"`             // rule name
-	State    string `json:"state"`              // normalized severity (critical|warning|…)
-	Summary  string `json:"summary,omitempty"`  // latest rendered summary
+var errEpisodeNotFound = alerts.ErrEpisodeNotFound
 
-	Status    string    `json:"status"` // active | cleared | closed
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"` // last observed transition (fire or clear)
-	Count     int       `json:"count"`     // number of firings folded in
-	Flapping  bool      `json:"flapping"`  // hit the flip threshold inside the flap window
-	FlipCount int       `json:"flip_count"`
-
-	// Triage state. Actor fields are stamped server-side from the principal.
-	AcknowledgedBy string        `json:"acknowledged_by,omitempty"`
-	AcknowledgedAt *time.Time    `json:"acknowledged_at,omitempty"`
-	AssignedTo     string        `json:"assigned_to,omitempty"`
-	AssignedBy     string        `json:"assigned_by,omitempty"`
-	Muted          bool          `json:"muted,omitempty"`
-	MutedBy        string        `json:"muted_by,omitempty"`
-	SnoozedUntil   *time.Time    `json:"snoozed_until,omitempty"`
-	SnoozedBy      string        `json:"snoozed_by,omitempty"`
-	Notes          []EpisodeNote `json:"notes,omitempty"`
-
-	// Flips holds recent state-transition timestamps for flap detection. Kept in
-	// the persisted form so flap state survives a restart; trimmed to the ring cap.
-	Flips []time.Time `json:"flips,omitempty"`
-}
-
-// suppressed reports whether the episode's notifications are currently paused.
-func (ep *AlertEpisode) suppressed(now time.Time) bool {
-	return ep.Muted || (ep.SnoozedUntil != nil && now.Before(*ep.SnoozedUntil))
-}
-
-func episodeKey(tenant, resource, signal, state string) string {
-	return tenant + "\x1f" + resource + "\x1f" + signal + "\x1f" + state
-}
-
-// alertEpisodeStore folds alert transitions into episodes. File-backed like the
-// rest of the alerts-adjacent state (bounded, tenant-scoped in-store); the
-// engine's transitions are tick-grained, so the write rate is low.
-type alertEpisodeStore struct {
-	mu       sync.RWMutex
-	path     string
-	episodes map[string]*AlertEpisode // id → episode
-	open     map[string]string        // fold key → id of the NOT-closed episode
-
-	closeWindow time.Duration
-	flapFlips   int
-	flapWindow  time.Duration
-
-	now func() time.Time // test seam
-}
-
-// newAlertEpisodeStore loads persisted episodes and reads the fold knobs from
-// the environment: ALERT_EPISODE_CLOSE_WINDOW (quiet gap that closes a cleared
-// episode), ALERT_EPISODE_FLAP_FLIPS / ALERT_EPISODE_FLAP_WINDOW (N flips in M
-// marks the episode flapping). Defaults: 15m / 6 / 15m.
-func newAlertEpisodeStore(path string) *alertEpisodeStore {
-	s := &alertEpisodeStore{
-		path:        path,
-		episodes:    map[string]*AlertEpisode{},
-		open:        map[string]string{},
-		closeWindow: envDuration("ALERT_EPISODE_CLOSE_WINDOW", episodeDefaultCloseWindow),
-		flapFlips:   envInt("ALERT_EPISODE_FLAP_FLIPS", episodeDefaultFlapFlips),
-		flapWindow:  envDuration("ALERT_EPISODE_FLAP_WINDOW", episodeDefaultFlapWindow),
-		now:         time.Now,
-	}
-	if s.flapFlips < 2 {
-		s.flapFlips = 2 // below 2 every clear would count as a flap
-	}
-	if b, err := platformdb.Load(path); err == nil {
-		var list []AlertEpisode
-		if json.Unmarshal(b, &list) == nil {
-			for i := range list {
-				ep := list[i]
-				s.episodes[ep.ID] = &ep
-				if ep.Status != episodeStatusClosed {
-					s.open[episodeKey(ep.TenantID, ep.Resource, ep.Signal, ep.State)] = ep.ID
-				}
-			}
-		}
-	}
-	return s
-}
-
-// flushLocked persists the episode set, returning any failure.
-//
-// Callers deliberately do NOT fail the alert loop on a persist error — an
-// unwritable disk must not stop alerts from being evaluated — but the error is
-// now returned and LOGGED rather than discarded (F-78 class, §10 no silent
-// failures). "Best effort" is a decision for the caller to make explicitly, not
-// a reason for the store to hide the outcome.
-func (s *alertEpisodeStore) flushLocked() error {
-	list := make([]AlertEpisode, 0, len(s.episodes))
-	for _, ep := range s.episodes {
-		list = append(list, *ep)
-	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
-	b, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	return platformdb.Save(s.path, b)
-}
-
-// sweepLocked closes cleared episodes whose quiet gap exceeded the close
-// window. Actively-firing episodes never close — only cleared ones age out.
-func (s *alertEpisodeStore) sweepLocked(now time.Time) {
-	for key, id := range s.open {
-		ep, ok := s.episodes[id]
-		if !ok {
-			delete(s.open, key)
-			continue
-		}
-		if ep.Status == episodeStatusCleared && now.Sub(ep.LastSeen) > s.closeWindow {
-			ep.Status = episodeStatusClosed
-			delete(s.open, key)
-		}
-	}
-}
-
-// evictLocked keeps a tenant's episode retention bounded: oldest CLOSED first,
-// then oldest cleared; an actively-firing episode is never evicted.
-func (s *alertEpisodeStore) evictLocked(tenant string) {
-	var mine []*AlertEpisode
-	for _, ep := range s.episodes {
-		if ep.TenantID == tenant {
-			mine = append(mine, ep)
-		}
-	}
-	if len(mine) <= episodeMaxPerTenant {
-		return
-	}
-	rank := func(status string) int {
-		switch status {
-		case episodeStatusClosed:
-			return 0
-		case episodeStatusCleared:
-			return 1
-		default:
-			return 2
-		}
-	}
-	sort.Slice(mine, func(i, j int) bool {
-		if rank(mine[i].Status) != rank(mine[j].Status) {
-			return rank(mine[i].Status) < rank(mine[j].Status)
-		}
-		return mine[i].LastSeen.Before(mine[j].LastSeen)
-	})
-	for _, ep := range mine[:len(mine)-episodeMaxPerTenant] {
-		if ep.Status == episodeStatusActive {
-			break // never drop a firing episode
-		}
-		delete(s.episodes, ep.ID)
-		delete(s.open, episodeKey(ep.TenantID, ep.Resource, ep.Signal, ep.State))
-	}
-}
-
-// recordFlipLocked notes a state transition and re-evaluates flap status:
-// >= flapFlips transitions inside flapWindow marks the episode flapping.
-// The mark is sticky for the episode's life — a flap that calms down stays
-// visible as "was flapping" until the episode closes.
-func (s *alertEpisodeStore) recordFlipLocked(ep *AlertEpisode, now time.Time) {
-	ep.FlipCount++
-	ep.Flips = append(ep.Flips, now)
-	if len(ep.Flips) > episodeMaxFlipsKept {
-		ep.Flips = ep.Flips[len(ep.Flips)-episodeMaxFlipsKept:]
-	}
-	recent := 0
-	for _, t := range ep.Flips {
-		if now.Sub(t) <= s.flapWindow {
-			recent++
-		}
-	}
-	if recent >= s.flapFlips {
-		ep.Flapping = true
-	}
-}
-
-// Observe folds one engine transition into the episode set. firing=true is a
-// newly-firing alert; firing=false a resolution. Tenant is derived by the
-// caller from the alert's device — never from any payload.
-func (s *alertEpisodeStore) Observe(tenant, resource, signal, state, summary string, firing bool) {
-	now := s.now().UTC()
-	key := episodeKey(tenant, resource, signal, state)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sweepLocked(now)
-
-	id, hasOpen := s.open[key]
-	if firing {
-		if hasOpen {
-			ep := s.episodes[id]
-			if ep.Status == episodeStatusCleared {
-				s.recordFlipLocked(ep, now) // cleared → firing again
-			}
-			ep.Status = episodeStatusActive
-			ep.Count++
-			ep.LastSeen = now
-			if summary != "" {
-				ep.Summary = summary
-			}
-		} else {
-			ep := &AlertEpisode{
-				ID: randHex(8), TenantID: tenant, Resource: resource, Signal: signal,
-				State: state, Summary: summary, Status: episodeStatusActive,
-				FirstSeen: now, LastSeen: now, Count: 1,
-			}
-			s.episodes[ep.ID] = ep
-			s.open[key] = ep.ID
-			s.evictLocked(tenant)
-		}
-	} else {
-		if !hasOpen {
-			return // resolve for an episode we never saw fire — nothing to fold
-		}
-		ep := s.episodes[id]
-		if ep.Status == episodeStatusActive {
-			ep.Status = episodeStatusCleared
-			ep.LastSeen = now
-			s.recordFlipLocked(ep, now) // firing → cleared
-		}
-	}
-	if err := s.flushLocked(); err != nil {
-		logError("alerts", "episode persist failed", map[string]any{"err": err.Error()})
-	}
-}
-
-// Suppressed reports whether notifications for this fold key are currently
-// paused (open episode muted, or snoozed into the future). A key with no open
-// episode is never suppressed — a NEW episode starts with notifications on.
-func (s *alertEpisodeStore) Suppressed(tenant, resource, signal, state string) bool {
-	now := s.now().UTC()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, ok := s.open[episodeKey(tenant, resource, signal, state)]
-	if !ok {
-		return false
-	}
-	ep, ok := s.episodes[id]
-	return ok && ep.suppressed(now)
-}
-
-// episodeQuery bounds a List.
-type episodeQuery struct {
-	Status string // "" | active | cleared | closed | open (active+cleared)
-	Limit  int
-}
-
-// List returns the episodes visible to the (tenant, cross) principal, most
-// recently seen first, capped with disclosure. Visibility mirrors /api/alerts:
-// cross sees all; a scoped principal sees its own tenant's episodes plus
-// device-less (platform/stack) ones.
-func (s *alertEpisodeStore) List(tenant string, cross bool, q episodeQuery) (eps []AlertEpisode, total int, truncated bool) {
-	now := s.now().UTC()
-	s.mu.Lock()
-	s.sweepLocked(now)
-	out := make([]AlertEpisode, 0, len(s.episodes))
-	for _, ep := range s.episodes {
-		if !cross && !(sameTenantStrict(ep.TenantID, tenant) || ep.Resource == "") {
-			continue
-		}
-		switch q.Status {
-		case "", "all":
-		case "open":
-			if ep.Status == episodeStatusClosed {
-				continue
-			}
-		default:
-			if ep.Status != q.Status {
-				continue
-			}
-		}
-		out = append(out, *ep)
-	}
-	s.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
-	total = len(out)
-	limit := q.Limit
-	if limit <= 0 {
-		limit = episodeDefaultLimit
-	}
-	if limit > episodeMaxQueryLimit {
-		limit = episodeMaxQueryLimit
-	}
-	if len(out) > limit {
-		out, truncated = out[:limit], true
-	}
-	return out, total, truncated
-}
-
-var errEpisodeNotFound = errors.New("episode not found")
-
-// Triage applies a mutation to an episode the principal OWNS. Default-closed:
-// a cross-tenant id (including a platform episode for a scoped caller) returns
-// errEpisodeNotFound so existence is never revealed.
-// reachable reports whether id exists AND the principal may see it. Used to gate
-// input validation behind the 404, so a cross-tenant probe can never learn an
-// id exists by receiving a 400 (input rejected) instead of a 404 (id hidden) —
-// CLAUDE.md §3a. Same scoping rule as Triage, so the two cannot disagree.
-func (s *alertEpisodeStore) reachable(id, tenant string, cross bool) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ep, ok := s.episodes[id]
-	return ok && (cross || sameTenantStrict(ep.TenantID, tenant))
-}
-
-func (s *alertEpisodeStore) Triage(id, tenant string, cross bool, apply func(*AlertEpisode) error) (AlertEpisode, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ep, ok := s.episodes[id]
-	if !ok || !(cross || sameTenantStrict(ep.TenantID, tenant)) {
-		return AlertEpisode{}, errEpisodeNotFound
-	}
-	if err := apply(ep); err != nil {
-		return AlertEpisode{}, err
-	}
-	if err := s.flushLocked(); err != nil {
-		logError("alerts", "episode persist failed", map[string]any{"err": err.Error()})
-	}
-	return *ep, nil
+// newAlertEpisodeStore reads the fold knobs from the environment
+// (ALERT_EPISODE_CLOSE_WINDOW / ALERT_EPISODE_FLAP_FLIPS /
+// ALERT_EPISODE_FLAP_WINDOW; defaults 15m / 6 / 15m) and builds the store.
+func newAlertEpisodeStore(path string) *alerts.EpisodeStore {
+	return alerts.NewEpisodeStore(path,
+		envDuration("ALERT_EPISODE_CLOSE_WINDOW", 15*time.Minute),
+		envInt("ALERT_EPISODE_FLAP_FLIPS", 6),
+		envDuration("ALERT_EPISODE_FLAP_WINDOW", 15*time.Minute))
 }
 
 // ── server adapters (engine → episodes) ──────────────────────────────────────
@@ -472,9 +149,9 @@ func (s *server) handleAlertEpisodes(w http.ResponseWriter, r *http.Request) {
 		"episodes":             eps,
 		"total":                total,
 		"truncated":            truncated,
-		"close_window_seconds": int(s.alertEpisodes.closeWindow.Seconds()),
-		"flap_flips":           s.alertEpisodes.flapFlips,
-		"flap_window_seconds":  int(s.alertEpisodes.flapWindow.Seconds()),
+		"close_window_seconds": int(s.alertEpisodes.CloseWindow().Seconds()),
+		"flap_flips":           s.alertEpisodes.FlapFlips(),
+		"flap_window_seconds":  int(s.alertEpisodes.FlapWindow().Seconds()),
 	})
 }
 
@@ -508,14 +185,14 @@ func (s *server) handleAlertEpisodeAction(w http.ResponseWriter, r *http.Request
 	}
 	tenant, cross := principalTenant(claims)
 	actor := claims.Sub
-	now := s.alertEpisodes.now().UTC()
+	now := s.alertEpisodes.Now().UTC()
 
 	// §3a: check existence+ownership BEFORE any action-specific input validation.
 	// Otherwise a cross-tenant probe with a malformed value (e.g. a snooze past
 	// the 7-day cap) receives a 400 that confirms the id exists, instead of the
 	// 404 that hides it. The 404 must win over the 400. Triage re-checks under
 	// its own lock, so this is a fast-fail gate, not the authority.
-	if !s.alertEpisodes.reachable(id, tenant, cross) {
+	if !s.alertEpisodes.Reachable(id, tenant, cross) {
 		http.NotFound(w, r)
 		return
 	}
