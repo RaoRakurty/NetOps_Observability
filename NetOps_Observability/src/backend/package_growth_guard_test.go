@@ -199,6 +199,10 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-29  204  audit_retention.go → internal/audit/retention.go (the
+//	                  F-57 opt-in pg retention sweeper joins the audit store
+//	                  it bounds; env read stays in main via ParseRetentionDays;
+//	                  TxRunner satisfied by platformdb DB.WithTenant directly)
 //	2026-07-29  205  timeintel_derive.go → timeintel/derive.go (the pure
 //	                  lifecycle derivation: CorrTimeFacts/ITSMTimeFacts →
 //	                  Lifecycle; the *server itsmTimeFacts method renamed
@@ -281,7 +285,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 205
+const rootPackageCeiling = 204
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

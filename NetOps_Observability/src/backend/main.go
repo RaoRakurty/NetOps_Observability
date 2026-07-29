@@ -21,6 +21,7 @@ import (
 	"netops/backend/cloudconn"
 	"netops/backend/internal/apikey"
 	"netops/backend/internal/applog"
+	"netops/backend/internal/audit"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
@@ -1113,8 +1114,11 @@ func main() {
 	srv.startTenantEnrichment(ctx)
 	// Bounded growth for the Postgres audit trail (F-57). Opt-in and OFF by
 	// default — an audit trail is evidence; only an operator decides how long
-	// it is kept. No-op unless AUDIT_RETENTION_DAYS is a positive integer.
-	startAuditRetention(ctx)
+	// it is kept. No-op unless AUDIT_RETENTION_DAYS is a positive integer and
+	// the Postgres backend is active (the file backend self-bounds).
+	if ps, ok := platformdb.ActivePG(); ok && ps != nil {
+		audit.StartRetention(ctx, ps.DB(), audit.ParseRetentionDays(os.Getenv("AUDIT_RETENTION_DAYS")))
+	}
 	// Self-heal the ClickHouse tenant row policies (#20 Phase 2) in the background.
 	ensureCHRowPolicies()
 	// corr_current projection drift repair (#101): detect + re-seed hot-read rows

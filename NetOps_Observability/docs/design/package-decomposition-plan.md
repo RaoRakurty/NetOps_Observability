@@ -1,6 +1,6 @@
 # `package main` decomposition — the executable plan
 
-**Status:** fifty-two domains shipped (`internal/chschema`, `internal/openapi`,
+**Status:** fifty-three domains shipped (`internal/chschema`, `internal/openapi`,
 `internal/totp`, `internal/rca` waves 1+2, `internal/vault`, `internal/vuln` +
 `internal/compliance`, `internal/ratelimit`, `internal/metricval`,
 `internal/noclabel`, `internal/ticketing`, `internal/gqlparse`,
@@ -14,8 +14,9 @@
 `appid/appstore`, `timeintel/store`, `internal/incident`,
 `internal/discovery` (+ devstore), `reports` pg stores, `integration`
 pg stores, `internal/saved`, `ai/evidence_language`, `topology/store`, `ai/feedback_store`,
-`ticketing/worker`, `internal/selfheal`, `cloudconn/broker`, `internal/audit`, `internal/platformdb`, 2026-07-28).
-**206** non-test files remain in `package main`. This document is the ordered sequence for the
+`ticketing/worker`, `internal/selfheal`, `cloudconn/broker`, `internal/audit`, `internal/platformdb`, 2026-07-28;
+`internal/applog`, `timeintel/derive`, `audit/retention`, 2026-07-29).
+**204** non-test files remain in `package main`. This document is the ordered sequence for the
 rest.
 
 **Why this exists:** CLAUDE.md §2 mandates `/cmd /internal /pkg /api /plugins
@@ -26,9 +27,9 @@ unenforced. It is also the substrate that hid the guard-scope bug: when "the
 package" is "the whole product", a root-only scan looks complete.
 
 **PROGRAM STATE (2026-07-28, end of the continuous run): the decomposition's
-extractable surface is COMPLETE.** Fifty-two domains live behind compiler-
+extractable surface is COMPLETE.** Fifty-three domains live behind compiler-
 enforced boundaries; the storage substrate is `internal/platformdb`; the root's
-206 remaining non-test files are the entrypoint layer the Definition of Done
+204 remaining non-test files are the entrypoint layer the Definition of Done
 describes — handlers, selectors, adapters (`platformKV`, `chSeam`, `chWorker`,
 `initStoreBackend`, the CH/mTLS client wiring) and worker loops holding `srv`.
 Future work is of a different kind: shrinking handlers, splitting `main.go`
@@ -147,6 +148,9 @@ an import — so each step is as cheap as it can be. LOC is indicative.
 | ✅ 35 | `cloud_connectors_store.go` + `_pg.go` → `cloudconn/` | 2 | ~500 | ~10 | **Done** (2026-07-28). The connector-credential repository (draft→active lifecycle, optimistic versioning, vault-backed `SecretRef`) joins the `cloudconn` package that owns Provider/Scope/IdentityConfig. Mem + FORCE-RLS pg via the `DB` seam; `ConnectorIDPrefix`/`SecretRefIDPrefix`/`ErrVersionConflict` exported; the durable-storage-required selector (credentials must never live only in RAM) stayed in `main.go`. |
 | ✅ 36 | `path_health.go` → `pathgraph/health.go` | 1 | ~390 | 3 | **Done** (2026-07-28). The pure Path Behavior Health scoring core (severity curves, weighted blend with the anti-averaging floor, health bands including the unknown-not-healthy rule, confidence rules, the baseline-source cascade + readiness gates, NOC evidence strings) joins `pathgraph`. Zero I/O — enums/candidates/scorers exported; the VM-percentile fetcher and `/api/paths/health` handler stayed in main. §12 acceptance suite + the unknown-band regression tests moved in. |
 | ✅ 37 | `business_service_store.go` → `cloud/bizsvc_store.go` | 1 | ~260 | 3 | **Done** (2026-07-28). The Business Service Observability pg store (services + resource mappings, owner stamped from the principal) joins the cloud domain its mappings resolve against. `DB` seam via `rlsPG`; `ErrNotFound`/`ErrConflict` + `MappingsByResource` exported; `newUUIDv4` duplicated; the pg-only selector (nil on file backend → handlers 503) stayed in `main.go`. |
+| ✅ 59 | `audit_retention.go` → `internal/audit/retention.go` | 1 | ~120 | 2 | **Done** (2026-07-29). The F-57 retention half joins the audit store it bounds: the opt-in, OFF-by-default hourly sweeper (WHERE-bounded on ts, 10k-row batch cap — deliberately NOT the platformdb saveRows path, whose unbounded `DELETE FROM` would truncate the whole cross-tenant trail). `TxRunner` seam satisfied by `platformdb.DB.WithTenant` directly; the `AUDIT_RETENTION_DAYS` env read stays in main via `ParseRetentionDays` (typo → retention stays OFF, never "delete everything"); main gates the start on `ActivePG()` (the file backend self-bounds). `SweepRetention` exported for the pg integration test; parse/no-op suite moved in. Ceiling 205 → 204. |
+| ✅ 58 | `timeintel_derive.go` → `timeintel/derive.go` | 1 | ~430 | 4 | **Done** (2026-07-29). The pure lifecycle derivation (`CorrTimeFacts` + `ITSMTimeFacts` → `timeintel.Lifecycle`, source-attributed stamps) joins the package whose types it produces. Four root consumers qualify directly; the `*server` method `itsmTimeFacts` renamed `itsmFactsFor` so it no longer shadows the now-exported type. Derive suite moved with it. Ceiling 206 → 205. |
+| ✅ 57 | `logs.go` core → `internal/applog` | ½ | ~75 | ~93 (via wrappers) | **Done** (2026-07-29). The process-wide structured JSON logger behind `logInfo`/`logWarn`/`logError` (93 root files fan in) moves behind a boundary so extractions can IMPORT it instead of injecting ad-hoc warn sinks (retention, above, is the first consumer). Root keeps the historical names as one-line wrappers; caller-fields-win merge pinned by package tests; `SwapWriterForTest` replaces unexported-field poking. Count unchanged (logs.go remains as the wrapper file). |
 | ✅ 56 | **INFRASTRUCTURE FINALE pt 1**: `db.go` + `pgstore.go` + `kvstore.go` + `migrations/` → `internal/platformdb` | 3+dir | ~840 | everything | **Done** (2026-07-28). The storage substrate every extracted seam adapts onto is now ONE package: the kv `Backend` contract + `FileKV`, the per-row FORCE-RLS `PGStore` (rowSpec registry, legacy file-state import), and the `DB` pool (RLS-capability assertion, embedded migrations + advisory-locked apply, exported `WithTenant`/`Close`). Main keeps `initStoreBackend` (the env switch → `UseFile`/`UsePostgres`) and `platformKV`; the 24 backend selectors now go through `ActivePG()`; **the `rlsPG` adapter is DELETED** — `DB.WithTenant` satisfies every package's DB seam directly. Loggers injected once via `SetLoggers`; PG_* pool knobs stay package-owned per the plan's knob rule. `SwapBackendForTest`/`BeginForTest` hooks replace global pokes; `MigrationsFS` exported for the two migration-reading tests; `provisionAppRole` fixture duplicated. **Pt 2 verdict (same day): NOT A MOVE.** `clickhouse_client.go` is, by its own header, "the main package's adapter onto the chhttp seam" — env-credential wiring over the already-extracted `chhttp` transport package; `backend_client.go` is the mTLS transport wiring fed by the CA bootstrap. Both are exactly what the Definition of Done says main SHOULD consist of. The infrastructure tier is COMPLETE. |
 | ½✅ 55 | `clickhouse_policies.go` DDL → `chschema/policies.go` | ½ | ~100 | 4 | **Done** (2026-07-28). `RowPolicyDDL` + `ConvergeStmts(extra ...[]string)` join the schema package; the ensure/retry loop and env stay in main, composing domain-owned DDL (cloud costs, path baselines) INTO the converge set — dependency inverted rather than reached across. Count unchanged. |
 | ✅ 54 | `audit_pg.go` + audit.go's store core → `internal/audit` | 1½ | ~330 | ~6 | **Done** (2026-07-28). The audit-trail storage: `Event`/`Query`/`Repo`, the bounded in-memory file ring, and the per-row FORCE-RLS pg trail with the F-73 (errors never read as "no privileged actions") and F-57 (true Count makes growth observable) contracts. Kv/DB/errf injected; the capture chokepoint (`withAudit`), org-scoped merge reads, and handlers STAYED in `audit.go` (openapi split pattern); `normTenant` re-homed to main for its ~40 users. |

@@ -38,6 +38,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/audit"
 	"netops/backend/internal/platformdb"
 	"os"
 	"strings"
@@ -72,7 +73,7 @@ func openPG(t *testing.T) *platformdb.DB {
 	if err != nil {
 		t.Fatalf("newPgDB: %v", err)
 	}
-	t.Cleanup(db.close)
+	t.Cleanup(db.Close)
 	return db
 }
 
@@ -217,7 +218,7 @@ func TestPGAuditCountAndOffsetPaging(t *testing.T) {
 	}
 }
 
-// TestPGRetentionSweepDeletesOnlyOldRows proves sweepAuditRetention removes rows
+// TestPGRetentionSweepDeletesOnlyOldRows proves audit.SweepRetention removes rows
 // past the horizon and leaves fresh ones — the DELETE that was compile-reviewed
 // only (and whose batching bounds a big purge).
 func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
@@ -258,7 +259,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	seed(3, old, "old")
 	seed(2, fresh, "fresh")
 
-	removed, err := sweepAuditRetention(ctx, db, 30)
+	removed, err := audit.SweepRetention(ctx, db, 30)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -279,7 +280,7 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 		t.Errorf("%d rows remain, want 2 (the fresh ones survived)", remaining)
 	}
 	// Idempotent: a second sweep removes nothing.
-	if removed2, _ := sweepAuditRetention(ctx, db, 30); removed2 != 0 {
+	if removed2, _ := audit.SweepRetention(ctx, db, 30); removed2 != 0 {
 		t.Errorf("second sweep removed %d, want 0", removed2)
 	}
 }
