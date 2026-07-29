@@ -1,22 +1,17 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
 	"os"
-	"sort"
 	"strings"
 	"sync"
-	"time"
 
-	"netops/backend/collectors"
 	"netops/backend/models"
 )
 
@@ -33,24 +28,6 @@ import (
 // back to a client. Env vars (ENABLE_SNMP_DISCOVERY / SNMP_CIDR_RANGES /
 // SNMP_COMMUNITY) remain only as the bootstrap default when nothing has been
 // configured from the console.
-
-const (
-	// discoveryMaxHosts caps the TOTAL number of addresses a scan may expand
-	// to across all ranges. This is the guardrail that makes the shipped
-	// 10.0.0.0/8 env default safe: an oversized range is refused with a clear
-	// error instead of sweeping sixteen million hosts.
-	discoveryMaxHosts = 4096
-	// discoveryMaxRanges bounds the config list itself.
-	discoveryMaxRanges = 32
-	// discoveryWorkers bounds concurrent UDP probes (§9: all queues bounded).
-	discoveryWorkers = 32
-	// discoveryProbeTimeout is the per-host probe budget.
-	discoveryProbeTimeout = 2 * time.Second
-	// discoveryCooldown is the minimum gap between real sweeps, so the
-	// tenant-triggerable /api/discovery/refresh cannot be abused to hammer
-	// the network with back-to-back scans.
-	discoveryCooldown = 60 * time.Second
-)
 
 type discoveryScanConfig struct {
 	Enabled bool     `json:"enabled"`
@@ -76,71 +53,6 @@ type discoveryScanConfig struct {
 // allowNonPrivate acknowledgment; loopback/link-local/multicast/reserved is
 // refused regardless), bounded count and expansion size. It returns the
 // normalized ranges and the total host count.
-func validateDiscoveryRanges(ranges []string, allowNonPrivate bool) ([]string, int, error) {
-	clean := make([]string, 0, len(ranges))
-	total := 0
-	for _, raw := range ranges {
-		r := strings.TrimSpace(raw)
-		if r == "" {
-			continue
-		}
-		ip, ipnet, err := net.ParseCIDR(r)
-		if err != nil {
-			return nil, 0, fmt.Errorf("%q is not valid CIDR notation (e.g. 10.20.0.0/24)", r)
-		}
-		v4 := ip.To4()
-		if v4 == nil {
-			return nil, 0, fmt.Errorf("%q: only IPv4 ranges are supported", r)
-		}
-		if v4.IsLoopback() || v4.IsLinkLocalUnicast() || v4.IsMulticast() || v4.IsUnspecified() || v4[0] >= 224 {
-			return nil, 0, fmt.Errorf("%q is not a scannable unicast range", r)
-		}
-		if !v4.IsPrivate() && !allowNonPrivate {
-			return nil, 0, fmt.Errorf("%q is not private (RFC 1918) address space — enable \"allow non-private ranges\" only if your network uses that space internally", r)
-		}
-		ones, bits := ipnet.Mask.Size()
-		if bits != 32 {
-			return nil, 0, fmt.Errorf("%q: only IPv4 ranges are supported", r)
-		}
-		total += 1 << (bits - ones)
-		if total > discoveryMaxHosts {
-			return nil, 0, fmt.Errorf("ranges expand to more than %d addresses — narrow them to your management subnets (a /20 is the widest single range)", discoveryMaxHosts)
-		}
-		clean = append(clean, ipnet.String())
-	}
-	if len(clean) > discoveryMaxRanges {
-		return nil, 0, fmt.Errorf("at most %d ranges are allowed", discoveryMaxRanges)
-	}
-	return clean, total, nil
-}
-
-// expandCIDR lists the probeable addresses of an already-validated IPv4 CIDR,
-// skipping the network and broadcast addresses of ranges wider than /31.
-func expandCIDR(cidr string) []string {
-	ip, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return nil
-	}
-	v4 := ip.Mask(ipnet.Mask).To4()
-	if v4 == nil {
-		return nil
-	}
-	ones, _ := ipnet.Mask.Size()
-	count := 1 << (32 - ones)
-	out := make([]string, 0, count)
-	base := uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
-	for i := 0; i < count; i++ {
-		if ones < 31 && (i == 0 || i == count-1) {
-			continue // network / broadcast
-		}
-		a := base + uint32(i)
-		out = append(out, net.IPv4(byte(a>>24), byte(a>>16), byte(a>>8), byte(a)).String())
-	}
-	return out
-}
-
-// mapDiscovery transforms the probe community (platform DEK), mirroring
-// mapNetbox/mapCopilot in secrets_config.go.
 func mapDiscovery(c discoveryScanConfig, f secretXform) (discoveryScanConfig, error) {
 	var e error
 	c.Community, e = f("", fieldDiscoveryComm, c.Community)
@@ -240,7 +152,7 @@ func (s *discoveryConfigStore) effective() discoveryScanConfig {
 }
 
 func (s *discoveryConfigStore) set(in discoveryScanConfig) (discoveryScanConfig, error) {
-	clean, _, err := validateDiscoveryRanges(in.Ranges, in.AllowNonPrivate)
+	clean, _, err := discovery.ValidateScanRanges(in.Ranges, in.AllowNonPrivate)
 	if err != nil {
 		return discoveryScanConfig{}, err
 	}
@@ -300,176 +212,24 @@ func (c discoveryScanConfig) public() publicDiscoveryConfig {
 // =============================================================================
 
 // discoveryProbe is the per-host probe seam (injectable for tests).
-type discoveryProbe func(ctx context.Context, addr, community string) (sysName, vendor, sysDescr string, ok bool)
+// The scanner moved to internal/discovery/snmp_source.go (Phase-2 W3.9).
+// The sealed store stays; scanSettings adapts it onto the scanner's slice.
+type SNMPSource = discovery.SNMPSource
 
-type SNMPSource struct {
-	cfg   func() discoveryScanConfig // live getter — console changes apply without restart
-	known func() []models.Device     // current inventory, to skip already-known addresses
-	probe discoveryProbe
-
-	mu        sync.Mutex
-	lastSweep time.Time
-	found     map[string]models.Device // sticky across sweeps; devices don't vanish on a missed probe
-}
-
-func NewSNMPSource(cfg func() discoveryScanConfig, known func() []models.Device) *SNMPSource {
-	return &SNMPSource{cfg: cfg, known: known, probe: collectors.ProbeIdentity, found: map[string]models.Device{}}
-}
-
-func (s *SNMPSource) Name() string            { return "snmp" }
-func (s *SNMPSource) Interval() time.Duration { return 5 * time.Minute }
-
-func (s *SNMPSource) Poll(ctx context.Context) ([]models.Device, error) {
-	cfg := s.cfg()
-	if !cfg.Enabled || len(cfg.Ranges) == 0 {
-		return nil, nil
-	}
-	ranges, _, err := validateDiscoveryRanges(cfg.Ranges, cfg.AllowNonPrivate)
-	if err != nil {
-		// Surfaces in source stats / the console instead of failing silently
-		// (§10: no silent failures) — and refuses oversized env defaults.
-		return s.snapshot(), fmt.Errorf("discovery ranges refused: %w", err)
-	}
-
-	s.mu.Lock()
-	if since := time.Since(s.lastSweep); since < discoveryCooldown {
-		snap := s.snapshotLocked()
-		s.mu.Unlock()
-		return snap, nil // refresh-triggered re-poll inside the cooldown: serve cache
-	}
-	s.lastSweep = time.Now()
-	s.mu.Unlock()
-
-	// The community field is a comma-separated priority list (per-vendor
-	// communities are the norm on mixed fleets); each host is tried in order
-	// until one answers.
-	raw := cfg.Community
-	if raw == "" {
-		raw = envOr("SNMP_COMMUNITY", "public")
-	}
-	var communities []string
-	for _, c := range strings.Split(raw, ",") {
-		if c = strings.TrimSpace(c); c != "" {
-			communities = append(communities, c)
+func newSNMPSourceFromStore(store *discoveryConfigStore, known func() []models.Device) *SNMPSource {
+	return discovery.NewSNMPSource(func() discovery.ScanSettings {
+		c := store.effective()
+		community := c.Community
+		if community == "" {
+			community = envOr("SNMP_COMMUNITY", "public")
 		}
-	}
-
-	// Addresses already in inventory (any source) are not re-probed: discovery
-	// only hunts for NEW devices, so it cannot duplicate manual/SoT entries.
-	knownAddr := map[string]bool{}
-	if s.known != nil {
-		for _, d := range s.known() {
-			if d.Address != "" {
-				knownAddr[d.Address] = true
-			}
+		return discovery.ScanSettings{
+			Enabled: c.Enabled, Ranges: c.Ranges,
+			Community: community, AllowNonPrivate: c.AllowNonPrivate,
 		}
-	}
-
-	var todo []string
-	for _, r := range ranges {
-		for _, addr := range expandCIDR(r) {
-			if !knownAddr[addr] {
-				todo = append(todo, addr)
-			}
-		}
-	}
-
-	jobs := make(chan string)
-	var wg sync.WaitGroup
-	var fmu sync.Mutex
-	for i := 0; i < discoveryWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for addr := range jobs {
-				var sysName, vendor, descr string
-				var ok bool
-				for _, community := range communities {
-					pctx, cancel := context.WithTimeout(ctx, discoveryProbeTimeout)
-					sysName, vendor, descr, ok = s.probe(pctx, addr, community)
-					cancel()
-					if ok || ctx.Err() != nil {
-						break
-					}
-				}
-				if !ok {
-					continue
-				}
-				name := strings.TrimSpace(sysName)
-				if name == "" {
-					name = addr
-				}
-				dev := models.Device{
-					ID:      discoveryDeviceID(sysName, addr),
-					Name:    name,
-					Address: addr,
-					Vendor:  vendor,
-					OS:      discovery.TruncateDescr(descr),
-					Source:  "snmp",
-					// TenantID deliberately empty: discovered infrastructure is
-					// platform-scoped until an operator assigns it (untagged =
-					// platform-only under the strict tenancy model).
-					LastSeen: time.Now().UTC(),
-				}
-				fmu.Lock()
-				s.found[dev.Address] = dev
-				fmu.Unlock()
-			}
-		}()
-	}
-	for _, addr := range todo {
-		select {
-		case <-ctx.Done():
-			// Stop feeding; workers drain and exit.
-			close(jobs)
-			wg.Wait()
-			return s.snapshot(), ctx.Err()
-		case jobs <- addr:
-		}
-	}
-	close(jobs)
-	wg.Wait()
-	return s.snapshot(), nil
+	}, known)
 }
 
-func (s *SNMPSource) snapshot() []models.Device {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.snapshotLocked()
-}
-
-func (s *SNMPSource) snapshotLocked() []models.Device {
-	out := make([]models.Device, 0, len(s.found))
-	for _, d := range s.found {
-		out = append(out, d)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
-	return out
-}
-
-// discoveryDeviceID derives a stable inventory id from sysName (lowercased,
-// unsafe runes collapsed) falling back to the address.
-func discoveryDeviceID(sysName, addr string) string {
-	id := strings.ToLower(strings.TrimSpace(sysName))
-	var b strings.Builder
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	if out := strings.Trim(b.String(), "-."); out != "" {
-		return out
-	}
-	return addr
-}
-
-// handleDiscoveryConfig serves GET/PUT /api/discovery/config (platform-owner
-// only, §3a: directing the platform's prober at a network is platform-global
-// plumbing — a tenant admin must never reach it). Mutations are recorded by
-// the audit middleware.
 func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireCrossTenant(w, r); !ok {
 		return
@@ -478,7 +238,7 @@ func (s *server) handleDiscoveryConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		body := map[string]any{
 			"config": s.discoveryCfg.effective().public(),
-			"limits": map[string]int{"max_hosts": discoveryMaxHosts, "max_ranges": discoveryMaxRanges},
+			"limits": map[string]int{"max_hosts": discovery.MaxScanHosts, "max_ranges": discovery.MaxScanRanges},
 			"stats":  s.discovery.Health()["snmp"],
 		}
 		// A config that could not be READ must not render as an operator who

@@ -274,7 +274,7 @@ func newServer() *server {
 	// (console-set store, env bootstrap fallback) so operators can scope and
 	// enable it at runtime without a restart. Poll is a no-op while disabled.
 	discoveryCfg := newDiscoveryConfigStore(envOr("DISCOVERY_CONFIG_FILE", "/data/discovery_config.json"), vault)
-	d.Register(NewSNMPSource(discoveryCfg.effective, d.Devices))
+	d.Register(newSNMPSourceFromStore(discoveryCfg, d.Devices))
 	// NetBox source-of-truth: registered always with a LIVE config getter (UI-set
 	// store, env fallback). Poll is a no-op while unconfigured/disabled, so it
 	// honors runtime changes from Automation → Source of Truth without a restart.
