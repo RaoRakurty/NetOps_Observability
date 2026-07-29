@@ -309,5 +309,10 @@ DeviceSiteBinding must move for sot_import's planner half; `providerCandidates`
 **Size estimate: comparable to Phase 1** — ~23k LOC across ~90 fat files vs
 Phase 1's 92 files. At Phase-1 velocity (steps 18–59 in two continuous days),
 Phase 2 is plausibly 2–4 focused days of the same discipline, plus the /cmd
-finale. Deferred by owner decision until launched; the ratchet holds at 204
-meanwhile.
+finale.
+
+### Phase-2 progress log (LAUNCHED 2026-07-29, owner go-ahead)
+
+| step | what | state |
+|---|---|---|
+| W0a | chquery consolidation: the shared CH read path (chQuery/chQueryCtx, chRows/chRowsScope/chSelect, chTenantScope/proxyClickHouse/writeEmptyClickHouse, chWorkerExec/chWorkerQuery/jsonEachRow) re-homed into `clickhouse_client.go`, the designated chhttp adapter. report_scheduler.go / correlations.go / flows.go no longer host package-wide plumbing; `appid_fusion_store.go` emptied and DELETED. Ceiling 204 → 203. | **Done** (2026-07-29) |

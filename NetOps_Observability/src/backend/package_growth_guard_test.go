@@ -199,6 +199,14 @@ import (
 //	2026-07-28  230  appid_store.go → appid/appstore.go (the Application
 //	                  catalog store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
+//	2026-07-29  203  PHASE 2 WAVE 0a: the shared ClickHouse read path
+//	                  (chQuery/chQueryCtx, chRows/chRowsScope/chSelect,
+//	                  chTenantScope/proxyClickHouse/writeEmptyClickHouse,
+//	                  chWorkerExec/chWorkerQuery/jsonEachRow) consolidated
+//	                  into clickhouse_client.go — the designated chhttp
+//	                  adapter — so report_scheduler/correlations/flows stop
+//	                  hosting package-wide plumbing and become extractable;
+//	                  appid_fusion_store.go emptied and DELETED
 //	2026-07-29  204  audit_retention.go → internal/audit/retention.go (the
 //	                  F-57 opt-in pg retention sweeper joins the audit store
 //	                  it bounds; env read stays in main via ParseRetentionDays;
@@ -285,7 +293,7 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 204
+const rootPackageCeiling = 203
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

@@ -12,13 +12,17 @@ package main
 // context rule (CLAUDE.md §7).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"netops/backend/appid"
 	"netops/backend/chhttp"
 )
 
@@ -136,6 +140,267 @@ func chInsertJSON(ctx context.Context, table, scope string, rows []map[string]an
 		Budget:   chDDLBudget,
 	})
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// The shared READ path (Phase-2 Wave 0a consolidation, 2026-07-29).
+//
+// Every tenant-scoped or worker-scoped ClickHouse read in package main goes
+// through the helpers below. They used to live in the files that first needed
+// them (report_scheduler.go, correlations.go, flows.go, appid_fusion_store.go),
+// which pinned those files in the root: a file cannot be extracted while it
+// hosts package-wide plumbing. This file is the designated chhttp adapter and
+// legitimately stays, so the plumbing lives here now.
+// ---------------------------------------------------------------------------
+
+// chQueryBudget is the wall-clock budget for one report ClickHouse read. The
+// SERVER is told the same number (max_execution_time), so it aborts before the
+// client does rather than being abandoned still running.
+const chQueryBudget = 8 * time.Second
+
+// chQuery runs a read-only query against ClickHouse over HTTP and returns the
+// non-empty result lines. Errors yield nil so the caller emits a clean "no data"
+// report rather than failing — but they are now COUNTED AND LOGGED
+// (netops_ch_read_failures_total), because "ClickHouse is unreachable" and
+// "there is genuinely no data" produced an identical empty report before.
+//
+// This is the shared read used by 14 report sections; the F-27 fixes are here
+// rather than at the call sites.
+func chQuery(sql string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), chQueryBudget)
+	defer cancel()
+	lines, err := chQueryCtx(ctx, sql)
+	if err != nil {
+		chReadFailures.Add(1)
+		logWarn("reports", "clickhouse read failed — this report section will render as 'no data'", map[string]any{
+			"err": err.Error(),
+		})
+		return nil
+	}
+	return lines
+}
+
+// chQueryCtx is chQuery with a caller-supplied context and a real error.
+//
+// F-27, three defects in the old five lines:
+//  1. `http.NewRequest` (no context) — the request could not be cancelled at
+//     all, so a caller giving up left the query running server-side.
+//  2. `io.ReadAll(resp.Body)` with NO limit — response size is a function of
+//     table size, in the process that also serves the API.
+//  3. `b, _ :=` — the read error was discarded, so a truncated response parsed
+//     as a short, plausible-looking result set.
+func chQueryCtx(ctx context.Context, sql string) ([]string, error) {
+	// #20 Phase 2: reports are a trusted internal reader — pass tenant_scope=__all__
+	// so the flows/findings row policies don't reject the query (getSetting errors
+	// on an unset custom setting). Report-level tenant scoping is handled upstream.
+	//
+	// Transport, execution guards, status classification and the anti-truncation
+	// check all live in chhttp now; what remains here is this reader's policy.
+	b, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "query worker:reports",
+		Scope:      "__all__",
+		LogComment: "worker:reports", // #100 read-budget attribution
+		Profile:    chWorkloadProfile("worker:reports"),
+		Budget:     chQueryBudget,
+		MaxBytes:   chMaxResponseBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out, nil
+}
+
+// chRows runs one tenant-scoped ClickHouse query and returns the parsed JSON
+// rows — the composable sibling of proxyClickHouse for handlers that combine
+// multiple result sets into one response. The scope is derived from the request
+// principal (chTenantScope); chRowsScope is the request-free form background jobs
+// (the auto-ticketing sweeper, #78 P3) use with an explicit scope.
+func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
+	return s.chRowsScope(r.Context(), chTenantScope(r), sql, "api:"+r.URL.Path)
+}
+
+// chRowsScope runs one ClickHouse query at an explicit tenant_scope ("__all__"
+// for cross-tenant background jobs, a tenant id for one tenant, "__none__" to
+// see nothing). The row policies enforce isolation server-side regardless of the
+// caller's SQL — same defense-in-depth as chRows. The optional trailing comment
+// stamps system.query_log.log_comment for per-caller read-budget attribution
+// (#100); callers that pass nothing are tagged as generic background work.
+func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
+	return chSelect(ctx, scope, sql, comment...)
+}
+
+// chSelect is the request-free, server-free form of the same tenant-scoped read —
+// the one stores (which hold no *server) use. chRowsScope delegates to it, so there
+// is exactly ONE ClickHouse read path carrying tenant_scope, log_comment and the
+// #101 workload profile.
+func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
+	tag := "worker:generic"
+	if len(comment) > 0 && comment[0] != "" {
+		tag = comment[0]
+	}
+	// F-27's execution guards are applied by chhttp for every caller now, rather
+	// than by each site remembering to call chApplyGuards.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "select " + tag,
+		Scope:      scope,
+		LogComment: tag,
+		// #101 workload fairness: same profile routing as proxyClickHouse.
+		Profile:  chWorkloadProfile(tag),
+		Budget:   chWorkerBudget,
+		MaxBytes: chMaxResponseBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// chTenantScope derives the ClickHouse `tenant_scope` custom setting for the
+// caller (#20 Phase 2). The DB row policies on flows/findings/tunnels enforce on
+// it: '__all__' unlocks everything (platform owner); a tenant id restricts to that
+// tenant's tagged rows plus untagged (the app-layer device matcher narrows the
+// untagged set). A request without claims (shouldn't reach an authed handler)
+// fails closed to a non-matching sentinel.
+func chTenantScope(r *http.Request) string {
+	claims, ok := userFrom(r.Context())
+	if !ok {
+		return "__none__"
+	}
+	tenant, cross := principalTenant(claims)
+	if cross {
+		return "__all__"
+	}
+	if tenant == "" {
+		return "__none__"
+	}
+	return tenant
+}
+
+// proxyClickHouse runs sql against ClickHouse over its HTTP interface, injecting
+// the caller's tenant_scope so the DB row policies enforce per-tenant isolation
+// even if a handler's SQL filter is ever forgotten (defense in depth).
+func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
+	// Streams via the chhttp seam: the result set is passed through to the client
+	// rather than buffered, but the FAILURE path is now classified like every
+	// other ClickHouse call.
+	//
+	// Two things this used to do wrong. It forwarded ClickHouse's status AND raw
+	// body straight to the API caller, so a DB::Exception — table names, column
+	// names, sometimes fragments of the query — was rendered to whoever hit the
+	// endpoint. And a 500 from insert backpressure reached the SPA looking
+	// exactly like a 500 from a schema bug.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).ExecStream(r.Context(), chhttp.Request{
+		SQL:   sql,
+		Op:    "api:" + r.URL.Path,
+		Scope: chTenantScope(r),
+		// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
+		// so per-endpoint read budgets are enforceable operationally (see
+		// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
+		// normalized query hashes during an incident.
+		LogComment: "api:" + r.URL.Path,
+		// #101 workload fairness: hot UI reads run under a stricter settings
+		// profile than analytics/background work, so a regressed hot query fails
+		// small and alone instead of competing with the whole platform.
+		Profile: chWorkloadProfile("api:" + r.URL.Path),
+		Budget:  chWorkerBudget,
+	})
+	if err != nil {
+		// 503 for transient pressure (the client may usefully retry), 502 for a
+		// permanent fault. The operator gets the detail; the caller does not.
+		status := http.StatusBadGateway
+		if chhttp.Retryable(err) {
+			status = http.StatusServiceUnavailable
+		}
+		logError("clickhouse", "proxy query failed", map[string]any{
+			"path": r.URL.Path, "error": err.Error(), "retryable": chhttp.Retryable(err),
+		})
+		writeError(w, status, errors.New("query backend unavailable"))
+		return
+	}
+	defer func() { _ = body.Close() }()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+}
+
+// writeEmptyClickHouse emits an empty result set in the same envelope shape the
+// ClickHouse HTTP JSON format uses, so the SPA's `.data` access is unaffected.
+func writeEmptyClickHouse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+}
+
+// chWorkerExec POSTs a statement (INSERT … FORMAT JSONEachRow or DDL) to ClickHouse as
+// the worker (tenant_scope=__all__: the worker spans tenants; per-tenant isolation is
+// enforced by the row policies on READ + the tenant_id stamped on every row).
+func chWorkerExec(ctx context.Context, body string) error {
+	_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:      body,
+		Op:       "worker exec",
+		Scope:    "__all__",
+		Settings: chInsertTolerance(),
+		Budget:   chWorkerBudget,
+	})
+	return err
+}
+
+// chWorkerQuery POSTs a SELECT … FORMAT JSON and returns the data rows.
+func chWorkerQuery(ctx context.Context, sql string) ([]map[string]any, error) {
+	// F-27 (execution guards + a bounded body) is now structural: chhttp applies
+	// max_execution_time and the response cap to every call, so this path cannot
+	// drift from its sibling chWorkerExec the way it once did.
+	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        sql,
+		Op:         "worker query",
+		Scope:      "__all__",
+		LogComment: "worker:cross-tenant", // #100 read-budget attribution
+		Budget:     chWorkerBudget,
+		MaxBytes:   chMaxResponseBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// chWorker is the appid.CHWorker adapter over main's worker plumbing.
+func chWorker() appid.CHWorker {
+	return appid.CHWorker{Exec: chWorkerExec, Query: chWorkerQuery}
+}
+
+// jsonEachRow renders rows as a "FORMAT JSONEachRow" insert body — re-homed
+// from the moved appid builders for its remaining main users (path baselines).
+func jsonEachRow(table string, rows []map[string]any) (string, error) {
+	var b bytes.Buffer
+	b.WriteString("INSERT INTO " + table + " FORMAT JSONEachRow\n")
+	enc := json.NewEncoder(&b)
+	for _, r := range rows {
+		if err := enc.Encode(r); err != nil {
+			return "", err
+		}
+	}
+	return b.String(), nil
 }
 
 // chInsertTolerance is the insert-hardening settings block F-56 found absent

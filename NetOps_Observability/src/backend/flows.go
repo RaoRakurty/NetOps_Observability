@@ -3,13 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"netops/backend/chhttp"
 	"netops/backend/internal/chschema"
 )
 
@@ -559,14 +557,6 @@ func sqlInList(vals []string) string {
 	return strings.Join(parts, ", ")
 }
 
-// writeEmptyClickHouse emits an empty result set in the same envelope shape the
-// ClickHouse HTTP JSON format uses, so the SPA's `.data` access is unaffected.
-func writeEmptyClickHouse(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
-}
-
 // handleTunnels returns the latest sample for each overlay tunnel (IPsec /
 // SD-WAN / GRE) the collectors have reported, newest first. "LIMIT 1 BY id"
 // collapses the time series to the current state per tunnel. Optional
@@ -608,74 +598,6 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
  LIMIT ` + intToString(limit) + `
  FORMAT JSON`
 	proxyClickHouse(w, r, sql)
-}
-
-// chTenantScope derives the ClickHouse `tenant_scope` custom setting for the
-// caller (#20 Phase 2). The DB row policies on flows/findings/tunnels enforce on
-// it: '__all__' unlocks everything (platform owner); a tenant id restricts to that
-// tenant's tagged rows plus untagged (the app-layer device matcher narrows the
-// untagged set). A request without claims (shouldn't reach an authed handler)
-// fails closed to a non-matching sentinel.
-func chTenantScope(r *http.Request) string {
-	claims, ok := userFrom(r.Context())
-	if !ok {
-		return "__none__"
-	}
-	tenant, cross := principalTenant(claims)
-	if cross {
-		return "__all__"
-	}
-	if tenant == "" {
-		return "__none__"
-	}
-	return tenant
-}
-
-// proxyClickHouse runs sql against ClickHouse over its HTTP interface, injecting
-// the caller's tenant_scope so the DB row policies enforce per-tenant isolation
-// even if a handler's SQL filter is ever forgotten (defense in depth).
-func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
-	// Streams via the chhttp seam: the result set is passed through to the client
-	// rather than buffered, but the FAILURE path is now classified like every
-	// other ClickHouse call.
-	//
-	// Two things this used to do wrong. It forwarded ClickHouse's status AND raw
-	// body straight to the API caller, so a DB::Exception — table names, column
-	// names, sometimes fragments of the query — was rendered to whoever hit the
-	// endpoint. And a 500 from insert backpressure reached the SPA looking
-	// exactly like a 500 from a schema bug.
-	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).ExecStream(r.Context(), chhttp.Request{
-		SQL:   sql,
-		Op:    "api:" + r.URL.Path,
-		Scope: chTenantScope(r),
-		// #100 hardening: stamp the issuing endpoint into system.query_log.log_comment
-		// so per-endpoint read budgets are enforceable operationally (see
-		// scripts/ch-query-budget-check.sh) instead of reverse-engineered from
-		// normalized query hashes during an incident.
-		LogComment: "api:" + r.URL.Path,
-		// #101 workload fairness: hot UI reads run under a stricter settings
-		// profile than analytics/background work, so a regressed hot query fails
-		// small and alone instead of competing with the whole platform.
-		Profile: chWorkloadProfile("api:" + r.URL.Path),
-		Budget:  chWorkerBudget,
-	})
-	if err != nil {
-		// 503 for transient pressure (the client may usefully retry), 502 for a
-		// permanent fault. The operator gets the detail; the caller does not.
-		status := http.StatusBadGateway
-		if chhttp.Retryable(err) {
-			status = http.StatusServiceUnavailable
-		}
-		logError("clickhouse", "proxy query failed", map[string]any{
-			"path": r.URL.Path, "error": err.Error(), "retryable": chhttp.Retryable(err),
-		})
-		writeError(w, status, errors.New("query backend unavailable"))
-		return
-	}
-	defer func() { _ = body.Close() }()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, body)
 }
 
 // intQuery parses a bounded integer query parameter.

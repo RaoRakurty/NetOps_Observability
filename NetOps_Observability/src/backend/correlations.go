@@ -15,7 +15,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,62 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"netops/backend/chhttp"
 	"netops/backend/internal/chschema"
 	"netops/backend/internal/metricval"
 )
-
-// chRows runs one tenant-scoped ClickHouse query and returns the parsed JSON
-// rows — the composable sibling of proxyClickHouse for handlers that combine
-// multiple result sets into one response. The scope is derived from the request
-// principal (chTenantScope); chRowsScope is the request-free form background jobs
-// (the auto-ticketing sweeper, #78 P3) use with an explicit scope.
-func (s *server) chRows(r *http.Request, sql string) ([]map[string]any, error) {
-	return s.chRowsScope(r.Context(), chTenantScope(r), sql, "api:"+r.URL.Path)
-}
-
-// chRowsScope runs one ClickHouse query at an explicit tenant_scope ("__all__"
-// for cross-tenant background jobs, a tenant id for one tenant, "__none__" to
-// see nothing). The row policies enforce isolation server-side regardless of the
-// caller's SQL — same defense-in-depth as chRows. The optional trailing comment
-// stamps system.query_log.log_comment for per-caller read-budget attribution
-// (#100); callers that pass nothing are tagged as generic background work.
-func (s *server) chRowsScope(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
-	return chSelect(ctx, scope, sql, comment...)
-}
-
-// chSelect is the request-free, server-free form of the same tenant-scoped read —
-// the one stores (which hold no *server) use. chRowsScope delegates to it, so there
-// is exactly ONE ClickHouse read path carrying tenant_scope, log_comment and the
-// #101 workload profile.
-func chSelect(ctx context.Context, scope, sql string, comment ...string) ([]map[string]any, error) {
-	tag := "worker:generic"
-	if len(comment) > 0 && comment[0] != "" {
-		tag = comment[0]
-	}
-	// F-27's execution guards are applied by chhttp for every caller now, rather
-	// than by each site remembering to call chApplyGuards.
-	body, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
-		SQL:        sql,
-		Op:         "select " + tag,
-		Scope:      scope,
-		LogComment: tag,
-		// #101 workload fairness: same profile routing as proxyClickHouse.
-		Profile:  chWorkloadProfile(tag),
-		Budget:   chWorkerBudget,
-		MaxBytes: chMaxResponseBytes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var out struct {
-		Data []map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, err
-	}
-	return out.Data, nil
-}
 
 // isUUIDToken allowlists a canonical UUID string before it is interpolated
 // into ClickHouse SQL or a proxied URL (SR-011 discipline: shape-validate,

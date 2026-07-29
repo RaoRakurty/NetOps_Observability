@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"netops/backend/alerts"
-	"netops/backend/chhttp"
 	"netops/backend/models"
 	"netops/backend/notify"
 	"netops/backend/reports"
@@ -1195,70 +1194,6 @@ SELECT local_device, remote_device, status,
 	summary := fmt.Sprintf("%d link(s), %d up, SLA %.2f%%", len(rows), up, sla)
 	fmt.Fprintf(&b, "\nAvailability SLA: %.2f%% (%d/%d up)\n", sla, up, len(rows))
 	return summary, b.String()
-}
-
-// chQueryBudget is the wall-clock budget for one report ClickHouse read. The
-// SERVER is told the same number (max_execution_time), so it aborts before the
-// client does rather than being abandoned still running.
-const chQueryBudget = 8 * time.Second
-
-// chQuery runs a read-only query against ClickHouse over HTTP and returns the
-// non-empty result lines. Errors yield nil so the caller emits a clean "no data"
-// report rather than failing — but they are now COUNTED AND LOGGED
-// (netops_ch_read_failures_total), because "ClickHouse is unreachable" and
-// "there is genuinely no data" produced an identical empty report before.
-//
-// This is the shared read used by 14 report sections; the F-27 fixes are here
-// rather than at the call sites.
-func chQuery(sql string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), chQueryBudget)
-	defer cancel()
-	lines, err := chQueryCtx(ctx, sql)
-	if err != nil {
-		chReadFailures.Add(1)
-		logWarn("reports", "clickhouse read failed — this report section will render as 'no data'", map[string]any{
-			"err": err.Error(),
-		})
-		return nil
-	}
-	return lines
-}
-
-// chQueryCtx is chQuery with a caller-supplied context and a real error.
-//
-// F-27, three defects in the old five lines:
-//  1. `http.NewRequest` (no context) — the request could not be cancelled at
-//     all, so a caller giving up left the query running server-side.
-//  2. `io.ReadAll(resp.Body)` with NO limit — response size is a function of
-//     table size, in the process that also serves the API.
-//  3. `b, _ :=` — the read error was discarded, so a truncated response parsed
-//     as a short, plausible-looking result set.
-func chQueryCtx(ctx context.Context, sql string) ([]string, error) {
-	// #20 Phase 2: reports are a trusted internal reader — pass tenant_scope=__all__
-	// so the flows/findings row policies don't reject the query (getSetting errors
-	// on an unset custom setting). Report-level tenant scoping is handled upstream.
-	//
-	// Transport, execution guards, status classification and the anti-truncation
-	// check all live in chhttp now; what remains here is this reader's policy.
-	b, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
-		SQL:        sql,
-		Op:         "query worker:reports",
-		Scope:      "__all__",
-		LogComment: "worker:reports", // #100 read-budget attribution
-		Profile:    chWorkloadProfile("worker:reports"),
-		Budget:     chQueryBudget,
-		MaxBytes:   chMaxResponseBytes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		if strings.TrimSpace(line) != "" {
-			out = append(out, line)
-		}
-	}
-	return out, nil
 }
 
 func atoiSafe(s string) int {
