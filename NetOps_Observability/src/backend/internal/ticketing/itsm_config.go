@@ -13,9 +13,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 	"netops/backend/notify"
 	"netops/backend/safehttp"
@@ -158,8 +160,20 @@ func NewITSMConfigStore(path string, envDefault func() ITSMConfig, stateFileFor 
 // seeds from env. Migrates the legacy single-object format under the "" key.
 func (s *ITSMConfigStore) load() bool {
 	b, err := platformdb.Load(s.path)
-	if err != nil || len(b) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
+		return false // absent = never configured; the env seed applies
+	}
+	if err != nil {
+		// The store did not ANSWER — a different fact from "never configured"
+		// (§10: an unreadable config must not silently read as a fresh install).
+		// Fall back to the env defaults for liveness, but say so loudly: a
+		// later Set() persists the whole map and would overwrite the stored
+		// contents that were never read.
+		applog.Error("itsm", "stored ITSM config unreadable — falling back to env defaults; a save will OVERWRITE the stored config", map[string]any{"err": err.Error()})
 		return false
+	}
+	if len(b) == 0 {
+		return false // present but empty = never configured
 	}
 	// New per-tenant format (versioned envelope).
 	var f itsmConfigFile

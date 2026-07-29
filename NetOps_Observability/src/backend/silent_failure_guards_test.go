@@ -169,7 +169,6 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 	// times in this release — they are the obvious next ones to clear.
 	baseline := map[string]bool{
 		"cloud_console.go":          true, // [was-invisible]
-		"itsm_config.go":            true, // [was-invisible] 3-state load()
 		"netbox_config.go":          true, // [was-invisible] 3-state load()
 		"cloudconn/exchange_gcp.go": true, // [was-invisible]
 		"cloudconn/probe_aws.go":    true, // [was-invisible]
