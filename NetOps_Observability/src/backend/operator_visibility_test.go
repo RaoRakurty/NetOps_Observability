@@ -110,10 +110,10 @@ func TestRestrictedTelemetryDeviceKeyed(t *testing.T) {
 	if rt.deny {
 		t.Fatal("Global view must not deny")
 	}
-	if !containsStr(rt.addrs, "10.1.0.1") || !containsStr(rt.keys, "acme-core") || !containsStr(rt.ids, "acme-core") {
+	if !slicesContains(rt.addrs, "10.1.0.1") || !slicesContains(rt.keys, "acme-core") || !slicesContains(rt.ids, "acme-core") {
 		t.Errorf("acme device not excluded: %+v", rt)
 	}
-	if containsStr(rt.addrs, "10.2.0.1") || containsStr(rt.keys, "globex-core") {
+	if slicesContains(rt.addrs, "10.2.0.1") || slicesContains(rt.keys, "globex-core") {
 		t.Errorf("globex (not restricted) must NOT be excluded: %+v", rt)
 	}
 	if rt := s.restrictedTelemetry(ownerActing(owner, acme.ID)); !rt.deny {

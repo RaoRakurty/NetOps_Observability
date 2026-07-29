@@ -85,7 +85,7 @@ func (s *server) handleAIAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Bound the request before decoding (LLM10: no unbounded input).
-	r.Body = http.MaxBytesReader(w, r.Body, maxCopilotBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, copilotBodyCap)
 	var req aiAskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)

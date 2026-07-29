@@ -30,7 +30,7 @@ func (l aiLLM) Complete(ctx context.Context, system string, msgs []ai.LLMMessage
 		cmsgs = append(cmsgs, copilotMessage{Role: role, Content: m.Content})
 	}
 	for _, cand := range l.srv.providerCandidates(l.claims) {
-		text, err := callProvider(ctx, cand.name, cand.key, cand.model, system, cmsgs)
+		text, err := ai.CallProvider(ctx, cand.name, cand.key, cand.model, system, cmsgs)
 		if err == nil {
 			return text, cand.name, nil
 		}

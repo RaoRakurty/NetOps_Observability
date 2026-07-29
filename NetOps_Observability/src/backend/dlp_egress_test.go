@@ -174,16 +174,15 @@ func TestToolResultCredentialNeverReachesProviderPayload(t *testing.T) {
 	}
 
 	cap := &capturingTransport{}
-	restore := copilotHTTP
-	copilotHTTP = &http.Client{Transport: cap}
-	defer func() { copilotHTTP = restore }()
+	restore := ai.SwapProviderHTTPForTest(&http.Client{Transport: cap})
+	defer restore()
 
 	turns := []ai.AgentTurn{
 		{Role: "user", Content: "what changed on rtr1?"},
 		{Role: "assistant", Calls: []ai.ToolCall{{ID: "c1", Name: "search_logs", Args: []byte(`{"query":"rtr1"}`)}}},
 		{Role: "user", Replies: []ai.ToolReply{{ID: "c1", Name: "search_logs", Content: rendered}}},
 	}
-	if _, _, err := ai.CallTools(context.Background(), providerDo, "openai", "test-key", "gpt-4o-mini", "system", turns, nil); err != nil {
+	if _, _, err := ai.CallTools(context.Background(), ai.ProviderDo, "openai", "test-key", "gpt-4o-mini", "system", turns, nil); err != nil {
 		t.Fatalf("ai.CallTools: %v", err)
 	}
 	payload := string(cap.body)
@@ -203,13 +202,12 @@ func TestToolResultCredentialNeverReachesProviderPayload(t *testing.T) {
 // the difference between fixing today's leak and closing the class.
 func TestProviderPayloadSweepCatchesAnUnredactedAssembler(t *testing.T) {
 	cap := &capturingTransport{}
-	restore := copilotHTTP
-	copilotHTTP = &http.Client{Transport: cap}
-	defer func() { copilotHTTP = restore }()
+	restore := ai.SwapProviderHTTPForTest(&http.Client{Transport: cap})
+	defer restore()
 
 	// A raw, deliberately UNredacted body — as a careless new caller would build.
 	raw := []byte(`{"model":"m","messages":[{"role":"user","content":"deploy with api_key=sk-live-AAAAAAAAAAAAAAAAAAAA and password: hunter2"}]}`)
-	if _, err := providerDo(context.Background(), "https://api.openai.com/v1/chat/completions", nil, raw, "openai"); err != nil {
+	if _, err := ai.ProviderDo(context.Background(), "https://api.openai.com/v1/chat/completions", nil, raw, "openai"); err != nil {
 		t.Fatalf("providerDo: %v", err)
 	}
 	payload := string(cap.body)

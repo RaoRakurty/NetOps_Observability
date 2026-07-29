@@ -17,10 +17,10 @@ func TestLatestUserMessage(t *testing.T) {
 		{Role: "assistant", Content: "answer"},
 		{Role: "user", Content: "how do I set up SNMP discovery?"},
 	}
-	if got := latestUserMessage(msgs); got != "how do I set up SNMP discovery?" {
+	if got := ai.LatestUserMessage(msgs); got != "how do I set up SNMP discovery?" {
 		t.Fatalf("latestUserMessage = %q", got)
 	}
-	if latestUserMessage(nil) != "" {
+	if ai.LatestUserMessage(nil) != "" {
 		t.Fatal("empty history → empty question")
 	}
 }
@@ -41,7 +41,7 @@ func TestDocsIndexFeedsCopilotPrompt(t *testing.T) {
 func TestStripFabricatedDocRefs(t *testing.T) {
 	refs := []copilotDocRef{{ID: "doc:send-data/syslog#step-1", Label: "Syslog › Step 1", Href: "/docs/send-data/syslog#step-1"}}
 	in := "Point syslog at Correlix [doc:send-data/syslog#step-1]. Never do X [doc:made-up/page#nope]. BFD is defined in [RFC 5880: BFD]."
-	out := stripFabricatedDocRefs(in, refs)
+	out := ai.StripFabricatedDocRefs(in, refs)
 	if !strings.Contains(out, "[doc:send-data/syslog#step-1]") {
 		t.Error("legitimate retrieved citation was stripped")
 	}
@@ -52,7 +52,7 @@ func TestStripFabricatedDocRefs(t *testing.T) {
 		t.Error("ordinary bracketed prose must survive doc-scoped stripping")
 	}
 	// No doc brackets at all → untouched fast path.
-	if s := "plain answer [note]"; stripFabricatedDocRefs(s, nil) != s {
+	if s := "plain answer [note]"; ai.StripFabricatedDocRefs(s, nil) != s {
 		t.Error("text without doc refs must pass through unchanged")
 	}
 }

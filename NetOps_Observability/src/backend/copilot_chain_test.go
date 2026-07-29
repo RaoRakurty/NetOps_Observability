@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"netops/backend/ai"
 )
 
 func TestNormalizeProvider(t *testing.T) {
@@ -14,8 +16,8 @@ func TestNormalizeProvider(t *testing.T) {
 		"": "", "bogus": "",
 	}
 	for in, want := range cases {
-		if got := normalizeProvider(in); got != want {
-			t.Errorf("normalizeProvider(%q)=%q want %q", in, got, want)
+		if got := ai.NormalizeProvider(in); got != want {
+			t.Errorf("ai.NormalizeProvider(%q)=%q want %q", in, got, want)
 		}
 	}
 }

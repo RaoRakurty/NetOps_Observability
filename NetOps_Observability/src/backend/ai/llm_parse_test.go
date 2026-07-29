@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"context"
@@ -53,7 +53,7 @@ func TestProviderDoSuccessAndRedaction(t *testing.T) {
 		_, _ = w.Write([]byte(`{"hello":"world"}`))
 	}))
 	defer ok.Close()
-	rb, err := providerDo(context.Background(), ok.URL, nil, []byte(`{}`), "test")
+	rb, err := ProviderDo(context.Background(), ok.URL, nil, []byte(`{}`), "test")
 	if err != nil || string(rb) != `{"hello":"world"}` {
 		t.Fatalf("2xx: rb=%q err=%v", rb, err)
 	}
@@ -63,7 +63,7 @@ func TestProviderDoSuccessAndRedaction(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"secret-org-id leaked here"}}`))
 	}))
 	defer bad.Close()
-	_, err = providerDo(context.Background(), bad.URL, nil, []byte(`{}`), "test")
+	_, err = ProviderDo(context.Background(), bad.URL, nil, []byte(`{}`), "test")
 	if err == nil {
 		t.Fatal("non-2xx must return an error")
 	}

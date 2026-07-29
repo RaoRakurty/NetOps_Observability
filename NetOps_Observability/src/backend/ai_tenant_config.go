@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"netops/backend/ai"
 )
 
 // ai_tenant_config.go — per-tenant Iris AI configuration (intelligence plan
@@ -219,7 +221,7 @@ func (s *aiTenantConfigStore) byoProvider(tenant string) (name, key, model strin
 	if c.Key == "" {
 		return "", "", "", false
 	}
-	name = normalizeProvider(c.Provider)
+	name = ai.NormalizeProvider(c.Provider)
 	if name == "" {
 		name = "anthropic"
 	}
@@ -245,7 +247,7 @@ func (s *aiTenantConfigStore) setTenantSettings(tenant, provider, model, key str
 	prev, had := s.cfgs[tenant]
 	c := prev
 	c.TenantID = tenant
-	c.Provider = normalizeProvider(provider)
+	c.Provider = ai.NormalizeProvider(provider)
 	c.Model = strings.TrimSpace(model)
 	c.NoPlatformKey = noPlatformKey
 	switch {
@@ -421,7 +423,7 @@ func (s *server) handleAITenantConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if p := strings.TrimSpace(req.Provider); p != "" && normalizeProvider(p) == "" {
+		if p := strings.TrimSpace(req.Provider); p != "" && ai.NormalizeProvider(p) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("unknown provider — use anthropic, openai or gemini"))
 			return
 		}

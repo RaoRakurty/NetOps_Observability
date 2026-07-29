@@ -287,7 +287,7 @@ func TestGoldenLiveToolSelection(t *testing.T) {
 	for _, it := range gs.Category(ai.GoldenAgentTool) {
 		total++
 		turns := []ai.AgentTurn{{Role: "user", Content: it.Question}}
-		_, calls, err := ai.CallTools(context.Background(), providerDo, name, key, model, system, turns, specs)
+		_, calls, err := ai.CallTools(context.Background(), ai.ProviderDo, name, key, model, system, turns, specs)
 		switch {
 		case err != nil:
 			t.Logf("%s: provider error: %v", it.ID, err)
