@@ -26,7 +26,7 @@ func validItem() rcaActionItem {
 
 func TestActionItemValidation(t *testing.T) {
 	it := validItem()
-	if err := validateActionItemFields(&it); err != nil {
+	if err := rca.ValidateActionItemFields(&it); err != nil {
 		t.Fatalf("valid item rejected: %v", err)
 	}
 	bad := []func(*rcaActionItem){
@@ -42,7 +42,7 @@ func TestActionItemValidation(t *testing.T) {
 	for n, mutate := range bad {
 		i := validItem()
 		mutate(&i)
-		if err := validateActionItemFields(&i); err == nil {
+		if err := rca.ValidateActionItemFields(&i); err == nil {
 			t.Fatalf("bad item %d accepted: %+v", n, i)
 		}
 	}
@@ -53,11 +53,11 @@ func TestActionStatusMachine(t *testing.T) {
 	it := validItem()
 
 	// A suggestion cannot be accepted without the ONE accountable owner.
-	if err := applyActionStatusChange(&it, "accepted", "ops@acme", now); err == nil {
+	if err := rca.ApplyActionStatusChange(&it, "accepted", "ops@acme", now); err == nil {
 		t.Fatal("acceptance without accountable owner must be refused")
 	}
 	it.AccountableOwner = "NetOps on-call"
-	if err := applyActionStatusChange(&it, "accepted", "ops@acme", now); err != nil {
+	if err := rca.ApplyActionStatusChange(&it, "accepted", "ops@acme", now); err != nil {
 		t.Fatalf("acceptance refused: %v", err)
 	}
 	if it.AcceptedAt != now || it.AcceptedBy != "ops@acme" {
@@ -65,36 +65,36 @@ func TestActionStatusMachine(t *testing.T) {
 	}
 
 	// No free-form jumps: accepted → verified is not a legal transition.
-	if err := applyActionStatusChange(&it, "verified", "ops@acme", now); err == nil {
+	if err := rca.ApplyActionStatusChange(&it, "verified", "ops@acme", now); err == nil {
 		t.Fatal("accepted → verified must be refused")
 	}
-	if err := applyActionStatusChange(&it, "in_progress", "ops@acme", now); err != nil {
+	if err := rca.ApplyActionStatusChange(&it, "in_progress", "ops@acme", now); err != nil {
 		t.Fatalf("in_progress: %v", err)
 	}
-	if err := applyActionStatusChange(&it, "completed", "ops@acme", now); err != nil {
+	if err := rca.ApplyActionStatusChange(&it, "completed", "ops@acme", now); err != nil {
 		t.Fatalf("completed: %v", err)
 	}
 	if it.CompletedAt != now {
 		t.Fatalf("completion timestamp missing: %+v", it)
 	}
 	// Verification requires evidence.
-	if err := applyActionStatusChange(&it, "verified", "ops@acme", now); err == nil {
+	if err := rca.ApplyActionStatusChange(&it, "verified", "ops@acme", now); err == nil {
 		t.Fatal("verification without evidence must be refused")
 	}
 	it.VerificationEvidence = "second vantage live; alert fired in the drill"
-	if err := applyActionStatusChange(&it, "verified", "ops@acme", now); err != nil {
+	if err := rca.ApplyActionStatusChange(&it, "verified", "ops@acme", now); err != nil {
 		t.Fatalf("verified: %v", err)
 	}
 	if it.VerifiedAt != now {
 		t.Fatalf("verification timestamp missing: %+v", it)
 	}
 	// Terminal.
-	if err := applyActionStatusChange(&it, "in_progress", "ops@acme", now); err == nil {
+	if err := rca.ApplyActionStatusChange(&it, "in_progress", "ops@acme", now); err == nil {
 		t.Fatal("verified is terminal")
 	}
 	// "overdue" is derived, never a settable state.
 	fresh := validItem()
-	if err := applyActionStatusChange(&fresh, "overdue", "ops@acme", now); err == nil {
+	if err := rca.ApplyActionStatusChange(&fresh, "overdue", "ops@acme", now); err == nil {
 		t.Fatal("overdue must be refused as a stored state")
 	}
 }
@@ -103,12 +103,12 @@ func TestActionOverdueIsDerived(t *testing.T) {
 	it := validItem()
 	it.AccountableOwner = "NetOps"
 	it.Status, it.DueDate = "in_progress", "2026-07-01"
-	stampActionDerived(&it, time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	rca.StampActionDerived(&it, time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
 	if !it.Overdue {
 		t.Fatal("past-due in-progress item must derive overdue")
 	}
 	it.Status = "completed"
-	stampActionDerived(&it, time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
+	rca.StampActionDerived(&it, time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
 	if it.Overdue {
 		t.Fatal("a completed item is never overdue")
 	}
@@ -123,7 +123,7 @@ func TestSuggestionsCarrySuggestedOwnerNeverAssign(t *testing.T) {
 		Ownership:         rca.Ownership{TriageOwner: "NOC", TechnicalOwner: "ISP / carrier"},
 		States:            rca.ReportStates{Recovery: "component_only", RecoveryBasis: "component up; service checks still failing"},
 	}
-	items := suggestRcaActionItems(rep, map[string]seamOwnerEntry{
+	items := rca.SuggestActionItems(rep, map[string]seamOwnerEntry{
 		"isp": {Name: "Lumen (DIA circuit #12345)"},
 	})
 	if len(items) == 0 {
@@ -140,7 +140,7 @@ func TestSuggestionsCarrySuggestedOwnerNeverAssign(t *testing.T) {
 		if it.SuggestedOwner == "Lumen (DIA circuit #12345)" {
 			foundSeamOwner = true
 		}
-		if !rcaActionCategories[it.Category] {
+		if !rca.ActionCategories[it.Category] {
 			t.Fatalf("suggestion outside the category enum: %+v", it)
 		}
 	}
@@ -167,22 +167,22 @@ func TestActionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaActionItemStore("") // in-memory
 	it := validItem()
 	it.ID, it.CorrelationID = "a-1", "c-1"
-	if err := st.put("acme", "c-1", it); err != nil {
+	if err := st.Put("acme", "c-1", it); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if got := st.list("globex", "c-1"); len(got) != 0 {
+	if got := st.List("globex", "c-1"); len(got) != 0 {
 		t.Fatalf("TENANT LEAK: globex read acme's action items: %+v", got)
 	}
-	if got := st.list("acme", "c-1"); len(got) != 1 {
+	if got := st.List("acme", "c-1"); len(got) != 1 {
 		t.Fatalf("own items lost: %+v", got)
 	}
-	if _, ok := st.get("globex", "c-1", "a-1"); ok {
+	if _, ok := st.Get("globex", "c-1", "a-1"); ok {
 		t.Fatal("TENANT LEAK: cross-tenant get")
 	}
-	if removed, _ := st.remove("globex", "c-1", "a-1"); removed {
+	if removed, _ := st.Remove("globex", "c-1", "a-1"); removed {
 		t.Fatal("TENANT LEAK: cross-tenant remove")
 	}
-	if removed, err := st.remove("acme", "c-1", "a-1"); err != nil || !removed {
+	if removed, err := st.Remove("acme", "c-1", "a-1"); err != nil || !removed {
 		t.Fatal("own remove failed")
 	}
 }
@@ -219,7 +219,7 @@ func TestActionItemsCRUDOwnTenant(t *testing.T) {
 	}
 
 	// The record is keyed by the OBJECT's owning tenant.
-	if got := s.rcaActionItems.list("acme", promoCorrID); len(got) != 1 {
+	if got := s.rcaActionItems.List("acme", promoCorrID); len(got) != 1 {
 		t.Fatalf("not stored under owner tenant: %+v", got)
 	}
 
@@ -259,7 +259,7 @@ func TestActionItemsCrossTenantIs404(t *testing.T) {
 	s := actionServer(t)
 	seed := validItem()
 	seed.ID = "a-1"
-	if err := s.rcaActionItems.put("acme", promoCorrID, seed); err != nil {
+	if err := s.rcaActionItems.Put("acme", promoCorrID, seed); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -277,10 +277,10 @@ func TestActionItemsCrossTenantIs404(t *testing.T) {
 			t.Fatalf("cross-tenant %s %q = %d, want 404", c.method, c.rest, w.Code)
 		}
 	}
-	if got := s.rcaActionItems.list("acme", promoCorrID); len(got) != 1 {
+	if got := s.rcaActionItems.List("acme", promoCorrID); len(got) != 1 {
 		t.Fatalf("cross-tenant call mutated the owner's register: %+v", got)
 	}
-	if got := s.rcaActionItems.list("globex", promoCorrID); len(got) != 0 {
+	if got := s.rcaActionItems.List("globex", promoCorrID); len(got) != 0 {
 		t.Fatalf("cross-tenant call created foreign records: %+v", got)
 	}
 }
@@ -294,7 +294,7 @@ func TestActionItemsCrossScopeAdminKeysByObjectTenant(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("platform-admin create = %d (%s)", w.Code, w.Body.String())
 	}
-	if got := s.rcaActionItems.list("acme", promoCorrID); len(got) != 1 {
+	if got := s.rcaActionItems.List("acme", promoCorrID); len(got) != 1 {
 		t.Fatal("item must key by the OBJECT's owning tenant, never the admin's")
 	}
 }
