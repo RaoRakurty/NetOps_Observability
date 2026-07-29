@@ -46,12 +46,12 @@ func (s *server) verifyTickOnce(ctx context.Context) {
 	launched := 0
 	// An unreadable config yields an EMPTY opt-in list that looks exactly like
 	// "nobody opted in" — say so every tick instead of quietly doing nothing.
-	if err := s.verifyCfg.unavailable(); err != nil {
+	if err := s.verifyCfg.Unavailable(); err != nil {
 		logWarn("verify", "auto-verification idle: the opt-in config could not be read, so NO tenant can be evaluated",
 			map[string]any{"err": err.Error()})
 		return
 	}
-	for _, tenant := range s.verifyCfg.enabledTenants() {
+	for _, tenant := range s.verifyCfg.EnabledTenants() {
 		if ctx.Err() != nil || launched >= verifyAutoPerTick() {
 			return
 		}
@@ -79,7 +79,7 @@ FORMAT JSONEachRow`
 				continue
 			}
 			// Dedupe: at most one run per case per cooldown window.
-			if last, ok := s.verifyRuns.latest(tenant, cid); ok &&
+			if last, ok := s.verifyRuns.Latest(tenant, cid); ok &&
 				time.Since(last.StartedAt) < verifyCooldown() {
 				continue
 			}

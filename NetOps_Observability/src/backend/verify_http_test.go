@@ -19,6 +19,8 @@ import (
 
 	"netops/backend/internal/ratelimit"
 	"netops/backend/models"
+
+	"netops/backend/internal/verify"
 )
 
 const (
@@ -69,8 +71,8 @@ func setupVerifyServer(t *testing.T) (*httptest.Server, *server, map[string]*ver
 	t.Helper()
 	srv, s := newTestServerState(t)
 	dir := t.TempDir()
-	s.verifyCfg = newVerifyConfigStore(filepath.Join(dir, "verify_config.json"), nil)
-	s.verifyRuns = newVerifyRunStore(filepath.Join(dir, "verify_runs.json"))
+	s.verifyCfg = verify.NewConfigStore(filepath.Join(dir, "verify_config.json"), nil)
+	s.verifyRuns = verify.NewRunStore(filepath.Join(dir, "verify_runs.json"))
 	s.verifyLimiter = ratelimit.New()
 
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
@@ -113,7 +115,7 @@ func waitVerifyDone(t *testing.T, s *server, tenant, caseID string) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if rec, ok := s.verifyRuns.latest(tenant, caseID); ok && rec.Status == "completed" {
+		if rec, ok := s.verifyRuns.Latest(tenant, caseID); ok && rec.Status == "completed" {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -141,7 +143,7 @@ func TestVerifyCrossTenantIsolation(t *testing.T) {
 		caseB: caseRow(fix["B"].tenantID, "dev-B", "suspected"),
 	})
 	// tenant A opts in
-	if _, err := s.verifyCfg.set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
+	if _, err := s.verifyCfg.Set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -244,10 +246,10 @@ func TestVerifySettingsTenantScopedAndSecretsWriteOnly(t *testing.T) {
 		t.Fatalf("tenant B must not inherit A's flag: %s", b)
 	}
 	// stored credential unseals for A's tenant only
-	if cred := s.verifyCfg.sshCredFor(fix["A"].tenantID); cred == nil || cred.Password != "s3cret-material" {
+	if cred := s.verifyCfg.SSHCredFor(fix["A"].tenantID); cred == nil || cred.Password != "s3cret-material" {
 		t.Fatal("stored credential must unseal for its own tenant")
 	}
-	if cred := s.verifyCfg.sshCredFor(fix["B"].tenantID); cred != nil {
+	if cred := s.verifyCfg.SSHCredFor(fix["B"].tenantID); cred != nil {
 		t.Fatal("tenant B must have no credential")
 	}
 }
@@ -262,7 +264,7 @@ func TestVerifyManualRateLimited(t *testing.T) {
 	verifyFakeCH(t, map[string]map[string]any{
 		caseA: caseRow(fix["A"].tenantID, "dev-A", "suspected"),
 	})
-	if _, err := s.verifyCfg.set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
+	if _, err := s.verifyCfg.Set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if st, b := do(t, srv, "POST", "/api/correlations/"+caseA+"/verify", fix["A"].token, nil); st != 202 {
@@ -283,30 +285,30 @@ func TestVerifyTriggerCooldownDedupe(t *testing.T) {
 	verifyFakeCH(t, map[string]map[string]any{
 		caseA: caseRow(fix["A"].tenantID, "dev-A", "suspected"),
 	})
-	if _, err := s.verifyCfg.set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
+	if _, err := s.verifyCfg.Set(fix["A"].tenantID, verifySettingsPatch{Enabled: boolPtr(true)}); err != nil {
 		t.Fatal(err)
 	}
 
 	// A recent run exists → the tick must NOT launch another (cooldown dedupe).
-	s.verifyRuns.put(verifyRunRecord{
+	s.verifyRuns.Put(verifyRunRecord{
 		RunID: "recent", TenantID: fix["A"].tenantID, CorrelationID: caseA,
 		Trigger: "auto", Actor: "system:verify", StartedAt: time.Now().UTC(),
 		Status: "completed",
 	})
 	s.verifyTickOnce(t.Context())
-	if rec, _ := s.verifyRuns.latest(fix["A"].tenantID, caseA); rec.RunID != "recent" {
+	if rec, _ := s.verifyRuns.Latest(fix["A"].tenantID, caseA); rec.RunID != "recent" {
 		t.Fatalf("cooldown violated: new run %s launched", rec.RunID)
 	}
 
 	// Backdate the run beyond the cooldown → the tick launches a fresh one.
-	s.verifyRuns.put(verifyRunRecord{
+	s.verifyRuns.Put(verifyRunRecord{
 		RunID: "old", TenantID: fix["A"].tenantID, CorrelationID: caseA,
 		Trigger: "auto", Actor: "system:verify",
 		StartedAt: time.Now().UTC().Add(-2 * verifyCooldown()),
 		Status:    "completed",
 	})
 	s.verifyTickOnce(t.Context())
-	rec, ok := s.verifyRuns.latest(fix["A"].tenantID, caseA)
+	rec, ok := s.verifyRuns.Latest(fix["A"].tenantID, caseA)
 	if !ok || rec.RunID == "old" {
 		t.Fatal("cooled-down case must get a fresh auto run")
 	}

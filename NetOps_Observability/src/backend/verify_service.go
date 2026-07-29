@@ -11,17 +11,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"netops/backend/internal/chschema"
-	"netops/backend/internal/platformdb"
-	"netops/backend/internal/vault"
 	"netops/backend/internal/verify"
-	"os"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"netops/backend/collectors"
@@ -35,50 +29,17 @@ func verifyCooldown() time.Duration {
 	return secEnvDuration("VERIFY_COOLDOWN_SEC", 900, 60, 86400)
 }
 
-// ---- per-tenant config (opt-in flag + read-only SSH credential) -------------
-
-const (
-	// Vault FIELD IDENTIFIERS (envelope AAD labels), not credential values.
-	verifyFieldPassword   = "verify_ssh_password"   // #nosec G101 -- field id, not a credential
-	verifyFieldKey        = "verify_ssh_key"        // #nosec G101 -- field id, not a credential
-	verifyFieldPassphrase = "verify_ssh_passphrase" // #nosec G101 -- field id, not a credential
+// ---- store aliases ----------------------------------------------------------
+// The config + run stores moved to internal/verify/service_store.go (Phase-2
+// W1.4). Aliases keep the handlers/trigger/tests source-compatible; the env
+// reads (paths, feature flag) stay here.
+type (
+	verifyTenantConfig  = verify.TenantConfig
+	verifyConfigStore   = verify.ConfigStore
+	verifySettingsPatch = verify.SettingsPatch
+	verifyRunRecord     = verify.RunRecord
+	verifyRunStore      = verify.RunStore
 )
-
-type verifyTenantConfig struct {
-	TenantID string `json:"tenant_id"`
-	Enabled  bool   `json:"enabled,omitempty"`
-	SSHUser  string `json:"ssh_user,omitempty"`
-	// Secret material — vault-sealed at rest, write-only via the API, never in
-	// audit detail or logs.
-	SSHPassword   string `json:"ssh_password,omitempty"`
-	SSHKey        string `json:"ssh_key,omitempty"`
-	SSHPassphrase string `json:"ssh_passphrase,omitempty"`
-	SSHPort       int    `json:"ssh_port,omitempty"`
-}
-
-// verifyConfigStore is a file-backed per-tenant map (tenant_display pattern)
-// plus the secret-custody vault for the SSH fields.
-type verifyConfigStore struct {
-	mu    sync.RWMutex
-	cfgs  map[string]verifyTenantConfig
-	path  string
-	vault *vault.Vault
-	// loadErr is set when the stored config could NOT be read (I/O error or
-	// corrupt bytes) — which is a different fact from "no tenant has opted in
-	// yet". §10: without it an unreadable file made verification read "off" for
-	// EVERY tenant while suspected cases piled up, and the next single-tenant
-	// PUT flushed a map containing only that tenant over the survivors.
-	loadErr error
-}
-
-func newVerifyConfigStore(path string, v *vault.Vault) *verifyConfigStore {
-	s := &verifyConfigStore{cfgs: map[string]verifyTenantConfig{}, path: path, vault: v}
-	if err := s.load(); err != nil {
-		s.loadErr = err
-		logError("verify", "verification config unreadable — every tenant will read as OPTED OUT and writes are refused until it is repaired", errf(err))
-	}
-	return s
-}
 
 func verifyConfigPath() string {
 	if p := strings.TrimSpace(envOr("VERIFY_CONFIG_PATH", "")); p != "" {
@@ -87,303 +48,12 @@ func verifyConfigPath() string {
 	return "/data/verify_config.json"
 }
 
-// load reads the stored per-tenant config. THREE states, never two
-// (cloud_monitor_eval.go shape): the store did not answer (error) / it answered
-// with nothing (absent key or empty blob — genuinely no opt-in yet) / loaded.
-func (s *verifyConfigStore) load() error {
-	b, err := platformdb.Load(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil // absent key = no tenant has configured verification yet
-	}
-	if err != nil {
-		return fmt.Errorf("read verification config: %w", err)
-	}
-	if len(b) == 0 {
-		return nil // present but empty = nothing stored yet
-	}
-	var m map[string]verifyTenantConfig
-	if err := json.Unmarshal(b, &m); err != nil {
-		return fmt.Errorf("decode verification config: %w", err)
-	}
-	for id, c := range m {
-		c.TenantID = id
-		m[id] = c
-	}
-	s.cfgs = m
-	return nil
-}
-
-// unavailable reports the load failure, if any. Callers use it to say "unknown"
-// instead of reporting the empty map as an operator's deliberate "off".
-func (s *verifyConfigStore) unavailable() error {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.loadErr
-}
-
-// F-62/F-63: returns error. A swallowed persist failure here made the
-// handler above structurally unable to report that the write did not
-// land — 200 with nothing saved. Callers roll back and answer 500.
-func (s *verifyConfigStore) saveLocked() error {
-	if s.path == "" {
-		return nil
-	}
-	// The in-memory map is NOT the stored state when the read failed: flushing it
-	// would delete every other tenant's opt-in and SSH credential. Fail closed.
-	if s.loadErr != nil {
-		return fmt.Errorf("refusing to overwrite verification config: its stored contents were never read: %w", s.loadErr)
-	}
-	b, err := json.MarshalIndent(s.cfgs, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode verification config: %w", err)
-	}
-	if err := platformdb.Save(s.path, b); err != nil {
-		logError("verify", "persist verification config failed", map[string]any{"err": err.Error()})
-		return fmt.Errorf("persist verification config: %w", err)
-	}
-	return nil
-}
-
-func (s *verifyConfigStore) seal(tenant, field, v string) (string, error) {
-	if s.vault == nil || v == "" {
-		return v, nil
-	}
-	return s.vault.Encrypt(tenant, field, v)
-}
-
-func (s *verifyConfigStore) open(tenant, field, v string) string {
-	if s.vault == nil || v == "" {
-		return v
-	}
-	out, err := s.vault.Decrypt(tenant, field, v)
-	if err != nil {
-		logWarn("verify", "unseal verification secret failed", map[string]any{"tenant": tenant, "field": field})
-		return ""
-	}
-	return out
-}
-
-// get returns the tenant's raw (still-sealed) record. Nil-safe.
-func (s *verifyConfigStore) get(tenant string) verifyTenantConfig {
-	if s == nil {
-		return verifyTenantConfig{TenantID: tenant}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c := s.cfgs[tenant]
-	c.TenantID = tenant
-	return c
-}
-
-// enabledTenants lists tenants that opted in — the auto-trigger's work list.
-func (s *verifyConfigStore) enabledTenants() []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []string
-	for id, c := range s.cfgs {
-		if c.Enabled && id != "" {
-			out = append(out, id)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// verifySettingsPatch is the PUT body. Secret fields are write-only: empty
-// keeps the stored value; ClearSSH wipes the credential entirely.
-type verifySettingsPatch struct {
-	Enabled       *bool   `json:"enabled,omitempty"`
-	SSHUser       *string `json:"ssh_user,omitempty"`
-	SSHPassword   string  `json:"ssh_password,omitempty"`
-	SSHKey        string  `json:"ssh_private_key,omitempty"`
-	SSHPassphrase string  `json:"ssh_passphrase,omitempty"`
-	SSHPort       *int    `json:"ssh_port,omitempty"`
-	ClearSSH      bool    `json:"clear_ssh,omitempty"`
-}
-
-// set applies a patch for the PRINCIPAL's tenant (callers pass the
-// principalTenant result — body tenant is ignored by construction).
-func (s *verifyConfigStore) set(tenant string, p verifySettingsPatch) (verifyTenantConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c := s.cfgs[tenant]
-	c.TenantID = tenant
-	if p.Enabled != nil {
-		c.Enabled = *p.Enabled
-	}
-	if p.ClearSSH {
-		c.SSHUser, c.SSHPassword, c.SSHKey, c.SSHPassphrase, c.SSHPort = "", "", "", "", 0
-	}
-	if p.SSHUser != nil {
-		c.SSHUser = strings.TrimSpace(*p.SSHUser)
-	}
-	if p.SSHPort != nil {
-		if *p.SSHPort < 0 || *p.SSHPort > 65535 {
-			return c, errors.New("ssh_port out of range")
-		}
-		c.SSHPort = *p.SSHPort
-	}
-	var err error
-	if p.SSHPassword != "" {
-		if c.SSHPassword, err = s.seal(tenant, verifyFieldPassword, p.SSHPassword); err != nil {
-			return c, err
-		}
-	}
-	if p.SSHKey != "" {
-		if c.SSHKey, err = s.seal(tenant, verifyFieldKey, p.SSHKey); err != nil {
-			return c, err
-		}
-	}
-	if p.SSHPassphrase != "" {
-		if c.SSHPassphrase, err = s.seal(tenant, verifyFieldPassphrase, p.SSHPassphrase); err != nil {
-			return c, err
-		}
-	}
-	prev, had := s.cfgs[tenant]
-	s.cfgs[tenant] = c
-	if err := s.saveLocked(); err != nil {
-		if had {
-			s.cfgs[tenant] = prev
-		} else {
-			delete(s.cfgs, tenant)
-		}
-		return prev, err
-	}
-	return c, nil
-}
-
-// sshCredFor unseals the tenant's verification SSH credential; nil when the
-// tenant has not configured one (ssh checks are then skipped honestly).
-func (s *verifyConfigStore) sshCredFor(tenant string) *verify.SSHCred {
-	c := s.get(tenant)
-	if c.SSHUser == "" {
-		return nil
-	}
-	cred := &verify.SSHCred{
-		User:       c.SSHUser,
-		Password:   s.open(tenant, verifyFieldPassword, c.SSHPassword),
-		PrivateKey: s.open(tenant, verifyFieldKey, c.SSHKey),
-		Passphrase: s.open(tenant, verifyFieldPassphrase, c.SSHPassphrase),
-		Port:       c.SSHPort,
-	}
-	if cred.Password == "" && cred.PrivateKey == "" {
-		return nil
-	}
-	return cred
-}
-
-// publicView is the API/UI projection — never any secret material.
-func (s *verifyConfigStore) publicView(tenant string) map[string]any {
-	c := s.get(tenant)
-	out := map[string]any{
-		"tenant_id":      tenant,
-		"enabled":        c.Enabled,
-		"feature":        envBool("FEATURE_ACTIVE_VERIFICATION"),
-		"ssh_configured": c.SSHUser != "" && (c.SSHPassword != "" || c.SSHKey != ""),
-		"ssh_user":       c.SSHUser,
-		"ssh_port":       c.SSHPort,
-	}
-	// An unreadable store must never render as a deliberate "off": the operator
-	// sees UNKNOWN plus the reason, and the settings surface stays read-only.
-	if s.unavailable() != nil {
-		out["config_unavailable"] = true
-		out["config_error"] = "stored verification config could not be read — settings shown are not the stored state"
-	}
-	return out
-}
-
-// ---- run store (bounded; latest run per case) -------------------------------
-
-type verifyRunRecord struct {
-	RunID         string               `json:"run_id"`
-	TenantID      string               `json:"tenant_id"`
-	CorrelationID string               `json:"correlation_id"`
-	Trigger       string               `json:"trigger"` // manual | auto
-	Actor         string               `json:"actor"`
-	StartedAt     time.Time            `json:"started_at"`
-	FinishedAt    time.Time            `json:"finished_at,omitempty"`
-	Status        string               `json:"status"` // running | completed
-	Devices       []string             `json:"devices"`
-	Modules       []string             `json:"modules,omitempty"` // seam/fault-fired troubleshooting modules
-	Results       []verify.CheckResult `json:"results,omitempty"`
-}
-
-const verifyRunsPerTenantCap = 200
-
-// verifyRunStore keeps the LATEST run per (tenant, case) — bounded by
-// construction, tenant-keyed in the store (§3a), persisted best-effort.
-type verifyRunStore struct {
-	mu   sync.RWMutex
-	runs map[string]map[string]verifyRunRecord // tenant → correlation_id → latest
-	path string
-}
-
-func newVerifyRunStore(path string) *verifyRunStore {
-	s := &verifyRunStore{runs: map[string]map[string]verifyRunRecord{}, path: path}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		_ = json.Unmarshal(b, &s.runs)
-	}
-	return s
-}
-
-func (s *verifyRunStore) latest(tenant, caseID string) (verifyRunRecord, bool) {
-	if s == nil {
-		return verifyRunRecord{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	r, ok := s.runs[tenant][caseID]
-	return r, ok
-}
-
-func (s *verifyRunStore) put(rec verifyRunRecord) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	byCase := s.runs[rec.TenantID]
-	if byCase == nil {
-		byCase = map[string]verifyRunRecord{}
-		s.runs[rec.TenantID] = byCase
-	}
-	byCase[rec.CorrelationID] = rec
-	// Bounded: evict the oldest cases past the cap.
-	if len(byCase) > verifyRunsPerTenantCap {
-		type kv struct {
-			id string
-			at time.Time
-		}
-		all := make([]kv, 0, len(byCase))
-		for id, r := range byCase {
-			all = append(all, kv{id, r.StartedAt})
-		}
-		sort.Slice(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
-		for _, e := range all[:len(byCase)-verifyRunsPerTenantCap] {
-			delete(byCase, e.id)
-		}
-	}
-	if s.path != "" {
-		if b, err := json.Marshal(s.runs); err == nil {
-			if err := platformdb.Save(s.path, b); err != nil {
-				logWarn("verify", "persist verification runs failed", map[string]any{"err": err.Error()})
-			}
-		}
-	}
-}
-
 // ---- feature gates ----------------------------------------------------------
 
 func (s *server) verifyFeatureOn() bool { return envBool("FEATURE_ACTIVE_VERIFICATION") }
 
 func (s *server) verifyEnabledFor(tenant string) bool {
-	return s.verifyFeatureOn() && s.verifyCfg.get(tenant).Enabled
+	return s.verifyFeatureOn() && s.verifyCfg.Get(tenant).Enabled
 }
 
 // ---- case lookup + target resolution ---------------------------------------
@@ -462,7 +132,7 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verify.Ta
 			want[strings.ToLower(n)] = true
 		}
 	}
-	sshCred := s.verifyCfg.sshCredFor(tenant)
+	sshCred := s.verifyCfg.SSHCredFor(tenant)
 	var out []verify.Target
 	for _, dev := range s.discovery.Devices() {
 		if !want[strings.ToLower(dev.ID)] && !want[strings.ToLower(dev.Name)] {
@@ -505,7 +175,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 	if !s.verifyEnabledFor(tenant) {
 		return verifyRunRecord{}, verify.ErrDisabled
 	}
-	if last, ok := s.verifyRuns.latest(tenant, caseID); ok && last.Status == "running" &&
+	if last, ok := s.verifyRuns.Latest(tenant, caseID); ok && last.Status == "running" &&
 		time.Since(last.StartedAt) < verify.RunBudget()+time.Minute {
 		return verifyRunRecord{}, errVerifyRunning
 	}
@@ -538,7 +208,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		Devices:       devIDs,
 		Modules:       verify.ModulesFor(cc),
 	}
-	s.verifyRuns.put(rec)
+	s.verifyRuns.Put(rec)
 	s.auditVerifyRun(rec, "start", why, cmds)
 
 	run := rec // own copy — the caller returns the RUNNING record
@@ -552,7 +222,7 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		run.Results = results
 		run.FinishedAt = time.Now().UTC()
 		run.Status = "completed"
-		s.verifyRuns.put(run)
+		s.verifyRuns.Put(run)
 		s.emitVerificationResults(run)
 		s.auditVerifyRun(run, "complete", why, nil)
 		logInfo("verify", "verification run completed", map[string]any{

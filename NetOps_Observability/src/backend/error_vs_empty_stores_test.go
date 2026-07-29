@@ -25,6 +25,8 @@ package main
 
 import (
 	"os"
+
+	"netops/backend/internal/verify"
 	"path/filepath"
 	"testing"
 
@@ -46,11 +48,11 @@ func TestVerifyConfigUnreadableIsNotAnOptedOutTenant(t *testing.T) {
 	dir := t.TempDir()
 
 	// Control: a genuinely absent store is NOT a failure.
-	fresh := newVerifyConfigStore(filepath.Join(dir, "absent.json"), nil)
-	if err := fresh.unavailable(); err != nil {
+	fresh := verify.NewConfigStore(filepath.Join(dir, "absent.json"), nil)
+	if err := fresh.Unavailable(); err != nil {
 		t.Fatalf("an absent store must load clean, got %v", err)
 	}
-	if _, ok := fresh.publicView("t-1")["config_unavailable"]; ok {
+	if _, ok := fresh.PublicView("t-1", false)["config_unavailable"]; ok {
 		t.Fatal("a fresh install must not report config_unavailable")
 	}
 
@@ -60,23 +62,23 @@ func TestVerifyConfigUnreadableIsNotAnOptedOutTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := newVerifyConfigStore(path, nil)
+	st := verify.NewConfigStore(path, nil)
 
-	if st.unavailable() == nil {
+	if st.Unavailable() == nil {
 		t.Fatal("an unreadable verification config must be reported, not swallowed: " +
 			"every tenant then reads as OPTED OUT while suspected cases pile up")
 	}
-	if len(st.enabledTenants()) != 0 {
+	if len(st.EnabledTenants()) != 0 {
 		t.Fatal("nothing was loaded, so no tenant can be enabled")
 	}
-	view := st.publicView("t-1")
+	view := st.PublicView("t-1", false)
 	if view["config_unavailable"] != true {
 		t.Fatalf("publicView must say the stored config is UNKNOWN, not render enabled=false as an operator choice: %v", view)
 	}
 
 	// A write must not flush the empty map over the file we never read.
 	on := true
-	if _, err := st.set("t-1", verifySettingsPatch{Enabled: &on}); err == nil {
+	if _, err := st.Set("t-1", verifySettingsPatch{Enabled: &on}); err == nil {
 		t.Fatal("a save against an unread store must fail — it would erase every other tenant's opt-in and SSH credential")
 	}
 	after, err := os.ReadFile(path)

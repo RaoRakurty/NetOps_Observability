@@ -52,7 +52,7 @@ func (s *server) handleCorrelationVerify(w http.ResponseWriter, r *http.Request,
 			"enabled": s.verifyEnabledFor(caseTenant),
 			"run":     nil,
 		}
-		if rec, ok := s.verifyRuns.latest(caseTenant, id); ok {
+		if rec, ok := s.verifyRuns.Latest(caseTenant, id); ok {
 			resp["run"] = rec
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -117,7 +117,7 @@ func (s *server) handleVerificationSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		tenant, _ := principalTenant(claims)
-		writeJSON(w, http.StatusOK, s.verifyCfg.publicView(tenant))
+		writeJSON(w, http.StatusOK, s.verifyCfg.PublicView(tenant, s.verifyFeatureOn()))
 
 	case http.MethodPut:
 		// Tenant-scoped opt-in + credential → scope-aware admin gate (§3a rule
@@ -133,7 +133,7 @@ func (s *server) handleVerificationSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		cfg, err := s.verifyCfg.set(tenant, patch)
+		cfg, err := s.verifyCfg.Set(tenant, patch)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -153,7 +153,7 @@ func (s *server) handleVerificationSettings(w http.ResponseWriter, r *http.Reque
 				},
 			})
 		}
-		writeJSON(w, http.StatusOK, s.verifyCfg.publicView(tenant))
+		writeJSON(w, http.StatusOK, s.verifyCfg.PublicView(tenant, s.verifyFeatureOn()))
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or PUT"))

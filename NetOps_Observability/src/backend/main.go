@@ -35,6 +35,7 @@ import (
 	"netops/backend/internal/tenant"
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/vault"
+	"netops/backend/internal/verify"
 	"netops/backend/internal/vuln"
 	"netops/backend/pathgraph"
 	"netops/backend/policy"
@@ -680,8 +681,8 @@ func newServer() *server {
 	srv.displayPrefs = newTenantDisplayStore(tenantDisplayPath())
 	// Active Verification (RCA spec item 8): per-tenant opt-in config (SSH
 	// secrets vault-sealed), bounded run store, per-tenant rate limiter.
-	srv.verifyCfg = newVerifyConfigStore(verifyConfigPath(), vault)
-	srv.verifyRuns = newVerifyRunStore(envOr("VERIFY_RUNS_FILE", "/data/verify_runs.json"))
+	srv.verifyCfg = verify.NewConfigStore(verifyConfigPath(), vault)
+	srv.verifyRuns = verify.NewRunStore(envOr("VERIFY_RUNS_FILE", "/data/verify_runs.json"))
 	srv.verifyLimiter = ratelimit.New()
 	srv.governance = newTenantGovernanceStore(tenantGovernancePath())
 	srv.cloudSLOs = newCloudSLOStore(cloudSLOPath())
