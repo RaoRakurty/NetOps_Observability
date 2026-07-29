@@ -196,7 +196,7 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 	// Per-tenant attribution precedence (Wave 4 #11 slice 3): a tenant's
 	// governed class order decides winner selection among competing signals;
 	// nil (unconfigured) keeps the intrinsic ladder — bit-identical to before.
-	order, _ := s.governance.attributionPrecedence(tenant)
+	order, _ := s.governance.AttributionPrecedence(tenant)
 	writeJSON(w, http.StatusOK, appid.FuseWithPrecedence(signals, order))
 }
 
@@ -272,7 +272,7 @@ func (s *server) handleAppIDResolveBatch(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadGateway, ovErr) // see handleAppIDResolve: never answer without the top of the ladder
 		return
 	}
-	order, _ := s.governance.attributionPrecedence(tenant)
+	order, _ := s.governance.AttributionPrecedence(tenant)
 
 	out := make(map[string]appIDBatchVerdict, len(body.Keys))
 	for _, raw := range body.Keys {
@@ -310,7 +310,7 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	ov, ovErr := s.overridesFor(r.Context(), tenant, cross)
 	// The tenant's ACTIVE precedence order (default ladder when unset) — the
 	// status surface stays inspectable after the editor ships.
-	order, customOrder := s.governance.attributionPrecedence(tenant)
+	order, customOrder := s.governance.AttributionPrecedence(tenant)
 	if !customOrder {
 		order = appid.PrecedenceClasses()
 	}

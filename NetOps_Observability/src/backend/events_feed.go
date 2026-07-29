@@ -230,7 +230,7 @@ SELECT toString(signal_id) AS signal_id,
 		logWarn("appid", "operator override store did not answer — feed app names fall back to lower-precedence sources",
 			map[string]any{"tenant": tenant, "err": ovErr.Error()})
 	}
-	order, _ := s.governance.attributionPrecedence(tenant)
+	order, _ := s.governance.AttributionPrecedence(tenant)
 
 	items := make([]map[string]any, 0, len(rows))
 	var nextCursor string

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/tenant"
 )
 
 // tenant_governance_test.go — per-tenant governance settings (Wave 4 #11).
@@ -31,31 +33,31 @@ func governanceTestServer(t *testing.T) *server {
 
 func TestGovernanceStoreRequiredTagsDefaultsAndKeying(t *testing.T) {
 	st := newTenantGovernanceStore("")
-	tags, custom := st.requiredTags("t-a")
+	tags, custom := st.RequiredTags("t-a")
 	if custom || !reflect.DeepEqual(tags, []string{"app", "owner", "env"}) {
 		t.Fatalf("unconfigured tenant = (%v,%v), want default app/owner/env", tags, custom)
 	}
-	_ = st.setRequiredTags("t-a", []string{"app", "cost_center"})
-	if tags, custom = st.requiredTags("t-a"); !custom || !reflect.DeepEqual(tags, []string{"app", "cost_center"}) {
+	_ = st.SetRequiredTags("t-a", []string{"app", "cost_center"})
+	if tags, custom = st.RequiredTags("t-a"); !custom || !reflect.DeepEqual(tags, []string{"app", "cost_center"}) {
 		t.Fatalf("t-a = (%v,%v)", tags, custom)
 	}
 	// §3a: another tenant's read is keyed separately — never t-a's list.
-	if tags, custom = st.requiredTags("t-b"); custom || len(tags) != 3 {
+	if tags, custom = st.RequiredTags("t-b"); custom || len(tags) != 3 {
 		t.Fatalf("t-b = (%v,%v) — cross-tenant bleed", tags, custom)
 	}
 	// Reset returns the tenant to the default.
-	_ = st.setRequiredTags("t-a", nil)
-	if _, custom = st.requiredTags("t-a"); custom {
+	_ = st.SetRequiredTags("t-a", nil)
+	if _, custom = st.RequiredTags("t-a"); custom {
 		t.Fatal("reset tenant must read as default")
 	}
 	var nilStore *tenantGovernanceStore
-	if tags, _ = nilStore.requiredTags("t-a"); len(tags) != 3 {
+	if tags, _ = nilStore.RequiredTags("t-a"); len(tags) != 3 {
 		t.Fatalf("nil store must serve the default, got %v", tags)
 	}
 }
 
 func TestNormalizeRequiredTags(t *testing.T) {
-	got, err := normalizeRequiredTags([]string{" App ", "cost_center", "app", "team/unit"})
+	got, err := tenant.NormalizeRequiredTags([]string{" App ", "cost_center", "app", "team/unit"})
 	if err != nil || !reflect.DeepEqual(got, []string{"app", "cost_center", "team/unit"}) {
 		t.Fatalf("normalize = (%v, %v)", got, err)
 	}
@@ -73,49 +75,49 @@ func TestNormalizeRequiredTags(t *testing.T) {
 				bad[i][j] = "t" + strings.Repeat("x", j%3)
 			}
 		}
-		if _, err := normalizeRequiredTags(bad[i]); err == nil {
-			t.Errorf("normalizeRequiredTags(%v) must fail", bad[i])
+		if _, err := tenant.NormalizeRequiredTags(bad[i]); err == nil {
+			t.Errorf("tenant.NormalizeRequiredTags(%v) must fail", bad[i])
 		}
 	}
 }
 
 func TestGovernanceStoreRcaWindowDefaultsAndKeying(t *testing.T) {
 	st := newTenantGovernanceStore("")
-	if h, custom := st.rcaWindowHours("t-a"); custom || h != cloudSignalWindowHours {
+	if h, custom := st.RcaWindowHours("t-a"); custom || h != cloudSignalWindowHours {
 		t.Fatalf("unconfigured tenant = (%d,%v), want default %d", h, custom, cloudSignalWindowHours)
 	}
-	_ = st.setRcaWindowHours("t-a", 72)
-	if h, custom := st.rcaWindowHours("t-a"); !custom || h != 72 {
+	_ = st.SetRcaWindowHours("t-a", 72)
+	if h, custom := st.RcaWindowHours("t-a"); !custom || h != 72 {
 		t.Fatalf("t-a = (%d,%v), want 72", h, custom)
 	}
 	// §3a: keyed per tenant — t-b keeps the default.
-	if h, custom := st.rcaWindowHours("t-b"); custom || h != cloudSignalWindowHours {
+	if h, custom := st.RcaWindowHours("t-b"); custom || h != cloudSignalWindowHours {
 		t.Fatalf("t-b = (%d,%v) — cross-tenant bleed", h, custom)
 	}
 	// Reset (0) restores the default; an off-bounds stored value clamps on read.
-	_ = st.setRcaWindowHours("t-a", 0)
-	if _, custom := st.rcaWindowHours("t-a"); custom {
+	_ = st.SetRcaWindowHours("t-a", 0)
+	if _, custom := st.RcaWindowHours("t-a"); custom {
 		t.Fatal("reset tenant must read as default")
 	}
-	_ = st.setRcaWindowHours("t-a", 10_000)
-	if h, _ := st.rcaWindowHours("t-a"); h != cloudSignalWindowMaxHours {
+	_ = st.SetRcaWindowHours("t-a", 10_000)
+	if h, _ := st.RcaWindowHours("t-a"); h != cloudSignalWindowMaxHours {
 		t.Fatalf("oversize stored window must clamp on read, got %d", h)
 	}
 	var nilStore *tenantGovernanceStore
-	if h, _ := nilStore.rcaWindowHours("t-a"); h != cloudSignalWindowHours {
+	if h, _ := nilStore.RcaWindowHours("t-a"); h != cloudSignalWindowHours {
 		t.Fatalf("nil store must serve the default, got %d", h)
 	}
 }
 
 func TestNormalizeRcaWindowHours(t *testing.T) {
 	for _, ok := range []int{1, 24, 168} {
-		if got, err := normalizeRcaWindowHours(ok); err != nil || got != ok {
-			t.Errorf("normalizeRcaWindowHours(%d) = (%d,%v)", ok, got, err)
+		if got, err := tenant.NormalizeRcaWindowHours(ok); err != nil || got != ok {
+			t.Errorf("tenant.NormalizeRcaWindowHours(%d) = (%d,%v)", ok, got, err)
 		}
 	}
 	for _, bad := range []int{0, -1, 169, 100000} {
-		if _, err := normalizeRcaWindowHours(bad); err == nil {
-			t.Errorf("normalizeRcaWindowHours(%d) must fail — clamped bounds", bad)
+		if _, err := tenant.NormalizeRcaWindowHours(bad); err == nil {
+			t.Errorf("tenant.NormalizeRcaWindowHours(%d) must fail — clamped bounds", bad)
 		}
 	}
 }
@@ -124,7 +126,7 @@ func TestNormalizeRcaWindowHours(t *testing.T) {
 // falls back to the CALLER's tenant default, never another tenant's.
 func TestTenantWindowHours(t *testing.T) {
 	s := governanceTestServer(t)
-	_ = s.governance.setRcaWindowHours("t-a", 72)
+	_ = s.governance.SetRcaWindowHours("t-a", 72)
 	admA := jwtClaims{Role: "admin", Tenant: "t-a", Sub: "adm-a"}
 	admB := jwtClaims{Role: "admin", Tenant: "t-b", Sub: "adm-b"}
 
@@ -236,25 +238,25 @@ func TestRcaWindowHandlerIsolation(t *testing.T) {
 
 func TestGovernanceStorePrecedenceDefaultsAndKeying(t *testing.T) {
 	st := newTenantGovernanceStore("")
-	if order, custom := st.attributionPrecedence("t-a"); custom || order != nil {
+	if order, custom := st.AttributionPrecedence("t-a"); custom || order != nil {
 		t.Fatalf("unconfigured tenant = (%v,%v), want default", order, custom)
 	}
 	reordered := []string{"firewall_appid", "operator", "cloud_tag", "cloud_graph", "domain", "ip_catalog"}
-	_ = st.setAttributionPrecedence("t-a", reordered)
-	if order, custom := st.attributionPrecedence("t-a"); !custom || !reflect.DeepEqual(order, reordered) {
+	_ = st.SetAttributionPrecedence("t-a", reordered)
+	if order, custom := st.AttributionPrecedence("t-a"); !custom || !reflect.DeepEqual(order, reordered) {
 		t.Fatalf("t-a = (%v,%v)", order, custom)
 	}
 	// §3a: keyed per tenant.
-	if _, custom := st.attributionPrecedence("t-b"); custom {
+	if _, custom := st.AttributionPrecedence("t-b"); custom {
 		t.Fatal("t-b must stay default — cross-tenant bleed")
 	}
 	// A stored order that no longer validates reads as default, never trusted.
-	_ = st.setAttributionPrecedence("t-a", []string{"bogus"})
-	if _, custom := st.attributionPrecedence("t-a"); custom {
+	_ = st.SetAttributionPrecedence("t-a", []string{"bogus"})
+	if _, custom := st.AttributionPrecedence("t-a"); custom {
 		t.Fatal("invalid stored order must fall back to default")
 	}
 	var nilStore *tenantGovernanceStore
-	if order, custom := nilStore.attributionPrecedence("t-a"); custom || order != nil {
+	if order, custom := nilStore.AttributionPrecedence("t-a"); custom || order != nil {
 		t.Fatalf("nil store = (%v,%v)", order, custom)
 	}
 }
@@ -383,7 +385,7 @@ func TestGovernanceAuditViewScopedAndFiltered(t *testing.T) {
 		if e.Tenant != "t-a" {
 			t.Fatalf("cross-tenant audit leak: %+v", e)
 		}
-		if !isGovernanceAuditAction(e.Detail["action"]) {
+		if !tenant.IsGovernanceAuditAction(e.Detail["action"]) {
 			t.Fatalf("non-governance event leaked into the view: %+v", e)
 		}
 	}
@@ -476,35 +478,35 @@ func TestRequiredTagsHandlerIsolation(t *testing.T) {
 
 func TestGovernanceStoreSeamOwnersDefaultsAndKeying(t *testing.T) {
 	st := newTenantGovernanceStore("")
-	if owners, custom := st.seamOwners("t-a"); custom || owners != nil {
+	if owners, custom := st.SeamOwners("t-a"); custom || owners != nil {
 		t.Fatalf("unconfigured tenant = (%v,%v), want no registry", owners, custom)
 	}
-	_ = st.setSeamOwners("t-a", map[string]seamOwnerEntry{"isp": {Name: "Lumen (DIA #12345)", Contact: "noc@lumen.example"}})
-	owners, custom := st.seamOwners("t-a")
+	_ = st.SetSeamOwners("t-a", map[string]seamOwnerEntry{"isp": {Name: "Lumen (DIA #12345)", Contact: "noc@lumen.example"}})
+	owners, custom := st.SeamOwners("t-a")
 	if !custom || owners["isp"].Name != "Lumen (DIA #12345)" {
 		t.Fatalf("t-a = (%v,%v)", owners, custom)
 	}
 	// §3a: another tenant reads its own (empty) registry.
-	if o, c := st.seamOwners("t-b"); c || o != nil {
+	if o, c := st.SeamOwners("t-b"); c || o != nil {
 		t.Fatalf("t-b = (%v,%v) — cross-tenant bleed", o, c)
 	}
 	// A stored key outside the class vocabulary is dropped on read, not trusted.
-	_ = st.setSeamOwners("t-a", map[string]seamOwnerEntry{"martians": {Name: "X"}})
-	if o, c := st.seamOwners("t-a"); c || o != nil {
+	_ = st.SetSeamOwners("t-a", map[string]seamOwnerEntry{"martians": {Name: "X"}})
+	if o, c := st.SeamOwners("t-a"); c || o != nil {
 		t.Fatalf("invalid stored class must read as default, got (%v,%v)", o, c)
 	}
-	_ = st.setSeamOwners("t-a", nil)
-	if _, c := st.seamOwners("t-a"); c {
+	_ = st.SetSeamOwners("t-a", nil)
+	if _, c := st.SeamOwners("t-a"); c {
 		t.Fatal("reset tenant must read as default")
 	}
 	var nilStore *tenantGovernanceStore
-	if o, c := nilStore.seamOwners("t-a"); c || o != nil {
+	if o, c := nilStore.SeamOwners("t-a"); c || o != nil {
 		t.Fatal("nil store must serve the default")
 	}
 }
 
 func TestNormalizeSeamOwners(t *testing.T) {
-	got, err := normalizeSeamOwners(map[string]seamOwnerEntry{
+	got, err := tenant.NormalizeSeamOwners(map[string]seamOwnerEntry{
 		" ISP ":   {Name: "  Lumen  ", Contact: " noc@lumen.example "},
 		"carrier": {Name: ""}, // empty row = no override, dropped
 	})
@@ -514,16 +516,16 @@ func TestNormalizeSeamOwners(t *testing.T) {
 	if _, ok := got["carrier"]; ok {
 		t.Fatal("empty-name row must be dropped")
 	}
-	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"martians": {Name: "X"}}); err == nil {
+	if _, err := tenant.NormalizeSeamOwners(map[string]seamOwnerEntry{"martians": {Name: "X"}}); err == nil {
 		t.Fatal("unknown class must fail")
 	}
-	if _, err := normalizeSeamOwners(nil); err == nil {
+	if _, err := tenant.NormalizeSeamOwners(nil); err == nil {
 		t.Fatal("empty registry must fail")
 	}
-	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: strings.Repeat("x", 121)}}); err == nil {
+	if _, err := tenant.NormalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: strings.Repeat("x", 121)}}); err == nil {
 		t.Fatal("over-long name must fail")
 	}
-	if _, err := normalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: "ok", Contact: strings.Repeat("x", 201)}}); err == nil {
+	if _, err := tenant.NormalizeSeamOwners(map[string]seamOwnerEntry{"isp": {Name: "ok", Contact: strings.Repeat("x", 201)}}); err == nil {
 		t.Fatal("over-long contact must fail")
 	}
 }
@@ -604,7 +606,7 @@ func TestSeamOwnersHandlerIsolation(t *testing.T) {
 	if !found {
 		t.Fatal("seam-owners change must be audited")
 	}
-	if !isGovernanceAuditAction("set_seam_owners") {
+	if !tenant.IsGovernanceAuditAction("set_seam_owners") {
 		t.Fatal("set_seam_owners must appear in the governance audit view")
 	}
 }

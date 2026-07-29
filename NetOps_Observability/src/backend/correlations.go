@@ -107,7 +107,7 @@ func (s *server) tenantRcaSince(r *http.Request, def time.Duration) (time.Durati
 	}
 	claims, _ := userFrom(r.Context())
 	tenant, _ := principalTenant(claims)
-	if hours, custom := s.governance.rcaWindowHours(tenant); custom && hours > 0 {
+	if hours, custom := s.governance.RcaWindowHours(tenant); custom && hours > 0 {
 		return time.Duration(hours) * time.Hour, nil
 	}
 	return def, nil

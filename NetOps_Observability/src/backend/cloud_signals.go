@@ -74,7 +74,7 @@ func (s *server) tenantWindowHours(r *http.Request) (int, error) {
 	}
 	claims, _ := userFrom(r.Context())
 	tenant, _ := principalTenant(claims)
-	hours, _ := s.governance.rcaWindowHours(tenant)
+	hours, _ := s.governance.RcaWindowHours(tenant)
 	return hours, nil
 }
 

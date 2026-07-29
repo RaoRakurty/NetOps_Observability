@@ -57,7 +57,7 @@ func TestRcaSinceHonoursTheTenantSetting(t *testing.T) {
 	if s.governance == nil {
 		t.Skip("governance store not wired on this test server")
 	}
-	if err := s.governance.setRcaWindowHours("t-a", 168); err != nil {
+	if err := s.governance.SetRcaWindowHours("t-a", 168); err != nil {
 		t.Fatalf("set rca window: %v", err)
 	}
 	got, err := s.tenantRcaSince(requestWithClaims(t, "/api/correlations", "t-a"), 24*time.Hour)
@@ -82,7 +82,7 @@ func TestRcaSinceHonoursTheTenantSetting(t *testing.T) {
 func TestExplicitSinceOverridesTheTenantSetting(t *testing.T) {
 	_, s := newTestServerState(t)
 	if s.governance != nil {
-		if err := s.governance.setRcaWindowHours("t-a", 168); err != nil {
+		if err := s.governance.SetRcaWindowHours("t-a", 168); err != nil {
 			t.Fatalf("set rca window: %v", err)
 		}
 	}

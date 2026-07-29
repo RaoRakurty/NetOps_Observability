@@ -158,11 +158,7 @@ func TestTenantMapStoresRefuseToOverwriteWhatTheyNeverRead(t *testing.T) {
 			return s.saveLocked()
 		}},
 		{"tenant_governance", func(p string) error {
-			s := newTenantGovernanceStore(p)
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.cfgs["t-1"] = tenantGovernanceConfig{TenantID: "t-1"}
-			return s.saveLocked()
+			return newTenantGovernanceStore(p).SeedForTest("t-1", tenantGovernanceConfig{TenantID: "t-1"})
 		}},
 		{"ai_tenant_config", func(p string) error {
 			s := newAITenantConfigStore(p, nil)

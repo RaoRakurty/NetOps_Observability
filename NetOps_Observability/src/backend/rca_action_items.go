@@ -34,6 +34,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/tenant"
 )
 
 // ---- vocabulary ---------------------------------------------------------------
@@ -373,7 +375,7 @@ func stampActionDerived(it *rcaActionItem, now time.Time) {
 // ownerClassForLabel reverse-maps a rendered owner-team label to its catalog
 // owner class (first match in the closed vocabulary), "" when unknown.
 func ownerClassForLabel(label string) string {
-	for _, class := range seamOwnerClasses {
+	for _, class := range tenant.SeamOwnerClasses {
 		if rca.OwnerTeam[class] == label {
 			return class
 		}
@@ -524,7 +526,7 @@ SELECT tenant_id FROM netops.corr_objects
 		}
 		var owners map[string]seamOwnerEntry
 		if s.governance != nil {
-			owners, _ = s.governance.seamOwners(objTenant)
+			owners, _ = s.governance.SeamOwners(objTenant)
 		}
 		existing := map[string]bool{}
 		for _, it := range s.rcaActionItems.list(objTenant, id) {

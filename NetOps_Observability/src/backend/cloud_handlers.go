@@ -126,7 +126,7 @@ func (s *server) handleCloudResources(w http.ResponseWriter, r *http.Request) {
 	}
 	// The tenant's required-tag list (Wave 4 #11) rides along so the UI computes
 	// "missing tags" against the SAME governance list the compliance report uses.
-	requiredTags, _ := s.governance.requiredTags(tenant)
+	requiredTags, _ := s.governance.RequiredTags(tenant)
 	writeJSON(w, http.StatusOK, map[string]any{"resources": res, "live": out, "console_urls": consoleURLs, "connectors": connectors, "count": len(res), "next_cursor": page.NextCursor, "required_tags": requiredTags})
 }
 
@@ -340,7 +340,7 @@ func (s *server) handleCloudCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	// The TENANT's required-tag list drives the compliance report (Wave 4 #11:
 	// the governance editor is what coverage/missing-tags actually read).
-	requiredTags, _ := s.governance.requiredTags(tenant)
+	requiredTags, _ := s.governance.RequiredTags(tenant)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"coverage":       cloud.Coverage(res),
 		"top_unknown":    cloud.TopUnknown(res, 25),

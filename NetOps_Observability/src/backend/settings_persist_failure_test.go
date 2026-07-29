@@ -85,13 +85,13 @@ func TestSettingsWritesFailLoudlyWhenTheStoreIsBroken(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{"governance.setRequiredTags", func() error { return gov.setRequiredTags("t-a", []string{"app"}) }},
-		{"governance.setRcaWindowHours", func() error { return gov.setRcaWindowHours("t-a", 72) }},
+		{"governance.setRequiredTags", func() error { return gov.SetRequiredTags("t-a", []string{"app"}) }},
+		{"governance.setRcaWindowHours", func() error { return gov.SetRcaWindowHours("t-a", 72) }},
 		{"governance.setAttributionPrecedence", func() error {
-			return gov.setAttributionPrecedence("t-a", []string{"operator_override"})
+			return gov.SetAttributionPrecedence("t-a", []string{"operator_override"})
 		}},
 		{"governance.setSeamOwners", func() error {
-			return gov.setSeamOwners("t-a", map[string]seamOwnerEntry{"isp": {Name: "Lumen"}})
+			return gov.SetSeamOwners("t-a", map[string]seamOwnerEntry{"isp": {Name: "Lumen"}})
 		}},
 		{"display.setTimeDisplay", func() error { _, err := disp.setTimeDisplay("t-a", "utc"); return err }},
 		{"slo.set", func() error { return slo.set("t-a", []cloudSLO{{AppName: "checkout", TargetPct: 99.9, WindowDays: 7}}) }},
@@ -122,28 +122,28 @@ func TestSettingsRollBackInMemoryStateOnFailedPersist(t *testing.T) {
 	gov := newTenantGovernanceStore(dir + "/gov.json")
 
 	// Seed a good value through a WORKING backend.
-	if err := gov.setRcaWindowHours("t-a", 24); err != nil {
+	if err := gov.SetRcaWindowHours("t-a", 24); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	if h, custom := gov.rcaWindowHours("t-a"); h != 24 || !custom {
+	if h, custom := gov.RcaWindowHours("t-a"); h != 24 || !custom {
 		t.Fatalf("seed = (%d,%v), want (24,true)", h, custom)
 	}
 
 	withFailingKV(t)
 
-	if err := gov.setRcaWindowHours("t-a", 96); err == nil {
+	if err := gov.SetRcaWindowHours("t-a", 96); err == nil {
 		t.Fatal("write on a broken store must fail")
 	}
-	if h, custom := gov.rcaWindowHours("t-a"); h != 24 || !custom {
+	if h, custom := gov.RcaWindowHours("t-a"); h != 24 || !custom {
 		t.Fatalf("after a REFUSED write the store reads (%d,%v) — want the pre-write (24,true). "+
 			"In-memory state diverged from the store.", h, custom)
 	}
 
 	// A refused CREATE must leave no phantom record either.
-	if err := gov.setRcaWindowHours("t-new", 48); err == nil {
+	if err := gov.SetRcaWindowHours("t-new", 48); err == nil {
 		t.Fatal("create on a broken store must fail")
 	}
-	if _, custom := gov.rcaWindowHours("t-new"); custom {
+	if _, custom := gov.RcaWindowHours("t-new"); custom {
 		t.Fatal("a tenant whose creating write was refused now reads as configured — phantom record")
 	}
 }
