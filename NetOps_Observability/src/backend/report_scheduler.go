@@ -215,7 +215,17 @@ func newReportScheduler(s *server, path string) *reportScheduler {
 		runs:      make(map[string]reportRun),
 		path:      path,
 	}
-	rs.ds = reports.DataSource{
+	rs.ds = rs.dataSource()
+	rs.load()
+	return rs
+}
+
+// dataSource wires the reports.DataSource seam over this scheduler's
+// tenant-scoped reads. Split from the constructor so test fixtures that build
+// the scheduler as a struct literal can wire it too (a zero DataSource panics
+// on first use — better here than a nil-tolerant seam that hides miswiring).
+func (rs *reportScheduler) dataSource() reports.DataSource {
+	return reports.DataSource{
 		Devices:    rs.tenantDevices,
 		Alerts:     rs.tenantAlerts,
 		DeviceKeys: rs.reportDeviceKeys,
@@ -223,8 +233,6 @@ func newReportScheduler(s *server, path string) *reportScheduler {
 		VMMap:      vmQueryMap,
 		StartedAt:  rs.startedAt,
 	}
-	rs.load()
-	return rs
 }
 
 // Start ticks the scheduler once a minute until ctx is cancelled.

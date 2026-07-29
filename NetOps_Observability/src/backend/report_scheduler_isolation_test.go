@@ -52,11 +52,13 @@ func isoReportScheduler(t *testing.T) *reportScheduler {
 		{ID: "dev-a", Name: "leaf-a", Address: "10.0.0.1", TenantID: "t-a"},
 		{ID: "dev-b", Name: "leaf-b", Address: "10.0.0.2", TenantID: "t-b"},
 	}})
-	return &reportScheduler{
+	rs := &reportScheduler{
 		discovery: agg,
 		alerts:    alerts.NewEngine("", nil),
 		runs:      map[string]reportRun{},
 	}
+	rs.ds = rs.dataSource()
+	return rs
 }
 
 // fakeClickHouse points chQuery at a recorder that returns an empty result set.
