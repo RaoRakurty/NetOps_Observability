@@ -44,6 +44,8 @@ import (
 	"time"
 
 	"netops/backend/chhttp"
+
+	"netops/backend/internal/servicecat"
 )
 
 const (
@@ -103,7 +105,7 @@ func svcRollupInsertSQL(tenant string, sets []svcSelectorSet, from, to time.Time
 		if !isUUIDToken(set.ServiceID) {
 			continue // never interpolate a malformed id (store-sourced, but §3 zero-trust)
 		}
-		cond, ok := buildSelectorCondition(set.Spec)
+		cond, ok := servicecat.BuildSelectorCondition(set.Spec)
 		if !ok {
 			continue // no usable predicate → service stays unattributed (honest)
 		}

@@ -14,13 +14,21 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
+
+	"netops/backend/internal/servicecat"
+
+	"strings"
+
+	"strconv"
 )
 
 // isCIDRToken allows an IPv4 CIDR or bare IPv4 (e.g. 10.0.0.0/8, 192.168.1.1).
 // Shape-validate, never quote-escape (SR-011).
+// isCIDRToken shape-validates an IPv4 CIDR (or bare IPv4) before SQL use
+// (SR-011): mask 0–32 when present, four octets 0–255, no leading zeros.
+// Kept in main for appid_overrides; the servicecat package holds its own copy
+// (duplicated BY COPY from the original — never by recall).
 func isCIDRToken(s string) bool {
 	host, mask, hasMask := strings.Cut(s, "/")
 	if hasMask {
@@ -40,91 +48,6 @@ func isCIDRToken(s string) bool {
 		}
 	}
 	return true
-}
-
-// intList extracts bounded ints from a JSON array value (numbers arrive float64).
-func intList(v any, lo, hi int) []int {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]int, 0, len(arr))
-	for _, e := range arr {
-		var n int
-		switch x := e.(type) {
-		case float64:
-			n = int(x)
-		case string:
-			p, err := strconv.Atoi(x)
-			if err != nil {
-				continue
-			}
-			n = p
-		default:
-			continue
-		}
-		if n >= lo && n <= hi {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-func strList(v any) []string {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, e := range arr {
-		if s, ok := e.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func joinInts(xs []int) string {
-	parts := make([]string, len(xs))
-	for i, x := range xs {
-		parts[i] = strconv.Itoa(x)
-	}
-	return strings.Join(parts, ",")
-}
-
-// buildSelectorCondition turns a selector spec into a ClickHouse boolean over the
-// flows table. Pure + unit-tested. Returns ("", false) when the spec yields no
-// safe predicate (so the caller marks the service unattributed rather than match
-// everything).
-func buildSelectorCondition(spec map[string]any) (string, bool) {
-	var ors []string
-	if ports := intList(spec["ports"], 0, 65535); len(ports) > 0 {
-		ors = append(ors, "dst_port IN ("+joinInts(ports)+")")
-	}
-	for _, c := range strList(spec["dst_prefixes"]) {
-		if isCIDRToken(c) {
-			ors = append(ors, "isIPAddressInRange(dst_addr, '"+c+"')")
-		}
-	}
-	if protos := intList(spec["protocols"], 0, 255); len(protos) > 0 {
-		// netops.flows column is `proto` (goflow2 field name) — `protocol` was a
-		// latent UNKNOWN_IDENTIFIER (#69 P2 fix; svc_rollup_worker reuses this).
-		ors = append(ors, "proto IN ("+joinInts(protos)+")")
-	}
-	if len(ors) == 0 {
-		return "", false
-	}
-	return "(" + strings.Join(ors, " OR ") + ")", true
-}
-
-// flowsServicesScanSQL renders the one-scan attribution query. tenantClause is
-// the addrTenantClauseFor fragment (" AND (src_addr IN … OR dst_addr IN …)" for
-// a scoped principal, "" for cross-tenant) — it bounds the scan because the
-// hybrid flows row policy alone does not isolate untagged rows.
-func flowsServicesScanSQL(sel []string, sinceSec int, tenantClause string) string {
-	return "SELECT " + strings.Join(sel, ", ") +
-		" FROM netops.flows WHERE ts >= now() - INTERVAL " + intToString(sinceSec) + " SECOND" +
-		tenantClause + " FORMAT JSON"
 }
 
 type svcFlowRow struct {
@@ -163,7 +86,7 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 		row := svcFlowRow{ServiceID: sv.ServiceID, Name: sv.Name, Criticality: sv.Criticality}
 		sels, e := s.services.ListSelectors(ctx, tenant, cross, sv.ServiceID)
 		if e == nil && len(sels) > 0 {
-			if cond, has := buildSelectorCondition(sels[0].Spec); has { // sels[0] = latest (version DESC)
+			if cond, has := servicecat.BuildSelectorCondition(sels[0].Spec); has { // sels[0] = latest (version DESC)
 				row.Attributed = true
 				conds = append(conds, cond)
 				idx = append(idx, len(rows))
@@ -185,7 +108,7 @@ func (s *server) handleFlowsServices(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("sumIf(bytes*if(sampling_rate=0,1,sampling_rate), %s) AS b%d", cond, i),
 				fmt.Sprintf("countIf(%s) AS f%d", cond, i))
 		}
-		sql := flowsServicesScanSQL(sel, int(since.Seconds()), tenantClause)
+		sql := servicecat.FlowScanSQL(sel, int(since.Seconds()), tenantClause)
 		res, e := s.chRows(r, sql)
 		if e != nil {
 			writeError(w, http.StatusBadGateway, e)

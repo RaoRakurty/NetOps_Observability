@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/servicecat"
 )
 
 func flowsAppsTestServer(t *testing.T) *server {
@@ -104,7 +106,7 @@ func TestFlowsAppsCrossTenantUnrestricted(t *testing.T) {
 func TestFlowsServicesScanSQLCarriesTenantClause(t *testing.T) {
 	sel := []string{"sumIf(bytes, dst_port IN (443)) AS b0", "countIf(dst_port IN (443)) AS f0"}
 	clause := " AND (src_addr IN ('10.1.0.1') OR dst_addr IN ('10.1.0.1'))"
-	sql := flowsServicesScanSQL(sel, 3600, clause)
+	sql := servicecat.FlowScanSQL(sel, 3600, clause)
 	for _, want := range []string{
 		"FROM netops.flows",
 		"INTERVAL 3600 SECOND",
@@ -115,7 +117,7 @@ func TestFlowsServicesScanSQLCarriesTenantClause(t *testing.T) {
 			t.Errorf("services scan SQL missing %q:\n%s", want, sql)
 		}
 	}
-	if got := flowsServicesScanSQL(sel, 3600, ""); strings.Contains(got, "src_addr IN") {
+	if got := servicecat.FlowScanSQL(sel, 3600, ""); strings.Contains(got, "src_addr IN") {
 		t.Errorf("cross-tenant services scan must not carry an address clause:\n%s", got)
 	}
 }

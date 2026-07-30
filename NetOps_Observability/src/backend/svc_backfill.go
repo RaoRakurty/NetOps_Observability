@@ -37,6 +37,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"netops/backend/internal/servicecat"
 )
 
 const (
@@ -133,7 +135,7 @@ func (s *server) serveSelectorBackfill(w http.ResponseWriter, r *http.Request, s
 		writeError(w, http.StatusNotFound, errors.New("selector version not found"))
 		return
 	}
-	if _, usable := buildSelectorCondition(spec); !usable {
+	if _, usable := servicecat.BuildSelectorCondition(spec); !usable {
 		writeError(w, http.StatusBadRequest, errors.New("selector version has no usable predicate — nothing to attribute"))
 		return
 	}
