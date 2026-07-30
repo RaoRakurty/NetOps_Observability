@@ -197,7 +197,7 @@ password.
 - [ ] Daily backup cron entry
 - [ ] Off-host backup destination configured
 - [ ] System monitoring of the host (CPU, disk, memory) — separate from this stack
-- [ ] Log retention reviewed in compose: `VICTORIA_RETENTION`, `LOKI_RETENTION_PERIOD` (deprecated), ClickHouse TTL, OpenSearch ILM
+- [ ] Log retention reviewed in compose: `VICTORIA_RETENTION`, ClickHouse TTL, OpenSearch ILM
 - [ ] Network ACL: management ports (8000, 514, 2055, 4739, 6343) restricted to known device ranges
 - [ ] `JWT_SECRET` is not the installer-generated default if you've forked the repo
 - [ ] OpenSearch `DISABLE_SECURITY_PLUGIN` flipped to `false` and TLS + auth configured
