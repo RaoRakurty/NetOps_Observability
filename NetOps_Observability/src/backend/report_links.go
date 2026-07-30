@@ -1,115 +1,50 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"html"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/internal/caplink"
 )
 
 // report_links.go — secure-link delivery (delivery_mode="link"). Instead of
 // emailing the report body, the pipeline emails a tamper-proof, short-lived link
 // to a read-only view of the stored artifact. The token is an HMAC over
-// (execution id, expiry) — unguessable and self-validating, so the view endpoint
-// needs no session (it is the capability). This replaces the phase-1 stub that
-// recorded link delivery as "pending" without leaking the body.
+// (execution id, tenant, expiry) — unguessable and self-validating, so the view
+// endpoint needs no session (it is the capability). The crypto and the
+// log-masking algorithm live in internal/caplink (P2 RA.3); this file keeps the
+// secret/env resolution, the route TABLE, the email body and the view handler.
 
-const reportLinkTTL = 7 * 24 * time.Hour
+const reportLinkTTL = caplink.ReportTTL
 
-// ---- capability tokens must never reach a log line -------------------------
-//
-// PIPE-HIGH-2. A report token is a 7-DAY bearer credential for a tenant's
-// report artifact; an export token is the same thing for a raw log export on a
-// 5–15 minute fuse. Both were minted INTO THE URL PATH, and a URL path is the
-// most-copied string in the stack: the Go request log (withLogging) writes
-// r.URL.Path on every request, nginx writes "$request", and both streams land
-// in OpenSearch unredacted. That makes the credential searchable, persisted for
-// the whole retention window, and replayable from any log copy or backup by
-// anyone who can read logs — a strictly larger audience than the recipient the
-// link was minted for.
-//
-// The fix is BOTH halves, because neither alone is sufficient:
-//
-//	(a) a header form — X-Link-Token — so any programmatic client (the SPA, a
-//	    script, a poller) can present the capability WITHOUT putting it in a URL
-//	    at all. Preferred, and the only form that keeps the token out of
-//	    intermediaries we do not control (proxies, browser history, Referer).
-//	    It cannot be the ONLY form: a report link is emailed and clicked in a
-//	    mail client, and a plain browser navigation carries no custom header.
-//	(b) masking at BOTH log boundaries, which is what actually closes the leak
-//	    for the browser case: maskCapabilityTokenPath below for the Go request
-//	    log, and a masked $request in the nginx log_format.
-//
-// Authorization: is deliberately NOT accepted for these routes — the SPA
-// already sends the user's session JWT in that header, and honouring it here
-// would turn every authenticated browser request into a failed link
-// verification (403) on a route that works today.
-const linkTokenHeader = "X-Link-Token" //nolint:gosec // G101 false positive: this is a header NAME, not a credential value
-
-// maskedTokenSegment is what a capability token becomes in a log line. It is
-// deliberately not a fixed-width blob of the same shape as a token: an operator
-// reading the log should see redaction, not a token they might try to use.
-const maskedTokenSegment = "[token-redacted]"
-
-// tokenPathRule marks a URL prefix whose remaining path segments are (or
-// contain) a bearer-equivalent capability token. keep is the number of leading
-// segments after the prefix that are safe to log — everything after them is
-// masked, because when in doubt the safe answer is to redact.
-type tokenPathRule struct {
-	prefix string
-	keep   int
-}
+// linkTokenHeader — see caplink.TokenHeader for why Authorization: is not used.
+const linkTokenHeader = caplink.TokenHeader
 
 // capabilityTokenPaths is the whole set of token-in-path routes this server
 // serves. It is a TABLE rather than two if-statements so the next route that
 // puts a capability in its path inherits the masking by adding one line, which
 // is the difference between fixing an instance and fixing the class.
-var capabilityTokenPaths = []tokenPathRule{
-	{prefix: "/api/reports/view/", keep: 0},         // …/{token}
-	{prefix: "/api/exports/view/", keep: 0},         // …/{token}
-	{prefix: "/api/integrations/webhook/", keep: 1}, // …/{provider}/{token}
-	{prefix: "/api/nms/webhook/", keep: 0},          // …/{token}
+// (PIPE-HIGH-2: masked here for the Go request log, and again in the nginx
+// log_format — both boundaries, because neither alone is sufficient.)
+var capabilityTokenPaths = []caplink.PathRule{
+	{Prefix: "/api/reports/view/", Keep: 0},         // …/{token}
+	{Prefix: "/api/exports/view/", Keep: 0},         // …/{token}
+	{Prefix: "/api/integrations/webhook/", Keep: 1}, // …/{provider}/{token}
+	{Prefix: "/api/nms/webhook/", Keep: 0},          // …/{token}
 }
 
-// maskCapabilityTokenPath returns a path safe to write to a log store: the
-// route survives (so the log is still useful for traffic analysis and error
-// triage), the credential does not. Non-token paths are returned untouched.
+// maskCapabilityTokenPath returns a path safe to write to a log store.
 func maskCapabilityTokenPath(p string) string {
-	for _, rule := range capabilityTokenPaths {
-		if !strings.HasPrefix(p, rule.prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(p, rule.prefix)
-		if rest == "" {
-			return p // no token in the path (header form) — nothing to mask
-		}
-		segs := strings.Split(rest, "/")
-		if len(segs) <= rule.keep {
-			return p // shorter than the safe prefix — nothing sensitive present
-		}
-		out := append([]string{}, segs[:rule.keep]...)
-		return rule.prefix + strings.Join(append(out, maskedTokenSegment), "/")
-	}
-	return p
+	return caplink.MaskTokenPath(p, capabilityTokenPaths)
 }
 
-// linkTokenFromRequest resolves the capability token for a token-authenticated
-// view route: the X-Link-Token header first (the form that never touches a log
-// or a proxy), falling back to the path segment for plain browser navigation
-// from an emailed link. Returns "" when neither is present, which the callers
-// turn into the same "invalid or expired link" refusal as a bad token — an
-// absent capability and a wrong one are indistinguishable to the caller.
+// linkTokenFromRequest resolves the capability token (header form first).
 func linkTokenFromRequest(r *http.Request, pathPrefix string) string {
-	if tok := strings.TrimSpace(r.Header.Get(linkTokenHeader)); tok != "" {
-		return tok
-	}
-	return strings.TrimPrefix(r.URL.Path, pathPrefix)
+	return caplink.TokenFromRequest(r, pathPrefix)
 }
 
 func reportLinkSecret() string {
@@ -123,108 +58,31 @@ func reportLinkSecret() string {
 // SR-018: the tenant is bound INTO the token (like export links) so a leaked
 // token can't be replayed against another tenant's execution id.
 func signReportLink(execID, tenant string, ttl time.Duration) string {
-	exp := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(execID)) + "." + enc([]byte(tenant)) + "." + enc([]byte(exp)) + "." + linkSig(execID, tenant, exp)
-}
-
-func linkSig(execID, tenant, exp string) string {
-	mac := hmac.New(sha256.New, []byte(reportLinkSecret()))
-	mac.Write([]byte("report." + execID + "." + tenant + "." + exp))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return caplink.SignReport(reportLinkSecret(), execID, tenant, ttl)
 }
 
 // verifyReportLink returns (execID, tenant) if the token is well-formed, the
 // signature matches, and it has not expired.
 func verifyReportLink(token string) (string, string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 4 {
-		return "", "", errors.New("malformed token")
-	}
-	idB, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return "", "", err
-	}
-	tenantB, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", "", err
-	}
-	expB, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return "", "", err
-	}
-	execID, tenant, exp := string(idB), string(tenantB), string(expB)
-	if !hmac.Equal([]byte(linkSig(execID, tenant, exp)), []byte(parts[3])) {
-		return "", "", errors.New("bad signature")
-	}
-	expUnix, err := strconv.ParseInt(exp, 10, 64)
-	if err != nil {
-		return "", "", err
-	}
-	if time.Now().Unix() > expUnix {
-		return "", "", errors.New("link expired")
-	}
-	return execID, tenant, nil
+	return caplink.VerifyReport(reportLinkSecret(), token)
 }
 
-// ---- export links --------------------------------------------------------
-//
-// A raw LOG EXPORT is bulk sensitive data (unlike a curated report), and links
-// "may be forwarded externally" — so export links expire in MINUTES (not the
-// report 7-day window) and are bound to BOTH the execution id AND the tenant id,
-// so a leaked token can't be replayed against another tenant's artifact.
-
-// exportLinkTTL is clamped to [5min, 15min] per the hardening policy.
+// exportLinkTTL is clamped to [5min, 15min] per the hardening policy: a raw
+// LOG EXPORT is bulk sensitive data (unlike a curated report), and links "may
+// be forwarded externally".
 func exportLinkTTL() time.Duration {
-	d := envDuration("EXPORT_LINK_TTL", 10*time.Minute)
-	if d < 5*time.Minute {
-		d = 5 * time.Minute
-	}
-	if d > 15*time.Minute {
-		d = 15 * time.Minute
-	}
-	return d
-}
-
-func exportLinkSig(execID, tenant, exp string) string {
-	mac := hmac.New(sha256.New, []byte(reportLinkSecret()))
-	mac.Write([]byte("export." + execID + "." + tenant + "." + exp))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return caplink.ClampExportTTL(envDuration("EXPORT_LINK_TTL", 10*time.Minute))
 }
 
 // signExportLink mints "b64(execID).b64(tenant).b64(expiryUnix).b64(hmac)".
 func signExportLink(execID, tenant string) string {
-	exp := strconv.FormatInt(time.Now().Add(exportLinkTTL()).Unix(), 10)
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(execID)) + "." + enc([]byte(tenant)) + "." + enc([]byte(exp)) + "." + exportLinkSig(execID, tenant, exp)
+	return caplink.SignExport(reportLinkSecret(), execID, tenant, exportLinkTTL())
 }
 
 // verifyExportLink returns (execID, tenant) iff the token is well-formed, the
 // signature matches, and it has not expired.
 func verifyExportLink(token string) (string, string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 4 {
-		return "", "", errors.New("malformed token")
-	}
-	dec := base64.RawURLEncoding.DecodeString
-	idB, e1 := dec(parts[0])
-	tB, e2 := dec(parts[1])
-	expB, e3 := dec(parts[2])
-	if e1 != nil || e2 != nil || e3 != nil {
-		return "", "", errors.New("malformed token")
-	}
-	execID, tenant, exp := string(idB), string(tB), string(expB)
-	if !hmac.Equal([]byte(exportLinkSig(execID, tenant, exp)), []byte(parts[3])) {
-		return "", "", errors.New("bad signature")
-	}
-	expUnix, err := strconv.ParseInt(exp, 10, 64)
-	if err != nil {
-		return "", "", err
-	}
-	if time.Now().Unix() > expUnix {
-		return "", "", errors.New("link expired")
-	}
-	return execID, tenant, nil
+	return caplink.VerifyExport(reportLinkSecret(), token)
 }
 
 // reportViewLink builds the absolute URL recipients click. REPORT_PUBLIC_BASE_URL

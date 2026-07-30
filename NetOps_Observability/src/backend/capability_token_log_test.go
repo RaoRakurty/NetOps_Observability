@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"netops/backend/internal/applog"
+	"netops/backend/internal/caplink"
 	"netops/backend/reports"
 )
 
@@ -85,8 +85,8 @@ func TestCapabilityTokenIsNotWrittenToTheRequestLog(t *testing.T) {
 				}
 			}
 			// …and the line must still be useful for triage.
-			if !strings.Contains(line, maskedTokenSegment) {
-				t.Errorf("expected the masked marker %q in the log line:\n%s", maskedTokenSegment, line)
+			if !strings.Contains(line, caplink.MaskedTokenSegment) {
+				t.Errorf("expected the masked marker %q in the log line:\n%s", caplink.MaskedTokenSegment, line)
 			}
 			if !strings.Contains(line, tc.route) {
 				t.Errorf("the route %q was lost from the log line — masking must keep the path useful for triage:\n%s", tc.route, line)
@@ -118,12 +118,12 @@ func TestCapabilityTokenInAHeaderIsNeverLoggedAtAll(t *testing.T) {
 // blind the request log for the whole API).
 func TestMaskCapabilityTokenPath(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"/api/reports/view/AAAA.BBBB.CCCC.DDDD", "/api/reports/view/" + maskedTokenSegment},
-		{"/api/exports/view/AAAA.BBBB.CCCC.DDDD", "/api/exports/view/" + maskedTokenSegment},
+		{"/api/reports/view/AAAA.BBBB.CCCC.DDDD", "/api/reports/view/" + caplink.MaskedTokenSegment},
+		{"/api/exports/view/AAAA.BBBB.CCCC.DDDD", "/api/exports/view/" + caplink.MaskedTokenSegment},
 		// The webhook routes are the same class: an opaque, long-lived path token.
 		// The provider segment is safe and stays (it is what makes the line useful).
-		{"/api/nms/webhook/opaque-token-123", "/api/nms/webhook/" + maskedTokenSegment},
-		{"/api/integrations/webhook/servicenow/opaque-token-123", "/api/integrations/webhook/servicenow/" + maskedTokenSegment},
+		{"/api/nms/webhook/opaque-token-123", "/api/nms/webhook/" + caplink.MaskedTokenSegment},
+		{"/api/integrations/webhook/servicenow/opaque-token-123", "/api/integrations/webhook/servicenow/" + caplink.MaskedTokenSegment},
 		// Header form / bare prefix — nothing to mask.
 		{"/api/reports/view/", "/api/reports/view/"},
 		// Everything else is untouched.
@@ -234,13 +234,12 @@ func TestExportLinkStillAuthorizesAfterTokenRelocation(t *testing.T) {
 }
 
 // staleExportToken mints a correctly-SIGNED export token whose expiry is in the
-// past. It has to be built by hand because signExportLink clamps the TTL to a
-// 5-minute minimum — the point is to prove that a valid signature alone does
-// not authorize once the clock has passed the embedded expiry.
+// past. It bypasses signExportLink because that clamps the TTL to a 5-minute
+// minimum — the point is to prove that a valid signature alone does not
+// authorize once the clock has passed the embedded expiry. The package signer
+// takes the TTL verbatim, so a negative TTL yields an already-expired token.
 func staleExportToken(execID, tenant string) string {
-	exp := "1000000000" // 2001-09-09
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(execID)) + "." + enc([]byte(tenant)) + "." + enc([]byte(exp)) + "." + exportLinkSig(execID, tenant, exp)
+	return caplink.SignExport(reportLinkSecret(), execID, tenant, -24*time.Hour)
 }
 
 // ---- the other log boundary: nginx -----------------------------------------
