@@ -22,7 +22,7 @@ func TestCopilotConfigEnvFallbackDefaults(t *testing.T) {
 	t.Setenv("COPILOT_PROVIDER", "")
 	t.Setenv("COPILOT_MODEL", "")
 	s := copilotTempStore(t)
-	got := s.get()
+	got := s.Get()
 	if got.Provider != "anthropic" {
 		t.Fatalf("default provider = %q, want anthropic", got.Provider)
 	}
@@ -32,7 +32,7 @@ func TestCopilotConfigEnvFallbackDefaults(t *testing.T) {
 
 	t.Setenv("COPILOT_PROVIDER", "OpenAI")
 	t.Setenv("COPILOT_MODEL", "gpt-4o")
-	got = s.get()
+	got = s.Get()
 	if got.Provider != "openai" { // env provider is lower-cased on read
 		t.Fatalf("env provider = %q, want openai", got.Provider)
 	}
@@ -62,7 +62,7 @@ func TestCopilotConfigProviderNormalization(t *testing.T) {
 	}
 	for _, c := range cases {
 		s := copilotTempStore(t)
-		out := s.set(copilotConfig{Provider: c.in, Model: "m"})
+		out := s.Set(copilotConfig{Provider: c.in, Model: "m"})
 		if out.Provider != c.want {
 			t.Errorf("set(provider=%q).Provider = %q, want %q", c.in, out.Provider, c.want)
 		}
@@ -75,7 +75,7 @@ func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
 	s := newCopilotConfigStore(path, nil)
 
-	out := s.set(copilotConfig{Provider: "openai", Model: "  gpt-4o  ", System: "  be terse  "})
+	out := s.Set(copilotConfig{Provider: "openai", Model: "  gpt-4o  ", System: "  be terse  "})
 	if out.Model != "gpt-4o" {
 		t.Fatalf("model not trimmed: %q", out.Model)
 	}
@@ -83,13 +83,13 @@ func TestCopilotConfigSetGetPersistAndReload(t *testing.T) {
 		t.Fatalf("system not trimmed: %q", out.System)
 	}
 
-	got := s.get()
+	got := s.Get()
 	if got != out {
 		t.Fatalf("get() = %+v, want %+v", got, out)
 	}
 
 	reloaded := newCopilotConfigStore(path, nil)
-	if r := reloaded.get(); r != out {
+	if r := reloaded.Get(); r != out {
 		t.Fatalf("reloaded get() = %+v, want %+v", r, out)
 	}
 }
@@ -101,7 +101,7 @@ func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 	t.Setenv("COPILOT_API_KEY", "sk-super-secret-should-not-be-stored")
 	path := filepath.Join(t.TempDir(), "copilot_config.json")
 	s := newCopilotConfigStore(path, nil)
-	s.set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", System: "hi"})
+	s.Set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", System: "hi"})
 
 	raw, err := platformdb.Load(path)
 	if err != nil {
@@ -128,16 +128,16 @@ func TestCopilotConfigNeverPersistsAPIKey(t *testing.T) {
 // blank key preserves it (the redacted form never round-trips the secret).
 func TestCopilotConfigKeyStoreAndPreserve(t *testing.T) {
 	s := copilotTempStore(t)
-	if s.apiKey() != "" {
-		t.Fatalf("fresh store apiKey = %q, want empty", s.apiKey())
+	if s.APIKey() != "" {
+		t.Fatalf("fresh store apiKey = %q, want empty", s.APIKey())
 	}
-	s.set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", Key: "sk-ui-key"})
-	if got := s.apiKey(); got != "sk-ui-key" {
+	s.Set(copilotConfig{Provider: "anthropic", Model: "claude-opus-4-8", Key: "sk-ui-key"})
+	if got := s.APIKey(); got != "sk-ui-key" {
 		t.Fatalf("apiKey after set = %q, want sk-ui-key", got)
 	}
 	// Save settings again WITHOUT a key (blank) — must keep the stored key.
-	s.set(copilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6"})
-	if got := s.apiKey(); got != "sk-ui-key" {
+	s.Set(copilotConfig{Provider: "anthropic", Model: "claude-sonnet-4-6"})
+	if got := s.APIKey(); got != "sk-ui-key" {
 		t.Fatalf("apiKey after blank re-save = %q, want preserved sk-ui-key", got)
 	}
 }
@@ -148,7 +148,7 @@ func TestCopilotConfigLoadMissingFileIsClean(t *testing.T) {
 	t.Setenv("COPILOT_PROVIDER", "")
 	t.Setenv("COPILOT_MODEL", "")
 	s := newCopilotConfigStore(filepath.Join(t.TempDir(), "does-not-exist.json"), nil)
-	got := s.get()
+	got := s.Get()
 	if got.Provider != "anthropic" || got.Model != "claude-sonnet-4-6" {
 		t.Fatalf("missing-file load did not fall back to defaults: %+v", got)
 	}

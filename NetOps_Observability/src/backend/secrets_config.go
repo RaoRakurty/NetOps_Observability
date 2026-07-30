@@ -30,16 +30,8 @@ const (
 	fieldLDAPBindPass    = "ldap.bind_password" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldTACACSSecret    = "tacacs.secret"
 	fieldNetboxToken     = "netbox.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
-	fieldCopilotKey      = "copilot.apikey"      // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldDiscoveryComm   = "discovery.community" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 )
-
-// mapCopilot transforms the assistant's provider API key (platform DEK).
-func mapCopilot(c copilotConfig, f secretXform) (copilotConfig, error) {
-	var e error
-	c.Key, e = f("", fieldCopilotKey, c.Key)
-	return c, e
-}
 
 // mapNetbox transforms the NetBox config's API token (platform DEK).
 func mapNetbox(c netboxConfig, f secretXform) (netboxConfig, error) {

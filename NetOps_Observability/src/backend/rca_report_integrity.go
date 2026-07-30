@@ -27,7 +27,6 @@ type (
 	rcaRevisionStore  = rca.RevisionStore
 )
 
-
 func newRcaRevisionStore(path string) *rcaRevisionStore { return rca.NewRevisionStore(path) }
 
 func rcaRevisionsPath() string {

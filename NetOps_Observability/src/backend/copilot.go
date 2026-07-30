@@ -61,7 +61,7 @@ type (
 func (s *server) copilotSystemPrompt() string {
 	persona := ai.DefaultSystemPrompt()
 	if s.copilotCfg != nil {
-		if sys := strings.TrimSpace(s.copilotCfg.get().System); sys != "" {
+		if sys := strings.TrimSpace(s.copilotCfg.Get().System); sys != "" {
 			persona = sys
 		}
 	}

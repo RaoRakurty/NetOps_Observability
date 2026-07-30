@@ -102,8 +102,8 @@ func (s *server) providerCandidates(claims jwtClaims) []providerCandidate {
 			return nil
 		}
 	}
-	storedKey := s.copilotCfg.apiKey()
-	cfg := s.copilotCfg.get()
+	storedKey := s.copilotCfg.APIKey()
+	cfg := s.copilotCfg.Get()
 	var out []providerCandidate
 	for _, name := range copilotProviderChain() {
 		key := providerKey(name)
