@@ -17,6 +17,8 @@ import (
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
 	"netops/backend/models"
+
+	"netops/backend/internal/searchrank"
 )
 
 func TestSearchRank(t *testing.T) {
@@ -33,8 +35,8 @@ func TestSearchRank(t *testing.T) {
 		{"edge", []string{"", "EDGE-ROUTER"}, 1},        // case-fold, empty skipped
 	}
 	for _, c := range cases {
-		if got := searchRank(c.q, c.fields...); got != c.want {
-			t.Errorf("searchRank(%q, %v) = %d, want %d", c.q, c.fields, got, c.want)
+		if got := searchrank.Rank(c.q, c.fields...); got != c.want {
+			t.Errorf("searchrank.Rank(%q, %v) = %d, want %d", c.q, c.fields, got, c.want)
 		}
 	}
 }
@@ -51,8 +53,8 @@ func TestCaseSearchHex(t *testing.T) {
 		{"P-5564D1; DROP TABLE x", ""}, // injection-shaped input rejected
 	}
 	for _, c := range cases {
-		if got := caseSearchHex(c.in); got != c.want {
-			t.Errorf("caseSearchHex(%q) = %q, want %q", c.in, got, c.want)
+		if got := searchrank.CaseHex(c.in); got != c.want {
+			t.Errorf("searchrank.CaseHex(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -106,7 +108,7 @@ func mustCreateConnector(t *testing.T, s *server, tenant, id, name, scopeRef, sc
 	}
 }
 
-func searchGet(t *testing.T, s *server, q string, claims jwtClaims) []searchHit {
+func searchGet(t *testing.T, s *server, q string, claims jwtClaims) []searchrank.Hit {
 	t.Helper()
 	w := httptest.NewRecorder()
 	s.handleUnifiedSearch(w, req(http.MethodGet, "/api/search?q="+q, "", claims))
@@ -114,7 +116,7 @@ func searchGet(t *testing.T, s *server, q string, claims jwtClaims) []searchHit 
 		t.Fatalf("GET /api/search?q=%s = %d (body %s)", q, w.Code, w.Body.String())
 	}
 	var resp struct {
-		Results []searchHit `json:"results"`
+		Results []searchrank.Hit `json:"results"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -160,7 +162,7 @@ func TestUnifiedSearchKindsAndHrefs(t *testing.T) {
 	fakeCH(t)
 	s := searchTestServer(t)
 	got := searchGet(t, s, "checkout", acme())
-	byKind := map[string]searchHit{}
+	byKind := map[string]searchrank.Hit{}
 	for _, h := range got {
 		if _, ok := byKind[h.Kind]; !ok {
 			byKind[h.Kind] = h
@@ -190,7 +192,7 @@ func TestUnifiedSearchKindsAndHrefs(t *testing.T) {
 func TestUnifiedSearchPerKindCap(t *testing.T) {
 	fakeCH(t)
 	s := searchTestServer(t)
-	for i := 0; i < searchPerKindCap*2; i++ {
+	for i := 0; i < searchrank.PerKindCap*2; i++ {
 		s.discovery.Upsert(models.Device{ID: fmt.Sprintf("edge-%02d", i), Name: fmt.Sprintf("edge-%02d", i), Address: fmt.Sprintf("10.1.7.%d", i), TenantID: "acme"})
 	}
 	got := searchGet(t, s, "edge", acme())
@@ -200,8 +202,8 @@ func TestUnifiedSearchPerKindCap(t *testing.T) {
 			devices++
 		}
 	}
-	if devices != searchPerKindCap {
-		t.Fatalf("device hits = %d, want per-kind cap %d", devices, searchPerKindCap)
+	if devices != searchrank.PerKindCap {
+		t.Fatalf("device hits = %d, want per-kind cap %d", devices, searchrank.PerKindCap)
 	}
 }
 

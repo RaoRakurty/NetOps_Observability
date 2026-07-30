@@ -29,102 +29,13 @@ import (
 	"netops/backend/internal/noclabel"
 	"sort"
 	"strings"
-	"time"
 
 	"netops/backend/cloud"
 	"netops/backend/cloudconn"
+
+	"netops/backend/internal/searchrank"
 )
 
-const (
-	searchMinQueryLen = 2
-	searchMaxQueryLen = 128
-	searchPerKindCap  = 8
-	searchTotalCap    = 32
-	searchTimeout     = 2 * time.Second
-)
-
-// searchHit is one typed, deep-linkable result. Href is the SPA hash route
-// (without the leading "#/") — the UI navigates, it never interprets the id.
-type searchHit struct {
-	Kind     string `json:"kind"` // device | resource | app | account | case
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Sublabel string `json:"sublabel,omitempty"`
-	Href     string `json:"href"`
-}
-
-// scoredHit carries the internal rank so the handler can order before writing.
-type scoredHit struct {
-	searchHit
-	rank int
-}
-
-// searchKindOrder fixes the tie-break order between kinds (infrastructure
-// first, then the cloud nouns, then cases).
-var searchKindOrder = map[string]int{"device": 0, "resource": 1, "app": 2, "account": 3, "case": 4}
-
-// searchRank scores a query against a candidate's fields: 0 exact (case-fold),
-// 1 prefix, 2 substring, -1 no match. q must already be lowercased.
-func searchRank(q string, fields ...string) int {
-	best := -1
-	for _, f := range fields {
-		if f == "" {
-			continue
-		}
-		lf := strings.ToLower(f)
-		var r int
-		switch {
-		case lf == q:
-			r = 0
-		case strings.HasPrefix(lf, q):
-			r = 1
-		case strings.Contains(lf, q):
-			r = 2
-		default:
-			continue
-		}
-		if best == -1 || r < best {
-			best = r
-		}
-		if best == 0 {
-			return 0
-		}
-	}
-	return best
-}
-
-// caseSearchHex extracts the hex prefix a case-id query addresses, or "" when
-// the query does not look like a case handle. Accepted: "P-5564D1" (any prefix
-// of the display id, ≥2 hex) or a bare hex/UUID prefix of ≥4 chars ("5564d1a0",
-// "5564d1a0-…"). The result is UPPERCASE HEX ONLY — safe to inline in SQL.
-func caseSearchHex(q string) string {
-	s := strings.ToUpper(strings.TrimSpace(q))
-	explicit := false
-	if strings.HasPrefix(s, "P-") {
-		explicit = true
-		s = s[2:]
-	}
-	s = strings.ReplaceAll(s, "-", "") // tolerate UUID dashes
-	if s == "" || len(s) > 32 {
-		return ""
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F') {
-			return ""
-		}
-	}
-	if !explicit && len(s) < 4 {
-		return "" // a 2-char bare hex ("ab") is almost never a case lookup
-	}
-	if explicit && len(s) < 2 {
-		return ""
-	}
-	return s
-}
-
-// handleUnifiedSearch is GET /api/search?q=… — see the file header for scope,
-// bounds and ranking. Gated like every surface it fans out to
-// (infrastructure:read); each sub-search re-applies the principal's tenant.
 func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "GET only", "method_not_allowed")
@@ -135,20 +46,20 @@ func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if len(q) > searchMaxQueryLen {
-		q = q[:searchMaxQueryLen]
+	if len(q) > searchrank.MaxQueryLen {
+		q = q[:searchrank.MaxQueryLen]
 	}
-	if len(q) < searchMinQueryLen {
-		writeJSON(w, http.StatusOK, map[string]any{"query": q, "results": []searchHit{}})
+	if len(q) < searchrank.MinQueryLen {
+		writeJSON(w, http.StatusOK, map[string]any{"query": q, "results": []searchrank.Hit{}})
 		return
 	}
 	lq := strings.ToLower(q)
 
-	ctx, cancel := context.WithTimeout(r.Context(), searchTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), searchrank.Timeout)
 	defer cancel()
 	tenant, cross := principalTenant(claims)
 
-	var hits []scoredHit
+	var hits []searchrank.ScoredHit
 	hits = append(hits, s.searchDevices(claims, lq)...)
 	res, apps := s.searchCloud(ctx, tenant, cross, lq)
 	hits = append(hits, res...)
@@ -157,29 +68,29 @@ func (s *server) handleUnifiedSearch(w http.ResponseWriter, r *http.Request) {
 	hits = append(hits, s.searchCases(ctx, chTenantScope(r), q)...)
 
 	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].rank != hits[j].rank {
-			return hits[i].rank < hits[j].rank
+		if hits[i].RankScore != hits[j].RankScore {
+			return hits[i].RankScore < hits[j].RankScore
 		}
-		if ko, kp := searchKindOrder[hits[i].Kind], searchKindOrder[hits[j].Kind]; ko != kp {
+		if ko, kp := searchrank.KindOrder[hits[i].Kind], searchrank.KindOrder[hits[j].Kind]; ko != kp {
 			return ko < kp
 		}
 		return hits[i].Label < hits[j].Label
 	})
-	if len(hits) > searchTotalCap {
-		hits = hits[:searchTotalCap]
+	if len(hits) > searchrank.TotalCap {
+		hits = hits[:searchrank.TotalCap]
 	}
-	out := make([]searchHit, 0, len(hits))
+	out := make([]searchrank.Hit, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, h.searchHit)
+		out = append(out, h.Hit)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"query": q, "results": out})
 }
 
 // searchDevices matches the principal-visible device inventory by name/id/IP.
-func (s *server) searchDevices(claims jwtClaims, lq string) []scoredHit {
-	var out []scoredHit
+func (s *server) searchDevices(claims jwtClaims, lq string) []searchrank.ScoredHit {
+	var out []searchrank.ScoredHit
 	for _, d := range visibleDevices(s.discovery.Devices(), claims) {
-		rank := searchRank(lq, d.Name, d.ID, d.Address)
+		rank := searchrank.Rank(lq, d.Name, d.ID, d.Address)
 		if rank < 0 {
 			continue
 		}
@@ -190,20 +101,20 @@ func (s *server) searchDevices(claims jwtClaims, lq string) []scoredHit {
 		label := firstNonEmpty(d.Name, d.ID)
 		// The Devices page supports ?q= (pre-filters the table to the entity) —
 		// the same deep-link Command Center's impacted-entities list uses.
-		out = append(out, scoredHit{searchHit{
+		out = append(out, searchrank.ScoredHit{Hit: searchrank.Hit{
 			Kind:     "device",
 			ID:       d.ID,
 			Label:    label,
 			Sublabel: sub,
 			Href:     "infrastructure/devices?q=" + url.QueryEscape(label),
-		}, rank})
+		}, RankScore: rank})
 	}
-	return capKind(out)
+	return searchrank.CapKind(out)
 }
 
 // searchCloud matches the tenant's cloud inventory (name / id / IPs / URI) and
 // the app registry derived from it. One store read serves both kinds.
-func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq string) (resources, apps []scoredHit) {
+func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq string) (resources, apps []searchrank.ScoredHit) {
 	if s.cloud == nil {
 		return nil, nil
 	}
@@ -215,7 +126,7 @@ func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq 
 	for _, cr := range res {
 		fields := append([]string{cr.ResourceName, cr.ResourceID, cr.ResourceURI}, cr.PrivateIPs...)
 		fields = append(fields, cr.PublicIPs...)
-		rank := searchRank(lq, fields...)
+		rank := searchrank.Rank(lq, fields...)
 		if rank < 0 {
 			continue
 		}
@@ -226,36 +137,36 @@ func (s *server) searchCloud(ctx context.Context, tenant string, cross bool, lq 
 		if cr.ResourceType != "" {
 			sub += " · " + cr.ResourceType
 		}
-		resources = append(resources, scoredHit{searchHit{
+		resources = append(resources, searchrank.ScoredHit{Hit: searchrank.Hit{
 			Kind:     "resource",
 			ID:       cr.ResourceID,
 			Label:    firstNonEmpty(cr.ResourceName, cr.ResourceID),
 			Sublabel: sub,
 			Href:     "resource/cloud/" + url.PathEscape(cr.ResourceID),
-		}, rank})
+		}, RankScore: rank})
 	}
 	for _, a := range cloud.DeriveApps(res) {
-		rank := searchRank(lq, a.AppName, a.AppID)
+		rank := searchrank.Rank(lq, a.AppName, a.AppID)
 		if rank < 0 {
 			continue
 		}
-		sub := strings.TrimSpace(strings.Join(nonEmpty(a.Owner, a.Env, string(a.Provider)), " · "))
+		sub := strings.TrimSpace(strings.Join(searchrank.NonEmpty(a.Owner, a.Env, string(a.Provider)), " · "))
 		// Service View › Services tab (no per-app URL param exists yet — the
 		// tab lists the tenant's services; see the Wave 6 #20 gap note).
-		apps = append(apps, scoredHit{searchHit{
+		apps = append(apps, searchrank.ScoredHit{Hit: searchrank.Hit{
 			Kind:     "app",
 			ID:       a.AppID,
 			Label:    firstNonEmpty(a.AppName, a.AppID),
 			Sublabel: sub,
 			Href:     "monitoring/appobs/services",
-		}, rank})
+		}, RankScore: rank})
 	}
-	return capKind(resources), capKind(apps)
+	return searchrank.CapKind(resources), searchrank.CapKind(apps)
 }
 
 // searchAccounts matches the tenant's onboarded provider accounts /
 // subscriptions / projects — the connector collection scopes.
-func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, lq string) []scoredHit {
+func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, lq string) []searchrank.ScoredHit {
 	if s.cloudConn == nil {
 		return nil
 	}
@@ -270,7 +181,7 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 		return nil
 	}
 	seen := map[string]bool{}
-	var out []scoredHit
+	var out []searchrank.ScoredHit
 	for _, c := range conns {
 		for _, sc := range c.Scopes {
 			switch sc.Type {
@@ -282,29 +193,29 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 			if seen[key] {
 				continue
 			}
-			rank := searchRank(lq, sc.Display, sc.Ref)
+			rank := searchrank.Rank(lq, sc.Display, sc.Ref)
 			if rank < 0 {
 				continue
 			}
 			seen[key] = true
-			out = append(out, scoredHit{searchHit{
+			out = append(out, searchrank.ScoredHit{Hit: searchrank.Hit{
 				Kind:     "account",
 				ID:       sc.Ref,
 				Label:    firstNonEmpty(sc.Display, sc.Ref),
 				Sublabel: strings.TrimSpace(string(c.Provider) + " " + string(sc.Type) + " · " + c.DisplayName),
 				Href:     "monitoring/appobs/resources?account=" + url.QueryEscape(sc.Ref),
-			}, rank})
+			}, RankScore: rank})
 		}
 	}
-	return capKind(out)
+	return searchrank.CapKind(out)
 }
 
 // searchCases resolves a case-handle query (P-XXXXXX / uuid prefix) against the
 // caller's correlation objects. Tenant isolation is the corr_current ClickHouse
 // row policy (tenant_scope), same as every correlations read. Best-effort: a
 // storage error degrades this kind only.
-func (s *server) searchCases(ctx context.Context, scope, q string) []scoredHit {
-	hex := caseSearchHex(q)
+func (s *server) searchCases(ctx context.Context, scope, q string) []searchrank.ScoredHit {
+	hex := searchrank.CaseHex(q)
 	if hex == "" {
 		return nil
 	}
@@ -314,13 +225,13 @@ SELECT toString(correlation_id) AS id, state, top_hypothesis
   FROM netops.corr_current FINAL
  WHERE startsWith(upper(replaceAll(toString(correlation_id), '-', '')), '` + hex + `')
  ORDER BY created_at DESC
- LIMIT ` + intToString(searchPerKindCap)
+ LIMIT ` + intToString(searchrank.PerKindCap)
 	rows, err := s.chRowsScope(ctx, scope, sql, "api:/api/search")
 	if err != nil {
 		log.Printf("search: case lookup unavailable: %v", err)
 		return nil
 	}
-	var out []scoredHit
+	var out []searchrank.ScoredHit
 	for _, row := range rows {
 		id := str(row["id"])
 		if id == "" {
@@ -333,37 +244,15 @@ SELECT toString(correlation_id) AS id, state, top_hypothesis
 		if len(hex) >= 6 {
 			rank = 0
 		}
-		out = append(out, scoredHit{searchHit{
+		out = append(out, searchrank.ScoredHit{Hit: searchrank.Hit{
 			Kind:     "case",
 			ID:       id,
 			Label:    disp,
 			Sublabel: strings.TrimSpace(str(row["state"]) + " · " + str(row["top_hypothesis"])),
 			Href:     "monitoring/correlations?id=" + url.QueryEscape(id),
-		}, rank})
+		}, RankScore: rank})
 	}
 	return out
 }
 
 // capKind orders one kind's hits (rank, then label) and applies the per-kind cap.
-func capKind(hits []scoredHit) []scoredHit {
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].rank != hits[j].rank {
-			return hits[i].rank < hits[j].rank
-		}
-		return hits[i].Label < hits[j].Label
-	})
-	if len(hits) > searchPerKindCap {
-		hits = hits[:searchPerKindCap]
-	}
-	return hits
-}
-
-func nonEmpty(vals ...string) []string {
-	out := make([]string, 0, len(vals))
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			out = append(out, v)
-		}
-	}
-	return out
-}
