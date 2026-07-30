@@ -15,131 +15,31 @@ package main
 // the catalog is empty and every resolve is the honest first-class "unknown".
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"netops/backend/appid"
 )
 
 // appCatalogHolder carries the current catalog behind an atomic pointer for
 // lock-free reads + atomic reload.
-type appCatalogHolder struct {
-	cur      atomic.Pointer[appid.Catalog]
-	dom      atomic.Pointer[appid.DomainIndex] // global domain matcher (#81 P2, from M365 urls)
-	feedsDir string
-}
+// The catalog holder moved to appid/catalog_holder.go (Phase-2 W4.7).
+type appCatalogHolder = appid.CatalogHolder
 
 func newAppCatalogHolder() *appCatalogHolder {
-	h := &appCatalogHolder{feedsDir: os.Getenv("APPID_FEEDS_DIR")}
-	h.cur.Store(appid.NewCatalog(nil)) // empty until loaded; resolve is safe + unknown
-	h.dom.Store(appid.NewDomainIndex())
-	return h
+	return appid.NewCatalogHolder(os.Getenv("APPID_FEEDS_DIR"))
 }
 
-func (h *appCatalogHolder) get() *appid.Catalog         { return h.cur.Load() }
-func (h *appCatalogHolder) domains() *appid.DomainIndex { return h.dom.Load() }
-
-// feedParsers maps a snapshot filename to its parser.
-var feedParsers = []struct {
-	file  string
-	parse func([]byte) ([]appid.CatalogEntry, error)
-}{
-	{"aws.json", appid.ParseAWS},
-	{"azure.json", appid.ParseAzure},
-	{"gcp.json", appid.ParseGCP},
-	{"m365.json", appid.ParseM365},
-}
-
-// reload rebuilds the catalog from the snapshot dir and swaps it in. Missing or
-// unparseable files are skipped (best-effort, offline-safe); returns the new size.
-// A per-file error is logged via the returned slice, never fatal.
-func (h *appCatalogHolder) reload() (int, []error) {
-	if h.feedsDir == "" {
-		return 0, nil
-	}
-	var entries []appid.CatalogEntry
-	var errs []error
-	for _, fp := range feedParsers {
-		raw, err := os.ReadFile(filepath.Join(h.feedsDir, fp.file))
-		if err != nil {
-			continue // feed not present — fine
-		}
-		es, perr := fp.parse(raw)
-		if perr != nil {
-			errs = append(errs, perr)
-			continue
-		}
-		entries = append(entries, es...)
-	}
-	cat := appid.NewCatalog(entries)
-	h.cur.Store(cat)
-	// #81 P2: build the global domain matcher from the M365 endpoints feed's urls[].
-	di := appid.NewDomainIndex()
-	if raw, err := os.ReadFile(filepath.Join(h.feedsDir, "m365.json")); err == nil {
-		if des, e := appid.M365Domains(raw); e == nil {
-			for _, de := range des {
-				di.Add(de.Pattern, de.App, appid.SrcDNS, 0) // a domain is a strong signal
-			}
-		}
-	}
-	h.dom.Store(di)
-	return cat.Size(), errs
-}
-
-// startRefresh periodically re-reads the snapshot dir and hot-swaps the catalog,
-// so an out-of-band feed refresh (cron running fetch-appid-feeds.sh) is picked up
-// without an API restart. No-op unless feeds are configured. Interval from
-// APPID_REFRESH_MINUTES (default 360 = 6h; ≤0 disables). The initial load already
-// happened synchronously in newServer.
-func (h *appCatalogHolder) startRefresh(ctx context.Context) {
-	if h.feedsDir == "" {
-		return
-	}
-	mins := envInt("APPID_REFRESH_MINUTES", 360)
-	if mins <= 0 {
-		return
-	}
-	go func() {
-		t := time.NewTicker(time.Duration(mins) * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				n, errs := h.reload()
-				if len(errs) > 0 {
-					log.Printf("appid: refreshed catalog to %d prefixes (%d feed errors)", n, len(errs))
-				}
-			}
-		}
-	}()
-}
-
-// ── handlers ──────────────────────────────────────────────────────────────────
-
-// keyAppSignals gathers every identification signal for one record key. An IP
-// key consults the global vendor catalog + the tenant's operator prefix
-// overrides; ANY key (IP, ENI, cloud resource id, …) additionally consults the
-// NGFW app-id and cloud identity-map resolvers, which match exact keys. This is
-// the ONE gather path shared by the single resolve, batch resolve and feed
-// enrichment — a new source added here lands everywhere at once (#81 P3G).
-// Nil-safe on every optional subsystem; tenant-scoped default-closed.
 func (s *server) keyAppSignals(tenant string, cross bool, ov tenantOverrides, key string) []appid.Signal {
 	var signals []appid.Signal
 	if ip, err := netip.ParseAddr(key); err == nil {
 		if s.appCatalog != nil {
-			signals = append(signals, s.appCatalog.get().SignalsFor(ip)...)
+			signals = append(signals, s.appCatalog.Get().SignalsFor(ip)...)
 		}
 		signals = append(signals, ov.prefixes.SignalsFor(ip)...)
 	}
@@ -190,7 +90,7 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 		signals = append(signals, s.keyAppSignals(tenant, cross, ov, ipStr)...)
 	}
 	if domain != "" {
-		signals = append(signals, s.appCatalog.domains().SignalsFor(domain)...)
+		signals = append(signals, s.appCatalog.Domains().SignalsFor(domain)...)
 		signals = append(signals, ov.domains.SignalsFor(domain)...)
 	}
 	// Per-tenant attribution precedence (Wave 4 #11 slice 3): a tenant's
@@ -331,9 +231,9 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"attribution_precedence": order,
 		"precedence_is_default":  !customOrder,
-		"feeds_configured":       s.appCatalog.feedsDir != "",
-		"catalog_prefixes":       s.appCatalog.get().Size(),
-		"catalog_domains":        s.appCatalog.domains().Size(),
+		"feeds_configured":       s.appCatalog.FeedsDir() != "",
+		"catalog_prefixes":       s.appCatalog.Get().Size(),
+		"catalog_domains":        s.appCatalog.Domains().Size(),
 		"ngfw_attributions":      s.ngfw.count(),
 		"cloud_attributions":     s.cloudApp.count(),
 		"tenant_overrides":       total,

@@ -633,8 +633,8 @@ func newServer() *server {
 	srv.cloudApp = newCloudAppResolver(srv.cloud)           // Cloud identity-map → appid bridge (#81 P3F+1)
 	srv.pathGraph = newPathGraphStore()                     // Service Path Graph storage (contract v1); ingester starts in main()
 	srv.remotePaths = newRemotePathStore()                  // remote-vantage path pushes (the LAN vantage's transport)
-	if n, errs := srv.appCatalog.reload(); srv.appCatalog.feedsDir != "" {
-		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.feedsDir, len(errs))
+	if n, errs := srv.appCatalog.Reload(); srv.appCatalog.FeedsDir() != "" {
+		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.FeedsDir(), len(errs))
 	}
 	srv.incMetrics = &incidentMetrics{}
 	// Integration platform (#43): persistence is Postgres-only; the provider
@@ -1132,7 +1132,7 @@ func main() {
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
 	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.
-	srv.appCatalog.startRefresh(ctx)
+	srv.appCatalog.StartRefresh(ctx, time.Duration(envInt("APPID_REFRESH_MINUTES", 360))*time.Minute)
 	// NGFW app-id overlay refresh (#81 P-NGFW pt2): aggregate firewall app-id events
 	// from OpenSearch into the resolver. Harmless empty map if no firewall onboarded.
 	srv.ngfw.startRefresh(ctx)

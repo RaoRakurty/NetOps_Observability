@@ -27,9 +27,8 @@ func TestAppIDResolveEndpoint(t *testing.T) {
 		[]byte(`{"prefixes":[{"ip_prefix":"52.94.0.0/22","service":"S3"}]}`), 0o600))
 
 	// the harness builds the struct directly, so wire the holder here (like s.sites).
-	s.appCatalog = &appCatalogHolder{feedsDir: dir}
-	s.appCatalog.cur.Store(appid.NewCatalog(nil))
-	if n, errs := s.appCatalog.reload(); n != 2 || len(errs) != 0 {
+	s.appCatalog = appid.NewCatalogHolder(dir)
+	if n, errs := s.appCatalog.Reload(); n != 2 || len(errs) != 0 {
 		t.Fatalf("reload loaded %d prefixes, errs=%v", n, errs)
 	}
 
@@ -81,12 +80,11 @@ func TestAppIDResolveEndpoint(t *testing.T) {
 }
 
 func TestAppCatalogEmptyDirIsSafe(t *testing.T) {
-	h := &appCatalogHolder{} // no feedsDir
-	h.cur.Store(appid.NewCatalog(nil))
-	if n, errs := h.reload(); n != 0 || errs != nil {
+	h := appid.NewCatalogHolder("") // no feedsDir
+	if n, errs := h.Reload(); n != 0 || errs != nil {
 		t.Fatalf("empty holder reload should be a no-op, got n=%d errs=%v", n, errs)
 	}
-	if v := h.get().Resolve(netip.MustParseAddr("1.2.3.4")); v.App != "unknown" {
+	if v := h.Get().Resolve(netip.MustParseAddr("1.2.3.4")); v.App != "unknown" {
 		t.Fatalf("empty catalog must resolve unknown, got %+v", v)
 	}
 }
@@ -101,9 +99,8 @@ func TestAppIDResolveBatchEndpointWiring(t *testing.T) {
 		[]byte(`{"prefixes":[{"ip_prefix":"52.94.0.0/22","service":"S3"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s.appCatalog = &appCatalogHolder{feedsDir: dir}
-	s.appCatalog.cur.Store(appid.NewCatalog(nil))
-	if n, errs := s.appCatalog.reload(); n != 1 || len(errs) != 0 {
+	s.appCatalog = appid.NewCatalogHolder(dir)
+	if n, errs := s.appCatalog.Reload(); n != 1 || len(errs) != 0 {
 		t.Fatalf("reload: n=%d errs=%v", n, errs)
 	}
 

@@ -133,7 +133,7 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cat := s.appCatalog.get()
+	cat := s.appCatalog.Get()
 	tenant, cross := principalTenant(claims)
 	ov, ovErr := s.overridesFor(r.Context(), tenant, cross) // operator-defined internal apps (#81 P1c)
 	if ovErr != nil {

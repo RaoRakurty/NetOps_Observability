@@ -96,8 +96,7 @@ func TestAppIDOverrideStoreFailureIsNotZeroOverrides(t *testing.T) {
 	srv, s := newTestServerState(t)
 	// The harness builds the struct directly, so wire the feed holder (as
 	// appid_catalog_test.go does) before hitting the status surface.
-	s.appCatalog = &appCatalogHolder{}
-	s.appCatalog.cur.Store(appid.NewCatalog(nil))
+	s.appCatalog = appid.NewCatalogHolder("")
 	tok := adminToken(t, srv)
 
 	// Control: the healthy in-memory store answers "no overrides configured".
