@@ -9,12 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"netops/backend/cloud"
 	"testing"
 )
 
 func TestNormalizeCloudSLOs(t *testing.T) {
 	good := []cloudSLO{{AppName: "billing-api", TargetPct: 99.9, WindowDays: 30}}
-	out, err := normalizeCloudSLOs(good)
+	out, err := cloud.NormalizeSLOs(good)
 	if err != nil || len(out) != 1 {
 		t.Fatalf("valid slo refused: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestNormalizeCloudSLOs(t *testing.T) {
 		{{AppName: "dup", TargetPct: 99, WindowDays: 7}, {AppName: "DUP", TargetPct: 99, WindowDays: 7}},
 	}
 	for i, b := range bad {
-		if _, err := normalizeCloudSLOs(b); err == nil {
+		if _, err := cloud.NormalizeSLOs(b); err == nil {
 			t.Errorf("case %d: invalid slos accepted: %+v", i, b)
 		}
 	}
@@ -38,24 +39,24 @@ func TestNormalizeCloudSLOs(t *testing.T) {
 	for i := range over {
 		over[i] = cloudSLO{AppName: "app-" + string(rune('a'+i%26)) + string(rune('a'+i/26)), TargetPct: 99, WindowDays: 7}
 	}
-	if _, err := normalizeCloudSLOs(over); err == nil {
+	if _, err := cloud.NormalizeSLOs(over); err == nil {
 		t.Error("over-cap slo list accepted")
 	}
 }
 
 func TestSloBudget(t *testing.T) {
 	// target 99.9, actual 99.95 → half the 0.1 budget spent.
-	budget, burn, remaining := sloBudget(99.9, 99.95)
+	budget, burn, remaining := cloud.SLOBudget(99.9, 99.95)
 	if math.Abs(budget-0.1) > 1e-9 || math.Abs(burn-0.5) > 1e-6 || math.Abs(remaining-50) > 1e-4 {
 		t.Fatalf("got budget=%v burn=%v remaining=%v", budget, burn, remaining)
 	}
 	// Over-spent: remaining floors at 0, burn carries the overshoot.
-	_, burn, remaining = sloBudget(99.9, 99.5)
+	_, burn, remaining = cloud.SLOBudget(99.9, 99.5)
 	if remaining != 0 || burn < 4.9 {
 		t.Fatalf("overspend: burn=%v remaining=%v", burn, remaining)
 	}
 	// Perfect actual → nothing spent.
-	_, burn, remaining = sloBudget(99.9, 100)
+	_, burn, remaining = cloud.SLOBudget(99.9, 100)
 	if burn != 0 || remaining != 100 {
 		t.Fatalf("perfect: burn=%v remaining=%v", burn, remaining)
 	}
@@ -66,7 +67,7 @@ func TestMeasureCloudSLOHonesty(t *testing.T) {
 	slo := cloudSLO{AppName: "shop", TargetPct: 99.9, WindowDays: 7}
 
 	// 1) No resources attributed → not measurable.
-	st := measureCloudSLO(ctx, slo, map[string][]string{}, func(context.Context, string) map[string]float64 {
+	st := cloud.MeasureSLO(ctx, slo, map[string][]string{}, func(context.Context, string) map[string]float64 {
 		t.Fatal("must not query the store when no resources exist")
 		return nil
 	})
@@ -77,19 +78,19 @@ func TestMeasureCloudSLOHonesty(t *testing.T) {
 	idx := map[string][]string{"shop": {"i-1", "i-2"}}
 
 	// 2) Store unreachable (nil) → not measurable, says so.
-	st = measureCloudSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 { return nil })
+	st = cloud.MeasureSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 { return nil })
 	if st.Measurable {
 		t.Fatalf("store-down must be not-measurable: %+v", st)
 	}
 
 	// 3) Store up but NO samples → not measurable, never 100%.
-	st = measureCloudSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 { return map[string]float64{} })
+	st = cloud.MeasureSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 { return map[string]float64{} })
 	if st.Measurable || st.ResourcesReporting != 0 {
 		t.Fatalf("no samples must be not-measurable: %+v", st)
 	}
 
 	// 4) Real samples: i-1 failed 0.2% of periods, i-2 clean → availability 99.9.
-	st = measureCloudSLO(ctx, slo, idx, func(_ context.Context, q string) map[string]float64 {
+	st = cloud.MeasureSLO(ctx, slo, idx, func(_ context.Context, q string) map[string]float64 {
 		return map[string]float64{"i-1": 0.002, "i-2": 0}
 	})
 	if !st.Measurable || st.ResourcesReporting != 2 {
@@ -104,7 +105,7 @@ func TestMeasureCloudSLOHonesty(t *testing.T) {
 	}
 
 	// 5) Partial coverage is measured but NAMED (1 of 2 reporting).
-	st = measureCloudSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 {
+	st = cloud.MeasureSLO(ctx, slo, idx, func(context.Context, string) map[string]float64 {
 		return map[string]float64{"i-1": 0}
 	})
 	if !st.Measurable || st.ResourcesReporting != 1 || st.ResourcesTotal != 2 {

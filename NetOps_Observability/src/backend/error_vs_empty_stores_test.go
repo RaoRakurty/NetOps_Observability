@@ -137,11 +137,7 @@ func TestTenantMapStoresRefuseToOverwriteWhatTheyNeverRead(t *testing.T) {
 		save func(path string) error // constructs the store and attempts a write
 	}{
 		{"cloud_slo", func(p string) error {
-			s := newCloudSLOStore(p)
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.slos["t-1"] = []cloudSLO{{AppName: "checkout", TargetPct: 99.9, WindowDays: 30}}
-			return s.saveLocked()
+			return newCloudSLOStore(p).SeedForTest("t-1", []cloudSLO{{AppName: "checkout", TargetPct: 99.9, WindowDays: 30}})
 		}},
 		{"cloud_monitors", func(p string) error {
 			return newCloudMonitorStore(p).SeedForTest("t-1", []cloudMonitor{{ID: "m1", TenantID: "t-1", Name: "cpu"}})

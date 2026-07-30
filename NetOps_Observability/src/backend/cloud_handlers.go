@@ -26,19 +26,7 @@ import (
 // isCloudAppToken bounds an app id used in a SQL literal: real app names carry
 // letters/digits/.-_:/ and a space — never a quote/backslash/control char. Rejects
 // injection without over-restricting (we cannot use isAlphaToken — apps have dots).
-func isCloudAppToken(s string) bool {
-	if s == "" || len(s) > 128 {
-		return false
-	}
-	for _, c := range s {
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-			c == '.' || c == '-' || c == '_' || c == ':' || c == '/' || c == ' '
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
+func isCloudAppToken(s string) bool { return cloud.IsCloudAppToken(s) }
 
 func (s *server) cloudResources(r *http.Request) ([]cloud.CloudResource, string, bool, error) {
 	claims, _ := userFrom(r.Context())
