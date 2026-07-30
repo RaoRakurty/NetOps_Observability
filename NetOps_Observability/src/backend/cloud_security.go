@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_security.go — Wave 5 #16: security & provider-event read surfaces.
 //

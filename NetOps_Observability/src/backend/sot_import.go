@@ -1,4 +1,4 @@
-package main
+package backend
 
 // sot_import.go — external Source-of-Truth IMPORT: a ONE-WAY, file-based seed of
 // operator INTENT (sites + device→site placement) into the platform's internal

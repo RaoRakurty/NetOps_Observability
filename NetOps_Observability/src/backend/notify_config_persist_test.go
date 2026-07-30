@@ -1,4 +1,4 @@
-package main
+package backend
 
 // notify_config_persist_test.go — F-78.
 //

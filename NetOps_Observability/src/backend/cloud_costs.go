@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_costs.go — the cloud cost read surface (Wave 5 #18 slice 2).
 //

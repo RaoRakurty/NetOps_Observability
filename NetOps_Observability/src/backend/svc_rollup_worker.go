@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_rollup_worker.go — #69 P2 scheduled flow→service attribution roll-up
 // (front-page.md §3). Populates netops.svc_flow_rollup_1m WITHOUT a

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // appid.go — Application Identification registry HTTP surface (#81 P0).
 //   GET/POST    /api/applications

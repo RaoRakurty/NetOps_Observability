@@ -1,4 +1,4 @@
-package main
+package backend
 
 // report_scheduler_isolation_test.go — §3a.5 isolation tests for the scheduled-
 // report renderers. Reports are rendered server-side under the report's OWN

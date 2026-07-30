@@ -1,4 +1,4 @@
-package main
+package backend
 
 // timeintel_manual_http_test.go — the embedded-investigation close/verification
 // surface (#7): GET/POST /api/correlations/{id}/time-events through the REAL

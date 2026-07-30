@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_connectors_probe_live_test.go — Wave 4 #13: end-to-end tests for LIVE
 // permission validation + scope discovery through the real stack: router +

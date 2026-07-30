@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Path Behavior Health API — wraps the pure scoring core (path_health.go) with a
 // VictoriaMetrics percentile fetcher. Design: docs/design/path-behavior-health.md.

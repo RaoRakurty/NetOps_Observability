@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Cross-tenant isolation for the Wave 6 #20 surfaces (CLAUDE.md §3a.5):
 //   · /api/search — a scoped principal's results NEVER contain another

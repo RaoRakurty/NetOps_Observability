@@ -1,4 +1,4 @@
-package main
+package backend
 
 // business_service_isolation_test.go — CROSS-TENANT isolation for the Business
 // Service mapping (CLAUDE.md §3a.5, REQUIRED with the feature). Drives the store

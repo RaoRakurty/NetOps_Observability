@@ -4,7 +4,7 @@
 // for real-time event streaming. It is intentionally kept dependency-free
 // (stdlib only) so the scaffold compiles in a clean Go environment without
 // pulling modules from the network.
-package main
+package backend
 
 import (
 	"bufio"
@@ -1075,7 +1075,9 @@ func initStoreBackend() error {
 	}
 }
 
-func main() {
+// Run is the backend entrypoint: cmd/api/main.go calls it. It owns flag/env
+// resolution, wiring and the serve loop — /cmd stays logic-free (§2).
+func Run() {
 	// Prober mode: a minimal, least-privilege sidecar that runs ONLY the active
 	// measurement collectors (STAMP / traceroute) — the single component that
 	// needs CAP_NET_RAW. No HTTP API, no DB, no auth surface. It shares the

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_monitors_test.go — unit tests for monitor authoring (Wave 5 #14
 // slice 3): closed-vocabulary validation + the CRUD contract. The evaluator

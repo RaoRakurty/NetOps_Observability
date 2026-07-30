@@ -187,24 +187,19 @@ and thereby certified the blind scope as healthy.
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
 6. ~~**Documented env switches are unverified as a class.**~~ **CLOSED 2026-07-30** — `TestEveryDocumentedEnvSwitchIsConsumed` guards the class mechanically (documented ⇒ consumed, exemptions carry reasons; fired on first run: the phantom `LOKI_RETENTION_PERIOD` row). Per-switch behaviour remains each feature's own tests — the honest limit, stated in the guard. (§9)
 7. ~~**API response-shape stability is prose.**~~ **CLOSED 2026-07-30** — the shape is now pinned by build-time tests (`internal/httppage/contract_test.go`: the five header LITERALS, all-five-stamped-on-every-write, the envelope's exact keys) and documented for integrators (`docs/API_ACCESS.md` § Pagination & totals contract). The header-blind-client hazard has a documented, tested escape hatch: `?envelope=1` carries the same numbers in the body. Renaming any of it fails the build. (§8)
-8. **`package main` still holds substantial business logic, against the repo's
-   own §2.** Originally 296 non-test files with no `/internal` at all. Phase 1
-   of the decomposition (steps 18–59, 2026-07-27→29) is COMPLETE: **204 files
-   remain** and fifty-three compiler-enforced domains live behind boundaries
-   (auth tier, every store, the storage substrate `internal/platformdb` — full
-   list in `docs/design/package-decomposition-plan.md`). The 2026-07-28 belief
-   that what remained was "just the entrypoint layer" was **measured and
-   disproven on 2026-07-29**: a four-reader audit of the 35 largest files (in
-   full) plus a sampled sweep of the 88 mid-tier files found **~23k LOC of
-   genuine business logic** still in the root — a 950-LOC LDAP/BER client, pure
-   algorithm files, SQL-builder clusters, tenant-keyed config stores, worker
-   state machines. The gap CLOSES via the plan doc's sized **Phase 2** (five
-   waves: enablers → clean lifts → post-`chquery` extractions → config stores →
-   mid-tier sweep, then the `/cmd` split finale). Until then §13/§4 are
-   enforceable *for the extracted 53 domains* but not within the root itself.
-   **Growth is ratcheted** (`TestFlatPackageMainDoesNotGrow`, ceiling 204,
-   lowered with every extraction). Nothing is exposed by it today; the cost is
-   future enforceability.
+8. ~~**`package main` still holds substantial business logic, against the repo's
+   own §2.**~~ **CLOSED 2026-07-30** — the programme ran to its finale. Phase 1
+   (steps 18–59) extracted 53 domains; Phase 2 ran waves W0–W4, the RA re-audit
+   classified EVERY remaining root file (61 INTEGRATOR / 34 FAT-deferred / 22
+   FAT-CRITICAL — all 22 critical lifts shipped, RA.1–RA.16), and the **W5
+   `/cmd` split landed**: the root is now the importable `backend` package,
+   `cmd/api/main.go` is the sole `package main` (one line of wiring, §2
+   satisfied), build ldflags + the shutdown-drain AST guard repointed. What
+   remains in the root is inventoried WITH VERDICTS (plan doc § re-audit):
+   handlers/wiring by design plus 34 FAT-deferred files extractable
+   opportunistically. Security/correctness cores all live behind compiler
+   boundaries; **growth stays ratcheted** (ceiling 200, lowered with every
+   further extraction).
 
 ### Closed
 

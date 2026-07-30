@@ -1,4 +1,4 @@
-package main
+package backend
 
 // integrations_inbound_test.go — F-75.
 //

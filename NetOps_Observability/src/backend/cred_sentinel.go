@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cred_sentinel.go — main-side wiring for the self-healing SNMP credential
 // sentinel (internal/snmpcred/sentinel.go, extracted P2 RA.14): env intervals

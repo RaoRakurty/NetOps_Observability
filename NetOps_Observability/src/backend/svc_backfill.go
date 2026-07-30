@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_backfill.go — #69 §3.3 explicit selector backfill.
 //

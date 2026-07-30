@@ -1,4 +1,4 @@
-package main
+package backend
 
 // error_vs_empty_reads_test.go — proof for the READ-SURFACE half of the
 // CLAUDE.md §10 conflation cleanup (silent_failure_guards_test.go is the

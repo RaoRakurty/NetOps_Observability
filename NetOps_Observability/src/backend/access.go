@@ -1,4 +1,4 @@
-package main
+package backend
 
 // access.go — main-side adapters for the PBAC Phase-B reachability algorithms
 // (internal/rbac/access.go, P2 W4.15). The deny-wins union over a principal's

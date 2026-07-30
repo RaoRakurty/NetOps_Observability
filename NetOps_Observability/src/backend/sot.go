@@ -1,4 +1,4 @@
-package main
+package backend
 
 // sot.go — the Source-of-Truth provider seam.
 //

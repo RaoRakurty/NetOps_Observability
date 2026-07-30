@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_roles_test.go — the role-fact gathering + spine stamping glue
 // (device_roles.go). Pure-function tests with mock facts; the §3a isolation

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_query_test.go — server-side filter + keyset-pagination + get-by-id for the
 // cloud inventory store (WAVE 1 #1, rev #2). Exercises the in-memory backend (no DB

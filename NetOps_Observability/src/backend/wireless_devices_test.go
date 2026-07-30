@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_devices_test.go — the wireless→fleet projection (#128 follow-on):
 // WLCs and APs appear in GET /api/devices as first-class rows (Type wlc/ap,

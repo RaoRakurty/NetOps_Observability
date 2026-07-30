@@ -1,4 +1,4 @@
-package main
+package backend
 
 // metrics_forecast_isolation_test.go — CLAUDE.md §3a rule 5 for
 // GET /api/metrics/forecast.

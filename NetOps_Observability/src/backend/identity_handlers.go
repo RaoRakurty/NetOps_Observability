@@ -1,4 +1,4 @@
-package main
+package backend
 
 // identity_handlers.go — admin CRUD for users, roles, tenants and API keys.
 // All routes here require the caller to hold administration:admin (super-admin

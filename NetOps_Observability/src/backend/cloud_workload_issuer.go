@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_workload_issuer.go — main-side wiring for the platform workload OIDC
 // issuer (custody in cloudconn/issuer.go, extracted P2 RA.11). When

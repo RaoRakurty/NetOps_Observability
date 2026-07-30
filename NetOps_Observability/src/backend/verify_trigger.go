@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_trigger.go — the Active Verification auto-trigger (RCA spec item 8).
 // A bounded background loop that watches the corr_current hot projection for

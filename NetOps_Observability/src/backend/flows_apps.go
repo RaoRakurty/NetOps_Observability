@@ -1,4 +1,4 @@
-package main
+package backend
 
 // flows_apps.go — GET /api/flows/apps (#81 P1b). Flow traffic attributed per
 // IDENTIFIED application (the app-centric flow view). QUERY-TIME, like

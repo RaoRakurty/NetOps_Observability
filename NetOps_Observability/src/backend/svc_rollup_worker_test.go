@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_rollup_worker_test.go — unit + isolation tests for the #69 P2 rollup
 // worker (CLAUDE.md §3a.5: REQUIRED with the feature). The worker's IO is

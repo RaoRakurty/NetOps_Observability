@@ -1,4 +1,4 @@
-package main
+package backend
 
 // scopes.go — the scope containment TREE for PBAC (docs/design/saas-identity-pbac.md
 // §1.2, §7.4). The scope-id VOCABULARY (types, minters, parseScope) lives in

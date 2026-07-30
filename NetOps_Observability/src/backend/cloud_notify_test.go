@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_notify_test.go — routing-decision + tenant-isolation tests for the
 // cloud signal notification sweeper (Wave 4 #12 slice 1, CLAUDE.md §3a.5).

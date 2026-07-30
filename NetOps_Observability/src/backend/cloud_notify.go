@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_notify.go — notification routing from cloud signals (Wave 4 #12,
 // detection→resolution, slice 1).

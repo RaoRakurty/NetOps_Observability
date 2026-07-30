@@ -1,4 +1,4 @@
-package main
+package backend
 
 // The runner half of SILENT-CRITICAL-1 (see internal/verify/truncation_test.go
 // for the engine half): boundedBuf must RECORD that it dropped bytes so a

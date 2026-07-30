@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_ingest_service.go — Wave 1 #2 (per-tenant ingestion): the poller-facing
 // service surface over the ALREADY-SHIPPED connector store + identity broker.

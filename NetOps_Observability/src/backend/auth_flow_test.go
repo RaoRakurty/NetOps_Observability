@@ -1,4 +1,4 @@
-package main
+package backend
 
 // auth_flow_test.go — end-to-end HTTP tests for the whole authentication
 // section, exercised through the real router + auth middleware (httptest):

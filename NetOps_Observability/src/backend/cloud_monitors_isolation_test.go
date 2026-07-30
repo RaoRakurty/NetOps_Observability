@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_monitors_isolation_test.go — CROSS-ORG isolation for
 // /api/cloud/monitors[/{id}] (CLAUDE.md §3a rule 5), through the real router +

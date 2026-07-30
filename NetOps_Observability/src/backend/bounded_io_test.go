@@ -1,4 +1,4 @@
-package main
+package backend
 
 // bounded_io_test.go — #100 incident guardrails (2026-07-09 ClickHouse
 // bounded-IO incident, docs/incidents/correlix-clickhouse-bounded-io.md).

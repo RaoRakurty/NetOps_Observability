@@ -1,4 +1,4 @@
-package main
+package backend
 
 // route_isolation_test.go — the isolation COVERAGE GUARD (CLAUDE.md §3a).
 //

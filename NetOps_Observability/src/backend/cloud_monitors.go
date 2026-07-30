@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_monitors.go — per-tenant cloud monitor authoring (Wave 5 #14 slice 3).
 // A monitor is a tenant-owned rule on ONE cloud metric of the closed catalog

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // snmp_handlers.go — CRUD for SNMP credential profiles, gated on
 // infrastructure:write (managing how devices are polled is an infra task).

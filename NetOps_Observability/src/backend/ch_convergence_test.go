@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ch_convergence_test.go — BOOT-CONVERGENCE guards.
 //

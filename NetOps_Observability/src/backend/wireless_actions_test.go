@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_actions_test.go — the five gates (#128 Phase 8), each proven to
 // FAIL CLOSED, plus dormancy, tenancy and audit. The framework ships before

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_source_status.go — Wave 2 #4 (Data Sources = connectors + health):
 // poller-reported per-source ERROR states (review #11 / missing #10).

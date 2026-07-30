@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_http_test.go — Active Verification isolation + gating (§3a rule 5):
 // cross-tenant verify → 404, tenant opt-in flag respected, settings tenant-

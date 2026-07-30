@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_metrics_series_test.go — unit tests for the Wave 5 #14 slice 1 chart
 // feed: window/step bounding, closed metric vocabulary, resource-id hygiene,

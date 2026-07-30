@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_catalog_isolation_pg_test.go — CROSS-TENANT isolation for the #69 P2
 // surfaces that ride the Postgres service catalog (CLAUDE.md §3a.5, REQUIRED):

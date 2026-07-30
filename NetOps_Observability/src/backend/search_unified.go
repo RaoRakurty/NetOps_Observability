@@ -1,4 +1,4 @@
-package main
+package backend
 
 // search_unified.go — Wave 6 #20: the search-first global nav backend.
 // GET /api/search?q=… resolves a free-text query (name / id / IP) to typed,

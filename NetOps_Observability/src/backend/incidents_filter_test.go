@@ -1,4 +1,4 @@
-package main
+package backend
 
 // incidents_filter_test.go — regression guards for audit F-74 (and the paging
 // half of the same class on /api/incidents).

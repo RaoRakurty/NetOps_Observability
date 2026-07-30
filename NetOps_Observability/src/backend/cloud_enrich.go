@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_enrich.go — Service View live enrichment (task #12).
 //

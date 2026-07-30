@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_report_http.go — GET /api/correlations/{id}/rca-report[?format=json|html|pdf]
 //

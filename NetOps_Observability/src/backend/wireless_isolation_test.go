@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_isolation_test.go — cross-tenant isolation for the wireless
 // canonical inventory (tracker #128 Phase 1), MANDATORY per CLAUDE.md §3a.5,

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Unified event feed (#69 §5 / #53 Explorer half) — one spine, two consumers.
 // The backing store IS netops.corr_signals (the same normalized-signal spine the

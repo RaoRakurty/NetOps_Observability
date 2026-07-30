@@ -1,4 +1,4 @@
-package main
+package backend
 
 // nms_scheduler.go — main-side wiring for the NMS poll runtime (nms.Runtime,
 // extracted P2 W4.17). This file owns the entrypoint transports the runtime

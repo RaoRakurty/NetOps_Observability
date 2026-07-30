@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ch_workload.go — ClickHouse workload profile routing (#101 SaaS fairness).
 //

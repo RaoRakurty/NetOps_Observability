@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_connectors_org_test.go — Wave 5 #17 slice 2: org-level (multi-account)
 // onboarding through the REAL router + auth middleware. Covers the anchor

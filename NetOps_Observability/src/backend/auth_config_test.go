@@ -1,4 +1,4 @@
-package main
+package backend
 
 // auth_config_test.go — unit + HTTP tests for the runtime-configurable native
 // LDAP/TACACS providers (auth_config.go): kv-backed config stores, write-only

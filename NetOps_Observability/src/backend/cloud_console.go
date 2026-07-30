@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Console deep-links — the pivot from a Correlix row to the provider's own
 // console (AWS console / Azure portal / Google Cloud console). Built SERVER-side so the URL formats

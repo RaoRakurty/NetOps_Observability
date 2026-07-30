@@ -1,4 +1,4 @@
-package main
+package backend
 
 // business_service_handlers.go — API for the Business Service mapping (Azure
 // optional-tags epic). Per-tenant data surfaces: every handler is requirePerm +

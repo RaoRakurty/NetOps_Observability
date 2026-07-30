@@ -1,4 +1,4 @@
-package main
+package backend
 
 // dependency_view.go — the REAL service/app dependency projection for the topology
 // canvas's "dependency" mode (P2). It is a SEPARATE projection from the physical

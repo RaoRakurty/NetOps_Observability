@@ -1,4 +1,4 @@
-package main
+package backend
 
 // graphql_test.go — regression guards for audit F-72.
 //

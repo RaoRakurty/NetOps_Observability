@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ldap_wiring.go — what stays in main after the LDAP protocol core moved to
 // internal/ldap (Phase-2 W1.8): the LDAP_* env constructor, the login handler

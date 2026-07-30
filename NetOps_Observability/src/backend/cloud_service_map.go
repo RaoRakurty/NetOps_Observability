@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_service_map.go — GET /api/cloud/service-map (cloud-platform-backlog #9).
 // The graph domain (SQL builders, wire types, the pure fold) lives in

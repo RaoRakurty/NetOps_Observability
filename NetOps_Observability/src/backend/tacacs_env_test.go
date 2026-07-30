@@ -1,4 +1,4 @@
-package main
+package backend
 
 // tacacs_env_test.go — env-constructor tests for the TACACS+ wiring that
 // stays in main (Phase-2 W1.9); the protocol suite moved to internal/tacacs.

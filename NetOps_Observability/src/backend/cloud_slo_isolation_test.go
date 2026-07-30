@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_slo_isolation_test.go — CROSS-ORG isolation for /api/cloud/slos
 // (CLAUDE.md §3a rule 5). Each tenant reads/writes ONLY its own SLO list; a

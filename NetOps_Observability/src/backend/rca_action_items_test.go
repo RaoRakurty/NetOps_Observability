@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_action_items_test.go — postmortem Phase 1 action items (spec §3/§7):
 // schema validation, the remediation-state machine, suggested-vs-committed

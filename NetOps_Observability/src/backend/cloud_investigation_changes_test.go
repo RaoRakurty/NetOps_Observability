@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_investigation_changes_test.go — Wave 4 #12 slice 3: the change→incident
 // correlation read is tenant-scoped, bounded, and scoped to the object's OWN

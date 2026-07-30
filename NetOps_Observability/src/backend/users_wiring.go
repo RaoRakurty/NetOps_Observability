@@ -1,4 +1,4 @@
-package main
+package backend
 
 // users_wiring.go — composition root + source-compat shims for internal/users.
 //

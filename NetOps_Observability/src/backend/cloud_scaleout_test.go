@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_scaleout_test.go — #10 "scale-out the tables": keyset cursor + server-side
 // free-text search on the cloud signal surfaces. The cursor and the search needle

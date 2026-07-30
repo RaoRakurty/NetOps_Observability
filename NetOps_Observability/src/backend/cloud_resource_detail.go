@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_resource_detail.go — Wave 6 #20: the permanent per-resource read.
 // GET /api/cloud/resources/{id} returns ONE cloud resource by its canonical

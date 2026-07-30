@@ -1,4 +1,4 @@
-package main
+package backend
 
 // identity_ids.go — the centralized, opaque identity primitives for orgs and
 // tenants (docs/design/opaque-identity-model.md). The security contract:

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // alert_episodes.go — alert EPISODE grouping + triage (cloud-platform backlog
 // Wave 2 #6, product-review rev #7 + missing #4/#5).

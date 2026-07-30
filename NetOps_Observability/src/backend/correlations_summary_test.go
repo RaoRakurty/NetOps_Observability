@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Tests for the Correlations "don't hide" surface (owner directive):
 //   - /api/correlations/summary serves REAL tenant-scoped counts (never the

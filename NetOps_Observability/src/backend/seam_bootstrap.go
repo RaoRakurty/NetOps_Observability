@@ -1,4 +1,4 @@
-package main
+package backend
 
 // seam_bootstrap.go — the seam bootstrap engine (#67 build ⑤, design
 // cloud-ingestion.md §4.1, P1-required). An empty seam inventory makes the

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // timeintel_metrics_isolation_test.go — §3a cross-org isolation guard for the
 // persisted phase-metrics surface, exercised through the REAL router + auth

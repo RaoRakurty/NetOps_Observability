@@ -1,4 +1,4 @@
-package main
+package backend
 
 // stampSpineCloudIdentity (truthfulness epic / topology task): provider marks
 // and human names come ONLY from declared inventory — cloud NIC/EIP bindings

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // tenant_context.go — the canonical, server-derived tenant identity (Phase 1 of
 // the opaque-identity hardening, docs/design/opaque-identity-model.md).

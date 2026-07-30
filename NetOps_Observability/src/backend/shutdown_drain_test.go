@@ -1,4 +1,4 @@
-package main
+package backend
 
 import (
 	"context"
@@ -202,7 +202,7 @@ func untrackedLaunchSites(t *testing.T) []string {
 	var found []string
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || fn.Name.Name != "main" || fn.Body == nil {
+		if !ok || fn.Recv != nil || fn.Name.Name != "Run" || fn.Body == nil { // Run() is the entrypoint since the P2 W5 /cmd split
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -226,7 +226,7 @@ func untrackedLaunchSites(t *testing.T) []string {
 func TestEveryBackgroundLaunchIsTrackedOrDocumented(t *testing.T) {
 	sites := untrackedLaunchSites(t)
 	if len(sites) != len(cancelOnlyWorkers()) {
-		t.Fatalf("main() has %d untracked background launch(es) but cancelOnlyWorkers() lists %d.\n"+
+		t.Fatalf("Run() has %d untracked background launch(es) but cancelOnlyWorkers() lists %d.\n"+
 			"Untracked launches found:\n  %s\n"+
 			"Register the new one with workers.start(...) (preferred — shutdown then WAITS for it), "+
 			"or add it to cancelOnlyWorkers() with the reason it is abandoned on SIGTERM. "+

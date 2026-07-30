@@ -1,4 +1,4 @@
-package main
+package backend
 
 // path_health_baselines.go — Path Behavior Health V1 baseline precompute
 // (docs/design/path-behavior-health.md §9, tier 2 "this path at this time of

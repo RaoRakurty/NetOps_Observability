@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ngfw_resolver.go — Application Identification: the NGFW App-ID overlay (#81
 // P-NGFW pt2). The FREE authoritative signal — a firewall does the on-box DPI and

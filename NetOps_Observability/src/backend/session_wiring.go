@@ -1,4 +1,4 @@
-package main
+package backend
 
 // session_wiring.go — composition root for the session-lifecycle stores.
 //

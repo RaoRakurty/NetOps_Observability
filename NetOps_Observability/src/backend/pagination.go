@@ -1,4 +1,4 @@
-package main
+package backend
 
 // pagination.go — the ONE bounded-read contract for list endpoints (audit
 // F-57 / F-61 / F-74 / F-79, 2026-07-21).

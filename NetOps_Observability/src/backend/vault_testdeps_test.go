@@ -1,4 +1,4 @@
-package main
+package backend
 
 // vault_testdeps_test.go — an active vault for package-main tests.
 //

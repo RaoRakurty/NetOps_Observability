@@ -1,4 +1,4 @@
-package main
+package backend
 
 // binding_sync.go — Phase A glue that keeps the role_binding store (bindings.go)
 // a faithful mirror of the legacy single-(role,tenant) user model, so the

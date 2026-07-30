@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_report_integrity_test.go — Phase 1 immutability (postmortem spec §7 +
 // "Additional mandatory"): the embedded integrity block, snapshot-hash

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Unit tests for the Wave 6 #20 unified search: ranking (exact > prefix >
 // substring), the case-handle parser, bounds (short query, per-kind cap) and

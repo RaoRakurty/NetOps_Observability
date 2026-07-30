@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cred_cache_reload.go — multi-instance cache coherence for the two stores that
 // stay in-memory by design: API keys and SNMP credentials (see TRACKER #33,

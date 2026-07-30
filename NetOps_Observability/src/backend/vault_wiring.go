@@ -1,4 +1,4 @@
-package main
+package backend
 
 // vault_wiring.go — composition root for the secret-custody vault.
 //

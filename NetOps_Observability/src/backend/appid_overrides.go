@@ -1,4 +1,4 @@
-package main
+package backend
 
 // appid_overrides.go — main-side wiring for the operator app catalog
 // (appid/catalog_store.go, extracted P2 RA.15): handlers + the three-state

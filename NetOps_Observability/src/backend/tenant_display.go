@@ -1,4 +1,4 @@
-package main
+package backend
 
 // tenant_display.go — per-tenant DISPLAY preferences (first real Settings
 // editor of Wave 4 #11, owner directive 2026-07-17).

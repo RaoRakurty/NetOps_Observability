@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_backfill_test.go — window validation, routing/authz guards and the
 // latest-version-wins read contract for the #69 §3.3 selector backfill.

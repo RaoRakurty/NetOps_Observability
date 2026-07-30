@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_http.go — Active Verification HTTP surface (RCA spec item 8):
 //

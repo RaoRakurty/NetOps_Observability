@@ -1,4 +1,4 @@
-package main
+package backend
 
 // security_settings.go — main-side wiring for the scope-wide Security Settings
 // domain (internal/secpolicy, extracted P2 RA.2). The model, store, defaults

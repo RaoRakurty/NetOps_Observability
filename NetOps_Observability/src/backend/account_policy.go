@@ -1,4 +1,4 @@
-package main
+package backend
 
 // account_policy.go — main-side wiring for the F-68 account-lifecycle gate
 // (internal/secpolicy, extracted P2 RA.2). The pure chokepoint

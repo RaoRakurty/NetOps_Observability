@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_source_status_test.go — Wave 2 #4: poller-reported permission_denied /
 // misconfigured source states. Covers the store semantics (full-set replace,

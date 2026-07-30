@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_workload_issuer_test.go — Wave 4 #13: platform OIDC issuer custody +
 // trust-material endpoints. Pins: key load-or-create round-trip (sealed at

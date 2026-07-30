@@ -1,4 +1,4 @@
-package main
+package backend
 
 // breakglass.go — PBAC Phase C: access-as-an-event for the platform operator.
 //

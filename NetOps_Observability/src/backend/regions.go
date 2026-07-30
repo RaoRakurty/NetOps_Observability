@@ -1,4 +1,4 @@
-package main
+package backend
 
 // regions.go — the canonical set of data-plane regions. A region is *where* a
 // tenant's telemetry physically lives (data residency). Today regions are an

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // credentials_gate_test.go — GET /api/credentials reports the PLATFORM-GLOBAL
 // integration posture (which provider credentials and feature flags the stack was

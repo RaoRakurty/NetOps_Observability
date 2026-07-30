@@ -1,4 +1,4 @@
-package main
+package backend
 
 // pagination_test.go — failure-path and boundary tests for the bounded-read
 // contract (audit F-57 / F-61 / F-72 / F-74 / F-79).

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Correlations inspector API (#67 build ⑦ follow-up) — the first owner-facing
 // surface for Correlation Engine v2 objects. Read-only: the engine owns the

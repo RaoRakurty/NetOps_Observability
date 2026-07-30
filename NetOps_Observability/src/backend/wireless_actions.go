@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_actions.go — guarded wireless remediation (#128 Phase 8, design
 // docs/Wireslessdesign.md §19). FIVE GATES, all mandatory, in order — an

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_locations.go — operator-supplied device placement: the location
 // annotation LAYER under Infrastructure → Maps. Discovery data stays

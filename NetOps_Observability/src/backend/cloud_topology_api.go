@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_topology_api.go — GET /api/topology/cloud : the in-cloud NETWORK topology
 // (VPC/VNet → subnets → route tables → gateways/NVAs) the Topology Operating

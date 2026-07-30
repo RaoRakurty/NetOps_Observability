@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_store_pg_test.go — CROSS-TENANT isolation for the Postgres cloud inventory
 // store (CLAUDE.md §3a.5, REQUIRED with the feature). Drives cloud.PGStore as two

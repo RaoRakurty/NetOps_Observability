@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_sites.go — operator device→site BINDINGS: the first-class, editable
 // "this device belongs to site X" intent the wire can't give (Phase 3 remainder

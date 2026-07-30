@@ -1,6 +1,6 @@
 //go:build pgintegration
 
-package main
+package backend
 
 // pg_integration_test.go — exercises the Postgres-dependent paths that were
 // COMPILE-REVIEWED ONLY (INVARIANTS.md standing gap #4): the F-60 pool bounds

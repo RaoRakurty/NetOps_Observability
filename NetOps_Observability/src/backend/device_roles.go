@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_roles.go — gathers the discovery facts the topology role classifier
 // (topology/roles.go) consumes, and stamps the resulting canonical device roles

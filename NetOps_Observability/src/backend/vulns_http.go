@@ -1,4 +1,4 @@
-package main
+package backend
 
 // vulns_http.go — the HTTP surface of Vulnerability Management (#13). The feed
 // and all matching logic live in internal/vuln; this file is the tenant-scoped

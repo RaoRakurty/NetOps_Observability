@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_ingest_service_test.go — Wave 1 #2 per-tenant ingestion: the poller-
 // facing ingest-service surface. Includes the MANDATED cross-tenant isolation

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // authz.go — main-side adapters for the central authorization policy
 // (rbac.Authorize, extracted P2 RA.1). This file binds the pure decision point

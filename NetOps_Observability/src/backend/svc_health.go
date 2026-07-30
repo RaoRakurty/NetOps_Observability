@@ -1,4 +1,4 @@
-package main
+package backend
 
 // svc_health.go — #69 P2: GET /api/health/score?scope=service&service_id=…
 //

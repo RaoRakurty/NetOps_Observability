@@ -21,8 +21,8 @@ COPY src/backend/ ./
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
-      -ldflags="-s -w -X main.buildSHA=${GIT_SHA} -X main.buildTime=${BUILD_TIME}" \
-      -o /out/api .
+      -ldflags="-s -w -X netops/backend.buildSHA=${GIT_SHA} -X netops/backend.buildTime=${BUILD_TIME}" \
+      -o /out/api ./cmd/api
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 ARG GIT_SHA=unknown

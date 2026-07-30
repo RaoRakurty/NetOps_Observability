@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_reports_list_test.go — the management RCA library (#113 point 3 follow-
 // up). Pins: the bounded two-phase evaluation (SQL prefilter cap + per-

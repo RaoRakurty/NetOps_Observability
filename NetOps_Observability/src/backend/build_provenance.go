@@ -1,4 +1,4 @@
-package main
+package backend
 
 // build_provenance.go — lets the RUNNING process state which commit it is.
 //

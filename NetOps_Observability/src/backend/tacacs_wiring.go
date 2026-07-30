@@ -1,4 +1,4 @@
-package main
+package backend
 
 // tacacs_wiring.go — what stays in main after the TACACS+ wire client moved to
 // internal/tacacs (Phase-2 W1.9): the env constructor, the login handler and

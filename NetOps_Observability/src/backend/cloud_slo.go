@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_slo.go — main-side wiring for per-tenant SLOs / error budgets
 // (cloud/slo.go, extracted P2 RA.9). This file keeps the env path, the

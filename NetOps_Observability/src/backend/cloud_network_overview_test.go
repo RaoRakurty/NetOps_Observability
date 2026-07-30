@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_network_overview_test.go — the MANDATED cross-tenant isolation test for
 // the Cloud Network Overview roll-up surface (CLAUDE.md §3a step 5), exercised

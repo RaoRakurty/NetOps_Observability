@@ -1,4 +1,4 @@
-package main
+package backend
 
 // probe_paths_ingest.go — main-side wiring for the remote-vantage path
 // transport (pathgraph/remote_paths.go, extracted P2 RA.10). The store, the

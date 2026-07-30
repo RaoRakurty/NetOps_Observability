@@ -1,4 +1,4 @@
-package main
+package backend
 
 // clickhouse_seam_test.go — guards that keep ClickHouse access on one seam.
 //

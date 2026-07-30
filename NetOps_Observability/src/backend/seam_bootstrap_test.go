@@ -1,4 +1,4 @@
-package main
+package backend
 
 // seam_bootstrap_test.go — unit tests for the seam bootstrap rules (#67 build
 // ⑤). The rules are pure functions over fetched telemetry rows, so every

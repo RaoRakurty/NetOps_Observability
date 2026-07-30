@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_reports_list.go — GET /api/correlations/rca-reports (#113 point 3, the
 // management library). The owner's model: the Correlations/candidates page

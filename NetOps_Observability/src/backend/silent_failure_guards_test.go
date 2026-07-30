@@ -1,4 +1,4 @@
-package main
+package backend
 
 // silent_failure_guards_test.go — MECHANICAL enforcement of CLAUDE.md §10
 // ("No silent failures allowed / All errors must be observable") as a CLASS.

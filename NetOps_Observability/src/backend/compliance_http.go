@@ -1,4 +1,4 @@
-package main
+package backend
 
 // compliance_http.go — the HTTP surface of Compliance Monitoring (#14). The
 // evaluation lives in internal/compliance; this file adapts the server's

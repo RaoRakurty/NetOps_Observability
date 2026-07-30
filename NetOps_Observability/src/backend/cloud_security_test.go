@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_security_test.go — Wave 5 #16 isolation + read-contract tests
 // (CLAUDE.md §3a.5). The three new cloud read surfaces are ClickHouse-backed:

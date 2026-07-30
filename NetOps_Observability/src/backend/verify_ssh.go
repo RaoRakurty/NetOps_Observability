@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_ssh.go — production executors for the Active Verification engine
 // (verify_engine.go). The SSH runner reuses the device-SSH gateway's host-key

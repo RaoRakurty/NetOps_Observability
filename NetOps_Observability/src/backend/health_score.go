@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Scope health score (#69 front-page §4) — the Health-strip backend.
 // Design rule (owner): HONEST BEFORE IMPRESSIVE. The score blends multiple signal

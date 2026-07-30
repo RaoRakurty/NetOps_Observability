@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_metrics_series_isolation_test.go — CROSS-ORG isolation for
 // GET /api/cloud/metrics/series (CLAUDE.md §3a rule 5). Through the real

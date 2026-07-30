@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_http.go — read-only API surface over the wireless canonical
 // inventory (tracker #128 Phase 1). Writers are platform-side connectors

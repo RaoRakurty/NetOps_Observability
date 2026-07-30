@@ -1,4 +1,4 @@
-package main
+package backend
 
 // bindings_api.go — REST for role bindings (PBAC Phase B). This is the data
 // behind the L2 governance screen /admin/bindings (a principal's access list).

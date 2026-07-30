@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ── #10 scale-out: CSV/JSON export for the cloud signal surfaces ─────────────
 //

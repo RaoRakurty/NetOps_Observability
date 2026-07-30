@@ -1,4 +1,4 @@
-package main
+package backend
 
 // ldap_env_test.go — the LDAP_* env constructor stays in main (env reads live
 // in the entrypoint); its tests moved here when the protocol core went to

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_handlers.go — Cloud App Observability API (#81 P3A). Read surfaces over the
 // cloud inventory, tenant-scoped via principalTenant. These back the App Observability

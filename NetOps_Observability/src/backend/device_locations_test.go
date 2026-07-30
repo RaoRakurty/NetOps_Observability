@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_locations_test.go — adversarial/robustness tests for the geomap
 // location annotation layer: boundary + hostile input at the HTTP boundary,

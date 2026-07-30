@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_appid_resolver.go — main-side wiring for the cloud identity-map
 // resolver (appid/cloud_resolver.go, extracted P2 RA.15).

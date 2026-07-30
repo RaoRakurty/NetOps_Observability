@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_topology_isolation_test.go — CROSS-ORG isolation for GET /api/topology/cloud
 // (CLAUDE.md §3a, required regression guard). The discovered cloud topology fixtures

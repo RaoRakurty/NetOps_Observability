@@ -1,4 +1,4 @@
-package main
+package backend
 
 // access_explain.go — the L3 "Explain" surface (docs/design/saas-identity-pbac.md
 // §1 / UI L3): answer "what can this principal access, and WHY?" by resolving its

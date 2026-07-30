@@ -1,4 +1,4 @@
-package main
+package backend
 
 // org_handlers.go — REST surface for the Organization layer (orgs.go).
 //

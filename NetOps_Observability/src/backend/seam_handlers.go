@@ -1,4 +1,4 @@
-package main
+package backend
 
 // seam_handlers.go — REST surface for the seam inventory (#67 build ⑤).
 // Suggest→confirm→active lifecycle for seams and redundancy groups, gated on

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_network_overview.go — GET /api/cloud/network/overview (cloud-network-
 // overview design §6 P1): the tenant's cloud network rolled up provider →

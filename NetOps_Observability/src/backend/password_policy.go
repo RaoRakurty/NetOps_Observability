@@ -1,4 +1,4 @@
-package main
+package backend
 
 // password_policy.go — main-side wiring for #24 password-rule enforcement
 // (validation lives in internal/secpolicy, extracted P2 RA.2). This file keeps

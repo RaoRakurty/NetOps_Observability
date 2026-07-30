@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Tests for the Logs "don't hide" surface (owner directive): the retention
 // floor and the search read must (a) stay tenant-scoped through the shared

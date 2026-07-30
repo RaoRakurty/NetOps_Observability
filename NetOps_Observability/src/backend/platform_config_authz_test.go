@@ -1,4 +1,4 @@
-package main
+package backend
 
 // platform_config_authz_test.go — platform-GLOBAL config (auth providers, LLM
 // key, token policy, notification channels) is single-instance "platform

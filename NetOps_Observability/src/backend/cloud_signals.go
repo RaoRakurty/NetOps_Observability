@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_signals.go — the REAL cloud health / change / evidence read surfaces
 // behind App Observability's Health & Changes and Evidence tabs (#81 P3H).

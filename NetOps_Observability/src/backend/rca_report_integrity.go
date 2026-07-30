@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_report_integrity.go — Phase 1 report immutability (postmortem spec
 // "Additional mandatory" + §7): a generated document embeds an analysis

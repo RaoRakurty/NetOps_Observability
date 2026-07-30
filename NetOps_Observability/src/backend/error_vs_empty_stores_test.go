@@ -1,4 +1,4 @@
-package main
+package backend
 
 // error_vs_empty_stores_test.go — proof for the file-backed store half of the
 // CLAUDE.md §10 conflation cleanup (see silent_failure_guards_test.go for the

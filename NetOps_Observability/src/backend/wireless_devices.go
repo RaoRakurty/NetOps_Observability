@@ -1,4 +1,4 @@
-package main
+package backend
 
 // wireless_devices.go — project the wireless canonical inventory into the
 // /api/devices fleet view (#128 follow-on, owner request 2026-07-26).

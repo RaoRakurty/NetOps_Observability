@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_action_items.go — Phase 1 structured action items (postmortem spec §3 +
 // §7, docs/design/rca-postmortem-enhancements-spec.md).

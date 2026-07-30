@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_ssh.go — opt-in, zero-trust SSH-over-WebSocket gateway for the
 // Infrastructure → Devices page. The browser runs an xterm.js terminal; this

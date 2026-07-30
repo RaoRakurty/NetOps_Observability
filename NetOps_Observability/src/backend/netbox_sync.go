@@ -1,4 +1,4 @@
-package main
+package backend
 
 // netbox_sync.go — reconciles DISCOVERED devices INTO NetBox as the source of
 // truth (the reverse of discovery.NetboxSource, which reads FROM NetBox). REST + idempotent

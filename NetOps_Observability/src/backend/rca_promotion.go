@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_promotion.go — #113 point 3: RCA creation policy. An RCA document is a
 // management/C-suite artifact for REAL outages (a primary network failure that

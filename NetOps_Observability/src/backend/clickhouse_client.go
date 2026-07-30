@@ -1,4 +1,4 @@
-package main
+package backend
 
 // clickhouse_client.go — the main package's adapter onto the chhttp seam.
 //

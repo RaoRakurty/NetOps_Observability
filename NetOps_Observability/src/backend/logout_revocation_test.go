@@ -1,4 +1,4 @@
-package main
+package backend
 
 // logout_revocation_test.go — F-70.
 //

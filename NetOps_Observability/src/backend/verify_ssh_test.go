@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_ssh_test.go — the SSH runner's defense-in-depth refusal: even when a
 // caller hands it an arbitrary command, a non-allowlisted command is refused

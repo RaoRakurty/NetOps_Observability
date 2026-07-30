@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Cross-tenant isolation for the flow attribution scans (§3a.5). The flows row
 // policy is HYBRID — untagged rows are shared to every tenant scope — so the

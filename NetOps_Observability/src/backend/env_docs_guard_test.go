@@ -1,4 +1,4 @@
-package main
+package backend
 
 // env_docs_guard_test.go — the CLASS guard behind INVARIANTS standing gap #6.
 //

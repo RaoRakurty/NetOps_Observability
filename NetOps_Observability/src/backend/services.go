@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Service catalog (#69 §2, P2) — the semantic lens over the truth streams.
 // Postgres-backed (lifecycle/catalog state, RLS tenant-isolated), nil on the file

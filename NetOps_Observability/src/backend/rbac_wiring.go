@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rbac_wiring.go — main-side aliases for the extracted internal/rbac domain
 // (P2 W4.14): the role model + store, the role_binding store and the scope-id

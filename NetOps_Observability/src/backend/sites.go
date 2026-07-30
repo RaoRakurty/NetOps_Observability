@@ -1,4 +1,4 @@
-package main
+package backend
 
 // sites.go — the internal Source-of-Truth sites store: operator-declared sites
 // (name, slug, coordinates) persisted in the platform itself, so geo / placement

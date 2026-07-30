@@ -1,4 +1,4 @@
-package main
+package backend
 
 // org_isolation_test.go — end-to-end CROSS-ORG isolation, exercised through the
 // REAL router + auth middleware (httptest), the way the running system behaves

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_metrics_series.go — tenant-scoped cloud metric time-series (Wave 5 #14
 // slice 1). The provider metric lane (CloudWatch / Azure Monitor / GCP

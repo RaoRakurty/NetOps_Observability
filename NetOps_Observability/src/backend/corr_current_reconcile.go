@@ -1,4 +1,4 @@
-package main
+package backend
 
 // corr_current_reconcile.go — corr_current projection repair (#101).
 //

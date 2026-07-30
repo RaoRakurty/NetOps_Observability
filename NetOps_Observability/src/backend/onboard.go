@@ -1,4 +1,4 @@
-package main
+package backend
 
 // onboard.go — operator-driven customer onboarding (the AWS Control-Tower /
 // Azure-CSP analog): create an org AND its first tenant (the data boundary) in one

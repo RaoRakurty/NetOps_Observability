@@ -1,4 +1,4 @@
-package main
+package backend
 
 // route_isolation_coverage_test.go — CLAUDE.md §3a RULE 5 enforcement.
 //

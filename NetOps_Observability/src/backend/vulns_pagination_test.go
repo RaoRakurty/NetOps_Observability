@@ -1,4 +1,4 @@
-package main
+package backend
 
 // vulns_pagination_test.go — regression guards for audit F-79.
 //

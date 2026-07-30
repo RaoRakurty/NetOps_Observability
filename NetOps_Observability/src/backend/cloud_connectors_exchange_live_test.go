@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_connectors_exchange_live_test.go — end-to-end tests for the LIVE
 // credential-exchange path through the REAL stack: router + auth middleware →

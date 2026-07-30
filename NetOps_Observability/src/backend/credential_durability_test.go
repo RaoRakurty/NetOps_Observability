@@ -1,4 +1,4 @@
-package main
+package backend
 
 // credential_durability_test.go — F-76.
 //

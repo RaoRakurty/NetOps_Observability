@@ -1,4 +1,4 @@
-package main
+package backend
 
 // path_health_baselines_test.go — PBH V1 precompute: hour-of-week bucketing,
 // exact quantiles, readiness gates, insert shape, and the tier-2 reader's

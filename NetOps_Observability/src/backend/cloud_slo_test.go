@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_slo_test.go — unit tests for the SLO/error-budget slice (Wave 5 #14
 // slice 2): validation bounds, budget math, and the honesty contract of the

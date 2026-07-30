@@ -1,4 +1,4 @@
-package main
+package backend
 
 // alert_episodes_isolation_test.go — §3a cross-org isolation guard for the
 // alert-episode surface, exercised through the REAL router + auth middleware

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // region_router.go — the ROUTING / EDGE LAYER of the SaaS topology
 // (control plane → routing → per-region data planes). This is the MODEL: it

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // appid_catalog.go — Application Identification resolver wiring (#81 P1). Loads the
 // free, vendor-published IP-range feeds (AWS/Azure/GCP/M365) from an opt-in on-disk

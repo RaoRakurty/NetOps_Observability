@@ -1,4 +1,4 @@
-package main
+package backend
 
 // rca_promotion_test.go — #113 point 3: RCA documents are a promoted tier, not
 // every candidate. Covers: the auto-promotion criteria (confirmed verdict ·

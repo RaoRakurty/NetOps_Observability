@@ -1,4 +1,4 @@
-package main
+package backend
 
 // copilot_config.go — main-side wiring for the assistant's runtime config
 // custody (ai.CopilotConfigStore, extracted P2 RA.7). This file keeps the env

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // snmp_profiles_seed.go — built-in SNMP vendor profiles.
 //

@@ -1,4 +1,4 @@
-package main
+package backend
 
 // cloud_ingestion.go — GET /api/cloud/ingestion: the REAL per-source ingestion
 // status behind App Observability's Sources / Ingestion-Status matrices.

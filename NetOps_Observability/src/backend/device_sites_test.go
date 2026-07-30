@@ -1,4 +1,4 @@
-package main
+package backend
 
 // device_sites_test.go — unit + cross-org isolation for the operator device→site
 // binding (Phase 3 SoT remainder). The isolation test (CLAUDE.md §3a) runs through

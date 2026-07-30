@@ -1,4 +1,4 @@
-package main
+package backend
 
 // tenant_governance.go — per-tenant GOVERNANCE settings (Wave 4 #11, the real
 // Settings editors). Sibling of tenant_display.go: the same file-backed,

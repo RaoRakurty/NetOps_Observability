@@ -1,4 +1,4 @@
-package main
+package backend
 
 // package_growth_guard_test.go — a RATCHET on the flat `package main`.
 //

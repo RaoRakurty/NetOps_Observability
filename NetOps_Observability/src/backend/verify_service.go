@@ -1,4 +1,4 @@
-package main
+package backend
 
 // verify_service.go — Active Verification service layer (RCA spec item 8):
 // per-tenant opt-in config (default OFF), the bounded run store, target

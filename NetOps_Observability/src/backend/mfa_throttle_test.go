@@ -1,4 +1,4 @@
-package main
+package backend
 
 // mfa_throttle_test.go — the TOTP second factor must be as brute-force-resistant
 // as the first. /api/auth/mfa/login is PUBLIC and totp.Verify accepts a ±1-step

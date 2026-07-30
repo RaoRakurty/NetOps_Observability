@@ -1,4 +1,4 @@
-package main
+package backend
 
 // Capacity forecast (#69 panel 10) — days-to-90% utilization per interface from a
 // linear trend over VM range data. Honest: < 14 days of history ⇒ "building

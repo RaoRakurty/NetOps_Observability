@@ -1,4 +1,4 @@
-package main
+package backend
 
 // alert_episodes_test.go — the engine→server adapters and the HTTP triage
 // surface + audit trail. The pure store suite moved to alerts/episodes_test.go
