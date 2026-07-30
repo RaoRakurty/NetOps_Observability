@@ -1,6 +1,7 @@
 package main
 
 import (
+	"netops/backend/notify"
 	"path/filepath"
 	"testing"
 )
@@ -20,14 +21,14 @@ func TestContactPointValidation(t *testing.T) {
 		{"unknown type", ContactPoint{Name: "x", Type: "carrier-pigeon"}, true},
 	}
 	for _, c := range cases {
-		_, err := validateContactPoint(c.in)
+		_, err := notify.ValidateContactPoint(c.in)
 		if (err != nil) != c.wantErr {
 			t.Errorf("%s: err=%v, wantErr=%v", c.name, err, c.wantErr)
 		}
 	}
 
 	// De-dupes addresses (case-insensitive) and drops the unused Target.
-	got, err := validateContactPoint(ContactPoint{Name: "NOC", Type: "EMAIL", Email: []string{"a@x.io", "A@X.io", "b@x.io"}, Target: "ignored"})
+	got, err := notify.ValidateContactPoint(ContactPoint{Name: "NOC", Type: "EMAIL", Email: []string{"a@x.io", "A@X.io", "b@x.io"}, Target: "ignored"})
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
@@ -37,7 +38,8 @@ func TestContactPointValidation(t *testing.T) {
 }
 
 func TestContactPointStoreCRUDAndResolve(t *testing.T) {
-	s, err := newContactPointStore(filepath.Join(t.TempDir(), "cp.json"))
+	storePath := filepath.Join(t.TempDir(), "cp.json")
+	s, err := newContactPointStore(storePath)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -61,18 +63,18 @@ func TestContactPointStoreCRUDAndResolve(t *testing.T) {
 	}
 
 	// Reload through the backend.
-	s2, _ := newContactPointStore(s.path)
+	s2, _ := newContactPointStore(storePath)
 	if _, ok := s2.Get(acme.ID); !ok {
 		t.Error("reloaded store should see the acme point")
 	}
 
 	// resolveEmailRecipients: tenant-scoped, dedup, skip disabled + other tenants.
-	got := s.resolveEmailRecipients([]string{acme.ID, globex.ID, disabled.ID}, "acme", false)
+	got := s.ResolveEmailRecipients([]string{acme.ID, globex.ID, disabled.ID}, "acme", false)
 	if len(got) != 2 { // acme's two addresses; globex hidden, disabled skipped
 		t.Errorf("acme scope resolve = %v, want 2 acme addrs", got)
 	}
 	// Platform owner ('*') sees across tenants.
-	if all := s.resolveEmailRecipients([]string{acme.ID, globex.ID}, "", true); len(all) != 3 {
+	if all := s.ResolveEmailRecipients([]string{acme.ID, globex.ID}, "", true); len(all) != 3 {
 		t.Errorf("platform resolve = %v, want 3", all)
 	}
 

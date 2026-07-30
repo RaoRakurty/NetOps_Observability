@@ -3,12 +3,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"netops/backend/internal/platformdb"
-	"sort"
+	"netops/backend/notify"
 	"strings"
-	"sync"
 )
 
 // contactpoints.go — reusable, tenant-scoped notification audiences (Phase 1 of
@@ -25,210 +22,17 @@ import (
 // concrete send at delivery time (Phase 2) by reusing the existing notify
 // constructors with the point's recipients; no global channel state is mutated.
 
-// contactPointType enumerates the supported destination kinds.
-const (
-	contactEmail   = "email"
-	contactSlack   = "slack"
-	contactWebhook = "webhook"
+// The model, store, validator and the tenant-fenced RESOLUTION GATES live in
+// notify/contact_points.go (P2 RA.13); this file keeps the admin handlers
+// (principal resolution, the 404-not-403 probe fence, owner stamping).
+
+type (
+	ContactPoint      = notify.ContactPoint
+	contactPointStore = notify.ContactPointStore
 )
 
-// ContactPoint is one reusable audience. Email-type points carry an address
-// list (a distribution group); slack/webhook carry a target URL. No secrets live
-// here — the SMTP transport/credentials stay in notify.SMTPConfig.
-type ContactPoint struct {
-	ID       string   `json:"id"`
-	TenantID string   `json:"tenant_id,omitempty"` // owner; "" = platform/global
-	Name     string   `json:"name"`
-	Type     string   `json:"type"` // email | slack | webhook
-	Email    []string `json:"email,omitempty"`
-	Target   string   `json:"target,omitempty"` // slack/generic webhook URL
-	Enabled  bool     `json:"enabled"`
-}
-
-type contactPointStore struct {
-	mu    sync.RWMutex
-	path  string
-	items map[string]ContactPoint
-}
-
 func newContactPointStore(path string) (*contactPointStore, error) {
-	if path == "" {
-		path = "/data/contact_points.json"
-	}
-	s := &contactPointStore{path: path, items: make(map[string]ContactPoint)}
-	if err := s.load(); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-func (s *contactPointStore) load() error {
-	b, err := platformdb.Load(s.path)
-	if err != nil {
-		return nil // absent store → empty (errors.Is(os.ErrNotExist) for both backends)
-	}
-	var list []ContactPoint
-	if err := json.Unmarshal(b, &list); err != nil {
-		return err
-	}
-	for _, c := range list {
-		s.items[c.ID] = c
-	}
-	return nil
-}
-
-func (s *contactPointStore) flushLocked() error {
-	list := make([]ContactPoint, 0, len(s.items))
-	for _, c := range s.items {
-		list = append(list, c)
-	}
-	b, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	return platformdb.Save(s.path, b)
-}
-
-// List returns all contact points sorted by name (handler applies tenant scope).
-func (s *contactPointStore) List() []ContactPoint {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]ContactPoint, 0, len(s.items))
-	for _, c := range s.items {
-		out = append(out, c)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-func (s *contactPointStore) Get(id string) (ContactPoint, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.items[id]
-	return c, ok
-}
-
-// validateContactPoint normalizes and checks a point. Pure (no I/O) so it is
-// unit-testable and shared by Upsert.
-func validateContactPoint(c ContactPoint) (ContactPoint, error) {
-	c.Name = strings.TrimSpace(c.Name)
-	c.Type = strings.ToLower(strings.TrimSpace(c.Type))
-	c.Target = strings.TrimSpace(c.Target)
-	if c.Name == "" {
-		return ContactPoint{}, errors.New("name required")
-	}
-	switch c.Type {
-	case contactEmail:
-		seen := map[string]bool{}
-		clean := make([]string, 0, len(c.Email))
-		for _, e := range c.Email {
-			e = strings.TrimSpace(e)
-			if e == "" || seen[strings.ToLower(e)] {
-				continue
-			}
-			if !strings.Contains(e, "@") {
-				return ContactPoint{}, fmt.Errorf("invalid email address %q", e)
-			}
-			seen[strings.ToLower(e)] = true
-			clean = append(clean, e)
-		}
-		if len(clean) == 0 {
-			return ContactPoint{}, errors.New("an email contact point needs at least one address")
-		}
-		c.Email = clean
-		c.Target = ""
-	case contactSlack, contactWebhook:
-		if c.Target == "" {
-			return ContactPoint{}, fmt.Errorf("a %s contact point needs a target URL", c.Type)
-		}
-		c.Email = nil
-	default:
-		return ContactPoint{}, fmt.Errorf("unknown contact point type %q (want email|slack|webhook)", c.Type)
-	}
-	return c, nil
-}
-
-// Upsert validates and stores a contact point, minting an id on create.
-func (s *contactPointStore) Upsert(c ContactPoint) (ContactPoint, error) {
-	c, err := validateContactPoint(c)
-	if err != nil {
-		return ContactPoint{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c.ID == "" {
-		c.ID = "cp_" + randHex(8)
-	}
-	prev, existed := s.items[c.ID]
-	s.items[c.ID] = c
-	if err := s.flushLocked(); err != nil {
-		if existed {
-			s.items[c.ID] = prev
-		} else {
-			delete(s.items, c.ID)
-		}
-		return ContactPoint{}, err
-	}
-	return c, nil
-}
-
-func (s *contactPointStore) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.items[id]; !ok {
-		return errors.New("no such contact point")
-	}
-	delete(s.items, id)
-	return s.flushLocked()
-}
-
-// resolveEmailRecipients returns the de-duplicated set of email addresses across
-// the named email-type contact points that the given tenant scope may use. Phase
-// 2 (report delivery) calls this to turn a report's contact-point ids into a
-// recipient list. Disabled points and points outside the caller's tenant are
-// skipped. Non-email types are ignored here (resolved per-type at send time).
-func (s *contactPointStore) resolveEmailRecipients(ids []string, tenant string, cross bool) []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	seen := map[string]bool{}
-	var out []string
-	for _, id := range ids {
-		c, ok := s.items[id]
-		if !ok || !c.Enabled || c.Type != contactEmail {
-			continue
-		}
-		if !sameTenant(c.TenantID, tenant, cross) {
-			continue
-		}
-		for _, e := range c.Email {
-			if k := strings.ToLower(e); !seen[k] {
-				seen[k] = true
-				out = append(out, e)
-			}
-		}
-	}
-	return out
-}
-
-// resolveWebhookPoints returns the enabled slack/webhook-type contact points in
-// scope with a usable target — the non-email delivery destinations for a report.
-func (s *contactPointStore) resolveWebhookPoints(ids []string, tenant string, cross bool) []ContactPoint {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []ContactPoint
-	for _, id := range ids {
-		c, ok := s.items[id]
-		if !ok || !c.Enabled || c.Target == "" {
-			continue
-		}
-		if c.Type != contactSlack && c.Type != contactWebhook {
-			continue
-		}
-		if sameTenant(c.TenantID, tenant, cross) {
-			out = append(out, c)
-		}
-	}
-	return out
+	return notify.NewContactPointStore(path)
 }
 
 // ---- handlers (admin-gated, tenant-scoped) ---------------------------------

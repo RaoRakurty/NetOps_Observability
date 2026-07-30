@@ -356,7 +356,7 @@ func (rs *reportScheduler) deliverToContactPoints(msg models.Alert, o saved.Obje
 	}
 	t := normTenant(o.TenantID)
 	cross := t == "" || t == TenantGlobal
-	recipients := rs.srv.contactPoints.resolveEmailRecipients(spec.ContactPoints, t, cross)
+	recipients := rs.srv.contactPoints.ResolveEmailRecipients(spec.ContactPoints, t, cross)
 	if len(recipients) == 0 {
 		return 0, "contact points resolved to no email recipients"
 	}

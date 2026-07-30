@@ -42,8 +42,8 @@ type docSender interface {
 
 func newReportDelivery(s *server) *reportDelivery {
 	return &reportDelivery{
-		resolveEmail:    s.contactPoints.resolveEmailRecipients,
-		resolveWebhooks: s.contactPoints.resolveWebhookPoints,
+		resolveEmail:    s.contactPoints.ResolveEmailRecipients,
+		resolveWebhooks: s.contactPoints.ResolveWebhookPoints,
 		emailSender: func(recipients []string) (docSender, bool) {
 			e, ok := s.notifyCfg.emailSenderTo(recipients)
 			if !ok {
