@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"netops/backend/internal/oidc"
+
+	"time"
 )
 
 func TestOIDCConfigStoreSetEffectiveAndReload(t *testing.T) {
@@ -54,7 +58,7 @@ func TestOIDCConfigSecretPreservedOnEmptyUpdate(t *testing.T) {
 
 func TestOIDCPublicNeverLeaksSecret(t *testing.T) {
 	c := oidcConfig{Enabled: true, Issuer: "https://idp", ClientID: "a", ClientSecret: "topsecret"}
-	pub := c.public()
+	pub := c.Public()
 	if !pub.ClientSecretSet {
 		t.Fatal("client_secret_set should be true")
 	}
@@ -86,10 +90,10 @@ func TestOIDCConfigValidate(t *testing.T) {
 
 func TestOIDCSetRebuildsAndSwapsProvider(t *testing.T) {
 	srv := &server{}
-	srv.oidc.Store(newOIDCProviderFromConfig(oidcConfig{})) // disabled initial provider
+	srv.oidc.Store(oidc.NewProviderFromConfig(oidcConfig{}, 10*time.Minute)) // disabled initial provider
 	st := newOIDCConfigStore(t.TempDir()+"/oidc.json", srv)
 
-	if srv.oidcProvider().ready() {
+	if srv.oidcProvider().Ready() {
 		t.Fatal("provider should not be ready before config")
 	}
 	if _, err := st.set(oidcConfig{
@@ -100,10 +104,10 @@ func TestOIDCSetRebuildsAndSwapsProvider(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 	p := srv.oidcProvider()
-	if !p.ready() {
+	if !p.Ready() {
 		t.Fatalf("provider not ready after valid config: %+v", p)
 	}
-	if p.issuer != "https://idp.example.com/realms/netops" || p.clientID != "netops" {
+	if p.Issuer() != "https://idp.example.com/realms/netops" || p.ClientID() != "netops" {
 		t.Fatalf("provider not rebuilt from config: %+v", p)
 	}
 }

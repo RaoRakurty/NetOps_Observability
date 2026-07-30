@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 
 // mfaSatisfied honors the IdP's MFA: an amr second factor, or a configured acr.
 func TestOIDCMFASatisfied(t *testing.T) {
-	p := &oidcProvider{mfaAcr: splitSet("urn:okta:loa:2fa,gold")}
+	p := &Provider{mfaAcr: splitSet("urn:okta:loa:2fa,gold")}
 
 	cases := []struct {
 		name string
@@ -25,7 +25,7 @@ func TestOIDCMFASatisfied(t *testing.T) {
 		{"amr case-insensitive", jwks.Claims{Amr: []string{"OTP"}}, true},
 	}
 	for _, tc := range cases {
-		if got := p.mfaSatisfied(tc.c); got != tc.want {
+		if got := p.MFASatisfied(tc.c); got != tc.want {
 			t.Errorf("%s: mfaSatisfied = %v, want %v", tc.name, got, tc.want)
 		}
 	}

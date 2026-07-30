@@ -3,16 +3,14 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"netops/backend/internal/jwks"
+	"netops/backend/internal/oidc"
 )
 
 // oidc.go — Single Sign-On via Keycloak (broker-and-reissue model).
@@ -35,196 +33,13 @@ import (
 // line of SAML in Go. See docs/IDENTITY_ACCESS.md.
 
 // ssoProviderInfo describes a sign-in button for the UI / login page.
-type ssoProviderInfo struct {
-	ID   string `json:"id"`   // kc_idp_hint; "" = realm default (plain OIDC)
-	Name string `json:"name"` // display label
-	Kind string `json:"kind"` // oidc | saml | ldap
-}
-
-type oidcProvider struct {
-	enabled       bool
-	clientID      string
-	clientSecret  string
-	scopes        string
-	issuer        string
-	redirectURL   string // optional override; else derived from the request
-	postLoginURL  string
-	defaultRole   string
-	defaultTenant string
-	adminRoles    map[string]bool
-	operatorRoles map[string]bool
-	providers     []ssoProviderInfo
-	requireMFA    bool
-	mfaAcr        map[string]bool // acr values that count as MFA (IdP-specific)
-
-	jwks  *jwks.Cache
-	httpc *http.Client // token-exchange client (the JWKS cache keeps its own)
-}
-
-// jwksTTL is how long signing keys are cached before a refresh. This is the IdP
-// cert-rollover refresh interval (best practice: hours). We default to 10 minutes
-// — well within range and more current than typical — and the cache also refreshes
-// on an unknown-kid miss, so a rotation is picked up immediately regardless.
-// Tunable via OIDC_JWKS_TTL_MIN (minutes); clamped to [1, 1440].
-func jwksTTL() time.Duration {
-	m := 10
-	if v := os.Getenv("OIDC_JWKS_TTL_MIN"); v != "" {
-		if n, err := parseIntStrict(v); err == nil && n >= 1 && n <= 1440 {
-			m = n
-		}
-	}
-	return time.Duration(m) * time.Minute
-}
-
-// mfaAmrMethods are amr values that indicate a SECOND factor was used (anything
-// beyond a bare password). Broad on purpose to interop across IdPs (Okta, Entra,
-// Keycloak, Auth0, Ping…). "pwd"/"password" alone is NOT MFA.
-var mfaAmrMethods = map[string]bool{
-	"mfa": true, "otp": true, "totp": true, "hwk": true, "swk": true, "sms": true,
-	"tel": true, "phone": true, "phr": true, "phrh": true, "pin": true, "fpt": true,
-	"face": true, "iris": true, "vbm": true, "kba": true, "webauthn": true, "u2f": true,
-	"hotp": true, "mca": true, "sc": true, "wia": true,
-}
-
-// mfaSatisfied reports whether the IdP token asserts a second factor: an amr entry
-// in mfaAmrMethods, or an acr value the operator listed as MFA. Used only when
-// requireMFA is on.
-func (p *oidcProvider) mfaSatisfied(c jwks.Claims) bool {
-	for _, m := range c.Amr {
-		if mfaAmrMethods[strings.ToLower(strings.TrimSpace(m))] {
-			return true
-		}
-	}
-	if p.mfaAcr != nil && c.Acr != "" && p.mfaAcr[strings.TrimSpace(c.Acr)] {
-		return true
-	}
-	return false
-}
-
-func splitSet(csv string) map[string]bool {
-	m := map[string]bool{}
-	for _, p := range strings.Split(csv, ",") {
-		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
-			m[p] = true
-		}
-	}
-	return m
-}
-
-// parseProviders turns "id:Label:kind,id2:Label2:kind2" into the button list.
-// A bare "id" defaults to kind=oidc and Label=id.
-func parseProviders(csv string) []ssoProviderInfo {
-	var out []ssoProviderInfo
-	for _, raw := range strings.Split(csv, ",") {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		parts := strings.SplitN(raw, ":", 3)
-		p := ssoProviderInfo{ID: strings.TrimSpace(parts[0]), Kind: "oidc"}
-		p.Name = p.ID
-		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
-			p.Name = strings.TrimSpace(parts[1])
-		}
-		if len(parts) > 2 && strings.TrimSpace(parts[2]) != "" {
-			p.Kind = strings.ToLower(strings.TrimSpace(parts[2]))
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
-// newOIDCProvider builds the SSO provider from the environment. It returns a
-// disabled provider (enabled=false) when OIDC_ENABLED!=true so the rest of the
-// app is unaffected — local accounts remain the always-available fallback.
-//
-// It is a thin wrapper over newOIDCProviderFromConfig(newOIDCConfigFromEnv()):
-// the env vars define the initial config, and the runtime overlay (oidc_config.go,
-// admin UI) rebuilds the provider from a stored oidcConfig with identical shape.
-func newOIDCProvider() *oidcProvider {
-	return newOIDCProviderFromConfig(newOIDCConfigFromEnv())
-}
-
-// newOIDCProviderFromConfig builds a live provider from an oidcConfig. The same
-// path is used for the env-derived initial provider and for every admin-driven
-// rebuild, so there is one construction path and no drift between the two.
-func newOIDCProviderFromConfig(c oidcConfig) *oidcProvider {
-	p := &oidcProvider{
-		enabled:       c.Enabled,
-		clientID:      strings.TrimSpace(c.ClientID),
-		clientSecret:  c.ClientSecret,
-		scopes:        firstNonEmpty(strings.TrimSpace(c.Scopes), "openid email profile"),
-		issuer:        strings.TrimRight(strings.TrimSpace(c.Issuer), "/"),
-		redirectURL:   strings.TrimSpace(c.RedirectURL),
-		postLoginURL:  firstNonEmpty(strings.TrimSpace(c.PostLoginURL), "/"),
-		defaultRole:   firstNonEmpty(strings.TrimSpace(c.DefaultRole), RoleReadOnly),
-		defaultTenant: firstNonEmpty(strings.TrimSpace(c.DefaultTenant), TenantGlobal),
-		adminRoles:    splitSet(firstNonEmpty(strings.TrimSpace(c.AdminRoles), "super-admin,admin,netops-admin")),
-		operatorRoles: splitSet(firstNonEmpty(strings.TrimSpace(c.OperatorRoles), "operator,netops-operator")),
-		providers:     parseProviders(c.Providers),
-		requireMFA:    c.RequireMFA,
-		mfaAcr:        splitSet(strings.TrimSpace(c.MFAAcr)),
-		httpc:         &http.Client{Timeout: 10 * time.Second},
-	}
-	if p.enabled && p.issuer != "" {
-		p.jwks = jwks.New(p.issuer, jwksTTL())
-	}
-	// Always offer at least the realm-default OIDC button when enabled.
-	if p.enabled && len(p.providers) == 0 {
-		p.providers = []ssoProviderInfo{{ID: "", Name: "Single Sign-On", Kind: "oidc"}}
-	}
-	return p
-}
-
-func (p *oidcProvider) ready() bool {
-	return p != nil && p.enabled && p.issuer != "" && p.clientID != "" && p.jwks != nil
-}
-
-// roleFor maps Keycloak realm roles / groups onto a NetOps built-in role.
-func (p *oidcProvider) roleFor(c jwks.Claims) string {
-	names := append([]string{}, c.RealmAccess.Roles...)
-	names = append(names, c.Groups...)
-	for _, n := range names {
-		if p.adminRoles[strings.ToLower(strings.TrimSpace(strings.TrimPrefix(n, "/")))] {
-			return RoleSuperAdmin
-		}
-	}
-	for _, n := range names {
-		if p.operatorRoles[strings.ToLower(strings.TrimSpace(strings.TrimPrefix(n, "/")))] {
-			return RoleOperator
-		}
-	}
-	return p.defaultRole
-}
-
-func (p *oidcProvider) callbackURL(r *http.Request) string {
-	if p.redirectURL != "" {
-		return p.redirectURL
-	}
-	scheme := "http"
-	if xf := r.Header.Get("X-Forwarded-Proto"); xf != "" {
-		scheme = xf
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-	host := r.Host
-	if xh := r.Header.Get("X-Forwarded-Host"); xh != "" {
-		host = xh
-	}
-	return scheme + "://" + host + "/api/auth/sso/callback"
-}
-
-// ---- handlers --------------------------------------------------------------
-
-// handleSSOConfig (public) tells the SPA whether SSO is on and which buttons to
-// render. Never leaks the client secret.
 func (s *server) handleSSOConfig(w http.ResponseWriter, _ *http.Request) {
 	p := s.oidcProvider()
-	if !p.ready() {
+	if !p.Ready() {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "providers": []ssoProviderInfo{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "providers": p.providers})
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "providers": p.Providers()})
 }
 
 const ssoStateCookie = "netops_sso_state"
@@ -233,13 +48,8 @@ const ssoStateCookie = "netops_sso_state"
 // cookie and 302 to Keycloak. ?idp=<id> selects a federated IdP via kc_idp_hint.
 func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 	p := s.oidcProvider()
-	if !p.ready() {
+	if !p.Ready() {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
-		return
-	}
-	disc, err := p.jwks.Discovery()
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 	state, err := randomToken(24)
@@ -262,32 +72,19 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
-	q := url.Values{}
-	q.Set("client_id", p.clientID)
-	q.Set("response_type", "code")
-	q.Set("scope", p.scopes)
-	q.Set("redirect_uri", p.callbackURL(r))
-	q.Set("state", state)
-	if idp := strings.TrimSpace(r.URL.Query().Get("idp")); idp != "" {
-		q.Set("kc_idp_hint", idp)
+	authURL, err := p.AuthorizeURL(p.CallbackURL(r), state, strings.TrimSpace(r.URL.Query().Get("idp")))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
 	}
-	// When MFA is required, ASK the IdP to step up (acr_values). Enforcement still
-	// happens at the callback (mfaSatisfied) — this just nudges the IdP to do it.
-	if p.requireMFA && len(p.mfaAcr) > 0 {
-		acrs := make([]string, 0, len(p.mfaAcr))
-		for a := range p.mfaAcr {
-			acrs = append(acrs, a)
-		}
-		q.Set("acr_values", strings.Join(acrs, " "))
-	}
-	http.Redirect(w, r, disc.AuthEndpoint+"?"+q.Encode(), http.StatusFound)
+	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // handleSSOCallback (public) completes the flow: validate state, exchange the
 // code, verify the ID token, JIT-provision the user and re-issue our session.
 func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	p := s.oidcProvider()
-	if !p.ready() {
+	if !p.Ready() {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
 		return
 	}
@@ -319,19 +116,19 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "missing authorization code")
 		return
 	}
-	idToken, err := p.exchange(code, p.callbackURL(r))
+	idToken, err := p.Exchange(code, p.CallbackURL(r))
 	if err != nil {
 		s.ssoFail(w, r, "token exchange failed: "+err.Error())
 		return
 	}
-	claims, err := p.jwks.VerifyRS256(idToken, p.issuer, p.clientID)
+	claims, err := p.VerifyIDToken(idToken)
 	if err != nil {
 		s.ssoFail(w, r, "id token rejected: "+err.Error())
 		return
 	}
 	// Honor the IdP's MFA: when required, the token must assert a second factor
 	// (amr/acr). We don't run MFA for SSO users — we verify the IdP did.
-	if p.requireMFA && !p.mfaSatisfied(claims) {
+	if p.RequireMFA() && !p.MFASatisfied(claims) {
 		logWarn("auth", "sso login rejected — MFA required but not asserted by IdP", map[string]any{"sub": claims.Sub, "amr": claims.Amr, "acr": claims.Acr})
 		s.ssoFail(w, r, "multi-factor authentication is required — your identity provider did not confirm a second factor")
 		return
@@ -342,8 +139,8 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "id token carried no usable subject")
 		return
 	}
-	role := p.roleFor(claims)
-	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", p.defaultTenant)
+	role := p.RoleFor(claims)
+	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", p.DefaultTenant())
 	if err != nil {
 		s.ssoFail(w, r, "provisioning failed: "+err.Error())
 		return
@@ -370,59 +167,18 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	frag.Set("token", access)
 	frag.Set("refresh", refresh)
 	frag.Set("sso", "1")
-	http.Redirect(w, r, p.postLoginURL+"#"+frag.Encode(), http.StatusFound)
+	http.Redirect(w, r, p.PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
 }
 
 func (s *server) ssoFail(w http.ResponseWriter, r *http.Request, msg string) {
 	logInfo("auth", "sso login failed", map[string]any{"reason": msg})
 	frag := url.Values{}
 	frag.Set("sso_error", msg)
-	http.Redirect(w, r, s.oidcProvider().postLoginURL+"#"+frag.Encode(), http.StatusFound)
+	http.Redirect(w, r, s.oidcProvider().PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
 }
 
 // exchange trades an authorization code for tokens at Keycloak's token endpoint
 // and returns the raw ID token.
-func (p *oidcProvider) exchange(code, redirectURI string) (string, error) {
-	disc, err := p.jwks.Discovery()
-	if err != nil {
-		return "", err
-	}
-	form := url.Values{}
-	form.Set("grant_type", "authorization_code")
-	form.Set("code", code)
-	form.Set("redirect_uri", redirectURI)
-	form.Set("client_id", p.clientID)
-	req, err := http.NewRequest(http.MethodPost, disc.TokenEndpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	if p.clientSecret != "" {
-		req.SetBasicAuth(url.QueryEscape(p.clientID), url.QueryEscape(p.clientSecret))
-	}
-	resp, err := p.httpc.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 300 {
-		return "", errors.New(strings.TrimSpace(string(body)))
-	}
-	var tok struct {
-		IDToken     string `json:"id_token"`
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return "", err
-	}
-	if tok.IDToken == "" {
-		return "", errors.New("no id_token in token response")
-	}
-	return tok.IDToken, nil
-}
-
 func randomToken(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -430,3 +186,35 @@ func randomToken(n int) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// jwksTTL is how long signing keys are cached before a refresh. This is the IdP
+// cert-rollover refresh interval (best practice: hours). We default to 10 minutes
+// — well within range and more current than typical — and the cache also refreshes
+// on an unknown-kid miss, so a rotation is picked up immediately regardless.
+// Tunable via OIDC_JWKS_TTL_MIN (minutes); clamped to [1, 1440].
+func jwksTTL() time.Duration {
+	m := 10
+	if v := os.Getenv("OIDC_JWKS_TTL_MIN"); v != "" {
+		if n, err := parseIntStrict(v); err == nil && n >= 1 && n <= 1440 {
+			m = n
+		}
+	}
+	return time.Duration(m) * time.Minute
+}
+
+// mfaAmrMethods are amr values that indicate a SECOND factor was used (anything
+// beyond a bare password). Broad on purpose to interop across IdPs (Okta, Entra,
+// Keycloak, Auth0, Ping…). "pwd"/"password" alone is NOT MFA.
+
+// newOIDCProvider builds the env-derived initial provider (the admin overlay
+// rebuilds via the same package path).
+func newOIDCProvider() *oidcProvider {
+	return oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())
+}
+
+// The provider + config domain moved to internal/oidc (Phase-2 W4.4).
+type (
+	oidcProvider    = oidc.Provider
+	oidcConfig      = oidc.Config
+	ssoProviderInfo = oidc.ProviderInfo
+)

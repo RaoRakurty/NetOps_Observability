@@ -929,12 +929,12 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		}
 		// Otherwise, if SSO is configured, accept a Keycloak-signed RS256 Bearer
 		// (service accounts / direct API clients) verified against its JWKS.
-		if op := s.oidcProvider(); op.ready() {
-			if oc, verr := op.jwks.VerifyRS256(bearer, op.issuer, op.clientID); verr == nil {
+		if op := s.oidcProvider(); op.Ready() {
+			if oc, verr := op.VerifyBearer(bearer); verr == nil {
 				ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, jwtClaims{
 					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
-					Role:   op.roleFor(oc),
-					Tenant: op.defaultTenant,
+					Role:   op.RoleFor(oc),
+					Tenant: op.DefaultTenant(),
 				}))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

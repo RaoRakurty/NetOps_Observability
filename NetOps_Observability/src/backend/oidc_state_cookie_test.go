@@ -6,6 +6,10 @@ import (
 	"net/http/httptest"
 	"netops/backend/internal/jwks"
 	"testing"
+
+	"netops/backend/internal/oidc"
+
+	"time"
 )
 
 // oidc_state_cookie_test.go — the SSO state cookie is the CSRF defence for the
@@ -29,21 +33,21 @@ import (
 // test IdP (or anywhere unreachable) — the login handler never calls it.
 func testSSOServer(t *testing.T, tokenEndpoint string) *server {
 	t.Helper()
-	p := newOIDCProviderFromConfig(oidcConfig{
+	p := oidc.NewProviderFromConfig(oidcConfig{
 		Enabled:  true,
 		Issuer:   "https://idp.example.test/realms/netops",
 		ClientID: "netops-api",
-	})
-	if p.jwks == nil {
+	}, 10*time.Minute)
+	if p.JWKS() == nil {
 		t.Fatal("provider built without a JWKS cache — cannot exercise the SSO handlers")
 	}
-	p.jwks.SeedDiscoveryForTest(&jwks.Discovery{
-		Issuer:        p.issuer,
-		AuthEndpoint:  p.issuer + "/protocol/openid-connect/auth",
+	p.JWKS().SeedDiscoveryForTest(&jwks.Discovery{
+		Issuer:        p.Issuer(),
+		AuthEndpoint:  p.Issuer() + "/protocol/openid-connect/auth",
 		TokenEndpoint: tokenEndpoint,
-		JWKSURI:       p.issuer + "/protocol/openid-connect/certs",
+		JWKSURI:       p.Issuer() + "/protocol/openid-connect/certs",
 	})
-	if !p.ready() {
+	if !p.Ready() {
 		t.Fatal("test provider is not ready")
 	}
 	s := &server{}

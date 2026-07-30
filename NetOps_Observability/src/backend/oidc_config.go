@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"netops/backend/internal/oidc"
 )
 
 // oidc_config.go — runtime-configurable, kv-persisted overlay for the SSO/OIDC
@@ -34,27 +36,6 @@ import (
 // oidcConfig is the serialisable SSO provider configuration. It mirrors the
 // fields newOIDCProvider() reads from the environment, so behaviour is
 // unchanged when nothing has been saved.
-type oidcConfig struct {
-	Enabled       bool   `json:"enabled"`
-	Issuer        string `json:"issuer"`
-	ClientID      string `json:"client_id"`
-	ClientSecret  string `json:"client_secret,omitempty"` // write-only: persisted to the kv store; never returned by public()
-	Scopes        string `json:"scopes"`
-	RedirectURL   string `json:"redirect_url"`
-	PostLoginURL  string `json:"post_login_url"`
-	DefaultRole   string `json:"default_role"`
-	DefaultTenant string `json:"default_tenant"`
-	AdminRoles    string `json:"admin_roles"`    // csv
-	OperatorRoles string `json:"operator_roles"` // csv
-	Providers     string `json:"providers"`      // OIDC_PROVIDERS csv: "id:Label:kind,..."
-	// RequireMFA rejects an SSO sign-in unless the IdP's token asserts a second
-	// factor (amr/acr) — i.e. we HONOR the IdP's MFA instead of trusting it blindly.
-	RequireMFA bool   `json:"require_mfa"`
-	MFAAcr     string `json:"mfa_acr,omitempty"` // csv of acr values that count as MFA (IdP-specific; optional)
-}
-
-// newOIDCConfigFromEnv reads the same env vars newOIDCProvider() reads today so
-// the env-only resolution is preserved until an operator saves from the UI.
 func newOIDCConfigFromEnv() oidcConfig {
 	return oidcConfig{
 		Enabled:       os.Getenv("OIDC_ENABLED") == "true",
@@ -76,85 +57,6 @@ func newOIDCConfigFromEnv() oidcConfig {
 
 // normalize trims fields and applies the same defaults newOIDCProviderFromConfig
 // applies, so the stored document is canonical.
-func (c *oidcConfig) normalize() {
-	c.Issuer = strings.TrimRight(strings.TrimSpace(c.Issuer), "/")
-	c.ClientID = strings.TrimSpace(c.ClientID)
-	c.Scopes = strings.TrimSpace(c.Scopes)
-	if c.Scopes == "" {
-		c.Scopes = "openid email profile"
-	}
-	c.RedirectURL = strings.TrimSpace(c.RedirectURL)
-	c.PostLoginURL = strings.TrimSpace(c.PostLoginURL)
-	if c.PostLoginURL == "" {
-		c.PostLoginURL = "/"
-	}
-	c.DefaultRole = strings.TrimSpace(c.DefaultRole)
-	if c.DefaultRole == "" {
-		c.DefaultRole = RoleReadOnly
-	}
-	c.DefaultTenant = strings.TrimSpace(c.DefaultTenant)
-	if c.DefaultTenant == "" {
-		c.DefaultTenant = TenantGlobal
-	}
-	c.AdminRoles = strings.TrimSpace(c.AdminRoles)
-	c.OperatorRoles = strings.TrimSpace(c.OperatorRoles)
-	c.Providers = strings.TrimSpace(c.Providers)
-}
-
-// validate enforces the invariants required for an enabled OIDC provider.
-func (c oidcConfig) validate() error {
-	if !c.Enabled {
-		return nil
-	}
-	if c.Issuer == "" {
-		return errors.New("oidc: issuer is required when enabled")
-	}
-	if c.ClientID == "" {
-		return errors.New("oidc: client_id is required when enabled")
-	}
-	return nil
-}
-
-// publicOIDCConfig is the redacted view returned by GET: the client secret is
-// replaced by a boolean so the secret never leaves the server.
-type publicOIDCConfig struct {
-	Enabled         bool   `json:"enabled"`
-	Issuer          string `json:"issuer"`
-	ClientID        string `json:"client_id"`
-	ClientSecretSet bool   `json:"client_secret_set"`
-	Scopes          string `json:"scopes"`
-	RedirectURL     string `json:"redirect_url"`
-	PostLoginURL    string `json:"post_login_url"`
-	DefaultRole     string `json:"default_role"`
-	DefaultTenant   string `json:"default_tenant"`
-	AdminRoles      string `json:"admin_roles"`
-	OperatorRoles   string `json:"operator_roles"`
-	Providers       string `json:"providers"`
-	RequireMFA      bool   `json:"require_mfa"`
-	MFAAcr          string `json:"mfa_acr,omitempty"`
-}
-
-func (c oidcConfig) public() publicOIDCConfig {
-	return publicOIDCConfig{
-		Enabled:         c.Enabled,
-		Issuer:          c.Issuer,
-		ClientID:        c.ClientID,
-		ClientSecretSet: c.ClientSecret != "",
-		Scopes:          c.Scopes,
-		RedirectURL:     c.RedirectURL,
-		PostLoginURL:    c.PostLoginURL,
-		DefaultRole:     c.DefaultRole,
-		DefaultTenant:   c.DefaultTenant,
-		AdminRoles:      c.AdminRoles,
-		OperatorRoles:   c.OperatorRoles,
-		Providers:       c.Providers,
-		RequireMFA:      c.RequireMFA,
-		MFAAcr:          c.MFAAcr,
-	}
-}
-
-// oidcConfigStore is the kv-backed overlay. It holds a back-reference to the
-// server so set() can rebuild and atomically swap the live provider.
 type oidcConfigStore struct {
 	mu   sync.RWMutex
 	cfg  *oidcConfig // nil until an operator saves; falls back to env defaults
@@ -234,8 +136,8 @@ func (s *oidcConfigStore) effective() oidcConfig {
 // preserved (the redacted GET form does not round-trip the secret). Returns the
 // stored effective config.
 func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
-	in.normalize()
-	if err := in.validate(); err != nil {
+	in.Normalize()
+	if err := in.Validate(); err != nil {
 		return oidcConfig{}, err
 	}
 	s.mu.Lock()
@@ -272,7 +174,7 @@ func (s *oidcConfigStore) set(in oidcConfig) (oidcConfig, error) {
 	// Rebuild and swap the live provider so the hot auth path and SSO handlers
 	// pick up the new config immediately, without a restart or a data race.
 	if s.srv != nil {
-		s.srv.oidc.Store(newOIDCProviderFromConfig(stored))
+		s.srv.oidc.Store(oidc.NewProviderFromConfig(stored, jwksTTL()))
 	}
 	return stored, nil
 }
@@ -287,8 +189,8 @@ func (s *server) handleOIDCConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{
-			"config": s.oidcCfg.effective().public(),
-			"ready":  s.oidcProvider().ready(),
+			"config": s.oidcCfg.effective().Public(),
+			"ready":  s.oidcProvider().Ready(),
 		})
 	case http.MethodPut:
 		var in oidcConfig
@@ -303,8 +205,8 @@ func (s *server) handleOIDCConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		logInfo("auth", "oidc config updated", map[string]any{"enabled": out.Enabled, "issuer": out.Issuer})
 		writeJSON(w, http.StatusOK, map[string]any{
-			"config": out.public(),
-			"ready":  s.oidcProvider().ready(),
+			"config": out.Public(),
+			"ready":  s.oidcProvider().Ready(),
 		})
 	default:
 		w.Header().Set("Allow", "GET, PUT")

@@ -64,6 +64,8 @@ import (
 	"netops/backend/safego"
 
 	"netops/backend/internal/httppage"
+
+	"netops/backend/internal/oidc"
 )
 
 const version = "0.1.0-scaffold"
@@ -714,7 +716,7 @@ func newServer() *server {
 	// builds the initial live provider into the atomic pointer and swaps it on
 	// every admin save (see oidc_config.go).
 	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
-	srv.oidc.Store(newOIDCProviderFromConfig(srv.oidcCfg.effective()))
+	srv.oidc.Store(oidc.NewProviderFromConfig(srv.oidcCfg.effective(), jwksTTL()))
 	// PBAC Phase A: ensure every existing user has its mirror role_binding so the
 	// auditable artifact is complete on boot. Idempotent; behaviour-preserving.
 	srv.backfillBindings()
