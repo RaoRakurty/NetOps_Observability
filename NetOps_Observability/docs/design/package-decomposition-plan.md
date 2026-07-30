@@ -311,6 +311,82 @@ Phase 1's 92 files. At Phase-1 velocity (steps 18–59 in two continuous days),
 Phase 2 is plausibly 2–4 focused days of the same discipline, plus the /cmd
 finale.
 
+### Phase-2 re-audit — the full tail classified (2026-07-30)
+
+Six parallel readers classified the **117 root files the waves never
+dispositioned** (the "~44 unclassified" estimate was wrong — the plan named
+only 83 of 201). Verdict criteria = the waves' method: INTEGRATOR
+(handler/wiring/adapter or welded to live `s.*` stores / request-scoped tenant
+guards) stays; FAT has an extractable domain block; FAT-CRITICAL additionally
+gates security or correctness. **Owner decision 2026-07-30: lift the
+FAT-CRITICAL tier, verdict-and-stop for the rest.**
+
+**FAT-CRITICAL — lift queue (22):**
+
+| file | what gates | dest |
+|---|---|---|
+| authz.go | THE Authorize(p,a,r) decision point + 404-vs-403 existence-hiding (~60 LOC, under bar, max criticality) | internal/rbac |
+| password_policy.go | stricter-wins rules merge + rune-aware validation (~80) | NEW internal/pwpolicy |
+| account_policy.go | clock-injected sign-in gate (expiry/inactivity/forced-reset) + password history (~130) | internal/users |
+| security_settings.go | password/lockout/session policy store with coherence clamps (~150) | NEW internal/secpolicy |
+| report_links.go | HMAC bearer-capability links (tenant binding + expiry + log-redaction table) (~200) | NEW internal/caplink |
+| ticketing_http.go | resolveMergeChain bounded walker w/ tenant-boundary disclosure guard + incident policy validator (~105) | internal/ticketing |
+| ticketing_sweeper.go | fail-closed policy-selection state machine + sweep decision + canonicalCorrTenant (~115) | internal/ticketing |
+| ticketing_inbound.go | inbound syncer: at-most-once audit dedupe + monotonic status machine (~130) | internal/ticketing |
+| cred_sentinel.go | credential adoption state machine + same-tenant candidate bound + override store (~210) | internal/snmpcred |
+| snmp_configgen.go | v3 credential minting (crypto/rand) + 11-vendor config renderer (~155) | internal/snmpcred |
+| rca_promotion.go | promotion store (tenant-keyed, rollback-on-persist-failure) — gates RCA document rendering (~110) | internal/rca |
+| rca_report_integrity.go | revision immutability register (hash-compared idempotent record) (~105) | internal/rca |
+| appid_overrides.go | mem+pg app-catalog stores encoding tenant visibility + cross-tenant-delete refusal (~180) | appid/ |
+| cloud_appid_resolver.go | provenance ladder + default-closed per-tenant bucket lookup (~145) | appid/ |
+| cloud_source_status.go | source-status store: origin-preserving Replace + default-closed ForTenant (~120) | cloud/ |
+| cloud_slo.go | SLO store + error-budget math (three-state load, rollback) (~185) | cloud/ |
+| contactpoints.go | contact-point store + the tenant recipient gate (cross-tenant delivery leak lives here) (~210) | notify/ |
+| cloud_workload_issuer.go | workload signing-key custody (RSA gen, Vault seal, kid) (~90) | cloudconn/ |
+| cloud_ingest_service.go | ingest inventory store + tenant-stamped-from-connector normalizer + platform-realm authz (~130) | cloudconn/ + cloud/ |
+| probe_paths_ingest.go | remote path store (TTL/bounds/vantage re-stamping) + untrusted push validator (~80) | pathgraph/ |
+| topology_links.go | LLDP normalization encoding the owned-device link-anchoring isolation rule (~220) | topology/ |
+| copilot_config.go | LLM key custody (failed-unseal blanks, provider-switch clears) (~100) | ai/ |
+
+**FAT — verdict recorded, lift deferred (extract opportunistically when
+touched):** path_graph_api (~110→pathgraph), cloud_handlers (~110→cloud),
+topology_view (~185→topology), snmp_profiles (~225→NEW internal/snmpprofile),
+snmp_profiles_seed (~270 rides with it), path_health_baselines (~175→pathgraph),
+path_health_api (~140→pathgraph), path_metric_resolver (~250→pathgraph),
+system_network (~180→NEW internal/sysnet), netbox_sync (~215→internal/discovery),
+device_locations (~130→internal/discovery), cloud_notify (~155→notify),
+fusion_worker (~215→appid), cloud_security (~165→cloud), cloud_console
+(~230→cloud), cloud_enrich (~170→cloud), cloud_export (~110→cloud),
+cloud_investigation_changes (~95→cloud), cloud_network_overview (~85→cloud),
+timeintel_api parsers (~110→timeintel), corr_undetermined (~165→internal/rca),
+dependency_view (~165→topology), system_backup (~165→NEW), ai_datasource_ops
+(~90→ai), svc_backfill (~80→internal/servicecat), rules_user (~100→alerts),
+tenant_display (~115→internal/tenant), ngfw_resolver (~150→appid),
+report_delivery (~90→reports), telemetry_enrichment (~75→NEW),
+topology_path_trace (~61→topology), device_roles (~57→topology),
+ticketing_lifecycle (~48→internal/ticketing), devicetype (~50→NEW).
+
+**INTEGRATOR — verdict recorded, stays (61):** integrations_http, policy_http
+(note: ~60-LOC pure authz block worth a ride-along to policy/), business_service_handlers,
+cloud_ingestion, ai_handlers, rca_report_http, sites, mfa (lockout ordering is
+handler control flow), tls_server, timeintel_manual, dashboard, svc_health,
+device_sites, rca_reports_list, token_policy, netbox_config, flows_apps,
+integration_reconciler (borderline — 6-field deps struct not worth it),
+region_router, verify_http, binding_sync (Phase-A mirror; ~35-LOC pure pair
+could join rbac later), access_explain (⚠ second rendering of the reach rule —
+drift risk noted), org_handlers, topology_path_ifmetrics, incidents_sync,
+search_global, topology_reconcile, snmp_handlers, report_executions_http,
+verify_trigger, wireless_http, entity_resolver_enrichment, sot, secrets_config,
+bus_producer, saved_handlers, appid, onboard (~40-LOC rollback saga noted as
+future internal/tenant candidate), topology_links_enrichment,
+topology_path_stamp, integration_inbound_job, wireless_devices,
+session_handlers, kv_legacy_migrate, topology_graph, report_preview_http,
+probe_paths_enrichment, tenant_context (principalTenant is NOT here — it is in
+tenancy.go), ch_workload, cred_cache_reload, build_provenance, itsm,
+cloud_resource_detail, report_artifacts, incidents_metrics,
+routing_direction_enrichment, integration_metrics, probe_handlers,
+cloud_topology_api, ai_llm, openapi_handler.
+
 ### Phase-2 progress log (LAUNCHED 2026-07-29, owner go-ahead)
 
 | step | what | state |
