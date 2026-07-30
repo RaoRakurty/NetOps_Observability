@@ -663,7 +663,7 @@ func newServer() *server {
 			// plaintext in a map that dies with the process.
 			srv.nms = newNMSRuntime(nms.NewNonDurableStore())
 		}
-		srv.nms.wireless = srv.wireless // #128: wireless-inventory sink
+		srv.nms.SetWirelessStore(srv.wireless) // #128: wireless-inventory sink
 	}
 	srv.intMetrics = &integrationMetrics{}
 	srv.vault = vault

@@ -59,13 +59,13 @@ func (s *server) nmsIntegrationPublic(ctx context.Context, c nms.Integration) ma
 		"createdAt":     c.CreatedAt,
 		"updatedAt":     c.UpdatedAt,
 	}
-	if spec, ok := s.nms.reg.Get(c.Vendor); ok {
+	if spec, ok := s.nms.Registry().Get(c.Vendor); ok {
 		out["product"] = spec.Spec().Product
 	}
 	if c.WebhookToken != "" {
 		out["webhookUrl"] = "/api/nms/webhook/" + c.WebhookToken
 	}
-	if _, names, err := s.nms.store.Credentials(ctx, c.Tenant, c.ID); err == nil {
+	if _, names, err := s.nms.Store().Credentials(ctx, c.Tenant, c.ID); err == nil {
 		out["credentialFieldsSet"] = names
 	}
 	return out
@@ -80,11 +80,11 @@ func (s *server) handleNMSConnectors(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
 		return
 	}
-	vendors := s.nms.reg.Vendors()
+	vendors := s.nms.Registry().Vendors()
 	sort.Strings(vendors)
 	out := make([]map[string]any, 0, len(vendors))
 	for _, v := range vendors {
-		conn, ok := s.nms.reg.Get(v)
+		conn, ok := s.nms.Registry().Get(v)
 		if !ok {
 			continue
 		}
@@ -116,7 +116,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		list, err := s.nms.store.List(r.Context(), tenant, cross)
+		list, err := s.nms.Store().List(r.Context(), tenant, cross)
 		if err != nil {
 			http.Error(w, "list failed", http.StatusInternalServerError)
 			return
@@ -146,7 +146,7 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		conn, ok := s.nms.reg.Get(in.Vendor)
+		conn, ok := s.nms.Registry().Get(in.Vendor)
 		if !ok {
 			http.Error(w, "unknown vendor", http.StatusBadRequest)
 			return
@@ -166,16 +166,16 @@ func (s *server) handleNMSIntegrations(w http.ResponseWriter, r *http.Request) {
 		}
 		// F-76: refuse BEFORE writing the integration row, so a refused
 		// credential cannot leave a half-created, unusable integration behind.
-		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.store) {
+		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.Store()) {
 			writeError(w, http.StatusNotImplemented, nms.ErrStorageNotDurable)
 			return
 		}
-		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
+		if err := s.nms.Store().Upsert(r.Context(), c); err != nil {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
 		if len(in.Credentials) > 0 {
-			if err := s.nms.store.SetCredentials(r.Context(), tenant, c.ID, in.Credentials); err != nil {
+			if err := s.nms.Store().SetCredentials(r.Context(), tenant, c.ID, in.Credentials); err != nil {
 				if errors.Is(err, nms.ErrStorageNotDurable) {
 					writeError(w, http.StatusNotImplemented, err)
 					return
@@ -259,14 +259,14 @@ func (s *server) nmsIntegrationPollNow(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	c, found, err := s.nms.store.Get(r.Context(), tenant, cross, id)
+	c, found, err := s.nms.Store().Get(r.Context(), tenant, cross, id)
 	if err != nil || !found {
 		http.NotFound(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	rec := s.nms.pollIntegration(ctx, c)
+	rec := s.nms.PollIntegration(ctx, c)
 	out := map[string]any{
 		"status":     rec.Status,
 		"events":     rec.Events,
@@ -290,11 +290,11 @@ func (s *server) nmsIntegrationStates(w http.ResponseWriter, r *http.Request, id
 	}
 	tenant, cross := principalTenant(claims)
 	// Existence check first so a cross-tenant id 404s (never an empty 200).
-	if _, found, err := s.nms.store.Get(r.Context(), tenant, cross, id); err != nil || !found {
+	if _, found, err := s.nms.Store().Get(r.Context(), tenant, cross, id); err != nil || !found {
 		http.NotFound(w, r)
 		return
 	}
-	states, err := s.nms.store.States(r.Context(), tenant, cross, id)
+	states, err := s.nms.Store().States(r.Context(), tenant, cross, id)
 	if err != nil {
 		http.Error(w, "states read failed", http.StatusInternalServerError)
 		return
@@ -324,7 +324,7 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		c, found, err := s.nms.store.Get(r.Context(), tenant, cross, id)
+		c, found, err := s.nms.Store().Get(r.Context(), tenant, cross, id)
 		if err != nil || !found {
 			http.NotFound(w, r) // cross-tenant id is indistinguishable from absent (§3a)
 			return
@@ -336,7 +336,7 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		c, found, err := s.nms.store.Get(r.Context(), tenant, cross, id)
+		c, found, err := s.nms.Store().Get(r.Context(), tenant, cross, id)
 		if err != nil || !found {
 			http.NotFound(w, r)
 			return
@@ -355,19 +355,19 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			http.Error(w, "vendor is immutable", http.StatusBadRequest)
 			return
 		}
-		conn, _ := s.nms.reg.Get(c.Vendor)
+		conn, _ := s.nms.Registry().Get(c.Vendor)
 		applyNMSInput(&c, in, conn.Spec())
 		// F-76: same refusal as the create path — check before the config write.
-		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.store) {
+		if len(in.Credentials) > 0 && !nms.StoreDurable(s.nms.Store()) {
 			writeError(w, http.StatusNotImplemented, nms.ErrStorageNotDurable)
 			return
 		}
-		if err := s.nms.store.Upsert(r.Context(), c); err != nil {
+		if err := s.nms.Store().Upsert(r.Context(), c); err != nil {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
 		if len(in.Credentials) > 0 {
-			if err := s.nms.store.SetCredentials(r.Context(), c.Tenant, c.ID, in.Credentials); err != nil {
+			if err := s.nms.Store().SetCredentials(r.Context(), c.Tenant, c.ID, in.Credentials); err != nil {
 				if errors.Is(err, nms.ErrStorageNotDurable) {
 					writeError(w, http.StatusNotImplemented, err)
 					return
@@ -383,7 +383,7 @@ func (s *server) nmsIntegrationCRUD(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		deleted, err := s.nms.store.Delete(r.Context(), tenant, cross, id)
+		deleted, err := s.nms.Store().Delete(r.Context(), tenant, cross, id)
 		if err != nil {
 			http.Error(w, "delete failed", http.StatusInternalServerError)
 			return
@@ -410,24 +410,24 @@ func (s *server) nmsIntegrationTest(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	c, found, err := s.nms.store.Get(r.Context(), tenant, cross, id)
+	c, found, err := s.nms.Store().Get(r.Context(), tenant, cross, id)
 	if err != nil || !found {
 		http.NotFound(w, r)
 		return
 	}
-	conn, ok := s.nms.reg.Get(c.Vendor)
+	conn, ok := s.nms.Registry().Get(c.Vendor)
 	if !ok {
 		http.Error(w, "unknown vendor", http.StatusInternalServerError)
 		return
 	}
-	creds, _, err := s.nms.store.Credentials(r.Context(), c.Tenant, c.ID)
+	creds, _, err := s.nms.Store().Credentials(r.Context(), c.Tenant, c.ID)
 	if err != nil {
 		http.Error(w, "credential resolve failed", http.StatusInternalServerError)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	do := nms.NewRetryDoer(s.nms.httpClient(c), nms.NewTokenBucket(conn.Spec().RatePerSec), nms.DefaultRetry())
+	do := nms.NewRetryDoer(s.nms.HTTPClient(c), nms.NewTokenBucket(conn.Spec().RatePerSec), nms.DefaultRetry())
 	if _, err := conn.Auth().Authenticate(ctx, c.BaseURL, creds, do); err != nil {
 		// The vendor error is safe to surface (no secrets in auth errors by design).
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -446,7 +446,7 @@ func (s *server) nmsIntegrationHealth(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	h, found, err := s.nms.store.Health(r.Context(), tenant, cross, id)
+	h, found, err := s.nms.Store().Health(r.Context(), tenant, cross, id)
 	if err != nil || !found {
 		http.NotFound(w, r)
 		return
@@ -472,12 +472,12 @@ func (s *server) handleNMSWebhook(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ic, found, err := s.nms.store.ByWebhookToken(r.Context(), token)
+	ic, found, err := s.nms.Store().ByWebhookToken(r.Context(), token)
 	if err != nil || !found || !ic.Enabled {
 		http.NotFound(w, r)
 		return
 	}
-	conn, ok := s.nms.reg.Get(ic.Vendor)
+	conn, ok := s.nms.Registry().Get(ic.Vendor)
 	if !ok || conn.Webhook() == nil {
 		http.NotFound(w, r)
 		return
@@ -487,7 +487,7 @@ func (s *server) handleNMSWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	creds, _, err := s.nms.store.Credentials(r.Context(), ic.Tenant, ic.ID)
+	creds, _, err := s.nms.Store().Credentials(r.Context(), ic.Tenant, ic.ID)
 	if err != nil {
 		http.Error(w, "verification unavailable", http.StatusInternalServerError)
 		return
@@ -505,14 +505,13 @@ func (s *server) handleNMSWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad payload", http.StatusBadRequest)
 		return
 	}
-	pipe := s.nms.pipeline(nms.Key(ic.Tenant, ic.ID))
 	var accepted int64
 	for _, raw := range payloads {
 		batch, terr := conn.Transformer().Transform(ic.Tenant, ic.ID, raw)
 		if terr != nil {
 			continue // one malformed payload must not reject the batch
 		}
-		accepted += s.nms.sinkRouted(r.Context(), ic, pipe.Route(batch))
+		accepted += s.nms.IngestBatch(r.Context(), ic, batch)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": accepted})
 }
