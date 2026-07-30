@@ -28,14 +28,17 @@ import (
 // ticketLifecycleAction is the canonical audit `action` vocabulary that maps to an
 // incident-timeline phase. The outbound worker emits the first two today; an
 // inbound ServiceNow state sync (future) appends the human-phase group.
+// The vocabulary itself moved to internal/ticketing (actions.go, P2 RA.4) —
+// the inbound writer lives there now; these aliases keep main's reader (this
+// bridge) and its tests in lockstep with it.
 const (
-	auditActionCreate            = "create"             // → ticket_created (outbound, live today)
-	auditActionResolve           = "resolve"            // → resolved        (outbound, live today)
-	auditActionAcknowledged      = "acknowledged"       // → acknowledged    (inbound, dormant)
-	auditActionMitigationStarted = "mitigation_started" // → mitigation_started (inbound, dormant)
-	auditActionMitigated         = "mitigated"          // → mitigated       (inbound, dormant)
-	auditActionRecovered         = "recovered"          // → recovered       (inbound, dormant)
-	auditActionClosed            = "closed"             // → closed          (inbound, dormant)
+	auditActionCreate            = ticketing.AuditActionCreate
+	auditActionResolve           = ticketing.AuditActionResolve
+	auditActionAcknowledged      = ticketing.AuditActionAcknowledged
+	auditActionMitigationStarted = ticketing.AuditActionMitigationStarted
+	auditActionMitigated         = ticketing.AuditActionMitigated
+	auditActionRecovered         = ticketing.AuditActionRecovered
+	auditActionClosed            = ticketing.AuditActionClosed
 )
 
 // ticketAuditToITSMFacts folds a correlation's ticket audit trail (+ its link)

@@ -7,76 +7,6 @@ import (
 	"time"
 )
 
-// ── pure state→observation mapper ────────────────────────────────────────────
-
-func TestSnowIncidentObservations_InProgress(t *testing.T) {
-	obs := snowIncidentObservations(ticketing.RemoteIncident{
-		State:     ticketing.SnowStateInProgress,
-		WorkStart: tAt("2026-06-28T10:05:00Z"),
-		UpdatedAt: tAt("2026-06-28T10:06:00Z"),
-	})
-	got := obsByAction(obs)
-	if got[auditActionAcknowledged].IsZero() {
-		t.Fatal("in-progress with work_start must yield acknowledged")
-	}
-	if !got[auditActionMitigationStarted].Equal(tAt("2026-06-28T10:05:00Z")) {
-		t.Fatalf("mitigation_started = %v, want work_start", got[auditActionMitigationStarted])
-	}
-	if !got[auditActionResolve].IsZero() || !got[auditActionClosed].IsZero() {
-		t.Fatal("a non-resolved ticket must not emit resolved/closed")
-	}
-}
-
-func TestSnowIncidentObservations_ResolvedAndClosed(t *testing.T) {
-	obs := snowIncidentObservations(ticketing.RemoteIncident{
-		State:      ticketing.SnowStateClosed,
-		WorkStart:  tAt("2026-06-28T10:05:00Z"),
-		ResolvedAt: tAt("2026-06-28T10:30:00Z"),
-		ClosedAt:   tAt("2026-06-28T11:00:00Z"),
-	})
-	got := obsByAction(obs)
-	if !got[auditActionResolve].Equal(tAt("2026-06-28T10:30:00Z")) {
-		t.Fatalf("resolved = %v, want resolved_at", got[auditActionResolve])
-	}
-	if !got[auditActionClosed].Equal(tAt("2026-06-28T11:00:00Z")) {
-		t.Fatalf("closed = %v, want closed_at", got[auditActionClosed])
-	}
-}
-
-func TestSnowIncidentObservations_CustomFields(t *testing.T) {
-	obs := snowIncidentObservations(ticketing.RemoteIncident{
-		State:          ticketing.SnowStateResolved,
-		AcknowledgedAt: tAt("2026-06-28T10:02:00Z"),
-		MitigatedAt:    tAt("2026-06-28T10:18:00Z"),
-		RecoveredAt:    tAt("2026-06-28T10:22:00Z"),
-		ResolvedAt:     tAt("2026-06-28T10:30:00Z"),
-	})
-	got := obsByAction(obs)
-	for _, a := range []string{auditActionAcknowledged, auditActionMitigated, auditActionRecovered, auditActionResolve} {
-		if got[a].IsZero() {
-			t.Fatalf("custom-driven phase %q must populate", a)
-		}
-	}
-}
-
-func TestSnowIncidentObservations_HonestEmpty(t *testing.T) {
-	// In progress but with NO timestamp anywhere → no acknowledged invented.
-	obs := snowIncidentObservations(ticketing.RemoteIncident{State: ticketing.SnowStateInProgress})
-	if len(obs) != 0 {
-		t.Fatalf("no timestamps must yield no observations, got %+v", obs)
-	}
-}
-
-func obsByAction(obs []lifecycleObservation) map[string]time.Time {
-	m := map[string]time.Time{}
-	for _, o := range obs {
-		if m[o.Action].IsZero() {
-			m[o.Action] = o.At
-		}
-	}
-	return m
-}
-
 // ── syncer integration (real adapter ⇄ httptest mock ServiceNow) ─────────────
 
 // TestInboundSyncer_AppendsPhasesAndDedupes drives the full inbound loop against
@@ -100,18 +30,14 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 		SysID: ref.SysID, TicketNumber: ref.Number, InstanceURL: m.srv.URL, Status: "open",
 	})
 
-	sy := &ticketStateSyncer{
-		store:    st,
-		adapters: map[string]ticketing.Adapter{"servicenow": m.adapter()},
-		resolveConn: func(context.Context, string, string) (ticketing.SystemConfig, bool, error) {
-			return m.cfg(), true, nil
-		},
-		lookback: 14 * 24 * time.Hour,
-	}
+	sy := ticketing.NewStateSyncer(st, func(context.Context, string, string) (ticketing.SystemConfig, bool, error) {
+		return m.cfg(), true, nil
+	})
+	sy.SetAdapterForTest("servicenow", m.adapter())
 	now := time.Now().UTC()
 
 	// Nothing moved yet (state New / unset) → no human phases.
-	if n, _ := sy.tick(ctx, now); n != 0 {
+	if n, _ := sy.Tick(ctx, now); n != 0 {
 		t.Fatalf("a brand-new ticket should yield no phases, appended %d", n)
 	}
 
@@ -121,7 +47,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	m.incidents[ref.SysID]["work_start"] = "2026-06-28 10:05:00"
 	m.mu.Unlock()
 
-	if n, _ := sy.tick(ctx, now); n == 0 {
+	if n, _ := sy.Tick(ctx, now); n == 0 {
 		t.Fatal("in-progress ticket must append acknowledged/mitigation_started")
 	}
 	audit, _, _ := st.ListAudit(ctx, "t_a", false, "obj-1", ticketing.MaxPage, 0)
@@ -131,7 +57,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 
 	// Second pass must NOT double-stamp (idempotent against the audit ledger).
 	before := len(audit)
-	_, _ = sy.tick(ctx, now)
+	_, _ = sy.Tick(ctx, now)
 	after, _, _ := st.ListAudit(ctx, "t_a", false, "obj-1", ticketing.MaxPage, 0)
 	if len(after) != before {
 		t.Fatalf("re-sync double-stamped: %d → %d", before, len(after))
@@ -143,7 +69,7 @@ func TestInboundSyncer_AppendsPhasesAndDedupes(t *testing.T) {
 	m.incidents[ref.SysID]["resolved_at"] = "2026-06-28 10:30:00"
 	m.mu.Unlock()
 
-	_, _ = sy.tick(ctx, now)
+	_, _ = sy.Tick(ctx, now)
 	audit, _, _ = st.ListAudit(ctx, "t_a", false, "obj-1", ticketing.MaxPage, 0)
 	if !hasAuditAction(audit, auditActionResolve) {
 		t.Fatalf("expected resolved in audit, got %+v", auditActions(audit))

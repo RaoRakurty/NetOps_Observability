@@ -1221,7 +1221,7 @@ func main() {
 		// Inbound state sync (#84): poll each live ticket's ServiceNow state back and
 		// append the human-phase lifecycle events (acknowledged/resolved/closed/…) the
 		// incident time-decomposition renders. Self-dormant when no connection is set.
-		sy := newTicketStateSyncer(srv.ticketing, resolve)
+		sy := ticketing.NewStateSyncer(srv.ticketing, resolve)
 		workers.start("ticketing-inbound-sync", func() {
 			sy.Run(ctx, durationOr("RCA_TICKETING_INBOUND_INTERVAL", 45*time.Second))
 		})
