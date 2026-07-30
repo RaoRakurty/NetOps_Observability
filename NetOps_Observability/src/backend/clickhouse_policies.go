@@ -4,6 +4,8 @@ import (
 	"log"
 	"netops/backend/internal/chschema"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 // clickhouse_policies.go — self-healing bootstrap for the #20 Phase 2
@@ -25,7 +27,7 @@ func ensureCHRowPolicies() {
 	if base == "" {
 		return // no ClickHouse configured (file/dev backend)
 	}
-	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
+	stmts := chschema.ConvergeStmts(cloud.CostsSchemaDDL(), pathBaselineSchemaDDL())
 	// F-58: state the retention schedule before applying it. `MODIFY TTL` is a
 	// deletion schedule, and a deletion schedule applied without a log line is
 	// exactly the kind of silent data loss this audit found everywhere else.

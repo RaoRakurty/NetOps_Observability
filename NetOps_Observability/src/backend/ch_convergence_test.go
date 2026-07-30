@@ -14,10 +14,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 func TestRetentionRunsAfterSchemaCreation(t *testing.T) {
-	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
+	stmts := chschema.ConvergeStmts(cloud.CostsSchemaDDL(), pathBaselineSchemaDDL())
 	createAt := map[string]int{}
 	reCreate := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS netops\.(\w+)`)
 	reAlterTTL := regexp.MustCompile(`ALTER TABLE netops\.(\w+) MODIFY TTL`)
@@ -48,7 +50,7 @@ func TestRetentionRunsAfterSchemaCreation(t *testing.T) {
 }
 
 func TestSvcRollupConvergeAndInitSQLInLockstep(t *testing.T) {
-	converge := strings.Join(chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL()), "\n")
+	converge := strings.Join(chschema.ConvergeStmts(cloud.CostsSchemaDDL(), pathBaselineSchemaDDL()), "\n")
 	for _, want := range []string{"netops.svc_flow_rollup_1m", "netops.path_baselines"} {
 		if !strings.Contains(converge, want) {
 			t.Errorf("boot converge list missing %s", want)

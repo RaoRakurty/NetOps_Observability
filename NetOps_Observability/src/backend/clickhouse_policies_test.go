@@ -7,6 +7,8 @@ import (
 	"netops/backend/internal/chschema"
 	"strings"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 func reqWithClaims(c jwtClaims) *http.Request {
@@ -58,7 +60,7 @@ func TestChTenantScope(t *testing.T) {
 // lenient clause would leak platform-global rows into every tenant's view.
 // It asserts over the ACTUAL DDL strings the boot path executes.
 func TestCorrRowPoliciesStrict(t *testing.T) {
-	stmts := chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL())
+	stmts := chschema.ConvergeStmts(cloud.CostsSchemaDDL(), pathBaselineSchemaDDL())
 
 	// Every ROW POLICY statement on a corr_* / path_* table: strict filter,
 	// no untagged escape.
@@ -161,7 +163,7 @@ func TestRowPolicyGrammarShape(t *testing.T) {
 		chschema.RowPolicyDDL("flows"),
 		chschema.StrictRowPolicyDDL("corr_signals"),
 	}
-	for _, s := range chschema.ConvergeStmts(cloudCostsSchemaDDL(), pathBaselineSchemaDDL()) {
+	for _, s := range chschema.ConvergeStmts(cloud.CostsSchemaDDL(), pathBaselineSchemaDDL()) {
 		if strings.Contains(s, "ROW POLICY") {
 			stmts = append(stmts, s)
 		}
