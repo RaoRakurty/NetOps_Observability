@@ -146,15 +146,15 @@ func TestBindingExpiry(t *testing.T) {
 	future := now.Add(time.Hour)
 
 	expired := RoleBinding{ExpiresAt: &past}
-	if expired.active(now) {
+	if expired.Active(now) {
 		t.Error("expired binding should be inactive")
 	}
 	notYet := RoleBinding{NotBefore: &future}
-	if notYet.active(now) {
+	if notYet.Active(now) {
 		t.Error("not-yet-active binding should be inactive")
 	}
 	live := RoleBinding{NotBefore: &past, ExpiresAt: &future}
-	if !live.active(now) {
+	if !live.Active(now) {
 		t.Error("in-window binding should be active")
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package rbac
 
 import (
 	"netops/backend/internal/platformdb"
@@ -44,9 +44,9 @@ func TestBuiltinPolicyRoles(t *testing.T) {
 // that Allows enforces their grids.
 func TestPolicyRolesSeededAndEnforced(t *testing.T) {
 	t.Cleanup(platformdb.SwapBackendForTest(platformdb.FileKV{}))
-	rs, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
+	rs, err := NewRoleStore(filepath.Join(t.TempDir(), "roles.json"))
 	if err != nil {
-		t.Fatalf("newRoleStore: %v", err)
+		t.Fatalf("NewRoleStore: %v", err)
 	}
 	// Auditor: reads administration, cannot write it.
 	if !rs.Allows(RoleAuditor, "administration", LevelRead) {

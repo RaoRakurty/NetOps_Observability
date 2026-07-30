@@ -89,6 +89,22 @@ func slugFromName(name string) string {
 	return collapseHyphens(slugify(name))
 }
 
+// slugify keeps [a-z0-9], maps space/underscore/hyphen to '-', drops the rest.
+// Shared by identity, NetBox sync and SNMP-profile ids; internal/rbac keeps its
+// own private copy for role ids (the no-utils rule).
+func slugify(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_':
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 // collapseHyphens squeezes runs of '-' into one and trims leading/trailing '-'.
 func collapseHyphens(s string) string {
 	var b strings.Builder

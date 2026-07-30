@@ -1,12 +1,9 @@
 package main
 
-// scopes.go — the scope identity model for PBAC (docs/design/saas-identity-pbac.md
-// §1.2, §7.4). A scope is a node in the resource hierarchy a binding can point at:
-//
-//	platform  >  org:<slug>  >  tenant:<slug>  >  resource:<kind>:<id>
-//
-// Canonical ids are `type:slug` (human-readable for incidents/audits/logs). The
-// containment hierarchy is a STRICT single-parent tree; cross-cutting access
+// scopes.go — the scope containment TREE for PBAC (docs/design/saas-identity-pbac.md
+// §1.2, §7.4). The scope-id VOCABULARY (types, minters, parseScope) lives in
+// internal/rbac; this file keeps the traversals that need the live org/tenant
+// stores. The hierarchy is a STRICT single-parent tree; cross-cutting access
 // (MSP / shared / break-glass) is never re-parenting — it is a binding whose
 // scope_id points across the tree. Authorization's only traversal is
 // ancestor-or-self, which walks parents (depth ≤ 4).
@@ -18,40 +15,6 @@ package main
 // re-mapped.
 
 import "strings"
-
-// Scope types (the fixed lattice, highest → lowest).
-const (
-	ScopePlatform     = "platform"
-	scopeTypeOrg      = "org"
-	scopeTypeTenant   = "tenant"
-	scopeTypeResource = "resource"
-)
-
-// scopeOrg / scopeTenant / scopeResource mint canonical scope ids.
-func scopeOrg(id string) string { return scopeTypeOrg + ":" + strings.ToLower(strings.TrimSpace(id)) }
-func scopeTenant(id string) string {
-	return scopeTypeTenant + ":" + strings.ToLower(strings.TrimSpace(id))
-}
-
-//nolint:unused // part of the scope-mint API (lazy resource scopes); used as resource-level ACLs land (Phase D+)
-//lint:ignore U1000 scope-mint API completeness — resource-level ACLs land Phase D+
-func scopeResource(kind, id string) string {
-	return scopeTypeResource + ":" + strings.ToLower(strings.TrimSpace(kind)) + ":" + strings.ToLower(strings.TrimSpace(id))
-}
-
-// parseScope splits a scope id into its type and the remainder (slug / kind:id).
-// platform has no slug. Unknown/blank → ("", "").
-func parseScope(id string) (scopeType, rest string) {
-	id = strings.TrimSpace(id)
-	if id == ScopePlatform {
-		return ScopePlatform, ""
-	}
-	i := strings.IndexByte(id, ':')
-	if i < 0 {
-		return "", ""
-	}
-	return id[:i], id[i+1:]
-}
 
 // scopeParent returns the parent scope id, or "" for the platform root (and for
 // malformed ids). tenant:X → org:<orgOf(X)>; org:Y → platform; resource:* → its

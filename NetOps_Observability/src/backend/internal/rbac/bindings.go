@@ -1,4 +1,4 @@
-package main
+package rbac
 
 // bindings.go — the role_binding store: the auditable join of
 // (principal → role → scope) that is the heart of PBAC
@@ -43,6 +43,9 @@ const (
 	PrincipalDevice  = "device"
 )
 
+// ConditionBreakGlass marks a binding as an emergency-access grant.
+const ConditionBreakGlass = "break_glass"
+
 // RoleBinding grants (or denies) a role to a principal at a scope. Optional
 // condition/time-bounds support tag filters and break-glass sessions (§7.1).
 type RoleBinding struct {
@@ -61,8 +64,8 @@ type RoleBinding struct {
 	GrantedAt     time.Time      `json:"granted_at"`
 }
 
-// active reports whether the binding is in effect at time now.
-func (b RoleBinding) active(now time.Time) bool {
+// Active reports whether the binding is in effect at time now.
+func (b RoleBinding) Active(now time.Time) bool {
 	if b.NotBefore != nil && now.Before(*b.NotBefore) {
 		return false
 	}
@@ -72,25 +75,35 @@ func (b RoleBinding) active(now time.Time) bool {
 	return true
 }
 
-type bindingStore struct {
+// IsBreakGlass reports whether a binding is a break-glass grant.
+func (b RoleBinding) IsBreakGlass() bool {
+	if b.Condition == nil {
+		return false
+	}
+	v, ok := b.Condition[ConditionBreakGlass].(bool)
+	return ok && v
+}
+
+// BindingStore is the file-backed role_binding registry (role_bindings.json).
+type BindingStore struct {
 	mu       sync.RWMutex
 	path     string
 	bindings map[string]RoleBinding // id -> binding
 	versions map[string]int64       // principal_id -> bindings_version (cache key, §3.1)
 }
 
-func newBindingStore(path string) (*bindingStore, error) {
+func NewBindingStore(path string) (*BindingStore, error) {
 	if path == "" {
 		path = "/data/role_bindings.json"
 	}
-	s := &bindingStore{path: path, bindings: map[string]RoleBinding{}, versions: map[string]int64{}}
+	s := &BindingStore{path: path, bindings: map[string]RoleBinding{}, versions: map[string]int64{}}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *bindingStore) load() error {
+func (s *BindingStore) load() error {
 	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return err
@@ -106,7 +119,7 @@ func (s *bindingStore) load() error {
 	return nil
 }
 
-func (s *bindingStore) flushLocked() error {
+func (s *BindingStore) flushLocked() error {
 	list := make([]RoleBinding, 0, len(s.bindings))
 	for _, rb := range s.bindings {
 		list = append(list, rb)
@@ -119,9 +132,9 @@ func (s *bindingStore) flushLocked() error {
 	return platformdb.Save(s.path, b)
 }
 
-// bindingID is a stable, deterministic id for a (principal, role, scope, effect)
+// BindingID is a stable, deterministic id for a (principal, role, scope, effect)
 // tuple so backfill/sync is idempotent — re-running never duplicates a binding.
-func bindingID(principalID, roleID, scopeID, effect string) string {
+func BindingID(principalID, roleID, scopeID, effect string) string {
 	return fmt.Sprintf("%s|%s|%s|%s",
 		strings.ToLower(strings.TrimSpace(principalID)),
 		strings.ToLower(strings.TrimSpace(roleID)),
@@ -130,7 +143,7 @@ func bindingID(principalID, roleID, scopeID, effect string) string {
 }
 
 // List returns all bindings (id order). Cross-tenant callers only.
-func (s *bindingStore) List() []RoleBinding {
+func (s *BindingStore) List() []RoleBinding {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]RoleBinding, 0, len(s.bindings))
@@ -142,7 +155,7 @@ func (s *bindingStore) List() []RoleBinding {
 }
 
 // ListByPrincipal returns the bindings for one principal (id order).
-func (s *bindingStore) ListByPrincipal(principalID string) []RoleBinding {
+func (s *BindingStore) ListByPrincipal(principalID string) []RoleBinding {
 	principalID = strings.ToLower(strings.TrimSpace(principalID))
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -157,7 +170,7 @@ func (s *bindingStore) ListByPrincipal(principalID string) []RoleBinding {
 }
 
 // Version returns the principal's bindings_version (0 if none) — the cache key.
-func (s *bindingStore) Version(principalID string) int64 {
+func (s *BindingStore) Version(principalID string) int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.versions[strings.ToLower(strings.TrimSpace(principalID))]
@@ -165,7 +178,7 @@ func (s *bindingStore) Version(principalID string) int64 {
 
 // Add inserts (or replaces, by deterministic id) a binding and bumps the
 // principal's version. GrantedAt defaults to now if unset.
-func (s *bindingStore) Add(b RoleBinding) (RoleBinding, error) {
+func (s *BindingStore) Add(b RoleBinding) (RoleBinding, error) {
 	b.PrincipalID = strings.ToLower(strings.TrimSpace(b.PrincipalID))
 	if b.PrincipalID == "" {
 		return RoleBinding{}, errors.New("binding requires a principal")
@@ -186,12 +199,12 @@ func (s *bindingStore) Add(b RoleBinding) (RoleBinding, error) {
 		b.PrincipalType = PrincipalUser
 	}
 	if b.ScopeType == "" {
-		b.ScopeType, _ = parseScope(b.ScopeID)
+		b.ScopeType, _ = ParseScope(b.ScopeID)
 	}
 	if b.GrantedAt.IsZero() {
 		b.GrantedAt = time.Now().UTC()
 	}
-	b.ID = bindingID(b.PrincipalID, b.RoleID, b.ScopeID, b.Effect)
+	b.ID = BindingID(b.PrincipalID, b.RoleID, b.ScopeID, b.Effect)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bindings[b.ID] = b
@@ -203,7 +216,7 @@ func (s *bindingStore) Add(b RoleBinding) (RoleBinding, error) {
 }
 
 // Remove deletes a binding by id and bumps the affected principal's version.
-func (s *bindingStore) Remove(id string) error {
+func (s *BindingStore) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rb, ok := s.bindings[id]
@@ -217,7 +230,7 @@ func (s *bindingStore) Remove(id string) error {
 
 // RemoveByPrincipal drops all of a principal's bindings (used when a user is
 // deleted). Bumps the version.
-func (s *bindingStore) RemoveByPrincipal(principalID string) error {
+func (s *BindingStore) RemoveByPrincipal(principalID string) error {
 	principalID = strings.ToLower(strings.TrimSpace(principalID))
 	s.mu.Lock()
 	defer s.mu.Unlock()

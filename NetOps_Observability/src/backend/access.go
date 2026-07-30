@@ -34,7 +34,7 @@ func (s *server) reachesTenant(principalID, tenantID string) bool {
 	now := time.Now().UTC()
 	allow := false
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if !b.active(now) || !s.scopeAncestorOrSelf(b.ScopeID, target) {
+		if !b.Active(now) || !s.scopeAncestorOrSelf(b.ScopeID, target) {
 			continue
 		}
 		if b.Effect == EffectDeny {
@@ -62,7 +62,7 @@ func (s *server) accessibleTenants(principalID string) (tenants []string, all bo
 	set := map[string]bool{}
 	deny := map[string]bool{}
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if !b.active(now) {
+		if !b.Active(now) {
 			continue
 		}
 		st, slug := parseScope(b.ScopeID)
@@ -139,7 +139,7 @@ func (s *server) orgAdminOrgs(principalID string) []string {
 	now := time.Now().UTC()
 	set := map[string]bool{}
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if b.Effect != EffectAllow || !b.active(now) {
+		if b.Effect != EffectAllow || !b.Active(now) {
 			continue
 		}
 		if st, slug := parseScope(b.ScopeID); st == scopeTypeOrg && isOrgManagerRole(b.RoleID) {

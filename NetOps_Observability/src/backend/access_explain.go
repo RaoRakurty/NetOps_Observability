@@ -55,14 +55,14 @@ func (s *server) grantsFor(principalID, tenantID string) []GrantReason {
 	now := time.Now().UTC()
 	var out []GrantReason
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if !b.active(now) || !s.scopeAncestorOrSelf(b.ScopeID, target) {
+		if !b.Active(now) || !s.scopeAncestorOrSelf(b.ScopeID, target) {
 			continue
 		}
 		st, _ := parseScope(b.ScopeID)
 		if st == scopeTypeOrg && b.Effect == EffectAllow && !isOrgManagerRole(b.RoleID) {
 			continue
 		}
-		g := GrantReason{RoleID: b.RoleID, ScopeID: b.ScopeID, Effect: b.Effect, GrantedBy: b.GrantedBy, Reason: b.Reason, BreakGlass: b.isBreakGlass()}
+		g := GrantReason{RoleID: b.RoleID, ScopeID: b.ScopeID, Effect: b.Effect, GrantedBy: b.GrantedBy, Reason: b.Reason, BreakGlass: b.IsBreakGlass()}
 		if b.ExpiresAt != nil {
 			g.ExpiresAt = b.ExpiresAt.Format(time.RFC3339)
 		}

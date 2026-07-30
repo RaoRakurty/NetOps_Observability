@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/rbac"
 	"strings"
 	"time"
 )
@@ -23,7 +24,7 @@ func (s *server) requirePerm(w http.ResponseWriter, r *http.Request, module stri
 		return jwtClaims{}, false
 	}
 	if !s.roles.Allows(claims.Role, module, level) {
-		writeError(w, http.StatusForbidden, errors.New(module+" "+levelName(level)+" permission required"))
+		writeError(w, http.StatusForbidden, errors.New(module+" "+rbac.LevelName(level)+" permission required"))
 		return jwtClaims{}, false
 	}
 	return claims, true
@@ -63,7 +64,7 @@ func (s *server) handlePermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	perms := map[string]int{}
-	for _, m := range Modules {
+	for _, m := range rbac.Modules {
 		switch {
 		case isSuperAdminRole(claims.Role):
 			perms[m] = LevelAdmin
@@ -237,7 +238,7 @@ func (s *server) handleRoles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		// Role definitions are platform-wide; a tenant admin may read them (to
 		// assign to its own users) but not change them.
-		writeJSON(w, http.StatusOK, map[string]any{"modules": Modules, "roles": s.roles.List()})
+		writeJSON(w, http.StatusOK, map[string]any{"modules": rbac.Modules, "roles": s.roles.List()})
 	case http.MethodPost:
 		if _, ok := s.requirePlatformAdmin(w, r); !ok {
 			return

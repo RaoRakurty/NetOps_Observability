@@ -1,11 +1,14 @@
-package main
-
-// rbac.go — granular, module-level role-based access control.
+// Package rbac is the role/permission domain for PBAC: the module-level role
+// model with its monotonic permission ladder, the compiled rule-bundle view,
+// the file-backed role store, the role_binding store (bindings.go) and the
+// scope identity vocabulary (scopes.go). See docs/IDENTITY_ACCESS.md and
+// docs/design/saas-identity-pbac.md for the model.
 //
 // File-backed (roles.json) in the same spirit as the user/saved stores: no
 // database dependency, swappable to Postgres later behind the same methods.
-// See docs/IDENTITY_ACCESS.md for the model. Modules map to product nav
-// sections; permission levels form a monotonic ladder none<read<write<admin.
+// Modules map to product nav sections; permission levels form a monotonic
+// ladder none<read<write<admin.
+package rbac
 
 import (
 	"encoding/json"
@@ -30,7 +33,8 @@ const (
 	LevelAdmin = 3
 )
 
-func levelName(l int) string {
+// LevelName renders a permission level for views/audit lines.
+func LevelName(l int) string {
 	switch l {
 	case LevelAdmin:
 		return "admin"
@@ -109,17 +113,17 @@ const (
 	RoleAPIClient  = "api-client" // least-privilege machine identity for programmatic access
 )
 
-// isOrgManagerRole reports whether a role, when bound at an org scope, lets the
+// IsOrgManagerRole reports whether a role, when bound at an org scope, lets the
 // principal manage that org's tenants/users (an org administrator). The platform
 // super-admin also qualifies. Used by access.go reachability.
-func isOrgManagerRole(role string) bool {
+func IsOrgManagerRole(role string) bool {
 	r := strings.ToLower(strings.TrimSpace(role))
-	return r == RoleOrgAdmin || isSuperAdminRole(role)
+	return r == RoleOrgAdmin || IsSuperAdminRole(role)
 }
 
-// isSuperAdminRole maps both the new role id and the legacy "admin" value onto
+// IsSuperAdminRole maps both the new role id and the legacy "admin" value onto
 // super-admin, so pre-existing users.json accounts keep full access.
-func isSuperAdminRole(role string) bool {
+func IsSuperAdminRole(role string) bool {
 	r := strings.ToLower(strings.TrimSpace(role))
 	return r == RoleSuperAdmin || r == "admin"
 }
@@ -181,22 +185,23 @@ func builtinRoles() []Role {
 	}
 }
 
-type roleStore struct {
+// RoleStore is the file-backed role registry (roles.json).
+type RoleStore struct {
 	mu    sync.RWMutex
 	path  string
 	roles map[string]Role
 }
 
-func newRoleStore(path string) (*roleStore, error) {
+// NewRoleStore opens (or creates) the store and (re)seeds the built-in roles so
+// upgrades pick up new defaults; custom roles are preserved.
+func NewRoleStore(path string) (*RoleStore, error) {
 	if path == "" {
 		path = "/data/roles.json"
 	}
-	s := &roleStore{path: path, roles: make(map[string]Role)}
+	s := &RoleStore{path: path, roles: make(map[string]Role)}
 	if err := s.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	// Always (re)seed built-ins so upgrades pick up new defaults; custom roles
-	// are preserved.
 	changed := false
 	for _, r := range builtinRoles() {
 		if _, ok := s.roles[r.ID]; !ok {
@@ -212,7 +217,7 @@ func newRoleStore(path string) (*roleStore, error) {
 	return s, nil
 }
 
-func (s *roleStore) load() error {
+func (s *RoleStore) load() error {
 	b, err := platformdb.Load(s.path)
 	if err != nil {
 		return err
@@ -227,7 +232,7 @@ func (s *roleStore) load() error {
 	return nil
 }
 
-func (s *roleStore) flushLocked() error {
+func (s *RoleStore) flushLocked() error {
 	list := make([]Role, 0, len(s.roles))
 	for _, r := range s.roles {
 		list = append(list, r)
@@ -240,7 +245,7 @@ func (s *roleStore) flushLocked() error {
 	return platformdb.Save(s.path, b)
 }
 
-func (s *roleStore) List() []Role {
+func (s *RoleStore) List() []Role {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Role, 0, len(s.roles))
@@ -256,13 +261,16 @@ func (s *roleStore) List() []Role {
 	return out
 }
 
-func (s *roleStore) Get(id string) (Role, bool) {
+func (s *RoleStore) Get(id string) (Role, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.roles[legacyRoleAlias(id)]
 	return r, ok
 }
 
+// slugify is the role-id form of a role name. Deliberately duplicated from
+// main's identity slug helper (the no-utils rule): the package must not reach
+// back into main, and the two may diverge.
 func slugify(name string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
@@ -278,7 +286,7 @@ func slugify(name string) string {
 
 // Upsert creates or replaces a custom role. Built-in roles cannot be created
 // or overwritten through this path.
-func (s *roleStore) Upsert(r Role) (Role, error) {
+func (s *RoleStore) Upsert(r Role) (Role, error) {
 	if strings.TrimSpace(r.Name) == "" {
 		return Role{}, errors.New("role name required")
 	}
@@ -325,7 +333,7 @@ func validateCustomRole(r Role) error {
 	return nil
 }
 
-func (s *roleStore) Delete(id string) error {
+func (s *RoleStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.roles[id]
@@ -341,8 +349,8 @@ func (s *roleStore) Delete(id string) error {
 
 // Allows reports whether a role grants at least `need` on a module. Super-admin
 // (and the legacy "admin" value) always passes.
-func (s *roleStore) Allows(roleID, module string, need int) bool {
-	if isSuperAdminRole(roleID) {
+func (s *RoleStore) Allows(roleID, module string, need int) bool {
+	if IsSuperAdminRole(roleID) {
 		return true
 	}
 	r, ok := s.Get(roleID)

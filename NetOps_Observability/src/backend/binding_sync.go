@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"netops/backend/internal/rbac"
 )
 
 // userBindingScope is the canonical scope id for a user's single mirror binding.
@@ -56,7 +58,7 @@ func (s *server) syncUserBinding(u User) error {
 		return nil
 	}
 	pid := strings.ToLower(strings.TrimSpace(u.Username))
-	want := bindingID(pid, u.Role, userBindingScope(u), EffectAllow)
+	want := rbac.BindingID(pid, u.Role, userBindingScope(u), EffectAllow)
 	// Remove any binding for this principal that isn't the desired mirror (so a
 	// role/tenant change re-syncs cleanly). Phase A holds exactly one per user.
 	for _, b := range s.bindings.ListByPrincipal(pid) {
@@ -134,7 +136,7 @@ func (s *server) bindingDerivedScope(principalID string) (tenant string, crossTe
 	}
 	now := time.Now().UTC()
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if b.Effect != EffectAllow || !b.active(now) {
+		if b.Effect != EffectAllow || !b.Active(now) {
 			continue
 		}
 		st, slug := parseScope(b.ScopeID)

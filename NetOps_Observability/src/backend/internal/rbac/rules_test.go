@@ -1,4 +1,4 @@
-package main
+package rbac
 
 import (
 	"path/filepath"
@@ -35,7 +35,7 @@ func TestCompileRoleRules(t *testing.T) {
 
 // TestRolesExposeRules: List() attaches the compiled bundle to every role.
 func TestRolesExposeRules(t *testing.T) {
-	rs, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
+	rs, err := NewRoleStore(filepath.Join(t.TempDir(), "roles.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func hasAnyLevel(p map[string]int) bool {
 // TestCustomRoleSandbox: a custom role cannot grant administration:admin (the
 // escalation vector), but operational grids are accepted.
 func TestCustomRoleSandbox(t *testing.T) {
-	rs, err := newRoleStore(filepath.Join(t.TempDir(), "roles.json"))
+	rs, err := NewRoleStore(filepath.Join(t.TempDir(), "roles.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,18 +87,18 @@ func TestCustomRoleSandbox(t *testing.T) {
 
 // TestBindingPrincipalType: machine principals carry their type; default is user.
 func TestBindingPrincipalType(t *testing.T) {
-	bs, err := newBindingStore(filepath.Join(t.TempDir(), "rb.json"))
+	bs, err := NewBindingStore(filepath.Join(t.TempDir(), "rb.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := bs.Add(RoleBinding{PrincipalID: "alice", RoleID: "operator", ScopeID: scopeTenant("acme")})
+	u, err := bs.Add(RoleBinding{PrincipalID: "alice", RoleID: "operator", ScopeID: ScopeTenant("acme")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.PrincipalType != PrincipalUser {
 		t.Errorf("default principal type = %q, want user", u.PrincipalType)
 	}
-	svc, err := bs.Add(RoleBinding{PrincipalID: "collector-1", PrincipalType: PrincipalAgent, RoleID: "api-client", ScopeID: scopeTenant("acme")})
+	svc, err := bs.Add(RoleBinding{PrincipalID: "collector-1", PrincipalType: PrincipalAgent, RoleID: "api-client", ScopeID: ScopeTenant("acme")})
 	if err != nil {
 		t.Fatal(err)
 	}

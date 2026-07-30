@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/internal/rbac"
 )
 
 // breakGlassDefaultTTL bounds a session if the caller doesn't specify one; the
@@ -32,17 +34,9 @@ const (
 	breakGlassMaxTTL     = 8 * time.Hour
 )
 
-// conditionBreakGlass marks a binding as an emergency-access grant.
-const conditionBreakGlass = "break_glass"
-
-// isBreakGlass reports whether a binding is a break-glass grant.
-func (b RoleBinding) isBreakGlass() bool {
-	if b.Condition == nil {
-		return false
-	}
-	v, ok := b.Condition[conditionBreakGlass].(bool)
-	return ok && v
-}
+// conditionBreakGlass marks a binding as an emergency-access grant. The
+// predicate is RoleBinding.IsBreakGlass (internal/rbac).
+const conditionBreakGlass = rbac.ConditionBreakGlass
 
 // hasBreakGlass reports whether the principal holds an ACTIVE break-glass binding
 // that reaches the given tenant.
@@ -53,7 +47,7 @@ func (s *server) hasBreakGlass(principalID, tenantID string) bool {
 	target := scopeTenant(tenantID)
 	now := time.Now().UTC()
 	for _, b := range s.bindings.ListByPrincipal(principalID) {
-		if b.Effect == EffectAllow && b.isBreakGlass() && b.active(now) && s.scopeAncestorOrSelf(b.ScopeID, target) {
+		if b.Effect == EffectAllow && b.IsBreakGlass() && b.Active(now) && s.scopeAncestorOrSelf(b.ScopeID, target) {
 			return true
 		}
 	}
@@ -105,7 +99,7 @@ func (s *server) handleBreakGlass(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
 		out := make([]RoleBinding, 0)
 		for _, b := range s.bindings.ListByPrincipal(claims.Sub) {
-			if b.isBreakGlass() && b.active(now) {
+			if b.IsBreakGlass() && b.Active(now) {
 				out = append(out, b)
 			}
 		}
@@ -178,7 +172,7 @@ func (s *server) handleBreakGlassByID(w http.ResponseWriter, r *http.Request) {
 	// A caller may only end its own break-glass session.
 	var target *RoleBinding
 	for _, b := range s.bindings.ListByPrincipal(claims.Sub) {
-		if b.ID == id && b.isBreakGlass() {
+		if b.ID == id && b.IsBreakGlass() {
 			bb := b
 			target = &bb
 			break
