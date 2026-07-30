@@ -186,9 +186,12 @@ REQUIRED_PATHS = [
     "src/backend/copilot.go",
     "src/backend/graphql.go",
     "src/backend/auth.go",
-    "src/backend/jwt.go",
-    "src/backend/password.go",
-    "src/backend/users.go",
+    # The auth tier moved into packages (P2 decomposition); anchor the moved
+    # files, plus the /cmd entrypoint the image builds from (P2 W5).
+    "src/backend/internal/token/jwt.go",
+    "src/backend/internal/token/password.go",
+    "src/backend/internal/users/store.go",
+    "src/backend/cmd/api/main.go",
     "src/backend/events.go",
     "src/backend/dashboard.go",
     # Ops scripts
