@@ -45,7 +45,7 @@ func aiCfgTestServer(t *testing.T) *server {
 		tenants:        ts,
 		audit:          au,
 		copilotLimiter: ratelimit.New(),
-		aiToolBudget:   newAIDailyBudget(),
+		aiToolBudget:   ai.NewDailyBudget(),
 		copilotCfg:     newCopilotConfigStore(dir+"/copilot_config.json", nil),
 		aiTenantCfg:    newAITenantConfigStore(dir+"/ai_tenant_config.json", nil),
 	}

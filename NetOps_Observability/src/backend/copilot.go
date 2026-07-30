@@ -212,7 +212,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 		return false // no provider — plain path renders the "add a key" message
 	}
 	tenant, _ := principalTenant(claims)
-	if !s.aiToolBudget.allow(tenant, s.dailyTokensFor(tenant)) {
+	if !s.aiToolBudget.Allow(tenant, s.dailyTokensFor(tenant)) {
 		logWarn("ai", "agent loop skipped — daily token budget exhausted", map[string]any{"tenant": claims.Tenant})
 		return false // fail closed to chat-without-tools (plan §4.5), disclosed via provider note
 	}
@@ -227,7 +227,7 @@ func (s *server) tryAgentLoop(w http.ResponseWriter, r *http.Request, claims jwt
 	}
 	// Server-owned investigation playbook + current-time anchor (models cannot
 	// resolve "last night" without knowing now).
-	system += "\n\n" + agentDoctrine(time.Now().UTC())
+	system += "\n\n" + ai.AgentDoctrine(time.Now().UTC())
 	call := func(ctx context.Context, sys string, turns []ai.AgentTurn, sp []ai.ToolSpec) (string, []ai.ToolCall, error) {
 		return ai.CallTools(ctx, ai.ProviderDo, name, key, model, sys, turns, sp)
 	}

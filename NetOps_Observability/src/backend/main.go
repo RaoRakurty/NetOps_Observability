@@ -168,7 +168,7 @@ type server struct {
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
 	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
 	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
-	aiToolBudget    *aiDailyBudget        // per-tenant daily token budget for the agent loop (P2, LLM04)
+	aiToolBudget    *ai.DailyBudget       // per-tenant daily token budget for the agent loop (P2, LLM04)
 	copilotCfg      *copilotConfigStore
 	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
 	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
@@ -670,7 +670,7 @@ func newServer() *server {
 	srv.exportPolicy = newExportPolicyStore(envOr("EXPORT_POLICY_FILE", "/data/export_policy.json"))
 	srv.exportLimiter = ratelimit.New()
 	srv.copilotLimiter = ratelimit.New()
-	srv.aiToolBudget = newAIDailyBudget()
+	srv.aiToolBudget = ai.NewDailyBudget()
 	engine.OnFire = srv.ingestAlertIncident
 	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
 	// into per-tenant episodes; muted/snoozed episodes pause NOTIFICATIONS only.

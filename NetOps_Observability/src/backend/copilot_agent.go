@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"netops/backend/ai"
@@ -25,31 +24,9 @@ import (
 // AI_TOOLS_ALL_TENANTS=true widens it later (P4). Off by default.
 
 const (
-	aiToolsLoopTimeout   = 2 * time.Minute // hard wall-clock bound per turn
-	aiToolsReplyMaxChars = 4000            // per-tool-reply prompt budget
-	aiToolsMaxCitations  = 12              // citations returned to the UI
+	aiToolsLoopTimeout  = 2 * time.Minute // hard wall-clock bound per turn
+	aiToolsMaxCitations = 12              // citations returned to the UI
 )
-
-// agentDoctrine is the investigation playbook appended to the server-owned
-// system prompt on tool-enabled turns. It exists because models — especially
-// small ones — default to interrogating the operator ("which source? exact
-// timestamps?") instead of investigating. A NOC assistant acts first: the
-// current-time anchor lets it resolve relative phrases itself, and the
-// incidents-first rule points it at the platform's already-merged view instead
-// of offering a logs/metrics/flows menu.
-func agentDoctrine(now time.Time) string {
-	return "CURRENT TIME (UTC): " + now.Format("Monday, 2006-01-02 15:04") + `
-
-INVESTIGATION DOCTRINE — how to answer with the tools:
-- Act first, ask later. NEVER ask which data source to check, and NEVER ask for exact timestamps. Run the lookups, answer, then state what you covered and offer to narrow.
-- Resolve relative time yourself against the current time above: "last night" or "today" → window 12h or 24h; "this week" or "past month" → 7d (the widest available — say what you covered).
-- "Any issues / what's wrong / what happened" → start with the incident tools: get_incident_history for past windows, get_active_major_incidents for right now. They are the platform's already-correlated view across logs, metrics, flows and paths — never offer the operator a menu of raw sources instead.
-- For a named device, corroborate with get_device_health and search_logs, and MERGE everything into ONE answer with citations.
-- Outage triage narrows in this order — real impact → blast radius → what changed → transport (links/tunnels) → routing → policy/firewall → front door (DNS/LB) → brownout vs hard-down → provider vs us → safest mitigation. Answer with where the evidence points and what would close the next question; a question closes only when its evidence threshold is met (e.g. two independent streams agree).
-- Ask a clarifying question ONLY when a required argument is truly unknowable (for example, two devices share the same name).
-
-WORDING (NOC operator voice): answer as "[Confidence label] [fault domain] affecting [scope]. Evidence: [signal A], [signal B], [time window]. Next: [specific check or mitigation]." Lead with impact and scope, never a deep mechanism. Separate symptom from hypothesis. Confidence labels — confirmed: multiple independent evidence classes agree, use sparingly live; likely: strong directional evidence, safe to act on; suspected: incomplete or contradicted — say what would confirm it; unknown: state symptom and impact only, never imply a root cause. Never show a bare percentage alone — pair it with the label ("Likely, 85% model confidence"). Name contradictions and gaps instead of hiding them; blameless language. Live verbs: investigating, identified, likely, suspected, monitoring, mitigated, resolved. Never: certainly, definitely, root cause found, proven.`
-}
 
 // featureAIToolsEnabled gates the loop (off by default — soak per plan §5 P2).
 func featureAIToolsEnabled() bool { return os.Getenv("FEATURE_AI_TOOLS") == "true" }
@@ -71,51 +48,9 @@ func (s *server) agentLoopEligible(claims jwtClaims) bool {
 
 // ---- daily per-tenant token budget (LLM04/LLM10, plan §4.5) ------------------
 
-// aiDailyBudget is an in-memory per-tenant daily token meter. Estimates are
-// coarse (chars/4) — the point is a hard ceiling on provider spend, not
-// accounting-grade metering. Resets at UTC midnight; fail-closed callers fall
-// back to chat-without-tools when exhausted.
-type aiDailyBudget struct {
-	mu   sync.Mutex
-	day  string
-	used map[string]int
-}
-
-func newAIDailyBudget() *aiDailyBudget { return &aiDailyBudget{used: map[string]int{}} }
-
-// aiToolsDailyTokens is the per-tenant daily budget; ≤0 disables metering.
+// aiToolsDailyTokens is the platform-default per-tenant daily budget
+// (metered by ai.DailyBudget); ≤0 disables metering.
 func aiToolsDailyTokens() int { return envInt("AI_TOOLS_DAILY_TOKENS", 250_000) }
-
-// allow reports whether the tenant still has budget; charge adds usage.
-// allow reports whether the tenant is under its daily token limit (resolved by
-// the caller — per-tenant override or platform default; <=0 disables metering).
-func (b *aiDailyBudget) allow(tenant string, limit int) bool {
-	if limit <= 0 {
-		return true
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.rollover()
-	return b.used[tenant] < limit
-}
-
-func (b *aiDailyBudget) charge(tenant string, tokens int) {
-	if tokens <= 0 {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.rollover()
-	b.used[tenant] += tokens
-}
-
-func (b *aiDailyBudget) rollover() {
-	today := time.Now().UTC().Format("2006-01-02")
-	if b.day != today {
-		b.day = today
-		b.used = map[string]int{}
-	}
-}
 
 // ---- the loop ----------------------------------------------------------------
 
@@ -137,18 +72,6 @@ type agentResult struct {
 	Citations []ai.Citation
 	Truncated bool
 	Calls     int // tool calls actually executed (0 → safe to fall back to plain chat)
-}
-
-// estTokens is the coarse chars/4 token estimate used for budget metering.
-func estTokens(turns []ai.AgentTurn, text string) int {
-	n := len(text)
-	for _, t := range turns {
-		n += len(t.Content)
-		for _, r := range t.Replies {
-			n += len(r.Content)
-		}
-	}
-	return n / 4
 }
 
 // runAgentLoop drives model↔tool rounds until the model answers in text, the
@@ -186,7 +109,7 @@ func (s *server) runAgentLoop(ctx context.Context, claims jwtClaims, p ai.Princi
 			activeSpecs = nil
 		}
 		text, calls, err := call(ctx, system, turns, activeSpecs)
-		s.aiToolBudget.charge(tenant, estTokens(turns, text))
+		s.aiToolBudget.Charge(tenant, ai.EstTokens(turns, text))
 		if err != nil {
 			return res, err
 		}
@@ -286,43 +209,9 @@ func (s *server) executeAgentTool(ctx context.Context, claims jwtClaims, p ai.Pr
 		return fail("the lookup failed — do not invent its data", "tool_error")
 	}
 
-	rep.Content = renderToolReply(&result)
+	rep.Content = ai.RenderToolReply(&result)
 	s.auditAgentTool(claims, c, args, started, true, "ok")
 	return rep, result.Items
-}
-
-// renderToolReply turns a tool result into the bounded text block that is fed
-// back into the conversation and therefore SHIPPED TO THE PROVIDER.
-//
-// This is an egress boundary, so the outbound DLP filter runs here (PIPE-MED-5:
-// the loop used to render raw store rows straight into the prompt — only the
-// syslog tool redacted anything). ai.Redact masks credential-shaped material
-// AND direct identifiers, because everything in a tool result is
-// server-originated tenant data, not something the operator typed.
-//
-// Redaction runs on the ASSEMBLED block rather than per item: one pass instead
-// of N, and the mask never lengthens a line enough to matter against the
-// character budget (it only ever replaces a longer secret with "***").
-func renderToolReply(result *ai.ToolResult) string {
-	var b strings.Builder
-	for _, it := range result.Items {
-		line := fmt.Sprintf("[%s] %s\n", it.CitationID, it.Text)
-		if b.Len()+len(line) > aiToolsReplyMaxChars {
-			result.Truncated = true
-			break
-		}
-		b.WriteString(line)
-	}
-	for _, n := range result.Notes {
-		b.WriteString("note: " + n + "\n")
-	}
-	if result.Truncated {
-		b.WriteString("note: results truncated.\n")
-	}
-	if b.Len() == 0 {
-		b.WriteString("no data.\n")
-	}
-	return ai.Redact(b.String())
 }
 
 // auditAgentTool writes the per-tool-call audit line: principal, tool, arg

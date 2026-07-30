@@ -59,7 +59,7 @@ func (d agentTestDS) ListProblemsInWindow(ctx context.Context, p ai.Principal, _
 // agentTestServer: the blank store path keeps the per-tenant AI config purely
 // in-memory (kvSave on "" fails and is ignored) — persistence has its own tests.
 func agentTestServer() *server {
-	return &server{aiToolBudget: newAIDailyBudget(), aiTenantCfg: newAITenantConfigStore("", nil)}
+	return &server{aiToolBudget: ai.NewDailyBudget(), aiTenantCfg: newAITenantConfigStore("", nil)}
 }
 
 func agentTestSetup(tenant string) (*server, ai.Principal, *ai.ToolRegistry, *ai.PolicyEngine, []ai.ToolSpec) {
@@ -179,18 +179,18 @@ func TestExecuteAgentToolPolicyAndValidation(t *testing.T) {
 }
 
 func TestAIDailyBudget(t *testing.T) {
-	b := newAIDailyBudget()
-	if !b.allow("t-a", 100) {
+	b := ai.NewDailyBudget()
+	if !b.Allow("t-a", 100) {
 		t.Fatal("fresh budget must allow")
 	}
-	b.charge("t-a", 150)
-	if b.allow("t-a", 100) {
+	b.Charge("t-a", 150)
+	if b.Allow("t-a", 100) {
 		t.Fatal("over-budget tenant must be refused")
 	}
-	if !b.allow("t-b", 100) {
+	if !b.Allow("t-b", 100) {
 		t.Fatal("budget is per-tenant")
 	}
-	if !b.allow("t-a", 0) {
+	if !b.Allow("t-a", 0) {
 		t.Fatal("<=0 disables metering")
 	}
 }

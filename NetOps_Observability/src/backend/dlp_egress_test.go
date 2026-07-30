@@ -158,7 +158,7 @@ func TestToolResultCredentialNeverReachesProviderPayload(t *testing.T) {
 		}},
 		Notes: []string{"bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.c2ln in upstream reply"},
 	}
-	rendered := renderToolReply(&result)
+	rendered := ai.RenderToolReply(&result)
 
 	// The rendered block is what re-enters the conversation.
 	for _, secret := range []string{"S3cr3tR0", "hunter2", "a4:83:e7:1b:2c:3d", "jsmith@corp.example.com", "eyJhbGciOiJIUzI1NiJ9"} {
