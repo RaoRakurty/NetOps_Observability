@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
+
+	"netops/backend/wireless"
 )
 
 func gateStore() *wirelessActionStore { return newWirelessActionStore() }
@@ -18,17 +20,17 @@ const confirmedTier = "confirmed"
 var rfKinds = []string{"wireless_channel_util_high", "wireless_retry_rate_high"}
 
 func TestGate1ProposalRequiresParticipatingEvidence(t *testing.T) {
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRRMChannel)
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRRMChannel)
 	st := gateStore()
 	// The incident's evidence is an ONBOARDING failure — an RRM channel change
 	// does not interrogate that family; proposing it must be refused.
-	_, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
-		[]string{"wireless_onboarding_dhcp_failure"}, confirmedTier)
-	if !errors.Is(err, errWActEvidence) {
+	_, err := st.Propose("t1", "op", wireless.WirelessActionRRMChannel, "ap-abc", "c1",
+		[]string{"wireless_onboarding_dhcp_failure"}, confirmedTier, wirelessActionAllowlist())
+	if !errors.Is(err, wireless.ErrActionEvidence) {
 		t.Fatalf("want gate-1 refusal, got %v", err)
 	}
-	if _, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
-		rfKinds, confirmedTier); err != nil {
+	if _, err := st.Propose("t1", "op", wireless.WirelessActionRRMChannel, "ap-abc", "c1",
+		rfKinds, confirmedTier, wirelessActionAllowlist()); err != nil {
 		t.Fatalf("participating RF evidence must pass gate 1: %v", err)
 	}
 }
@@ -36,95 +38,95 @@ func TestGate1ProposalRequiresParticipatingEvidence(t *testing.T) {
 func TestGate2AllowlistDefaultsEmpty(t *testing.T) {
 	t.Setenv("WIRELESS_ACTION_ALLOWLIST", "")
 	st := gateStore()
-	_, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
-		rfKinds, confirmedTier)
-	if !errors.Is(err, errWActNotAllowed) {
+	_, err := st.Propose("t1", "op", wireless.WirelessActionRRMChannel, "ap-abc", "c1",
+		rfKinds, confirmedTier, wirelessActionAllowlist())
+	if !errors.Is(err, wireless.ErrActionNotAllowed) {
 		t.Fatalf("empty allowlist must refuse EVERY kind, got %v", err)
 	}
 }
 
 func TestGate2VerdictMustBeConfirmed(t *testing.T) {
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRRMChannel)
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRRMChannel)
 	st := gateStore()
 	for _, tier := range []string{"suspected", "undetermined", ""} {
-		if _, err := st.propose("t1", "op", WirelessActionRRMChannel, "ap-abc", "c1",
-			rfKinds, tier); !errors.Is(err, errWActNotConfirmed) {
+		if _, err := st.Propose("t1", "op", wireless.WirelessActionRRMChannel, "ap-abc", "c1",
+			rfKinds, tier, wirelessActionAllowlist()); !errors.Is(err, wireless.ErrActionNotConfirmed) {
 			t.Fatalf("tier %q must refuse, got %v", tier, err)
 		}
 	}
 }
 
 func TestGate2BlastRadiusOneTypedTarget(t *testing.T) {
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRRMChannel+","+WirelessActionClientDeauth)
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRRMChannel+","+wireless.WirelessActionClientDeauth)
 	st := gateStore()
 	cases := []string{"", "sw1:Gi1/0/1", "ap-a,ap-b", "wcl-c1"}
 	for _, target := range cases {
-		if _, err := st.propose("t1", "op", WirelessActionRRMChannel, target, "c1",
-			rfKinds, confirmedTier); !errors.Is(err, errWActBlastRadius) {
+		if _, err := st.Propose("t1", "op", wireless.WirelessActionRRMChannel, target, "c1",
+			rfKinds, confirmedTier, wirelessActionAllowlist()); !errors.Is(err, wireless.ErrActionBlastRadius) {
 			t.Fatalf("target %q must refuse on blast radius, got %v", target, err)
 		}
 	}
 	// The deauth action targets a CLIENT, never an AP.
-	if _, err := st.propose("t1", "op", WirelessActionClientDeauth, "ap-abc", "c1",
-		[]string{"wireless_roam_storm"}, confirmedTier); !errors.Is(err, errWActBlastRadius) {
+	if _, err := st.Propose("t1", "op", wireless.WirelessActionClientDeauth, "ap-abc", "c1",
+		[]string{"wireless_roam_storm"}, confirmedTier, wirelessActionAllowlist()); !errors.Is(err, wireless.ErrActionBlastRadius) {
 		t.Fatalf("client action on an AP target must refuse, got %v", err)
 	}
 }
 
 func TestGate3And4ApprovalThenFailClosedExecution(t *testing.T) {
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRadioReset)
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRadioReset)
 	st := gateStore()
-	a, err := st.propose("t1", "op", WirelessActionRadioReset, "ap-abc", "c1",
-		[]string{"wireless_radio_down"}, confirmedTier)
+	a, err := st.Propose("t1", "op", wireless.WirelessActionRadioReset, "ap-abc", "c1",
+		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Executing an unapproved action refuses (gate 3).
-	if _, err := st.execute("t1", a.ID); !errors.Is(err, errWActNotApproved) {
+	if _, err := st.Execute("t1", a.ID); !errors.Is(err, wireless.ErrActionNotApproved) {
 		t.Fatalf("unapproved execute must refuse, got %v", err)
 	}
-	if _, err := st.approve("t1", a.ID, "admin"); err != nil {
+	if _, err := st.Approve("t1", a.ID, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	// v1 has NO executor: execution fails CLOSED and records FAILED (gate 4).
-	got, err := st.execute("t1", a.ID)
-	if !errors.Is(err, errWActNoExecutor) {
+	got, err := st.Execute("t1", a.ID)
+	if !errors.Is(err, wireless.ErrActionNoExecutor) {
 		t.Fatalf("no-executor execute must refuse, got %v", err)
 	}
-	if got.State != wactFailed || got.Error == "" {
+	if got.State != wireless.ActionStateFailed || got.Error == "" {
 		t.Fatalf("refused execution must record failed+reason: %+v", got)
 	}
 	// A rejected proposal can never be approved or executed.
-	b, _ := st.propose("t1", "op", WirelessActionRadioReset, "ap-def", "c1",
-		[]string{"wireless_radio_down"}, confirmedTier)
-	if _, err := st.reject("t1", b.ID, "admin"); err != nil {
+	b, _ := st.Propose("t1", "op", wireless.WirelessActionRadioReset, "ap-def", "c1",
+		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
+	if _, err := st.Reject("t1", b.ID, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.approve("t1", b.ID, "admin"); !errors.Is(err, errWActWrongState) {
+	if _, err := st.Approve("t1", b.ID, "admin"); !errors.Is(err, wireless.ErrActionWrongState) {
 		t.Fatalf("approving a rejected action must refuse, got %v", err)
 	}
 }
 
 func TestActionsTenantScoped(t *testing.T) {
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRadioReset)
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRadioReset)
 	st := gateStore()
-	a, _ := st.propose("tA", "op", WirelessActionRadioReset, "ap-abc", "c1",
-		[]string{"wireless_radio_down"}, confirmedTier)
+	a, _ := st.Propose("tA", "op", wireless.WirelessActionRadioReset, "ap-abc", "c1",
+		[]string{"wireless_radio_down"}, confirmedTier, wirelessActionAllowlist())
 	// Another tenant can neither see nor act on it — indistinguishable from
 	// nonexistent (§3a).
-	if got := st.list("tB", false); len(got) != 0 {
+	if got := st.List("tB", false); len(got) != 0 {
 		t.Fatalf("cross-tenant list leaked: %+v", got)
 	}
-	if _, err := st.approve("tB", a.ID, "admin"); !errors.Is(err, errNotFound) {
+	if _, err := st.Approve("tB", a.ID, "admin"); !errors.Is(err, wireless.ErrActionNotFound) {
 		t.Fatalf("cross-tenant approve must be notFound, got %v", err)
 	}
-	if _, err := st.execute("tB", a.ID); !errors.Is(err, errNotFound) {
+	if _, err := st.Execute("tB", a.ID); !errors.Is(err, wireless.ErrActionNotFound) {
 		t.Fatalf("cross-tenant execute must be notFound, got %v", err)
 	}
-	if got := st.list("tA", false); len(got) != 1 {
+	if got := st.List("tA", false); len(got) != 1 {
 		t.Fatalf("own list must see it")
 	}
-	if got := st.list("", true); len(got) != 1 {
+	if got := st.List("", true); len(got) != 1 {
 		t.Fatalf("platform cross list must see it")
 	}
 }
@@ -157,7 +159,7 @@ func TestWirelessActionsHTTPDormantAndScoped(t *testing.T) {
 	}
 	// Propose without a reachable evidence store: gate inputs FAIL CLOSED.
 	st_, body = do(t, srv, "POST", "/api/wireless/actions", admin, map[string]any{
-		"kind": WirelessActionRRMChannel, "target": "ap-abc",
+		"kind": wireless.WirelessActionRRMChannel, "target": "ap-abc",
 		"correlation_id": "0f9e8d7c-0000-4000-8000-000000000001",
 	})
 	if st_ != 400 && st_ != 422 {
@@ -168,9 +170,9 @@ func TestWirelessActionsHTTPDormantAndScoped(t *testing.T) {
 	// hidden. Seed one action for tenant "other" directly in the store; the
 	// platform-owner path sees it, but a foreign id through the item verbs
 	// resolves exactly like a nonexistent one for a scoped caller.
-	t.Setenv("WIRELESS_ACTION_ALLOWLIST", WirelessActionRadioReset)
-	a, err := s.wirelessActions.propose("other-tenant", "seed", WirelessActionRadioReset,
-		"ap-abc", "c1", []string{"wireless_radio_down"}, "confirmed")
+	t.Setenv("WIRELESS_ACTION_ALLOWLIST", wireless.WirelessActionRadioReset)
+	a, err := s.wirelessActions.Propose("other-tenant", "seed", wireless.WirelessActionRadioReset,
+		"ap-abc", "c1", []string{"wireless_radio_down"}, "confirmed", wirelessActionAllowlist())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,70 +38,21 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"netops/backend/wireless"
 )
 
 // The three v1 actions — deliberately the lowest-risk (report §19); anything
 // touching more than one AP in one action is out of scope by design.
-const (
-	WirelessActionRRMChannel   = "rrm_channel_change" // 1 radio, brief re-assoc
-	WirelessActionRadioReset   = "ap_radio_reset"     // 1 AP's radio
-	WirelessActionClientDeauth = "client_deauth"      // 1 client session
+// The action state machine moved to wireless/actions.go (Phase-2 W4.6).
+type (
+	wirelessAction      = wireless.Action
+	wirelessActionState = wireless.ActionState
+	wirelessActionStore = wireless.ActionStore
 )
 
-var wirelessActionKinds = map[string]struct {
-	targetPrefix string // the canonical entity prefix the target must carry
-	evidence     []string
-}{
-	WirelessActionRRMChannel:   {"ap-", []string{"wireless_channel_util_high", "wireless_interference", "wireless_noise_high", "wireless_radar_event"}},
-	WirelessActionRadioReset:   {"ap-", []string{"wireless_radio_down", "wireless_retry_rate_high", "wireless_ap_join_flap"}},
-	WirelessActionClientDeauth: {"wcl-", []string{"wireless_roam_storm", "wireless_client_disconnect_storm", "wireless_onboarding_auth_failure"}},
-}
-
-type wirelessActionState string
-
-const (
-	wactProposed wirelessActionState = "proposed"
-	wactApproved wirelessActionState = "approved"
-	wactExecuted wirelessActionState = "executed"
-	wactVerified wirelessActionState = "verified"
-	wactFailed   wirelessActionState = "failed"
-	wactRejected wirelessActionState = "rejected"
-)
-
-type wirelessAction struct {
-	Tenant        string              `json:"-"`
-	ID            string              `json:"id"`
-	Kind          string              `json:"kind"`
-	Target        string              `json:"target"` // ONE canonical entity id
-	CorrelationID string              `json:"correlation_id"`
-	State         wirelessActionState `json:"state"`
-	ProposedBy    string              `json:"proposed_by"`
-	ApprovedBy    string              `json:"approved_by,omitempty"`
-	Error         string              `json:"error,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
-	// Verification outcome (gate 5): set by the settle-window recheck.
-	VerifyNote string `json:"verify_note,omitempty"`
-}
-
-// wirelessActionExecutor is gate 4's seam: the vendor-connector write RPC.
-// v1 registers NONE — execution fails closed. NEVER implement this over SSH.
-type wirelessActionExecutor interface {
-	Execute(a wirelessAction) error
-}
-
-type wirelessActionStore struct {
-	mu   sync.Mutex
-	rows map[string]map[string]*wirelessAction // tenant → id → action
-	seq  int
-	exec wirelessActionExecutor // nil = fail closed (v1)
-}
-
-func newWirelessActionStore() *wirelessActionStore {
-	return &wirelessActionStore{rows: map[string]map[string]*wirelessAction{}}
-}
+func newWirelessActionStore() *wirelessActionStore { return wireless.NewActionStore() }
 
 func wirelessActionsEnabled() bool {
 	return os.Getenv("FEATURE_WIRELESS_ACTIONS") == "true"
@@ -120,159 +71,6 @@ func wirelessActionAllowlist() map[string]bool {
 	}
 	return out
 }
-
-var (
-	errWActUnknownKind  = errors.New("unknown wireless action kind")
-	errWActEvidence     = errors.New("gate 1: the action's evidence family did not participate in the correlation object")
-	errWActNotAllowed   = errors.New("gate 2: action kind is not in the tenant allowlist")
-	errWActNotConfirmed = errors.New("gate 2: verdict is not confirmed — suspected/undetermined never auto-remediate")
-	errWActBlastRadius  = errors.New("gate 2: blast radius — the target must be exactly one entity of the action's type")
-	errWActNotApproved  = errors.New("gate 3: action is not approved")
-	errWActNoExecutor   = errors.New("gate 4: no executor registered — the vendor write RPC has not earned live validation (Phase 9)")
-	errWActWrongState   = errors.New("action is not in a state that permits this transition")
-)
-
-// propose runs gates 1 + 2 and records the request. participatingKinds and
-// verdictTier come from the correlation object the caller names (the handler
-// fetches them; tests inject them).
-func (st *wirelessActionStore) propose(tenant, actor string, kind, target, correlationID string,
-	participatingKinds []string, verdictTier string) (*wirelessAction, error) {
-	spec, ok := wirelessActionKinds[kind]
-	if !ok {
-		return nil, errWActUnknownKind
-	}
-	// Gate 1 — proposal from participating evidence only.
-	part := map[string]bool{}
-	for _, k := range participatingKinds {
-		part[k] = true
-	}
-	matched := false
-	for _, k := range spec.evidence {
-		if part[k] {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		return nil, errWActEvidence
-	}
-	// Gate 2 — eligibility.
-	if !wirelessActionAllowlist()[kind] {
-		return nil, errWActNotAllowed
-	}
-	if verdictTier != "confirmed" {
-		return nil, errWActNotConfirmed
-	}
-	if target == "" || !strings.HasPrefix(target, spec.targetPrefix) ||
-		strings.ContainsAny(target, ", \t") {
-		return nil, errWActBlastRadius
-	}
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.seq++
-	a := &wirelessAction{
-		Tenant: tenant, ID: fmt.Sprintf("wact-%d", st.seq), Kind: kind,
-		Target: target, CorrelationID: correlationID, State: wactProposed,
-		ProposedBy: actor, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
-	}
-	t := st.rows[tenant]
-	if t == nil {
-		t = map[string]*wirelessAction{}
-		st.rows[tenant] = t
-	}
-	t[a.ID] = a
-	return a, nil
-}
-
-// approve runs gate 3: a named human approver. (Auto-approve, when it lands,
-// calls this with actor "auto:<policy>" and its OWN audit event — never
-// silently.)
-func (st *wirelessActionStore) approve(tenant, id, approver string) (*wirelessAction, error) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	a := st.rows[tenant][id]
-	if a == nil {
-		return nil, errNotFound
-	}
-	if a.State != wactProposed {
-		return nil, errWActWrongState
-	}
-	a.State = wactApproved
-	a.ApprovedBy = approver
-	a.UpdatedAt = time.Now().UTC()
-	return a, nil
-}
-
-// reject is the approver's other verb.
-func (st *wirelessActionStore) reject(tenant, id, approver string) (*wirelessAction, error) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	a := st.rows[tenant][id]
-	if a == nil {
-		return nil, errNotFound
-	}
-	if a.State != wactProposed {
-		return nil, errWActWrongState
-	}
-	a.State = wactRejected
-	a.ApprovedBy = approver
-	a.UpdatedAt = time.Now().UTC()
-	return a, nil
-}
-
-// execute runs gate 4. Fail-closed: no registered executor = refusal, and a
-// failed execution records FAILED (never silently retried).
-func (st *wirelessActionStore) execute(tenant, id string) (*wirelessAction, error) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	a := st.rows[tenant][id]
-	if a == nil {
-		return nil, errNotFound
-	}
-	if a.State != wactApproved {
-		if a.State == wactProposed {
-			return nil, errWActNotApproved
-		}
-		return nil, errWActWrongState
-	}
-	if st.exec == nil {
-		a.State = wactFailed
-		a.Error = errWActNoExecutor.Error()
-		a.UpdatedAt = time.Now().UTC()
-		return a, errWActNoExecutor
-	}
-	if err := st.exec.Execute(*a); err != nil {
-		a.State = wactFailed
-		a.Error = err.Error()
-		a.UpdatedAt = time.Now().UTC()
-		return a, err
-	}
-	a.State = wactExecuted
-	a.UpdatedAt = time.Now().UTC()
-	// Gate 5 begins here when an executor exists: the settle-window recheck of
-	// the originating signal marks verified/failed. Recorded as pending so a
-	// fire-and-forget can never masquerade as done.
-	a.VerifyNote = "verification pending: settle-window recheck of the originating signal"
-	return a, nil
-}
-
-func (st *wirelessActionStore) list(tenant string, cross bool) []*wirelessAction {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	var out []*wirelessAction
-	for t, rows := range st.rows {
-		if !cross && t != tenant {
-			continue
-		}
-		for _, a := range rows {
-			cp := *a
-			out = append(out, &cp)
-		}
-	}
-	return out
-}
-
-// ── HTTP surface (dormant unless FEATURE_WIRELESS_ACTIONS=true) ─────────────
 
 func (s *server) wirelessActionAudit(r *http.Request, claims jwtClaims, action string, a *wirelessAction, decision string) {
 	if s.audit == nil {
@@ -307,7 +105,7 @@ func (s *server) handleWirelessActions(w http.ResponseWriter, r *http.Request) {
 	tenant, cross := principalTenant(claims)
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.wirelessActions.list(tenant, cross))
+		writeJSON(w, http.StatusOK, s.wirelessActions.List(tenant, cross))
 	case http.MethodPost:
 		var in struct {
 			Kind          string `json:"kind"`
@@ -323,8 +121,8 @@ func (s *server) handleWirelessActions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("gate inputs: %w", err))
 			return
 		}
-		a, err := s.wirelessActions.propose(tenant, claims.Sub, in.Kind, in.Target,
-			in.CorrelationID, kinds, tier)
+		a, err := s.wirelessActions.Propose(tenant, claims.Sub, in.Kind, in.Target,
+			in.CorrelationID, kinds, tier, wirelessActionAllowlist())
 		if err != nil {
 			s.wirelessActionAudit(r, claims, "propose", a, "deny")
 			writeError(w, http.StatusUnprocessableEntity, err)
@@ -367,16 +165,16 @@ func (s *server) handleWirelessActionItem(w http.ResponseWriter, r *http.Request
 	)
 	switch verb {
 	case "approve":
-		a, err = s.wirelessActions.approve(tenant, id, claims.Sub)
+		a, err = s.wirelessActions.Approve(tenant, id, claims.Sub)
 	case "reject":
-		a, err = s.wirelessActions.reject(tenant, id, claims.Sub)
+		a, err = s.wirelessActions.Reject(tenant, id, claims.Sub)
 	case "execute":
-		a, err = s.wirelessActions.execute(tenant, id)
+		a, err = s.wirelessActions.Execute(tenant, id)
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	if errors.Is(err, errNotFound) {
+	if errors.Is(err, wireless.ErrActionNotFound) || errors.Is(err, errNotFound) {
 		// Cross-tenant and unknown ids are indistinguishable (§3a).
 		http.NotFound(w, r)
 		return
