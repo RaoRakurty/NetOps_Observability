@@ -268,7 +268,7 @@ func sameTenant(resourceTenant, tenant string, cross bool) bool {
 // Decision flows through the central Authorize() policy.
 func canSeeDevice(d models.Device, tenant string, cross bool) bool {
 	return Authorize(
-		Principal{Tenant: tenant, cross: cross},
+		Principal{Tenant: tenant, Cross: cross},
 		ActionView,
 		Resource{Type: ResDevice, Tenant: deviceTenant(d)},
 	).Allow
@@ -285,7 +285,7 @@ func savedTenant(o saved.Object) string {
 // are platform-owned, visible only cross-tenant). Routed through Authorize().
 func canSeeSaved(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
-		Principal{Tenant: tenant, cross: cross},
+		Principal{Tenant: tenant, Cross: cross},
 		ActionView,
 		Resource{Type: ResSaved, Tenant: savedTenant(o)},
 	).Allow
@@ -296,7 +296,7 @@ func canSeeSaved(o saved.Object, tenant string, cross bool) bool {
 // shared/global ones (which belong to no single tenant), mirroring devices.
 func canMutateSaved(o saved.Object, tenant string, cross bool) bool {
 	return Authorize(
-		Principal{Tenant: tenant, cross: cross},
+		Principal{Tenant: tenant, Cross: cross},
 		ActionUpdate,
 		Resource{Type: ResSaved, Tenant: savedTenant(o)},
 	).Allow
