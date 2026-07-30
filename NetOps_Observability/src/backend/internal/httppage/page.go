@@ -39,19 +39,6 @@ const (
 	HeaderPageMax    = "X-Page-Max-Limit" // server-side ceiling, so a client can size its walk
 )
 
-// Per-endpoint bounds. The DEFAULT is deliberately the same as the MAX on
-// /api/devices: the SPA and every existing API-key client call the endpoint
-// with no parameters at all, and quietly handing them 100 of 512 devices would
-// be a NEW instance of the very defect this change closes. The ceiling is a
-// real bound (an unbounded materialisation of a 50,000-device fleet is a 21 MB
-// per-caller response, F-61), and crossing it is announced three ways: the
-// X-Page-Complete header, the ?envelope=1 `complete` field, and a structured
-// server log — never silence.
-const (
-	deviceDefaultPage = 5000
-	deviceMaxPage     = 5000
-)
-
 // LogTruncated records a bounded read that returned less than the caller
 // matched WITHOUT the caller having asked for a page. A client walking pages on
 // purpose is not a defect and is not logged; a client that asked for "the list"

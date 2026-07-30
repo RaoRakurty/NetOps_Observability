@@ -227,8 +227,6 @@ func (s *server) jiraFor(tenant string) *notify.Jira {
 	return s.itsmCfg.JiraFor(tenant)
 }
 
-func (s *server) serviceNow() *notify.ServiceNow { return s.serviceNowFor("") }
-
 func newServer() *server {
 	// Fail closed if no JWT_SECRET is configured (SR-017) — the dev fallback is
 	// public and also keys report/export links. Dev runs opt in via

@@ -77,6 +77,9 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	// #nosec G710 -- the redirect target is the IdP's DISCOVERED auth endpoint
+	// (trusted operator config via oidc.Provider), never caller input; the only
+	// caller-influenced parts (state, kc_idp_hint) are query-encoded parameters.
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 

@@ -32,10 +32,8 @@ import (
 // Aliases keep the wide main-package consumers (ticketing payload/sweeper and
 // their tests) source-compatible — the jwtClaims technique.
 type (
-	rcaPathView   = rca.PathView
-	rcaPath       = rca.Path
-	rcaAnnotation = rca.Annotation
-	rcaAppImpact  = rca.AppImpact
+	rcaPathView = rca.PathView
+	rcaPath     = rca.Path
 )
 
 // serveRcaPathView renders the UI-ready path view for one correlation object:

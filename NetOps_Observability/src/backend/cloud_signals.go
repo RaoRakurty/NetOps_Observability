@@ -62,8 +62,6 @@ const (
 	cloudEvidenceMaxObjects   = cloud.EvidenceMaxObjects
 )
 
-var errBadSignalCursor = cloud.ErrBadCursorToken
-
 func (s *server) tenantWindowHours(r *http.Request) (int, error) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("window_hours")); raw != "" {
 		n, err := intQuery(r, "window_hours", 0, 1, cloudSignalWindowMaxHours)

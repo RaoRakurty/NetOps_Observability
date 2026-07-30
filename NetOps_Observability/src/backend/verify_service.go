@@ -34,7 +34,6 @@ func verifyCooldown() time.Duration {
 // W1.4). Aliases keep the handlers/trigger/tests source-compatible; the env
 // reads (paths, feature flag) stay here.
 type (
-	verifyTenantConfig  = verify.TenantConfig
 	verifyConfigStore   = verify.ConfigStore
 	verifySettingsPatch = verify.SettingsPatch
 	verifyRunRecord     = verify.RunRecord

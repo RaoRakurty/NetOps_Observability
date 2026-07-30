@@ -138,15 +138,6 @@ func NormalizeProvider(s string) string {
 	return ""
 }
 
-func providerListed(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 // providerKey resolves a provider's API key: its own env var, else the legacy
 // COPILOT_API_KEY when this provider is the configured COPILOT_PROVIDER.
 var providerHTTP = &http.Client{Timeout: 60 * time.Second}

@@ -22,10 +22,7 @@ import (
 	"netops/backend/reports"
 )
 
-const (
-	jobTypeReport = "report"
-	jobTypeExport = "export"
-)
+const ()
 
 // ErrTooLarge is a deterministic (non-retryable) failure: the matched set
 // exceeds the configured caps. The caller surfaces an actionable message.

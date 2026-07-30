@@ -43,8 +43,6 @@ func newTenantGovernanceStore(path string) *tenantGovernanceStore {
 	return tenantpkg.NewGovernanceStore(path)
 }
 
-func isSeamOwnerClass(c string) bool { return tenantpkg.IsSeamOwnerClass(c) }
-
 func tenantGovernancePath() string {
 	if p := strings.TrimSpace(os.Getenv("TENANT_GOVERNANCE_PATH")); p != "" {
 		return p

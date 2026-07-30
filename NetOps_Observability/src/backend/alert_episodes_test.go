@@ -27,8 +27,7 @@ func newEpisodeStore(t *testing.T) (*alertEpisodeStore, *fakeEpisodeClock) {
 
 type fakeEpisodeClock struct{ t time.Time }
 
-func (c *fakeEpisodeClock) now() time.Time          { return c.t }
-func (c *fakeEpisodeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *fakeEpisodeClock) now() time.Time { return c.t }
 
 func listAll(t *testing.T, s *alertEpisodeStore) []AlertEpisode {
 	t.Helper()

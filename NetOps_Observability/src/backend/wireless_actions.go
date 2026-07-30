@@ -48,7 +48,6 @@ import (
 // The action state machine moved to wireless/actions.go (Phase-2 W4.6).
 type (
 	wirelessAction      = wireless.Action
-	wirelessActionState = wireless.ActionState
 	wirelessActionStore = wireless.ActionStore
 )
 

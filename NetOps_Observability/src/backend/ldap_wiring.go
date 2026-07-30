@@ -18,7 +18,6 @@ import (
 type (
 	ldapConfig      = ldap.Config
 	ldapRoleMapping = ldap.RoleMapping
-	ldapIdentity    = ldap.Identity
 )
 
 // newLDAPConfig builds the LDAP config from the environment. It returns a
