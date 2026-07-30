@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"netops/backend/internal/secpolicy"
+)
 
 func TestPasswordClassCount(t *testing.T) {
 	cases := map[string]int{
@@ -15,8 +19,8 @@ func TestPasswordClassCount(t *testing.T) {
 		"abcABC123!@": 4,
 	}
 	for pw, want := range cases {
-		if got := passwordClassCount(pw); got != want {
-			t.Errorf("passwordClassCount(%q) = %d, want %d", pw, got, want)
+		if got := secpolicy.ClassCount(pw); got != want {
+			t.Errorf("secpolicy.ClassCount(%q) = %d, want %d", pw, got, want)
 		}
 	}
 }

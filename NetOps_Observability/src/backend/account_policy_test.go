@@ -40,7 +40,7 @@ func TestAccountValidityDaysExpiresTheAccount(t *testing.T) {
 	}
 	// Inside the window it must NOT fire.
 	fresh := localUser(func(u *User) { u.CreatedAt = policyNow.AddDate(0, 0, -29) })
-	if got := evaluateAccountPolicy(ss, fresh, policyNow); got.blocked() {
+	if got := evaluateAccountPolicy(ss, fresh, policyNow); got.Blocked() {
 		t.Errorf("29-day-old account under a 30-day validity must pass, got %+v", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestAccountValidityDaysExpiresTheAccount(t *testing.T) {
 func TestAccountValidityIsSkippedWhenUnset(t *testing.T) {
 	// 0 = disabled. An ancient account must still sign in.
 	ancient := localUser(func(u *User) { u.CreatedAt = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC) })
-	if d := evaluateAccountPolicy(SecuritySettings{}, ancient, policyNow); d.blocked() {
+	if d := evaluateAccountPolicy(SecuritySettings{}, ancient, policyNow); d.Blocked() {
 		t.Fatalf("validity 0 must disable the rule, got %+v", d)
 	}
 }
@@ -61,7 +61,7 @@ func TestAccountInactivityLocksAfterTheWindow(t *testing.T) {
 		t.Fatalf("91 days idle under a 90-day rule must lock, got %+v", d)
 	}
 	recent := localUser(func(u *User) { u.LastLoginAt = policyNow.AddDate(0, 0, -89) })
-	if got := evaluateAccountPolicy(ss, recent, policyNow); got.blocked() {
+	if got := evaluateAccountPolicy(ss, recent, policyNow); got.Blocked() {
 		t.Errorf("89 days idle must pass, got %+v", got)
 	}
 }
@@ -98,7 +98,7 @@ func TestUnknownPasswordAgeDoesNotForceAFleetWideReset(t *testing.T) {
 		u.CreatedAt = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC) // ancient
 		u.LastLoginAt = policyNow.AddDate(0, 0, -1)               // active user
 	})
-	if d := evaluateAccountPolicy(ss, legacy, policyNow); d.blocked() {
+	if d := evaluateAccountPolicy(ss, legacy, policyNow); d.Blocked() {
 		t.Fatalf("unknown password age must not block; got %+v", d)
 	}
 }
@@ -107,7 +107,7 @@ func TestPasswordExpiryDisabledByFlag(t *testing.T) {
 	// days set but the enable flag off — the flag must win.
 	ss := SecuritySettings{PasswordExpireEnabled: false, PasswordExpireDays: 1}
 	old := localUser(func(u *User) { u.PasswordChangedAt = policyNow.AddDate(0, 0, -400) })
-	if d := evaluateAccountPolicy(ss, old, policyNow); d.blocked() {
+	if d := evaluateAccountPolicy(ss, old, policyNow); d.Blocked() {
 		t.Fatalf("password_expire_enabled=false must disable expiry, got %+v", d)
 	}
 }
@@ -120,7 +120,7 @@ func TestResetOnFirstLogin(t *testing.T) {
 		t.Fatalf("first login must force a reset, got %+v", d)
 	}
 	returning := localUser(func(u *User) { u.LastLoginAt = policyNow.AddDate(0, 0, -1) })
-	if got := evaluateAccountPolicy(ss, returning, policyNow); got.blocked() {
+	if got := evaluateAccountPolicy(ss, returning, policyNow); got.Blocked() {
 		t.Errorf("a returning user must not be asked to reset, got %+v", got)
 	}
 }
@@ -146,7 +146,7 @@ func TestFederatedAccountsSkipPasswordRules(t *testing.T) {
 			u.LastLoginAt = time.Time{}
 			u.PasswordChangedAt = policyNow.AddDate(0, 0, -400)
 		})
-		if d := evaluateAccountPolicy(ss, u, policyNow); d.blocked() {
+		if d := evaluateAccountPolicy(ss, u, policyNow); d.Blocked() {
 			t.Errorf("%s account must skip local password rules, got %+v", src, d)
 		}
 	}
@@ -254,7 +254,7 @@ func TestDefaultSettingsDoNotBlockAFreshAdmin(t *testing.T) {
 		Username: "admin", AuthSource: "local", Status: "active",
 		CreatedAt: policyNow, // just installed
 	}
-	if d := evaluateAccountPolicy(ss, admin, policyNow); d.blocked() {
+	if d := evaluateAccountPolicy(ss, admin, policyNow); d.Blocked() {
 		t.Fatalf("shipped defaults must let a freshly seeded admin sign in, got %+v", d)
 	}
 	if !strings.EqualFold(ss.ConcurrentLogin, "allow") {

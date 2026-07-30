@@ -72,29 +72,34 @@ func structFields(t *testing.T, file, structName string) []string {
 // consumerSources returns the non-test Go sources that mention the settings type
 // at all. Scoping the search to these files (rather than the whole tree) keeps a
 // field named like a common word — Status, Scope — from being "found" in totally
-// unrelated code and passing the guard for free.
+// unrelated code and passing the guard for free. Scans both main (aliases the
+// type as SecuritySettings) and the internal/secpolicy package the domain moved
+// to (P2 RA.2) — the enforcement read sites live in both.
 func consumerSources(t *testing.T, defFile string, typeNames ...string) map[string]string {
 	t.Helper()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read dir: %v", err)
-	}
 	out := map[string]string{}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") ||
-			strings.HasSuffix(name, "_test.go") || name == defFile {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Clean(name))
+	for _, dir := range []string{".", "internal/secpolicy"} {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+			t.Fatalf("read dir %s: %v", dir, err)
 		}
-		src := stripComments(string(b))
-		for _, tn := range typeNames {
-			if strings.Contains(src, tn) {
-				out[name] = src
-				break
+		for _, e := range entries {
+			name := e.Name()
+			rel := filepath.Join(dir, name)
+			if e.IsDir() || !strings.HasSuffix(name, ".go") ||
+				strings.HasSuffix(name, "_test.go") || rel == filepath.Clean(defFile) {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Clean(rel))
+			if err != nil {
+				t.Fatalf("read %s: %v", rel, err)
+			}
+			src := stripComments(string(b))
+			for _, tn := range typeNames {
+				if strings.Contains(src, tn) {
+					out[rel] = src
+					break
+				}
 			}
 		}
 	}
@@ -102,9 +107,10 @@ func consumerSources(t *testing.T, defFile string, typeNames ...string) map[stri
 }
 
 func TestEverySecuritySettingHasAReadSite(t *testing.T) {
-	const defFile = "security_settings.go"
-	fields := structFields(t, defFile, "SecuritySettings")
-	sources := consumerSources(t, defFile, "SecuritySettings", "securitySettings")
+	// The struct moved to internal/secpolicy (P2 RA.2); the guard moved with it.
+	const defFile = "internal/secpolicy/settings.go"
+	fields := structFields(t, defFile, "Settings")
+	sources := consumerSources(t, defFile, "SecuritySettings", "securitySettings", "Settings")
 	if len(sources) == 0 {
 		t.Fatal("no consumer files reference SecuritySettings — the guard would pass vacuously")
 	}
@@ -148,7 +154,7 @@ func TestF68SettingsAreEnforced(t *testing.T) {
 		"ResetOnFirstLogin", "AccountValidityDays", "AccountInactivityDays",
 		"ConcurrentLogin",
 	}
-	sources := consumerSources(t, "security_settings.go", "SecuritySettings", "securitySettings")
+	sources := consumerSources(t, "internal/secpolicy/settings.go", "SecuritySettings", "securitySettings", "Settings")
 	for _, f := range f68 {
 		found := false
 		for _, src := range sources {
