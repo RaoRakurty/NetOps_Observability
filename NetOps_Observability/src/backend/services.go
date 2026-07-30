@@ -37,8 +37,6 @@ type (
 
 var errNotFound = servicecat.ErrNotFound
 
-
-
 // ── backend selector ─────────────────────────────────────────────────────────
 
 func newServiceStore() *pgServiceStore {

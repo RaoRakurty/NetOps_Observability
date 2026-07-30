@@ -1,4 +1,4 @@
-package main
+package topology
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ func ownedFixture() (id, name, addr map[string]string) {
 	return
 }
 
-func findLink(links []topoLink, src, tgt string) *topoLink {
+func findLink(links []TopoLink, src, tgt string) *TopoLink {
 	for i := range links {
 		if links[i].Source == src && links[i].Target == tgt {
 			return &links[i]
@@ -31,7 +31,7 @@ func TestNormalizeLLDP_BidirectionalDedup(t *testing.T) {
 		{LocalDevice: "leaf1", LocalPort: "Ethernet1", RemSysName: "spine1", RemPort: "", TS: 100},
 		{LocalDevice: "spine1", LocalPort: "Ethernet2", RemSysName: "leaf1", RemPort: "Ethernet1", TS: 200},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, nil)
+	links := NormalizeLLDP(neighbors, id, name, addr, nil)
 	if len(links) != 1 {
 		t.Fatalf("expected 1 deduped link, got %d: %+v", len(links), links)
 	}
@@ -57,7 +57,7 @@ func TestNormalizeLLDP_ExternalNeighbor(t *testing.T) {
 	neighbors := []collectors.LLDPNeighbor{
 		{LocalDevice: "leaf1", LocalPort: "Ethernet9", RemSysName: "isp-pe-7", TS: 50},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, nil)
+	links := NormalizeLLDP(neighbors, id, name, addr, nil)
 	l := findLink(links, "leaf1", "ext:isp-pe-7")
 	if l == nil {
 		t.Fatalf("expected an external link leaf1→ext:isp-pe-7; got %+v", links)
@@ -80,7 +80,7 @@ func TestNormalizeLLDP_TenantIsolation(t *testing.T) {
 		// owned device's real link → kept
 		{LocalDevice: "leaf1", LocalPort: "Ethernet1", RemSysName: "spine1", TS: 20},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, nil)
+	links := NormalizeLLDP(neighbors, id, name, addr, nil)
 	for _, l := range links {
 		if l.Source == "other-tenant-rtr" || l.Target == "other-tenant-rtr" {
 			t.Fatalf("foreign device leaked into topology: %+v", l)
@@ -96,7 +96,7 @@ func TestNormalizeLLDP_NoOwnedDevices(t *testing.T) {
 	neighbors := []collectors.LLDPNeighbor{
 		{LocalDevice: "leaf1", RemSysName: "spine1", TS: 1},
 	}
-	if links := normalizeLLDP(neighbors, map[string]string{}, map[string]string{}, map[string]string{}, nil); len(links) != 0 {
+	if links := NormalizeLLDP(neighbors, map[string]string{}, map[string]string{}, map[string]string{}, nil); len(links) != 0 {
 		t.Errorf("no owned devices → 0 links; got %+v", links)
 	}
 }
@@ -109,7 +109,7 @@ func TestNormalizeBGPLS_BothEndpointsResolved(t *testing.T) {
 		{Proto: "bgp_ls", IGP: "isis-l2", LocalName: "spine1", LocalPort: "10.0.0.1",
 			RemSysName: "leaf1", RemPort: "10.0.0.2", TS: 300},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, nil)
+	links := NormalizeLLDP(neighbors, id, name, addr, nil)
 	l := findLink(links, "leaf1", "spine1") // endpoints sorted → leaf1 < spine1
 	if l == nil {
 		l = findLink(links, "spine1", "leaf1")
@@ -136,7 +136,7 @@ func TestNormalizeBGPLS_TenantIsolation(t *testing.T) {
 	neighbors := []collectors.LLDPNeighbor{
 		{Proto: "bgp_ls", LocalName: "foreign-core", RemSysName: "spine1", TS: 1},
 	}
-	if links := normalizeLLDP(neighbors, id, name, addr, nil); len(links) != 0 {
+	if links := NormalizeLLDP(neighbors, id, name, addr, nil); len(links) != 0 {
 		t.Fatalf("a bgp_ls link not anchored on an owned device must be dropped; got %+v", links)
 	}
 }
@@ -149,7 +149,7 @@ func TestNormalizeBGPLS_CrossProtocolUnion(t *testing.T) {
 		{Proto: "bgp_ls", IGP: "isis-l2", LocalName: "spine1", RemSysName: "leaf1", TS: 100},
 		{Proto: "lldp", LocalDevice: "leaf1", LocalPort: "Ethernet1", RemSysName: "spine1", TS: 200},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, nil)
+	links := NormalizeLLDP(neighbors, id, name, addr, nil)
 	if len(links) != 1 {
 		t.Fatalf("same adjacency from two protocols → 1 link; got %d: %+v", len(links), links)
 	}
@@ -177,7 +177,7 @@ func TestNormalizeBGPLS_IfAddrEnrichment(t *testing.T) {
 		"spine1": {"10.0.0.1": "Ethernet1/1"},
 		"leaf1":  {"10.0.0.2": "Ethernet49"},
 	}
-	links := normalizeLLDP(neighbors, id, name, addr, ifaddr)
+	links := NormalizeLLDP(neighbors, id, name, addr, ifaddr)
 	l := findLink(links, "leaf1", "spine1")
 	if l == nil {
 		l = findLink(links, "spine1", "leaf1")
@@ -195,7 +195,7 @@ func TestNormalizeBGPLS_IfAddrEnrichment(t *testing.T) {
 	}
 
 	// No map → IP ports pass through untouched (no panic, no error).
-	plain := normalizeLLDP(neighbors, id, name, addr, nil)
+	plain := NormalizeLLDP(neighbors, id, name, addr, nil)
 	if len(plain) != 1 || plain[0].LocalPort != "10.0.0.1" {
 		t.Errorf("without ifaddr, IP ports must pass through unchanged; got %+v", plain)
 	}
@@ -209,7 +209,7 @@ func TestNormalizeLLDP_NoIfAddrEnrichment(t *testing.T) {
 		{LocalDevice: "leaf1", LocalPort: "Ethernet1", RemSysName: "spine1", TS: 10},
 	}
 	ifaddr := map[string]map[string]string{"leaf1": {"Ethernet1": "WRONG"}}
-	links := normalizeLLDP(neighbors, id, name, addr, ifaddr)
+	links := NormalizeLLDP(neighbors, id, name, addr, ifaddr)
 	if findLink(links, "leaf1", "spine1") == nil || links[0].LocalPort != "Ethernet1" {
 		t.Errorf("LLDP ports must never be rewritten by ifaddr enrichment; got %+v", links)
 	}
@@ -218,16 +218,16 @@ func TestNormalizeLLDP_NoIfAddrEnrichment(t *testing.T) {
 // Resolution: system-name (incl. FQDN leading label) and mgmt-address fallback.
 func TestResolveNeighbor(t *testing.T) {
 	_, name, addr := ownedFixture()
-	if id, ok := resolveNeighbor(collectors.LLDPNeighbor{RemSysName: "spine1"}, name, addr); !ok || id != "spine1" {
+	if id, ok := resolveNeighborID(collectors.LLDPNeighbor{RemSysName: "spine1"}, name, addr); !ok || id != "spine1" {
 		t.Errorf("sysname resolve = %q,%v", id, ok)
 	}
-	if id, ok := resolveNeighbor(collectors.LLDPNeighbor{RemSysName: "SPINE1.lab.example.com"}, name, addr); !ok || id != "spine1" {
+	if id, ok := resolveNeighborID(collectors.LLDPNeighbor{RemSysName: "SPINE1.lab.example.com"}, name, addr); !ok || id != "spine1" {
 		t.Errorf("FQDN leading-label resolve = %q,%v", id, ok)
 	}
-	if id, ok := resolveNeighbor(collectors.LLDPNeighbor{RemSysName: "", RemChassis: "10.0.0.2"}, name, addr); !ok || id != "spine1" {
+	if id, ok := resolveNeighborID(collectors.LLDPNeighbor{RemSysName: "", RemChassis: "10.0.0.2"}, name, addr); !ok || id != "spine1" {
 		t.Errorf("mgmt-address resolve = %q,%v", id, ok)
 	}
-	if _, ok := resolveNeighbor(collectors.LLDPNeighbor{RemSysName: "stranger"}, name, addr); ok {
+	if _, ok := resolveNeighborID(collectors.LLDPNeighbor{RemSysName: "stranger"}, name, addr); ok {
 		t.Error("unknown neighbour must not resolve")
 	}
 }

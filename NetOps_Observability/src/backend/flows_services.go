@@ -17,11 +17,7 @@ import (
 	"time"
 
 	"netops/backend/internal/servicecat"
-
-
 )
-
-
 
 type svcFlowRow struct {
 	ServiceID   string  `json:"service_id"`

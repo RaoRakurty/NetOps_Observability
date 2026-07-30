@@ -55,7 +55,7 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []to
 	}
 	neighbors, _ := collectors.FetchTopologyLinks(ctx)
 	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
-	return normalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 }
 
 // topoMetrics is the live signal bundle the topology surfaces overlay: device

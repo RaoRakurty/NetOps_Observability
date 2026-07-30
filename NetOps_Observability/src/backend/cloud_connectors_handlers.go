@@ -527,7 +527,7 @@ func (s *server) liveTrustCheck(w http.ResponseWriter, r *http.Request, claims j
 // authenticates with, bounded to 20s. The deferral sentinels come back as
 // ("deferred", reason); a provider refusal comes back as an error.
 func (s *server) connectorProbeToken(r *http.Request, tenant string, c cloudconn.Connector) (cloudconn.ScopedToken, string, string, string, error) {
-	account, region := connectorDefaultScope(c)
+	account, region := cloudconn.DefaultScope(c)
 	ctx, cancel := context.WithTimeout(r.Context(), ingestCredTimeout)
 	defer cancel()
 	tok, err := s.cloudBroker.TokenFor(ctx, cloudconn.ScopedTokenRequest{

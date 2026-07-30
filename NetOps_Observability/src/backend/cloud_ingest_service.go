@@ -34,7 +34,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"netops/backend/cloud"
@@ -216,25 +215,6 @@ type ingestCredentialsResp struct {
 	AWSSessionToken    string    `json:"aws_session_token,omitempty"`
 }
 
-// connectorDefaultScope derives the default provider account + region from the
-// connector's declared scopes (same precedence as the validate handler's live
-// trust check).
-func connectorDefaultScope(c cloudconn.Connector) (account, region string) {
-	for _, sc := range c.Scopes {
-		if sc.Type == cloudconn.ScopeRegion && region == "" {
-			region = sc.Ref
-			continue
-		}
-		if account == "" {
-			account = sc.Ref
-			if len(sc.Regions) > 0 && region == "" {
-				region = sc.Regions[0]
-			}
-		}
-	}
-	return account, region
-}
-
 func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, c cloudconn.Connector) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("POST"))
@@ -249,7 +229,7 @@ func (s *server) serveIngestCredentials(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	account, region := connectorDefaultScope(c)
+	account, region := cloudconn.DefaultScope(c)
 	if a := strings.TrimSpace(req.Account); a != "" {
 		account = a
 	}
@@ -348,30 +328,11 @@ func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c 
 	// provider/account defaults from the header, then the same attribution the
 	// fixture loader applies — both paths land identically shaped rows.
 	now := time.Now().UTC()
-	res := make([]cloud.CloudResource, 0, len(doc.Resources))
-	maps := make([]cloud.CloudIdentityMapping, 0, len(doc.Resources))
-	for _, rr := range doc.Resources {
-		rr.TenantID = c.TenantID
-		if rr.Provider == "" {
-			rr.Provider = cloud.Provider(c.Provider)
-		}
-		if rr.AccountID == "" {
-			rr.AccountID = doc.AccountID
-		}
-		if rr.DiscoveredAt.IsZero() {
-			rr.DiscoveredAt = now
-		}
-		if rr.LastSeenAt.IsZero() {
-			rr.LastSeenAt = now
-		}
-		cloud.AttributeResource(&rr)
-		res = append(res, rr)
-		maps = append(maps, cloud.IdentityMappings(rr)...)
-	}
+	res, maps := cloud.NormalizeIngestedResources(doc.Resources, c.TenantID, cloud.Provider(c.Provider), doc.AccountID, now)
 
 	// Fold this connector's snapshot into its tenant's merged inventory (a
 	// tenant can hold several connectors — one PUT must never clobber siblings).
-	mergedRes, mergedMaps := s.cloudIngestInv.put(c.TenantID, c.ConnectorID, res, maps)
+	mergedRes, mergedMaps := s.cloudIngestInv.Put(c.TenantID, c.ConnectorID, res, maps)
 	if err := s.cloud.ReplaceInventory(r.Context(), c.TenantID, mergedRes, mergedMaps); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -397,54 +358,10 @@ func (s *server) serveIngestInventory(w http.ResponseWriter, r *http.Request, c 
 	})
 }
 
-// ── per-connector snapshot registry ──────────────────────────────────────────
+// The snapshot registry + tenant-stamping normalizer live in
+// cloud/ingest_inventory.go; the default-scope derivation in cloudconn
+// (P2 RA.16).
 
-// ingestSnapshot is one connector's last normalized inventory snapshot.
-type ingestSnapshot struct {
-	tenant string
-	res    []cloud.CloudResource
-	maps   []cloud.CloudIdentityMapping
-	at     time.Time
-}
+type cloudIngestInventory = cloud.IngestInventory
 
-// cloudIngestInventory folds per-connector snapshots into per-tenant merged
-// inventories so ReplaceInventory (a full tenant refresh by contract) stays
-// correct with multiple connectors per tenant. In-memory by design: snapshots
-// are re-PUT every discovery cycle, so a restart converges within one cycle —
-// the same freshness contract the fixture loader keeps.
-type cloudIngestInventory struct {
-	mu     sync.Mutex
-	byConn map[string]ingestSnapshot // connectorID → last snapshot
-}
-
-func newCloudIngestInventory() *cloudIngestInventory {
-	return &cloudIngestInventory{byConn: map[string]ingestSnapshot{}}
-}
-
-// put stores connectorID's snapshot and returns the tenant's merged inventory
-// (deterministic connector order, bounded by the store's own hard cap).
-func (ci *cloudIngestInventory) put(tenant, connectorID string, res []cloud.CloudResource, maps []cloud.CloudIdentityMapping) ([]cloud.CloudResource, []cloud.CloudIdentityMapping) {
-	t := normTenant(tenant)
-	ci.mu.Lock()
-	defer ci.mu.Unlock()
-	ci.byConn[connectorID] = ingestSnapshot{tenant: t, res: res, maps: maps, at: time.Now().UTC()}
-
-	ids := make([]string, 0, len(ci.byConn))
-	for id, snap := range ci.byConn {
-		if snap.tenant == t {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	var mergedRes []cloud.CloudResource
-	var mergedMaps []cloud.CloudIdentityMapping
-	for _, id := range ids {
-		snap := ci.byConn[id]
-		if len(mergedRes)+len(snap.res) > cloud.ListHardCap {
-			break // bounded: never build an unbounded merge (§9)
-		}
-		mergedRes = append(mergedRes, snap.res...)
-		mergedMaps = append(mergedMaps, snap.maps...)
-	}
-	return mergedRes, mergedMaps
-}
+func newCloudIngestInventory() *cloudIngestInventory { return cloud.NewIngestInventory() }
