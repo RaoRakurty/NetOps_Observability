@@ -184,35 +184,7 @@ func (s *server) upsertIncidentPolicy(w http.ResponseWriter, r *http.Request, cl
 
 // validateIncidentPolicy bounds the operator-supplied policy (zero-trust input).
 func validateIncidentPolicy(p ticketing.IncidentPolicy) error {
-	switch p.ExternalSystem {
-	case "servicenow", "pagerduty", "slack", "jira":
-	default:
-		return errors.New("external_system must be servicenow, pagerduty, slack, or jira")
-	}
-	if p.MinVerdict != "suspected" && p.MinVerdict != "confirmed" {
-		return errors.New("min_verdict must be suspected or confirmed")
-	}
-	if len(p.Name) > 160 {
-		return errors.New("name too long (max 160)")
-	}
-	if p.RequirePersistenceSeconds < 0 || p.RequirePersistenceSeconds > 86400 {
-		return errors.New("require_persistence_seconds out of range [0, 86400]")
-	}
-	if p.SuppressFlappingSeconds < 0 || p.SuppressFlappingSeconds > 86400 {
-		return errors.New("suppress_flapping_seconds out of range [0, 86400]")
-	}
-	if p.DefaultImpact < 0 || p.DefaultImpact > 4 || p.DefaultUrgency < 0 || p.DefaultUrgency > 4 {
-		return errors.New("default impact/urgency out of range [0, 4]")
-	}
-	for _, v := range []int{p.ImpactConfirmedCritical, p.UrgencyConfirmedCritical, p.ImpactConfirmed, p.UrgencyConfirmed} {
-		if v < 0 || v > 4 {
-			return errors.New("priority mapping impact/urgency out of range [0, 4] (0 = automatic)")
-		}
-	}
-	if len(p.AssignmentGroup) > 120 {
-		return errors.New("assignment_group too long (max 120)")
-	}
-	return nil
+	return ticketing.ValidateIncidentPolicy(p)
 }
 
 // handleIncidentPolicyTest simulates a policy against caller-supplied facts. Pure:
@@ -453,63 +425,32 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, id stri
 	return payload, policy, owner, mergedInto, http.StatusOK, nil
 }
 
-// resolveMergeChain follows merged_into pointers from `first` to the terminal
-// surviving correlation object. Bounded (≤ maxMergeDepth hops) and cycle-safe;
-// it never follows a pointer across the owning tenant boundary — a hop that
-// resolves to a foreign-owned row stops the walk at the last same-owner id
-// (the first pointer itself came from the caller-authorized row, so returning
-// it discloses nothing new). Best-effort: an unreadable hop terminates the walk
-// at the last known id rather than failing the caller's 409. Returns the most
-// canonical id reached plus the number of hops it represents (1 = direct).
+// resolveMergeChain delegates the bounded/cycle-safe/tenant-fenced walk to
+// ticketing.ResolveMergeChain (P2 RA.12); the scoped projection read stays
+// here as the injected hop reader.
 func (s *server) resolveMergeChain(ctx context.Context, scope, owner, requested, first string) (string, int) {
-	const maxMergeDepth = 5
-	// The requested id is seeded too: a cycle back to it (A→B→A) must stop the
-	// walk rather than "canonicalize" to the very object the caller started from.
-	seen := map[string]bool{requested: true, first: true}
-	cur, depth := first, 1
-	for depth < maxMergeDepth {
-		if !isUUIDToken(cur) {
-			return cur, depth
-		}
-		sql := `SELECT tenant_id, state, coalesce(toString(merged_into), '') AS merged_into
+	return ticketing.ResolveMergeChain(ctx, owner, requested, first, isUUIDToken,
+		func(ctx context.Context, id string) (ticketing.MergeHop, error) {
+			sql := `SELECT tenant_id, state, coalesce(toString(merged_into), '') AS merged_into
   FROM netops.corr_objects
- WHERE correlation_id = '` + cur + `'
+ WHERE correlation_id = '` + id + `'
  ORDER BY version DESC
  LIMIT 1
  FORMAT JSON`
-		rows, err := s.chRowsScope(ctx, scope, sql)
-		if err != nil {
-			// The projection did not answer. The walk still stops at the last
-			// known id (best-effort by design — the caller's 409 must not fail),
-			// but "this id is terminal" and "we could not read the next hop" are
-			// different facts, and the second is now visible (§10).
-			logWarn("ticketing", "merge-chain hop unreadable — canonical id resolution stopped early",
-				map[string]any{"correlation_id": cur, "tenant": owner, "merge_depth": depth, "err": err.Error()})
-			return cur, depth
-		}
-		if len(rows) == 0 {
-			return cur, depth // answered: no such object → cur is the last known id
-		}
-		if canonicalCorrTenant(asString(rows[0]["tenant_id"])) != owner {
-			// Merge pointer crossed a tenant boundary — an engine invariant
-			// violation. Stop at the last same-owner id, never disclose further.
-			logWarn("ticketing", "INVARIANT VIOLATION: merge chain crossed tenant boundary — walk stopped",
-				map[string]any{"correlation_id": cur, "tenant": owner, "merge_depth": depth})
-			return cur, depth
-		}
-		next := asString(rows[0]["merged_into"])
-		if asString(rows[0]["state"]) != "merged" || next == "" {
-			return cur, depth // terminal survivor
-		}
-		if seen[next] {
-			logWarn("ticketing", "INVARIANT VIOLATION: merge chain cycle — walk stopped",
-				map[string]any{"correlation_id": next, "tenant": owner, "merge_depth": depth})
-			return cur, depth
-		}
-		seen[next] = true
-		cur, depth = next, depth+1
-	}
-	return cur, depth
+			rows, err := s.chRowsScope(ctx, scope, sql)
+			if err != nil {
+				return ticketing.MergeHop{}, err
+			}
+			if len(rows) == 0 {
+				return ticketing.MergeHop{}, nil
+			}
+			return ticketing.MergeHop{
+				Found:      true,
+				Tenant:     asString(rows[0]["tenant_id"]),
+				State:      asString(rows[0]["state"]),
+				MergedInto: asString(rows[0]["merged_into"]),
+			}, nil
+		})
 }
 
 // ── outbox + audit observability — /api/tickets/{outbox,audit} ────────────────
@@ -658,32 +599,9 @@ func (s *server) handleTicketsAudit(w http.ResponseWriter, r *http.Request) {
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-// ticketStatusView projects a ticket link into the status surface the correlation
-// detail + RCA Inspector render. No link → not_created (an honest empty state).
+// ticketStatusView projects a ticket link into the status surface (package).
 func ticketStatusView(l ticketing.Link, found bool) map[string]any {
-	if !found {
-		return map[string]any{"state": "not_created"}
-	}
-	// Links written before the InstanceURL fix stored the FULL incident URL
-	// (…/nav_to.do?…) instead of the bare instance; strip the path so the
-	// deep-link below isn't doubled (found live against a real PDI, 2026-07-10).
-	base := l.InstanceURL
-	if i := strings.Index(base, "/nav_to.do"); i >= 0 {
-		base = base[:i]
-	}
-	out := map[string]any{
-		"state":          orDefault(l.Status, "pending"),
-		"system":         l.ExternalSystem,
-		"ticket_number":  l.TicketNumber,
-		"sys_id":         l.SysID,
-		"instance_url":   base,
-		"last_verdict":   l.LastVerdict,
-		"last_synced_at": l.LastSyncedAt,
-	}
-	if l.SysID != "" && base != "" && orDefault(l.ExternalSystem, "servicenow") == "servicenow" {
-		out["url"] = strings.TrimRight(base, "/") + "/nav_to.do?uri=incident.do?sys_id=" + l.SysID
-	}
-	return out
+	return ticketing.StatusView(l, found)
 }
 
 // ticketStatusForObject is the read used by serveCorrelationDetail to attach
