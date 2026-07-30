@@ -134,6 +134,41 @@ func TestReachesTenantDenyWins(t *testing.T) {
 	}
 }
 
+func TestCanManageBindingNoEscalation(t *testing.T) {
+	orgOf := func(scopeID string) string {
+		if scopeID == "tenant:t1" || scopeID == "org:o1" {
+			return "o1"
+		}
+		return "o9"
+	}
+	isAdmin := func(orgID string) bool { return orgID == "o1" }
+
+	if ok, _ := CanManageBinding(true, "platform", RoleSuperAdmin, nil, nil); !ok {
+		t.Fatalf("platform owner refused")
+	}
+	if ok, why := CanManageBinding(false, "platform", RoleReadOnly, orgOf, isAdmin); ok || why != "platform-scope bindings require the platform owner" {
+		t.Fatalf("platform scope allowed for non-owner: %v %q", ok, why)
+	}
+	for _, role := range []string{RoleSuperAdmin, "admin", "SUPER-ADMIN"} {
+		if ok, _ := CanManageBinding(false, "org:o1", role, orgOf, isAdmin); ok {
+			t.Fatalf("org-admin granted super-admin (%q)", role)
+		}
+	}
+	if ok, _ := CanManageBinding(false, "tenant:t1", RoleReadOnly, orgOf, isAdmin); !ok {
+		t.Fatalf("org-admin refused within own org")
+	}
+	if ok, _ := CanManageBinding(false, "tenant:t9", RoleReadOnly, orgOf, isAdmin); ok {
+		t.Fatalf("org-admin allowed outside own org")
+	}
+	if ok, _ := CanManageBinding(false, "org:o1", RoleReadOnly, nil, nil); ok {
+		t.Fatalf("nil closures must fail closed")
+	}
+	empty := func(string) string { return "" }
+	if ok, _ := CanManageBinding(false, "org:o1", RoleReadOnly, empty, isAdmin); ok {
+		t.Fatalf("empty org resolution must fail closed")
+	}
+}
+
 func TestOrgAdminOrgsCanonicalizedSorted(t *testing.T) {
 	bs := []RoleBinding{
 		{RoleID: RoleOrgAdmin, ScopeID: "org:acme-org", Effect: EffectAllow}, // → o1

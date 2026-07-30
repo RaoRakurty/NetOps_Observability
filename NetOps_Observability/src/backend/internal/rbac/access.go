@@ -138,6 +138,34 @@ func AccessibleTenants(bindings []RoleBinding, now time.Time, dir Directory) (te
 	return out, false
 }
 
+// CanManageBinding reports whether a caller may grant/revoke a binding at the
+// given (scope, role) — the no-escalation rule of the bindings API. Platform
+// owner: always. Anyone else: never platform scope, never a super-admin role,
+// and only within an org the caller administers. orgOfScope resolves the org
+// owning a scope (it reads live stores and stays with the server); isOrgAdmin
+// is the caller's org-admin predicate. Nil closures fail closed. The string is
+// the human reason surfaced by the API.
+func CanManageBinding(platformOwner bool, scopeID, roleID string, orgOfScope func(scopeID string) string, isOrgAdmin func(orgID string) bool) (bool, string) {
+	if platformOwner {
+		return true, "platform owner"
+	}
+	st, _ := ParseScope(scopeID)
+	if st == ScopePlatform {
+		return false, "platform-scope bindings require the platform owner"
+	}
+	if IsSuperAdminRole(roleID) {
+		return false, "cannot grant super-admin"
+	}
+	if orgOfScope == nil || isOrgAdmin == nil {
+		return false, "not an administrator of this organization"
+	}
+	org := orgOfScope(scopeID)
+	if org == "" || !isOrgAdmin(org) {
+		return false, "not an administrator of this organization"
+	}
+	return true, "org administrator"
+}
+
 // OrgAdminOrgs returns the org ids a principal's bindings administer (an active
 // allow org-admin/super-admin binding at org scope), canonicalized to opaque
 // org ids. Used to let an org-admin manage users/tenants within its org without

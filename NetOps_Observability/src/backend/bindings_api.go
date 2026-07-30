@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"netops/backend/internal/rbac"
 )
 
 type grantBindingRequest struct {
@@ -52,23 +54,11 @@ func (s *server) orgOfScope(scopeID string) string {
 
 // canManageBinding reports whether the caller may grant/revoke a binding at the
 // given (scope, role). Platform owner: always. Org-admin: within its org, no
-// escalation.
+// escalation. The policy lives in rbac.CanManageBinding (P2 W4.16); this
+// adapter binds it to the caller's claims and the live-store org resolution.
 func (s *server) canManageBinding(claims jwtClaims, scopeID, roleID string) (bool, string) {
-	if isPlatformOwner(claims) {
-		return true, "platform owner"
-	}
-	st, _ := parseScope(scopeID)
-	if st == ScopePlatform {
-		return false, "platform-scope bindings require the platform owner"
-	}
-	if isSuperAdminRole(roleID) {
-		return false, "cannot grant super-admin"
-	}
-	org := s.orgOfScope(scopeID)
-	if org == "" || !s.isOrgAdminOf(claims.Sub, org) {
-		return false, "not an administrator of this organization"
-	}
-	return true, "org administrator"
+	return rbac.CanManageBinding(isPlatformOwner(claims), scopeID, roleID, s.orgOfScope,
+		func(orgID string) bool { return s.isOrgAdminOf(claims.Sub, orgID) })
 }
 
 func (s *server) handleBindings(w http.ResponseWriter, r *http.Request) {
