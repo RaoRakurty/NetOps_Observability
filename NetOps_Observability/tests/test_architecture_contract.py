@@ -166,5 +166,5 @@ def test_trap_classifier_is_an_allowlist_not_a_firehose():
 def test_source_enum_includes_trap_everywhere():
     """The corr_signals.source enum must list 'trap' in BOTH the Go DDL and the
     SQL init, or normalized trap signals fail to insert (the bug this guards)."""
-    assert "'trap'=8" in read("src", "backend", "corr_schema.go")
+    assert "'trap'=8" in read("src", "backend", "internal", "chschema", "corr_schema.go")
     assert read("deployment", "docker", "clickhouse", "init.sql").count("'trap'=8") >= 2

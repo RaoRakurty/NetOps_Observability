@@ -53,3 +53,13 @@ f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/
 # marker in the key/cert-mismatch test case; all key material in that test is
 # generated at runtime. No secret.
 584bd19fcc2d5403c4d6e3795042c540325a1a27:NetOps_Observability/src/backend/cloudconn/exchange_azure_cert_test.go:private-key:199
+#
+# ai/redact_test.go — false positives re-minted by the P2 W3.5/decomposition
+# MOVE of the DLP redactor's test suite into ai/ (new blob path = new
+# fingerprints; the same synthetic fixtures were already triaged at their old
+# main-package path). The fixtures are a hand-assembled JWT (sub=admin), a
+# truncated fake RSA key block and hunter2-class tokens — inputs that exist
+# precisely to prove the redactor strips them. Never live credentials.
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:jwt:55
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:private-key:83
+9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:generic-api-key:207

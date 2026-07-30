@@ -26,12 +26,11 @@ at the bottom).
 """
 from __future__ import annotations
 
-from typing import ClassVar
-
 import asyncio
 import json
 import os
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
