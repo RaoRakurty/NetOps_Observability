@@ -24,15 +24,15 @@ func TestSourceStatusStoreSincePreservedAcrossReplace(t *testing.T) {
 	day2 := day1.Add(24 * time.Hour)
 	rec := cloudSourceStatusRecord{
 		Tenant: "t_a", Provider: "aws", AccountID: "1", Region: "us-west-2",
-		SourceType: "flow_logs", Status: "permission_denied", since: day1,
+		SourceType: "flow_logs", Status: "permission_denied", Since: day1,
 	}
 	st.Replace([]cloudSourceStatusRecord{rec}, day1)
 	// The poller re-reports the SAME failure a day later with a fresh since —
 	// the stored first-failure time must not move forward.
-	rec.since = day2
+	rec.Since = day2
 	st.Replace([]cloudSourceStatusRecord{rec}, day2)
 	got := st.ForTenant("t_a", false, day2)
-	if len(got) != 1 || !got[0].since.Equal(day1) {
+	if len(got) != 1 || !got[0].Since.Equal(day1) {
 		t.Fatalf("first-failure time must be preserved (want %v): %+v", day1, got)
 	}
 	// Full-set replace: a lane that recovered stops being reported → gone.
@@ -73,9 +73,9 @@ func TestOverlaySourceStatusPrecedenceAndProviderMatch(t *testing.T) {
 	}
 	since := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
 	recs := []cloudSourceStatusRecord{
-		{Tenant: "t", Provider: "aws", SourceType: "flow_logs", Status: "misconfigured", Detail: "bucket missing", since: since},
-		{Tenant: "t", Provider: "aws", AccountID: "2", SourceType: "flow_logs", Status: "permission_denied", Detail: "IAM denied s3:GetObject", since: since},
-		{Tenant: "t", Provider: "azure", SourceType: "metrics", Status: "permission_denied", Detail: "role missing", since: since},
+		{Tenant: "t", Provider: "aws", SourceType: "flow_logs", Status: "misconfigured", Detail: "bucket missing", Since: since},
+		{Tenant: "t", Provider: "aws", AccountID: "2", SourceType: "flow_logs", Status: "permission_denied", Detail: "IAM denied s3:GetObject", Since: since},
+		{Tenant: "t", Provider: "azure", SourceType: "metrics", Status: "permission_denied", Detail: "role missing", Since: since},
 	}
 	// Provider row: only ITS records apply; permission_denied outranks
 	// misconfigured when both hit one source. Measured volume is kept.

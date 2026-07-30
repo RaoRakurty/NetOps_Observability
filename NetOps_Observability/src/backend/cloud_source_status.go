@@ -35,9 +35,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"sort"
+	"netops/backend/cloud"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -49,135 +48,21 @@ const (
 	srcStatusDetailMax  = 300
 )
 
-// srcStatusAllowed are the ONLY poller-reportable statuses. flowing/stale/off
-// stay measured from landed data — a poller may report why a source is failing,
-// never that it is healthy.
-var srcStatusAllowed = map[string]bool{
-	"permission_denied": true,
-	"misconfigured":     true,
-}
+// The record + store (statuses vocabulary, full-set Replace with origin
+// separation, validate upserts, default-closed ForTenant with stale expiry)
+// live in cloud/source_status.go (P2 RA.8); this file keeps the boundary:
+// bounds, validation, §3a.2 owner stamping and the overlay onto the measured
+// rows.
 
-// cloudSourceStatusRecord is one (tenant, provider, account, region, source)
-// error state as observed by a poller.
-type cloudSourceStatusRecord struct {
-	Tenant      string    `json:"tenant,omitempty"`       // ambient lanes only; connector rows override it
-	ConnectorID string    `json:"connector_id,omitempty"` // when set: tenant+provider come from the row
-	Provider    string    `json:"provider"`
-	AccountID   string    `json:"account_id,omitempty"`
-	Region      string    `json:"region,omitempty"`
-	SourceType  string    `json:"source_type"`
-	Status      string    `json:"status"` // permission_denied | misconfigured
-	Detail      string    `json:"detail,omitempty"`
-	SinceISO    string    `json:"since_iso,omitempty"` // poller-observed first failure
-	since       time.Time // resolved server-side
-	reported    time.Time
-	// origin separates the two producers writing into this store: "poller"
-	// (full-set replace semantics per flush) and "validate" (the connector
-	// wizard's live permission check, upserted per connector). Replace only
-	// swaps the poller's records so a validate result survives poller flushes.
-	origin string
-}
-
-const (
-	srcStatusOriginPoller   = "poller"
-	srcStatusOriginValidate = "validate"
+type (
+	cloudSourceStatusRecord = cloud.SourceStatusRecord
+	cloudSourceStatusStore  = cloud.SourceStatusStore
 )
 
-func (r cloudSourceStatusRecord) key() string {
-	return strings.Join([]string{r.Tenant, r.Provider, r.AccountID, r.Region, r.SourceType}, "|")
-}
-
-// cloudSourceStatusStore holds the poller-reported error set, tenant-keyed.
-type cloudSourceStatusStore struct {
-	mu   sync.Mutex
-	recs map[string]cloudSourceStatusRecord // key() → record
-}
+var srcStatusAllowed = cloud.SourceStatusAllowed
 
 func newCloudSourceStatusStore() *cloudSourceStatusStore {
-	return &cloudSourceStatusStore{recs: map[string]cloudSourceStatusRecord{}}
-}
-
-// Replace swaps in the poller's CURRENT error set (full-set semantics: a lane
-// that recovered simply stops being reported and its record disappears). The
-// first-failure time is preserved across re-reports so "since Tuesday" stays
-// Tuesday — the earliest of the stored and incoming `since` wins. Records the
-// VALIDATE surface upserted are retained (a poller flush must not erase a live
-// permission-check result); a poller record for the same key overrides it —
-// the poller's runtime observation is fresher truth than a wizard snapshot.
-func (st *cloudSourceStatusStore) Replace(records []cloudSourceStatusRecord, now time.Time) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	next := make(map[string]cloudSourceStatusRecord, len(records))
-	for k, prev := range st.recs {
-		if prev.origin == srcStatusOriginValidate {
-			next[k] = prev
-		}
-	}
-	for _, r := range records {
-		r.origin = srcStatusOriginPoller
-		r.reported = now
-		if r.since.IsZero() {
-			r.since = now
-		}
-		k := r.key()
-		if prev, ok := st.recs[k]; ok && !prev.since.IsZero() && prev.since.Before(r.since) {
-			r.since = prev.since
-		}
-		next[k] = r
-	}
-	st.recs = next
-}
-
-// UpsertValidate merges the live permission-check results for one connector's
-// scope into the store (origin "validate"), preserving first-seen times.
-func (st *cloudSourceStatusStore) UpsertValidate(records []cloudSourceStatusRecord, now time.Time) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	for _, r := range records {
-		r.origin = srcStatusOriginValidate
-		r.reported = now
-		if r.since.IsZero() {
-			r.since = now
-		}
-		k := r.key()
-		if prev, ok := st.recs[k]; ok && !prev.since.IsZero() && prev.since.Before(r.since) {
-			r.since = prev.since
-		}
-		st.recs[k] = r
-	}
-}
-
-// ClearValidate drops a validate-origin record (the permission is granted
-// again). Poller-origin records are never touched here.
-func (st *cloudSourceStatusStore) ClearValidate(rec cloudSourceStatusRecord) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	k := rec.key()
-	if prev, ok := st.recs[k]; ok && prev.origin == srcStatusOriginValidate {
-		delete(st.recs, k)
-	}
-}
-
-// ForTenant returns the caller-visible records, default-closed (§3a.1): a
-// non-cross caller only ever sees its own tenant's rows. Records that were not
-// refreshed within the ingest stale horizon have expired — the poller that
-// observed them is gone or the lane state is unknown, and unknown ≠ broken.
-func (st *cloudSourceStatusStore) ForTenant(tenant string, cross bool, now time.Time) []cloudSourceStatusRecord {
-	t := normTenant(tenant)
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	out := make([]cloudSourceStatusRecord, 0, len(st.recs))
-	for _, r := range st.recs {
-		if now.Sub(r.reported) > ingestStaleWindow {
-			continue
-		}
-		if !cross && r.Tenant != t {
-			continue
-		}
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
-	return out
+	return cloud.NewSourceStatusStore(ingestStaleWindow)
 }
 
 // ── handler: PUT /api/cloud/ingest/source-status ─────────────────────────────
@@ -255,7 +140,7 @@ func (s *server) handleCloudIngestSourceStatus(w http.ResponseWriter, r *http.Re
 		}
 		rec.Tenant = normTenant(rec.Tenant)
 		if rec.SinceISO != "" {
-			rec.since = mustParseZero(rec.SinceISO)
+			rec.Since = mustParseZero(rec.SinceISO)
 		}
 		accepted = append(accepted, rec)
 	}
@@ -283,7 +168,7 @@ func overlaySourceStatus(rows []cloudSourceStatus, recs []cloudSourceStatusRecor
 		}
 		prev, ok := pick[rec.SourceType]
 		if !ok || (prev.Status != "permission_denied" && rec.Status == "permission_denied") ||
-			(prev.Status == rec.Status && rec.since.Before(prev.since)) {
+			(prev.Status == rec.Status && rec.Since.Before(prev.Since)) {
 			pick[rec.SourceType] = rec
 		}
 	}
@@ -294,8 +179,8 @@ func overlaySourceStatus(rows []cloudSourceStatus, recs []cloudSourceStatusRecor
 		}
 		rows[i].Status = rec.Status
 		rows[i].Detail = rec.Detail
-		if !rec.since.IsZero() {
-			rows[i].SinceISO = rec.since.Format(time.RFC3339)
+		if !rec.Since.IsZero() {
+			rows[i].SinceISO = rec.Since.Format(time.RFC3339)
 		}
 	}
 	return rows
