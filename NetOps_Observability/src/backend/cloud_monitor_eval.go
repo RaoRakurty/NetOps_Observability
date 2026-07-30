@@ -7,8 +7,8 @@ package main
 // resource ids — exactly the scoping the chart endpoint enforces — so one
 // tenant's rule can never read another tenant's series (§3a).
 //
-// Honesty: "no samples" is monitorStateNoData with the reason spelled out; an
-// unreachable metric store is monitorStateError — neither ever reads as "ok".
+// Honesty: "no samples" is cloud.MonitorStateNoData with the reason spelled out; an
+// unreachable metric store is cloud.MonitorStateError — neither ever reads as "ok".
 // Bounded (§9): per-tick query budget, per-monitor scope cap, per-query
 // timeout inherited from vmQuery (4s), 30m sample freshness window.
 
@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"netops/backend/models"
+
+	"netops/backend/cloud"
 )
 
 const (
@@ -107,7 +109,7 @@ func (e *cloudMonitorEvaluator) loop(ctx context.Context) {
 
 // evaluateAll runs one bounded cycle over every tenant's monitors.
 func (e *cloudMonitorEvaluator) evaluateAll(ctx context.Context) {
-	snap := e.store.snapshot()
+	snap := e.store.Snapshot()
 	tenants := make([]string, 0, len(snap))
 	for t := range snap {
 		tenants = append(tenants, t)
@@ -124,8 +126,8 @@ func (e *cloudMonitorEvaluator) evaluateAll(ctx context.Context) {
 		cancel()
 		for _, m := range monitors {
 			if !m.Enabled {
-				if m.LastState != monitorStateDisabled {
-					if err := e.store.setStatus(tenant, m.ID, monitorStateDisabled, "monitor is disabled", nil, e.now()); err != nil {
+				if m.LastState != cloud.MonitorStateDisabled {
+					if err := e.store.SetStatus(tenant, m.ID, cloud.MonitorStateDisabled, "monitor is disabled", nil, e.now()); err != nil {
 						logError("monitors", "persist monitor state failed", map[string]any{"monitor": m.ID, "err": err.Error()})
 					}
 				}
@@ -138,7 +140,7 @@ func (e *cloudMonitorEvaluator) evaluateAll(ctx context.Context) {
 				return
 			}
 			if err != nil {
-				e.transition(tenant, m, monitorStateError, "inventory unavailable — cannot resolve this tenant's resources", nil)
+				e.transition(tenant, m, cloud.MonitorStateError, "inventory unavailable — cannot resolve this tenant's resources", nil)
 				continue
 			}
 			used := e.evaluateOne(ctx, tenant, m, ids, budget)
@@ -160,22 +162,22 @@ func (e *cloudMonitorEvaluator) evaluateOne(ctx context.Context, tenant string, 
 			}
 		}
 		if !found {
-			e.transition(tenant, m, monitorStateNoData, "the monitored resource is no longer in this tenant's inventory", nil)
+			e.transition(tenant, m, cloud.MonitorStateNoData, "the monitored resource is no longer in this tenant's inventory", nil)
 			return 0
 		}
 		scope = []string{m.ResourceID}
 	}
 	if len(scope) == 0 {
-		e.transition(tenant, m, monitorStateNoData, "this tenant has no cloud resources in inventory", nil)
+		e.transition(tenant, m, cloud.MonitorStateNoData, "this tenant has no cloud resources in inventory", nil)
 		return 0
 	}
 	if len(scope) > cloudMonitorMaxScopeIDs {
-		e.transition(tenant, m, monitorStateError,
+		e.transition(tenant, m, cloud.MonitorStateError,
 			fmt.Sprintf("monitor scope covers %d resources (limit %d) — scope it to one resource", len(scope), cloudMonitorMaxScopeIDs), nil)
 		return 0
 	}
 	need := 1
-	if m.Mode == monitorModeAnomaly {
+	if m.Mode == cloud.MonitorModeAnomaly {
 		need = 3
 	}
 	if budget < need {
@@ -185,30 +187,30 @@ func (e *cloudMonitorEvaluator) evaluateOne(ctx context.Context, tenant string, 
 	sel := fmt.Sprintf(`%s{resource_id=~"%s"}`, m.Metric, regexAlternation(scope))
 	last := e.queryFn(ctx, fmt.Sprintf(`last_over_time(%s[%s])`, sel, cloudMonitorFreshWindow))
 	if last == nil {
-		e.transition(tenant, m, monitorStateError, "the metric store did not answer", nil)
+		e.transition(tenant, m, cloud.MonitorStateError, "the metric store did not answer", nil)
 		return need
 	}
 	if len(last) == 0 {
-		e.transition(tenant, m, monitorStateNoData,
+		e.transition(tenant, m, cloud.MonitorStateNoData,
 			fmt.Sprintf("no %s samples ingested for the monitored scope in the last %s", m.Metric, cloudMonitorFreshWindow), nil)
 		return need
 	}
 
 	switch m.Mode {
-	case monitorModeThreshold:
+	case cloud.MonitorModeThreshold:
 		e.applyThreshold(tenant, m, last)
 		return 1
-	case monitorModeAnomaly:
+	case cloud.MonitorModeAnomaly:
 		avg := e.queryFn(ctx, fmt.Sprintf(`avg_over_time(%s[%s])`, sel, cloudMonitorBaselineWindow))
 		sd := e.queryFn(ctx, fmt.Sprintf(`stddev_over_time(%s[%s])`, sel, cloudMonitorBaselineWindow))
 		if avg == nil || sd == nil {
-			e.transition(tenant, m, monitorStateError, "the metric store did not answer the baseline query", nil)
+			e.transition(tenant, m, cloud.MonitorStateError, "the metric store did not answer the baseline query", nil)
 			return 3
 		}
 		e.applyAnomaly(tenant, m, last, avg, sd)
 		return 3
 	default:
-		e.transition(tenant, m, monitorStateError, "unknown monitor mode", nil)
+		e.transition(tenant, m, cloud.MonitorStateError, "unknown monitor mode", nil)
 		return need
 	}
 }
@@ -216,11 +218,11 @@ func (e *cloudMonitorEvaluator) evaluateOne(ctx context.Context, tenant string, 
 func (e *cloudMonitorEvaluator) applyThreshold(tenant string, m cloudMonitor, last map[string]float64) {
 	worstID, worst, firing := "", math.NaN(), false
 	for id, v := range last {
-		crosses := (m.Condition == monitorCondAbove && v > m.Threshold) ||
-			(m.Condition == monitorCondBelow && v < m.Threshold)
+		crosses := (m.Condition == cloud.MonitorCondAbove && v > m.Threshold) ||
+			(m.Condition == cloud.MonitorCondBelow && v < m.Threshold)
 		better := math.IsNaN(worst) ||
-			(m.Condition == monitorCondAbove && v > worst) ||
-			(m.Condition == monitorCondBelow && v < worst)
+			(m.Condition == cloud.MonitorCondAbove && v > worst) ||
+			(m.Condition == cloud.MonitorCondBelow && v < worst)
 		if better {
 			worst, worstID = v, id
 		}
@@ -230,11 +232,11 @@ func (e *cloudMonitorEvaluator) applyThreshold(tenant string, m cloudMonitor, la
 	}
 	v := worst
 	if firing {
-		e.transition(tenant, m, monitorStateFiring,
+		e.transition(tenant, m, cloud.MonitorStateFiring,
 			fmt.Sprintf("%s is %s on %s (%s %s)", m.Metric, fmtMonitorVal(worst), worstID, m.Condition, fmtMonitorVal(m.Threshold)), &v)
 		return
 	}
-	e.transition(tenant, m, monitorStateOK,
+	e.transition(tenant, m, cloud.MonitorStateOK,
 		fmt.Sprintf("%s worst reading %s on %s (threshold %s %s)", m.Metric, fmtMonitorVal(worst), worstID, m.Condition, fmtMonitorVal(m.Threshold)), &v)
 }
 
@@ -256,17 +258,17 @@ func (e *cloudMonitorEvaluator) applyAnomaly(tenant string, m cloudMonitor, last
 		}
 	}
 	if compared == 0 {
-		e.transition(tenant, m, monitorStateNoData,
+		e.transition(tenant, m, cloud.MonitorStateNoData,
 			fmt.Sprintf("no %s baseline over the last %s — anomaly detection needs history", m.Metric, cloudMonitorBaselineWindow), nil)
 		return
 	}
 	v := worstVal
 	if firing {
-		e.transition(tenant, m, monitorStateFiring,
+		e.transition(tenant, m, cloud.MonitorStateFiring,
 			fmt.Sprintf("%s on %s reads %s — more than %.0fσ from its %s average", m.Metric, worstID, fmtMonitorVal(worstVal), cloudMonitorAnomalySigma, cloudMonitorBaselineWindow), &v)
 		return
 	}
-	e.transition(tenant, m, monitorStateOK,
+	e.transition(tenant, m, cloud.MonitorStateOK,
 		fmt.Sprintf("%s within %.0fσ of its %s average across %d resource(s)", m.Metric, cloudMonitorAnomalySigma, cloudMonitorBaselineWindow, compared), &v)
 }
 
@@ -274,7 +276,7 @@ func (e *cloudMonitorEvaluator) applyAnomaly(tenant string, m cloudMonitor, last
 // edge (ok/…→firing fires; firing→ok/no_data resolves), never on repeats.
 func (e *cloudMonitorEvaluator) transition(tenant string, m cloudMonitor, state, reason string, value *float64) {
 	prev := m.LastState
-	if err := e.store.setStatus(tenant, m.ID, state, reason, value, e.now()); err != nil {
+	if err := e.store.SetStatus(tenant, m.ID, state, reason, value, e.now()); err != nil {
 		// The verdict was computed and is now unrecorded — the operator must be
 		// able to see that, or the monitor silently stops reporting.
 		logError("monitors", "persist monitor state failed", map[string]any{"monitor": m.ID, "err": err.Error()})
@@ -286,10 +288,10 @@ func (e *cloudMonitorEvaluator) transition(tenant string, m cloudMonitor, state,
 		Labels:      map[string]string{"tenant_id": tenant, "metric": m.Metric, "mode": m.Mode, "source": "cloud_monitor"},
 		FiredAt:     e.now(),
 	}
-	if state == monitorStateFiring && prev != monitorStateFiring {
+	if state == cloud.MonitorStateFiring && prev != cloud.MonitorStateFiring {
 		e.fire(alert)
 	}
-	if prev == monitorStateFiring && state != monitorStateFiring {
+	if prev == cloud.MonitorStateFiring && state != cloud.MonitorStateFiring {
 		e.resolve(alert)
 	}
 }

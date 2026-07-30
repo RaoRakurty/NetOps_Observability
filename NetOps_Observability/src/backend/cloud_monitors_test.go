@@ -14,30 +14,32 @@ import (
 	"time"
 
 	"netops/backend/models"
+
+	"netops/backend/cloud"
 )
 
 func TestNormalizeCloudMonitor(t *testing.T) {
-	good := cloudMonitor{Name: "High CPU", Metric: "cloud_cpu_util", Mode: monitorModeThreshold, Condition: monitorCondAbove, Threshold: 90, Enabled: true}
-	m, err := normalizeCloudMonitor(good)
+	good := cloudMonitor{Name: "High CPU", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, Threshold: 90, Enabled: true}
+	m, err := cloud.NormalizeMonitor(good)
 	if err != nil || m.Name != "High CPU" || !m.Enabled {
 		t.Fatalf("valid monitor refused: %v %+v", err, m)
 	}
-	anomaly := cloudMonitor{Name: "CPU anomaly", Metric: "cloud_cpu_util", Mode: monitorModeAnomaly, Enabled: true}
-	if _, err := normalizeCloudMonitor(anomaly); err != nil {
+	anomaly := cloudMonitor{Name: "CPU anomaly", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeAnomaly, Enabled: true}
+	if _, err := cloud.NormalizeMonitor(anomaly); err != nil {
 		t.Fatalf("valid anomaly monitor refused: %v", err)
 	}
 	bad := []cloudMonitor{
-		{Name: "", Metric: "cloud_cpu_util", Mode: monitorModeThreshold, Condition: monitorCondAbove},
-		{Name: "x", Metric: "up", Mode: monitorModeThreshold, Condition: monitorCondAbove},                                    // metric outside catalog
-		{Name: "x", Metric: `cloud_cpu_util{a="b"}`, Mode: monitorModeThreshold, Condition: monitorCondAbove},                 // selector injection
-		{Name: "x", Metric: "cloud_cpu_util", Mode: "sideways", Condition: monitorCondAbove},                                  // bad mode
-		{Name: "x", Metric: "cloud_cpu_util", Mode: monitorModeThreshold, Condition: "equals"},                                // bad condition
-		{Name: "x", Metric: "cloud_cpu_util", Mode: monitorModeThreshold, Condition: monitorCondAbove, Threshold: math.NaN()}, // NaN
-		{Name: "x", Metric: "cloud_cpu_util", Mode: monitorModeAnomaly, Threshold: 5},                                         // leftover threshold
-		{Name: "x", Metric: "cloud_cpu_util", Mode: monitorModeThreshold, Condition: monitorCondAbove, ResourceID: `i-"quot`}, // bad resource id
+		{Name: "", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove},
+		{Name: "x", Metric: "up", Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove},                                    // metric outside catalog
+		{Name: "x", Metric: `cloud_cpu_util{a="b"}`, Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove},                 // selector injection
+		{Name: "x", Metric: "cloud_cpu_util", Mode: "sideways", Condition: cloud.MonitorCondAbove},                                        // bad mode
+		{Name: "x", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeThreshold, Condition: "equals"},                                      // bad condition
+		{Name: "x", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, Threshold: math.NaN()}, // NaN
+		{Name: "x", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeAnomaly, Threshold: 5},                                               // leftover threshold
+		{Name: "x", Metric: "cloud_cpu_util", Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, ResourceID: `i-"quot`}, // bad resource id
 	}
 	for i, b := range bad {
-		if _, err := normalizeCloudMonitor(b); err == nil {
+		if _, err := cloud.NormalizeMonitor(b); err == nil {
 			t.Errorf("case %d accepted: %+v", i, b)
 		}
 	}
@@ -81,7 +83,7 @@ func TestCloudMonitorCRUDContract(t *testing.T) {
 	if created.TenantID != ob.Tenant.ID {
 		t.Fatalf("tenant must come from the token, got %q", created.TenantID)
 	}
-	if created.LastState != monitorStateNever {
+	if created.LastState != cloud.MonitorStateNever {
 		t.Fatalf("new monitor must be never_evaluated, got %q", created.LastState)
 	}
 
@@ -109,7 +111,7 @@ func TestCloudMonitorCRUDContract(t *testing.T) {
 	}
 
 	// Update resets the verdict (definition changed).
-	_ = s.cloudMonitors.setStatus(ob.Tenant.ID, created.ID, monitorStateFiring, "was firing", nil, time.Now())
+	_ = s.cloudMonitors.SetStatus(ob.Tenant.ID, created.ID, cloud.MonitorStateFiring, "was firing", nil, time.Now())
 	st, b = do(t, srv, "PUT", "/api/cloud/monitors/"+created.ID, tok, map[string]any{
 		"name": "High CPU v2", "metric": "cloud_cpu_util", "mode": "threshold",
 		"condition": "above", "threshold": 80, "enabled": true,
@@ -121,7 +123,7 @@ func TestCloudMonitorCRUDContract(t *testing.T) {
 	if err := json.Unmarshal(b, &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.LastState != monitorStateNever || updated.Threshold != 80 {
+	if updated.LastState != cloud.MonitorStateNever || updated.Threshold != 80 {
 		t.Fatalf("update must reset verdict: %+v", updated)
 	}
 
@@ -153,7 +155,7 @@ func evalHarness(t *testing.T, m cloudMonitor, ids []string,
 	q func(ctx context.Context, query string) map[string]float64) (*cloudMonitorEvaluator, *cloudMonitorStore, *[]string) {
 	t.Helper()
 	store := newCloudMonitorStore("")
-	if fits, err := store.upsert("t1", m); err != nil || !fits {
+	if fits, err := store.Upsert("t1", m); err != nil || !fits {
 		t.Fatal("seed monitor failed")
 	}
 	var events []string
@@ -171,7 +173,7 @@ func evalHarness(t *testing.T, m cloudMonitor, ids []string,
 
 func monState(t *testing.T, store *cloudMonitorStore, id string) cloudMonitor {
 	t.Helper()
-	m, ok := store.get("t1", id)
+	m, ok := store.Get("t1", id)
 	if !ok {
 		t.Fatal("monitor vanished")
 	}
@@ -180,8 +182,8 @@ func monState(t *testing.T, store *cloudMonitorStore, id string) cloudMonitor {
 
 func TestEvaluatorThresholdTransitions(t *testing.T) {
 	def := cloudMonitor{ID: "m1", Name: "High CPU", Metric: "cloud_cpu_util",
-		Mode: monitorModeThreshold, Condition: monitorCondAbove, Threshold: 90,
-		Enabled: true, LastState: monitorStateNever}
+		Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, Threshold: 90,
+		Enabled: true, LastState: cloud.MonitorStateNever}
 	val := 95.0
 	e, store, events := evalHarness(t, def, []string{"i-1", "i-2"},
 		func(context.Context, string) map[string]float64 {
@@ -190,7 +192,7 @@ func TestEvaluatorThresholdTransitions(t *testing.T) {
 
 	// Cycle 1: 95 > 90 → firing, one notification.
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateFiring || st.LastValue == nil || *st.LastValue != 95 {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateFiring || st.LastValue == nil || *st.LastValue != 95 {
 		t.Fatalf("cycle1: %+v", st)
 	}
 	if len(*events) != 1 || (*events)[0] != "fire:High CPU" {
@@ -206,7 +208,7 @@ func TestEvaluatorThresholdTransitions(t *testing.T) {
 	// Cycle 3: recovered → resolve exactly once.
 	val = 50
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateOK {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateOK {
 		t.Fatalf("cycle3: %+v", st)
 	}
 	if len(*events) != 2 || (*events)[1] != "resolve:High CPU" {
@@ -216,14 +218,14 @@ func TestEvaluatorThresholdTransitions(t *testing.T) {
 
 func TestEvaluatorHonestStates(t *testing.T) {
 	def := cloudMonitor{ID: "m1", Name: "n", Metric: "cloud_cpu_util",
-		Mode: monitorModeThreshold, Condition: monitorCondAbove, Threshold: 90,
-		Enabled: true, LastState: monitorStateNever}
+		Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, Threshold: 90,
+		Enabled: true, LastState: cloud.MonitorStateNever}
 
 	// Store unreachable → error, not ok.
 	e, store, events := evalHarness(t, def, []string{"i-1"},
 		func(context.Context, string) map[string]float64 { return nil })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateError {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateError {
 		t.Fatalf("store-down: %+v", st)
 	}
 	if len(*events) != 0 {
@@ -234,7 +236,7 @@ func TestEvaluatorHonestStates(t *testing.T) {
 	e, store, _ = evalHarness(t, def, []string{"i-1"},
 		func(context.Context, string) map[string]float64 { return map[string]float64{} })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateNoData || st.LastReason == "" {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateNoData || st.LastReason == "" {
 		t.Fatalf("no-samples: %+v", st)
 	}
 
@@ -242,7 +244,7 @@ func TestEvaluatorHonestStates(t *testing.T) {
 	e, store, _ = evalHarness(t, def, nil,
 		func(context.Context, string) map[string]float64 { t.Fatal("must not query"); return nil })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateNoData {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateNoData {
 		t.Fatalf("no-resources: %+v", st)
 	}
 
@@ -252,7 +254,7 @@ func TestEvaluatorHonestStates(t *testing.T) {
 	e, store, _ = evalHarness(t, scoped, []string{"i-1"},
 		func(context.Context, string) map[string]float64 { t.Fatal("must not query"); return nil })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateNoData {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateNoData {
 		t.Fatalf("gone-resource: %+v", st)
 	}
 
@@ -262,14 +264,14 @@ func TestEvaluatorHonestStates(t *testing.T) {
 	e, store, _ = evalHarness(t, off, []string{"i-1"},
 		func(context.Context, string) map[string]float64 { t.Fatal("must not query"); return nil })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateDisabled {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateDisabled {
 		t.Fatalf("disabled: %+v", st)
 	}
 }
 
 func TestEvaluatorAnomaly(t *testing.T) {
 	def := cloudMonitor{ID: "m1", Name: "CPU anomaly", Metric: "cloud_cpu_util",
-		Mode: monitorModeAnomaly, Enabled: true, LastState: monitorStateNever}
+		Mode: cloud.MonitorModeAnomaly, Enabled: true, LastState: cloud.MonitorStateNever}
 
 	mk := func(last, avg, sd float64) func(context.Context, string) map[string]float64 {
 		return func(_ context.Context, q string) map[string]float64 {
@@ -287,14 +289,14 @@ func TestEvaluatorAnomaly(t *testing.T) {
 	// Within 3σ → ok.
 	e, store, _ := evalHarness(t, def, []string{"i-1"}, mk(55, 50, 5))
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateOK {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateOK {
 		t.Fatalf("within-band: %+v", st)
 	}
 
 	// 10σ deviation → firing.
 	e, store, events := evalHarness(t, def, []string{"i-1"}, mk(100, 50, 5))
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateFiring {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateFiring {
 		t.Fatalf("deviation: %+v", st)
 	}
 	if len(*events) != 1 {
@@ -310,15 +312,15 @@ func TestEvaluatorAnomaly(t *testing.T) {
 			return map[string]float64{}
 		})
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateNoData {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateNoData {
 		t.Fatalf("no-baseline: %+v", st)
 	}
 }
 
 func TestEvaluatorScopeCap(t *testing.T) {
 	def := cloudMonitor{ID: "m1", Name: "wide", Metric: "cloud_cpu_util",
-		Mode: monitorModeThreshold, Condition: monitorCondAbove, Threshold: 90,
-		Enabled: true, LastState: monitorStateNever}
+		Mode: cloud.MonitorModeThreshold, Condition: cloud.MonitorCondAbove, Threshold: 90,
+		Enabled: true, LastState: cloud.MonitorStateNever}
 	ids := make([]string, cloudMonitorMaxScopeIDs+1)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("i-%d", i)
@@ -326,7 +328,7 @@ func TestEvaluatorScopeCap(t *testing.T) {
 	e, store, _ := evalHarness(t, def, ids,
 		func(context.Context, string) map[string]float64 { t.Fatal("must not query over-cap scope"); return nil })
 	e.evaluateAll(context.Background())
-	if st := monState(t, store, "m1"); st.LastState != monitorStateError {
+	if st := monState(t, store, "m1"); st.LastState != cloud.MonitorStateError {
 		t.Fatalf("over-cap scope: %+v", st)
 	}
 }

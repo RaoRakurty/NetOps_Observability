@@ -12,28 +12,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"netops/backend/cloud"
 )
 
 func TestClampCloudSeriesWindow(t *testing.T) {
 	cases := []struct{ in, want int }{
-		{0, cloudSeriesDefaultWindow},
-		{-10, cloudSeriesDefaultWindow},
-		{1, cloudSeriesMinWindowMin},
+		{0, cloud.SeriesDefaultWindow},
+		{-10, cloud.SeriesDefaultWindow},
+		{1, cloud.SeriesMinWindowMin},
 		{5, 5},
 		{180, 180},
 		{10080, 10080},
-		{99999, cloudSeriesMaxWindowMin},
+		{99999, cloud.SeriesMaxWindowMin},
 	}
 	for _, c := range cases {
-		if got := clampCloudSeriesWindow(c.in); got != c.want {
-			t.Errorf("clampCloudSeriesWindow(%d) = %d, want %d", c.in, got, c.want)
+		if got := cloud.ClampSeriesWindow(c.in); got != c.want {
+			t.Errorf("cloud.ClampSeriesWindow(%d) = %d, want %d", c.in, got, c.want)
 		}
 	}
 }
 
 func TestCloudSeriesStepSecondsHoldsPointCap(t *testing.T) {
 	for _, windowMin := range []int{5, 60, 180, 1440, 10080} {
-		step := cloudSeriesStepSeconds(windowMin)
+		step := cloud.SeriesStepSeconds(windowMin)
 		if step < 60 {
 			t.Errorf("window %dm: step %ds below 60s floor", windowMin, step)
 		}
@@ -41,18 +43,18 @@ func TestCloudSeriesStepSecondsHoldsPointCap(t *testing.T) {
 			t.Errorf("window %dm: step %ds not whole minutes", windowMin, step)
 		}
 		points := windowMin * 60 / step
-		if points > cloudSeriesMaxPoints {
-			t.Errorf("window %dm: %d points exceeds cap %d", windowMin, points, cloudSeriesMaxPoints)
+		if points > cloud.SeriesMaxPoints {
+			t.Errorf("window %dm: %d points exceeds cap %d", windowMin, points, cloud.SeriesMaxPoints)
 		}
 	}
 }
 
 func TestCloudMetricInfoClosedVocabulary(t *testing.T) {
-	if _, ok := cloudMetricInfo("cloud_cpu_util"); !ok {
+	if _, ok := cloud.MetricInfo("cloud_cpu_util"); !ok {
 		t.Fatal("cloud_cpu_util must be in the catalog")
 	}
 	for _, bad := range []string{"", "up", "node_cpu_seconds_total", `cloud_cpu_util{x="y"}`, "cloud_cpu_util or on() vector(1)"} {
-		if _, ok := cloudMetricInfo(bad); ok {
+		if _, ok := cloud.MetricInfo(bad); ok {
 			t.Errorf("metric %q must be refused", bad)
 		}
 	}
@@ -61,13 +63,13 @@ func TestCloudMetricInfoClosedVocabulary(t *testing.T) {
 func TestValidCloudResourceID(t *testing.T) {
 	ok := []string{"i-0abc123", "/subscriptions/1111/resourcegroups/rg/providers/microsoft.compute/virtualmachines/vm-1", "projects/p/zones/z/instances/i"}
 	for _, id := range ok {
-		if !validCloudResourceID(id) {
+		if !cloud.ValidResourceID(id) {
 			t.Errorf("id %q must be accepted", id)
 		}
 	}
-	bad := []string{"", `i-"quote`, "i-back\\slash", "i-ctrl\x01", string(make([]byte, cloudSeriesMaxResourceIDLn+1))}
+	bad := []string{"", `i-"quote`, "i-back\\slash", "i-ctrl\x01", string(make([]byte, cloud.SeriesMaxResourceIDLen+1))}
 	for _, id := range bad {
-		if validCloudResourceID(id) {
+		if cloud.ValidResourceID(id) {
 			t.Errorf("id %q must be refused", id)
 		}
 	}

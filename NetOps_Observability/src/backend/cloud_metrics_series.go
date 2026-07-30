@@ -16,7 +16,7 @@ package main
 // on this surface.
 //
 // Bounded (§9): window clamped to 5m..7d, ≤ cloudSeriesMaxResources resources
-// per request, step sized so a series never exceeds cloudSeriesMaxPoints
+// per request, step sized so a series never exceeds cloud.SeriesMaxPoints
 // points, 10s upstream timeout, 4 MiB response read cap.
 //
 // Honesty: a resource with no samples returns an EMPTY points array — the UI
@@ -34,100 +34,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"netops/backend/cloud"
 )
 
 const (
-	cloudSeriesMaxResources    = 6     // resources per request (drawer shows 1; App Detail a handful)
-	cloudSeriesMaxPoints       = 400   // per-series point cap — chart-density, not archive
-	cloudSeriesMinWindowMin    = 5     // one provider period
-	cloudSeriesMaxWindowMin    = 10080 // 7 days
-	cloudSeriesDefaultWindow   = 180   // 3h default — a few provider periods of context
+	cloudSeriesMaxResources    = 6 // resources per request (drawer shows 1; App Detail a handful)
 	cloudSeriesQueryTimeout    = 10 * time.Second
 	cloudSeriesMaxResponseByte = 4 << 20
-	cloudSeriesMaxResourceIDLn = 512 // ARM ids are long; still bounded
 )
 
-// cloudMetricMeta is one entry of the CLOSED cloud-metric vocabulary — exactly
+// cloud.MetricMeta is one entry of the CLOSED cloud-metric vocabulary — exactly
 // the canonical names the ingest producers emit (cloudmetrics.py CW_METRICS,
 // azure.py AZ_METRICS, gcp.py GCP_METRICS). A metric outside this list is
 // refused: the endpoint is a cloud-lane chart feed, not a raw PromQL proxy.
-type cloudMetricMeta struct {
-	Name  string `json:"name"`
-	Label string `json:"label"`
-	Unit  string `json:"unit"` // percent | bytes | count
-}
-
-// cloudMetricCatalog returns the closed vocabulary in stable display order.
-func cloudMetricCatalog() []cloudMetricMeta {
-	return []cloudMetricMeta{
-		{Name: "cloud_cpu_util", Label: "CPU utilization", Unit: "percent"},
-		{Name: "cloud_net_in_bytes", Label: "Network in", Unit: "bytes"},
-		{Name: "cloud_net_out_bytes", Label: "Network out", Unit: "bytes"},
-		{Name: "cloud_status_check_failed", Label: "Provider status check failed", Unit: "count"},
-		{Name: "cloud_status_check_failed_system", Label: "Status check failed (provider side)", Unit: "count"},
-		{Name: "cloud_status_check_failed_instance", Label: "Status check failed (instance side)", Unit: "count"},
-		{Name: "cloud_cpu_credit_balance", Label: "CPU credit balance", Unit: "count"},
-	}
-}
-
-// cloudMetricInfo resolves a metric name against the closed catalog.
-func cloudMetricInfo(name string) (cloudMetricMeta, bool) {
-	for _, m := range cloudMetricCatalog() {
-		if m.Name == name {
-			return m, true
-		}
-	}
-	return cloudMetricMeta{}, false
-}
-
-// clampCloudSeriesWindow bounds a caller's window to 5m..7d; 0/absent gets the
-// default. Pure — unit-tested.
-func clampCloudSeriesWindow(minutes int) int {
-	if minutes <= 0 {
-		return cloudSeriesDefaultWindow
-	}
-	if minutes < cloudSeriesMinWindowMin {
-		return cloudSeriesMinWindowMin
-	}
-	if minutes > cloudSeriesMaxWindowMin {
-		return cloudSeriesMaxWindowMin
-	}
-	return minutes
-}
-
-// cloudSeriesStepSeconds sizes the query step so one series never exceeds the
-// point cap, floored at 60s (the lane's data is 5-min resolution anyway) and
-// rounded to whole minutes for tidy axis ticks. Pure — unit-tested.
-func cloudSeriesStepSeconds(windowMinutes int) int {
-	windowSec := windowMinutes * 60
-	step := windowSec / cloudSeriesMaxPoints
-	if step < 60 {
-		return 60
-	}
-	// Round UP to a whole minute so the cap holds after rounding.
-	if step%60 != 0 {
-		step += 60 - step%60
-	}
-	return step
-}
-
-// validCloudResourceID bounds a caller-supplied resource id before it goes
-// anywhere near a query string: non-empty, bounded length, no quotes /
-// backslashes / control chars (regexp.QuoteMeta handles the rest).
-func validCloudResourceID(id string) bool {
-	if id == "" || len(id) > cloudSeriesMaxResourceIDLn {
-		return false
-	}
-	for _, c := range id {
-		if c < 0x20 || c == '"' || c == '\\' || c == 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
-// cloudSeriesPoint is one [unix_seconds, value] sample (Prometheus convention;
-// the UI multiplies by 1000 for its time axis).
 type cloudSeriesPoint [2]float64
 
 // vmQueryRangeBy runs one range PromQL query against VictoriaMetrics and
@@ -192,7 +112,7 @@ func vmQueryRangeBy(ctx context.Context, q string, start, end int64, stepSec int
 				continue
 			}
 			pts = append(pts, cloudSeriesPoint{ts, f})
-			if len(pts) >= cloudSeriesMaxPoints {
+			if len(pts) >= cloud.SeriesMaxPoints {
 				break // hard cap even if the upstream over-delivers
 			}
 		}
@@ -222,7 +142,7 @@ func (s *server) handleCloudMetricSeries(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	q := r.URL.Query()
-	meta, ok := cloudMetricInfo(strings.TrimSpace(q.Get("metric")))
+	meta, ok := cloud.MetricInfo(strings.TrimSpace(q.Get("metric")))
 	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("metric must be one of the cloud metric catalog (e.g. cloud_cpu_util)"))
 		return
@@ -245,8 +165,8 @@ func (s *server) handleCloudMetricSeries(w http.ResponseWriter, r *http.Request)
 		}
 		windowMin = n
 	}
-	windowMin = clampCloudSeriesWindow(windowMin)
-	stepSec := cloudSeriesStepSeconds(windowMin)
+	windowMin = cloud.ClampSeriesWindow(windowMin)
+	stepSec := cloud.SeriesStepSeconds(windowMin)
 
 	// §3a: resolve the CALLER's inventory and refuse anything outside it with
 	// 404 — an id the tenant does not own must be indistinguishable from one
@@ -264,7 +184,7 @@ func (s *server) handleCloudMetricSeries(w http.ResponseWriter, r *http.Request)
 	seen := map[string]bool{}
 	for _, raw := range reqIDs {
 		id := strings.TrimSpace(raw)
-		if !validCloudResourceID(id) {
+		if !cloud.ValidResourceID(id) {
 			writeError(w, http.StatusBadRequest, errors.New("invalid resource id"))
 			return
 		}
@@ -305,6 +225,6 @@ func (s *server) handleCloudMetricSeries(w http.ResponseWriter, r *http.Request)
 		"start":          start,
 		"end":            end,
 		"series":         series,
-		"catalog":        cloudMetricCatalog(),
+		"catalog":        cloud.MetricCatalog(),
 	})
 }

@@ -144,11 +144,7 @@ func TestTenantMapStoresRefuseToOverwriteWhatTheyNeverRead(t *testing.T) {
 			return s.saveLocked()
 		}},
 		{"cloud_monitors", func(p string) error {
-			s := newCloudMonitorStore(p)
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			s.monitors["t-1"] = []cloudMonitor{{ID: "m1", TenantID: "t-1", Name: "cpu"}}
-			return s.saveLocked()
+			return newCloudMonitorStore(p).SeedForTest("t-1", []cloudMonitor{{ID: "m1", TenantID: "t-1", Name: "cpu"}})
 		}},
 		{"tenant_display", func(p string) error {
 			s := newTenantDisplayStore(p)
