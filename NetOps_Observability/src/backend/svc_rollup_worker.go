@@ -39,11 +39,7 @@ import (
 	"context"
 	"log"
 	"math/rand"
-	"strconv"
-	"strings"
 	"time"
-
-	"netops/backend/chhttp"
 
 	"netops/backend/internal/servicecat"
 )
@@ -66,66 +62,6 @@ const (
 // server-side execution ceiling (it set no max_execution_time, so a runaway
 // INSERT..SELECT was bounded only by the client) and classification, so the
 // caller can tell insert backpressure from a schema fault.
-func chScopedExec(ctx context.Context, scope, body string) error {
-	_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
-		SQL:        body,
-		Op:         "rollup insert",
-		Scope:      scope,
-		LogComment: "worker:svc-rollup",
-		Settings:   chInsertTolerance(),
-		Budget:     svcRollupQueryTimeout,
-	})
-	return err
-}
-
-// sqlStringLiteral quotes an internally-sourced identifier (tenant id, uuid)
-// for interpolation. Values come from our own stores, but escape regardless
-// (SR-011 discipline).
-func sqlStringLiteral(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-// svcRollupInsertSQL renders the single per-tenant attribution statement for
-// minutes [from, to] (inclusive minute buckets, i.e. ts ∈ [from, to+1m)).
-// Pure + unit-tested. Every branch stamps ONLY the given tenant and reads only
-// rows the tenant may claim: its tagged rows, plus untagged rows bounded by
-// addrClause ("" = tenant has no visible devices → tagged rows only).
-func svcRollupInsertSQL(tenant string, sets []svcSelectorSet, from, to time.Time, addrClause, rolledBy string) (string, int) {
-	tl := sqlStringLiteral(tenant)
-	tenantPred := "tenant_id = " + tl
-	if addrClause != "" {
-		// addrClause arrives in addrTenantClauseFor's " AND (src_addr IN … OR …)"
-		// form; embed it as the untagged-row bound.
-		tenantPred = "(tenant_id = " + tl + " OR (tenant_id = ''" + addrClause + "))"
-	}
-	fromU := strconv.FormatInt(from.Unix(), 10)
-	toU := strconv.FormatInt(to.Add(time.Minute).Unix(), 10)
-	var selects []string
-	for _, set := range sets {
-		if !isUUIDToken(set.ServiceID) {
-			continue // never interpolate a malformed id (store-sourced, but §3 zero-trust)
-		}
-		cond, ok := servicecat.BuildSelectorCondition(set.Spec)
-		if !ok {
-			continue // no usable predicate → service stays unattributed (honest)
-		}
-		selects = append(selects,
-			"SELECT "+tl+" AS tenant_id, toStartOfMinute(ts) AS minute, toUUID("+sqlStringLiteral(set.ServiceID)+") AS service_id, "+
-				"toUInt32("+strconv.Itoa(set.Version)+") AS selector_version, '' AS seam_id, "+sqlStringLiteral(rolledBy)+" AS rolled_by, "+
-				"toUInt64(sum(bytes * if(sampling_rate = 0, 1, sampling_rate))) AS bytes, "+
-				"toUInt64(sum(packets * if(sampling_rate = 0, 1, sampling_rate))) AS packets, "+
-				"toUInt64(count()) AS flows "+
-				"FROM netops.flows WHERE ts >= toDateTime("+fromU+") AND ts < toDateTime("+toU+") AND "+
-				tenantPred+" AND "+cond+" GROUP BY minute")
-	}
-	if len(selects) == 0 {
-		return "", 0
-	}
-	return "INSERT INTO netops.svc_flow_rollup_1m (tenant_id, minute, service_id, selector_version, seam_id, rolled_by, bytes, packets, flows) " +
-		strings.Join(selects, " UNION ALL "), len(selects)
-}
-
-// svcRollupWorker materializes the rollup. All IO is injectable for tests.
 type svcRollupWorker struct {
 	listSets   func(ctx context.Context, limit int) ([]svcSelectorSet, error)
 	query      func(ctx context.Context, scope, sql string) ([]map[string]any, error) // checkpoint read (__all__)
@@ -221,7 +157,7 @@ func (w *svcRollupWorker) tick(ctx context.Context) (int, error) {
 		if empty {
 			clause = "" // no visible devices → tagged rows only (default-closed)
 		}
-		sql, n := svcRollupInsertSQL(tenant, byTenant[tenant], from, lastClosed, clause, "live")
+		sql, n := servicecat.RollupInsertSQL(tenant, byTenant[tenant], from, lastClosed, clause, "live")
 		if n == 0 {
 			continue // no service with a usable selector predicate
 		}

@@ -193,7 +193,7 @@ func (s *server) runSelectorBackfill(set svcSelectorSet, from, to time.Time, add
 			end = to
 		}
 		// svcRollupInsertSQL's window is inclusive of the last minute bucket.
-		sql, n := svcRollupInsertSQL(set.TenantID, []svcSelectorSet{set}, start, end.Add(-time.Minute), addrClause, "backfill")
+		sql, n := servicecat.RollupInsertSQL(set.TenantID, []svcSelectorSet{set}, start, end.Add(-time.Minute), addrClause, "backfill")
 		if n == 0 {
 			log.Printf("svc-backfill: service %s v%d: selector yielded no predicate mid-run — aborting", set.ServiceID, set.Version)
 			return
@@ -219,8 +219,8 @@ func svcRollupLatestVersionSQL(tenantID, serviceID string, since time.Time) stri
 	return `SELECT toUnixTimestamp(minute) AS minute_ts, argMax(b, selector_version) AS bytes, argMax(f, selector_version) AS flows FROM (
   SELECT minute, selector_version, sum(bytes) AS b, sum(flows) AS f
     FROM netops.svc_flow_rollup_1m
-   WHERE service_id = toUUID(` + sqlStringLiteral(serviceID) + `)
-     AND tenant_id = ` + sqlStringLiteral(tenantID) + `
+   WHERE service_id = toUUID(` + servicecat.SQLStringLiteral(serviceID) + `)
+     AND tenant_id = ` + servicecat.SQLStringLiteral(tenantID) + `
      AND minute >= toDateTime(` + strconv.FormatInt(since.Unix(), 10) + `)
    GROUP BY minute, selector_version)
 GROUP BY minute ORDER BY minute_ts FORMAT JSON`

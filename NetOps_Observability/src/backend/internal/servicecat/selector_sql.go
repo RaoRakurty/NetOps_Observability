@@ -9,6 +9,7 @@ package servicecat
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 func isCIDRToken(s string) bool {
@@ -116,3 +117,74 @@ func FlowScanSQL(sel []string, sinceSec int, tenantClause string) string {
 		" FROM netops.flows WHERE ts >= now() - INTERVAL " + strconv.Itoa(sinceSec) + " SECOND" +
 		tenantClause + " FORMAT JSON"
 }
+
+// isUUIDToken mirrors main's SR-011 shape validator (duplicated test fixture —
+// test files cannot cross packages).
+func isUUIDToken(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			switch {
+			case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ── rollup SQL (Phase-2 W4.11, from main's svc_rollup_worker.go) ─────────────
+
+func SQLStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// RollupInsertSQL renders the single per-tenant attribution statement for
+// minutes [from, to] (inclusive minute buckets, i.e. ts ∈ [from, to+1m)).
+// Pure + unit-tested. Every branch stamps ONLY the given tenant and reads only
+// rows the tenant may claim: its tagged rows, plus untagged rows bounded by
+// addrClause ("" = tenant has no visible devices → tagged rows only).
+func RollupInsertSQL(tenant string, sets []SelectorSet, from, to time.Time, addrClause, rolledBy string) (string, int) {
+	tl := SQLStringLiteral(tenant)
+	tenantPred := "tenant_id = " + tl
+	if addrClause != "" {
+		// addrClause arrives in addrTenantClauseFor's " AND (src_addr IN … OR …)"
+		// form; embed it as the untagged-row bound.
+		tenantPred = "(tenant_id = " + tl + " OR (tenant_id = ''" + addrClause + "))"
+	}
+	fromU := strconv.FormatInt(from.Unix(), 10)
+	toU := strconv.FormatInt(to.Add(time.Minute).Unix(), 10)
+	var selects []string
+	for _, set := range sets {
+		if !isUUIDToken(set.ServiceID) {
+			continue // never interpolate a malformed id (store-sourced, but §3 zero-trust)
+		}
+		cond, ok := BuildSelectorCondition(set.Spec)
+		if !ok {
+			continue // no usable predicate → service stays unattributed (honest)
+		}
+		selects = append(selects,
+			"SELECT "+tl+" AS tenant_id, toStartOfMinute(ts) AS minute, toUUID("+SQLStringLiteral(set.ServiceID)+") AS service_id, "+
+				"toUInt32("+strconv.Itoa(set.Version)+") AS selector_version, '' AS seam_id, "+SQLStringLiteral(rolledBy)+" AS rolled_by, "+
+				"toUInt64(sum(bytes * if(sampling_rate = 0, 1, sampling_rate))) AS bytes, "+
+				"toUInt64(sum(packets * if(sampling_rate = 0, 1, sampling_rate))) AS packets, "+
+				"toUInt64(count()) AS flows "+
+				"FROM netops.flows WHERE ts >= toDateTime("+fromU+") AND ts < toDateTime("+toU+") AND "+
+				tenantPred+" AND "+cond+" GROUP BY minute")
+	}
+	if len(selects) == 0 {
+		return "", 0
+	}
+	return "INSERT INTO netops.svc_flow_rollup_1m (tenant_id, minute, service_id, selector_version, seam_id, rolled_by, bytes, packets, flows) " +
+		strings.Join(selects, " UNION ALL "), len(selects)
+}
+
+// svcRollupWorker materializes the rollup. All IO is injectable for tests.

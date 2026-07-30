@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/internal/servicecat"
 )
 
 func rollupSets() []svcSelectorSet {
@@ -148,7 +150,7 @@ func TestSvcRollupColdStartBounded(t *testing.T) {
 // untagged-share clause must be absent (default-closed).
 func TestSvcRollupInsertSQLNoDevicesDefaultClosed(t *testing.T) {
 	from := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	sql, n := svcRollupInsertSQL("nodev", rollupSets()[:1], from, from.Add(4*time.Minute), "", "live")
+	sql, n := servicecat.RollupInsertSQL("nodev", rollupSets()[:1], from, from.Add(4*time.Minute), "", "live")
 	if n != 1 {
 		t.Fatalf("want 1 select, got %d", n)
 	}
@@ -168,7 +170,7 @@ func TestSvcRollupInsertSQLSkipsUnusableSelector(t *testing.T) {
 		{TenantID: "acme", ServiceID: "11111111-1111-4111-8111-111111111111", Version: 1, Spec: map[string]any{}},
 		{TenantID: "acme", ServiceID: "not-a-uuid", Version: 1, Spec: map[string]any{"ports": []any{float64(53)}}},
 	}
-	if sql, n := svcRollupInsertSQL("acme", sets, from, from, "", "live"); n != 0 || sql != "" {
+	if sql, n := servicecat.RollupInsertSQL("acme", sets, from, from, "", "live"); n != 0 || sql != "" {
 		t.Fatalf("unusable selectors must produce no statement, got n=%d sql=%q", n, sql)
 	}
 }
@@ -179,7 +181,7 @@ func TestSvcRollupInsertSQLStampsVersionAndProto(t *testing.T) {
 	from := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	sets := []svcSelectorSet{{TenantID: "acme", ServiceID: "11111111-1111-4111-8111-111111111111", Version: 7,
 		Spec: map[string]any{"protocols": []any{float64(17)}}}}
-	sql, n := svcRollupInsertSQL("acme", sets, from, from, "", "backfill")
+	sql, n := servicecat.RollupInsertSQL("acme", sets, from, from, "", "backfill")
 	if n != 1 {
 		t.Fatalf("want 1 select, got %d", n)
 	}

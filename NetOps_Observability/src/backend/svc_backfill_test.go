@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/internal/servicecat"
 )
 
 func TestSvcBackfillWindowValidation(t *testing.T) {
@@ -101,7 +103,7 @@ func TestSvcRollupLatestVersionSQLShape(t *testing.T) {
 
 // sqlStringLiteral must neutralize quotes (store-sourced values, but SR-011).
 func TestSqlStringLiteralEscapes(t *testing.T) {
-	if got := sqlStringLiteral("a'b"); got != "'a''b'" {
+	if got := servicecat.SQLStringLiteral("a'b"); got != "'a''b'" {
 		t.Errorf("sqlStringLiteral = %q", got)
 	}
 }

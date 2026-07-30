@@ -24,29 +24,6 @@ func TestValidateServiceInput(t *testing.T) {
 	}
 }
 
-// isUUIDToken mirrors main's SR-011 shape validator (duplicated test fixture —
-// test files cannot cross packages).
-func isUUIDToken(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if c != '-' {
-				return false
-			}
-		default:
-			switch {
-			case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
-			default:
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func TestNewUUIDv4(t *testing.T) {
 	a, err := newUUIDv4()
 	if err != nil {

@@ -469,3 +469,21 @@ func chScalarInt(sql string) int {
 // ── handlers ─────────────────────────────────────────────────────────────────
 
 // appFilterSQL builds the (validated) app predicate for the signal tables.
+
+// chScopedExec POSTs a statement at an explicit tenant scope (moved from the
+// svc rollup worker — CH plumbing, W4.11).
+func chScopedExec(ctx context.Context, scope, body string) error {
+	_, err := chClientFor(envOr("CLICKHOUSE_URL", "http://clickhouse:8123")).Exec(ctx, chhttp.Request{
+		SQL:        body,
+		Op:         "rollup insert",
+		Scope:      scope,
+		LogComment: "worker:svc-rollup",
+		Settings:   chInsertTolerance(),
+		Budget:     svcRollupQueryTimeout,
+	})
+	return err
+}
+
+// sqlStringLiteral quotes an internally-sourced identifier (tenant id, uuid)
+// for interpolation. Values come from our own stores, but escape regardless
+// (SR-011 discipline).
