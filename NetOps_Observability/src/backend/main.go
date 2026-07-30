@@ -327,7 +327,7 @@ func newServer() *server {
 					}
 				}
 				if c, ok := snmpCredsRef.Resolve(ref); ok {
-					applyCredToTarget(&tgt, c)
+					snmpcred.ApplyCredToTarget(&tgt, c)
 				}
 			}
 			out = append(out, tgt)
@@ -1104,7 +1104,7 @@ func main() {
 	// SNMP collection; CRED_AUTO_RESOLVE=false opts out (bound refs then fail
 	// dark exactly as before).
 	if os.Getenv("ENABLE_SNMP_COLLECTION") == "true" && os.Getenv("CRED_AUTO_RESOLVE") != "false" {
-		workers.start("cred-sentinel", func() { srv.credSentinel.run(ctx) })
+		workers.start("cred-sentinel", func() { srv.credSentinel.Run(ctx) })
 	}
 	srv.alerts.Start(ctx)
 	srv.loadUserRules() // re-feed persisted operator-created monitors (rules_user.go)

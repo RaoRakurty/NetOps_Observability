@@ -38,8 +38,7 @@ func sentinelFixture(t *testing.T) (*credSentinel, *credOverrideStore, *snmpcred
 			t.Fatal(err)
 		}
 	}
-	cs := newCredSentinel(ov, creds, nil)
-	cs.cooldown = 0 // tests drive sweeps directly
+	cs := snmpcred.NewSentinel(ov, creds, nil, time.Minute, 0) // zero cooldown: tests drive sweeps directly
 	return cs, ov, creds
 }
 
@@ -61,8 +60,8 @@ func TestSentinelAdoptsWorkingProfileWhenBoundFails(t *testing.T) {
 	cs, ov, _ := sentinelFixture(t)
 	// Device bound to v3, but only v2c "vendor-public" answers (the IOS-XE
 	// lost-v3-user / FortiGate-v2c-only class).
-	cs.probe = answersOnly("vendor-public")
-	cs.checkDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
+	cs.SetProbeForTest(answersOnly("vendor-public"))
+	cs.CheckDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
 
 	o, ok := ov.Get("dmz-fw")
 	if !ok || o.ProfileID != "vendor-v2c" || o.BoundRef != "vendor-v3" {
@@ -74,8 +73,8 @@ func TestSentinelRestoresIntentWhenBoundRecovers(t *testing.T) {
 	cs, ov, _ := sentinelFixture(t)
 	ov.Set(credOverride{DeviceID: "dmz-fw", ProfileID: "vendor-v2c", BoundRef: "vendor-v3", Since: time.Now()})
 	// Now EVERYTHING answers (device re-configured to v3 as intended).
-	cs.probe = func(context.Context, collectors.Target) error { return nil }
-	cs.checkDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
+	cs.SetProbeForTest(func(context.Context, collectors.Target) error { return nil })
+	cs.CheckDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
 
 	if _, ok := ov.Get("dmz-fw"); ok {
 		t.Fatal("bound profile recovered — override must be cleared (intent wins)")
@@ -86,8 +85,8 @@ func TestSentinelNeverCrossesTenants(t *testing.T) {
 	cs, ov, _ := sentinelFixture(t)
 	// Global device; ONLY the other tenant's community answers. Default-closed:
 	// the sentinel must NOT adopt a cross-tenant profile.
-	cs.probe = answersOnly("other")
-	cs.checkDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
+	cs.SetProbeForTest(answersOnly("other"))
+	cs.CheckDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
 
 	if o, ok := ov.Get("dmz-fw"); ok {
 		t.Fatalf("cross-tenant profile adopted: %+v — §3a violation", o)
@@ -95,17 +94,17 @@ func TestSentinelNeverCrossesTenants(t *testing.T) {
 }
 
 func TestSentinelCooldownRateLimitsSweeps(t *testing.T) {
-	cs, ov, _ := sentinelFixture(t)
-	cs.cooldown = time.Hour
+	_, ov, creds := sentinelFixture(t)
+	cs := snmpcred.NewSentinel(ov, creds, nil, time.Minute, time.Hour)
 	calls := 0
-	cs.probe = func(_ context.Context, tg collectors.Target) error {
+	cs.SetProbeForTest(func(_ context.Context, tg collectors.Target) error {
 		calls++
 		return context.DeadlineExceeded // nothing ever answers
-	}
+	})
 	d := dev("dead-device", "vendor-v3")
-	cs.checkDevice(context.Background(), d)
+	cs.CheckDevice(context.Background(), d)
 	first := calls
-	cs.checkDevice(context.Background(), d) // within cooldown: 1 active probe only, no sweep
+	cs.CheckDevice(context.Background(), d) // within cooldown: 1 active probe only, no sweep
 	if calls-first > 1 {
 		t.Fatalf("sweep ran during cooldown: %d probes after first pass (want ≤1)", calls-first)
 	}
@@ -120,8 +119,8 @@ func TestSentinelClearsStaleOverrideWhenProfileDeleted(t *testing.T) {
 	if err := creds.Delete("vendor-v2c"); err != nil {
 		t.Fatal(err)
 	}
-	cs.probe = answersOnly("nothing-answers")
-	cs.checkDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
+	cs.SetProbeForTest(answersOnly("nothing-answers"))
+	cs.CheckDevice(context.Background(), dev("dmz-fw", "vendor-v3"))
 	if o, ok := ov.Get("dmz-fw"); ok && o.ProfileID == "vendor-v2c" {
 		t.Fatal("override still references a deleted profile")
 	}
@@ -147,11 +146,11 @@ func TestOverrideStorePersistsAcrossReload(t *testing.T) {
 func TestTargetBuilderHonorsOverride(t *testing.T) {
 	// applyCredToTarget is the single mapping both the builder and sentinel use.
 	var tgt collectors.Target
-	applyCredToTarget(&tgt, snmpcred.Credential{ID: "x", Version: "v3", SecurityName: "u", SecurityLevel: "authPriv", AuthProtocol: "SHA", AuthKey: "a", PrivProtocol: "AES128", PrivKey: "p"})
+	snmpcred.ApplyCredToTarget(&tgt, snmpcred.Credential{ID: "x", Version: "v3", SecurityName: "u", SecurityLevel: "authPriv", AuthProtocol: "SHA", AuthKey: "a", PrivProtocol: "AES128", PrivKey: "p"})
 	if tgt.SNMPVersion != 3 || tgt.V3User != "u" || tgt.V3PrivKey != "p" {
 		t.Fatalf("v3 mapping wrong: %+v", tgt)
 	}
-	applyCredToTarget(&tgt, snmpcred.Credential{ID: "y", Version: "v2c", Community: "c"})
+	snmpcred.ApplyCredToTarget(&tgt, snmpcred.Credential{ID: "y", Version: "v2c", Community: "c"})
 	if tgt.SNMPVersion != 0 || tgt.Community != "c" {
 		t.Fatalf("v2c mapping must reset v3 state: %+v", tgt)
 	}
@@ -161,16 +160,16 @@ func TestSentinelBindsFreshDiscoveryDevice(t *testing.T) {
 	cs, ov, _ := sentinelFixture(t)
 	d := dev("new-switch", "") // discovered device — no bound profile
 	// Default community fails; the stored vendor-v2c profile answers.
-	cs.probe = answersOnly("vendor-public")
-	cs.checkDevice(context.Background(), d)
+	cs.SetProbeForTest(answersOnly("vendor-public"))
+	cs.CheckDevice(context.Background(), d)
 	if o, ok := ov.Get("new-switch"); !ok || o.ProfileID != "vendor-v2c" || o.BoundRef != "" {
 		t.Fatalf("fresh device must bind to the answering profile, got %+v ok=%v", o, ok)
 	}
 
 	// A device the poller's DEFAULT community already reaches is left alone.
 	cs2, ov2, _ := sentinelFixture(t)
-	cs2.probe = answersOnly("") // only the bare default target (no community set) answers
-	cs2.checkDevice(context.Background(), dev("plain-device", ""))
+	cs2.SetProbeForTest(answersOnly("")) // only the bare default target (no community set) answers
+	cs2.CheckDevice(context.Background(), dev("plain-device", ""))
 	if _, ok := ov2.Get("plain-device"); ok {
 		t.Fatal("default-community device must not get an override")
 	}

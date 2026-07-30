@@ -10,6 +10,7 @@ package main
 // as the SNMP credential store) and write-only through the API.
 
 import (
+	"netops/backend/internal/snmpcred"
 	"context"
 	"errors"
 	"fmt"
@@ -150,7 +151,7 @@ func (s *server) resolveVerifyTargets(tenant string, names []string) []verify.Ta
 			}
 			if c, ok := s.snmpCreds.Resolve(ref); ok {
 				tgt := collectors.Target{ID: dev.ID, Address: dev.Address}
-				applyCredToTarget(&tgt, c)
+				snmpcred.ApplyCredToTarget(&tgt, c)
 				t.SNMP = &tgt
 			}
 		}
