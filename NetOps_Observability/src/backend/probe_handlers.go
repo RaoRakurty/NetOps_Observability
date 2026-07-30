@@ -58,5 +58,5 @@ func (s *server) mergedProbePaths(local []collectors.PathResult) []collectors.Pa
 		return local
 	}
 	out := append([]collectors.PathResult{}, local...)
-	return append(out, s.remotePaths.all(time.Now().UTC())...)
+	return append(out, s.remotePaths.All(time.Now().UTC())...)
 }
