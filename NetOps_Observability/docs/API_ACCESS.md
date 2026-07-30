@@ -73,6 +73,30 @@ A client either uses a long-lived **API key** (machine) or the
 
 ---
 
+## Pagination & totals contract (stable)
+
+Every bounded list/search endpoint stamps the same response headers; the body
+alone is NOT the whole answer. This shape is pinned by a build-time test
+(`internal/httppage/contract_test.go`) — renaming a header or envelope key is
+a breaking API change and fails the build.
+
+| Header | Meaning |
+|---|---|
+| `X-Total-Count` | TRUE number of rows matching the caller's filter |
+| `X-Page-Limit` | limit actually applied (after server clamping) |
+| `X-Page-Offset` | offset actually applied |
+| `X-Page-Complete` | `true` iff this response IS the whole matching set |
+| `X-Page-Max-Limit` | server-side ceiling, so a client can size its walk |
+
+Header-blind clients (or proxies that strip headers) opt into the **envelope**
+with `?envelope=1`: the rows arrive under the endpoint's collection key plus
+the same numbers in the body — keys `total`, `returned`, `limit`, `offset`,
+`complete`. A client that reads neither the headers nor the envelope and
+treats the bare array as complete is silently wrong on any result set larger
+than one page — integrate against one of the two.
+
+---
+
 ## Build order
 
 1. ~~`api_keys` table + key middleware (resolve key → RBAC context).~~ **Done.**

@@ -186,7 +186,7 @@ and thereby certified the blind scope as healthy.
 4. ~~**Postgres-dependent paths are compile-reviewed only.**~~ **CLOSED 2026-07-25** (`33cb45f2`) — the `pg-integration` job in `backend-ci.yml` runs the build-tagged Postgres tests against a pinned postgres:16-alpine every CI run: `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE. (§3)
 5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
 6. ~~**Documented env switches are unverified as a class.**~~ **CLOSED 2026-07-30** — `TestEveryDocumentedEnvSwitchIsConsumed` guards the class mechanically (documented ⇒ consumed, exemptions carry reasons; fired on first run: the phantom `LOKI_RETENTION_PERIOD` row). Per-switch behaviour remains each feature's own tests — the honest limit, stated in the guard. (§9)
-7. **API response-shape stability is prose.** Totals currently ride on headers to avoid breaking the SPA — a header-blind client silently misses them. (§8)
+7. ~~**API response-shape stability is prose.**~~ **CLOSED 2026-07-30** — the shape is now pinned by build-time tests (`internal/httppage/contract_test.go`: the five header LITERALS, all-five-stamped-on-every-write, the envelope's exact keys) and documented for integrators (`docs/API_ACCESS.md` § Pagination & totals contract). The header-blind-client hazard has a documented, tested escape hatch: `?envelope=1` carries the same numbers in the body. Renaming any of it fails the build. (§8)
 8. **`package main` still holds substantial business logic, against the repo's
    own §2.** Originally 296 non-test files with no `/internal` at all. Phase 1
    of the decomposition (steps 18–59, 2026-07-27→29) is COMPLETE: **204 files
