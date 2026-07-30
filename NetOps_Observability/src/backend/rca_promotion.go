@@ -21,15 +21,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rca"
 	"os"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -38,122 +34,17 @@ import (
 // The promotion model types (rca.PromotionStatus / PromotionCriterion /
 // PromotionRecord) live in internal/rca — they are part of the report's shape.
 
-// ---- store ------------------------------------------------------------------
+// ---- store (internal/rca/promotion_store.go, P2 RA.6) -----------------------
 
-// rcaPromotionStore is a file-backed map keyed tenant → correlation id →
-// record. §3a rule 4: the key includes the tenant in the store itself and no
-// cross-tenant listing exists.
-type rcaPromotionStore struct {
-	mu   sync.RWMutex
-	m    map[string]map[string]rca.PromotionRecord
-	path string
-}
+type rcaPromotionStore = rca.PromotionStore
+
+func newRcaPromotionStore(path string) *rcaPromotionStore { return rca.NewPromotionStore(path) }
 
 func rcaPromotionsPath() string {
 	if p := strings.TrimSpace(os.Getenv("RCA_PROMOTIONS_PATH")); p != "" {
 		return p
 	}
 	return "/data/rca_promotions.json"
-}
-
-func newRcaPromotionStore(path string) *rcaPromotionStore {
-	s := &rcaPromotionStore{m: map[string]map[string]rca.PromotionRecord{}, path: path}
-	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		var m map[string]map[string]rca.PromotionRecord
-		if json.Unmarshal(b, &m) == nil {
-			s.m = m
-		}
-	}
-	return s
-}
-
-// F-62/F-63: returns error. A swallowed persist failure here made the
-// handler above structurally unable to report that the write did not
-// land — 200 with nothing saved. Callers roll back and answer 500.
-func (s *rcaPromotionStore) saveLocked() error {
-	if s.path == "" {
-		return nil
-	}
-	b, err := json.MarshalIndent(s.m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode rca promotions: %w", err)
-	}
-	if err := platformdb.Save(s.path, b); err != nil {
-		logError("rca", "persist rca promotions failed", map[string]any{"err": err.Error()})
-		return fmt.Errorf("persist rca promotions: %w", err)
-	}
-	return nil
-}
-
-// get returns the tenant's manual promotion for one correlation. Nil-safe.
-func (s *rcaPromotionStore) get(tenant, id string) (rca.PromotionRecord, bool) {
-	if s == nil {
-		return rca.PromotionRecord{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rec, ok := s.m[tenant][id]
-	return rec, ok
-}
-
-// list returns ONE tenant's manually promoted correlation ids, sorted for
-// determinism. §3a rule 4: the only listing is tenant-keyed — no cross-tenant
-// or unscoped enumeration exists on this store. Nil-safe.
-func (s *rcaPromotionStore) list(tenant string) []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	ids := make([]string, 0, len(s.m[tenant]))
-	for id := range s.m[tenant] {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func (s *rcaPromotionStore) set(tenant, id string, rec rca.PromotionRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.m[tenant] == nil {
-		s.m[tenant] = map[string]rca.PromotionRecord{}
-	}
-	prev, had := s.m[tenant][id]
-	s.m[tenant][id] = rec
-	if err := s.saveLocked(); err != nil {
-		if had {
-			s.m[tenant][id] = prev
-		} else {
-			delete(s.m[tenant], id)
-		}
-		return err
-	}
-	return nil
-}
-
-func (s *rcaPromotionStore) remove(tenant, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prev, had := s.m[tenant][id]
-	byTenant, hadTenant := s.m[tenant]
-	delete(s.m[tenant], id)
-	if len(s.m[tenant]) == 0 {
-		delete(s.m, tenant)
-	}
-	if err := s.saveLocked(); err != nil {
-		if hadTenant {
-			s.m[tenant] = byTenant
-		}
-		if had {
-			if s.m[tenant] == nil {
-				s.m[tenant] = map[string]rca.PromotionRecord{}
-			}
-			s.m[tenant][id] = prev
-		}
-		return err
-	}
-	return nil
 }
 
 // ---- evaluation -------------------------------------------------------------
@@ -198,7 +89,7 @@ SELECT tenant_id FROM netops.corr_objects
 
 	switch r.Method {
 	case http.MethodGet:
-		rec, has := s.rcaPromotions.get(objTenant, id)
+		rec, has := s.rcaPromotions.Get(objTenant, id)
 		out := map[string]any{"manually_promoted": has}
 		if has {
 			out["manual"] = rec
@@ -225,7 +116,7 @@ SELECT tenant_id FROM netops.corr_objects
 			return
 		}
 		rec := rca.PromotionRecord{PromotedBy: claims.Sub, PromotedAt: rca.FmtUTC(time.Now().UTC()), Note: strings.TrimSpace(body.Note)}
-		if err := s.rcaPromotions.set(objTenant, id, rec); err != nil {
+		if err := s.rcaPromotions.Set(objTenant, id, rec); err != nil {
 			writeError(w, http.StatusInternalServerError, errors.New("promotion was not saved"))
 			return
 		}
@@ -236,7 +127,7 @@ SELECT tenant_id FROM netops.corr_objects
 			writeError(w, http.StatusServiceUnavailable, errors.New("promotion store unavailable"))
 			return
 		}
-		if err := s.rcaPromotions.remove(objTenant, id); err != nil {
+		if err := s.rcaPromotions.Remove(objTenant, id); err != nil {
 			writeError(w, http.StatusInternalServerError, errors.New("promotion was not cleared"))
 			return
 		}

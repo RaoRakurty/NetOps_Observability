@@ -21,15 +21,15 @@ import (
 
 func TestPromotionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaPromotionStore("") // in-memory
-	_ = st.set("acme", "c-1", rca.PromotionRecord{PromotedBy: "a"})
-	if _, ok := st.get("globex", "c-1"); ok {
+	_ = st.Set("acme", "c-1", rca.PromotionRecord{PromotedBy: "a"})
+	if _, ok := st.Get("globex", "c-1"); ok {
 		t.Fatal("TENANT LEAK: another tenant read acme's promotion")
 	}
-	if rec, ok := st.get("acme", "c-1"); !ok || rec.PromotedBy != "a" {
+	if rec, ok := st.Get("acme", "c-1"); !ok || rec.PromotedBy != "a" {
 		t.Fatalf("own record lost: %+v ok=%v", rec, ok)
 	}
-	_ = st.remove("acme", "c-1")
-	if _, ok := st.get("acme", "c-1"); ok {
+	_ = st.Remove("acme", "c-1")
+	if _, ok := st.Get("acme", "c-1"); ok {
 		t.Fatal("remove did not delete")
 	}
 }
@@ -92,7 +92,7 @@ func TestPromoteOwnTenantAndKeyedByOwner(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("own-tenant promote = %d (%s)", w.Code, w.Body.String())
 	}
-	rec, ok := s.rcaPromotions.get("acme", promoCorrID)
+	rec, ok := s.rcaPromotions.Get("acme", promoCorrID)
 	if !ok || rec.PromotedBy != "a@acme" || rec.Note != "C-suite outage review" {
 		t.Fatalf("record not stored under the owning tenant: %+v ok=%v", rec, ok)
 	}
@@ -110,7 +110,7 @@ func TestPromoteOwnTenantAndKeyedByOwner(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("revoke = %d", w.Code)
 	}
-	if _, ok := s.rcaPromotions.get("acme", promoCorrID); ok {
+	if _, ok := s.rcaPromotions.Get("acme", promoCorrID); ok {
 		t.Fatal("revoked promotion still stored")
 	}
 }
@@ -126,10 +126,10 @@ func TestPromoteCrossTenantIs404(t *testing.T) {
 			t.Fatalf("cross-tenant %s = %d, want 404 (never reveal the id)", method, w.Code)
 		}
 	}
-	if _, ok := s.rcaPromotions.get("acme", promoCorrID); ok {
+	if _, ok := s.rcaPromotions.Get("acme", promoCorrID); ok {
 		t.Fatal("cross-tenant call must never write the owner's store")
 	}
-	if _, ok := s.rcaPromotions.get("globex", promoCorrID); ok {
+	if _, ok := s.rcaPromotions.Get("globex", promoCorrID); ok {
 		t.Fatal("cross-tenant call must never create a foreign record")
 	}
 }
@@ -144,7 +144,7 @@ func TestPromoteCrossScopeAdminKeysByObjectTenant(t *testing.T) {
 		t.Fatalf("platform admin promote = %d (%s)", w.Code, w.Body.String())
 	}
 	// Stamped by the OBJECT's owning tenant — never by the admin's (absent) one.
-	if _, ok := s.rcaPromotions.get("acme", promoCorrID); !ok {
+	if _, ok := s.rcaPromotions.Get("acme", promoCorrID); !ok {
 		t.Fatal("promotion must key by the object's owning tenant")
 	}
 }
@@ -201,7 +201,7 @@ func TestRcaDocumentGateBlocksUnpromotedHTML(t *testing.T) {
 func TestRcaDocumentGateOpensAfterManualPromotion(t *testing.T) {
 	promoFakeCH(t, "acme")
 	s := promoServer(t)
-	_ = s.rcaPromotions.set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	w := httptest.NewRecorder()
 	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)

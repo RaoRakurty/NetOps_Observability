@@ -95,8 +95,8 @@ func TestSettingsWritesFailLoudlyWhenTheStoreIsBroken(t *testing.T) {
 		}},
 		{"display.setTimeDisplay", func() error { _, err := disp.setTimeDisplay("t-a", "utc"); return err }},
 		{"slo.set", func() error { return slo.set("t-a", []cloudSLO{{AppName: "checkout", TargetPct: 99.9, WindowDays: 7}}) }},
-		{"promotion.set", func() error { return promo.set("t-a", "c-1", rca.PromotionRecord{PromotedBy: "ops"}) }},
-		{"promotion.remove", func() error { return promo.remove("t-a", "c-1") }},
+		{"promotion.set", func() error { return promo.Set("t-a", "c-1", rca.PromotionRecord{PromotedBy: "ops"}) }},
+		{"promotion.remove", func() error { return promo.Remove("t-a", "c-1") }},
 	}
 
 	for _, tc := range cases {

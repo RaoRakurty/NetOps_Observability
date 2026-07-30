@@ -29,23 +29,23 @@ func TestRevisionRegisterAppendOnlyAndIdempotent(t *testing.T) {
 	integ, _ := rca.ComputeReportIntegrity(rep)
 	integ.ContentHash = rca.HashContent([]byte("<html>doc v1</html>"))
 
-	rev1, created, err := st.record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ, CreatedAt: "t1", CreatedBy: "a@acme"})
+	rev1, created, err := st.Record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ, CreatedAt: "t1", CreatedBy: "a@acme"})
 	if err != nil || !created || rev1.Revision != 1 {
 		t.Fatalf("first record: %+v created=%v err=%v", rev1, created, err)
 	}
 	// Identical regeneration → the SAME immutable revision, no new object.
-	rev1b, created, err := st.record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ, CreatedAt: "t2", CreatedBy: "b@acme"})
+	rev1b, created, err := st.Record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ, CreatedAt: "t2", CreatedBy: "b@acme"})
 	if err != nil || created || rev1b.Revision != 1 || rev1b.CreatedAt != "t1" {
 		t.Fatalf("identical regeneration must reuse revision 1 unchanged: %+v created=%v", rev1b, created)
 	}
 	// Changed content → a NEW revision object; revision 1 is never mutated.
 	integ2 := integ
 	integ2.ContentHash = rca.HashContent([]byte("<html>doc v2</html>"))
-	rev2, created, err := st.record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ2, CreatedAt: "t3", CreatedBy: "a@acme"})
+	rev2, created, err := st.Record("acme", "c-1", rcaReportRevision{ReportID: rep.ReportID, Format: "html", Integrity: integ2, CreatedAt: "t3", CreatedBy: "a@acme"})
 	if err != nil || !created || rev2.Revision != 2 {
 		t.Fatalf("changed content must append revision 2: %+v", rev2)
 	}
-	revs := st.list("acme", "c-1")
+	revs := st.List("acme", "c-1")
 	if len(revs) != 2 || revs[0].Integrity.ContentHash != integ.ContentHash {
 		t.Fatalf("register mutated: %+v", revs)
 	}
@@ -55,13 +55,13 @@ func TestRevisionStoreIsTenantKeyed(t *testing.T) {
 	st := newRcaRevisionStore("")
 	rep := integrityReport(t)
 	integ, _ := rca.ComputeReportIntegrity(rep)
-	if _, _, err := st.record("acme", "c-1", rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
+	if _, _, err := st.Record("acme", "c-1", rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if got := st.list("globex", "c-1"); len(got) != 0 {
+	if got := st.List("globex", "c-1"); len(got) != 0 {
 		t.Fatalf("TENANT LEAK: globex read acme's revision register: %+v", got)
 	}
-	if got := st.list("acme", "c-1"); len(got) != 1 {
+	if got := st.List("acme", "c-1"); len(got) != 1 {
 		t.Fatalf("own register lost: %+v", got)
 	}
 }
@@ -73,7 +73,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	s := corrTestServer(t)
 	s.rcaPromotions = newRcaPromotionStore("")
 	s.rcaRevisions = newRcaRevisionStore("")
-	_ = s.rcaPromotions.set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
 
 	// JSON: integrity embedded, no revision recorded.
 	w := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	if rep.Integrity == nil || rep.Integrity.AnalysisSnapshotHash == "" {
 		t.Fatalf("json response must embed the integrity block: %+v", rep.Integrity)
 	}
-	if got := s.rcaRevisions.list("acme", promoCorrID); len(got) != 0 {
+	if got := s.rcaRevisions.List("acme", promoCorrID); len(got) != 0 {
 		t.Fatalf("json read must not create revisions: %+v", got)
 	}
 
@@ -103,7 +103,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "Analysis snapshot sha256:") {
 		t.Fatal("rendered document must embed the integrity footer")
 	}
-	revs := s.rcaRevisions.list("acme", promoCorrID)
+	revs := s.rcaRevisions.List("acme", promoCorrID)
 	if len(revs) != 1 || revs[0].Format != "html" || !strings.HasPrefix(revs[0].Integrity.ContentHash, "sha256:") {
 		t.Fatalf("document revision not recorded: %+v", revs)
 	}
@@ -117,7 +117,7 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("html regen = %d", w.Code)
 	}
-	if revs := s.rcaRevisions.list("acme", promoCorrID); len(revs) != 1 {
+	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
 		t.Fatalf("identical regeneration duplicated the revision: %+v", revs)
 	}
 }
@@ -129,7 +129,7 @@ func TestRcaRevisionsEndpointTenantScoped(t *testing.T) {
 	s.rcaRevisions = newRcaRevisionStore("")
 	rep := integrityReport(t)
 	integ, _ := rca.ComputeReportIntegrity(rep)
-	if _, _, err := s.rcaRevisions.record("acme", promoCorrID, rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
+	if _, _, err := s.rcaRevisions.Record("acme", promoCorrID, rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 

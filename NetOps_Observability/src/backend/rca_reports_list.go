@@ -136,7 +136,7 @@ func (s *server) handleRcaReportsLibrary(w http.ResponseWriter, r *http.Request)
 	// still sees auto-promotable cases via the __all__ prefilter above).
 	tenant, cross := principalTenant(claims)
 	if !cross {
-		for _, id := range s.rcaPromotions.list(tenant) {
+		for _, id := range s.rcaPromotions.List(tenant) {
 			if isUUIDToken(id) && !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)

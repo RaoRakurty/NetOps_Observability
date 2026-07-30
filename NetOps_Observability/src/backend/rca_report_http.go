@@ -94,7 +94,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	// (confirmed verdict + confirmed user/app impact + duration) or an explicit,
 	// audited manual promotion. The refusal names the unmet criteria.
 	var manual *rca.PromotionRecord
-	if rec, has := s.rcaPromotions.get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
+	if rec, has := s.rcaPromotions.Get(canonicalCorrTenant(asString(meta["tenant_id"])), id); has {
 		manual = &rec
 	}
 	rep.Promotion = rca.EvaluatePromotion(&rep, manual)
