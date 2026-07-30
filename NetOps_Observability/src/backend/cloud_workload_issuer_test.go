@@ -16,25 +16,25 @@ import (
 	"netops/backend/cloudconn"
 )
 
-func redirectIssuerKV(t *testing.T) {
+func redirectIssuerKV(t *testing.T) string {
 	t.Helper()
-	orig := kvWorkloadIssuerKeyKey
-	kvWorkloadIssuerKeyKey = filepath.Join(t.TempDir(), "issuer.key.enc")
-	t.Cleanup(func() { kvWorkloadIssuerKeyKey = orig })
+	p := filepath.Join(t.TempDir(), "issuer.key.enc")
+	t.Cleanup(cloudconn.SetIssuerKeyPathForTest(p))
+	return p
 }
 
 func TestLoadOrCreateWorkloadIssuerPersists(t *testing.T) {
-	redirectIssuerKV(t)
+	keyPath := redirectIssuerKV(t)
 	v := newTestVault(t)
-	wi, err := loadOrCreateWorkloadIssuer(v, "https://correlix.example.com/")
+	wi, err := cloudconn.LoadOrCreateWorkloadIssuer(v, "https://correlix.example.com/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wi.issuer != "https://correlix.example.com" { // trailing slash normalized
-		t.Fatalf("issuer: %q", wi.issuer)
+	if wi.Issuer() != "https://correlix.example.com" { // trailing slash normalized
+		t.Fatalf("issuer: %q", wi.Issuer())
 	}
 	// At rest the key is sealed — never plaintext PEM.
-	raw, err := platformdb.Load(kvWorkloadIssuerKeyKey)
+	raw, err := platformdb.Load(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +42,12 @@ func TestLoadOrCreateWorkloadIssuerPersists(t *testing.T) {
 		t.Fatal("signing key stored unsealed")
 	}
 	// Second load = same identity (kid), not a regenerated key.
-	wi2, err := loadOrCreateWorkloadIssuer(v, "https://correlix.example.com")
+	wi2, err := cloudconn.LoadOrCreateWorkloadIssuer(v, "https://correlix.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wi2.kid != wi.kid {
-		t.Fatalf("kid changed across loads: %s vs %s", wi.kid, wi2.kid)
+	if wi2.Kid() != wi.Kid() {
+		t.Fatalf("kid changed across loads: %s vs %s", wi.Kid(), wi2.Kid())
 	}
 }
 
@@ -55,7 +55,7 @@ func TestLoadOrCreateWorkloadIssuerRejectsBadURL(t *testing.T) {
 	redirectIssuerKV(t)
 	v := newTestVault(t)
 	for _, bad := range []string{"", "correlix.example.com", "ftp://x"} {
-		if _, err := loadOrCreateWorkloadIssuer(v, bad); err == nil {
+		if _, err := cloudconn.LoadOrCreateWorkloadIssuer(v, bad); err == nil {
 			t.Fatalf("URL %q must be rejected", bad)
 		}
 	}
@@ -79,7 +79,7 @@ func TestWorkloadWellKnownEndpoints(t *testing.T) {
 		t.Fatalf("dormant jwks: want 404, got %d", rr.Code)
 	}
 
-	wi, err := loadOrCreateWorkloadIssuer(v, "https://correlix.example.com")
+	wi, err := cloudconn.LoadOrCreateWorkloadIssuer(v, "https://correlix.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestWorkloadWellKnownEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &jwks); err != nil {
 		t.Fatal(err)
 	}
-	if len(jwks.Keys) != 1 || jwks.Keys[0]["kid"] != wi.kid {
+	if len(jwks.Keys) != 1 || jwks.Keys[0]["kid"] != wi.Kid() {
 		t.Fatalf("bad jwks: %s", rr.Body.String())
 	}
 
