@@ -93,10 +93,10 @@ func TestResolvePolicyState_PerSystem(t *testing.T) {
 		t.Fatalf("put pd (dual-enable must be legal): %v", err)
 	}
 
-	if res := sw.resolvePolicyState(ctx, "t_a", "servicenow"); res.state != policyStateActive || res.policy.ID != "sn1" {
+	if res := sw.resolvePolicyState(ctx, "t_a", "servicenow"); res.State != policyStateActive || res.Policy.ID != "sn1" {
 		t.Fatalf("sn resolution: %+v", res)
 	}
-	if res := sw.resolvePolicyState(ctx, "t_a", "pagerduty"); res.state != policyStateActive || res.policy.ID != "pd1" {
+	if res := sw.resolvePolicyState(ctx, "t_a", "pagerduty"); res.State != policyStateActive || res.Policy.ID != "pd1" {
 		t.Fatalf("pd resolution: %+v", res)
 	}
 	// second enabled PD policy → conflict at the store
@@ -106,11 +106,11 @@ func TestResolvePolicyState_PerSystem(t *testing.T) {
 		t.Fatalf("second enabled pd policy: err=%v, want conflict", err)
 	}
 	// no PD policy → opt-in default is OFF (never a default-on pager)
-	if res := sw.resolvePolicyState(ctx, "t_b", "pagerduty"); res.state != policyStateOptedOut || res.policy.Enabled {
+	if res := sw.resolvePolicyState(ctx, "t_b", "pagerduty"); res.State != policyStateOptedOut || res.Policy.Enabled {
 		t.Fatalf("pd must be opt-in, got %+v", res)
 	}
 	// SN keeps its default-on MVP fallback
-	if res := sw.resolvePolicyState(ctx, "t_b", "servicenow"); res.state != policyStateDefault || !res.policy.Enabled {
+	if res := sw.resolvePolicyState(ctx, "t_b", "servicenow"); res.State != policyStateDefault || !res.Policy.Enabled {
 		t.Fatalf("sn default lost: %+v", res)
 	}
 }
@@ -300,7 +300,7 @@ func TestResolvePolicyState_TripleSystem(t *testing.T) {
 		}
 	}
 	for _, sys := range []string{"servicenow", "pagerduty", "slack"} {
-		if res := sw.resolvePolicyState(ctx, "t_tri", sys); res.state != policyStateActive {
+		if res := sw.resolvePolicyState(ctx, "t_tri", sys); res.State != policyStateActive {
 			t.Fatalf("%s not active under triple-enable: %+v", sys, res)
 		}
 	}
@@ -344,7 +344,7 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 		Enabled: true, ExternalSystem: "pagerduty", MinVerdict: "confirmed"}); err != nil {
 		t.Fatal(err)
 	}
-	if res := sw.resolvePolicyState(ctx, canon, "pagerduty"); res.state != policyStateActive || res.policy.ID != "gpd" {
+	if res := sw.resolvePolicyState(ctx, canon, "pagerduty"); res.State != policyStateActive || res.Policy.ID != "gpd" {
 		t.Fatalf("global pagerduty policy not resolving: %+v", res)
 	}
 	// Dedup identity for the global tenant is stable and tenant-qualified.

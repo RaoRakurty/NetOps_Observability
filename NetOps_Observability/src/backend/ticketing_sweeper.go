@@ -6,7 +6,6 @@ import (
 	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -29,6 +28,15 @@ import (
 // own tenant_id from the corr_objects row, and EVERY downstream write (link
 // lookup, outbox enqueue) is stamped + scoped to that owning tenant — never a
 // request body. A tenant can only ever ticket its own correlation objects.
+
+type policyResolution = ticketing.PolicyResolution
+
+const (
+	policyStateDefault  = ticketing.PolicyStateDefault
+	policyStateActive   = ticketing.PolicyStateActive
+	policyStateOptedOut = ticketing.PolicyStateOptedOut
+	policyStateHeld     = ticketing.PolicyStateHeld
+)
 
 type ticketSweeper struct {
 	srv     *server
@@ -152,13 +160,7 @@ SELECT toString(correlation_id) AS correlation_id,
 // goes through normTenant), so canonicalizing here closes the one seam where a
 // raw row value could bypass that. It never collapses two distinct real tenant
 // ids (opaque lowercase t_… ids), only ""↔global representations.
-func canonicalCorrTenant(t string) string {
-	t = normTenant(t)
-	if t == "" {
-		return TenantGlobal
-	}
-	return t
-}
+func canonicalCorrTenant(t string) string { return ticketing.CanonicalCorrTenant(t) }
 
 // evaluate loads one object's RCA slice, decides via the owning tenant's policy,
 // and enqueues a create (or an update when an open ticket's RCA state changed).
@@ -181,7 +183,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 	// a ServiceNow ticket and a PagerDuty page for the same RCA object are
 	// separate policy decisions, separate links, separate outbox rows.
 	acted := false
-	for _, system := range ticketSystems {
+	for _, system := range ticketing.TicketSystems {
 		policy := sw.resolvePolicy(ctx, c.tenant, system)
 		if !policy.Enabled {
 			continue // opted out / held / opt-in system without a policy
@@ -209,24 +211,24 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		}
 
 		act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
-		if act.suppressionReason != "" {
+		if act.SuppressionReason != "" {
 			// NEVER a silent drop (§10): the gate's hold is observable and
 			// structured; the object re-evaluates naturally on the next sweep.
 			logWarn("ticketing", "RCA emitter action suppressed by consistency gate",
 				map[string]any{"corr_object_id": c.id, "system": system,
-					"suppression_reason": act.suppressionReason})
+					"suppression_reason": act.SuppressionReason})
 			continue
 		}
-		switch act.kind {
+		switch act.Kind {
 		case "create":
-			if err := ticketing.EnqueueCreate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			if err := ticketing.EnqueueCreate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
 				logWarn("ticketing", "sweep enqueue create failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue
 			}
 			acted = true
 		case "update":
-			if err := ticketing.EnqueueUpdate(ctx, sw.store, c.tenant, system, act.payload); err != nil {
+			if err := ticketing.EnqueueUpdate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
 				logWarn("ticketing", "sweep enqueue update failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue
@@ -237,130 +239,25 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 	return acted
 }
 
-// sweepAction is the pure outcome of evaluating one object: enqueue nothing, a
-// create, or an update — with the assembled payload for the latter two. A
-// suppressionReason means the consistency gate HELD an action the policy would
-// otherwise have emitted; the caller must surface it (log), never drop it.
-type sweepAction struct {
-	kind              string // "" | "create" | "update"
-	payload           ticketing.Payload
-	suppressionReason string // non-empty = consistency gate held the action
+// decideSweepAction delegates to the package decision (P2 RA.5); the payload
+// is assembled lazily so the package never sees main's RCA view types.
+func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, link *ticketing.Link, baseURL string, now time.Time) ticketing.SweepAction {
+	return ticketing.DecideSweepAction(facts, policy, link, now, func() ticketing.Payload {
+		return buildTicketPayload(view, facts, policy, baseURL)
+	})
 }
 
-// decideSweepAction is the I/O-free decision for one already-loaded object. A
-// create when the incident policy opens a ticket; otherwise an update when an
-// already-open ticket's RCA state moved on (payload hash changed) so an unchanged
-// state is a no-op. Deterministic, so it is unit-tested in isolation.
-//
-// Consistency gate (audit D11 at the emitter boundary): an action the policy
-// approves is still HELD when the object's facts carry a P1 contradiction
-// (facts.ConsistencyIssues) — contradictory state never reaches an external
-// system. The hold carries its reason; validation-scenario suppression (§11,
-// the rca-canary contract) already happened inside ticketing.EvalDecision and is
-// unaffected: a canary never gets this far.
-func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, link *ticketing.Link, baseURL string, now time.Time) sweepAction {
-	held := func() sweepAction {
-		return sweepAction{suppressionReason: "consistency gate (P1): " + strings.Join(facts.ConsistencyIssues, "; ")}
-	}
-	if dec := ticketing.EvalDecision(facts, policy, link, now); dec.Create {
-		if len(facts.ConsistencyIssues) > 0 {
-			return held()
-		}
-		return sweepAction{kind: "create", payload: buildTicketPayload(view, facts, policy, baseURL)}
-	}
-	if link != nil && link.Open() {
-		p := buildTicketPayload(view, facts, policy, baseURL)
-		if ticketing.PayloadHash(p) != link.LastPayloadHash {
-			if len(facts.ConsistencyIssues) > 0 {
-				return held()
-			}
-			return sweepAction{kind: "update", payload: p}
-		}
-	}
-	return sweepAction{}
-}
-
-// policyResolution is resolvePolicyState's outcome: the governing policy plus
-// HOW it came to govern, so callers (simulator, future observability) can tell
-// an active configured policy from a fallback, an opt-out, or a held conflict.
-// ticketSystems are the destinations the RCA policy engine can drive. Each
-// system resolves its OWN governing policy (the one-enabled invariant is per
-// (tenant, external_system)); ServiceNow keeps its default-on MVP fallback,
-// every other system is strictly opt-in (no policy -> no delivery).
-var ticketSystems = []string{"servicenow", "pagerduty", "slack", "jira"}
-
-type policyResolution struct {
-	policy ticketing.IncidentPolicy
-	state  string // policyStateDefault | policyStateActive | policyStateOptedOut | policyStateHeld
-}
-
-const (
-	policyStateDefault  = "default"   // tenant has no policy; safe MVP default governs
-	policyStateActive   = "active"    // exactly one enabled configured policy governs
-	policyStateOptedOut = "opted_out" // policies exist but all are disabled — tenant opted out
-	policyStateHeld     = "held"      // invariant violated (multiple enabled) — ticketing held
-)
-
-// resolvePolicy returns the incident policy that governs a tenant: a configured
-// enabled policy wins; an explicitly configured (but disabled) policy is honored
-// so a tenant can opt OUT; only a tenant with NO policy at all falls back to the
-// default-on MVP policy.
 func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system string) ticketing.IncidentPolicy {
-	return sw.resolvePolicyState(ctx, tenant, system).policy
+	return sw.resolvePolicyState(ctx, tenant, system).Policy
 }
 
-// resolvePolicyState is the single policy-selection brain (sweeper, manual
-// path, and simulator all resolve through here — never a "first row wins").
+// resolvePolicyState delegates to the single policy-selection brain
+// (ticketing.ResolvePolicyState, P2 RA.5); the invariant-violation metric bump
+// stays here (it reads srv).
 func (sw *ticketSweeper) resolvePolicyState(ctx context.Context, tenant, system string) policyResolution {
-	system = orDefault(system, "servicenow")
-	all, err := sw.store.ListPolicies(ctx, tenant, false)
-	var policies []ticketing.IncidentPolicy
-	for _, p := range all {
-		if orDefault(p.ExternalSystem, "servicenow") == system {
-			policies = append(policies, p)
+	return ticketing.ResolvePolicyState(ctx, sw.store, tenant, system, func() {
+		if sw.srv != nil {
+			sw.srv.tktPolicyMultiEnabled.Add(1)
 		}
-	}
-	if err != nil || len(policies) == 0 {
-		if system == "servicenow" {
-			// ServiceNow keeps the historical default-on MVP policy.
-			return policyResolution{policy: ticketing.DefaultIncidentPolicy(tenant), state: policyStateDefault}
-		}
-		// Paging (and any future system) is OPT-IN: no policy, no delivery.
-		off := ticketing.DefaultIncidentPolicy(tenant)
-		off.Enabled = false
-		off.ExternalSystem = system
-		off.Name = "no " + system + " policy (opt-in)"
-		return policyResolution{policy: off, state: policyStateOptedOut}
-	}
-	var enabled []ticketing.IncidentPolicy
-	for _, p := range policies {
-		if p.Enabled {
-			enabled = append(enabled, p)
-		}
-	}
-	switch len(enabled) {
-	case 1:
-		return policyResolution{policy: enabled[0], state: policyStateActive}
-	case 0:
-		// Explicitly configured but all disabled = the tenant opted OUT.
-		return policyResolution{policy: policies[0], state: policyStateOptedOut}
-	}
-	// >1 enabled should be impossible (partial unique index + write-path 409) —
-	// if legacy data or drift ever violates it, FAIL CLOSED: hold all ticketing
-	// for the tenant and say so loudly, never silently pick a winner by row
-	// order (live incident 2026-07-10: a shadowed permissive policy flooded a
-	// real PDI at ~7 tickets/min while a confirmed-only policy appeared active).
-	ids := make([]string, len(enabled))
-	for i, p := range enabled {
-		ids[i] = p.ID
-	}
-	logWarn("ticketing", "INVARIANT VIOLATION: multiple enabled incident policies — ticketing held (fail closed)",
-		map[string]any{"tenant": tenant, "policy_ids": strings.Join(ids, ","), "system": orDefault(enabled[0].ExternalSystem, "servicenow")})
-	if sw.srv != nil {
-		sw.srv.tktPolicyMultiEnabled.Add(1)
-	}
-	held := ticketing.DefaultIncidentPolicy(tenant)
-	held.Enabled = false
-	held.Name = "HELD: conflicting enabled policies"
-	return policyResolution{policy: held, state: policyStateHeld}
+	})
 }

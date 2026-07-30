@@ -276,16 +276,16 @@ func (s *server) handleIncidentPolicyTest(w http.ResponseWriter, r *http.Request
 	// (the exact ambiguity behind the 2026-07-10 shadowed-policy flood).
 	res := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicyState(r.Context(), policy.TenantID, policy.ExternalSystem)
 	switch {
-	case res.state == policyStateActive && res.policy.ID == policy.ID:
+	case res.State == policyStateActive && res.Policy.ID == policy.ID:
 		out["runtime_state"] = "active"
-	case res.state == policyStateHeld:
+	case res.State == policyStateHeld:
 		out["runtime_state"] = "held"
-	case res.state == policyStateOptedOut:
+	case res.State == policyStateOptedOut:
 		out["runtime_state"] = "opted_out"
 	default:
 		out["runtime_state"] = "shadowed"
-		out["runtime_policy_id"] = res.policy.ID
-		out["runtime_policy_name"] = res.policy.Name
+		out["runtime_policy_id"] = res.Policy.ID
+		out["runtime_policy_name"] = res.Policy.Name
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -310,10 +310,10 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 		}
 		var pdView map[string]any
 		// destinations covers EVERY policy destination (ServiceNow, PagerDuty,
-		// Slack) in ticketSystems order — the card renders all of them; the
+		// Slack) in ticketing.TicketSystems order — the card renders all of them; the
 		// status/pagerduty keys stay for older clients.
 		destinations := []map[string]any{}
-		for _, system := range ticketSystems {
+		for _, system := range ticketing.TicketSystems {
 			l, lFound, lErr := s.ticketing.GetLink(r.Context(), tenant, cross, id, system)
 			if lErr != nil || !lFound {
 				continue
@@ -705,7 +705,7 @@ func (s *server) ticketStatusForObject(r *http.Request, id string) map[string]an
 	if !found {
 		// No ITSM ticket — fall through the other policy destinations so the
 		// card isn't blind when a tenant runs PagerDuty- or Slack-only.
-		for _, system := range ticketSystems {
+		for _, system := range ticketing.TicketSystems {
 			if system == "servicenow" {
 				continue
 			}

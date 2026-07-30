@@ -31,10 +31,10 @@ import (
 // TenantIDsByOrg confers no org-scope reach, a nil CanonicalOrgID falls back to
 // bare normalization (an unknown ref won't match a real opaque id).
 type Directory struct {
-	ResolveTenantID func(ref string) (id string, ok bool)  // tenant slug-or-id → opaque id
-	TenantIDsByOrg  func(orgID string) []string            // opaque org id → its tenants' opaque ids
-	CanonicalOrgID  func(ref string) string                // org slug-or-id → opaque id
-	GlobalTenant    string                                 // the Global tenant id (sorted first)
+	ResolveTenantID func(ref string) (id string, ok bool) // tenant slug-or-id → opaque id
+	TenantIDsByOrg  func(orgID string) []string           // opaque org id → its tenants' opaque ids
+	CanonicalOrgID  func(ref string) string               // org slug-or-id → opaque id
+	GlobalTenant    string                                // the Global tenant id (sorted first)
 }
 
 func (d Directory) canonicalOrgID(ref string) string {

@@ -87,7 +87,7 @@ func TestTicketLinksAPI_TenantIsolation(t *testing.T) {
 
 // TestCorrelationTickets_DestinationsAllSystems pins the Slack blind spot fix:
 // the per-correlation ticket read must surface EVERY policy destination the
-// object was filed to, in ticketSystems order, while the legacy status /
+// object was filed to, in ticketing.TicketSystems order, while the legacy status /
 // pagerduty keys keep working for older clients.
 func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 	srv, s, fix := setupTicketingTenants(t)
@@ -117,10 +117,10 @@ func TestCorrelationTickets_DestinationsAllSystems(t *testing.T) {
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Destinations) != len(ticketSystems) {
-		t.Fatalf("destinations = %d (%+v), want all %d systems", len(out.Destinations), out.Destinations, len(ticketSystems))
+	if len(out.Destinations) != len(ticketing.TicketSystems) {
+		t.Fatalf("destinations = %d (%+v), want all %d systems", len(out.Destinations), out.Destinations, len(ticketing.TicketSystems))
 	}
-	for i, want := range ticketSystems { // servicenow, pagerduty, slack, jira
+	for i, want := range ticketing.TicketSystems { // servicenow, pagerduty, slack, jira
 		if got := out.Destinations[i]["system"]; got != want {
 			t.Fatalf("destinations[%d].system = %v, want %s", i, got, want)
 		}

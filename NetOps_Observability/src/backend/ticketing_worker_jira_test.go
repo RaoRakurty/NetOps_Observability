@@ -271,20 +271,20 @@ func TestResolvePolicyState_QuadSystemAndJiraOptIn(t *testing.T) {
 	ctx := context.Background()
 	store := ticketing.NewMemStore()
 	sw := &ticketSweeper{store: store}
-	for _, sys := range ticketSystems {
+	for _, sys := range ticketing.TicketSystems {
 		p := ticketing.IncidentPolicy{ID: "q-" + sys, TenantID: "t_quad", Name: sys, Enabled: true,
 			ExternalSystem: sys, MinVerdict: "confirmed"}
 		if err := store.PutPolicy(ctx, p); err != nil {
 			t.Fatalf("put %s: %v", sys, err)
 		}
 	}
-	for _, sys := range ticketSystems {
-		if res := sw.resolvePolicyState(ctx, "t_quad", sys); res.state != policyStateActive {
+	for _, sys := range ticketing.TicketSystems {
+		if res := sw.resolvePolicyState(ctx, "t_quad", sys); res.State != policyStateActive {
 			t.Fatalf("%s not active under quad-enable: %+v", sys, res)
 		}
 	}
 	// No Jira policy → opt-in default is OFF (never a default-on ticket stream).
-	if res := sw.resolvePolicyState(ctx, "t_other", "jira"); res.state != policyStateOptedOut || res.policy.Enabled {
+	if res := sw.resolvePolicyState(ctx, "t_other", "jira"); res.State != policyStateOptedOut || res.Policy.Enabled {
 		t.Fatalf("jira must be opt-in, got %+v", res)
 	}
 	// The policy validator accepts jira as a first-class destination.
