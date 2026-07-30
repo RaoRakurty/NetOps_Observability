@@ -18,37 +18,10 @@ import (
 
 	"netops/backend/internal/servicecat"
 
-	"strings"
 
-	"strconv"
 )
 
-// isCIDRToken allows an IPv4 CIDR or bare IPv4 (e.g. 10.0.0.0/8, 192.168.1.1).
-// Shape-validate, never quote-escape (SR-011).
-// isCIDRToken shape-validates an IPv4 CIDR (or bare IPv4) before SQL use
-// (SR-011): mask 0–32 when present, four octets 0–255, no leading zeros.
-// Kept in main for appid_overrides; the servicecat package holds its own copy
-// (duplicated BY COPY from the original — never by recall).
-func isCIDRToken(s string) bool {
-	host, mask, hasMask := strings.Cut(s, "/")
-	if hasMask {
-		m, err := strconv.Atoi(mask)
-		if err != nil || m < 0 || m > 32 {
-			return false
-		}
-	}
-	octets := strings.Split(host, ".")
-	if len(octets) != 4 {
-		return false
-	}
-	for _, o := range octets {
-		n, err := strconv.Atoi(o)
-		if err != nil || n < 0 || n > 255 || (len(o) > 1 && o[0] == '0') {
-			return false
-		}
-	}
-	return true
-}
+
 
 type svcFlowRow struct {
 	ServiceID   string  `json:"service_id"`

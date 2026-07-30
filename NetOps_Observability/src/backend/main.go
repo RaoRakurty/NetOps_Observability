@@ -1152,7 +1152,7 @@ func main() {
 	// Cloud identity-map → appid bridge (#81 P3F+1): index the cloud inventory's
 	// (private-IP/ENI/resource → app) mappings into the shared resolver so flows/logs
 	// to cloud resources name their app. Runs after the fixture load above.
-	srv.cloudApp.startRefresh(ctx)
+	srv.cloudApp.StartRefresh(ctx)
 	// Application Identity Fusion worker (#81 P4): pull vendor app events → adapters →
 	// observations → fuse → persist app_observations/app_identities. Opt-in + default-off
 	// (FUSION_WORKER_ENABLED=true) so it never runs unasked; metrics at /api/appid/fusion/status.

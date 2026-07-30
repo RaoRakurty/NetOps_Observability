@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/appid"
 	"testing"
 
 	"netops/backend/cloud"
@@ -21,12 +22,11 @@ func batchTestServer(t *testing.T) *server {
 	if err != nil {
 		t.Fatalf("roleStore: %v", err)
 	}
-	r := &cloudAppResolver{}
-	m := buildCloudKeyMap([]cloud.CloudIdentityMapping{
+	r := appid.NewCloudResolver(nil)
+	r.SeedForTest([]cloud.CloudIdentityMapping{
 		{TenantID: "acme", MatchKeyType: cloud.MatchPrivateIP, MatchKey: "10.0.1.10", AppName: "billing", Source: cloud.SrcCloudTag, Confidence: cloud.Confirmed},
 		{TenantID: "globex", MatchKeyType: cloud.MatchPrivateIP, MatchKey: "10.9.9.9", AppName: "payroll", Source: cloud.SrcCloudTag, Confidence: cloud.Confirmed},
 	})
-	r.cur.Store(&m)
 	return &server{roles: roles, cloudApp: r}
 }
 

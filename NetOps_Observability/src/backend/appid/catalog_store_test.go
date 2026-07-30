@@ -1,11 +1,9 @@
-package main
+package appid
 
 import (
 	"context"
 	"net/netip"
 	"testing"
-
-	"netops/backend/appid"
 )
 
 func TestValidateAppCatalogInput(t *testing.T) {
@@ -23,7 +21,7 @@ func TestValidateAppCatalogInput(t *testing.T) {
 		{"prefix", "10.0.0.0/8", "", false}, // empty app
 	}
 	for _, c := range cases {
-		err := validateAppCatalogInput(c.kind, c.val, c.app)
+		err := ValidateCatalogInput(c.kind, c.val, c.app)
 		if (err == nil) != c.ok {
 			t.Fatalf("validate(%q,%q,%q): ok=%v err=%v", c.kind, c.val, c.app, c.ok, err)
 		}
@@ -32,7 +30,7 @@ func TestValidateAppCatalogInput(t *testing.T) {
 
 func TestAppCatalogStoreIsolation(t *testing.T) {
 	ctx := context.Background()
-	st := &memAppCatalogStore{by: map[string]AppCatalogEntry{}}
+	st := &memCatalogStore{by: map[string]AppCatalogEntry{}}
 	a, _ := st.Create(ctx, "org-a", false, AppCatalogEntry{TenantID: "org-a", MatchKind: "prefix", MatchValue: "10.1.0.0/16", AppLabel: "A-App"})
 	b, _ := st.Create(ctx, "org-b", false, AppCatalogEntry{TenantID: "org-b", MatchKind: "prefix", MatchValue: "10.2.0.0/16", AppLabel: "B-App"})
 	g, _ := st.Create(ctx, "", true, AppCatalogEntry{TenantID: "", MatchKind: "prefix", MatchValue: "10.9.0.0/16", AppLabel: "Shared"})
@@ -68,20 +66,20 @@ func TestBuildOverrideCatalogAuthoritative(t *testing.T) {
 		{MatchKind: "prefix", MatchValue: "10.5.0.0/16", AppLabel: "Payroll"},
 		{MatchKind: "domain", MatchValue: "wiki.corp", AppLabel: "Wiki"}, // non-prefix: skipped in P1c
 	}
-	ov := buildOverrides(entries)
-	if ov.prefixes.Size() != 1 {
-		t.Fatalf("only the prefix entry should index as a prefix, size=%d", ov.prefixes.Size())
+	ov := BuildOverrides(entries)
+	if ov.Prefixes.Size() != 1 {
+		t.Fatalf("only the prefix entry should index as a prefix, size=%d", ov.Prefixes.Size())
 	}
-	if ov.domains.Size() != 1 {
-		t.Fatalf("the domain entry should index in the domain matcher, size=%d", ov.domains.Size())
+	if ov.Domains.Size() != 1 {
+		t.Fatalf("the domain entry should index in the domain matcher, size=%d", ov.Domains.Size())
 	}
-	sigs := ov.prefixes.SignalsFor(netip.MustParseAddr("10.5.1.2"))
-	if len(sigs) != 1 || sigs[0].Source != appid.SrcOperator || sigs[0].App != "Payroll" {
+	sigs := ov.Prefixes.SignalsFor(netip.MustParseAddr("10.5.1.2"))
+	if len(sigs) != 1 || sigs[0].Source != SrcOperator || sigs[0].App != "Payroll" {
 		t.Fatalf("expected an authoritative Payroll signal, got %+v", sigs)
 	}
 	// fused over an empty global catalog → confirmed
-	v := appid.NewCatalog(nil).Resolve(netip.MustParseAddr("10.5.1.2"), sigs...)
-	if v.App != "Payroll" || v.Tier != appid.Confirmed {
+	v := NewCatalog(nil).Resolve(netip.MustParseAddr("10.5.1.2"), sigs...)
+	if v.App != "Payroll" || v.Tier != Confirmed {
 		t.Fatalf("operator override should confirm Payroll, got %+v", v)
 	}
 }

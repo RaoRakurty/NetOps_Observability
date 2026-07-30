@@ -150,12 +150,12 @@ func (s *server) handleFlowsApps(w http.ResponseWriter, r *http.Request) {
 	extraFor := func(addr string) []appid.Signal {
 		var extra []appid.Signal
 		if ip, err := netip.ParseAddr(addr); err == nil {
-			extra = append(extra, ov.prefixes.SignalsFor(ip)...)
+			extra = append(extra, ov.Prefixes.SignalsFor(ip)...)
 		}
 		if sig, has := s.ngfw.signalFor(tenant, cross, addr); has {
 			extra = append(extra, sig)
 		}
-		if sig, has := s.cloudApp.signalFor(tenant, cross, addr); has {
+		if sig, has := s.cloudApp.SignalFor(tenant, cross, addr); has {
 			extra = append(extra, sig)
 		}
 		return extra

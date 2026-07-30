@@ -41,14 +41,14 @@ func (s *server) keyAppSignals(tenant string, cross bool, ov tenantOverrides, ke
 		if s.appCatalog != nil {
 			signals = append(signals, s.appCatalog.Get().SignalsFor(ip)...)
 		}
-		signals = append(signals, ov.prefixes.SignalsFor(ip)...)
+		signals = append(signals, ov.Prefixes.SignalsFor(ip)...)
 	}
 	if sig, has := s.ngfw.signalFor(tenant, cross, key); has {
 		signals = append(signals, sig)
 	}
 	// cloud inventory identity-map (private IP / resource → app) — the
 	// authoritative cloud identity, consumed for every key shape (#81 P3F+1).
-	if sig, has := s.cloudApp.signalFor(tenant, cross, key); has {
+	if sig, has := s.cloudApp.SignalFor(tenant, cross, key); has {
 		signals = append(signals, sig)
 	}
 	return signals
@@ -91,7 +91,7 @@ func (s *server) handleAppIDResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if domain != "" {
 		signals = append(signals, s.appCatalog.Domains().SignalsFor(domain)...)
-		signals = append(signals, ov.domains.SignalsFor(domain)...)
+		signals = append(signals, ov.Domains.SignalsFor(domain)...)
 	}
 	// Per-tenant attribution precedence (Wave 4 #11 slice 3): a tenant's
 	// governed class order decides winner selection among competing signals;
@@ -222,7 +222,7 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 	// whole job is to say what the engine can see.
 	pfx, dom := -1, -1
 	if ovErr == nil {
-		pfx, dom = ov.prefixes.Size(), ov.domains.Size()
+		pfx, dom = ov.Prefixes.Size(), ov.Domains.Size()
 	}
 	total := -1
 	if ovErr == nil {
@@ -235,7 +235,7 @@ func (s *server) handleAppIDStatus(w http.ResponseWriter, r *http.Request) {
 		"catalog_prefixes":       s.appCatalog.Get().Size(),
 		"catalog_domains":        s.appCatalog.Domains().Size(),
 		"ngfw_attributions":      s.ngfw.count(),
-		"cloud_attributions":     s.cloudApp.count(),
+		"cloud_attributions":     s.cloudApp.Count(),
 		"tenant_overrides":       total,
 		"tenant_override_pfx":    pfx,
 		"tenant_override_dom":    dom,

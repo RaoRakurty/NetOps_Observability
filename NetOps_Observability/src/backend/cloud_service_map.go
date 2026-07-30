@@ -29,7 +29,7 @@ func (s *server) cloudEndpointResolver(r *http.Request) func(string) (string, bo
 		if key == "" {
 			return "", false
 		}
-		if sig, ok := s.cloudApp.signalFor(tenant, cross, key); ok && sig.App != "" {
+		if sig, ok := s.cloudApp.SignalFor(tenant, cross, key); ok && sig.App != "" {
 			return sig.App, true
 		}
 		if c, ok := lookupCloudResource(idx, key); ok {

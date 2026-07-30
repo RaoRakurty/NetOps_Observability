@@ -10,11 +10,11 @@ package main
 // as the SNMP credential store) and write-only through the API.
 
 import (
-	"netops/backend/internal/snmpcred"
 	"context"
 	"errors"
 	"fmt"
 	"netops/backend/internal/chschema"
+	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/verify"
 	"strings"
 	"time"
