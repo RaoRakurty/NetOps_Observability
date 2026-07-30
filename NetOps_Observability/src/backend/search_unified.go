@@ -210,7 +210,7 @@ func (s *server) searchAccounts(ctx context.Context, tenant string, cross bool, 
 	return searchrank.CapKind(out)
 }
 
-// searchCases resolves a case-handle query (P-XXXXXX / uuid prefix) against the
+// searchCases resolves a case-handle query (P-pathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *time / uuid prefix) against the
 // caller's correlation objects. Tenant isolation is the corr_current ClickHouse
 // row policy (tenant_scope), same as every correlations read. Best-effort: a
 // storage error degrades this kind only.

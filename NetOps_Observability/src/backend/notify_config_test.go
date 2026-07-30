@@ -8,7 +8,7 @@ import (
 )
 
 func TestPublicSlackMasksSecret(t *testing.T) {
-	s := &notifyConfigStore{cfg: notify.ChannelConfig{Slack: notify.SlackConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/XXX", MinSeverity: "warning"}}}
+	s := &notifyConfigStore{cfg: notify.ChannelConfig{Slack: notify.SlackConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/pathgraph.ISOZPtr(t *timeX", MinSeverity: "warning"}}}
 	p := s.publicSlack()
 	if !p.Enabled || !p.WebhookSet || p.MinSeverity != "warning" {
 		t.Fatalf("unexpected public slack: %+v", p)

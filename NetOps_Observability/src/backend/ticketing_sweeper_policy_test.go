@@ -355,6 +355,6 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 
 // ── #103 UX-2: human display id in notification payloads ────────────────────
 // Operators reported raw hex identifiers in notifications. Every operator-facing
-// string leads with the friendly Correlix Problem ID (P-XXXXXX — the same handle
+// string leads with the friendly Correlix Problem ID (P-pathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *time — the same handle
 // the RCA Inspector and ServiceNow tickets use); the correlation UUID stays
 // canonical in dedup keys / custom details.

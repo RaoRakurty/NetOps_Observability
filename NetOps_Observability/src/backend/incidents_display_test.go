@@ -9,7 +9,7 @@ import (
 )
 
 // incidents_display_test.go — #103 UX for the Incident system: the human
-// INC-XXXXXX handle and the notified-via delivery record.
+// INC-pathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *timepathgraph.ISOZPtr(t *time handle and the notified-via delivery record.
 
 func TestIncidentDisplayID(t *testing.T) {
 	cases := []struct{ in, want string }{
