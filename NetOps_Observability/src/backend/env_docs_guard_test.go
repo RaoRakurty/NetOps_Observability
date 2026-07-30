@@ -40,12 +40,9 @@ var upperSnakeRe = regexp.MustCompile(`[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+`)
 
 // backtickSpans extracts the content of `...` spans and fenced code blocks.
 func backtickSpans(md string) []string {
-	var spans []string
 	// fenced blocks
 	fence := regexp.MustCompile("(?s)```.*?```")
-	for _, m := range fence.FindAllString(md, -1) {
-		spans = append(spans, m)
-	}
+	spans := fence.FindAllString(md, -1)
 	md = fence.ReplaceAllString(md, "")
 	inline := regexp.MustCompile("`[^`\n]+`")
 	spans = append(spans, inline.FindAllString(md, -1)...)
