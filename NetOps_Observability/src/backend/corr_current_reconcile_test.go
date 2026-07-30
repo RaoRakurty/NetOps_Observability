@@ -14,7 +14,7 @@ import (
 func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 	for name, sql := range map[string]string{
 		"backfill": chschema.CorrCurrentBackfillSQL(),
-		"drift":    corrCurrentDriftRepairSQL(7),
+		"drift":    chschema.CorrDriftRepairSQL(7),
 	} {
 		inner := sql[strings.Index(sql, "WHERE (o.tenant_id, o.correlation_id, o.version) IN ("):]
 		// The picking subquery (fold) must never reference a wide column.
@@ -33,7 +33,7 @@ func TestCorrCurrentRepairSQLStaysNarrow(t *testing.T) {
 }
 
 func TestCorrCurrentDriftScanIsTimeBounded(t *testing.T) {
-	sql := corrCurrentDriftSelect(7)
+	sql := chschema.CorrDriftSelect(7)
 	if !strings.Contains(sql, "created_at >= now() - INTERVAL 7 DAY") {
 		t.Error("drift scan must prefilter corr_objects by created_at window")
 	}
@@ -58,7 +58,7 @@ func TestCorrCurrentBackfillIsIdempotent(t *testing.T) {
 // abandon open objects forever; the janitor closes them through HISTORY
 // (auditable), wide columns never crossing the narrow fold.
 func TestOrphanClosePickIsNarrowAndBounded(t *testing.T) {
-	sql := corrOrphanClosePickSQL(24)
+	sql := chschema.CorrOrphanClosePickSQL(24)
 	if !strings.Contains(sql, "LIMIT 1 BY tenant_id, correlation_id") {
 		t.Fatal("orphan pick lost its latest-version fold")
 	}
@@ -81,11 +81,11 @@ func TestOrphanClosePickIsNarrowAndBounded(t *testing.T) {
 }
 
 func TestOrphanCloseWritesAuditableHistoryVersion(t *testing.T) {
-	sql := corrOrphanCloseSQL(24)
+	sql := chschema.CorrOrphanCloseSQL(24)
 	for _, want := range []string{
 		"INSERT INTO netops.corr_objects",
 		"version + 1, 'closed'",
-		corrOrphanCloseMarker,
+		chschema.CorrOrphanCloseMarker,
 		"now64(3)",
 		// exact-row keying: version-counter resets after engine restarts mean
 		// (tenant,id,version) alone can match two rows — created_at disambiguates.
@@ -106,7 +106,7 @@ func TestOrphanCloseWritesAuditableHistoryVersion(t *testing.T) {
 }
 
 func TestOrphanCountMatchesPick(t *testing.T) {
-	if !strings.Contains(corrOrphanCountSQL(6), "INTERVAL 6 HOUR") {
+	if !strings.Contains(chschema.CorrOrphanCountSQL(6), "INTERVAL 6 HOUR") {
 		t.Fatal("orphan count does not honor the configured threshold")
 	}
 }
