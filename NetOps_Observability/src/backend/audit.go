@@ -1,8 +1,11 @@
 package backend
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha1" // #nosec G505 -- RFC-4122 v5 name-based UUIDs (identity, not cryptography)
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,7 +13,9 @@ import (
 	"netops/backend/internal/audit"
 	"netops/backend/internal/platformdb"
 	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"netops/backend/internal/httppage"
@@ -307,4 +312,168 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	total := s.auditScopedCount(claims, q)
 	httppage.LogTruncated("/api/audit", page, len(events), total)
 	httppage.Write(w, "audit", events, page, len(events), total)
+}
+
+// ── audit → signal-spine bridge (item 121: audit as an event-feed source) ────
+//
+// The unified event feed answers "what is the network doing"; the first NOC
+// question during an incident is "what did a HUMAN change". Those records exist
+// (this trail) but in a different substrate (file/PG) than the feed
+// (ClickHouse corr_signals) — so the bridge mirrors every successfully-ALLOWED
+// mutating action onto the spine as source='audit', kind='audit_change'
+// (visible under class=changes next to config/adjacency/cloud changes).
+// Denials and errors are NOT mirrored: they are recorded in the trail but they
+// are not changes, and the feed's "what changed" answer must stay honest.
+//
+// The mirror is best-effort and asynchronous behind a BOUNDED queue (§9): the
+// audit trail itself is the durable record — a full queue or a ClickHouse
+// outage drops the MIRROR (counted + logged, §10), never blocks the request
+// path and never loses the audit row. Tenant mapping: a scoped principal's
+// action lands under its tenant (visible in that tenant's feed); a
+// platform-owner/unauthenticated event lands untagged (tenant_id ''), which
+// the strict row policy shows to the platform owner only — an owner action is
+// never leaked into a tenant's feed.
+
+// auditSignalQueueCap bounds the mirror queue (audit events are low-rate;
+// hundreds of buffered events means ClickHouse is down, not that we're busy).
+const auditSignalQueueCap = 512
+
+type auditSignalBridge struct {
+	inner   auditRepo
+	queue   chan AuditEvent
+	dropped int64 // updated atomically
+}
+
+// newAuditSignalBridge wraps the real store. No-op passthrough when ClickHouse
+// is not configured (file-only deployments keep exactly the old behavior).
+func newAuditSignalBridge(inner auditRepo) auditRepo {
+	if envOr("CLICKHOUSE_URL", "") == "" {
+		return inner
+	}
+	b := &auditSignalBridge{inner: inner, queue: make(chan AuditEvent, auditSignalQueueCap)}
+	go b.run()
+	return b
+}
+
+func (b *auditSignalBridge) List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error) {
+	return b.inner.List(tenant, cross, q)
+}
+func (b *auditSignalBridge) Count(tenant string, cross bool, q auditQuery) int {
+	return b.inner.Count(tenant, cross, q)
+}
+
+func (b *auditSignalBridge) Record(e AuditEvent) {
+	b.inner.Record(e) // the durable trail ALWAYS gets the event first
+	if !auditSignalWorthy(e) {
+		return
+	}
+	select {
+	case b.queue <- e:
+	default:
+		if n := atomic.AddInt64(&b.dropped, 1); n == 1 || n%100 == 0 {
+			logWarn("audit.bridge", "signal mirror queue full — mirror dropped, audit trail unaffected",
+				map[string]any{"dropped_total": n})
+		}
+	}
+}
+
+// auditSignalWorthy: only successfully-allowed mutations are changes. The
+// synthetic methods some call sites use (e.g. "TRIAGE") count as mutating.
+func auditSignalWorthy(e AuditEvent) bool {
+	if e.Decision != "allow" {
+		return false
+	}
+	switch e.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
+}
+
+func (b *auditSignalBridge) run() {
+	for e := range b.queue {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		row, scope := auditSignalRow(e)
+		if err := chInsertJSON(ctx, "netops.corr_signals", scope, []map[string]any{row}); err != nil {
+			logWarn("audit.bridge", "signal mirror insert failed — audit trail unaffected", errf(err))
+		}
+		cancel()
+	}
+}
+
+// auditSignalArea extracts the API area for the entity field: "/api/alerts/…"
+// → "alerts". Bounded and shape-safe (path segments only).
+func auditSignalArea(path string) string {
+	p := strings.TrimPrefix(path, "/api/")
+	if i := strings.IndexByte(p, '/'); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" {
+		return "api"
+	}
+	if len(p) > 64 {
+		p = p[:64]
+	}
+	return p
+}
+
+// auditSignalRow maps one audit event to a corr_signals row. Deterministic
+// signal_id (UUIDv5 over the event identity) keeps a retried insert idempotent
+// — the same rule the Python producers follow.
+func auditSignalRow(e AuditEvent) (row map[string]any, scope string) {
+	ts := e.Time
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	tenant := ""
+	if !e.Cross {
+		tenant = normTenant(e.Tenant)
+	}
+	if tenant == TenantGlobal {
+		tenant = "" // platform-owned, never a tenant literal on the spine
+	}
+	attrs := map[string]any{
+		"actor":  e.Actor,
+		"method": e.Method,
+		"path":   e.Path,
+		"status": e.Status,
+	}
+	attrsJSON, err := json.Marshal(attrs)
+	if err != nil || len(attrsJSON) > 2048 {
+		attrsJSON = []byte("{}")
+	}
+	scope = tenant
+	if scope == "" {
+		scope = "__all__" // deliberately platform-scoped write (visible choice)
+	}
+	return map[string]any{
+		"tenant_id":     tenant,
+		"signal_id":     uuidV5("audit|" + e.ID + "|" + e.Actor + "|" + e.Method + "|" + e.Path + "|" + strconv.FormatInt(ts.UnixNano(), 10)),
+		"ts":            ts.UTC().Format("2006-01-02 15:04:05.000"),
+		"source":        "audit",
+		"kind":          "audit_change",
+		"observer_id":   "platform-api",
+		"observer_type": "platform",
+		"modality_class": "management_plane",
+		"entity_type":   "service",
+		"entity_id":     auditSignalArea(e.Path),
+		"severity":      "info",
+		"attrs":         string(attrsJSON),
+	}, scope
+}
+
+// uuidV5 is RFC-4122 v5 (SHA-1, name-based) over a fixed platform namespace —
+// minted by hand because the tree deliberately has no uuid dependency (§6).
+func uuidV5(name string) string {
+	// Namespace: a fixed random UUID minted for the audit bridge.
+	ns := [16]byte{0x8e, 0x1f, 0x42, 0xb7, 0x5d, 0x0a, 0x4c, 0x39, 0x9b, 0x21, 0xd6, 0x44, 0x7a, 0x03, 0x5e, 0xc2}
+	h := sha1.New() // #nosec G401 -- v5 UUID identity hashing per RFC 4122, not a security control
+	h.Write(ns[:])
+	h.Write([]byte(name))
+	sum := h.Sum(nil)
+	var u [16]byte
+	copy(u[:], sum[:16])
+	u[6] = (u[6] & 0x0f) | 0x50 // version 5
+	u[8] = (u[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }

@@ -37,7 +37,7 @@ func CorrSchemaDDL() []string {
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -126,6 +126,9 @@ SETTINGS index_granularity = 8192`,
 		// 'active_verification'=6 — the Active Verification lane (bounded READ-ONLY
 		// check batteries against implicated devices) as a distinct evidence
 		// modality. Additive Enum8 value-add, same safety argument as above.
+		// Item 121: source gains 'audit'=13 — operator/API actions mirrored onto
+		// the signal spine (the audit→feed bridge, audit.go) so "what changed"
+		// includes the humans. Additive Enum8 value-add, same safety argument.
 		//
 		// HARD RULE (2026-07-09 outage): these ALTERs must always list the FULL
 		// enum — the superset of every value any deployment has ever had, kept
@@ -134,11 +137,11 @@ SETTINGS index_granularity = 8192`,
 		// a stale (subset) ALTER fails on EVERY boot against a live table that
 		// already learned the newer value — and stalls the converge list behind it
 		// (this is how corr_current failed to be created on 2026-07-09).
-		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12)`,
+		`ALTER TABLE netops.corr_signals MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,'wireless_controller'=10,'access_point'=11,'radio'=12,'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16)`,
 		`ALTER TABLE netops.corr_signals MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6)`,
-		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12)`,
+		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN source Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,'app_identity'=10,'controller'=11,'verification'=12,'audit'=13)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN observer_type Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,'flow_exporter'=4,'platform'=5,'controller'=6)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN entity_type Enum8('device'=1,'interface'=2,'path'=3,'segment'=4,'site'=5,'service'=6,'prefix'=7,'app'=8,'cloud_resource'=9,'wireless_controller'=10,'access_point'=11,'radio'=12,'bssid'=13,'wlan'=14,'wireless_client'=15,'wireless_session'=16)`,
 		`ALTER TABLE netops.corr_signals_archive MODIFY COLUMN modality_class Enum8('active_probe'=1,'passive_flow'=2,'control_plane'=3,'device_telemetry'=4,'management_plane'=5,'active_verification'=6)`,

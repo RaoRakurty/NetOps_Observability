@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13),
     kind           LowCardinality(String),   -- e.g. probe_loss, if_errors, bgp_peer_down
     observer_id    LowCardinality(String),   -- WHO measured it (independence gate)
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS netops.corr_signals_archive
     ingest_ts      DateTime64(3) DEFAULT now64(3),
     source         Enum8('flow'=1,'probe'=2,'metric'=3,'alert'=4,
                          'topology'=5,'syslog'=6,'sot_drift'=7,'trap'=8,'cloud'=9,
-                         'app_identity'=10,'controller'=11,'verification'=12),
+                         'app_identity'=10,'controller'=11,'verification'=12,'audit'=13),
     kind           LowCardinality(String),
     observer_id    LowCardinality(String),
     observer_type  Enum8('device'=1,'vantage_agent'=2,'cloud_api'=3,

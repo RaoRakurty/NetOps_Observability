@@ -133,6 +133,7 @@ class Source(str, Enum):
     APP_IDENTITY = "app_identity"  # #81 P5: fused application identity (enrichment, not a fault)
     CONTROLLER = "controller"  # NMS: vendor-controller intelligence (Meraki/vManage/Catalyst/…)
     VERIFICATION = "verification"  # RCA spec item 8: active-verification check battery results
+    AUDIT = "audit"  # item 121: operator/API actions mirrored onto the spine (audit→feed bridge)
 
 
 class ObserverType(str, Enum):

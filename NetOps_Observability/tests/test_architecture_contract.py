@@ -168,3 +168,12 @@ def test_source_enum_includes_trap_everywhere():
     SQL init, or normalized trap signals fail to insert (the bug this guards)."""
     assert "'trap'=8" in read("src", "backend", "internal", "chschema", "corr_schema.go")
     assert read("deployment", "docker", "clickhouse", "init.sql").count("'trap'=8") >= 2
+
+
+def test_source_enum_includes_audit_everywhere():
+    """Item 121: 'audit'=13 must exist in the Go DDL, the SQL init AND the
+    Python Signal model, or the audit→feed bridge inserts fail (Go) / read-back
+    raises (Python)."""
+    assert "'audit'=13" in read("src", "backend", "internal", "chschema", "corr_schema.go")
+    assert read("deployment", "docker", "clickhouse", "init.sql").count("'audit'=13") >= 2
+    assert 'AUDIT = "audit"' in read("src", "correlation", "signals.py")

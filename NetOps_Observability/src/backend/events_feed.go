@@ -18,6 +18,7 @@ package backend
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -31,14 +32,23 @@ import (
 )
 
 // Allowlists for the enum columns — shape-validate, never quote-escape (SR-011).
+// These mirror the corr_signals Enum8 values (chschema/corr_schema.go): rows of
+// EVERY source are already in the unfiltered feed — an allowlist gap only makes
+// a source un-filterable (?source= → 400), it never hides rows. Item 121 closed
+// the drift: cloud/app_identity/controller/verification existed in the schema
+// but not here, and 'audit' joins both (the audit→feed bridge, audit.go).
 var feedSources = map[string]bool{
 	"flow": true, "probe": true, "metric": true, "alert": true,
 	"topology": true, "syslog": true, "sot_drift": true, "trap": true,
+	"cloud": true, "app_identity": true, "controller": true, "verification": true,
+	"audit": true,
 }
 var feedSeverities = map[string]bool{"info": true, "warn": true, "high": true, "crit": true}
 var feedEntityTypes = map[string]bool{
 	"device": true, "interface": true, "path": true, "segment": true,
-	"site": true, "service": true, "prefix": true,
+	"site": true, "service": true, "prefix": true, "app": true, "cloud_resource": true,
+	"wireless_controller": true, "access_point": true, "radio": true,
+	"bssid": true, "wlan": true, "wireless_client": true, "wireless_session": true,
 }
 
 // sanitizeCHText keeps only characters valid in our device / path / kind / site
@@ -174,9 +184,11 @@ func (s *server) handleEventsFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	// class=changes → discrete "what changed" (Front Page panel 4). Match the
 	// change-specific sources OR any "*_change" kind (adjacency / link / neighbour
-	// changes arrive over syslog/trap, not a change-specific source).
+	// changes arrive over syslog/trap, not a change-specific source). Item 121:
+	// 'audit' joins the source list (human/API actions ARE changes) and
+	// 'cloud_audit' joins by kind (the one cloud change kind without the suffix).
 	if strings.TrimSpace(q.Get("class")) == "changes" {
-		conds = append(conds, "(source IN ('topology','sot_drift','alert') OR endsWith(kind, '_change'))")
+		conds = append(conds, "(source IN ('topology','sot_drift','alert','audit') OR endsWith(kind, '_change') OR kind = 'cloud_audit')")
 	}
 	// text filters — sanitized literals (quotes stripped, not escaped)
 	if v := sanitizeCHText(q.Get("kind")); v != "" {
@@ -208,7 +220,7 @@ SELECT toString(signal_id) AS signal_id,
        ` + chschema.ISO("ts") + ` AS ts_iso,
        toUnixTimestamp64Milli(ts) AS ts_ms,
        source, kind, severity, entity_type, entity_id, site,
-       observer_type, modality_class, metric_name, value, deviation
+       observer_type, modality_class, metric_name, value, deviation, attrs
   FROM netops.corr_signals
  WHERE ` + itemConds + `
  ORDER BY ts DESC, signal_id DESC
@@ -251,6 +263,15 @@ SELECT toString(signal_id) AS signal_id,
 			title += " (" + app + ")" // resolved name appended; otherwise UNCHANGED
 		}
 		row["title"] = title
+		// attrs is stored as a JSON string; decode so consumers get an object
+		// (actor/provider/region for changes) instead of double-encoded text. A
+		// malformed blob passes through untouched — data, never dropped.
+		if raw, ok := row["attrs"].(string); ok && raw != "" && raw != "{}" {
+			var parsed map[string]any
+			if json.Unmarshal([]byte(raw), &parsed) == nil {
+				row["attrs"] = parsed
+			}
+		}
 		row["correlation_id"] = nil // best-effort link is a follow-up (Explorer wiring)
 		items = append(items, row)
 	}
