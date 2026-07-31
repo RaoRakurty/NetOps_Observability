@@ -151,16 +151,16 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
           go install github.com/securego/gosec/v2/cmd/gosec@${{ env.GOSEC_VERSION }}
-      - name: staticcheck (tlsconfig, internalca)
-        run: staticcheck ./tlsconfig/... ./internalca/...
-      - name: gosec (tlsconfig, internalca)
-        run: gosec -quiet ./tlsconfig/... ./internalca/...
-      - name: golangci-lint (tlsconfig, internalca)
+      - name: staticcheck (tlsconfig, internalca, sealing)
+        run: staticcheck ./tlsconfig/... ./internalca/... ./sealing/...
+      - name: gosec (tlsconfig, internalca, sealing)
+        run: gosec -quiet ./tlsconfig/... ./internalca/... ./sealing/...
+      - name: golangci-lint (tlsconfig, internalca, sealing)
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: ${{ env.GOLANGCI_VERSION }}
           working-directory: NetOps_Observability/src/backend
-          args: ./tlsconfig/... ./internalca/...
+          args: ./tlsconfig/... ./internalca/... ./sealing/...
 
   full-lint:
     name: golangci-lint (repo-wide, blocking)
