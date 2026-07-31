@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -411,11 +412,138 @@ func (s *server) handleProcessorByID(w http.ResponseWriter, r *http.Request) {
 		if cross {
 			simTenant = strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", req.Event["tenant_id"])))
 		}
-		shaped, applied := processors.Simulate(rules, req.Lane, simTenant, req.Event)
-		if applied == nil {
-			applied = []processors.Applied{}
+		// The preview runs the SAME engine the compiler emits from
+		// (processors.SimulateChain) — never a parallel preview implementation.
+		res := processors.SimulateChain(rules, req.Lane, simTenant, req.Event)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"original": req.Event,
+			"event":    res.Event,
+			"applied":  res.Applied,
+			"dropped":  res.Dropped,
+		})
+		return
+	}
+
+	// GET /api/pipeline/processors/catalog — the engine describes ITSELF: the
+	// registered actions, matchers and managed rules. The wizard is generated
+	// from this, so a newly-registered plugin appears in the UI with no
+	// frontend change (spec §3/§4: registries are the extension point).
+	if rest == "catalog" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"event": shaped, "applied": applied})
+		if _, ok := s.requireAdmin(w, r); !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"actions":       processors.ActionCatalog(),
+			"matchers":      processors.MatcherCatalog(),
+			"managed_rules": processors.ManagedRules(),
+			"lanes":         []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"},
+		})
+		return
+	}
+
+	// POST /api/pipeline/processors/clone — adopt a managed rule as an
+	// editable, tenant-owned processor. Same engine, same storage; the clone
+	// just records its provenance.
+	if rest == "clone" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+			return
+		}
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var req struct {
+			ManagedRuleID string `json:"managed_rule_id"`
+			Lane          string `json:"lane"`
+			Field         string `json:"field"`
+			Order         int    `json:"order"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+			return
+		}
+		in, ok := processors.CloneManagedRule(req.ManagedRuleID, strings.ToLower(strings.TrimSpace(req.Lane)), strings.TrimSpace(req.Field))
+		if !ok {
+			writeError(w, http.StatusBadRequest, errors.New("unknown managed rule"))
+			return
+		}
+		in.Order = req.Order
+		tenant, cross := principalTenant(claims)
+		if !cross {
+			in.TenantID = tenant
+		}
+		in.CreatedBy = claims.Sub
+		if err := in.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		out, err := s.processors.Create(r.Context(), tenant, cross, in)
+		if errors.Is(err, processors.ErrLimit) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		s.regenProcessorsAsync()
+		writeJSON(w, http.StatusCreated, out)
+		return
+	}
+
+	// GET  /api/pipeline/processors/{id}/versions       — immutable history
+	// POST /api/pipeline/processors/{id}/versions/{n}   — roll back to n
+	if id, tail, isSub := strings.Cut(rest, "/"); isSub && strings.HasPrefix(tail, "versions") {
+		if !isUUIDToken(id) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid processor id"))
+			return
+		}
+		claims, ok := s.requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		if r.Method == http.MethodGet && tail == "versions" {
+			vs, found, err := s.processors.ListVersions(r.Context(), tenant, cross, id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if !found {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"versions": vs, "count": len(vs)})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasPrefix(tail, "versions/") {
+			n, err := strconv.Atoi(strings.TrimPrefix(tail, "versions/"))
+			if err != nil || n < 1 {
+				writeError(w, http.StatusBadRequest, errors.New("version must be a positive integer"))
+				return
+			}
+			out, found, err := s.processors.Rollback(r.Context(), tenant, cross, id, n, claims.Sub)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if !found {
+				http.NotFound(w, r)
+				return
+			}
+			s.regenProcessorsAsync()
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET versions or POST versions/{n}"))
 		return
 	}
 

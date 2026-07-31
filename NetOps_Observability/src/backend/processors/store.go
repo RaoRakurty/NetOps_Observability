@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -38,6 +39,9 @@ type Store interface {
 	// AllEnabled returns every tenant's enabled rules — the config writer's
 	// read (platform-side worker; never exposed through a tenant-scoped API).
 	AllEnabled(ctx context.Context) ([]Rule, error)
+	// History + rollback (versions.go). Part of the Store contract so every
+	// backend keeps an audit trail — an optional history is no history.
+	VersionStore
 }
 
 func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
@@ -57,23 +61,31 @@ func newUUIDv4() (string, error) {
 // ── file backend (default; tenant-filtered IN the store) ─────────────────────
 
 type FileStore struct {
-	mu   sync.RWMutex
-	path string
-	rows map[string]map[string]Rule // tenant → id → rule
+	mu       sync.RWMutex
+	path     string
+	rows     map[string]map[string]Rule // tenant → id → rule
+	versions []Version                  // append-only history (bounded per processor)
 }
 
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[string]map[string]Rule{}}
 	if b, err := platformdb.Load(path); err == nil {
+		// Two on-disk shapes are accepted: the ORIGINAL flat array (pre-history
+		// files must keep loading — backward compatibility is a requirement,
+		// not a nicety) and the current {rules,versions} envelope.
+		var env versionsJSON
 		var list []Rule
-		if json.Unmarshal(b, &list) == nil {
-			for _, r := range list {
-				t := normTenant(r.TenantID)
-				if s.rows[t] == nil {
-					s.rows[t] = map[string]Rule{}
-				}
-				s.rows[t][r.ID] = r
+		if json.Unmarshal(b, &env) == nil && (len(env.Rules) > 0 || len(env.Versions) > 0) {
+			list, s.versions = env.Rules, env.Versions
+		} else {
+			_ = json.Unmarshal(b, &list)
+		}
+		for _, r := range list {
+			t := normTenant(r.TenantID)
+			if s.rows[t] == nil {
+				s.rows[t] = map[string]Rule{}
 			}
+			s.rows[t][r.ID] = r
 		}
 	}
 	return s
@@ -87,7 +99,7 @@ func (s *FileStore) flushLocked() error {
 		}
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
-	b, err := json.Marshal(list)
+	b, err := marshalVersions(list, s.versions)
 	if err != nil {
 		return err
 	}
@@ -107,7 +119,8 @@ func (s *FileStore) List(_ context.Context, tenant string, cross bool) ([]Rule, 
 			out = append(out, r)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	// Listed in EXECUTION order (the order operators reason about), not recency.
+	orderRules(out)
 	return out, nil
 }
 
@@ -134,6 +147,7 @@ func (s *FileStore) Create(_ context.Context, _ string, _ bool, r Rule) (Rule, e
 	now := time.Now().UTC()
 	r.ID, r.TenantID = id, normTenant(r.TenantID)
 	r.CreatedAt, r.UpdatedAt = now, now
+	r.Version = 1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.rows[r.TenantID]) >= MaxPerTenant {
@@ -143,6 +157,7 @@ func (s *FileStore) Create(_ context.Context, _ string, _ bool, r Rule) (Rule, e
 		s.rows[r.TenantID] = map[string]Rule{}
 	}
 	s.rows[r.TenantID][r.ID] = r
+	s.appendVersionLocked(r, r.CreatedBy, "created")
 	return r, s.flushLocked()
 }
 
@@ -161,7 +176,9 @@ func (s *FileStore) Update(_ context.Context, tenant string, cross bool, id stri
 		in.ID, in.TenantID = cur.ID, cur.TenantID
 		in.CreatedBy, in.CreatedAt = cur.CreatedBy, cur.CreatedAt
 		in.UpdatedAt = time.Now().UTC()
+		in.Version = cur.Version + 1
 		byID[id] = in
+		s.appendVersionLocked(in, in.CreatedBy, "updated")
 		return in, true, s.flushLocked()
 	}
 	return Rule{}, false, nil
@@ -217,7 +234,7 @@ func ruleBlob(r Rule) ([]byte, error) {
 	return b, nil
 }
 
-const pgRuleCols = `tenant_id, rule_id, lane, rule_type, enabled, data, created_by, created_at, updated_at`
+const pgRuleCols = `tenant_id, rule_id, lane, rule_type, enabled, data, created_by, created_at, updated_at, rule_order, version, source`
 
 func scanPGRule(rows pgx.Rows) (Rule, error) {
 	var (
@@ -229,21 +246,30 @@ func scanPGRule(rows pgx.Rows) (Rule, error) {
 		by               string
 		created, updated time.Time
 	)
-	if err := rows.Scan(&tenantID, &id, &lane, &ruleType, &enabled, &blob, &by, &created, &updated); err != nil {
+	var (
+		order   int
+		version int
+		source  string
+	)
+	if err := rows.Scan(&tenantID, &id, &lane, &ruleType, &enabled, &blob, &by, &created, &updated,
+		&order, &version, &source); err != nil {
 		return Rule{}, err
 	}
 	if err := json.Unmarshal(blob, &r); err != nil {
 		return Rule{}, err
 	}
+	// Typed columns are the truth for identity/lifecycle/ordering; the blob for
+	// the rest — so a query can sort/filter without decoding JSONB.
 	r.TenantID, r.ID, r.Lane, r.Type, r.Enabled = tenantID, id, lane, ruleType, enabled
 	r.CreatedBy, r.CreatedAt, r.UpdatedAt = by, created, updated
+	r.Order, r.Version, r.Source = order, version, source
 	return r, nil
 }
 
 func (p *pgStore) list(ctx context.Context, tenant string, cross bool, where string, args ...any) ([]Rule, error) {
 	out := []Rule{}
 	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+pgRuleCols+` FROM pipeline_processors`+where+` ORDER BY created_at DESC`, args...)
+		rows, err := tx.Query(ctx, `SELECT `+pgRuleCols+` FROM pipeline_processors`+where+` ORDER BY rule_order ASC, created_at ASC, rule_id ASC`, args...)
 		if err != nil {
 			return err
 		}
@@ -284,6 +310,7 @@ func (p *pgStore) Create(ctx context.Context, tenant string, cross bool, r Rule)
 	now := time.Now().UTC()
 	r.ID, r.TenantID = id, normTenant(r.TenantID)
 	r.CreatedAt, r.UpdatedAt = now, now
+	r.Version = 1
 	blob, err := ruleBlob(r)
 	if err != nil {
 		return Rule{}, err
@@ -296,11 +323,15 @@ func (p *pgStore) Create(ctx context.Context, tenant string, cross bool, r Rule)
 		if n >= MaxPerTenant {
 			return ErrLimit
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO pipeline_processors
-		        (tenant_id, rule_id, lane, rule_type, enabled, data, created_by, created_at, updated_at)
-		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			r.TenantID, r.ID, r.Lane, r.Type, r.Enabled, blob, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
-		return err
+		if _, err := tx.Exec(ctx, `INSERT INTO pipeline_processors
+		        (tenant_id, rule_id, lane, rule_type, enabled, data, created_by, created_at, updated_at,
+		         rule_order, version, source)
+		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			r.TenantID, r.ID, r.Lane, r.Type, r.Enabled, blob, r.CreatedBy, r.CreatedAt, r.UpdatedAt,
+			r.Order, r.Version, r.Source); err != nil {
+			return err
+		}
+		return insertVersionTx(ctx, tx, r, r.CreatedBy, "created")
 	})
 	if err != nil {
 		return Rule{}, err
@@ -332,17 +363,23 @@ func (p *pgStore) Update(ctx context.Context, tenant string, cross bool, id stri
 		in.ID, in.TenantID = cur.ID, cur.TenantID
 		in.CreatedBy, in.CreatedAt = cur.CreatedBy, cur.CreatedAt
 		in.UpdatedAt = time.Now().UTC()
+		in.Version = cur.Version + 1
 		blob, err := ruleBlob(in)
 		if err != nil {
 			return err
 		}
 		ct, err := tx.Exec(ctx, `UPDATE pipeline_processors
-		    SET lane = $2, rule_type = $3, enabled = $4, data = $5, updated_at = $6
-		    WHERE rule_id = $1`, id, in.Lane, in.Type, in.Enabled, blob, in.UpdatedAt)
+		    SET lane = $2, rule_type = $3, enabled = $4, data = $5, updated_at = $6,
+		        rule_order = $7, version = $8, source = $9
+		    WHERE rule_id = $1`, id, in.Lane, in.Type, in.Enabled, blob, in.UpdatedAt,
+			in.Order, in.Version, in.Source)
 		if err != nil {
 			return err
 		}
 		if ct.RowsAffected() > 0 {
+			if err := insertVersionTx(ctx, tx, in, in.CreatedBy, "updated"); err != nil {
+				return err
+			}
 			out, found = in, true
 		}
 		return nil
@@ -365,3 +402,191 @@ func (p *pgStore) Delete(ctx context.Context, tenant string, cross bool, id stri
 
 var _ Store = (*FileStore)(nil)
 var _ Store = (*pgStore)(nil)
+
+// ── history: file backend ───────────────────────────────────────────────────
+
+// appendVersionLocked records an immutable snapshot (call with mu held).
+func (s *FileStore) appendVersionLocked(r Rule, actor, kind string) {
+	s.versions = append(s.versions, Version{
+		ProcessorID: r.ID,
+		Version:     r.Version,
+		Config:      cloneConfig(r),
+		ChangedBy:   actor,
+		ChangeKind:  kind,
+		CreatedAt:   time.Now().UTC(),
+	})
+	s.versions = trimVersions(s.versions, r.ID)
+}
+
+func (s *FileStore) ListVersions(_ context.Context, tenant string, cross bool, id string) ([]Version, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t := normTenant(tenant)
+	visible := false
+	for tid, byID := range s.rows {
+		if !cross && tid != t {
+			continue
+		}
+		if _, ok := byID[id]; ok {
+			visible = true
+			break
+		}
+	}
+	if !visible {
+		return nil, false, nil // cross-tenant id is indistinguishable from absent
+	}
+	out := []Version{}
+	for _, v := range s.versions {
+		if v.ProcessorID == id {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version > out[j].Version }) // newest first
+	return out, true, nil
+}
+
+func (s *FileStore) Rollback(_ context.Context, tenant string, cross bool, id string, version int, actor string) (Rule, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := normTenant(tenant)
+	for tid, byID := range s.rows {
+		if !cross && tid != t {
+			continue
+		}
+		cur, ok := byID[id]
+		if !ok {
+			continue
+		}
+		for _, v := range s.versions {
+			if v.ProcessorID != id || v.Version != version {
+				continue
+			}
+			// Append-only: the restored config becomes the NEXT version, so the
+			// history still shows that a rollback happened and from what.
+			next := cloneConfig(v.Config)
+			next.ID, next.TenantID = cur.ID, cur.TenantID
+			next.CreatedBy, next.CreatedAt = cur.CreatedBy, cur.CreatedAt
+			next.Version = cur.Version + 1
+			next.UpdatedAt = time.Now().UTC()
+			byID[id] = next
+			s.appendVersionLocked(next, actor, "rolled_back")
+			return next, true, s.flushLocked()
+		}
+		return Rule{}, false, nil // processor visible, that version is not
+	}
+	return Rule{}, false, nil
+}
+
+// ── history: Postgres backend (migration 0033) ──────────────────────────────
+
+// insertVersionTx appends a snapshot inside the caller's transaction, so the
+// processor write and its history entry commit together (an audit row that can
+// be lost independently of the change it records is worse than none).
+func insertVersionTx(ctx context.Context, tx pgx.Tx, r Rule, actor, kind string) error {
+	blob, err := ruleBlob(cloneConfig(r))
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO processor_versions
+	        (tenant_id, processor_id, version, config, changed_by, change_kind)
+	    VALUES ($1,$2,$3,$4,$5,$6)
+	    ON CONFLICT (tenant_id, processor_id, version) DO NOTHING`,
+		r.TenantID, r.ID, r.Version, blob, actor, kind)
+	return err
+}
+
+func (p *pgStore) ListVersions(ctx context.Context, tenant string, cross bool, id string) ([]Version, bool, error) {
+	out := []Version{}
+	visible := false
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) > 0 FROM pipeline_processors WHERE rule_id = $1`, id).Scan(&visible); err != nil {
+			return err
+		}
+		if !visible {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `SELECT processor_id, version, config, changed_by, change_kind, created_at
+		    FROM processor_versions WHERE processor_id = $1 ORDER BY version DESC`, id)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				v    Version
+				blob []byte
+			)
+			if err := rows.Scan(&v.ProcessorID, &v.Version, &blob, &v.ChangedBy, &v.ChangeKind, &v.CreatedAt); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(blob, &v.Config); err != nil {
+				return err
+			}
+			out = append(out, v)
+		}
+		return rows.Err()
+	})
+	return out, visible, err
+}
+
+func (p *pgStore) Rollback(ctx context.Context, tenant string, cross bool, id string, version int, actor string) (Rule, bool, error) {
+	var out Rule
+	found := false
+	err := p.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+pgRuleCols+` FROM pipeline_processors WHERE rule_id = $1`, id)
+		if err != nil {
+			return err
+		}
+		cur, scanErr := func() (Rule, error) {
+			defer rows.Close()
+			if !rows.Next() {
+				return Rule{}, rows.Err()
+			}
+			return scanPGRule(rows)
+		}()
+		if scanErr != nil {
+			return scanErr
+		}
+		if cur.ID == "" {
+			return nil
+		}
+		var blob []byte
+		if err := tx.QueryRow(ctx, `SELECT config FROM processor_versions
+		    WHERE processor_id = $1 AND version = $2`, id, version).Scan(&blob); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil // processor visible, that version is not
+			}
+			return err
+		}
+		var restored Rule
+		if err := json.Unmarshal(blob, &restored); err != nil {
+			return err
+		}
+		restored.ID, restored.TenantID = cur.ID, cur.TenantID
+		restored.CreatedBy, restored.CreatedAt = cur.CreatedBy, cur.CreatedAt
+		restored.Version = cur.Version + 1
+		restored.UpdatedAt = time.Now().UTC()
+		nb, err := ruleBlob(restored)
+		if err != nil {
+			return err
+		}
+		ct, err := tx.Exec(ctx, `UPDATE pipeline_processors
+		    SET lane = $2, rule_type = $3, enabled = $4, data = $5, updated_at = $6,
+		        rule_order = $7, version = $8, source = $9
+		    WHERE rule_id = $1`,
+			id, restored.Lane, restored.Type, restored.Enabled, nb, restored.UpdatedAt,
+			restored.Order, restored.Version, restored.Source)
+		if err != nil {
+			return err
+		}
+		if ct.RowsAffected() == 0 {
+			return nil
+		}
+		if err := insertVersionTx(ctx, tx, restored, actor, "rolled_back"); err != nil {
+			return err
+		}
+		out, found = restored, true
+		return nil
+	})
+	return out, found, err
+}

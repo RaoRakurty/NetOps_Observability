@@ -486,7 +486,11 @@ transforms:
 sinks:
   prometheus_internal:
     type: prometheus_exporter
-    inputs: [internal_metrics, tenant_attribution_metric]
+    # cx_processor_metrics is defined in the GENERATED processors config (second
+    # --config): one counter per Pipeline Processor that fired, so per-processor
+    # match rates are observable without an execution-log row per event. Listed
+    # here because the generated file cannot edit this sink's inputs.
+    inputs: [internal_metrics, tenant_attribution_metric, cx_processor_metrics]
     address: 0.0.0.0:9598
 
   # ── per-tenant processor hooks (item 121) ────────────────────────────────

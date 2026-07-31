@@ -1,27 +1,23 @@
 package processors
 
-// simulate.go — the Go-side preview of what the generated VRL will do to a
-// sample event ("dry-run before the pipeline", the incident-policy simulator
-// pattern). It mirrors ruleVRL's semantics rule-for-rule: same tenant guard,
-// same match ops, same builtin regexes, same mask. generate_test.go pins the
-// two together on golden cases so they cannot drift silently.
+// simulate.go — DRY RUN. Not a parallel implementation: it runs the ordered
+// chain through the SAME registries (registry.go) the compiler emits VRL from,
+// so "what the preview showed" and "what the pipeline does" are one definition
+// read twice (spec §7). generate_test.go pins the pair on golden cases.
+//
+// Nothing here mutates the caller's event: the chain runs on a deep copy.
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 )
 
-var builtinCompiled = func() map[string]*regexp.Regexp {
-	m := make(map[string]*regexp.Regexp, len(BuiltinPatterns))
-	for name, p := range BuiltinPatterns {
-		m[name] = regexp.MustCompile(p)
-	}
-	return m
-}()
+// ── path helpers (shared with the action registry) ──────────────────────────
 
-// getPath / setPath / delPath walk a validated dot-path over a JSON-shaped map.
 func getPath(ev map[string]any, field string) (any, bool) {
+	if ev == nil || field == "" {
+		return nil, false
+	}
 	segs := strings.Split(field, ".")
 	cur := any(ev)
 	for i, s := range segs {
@@ -42,6 +38,9 @@ func getPath(ev map[string]any, field string) (any, bool) {
 }
 
 func parentOf(ev map[string]any, field string) (map[string]any, string, bool) {
+	if ev == nil || field == "" {
+		return nil, "", false
+	}
 	segs := strings.Split(field, ".")
 	cur := ev
 	for _, s := range segs[:len(segs)-1] {
@@ -54,6 +53,7 @@ func parentOf(ev map[string]any, field string) (map[string]any, string, bool) {
 	return cur, segs[len(segs)-1], true
 }
 
+// toStr mirrors VRL's to_string for the value shapes JSON carries.
 func toStr(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -66,8 +66,6 @@ func toStr(v any) string {
 		}
 		return "false"
 	case float64:
-		// JSON numbers arrive as float64; render like VRL's to_string (integral
-		// values without a decimal point).
 		if t == float64(int64(t)) {
 			return strconv.FormatInt(int64(t), 10)
 		}
@@ -77,90 +75,81 @@ func toStr(v any) string {
 	}
 }
 
-// Applied describes one rule that fired during a simulation.
+// Applied is one processor that fired during a simulation.
 type Applied struct {
 	RuleID      string `json:"rule_id"`
+	Processor   string `json:"processor"` // display name (spec's `processor`)
 	Type        string `json:"type"`
-	Field       string `json:"field"`
+	Field       string `json:"field,omitempty"`
 	Description string `json:"description,omitempty"`
+	// ManagedRule names the catalog detector when the processor adopted one
+	// (the spec's "matched: Email Detector").
+	ManagedRule string `json:"managed_rule,omitempty"`
 }
 
-// Simulate applies the tenant's enabled rules for one lane to a sample event
-// and returns the shaped copy plus which rules fired. The input map is not
-// mutated. Semantics mirror the generated VRL exactly.
+// SimResult is the dry-run answer (spec §7 shape).
+type SimResult struct {
+	Event   map[string]any `json:"event"`
+	Applied []Applied      `json:"applied"`
+	// Dropped reports that a drop_event processor matched — the event would not
+	// be stored. Stated explicitly: a preview that just showed a shaped event
+	// would hide the most consequential outcome of all.
+	Dropped bool `json:"dropped"`
+}
+
+// Simulate runs the tenant's enabled processors for one lane against a sample
+// event, in the SAME order the pipeline uses, and reports what fired.
 func Simulate(rules []Rule, lane, tenant string, event map[string]any) (map[string]any, []Applied) {
+	r := SimulateChain(rules, lane, tenant, event)
+	return r.Event, r.Applied
+}
+
+// SimulateChain is Simulate with the full result (including the drop verdict).
+func SimulateChain(rules []Rule, lane, tenant string, event map[string]any) SimResult {
 	out := deepCopy(event)
-	var applied []Applied
+	applied := []Applied{}
 	tenant = strings.ToLower(strings.TrimSpace(tenant))
+
+	// Same ordering the compiler uses — determinism is the whole contract.
+	chain := make([]Rule, 0, len(rules))
 	for _, r := range rules {
-		if !r.Enabled || r.Lane != lane {
+		if r.Enabled && r.Lane == lane {
+			chain = append(chain, r)
+		}
+	}
+	orderRules(chain)
+
+	for _, r := range chain {
+		spec, ok := lookupAction(r.Type)
+		if !ok {
 			continue
 		}
-		// tenant guard: the event's own tenant_id must equal the rule's owner
-		// (the router evaluates the same predicate).
+		// Tenant guard — the same predicate the generated VRL carries.
 		evTenant := strings.ToLower(toStr(func() any { v, _ := getPath(out, "tenant_id"); return v }()))
 		if evTenant != strings.ToLower(strings.TrimSpace(r.TenantID)) || evTenant != tenant {
 			continue
 		}
 		if r.Match != nil {
-			mv, _ := getPath(out, r.Match.Field)
-			s := toStr(mv)
-			okMatch := false
-			switch r.Match.Op {
-			case "equals":
-				okMatch = s == r.Match.Value
-			case "contains":
-				okMatch = strings.Contains(s, r.Match.Value)
-			case "prefix":
-				okMatch = strings.HasPrefix(s, r.Match.Value)
-			}
-			if !okMatch {
+			m, ok := lookupMatcher(r.Match.Op)
+			if !ok || !m.Eval(out, *r.Match) {
 				continue
 			}
 		}
-		fired := false
-		switch r.Type {
-		case TypeRedactField:
-			if _, ok := getPath(out, r.Field); ok {
-				if p, leaf, ok := parentOf(out, r.Field); ok {
-					p[leaf] = Mask
-					fired = true
-				}
-			}
-		case TypeDropField:
-			if p, leaf, ok := parentOf(out, r.Field); ok {
-				if _, had := p[leaf]; had {
-					delete(p, leaf)
-					fired = true
-				}
-			}
-		case TypeSetField:
-			if p, leaf, ok := parentOf(out, r.Field); ok {
-				p[leaf] = r.Value
-				fired = true
-			}
-		case TypeRedactPattern:
-			v, ok := getPath(out, r.Field)
-			if !ok {
-				break
-			}
-			s := toStr(v)
-			var next string
-			if r.PatternKind == "builtin" {
-				next = builtinCompiled[r.Pattern].ReplaceAllString(s, Mask)
-			} else {
-				next = strings.ReplaceAll(s, r.Pattern, Mask)
-			}
-			if p, leaf, ok := parentOf(out, r.Field); ok {
-				p[leaf] = next // the write happens even when nothing matched, like VRL
-				fired = true
-			}
+		if !spec.Apply(out, r) {
+			continue
 		}
-		if fired {
-			applied = append(applied, Applied{RuleID: r.ID, Type: r.Type, Field: r.Field, Description: r.Description})
-		}
+		applied = append(applied, Applied{
+			RuleID: r.ID, Processor: r.DisplayName(), Type: r.Type,
+			Field: r.Field, Description: r.Description, ManagedRule: r.ManagedRuleID,
+		})
 	}
-	return out, applied
+
+	dropped := false
+	if v, ok := out[DropField]; ok {
+		dropped = v == true
+		delete(out, DropField) // the marker is pipeline plumbing, not part of the event
+	}
+	return SimResult{Event: out, Applied: applied, Dropped: dropped}
 }
 
 func deepCopy(m map[string]any) map[string]any {

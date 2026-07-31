@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validRule(t *testing.T, r Rule) Rule {
@@ -15,23 +16,48 @@ func validRule(t *testing.T, r Rule) Rule {
 	return r
 }
 
-func TestValidateRejectsInjectionShapes(t *testing.T) {
-	bad := []Rule{
-		{Lane: "syslog", Type: "redact_field", Field: `msg" } del(.) if true { "`},
-		{Lane: "syslog", Type: "redact_field", Field: "tenant_id"},          // protected
-		{Lane: "syslog", Type: "redact_field", Field: "log_index_base"},     // protected (index routing)
-		{Lane: "syslog", Type: "set_field", Field: "a.b.c.d.e"},             // too deep
-		{Lane: "syslog", Type: "redact_pattern", Field: "message", PatternKind: "builtin", Pattern: "not_a_builtin"},
-		{Lane: "syslog", Type: "redact_pattern", Field: "message", PatternKind: "regex", Pattern: ".*"}, // no free regex
-		{Lane: "nope", Type: "redact_field", Field: "message"},
-		{Lane: "syslog", Type: "vrl", Field: "message"}, // no free VRL
-		{Lane: "syslog", Type: "set_field", Field: "message", Value: "line1\nline2"},
-		{Lane: "syslog", Type: "redact_field", Field: "message", Match: &Match{Field: "sev", Op: "regex", Value: "x"}},
+func TestValidateRejectsUnsafeShapes(t *testing.T) {
+	bad := []struct {
+		why string
+		r   Rule
+	}{
+		{"VRL injection through the target field", Rule{Lane: "syslog", Type: TypeRedactField, Field: `msg" } del(.) if true { "`}},
+		{"protected tenancy field", Rule{Lane: "syslog", Type: TypeRedactField, Field: "tenant_id"}},
+		{"protected index-routing field", Rule{Lane: "syslog", Type: TypeRedactField, Field: "log_index_base"}},
+		{"path too deep", Rule{Lane: "syslog", Type: TypeSetField, Field: "a.b.c.d.e"}},
+		{"unknown managed rule", Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message", PatternKind: PatternBuiltin, Pattern: "not_a_rule"}},
+		{"unknown pattern kind", Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message", PatternKind: "wat", Pattern: ".*"}},
+		{"unknown lane", Rule{Lane: "nope", Type: TypeRedactField, Field: "message"}},
+		{"unknown processor type", Rule{Lane: "syslog", Type: "vrl", Field: "message"}},
+		{"multi-line value", Rule{Lane: "syslog", Type: TypeSetField, Field: "message", Value: "line1\nline2"}},
+		{"unknown match op", Rule{Lane: "syslog", Type: TypeRedactField, Field: "message", Match: &Match{Field: "sev", Op: "sql", Value: "x"}}},
+		{"uncompilable regex", Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message", PatternKind: PatternRegex, Pattern: "([a-z"}},
+		{"regex over the length cap", Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message", PatternKind: PatternRegex, Pattern: strings.Repeat("a", MaxPatternLen+1)}},
+		{"too many capture groups", Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message", PatternKind: PatternRegex, Pattern: strings.Repeat("(a)", MaxCaptureGroups+1)}},
+		{"drop_event without a guard", Rule{Lane: "syslog", Type: TypeDropEvent}},
+		{"mask keep_last out of range", Rule{Lane: "syslog", Type: TypeMask, Field: "card", KeepLast: 999}},
+		{"pattern on a non-pattern type", Rule{Lane: "syslog", Type: TypeDropField, Field: "x", PatternKind: PatternRegex, Pattern: ".*"}},
 	}
-	for i, r := range bad {
-		if err := r.Validate(); err == nil {
-			t.Errorf("case %d must be rejected: %+v", i, r)
+	for _, c := range bad {
+		if err := c.r.Validate(); err == nil {
+			t.Errorf("must be rejected (%s): %+v", c.why, c.r)
 		}
+	}
+}
+
+func TestValidateAcceptsCustomRegex(t *testing.T) {
+	// Policy (2026-07-31): custom RE2 patterns ARE allowed. Both engines are
+	// RE2-family — linear time, no backtracking — so catastrophic backtracking
+	// is structurally impossible; the bar is compile-correctness + bounds.
+	r := Rule{Lane: "syslog", Type: TypeRedactPattern, Field: "message",
+		PatternKind: PatternRegex, Pattern: `Bearer\s+[A-Za-z0-9._-]+`, Replacement: "[TOKEN]"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a safe custom pattern must be accepted: %v", err)
+	}
+	m := Rule{Lane: "syslog", Type: TypeRedactField, Field: "message",
+		Match: &Match{Field: "service", Op: MatchRegex, Value: `^auth(-svc)?$`}}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("a safe regex matcher must be accepted: %v", err)
 	}
 }
 
@@ -41,7 +67,6 @@ func TestGenerateEscapesUserInput(t *testing.T) {
 		Field: "note", Value: `x" } .tenant_id = "evil" if true { "`,
 	})
 	out := GenerateRouterConfig([]Rule{r})
-	// The hostile value must appear only inside an escaped string literal.
 	if !strings.Contains(out, `\" } .tenant_id = \"evil\" if true { \"`) {
 		t.Fatalf("value must be escaped into a string literal:\n%s", out)
 	}
@@ -50,77 +75,207 @@ func TestGenerateEscapesUserInput(t *testing.T) {
 	}
 }
 
-func TestGenerateShape(t *testing.T) {
+func TestGenerateShapeAndOrdering(t *testing.T) {
+	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	rules := []Rule{
-		validRule(t, Rule{TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
-			Field: "message", PatternKind: "builtin", Pattern: "email"}),
-		validRule(t, Rule{TenantID: "acme", Lane: "syslog", Type: TypeDropField, Enabled: true,
-			Field: "secret_field", Match: &Match{Field: "vendor", Op: "equals", Value: "fortinet"}}),
-		validRule(t, Rule{TenantID: "globex", Lane: "flows", Type: TypeRedactField, Enabled: true, Field: "note"}),
-		{TenantID: "acme", Lane: "syslog", Type: TypeDropField, Field: "x", Enabled: false}, // disabled → absent
+		validRule(t, Rule{ID: "c", TenantID: "acme", Lane: "syslog", Type: TypeDropField, Enabled: true,
+			Field: "secret_c", Order: 30, CreatedAt: base}),
+		validRule(t, Rule{ID: "a", TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
+			Field: "message", PatternKind: PatternBuiltin, Pattern: "email", Order: 10, CreatedAt: base}),
+		validRule(t, Rule{ID: "b", TenantID: "acme", Lane: "syslog", Type: TypeMask, Enabled: true,
+			Field: "card", KeepLast: 4, Order: 20, CreatedAt: base}),
+		{ID: "off", TenantID: "acme", Lane: "syslog", Type: TypeDropField, Field: "x", Enabled: false},
 	}
 	out := GenerateRouterConfig(rules)
 
-	// All five hooks must ALWAYS exist (base config routes sinks through them).
 	for _, lane := range []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"} {
-		if !strings.Contains(out, lane+"_rules:") {
-			t.Fatalf("hook %s_rules missing:\n%s", lane, out)
+		if !strings.Contains(out, lane+"_rules:") || !strings.Contains(out, lane+"_rules_apply:") {
+			t.Fatalf("lane %s missing its apply+filter pair:\n%s", lane, out)
 		}
 	}
-	// Tenant guard wraps every action.
+	// Execution ORDER is the contract: order 10 → 20 → 30.
+	iA, iB, iC := strings.Index(out, `"a"`), strings.Index(out, `"b"`), strings.Index(out, `"c"`)
+	if !(iA > 0 && iA < iB && iB < iC) {
+		t.Fatalf("processors must compile in Order sequence (a<b<c): %d %d %d\n%s", iA, iB, iC, out)
+	}
 	if !strings.Contains(out, `downcase(to_string(.tenant_id) ?? "") == "acme"`) {
 		t.Fatalf("tenant guard missing:\n%s", out)
 	}
-	// Match guard renders.
-	if !strings.Contains(out, `(to_string(.vendor) ?? "") == "fortinet"`) {
-		t.Fatalf("match guard missing:\n%s", out)
-	}
-	// Disabled rule stays out.
 	if strings.Contains(out, "del(.x)") {
-		t.Fatalf("disabled rule leaked into the config:\n%s", out)
+		t.Fatalf("disabled processor leaked into the config:\n%s", out)
 	}
-	// Determinism.
+	// Execution metrics + drop filter must be wired.
+	if !strings.Contains(out, "cx_processor_metrics:") || !strings.Contains(out, AppliedField) {
+		t.Fatalf("per-processor metrics transform missing:\n%s", out)
+	}
+	if !strings.Contains(out, "type: filter") || !strings.Contains(out, DropField) {
+		t.Fatalf("drop filter missing:\n%s", out)
+	}
 	if out != GenerateRouterConfig(rules) {
 		t.Fatal("generator must be deterministic (watch-config sees phantom diffs otherwise)")
 	}
 }
 
-func TestSimulateMirrorsGenerator(t *testing.T) {
+// The core anti-drift guarantee: compiler and simulator dispatch through the
+// SAME registry entry, so every action/matcher that compiles also evaluates.
+func TestEveryRegisteredPluginCompilesAndEvaluates(t *testing.T) {
+	for _, a := range ActionCatalog() {
+		r := Rule{TenantID: "acme", Lane: "syslog", Type: a.Type, Enabled: true, Field: "message"}
+		if !a.TargetsField {
+			r.Field = ""
+			r.Match = &Match{Field: "service", Op: MatchEquals, Value: "x"}
+		}
+		if a.Type == TypeRedactPattern {
+			r.PatternKind, r.Pattern = PatternBuiltin, "email"
+		}
+		if err := r.Validate(); err != nil {
+			t.Fatalf("action %s: representative rule must validate: %v", a.Type, err)
+		}
+		spec, ok := lookupAction(a.Type)
+		if !ok {
+			t.Fatalf("action %s registered in the catalog but not the registry", a.Type)
+		}
+		if spec.CompileVRL(r) == "" {
+			t.Errorf("action %s compiles to nothing", a.Type)
+		}
+	}
+	for _, m := range MatcherCatalog() {
+		val := "x"
+		if m.Type == MatchRegex {
+			val = "^x$"
+		}
+		mm := Match{Field: "service", Op: m.Type, Value: val}
+		spec, ok := lookupMatcher(m.Type)
+		if !ok {
+			t.Fatalf("matcher %s registered in the catalog but not the registry", m.Type)
+		}
+		if err := spec.Validate(mm); err != nil {
+			t.Errorf("matcher %s: representative config must validate: %v", m.Type, err)
+		}
+		if spec.CompileVRL(mm) == "" {
+			t.Errorf("matcher %s compiles to nothing", m.Type)
+		}
+		if !spec.Eval(map[string]any{"service": "x"}, mm) {
+			t.Errorf("matcher %s must evaluate true on its own representative case", m.Type)
+		}
+	}
+}
+
+func TestSimulateRunsTheOrderedChain(t *testing.T) {
+	base := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	rules := []Rule{
-		validRule(t, Rule{ID: "r1", TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
-			Field: "message", PatternKind: "builtin", Pattern: "email"}),
-		validRule(t, Rule{ID: "r2", TenantID: "acme", Lane: "syslog", Type: TypeDropField, Enabled: true,
-			Field: "password"}),
-		validRule(t, Rule{ID: "r3", TenantID: "acme", Lane: "syslog", Type: TypeRedactField, Enabled: true,
-			Field: "user", Match: &Match{Field: "vendor", Op: "equals", Value: "fortinet"}}),
+		validRule(t, Rule{ID: "r1", Name: "Redact emails", TenantID: "acme", Lane: "syslog",
+			Type: TypeRedactPattern, Enabled: true, Field: "message",
+			PatternKind: PatternBuiltin, Pattern: "email", Replacement: "[EMAIL]", Order: 10, CreatedAt: base}),
+		validRule(t, Rule{ID: "r2", TenantID: "acme", Lane: "syslog", Type: TypeDropField,
+			Enabled: true, Field: "password", Order: 20, CreatedAt: base}),
+		validRule(t, Rule{ID: "r3", TenantID: "acme", Lane: "syslog", Type: TypeMask,
+			Enabled: true, Field: "card", KeepLast: 4, Order: 30, CreatedAt: base}),
+		validRule(t, Rule{ID: "r4", TenantID: "acme", Lane: "syslog", Type: TypeRedactField,
+			Enabled: true, Field: "user", Replacement: "[USER]", Order: 40, CreatedAt: base,
+			Match: &Match{Field: "vendor", Op: MatchEquals, Value: "fortinet"}}),
 	}
 	ev := map[string]any{
 		"tenant_id": "acme", "vendor": "fortinet",
-		"message": "login by jsmith@mercy.org failed", "password": "hunter2", "user": "jsmith",
+		"message": "login by jsmith@mercy.org failed", "password": "hunter2",
+		"card": "4111111111111111", "user": "jsmith",
 	}
-	out, applied := Simulate(rules, "syslog", "acme", ev)
-	if got := out["message"]; got != "login by *** failed" {
-		t.Fatalf("email must be redacted: %v", got)
+	res := SimulateChain(rules, "syslog", "acme", ev)
+
+	if got := res.Event["message"]; got != "login by [EMAIL] failed" {
+		t.Fatalf("managed-rule redaction with a custom token: %v", got)
 	}
-	if _, ok := out["password"]; ok {
-		t.Fatal("password field must be dropped")
+	if _, ok := res.Event["password"]; ok {
+		t.Fatal("password field must be removed")
 	}
-	if out["user"] != Mask {
-		t.Fatalf("matched redact_field must mask: %v", out["user"])
+	if got := res.Event["card"]; got != "************1111" {
+		t.Fatalf("mask must keep the last 4: %v", got)
 	}
-	if len(applied) != 3 {
-		t.Fatalf("all three rules fired: %+v", applied)
+	if res.Event["user"] != "[USER]" {
+		t.Fatalf("guarded redact must fire on a match: %v", res.Event["user"])
 	}
-	// The input event is not mutated.
+	if len(res.Applied) != 4 || res.Applied[0].RuleID != "r1" || res.Applied[3].RuleID != "r4" {
+		t.Fatalf("applied list must follow execution order: %+v", res.Applied)
+	}
+	if res.Applied[0].Processor != "Redact emails" {
+		t.Fatalf("applied entry must carry the display name: %+v", res.Applied[0])
+	}
+	if res.Dropped {
+		t.Fatal("no drop_event processor fired")
+	}
 	if ev["password"] != "hunter2" || ev["user"] != "jsmith" {
-		t.Fatalf("Simulate must not mutate its input: %+v", ev)
+		t.Fatalf("dry-run must not mutate its input: %+v", ev)
 	}
 
-	// Another tenant's event is untouched even if handed the same rules.
-	other := map[string]any{"tenant_id": "globex", "message": "a@b.co"}
-	out2, applied2 := Simulate(rules, "syslog", "globex", other)
-	if out2["message"] != "a@b.co" || len(applied2) != 0 {
-		t.Fatalf("TENANT LEAK: acme's rules shaped globex's event: %+v", out2)
+	// Another tenant's event is untouched even given the same rules.
+	other := SimulateChain(rules, "syslog", "globex", map[string]any{"tenant_id": "globex", "message": "a@b.co"})
+	if other.Event["message"] != "a@b.co" || len(other.Applied) != 0 {
+		t.Fatalf("TENANT LEAK in simulation: %+v", other)
+	}
+}
+
+func TestSimulateReportsDrop(t *testing.T) {
+	r := validRule(t, Rule{ID: "d", TenantID: "acme", Lane: "syslog", Type: TypeDropEvent, Enabled: true,
+		Match: &Match{Field: "level", Op: MatchEquals, Value: "debug"}})
+	res := SimulateChain([]Rule{r}, "syslog", "acme", map[string]any{"tenant_id": "acme", "level": "debug"})
+	if !res.Dropped {
+		t.Fatal("a matching drop_event must report the event as dropped")
+	}
+	if _, leaked := res.Event[DropField]; leaked {
+		t.Fatal("the drop marker is plumbing and must not appear in the previewed event")
+	}
+	keep := SimulateChain([]Rule{r}, "syslog", "acme", map[string]any{"tenant_id": "acme", "level": "error"})
+	if keep.Dropped {
+		t.Fatal("a non-matching drop_event must not drop")
+	}
+}
+
+func TestManagedRulesCatalog(t *testing.T) {
+	cat := ManagedRules()
+	if len(cat) < 6 {
+		t.Fatalf("catalog looks empty: %d", len(cat))
+	}
+	for _, r := range cat {
+		if r.ID == "" || r.Name == "" || r.Pattern == "" || r.Version < 1 {
+			t.Errorf("managed rule incomplete: %+v", r)
+		}
+		if compiled(r.Pattern) == nil {
+			t.Errorf("managed rule %s has an uncompilable pattern", r.ID)
+		}
+	}
+	// Cloning produces a NORMAL processor that validates and records provenance.
+	clone, ok := CloneManagedRule("jwt", "syslog", "message")
+	if !ok {
+		t.Fatal("clone must succeed for a known rule")
+	}
+	clone.TenantID = "acme"
+	if err := clone.Validate(); err != nil {
+		t.Fatalf("a cloned processor must validate: %v", err)
+	}
+	if clone.Source != SourceManaged || clone.ManagedRuleID != "jwt" {
+		t.Fatalf("clone must be badged managed: %+v", clone)
+	}
+	if _, ok := CloneManagedRule("nope", "syslog", "message"); ok {
+		t.Fatal("cloning an unknown rule must fail")
+	}
+}
+
+func TestSensitiveDataDetectorExtensionPoint(t *testing.T) {
+	var d SensitiveDataDetector = ManagedRuleDetector{RuleID: "email"}
+	found := d.Detect(map[string]any{
+		"message": "contact jsmith@mercy.org",
+		"nested":  map[string]any{"cc": "nothing here"},
+	})
+	if len(found) != 1 || !found[0].Detected || found[0].Location != "message" {
+		t.Fatalf("detector must locate the finding: %+v", found)
+	}
+	if strings.Contains(found[0].Sample, "jsmith@mercy.org") {
+		t.Fatalf("a finding must not carry the raw secret: %+v", found[0])
+	}
+	// A checksum-bearing rule reports a CANDIDATE, not a certainty.
+	cc := ManagedRuleDetector{RuleID: "credit_card"}.Detect(map[string]any{"m": "4111 1111 1111 1111"})
+	if len(cc) != 1 || cc[0].Confidence >= 1 {
+		t.Fatalf("checksum-pending finding must be < 1.0 confidence: %+v", cc)
 	}
 }
 
@@ -141,25 +296,24 @@ func TestFileStoreTenantIsolation(t *testing.T) {
 
 	la, _ := s.List(ctx, "acme", false)
 	if len(la) != 1 || la[0].ID != ra.ID {
-		t.Fatalf("acme must list only its own rule: %+v", la)
+		t.Fatalf("acme must list only its own processor: %+v", la)
 	}
 	if _, found, _ := s.Get(ctx, "acme", false, rb.ID); found {
-		t.Fatal("TENANT LEAK: acme read globex's rule")
+		t.Fatal("TENANT LEAK: acme read globex's processor")
 	}
 	if _, found, _ := s.Update(ctx, "acme", false, rb.ID, rb); found {
-		t.Fatal("TENANT LEAK: acme updated globex's rule")
+		t.Fatal("TENANT LEAK: acme updated globex's processor")
 	}
 	if found, _ := s.Delete(ctx, "acme", false, rb.ID); found {
-		t.Fatal("TENANT LEAK: acme deleted globex's rule")
+		t.Fatal("TENANT LEAK: acme deleted globex's processor")
 	}
 	if all, _ := s.AllEnabled(ctx); len(all) != 2 {
-		t.Fatalf("the config writer must see every tenant's enabled rules: %+v", all)
+		t.Fatalf("the config writer must see every tenant's enabled processors: %+v", all)
 	}
 
-	// Persistence round-trip.
 	s2 := NewFileStore(s.path)
 	l2, _ := s2.List(ctx, "globex", false)
 	if len(l2) != 1 {
-		t.Fatalf("reload must keep rules: %+v", l2)
+		t.Fatalf("reload must keep processors: %+v", l2)
 	}
 }

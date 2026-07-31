@@ -1,24 +1,31 @@
-// Package processors holds the per-tenant ingest processor rules (tracker item
-// 121, the #53 "UI processor editor" remnant): operator-declared redact /
-// drop-field / set-field shaping applied in the Vector ROUTER, just before the
-// storage sinks (OpenSearch / ClickHouse), scoped to the owning tenant.
+// Package processors is the Pipeline Processors framework (tracker item 121 +
+// the 2026-07-31 framework spec): tenant-scoped, ordered, versioned log
+// processing that runs against incoming events BEFORE storage.
 //
-// Zero-trust design decisions (§3, §15-adjacent):
-//   - Rules are STRUCTURED, never free-form VRL and never free-form regex. A
-//     pattern is either a built-in (email / ipv4 / mac) whose regex is a fixed
-//     constant of this package, or a LITERAL string. User input is only ever
-//     embedded as an escaped VRL string literal — there is no way to write
-//     syntax through a rule.
-//   - Every generated action is wrapped in a tenant guard derived from the
-//     rule's server-stamped TenantID; a rule can never touch another tenant's
-//     events.
-//   - Attribution/lifecycle fields the pipeline itself stamps are protected —
-//     a rule cannot target them, so shaping can never break tenancy routing.
+//	Incoming logs → router → per-tenant processor chain → storage
 //
-// Known v1 limitation (documented in docs/design/pipeline-processors.md): the
-// hooks run in the router, the terminal writer for stored data. The Python
-// correlation engine consumes the Kafka topics BEFORE the router, so derived
-// corr_signals are not shaped by these rules.
+// Division of responsibility (deliberate, and the reason this scales):
+//   - Go OWNS the model: types, matchers, actions, ordering, validation,
+//     managed-rule catalog, versioning, and the dry-run simulator.
+//   - Vector EXECUTES: the pure generator (generate.go) compiles the ordered
+//     chain into VRL the router runs at the edge. The Go backend has no Kafka
+//     client by design (CLAUDE.md §6), so an inline Go stage on the ingest path
+//     would mean a new service and a new dependency; compiling to the executor
+//     already in the path costs neither and keeps hot-reload + fail-safe
+//     rollback (Vector keeps the previous topology if a config fails to load).
+//   - simulate.go mirrors the generator's semantics exactly so dry-run answers
+//     what the pipeline will actually do (generate_test.go pins the two).
+//
+// Zero-trust posture (§3, §15-adjacent):
+//   - user input reaches the generated config ONLY as an escaped VRL string
+//     literal or a validated regex — never as syntax;
+//   - every action is wrapped in a tenant guard from the server-stamped owner;
+//   - pipeline-owned fields (tenancy/time/index routing) cannot be targeted.
+//
+// On regex safety: Go's regexp and Vector's Rust engine are both RE2-family —
+// linear time, no backtracking — so catastrophic backtracking is STRUCTURALLY
+// impossible here. Custom patterns are therefore accepted, bounded and
+// compile-checked (validateRegex) rather than forbidden.
 package processors
 
 import (
@@ -29,37 +36,76 @@ import (
 	"time"
 )
 
-// Lanes a rule may attach to — exactly the router lanes with a storage sink.
+// Lanes a processor may attach to — exactly the router lanes with a storage sink.
 var Lanes = map[string]bool{
 	"applogs": true, "syslog": true, "snmptrap": true, "cloudlogs": true, "flows": true,
 }
 
-// Types of shaping a rule can do.
+// Processor types. The first four shipped in the initial cut; mask and
+// drop_event complete the spec's set. The framework is open by construction:
+// a new type is a case in the generator + simulator and an entry here.
 const (
-	TypeRedactField   = "redact_field"   // field value → "***"
-	TypeRedactPattern = "redact_pattern" // builtin/literal pattern inside a field → "***"
+	TypeRedactField   = "redact_field"   // whole field value → replacement
+	TypeRedactPattern = "redact_pattern" // matches inside a field → replacement
+	TypeMask          = "mask"           // partial hide: keep the last N chars
 	TypeDropField     = "drop_field"     // delete the field
-	TypeSetField      = "set_field"      // set the field to a literal value
+	TypeSetField      = "set_field"      // set the field to a literal
+	TypeDropEvent     = "drop_event"     // drop the whole event (counted, never silent)
 )
 
 var ruleTypes = map[string]bool{
-	TypeRedactField: true, TypeRedactPattern: true, TypeDropField: true, TypeSetField: true,
+	TypeRedactField: true, TypeRedactPattern: true, TypeMask: true,
+	TypeDropField: true, TypeSetField: true, TypeDropEvent: true,
 }
 
-// Builtin patterns — the ONLY regexes a rule can invoke. RE2-safe and equally
-// valid in Rust's regex crate (the syntax used is the shared subset), so the Go
-// preview and the Vector runtime agree.
-var BuiltinPatterns = map[string]string{
-	"email": `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`,
-	"ipv4":  `\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`,
-	"mac":   `\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b`,
+// TypeLabel is the operator-facing name of a processor type (UI + audit).
+var TypeLabel = map[string]string{
+	TypeRedactField:   "Redact field",
+	TypeRedactPattern: "Redact pattern",
+	TypeMask:          "Mask",
+	TypeDropField:     "Remove field",
+	TypeSetField:      "Set field",
+	TypeDropEvent:     "Drop event",
 }
 
-// Mask replaces redacted content (mirrors ai/redact.go's dialect).
+// Matcher operators. equals/contains/prefix shipped first; regex + attribute
+// complete the spec's matching engine. `attribute` is equals on a named field
+// (service=authentication) — kept distinct from `equals` so the UI can offer
+// the operator's vocabulary and future attribute semantics can diverge.
+const (
+	MatchEquals    = "equals"
+	MatchContains  = "contains"
+	MatchPrefix    = "prefix"
+	MatchRegex     = "regex"
+	MatchAttribute = "attribute"
+)
+
+// Processor provenance (spec §1 "source").
+const (
+	SourceCustom  = "custom"
+	SourceManaged = "managed"
+)
+
+// Pattern kinds for redact_pattern / regex matchers.
+const (
+	PatternBuiltin = "builtin" // a Managed Rule id (managed.go) — versioned, read-only
+	PatternLiteral = "literal" // exact text, regex-escaped before use
+	PatternRegex   = "regex"   // operator-supplied RE2 pattern (validated)
+)
+
+// Mask replaces redacted content when a processor declares no replacement.
 const Mask = "***"
 
-// protectedFields are pipeline-stamped attribution/lifecycle fields a rule may
-// never TARGET (matching on them read-only is fine). Touching these could
+// Limits (bounded by construction, §9).
+const (
+	MaxReplacementLen = 64
+	MaxPatternLen     = 256
+	MaxCaptureGroups  = 9
+	MaxOrder          = 9999
+)
+
+// protectedFields are pipeline-stamped attribution/lifecycle fields a processor
+// may never TARGET (matching on them read-only is fine). Touching these could
 // re-route another tenant's documents or corrupt the time axis.
 var protectedFields = map[string]bool{
 	"tenant_id": true, "tenant_seg": true, "tenant_attribution": true,
@@ -71,33 +117,83 @@ var protectedFields = map[string]bool{
 // spaces, no indexing syntax. What matches here embeds verbatim as a VRL path.
 var fieldPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}(\.[A-Za-z_][A-Za-z0-9_]{0,63}){0,3}$`)
 
-// Match is an optional per-rule guard: apply only when the event field matches.
+// Match is the optional per-processor guard: apply only when the event matches.
 type Match struct {
 	Field string `json:"field"`
-	Op    string `json:"op"` // equals | contains | prefix
+	Op    string `json:"op"` // equals | contains | prefix | regex | attribute
 	Value string `json:"value"`
 }
 
-var matchOps = map[string]bool{"equals": true, "contains": true, "prefix": true}
-
-// Rule is one tenant-owned shaping rule.
+// Rule is one tenant-owned processor. (Named Rule for wire compatibility with
+// the shipped API; it IS the spec's Processor entity.)
 type Rule struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenant_id,omitempty"`
 
+	// Name is the operator-facing label ("Redact customer emails"). Optional for
+	// wire compatibility — DisplayName() falls back to a derived description.
+	Name string `json:"name,omitempty"`
+
 	Lane        string `json:"lane"`
 	Type        string `json:"type"`
-	Field       string `json:"field"`                  // target (all types)
-	Pattern     string `json:"pattern,omitempty"`      // redact_pattern: builtin name or literal
-	PatternKind string `json:"pattern_kind,omitempty"` // "builtin" | "literal"
+	Field       string `json:"field"`                  // target (all types except drop_event)
+	Pattern     string `json:"pattern,omitempty"`      // managed-rule id, literal, or regex
+	PatternKind string `json:"pattern_kind,omitempty"` // builtin | literal | regex
 	Value       string `json:"value,omitempty"`        // set_field
+	// Replacement is what redact/mask writes ("[EMAIL]"); "" → Mask ("***").
+	Replacement string `json:"replacement,omitempty"`
+	// KeepLast is mask's tail length: 4 → "************1111". 0 → 4 (the
+	// PCI-style default operators expect).
+	KeepLast    int    `json:"keep_last,omitempty"`
 	Match       *Match `json:"match,omitempty"`
 	Description string `json:"description,omitempty"`
+
+	// Order is the execution priority within a lane (ascending; ties broken by
+	// created_at then id, so execution is DETERMINISTIC — spec principle 4).
+	Order int `json:"order"`
+
+	// ManagedRuleID records that this processor was cloned from a managed rule,
+	// so the catalog can show adoption and a future rule-version bump can offer
+	// an upgrade. Empty for hand-authored processors.
+	ManagedRuleID string `json:"managed_rule_id,omitempty"`
+	// Source is the provenance badge: "custom" (hand-authored) or "managed"
+	// (adopted from the catalog). Derived on write from ManagedRuleID.
+	Source string `json:"source,omitempty"`
+	// Version increments on every saved edit; processor_versions keeps the
+	// history and rollback restores one (immutable audit — spec §10).
+	Version int `json:"version"`
 
 	Enabled   bool      `json:"enabled"`
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// DisplayName is the processor's operator-facing name (never empty).
+func (r Rule) DisplayName() string {
+	if n := strings.TrimSpace(r.Name); n != "" {
+		return n
+	}
+	if d := strings.TrimSpace(r.Description); d != "" {
+		return d
+	}
+	return TypeLabel[r.Type] + " · " + r.Field
+}
+
+// ReplacementOrDefault is what a redact/mask action writes.
+func (r Rule) ReplacementOrDefault() string {
+	if s := strings.TrimSpace(r.Replacement); s != "" {
+		return s
+	}
+	return Mask
+}
+
+// KeepLastOrDefault is mask's retained tail length.
+func (r Rule) KeepLastOrDefault() int {
+	if r.KeepLast > 0 {
+		return r.KeepLast
+	}
+	return 4
 }
 
 func printable(s string) bool {
@@ -123,66 +219,113 @@ func validField(name, f string) error {
 	return nil
 }
 
+// validateRegex accepts an operator-supplied pattern.
+//
+// Both execution engines are RE2-family (Go regexp here, the Rust regex crate
+// in Vector): matching is LINEAR in input length with no backtracking, so the
+// classic "catastrophic backtracking" DoS is impossible by construction — the
+// safety bar is therefore compile-correctness and bounded size, not a
+// hand-rolled complexity heuristic. Lookaround/backreferences are rejected by
+// the RE2 compiler itself, which is exactly what we want: patterns that would
+// behave differently in the two engines are refused here rather than silently
+// disabling a customer's redaction at the edge.
+func validateRegex(name, pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	if len(pattern) > MaxPatternLen {
+		return fmt.Errorf("%s is capped at %d characters", name, MaxPatternLen)
+	}
+	if !printable(pattern) {
+		return fmt.Errorf("%s must be a single line of printable characters", name)
+	}
+	// The VRL raw-literal form r'…' cannot escape a single quote; the generator
+	// falls back to a quoted literal for those, so reject only what neither
+	// form can carry.
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("%s is not a valid pattern: %w", name, err)
+	}
+	if n := re.NumSubexp(); n > MaxCaptureGroups {
+		return fmt.Errorf("%s uses %d capture groups (max %d)", name, n, MaxCaptureGroups)
+	}
+	return nil
+}
+
 // Validate checks and normalizes the operator-supplied fields (zero-trust on
 // the payload). Server-owned stamps (id/tenant/created_*) are not touched.
 func (r *Rule) Validate() error {
+	r.Name = strings.TrimSpace(r.Name)
+	if err := validLiteral("name", r.Name, 128); err != nil {
+		return err
+	}
 	r.Lane = strings.ToLower(strings.TrimSpace(r.Lane))
 	if !Lanes[r.Lane] {
 		return errors.New("lane must be one of applogs, syslog, snmptrap, cloudlogs, flows")
 	}
 	r.Type = strings.ToLower(strings.TrimSpace(r.Type))
 	if !ruleTypes[r.Type] {
-		return errors.New("type must be one of redact_field, redact_pattern, drop_field, set_field")
+		return errors.New("type must be one of redact_field, redact_pattern, mask, drop_field, set_field, drop_event")
 	}
-	r.Field = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Field), "."))
-	if err := validField("field", r.Field); err != nil {
-		return err
-	}
-	if protectedFields[strings.ToLower(r.Field)] {
-		return fmt.Errorf("field %q is pipeline-owned (tenancy/time attribution) and cannot be targeted", r.Field)
+	if r.Order < 0 || r.Order > MaxOrder {
+		return fmt.Errorf("order must be 0..%d", MaxOrder)
 	}
 	r.Description = strings.TrimSpace(r.Description)
 	if err := validLiteral("description", r.Description, 256); err != nil {
 		return err
 	}
-	switch r.Type {
-	case TypeRedactPattern:
-		r.PatternKind = strings.ToLower(strings.TrimSpace(r.PatternKind))
-		r.Pattern = strings.TrimSpace(r.Pattern)
-		switch r.PatternKind {
-		case "builtin":
-			if _, ok := BuiltinPatterns[r.Pattern]; !ok {
-				return fmt.Errorf("unknown builtin pattern %q (use email, ipv4, mac)", r.Pattern)
-			}
-		case "literal":
-			if r.Pattern == "" {
-				return errors.New("a literal pattern must not be empty")
-			}
-			if err := validLiteral("pattern", r.Pattern, 256); err != nil {
-				return err
-			}
-		default:
-			return errors.New("pattern_kind must be builtin or literal")
-		}
-	case TypeSetField:
-		if err := validLiteral("value", r.Value, 256); err != nil {
+	r.Replacement = strings.TrimSpace(r.Replacement)
+	if err := validLiteral("replacement", r.Replacement, MaxReplacementLen); err != nil {
+		return err
+	}
+
+	// Provenance badge (spec §1): managed = adopted from the catalog.
+	if strings.TrimSpace(r.ManagedRuleID) != "" {
+		r.Source = SourceManaged
+	} else {
+		r.Source = SourceCustom
+	}
+
+	action, ok := lookupAction(r.Type)
+	if !ok {
+		return fmt.Errorf("unknown processor type %q", r.Type)
+	}
+
+	// An action that acts on the WHOLE event takes no target field.
+	if !action.TargetsField() {
+		r.Field = ""
+	} else {
+		r.Field = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Field), "."))
+		if err := validField("field", r.Field); err != nil {
 			return err
 		}
-	default:
-		if r.Pattern != "" || r.PatternKind != "" {
-			return fmt.Errorf("%s does not take a pattern", r.Type)
+		if protectedFields[strings.ToLower(r.Field)] {
+			return fmt.Errorf("field %q is pipeline-owned (tenancy/time attribution) and cannot be targeted", r.Field)
 		}
 	}
+
+	// Type-specific validation is the ACTION's own (registry.go) — one
+	// definition per action, shared by the compiler and the simulator.
+	r.PatternKind = strings.ToLower(strings.TrimSpace(r.PatternKind))
+	r.Pattern = strings.TrimSpace(r.Pattern)
+	if r.Type != TypeRedactPattern && (r.Pattern != "" || r.PatternKind != "") {
+		return fmt.Errorf("%s does not take a pattern", r.Type)
+	}
+	if err := action.Validate(*r); err != nil {
+		return err
+	}
+
 	if r.Match != nil {
 		r.Match.Field = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Match.Field), "."))
 		if err := validField("match.field", r.Match.Field); err != nil {
 			return err
 		}
 		r.Match.Op = strings.ToLower(strings.TrimSpace(r.Match.Op))
-		if !matchOps[r.Match.Op] {
-			return errors.New("match.op must be equals, contains or prefix")
+		matcher, ok := lookupMatcher(r.Match.Op)
+		if !ok {
+			return errors.New("match.op must be equals, contains, prefix, regex or attribute")
 		}
-		if err := validLiteral("match.value", r.Match.Value, 256); err != nil {
+		if err := matcher.Validate(*r.Match); err != nil {
 			return err
 		}
 	}

@@ -322,18 +322,36 @@ def test_every_storage_sink_routes_through_its_processor_hook():
 
 
 def test_processor_hooks_shape_after_attribution_not_before():
-    """Hooks consume the *_tagged / flows_decoded transforms so tenant
-    attribution (and its metric) is measured BEFORE any tenant rule runs, and
-    the tenant guard inside the generated VRL has a tenant_id to read."""
+    """Each lane is a PAIR: <lane>_rules_apply runs the ordered processor chain
+    (a remap), <lane>_rules filters events a drop_event processor marked (a
+    filter). The apply stage consumes the *_tagged / flows_decoded transforms so
+    tenant attribution (and its metric) is measured BEFORE any tenant rule runs,
+    and the tenant guard inside the generated VRL has a tenant_id to read."""
     hooks = processors_default()["transforms"]
     expected_inputs = {
-        "applogs_rules": "applogs_tagged", "syslog_rules": "syslog_tagged",
-        "snmptrap_rules": "snmptrap_tagged", "cloudlogs_rules": "cloudlogs_tagged",
-        "flows_rules": "flows_decoded",
+        "applogs": "applogs_tagged", "syslog": "syslog_tagged",
+        "snmptrap": "snmptrap_tagged", "cloudlogs": "cloudlogs_tagged",
+        "flows": "flows_decoded",
     }
-    for hook, inp in expected_inputs.items():
-        assert hooks[hook]["type"] == "remap"
-        assert hooks[hook]["inputs"] == [inp], f"{hook} must consume {inp}"
+    for lane, inp in expected_inputs.items():
+        apply_name, hook_name = f"{lane}_rules_apply", f"{lane}_rules"
+        assert hooks[apply_name]["type"] == "remap"
+        assert hooks[apply_name]["inputs"] == [inp], f"{apply_name} must consume {inp}"
+        # The sink-facing hook is the drop FILTER over the apply stage. A filter
+        # (not `abort`) keeps deliberate drops out of the dead-letter lane, which
+        # is reserved for malformed records — an operator's drop is not a failure.
+        assert hooks[hook_name]["type"] == "filter"
+        assert hooks[hook_name]["inputs"] == [apply_name]
+
+
+def test_processor_metrics_are_exported():
+    """Per-processor match counters must reach the exporter — a metric that is
+    computed and never exported cannot be alerted on (the F-11 lesson)."""
+    gen = processors_default()["transforms"]
+    assert gen["cx_processor_metrics"]["type"] == "log_to_metric"
+    exporter = vector_cfg("router")["sinks"]["prometheus_internal"]
+    assert "cx_processor_metrics" in exporter["inputs"], \
+        "the per-processor counter is computed but never exported"
     # The attribution metric stays on the PRE-hook transforms.
     metric = vector_cfg("router")["transforms"]["tenant_attribution_metric"]
     assert set(metric["inputs"]) == {"applogs_tagged", "syslog_tagged", "snmptrap_tagged",

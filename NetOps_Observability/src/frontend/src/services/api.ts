@@ -154,28 +154,66 @@ export type MaintenanceWindow = MaintenanceWindowInput & {
   updated_at: string;
 };
 
-// Pipeline processors (item 121): structured rules — never free-form VRL/regex.
+// Pipeline Processors — structured processors compiled to the ingest runtime.
+// Never free-form VRL; custom regex is accepted but server-validated (RE2).
 export type ProcessorLane = "applogs" | "syslog" | "snmptrap" | "cloudlogs" | "flows";
-export type ProcessorRuleType = "redact_field" | "redact_pattern" | "drop_field" | "set_field";
-export type ProcessorMatch = { field: string; op: "equals" | "contains" | "prefix"; value: string };
+export type ProcessorRuleType =
+  | "redact_field" | "redact_pattern" | "mask" | "drop_field" | "set_field" | "drop_event";
+export type ProcessorMatchOp = "equals" | "contains" | "prefix" | "regex" | "attribute";
+export type ProcessorMatch = { field: string; op: ProcessorMatchOp; value: string };
 export type ProcessorRuleInput = {
+  name?: string;
   lane: ProcessorLane;
   type: ProcessorRuleType;
   field: string;
-  pattern?: string;       // redact_pattern: builtin name or literal text
-  pattern_kind?: "builtin" | "literal";
+  pattern?: string;       // managed-rule id, literal text, or RE2 pattern
+  pattern_kind?: "builtin" | "literal" | "regex";
   value?: string;         // set_field
+  replacement?: string;   // redact/mask token, e.g. "[EMAIL]"
+  keep_last?: number;     // mask: retained tail length
   match?: ProcessorMatch;
   description?: string;
+  order?: number;
   enabled?: boolean;
 };
 export type ProcessorRule = ProcessorRuleInput & {
   id: string;
   tenant_id?: string;
   enabled: boolean;
+  order: number;
+  version: number;
+  source?: "custom" | "managed";
+  managed_rule_id?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;
+};
+export type ManagedRule = {
+  id: string; name: string; category: string; description: string;
+  pattern: string; version: number; replacement: string; checksum?: string;
+};
+export type ProcessorPlugin = {
+  type: string; label: string; edge_capable: boolean; targets_field?: boolean;
+};
+export type ProcessorCatalog = {
+  actions: ProcessorPlugin[];
+  matchers: ProcessorPlugin[];
+  managed_rules: ManagedRule[];
+  lanes: ProcessorLane[];
+};
+export type ProcessorApplied = {
+  rule_id: string; processor: string; type: string; field?: string;
+  description?: string; managed_rule?: string;
+};
+export type ProcessorPreview = {
+  original: Record<string, unknown>;
+  event: Record<string, unknown>;
+  applied: ProcessorApplied[];
+  dropped: boolean;
+};
+export type ProcessorVersion = {
+  processor_id: string; version: number; config: ProcessorRule;
+  changed_by?: string; change_kind: string; created_at: string;
 };
 
 export type AlertEpisodeList = {
@@ -1966,8 +2004,20 @@ export const api = {
   processorRuleDelete: (id: string) =>
     request<{ deleted: string }>(`/api/pipeline/processors/${encodeURIComponent(id)}`, { method: "DELETE" }),
   processorPreview: (lane: string, event: Record<string, unknown>) =>
-    request<{ event: Record<string, unknown>; applied: { rule_id: string; type: string; field: string; description?: string }[] }>(
-      "/api/pipeline/processors/preview", { method: "POST", body: JSON.stringify({ lane, event }) }),
+    request<ProcessorPreview>("/api/pipeline/processors/preview", {
+      method: "POST", body: JSON.stringify({ lane, event }),
+    }),
+  // The engine describes itself: registered actions/matchers + the managed-rule
+  // catalog. The wizard renders from this, so a newly-registered plugin shows up
+  // with no frontend change.
+  processorCatalog: () => request<ProcessorCatalog>("/api/pipeline/processors/catalog"),
+  processorClone: (body: { managed_rule_id: string; lane: string; field: string; order?: number }) =>
+    request<ProcessorRule>("/api/pipeline/processors/clone", { method: "POST", body: JSON.stringify(body) }),
+  processorVersions: (id: string) =>
+    request<{ versions: ProcessorVersion[]; count: number }>(
+      `/api/pipeline/processors/${encodeURIComponent(id)}/versions`),
+  processorRollback: (id: string, version: number) =>
+    request<ProcessorRule>(`/api/pipeline/processors/${encodeURIComponent(id)}/versions/${version}`, { method: "POST" }),
   rules: () => request<Rule[]>("/api/rules"),
   addRule: (r: Rule) =>
     request<Rule>("/api/rules", { method: "POST", body: JSON.stringify(r) }),
