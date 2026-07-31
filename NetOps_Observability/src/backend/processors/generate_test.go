@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -315,5 +316,38 @@ func TestFileStoreTenantIsolation(t *testing.T) {
 	l2, _ := s2.List(ctx, "globex", false)
 	if len(l2) != 1 {
 		t.Fatalf("reload must keep processors: %+v", l2)
+	}
+}
+
+// The checked-in seed the installer copies (and preflight boot-validates) IS
+// the generator's zero-rule output. Without this pin, any generator change
+// silently desynchronizes them — a cold start would boot yesterday's topology
+// while the api writes today's (review B11).
+func TestDefaultConfigMatchesGenerator(t *testing.T) {
+	const seed = "../../../deployment/docker/vector-router/processors-default.yaml"
+	want, err := os.ReadFile(seed)
+	if err != nil {
+		t.Skipf("seed file not readable from this tree: %v", err)
+	}
+	if got := GenerateRouterConfig(nil); got != string(want) {
+		t.Errorf("processors-default.yaml is stale — regenerate it from GenerateRouterConfig(nil).\n"+
+			"got %d bytes, seed %d bytes", len(got), len(want))
+	}
+}
+
+// Mask must agree between the compiler and the simulator for MULTIBYTE values
+// too: VRL's strlen/slice! are character-oriented, so a byte-based Go mask
+// would preview differently than it ships — and could emit an invalid rune.
+func TestMaskIsRuneSafe(t *testing.T) {
+	r := validRule(t, Rule{ID: "m", TenantID: "acme", Lane: "syslog", Type: TypeMask,
+		Enabled: true, Field: "who", KeepLast: 2})
+	res := SimulateChain([]Rule{r}, "syslog", "acme",
+		map[string]any{"tenant_id": "acme", "who": "café-naïve"})
+	got, _ := res.Event["who"].(string)
+	if []rune(got)[len([]rune(got))-2:][0] != 'v' {
+		t.Fatalf("mask must keep the last 2 RUNES: %q", got)
+	}
+	if strings.ContainsRune(got, '\uFFFD') {
+		t.Fatalf("mask split a UTF-8 rune: %q", got)
 	}
 }

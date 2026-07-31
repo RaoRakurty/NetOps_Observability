@@ -209,6 +209,9 @@ func (regexMatcher) Validate(m Match) error {
 }
 func (regexMatcher) CompileVRL(m Match) string {
 	rex, _ := vrlRegex(m.Value)
+	if rex == "" {
+		return "" // not expressible at the edge; never emit uncompilable VRL
+	}
 	return fmt.Sprintf("match(to_string(%s) ?? \"\", %s)", vrlPath(m.Field), rex)
 }
 func (regexMatcher) Eval(ev map[string]any, m Match) bool {
@@ -343,13 +346,17 @@ const MaskHeadCap = 64
 
 // maskedValue is THE mask semantics, shared by the simulator and (mirrored in
 // VRL) the compiler, so preview and pipeline agree character for character.
+// Operates on RUNES, not bytes: VRL's strlen/slice! are character-oriented, so
+// a byte-based mask would preview differently than it ships for any multibyte
+// value — and could split a UTF-8 rune into invalid output (review B10).
 func maskedValue(s string, keep int) string {
-	n := len(s)
+	r := []rune(s)
+	n := len(r)
 	head := n
 	tail := ""
 	if n > keep {
 		head = n - keep
-		tail = s[n-keep:]
+		tail = string(r[n-keep:])
 	}
 	if head > MaskHeadCap {
 		head = MaskHeadCap

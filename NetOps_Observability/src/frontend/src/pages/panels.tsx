@@ -75,7 +75,7 @@ export function __resetBoardHealth(): void {
 // rendered as "All clear" is a failure reported as good news.
 type Polled<T> = { data: T | undefined; err: boolean };
 
-function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): Polled<T> {
+export function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: undefined, err: false });
   const failing = useRef(false);
   useEffect(() => {
@@ -112,7 +112,7 @@ function usePolled<T>(loader: () => Promise<T>, intervalMs = 15000): Polled<T> {
 }
 
 // latestFromProm pulls the most recent finite sample out of a range response.
-function latestFromProm(res?: PromRangeResponse): number | null {
+export function latestFromProm(res?: PromRangeResponse): number | null {
   for (const s of res?.data?.result ?? []) {
     const vals = s.values ?? [];
     for (let i = vals.length - 1; i >= 0; i--) {
@@ -123,7 +123,7 @@ function latestFromProm(res?: PromRangeResponse): number | null {
   return null;
 }
 
-function nowWindow(seconds: number, step = 60): [number, number, number] {
+export function nowWindow(seconds: number, step = 60): [number, number, number] {
   const end = Math.floor(Date.now() / 1000);
   return [end - seconds, end, step];
 }
@@ -154,7 +154,7 @@ function Loading() {
 // order that reads best for an operator: interface (device·ifName) → device
 // (device·index) → synthetic-probe target (dst) → generic. Shared by every
 // per-series panel so labelling is consistent across the board.
-function seriesLabel(m: Record<string, string>): string {
+export function seriesLabel(m: Record<string, string>): string {
   if (m.ifName) return m.device ? `${m.device}·${m.ifName}` : m.ifName;
   if (m.device) return m.index ? `${m.device}·${m.index}` : m.device;
   return m.dst || m.instance || m.mount || m.peer || "series";

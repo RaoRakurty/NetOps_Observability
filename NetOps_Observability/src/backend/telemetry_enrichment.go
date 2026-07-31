@@ -238,17 +238,22 @@ func (s *server) writeProcessorsConfig(ctx context.Context) error {
 	return nil
 }
 
-// regenProcessorsAsync rebuilds the config after a rule mutation without
-// holding the request; the periodic writer is the safety net (§10: failures
-// are logged, and the next tick retries).
+// processorsKick is the coalescing signal from a mutation to the single config
+// writer. Capacity 1 by design: N concurrent mutations collapse into ONE
+// regeneration that reads the latest state.
+//
+// The previous shape — a detached goroutine per mutation on
+// context.Background() — was unbounded (§9), outlived shutdown, and could
+// interleave: two regens racing meant an OLDER AllEnabled snapshot could win
+// the final rename and leave a stale config live until the next 60s tick.
+var processorsKick = make(chan struct{}, 1)
+
+// regenProcessorsAsync asks the writer to regenerate. Never blocks a request.
 func (s *server) regenProcessorsAsync() {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := s.writeProcessorsConfig(ctx); err != nil {
-			log.Printf("processors: regen after mutation: %v", err)
-		}
-	}()
+	select {
+	case processorsKick <- struct{}{}:
+	default: // a regeneration is already pending; it will read the latest state
+	}
 }
 
 // startProcessorsConfigWriter is the periodic writer. No-op unless
@@ -271,16 +276,21 @@ func (s *server) startProcessorsConfigWriter(ctx context.Context) {
 		cancel()
 		t := time.NewTicker(interval)
 		defer t.Stop()
+		write := func(why string) {
+			wctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if err := s.writeProcessorsConfig(wctx); err != nil {
+				log.Printf("processors: %s write: %v", why, err)
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-processorsKick: // a mutation landed — regenerate now
+				write("mutation")
 			case <-t.C:
-				wctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				if err := s.writeProcessorsConfig(wctx); err != nil {
-					log.Printf("processors: periodic write: %v", err)
-				}
-				cancel()
+				write("periodic")
 			}
 		}
 	}()
@@ -410,13 +420,23 @@ func (s *server) handleProcessorByID(w http.ResponseWriter, r *http.Request) {
 		}
 		simTenant := tenant
 		if cross {
-			simTenant = strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", req.Event["tenant_id"])))
+			// Typed extraction: fmt.Sprintf on a missing key yields the literal
+			// "<nil>", which silently matched nothing and made a platform owner
+			// conclude the rules were broken (review A5).
+			ev, _ := req.Event["tenant_id"].(string)
+			simTenant = strings.ToLower(strings.TrimSpace(ev))
 		}
 		// The preview runs the SAME engine the compiler emits from
 		// (processors.SimulateChain) — never a parallel preview implementation.
+		// Snapshot BEFORE the tenant stamp below so "original" is genuinely the
+		// caller's event, not a mutated copy.
+		original := map[string]any{}
+		for k, v := range req.Event {
+			original[k] = v
+		}
 		res := processors.SimulateChain(rules, req.Lane, simTenant, req.Event)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"original": req.Event,
+			"original": original,
 			"event":    res.Event,
 			"applied":  res.Applied,
 			"dropped":  res.Dropped,

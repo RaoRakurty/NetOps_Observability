@@ -73,12 +73,17 @@ func regexEscape(s string) string {
 	return b.String()
 }
 
-// vrlRegex renders a pattern as a VRL regex literal. r'…' cannot escape a
-// single quote, so a pattern containing one falls back to a quoted string
-// (which VRL's regex-taking functions accept for the string forms we use).
+// vrlRegex renders a pattern as a VRL raw-regex literal. Patterns containing a
+// single quote are rejected at validation (validateRegex) precisely so this
+// function has no unsafe fallback: a quoted-string fallback either failed to
+// compile (matchers) or silently degraded to literal matching (replace).
+// Literal patterns are regex-escaped before they reach here, and the escaper
+// does not introduce quotes, so the guard is a belt-and-braces no-op.
 func vrlRegex(pattern string) (expr string, raw bool) {
 	if strings.ContainsRune(pattern, '\'') {
-		return vrlString(pattern), false
+		// Unreachable via the API; compile to nothing rather than emit VRL that
+		// would take the whole lane's config down.
+		return "", false
 	}
 	return "r'" + pattern + "'", true
 }

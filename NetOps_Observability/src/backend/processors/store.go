@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"netops/backend/internal/applog"
 	"netops/backend/internal/platformdb"
 )
 
@@ -69,7 +70,15 @@ type FileStore struct {
 
 func NewFileStore(path string) *FileStore {
 	s := &FileStore{path: path, rows: map[string]map[string]Rule{}}
-	if b, err := platformdb.Load(path); err == nil {
+	b, loadErr := platformdb.Load(path)
+	if loadErr != nil {
+		// A corrupt/unreadable store must be LOUD: silently loading an empty set
+		// would generate an empty router config and stop every redaction with no
+		// log line at all — the worst failure mode a redaction feature has (§10).
+		applog.Error("processors", "processor store could not be read — redaction rules are NOT loaded",
+			map[string]any{"path": path, "err": loadErr.Error()})
+	}
+	if loadErr == nil {
 		// Two on-disk shapes are accepted: the ORIGINAL flat array (pre-history
 		// files must keep loading — backward compatibility is a requirement,
 		// not a nicety) and the current {rules,versions} envelope.
@@ -77,8 +86,9 @@ func NewFileStore(path string) *FileStore {
 		var list []Rule
 		if json.Unmarshal(b, &env) == nil && (len(env.Rules) > 0 || len(env.Versions) > 0) {
 			list, s.versions = env.Rules, env.Versions
-		} else {
-			_ = json.Unmarshal(b, &list)
+		} else if err := json.Unmarshal(b, &list); err != nil && len(b) > 0 {
+			applog.Error("processors", "processor store is unparseable — redaction rules are NOT loaded",
+				map[string]any{"path": path, "err": err.Error()})
 		}
 		for _, r := range list {
 			t := normTenant(r.TenantID)

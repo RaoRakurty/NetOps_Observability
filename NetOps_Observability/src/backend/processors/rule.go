@@ -239,9 +239,18 @@ func validateRegex(name, pattern string) error {
 	if !printable(pattern) {
 		return fmt.Errorf("%s must be a single line of printable characters", name)
 	}
-	// The VRL raw-literal form r'…' cannot escape a single quote; the generator
-	// falls back to a quoted literal for those, so reject only what neither
-	// form can carry.
+	// A single quote is REFUSED, not worked around. VRL's raw-regex literal
+	// r'…' cannot escape one, and the old fallback to a double-quoted literal
+	// had two unacceptable outcomes: for a matcher, VRL's `match()` demands a
+	// regex type, so the generated program failed to compile and Vector
+	// rejected the WHOLE processors.yaml — one tenant's pattern freezing every
+	// tenant's processors; for a replace, VRL treats a string pattern as
+	// LITERAL text, so the preview would show a regex redaction the edge never
+	// performs — a redaction that "previewed green" while leaking data. A clear
+	// 400 beats either. (Quotes are vanishingly rare in RE2 patterns.)
+	if strings.ContainsRune(pattern, '\'') {
+		return fmt.Errorf("%s must not contain a single quote (the ingest runtime cannot carry one safely)", name)
+	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fmt.Errorf("%s is not a valid pattern: %w", name, err)

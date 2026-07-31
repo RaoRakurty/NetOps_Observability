@@ -54,14 +54,14 @@ import (
 	"time"
 
 	"netops/backend/alerts"
-	"netops/backend/maintenance"
-	"netops/backend/processors"
 	"netops/backend/chhttp"
 	"netops/backend/collectors"
 	"netops/backend/integration"
+	"netops/backend/maintenance"
 	"netops/backend/models"
 	"netops/backend/nms"
 	"netops/backend/notify"
+	"netops/backend/processors"
 	"netops/backend/reports"
 	"netops/backend/safego"
 
@@ -894,6 +894,7 @@ func cancelOnlyWorkers() []string {
 		"seam-bootstrap",           // server.startSeamBootstrap (PG writes)
 		"seam-enrich",              // server.startSeamEnrichment
 		"svc-flow-rollup",          // server.startSvcFlowRollup (CH writes)
+		"pipeline-processors",      // server.startProcessorsConfigWriter (ticker + mutation kicks)
 		"tenant-enrichment",        // server.startTenantEnrichment
 		"topology-links-enrich",    // server.startTopologyLinksEnrichment
 		"topology-reconciler",      // server.startTopologyReconciler (PG writes)
@@ -1509,9 +1510,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/devices/", s.handleDeviceByID)
 	mux.HandleFunc("/api/collectors", s.handleCollectors)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
-	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)       // tenant-scoped episode list
-	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction) // POST {id}/(ack|assign|mute|snooze|notes)
-	mux.HandleFunc("/api/alerts/maintenance-windows", s.handleMaintenanceWindows)      // tenant-scoped planned-work windows (item 121)
+	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)                     // tenant-scoped episode list
+	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction)               // POST {id}/(ack|assign|mute|snooze|notes)
+	mux.HandleFunc("/api/alerts/maintenance-windows", s.handleMaintenanceWindows)     // tenant-scoped planned-work windows (item 121)
 	mux.HandleFunc("/api/alerts/maintenance-windows/", s.handleMaintenanceWindowByID) // GET|PUT|DELETE {id}
 	mux.HandleFunc("/api/pipeline/processors", s.handleProcessors)                    // per-tenant processor rules (item 121)
 	mux.HandleFunc("/api/pipeline/processors/", s.handleProcessorByID)                // GET|PUT|DELETE {id} · POST preview
