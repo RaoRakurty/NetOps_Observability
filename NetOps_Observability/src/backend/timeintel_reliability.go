@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/maintenance"
 	"netops/backend/timeintel"
 )
 
@@ -133,6 +134,18 @@ SELECT toString(o.correlation_id) AS correlation_id,
 	if err != nil {
 		return nil, err
 	}
+	// Maintenance stamp (item 121): only resolvable for a scoped caller — the
+	// cross-tenant live scan mixes tenants, and windows are strictly per-tenant.
+	// One window read for the whole scan (the caller is a single tenant).
+	callerClaims, _ := userFrom(r.Context())
+	callerTenant, callerCross := principalTenant(callerClaims)
+	var callerWindows []maintenance.Window
+	if !callerCross && s.maintWindows != nil {
+		var werr error
+		if callerWindows, werr = s.maintWindows.List(r.Context(), callerTenant, false); werr != nil {
+			logWarn("timeintel", "maintenance window read failed — live-scan rows stay unstamped", errf(werr))
+		}
+	}
 	out := make([]timeintel.IncidentSummary, 0, len(rows))
 	for _, o := range rows {
 		owner := strings.ToLower(strings.TrimSpace(asString(o["owner"])))
@@ -188,6 +201,13 @@ SELECT toString(o.correlation_id) AS correlation_id,
 		}
 		driver, _ := timeintel.DeriveTimeLossDriver(lc, timeintel.DriverContext{EvidenceMissing: facts.EvidenceMissing, Owner: owner})
 
+		maint := false
+		for i := range callerWindows {
+			if callerWindows[i].Covers(facts.WindowStart, group["device"], "", "") {
+				maint = true
+				break
+			}
+		}
 		out = append(out, timeintel.IncidentSummary{
 			CorrelationID:  asString(o["correlation_id"]),
 			Durations:      durs,
@@ -196,6 +216,7 @@ SELECT toString(o.correlation_id) AS correlation_id,
 			OccurredAt:     facts.WindowStart,
 			State:          asString(o["state"]),
 			IsChild:        strings.EqualFold(asString(o["state"]), "merged"),
+			Maintenance:    maint,
 			OwnerDomain:    ownerDomain,
 			Internal:       internal,
 		})

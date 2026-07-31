@@ -27,9 +27,11 @@ package backend
 // platform episodes are platform-owner-only to triage).
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -37,6 +39,8 @@ import (
 	"time"
 
 	"netops/backend/alerts"
+	"netops/backend/internal/platformdb"
+	"netops/backend/maintenance"
 	"netops/backend/models"
 )
 
@@ -104,8 +108,15 @@ func (s *server) observeAlertTransition(a models.Alert, firing bool) {
 }
 
 // alertNotifySuppressed is Engine.SuppressNotify: true pauses the notification
-// for this firing (muted/snoozed episode). Never affects the active set.
+// for this firing (muted/snoozed episode, or an active maintenance window
+// covering the alert's device/site/rule). Never affects the active set. The
+// maintenance check runs FIRST and independently of the episode lookup: the
+// episode store only suppresses an already-OPEN episode, but a brand-new
+// firing inside a declared window must be quiet too (item 121).
 func (s *server) alertNotifySuppressed(a models.Alert) bool {
+	if s.maintenanceSuppressed(a) {
+		return true
+	}
 	if s.alertEpisodes == nil {
 		return false
 	}
@@ -337,4 +348,200 @@ func (s *server) recordEpisodeTriage(r *http.Request, claims jwtClaims, ep Alert
 		Method: "TRIAGE", Path: "/api/alerts/episodes/" + ep.ID, Status: http.StatusOK,
 		Decision: "allow", Remote: auditClientIP(r), Detail: detail,
 	})
+}
+
+// ── maintenance windows (item 121: the #53 remnant) ──────────────────────────
+//
+// Declared planned-work periods. A covering window pauses alert NOTIFICATIONS
+// only — same honesty rule as mute/snooze — and stamps timeintel snapshots so
+// MTBF / chronic-offender math separates planned from unplanned downtime.
+// Store: maintenance/ (file backend tenant-filtered in-store, PG FORCE-RLS via
+// migration 0031). Routes:
+//
+//	GET|POST          /api/alerts/maintenance-windows
+//	GET|PUT|DELETE    /api/alerts/maintenance-windows/{id}
+
+// newMaintenanceWindowStore selects pg under the Postgres backend, else file.
+func newMaintenanceWindowStore() maintenance.Store {
+	if ps, ok := platformdb.ActivePG(); ok {
+		return maintenance.NewPGStore(ps.DB())
+	}
+	return maintenance.NewFileStore(envOr("MAINTENANCE_WINDOWS_FILE", "/data/maintenance_windows.json"))
+}
+
+// maintenanceCoveredAt reports whether a covering window exists for the triple
+// at the given instant. Fail-OPEN on store errors (noisy beats silently dark —
+// a broken store must never hide real alerts), but the error is logged (§10).
+func (s *server) maintenanceCoveredAt(tenant, device, site, rule string, at time.Time) bool {
+	if s.maintWindows == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, covered, err := s.maintWindows.Covering(ctx, tenant, device, site, rule, at)
+	if err != nil {
+		log.Printf("maintenance window lookup: %v", err)
+		return false
+	}
+	return covered
+}
+
+// maintenanceSuppressed derives the alert's tenant/site the same way the
+// episode fold does and asks the window store about NOW.
+func (s *server) maintenanceSuppressed(a models.Alert) bool {
+	if s.maintWindows == nil {
+		return false
+	}
+	tenant := s.alertTenant(a)
+	site := ""
+	if a.DeviceID != "" && s.deviceSites != nil {
+		if b, ok := s.deviceSites.Get(tenant, false, a.DeviceID); ok {
+			site = b.Site
+		}
+	}
+	return s.maintenanceCoveredAt(tenant, a.DeviceID, site, a.Rule, time.Now().UTC())
+}
+
+// decodeMaintenanceWindow reads and validates an operator payload. `enabled`
+// defaults to TRUE when omitted (a freshly-declared window that silently did
+// nothing would be the worst failure mode).
+func decodeMaintenanceWindow(w http.ResponseWriter, r *http.Request) (maintenance.Window, bool) {
+	var raw json.RawMessage
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&raw); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+		return maintenance.Window{}, false
+	}
+	var in maintenance.Window
+	if err := json.Unmarshal(raw, &in); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+		return maintenance.Window{}, false
+	}
+	var probe struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if json.Unmarshal(raw, &probe) == nil && probe.Enabled == nil {
+		in.Enabled = true
+	}
+	if err := in.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return maintenance.Window{}, false
+	}
+	return in, true
+}
+
+func (s *server) handleMaintenanceWindows(w http.ResponseWriter, r *http.Request) {
+	if s.maintWindows == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("maintenance window store unavailable"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := s.requirePerm(w, r, "alerts", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		out, err := s.maintWindows.List(r.Context(), tenant, cross)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"windows": out, "count": len(out)})
+	case http.MethodPost:
+		claims, ok := s.requirePerm(w, r, "alerts", LevelWrite)
+		if !ok {
+			return
+		}
+		in, ok := decodeMaintenanceWindow(w, r)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		if !cross {
+			in.TenantID = tenant // §3a.2: owner from the token, never the body
+		}
+		in.CreatedBy = claims.Sub
+		out, err := s.maintWindows.Create(r.Context(), tenant, cross, in)
+		if errors.Is(err, maintenance.ErrLimit) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, out)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or POST"))
+	}
+}
+
+func (s *server) handleMaintenanceWindowByID(w http.ResponseWriter, r *http.Request) {
+	if s.maintWindows == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("maintenance window store unavailable"))
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/alerts/maintenance-windows/")
+	if !isUUIDToken(id) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid window id"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		claims, ok := s.requirePerm(w, r, "alerts", LevelRead)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		win, found, err := s.maintWindows.Get(r.Context(), tenant, cross, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !found {
+			http.NotFound(w, r) // cross-tenant id indistinguishable from absent
+			return
+		}
+		writeJSON(w, http.StatusOK, win)
+	case http.MethodPut:
+		claims, ok := s.requirePerm(w, r, "alerts", LevelWrite)
+		if !ok {
+			return
+		}
+		in, ok := decodeMaintenanceWindow(w, r)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		out, found, err := s.maintWindows.Update(r.Context(), tenant, cross, id, in)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodDelete:
+		claims, ok := s.requirePerm(w, r, "alerts", LevelWrite)
+		if !ok {
+			return
+		}
+		tenant, cross := principalTenant(claims)
+		found, err := s.maintWindows.Delete(r.Context(), tenant, cross, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
+	}
 }

@@ -47,6 +47,10 @@ type MetricRow struct {
 	State    string            `json:"state,omitempty"`      // open|closed|merged — merged children excluded from MTBF
 	Internal bool              `json:"internal"`             // platform self-monitoring (excluded by default)
 	Group    map[string]string `json:"group_keys,omitempty"` // device/interface/provider/signature/… grouping keys
+	// Maintenance (migration 0031): occurred_at fell inside a covering
+	// maintenance window — MTBF/chronic-offender math separates it from
+	// unplanned downtime (IncidentSummary.Maintenance, spec test 10).
+	Maintenance bool `json:"maintenance"`
 }
 
 type MetricsStore interface {
@@ -72,7 +76,7 @@ type MetricsStore interface {
 // is the grounded seam type (may be ""); group carries the owner/identity keys for
 // owner-domain classification, MTBF grouping and dimension filters; state is the
 // corr object state (open|closed|merged — merged = child, excluded from MTBF).
-func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group map[string]string, seamType, state string, now time.Time) MetricRow {
+func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group map[string]string, seamType, state string, maintenance bool, now time.Time) MetricRow {
 	lc := DeriveLifecycle(facts, ITSMTimeFacts{})
 	metrics := ComputeTimeMetrics(lc, version, now)
 	ownerDomain, internal := ClassifyOwnerDomain(facts.Owner, group)
@@ -93,6 +97,7 @@ func DeriveMetricRow(tenant, corrID, version string, facts CorrTimeFacts, group 
 		State:         strings.ToLower(strings.TrimSpace(state)),
 		Internal:      internal,
 		Group:         group,
+		Maintenance:   maintenance,
 	}
 }
 
@@ -208,17 +213,18 @@ func (s *PGMetricsStore) Upsert(ctx context.Context, row MetricRow) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO incident_time_metrics
   (tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-   current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+   current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys, maintenance)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 ON CONFLICT (tenant_id, correlation_id, calculation_version)
 DO UPDATE SET occurred_at = EXCLUDED.occurred_at, owner_domain = EXCLUDED.owner_domain,
               current_bottleneck = EXCLUDED.current_bottleneck, seam_type = EXCLUDED.seam_type,
               metrics = EXCLUDED.metrics, calculated_at = EXCLUDED.calculated_at,
               owner = EXCLUDED.owner, state = EXCLUDED.state,
-              internal = EXCLUDED.internal, group_keys = EXCLUDED.group_keys`,
+              internal = EXCLUDED.internal, group_keys = EXCLUDED.group_keys,
+              maintenance = EXCLUDED.maintenance`,
 			normTenant(row.TenantID), row.CorrelationID, row.CalcVersion, nullableTime(row.OccurredAt),
 			row.OwnerDomain, row.Bottleneck, row.SeamType, string(metricsJSON), calc,
-			row.Owner, row.State, row.Internal, string(groupJSON))
+			row.Owner, row.State, row.Internal, string(groupJSON), row.Maintenance)
 		return err
 	})
 }
@@ -233,7 +239,7 @@ func (s *PGMetricsStore) List(ctx context.Context, tenant string, cross bool, li
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 SELECT tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-       current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys
+       current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys, maintenance
   FROM incident_time_metrics
  ORDER BY occurred_at DESC NULLS LAST
  LIMIT `+strconv.Itoa(limit))
@@ -267,7 +273,7 @@ func (s *PGMetricsStore) ListWindow(ctx context.Context, tenant string, cross bo
 SELECT * FROM (
     SELECT DISTINCT ON (tenant_id, correlation_id)
            tenant_id, correlation_id, calculation_version, occurred_at, owner_domain,
-           current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys
+           current_bottleneck, seam_type, metrics, calculated_at, owner, state, internal, group_keys, maintenance
       FROM incident_time_metrics
      WHERE occurred_at >= $1
      ORDER BY tenant_id, correlation_id, (calculation_version = $2) DESC, calculated_at DESC
@@ -285,7 +291,7 @@ SELECT * FROM (
 	return out, err
 }
 
-// scanMetricRows scans the shared 13-column snapshot row shape.
+// scanMetricRows scans the shared 14-column snapshot row shape.
 func scanMetricRows(rows pgx.Rows) ([]MetricRow, error) {
 	out := []MetricRow{}
 	for rows.Next() {
@@ -294,7 +300,7 @@ func scanMetricRows(rows pgx.Rows) ([]MetricRow, error) {
 		var metricsRaw, groupRaw []byte
 		if err := rows.Scan(&row.TenantID, &row.CorrelationID, &row.CalcVersion, &occurred,
 			&row.OwnerDomain, &row.Bottleneck, &row.SeamType, &metricsRaw, &row.CalculatedAt,
-			&row.Owner, &row.State, &row.Internal, &groupRaw); err != nil {
+			&row.Owner, &row.State, &row.Internal, &groupRaw, &row.Maintenance); err != nil {
 			return out, err
 		}
 		if occurred != nil {

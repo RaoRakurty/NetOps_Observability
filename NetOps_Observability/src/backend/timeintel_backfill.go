@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"netops/backend/internal/chschema"
+	"netops/backend/maintenance"
 	"netops/backend/timeintel"
 )
 
@@ -107,6 +108,32 @@ SELECT toString(o.tenant_id)      AS tenant_id,
 	}
 	now := time.Now().UTC()
 	written := 0
+	// Maintenance-window memo (item 121): one store read per TENANT per pass,
+	// not one per corr object — a full pass may touch 20k rows.
+	winsByTenant := map[string][]maintenance.Window{}
+	tenantWindows := func(tenant string) []maintenance.Window {
+		if s.maintWindows == nil {
+			return nil
+		}
+		if wins, ok := winsByTenant[tenant]; ok {
+			return wins
+		}
+		wins, err := s.maintWindows.List(ctx, tenant, false)
+		if err != nil {
+			log.Printf("timeintel backfill: maintenance window read for %q: %v", tenant, err)
+			wins = nil // fail toward unstamped, never toward wrong-tenant
+		}
+		winsByTenant[tenant] = wins
+		return wins
+	}
+	coveredAt := func(tenant, device string, at time.Time) bool {
+		for i := range tenantWindows(tenant) {
+			if tenantWindows(tenant)[i].Covers(at, device, "", "") {
+				return true
+			}
+		}
+		return false
+	}
 	for _, o := range rows {
 		corrID := strings.TrimSpace(asString(o["correlation_id"]))
 		if corrID == "" {
@@ -129,9 +156,14 @@ SELECT toString(o.tenant_id)      AS tenant_id,
 		if sig != "" {
 			group["signature"] = sig
 		}
+		// Maintenance stamp (item 121): was the incident's onset inside a covering
+		// window for its tenant? Site/rule are unknown at corr-object granularity,
+		// so only tenant-wide and device-scoped windows can match (conservative —
+		// a sites- or rules-scoped window never over-stamps).
+		maint := coveredAt(asString(o["tenant_id"]), group["device"], facts.WindowStart)
 		row := timeintel.DeriveMetricRow(
 			asString(o["tenant_id"]), corrID, timeIntelCalcVersion,
-			facts, group, asString(o["seam_type"]), asString(o["state"]), now)
+			facts, group, asString(o["seam_type"]), asString(o["state"]), maint, now)
 		if err := s.incidentTimeMetrics.Upsert(ctx, row); err != nil {
 			return written, err
 		}

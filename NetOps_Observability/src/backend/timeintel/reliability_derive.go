@@ -57,6 +57,7 @@ func SummariesFromSnapshots(rows []MetricRow, f Filters, includeInternal bool) [
 			OccurredAt:     row.OccurredAt,
 			State:          row.State,
 			IsChild:        strings.EqualFold(row.State, "merged"),
+			Maintenance:    row.Maintenance,
 			OwnerDomain:    OwnerDomain(row.OwnerDomain),
 			Internal:       row.Internal,
 		})

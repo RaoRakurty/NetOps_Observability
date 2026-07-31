@@ -26,7 +26,11 @@ func TestDeriveIncidentTimeMetricRow(t *testing.T) {
 	facts := backfillFacts()
 	group := map[string]string{"provider": "isp", "device": "wan-r2"}
 
-	row := DeriveMetricRow("ACME", "corr-1", "ti-1", facts, group, "DIA", "OPEN", now)
+	row := DeriveMetricRow("ACME", "corr-1", "ti-1", facts, group, "DIA", "OPEN", true, now)
+
+	if !row.Maintenance {
+		t.Errorf("maintenance stamp must survive derivation: %+v", row)
+	}
 
 	if row.TenantID != "acme" { // normalized
 		t.Errorf("tenant not normalized: %q", row.TenantID)
