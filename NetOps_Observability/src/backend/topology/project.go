@@ -114,6 +114,12 @@ func Project(in Input) View {
 			continue
 		}
 		health, change := deviceHealth(d, alertsByDev[d.ID], now, staleAfter)
+		// Item 121: a device inside an active maintenance window renders the
+		// calm planned-work state instead of ok/unknown — but an active
+		// critical/warning alert still wins (planned work never hides a fire).
+		if in.MaintenanceDevices[d.ID] && health != HealthCritical && health != HealthWarning {
+			health = HealthMaintenance
+		}
 		n := Node{
 			ID:          d.ID,
 			Label:       displayName(d),

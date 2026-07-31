@@ -25,11 +25,40 @@ function roleTier(role?: string, kind?: string): number {
   return 2;
 }
 
-// view-keyed cache; a view's identity is its id + node/edge cardinality + intent.
+// view-keyed cache, bounded (FIFO eviction — Map preserves insertion order).
 const cache = new Map<string, LayoutResult>();
+const CACHE_CAP = 24;
+
+/**
+ * Content signature over the node/edge id sets. Cardinality alone is NOT an
+ * identity (audit S4): the client-side lenses (domain slice, carrier overlay)
+ * mutate the node set without changing view_id/layout_type, so two different
+ * graphs with equal counts collided in this cache — and every node missing
+ * from the reused result fell to (0,0). Order-independent fold so a reordered
+ * but identical view still hits.
+ */
+export function viewSignature(view: TopologyView): string {
+  let h = 0;
+  const fold = (s: string) => {
+    let x = 5381;
+    for (let i = 0; i < s.length; i++) x = ((x << 5) + x + s.charCodeAt(i)) | 0;
+    h = (h + (x >>> 0)) >>> 0; // commutative sum → order-independent
+  };
+  for (const n of view.nodes) fold("n:" + n.id);
+  for (const e of view.edges) fold("e:" + e.id);
+  return `${view.nodes.length}.${view.edges.length}.${h.toString(36)}`;
+}
 
 function viewKey(view: TopologyView): string {
-  return [view.view_id, view.mode, view.layout_type, view.nodes.length, view.edges.length].join("|");
+  return [view.view_id, view.mode, view.layout_type, viewSignature(view)].join("|");
+}
+
+function cachePut(key: string, result: LayoutResult): void {
+  if (cache.size >= CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, result);
 }
 
 /**
@@ -47,7 +76,7 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
   if (view.nodes.length > 0 && view.nodes.every((n) => n.coordinates)) {
     const pinned: LayoutResult = {};
     for (const n of view.nodes) pinned[n.id] = { x: n.coordinates!.x, y: n.coordinates!.y };
-    cache.set(key, pinned);
+    cachePut(key, pinned);
     return pinned;
   }
 
@@ -93,7 +122,7 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
     for (const n of view.nodes) if (!result[n.id]) result[n.id] = grid[n.id];
   }
 
-  cache.set(key, result);
+  cachePut(key, result);
   return result;
 }
 

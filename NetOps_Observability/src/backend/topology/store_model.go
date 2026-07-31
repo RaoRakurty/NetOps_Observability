@@ -315,14 +315,21 @@ func (g GraphRecords) ToView(tenant string, now time.Time) View {
 // enriched separately by the package-main handler (interface-keyed link metrics
 // need the vendor-ifname canonicalization that lives there). Pure + tested; the
 // caller gathers the tenant-scoped signals.
-func (v *View) EnrichLive(alertsByDevice map[string][]AlertFact, cpu, mem map[string]float64) {
+func (v *View) EnrichLive(alertsByDevice map[string][]AlertFact, cpu, mem map[string]float64, maintenance map[string]bool) {
 	for i := range v.Nodes {
 		n := &v.Nodes[i]
 		al := alertsByDevice[n.ID]
 		switch {
 		case AlertSeverityHealth(al) != "":
 			n.Health = AlertSeverityHealth(al)
-		case n.ChangeState == ChangeStale:
+		case maintenance[n.ID]:
+			// Item 121: planned work — the calm state. Ordered above staleness
+			// on purpose: a device mid-reboot inside its window going quiet is
+			// the EXPECTED shape of maintenance, not an unknown.
+			n.Health = HealthMaintenance
+		case n.ChangeState == ChangeStale || n.LastSeen == "":
+			// Never-observed matches the live projection's honesty rule
+			// (LastSeen.IsZero() → unknown): "ok" is a claim, not a default.
 			n.Health = HealthUnknown
 		default:
 			n.Health = HealthOK

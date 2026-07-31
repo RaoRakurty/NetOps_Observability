@@ -152,7 +152,10 @@ export function topologyToReactFlow(
         data: { group: g, collapsed: true, emphasis, counts, health: worst, onToggle: ui.onToggleGroup },
         zIndex: 2,
         selectable: true,
-        draggable: true,
+        // A group's position is always re-derived from its children's bbox, so a
+        // drag was a no-op that snapped back — while still writing a junk pin
+        // into the saved layout (audit S8). Groups are not draggable.
+        draggable: false,
       });
     } else {
       const pad = 28;

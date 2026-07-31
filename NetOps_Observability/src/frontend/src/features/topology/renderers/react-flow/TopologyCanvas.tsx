@@ -27,9 +27,9 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
-import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus } from "../../api/topologyApi";
+import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
-import { layoutView } from "../../layout/elkLayout";
+import { layoutView, viewSignature } from "../../layout/elkLayout";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
@@ -153,6 +153,12 @@ function CanvasInner({
   // The two must never render as the same state (a failed read used to render a
   // MOCK fabric — someone else's devices — as the operator's live graph).
   const [graphStatus, setGraphStatus] = useState<TopologyGraphStatus | null>(null);
+  // Same discriminator for the LIVE source (audit S2): a failed /view fetch used
+  // to be indistinguishable from an empty network.
+  const [viewStatus, setViewStatus] = useState<TopologyViewStatus | null>(null);
+  // Freshness (audit S5): the canvas refetches on a cadence and shows data age —
+  // a board left open for hours must never silently present stale health as now.
+  const [refreshTick, setRefreshTick] = useState(0);
   // Investigate mode can pin a REAL incident: its RCA fault path (GET
   // /api/correlations/{id}/rca-path-view) is converted to a view and rendered on
   // the canvas, overriding the live projection. Empty = the live/mock projection.
@@ -222,10 +228,12 @@ function CanvasInner({
         setFetched(r.view);
         setCoverage(r.coverage ?? null);
         setGraphStatus(r.status);
+        setViewStatus(null);
       } else {
         const v = await fetchTopologyView(mode, mode === "path_trace" ? { src: pathSrc, dst: pathDst } : undefined);
         if (!alive) return;
-        setFetched(v);
+        setFetched(v.view);
+        setViewStatus(v.status);
         setCoverage(null);
         setGraphStatus(null); // graph status only describes the persisted source
         // Record what this view resolved for, so the stage can distinguish a resolved
@@ -236,7 +244,19 @@ function CanvasInner({
     return () => {
       alive = false;
     };
-  }, [mode, source, incidentId, pathSrc, pathDst]);
+  }, [mode, source, incidentId, pathSrc, pathDst, refreshTick]);
+
+  // Periodic refetch (audit S5). 60s matches the backend reconciler cadence;
+  // paused while the tab is hidden so a background wallboard doesn't hammer the
+  // API. Operator pins live in `positions`/savedLayout and survive a refetch,
+  // and the content-keyed layout cache means an unchanged graph re-renders
+  // byte-identically.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!document.hidden) setRefreshTick((n) => n + 1);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   // Drop the pinned incident (and re-arm the auto-pin) when leaving Investigate mode,
   // so a fresh entry lands on the current top incident again.
@@ -269,9 +289,10 @@ function CanvasInner({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setCollapsedGroups(new Set()), [groupBy]);
   const showAllLabels = labelsToggle || density === "engineer";
-  // saved-layout key: invalidated when the view, layout type, or node cardinality
-  // (a proxy for topology generation) changes.
-  const layoutKey = view ? `${view.view_id}:${view.layout_type}:${view.nodes.length}` : "";
+  // saved-layout key: invalidated when the view, layout type, or CONTENT changes.
+  // Content-keyed (audit S4): node cardinality alone let pins bleed between the
+  // domain lenses (SD-WAN vs DC slices with equal counts shared one key).
+  const layoutKey = view ? `${view.view_id}:${view.layout_type}:${viewSignature(view)}` : "";
 
   // (Re)compute ELK layout only when the active view changes. Cached in elkLayout.
   useEffect(() => {
@@ -296,10 +317,12 @@ function CanvasInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, layoutKey]);
 
-  // Persist a dragged node and keep it pinned for this session.
+  // Persist a dragged node and keep it pinned for this session. Group nodes are
+  // excluded (their position is derived from children — audit S8): they are no
+  // longer draggable, and the guard keeps a junk pin out even if that changes.
   const onNodeDragStop = useCallback<OnNodeDrag<Node<AnyNodeData>>>(
     (_e, n) => {
-      if (!layoutKey) return;
+      if (!layoutKey || n.type === "groupNode") return;
       saveNodePosition(layoutKey, n.id, n.position);
       setPositions((p) => ({ ...p, [n.id]: n.position }));
       setLayoutPinned(true);
@@ -565,6 +588,28 @@ function CanvasInner({
             )}
           </span>
         )}
+        {/* Freshness (audit S5): data age from the view's own generated_at, with
+            an explicit stale warning past two refresh cycles. Never a wall clock. */}
+        {fetched?.generated_at && viewStatus !== "sample" && (() => {
+          const ageMs = Date.now() - Date.parse(fetched.generated_at);
+          const stale = Number.isFinite(ageMs) && ageMs > 150_000;
+          const ageLabel = !Number.isFinite(ageMs) || ageMs < 0 ? "" : ageMs < 90_000 ? "" : `${Math.round(ageMs / 60_000)}m old`;
+          return (
+            <span
+              className="topo-coverage"
+              style={stale ? { color: "var(--warn)" } : undefined}
+              title={`Topology data generated at ${fetched.generated_at}; auto-refreshes every 60s`}
+            >
+              {stale ? `⚠ data ${ageLabel || "stale"}` : ageLabel || "live"}
+            </span>
+          );
+        })()}
+        {viewStatus === "sample" && (
+          <span className="topo-coverage" style={{ color: "var(--warn)" }}
+            title="This workflow mode is not backed by live data yet — a bundled sample is shown.">
+            Sample data
+          </span>
+        )}
         {mode === "investigate" && (
           /* Pin a real incident to render its RCA fault path on the canvas. */
           <label className="topo-incident-picker" title="Render a real incident's RCA fault path on the canvas">
@@ -648,8 +693,18 @@ function CanvasInner({
           {fullscreen ? "⤡ Exit" : "⤢ Full screen"}
         </button>
         {renderer === "overview" ? (
+          /* Audit S1: the overview renders the operator's REAL graph. The bundled
+             synthetic fabric survives ONLY as an explicitly-badged sample when no
+             real data exists — never presented as the live network. */
           <Suspense fallback={<div className="topo-sigma-loading">Loading enterprise overview…</div>}>
-            <SigmaTopologyView view={enterpriseScaleTopology} />
+            <SigmaTopologyView view={view && view.nodes.length > 0 ? view : enterpriseScaleTopology} />
+            {(!view || view.nodes.length === 0) && (
+              <span className="topo-coverage" role="status"
+                style={{ position: "absolute", top: 10, left: 10, color: "var(--warn)", background: "var(--panel)", padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)" }}
+                title="No live topology resolved for this view — a bundled sample fabric is shown so the renderer can be evaluated.">
+                Sample data — not your network
+              </span>
+            )}
           </Suspense>
         ) : renderer === "geo" ? (
           <Suspense fallback={<div className="topo-geo-loading">Loading geographic map…</div>}>
@@ -681,6 +736,24 @@ function CanvasInner({
           // Dedicated source→destination view (#77): the resolved path as a clean
           // L→R ribbon, NOT the full topology with the path merely highlighted.
           <NetworkPathView view={view} />
+        ) : view.nodes.length > 1000 ? (
+          // Scale policy (skill: 1000+ nodes must not render as full React Flow
+          // cards — audit S10). The WebGL overview handles this size; the canvas
+          // stays for scoped subsets (search, groups, domains).
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ maxWidth: 460, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                {view.nodes.length.toLocaleString()} nodes — too many for the interactive canvas
+              </div>
+              <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
+                Use the WebGL overview for the whole fabric, then narrow this canvas with search,
+                the domain tabs, or grouping to a subset under 1,000 nodes.
+              </div>
+              <button className="btn btn-sm btn-primary" onClick={() => setRenderer("overview")}>
+                Open enterprise overview
+              </button>
+            </div>
+          </div>
         ) : (
           <>
             <div className="topo-search-dock">
@@ -714,25 +787,30 @@ function CanvasInner({
             {/* Honest empty state — a mode that resolves no nodes (e.g. Dependency
                 with no flow attribution, or a too-narrow window) must SAY so, never
                 leave a silent blank canvas the operator can't read. */}
-            {view && view.nodes.length === 0 && (
+            {view && view.nodes.length === 0 && (() => {
+              // Audit S2: BOTH sources carry a status discriminator now — a
+              // failed read must never render as "you have no devices".
+              const readFailed = source === "persisted" ? graphStatus === "error" : viewStatus === "error";
+              return (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-                <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: `1px dashed ${graphStatus === "error" ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
-                  role={graphStatus === "error" ? "alert" : undefined}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: graphStatus === "error" ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
-                    {graphStatus === "error"
-                      ? "The topology graph could not be read"
+                <div style={{ maxWidth: 440, textAlign: "center", padding: "18px 22px", border: `1px dashed ${readFailed ? "var(--bad)" : "var(--border)"}`, borderRadius: 10, background: "var(--panel)", pointerEvents: "auto" }}
+                  role={readFailed ? "alert" : undefined}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: readFailed ? "var(--bad)" : "var(--fg)", marginBottom: 6 }}>
+                    {readFailed
+                      ? "The topology could not be read"
                       : mode === "dependency" ? "No service dependencies in this window" : "Nothing to display for this view"}
                   </div>
                   <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5 }}>
-                    {graphStatus === "error"
-                      ? "The graph service did not answer, so the shape of your network is unknown — this is NOT an empty network. Retry, or check the topology service."
+                    {readFailed
+                      ? "The topology service did not answer, so the shape of your network is unknown — this is NOT an empty network. Retry, or check the topology service."
                       : mode === "dependency"
                         ? "Dependency edges appear when flows are attributed to services. Widen the time range, or confirm flow collection is active."
                         : "No nodes resolved for the current mode, data source and time range."}
                   </div>
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {/* Hover peek: WHY this node/edge is here (health/verdict + evidence),
                 without a click into the drawer. Suppressed while a drawer is open. */}

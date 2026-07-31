@@ -41,9 +41,22 @@ func topologyModeOrDefault(m string) string {
 // the shared normalizer. Extracted so /api/topology/view, /links and the persistent
 // reconciler all derive links identically and can never disagree.
 func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []topoLink {
-	ownedID := make(map[string]string, len(devs))
-	byName := make(map[string]string, len(devs))
-	byAddr := make(map[string]string, len(devs))
+	ownedID, byName, byAddr := topoLinkMaps(devs)
+	neighbors, _ := collectors.FetchTopologyLinks(ctx)
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
+	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+}
+
+// topoLinkMaps builds the id/name/address resolution maps for a device slice.
+// The SLICE defines the resolution universe: a neighbour only ever resolves to
+// a device in it. Callers must therefore pass an already-scoped slice — the
+// caller's visible inventory (/view, /links) or ONE tenant's devices (the
+// reconciler) — never the platform-wide set, or a neighbour string that happens
+// to match another tenant's hostname resolves to that tenant's device id (§3a).
+func topoLinkMaps(devs []models.Device) (ownedID, byName, byAddr map[string]string) {
+	ownedID = make(map[string]string, len(devs))
+	byName = make(map[string]string, len(devs))
+	byAddr = make(map[string]string, len(devs))
 	for _, d := range devs {
 		ownedID[d.ID] = d.Name
 		if d.Name != "" {
@@ -53,9 +66,7 @@ func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []to
 			byAddr[strings.TrimSpace(d.Address)] = d.ID
 		}
 	}
-	neighbors, _ := collectors.FetchTopologyLinks(ctx)
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
-	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
+	return ownedID, byName, byAddr
 }
 
 // topoMetrics is the live signal bundle the topology surfaces overlay: device
@@ -155,6 +166,9 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 		Devices:  toDeviceFacts(devs, lm.cpu, lm.mem, links),
 		Links:    linkFacts,
 		Alerts:   toAlertFacts(alerts),
+		// Item 121: devices inside an active window render the calm
+		// maintenance state (alerts still win inside the projection).
+		MaintenanceDevices: s.maintenanceCoveredDevices(devs),
 	}
 
 	view := topology.Project(in)

@@ -70,11 +70,18 @@ const REAL_MODES: ReadonlySet<WorkflowMode> = new Set<WorkflowMode>([
   "executive_geo",
 ]);
 
+/** What the live-view read actually established (drives the honest UI state). */
+export type TopologyViewStatus = "live" | "empty" | "error" | "sample";
+
 export async function fetchTopologyView(
   mode: WorkflowMode,
   params?: { src?: string; dst?: string },
-): Promise<TopologyView> {
-  if (!REAL_MODES.has(mode)) return normalizeView(mockForMode(mode));
+): Promise<{ view: TopologyView; status: TopologyViewStatus }> {
+  if (!REAL_MODES.has(mode)) return { view: normalizeView(mockForMode(mode)), status: "sample" };
+  const emptyView = (): TopologyView => normalizeView({
+    view_id: `empty-${mode}`, mode, scope: { tenant_id: "" }, layout_type: "spine_leaf",
+    generated_at: new Date().toISOString(), nodes: [], edges: [], groups: [], overlays: [],
+  } as unknown as TopologyView);
   try {
     // Path Trace passes src/dst so the backend resolves a real A→B path; the other
     // modes ignore them. Only forward when both endpoints are set.
@@ -84,14 +91,14 @@ export async function fetchTopologyView(
     // state — NEVER fabricated demo nodes presented as the live network. An empty
     // graph (collectors off / no inventory / no flow attribution) returns the empty
     // view so the canvas renders its "nothing to display" state, not a fake cloud map.
-    return normalizeView(raw);
-  } catch {
-    // A failed fetch is not "no data" either — return an empty view (honest empty
-    // state), not mock data that looks like the operator's network.
-    return normalizeView({
-      view_id: `empty-${mode}`, mode, scope: { tenant_id: "" }, layout_type: "spine_leaf",
-      generated_at: new Date().toISOString(), nodes: [], edges: [], groups: [], overlays: [],
-    } as unknown as TopologyView);
+    const view = normalizeView(raw);
+    return view.nodes.length > 0 ? { view, status: "live" } : { view: emptyView(), status: "empty" };
+  } catch (err) {
+    // A failed fetch is not "no data" either (audit S2: this branch used to be
+    // indistinguishable from an empty network — an API outage rendered as "you
+    // have no devices"). status:"error" lets the canvas say which, honestly.
+    console.warn("topology view fetch failed", mode, err);
+    return { view: emptyView(), status: "error" };
   }
 }
 
@@ -188,57 +195,4 @@ export async function fetchRcaPathView(
   } catch {
     return null;
   }
-}
-
-/** Catalogue of operator workflows for the mode switcher (PDF §9). */
-export function listWorkflowMeta(): {
-  id: WorkflowMode;
-  label: string;
-  implemented: boolean;
-  blurb: string;
-}[] {
-  return [
-    {
-      id: "explore",
-      label: "Explore",
-      implemented: true,
-      blurb: "Browse the physical/logical fabric and expand neighbourhoods hop by hop.",
-    },
-    {
-      id: "investigate",
-      label: "Investigate",
-      implemented: true,
-      blurb: "Incident-centred view with blast radius and RCA evidence on the graph.",
-    },
-    {
-      id: "path_trace",
-      label: "Path trace",
-      implemented: true,
-      blurb: "Highlight the A→B path, its hops and where it diverges from the golden path.",
-    },
-    {
-      id: "dependency",
-      label: "Dependency",
-      implemented: true,
-      blurb: "App/cloud dependency map built from observed flows and cloud APIs.",
-    },
-    {
-      id: "change_review",
-      label: "Change review",
-      implemented: false,
-      blurb: "Diff topology across a time window: what was added, removed or changed.",
-    },
-    {
-      id: "capacity",
-      label: "Capacity",
-      implemented: false,
-      blurb: "Utilization and headroom overlay for capacity planning.",
-    },
-    {
-      id: "executive_geo",
-      label: "Executive geo",
-      implemented: false,
-      blurb: "Geographic WAN rollup for executive and NOC wallboards.",
-    },
-  ];
 }

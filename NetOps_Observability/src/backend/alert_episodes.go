@@ -386,6 +386,65 @@ func (s *server) maintenanceCoveredAt(tenant, device, site, rule string, at time
 	return covered
 }
 
+// maintTriple is one (device id, tenant, site) lookup for bulk window checks.
+type maintTriple struct{ id, tenant, site string }
+
+// maintenanceCoveredIDs reports which of the given devices are inside an
+// active maintenance window right now — the topology projections render those
+// as the calm HealthMaintenance state (item 121). One window read per tenant;
+// a failed read leaves that tenant unstamped (fail toward the ordinary state,
+// §10-logged). Rules-scoped windows never match here (rule = ""), mirroring
+// the timeintel backfill's conservative semantics.
+func (s *server) maintenanceCoveredIDs(items []maintTriple) map[string]bool {
+	if s.maintWindows == nil || len(items) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	winsByTenant := map[string][]maintenance.Window{}
+	out := map[string]bool{}
+	for _, it := range items {
+		wins, ok := winsByTenant[it.tenant]
+		if !ok {
+			var err error
+			wins, err = s.maintWindows.List(ctx, it.tenant, false)
+			if err != nil {
+				log.Printf("maintenance window read (topology): %v", err)
+				wins = nil
+			}
+			winsByTenant[it.tenant] = wins
+		}
+		for i := range wins {
+			if wins[i].Covers(now, it.id, it.site, "") {
+				out[it.id] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// maintenanceCoveredDevices is maintenanceCoveredIDs over the live inventory
+// (site resolved through the operator device→site binding, like suppression).
+func (s *server) maintenanceCoveredDevices(devs []models.Device) map[string]bool {
+	if s.maintWindows == nil || len(devs) == 0 {
+		return nil
+	}
+	items := make([]maintTriple, 0, len(devs))
+	for _, d := range devs {
+		tenant := deviceTenant(d)
+		site := ""
+		if s.deviceSites != nil {
+			if b, ok := s.deviceSites.Get(tenant, false, d.ID); ok {
+				site = b.Site
+			}
+		}
+		items = append(items, maintTriple{id: d.ID, tenant: tenant, site: site})
+	}
+	return s.maintenanceCoveredIDs(items)
+}
+
 // maintenanceSuppressed derives the alert's tenant/site the same way the
 // episode fold does and asks the window store about NOW.
 func (s *server) maintenanceSuppressed(a models.Alert) bool {

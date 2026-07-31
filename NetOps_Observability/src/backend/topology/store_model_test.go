@@ -117,23 +117,32 @@ func TestToViewAndCoverage(t *testing.T) {
 	}
 }
 
-// TestEnrichLive: live overlay sets node health from alerts (critical wins),
-// OK for a fresh no-alert node, UNKNOWN for a stale no-alert node, + cpu/mem metrics.
+// TestEnrichLive: live overlay sets node health from alerts (critical wins —
+// including over a maintenance window), MAINTENANCE for a covered quiet node
+// (item 121; ordered above staleness — a device mid-reboot inside its window
+// is the expected shape of maintenance), OK for a fresh no-alert node, UNKNOWN
+// for a stale no-alert node, + cpu/mem metrics.
 func TestEnrichLive(t *testing.T) {
 	now := time.Now()
 	g := GraphRecords{Nodes: []NodeRecord{
-		{ID: "crit", LastSeen: now},                // has a critical alert
+		{ID: "crit", LastSeen: now},                // critical alert + in window: alert wins
 		{ID: "warn", LastSeen: now},                // has a warning alert
 		{ID: "ok", LastSeen: now},                  // fresh, no alert
 		{ID: "staleq", Stale: true, LastSeen: now}, // stale, no alert
+		{ID: "maint", LastSeen: now},               // fresh, no alert, in window
+		{ID: "maintq", Stale: true, LastSeen: now}, // stale, no alert, in window
 	}}
 	v := g.ToView("a", now)
 	v.EnrichLive(map[string][]AlertFact{
 		"crit": {{Severity: "critical"}},
 		"warn": {{Severity: "warning"}},
-	}, map[string]float64{"crit": 91.5}, map[string]float64{"crit": 40})
+	}, map[string]float64{"crit": 91.5}, map[string]float64{"crit": 40},
+		map[string]bool{"crit": true, "maint": true, "maintq": true})
 
-	want := map[string]string{"crit": HealthCritical, "warn": HealthWarning, "ok": HealthOK, "staleq": HealthUnknown}
+	want := map[string]string{
+		"crit": HealthCritical, "warn": HealthWarning, "ok": HealthOK,
+		"staleq": HealthUnknown, "maint": HealthMaintenance, "maintq": HealthMaintenance,
+	}
 	for _, n := range v.Nodes {
 		if n.Health != want[n.ID] {
 			t.Errorf("node %s health=%q, want %q", n.ID, n.Health, want[n.ID])

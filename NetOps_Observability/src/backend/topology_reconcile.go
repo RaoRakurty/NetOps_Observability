@@ -5,6 +5,8 @@ import (
 	"os"
 	"time"
 
+	"netops/backend/collectors"
+	"netops/backend/models"
 	"netops/backend/topology"
 )
 
@@ -106,7 +108,9 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 			Owner:    f.Owner,
 		})
 	}
-	for _, l := range s.gatherTopoLinks(ctx, devs) {
+	neighbors, _ := collectors.FetchTopologyLinks(ctx)
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
+	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant
 			ID:            topoEdgeID(l),
@@ -122,6 +126,29 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 		})
 	}
 	return g
+}
+
+// observeTopoLinks resolves the raw neighbour set into adjacencies PER TENANT
+// (§3a). gatherTopoLinks builds its name/address resolution maps from the
+// device slice it is given; passing the reconciler's platform-wide slice let a
+// neighbour advertised to tenant A resolve to tenant B's device id whenever
+// hostnames/mgmt-IPs collided — A's persisted edge then carried another
+// tenant's device identifier (and was later pruned client-side, so A also
+// silently lost the adjacency /view correctly shows as an ext: boundary). Raw
+// neighbours are fetched once by the caller; only the resolution universe is
+// partitioned. Pure — unit-tested by topology_reconcile_test.go.
+func observeTopoLinks(devs []models.Device, neighbors []collectors.LLDPNeighbor, ifaddr map[string]map[string]string) []topoLink {
+	devsByTenant := map[string][]models.Device{}
+	for _, d := range devs {
+		t := normTenant(d.TenantID)
+		devsByTenant[t] = append(devsByTenant[t], d)
+	}
+	var links []topoLink
+	for _, tdevs := range devsByTenant {
+		ownedID, byName, byAddr := topoLinkMaps(tdevs)
+		links = append(links, topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)...)
+	}
+	return links
 }
 
 // topoEdgeID is a deterministic, orientation-independent id for an adjacency, so

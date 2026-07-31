@@ -307,4 +307,9 @@ type Input struct {
 	SrcID      string
 	DstID      string
 	StaleAfter time.Duration // a device unseen longer than this → change_state=stale (0 → 24h default)
+	// MaintenanceDevices — device ids currently inside an active maintenance
+	// window (item 121). Covered devices render HealthMaintenance instead of
+	// ok/unknown; an active critical/warning alert still wins (planned work is
+	// calm, never a blindfold).
+	MaintenanceDevices map[string]bool
 }

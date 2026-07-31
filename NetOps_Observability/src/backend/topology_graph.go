@@ -50,7 +50,13 @@ func (s *server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 	// in the view) is kept; only Health/Metrics/Status/Utilization are filled.
 	alertsByDevice := s.activeAlertsByDevice(claims)
 	lm := s.gatherTopoMetrics(r.Context())
-	view.EnrichLive(alertsByDevice, lm.cpu, lm.mem)
+	// Item 121: persisted records carry their own tenant + declared site, so the
+	// window check needs no inventory join here.
+	maintItems := make([]maintTriple, 0, len(snap.Nodes))
+	for _, n := range snap.Nodes {
+		maintItems = append(maintItems, maintTriple{id: n.ID, tenant: n.TenantID, site: n.Site})
+	}
+	view.EnrichLive(alertsByDevice, lm.cpu, lm.mem, s.maintenanceCoveredIDs(maintItems))
 	for i := range view.Edges {
 		e := &view.Edges[i]
 		util, hasUtil, status := resolveLinkMetricBy(e.Source, e.SourcePort, e.Target, e.TargetPort, lm.operStatus, lm.inUtil, lm.outUtil)

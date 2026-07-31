@@ -35,7 +35,12 @@ export type LayoutType =
   | "path_first"
   | "incident"
   | "dependency"
-  | "cloud_grouped";
+  | "cloud_grouped"
+  // Generic role-agnostic layered layout — what the persisted graph
+  // (GET /api/topology/graph → ToView) declares. It used to be outside this
+  // union, so presetFor silently substituted the spine_leaf DC tiering the
+  // graph never asked for (audit S6).
+  | "layered";
 
 export type NodeKind =
   | "switch"

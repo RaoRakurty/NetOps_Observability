@@ -52,6 +52,11 @@ function UnresolvedNodeBase(props: NodeProps) {
         display: "inline-flex",
         alignItems: "center",
         gap: 8,
+        // Fixed footprint matching the adapter's declared 188×56 (audit S11):
+        // an intrinsically-sized box made React Flow's hit-boxes and edge
+        // anchors wrong for every boundary node.
+        width: 188,
+        minHeight: 56,
         maxWidth: 200,
         boxSizing: "border-box",
         padding: "8px 12px",

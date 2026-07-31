@@ -55,7 +55,11 @@ export const NODE_TYPE_FOR_KIND: Record<string, string> = {
   server: "deviceNode",
   cloud: "cloudNode",
   wan: "cloudNode",
-  site: "groupNode",
+  // `site` is a plain NODE kind (ProjectGeo emits it with RFNodeData) — routing
+  // it to groupNode crashed the canvas: GroupNode dereferences RFGroupData
+  // fields the adapter never builds for it (audit S7). Sites render as cards;
+  // real containers arrive only as `group` with proper group data.
+  site: "deviceNode",
   group: "groupNode",
   unresolved: "unresolvedNode",
 };

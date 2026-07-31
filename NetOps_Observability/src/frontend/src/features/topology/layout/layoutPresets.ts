@@ -16,6 +16,10 @@ const PRESETS: Record<LayoutType, LayoutPreset> = {
   cloud_grouped: { intent: "cloud_grouped", direction: "DOWN", layerSpacing: 110, nodeSpacing: 72 },
   // geo is positioned by coordinates, not ELK; fall back to a calm layered grid.
   wan_geo: { intent: "wan_geo", direction: "DOWN", layerSpacing: 120, nodeSpacing: 80 },
+  // The persisted graph's declared type (audit S6): plain layered flow WITHOUT
+  // role partitioning — the mode-agnostic whole-tenant graph never asked for
+  // DC spine/leaf tiering.
+  layered: { intent: "layered", direction: "DOWN", layerSpacing: 110, nodeSpacing: 70 },
 };
 
 export function presetFor(layoutType: LayoutType): LayoutPreset {
