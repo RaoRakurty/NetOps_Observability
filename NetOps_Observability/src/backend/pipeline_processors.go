@@ -258,12 +258,12 @@ func (s *server) handleProcessorByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/pipeline/processors/")
-	switch {
-	case rest == "preview":
+	switch rest {
+	case "preview":
 		s.handleProcessorPreview(w, r)
-	case rest == "catalog":
+	case "catalog":
 		s.handleProcessorCatalog(w, r)
-	case rest == "clone":
+	case "clone":
 		s.handleProcessorClone(w, r)
 	default:
 		if id, tail, isSub := strings.Cut(rest, "/"); isSub && strings.HasPrefix(tail, "versions") {
