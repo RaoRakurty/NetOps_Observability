@@ -56,9 +56,10 @@ import (
 	"crypto/hkdf" // stdlib since Go 1.24 — no new dependency (CLAUDE.md §6)
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // Errors the callers above this package distinguish. They map to HTTP status
@@ -150,7 +151,19 @@ type CryptoProvider interface {
 	// config load, so no unwrapped key is ever written to disk. A router
 	// compromise therefore exposes the keys of tenants that ENABLED sealing,
 	// not a master capable of deriving every tenant's key.
-	EdgeKey(ctx context.Context, tenant string) (key []byte, version int, err error)
+	EdgeKey(ctx context.Context, tenant string) (EdgeMaterial, error)
+}
+
+// EdgeMaterial is everything the ingest runtime needs to seal for one tenant.
+//
+// BOTH derived keys travel, because VRL has no HKDF: the edge cannot compute
+// the MAC key from the seal key the way this process can. What it still never
+// receives is the tenant DEK — the thing those two are derived FROM, and the
+// thing that also protects stored credentials.
+type EdgeMaterial struct {
+	SealKey []byte // AES-256 key for the field cipher
+	MACKey  []byte // HMAC-SHA256 key for encrypt-then-MAC
+	Version int    // key version to stamp into every token the edge produces
 }
 
 // sealKeyInfo domain-separates the field-sealing key from every other use of
@@ -185,33 +198,42 @@ func macKey(sealKey []byte) ([]byte, error) {
 	return out, nil
 }
 
-// computeMAC authenticates the ciphertext TOGETHER WITH its context. The
-// context fields are length-prefixed so that ("ab","c") and ("a","bc") cannot
-// produce the same MAC input — canonical encoding, not naive concatenation.
+// macInput builds the canonical string the MAC is computed over.
+//
+// Every part is prefixed with its BYTE LENGTH IN DECIMAL ASCII, so ("ab","c")
+// and ("a","bc") cannot collide — canonical encoding, not naive concatenation.
+//
+// WHY ASCII AND NOT A BINARY LENGTH PREFIX: this exact string has to be
+// reproducible by the EDGE, and the edge is VRL, which has string concatenation
+// but no way to emit a 4-byte big-endian integer. A binary prefix would have
+// been marginally tidier and completely unimplementable where it matters —
+// Vector could not have sealed at all, and sealing at ingest is the whole
+// feature. iv and ciphertext are folded in base64url-encoded for the same
+// reason: VRL manipulates them in that form, and it keeps the MAC input pure
+// ASCII, which makes a mismatch between the two engines readable in a diff
+// rather than a hex dump.
+func macInput(c Context, version int, iv, ciphertext []byte) string {
+	var b strings.Builder
+	w := func(s string) {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(':')
+		b.WriteString(s)
+		b.WriteByte(':')
+	}
+	w(tokenVersion)
+	w(c.Tenant)
+	w(c.ProcessorID)
+	w(c.Field)
+	w(c.DataType)
+	w(strconv.Itoa(version))
+	w(b64.EncodeToString(iv))
+	w(b64.EncodeToString(ciphertext))
+	return b.String()
+}
+
+// computeMAC authenticates the ciphertext TOGETHER WITH its context.
 func computeMAC(key []byte, c Context, version int, iv, ciphertext []byte) []byte {
 	m := hmac.New(sha256.New, key)
-	write := func(s string) {
-		// Callers reach here only through Context.valid(), which caps each field
-		// at maxContextField; the clamp is belt-and-braces so the uint32 prefix
-		// can never truncate silently on a path that skipped validation.
-		if len(s) > maxContextField {
-			s = s[:maxContextField]
-		}
-		var n [4]byte
-		// #nosec G115 -- len(s) is clamped to maxContextField (512) on the line
-		// above, so the uint32 conversion provably cannot overflow. gosec does
-		// not follow the clamp through the reassignment of s.
-		binary.BigEndian.PutUint32(n[:], uint32(len(s)))
-		m.Write(n[:])
-		m.Write([]byte(s))
-	}
-	write(tokenVersion)
-	write(c.Tenant)
-	write(c.ProcessorID)
-	write(c.Field)
-	write(c.DataType)
-	write(fmt.Sprint(version))
-	m.Write(iv)
-	m.Write(ciphertext)
+	m.Write([]byte(macInput(c, version, iv, ciphertext)))
 	return m.Sum(nil)
 }

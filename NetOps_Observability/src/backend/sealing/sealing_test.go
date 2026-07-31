@@ -332,30 +332,35 @@ func TestUnavailableCustodyFailsClosed(t *testing.T) {
 func TestEdgeKeyIsDerivedNotTheDEK(t *testing.T) {
 	p, keys := newProvider("acme")
 	ctx := context.Background()
-	edge, version, err := p.EdgeKey(ctx, "acme")
+	edge, err := p.EdgeKey(ctx, "acme")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(edge) != 32 {
-		t.Fatalf("edge key must be 32 bytes for AES-256, got %d", len(edge))
+	if len(edge.SealKey) != 32 || len(edge.MACKey) != 32 {
+		t.Fatalf("edge keys must be 32 bytes, got seal=%d mac=%d", len(edge.SealKey), len(edge.MACKey))
 	}
 	dek, _, err := keys.TenantKey(ctx, "acme")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(edge) == string(dek) {
-		t.Fatal("the edge must receive a DERIVED key, never the tenant DEK itself")
+	if bytes.Equal(edge.SealKey, dek) || bytes.Equal(edge.MACKey, dek) {
+		t.Fatal("the edge must receive DERIVED keys, never the tenant DEK itself")
 	}
-	if version != 1 {
-		t.Fatalf("edge key version: got %d", version)
+	// The two edge keys must also differ from each other: encrypt-then-MAC with
+	// one key for both jobs is the classic misuse.
+	if bytes.Equal(edge.SealKey, edge.MACKey) {
+		t.Fatal("seal and MAC keys are identical — encryption and authentication must not share a key")
+	}
+	if edge.Version != 1 {
+		t.Fatalf("edge key version: got %d", edge.Version)
 	}
 	// Different tenants get different edge keys — isolation holds at the edge.
 	keys.mint("globex", 1)
-	other, _, err := p.EdgeKey(ctx, "globex")
+	other, err := p.EdgeKey(ctx, "globex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(other) == string(edge) {
+	if bytes.Equal(other.SealKey, edge.SealKey) || bytes.Equal(other.MACKey, edge.MACKey) {
 		t.Fatal("edge keys must differ per tenant")
 	}
 }

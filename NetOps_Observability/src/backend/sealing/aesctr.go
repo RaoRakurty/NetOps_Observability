@@ -18,6 +18,7 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -65,6 +66,36 @@ func NewAESCTRProvider(keys KeyProvider) CryptoProvider {
 }
 
 func cacheKey(tenant string, version int) string { return fmt.Sprintf("%s#%d", tenant, version) }
+
+// ctrXOR applies the keystream of the counter mode THE EDGE USES.
+//
+// This is not the Go standard library's CTR, and that is the entire point.
+// crypto/cipher.NewCTR treats the whole 16-byte IV as one big-endian counter;
+// Vector's "AES-256-CTR" (Rust's ctr::Ctr64LE) uses the FIRST EIGHT BYTES as a
+// LITTLE-ENDIAN block counter and holds the rest fixed. The two agree on block
+// 0 and diverge from block 1 onward — so a value of 16 bytes or less round-trips
+// perfectly and anything longer silently decrypts to garbage.
+//
+// That is exactly how it presented: card numbers worked, email addresses did
+// not. Discovered by running the pinned binary (see vrl_parity_test.go) rather
+// than by reading either implementation, and pinned forever by the golden
+// keystream in TestCounterModeMatchesTheEdge — which fails without Docker
+// present, so this cannot regress unnoticed.
+func ctrXOR(block cipher.Block, iv, src []byte) []byte {
+	dst := make([]byte, len(src))
+	ctr := make([]byte, aes.BlockSize)
+	copy(ctr, iv)
+	base := binary.LittleEndian.Uint64(iv[:8])
+	ks := make([]byte, aes.BlockSize)
+	for off := 0; off < len(src); off += aes.BlockSize {
+		binary.LittleEndian.PutUint64(ctr[:8], base+uint64(off/aes.BlockSize))
+		block.Encrypt(ks, ctr)
+		for i := 0; i < aes.BlockSize && off+i < len(src); i++ {
+			dst[off+i] = src[off+i] ^ ks[i]
+		}
+	}
+	return dst
+}
 
 // keysFor resolves the derived seal+mac keys for a tenant key version.
 //
@@ -139,8 +170,7 @@ func (p *aesCTRProvider) Seal(ctx context.Context, c Context, plaintext string) 
 	if err != nil {
 		return "", fmt.Errorf("sealing: cipher: %w", err)
 	}
-	ct := make([]byte, len(plaintext))
-	cipher.NewCTR(block, iv).XORKeyStream(ct, []byte(plaintext))
+	ct := ctrXOR(block, iv, []byte(plaintext))
 
 	return encodeToken(token{
 		Tenant:     c.Tenant,
@@ -188,9 +218,7 @@ func (p *aesCTRProvider) Unseal(ctx context.Context, c Context, raw string) (str
 	if err != nil {
 		return "", fmt.Errorf("sealing: cipher: %w", err)
 	}
-	pt := make([]byte, len(t.Ciphertext))
-	cipher.NewCTR(block, t.IV).XORKeyStream(pt, t.Ciphertext)
-	return string(pt), nil
+	return string(ctrXOR(block, t.IV, t.Ciphertext)), nil
 }
 
 // contextMismatch distinguishes "sealed for a different field/processor" from
@@ -228,19 +256,23 @@ func (p *aesCTRProvider) Rotate(ctx context.Context, tenant string) (int, error)
 	return v, nil
 }
 
-func (p *aesCTRProvider) EdgeKey(ctx context.Context, tenant string) ([]byte, int, error) {
+func (p *aesCTRProvider) EdgeKey(ctx context.Context, tenant string) (EdgeMaterial, error) {
 	material, version, err := p.keys.TenantKey(ctx, tenant)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%w: %w", ErrKeyUnavailable, err)
+		return EdgeMaterial{}, fmt.Errorf("%w: %w", ErrKeyUnavailable, err)
 	}
 	sealKey, err := deriveSealKey(material, version)
 	if err != nil {
-		return nil, 0, err
+		return EdgeMaterial{}, err
 	}
-	// The DERIVED seal key crosses to the edge — never the tenant DEK itself.
-	// A router compromise therefore cannot unwrap stored credentials, which use
-	// a different derivation from the same DEK.
-	return sealKey, version, nil
+	mk, err := macKey(sealKey)
+	if err != nil {
+		return EdgeMaterial{}, err
+	}
+	// The DERIVED keys cross to the edge — never the tenant DEK itself. A router
+	// compromise therefore cannot unwrap stored credentials, which use a
+	// different derivation from the same DEK.
+	return EdgeMaterial{SealKey: sealKey, MACKey: mk, Version: version}, nil
 }
 
 var _ CryptoProvider = (*aesCTRProvider)(nil)
