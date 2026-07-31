@@ -158,7 +158,8 @@ export type MaintenanceWindow = MaintenanceWindowInput & {
 // Never free-form VRL; custom regex is accepted but server-validated (RE2).
 export type ProcessorLane = "applogs" | "syslog" | "snmptrap" | "cloudlogs" | "flows";
 export type ProcessorRuleType =
-  | "redact_field" | "redact_pattern" | "mask" | "drop_field" | "set_field" | "drop_event";
+  | "redact_field" | "redact_pattern" | "redact_keys" | "mask" | "hash" | "tag"
+  | "drop_field" | "set_field" | "drop_event";
 export type ProcessorMatchOp = "equals" | "contains" | "prefix" | "regex" | "attribute";
 export type ProcessorMatch = { field: string; op: ProcessorMatchOp; value: string };
 export type ProcessorRuleInput = {
@@ -171,6 +172,7 @@ export type ProcessorRuleInput = {
   value?: string;         // set_field
   replacement?: string;   // redact/mask token, e.g. "[EMAIL]"
   keep_last?: number;     // mask: retained tail length
+  keys?: string[];        // redact_keys: field NAMES to redact
   match?: ProcessorMatch;
   description?: string;
   order?: number;
@@ -190,7 +192,9 @@ export type ProcessorRule = ProcessorRuleInput & {
 };
 export type ManagedRule = {
   id: string; name: string; category: string; description: string;
-  pattern: string; version: number; replacement: string; checksum?: string;
+  // A detector is EITHER content-scoped (pattern) or key-scoped (keys).
+  pattern: string; keys?: string[]; version: number; replacement: string;
+  checksum?: string; default_field?: string;
 };
 export type ProcessorPlugin = {
   type: string; label: string; edge_capable: boolean; targets_field?: boolean;

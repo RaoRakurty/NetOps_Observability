@@ -30,6 +30,7 @@ type FormState = {
   pattern: string;
   replacement: string;
   keep_last: string;
+  keys: string;
   value: string;
   useMatch: boolean;
   match: ProcessorMatch;
@@ -40,7 +41,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   name: "", lane: "syslog", type: "redact_pattern", field: "message",
-  pattern_kind: "builtin", pattern: "email", replacement: "", keep_last: "4", value: "",
+  pattern_kind: "builtin", pattern: "email", replacement: "", keep_last: "4", keys: "", value: "",
   useMatch: false, match: { field: "", op: "equals", value: "" },
   description: "", order: "10", enabled: true,
 };
@@ -59,9 +60,16 @@ function toInput(f: FormState): ProcessorRuleInput {
     out.pattern = f.pattern.trim();
   }
   if (f.type === "mask") out.keep_last = Number(f.keep_last) || 4;
+  if (f.type === "redact_keys") {
+    out.keys = f.keys.split(",").map((k) => k.trim()).filter(Boolean);
+  }
   if (f.type === "set_field") out.value = f.value;
-  if (f.type === "redact_field" || f.type === "redact_pattern") {
+  if (["redact_field", "redact_pattern", "redact_keys", "tag"].includes(f.type)) {
     out.replacement = f.replacement.trim() || undefined;
+  }
+  if (f.type === "tag") {
+    out.pattern_kind = f.pattern_kind;
+    out.pattern = f.pattern.trim();
   }
   if (f.useMatch && f.match.field.trim()) {
     out.match = { field: f.match.field.trim(), op: f.match.op, value: f.match.value };
@@ -73,7 +81,8 @@ function fromRule(r: ProcessorRule): FormState {
   return {
     name: r.name ?? "", lane: r.lane, type: r.type, field: r.field ?? "",
     pattern_kind: r.pattern_kind ?? "builtin", pattern: r.pattern ?? "email",
-    replacement: r.replacement ?? "", keep_last: String(r.keep_last ?? 4), value: r.value ?? "",
+    replacement: r.replacement ?? "", keep_last: String(r.keep_last ?? 4),
+    keys: (r.keys ?? []).join(", "), value: r.value ?? "",
     useMatch: !!r.match, match: r.match ?? { field: "", op: "equals", value: "" },
     description: r.description ?? "", order: String(r.order ?? 0), enabled: r.enabled,
   };
@@ -82,9 +91,12 @@ function fromRule(r: ProcessorRule): FormState {
 const summarize = (r: ProcessorRule): string => {
   switch (r.type) {
     case "redact_pattern":
-      return `redact ${r.pattern_kind === "builtin" ? r.pattern : `"${r.pattern}"`} in .${r.field} → ${r.replacement || "***"}`;
+      return `redact ${r.pattern_kind === "builtin" ? r.pattern : `"${r.pattern}"`} in ${r.field === "*" ? "every field" : `.${r.field}`} → ${r.replacement || "***"}`;
     case "redact_field": return `redact .${r.field} → ${r.replacement || "***"}`;
     case "mask": return `mask .${r.field}, keep last ${r.keep_last ?? 4}`;
+    case "redact_keys": return `redact fields named ${(r.keys ?? []).slice(0, 3).join(", ")}${(r.keys ?? []).length > 3 ? "…" : ""}`;
+    case "hash": return `hash .${r.field}`;
+    case "tag": return `tag ${r.pattern_kind === "builtin" ? r.pattern : "matches"} as "${r.replacement || "sensitive"}"`;
     case "drop_field": return `remove .${r.field}`;
     case "set_field": return `set .${r.field} = "${r.value ?? ""}"`;
     case "drop_event": return "drop matching events";
@@ -92,18 +104,47 @@ const summarize = (r: ProcessorRule): string => {
   }
 };
 
-const SAMPLES: Record<string, string> = {
+// A representative sample per LANE, so the preview step works wherever the
+// operator is working — not just syslog. Shapes mirror what each lane actually
+// carries after the router's normalization.
+const SAMPLES: Record<ProcessorLane, string> = {
   syslog: `{
   "message": "login failure for jsmith@example.org from 10.1.2.3 Bearer abc123def456",
+  "hostname": "edge-fw-01",
   "vendor": "fortinet",
   "severity": "warning"
 }`,
   applogs: `{
-  "message": "charge ok",
+  "message": "charge authorized",
   "card": "4111111111111111",
   "password": "hunter2",
   "service": "billing"
 }`,
+  snmptrap: `{
+  "message": "linkDown on Gi0/3",
+  "community": "public",
+  "oid": "1.3.6.1.6.3.1.1.5.3",
+  "device": "core-sw-02"
+}`,
+  cloudlogs: `{
+  "message": "AssumeRole by arn:aws:iam::123456789012:user/deploy",
+  "user_email": "deploy@example.org",
+  "provider": "aws",
+  "region": "us-east-1"
+}`,
+  flows: `{
+  "src_addr": "10.1.2.3",
+  "dst_addr": "52.94.236.248",
+  "dst_port": 443,
+  "proto": 6,
+  "bytes": 84213
+}`,
+};
+
+/** The field a managed rule most usefully targets on each lane. */
+const DEFAULT_FIELD: Record<ProcessorLane, string> = {
+  syslog: "message", applogs: "message", snmptrap: "message",
+  cloudlogs: "message", flows: "src_addr",
 };
 
 // ── the 4-step create wizard ────────────────────────────────────────────────
@@ -115,7 +156,10 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const [step, setStep] = useState(editingId ? 3 : 0);
+  // Editing opens on the ACTION step (the thing you came to change), not the
+  // preview — landing on a read-only pane to edit a rule is a small daily
+  // insult (review C).
+  const [step, setStep] = useState(editingId ? 2 : 0);
   const [f, setF] = useState<FormState>(initial);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -194,7 +238,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
               <label className="ccw-field">
                 <span className="ccw-label">Lane</span>
                 <select className="app-select" value={f.lane}
-                  onChange={(e) => { set("lane", e.target.value as ProcessorLane); setSample(SAMPLES[e.target.value] ?? SAMPLES.syslog); }}>
+                  onChange={(e) => { set("lane", e.target.value as ProcessorLane); setSample(SAMPLES[e.target.value as ProcessorLane] ?? SAMPLES.syslog); }}>
                   {catalog.lanes.map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
               </label>
@@ -254,10 +298,24 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                 <span className="ccw-label">Target field <span className="ccw-req">*</span></span>
                 <input className="ccw-input" value={f.field} onChange={(e) => set("field", e.target.value)}
                   placeholder="message · user.email · request.headers.authorization" />
-                <span className="ccw-hint">JSON dot-path, up to 4 segments</span>
+                <span className="ccw-hint">
+                  JSON dot-path (user.email), or <code>*</code> to scan every field — which is what a
+                  detector normally wants, since sensitive values rarely sit in <code>message</code>.
+                </span>
               </label>
             )}
-            {f.type === "redact_pattern" && (
+            {f.type === "redact_keys" && (
+              <label className="ccw-field">
+                <span className="ccw-label">Field names to redact <span className="ccw-req">*</span></span>
+                <input className="ccw-input" value={f.keys} onChange={(e) => set("keys", e.target.value)}
+                  placeholder="password, api_key, authorization" />
+                <span className="ccw-hint">
+                  Matches by field NAME, wherever it sits (including one level inside fields/body/headers).
+                  A value pattern cannot see keys — this is what catches {'"password": "hunter2"'}.
+                </span>
+              </label>
+            )}
+            {(f.type === "redact_pattern" || f.type === "tag") && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
                 <label className="ccw-field">
                   <span className="ccw-label">Pattern source</span>
@@ -292,11 +350,13 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                 )}
               </div>
             )}
-            {(f.type === "redact_field" || f.type === "redact_pattern") && (
+            {["redact_field", "redact_pattern", "redact_keys", "tag"].includes(f.type) && (
               <label className="ccw-field">
-                <span className="ccw-label">Replacement</span>
+                <span className="ccw-label">{f.type === "tag" ? "Tag" : "Replacement"}</span>
                 <input className="ccw-input" value={f.replacement} onChange={(e) => set("replacement", e.target.value)}
-                  placeholder="[EMAIL] · defaults to ***" maxLength={64} />
+                  placeholder={f.type === "tag" ? "PCI · stamped on cx_sensitive" : "[EMAIL] · defaults to ***"} maxLength={64} />
+                {f.type === "tag" && <span className="ccw-hint">Detect only — the value is NOT modified.</span>}
+                {f.type === "hash" && <span className="ccw-hint">Stable digest: unreadable, still joinable.</span>}
               </label>
             )}
             {f.type === "mask" && (
@@ -440,6 +500,8 @@ export default function ProcessorsAdmin() {
   const [wizard, setWizard] = useState<{ initial: FormState; editingId?: string } | null>(null);
   const [history, setHistory] = useState<ProcessorRule | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
+  const [cloneLane, setCloneLane] = useState<ProcessorLane>("syslog");
+  const [cloneField, setCloneField] = useState("message");
   const [nonce, setNonce] = useState(0);
 
   const load = useCallback(async () => {
@@ -466,7 +528,9 @@ export default function ProcessorsAdmin() {
   };
   const toggle = async (r: ProcessorRule) => {
     try {
-      await api.processorRuleUpdate(r.id, { ...(r as ProcessorRuleInput), enabled: !r.enabled });
+      // Send only the EDITABLE shape — spreading the full row shipped
+      // server-owned stamps (id/version/source/created_by) back in the PUT.
+      await api.processorRuleUpdate(r.id, { ...toInput(fromRule(r)), enabled: !r.enabled });
       refresh();
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : String(e));
@@ -485,35 +549,35 @@ export default function ProcessorsAdmin() {
   const columns = useMemo<Column<ProcessorRule>[]>(() => [
     { key: "order", header: "#", width: 56, sortable: true, sortValue: (r) => r.order,
       text: (r) => String(r.order), render: (r) => <span style={{ color: "var(--muted)" }}>{r.order}</span> },
-    { key: "name", header: "Processor", width: "26%", sortable: true, text: (r) => r.name || summarize(r),
+    { key: "name", header: "Processor", width: "24%", sortable: true, text: (r) => r.name || summarize(r),
       render: (r) => (
-        <span title={r.description || summarize(r)}>
+        <span className="pp-name" title={r.description || summarize(r)}>
           <strong>{r.name || summarize(r)}</strong>
-          <span style={{ display: "block", fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono, monospace)" }}>
-            {summarize(r)}
-          </span>
+          <span className="pp-name-sum">{summarize(r)}</span>
         </span>
       ) },
-    { key: "lane", header: "Lane", width: 96, sortable: true, text: (r) => r.lane,
+    { key: "lane", header: "Lane", width: 86, sortable: true, text: (r) => r.lane,
       render: (r) => <span className="badge">{r.lane}</span> },
-    { key: "source", header: "Source", width: 96, sortable: true, text: (r) => r.source ?? "custom",
+    { key: "source", header: "Source", width: 92, sortable: true, text: (r) => r.source ?? "custom",
       render: (r) => r.source === "managed"
         ? <Chip label="Managed" tone="var(--accent)" title={`Adopted from the managed rule "${r.managed_rule_id}"`} />
         : <Chip label="Custom" tone="var(--fg-subtle)" /> },
-    { key: "status", header: "Status", width: 104, sortable: true, text: (r) => (r.enabled ? "enabled" : "disabled"),
+    { key: "status", header: "Status", width: 96, sortable: true, text: (r) => (r.enabled ? "enabled" : "disabled"),
       render: (r) => (r.enabled ? <Chip label="Enabled" tone="var(--ok)" /> : <Chip label="Disabled" tone="var(--fg-subtle)" />) },
-    { key: "updated", header: "Last updated", width: 150, sortable: true,
+    { key: "updated", header: "Last updated", width: 138, sortable: true,
       sortValue: (r) => Date.parse(r.updated_at) || 0,
       render: (r) => <span title={`version ${r.version}`}>{fmt(r.updated_at)} · v{r.version}</span> },
-    { key: "actions", header: "", width: 240,
+    // 4 buttons never fit 240px — Delete was clipped off the right edge. The
+    // column is sized to its content and the buttons are compact + no-wrap.
+    { key: "actions", header: "", width: 268,
       render: (r) => (
-        <span style={{ display: "inline-flex", gap: 5 }}>
+        <span className="pp-actions">
           <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setWizard({ initial: fromRule(r), editingId: r.id }); }}>Edit</button>
           <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); void toggle(r); }}>
             {r.enabled ? "Disable" : "Enable"}
           </button>
           <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setHistory(r); }}>History</button>
-          <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); void remove(r); }}>Delete</button>
+          <button className="btn btn-sm pp-danger" onClick={(e) => { e.stopPropagation(); void remove(r); }}>Delete</button>
         </span>
       ) },
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -580,6 +644,24 @@ export default function ProcessorsAdmin() {
             Curated, versioned detectors maintained by the platform. They are read-only — clone one to get an
             editable processor of your own.
           </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
+            <label className="ccw-field" style={{ minWidth: 150 }}>
+              <span className="ccw-label">Clone into lane</span>
+              <select className="app-select" value={cloneLane}
+                onChange={(e) => {
+                  const l = e.target.value as ProcessorLane;
+                  setCloneLane(l);
+                  setCloneField(DEFAULT_FIELD[l] ?? "message");
+                }}>
+                {catalog.lanes.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </label>
+            <label className="ccw-field" style={{ minWidth: 200 }}>
+              <span className="ccw-label">Target field</span>
+              <input className="ccw-input" value={cloneField} onChange={(e) => setCloneField(e.target.value)}
+                placeholder="message" />
+            </label>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: "55vh", overflowY: "auto" }}>
             {catalog.managed_rules.map((m) => (
               <div key={m.id} className="pp-managed">
@@ -587,8 +669,8 @@ export default function ProcessorsAdmin() {
                 <Chip label={m.category} tone="var(--accent)" />
                 <span className="pp-managed-desc">{m.description}</span>
                 <span className="pp-version-meta">v{m.version} → {m.replacement}</span>
-                <button className="btn btn-sm" onClick={() => void clone(m, "syslog", "message")}>
-                  Clone to syslog · message
+                <button className="btn btn-sm" onClick={() => void clone(m, cloneLane, cloneField.trim() || DEFAULT_FIELD[cloneLane] || "message")}>
+                  Clone here
                 </button>
               </div>
             ))}

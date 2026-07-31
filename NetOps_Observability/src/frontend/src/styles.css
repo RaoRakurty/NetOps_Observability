@@ -5691,3 +5691,14 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   .demo2-row-gauges { grid-template-columns: repeat(3, 1fr); }
   .demo2-span-4, .demo2-span-5, .demo2-span-7, .demo2-span-8 { grid-column: span 6; }
 }
+
+/* Pipeline Processors list — the actions column must never clip its buttons. */
+.pp-actions { display: inline-flex; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
+.pp-actions .btn { padding: 2px 7px; font-size: 11px; line-height: 1.5; }
+.pp-actions .pp-danger:hover { border-color: var(--bad); color: var(--bad); }
+.pp-name { display: block; line-height: 1.35; padding: 2px 0; min-width: 0; }
+.pp-name-sum {
+  display: block; font-size: 11px; color: var(--muted);
+  font-family: var(--font-mono, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

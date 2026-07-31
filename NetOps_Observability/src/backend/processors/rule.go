@@ -36,10 +36,20 @@ import (
 	"time"
 )
 
-// Lanes a processor may attach to — exactly the router lanes with a storage sink.
-var Lanes = map[string]bool{
-	"applogs": true, "syslog": true, "snmptrap": true, "cloudlogs": true, "flows": true,
-}
+// LaneOrder is THE lane list — exactly the router lanes with a storage sink,
+// in generation order. Everything else (the Lanes set, the compiler's input
+// map, the catalog response, error messages) derives from it, so adding a lane
+// is one edit here plus its router input (review B3).
+var LaneOrder = []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"}
+
+// Lanes is the membership set derived from LaneOrder.
+var Lanes = func() map[string]bool {
+	m := make(map[string]bool, len(LaneOrder))
+	for _, l := range LaneOrder {
+		m[l] = true
+	}
+	return m
+}()
 
 // Processor types. The first four shipped in the initial cut; mask and
 // drop_event complete the spec's set. The framework is open by construction:
@@ -50,12 +60,19 @@ const (
 	TypeMask          = "mask"           // partial hide: keep the last N chars
 	TypeDropField     = "drop_field"     // delete the field
 	TypeSetField      = "set_field"      // set the field to a literal
+	TypeRedactKeys    = "redact_keys"    // redact fields by KEY NAME (password, api_key, …)
+	TypeHash          = "hash"           // stable digest: unreadable but still joinable
+	TypeTag           = "tag"            // detect-only: stamp a marker, change nothing
 	TypeDropEvent     = "drop_event"     // drop the whole event (counted, never silent)
 )
+
+// TagField collects the markers a tag processor stamps (the scan-only mode).
+const TagField = "cx_sensitive"
 
 var ruleTypes = map[string]bool{
 	TypeRedactField: true, TypeRedactPattern: true, TypeMask: true,
 	TypeDropField: true, TypeSetField: true, TypeDropEvent: true,
+	TypeHash: true, TypeTag: true, TypeRedactKeys: true,
 }
 
 // TypeLabel is the operator-facing name of a processor type (UI + audit).
@@ -66,6 +83,9 @@ var TypeLabel = map[string]string{
 	TypeDropField:     "Remove field",
 	TypeSetField:      "Set field",
 	TypeDropEvent:     "Drop event",
+	TypeRedactKeys:    "Redact by field name",
+	TypeHash:          "Hash",
+	TypeTag:           "Tag (detect only)",
 }
 
 // Matcher operators. equals/contains/prefix shipped first; regex + attribute
@@ -93,8 +113,10 @@ const (
 	PatternRegex   = "regex"   // operator-supplied RE2 pattern (validated)
 )
 
-// Mask replaces redacted content when a processor declares no replacement.
-const Mask = "***"
+// DefaultRedaction is what a redact/mask writes when the processor declares no
+// replacement. (Was `Mask`, which read as a sibling of TypeMask — an unrelated
+// keep-last-N action. Review B7.)
+const DefaultRedaction = "***"
 
 // Limits (bounded by construction, §9).
 const (
@@ -104,6 +126,14 @@ const (
 	MaxOrder          = 9999
 )
 
+// FieldAll targets EVERY string field in the event (recursively) instead of one
+// path. This is what makes a managed detector useful out of the box: "redact
+// emails" should find them wherever they are, not only in the field the
+// operator happened to name. Pipeline-owned fields are preserved across the
+// sweep (see the compiler + simulator), so tenancy/time routing is never
+// rewritten by a content rule.
+const FieldAll = "*"
+
 // protectedFields are pipeline-stamped attribution/lifecycle fields a processor
 // may never TARGET (matching on them read-only is fine). Touching these could
 // re-route another tenant's documents or corrupt the time axis.
@@ -111,6 +141,13 @@ var protectedFields = map[string]bool{
 	"tenant_id": true, "tenant_seg": true, "tenant_attribution": true,
 	"log_index_base": true, "ts": true, "ts_source": true, "ts_invalid": true,
 	"timestamp": true, "topic": true,
+}
+
+// protectedFieldOrder is protectedFields in a STABLE order — the compiler emits
+// save/restore statements from it, and generated config must be deterministic.
+var protectedFieldOrder = []string{
+	"tenant_id", "tenant_seg", "tenant_attribution", "log_index_base",
+	"ts", "ts_source", "ts_invalid", "timestamp", "topic",
 }
 
 // fieldPattern bounds a dot-path: identifier segments only — no quotes, no
@@ -124,9 +161,12 @@ type Match struct {
 	Value string `json:"value"`
 }
 
-// Rule is one tenant-owned processor. (Named Rule for wire compatibility with
-// the shipped API; it IS the spec's Processor entity.)
-type Rule struct {
+// Processor is one tenant-owned processor — the spec's entity, and the name
+// used everywhere in prose, the UI and the API path. `Rule` remains as an
+// ALIAS below because the shipped JSON/DB field names (rule_id, rule_type,
+// "rules") predate the rename and changing them would break stored data for no
+// user-visible gain (review B7).
+type Processor struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenant_id,omitempty"`
 
@@ -142,6 +182,11 @@ type Rule struct {
 	Value       string `json:"value,omitempty"`        // set_field
 	// Replacement is what redact/mask writes ("[EMAIL]"); "" → Mask ("***").
 	Replacement string `json:"replacement,omitempty"`
+	// Keys is the field-NAME list a redact_keys processor redacts. Value
+	// patterns cannot see keys: in a real application log the secret is
+	// `"password": "hunter2"` — the value alone is just "hunter2" and matches
+	// nothing. Key-scoped redaction is the only thing that catches it.
+	Keys []string `json:"keys,omitempty"`
 	// KeepLast is mask's tail length: 4 → "************1111". 0 → 4 (the
 	// PCI-style default operators expect).
 	KeepLast    int    `json:"keep_last,omitempty"`
@@ -169,8 +214,12 @@ type Rule struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Rule is the historical name of Processor, kept so existing call sites and
+// the wire format stay valid.
+type Rule = Processor
+
 // DisplayName is the processor's operator-facing name (never empty).
-func (r Rule) DisplayName() string {
+func (r Processor) DisplayName() string {
 	if n := strings.TrimSpace(r.Name); n != "" {
 		return n
 	}
@@ -181,15 +230,15 @@ func (r Rule) DisplayName() string {
 }
 
 // ReplacementOrDefault is what a redact/mask action writes.
-func (r Rule) ReplacementOrDefault() string {
+func (r Processor) ReplacementOrDefault() string {
 	if s := strings.TrimSpace(r.Replacement); s != "" {
 		return s
 	}
-	return Mask
+	return DefaultRedaction
 }
 
 // KeepLastOrDefault is mask's retained tail length.
-func (r Rule) KeepLastOrDefault() int {
+func (r Processor) KeepLastOrDefault() int {
 	if r.KeepLast > 0 {
 		return r.KeepLast
 	}
@@ -263,18 +312,18 @@ func validateRegex(name, pattern string) error {
 
 // Validate checks and normalizes the operator-supplied fields (zero-trust on
 // the payload). Server-owned stamps (id/tenant/created_*) are not touched.
-func (r *Rule) Validate() error {
+func (r *Processor) Validate() error {
 	r.Name = strings.TrimSpace(r.Name)
 	if err := validLiteral("name", r.Name, 128); err != nil {
 		return err
 	}
 	r.Lane = strings.ToLower(strings.TrimSpace(r.Lane))
 	if !Lanes[r.Lane] {
-		return errors.New("lane must be one of applogs, syslog, snmptrap, cloudlogs, flows")
+		return fmt.Errorf("lane must be one of %s", strings.Join(LaneOrder, ", "))
 	}
 	r.Type = strings.ToLower(strings.TrimSpace(r.Type))
 	if !ruleTypes[r.Type] {
-		return errors.New("type must be one of redact_field, redact_pattern, mask, drop_field, set_field, drop_event")
+		return fmt.Errorf("type must be one of %s", strings.Join(ActionTypes(), ", "))
 	}
 	if r.Order < 0 || r.Order > MaxOrder {
 		return fmt.Errorf("order must be 0..%d", MaxOrder)
@@ -282,6 +331,31 @@ func (r *Rule) Validate() error {
 	r.Description = strings.TrimSpace(r.Description)
 	if err := validLiteral("description", r.Description, 256); err != nil {
 		return err
+	}
+	if r.Type == TypeRedactKeys {
+		// The key list IS the target, so the generic field validation is skipped
+		// (Field stays empty); each key is bounded like any identifier.
+		clean := r.Keys[:0]
+		for _, k := range r.Keys {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if err := validField("keys", k); err != nil {
+				return err
+			}
+			if protectedFields[strings.ToLower(k)] {
+				return fmt.Errorf("key %q is pipeline-owned and cannot be redacted", k)
+			}
+			clean = append(clean, k)
+		}
+		r.Keys = clean
+		if len(r.Keys) == 0 {
+			return errors.New("a redact_keys processor needs at least one field name")
+		}
+		if len(r.Keys) > 64 {
+			return errors.New("keys is capped at 64 field names")
+		}
 	}
 	r.Replacement = strings.TrimSpace(r.Replacement)
 	if err := validLiteral("replacement", r.Replacement, MaxReplacementLen); err != nil {
@@ -305,11 +379,19 @@ func (r *Rule) Validate() error {
 		r.Field = ""
 	} else {
 		r.Field = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Field), "."))
-		if err := validField("field", r.Field); err != nil {
-			return err
-		}
-		if protectedFields[strings.ToLower(r.Field)] {
-			return fmt.Errorf("field %q is pipeline-owned (tenancy/time attribution) and cannot be targeted", r.Field)
+		if r.Field == FieldAll {
+			// "*" is only meaningful for CONTENT rules — dropping or setting
+			// "every field" is not an operation anyone means to perform.
+			if r.Type != TypeRedactPattern && r.Type != TypeTag {
+				return fmt.Errorf("%s needs a specific field; only redact_pattern can target every field (*)", r.Type)
+			}
+		} else {
+			if err := validField("field", r.Field); err != nil {
+				return err
+			}
+			if protectedFields[strings.ToLower(r.Field)] {
+				return fmt.Errorf("field %q is pipeline-owned (tenancy/time attribution) and cannot be targeted", r.Field)
+			}
 		}
 	}
 
@@ -317,7 +399,7 @@ func (r *Rule) Validate() error {
 	// definition per action, shared by the compiler and the simulator.
 	r.PatternKind = strings.ToLower(strings.TrimSpace(r.PatternKind))
 	r.Pattern = strings.TrimSpace(r.Pattern)
-	if r.Type != TypeRedactPattern && (r.Pattern != "" || r.PatternKind != "") {
+	if !action.UsesPattern() && (r.Pattern != "" || r.PatternKind != "") {
 		return fmt.Errorf("%s does not take a pattern", r.Type)
 	}
 	if err := action.Validate(*r); err != nil {
@@ -332,7 +414,7 @@ func (r *Rule) Validate() error {
 		r.Match.Op = strings.ToLower(strings.TrimSpace(r.Match.Op))
 		matcher, ok := lookupMatcher(r.Match.Op)
 		if !ok {
-			return errors.New("match.op must be equals, contains, prefix, regex or attribute")
+			return fmt.Errorf("match.op must be one of %s", strings.Join(MatcherTypes(), ", "))
 		}
 		if err := matcher.Validate(*r.Match); err != nil {
 			return err

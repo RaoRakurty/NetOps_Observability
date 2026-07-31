@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -149,7 +150,13 @@ func (s *FileStore) Get(_ context.Context, tenant string, cross bool, id string)
 	return Rule{}, false, nil
 }
 
-func (s *FileStore) Create(_ context.Context, _ string, _ bool, r Rule) (Rule, error) {
+func (s *FileStore) Create(_ context.Context, tenant string, cross bool, r Rule) (Rule, error) {
+	// §3a.2 defense in depth (review B9): the owner comes from the caller's
+	// scope, matching what the PG backend's RLS session enforces — so the two
+	// backends cannot diverge for a caller that forgets to stamp r.TenantID.
+	if !cross {
+		r.TenantID = tenant
+	}
 	id, err := newUUIDv4()
 	if err != nil {
 		return Rule{}, err
@@ -318,6 +325,9 @@ func (p *pgStore) Create(ctx context.Context, tenant string, cross bool, r Rule)
 		return Rule{}, err
 	}
 	now := time.Now().UTC()
+	if !cross {
+		r.TenantID = tenant // §3a.2 (review B9) — mirrors the file backend
+	}
 	r.ID, r.TenantID = id, normTenant(r.TenantID)
 	r.CreatedAt, r.UpdatedAt = now, now
 	r.Version = 1
@@ -497,11 +507,17 @@ func insertVersionTx(ctx context.Context, tx pgx.Tx, r Rule, actor, kind string)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO processor_versions
+	if _, err = tx.Exec(ctx, `INSERT INTO processor_versions
 	        (tenant_id, processor_id, version, config, changed_by, change_kind)
 	    VALUES ($1,$2,$3,$4,$5,$6)
 	    ON CONFLICT (tenant_id, processor_id, version) DO NOTHING`,
-		r.TenantID, r.ID, r.Version, blob, actor, kind)
+		r.TenantID, r.ID, r.Version, blob, actor, kind); err != nil {
+		return err
+	}
+	// Bounded retention (§9, review B8): the file backend trimmed but PG grew
+	// forever and shipped the whole history on every drawer open.
+	_, err = tx.Exec(ctx, `DELETE FROM processor_versions
+	    WHERE processor_id = $1 AND version <= $2`, r.ID, r.Version-MaxVersionsPerProcessor)
 	return err
 }
 
@@ -516,7 +532,8 @@ func (p *pgStore) ListVersions(ctx context.Context, tenant string, cross bool, i
 			return nil
 		}
 		rows, err := tx.Query(ctx, `SELECT processor_id, version, config, changed_by, change_kind, created_at
-		    FROM processor_versions WHERE processor_id = $1 ORDER BY version DESC`, id)
+		    FROM processor_versions WHERE processor_id = $1
+		    ORDER BY version DESC LIMIT `+strconv.Itoa(MaxVersionsPerProcessor), id)
 		if err != nil {
 			return err
 		}

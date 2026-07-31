@@ -74,6 +74,3 @@ CREATE POLICY tenant_iso ON managed_rule_state
     WITH CHECK (current_setting('app.tenant_id', true) = '*'
         OR tenant_id = current_setting('app.tenant_id', true));
 
--- Backfill: existing processors are custom, version 1, ordered by age so the
--- pre-framework implicit order is preserved exactly.
-UPDATE pipeline_processors SET source = 'custom' WHERE source IS NULL OR source = '';

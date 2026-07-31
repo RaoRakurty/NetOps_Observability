@@ -33,8 +33,8 @@ var laneInputs = map[string]string{
 	"flows":     "flows_decoded",
 }
 
-// laneOrder keeps output stable.
-var laneOrder = []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"}
+// laneOrder is LaneOrder (rule.go) — the single lane source (review B3).
+var laneOrder = LaneOrder
 
 // HookName is the transform the lane's storage sinks read (post-filter).
 func HookName(lane string) string { return lane + "_rules" }
@@ -51,11 +51,21 @@ const DropField = "cx_drop"
 // AppliedField collects the ids of processors that fired (execution metrics).
 const AppliedField = "cx_applied"
 
+// escapeEnv protects a generated literal from Vector's CONFIG-FILE environment
+// interpolation, which runs before VRL ever sees the text: an unescaped `$`
+// makes Vector look for a variable and refuse to start
+// ("Missing environment variable in config. name = 1"). That means a regex
+// end-anchor (`^auth$`) or a capture reference (`$1`) in a REPLACEMENT would
+// take the whole processors config down — every tenant's processors with it.
+// `$$` is Vector's escape for a literal `$`. Found by boot-validating the
+// generated config against the real binary.
+func escapeEnv(s string) string { return strings.ReplaceAll(s, "$", "$$") }
+
 // vrlString renders s as a double-quoted VRL string literal.
 func vrlString(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
-	return `"` + s + `"`
+	return `"` + escapeEnv(s) + `"`
 }
 
 // vrlPath renders a validated dot-path as a VRL field accessor.
@@ -85,7 +95,7 @@ func vrlRegex(pattern string) (expr string, raw bool) {
 		// would take the whole lane's config down.
 		return "", false
 	}
-	return "r'" + pattern + "'", true
+	return "r'" + escapeEnv(pattern) + "'", true
 }
 
 // resolvePattern returns the RE2 source for a processor's pattern field.
@@ -119,10 +129,7 @@ func ruleVRL(r Rule) string {
 		// emitting broken VRL that would fail the whole lane's config load.
 		return ""
 	}
-	guards := []string{
-		fmt.Sprintf("(downcase(to_string(.tenant_id) ?? \"\") == %s)",
-			vrlString(strings.ToLower(strings.TrimSpace(r.TenantID)))),
-	}
+	guards := []string{tenantGuardVRL(r.TenantID)}
 	if r.Match != nil {
 		m, ok := lookupMatcher(r.Match.Op)
 		if !ok {
@@ -225,8 +232,3 @@ func GenerateRouterConfig(rules []Rule) string {
 	b.WriteString("          topic: \"{{ topic }}\"\n")
 	return b.String()
 }
-
-// MetricSinkInput is the transform name the router's Prometheus exporter must
-// include so the per-processor counters are actually exported (the generated
-// file cannot edit the base config's sink, so the base wires this name).
-const MetricSinkInput = "cx_processor_metrics"

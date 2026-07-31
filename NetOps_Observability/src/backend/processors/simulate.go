@@ -97,13 +97,6 @@ type SimResult struct {
 	Dropped bool `json:"dropped"`
 }
 
-// Simulate runs the tenant's enabled processors for one lane against a sample
-// event, in the SAME order the pipeline uses, and reports what fired.
-func Simulate(rules []Rule, lane, tenant string, event map[string]any) (map[string]any, []Applied) {
-	r := SimulateChain(rules, lane, tenant, event)
-	return r.Event, r.Applied
-}
-
 // SimulateChain is Simulate with the full result (including the drop verdict).
 func SimulateChain(rules []Rule, lane, tenant string, event map[string]any) SimResult {
 	out := deepCopy(event)
@@ -124,9 +117,8 @@ func SimulateChain(rules []Rule, lane, tenant string, event map[string]any) SimR
 		if !ok {
 			continue
 		}
-		// Tenant guard — the same predicate the generated VRL carries.
-		evTenant := strings.ToLower(toStr(func() any { v, _ := getPath(out, "tenant_id"); return v }()))
-		if evTenant != strings.ToLower(strings.TrimSpace(r.TenantID)) || evTenant != tenant {
+		// Tenant guard — literally the same definition the compiler emits.
+		if !tenantGuardEval(out, r.TenantID, tenant) {
 			continue
 		}
 		if r.Match != nil {

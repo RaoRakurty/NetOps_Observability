@@ -44,6 +44,16 @@ type ManagedRule struct {
 	// The edge engine ignores it today — declared so adding it later is not a
 	// schema change.
 	Checksum string `json:"checksum,omitempty"`
+	// Keys, when set, makes this a KEY-SCOPED detector: it redacts fields by
+	// NAME rather than by content. Value patterns are blind to keys, so this is
+	// the only way to catch `"password": "hunter2"`, where the value alone
+	// matches nothing.
+	Keys []string `json:"keys,omitempty"`
+	// DefaultField is where a clone targets unless the operator picks otherwise.
+	// "*" (FieldAll) sweeps every string in the event, which is what a detector
+	// normally wants: sensitive values do not politely stay in `message`
+	// (verified against live traps, where MACs live in nested fields.mac).
+	DefaultField string `json:"default_field,omitempty"`
 }
 
 // managedRules is the catalog. Ordered deterministically by id at read time.
@@ -98,10 +108,77 @@ var managedRules = []ManagedRule{
 		Checksum:    "luhn",
 	},
 	{
-		ID: "password_field", Name: "Password Field Detector", Category: "secret", Version: 1,
-		Description: "key=value pairs whose key names a secret (password/passwd/secret/api_key).",
-		Pattern:     `(?i)(password|passwd|pwd|secret|api[_-]?key)\s*[=:]\s*\S+`,
+		ID: "password_field", Name: "Secret Field Detector", Category: "secret", Version: 3,
+		Description: "Fields NAMED like a secret (password, api_key, token, authorization) — redacted by key, wherever they sit.",
+		// v3: KEY-scoped. v1/v2 were value patterns matching `password=x` in
+		// free text, which missed the shape real application logs actually
+		// carry — the secret as its own JSON field, whose value ("hunter2")
+		// matches no pattern at all. Caught by the real-log acceptance suite.
+		Keys: []string{
+			"password", "passwd", "pwd", "secret", "api_key", "apikey",
+			"access_token", "refresh_token", "token", "authorization",
+			"auth", "credentials", "private_key", "client_secret",
+		},
 		Replacement: "[REDACTED]",
+	},
+	{
+		ID: "secret_in_text", Name: "Secret Assignment Detector", Category: "secret", Version: 1,
+		Description: "key=value assignments inside free text (password=hunter2, api_key: abc123).",
+		// The companion to the key-scoped rule above: catches secrets embedded
+		// in a message string rather than carried as their own field.
+		Pattern:     `(?i)["']?(password|passwd|pwd|secret|api[_-]?key|access[_-]?token)["']?\s*[=:]\s*["']?[^"'\s,;}]+`,
+		Replacement: "[REDACTED]",
+	},
+	{
+		ID: "snmp_community", Name: "SNMP Community Detector", Category: "secret", Version: 1,
+		Description: "SNMP community strings in trap payloads and device configuration lines.",
+		// Real trap messages in this platform carry `community=public`; a
+		// community string is a credential and should never sit in a log index.
+		Pattern:     `(?i)community(?:[-_ ]?string)?\s*[=:]\s*["']?[A-Za-z0-9._-]+["']?`,
+		Replacement: "community=[REDACTED]",
+	},
+	{
+		ID: "basic_auth_url", Name: "Credentials-in-URL Detector", Category: "auth", Version: 1,
+		Description: "user:password embedded in a URL (http://user:pass@host).",
+		Pattern:     `(?i)(https?|ftp|ldap)://[^:\s/@]+:[^@\s/]+@`,
+		Replacement: "$1://[REDACTED]@",
+	},
+	{
+		ID: "private_key", Name: "Private Key Detector", Category: "secret", Version: 1,
+		Description: "PEM private-key headers (RSA/EC/OPENSSH/PGP).",
+		Pattern:     `-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----`,
+		Replacement: "[PRIVATE_KEY]",
+	},
+	{
+		ID: "ipv6", Name: "IPv6 Address Detector", Category: "pii", Version: 1,
+		Description: "Full and compressed IPv6 addresses.",
+		Pattern:     `\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b`,
+		Replacement: "[IPV6]",
+	},
+	{
+		ID: "us_ssn", Name: "US SSN Detector", Category: "pii", Version: 1,
+		Description: "US Social Security numbers (NNN-NN-NNNN).",
+		// SHAPE only: RE2 has no lookaround, so the strict area/group/serial
+		// exclusions (000/666/9xx, 00, 0000) cannot be expressed here — they
+		// belong to the checksum validator. Matching the shape is the right
+		// trade for a redactor: a false positive costs one masked string, a
+		// false negative leaks an SSN.
+		Pattern:     `\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b`,
+		Replacement: "[SSN]",
+		Checksum:    "ssn_area",
+	},
+	{
+		ID: "phone_e164", Name: "Phone Number Detector", Category: "pii", Version: 1,
+		Description: "E.164 / NANP-formatted phone numbers.",
+		Pattern:     `\+?[0-9]{1,3}[ .-]?\(?[0-9]{3}\)?[ .-]?[0-9]{3}[ .-]?[0-9]{4}\b`,
+		Replacement: "[PHONE]",
+	},
+	{
+		ID: "iban", Name: "IBAN Detector", Category: "financial", Version: 1,
+		Description: "International bank account numbers.",
+		Pattern:     `\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b`,
+		Replacement: "[IBAN]",
+		Checksum:    "mod97",
 	},
 }
 
@@ -132,6 +209,15 @@ var managedCompiled = func() map[string]*regexp.Regexp {
 	return m
 }()
 
+// defaultFieldFor is the clone target for a rule: sweep everything unless the
+// catalog entry says otherwise.
+func defaultFieldFor(mr ManagedRule) string {
+	if mr.DefaultField != "" {
+		return mr.DefaultField
+	}
+	return FieldAll
+}
+
 // CloneManagedRule builds an editable processor from a catalog entry. The
 // clone is a NORMAL processor from then on (the tenant owns it); it keeps
 // ManagedRuleID so the catalog can show adoption and offer version upgrades.
@@ -140,18 +226,29 @@ func CloneManagedRule(id, lane, field string) (Rule, bool) {
 	if !ok {
 		return Rule{}, false
 	}
-	return Rule{
+	out := Rule{
 		Name:          mr.Name,
 		Lane:          lane,
-		Type:          TypeRedactPattern,
-		Field:         field,
-		PatternKind:   PatternBuiltin,
-		Pattern:       mr.ID,
 		Replacement:   mr.Replacement,
 		Description:   mr.Description,
 		ManagedRuleID: mr.ID,
 		Enabled:       true,
-	}, true
+	}
+	// A key-scoped detector compiles to a redact_keys processor; a content
+	// detector to a pattern sweep. Same engine either way.
+	if len(mr.Keys) > 0 {
+		out.Type = TypeRedactKeys
+		out.Keys = append([]string(nil), mr.Keys...)
+		return out, true
+	}
+	if strings.TrimSpace(field) == "" {
+		field = defaultFieldFor(mr)
+	}
+	out.Type = TypeRedactPattern
+	out.Field = field
+	out.PatternKind = PatternBuiltin
+	out.Pattern = mr.ID
+	return out, true
 }
 
 // ── Sensitive Data Scanner extension point (interfaces only) ────────────────

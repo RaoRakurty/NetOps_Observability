@@ -29,6 +29,33 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 	defer ps.DB().Close()
 	st := processors.NewPGStore(ps.DB())
 
+	// EVERY registered action must round-trip through Postgres. The original
+	// test only exercised drop_field, so a CHECK constraint that rejected mask
+	// and drop_event shipped: green in dev (file backend), 500 in production.
+	for _, a := range processors.ActionCatalog() {
+		r := processors.Processor{TenantID: "acme", Lane: "syslog", Type: a.Type, Enabled: true, Field: "probe_field"}
+		if !a.TargetsField {
+			r.Field = ""
+			r.Match = &processors.Match{Field: "level", Op: processors.MatchEquals, Value: "debug"}
+		}
+		if a.Type == processors.TypeRedactPattern {
+			r.PatternKind, r.Pattern = processors.PatternBuiltin, "email"
+		}
+		if err := r.Validate(); err != nil {
+			t.Fatalf("action %s: fixture must validate: %v", a.Type, err)
+		}
+		saved, err := st.Create(ctx, "acme", false, r)
+		if err != nil {
+			t.Fatalf("action %s must persist on the Postgres backend: %v", a.Type, err)
+		}
+		if _, found, err := st.Get(ctx, "acme", false, saved.ID); err != nil || !found {
+			t.Fatalf("action %s must read back: %v found=%v", a.Type, err, found)
+		}
+		if _, err := st.Delete(ctx, "acme", false, saved.ID); err != nil {
+			t.Fatalf("action %s cleanup: %v", a.Type, err)
+		}
+	}
+
 	mk := func(tenant string) processors.Rule {
 		r := processors.Rule{TenantID: tenant, Lane: "syslog", Type: processors.TypeDropField, Field: "secret", Enabled: true}
 		if err := r.Validate(); err != nil {
@@ -71,5 +98,14 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 	// The config writer's cross-tenant read sees both.
 	if all, _ := st.AllEnabled(ctx); len(all) != 2 {
 		t.Fatalf("AllEnabled must see every tenant's enabled rules: %+v", all)
+	}
+
+	// History + rollback must work on the RLS backend too, and stay scoped.
+	hist, found, err := st.ListVersions(ctx, "acme", false, ra.ID)
+	if err != nil || !found || len(hist) == 0 {
+		t.Fatalf("pg history must record the create: %v found=%v %+v", err, found, hist)
+	}
+	if _, found, _ := st.ListVersions(ctx, "acme", false, rb.ID); found {
+		t.Fatal("RLS LEAK: acme read globex's processor history")
 	}
 }

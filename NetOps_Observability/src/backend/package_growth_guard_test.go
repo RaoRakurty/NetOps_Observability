@@ -299,7 +299,17 @@ import (
 //	2026-07-28  229  timeintel_store.go → timeintel/store.go (the incident
 //	                  timeline store, mem + FORCE-RLS pg via the DB seam;
 //	                  selector stayed in main.go)
-const rootPackageCeiling = 200
+//	2026-07-31  201  +1: pipeline_processors.go SPLIT OUT of
+//	                  telemetry_enrichment.go. Not a new domain in the root —
+//	                  the Pipeline Processors DOMAIN (model, matcher/action
+//	                  registries, managed rules, compiler, simulator,
+//	                  versioning) already lives in the processors/ subpackage.
+//	                  This file is only the I/O boundary (handlers + the
+//	                  file-plane config writer + the store selector), which is
+//	                  precisely what the root package is for; it was living
+//	                  under telemetry_enrichment.go's device→tenant-CSV header,
+//	                  where nobody would find it. Net effect on §2: better.
+const rootPackageCeiling = 201
 
 func TestFlatPackageMainDoesNotGrow(t *testing.T) {
 	entries, err := os.ReadDir(".")

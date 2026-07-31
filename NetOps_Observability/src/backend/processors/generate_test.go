@@ -126,8 +126,13 @@ func TestEveryRegisteredPluginCompilesAndEvaluates(t *testing.T) {
 			r.Field = ""
 			r.Match = &Match{Field: "service", Op: MatchEquals, Value: "x"}
 		}
-		if a.Type == TypeRedactPattern {
+		// Pattern-bearing actions (redact_pattern, tag) need a detector;
+		// key-scoped actions need a key list.
+		if spec, ok := lookupAction(a.Type); ok && spec.UsesPattern() {
 			r.PatternKind, r.Pattern = PatternBuiltin, "email"
+		}
+		if a.Type == TypeRedactKeys {
+			r.Keys = []string{"password"}
 		}
 		if err := r.Validate(); err != nil {
 			t.Fatalf("action %s: representative rule must validate: %v", a.Type, err)
@@ -237,10 +242,15 @@ func TestManagedRulesCatalog(t *testing.T) {
 		t.Fatalf("catalog looks empty: %d", len(cat))
 	}
 	for _, r := range cat {
-		if r.ID == "" || r.Name == "" || r.Pattern == "" || r.Version < 1 {
+		if r.ID == "" || r.Name == "" || r.Version < 1 {
 			t.Errorf("managed rule incomplete: %+v", r)
 		}
-		if compiled(r.Pattern) == nil {
+		// A detector is EITHER content-scoped (a pattern) or key-scoped (a key
+		// list) — never neither.
+		if r.Pattern == "" && len(r.Keys) == 0 {
+			t.Errorf("managed rule %s has neither a pattern nor keys", r.ID)
+		}
+		if r.Pattern != "" && compiled(r.Pattern) == nil {
 			t.Errorf("managed rule %s has an uncompilable pattern", r.ID)
 		}
 	}
@@ -349,5 +359,51 @@ func TestMaskIsRuneSafe(t *testing.T) {
 	}
 	if strings.ContainsRune(got, '\uFFFD') {
 		t.Fatalf("mask split a UTF-8 rune: %q", got)
+	}
+}
+
+// Vector interpolates $VAR in the CONFIG FILE before VRL parses it, so a `$`
+// in a generated literal — a regex end-anchor, or a capture reference in a
+// replacement — makes the router refuse to start and freezes EVERY tenant's
+// processors. Both must be escaped as `$$`.
+func TestGeneratedLiteralsEscapeDollar(t *testing.T) {
+	r := validRule(t, Rule{
+		ID: "d", TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
+		Field: "message", PatternKind: PatternRegex, Pattern: `secret=[a-z]+$`,
+		Replacement: "$1[GONE]",
+	})
+	out := GenerateRouterConfig([]Rule{r})
+	for _, bad := range []string{"[a-z]+$'", `"$1[GONE]"`} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("unescaped $ reached the config (%q) — Vector would refuse to start:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "[a-z]+$$'") || !strings.Contains(out, `$$1[GONE]`) {
+		t.Fatalf("both the pattern and the replacement must escape $ as $$:\n%s", out)
+	}
+}
+
+// The compiler and the simulator must agree about WHAT a processor targets, not
+// just how it transforms. A whole-event sweep that compiled to the single-field
+// form emitted `.*` — invalid VRL that took the entire lane's config down,
+// while the simulator happily previewed a correct sweep. (That drift shipped
+// once; this test is why it cannot again.)
+func TestFieldAllCompilesAsASweep(t *testing.T) {
+	r := validRule(t, Rule{
+		ID: "s", TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
+		Field: FieldAll, PatternKind: PatternBuiltin, Pattern: "email",
+	})
+	out := GenerateRouterConfig([]Rule{r})
+	if strings.Contains(out, ".*") {
+		t.Fatalf("FieldAll must not compile to the single-field form (invalid VRL):\n%s", out)
+	}
+	if !strings.Contains(out, "map_values(., recursive: true)") {
+		t.Fatalf("FieldAll must compile to a recursive sweep:\n%s", out)
+	}
+	// The sweep must save AND restore every pipeline-owned field.
+	for _, f := range protectedFieldOrder {
+		if !strings.Contains(out, "= ."+f+";") && !strings.Contains(out, "."+f+" = _p") {
+			t.Fatalf("sweep must preserve pipeline-owned field %q:\n%s", f, out)
+		}
 	}
 }
