@@ -294,6 +294,69 @@ def test_bus_bridge_stamps_a_time_on_timeless_producers():
 
 # ── F-11: a broken enrichment table must be visible ─────────────────────────
 
+def processors_default() -> dict:
+    return yaml.safe_load(read("deployment", "docker", "vector-router", "processors-default.yaml"))
+
+
+# ── item 121: per-tenant processor hooks ─────────────────────────────────────
+
+def test_every_storage_sink_routes_through_its_processor_hook():
+    """The router's storage sinks must read the generated *_rules hooks, not
+    the *_tagged transforms directly — otherwise a tenant's redaction rules
+    exist in the API but never touch what is actually stored."""
+    cfg = vector_cfg("router")
+    expect = {
+        "opensearch_applogs": "applogs_rules",
+        "opensearch_syslog": "syslog_rules",
+        "opensearch_snmptrap": "snmptrap_rules",
+        "opensearch_cloudlogs": "cloudlogs_rules",
+        "clickhouse_flows": "flows_rules",
+    }
+    hooks = processors_default()["transforms"]
+    for sink, hook in expect.items():
+        assert cfg["sinks"][sink]["inputs"] == [hook], \
+            f"{sink} bypasses the processor hook (reads {cfg['sinks'][sink]['inputs']})"
+        assert hook in hooks, f"default processors file no longer defines {hook} — a cold start cannot boot"
+    assert cfg["transforms"]["flows_os_sample"]["inputs"] == ["flows_rules"], \
+        "the OS flow sample must see the SAME shaped records as ClickHouse"
+
+
+def test_processor_hooks_shape_after_attribution_not_before():
+    """Hooks consume the *_tagged / flows_decoded transforms so tenant
+    attribution (and its metric) is measured BEFORE any tenant rule runs, and
+    the tenant guard inside the generated VRL has a tenant_id to read."""
+    hooks = processors_default()["transforms"]
+    expected_inputs = {
+        "applogs_rules": "applogs_tagged", "syslog_rules": "syslog_tagged",
+        "snmptrap_rules": "snmptrap_tagged", "cloudlogs_rules": "cloudlogs_tagged",
+        "flows_rules": "flows_decoded",
+    }
+    for hook, inp in expected_inputs.items():
+        assert hooks[hook]["type"] == "remap"
+        assert hooks[hook]["inputs"] == [inp], f"{hook} must consume {inp}"
+    # The attribution metric stays on the PRE-hook transforms.
+    metric = vector_cfg("router")["transforms"]["tenant_attribution_metric"]
+    assert set(metric["inputs"]) == {"applogs_tagged", "syslog_tagged", "snmptrap_tagged",
+                                     "cloudlogs_tagged", "flows_decoded"}
+
+
+def test_router_loads_and_watches_the_generated_processors_config():
+    compose = yaml.safe_load(read("deployment", "docker", "docker-compose.yml"))
+    router = compose["services"]["vector-router"]
+    assert "--watch-config" in router["command"], \
+        "without --watch-config a rule change needs a container restart to apply"
+    assert "/etc/vector/processors/processors.yaml" in router["command"]
+    assert any("/etc/vector/processors" in v for v in router["volumes"]), \
+        "the generated-config mount is missing"
+
+
+def test_installer_seeds_the_processors_config():
+    """The router loads the generated file at boot; a cold start before the api
+    has ever written it must find the checked-in no-op default."""
+    src = read("scripts", "install.py")
+    assert "processors-default.yaml" in src, "install.py no longer seeds the processors config"
+
+
 def test_tenant_attribution_outcome_is_stamped_on_every_lane():
     """tenant_id="" is a legitimate value, so a broken device→tenant table looks
     exactly like correct operation: every lane collapses into the shared

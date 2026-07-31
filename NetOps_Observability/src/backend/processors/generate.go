@@ -1,0 +1,155 @@
+package processors
+
+// generate.go — the pure rules→Vector-config generator. Emits the router's
+// processors.yaml: one remap hook per lane, wired between the lane's tagged
+// transform and its storage sinks (the base vector-router/vector.yaml routes
+// its sinks through these hook names, so the file MUST always define all five
+// — a lane with no rules gets an explicit no-op program).
+//
+// Determinism: same rule set → byte-identical output (the writer compares
+// before writing; --watch-config must not see phantom changes). No timestamps.
+//
+// Injection posture: user input reaches the output ONLY through vrlString()
+// (escaped string literal) — never as syntax. Builtin regexes are constants.
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// laneInputs maps a lane to the router transform its hook consumes.
+var laneInputs = map[string]string{
+	"applogs":   "applogs_tagged",
+	"syslog":    "syslog_tagged",
+	"snmptrap":  "snmptrap_tagged",
+	"cloudlogs": "cloudlogs_tagged",
+	"flows":     "flows_decoded",
+}
+
+// laneOrder keeps output stable.
+var laneOrder = []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"}
+
+// HookName returns the generated transform name for a lane ("<lane>_rules").
+func HookName(lane string) string { return lane + "_rules" }
+
+// vrlString renders s as a double-quoted VRL string literal. Validation has
+// already restricted s to single-line printable text; escape the two
+// characters that could alter the literal, plus template braces which Vector
+// would otherwise try to expand in some contexts.
+func vrlString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
+// vrlPath renders a validated dot-path as a VRL field accessor.
+func vrlPath(field string) string { return "." + field }
+
+// regexEscape escapes a literal for embedding inside a VRL regex. Only used
+// for literal redact patterns (builtins are constants).
+func regexEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(`\.+*?()|[]{}^$`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// ruleVRL renders ONE rule's guarded action. The rule must be validated.
+func ruleVRL(r Rule) string {
+	var action string
+	target := vrlPath(r.Field)
+	switch r.Type {
+	case TypeRedactField:
+		action = fmt.Sprintf("if exists(%s) { %s = %s }", target, target, vrlString(Mask))
+	case TypeDropField:
+		action = fmt.Sprintf("del(%s)", target)
+	case TypeSetField:
+		action = fmt.Sprintf("%s = %s", target, vrlString(r.Value))
+	case TypeRedactPattern:
+		pattern := BuiltinPatterns[r.Pattern]
+		if r.PatternKind == "literal" {
+			pattern = regexEscape(r.Pattern)
+		}
+		// r'…' raw literal: pattern is either a package constant or an escaped
+		// literal — no user syntax. The single quote is not escapable inside a
+		// VRL raw regex, so validation-by-construction: regexEscape never emits
+		// one from a literal that lacks it, and literals containing ' are
+		// rejected here (defense in depth: replace with the escaped string form).
+		if strings.ContainsRune(pattern, '\'') {
+			return fmt.Sprintf("if exists(%s) { %s = replace(to_string(%s) ?? \"\", %s, %s) }",
+				target, target, target, vrlString(r.Pattern), vrlString(Mask))
+		}
+		action = fmt.Sprintf("if exists(%s) { %s = replace(to_string(%s) ?? \"\", r'%s', %s) }",
+			target, target, target, pattern, vrlString(Mask))
+	}
+
+	guards := []string{fmt.Sprintf("(downcase(to_string(.tenant_id) ?? \"\") == %s)", vrlString(strings.ToLower(strings.TrimSpace(r.TenantID))))}
+	if r.Match != nil {
+		f := vrlPath(r.Match.Field)
+		v := vrlString(r.Match.Value)
+		switch r.Match.Op {
+		case "equals":
+			guards = append(guards, fmt.Sprintf("((to_string(%s) ?? \"\") == %s)", f, v))
+		case "contains":
+			guards = append(guards, fmt.Sprintf("contains(to_string(%s) ?? \"\", %s)", f, v))
+		case "prefix":
+			guards = append(guards, fmt.Sprintf("starts_with(to_string(%s) ?? \"\", %s)", f, v))
+		}
+	}
+	return "if " + strings.Join(guards, " && ") + " { " + action + " }"
+}
+
+// GenerateRouterConfig renders the full processors.yaml from the enabled rule
+// set (disabled rules are the caller's filter). Rules are ordered
+// deterministically (tenant, created_at, id) inside each lane.
+func GenerateRouterConfig(rules []Rule) string {
+	byLane := map[string][]Rule{}
+	total := 0
+	for _, r := range rules {
+		if !r.Enabled || !Lanes[r.Lane] {
+			continue
+		}
+		byLane[r.Lane] = append(byLane[r.Lane], r)
+		total++
+	}
+	for _, lane := range laneOrder {
+		rs := byLane[lane]
+		sort.Slice(rs, func(i, j int) bool {
+			if rs[i].TenantID != rs[j].TenantID {
+				return rs[i].TenantID < rs[j].TenantID
+			}
+			if !rs[i].CreatedAt.Equal(rs[j].CreatedAt) {
+				return rs[i].CreatedAt.Before(rs[j].CreatedAt)
+			}
+			return rs[i].ID < rs[j].ID
+		})
+	}
+
+	var b strings.Builder
+	b.WriteString("# GENERATED by the Correlix API (per-tenant processor rules, item 121).\n")
+	b.WriteString("# Do not edit: the api service rewrites this file when rules change.\n")
+	b.WriteString(fmt.Sprintf("# Active rules: %d\n", total))
+	b.WriteString("#\n")
+	b.WriteString("# The base vector-router/vector.yaml routes every storage sink through the\n")
+	b.WriteString("# *_rules hooks below, so ALL FIVE must always exist — a lane with no rules\n")
+	b.WriteString("# is an explicit no-op remap, never an absent component.\n")
+	b.WriteString("transforms:\n")
+	for _, lane := range laneOrder {
+		b.WriteString(fmt.Sprintf("  %s:\n", HookName(lane)))
+		b.WriteString("    type: remap\n")
+		b.WriteString(fmt.Sprintf("    inputs: [%s]\n", laneInputs[lane]))
+		b.WriteString("    source: |\n")
+		// Explicit no-op so the program is never empty (an empty VRL program is
+		// a compile error). del() of a never-present field touches nothing.
+		b.WriteString("      del(.__cx_rules_noop__)\n")
+		for _, r := range byLane[lane] {
+			b.WriteString("      " + ruleVRL(r) + "\n")
+		}
+	}
+	return b.String()
+}

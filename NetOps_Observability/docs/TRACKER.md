@@ -66,7 +66,6 @@ ignores them.
 | # | Item | Pri | Status |
 |---|------|-----|--------|
 | 114 | **Kubernetes deployment packaging** — Helm chart over the 19-service stack (StatefulSets + PVCs for CH/OS/PG/Kafka), per-service requests from `RESOURCE_SIZING.md`, ingress replacing nginx, secrets from the installer `.env` contract, air-gapped image bundle for k8s registries, CI packaging leg alongside `make-installer.sh`. Customers get single-host artifacts only today. | High | ⏳ not started — confirmed absent 2026-07-20; **a project, not a task** |
-| 121 | **#53 remnants** — the Explorer and dedup/triage halves shipped (`events_feed.go`, `alert_episodes.go`). Left: maintenance windows (no `maintenance` handling in the alert path), audit + deploy events as feed sources, UI processor editor (enrich/normalize/redact is still Vector YAML). | Med | ⏳ not started |
 | 123 | **`docs-portal` advisory triage** — 46 npm advisories (14 high). Only 2 were Trivy-visible (`ignore-unfixed: true`) and are fixed. Triage the rest so what is deferred is deferred knowingly. | Low | ⏳ not started |
 | 128 | **Wireless — Phase 9 live validation + the doc_claimed→lab/live fidelity ladder.** Phases 1–8 SHIPPED 2026-07-26 (report `docs/Wireslessdesign.md` signed off; canonical model + mig 0030 · Catalyst 9800 connector · correlation integration RF=-1 + 9 signatures · onboarding/session lanes + #126 fix · 9-model architecture proof · Iris module · UI · guarded remediation, five gates fail-closed, `FEATURE_WIRELESS_ACTIONS=false`). OPEN: **Phase 9 needs hardware (Q8 — a WLC + AP + client; owner decision O7)**: verify the Cisco-IOS-XE-wireless-* leaf spellings the connector authored doc_claimed, run the physical fault-injection battery (report §23), promote fidelity, then build the first real action executor behind gate 4 (which fails closed until it exists). Follow-ons unblocked but not started: Aruba/Meraki/Mist connectors over the proven model; client-history Iris tools once the pseudonymization contract (Q4/Q5) is decided. | Low | 🟡 Phases 1–8 shipped; Phase 9 **ON HOLD** (owner 2026-07-27: hardware-dependent work → Low; lab design saved in `docs/design/research/wireless-lab-setup.md`) |
 | 125 | **Stale customer bundle** — the pre-push hook warns on every push; `make bundle` when ready to ship. Note `6092adce` deliberately took this off its daily cron per §16.4, so rebuild is event-driven and manual by design. | Low | ⏳ not started |
@@ -86,6 +85,13 @@ ignores them.
   included. BGP all-AFI is **not** being refiled; `profiles.go:68` stays
   IPv4-only as a known, accepted state. The 23 verified groundings remain in
   `docs/design/telemetry-coverage-reference.md`.
+- **Item 121 scoped-out tails (shipped 2026-07-30, see
+  `docs/design/pipeline-processors.md`)** — (a) **on-prem deploy events as a
+  feed source**: there is no on-prem deploy/config-push producer to record;
+  cloud change events cover the cloud half via the admitted `cloud` source.
+  Reopen trigger = an on-prem config-push/deploy pipeline exists. (b)
+  **processor shaping of the correlation lane**: the correlation engine
+  consumes the bus upstream of the router hooks; v2 options documented.
 - **T4 (#67 replay calibration)** — parked; reopen trigger = promoted-incident
   history exists.
 - **T6 Stream 6** — parked; designs saved. Revisit before scale.

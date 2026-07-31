@@ -26,6 +26,8 @@ import TopologyCanvas from "./features/topology/renderers/react-flow/TopologyCan
 import Collectors from "./tabs/Collectors";
 import SnmpProfileManager from "./tabs/SnmpProfileManager";
 import Alerts from "./tabs/Alerts";
+import MaintenanceWindows from "./tabs/MaintenanceWindows";
+import ProcessorsAdmin from "./tabs/ProcessorsAdmin";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
 import Incidents from "./tabs/Incidents";
@@ -143,6 +145,9 @@ export const NAV: NavSection[] = [
       { id: "monitors", label: "Monitor Rules", group: "Monitors", render: () => <Rules /> },
       { id: "new", label: "Create Monitor", group: "Monitors", render: () => <NewMonitor /> },
       { id: "triggered", label: "Active Alerts", group: "Monitors", render: () => <Alerts /> },
+      // Item 121: planned-work windows — pause notifications, stamp reliability
+      // rollups as planned maintenance. Sits with the alert surface it governs.
+      { id: "maintenance", label: "Maintenance Windows", group: "Monitors", render: () => <MaintenanceWindows /> },
       { id: "quality", label: "Link Quality", group: "Monitors", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
       { id: "events", label: "Events", group: "Event Management", render: (c) => <Events sinceSeconds={c.rangeMinutes * 60} /> },
       { id: "incidents", label: "Incidents", group: "Event Management", render: () => <Incidents /> },
@@ -284,6 +289,10 @@ export const NAV: NavSection[] = [
       // Data Collection — moved out of Infrastructure (kept it uncrowded): the
       // sources + the poller plumbing that feed telemetry.
       { id: "datasources", label: "Data Sources", group: "Data Collection", render: () => <DataSources /> },
+      // Item 121: per-tenant processor editor (redact/drop/set shaping compiled
+      // into the ingest router). Admin-gated server-side; sits with the plumbing
+      // that feeds telemetry.
+      { id: "processors", label: "Processors", group: "Data Collection", render: () => <ProcessorsAdmin /> },
       { id: "collectors", label: "Collectors", group: "Data Collection", platformOnly: true, render: () => <Collectors /> },
       { id: "snmp", label: "SNMP Profile Manager", group: "Data Collection", render: () => <SnmpProfileManager /> },
       // Identity & Access — consolidates Users · Roles · Security Settings,

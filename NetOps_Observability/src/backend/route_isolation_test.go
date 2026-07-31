@@ -59,6 +59,10 @@ var routeIsolationLedger = map[string]string{
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.
 	"/api/alerts/episodes":          "scoped",
 	"/api/alerts/episodes/":         "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
+	"/api/alerts/maintenance-windows":  "scoped", // planned-work windows (item 121), alerts:read/write + tenant filter
+	"/api/alerts/maintenance-windows/": "scoped", // GET|PUT|DELETE {id}, cross-tenant id → 404
+	"/api/pipeline/processors":         "scoped", // per-tenant processor rules (item 121), administration:admin + tenant filter
+	"/api/pipeline/processors/":        "scoped", // GET|PUT|DELETE {id} · POST preview, cross-tenant id → 404
 	"/api/compliance":               "scoped",
 	"/api/correlations":             "scoped",
 	"/api/correlations/":            "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited

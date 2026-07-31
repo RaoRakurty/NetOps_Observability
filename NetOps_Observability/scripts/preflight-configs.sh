@@ -53,10 +53,23 @@ SYSLOGNG_IMG="balabit/syslog-ng:4.7.1"
 # that a secret has been provisioned — without the stub every future run fails
 # for a reason that has nothing to do with the config being broken.
 check_vector(){
-  local rel="$1" label="$2"
+  # $3 (optional): a SECOND config file the tier loads at runtime — the router's
+  # generated processor hooks (item 121). The base config's sinks reference
+  # transforms defined there, so validating the base alone would always fail.
+  local rel="$1" label="$2" extra="${3:-}"
   [ -f "$ROOT/$rel" ] || { skip "$label (no $rel)"; return; }
   local stub; stub="$(mktemp -d)"
   printf 'identity,tenant_id\n' > "$stub/device_tenant.csv"
+  local -a extra_mounts=() extra_flags=()
+  if [ -n "$extra" ]; then
+    if [ ! -f "$ROOT/$extra" ]; then
+      red "$label — companion config $extra is missing (the router cannot boot without it)"
+      rm -rf "$stub"
+      return
+    fi
+    extra_mounts=(-v "$ROOT/$extra:/etc/vector/processors/processors.yaml:ro")
+    extra_flags=(--config /etc/vector/processors/processors.yaml)
+  fi
   local out
   out="$(timeout 30 docker run --rm --entrypoint vector \
       -e CLICKHOUSE_USER=x -e CLICKHOUSE_PASSWORD=x -e OPENSEARCH_URL=http://x:9200 \
@@ -64,7 +77,8 @@ check_vector(){
       -e INGEST_TOKEN=preflight-stub \
       -v "$ROOT/$rel:/etc/vector/vector.yaml:ro" \
       -v "$stub:/etc/vector/enrichment:ro" \
-      "$VECTOR_IMG" --config /etc/vector/vector.yaml 2>&1)"
+      "${extra_mounts[@]}" \
+      "$VECTOR_IMG" --config /etc/vector/vector.yaml "${extra_flags[@]}" 2>&1)"
   rm -rf "$stub"
   if grep -qE 'error\[E[0-9]+\]' <<<"$out"; then
     red "$label — VRL/topology compile error: $(grep -oE 'error\[E[0-9]+\][^
@@ -144,7 +158,11 @@ check_syslogng(){
 
 echo "=== config preflight: fresh-load every committed service config ==="
 check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator"
-check_vector "deployment/docker/vector-router/vector.yaml" "vector-router"
+# The router loads TWO configs at runtime: base + the generated processor hooks
+# (item 121). Validate with the checked-in no-op default standing in for the
+# generated file — exactly what install.py seeds on a cold start.
+check_vector "deployment/docker/vector-router/vector.yaml" "vector-router" \
+             "deployment/docker/vector-router/processors-default.yaml"
 check_nginx
 check_metrics_configs
 check_syslogng

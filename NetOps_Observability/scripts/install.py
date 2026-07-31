@@ -982,6 +982,24 @@ def ensure_data_dirs(root: Path) -> None:
     except (PermissionError, OSError):
         pass  # not root; api will adopt it on first write where it can
 
+    # Item 121: per-tenant processor rules → generated Vector-router config.
+    # The api (nonroot 65532) writes processors/router/processors.yaml; the
+    # router loads it as a second --config, so it MUST exist before the router
+    # boots. Seed the checked-in no-op default (all five hooks, zero rules);
+    # the api rewrites it on first start and on every rule change.
+    proc_dir = root / "data" / "api" / "processors" / "router"
+    proc_dir.mkdir(parents=True, exist_ok=True)
+    proc_seed = proc_dir / "processors.yaml"
+    if not proc_seed.exists():
+        default = root / "deployment" / "docker" / "vector-router" / "processors-default.yaml"
+        proc_seed.write_text(default.read_text())
+    try:
+        os.chown(proc_dir.parent, 65532, 65532)
+        os.chown(proc_dir, 65532, 65532)
+        os.chown(proc_seed, 65532, 65532)
+    except (PermissionError, OSError):
+        pass  # not root; api will adopt it on first write where it can
+
     # #81 P1: Application Identification IP→app catalog feeds dir. The api (nonroot
     # 65532) reads vendor IP-range snapshots dropped here by scripts/fetch-appid-feeds.sh
     # (APPID_FEEDS_DIR=/data/appid-feeds). Pre-create it (empty is fine — the resolver

@@ -435,7 +435,14 @@ services:
     logging: *deflog
     # F-51: DIRECTORY mount — see the note on vector-aggregator above. This is
     # the service the stale-inode trap was caught on.
-    command: ["--config", "/etc/vector/conf/vector.yaml"]
+    #
+    # Item 121: the second --config is the GENERATED per-tenant processor hook
+    # file (api writes it into data/api/processors/router; install.py seeds a
+    # no-op default so a cold start never boots against a missing component).
+    # --watch-config hot-applies rule changes; Vector validates a reload and
+    # keeps the old topology on error, so a bad generate can't take the lane
+    # down. This is also the enrichment reload-on-change Phase 2 wanted.
+    command: ["--config", "/etc/vector/conf/vector.yaml", "--config", "/etc/vector/processors/processors.yaml", "--watch-config"]
     environment:
       # ClickHouse credentials are interpolated into vector.yaml at startup.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
@@ -447,6 +454,9 @@ services:
       # aggregator has. Flows reach the bus straight from goflow2 now, so this
       # tier is where their tenant stamp is applied.
       - ../../data/api/enrichment:/etc/vector/enrichment:ro
+      # Item 121: generated processor hooks (DIRECTORY mount per F-51 — the
+      # api's write-then-rename must be visible to --watch-config).
+      - ../../data/api/processors/router:/etc/vector/processors:ro
     # Liveness: Vector's API /health (process-level). A WEDGED SINK keeps the
     # API healthy, so this only catches a fully-hung process — the sink-wedge
     # case (input advancing, output stale) is handled by pipeline-watchdog.sh.
@@ -1092,6 +1102,11 @@ services:
       # #20: export the device→tenant map (under the api's /data volume) so the
       # Vector aggregator + correlation can stamp tenant_id onto telemetry.
       TENANT_ENRICHMENT_DIR: /data/enrichment
+      # Item 121: per-tenant processor rules → generated router config. The
+      # writer emits $PROCESSORS_DIR/router/processors.yaml; vector-router
+      # mounts that subdir read-only and hot-reloads it (--watch-config).
+      PROCESSORS_DIR: /data/processors
+      FEATURE_PROCESSORS: ${FEATURE_PROCESSORS:-true}
       STATIC_DEVICES_PATH: ${STATIC_DEVICES_PATH:-/config/devices.yaml}
       RULES_FILE: /config/rules.yaml
       # #81 P1: Application Identification IP→app catalog. Opt-in snapshot dir of

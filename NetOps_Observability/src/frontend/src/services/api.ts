@@ -123,6 +123,61 @@ export type AlertEpisode = {
   snoozed_by?: string;
   notes?: EpisodeNote[];
 };
+// Maintenance windows (item 121). Exactly one shape per window: one-shot
+// (starts_at + ends_at) or recurring (schedule, optionally bounded by until).
+// Empty scope lists match everything of that dimension.
+export type MaintenanceWindowSchedule = {
+  tz?: string;
+  weekdays?: string[]; // mon..sun; empty = daily
+  start_hour: number;
+  start_minute: number;
+  duration_minutes: number;
+};
+export type MaintenanceWindowInput = {
+  name: string;
+  description?: string;
+  device_ids?: string[];
+  sites?: string[];
+  rules?: string[];
+  starts_at?: string;
+  ends_at?: string;
+  schedule?: MaintenanceWindowSchedule;
+  until?: string;
+  enabled?: boolean;
+};
+export type MaintenanceWindow = MaintenanceWindowInput & {
+  id: string;
+  tenant_id?: string;
+  enabled: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+// Pipeline processors (item 121): structured rules — never free-form VRL/regex.
+export type ProcessorLane = "applogs" | "syslog" | "snmptrap" | "cloudlogs" | "flows";
+export type ProcessorRuleType = "redact_field" | "redact_pattern" | "drop_field" | "set_field";
+export type ProcessorMatch = { field: string; op: "equals" | "contains" | "prefix"; value: string };
+export type ProcessorRuleInput = {
+  lane: ProcessorLane;
+  type: ProcessorRuleType;
+  field: string;
+  pattern?: string;       // redact_pattern: builtin name or literal text
+  pattern_kind?: "builtin" | "literal";
+  value?: string;         // set_field
+  match?: ProcessorMatch;
+  description?: string;
+  enabled?: boolean;
+};
+export type ProcessorRule = ProcessorRuleInput & {
+  id: string;
+  tenant_id?: string;
+  enabled: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AlertEpisodeList = {
   episodes: AlertEpisode[];
   total: number;
@@ -727,6 +782,9 @@ export type HealthScoreResp = {
 export type FeedItem = {
   signal_id: string; ts: string; source: string; kind: string; severity: string;
   entity_type: string; entity_id: string; site: string; title: string; correlation_id: string | null;
+  // attrs is decoded server-side when it is valid JSON (actor/provider/region
+  // for change events); a malformed blob passes through as its raw string.
+  attrs?: Record<string, unknown> | string;
 };
 // `total` is the TRUE window count (real COUNT over the same filters; -1 =
 // unknown); next_cursor is set only when a full page was returned.
@@ -1886,6 +1944,30 @@ export const api = {
     request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/snooze`, { method: "POST", body: JSON.stringify({ until }) }),
   episodeNote: (id: string, text: string) =>
     request<AlertEpisode>(`/api/alerts/episodes/${encodeURIComponent(id)}/notes`, { method: "POST", body: JSON.stringify({ text }) }),
+  // Maintenance windows (item 121): declared planned-work periods. A covering
+  // window pauses alert NOTIFICATIONS only (same honesty rule as mute/snooze)
+  // and stamps reliability rollups as planned maintenance.
+  maintenanceWindows: () =>
+    request<{ windows: MaintenanceWindow[]; count: number }>("/api/alerts/maintenance-windows"),
+  maintenanceWindowCreate: (body: MaintenanceWindowInput) =>
+    request<MaintenanceWindow>("/api/alerts/maintenance-windows", { method: "POST", body: JSON.stringify(body) }),
+  maintenanceWindowUpdate: (id: string, body: MaintenanceWindowInput) =>
+    request<MaintenanceWindow>(`/api/alerts/maintenance-windows/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  maintenanceWindowDelete: (id: string) =>
+    request<{ deleted: string }>(`/api/alerts/maintenance-windows/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // Pipeline processors (item 121): structured per-tenant redact/drop/set rules
+  // compiled into the ingest router. Admin-gated server-side.
+  processorRules: () =>
+    request<{ rules: ProcessorRule[]; count: number }>("/api/pipeline/processors"),
+  processorRuleCreate: (body: ProcessorRuleInput) =>
+    request<ProcessorRule>("/api/pipeline/processors", { method: "POST", body: JSON.stringify(body) }),
+  processorRuleUpdate: (id: string, body: ProcessorRuleInput) =>
+    request<ProcessorRule>(`/api/pipeline/processors/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  processorRuleDelete: (id: string) =>
+    request<{ deleted: string }>(`/api/pipeline/processors/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  processorPreview: (lane: string, event: Record<string, unknown>) =>
+    request<{ event: Record<string, unknown>; applied: { rule_id: string; type: string; field: string; description?: string }[] }>(
+      "/api/pipeline/processors/preview", { method: "POST", body: JSON.stringify({ lane, event }) }),
   rules: () => request<Rule[]>("/api/rules"),
   addRule: (r: Rule) =>
     request<Rule>("/api/rules", { method: "POST", body: JSON.stringify(r) }),

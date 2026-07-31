@@ -54,6 +54,8 @@ import (
 	"time"
 
 	"netops/backend/alerts"
+	"netops/backend/maintenance"
+	"netops/backend/processors"
 	"netops/backend/chhttp"
 	"netops/backend/collectors"
 	"netops/backend/integration"
@@ -79,6 +81,8 @@ type server struct {
 	collectors       *collectors.Pool
 	alerts           *alerts.Engine
 	alertEpisodes    *alertEpisodeStore
+	maintWindows     maintenance.Store // declared planned-work windows (item 121): pause notifications + stamp timeintel
+	processors       processors.Store  // per-tenant pipeline processor rules (item 121): compiled into the router config
 	userRules        *userRulesStore
 	notifier         *notify.Dispatcher
 	selfHeal         *selfheal.Healer
@@ -512,6 +516,10 @@ func newServer() *server {
 	if err != nil {
 		log.Fatalf("audit store: %v", err)
 	}
+	// Item 121: mirror allowed mutations onto the corr_signals spine so the
+	// event feed's "what changed" includes operator/API actions. No-op without
+	// ClickHouse; the trail above stays the durable record either way.
+	audit = newAuditSignalBridge(audit)
 
 	snmpProfiles, err := newSNMPProfileStore(envOr("SNMP_PROFILES_FILE", "/data/snmp_profiles.json"))
 	if err != nil {
@@ -675,6 +683,12 @@ func newServer() *server {
 	// Alert episode grouping + triage (Wave 2 #6): fold fire/resolve transitions
 	// into per-tenant episodes; muted/snoozed episodes pause NOTIFICATIONS only.
 	srv.alertEpisodes = newAlertEpisodeStore(envOr("ALERT_EPISODES_FILE", "/data/alert_episodes.json"))
+	// Maintenance windows (item 121): a covering window pauses notifications for
+	// newly-firing alerts and stamps timeintel snapshots as planned maintenance.
+	srv.maintWindows = newMaintenanceWindowStore()
+	// Per-tenant pipeline processor rules (item 121): structured redact/drop/set
+	// shaping compiled into the router's processors.yaml by the config writer.
+	srv.processors = newProcessorStore()
 	engine.OnTransition = srv.observeAlertTransition
 	engine.SuppressNotify = srv.alertNotifySuppressed
 	srv.reports = newReportScheduler(srv, envOr("REPORT_RUNS_FILE", "/data/report_runs.json"))
@@ -1117,6 +1131,7 @@ func Run() {
 	// Export the device→tenant map for the ingest tier to stamp tenant_id onto
 	// telemetry (#20 Phase 1). No-op unless TENANT_ENRICHMENT_DIR is set.
 	srv.startTenantEnrichment(ctx)
+	srv.startProcessorsConfigWriter(ctx) // item 121: rules → router processors.yaml
 	// Bounded growth for the Postgres audit trail (F-57). Opt-in and OFF by
 	// default — an audit trail is evidence; only an operator decides how long
 	// it is kept. No-op unless AUDIT_RETENTION_DAYS is a positive integer and
@@ -1496,6 +1511,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/alerts/episodes", s.handleAlertEpisodes)       // tenant-scoped episode list
 	mux.HandleFunc("/api/alerts/episodes/", s.handleAlertEpisodeAction) // POST {id}/(ack|assign|mute|snooze|notes)
+	mux.HandleFunc("/api/alerts/maintenance-windows", s.handleMaintenanceWindows)      // tenant-scoped planned-work windows (item 121)
+	mux.HandleFunc("/api/alerts/maintenance-windows/", s.handleMaintenanceWindowByID) // GET|PUT|DELETE {id}
+	mux.HandleFunc("/api/pipeline/processors", s.handleProcessors)                    // per-tenant processor rules (item 121)
+	mux.HandleFunc("/api/pipeline/processors/", s.handleProcessorByID)                // GET|PUT|DELETE {id} · POST preview
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	// Feature availability only (no credential/integration posture) — any
@@ -1974,6 +1993,10 @@ func (s *server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 		"copilot":             os.Getenv("FEATURE_COPILOT") == "true",
 		"device_ssh":          os.Getenv("FEATURE_DEVICE_SSH") == "true",
 		"active_verification": os.Getenv("FEATURE_ACTIVE_VERIFICATION") == "true",
+		// item 121: the per-tenant pipeline processor editor. The API itself is
+		// always up (rules persist regardless); the flag gates UI visibility and
+		// signals that the router is actually consuming the generated config.
+		"processors": os.Getenv("FEATURE_PROCESSORS") == "true",
 	})
 }
 
