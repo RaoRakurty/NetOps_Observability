@@ -16,12 +16,22 @@ import {
 } from "../../../utils/topologyHealth";
 import { RCA_OVERLAY } from "../../../utils/rcaOverlay";
 
-// FIXED card geometry. Both dimensions are constants (not min-height) and are
+// FIXED node footprint. Both dimensions are constants (not min-height) and are
 // also declared on the React-Flow node (see topologyToReactFlow) so RF never
 // re-measures the card — together with a constant border width, hover/spotlight
 // can change colour/shadow/opacity but NEVER the box, so a node can't shake.
-export const CARD_W = 188;
+//
+// ADAPTIVE 3-TIER (2026-07-31): the box is 120×56 and the CONTENT changes with
+// the semantic-zoom tier — badge (shape only) → token (shape + name) → card
+// (shape + name + metrics). The old 188×56 card paid full width for a hostname
+// that is illegible past ~200 nodes anyway (at 1000 nodes the fit-zoom is ~0.33,
+// rendering 13px text at 4px). Keeping ONE footprint across tiers is what lets
+// the layout stay valid at every zoom: nodes can never overlap, and the cell
+// never has to be sized for the largest tier.
+export const CARD_W = 120;
 export const CARD_H = 56;
+/** Resting size of the far-zoom badge (drawn centred inside the fixed box). */
+export const BADGE_SIZE = 36;
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
@@ -140,6 +150,77 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       ? `0 12px 30px rgba(16,24,40,0.30), 0 0 0 1px ${healthColor}55`
       : "0 3px 10px rgba(16,24,40,0.13), 0 1px 2px rgba(16,24,40,0.09)";
 
+  // ── ADAPTIVE TIER ────────────────────────────────────────────────────────────
+  // badge: far zoom — a role SHAPE with a health fill. Shapes survive at 16px
+  // where text does not, so a 1000-node fabric still reads as structure. A name
+  // appears only for the nodes the LOD already decided to name (trouble /
+  // selected / search match), so troublemakers stay identifiable on a wallboard.
+  const tier = data.tier ?? "card";
+  if (tier === "badge") {
+    const marker = showRca && rca ? rca.color : healthColor;
+    return (
+      <div
+        title={tip}
+        style={{
+          position: "relative",
+          width: CARD_W,
+          height: CARD_H,
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 2,
+          opacity,
+        }}
+      >
+        <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+        <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+        <span
+          aria-label={`${node.label} — ${HEALTH_LABEL[node.health]}`}
+          style={{
+            width: BADGE_SIZE,
+            height: BADGE_SIZE,
+            borderRadius: node.kind === "router" || node.kind === "cloud" ? "50%" : 9,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            // fill = health (tinted, never a screaming solid), stroke = role accent,
+            // outer ring = exception/selection. Three independent channels.
+            background: HEALTH_TINT[node.health],
+            border: `2px solid ${spotlight ? accent : marker}`,
+            boxShadow: spotlight
+              ? `0 0 0 3px ${accent}44`
+              : unhealthy
+                ? `0 0 0 3px ${marker}33`
+                : "0 1px 3px rgba(16,24,40,.14)",
+            color: accent,
+          }}
+        >
+          {icon}
+        </span>
+        {!nameHidden && (
+          <span
+            style={{
+              maxWidth: CARD_W - 6,
+              fontSize: 9,
+              fontWeight: 600,
+              lineHeight: 1.1,
+              color: "var(--topo-node-fg, var(--fg))",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {node.label}
+          </span>
+        )}
+        <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+        <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+      </div>
+    );
+  }
+
   // ── ONE uniform, FIXED-SIZE card ─────────────────────────────────────────────
   // Emphasis (hover/spotlight/dim) tunes opacity / border-colour / shadow ONLY —
   // never geometry. The card kept a fixed `width` + `box-sizing: border-box`, so a
@@ -156,8 +237,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         width: CARD_W,
         height: CARD_H,
         boxSizing: "border-box",
-        padding: "13px 14px",
-        borderRadius: 14,
+        // Token tier is a compact pill (no room for, and no need of, the
+        // metrics/confidence strip); card tier keeps the full anatomy.
+        padding: tier === "token" ? "8px 9px" : "9px 10px 13px",
+        borderRadius: 12,
         background: "var(--panel)",
         border: `${borderWidth}px solid ${borderColor}`,
         borderLeft: `3px solid ${accent}`,
@@ -173,11 +256,11 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
 
       {/* icon + hostname (dominant) + health badge — one consistent row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
         <span style={{ display: "inline-flex", color: accent, flex: "0 0 auto" }}>{icon}</span>
         <span
           style={{
-            fontSize: 13,
+            fontSize: 12,
             fontWeight: 600,
             lineHeight: 1.25,
             // Bright label — pure white on dark canvases, dark ink on light ones
@@ -199,18 +282,18 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
 
       {/* engineer/incident detail strip — compact CPU/MEM inline, bottom-left, so the
           card never resizes (paired with the confidence chip at bottom-right). */}
-      {metricsLine ? (
+      {metricsLine && tier === "card" ? (
         <span
           title={metricsLine}
           style={{
             position: "absolute",
-            left: 14,
-            bottom: 4,
+            left: 10,
+            bottom: 3,
             fontSize: 9,
             fontFamily: MONO,
             color: "var(--fg-subtle)",
             opacity: 0.85,
-            maxWidth: CARD_W - 64,
+            maxWidth: CARD_W - 46,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -220,13 +303,14 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         </span>
       ) : null}
 
-      {/* confidence chip — bottom-right, faint */}
+      {/* confidence chip — bottom-right, faint (card tier only) */}
+      {tier === "card" && (
       <span
         title={`Confidence ${confidencePct(node.confidence)}`}
         style={{
           position: "absolute",
-          right: 8,
-          bottom: 4,
+          right: 7,
+          bottom: 3,
           fontSize: 9,
           fontFamily: MONO,
           color: "var(--fg-subtle)",
@@ -235,6 +319,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       >
         {confidencePct(node.confidence)}
       </span>
+      )}
 
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />

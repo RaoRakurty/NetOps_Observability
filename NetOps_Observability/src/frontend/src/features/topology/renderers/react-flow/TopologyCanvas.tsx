@@ -614,6 +614,17 @@ function CanvasInner({
         >
           Carrier
         </button>
+        {renderer === "canvas" && (
+          <button
+            className={`topo-render-toggle topo-carrier${showInventory ? " on" : ""}`}
+            role="switch"
+            aria-checked={showInventory}
+            onClick={() => setShowInventory((v) => !v)}
+            title="Show the device inventory beside the canvas (status, mgmt IP, observed-since; click a row to focus it on the map)."
+          >
+            Devices
+          </button>
+        )}
         <MapWorkflowSelector value={mode} onChange={setMode} workflows={workflowMeta} />
         {/* Data source: live per-mode projection vs the persistent reconciled graph. */}
         <div className="topo-render-toggle" role="tablist" aria-label="Data source">
@@ -818,23 +829,18 @@ function CanvasInner({
           </div>
         ) : (
           <>
-            <div className="topo-search-dock">
+            {/* Search shifts clear of the inventory rail when it is open. */}
+            <div className={`topo-search-dock${showInventory ? " with-inventory" : ""}`}>
               <TopologySearch view={view} onMatches={setSearchMatches} onPick={onPick} />
             </div>
 
             {/* ContainerLab-style device inventory beside the canvas (vendor
-                research §b): same resolved view, bidirectional selection sync. */}
+                research §b): same resolved view, bidirectional selection sync.
+                The toggle lives in the TOOLBAR (not docked on the stage) — an
+                overlay button at top-left collided with the search dock. */}
             {showInventory && (
               <TopologyInventoryPanel view={view} selection={selection} onPick={onPick} />
             )}
-            <button
-              className="topo-fs-btn topo-inventory-toggle"
-              onClick={() => setShowInventory((v) => !v)}
-              title={showInventory ? "Hide the device inventory" : "Show the device inventory"}
-              aria-pressed={showInventory}
-            >
-              {showInventory ? "◧ Hide devices" : "◧ Devices"}
-            </button>
 
             <ReactFlow
               nodes={rfNodes}

@@ -5500,4 +5500,5 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   font-family: var(--font-mono, monospace);
 }
 .topo-inventory-since { color: var(--fg-subtle); }
-.topo-inventory-toggle { left: 10px; right: auto; top: 12px; }
+/* Search shifts right of the inventory rail (252px + gaps) so the two never overlap. */
+.topo-search-dock.with-inventory { left: 274px; max-width: calc(100% - 300px); }

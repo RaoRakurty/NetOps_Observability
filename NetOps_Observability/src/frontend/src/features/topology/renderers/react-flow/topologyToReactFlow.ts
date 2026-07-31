@@ -246,7 +246,17 @@ export function topologyToReactFlow(
         // node from shaking as spotlight recomputes.
         width: CARD_W,
         height: CARD_H,
-        data: { node: n, emphasis, showLabel, overlay: ui.overlay, metricsLine: showMetrics ? metricsLine(n.metrics) : undefined },
+        data: {
+          node: n,
+          emphasis,
+          showLabel,
+          overlay: ui.overlay,
+          metricsLine: showMetrics ? metricsLine(n.metrics) : undefined,
+          // Adaptive tier from the semantic-zoom bucket: shapes at distance,
+          // names at working zoom, full anatomy up close. Undefined zoom
+          // (tests/static renders) keeps the full card.
+          tier: ui.zoom === undefined ? "card" : ui.zoom < 0.8 ? "badge" : ui.zoom < 1.4 ? "token" : "card",
+        },
         zIndex: 1,
         selectable: true,
         draggable: true,

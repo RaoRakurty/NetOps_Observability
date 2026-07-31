@@ -36,6 +36,8 @@ export type RFNodeData = {
   overlay: OverlayKind;
   /** Precomputed metrics strip, e.g. "CPU 42% · MEM 68% · Links 12 · Alerts 2". */
   metricsLine?: string;
+  /** Adaptive render tier from the semantic-zoom bucket (default "card"). */
+  tier?: NodeTier;
 };
 
 /** `data` payload on every React Flow edge. */
@@ -45,6 +47,15 @@ export type RFEdgeData = {
   overlay: OverlayKind;
   showLabel: boolean;
 };
+
+/**
+ * Adaptive render tier for a device node (semantic zoom). ONE fixed footprint
+ * (CARD_W×CARD_H) across all three, so the layout stays valid at every zoom:
+ *   badge — far zoom: role shape + health fill (+ a name only for trouble)
+ *   token — mid zoom: shape + hostname
+ *   card  — close zoom: shape + hostname + metrics/confidence
+ */
+export type NodeTier = "badge" | "token" | "card";
 
 /** Maps a domain NodeKind to the registered React Flow node `type` key. */
 export const NODE_TYPE_FOR_KIND: Record<string, string> = {
