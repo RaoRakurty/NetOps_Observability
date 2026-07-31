@@ -196,7 +196,9 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
       return;
     }
     try {
-      setPreview(await api.processorPreview(f.lane, ev));
+      // Send the DRAFT so step 4 shows what THIS rule does, not just what the
+      // already-saved chain does.
+      setPreview(await api.processorPreview(f.lane, ev, toInput(f)));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -389,7 +391,7 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
           <div style={{ display: "grid", gap: 10 }}>
             <div className="ccw-hint">
               Dry run against a sample event — nothing is stored, and the pipeline is not touched.
-              The preview runs your <strong>saved</strong> processors; save first to include this one.
+              This includes the rule you are writing <em>plus</em> your already-saved processors, in execution order.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <label className="ccw-field">
@@ -419,7 +421,11 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
               </div>
             )}
             {preview && preview.applied.length === 0 && !preview.dropped && (
-              <div className="ccw-hint">No saved processor matched this sample.</div>
+              <div className="ccw-hint">
+                Nothing matched this sample. Check that the target field exists in the event above —
+                a detector aimed at <code>message</code> will not find a value that lives in another field
+                (use <code>*</code> to scan every field).
+              </div>
             )}
           </div>
         )}
@@ -549,14 +555,14 @@ export default function ProcessorsAdmin() {
   const columns = useMemo<Column<ProcessorRule>[]>(() => [
     { key: "order", header: "#", width: 56, sortable: true, sortValue: (r) => r.order,
       text: (r) => String(r.order), render: (r) => <span style={{ color: "var(--muted)" }}>{r.order}</span> },
-    { key: "name", header: "Processor", width: "24%", sortable: true, text: (r) => r.name || summarize(r),
+    { key: "name", header: "Processor", width: "34%", sortable: true, text: (r) => r.name || summarize(r),
       render: (r) => (
         <span className="pp-name" title={r.description || summarize(r)}>
           <strong>{r.name || summarize(r)}</strong>
           <span className="pp-name-sum">{summarize(r)}</span>
         </span>
       ) },
-    { key: "lane", header: "Lane", width: 86, sortable: true, text: (r) => r.lane,
+    { key: "lane", header: "Lane", width: 82, sortable: true, text: (r) => r.lane,
       render: (r) => <span className="badge">{r.lane}</span> },
     { key: "source", header: "Source", width: 92, sortable: true, text: (r) => r.source ?? "custom",
       render: (r) => r.source === "managed"
@@ -564,7 +570,7 @@ export default function ProcessorsAdmin() {
         : <Chip label="Custom" tone="var(--fg-subtle)" /> },
     { key: "status", header: "Status", width: 96, sortable: true, text: (r) => (r.enabled ? "enabled" : "disabled"),
       render: (r) => (r.enabled ? <Chip label="Enabled" tone="var(--ok)" /> : <Chip label="Disabled" tone="var(--fg-subtle)" />) },
-    { key: "updated", header: "Last updated", width: 138, sortable: true,
+    { key: "updated", header: "Last updated", width: 128, sortable: true,
       sortValue: (r) => Date.parse(r.updated_at) || 0,
       render: (r) => <span title={`version ${r.version}`}>{fmt(r.updated_at)} · v{r.version}</span> },
     // 4 buttons never fit 240px — Delete was clipped off the right edge. The

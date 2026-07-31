@@ -2007,9 +2007,11 @@ export const api = {
     request<ProcessorRule>(`/api/pipeline/processors/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
   processorRuleDelete: (id: string) =>
     request<{ deleted: string }>(`/api/pipeline/processors/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  processorPreview: (lane: string, event: Record<string, unknown>) =>
+  // `draft` previews an UNSAVED processor alongside the saved chain, so the
+  // wizard can show the effect of the rule being written.
+  processorPreview: (lane: string, event: Record<string, unknown>, draft?: ProcessorRuleInput) =>
     request<ProcessorPreview>("/api/pipeline/processors/preview", {
-      method: "POST", body: JSON.stringify({ lane, event }),
+      method: "POST", body: JSON.stringify({ lane, event, processor: draft }),
     }),
   // The engine describes itself: registered actions/matchers + the managed-rule
   // catalog. The wizard renders from this, so a newly-registered plugin shows up

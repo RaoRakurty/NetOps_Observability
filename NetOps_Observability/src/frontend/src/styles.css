@@ -5696,7 +5696,11 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 .pp-actions { display: inline-flex; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
 .pp-actions .btn { padding: 2px 7px; font-size: 11px; line-height: 1.5; }
 .pp-actions .pp-danger:hover { border-color: var(--bad); color: var(--bad); }
-.pp-name { display: block; line-height: 1.35; padding: 2px 0; min-width: 0; }
+.pp-name { display: block; line-height: 1.4; padding: 4px 0; min-width: 0; }
+.pp-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The processor cell carries two lines (name + compiled summary) — give the
+   row height to match, or a cloned rule reads as a cramped smudge. */
+.dtv-row:has(.pp-name), tr:has(.pp-name) { height: 46px; }
 .pp-name-sum {
   display: block; font-size: 11px; color: var(--muted);
   font-family: var(--font-mono, monospace);

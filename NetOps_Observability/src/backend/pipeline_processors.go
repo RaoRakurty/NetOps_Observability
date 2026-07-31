@@ -230,10 +230,19 @@ func (s *server) handleProcessors(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// processorPreviewRequest is the dry-run body: a sample event + the lane.
+// processorPreviewRequest is the dry-run body: a sample event, the lane, and
+// optionally the DRAFT being edited.
+//
+// The draft matters: without it the preview only ran SAVED processors, so an
+// operator building a rule in the wizard pressed "preview" and saw the before
+// and after panes identical — the rule they were writing was not in the chain
+// yet. Previewing a rule you cannot see the effect of is not a preview.
 type processorPreviewRequest struct {
 	Lane  string         `json:"lane"`
 	Event map[string]any `json:"event"`
+	// Draft is an unsaved processor to append to the chain for this run only.
+	// It is validated exactly like a save, and never persisted.
+	Draft *processors.Processor `json:"processor,omitempty"`
 }
 
 // handleProcessorByID routes the per-processor surface. Each sub-route is its
@@ -293,6 +302,32 @@ func (s *server) handleProcessorPreview(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	// Append the unsaved DRAFT so the wizard shows what the rule being written
+	// will actually do. Without it the preview ran only SAVED processors, so an
+	// operator building a rule pressed "preview" and saw before and after
+	// identical — the rule they were writing was not in the chain yet. A
+	// preview whose effect you cannot see is not a preview.
+	if req.Draft != nil {
+		draft := *req.Draft
+		draft.ID = "draft"
+		draft.Name = strings.TrimSpace(draft.Name)
+		if draft.Name == "" {
+			draft.Name = "(unsaved draft)"
+		}
+		draft.Lane, draft.Enabled = req.Lane, true
+		// The draft belongs to the caller — never to whatever a payload claims.
+		if !cross {
+			draft.TenantID = tenant
+		}
+		if err := draft.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("draft: %w", err))
+			return
+		}
+		if draft.Order == 0 {
+			draft.Order = processors.MaxOrder // runs last, like a new processor
+		}
+		rules = append(rules, draft)
 	}
 	// The simulation runs under the CALLER's tenant: stamp the sample the
 	// way the router's enrichment would, so the tenant guard behaves.
