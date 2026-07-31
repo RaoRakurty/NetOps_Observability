@@ -74,6 +74,10 @@ func (s *server) writeProcessorsConfig(ctx context.Context) error {
 	content := processors.GenerateRouterConfig(rules)
 	routerDir := filepath.Join(dir, "router")
 	target := filepath.Join(routerDir, processorsFileName)
+	// #nosec G304 -- the path is $PROCESSORS_DIR (operator-set env, from compose)
+	// joined with a package CONSTANT filename. No request data, no tenant data
+	// and no processor field reaches it, so there is no traversal surface; the
+	// read exists only to skip rewriting an unchanged file.
 	if prev, err := os.ReadFile(target); err == nil && string(prev) == content {
 		return nil // unchanged — don't touch the watched file
 	}
@@ -357,7 +361,6 @@ func (s *server) handleProcessorPreview(w http.ResponseWriter, r *http.Request) 
 		"applied":  res.Applied,
 		"dropped":  res.Dropped,
 	})
-	return
 }
 
 // handleProcessorCatalog — GET …/catalog: the engine describes ITSELF
@@ -378,7 +381,6 @@ func (s *server) handleProcessorCatalog(w http.ResponseWriter, r *http.Request) 
 		"managed_rules": processors.ManagedRules(),
 		"lanes":         processors.LaneOrder,
 	})
-	return
 }
 
 // handleProcessorClone — POST …/clone: adopt a managed rule as an editable,
@@ -429,7 +431,6 @@ func (s *server) handleProcessorClone(w http.ResponseWriter, r *http.Request) {
 	}
 	s.regenProcessorsAsync()
 	writeJSON(w, http.StatusCreated, out)
-	return
 }
 
 // handleProcessorVersions — GET …/{id}/versions (immutable history) and
@@ -478,7 +479,6 @@ func (s *server) handleProcessorVersions(w http.ResponseWriter, r *http.Request,
 	}
 	w.Header().Set("Allow", "GET, POST")
 	writeError(w, http.StatusMethodNotAllowed, errors.New("GET versions or POST versions/{n}"))
-	return
 }
 
 // handleProcessorCRUD — GET | PUT | DELETE …/{id}.
