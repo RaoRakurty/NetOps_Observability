@@ -887,6 +887,7 @@ func cancelOnlyWorkers() []string {
 		"path-baseline-precompute", // server.startPathBaselinePrecompute (CH writes)
 		"path-graph-enrich",        // server.startPathGraphEnrichment
 		"path-graph-ingest",        // server.startPathGraphIngest (CH/PG writes)
+		"pipeline-processors",      // server.startProcessorsConfigWriter (ticker + mutation kicks)
 		"probe-paths-enrich",       // server.startProbePathsEnrichment
 		"report-pipeline",          // reportPipeline.Start → scheduler + N render workers
 		"report-scheduler-file",    // reportScheduler.Start (file backend)
@@ -894,7 +895,6 @@ func cancelOnlyWorkers() []string {
 		"seam-bootstrap",           // server.startSeamBootstrap (PG writes)
 		"seam-enrich",              // server.startSeamEnrichment
 		"svc-flow-rollup",          // server.startSvcFlowRollup (CH writes)
-		"pipeline-processors",      // server.startProcessorsConfigWriter (ticker + mutation kicks)
 		"tenant-enrichment",        // server.startTenantEnrichment
 		"topology-links-enrich",    // server.startTopologyLinksEnrichment
 		"topology-reconciler",      // server.startTopologyReconciler (PG writes)
