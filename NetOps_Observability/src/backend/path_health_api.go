@@ -36,8 +36,24 @@ type vmSample struct {
 
 // vmInstant runs a VictoriaMetrics instant query and returns one sample per series.
 func (s *server) vmInstant(ctx context.Context, query string) ([]vmSample, error) {
+	return s.vmInstantScoped(ctx, query, nil)
+}
+
+// vmInstantScoped is vmInstant with the caller's tenant-scope `extra_filters[]`.
+//
+// VictoriaMetrics AND-injects each filter into every series selector server-side,
+// so a scoped principal's query is never evaluated unscoped upstream. This is the
+// same mechanism the metrics proxy and the forecast use — reused rather than
+// re-derived, because a second scoping implementation is a second thing that can
+// silently be wrong.
+func (s *server) vmInstantScoped(ctx context.Context, query string, filters []string) ([]vmSample, error) {
 	base := envOr("VICTORIA_URL", envOr("METRICS_URL", "http://victoria:8428"))
-	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?query=" + url.QueryEscape(query)
+	q := url.Values{}
+	q.Set("query", query)
+	for _, f := range filters {
+		q.Add("extra_filters[]", f)
+	}
+	endpoint := strings.TrimRight(base, "/") + "/api/v1/query?" + q.Encode()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

@@ -70,7 +70,12 @@ func (s *server) handleHealthScore(w http.ResponseWriter, r *http.Request) {
 // qVecBy runs a VM vector query and returns value-by-label-key (e.g. "device").
 // Best-effort: an error yields an empty map + ok=false (class then not live).
 func (s *server) qVecBy(ctx context.Context, query, key string) (map[string]float64, bool) {
-	samples, err := s.vmInstant(ctx, query)
+	return s.qVecByScoped(ctx, query, key, nil)
+}
+
+// qVecByScoped is qVecBy constrained to a principal's visible devices.
+func (s *server) qVecByScoped(ctx context.Context, query, key string, filters []string) (map[string]float64, bool) {
+	samples, err := s.vmInstantScoped(ctx, query, filters)
 	if err != nil {
 		return nil, false
 	}
@@ -89,7 +94,12 @@ func (s *server) qVecBy(ctx context.Context, query, key string) (map[string]floa
 // pair. Returns nil (not an empty map) when the query fails, so callers can
 // treat "unreachable" and "no series" identically (both yield no lookups).
 func (s *server) qVecBy2(ctx context.Context, query, k1, k2 string) map[[2]string]float64 {
-	samples, err := s.vmInstant(ctx, query)
+	return s.qVecBy2Scoped(ctx, query, k1, k2, nil)
+}
+
+// qVecBy2Scoped is qVecBy2 constrained to a principal's visible devices.
+func (s *server) qVecBy2Scoped(ctx context.Context, query, k1, k2 string, filters []string) map[[2]string]float64 {
+	samples, err := s.vmInstantScoped(ctx, query, filters)
 	if err != nil {
 		return nil
 	}

@@ -83,11 +83,20 @@ type topoMetrics struct {
 // the busier direction as a fraction of ifSpeed (rate(octets)*8 / speed_mbps*1e6).
 // Interface keys are re-canonicalized so abbreviated LLDP/CDP port-ids ("Et1")
 // match full SNMP ifNames ("Ethernet1").
-func (s *server) gatherTopoMetrics(ctx context.Context) topoMetrics {
+//
+// TENANT SCOPING (§3a.4). These series are keyed by device NAME, and the map is
+// later joined to the caller's devices by name — so an unscoped query let two
+// tenants that both run a "core-sw1" read each other's CPU, memory and interface
+// utilisation onto their own topology nodes. The queries now carry the caller's
+// `extra_filters[]`, the same VictoriaMetrics boundary the metrics proxy and the
+// forecast enforce.
+func (s *server) gatherTopoMetrics(ctx context.Context, claims jwtClaims) topoMetrics {
 	mctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	cpu, _ := s.qVecBy(mctx, `max by (device) (device_cpu_percent)`, "device")
-	mem, _ := s.qVecBy(mctx, `max by (device) (device_mem_percent)`, "device")
+	ids, names, cross := s.visibleDeviceMetricLabels(claims)
+	f := metricsScopeFilters(ids, names, cross)
+	cpu, _ := s.qVecByScoped(mctx, `max by (device) (device_cpu_percent)`, "device", f)
+	mem, _ := s.qVecByScoped(mctx, `max by (device) (device_mem_percent)`, "device", f)
 	return topoMetrics{
 		cpu: cpu,
 		mem: mem,
@@ -95,9 +104,9 @@ func (s *server) gatherTopoMetrics(ctx context.Context) topoMetrics {
 		// keying by `interface` silently yields empty maps, so link utilization never
 		// binds to an edge and Capacity shows nothing. canonIfaceMap then collapses
 		// abbreviated LLDP/CDP port-ids and full ifNames to one key.
-		operStatus: canonIfaceMap(s.qVecBy2(mctx, `max by (device, ifName) (device_if_oper_status)`, "device", "ifName")),
-		inUtil:     canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName")),
-		outUtil:    canonIfaceMap(s.qVecBy2(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName")),
+		operStatus: canonIfaceMap(s.qVecBy2Scoped(mctx, `max by (device, ifName) (device_if_oper_status)`, "device", "ifName", f)),
+		inUtil:     canonIfaceMap(s.qVecBy2Scoped(mctx, `rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName", f)),
+		outUtil:    canonIfaceMap(s.qVecBy2Scoped(mctx, `rate(device_if_out_octets[5m])*8 / ((device_if_speed > 0)*1000000)`, "device", "ifName", f)),
 	}
 }
 
@@ -131,7 +140,7 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── live device + link metrics (best-effort; same source /graph enrichment uses) ──
-	lm := s.gatherTopoMetrics(r.Context())
+	lm := s.gatherTopoMetrics(r.Context(), claims)
 	linkFacts := toLinkFacts(links, lm.operStatus, lm.inUtil, lm.outUtil)
 
 	// Executive geo is a SITE-level projection: it aggregates the same evidence-

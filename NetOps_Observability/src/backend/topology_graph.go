@@ -49,7 +49,7 @@ func (s *server) handleTopologyGraph(w http.ResponseWriter, r *http.Request) {
 	// the SAME signals /view uses. The persisted first_seen/last_seen/stale (already
 	// in the view) is kept; only Health/Metrics/Status/Utilization are filled.
 	alertsByDevice := s.activeAlertsByDevice(claims)
-	lm := s.gatherTopoMetrics(r.Context())
+	lm := s.gatherTopoMetrics(r.Context(), claims)
 	// Item 121: persisted records carry their own tenant + declared site, so the
 	// window check needs no inventory join here.
 	maintItems := make([]maintTriple, 0, len(snap.Nodes))
