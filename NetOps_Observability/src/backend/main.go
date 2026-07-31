@@ -1768,6 +1768,16 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/events", s.handleEvents)
 	// Prometheus scrape endpoint
 	mux.HandleFunc("/metrics", s.handlePromMetrics)
+	// Sealed Fields edge key delivery (#129). Registered ONLY when sealing is
+	// enabled, so a deployment without the feature has no key-serving route at
+	// all — not even one that answers 501. Stack-internal credential required;
+	// see internal/sealedfields/edgekeys.go for why this is not a public route.
+	if s.sealProvider != nil {
+		mux.HandleFunc(sealedfields.EdgeKeyPath, sealedfields.EdgeKeyHandler(
+			func() sealing.CryptoProvider { return s.sealProvider },
+			s.internalStackCaller,
+		))
+	}
 }
 
 // handleHealth (`/admin/health`, public) is a minimal liveness probe (SR-009).

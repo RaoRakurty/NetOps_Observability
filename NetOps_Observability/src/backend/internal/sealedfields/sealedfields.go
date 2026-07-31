@@ -126,3 +126,9 @@ func NewProvider(v *vault.Vault) sealing.CryptoProvider {
 
 // NewEngine adapts a CryptoProvider to the processor framework's seam.
 func NewEngine(p sealing.CryptoProvider) processors.SealEngine { return sealEngine{p: p} }
+
+// CryptoProviderSource yields the active provider (or nil when sealing is off).
+// A function rather than a value so the handler reflects a provider installed
+// after the route was registered, and so a disabled deployment cannot serve a
+// stale one.
+type CryptoProviderSource func() sealing.CryptoProvider

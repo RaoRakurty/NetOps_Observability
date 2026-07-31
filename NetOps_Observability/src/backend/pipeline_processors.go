@@ -22,6 +22,7 @@ package backend
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -786,4 +787,31 @@ func truncateReason(s string) string {
 		return s[:maxReasonLen]
 	}
 	return s
+}
+
+// internalStackCaller reports whether a request carries the stack-internal
+// credential (the INGEST_USER/INGEST_TOKEN pair compose gives every in-stack
+// client). It is the gate on edge key delivery.
+//
+// Fail-closed by construction: an unset INGEST_TOKEN makes this return false
+// for every caller, so a misconfigured stack serves NO key material rather than
+// serving it to anyone who can reach the port.
+func (s *server) internalStackCaller(r *http.Request) bool {
+	want := os.Getenv("INGEST_TOKEN")
+	if want == "" {
+		return false
+	}
+	user, token, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+	wantUser := os.Getenv("INGEST_USER")
+	if wantUser == "" {
+		wantUser = "netops-ingest"
+	}
+	// Constant time on BOTH components: a timing oracle on the username is a
+	// slower path to the same place.
+	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(wantUser)) == 1
+	tokenOK := subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
+	return userOK && tokenOK
 }

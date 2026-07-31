@@ -448,6 +448,12 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-netops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      # Sealed Fields (#129): the `exec` secret backend fetches per-tenant seal
+      # keys from the api over the stack-internal credential. Unset INGEST_TOKEN
+      # makes the backend refuse rather than fetch keys unauthenticated.
+      SEALING_API_URL: ${SEALING_API_URL:-http://api:8080}
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:-}
     volumes:
       - ./vector-router:/etc/vector/conf:ro
       # F-49: the device→tenant enrichment CSV, same read-only mount the

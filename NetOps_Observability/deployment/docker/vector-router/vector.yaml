@@ -16,6 +16,38 @@ api:
   address: 0.0.0.0:8686
 
 # ----------------------------------------------------------------------------
+# SEALED FIELDS (#129) — per-tenant key delivery.
+#
+# `seal` processors compile to VRL that references SECRET[cxseal.<tenant>] and
+# SECRET[cxmac.<tenant>]. Vector resolves those ONCE, here, at config load, by
+# executing the backend below and holding the result IN MEMORY — secret backends
+# never write to disk, which is what makes it acceptable for key material to
+# reach the edge at all.
+#
+# Dormant unless a tenant actually has a seal processor: with no SECRET[...]
+# reference in the generated config, Vector never invokes the backend, so a
+# deployment without Sealed Fields pays nothing and serves nothing.
+#
+# If a key cannot be resolved the backend returns an error for that secret and
+# Vector REFUSES TO START (verified against 0.40.0: exit 78, "secret for key
+# '<tenant>' was not retrieved"). That is deliberate: a router that started
+# without a tenant's seal key would run the pipeline with sealing silently
+# absent and write the very values the operator believes are protected straight
+# to storage.
+#
+# CAVEAT, verified the same way: `vector validate` does NOT resolve secrets, so
+# a config carrying SECRET[...] can validate cleanly and still fail to start.
+# Pre-flight checks that shell out to `validate` therefore prove syntax, not key
+# availability — do not read a green validate as "the router will come up".
+secret:
+  cxseal:
+    type: exec
+    command: ["/etc/vector/conf/cx-secret-backend.sh"]
+  cxmac:
+    type: exec
+    command: ["/etc/vector/conf/cx-secret-backend.sh"]
+
+# ----------------------------------------------------------------------------
 # DURABILITY (F-04) — end-to-end acknowledgements.
 #
 # THE DEFECT THIS FIXES: every source on this tier is a `kafka` source. With
