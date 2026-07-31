@@ -35,6 +35,8 @@ import (
 	"time"
 
 	"io"
+	"netops/backend/internal/audit"
+	"netops/backend/internal/httppage"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/rbac"
 	"netops/backend/processors"
@@ -272,6 +274,10 @@ func (s *server) handleProcessorByID(w http.ResponseWriter, r *http.Request) {
 		s.handleProcessorClone(w, r)
 	case "unseal":
 		s.handleProcessorUnseal(w, r)
+	case "unseal/audit":
+		s.handleSealAccessAudit(w, r)
+	case "seal/rotate":
+		s.handleSealRotate(w, r)
 	default:
 		if id, tail, isSub := strings.Cut(rest, "/"); isSub && strings.HasPrefix(tail, "versions") {
 			s.handleProcessorVersions(w, r, id, tail)
@@ -387,6 +393,11 @@ func (s *server) handleProcessorCatalog(w http.ResponseWriter, r *http.Request) 
 		"matchers":      processors.MatcherCatalog(),
 		"managed_rules": processors.ManagedRules(),
 		"lanes":         processors.LaneOrder,
+		// Sealing is the one action that can be REGISTERED but unavailable (it
+		// needs key custody). The wizard reads this to disable the option with a
+		// reason, instead of offering a choice that fails on save.
+		"seal_available": processors.SealAvailable(),
+		"seal_presets":   processors.SealPresets,
 	})
 }
 
@@ -770,7 +781,7 @@ func (s *server) auditUnseal(claims jwtClaims, req unsealRequest, owner string, 
 		Tenant:   tenant,
 		Cross:    cross,
 		Method:   http.MethodPost,
-		Path:     "/api/pipeline/processors/unseal",
+		Path:     unsealRoutePath,
 		Status:   status,
 		Decision: decision,
 		Detail:   detail,
@@ -815,3 +826,95 @@ func (s *server) internalStackCaller(r *http.Request) bool {
 	tokenOK := subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
 	return userOK && tokenOK
 }
+
+// handleSealAccessAudit — GET /api/pipeline/processors/unseal/audit
+//
+// The compliance view: who revealed sensitive data, when, for what stated
+// reason, and whether they were allowed to. It is the reveal endpoint's
+// counterpart — the reason auditing a reveal is worth anything is that someone
+// can read the result back.
+//
+// Server-side filtered to the unseal route. Filtering client-side over a capped
+// page would show an EMPTY list whenever reveals sit below the newest N audit
+// rows, and a compliance surface that silently reports "nobody read anything"
+// is precisely the failure this page cannot have.
+func (s *server) handleSealAccessAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	// Reading WHO revealed data is itself sensitive: it names the values that
+	// were interesting enough to look at. Same gate as revealing.
+	claims, ok := s.requirePerm(w, r, rbac.ModuleSensitiveData, rbac.LevelAdmin)
+	if !ok {
+		return
+	}
+	if s.audit == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("audit store unavailable"))
+		return
+	}
+	page, err := httppage.Parse(r, audit.DefaultLimit, audit.MaxQueryLimit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	q := auditQuery{Limit: page.Limit, Offset: page.Offset, Path: unsealRoutePath}
+	events, err := s.auditScopedList(claims, q)
+	if err != nil {
+		// An ERROR is not an empty trail. Surfacing it as 200 [] would read as
+		// "no one has revealed anything", which is the most dangerous possible
+		// lie for this particular page (§10).
+		writeError(w, http.StatusBadGateway, fmt.Errorf("audit trail unavailable: %w", err))
+		return
+	}
+	total := s.auditScopedCount(claims, q)
+	// Same pagination contract as every other listing surface (headers carry the
+	// TRUE total, pinned by internal/httppage/contract_test.go).
+	httppage.Write(w, "events", events, page, len(events), total)
+}
+
+// handleSealRotate — POST /api/pipeline/processors/seal/rotate
+//
+// Advances the caller's tenant to a new sealing key version. Values already
+// sealed are NOT re-encrypted and keep opening: each names the version that
+// sealed it. That is the only model that works at log scale, where sealed
+// values live in immutable OpenSearch and ClickHouse data across the whole
+// retention window.
+func (s *server) handleSealRotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST only"))
+		return
+	}
+	if s.sealProvider == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("sealed fields are not enabled on this deployment"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, rbac.ModuleSensitiveData, rbac.LevelAdmin)
+	if !ok {
+		return
+	}
+	tenant, _ := principalTenant(claims)
+	if tenant == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a tenant-scoped principal is required"))
+		return
+	}
+	version, err := s.sealProvider.Rotate(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("rotate sealing key: %w", err))
+		return
+	}
+	// The ROUTER still holds the previous key: Vector resolves secrets at config
+	// load. Say so rather than letting an operator believe rotation took effect
+	// at the edge the moment this returned.
+	s.regenProcessorsAsync()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key_version": version,
+		"note":        "New values seal under this version once the router reloads its config. Values sealed under earlier versions remain readable.",
+	})
+}
+
+// unsealRoutePath is the audited route, named once so the recorder and the
+// reader cannot drift.
+const unsealRoutePath = "/api/pipeline/processors/unseal"

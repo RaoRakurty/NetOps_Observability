@@ -382,12 +382,33 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
               <div className="ccw-grid-2">
                 <label className="ccw-field">
                   <span className="ccw-label">Data type</span>
+                  {/* Presets exist because this string is bound INTO every token:
+                      a typo today is unreadable data tomorrow. Picking one also
+                      sets the keep-last convention for that kind of value. */}
+                  <select
+                    className="ccw-input"
+                    value={(catalog.seal_presets ?? []).some((p) => p.data_type === f.data_type) ? f.data_type : ""}
+                    onChange={(e) => {
+                      const preset = (catalog.seal_presets ?? []).find((p) => p.data_type === e.target.value);
+                      if (preset) {
+                        set("data_type", preset.data_type);
+                        set("keep_last", String(preset.keep_last));
+                      } else {
+                        set("data_type", "");
+                      }
+                    }}
+                  >
+                    <option value="">Custom…</option>
+                    {(catalog.seal_presets ?? []).map((p) => (
+                      <option key={p.data_type} value={p.data_type}>{p.label}</option>
+                    ))}
+                  </select>
                   <input className="ccw-input" value={f.data_type} maxLength={64}
                     onChange={(e) => set("data_type", e.target.value)}
                     placeholder={f.field.trim() || "card · email · ssn"} />
                   <span className="ccw-hint">
-                    Bound into every sealed value. Changing it later makes values
-                    already sealed under the old type unreadable.
+                    {(catalog.seal_presets ?? []).find((p) => p.data_type === f.data_type)?.hint ??
+                      "Bound into every sealed value. Changing it later makes values already sealed under the old type unreadable."}
                   </span>
                 </label>
                 <label className="ccw-field">

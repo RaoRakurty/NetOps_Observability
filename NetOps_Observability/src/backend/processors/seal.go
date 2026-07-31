@@ -147,3 +147,43 @@ func (sealAction) Apply(ev map[string]any, r Rule) bool {
 // Deliberately NOT token-shaped: it must be impossible to mistake for a real
 // sealed value, either by an operator reading it or by IsSealed().
 const SealFailureMarker = "[seal unavailable — key custody error]"
+
+// SealPreset is a recommended configuration for sealing a known kind of value.
+//
+// These are NOT managed rules. A managed rule is a DETECTOR — a pattern that
+// finds sensitive values anywhere in an event. A seal preset is the opposite
+// shape: sealing is bound to ONE named field (see Validate), so there is
+// nothing to detect and a pattern would be meaningless. Modelling them as
+// managed rules would have forced a fake pattern into the catalog and made the
+// two concepts indistinguishable in the UI.
+//
+// What a preset carries is the part operators get wrong unaided: the DataType
+// string (which is cryptographically bound into every token, so a typo today is
+// unreadable data tomorrow) and a keep-last that matches the convention for
+// that kind of value.
+type SealPreset struct {
+	DataType string `json:"data_type"`
+	Label    string `json:"label"`
+	KeepLast int    `json:"keep_last"`
+	// Hint explains the retained tail to the operator, because "keep last 4" is
+	// meaningless without knowing what the tail is FOR.
+	Hint string `json:"hint"`
+}
+
+// SealPresets is the catalog the wizard renders. Deliberately short: each entry
+// is a convention worth standardising, not an attempt to enumerate every kind
+// of sensitive value.
+var SealPresets = []SealPreset{
+	{DataType: "card", Label: "Payment card", KeepLast: 4,
+		Hint: "Last 4 stays readable — the industry convention for reconciling a charge without exposing the number."},
+	{DataType: "ssn", Label: "National ID / SSN", KeepLast: 4,
+		Hint: "Last 4 stays readable, which is what support desks verify against."},
+	{DataType: "email", Label: "Email address", KeepLast: 0,
+		Hint: "Nothing retained: a partial address is often enough to identify a person."},
+	{DataType: "phone", Label: "Phone number", KeepLast: 4,
+		Hint: "Last 4 stays readable for call-back verification."},
+	{DataType: "account", Label: "Account / customer id", KeepLast: 4,
+		Hint: "Last 4 stays readable so an operator can match a ticket without reading the identifier."},
+	{DataType: "credential", Label: "Credential or token", KeepLast: 0,
+		Hint: "Nothing retained. A partial credential is still a credential."},
+}

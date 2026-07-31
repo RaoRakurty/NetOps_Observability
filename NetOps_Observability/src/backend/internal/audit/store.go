@@ -71,6 +71,12 @@ type Query struct {
 	Offset int
 	Before time.Time // exclusive upper bound (keyset pagination cursor); zero = newest
 	Since  time.Time // inclusive lower bound; zero = unbounded
+	// Path filters to one recorded route. Added for the Sensitive Data Access
+	// view, which must show reveals ONLY. Filtering client-side over a capped
+	// page would render an EMPTY list whenever reveals sit below the newest N
+	// rows — a compliance surface that silently reports "nobody read anything"
+	// is the one failure mode it must never have.
+	Path string
 }
 
 // MergeCeiling bounds the org-admin merge path (auditScopedList), which
@@ -191,6 +197,9 @@ func (s *FileStore) matching(tenant string, cross bool, q Query) []Event {
 			continue
 		}
 		if !q.Since.IsZero() && e.Time.Before(q.Since) {
+			continue
+		}
+		if q.Path != "" && e.Path != q.Path {
 			continue
 		}
 		out = append(out, e)

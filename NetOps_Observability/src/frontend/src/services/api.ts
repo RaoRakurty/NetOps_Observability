@@ -200,11 +200,19 @@ export type ManagedRule = {
 export type ProcessorPlugin = {
   type: string; label: string; edge_capable: boolean; targets_field?: boolean;
 };
+export type SealPreset = {
+  data_type: string; label: string; keep_last: number; hint: string;
+};
 export type ProcessorCatalog = {
   actions: ProcessorPlugin[];
   matchers: ProcessorPlugin[];
   managed_rules: ManagedRule[];
   lanes: ProcessorLane[];
+  // Sealing is the one action that can be registered but UNAVAILABLE (it needs
+  // key custody), so the wizard disables it with a reason rather than offering
+  // a choice that fails on save.
+  seal_available?: boolean;
+  seal_presets?: SealPreset[];
 };
 export type ProcessorApplied = {
   rule_id: string; processor: string; type: string; field?: string;
@@ -370,6 +378,9 @@ export type AuditEvent = {
   status: number;
   decision: "allow" | "deny" | "error";
   remote?: string;
+  // Action-specific context for sensitive operations (an unseal's outcome,
+  // stated reason, data type and ciphertext fingerprint). Never the value.
+  detail?: Record<string, unknown>;
 };
 
 // ---------- OpenSearch ------------
@@ -2026,6 +2037,18 @@ export const api = {
   processorUnseal: (body: { value: string; reason: string; processor_id?: string; field?: string; data_type?: string }) =>
     request<{ value: string; field?: string; data_type?: string; processor_id?: string; key_version?: number }>(
       "/api/pipeline/processors/unseal", { method: "POST", body: JSON.stringify(body) }),
+  // The compliance view: who revealed sensitive data, when, and why. Filtered
+  // SERVER-side to reveal events — a client-side filter over a capped page
+  // would render empty whenever reveals sit below the newest rows, and a
+  // compliance surface that says "nobody read anything" when someone did is
+  // the one failure this must not have.
+  sealAccessAudit: (limit = 200) =>
+    request<AuditEvent[]>(`/api/pipeline/processors/unseal/audit?limit=${limit}`),
+  // Advance this tenant's sealing key. Values already sealed keep opening —
+  // each names the version that sealed it.
+  sealRotate: () =>
+    request<{ key_version: number; note: string }>(
+      "/api/pipeline/processors/seal/rotate", { method: "POST", body: "{}" }),
   processorVersions: (id: string) =>
     request<{ versions: ProcessorVersion[]; count: number }>(
       `/api/pipeline/processors/${encodeURIComponent(id)}/versions`),

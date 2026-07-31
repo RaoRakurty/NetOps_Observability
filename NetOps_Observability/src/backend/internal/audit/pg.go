@@ -85,6 +85,12 @@ func pgWhere(q Query) (string, []any) {
 		args = append(args, q.Since)
 		conds = append(conds, fmt.Sprintf("ts >= $%d", len(args)))
 	}
+	if q.Path != "" {
+		// data->>'path' rather than a LIKE: an exact match on the JSON field,
+		// so a caller cannot turn this into a scan or a prefix probe.
+		args = append(args, q.Path)
+		conds = append(conds, fmt.Sprintf("data->>'path' = $%d", len(args)))
+	}
 	if len(conds) == 0 {
 		return "", args
 	}

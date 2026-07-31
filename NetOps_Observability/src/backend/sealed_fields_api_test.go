@@ -314,3 +314,101 @@ func TestOnlyAdminRolesHoldTheRevealPermission(t *testing.T) {
 		}
 	}
 }
+
+// The access-audit view is the reason auditing a reveal is worth anything:
+// someone has to be able to read the result back.
+func TestSealAccessAuditListsReveals(t *testing.T) {
+	ts, s, p := sealTestServer(t)
+	admin := login(t, ts, "admin", "Passw0rd!2345").Token
+	tok := sealFor(t, s, p, TenantGlobal, "p-1", "card", "4111111111111111")
+
+	if st, body := do(t, ts, "POST", unsealPath, admin, map[string]any{
+		"value": tok, "reason": "chargeback 9912",
+	}); st != http.StatusOK {
+		t.Fatalf("reveal: %d %s", st, body)
+	}
+
+	// The platform pagination contract: a bare array by default, the TRUE total
+	// in X-Total-Count, an envelope only when asked for. This route follows it
+	// rather than inventing a shape of its own.
+	st, body := do(t, ts, "GET", unsealPath+"/audit", admin, nil)
+	if st != http.StatusOK {
+		t.Fatalf("access audit: %d %s", st, body)
+	}
+	var events []map[string]any
+	if err := json.Unmarshal(body, &events); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	out := struct{ Events []map[string]any }{Events: events}
+	if len(out.Events) == 0 {
+		t.Fatal("a reveal happened but the access-audit view is empty — the compliance surface reports nobody read anything")
+	}
+	// It must be FILTERED to reveals, not the whole trail.
+	for _, e := range out.Events {
+		if e["path"] != unsealPath {
+			t.Fatalf("access audit leaked an unrelated route: %v", e["path"])
+		}
+	}
+	if !strings.Contains(string(body), "chargeback 9912") {
+		t.Fatal("the stated reason did not reach the compliance view")
+	}
+	if strings.Contains(string(body), "4111111111111111") {
+		t.Fatal("THE ACCESS-AUDIT VIEW LEAKED THE PLAINTEXT")
+	}
+}
+
+// Reading WHO revealed data is itself sensitive — it names the values worth
+// looking at. Same gate as revealing.
+func TestSealAccessAuditRequiresTheRevealPermission(t *testing.T) {
+	ts, _, _ := sealTestServer(t)
+	admin := login(t, ts, "admin", "Passw0rd!2345").Token
+	tenantID := createTenantFor(t, ts, admin, "acme")
+	operator := createUserFor(t, ts, admin, "audit-op", "operator", tenantID)
+
+	if st, _ := do(t, ts, "GET", unsealPath+"/audit", operator, nil); st != http.StatusForbidden {
+		t.Fatalf("an operator must not read the sensitive-data access trail, got %d", st)
+	}
+}
+
+// Rotation advances the version WITHOUT orphaning anything already sealed.
+func TestSealRotateAdvancesAndKeepsOldValuesReadable(t *testing.T) {
+	ts, s, p := sealTestServer(t)
+	admin := login(t, ts, "admin", "Passw0rd!2345").Token
+	tok := sealFor(t, s, p, TenantGlobal, "p-1", "card", "4111111111111111")
+
+	before, _ := sealing.KeyVersionOf(tok)
+	st, body := do(t, ts, "POST", "/api/pipeline/processors/seal/rotate", admin, map[string]any{})
+	if st != http.StatusOK {
+		t.Fatalf("rotate: %d %s", st, body)
+	}
+	var out struct {
+		KeyVersion int    `json:"key_version"`
+		Note       string `json:"note"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.KeyVersion <= before {
+		t.Fatalf("rotation did not advance the version: %d → %d", before, out.KeyVersion)
+	}
+	// The router still holds the previous key until it reloads; the response
+	// must SAY so rather than let an operator assume the edge moved instantly.
+	if out.Note == "" {
+		t.Error("rotation returned no operator guidance about router reload")
+	}
+	// The pre-rotation value must still open — rotation may never orphan data.
+	st, body = do(t, ts, "POST", unsealPath, admin, map[string]any{"value": tok, "reason": "post-rotation check"})
+	if st != http.StatusOK {
+		t.Fatalf("a value sealed BEFORE rotation must still open: %d %s", st, body)
+	}
+}
+
+func TestSealRotateRequiresThePermission(t *testing.T) {
+	ts, _, _ := sealTestServer(t)
+	admin := login(t, ts, "admin", "Passw0rd!2345").Token
+	tenantID := createTenantFor(t, ts, admin, "acme")
+	operator := createUserFor(t, ts, admin, "rot-op", "operator", tenantID)
+	if st, _ := do(t, ts, "POST", "/api/pipeline/processors/seal/rotate", operator, map[string]any{}); st != http.StatusForbidden {
+		t.Fatalf("an operator must not rotate sealing keys, got %d", st)
+	}
+}
