@@ -64,6 +64,7 @@ const (
 	TypeHash          = "hash"           // stable digest: unreadable but still joinable
 	TypeTag           = "tag"            // detect-only: stamp a marker, change nothing
 	TypeDropEvent     = "drop_event"     // drop the whole event (counted, never silent)
+	TypeSeal          = "seal"           // REVERSIBLE: encrypt, recoverable via audited unmask
 )
 
 // TagField collects the markers a tag processor stamps (the scan-only mode).
@@ -72,7 +73,7 @@ const TagField = "cx_sensitive"
 var ruleTypes = map[string]bool{
 	TypeRedactField: true, TypeRedactPattern: true, TypeMask: true,
 	TypeDropField: true, TypeSetField: true, TypeDropEvent: true,
-	TypeHash: true, TypeTag: true, TypeRedactKeys: true,
+	TypeHash: true, TypeTag: true, TypeRedactKeys: true, TypeSeal: true,
 }
 
 // TypeLabel is the operator-facing name of a processor type (UI + audit).
@@ -86,6 +87,7 @@ var TypeLabel = map[string]string{
 	TypeRedactKeys:    "Redact by field name",
 	TypeHash:          "Hash",
 	TypeTag:           "Tag (detect only)",
+	TypeSeal:          "Seal (reversible)",
 }
 
 // Matcher operators. equals/contains/prefix shipped first; regex + attribute
@@ -189,7 +191,14 @@ type Processor struct {
 	Keys []string `json:"keys,omitempty"`
 	// KeepLast is mask's tail length: 4 → "************1111". 0 → 4 (the
 	// PCI-style default operators expect).
-	KeepLast    int    `json:"keep_last,omitempty"`
+	KeepLast int `json:"keep_last,omitempty"`
+	// DataType is the SEMANTIC kind of the value ("card", "email", "ssn"). It is
+	// part of what a sealed token is cryptographically bound to, so changing it
+	// on an existing processor makes previously sealed values unreadable — which
+	// is the intended behaviour, not a bug: a token minted as a card number must
+	// not become readable as something else. It also drives audit records and
+	// how the UI labels a revealed value.
+	DataType    string `json:"data_type,omitempty"`
 	Match       *Match `json:"match,omitempty"`
 	Description string `json:"description,omitempty"`
 
@@ -235,6 +244,17 @@ func (r Processor) ReplacementOrDefault() string {
 		return s
 	}
 	return DefaultRedaction
+}
+
+// DataTypeOrField is the semantic type bound into a sealed value, falling back
+// to the field name when the operator did not pick one. It must never be empty:
+// an empty binding component would make two different processors' tokens
+// interchangeable.
+func (r Processor) DataTypeOrField() string {
+	if r.DataType != "" {
+		return r.DataType
+	}
+	return r.Field
 }
 
 // KeepLastOrDefault is mask's retained tail length.

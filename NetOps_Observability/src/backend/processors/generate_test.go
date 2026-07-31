@@ -134,6 +134,13 @@ func TestEveryRegisteredPluginCompilesAndEvaluates(t *testing.T) {
 		if a.Type == TypeRedactKeys {
 			r.Keys = []string{"password"}
 		}
+		// seal needs a configured engine and a data type; without custody the
+		// action is unavailable by design (see seal.go), so the guard installs a
+		// stub rather than exempting seal from the coverage requirement.
+		if a.Type == TypeSeal {
+			withSealEngine(t, newStubSealEngine())
+			r.DataType = "card"
+		}
 		if err := r.Validate(); err != nil {
 			t.Fatalf("action %s: representative rule must validate: %v", a.Type, err)
 		}

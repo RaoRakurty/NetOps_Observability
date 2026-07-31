@@ -482,6 +482,7 @@ func init() {
 	RegisterAction(hashAction{})
 	RegisterAction(tagAction{})
 	RegisterAction(dropEventAction{})
+	RegisterAction(sealAction{})
 }
 
 // ── actions ─────────────────────────────────────────────────────────────────
