@@ -26,8 +26,10 @@ export type LayoutPreset = {
   partitionByRole?: boolean;
 };
 
-/** Default layout cell for a node. The card renders 188×56; the cell keeps a
- *  12×8 margin. It was 200×88 — 32px of phantom vertical slack per row that
- *  made every layout read sparse, banded and "flat" (audit §B). */
-export const NODE_SIZE = { width: 200, height: 64 };
+/** Default layout cell for a node. The card renders 120×56 (adaptive 3-tier);
+ *  the cell keeps a 30×8 margin for edge routing. History: 200×88 left 32px of
+ *  phantom VERTICAL slack per row (fixed 2026-07-31), then the card shrank to
+ *  120 wide while the cell stayed 200 — 80px of phantom HORIZONTAL slack, the
+ *  same "sparse and banded" defect on the other axis (re-audit A2). */
+export const NODE_SIZE = { width: 150, height: 64 };
 export const GROUP_PAD = 28;

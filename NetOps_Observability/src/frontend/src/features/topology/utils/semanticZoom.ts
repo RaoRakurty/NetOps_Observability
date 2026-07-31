@@ -32,3 +32,28 @@ export function labelDensityForZoom(zoom: number): boolean {
   const level = zoomLevel(zoom);
   return level === "fabric" || level === "device" || level === "interface";
 }
+
+/**
+ * Representative zoom for a level — the ONE ladder the canvas buckets on and
+ * the adapter derives its render tier from. Keeping the boundaries in this file
+ * (rather than duplicating thresholds in the canvas and the adapter) is what
+ * stops the three tables from disagreeing about where a level begins.
+ */
+export function bucketForZoom(zoom: number): number {
+  switch (zoomLevel(zoom)) {
+    case "global": return 0.3;
+    case "site": return 0.6;
+    case "fabric": return 1;
+    case "device": return 1.4;
+    default: return 1.8;
+  }
+}
+
+/** Render tier for a bucketed zoom: shapes at distance, names mid, full detail close. */
+export function tierForZoom(zoom: number | undefined): "badge" | "token" | "card" {
+  if (zoom === undefined) return "card";
+  const level = zoomLevel(zoom);
+  if (level === "global" || level === "site") return "badge";
+  if (level === "fabric") return "token";
+  return "card";
+}

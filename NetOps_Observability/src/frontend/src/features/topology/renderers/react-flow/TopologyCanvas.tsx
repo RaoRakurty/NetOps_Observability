@@ -30,6 +30,11 @@ import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from 
 import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView, viewSignature } from "../../layout/elkLayout";
+import { bucketForZoom } from "../../utils/semanticZoom";
+import { CARD_W, CARD_H } from "./nodes/DeviceNode";
+
+/** Skill graph-scale-policy: past this, the WebGL overview owns the fabric. */
+const MAX_CANVAS_NODES = 1000;
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
 import type { LayoutResult } from "../../layout/layoutTypes";
@@ -304,7 +309,14 @@ function CanvasInner({
   // draw it. "auto" applies the detected shape only when the structure matches
   // cleanly (confidence ≥ 0.8); the operator can force any shape.
   const [arrange, setArrange] = useState<"auto" | Archetype>("auto");
-  const detected = useMemo(() => (view ? detectArchetype(view) : null), [view]);
+  // A5: the >1000-node ceiling gates RENDER; it must gate COMPUTE too, or a
+  // large tenant pays a main-thread ELK run + full RF-array build every refetch
+  // just to show the "too many nodes" card.
+  const overCeiling = !!view && view.nodes.length > MAX_CANVAS_NODES;
+  const detected = useMemo(
+    () => (view && !overCeiling ? detectArchetype(view) : null),
+    [view, overCeiling],
+  );
   const effectiveArchetype: Archetype | null =
     arrange !== "auto"
       ? arrange
@@ -326,7 +338,7 @@ function CanvasInner({
   // leaf-spine re-runs ELK with the spine_leaf role-tiered preset.
   useEffect(() => {
     let alive = true;
-    if (!view) {
+    if (!view || overCeiling) {
       setPositions({});
       return;
     }
@@ -351,7 +363,7 @@ function CanvasInner({
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, layoutKey, effectiveArchetype]);
+  }, [view, layoutKey, effectiveArchetype, overCeiling]);
 
   // Persist a dragged node and keep it pinned for this session. Group nodes are
   // excluded (their position is derived from children — audit S8): they are no
@@ -451,7 +463,7 @@ function CanvasInner({
 
   // Derive React Flow nodes/edges. Pure, memoized on the inputs that matter.
   const derived = useMemo(() => {
-    if (!view) return { nodes: [] as Node<AnyNodeData>[], edges: [] as Edge<RFEdgeData>[] };
+    if (!view || overCeiling) return { nodes: [] as Node<AnyNodeData>[], edges: [] as Edge<RFEdgeData>[] };
     const strongEdges = new Set<string>(spotlight.edges);
     if (selection.edgeId) strongEdges.add(selection.edgeId);
     if (hoverEdge) strongEdges.add(hoverEdge);
@@ -471,7 +483,7 @@ function CanvasInner({
       density,
       zoom: zoomBucket,
     });
-  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge, collapsedGroups, onToggleGroup, density, zoomBucket]);
+  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge, collapsedGroups, onToggleGroup, density, zoomBucket, overCeiling]);
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<AnyNodeData>>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<RFEdgeData>>([]);
@@ -519,9 +531,14 @@ function CanvasInner({
   // Bucket zoom at the semantic-level boundaries (semanticZoom.ts §10) so the
   // node array re-derives only when a LEVEL is crossed, never per wheel tick.
   const onMove = useCallback((_e: unknown, viewport: { zoom: number }) => {
-    const z = viewport.zoom;
-    const bucket = z < 0.45 ? 0.3 : z < 0.8 ? 0.6 : z < 1.2 ? 1 : z < 1.7 ? 1.4 : 1.8;
-    setZoomBucket((prev) => (prev === bucket ? prev : bucket));
+    // A6: ONE ladder owns the zoom→detail mapping (semanticZoom.ts §10). The
+    // bucket is the level's representative zoom, so the tier thresholds in the
+    // adapter and the label-density rule can never disagree about where a
+    // boundary is.
+    setZoomBucket((prev) => {
+      const next = bucketForZoom(viewport.zoom);
+      return prev === next ? prev : next;
+    });
   }, []);
   const onNodeMouseEnter = useCallback<NodeMouseHandler>((e, n) => {
     setHoverNode(n.id);
@@ -537,10 +554,24 @@ function CanvasInner({
   const onPick = useCallback(
     (nodeId: string) => {
       setSelection({ nodeId });
+      // A8: a pick that lands inside a COLLAPSED group would centre on a hidden
+      // node and highlight nothing — reveal the group first (the same courtesy
+      // search-to-expand already does for matches).
+      const g = nodeGroup.get(nodeId);
+      if (g && collapsedGroups.has(g)) {
+        setCollapsedGroups((prev) => {
+          const next = new Set(prev);
+          next.delete(g);
+          return next;
+        });
+      }
       const p = positions[nodeId];
-      if (p) rf.setCenter(p.x + 100, p.y + 44, { zoom: 1.1, duration: 400 });
+      // A3: centre on the CARD's centre. The old +100/+44 were half of a 200×88
+      // cell that no longer exists, so every inventory/search pick landed ~40px
+      // off. Derived from the card constants so it cannot drift again.
+      if (p) rf.setCenter(p.x + CARD_W / 2, p.y + CARD_H / 2, { zoom: 1.1, duration: 400 });
     },
-    [positions, rf],
+    [positions, rf, nodeGroup, collapsedGroups],
   );
 
   const overlays = useMemo(() => (view ? availableOverlays(view) : []), [view]);
@@ -809,7 +840,7 @@ function CanvasInner({
           // Dedicated source→destination view (#77): the resolved path as a clean
           // L→R ribbon, NOT the full topology with the path merely highlighted.
           <NetworkPathView view={view} />
-        ) : view.nodes.length > 1000 ? (
+        ) : overCeiling ? (
           // Scale policy (skill: 1000+ nodes must not render as full React Flow
           // cards — audit S10). The WebGL overview handles this size; the canvas
           // stays for scoped subsets (search, groups, domains).

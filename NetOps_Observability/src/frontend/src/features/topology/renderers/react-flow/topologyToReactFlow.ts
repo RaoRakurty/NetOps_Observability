@@ -14,7 +14,7 @@ import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
-import { labelDensityForZoom } from "../../utils/semanticZoom";
+import { labelDensityForZoom, tierForZoom } from "../../utils/semanticZoom";
 import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
 /** Invisible hover/click band around each edge (React Flow default is 20px). */
@@ -226,7 +226,9 @@ export function topologyToReactFlow(
             // only trouble + selection carry names — 100+ hostnames at once is
             // the clutter that kills big canvases. The ramp stays monotonic:
             // executive never names calm nodes at any zoom; engineer always does.
-            ? ui.zoom === undefined || labelDensityForZoom(ui.zoom) || unhealthy || critical || selected
+            // A7: a search match is named at ANY zoom — a zoomed-out search that
+            // highlights anonymous badges answers "where" but not "which".
+            ? ui.zoom === undefined || labelDensityForZoom(ui.zoom) || unhealthy || critical || selected || ui.searchMatches.has(n.id)
             : density === "incident"
               ? unhealthy || critical || rcaFlag || selected
               : /* executive */ unhealthy || critical || selected;
@@ -255,7 +257,9 @@ export function topologyToReactFlow(
           // Adaptive tier from the semantic-zoom bucket: shapes at distance,
           // names at working zoom, full anatomy up close. Undefined zoom
           // (tests/static renders) keeps the full card.
-          tier: ui.zoom === undefined ? "card" : ui.zoom < 0.8 ? "badge" : ui.zoom < 1.4 ? "token" : "card",
+          // A6: the tier comes from the SHARED ladder (semanticZoom.ts), so the
+          // canvas's bucket boundaries and the render tiers can never disagree.
+          tier: tierForZoom(ui.zoom),
         },
         zIndex: 1,
         selectable: true,

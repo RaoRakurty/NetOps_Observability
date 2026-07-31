@@ -6,6 +6,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { RFNodeData } from "../rfTypes";
+import { CARD_W, CARD_H } from "./DeviceNode";
 import { HEALTH_COLOR, confidencePct, unresolvedReason } from "../../../utils/topologyHealth";
 
 const SLATE = HEALTH_COLOR.unknown;
@@ -52,12 +53,13 @@ function UnresolvedNodeBase(props: NodeProps) {
         display: "inline-flex",
         alignItems: "center",
         gap: 8,
-        // Fixed footprint matching the adapter's declared 188×56 (audit S11):
-        // an intrinsically-sized box made React Flow's hit-boxes and edge
-        // anchors wrong for every boundary node.
-        width: 188,
-        minHeight: 56,
-        maxWidth: 200,
+        // Fixed footprint matching the adapter's DECLARED size (re-audit A1):
+        // an intrinsically-sized box — or one matching a stale card width —
+        // makes React Flow's hit-boxes and floating-edge anchors wrong for
+        // every boundary node. Imported so the two can never drift again.
+        width: CARD_W,
+        minHeight: CARD_H,
+        maxWidth: CARD_W,
         boxSizing: "border-box",
         padding: "8px 12px",
         borderRadius: 14,
