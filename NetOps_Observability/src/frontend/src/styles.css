@@ -5468,3 +5468,36 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   transform: translateY(-2px);
   box-shadow: 0 10px 26px rgba(30, 27, 75, 0.16);
 }
+
+/* ── Topology inventory sidebar (TopologyInventoryPanel.tsx) ───────────────── */
+.topo-inventory {
+  position: absolute; top: 52px; left: 10px; bottom: 12px; width: 252px; z-index: 6;
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 10px 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+.topo-inventory-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.topo-inventory-count { color: var(--muted); font-size: 11px; margin-left: auto; }
+.topo-inventory-filter {
+  font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); color: var(--fg);
+}
+.topo-inventory-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.topo-inventory-empty { color: var(--muted); font-size: 12px; padding: 10px 4px; }
+.topo-inventory-row {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 5px 7px; border: 1px solid transparent; border-radius: 7px;
+  background: none; color: var(--fg); cursor: pointer; text-align: left; font-size: 12px;
+}
+.topo-inventory-row:hover { background: var(--surface-2); }
+.topo-inventory-row.on { border-color: var(--accent); background: var(--surface-2); }
+.topo-inventory-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.topo-inventory-name {
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.topo-inventory-meta {
+  margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+}
+.topo-inventory-since { color: var(--fg-subtle); }
+.topo-inventory-toggle { left: 10px; right: auto; top: 12px; }

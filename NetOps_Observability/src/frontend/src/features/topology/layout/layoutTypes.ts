@@ -26,6 +26,8 @@ export type LayoutPreset = {
   partitionByRole?: boolean;
 };
 
-/** Default rendered card size used for ELK sizing and React Flow node dimensions. */
-export const NODE_SIZE = { width: 200, height: 88 };
+/** Default layout cell for a node. The card renders 188×56; the cell keeps a
+ *  12×8 margin. It was 200×88 — 32px of phantom vertical slack per row that
+ *  made every layout read sparse, banded and "flat" (audit §B). */
+export const NODE_SIZE = { width: 200, height: 64 };
 export const GROUP_PAD = 28;

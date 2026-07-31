@@ -14,6 +14,7 @@ import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
+import { labelDensityForZoom } from "../../utils/semanticZoom";
 import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
 /** Invisible hover/click band around each edge (React Flow default is 20px). */
@@ -36,6 +37,14 @@ export type TopologyUIState = {
   overlay: OverlayKind;
   /** Show every label (engineer/debug density) — otherwise labels are sparse. */
   showAllLabels: boolean;
+  /**
+   * Current canvas zoom (bucketed by the caller). Drives semantic-zoom label
+   * density (skill §10 / audit: "do not show all labels at once"): the operator
+   * density names every node only from "fabric" detail (zoom ≥ 0.8) inward —
+   * zoomed out, only trouble + selection carry names. Undefined = zoomed-in
+   * behaviour (tests, static renders).
+   */
+  zoom?: number;
   /** Node ids that matched the current search. */
   searchMatches: Set<string>;
   /** Group ids currently collapsed (children hidden, edges rerouted to the group). */
@@ -209,11 +218,18 @@ export function topologyToReactFlow(
       // logic tied the difference to trouble/metrics that may all be absent, so the
       // levels collapsed to look identical (the "Exec vs Operator shows the same" bug).
       const labelByDensity =
-        density === "operator" || density === "engineer"
+        density === "engineer"
           ? true
-          : density === "incident"
-            ? unhealthy || critical || rcaFlag || selected
-            : /* executive */ unhealthy || critical || selected;
+          : density === "operator"
+            // Semantic zoom (skill §10): the working map names EVERYTHING at
+            // fabric detail and closer, but zoomed out to the global/site level
+            // only trouble + selection carry names — 100+ hostnames at once is
+            // the clutter that kills big canvases. The ramp stays monotonic:
+            // executive never names calm nodes at any zoom; engineer always does.
+            ? ui.zoom === undefined || labelDensityForZoom(ui.zoom) || unhealthy || critical || selected
+            : density === "incident"
+              ? unhealthy || critical || rcaFlag || selected
+              : /* executive */ unhealthy || critical || selected;
       const showLabel = ui.showAllLabels || labelByDensity;
       // The per-node metric strip is the engineer/incident detail tier — names alone
       // at operator, names + telemetry at engineer, so operator≠engineer is visible

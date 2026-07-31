@@ -31,6 +31,7 @@ import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyC
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView, viewSignature } from "../../layout/elkLayout";
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
+import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
@@ -134,6 +135,13 @@ function CanvasInner({
   // glance at WHY a node/edge is here, without a click into the drawer).
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | undefined>();
   const [fullscreen, setFullscreen] = useState(false);
+  // ContainerLab-style inventory sidebar (vendor research §b). Default ON — the
+  // list + canvas dual-pane is the point; one click hides it for wallboards.
+  const [showInventory, setShowInventory] = useState(true);
+  // Semantic-zoom bucket (skill §10): the ONLY zoom-derived state, bucketed at
+  // the level boundaries so panning never re-derives nodes and zoom re-derives
+  // them at most once per level crossing.
+  const [zoomBucket, setZoomBucket] = useState(1);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Renderer toggle: the scoped React Flow canvas (default) vs. the WebGL
   // enterprise overview (Phase 4) vs. the geographic / WAN map (Phase 5).
@@ -461,8 +469,9 @@ function CanvasInner({
       collapsedGroups,
       onToggleGroup,
       density,
+      zoom: zoomBucket,
     });
-  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge, collapsedGroups, onToggleGroup, density]);
+  }, [view, positions, spotlight, selection, overlay, showAllLabels, searchMatches, mode, hoverEdge, collapsedGroups, onToggleGroup, density, zoomBucket]);
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<AnyNodeData>>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<RFEdgeData>>([]);
@@ -507,6 +516,13 @@ function CanvasInner({
     setSelection({ edgeId: ed.id });
   }, []);
   const onPaneClick = useCallback(() => setSelection({}), []);
+  // Bucket zoom at the semantic-level boundaries (semanticZoom.ts §10) so the
+  // node array re-derives only when a LEVEL is crossed, never per wheel tick.
+  const onMove = useCallback((_e: unknown, viewport: { zoom: number }) => {
+    const z = viewport.zoom;
+    const bucket = z < 0.45 ? 0.3 : z < 0.8 ? 0.6 : z < 1.2 ? 1 : z < 1.7 ? 1.4 : 1.8;
+    setZoomBucket((prev) => (prev === bucket ? prev : bucket));
+  }, []);
   const onNodeMouseEnter = useCallback<NodeMouseHandler>((e, n) => {
     setHoverNode(n.id);
     setHoverPos({ x: e.clientX, y: e.clientY });
@@ -806,6 +822,20 @@ function CanvasInner({
               <TopologySearch view={view} onMatches={setSearchMatches} onPick={onPick} />
             </div>
 
+            {/* ContainerLab-style device inventory beside the canvas (vendor
+                research §b): same resolved view, bidirectional selection sync. */}
+            {showInventory && (
+              <TopologyInventoryPanel view={view} selection={selection} onPick={onPick} />
+            )}
+            <button
+              className="topo-fs-btn topo-inventory-toggle"
+              onClick={() => setShowInventory((v) => !v)}
+              title={showInventory ? "Hide the device inventory" : "Show the device inventory"}
+              aria-pressed={showInventory}
+            >
+              {showInventory ? "◧ Hide devices" : "◧ Devices"}
+            </button>
+
             <ReactFlow
               nodes={rfNodes}
               edges={rfEdges}
@@ -817,6 +847,7 @@ function CanvasInner({
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
               onNodeDragStop={onNodeDragStop}
+              onMove={onMove}
               onNodeMouseEnter={onNodeMouseEnter}
               onNodeMouseLeave={onNodeMouseLeave}
               onEdgeMouseEnter={onEdgeMouseEnter}
