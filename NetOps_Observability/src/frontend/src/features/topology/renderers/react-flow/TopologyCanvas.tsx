@@ -30,6 +30,7 @@ import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from 
 import { fetchTopologyView, fetchTopologyGraph, fetchRcaPathView, type TopologyCoverage, type TopologyGraphStatus, type TopologyViewStatus } from "../../api/topologyApi";
 import { api, type CorrObject } from "../../../../services/api";
 import { layoutView, viewSignature } from "../../layout/elkLayout";
+import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayout } from "../../layout/savedLayoutStore";
 import { topologyToReactFlow } from "./topologyToReactFlow";
@@ -289,33 +290,60 @@ function CanvasInner({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setCollapsedGroups(new Set()), [groupBy]);
   const showAllLabels = labelsToggle || density === "engineer";
-  // saved-layout key: invalidated when the view, layout type, or CONTENT changes.
-  // Content-keyed (audit S4): node cardinality alone let pins bleed between the
-  // domain lenses (SD-WAN vs DC slices with equal counts shared one key).
-  const layoutKey = view ? `${view.view_id}:${view.layout_type}:${viewSignature(view)}` : "";
 
-  // (Re)compute ELK layout only when the active view changes. Cached in elkLayout.
+  // Owner Step 2 — topology ARCHETYPE: detect the network's textbook shape
+  // (ring/star/bus/mesh/leaf-spine) and arrange it the way an engineer would
+  // draw it. "auto" applies the detected shape only when the structure matches
+  // cleanly (confidence ≥ 0.8); the operator can force any shape.
+  const [arrange, setArrange] = useState<"auto" | Archetype>("auto");
+  const detected = useMemo(() => (view ? detectArchetype(view) : null), [view]);
+  const effectiveArchetype: Archetype | null =
+    arrange !== "auto"
+      ? arrange
+      : detected && detected.confidence >= 0.8 && detected.archetype !== "irregular"
+        ? detected.archetype
+        : null;
+
+  // saved-layout key: invalidated when the view, layout type, arrangement, or
+  // CONTENT changes. Content-keyed (audit S4): node cardinality alone let pins
+  // bleed between the domain lenses (SD-WAN vs DC slices with equal counts
+  // shared one key).
+  const layoutKey = view
+    ? `${view.view_id}:${view.layout_type}:${effectiveArchetype ?? "elk"}:${viewSignature(view)}`
+    : "";
+
+  // (Re)compute layout only when the active view/arrangement changes. Analytic
+  // archetype layouts (ring/star/bus/mesh — deterministic, no physics) place
+  // synchronously; everything else runs the cached ELK layered presets. A forced
+  // leaf-spine re-runs ELK with the spine_leaf role-tiered preset.
   useEffect(() => {
     let alive = true;
     if (!view) {
       setPositions({});
       return;
     }
-    layoutView(view).then((pos) => {
+    const finish = (pos: LayoutResult) => {
       if (!alive) return;
       elkPositions.current = pos;
-      // operator pins override ELK for the nodes they cover (skill §3).
+      // operator pins override the computed layout for the nodes they cover (skill §3).
       const saved = loadSavedLayout(layoutKey);
       const pinCount = Object.keys(saved).length;
       setLayoutPinned(pinCount > 0);
       setPositions(pinCount > 0 ? { ...pos, ...saved } : pos);
-      setLaidOutKey(view.view_id);
-    });
+      setLaidOutKey(`${view.view_id}:${effectiveArchetype ?? "elk"}`);
+    };
+    const analytic = effectiveArchetype ? archetypeLayout(view, effectiveArchetype) : null;
+    if (analytic) {
+      finish(analytic);
+      return;
+    }
+    const elkView = arrange === "leaf_spine" ? { ...view, layout_type: "spine_leaf" as const } : view;
+    layoutView(elkView).then(finish);
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, layoutKey]);
+  }, [view, layoutKey, effectiveArchetype]);
 
   // Persist a dragged node and keep it pinned for this session. Group nodes are
   // excluded (their position is derived from children — audit S8): they are no
@@ -655,11 +683,29 @@ function CanvasInner({
         )}
         {view && renderer === "canvas" && <OverlaySelector value={overlay} overlays={overlays} onChange={setOverlay} />}
         {renderer === "canvas" && (
-          <label className="topo-incident-picker" title="Regroup the canvas by a node dimension">
+          <label className="topo-incident-picker" title="Regroup the canvas by a node dimension — Zone segregates by ownership border (LAN · WAN · DC · Cloud · ISP · DX/ExpressRoute)">
             <span className="topo-incident-picker-label">Group</span>
             <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupDimension)} aria-label="Group the canvas by">
               {GROUP_DIMENSIONS.map((d) => (
                 <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {renderer === "canvas" && (
+          /* Owner Step 2: arrange by topology archetype. Auto names what was
+             detected and WHY (tooltip); forcing a shape redraws deterministically. */
+          <label
+            className="topo-incident-picker"
+            title={detected ? `Detected: ${detected.archetype.replace("_", "-")} — ${detected.reason}` : "Arrange the canvas by topology shape"}
+          >
+            <span className="topo-incident-picker-label">Shape</span>
+            <select value={arrange} onChange={(e) => setArrange(e.target.value as "auto" | Archetype)} aria-label="Arrange by topology shape">
+              <option value="auto">
+                Auto{detected && detected.archetype !== "irregular" && detected.confidence >= 0.8 ? ` (${ARCHETYPES.find((a) => a.id === detected.archetype)?.label ?? detected.archetype})` : ""}
+              </option>
+              {ARCHETYPES.map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
               ))}
             </select>
           </label>

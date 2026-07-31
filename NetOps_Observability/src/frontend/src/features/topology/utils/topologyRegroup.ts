@@ -6,11 +6,16 @@
 // is all that's needed — no graph mutation, nodes are untouched.
 
 import type { TopologyView, TopologyGroup, GroupType, Health, TopologyNode } from "../api/topologyTypes";
+import { zoneOfNode } from "./topologyDomains";
 
-export type GroupDimension = "site" | "role" | "vendor" | "owner" | "none";
+export type GroupDimension = "site" | "zone" | "role" | "vendor" | "owner" | "none";
 
 export const GROUP_DIMENSIONS: { id: GroupDimension; label: string }[] = [
   { id: "site", label: "Site" },
+  // Owner Step 2: segregate by ownership border — LAN · WAN (SD-WAN) · Data
+  // Center · Cloud · ISP · AWS Direct Connect · Azure ExpressRoute (the seam
+  // vocabulary, cloud-ingestion.md §4.0).
+  { id: "zone", label: "Zone" },
   { id: "role", label: "Role" },
   { id: "vendor", label: "Vendor" },
   { id: "owner", label: "Owner" },
@@ -20,7 +25,7 @@ export const GROUP_DIMENSIONS: { id: GroupDimension; label: string }[] = [
 // Map a regroup dimension to a valid GroupType (the contract's closed set). The
 // label carries the real value (e.g. "arista", "leaf"); the type only tints/rolls up.
 const TYPE_FOR_DIM: Record<Exclude<GroupDimension, "none">, GroupType> = {
-  site: "site", role: "cluster", vendor: "zone", owner: "app",
+  site: "site", zone: "zone", role: "cluster", vendor: "zone", owner: "app",
 };
 
 const HEALTH_RANK: Record<Health, number> = {
@@ -32,7 +37,12 @@ function worse(a: Health, b: Health): Health {
 }
 
 function keyOf(n: TopologyNode, dim: Exclude<GroupDimension, "none">): string {
-  const v = dim === "site" ? n.site : dim === "role" ? n.role : dim === "vendor" ? n.vendor : n.owner;
+  const v =
+    dim === "site" ? n.site
+    : dim === "zone" ? zoneOfNode(n)
+    : dim === "role" ? n.role
+    : dim === "vendor" ? n.vendor
+    : n.owner;
   return (v ?? "").trim();
 }
 

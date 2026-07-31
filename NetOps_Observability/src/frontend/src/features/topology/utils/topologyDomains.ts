@@ -42,6 +42,46 @@ export function domainOfNode(n: TopologyNode): NetworkDomain {
   return "lan";
 }
 
+// ── border/zone classification (owner Step 2) ────────────────────────────────
+//
+// Zones segregate the canvas by OWNERSHIP BORDER, following the canonical seam
+// vocabulary (docs/design/cloud-ingestion.md §4.0 — five FINAL seam types; DIA
+// displays "ISP"; wireless+wired = LAN): LAN · WAN (SD-WAN) · Data Center ·
+// Cloud · ISP · and the deterministic backbone seams (AWS Direct Connect /
+// Azure ExpressRoute — both `DX`-class seams, labelled by provider). Best-effort
+// classifier over role/kind/label; a node with no signal stays in LAN (the
+// catch-all — a device is never dropped), and unresolved boundary nodes return
+// "" so the zone lens leaves them ungrouped rather than asserting an owner.
+
+export type NetworkZone =
+  | "LAN"
+  | "WAN (SD-WAN)"
+  | "Data Center"
+  | "Cloud"
+  | "ISP"
+  | "AWS Direct Connect"
+  | "Azure ExpressRoute";
+
+const DX_RE = /(direct[-_ ]?connect|(^|[^a-z])dx([^a-z]|$))/i;
+const ER_RE = /(express[-_ ]?route|(^|[^a-z])er[-_]{1}[a-z0-9])/i;
+const ISP_RE = /(carrier|isp|provider|transit|internet|dia\b|upstream)/i;
+
+/** Zone (ownership border) of a node. "" = unknown owner → stays ungrouped. */
+export function zoneOfNode(n: TopologyNode): NetworkZone | "" {
+  if (n.kind === "unresolved") return ""; // never assert an owner we can't prove
+  const h = hay(n);
+  // Deterministic backbone seams first — a DX/ER edge device names its seam.
+  if (DX_RE.test(h)) return "AWS Direct Connect";
+  if (ER_RE.test(h)) return "Azure ExpressRoute";
+  if (n.kind === "cloud") return "Cloud";
+  if (n.kind === "wan" || ISP_RE.test(h)) return "ISP";
+  const d = domainOfNode(n);
+  if (d === "cloud") return "Cloud";
+  if (d === "sdwan") return "WAN (SD-WAN)";
+  if (d === "dc") return "Data Center";
+  return "LAN"; // wireless + wired access = LAN (settled vocabulary)
+}
+
 /**
  * Filter a fabric view to one domain. LAN returns the view UNCHANGED (default,
  * additive). Cloud is handled by its own renderer, so this filter is only used
