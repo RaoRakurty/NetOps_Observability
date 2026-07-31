@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/vault"
 	"netops/backend/processors"
 	"netops/backend/sealing"
@@ -28,10 +29,10 @@ func liveSealing(t *testing.T) (*vault.Vault, sealing.CryptoProvider) {
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
-	provider := sealing.NewAESCTRProvider(vaultKeyProvider{v: v})
+	provider := sealedfields.NewProvider(v)
 
 	prev := processors.SealAvailable()
-	processors.SetSealEngine(sealEngine{p: provider})
+	processors.SetSealEngine(sealedfields.NewEngine(provider))
 	t.Cleanup(func() {
 		if !prev {
 			processors.SetSealEngine(nil)
@@ -145,7 +146,7 @@ func TestSealRefusedWhenFeatureDisabled(t *testing.T) {
 	processors.SetSealEngine(nil)
 	t.Cleanup(func() { processors.SetSealEngine(nil) })
 
-	if sealedFieldsEnabled() {
+	if sealedfields.Enabled() {
 		t.Fatal("the feature must be off when the flag is unset")
 	}
 	r := processors.Rule{
@@ -168,7 +169,7 @@ func TestSealedFieldsFailsClosedWithoutCustody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("vault: %v", err)
 	}
-	err = initSealedFields(dormant, func(string, string, map[string]any) {})
+	_, err = sealedfields.Init(dormant, func(string, string, map[string]any) {})
 	if err == nil {
 		t.Fatal("FEATURE_SEALED_FIELDS=true with no custody must fail closed")
 	}

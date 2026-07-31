@@ -33,8 +33,12 @@ import (
 	"strings"
 	"time"
 
+	"io"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/rbac"
 	"netops/backend/processors"
+	"netops/backend/sealing"
+	"sync/atomic"
 )
 
 // ── per-tenant processor rules → router config (item 121) ────────────────────
@@ -265,6 +269,8 @@ func (s *server) handleProcessorByID(w http.ResponseWriter, r *http.Request) {
 		s.handleProcessorCatalog(w, r)
 	case "clone":
 		s.handleProcessorClone(w, r)
+	case "unseal":
+		s.handleProcessorUnseal(w, r)
 	default:
 		if id, tail, isSub := strings.Cut(rest, "/"); isSub && strings.HasPrefix(tail, "versions") {
 			s.handleProcessorVersions(w, r, id, tail)
@@ -537,4 +543,247 @@ func (s *server) handleProcessorCRUD(w http.ResponseWriter, r *http.Request, res
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
 	}
+}
+
+// ── Sealed Fields: the reveal path ──────────────────────────────────────────
+
+// maxUnsealBody bounds the request. A sealed token is a few hundred bytes; this
+// is generous and still refuses an unbounded read (§9).
+const maxUnsealBody = 16 << 10
+
+// sealMetrics counts reveal attempts by outcome. Deliberately NO per-value or
+// per-field label: a metric series named after the data it protects is a
+// disclosure channel that survives in the TSDB long after the audit entry ages
+// out.
+type sealMetrics struct {
+	granted   atomic.Int64
+	forbidden atomic.Int64
+	notFound  atomic.Int64 // token unreadable: tampered, malformed, wrong tenant
+	keyGone   atomic.Int64 // key version retired or custody unavailable
+}
+
+func (m *sealMetrics) write(w io.Writer) {
+	fmt.Fprintf(w, "# HELP netops_unmask_requests_total Sealed-value reveal attempts, by outcome.\n")
+	fmt.Fprintf(w, "# TYPE netops_unmask_requests_total counter\n")
+	fmt.Fprintf(w, "netops_unmask_requests_total{outcome=%q} %d\n", "granted", m.granted.Load())
+	fmt.Fprintf(w, "netops_unmask_requests_total{outcome=%q} %d\n", "forbidden", m.forbidden.Load())
+	fmt.Fprintf(w, "netops_unmask_requests_total{outcome=%q} %d\n", "unreadable", m.notFound.Load())
+	fmt.Fprintf(w, "netops_unmask_requests_total{outcome=%q} %d\n", "key_unavailable", m.keyGone.Load())
+}
+
+type unsealRequest struct {
+	Value string `json:"value"`
+	// Optional narrowing hints. When supplied they are tried FIRST; when absent
+	// (the common case — an operator pasting a token out of a log line) the
+	// server searches this tenant's seal processors.
+	ProcessorID string `json:"processor_id,omitempty"`
+	Field       string `json:"field,omitempty"`
+	DataType    string `json:"data_type,omitempty"`
+	// Reason is the operator's justification. Recorded in the audit trail; this
+	// is a compliance surface, and "who revealed a card number and why" is the
+	// question it has to answer.
+	Reason string `json:"reason,omitempty"`
+}
+
+type unsealResponse struct {
+	Value      string `json:"value"`
+	Field      string `json:"field,omitempty"`
+	DataType   string `json:"data_type,omitempty"`
+	Processor  string `json:"processor_id,omitempty"`
+	KeyVersion int    `json:"key_version,omitempty"`
+}
+
+// handleProcessorUnseal reveals one sealed value.
+func (s *server) handleProcessorUnseal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST required"))
+		return
+	}
+	if s.sealProvider == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("sealed fields are not enabled on this deployment"))
+		return
+	}
+	// sensitive_data:admin — NOT administration:admin. Sealing is a per-tenant
+	// data capability, so it gets its own module: an infrastructure admin who
+	// should never read card numbers does not acquire the ability by being an
+	// admin of something else.
+	claims, ok := s.requirePerm(w, r, rbac.ModuleSensitiveData, rbac.LevelAdmin)
+	if !ok {
+		s.sealMetrics.forbidden.Add(1)
+		// The audit middleware already records the 403. Nothing more is added
+		// here: a denied caller must not learn whether the token was even valid.
+		return
+	}
+
+	var req unsealRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUnsealBody)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	req.Value = strings.TrimSpace(req.Value)
+	if req.Value == "" {
+		writeError(w, http.StatusBadRequest, errors.New("value is required"))
+		return
+	}
+	if !sealing.IsSealed(req.Value) {
+		writeError(w, http.StatusBadRequest, errors.New("value is not a sealed token"))
+		return
+	}
+
+	tenant, cross := principalTenant(claims)
+	// The token names its own tenant. Refuse a cross-tenant reveal BEFORE
+	// touching key material, and refuse it as 404 — confirming that another
+	// tenant's token exists is itself a disclosure (§3a).
+	owner, okOwner := sealing.TenantOf(req.Value)
+	if !okOwner {
+		s.sealMetrics.notFound.Add(1)
+		writeError(w, http.StatusBadRequest, errors.New("value is not a readable sealed token"))
+		return
+	}
+	if !cross && !strings.EqualFold(owner, tenant) {
+		s.sealMetrics.notFound.Add(1)
+		s.auditUnseal(claims, req, owner, 0, "denied_cross_tenant")
+		writeError(w, http.StatusNotFound, errors.New("no such sealed value"))
+		return
+	}
+
+	plaintext, ctx, err := s.unsealWithKnownContexts(r, owner, req)
+	if err != nil {
+		switch {
+		case errors.Is(err, sealing.ErrKeyUnavailable):
+			s.sealMetrics.keyGone.Add(1)
+			s.auditUnseal(claims, req, owner, 0, "key_unavailable")
+			// 410: the value is genuinely gone, not merely refused. An operator
+			// needs to tell "I may not" from "nobody can, ever again".
+			writeError(w, http.StatusGone, errors.New("the key that sealed this value is no longer available"))
+		default:
+			s.sealMetrics.notFound.Add(1)
+			s.auditUnseal(claims, req, owner, 0, "unreadable")
+			writeError(w, http.StatusBadRequest, errors.New("this value could not be verified — it may have been altered, or it was sealed by a processor that no longer exists"))
+		}
+		return
+	}
+
+	version, _ := sealing.KeyVersionOf(req.Value)
+	s.sealMetrics.granted.Add(1)
+	s.auditUnseal(claims, req, owner, version, "granted")
+
+	writeJSON(w, http.StatusOK, unsealResponse{
+		Value:      plaintext,
+		Field:      ctx.Field,
+		DataType:   ctx.DataType,
+		Processor:  ctx.ProcessorID,
+		KeyVersion: version,
+	})
+}
+
+// unsealWithKnownContexts tries the caller's hint first, then every seal
+// processor this tenant owns, and returns the first context whose MAC verifies.
+//
+// It reports ErrKeyUnavailable distinctly: if the key is gone, no candidate can
+// possibly verify, so the loop stops rather than grinding through every
+// processor to reach the same conclusion.
+func (s *server) unsealWithKnownContexts(r *http.Request, tenant string, req unsealRequest) (string, sealing.Context, error) {
+	candidates := make([]sealing.Context, 0, 8)
+	if req.ProcessorID != "" && req.Field != "" {
+		candidates = append(candidates, sealing.Context{
+			Tenant: tenant, ProcessorID: req.ProcessorID, Field: req.Field,
+			DataType: req.DataType,
+		})
+	}
+	for _, p := range s.sealProcessorsFor(r.Context(), tenant) {
+		candidates = append(candidates, sealing.Context{
+			Tenant: tenant, ProcessorID: p.ID, Field: p.Field,
+			DataType: p.DataTypeOrField(),
+		})
+	}
+	if len(candidates) == 0 {
+		return "", sealing.Context{}, sealing.ErrWrongContext
+	}
+
+	var lastErr = sealing.ErrWrongContext
+	for _, c := range candidates {
+		plaintext, err := s.sealProvider.Unseal(r.Context(), c, req.Value)
+		if err == nil {
+			return plaintext, c, nil
+		}
+		if errors.Is(err, sealing.ErrKeyUnavailable) {
+			return "", sealing.Context{}, err // no candidate can succeed
+		}
+		lastErr = err
+	}
+	return "", sealing.Context{}, lastErr
+}
+
+// sealProcessorsFor lists this tenant's seal processors, including disabled
+// ones: a rule can be turned off long after it sealed values that still need
+// revealing.
+func (s *server) sealProcessorsFor(ctx context.Context, tenant string) []processors.Processor {
+	if s.processors == nil {
+		return nil
+	}
+	// cross=false: the reveal path resolves contexts for ONE tenant only. A
+	// cross-tenant listing here would let a platform owner's search silently
+	// pull another tenant's processor definitions into the candidate set.
+	all, err := s.processors.List(ctx, tenant, false)
+	if err != nil {
+		return nil
+	}
+	out := make([]processors.Processor, 0, len(all))
+	for _, p := range all {
+		if p.Type == processors.TypeSeal {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// auditUnseal records the attempt. The plaintext, and anything derived from it,
+// is deliberately absent — an audit trail that leaks what it audits is worse
+// than none, because it concentrates every revealed secret in one admin-readable
+// place.
+func (s *server) auditUnseal(claims jwtClaims, req unsealRequest, owner string, version int, outcome string) {
+	if s.audit == nil {
+		return
+	}
+	tenant, cross := principalTenant(claims)
+	detail := map[string]any{
+		"outcome":       outcome,
+		"value_tenant":  owner,
+		"data_type":     req.DataType,
+		"field":         req.Field,
+		"processor_id":  req.ProcessorID,
+		"reason":        truncateReason(req.Reason),
+		"actor_tenant":  tenant,
+		"cross_tenant":  cross,
+		"key_version":   version,
+		"token_preview": sealing.TokenFingerprint(req.Value),
+	}
+	status := http.StatusOK
+	decision := "allow"
+	if outcome != "granted" {
+		status, decision = http.StatusForbidden, "deny"
+	}
+	s.audit.Record(AuditEvent{
+		Actor:    claims.Sub,
+		Tenant:   tenant,
+		Cross:    cross,
+		Method:   http.MethodPost,
+		Path:     "/api/pipeline/processors/unseal",
+		Status:   status,
+		Decision: decision,
+		Detail:   detail,
+	})
+}
+
+// maxReasonLen bounds the operator's justification so a caller cannot use the
+// audit trail as unbounded storage.
+const maxReasonLen = 512
+
+func truncateReason(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxReasonLen {
+		return s[:maxReasonLen]
+	}
+	return s
 }

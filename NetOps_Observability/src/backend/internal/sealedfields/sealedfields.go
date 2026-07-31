@@ -1,6 +1,6 @@
-package backend
+package sealedfields
 
-// sealed_fields.go — the wiring that makes Sealed Fields real.
+// Package sealedfields is the wiring that makes Sealed Fields real.
 //
 // Three packages that deliberately do not know about each other meet here:
 //
@@ -35,6 +35,7 @@ import (
 // key from it. That separation is why this adapter is safe: the material
 // crossing this boundary is never used as a cipher key directly, so the
 // high-volume log path and the stored-credential path cannot share a weakness.
+// KeyProvider adapts the vault to sealing.KeyProvider.
 type vaultKeyProvider struct{ v *vault.Vault }
 
 func (p vaultKeyProvider) TenantKey(_ context.Context, tenant string) ([]byte, int, error) {
@@ -85,19 +86,19 @@ func (e sealEngine) DisplayForm(plaintext string, keepLast int) string {
 // checked separately so the two failures can be reported differently: "you did
 // not turn it on" and "you turned it on but there is no key custody" need
 // different remedies.
-func sealedFieldsEnabled() bool { return os.Getenv("FEATURE_SEALED_FIELDS") == "true" }
+func Enabled() bool { return os.Getenv("FEATURE_SEALED_FIELDS") == "true" }
 
 // initSealedFields installs the seal engine, or explains why it did not.
 //
 // Returns an error ONLY when the operator asked for sealing and it cannot be
 // provided — that combination must abort boot rather than start a deployment
 // whose sensitive-data rules silently do nothing.
-func initSealedFields(v *vault.Vault, warn func(component, msg string, fields map[string]any)) error {
-	if !sealedFieldsEnabled() {
-		return nil // dormant, by default and without comment
+func Init(v *vault.Vault, warn func(component, msg string, fields map[string]any)) (sealing.CryptoProvider, error) {
+	if !Enabled() {
+		return nil, nil // dormant, by default and without comment
 	}
 	if v == nil {
-		return errors.New("FEATURE_SEALED_FIELDS=true but no vault is configured")
+		return nil, errors.New("FEATURE_SEALED_FIELDS=true but no vault is configured")
 	}
 	// Probe custody before claiming the feature is on. TenantKeyMaterial on the
 	// platform tenant is the cheapest honest check: if the vault is dormant it
@@ -105,13 +106,23 @@ func initSealedFields(v *vault.Vault, warn func(component, msg string, fields ma
 	// hours later, in the ingest path where nobody is watching.
 	if _, _, err := v.TenantKeyMaterial(""); err != nil {
 		if errors.Is(err, vault.ErrCustodyUnavailable) {
-			return fmt.Errorf("FEATURE_SEALED_FIELDS=true requires key custody: %w — set SEAL_PROVIDER=swtpm", err)
+			return nil, fmt.Errorf("FEATURE_SEALED_FIELDS=true requires key custody: %w — set SEAL_PROVIDER=swtpm", err)
 		}
-		return fmt.Errorf("sealed fields: key custody unusable: %w", err)
+		return nil, fmt.Errorf("sealed fields: key custody unusable: %w", err)
 	}
 
 	provider := sealing.NewAESCTRProvider(vaultKeyProvider{v: v})
 	processors.SetSealEngine(sealEngine{p: provider})
 	warn("sealing", "Sealed Fields ENABLED — values matched by a `seal` processor are encrypted at ingest and recoverable only through an audited unmask.", nil)
-	return nil
+	return provider, nil
 }
+
+// NewProvider builds the CryptoProvider over a vault WITHOUT installing the
+// global engine. Exported so callers (and tests) can construct the production
+// object graph without the package-level side effect Init performs.
+func NewProvider(v *vault.Vault) sealing.CryptoProvider {
+	return sealing.NewAESCTRProvider(vaultKeyProvider{v: v})
+}
+
+// NewEngine adapts a CryptoProvider to the processor framework's seam.
+func NewEngine(p sealing.CryptoProvider) processors.SealEngine { return sealEngine{p: p} }

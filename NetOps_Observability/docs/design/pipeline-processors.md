@@ -83,11 +83,17 @@ when nothing changed (so `--watch-config` never sees a phantom reload).
 | `tag` | **detect only**: stamp `cx_sensitive[]`, change nothing | adds `["PCI"]` |
 | `drop_field` | delete the field | `password` gone |
 | `drop_event` | drop the whole event (guard required) | `level=debug` discarded |
+| `seal` | **reversible**: encrypt at ingest, recoverable through an audited reveal | `4111111111111111` → `<enc:v1:…>` |
 
 Two notes that matter operationally:
 
 - **`hash` preserves correlation.** Redaction destroys the ability to ask "all
   events from this user"; hashing keeps it while storing nothing readable.
+- **`seal` is the only action you can undo.** Every other action destroys; seal
+  encrypts, so an authorized operator can recover the original later for a
+  chargeback dispute or a subject-access request. It needs key custody and is
+  off by default — see **`sealed-fields.md`** for the key model, the reveal API,
+  RBAC and the audit contract.
 - **`tag` is how you roll out safely.** Run detectors in tag mode first, look at
   where `cx_sensitive` appears, *then* decide what to redact. Nothing is
   destroyed while you learn.

@@ -28,6 +28,7 @@ import (
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/saved"
+	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
 	"netops/backend/internal/selfheal"
 	"netops/backend/internal/session"
@@ -64,6 +65,7 @@ import (
 	"netops/backend/processors"
 	"netops/backend/reports"
 	"netops/backend/safego"
+	"netops/backend/sealing"
 
 	"netops/backend/internal/httppage"
 
@@ -126,7 +128,12 @@ type server struct {
 	reportPipeline *reportPipeline // async PG-backed pipeline (nil on file backend)
 	incidents      incidentsRepo   // incident system of record (nil on file backend)
 	incMetrics     *incidentMetrics
-	ticketing      ticketing.Store // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	// Sealed Fields (#129): nil unless FEATURE_SEALED_FIELDS + key custody are
+	// both present, which is what makes the reveal endpoint 501 rather than
+	// pretending to be available.
+	sealProvider sealing.CryptoProvider
+	sealMetrics  *sealMetrics
+	ticketing    ticketing.Store // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	// ticketing invariant/contract counters (exposed on /metrics): enable attempts
 	// rejected by the one-enabled-policy rule, fail-closed holds on a violated
 	// invariant, and manual actions redirected off a merged object.
@@ -266,7 +273,8 @@ func newServer() *server {
 	// Sealed Fields (#129): reversible masking. Dormant unless
 	// FEATURE_SEALED_FIELDS=true; fail closed when it is on but key custody is
 	// not, rather than accepting seal rules that would not encrypt.
-	if err := initSealedFields(vault, vaultWarn); err != nil {
+	sealProvider, err := sealedfields.Init(vault, vaultWarn)
+	if err != nil {
 		log.Fatalf("sealed fields: %v", err)
 	}
 
@@ -650,6 +658,10 @@ func newServer() *server {
 		log.Printf("appid: loaded %d catalog prefixes from %s (%d feed errors)", n, srv.appCatalog.FeedsDir(), len(errs))
 	}
 	srv.incMetrics = &incidentMetrics{}
+	srv.sealMetrics = &sealMetrics{}
+	// nil unless FEATURE_SEALED_FIELDS + real key custody are BOTH present, which
+	// is what makes the reveal endpoint answer 501 instead of pretending.
+	srv.sealProvider = sealProvider
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
 	if ps, ok := platformdb.ActivePG(); ok {
@@ -2074,6 +2086,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.reportPipeline != nil {
 		s.reportPipeline.writeMetrics(w)
+	}
+	if s.sealMetrics != nil {
+		s.sealMetrics.write(w)
 	}
 	if s.incMetrics != nil {
 		s.incMetrics.write(w)

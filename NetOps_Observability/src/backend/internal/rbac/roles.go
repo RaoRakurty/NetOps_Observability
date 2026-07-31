@@ -20,9 +20,21 @@ import (
 	"sync"
 )
 
+// ModuleSensitiveData gates reversible masking (Sealed Fields). It is its OWN
+// module rather than a level of `administration` on purpose: revealing a card
+// number is a different capability from configuring the platform, and an
+// infrastructure or alerting admin must not acquire it by being an admin of
+// something else. On the monotonic ladder:
+//
+//	read  → see that a field is sealed, and its masked display form
+//	write → create and edit `seal` processors
+//	admin → REVEAL plaintext through the audited unseal endpoint
+const ModuleSensitiveData = "sensitive_data"
+
 // Modules are the gated product areas (match the frontend nav sections).
 var Modules = []string{
 	"overview", "explore", "alerts", "infrastructure", "topology", "reports", "administration",
+	ModuleSensitiveData,
 }
 
 // Permission levels (monotonic — each implies the ones below it).

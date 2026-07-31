@@ -31,6 +31,7 @@ type FormState = {
   replacement: string;
   keep_last: string;
   keys: string;
+  data_type: string;
   value: string;
   useMatch: boolean;
   match: ProcessorMatch;
@@ -41,7 +42,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   name: "", lane: "syslog", type: "redact_pattern", field: "message",
-  pattern_kind: "builtin", pattern: "email", replacement: "", keep_last: "4", keys: "", value: "",
+  pattern_kind: "builtin", pattern: "email", replacement: "", keep_last: "4", keys: "", data_type: "", value: "",
   useMatch: false, match: { field: "", op: "equals", value: "" },
   description: "", order: "10", enabled: true,
 };
@@ -60,6 +61,13 @@ function toInput(f: FormState): ProcessorRuleInput {
     out.pattern = f.pattern.trim();
   }
   if (f.type === "mask") out.keep_last = Number(f.keep_last) || 4;
+  if (f.type === "seal") {
+    out.keep_last = Number(f.keep_last) || 4;
+    // The semantic type is bound INTO the token, so changing it later makes
+    // already-sealed values unreadable. Default to the field name rather than
+    // sending empty, which would make two processors' tokens interchangeable.
+    out.data_type = f.data_type.trim() || f.field.trim();
+  }
   if (f.type === "redact_keys") {
     out.keys = f.keys.split(",").map((k) => k.trim()).filter(Boolean);
   }
@@ -82,7 +90,7 @@ function fromRule(r: ProcessorRule): FormState {
     name: r.name ?? "", lane: r.lane, type: r.type, field: r.field ?? "",
     pattern_kind: r.pattern_kind ?? "builtin", pattern: r.pattern ?? "email",
     replacement: r.replacement ?? "", keep_last: String(r.keep_last ?? 4),
-    keys: (r.keys ?? []).join(", "), value: r.value ?? "",
+    keys: (r.keys ?? []).join(", "), data_type: r.data_type ?? "", value: r.value ?? "",
     useMatch: !!r.match, match: r.match ?? { field: "", op: "equals", value: "" },
     description: r.description ?? "", order: String(r.order ?? 0), enabled: r.enabled,
   };
@@ -96,6 +104,7 @@ const summarize = (r: ProcessorRule): string => {
     case "mask": return `mask .${r.field}, keep last ${r.keep_last ?? 4}`;
     case "redact_keys": return `redact fields named ${(r.keys ?? []).slice(0, 3).join(", ")}${(r.keys ?? []).length > 3 ? "…" : ""}`;
     case "hash": return `hash .${r.field}`;
+    case "seal": return `seal .${r.field} (reversible, keep last ${r.keep_last ?? 4})`;
     case "tag": return `tag ${r.pattern_kind === "builtin" ? r.pattern : "matches"} as "${r.replacement || "sensitive"}"`;
     case "drop_field": return `remove .${r.field}`;
     case "set_field": return `set .${r.field} = "${r.value ?? ""}"`;
@@ -368,6 +377,28 @@ function Wizard({ catalog, initial, editingId, onDone, onCancel }: {
                   onChange={(e) => set("keep_last", e.target.value)} />
                 <span className="ccw-hint">4111111111111111 → ************1111</span>
               </label>
+            )}
+            {f.type === "seal" && (
+              <div className="ccw-grid-2">
+                <label className="ccw-field">
+                  <span className="ccw-label">Data type</span>
+                  <input className="ccw-input" value={f.data_type} maxLength={64}
+                    onChange={(e) => set("data_type", e.target.value)}
+                    placeholder={f.field.trim() || "card · email · ssn"} />
+                  <span className="ccw-hint">
+                    Bound into every sealed value. Changing it later makes values
+                    already sealed under the old type unreadable.
+                  </span>
+                </label>
+                <label className="ccw-field">
+                  <span className="ccw-label">Keep last N characters</span>
+                  <input className="ccw-input" type="number" min={0} max={64} value={f.keep_last}
+                    onChange={(e) => set("keep_last", e.target.value)} />
+                  <span className="ccw-hint">
+                    Shown to everyone; the full value needs an audited reveal.
+                  </span>
+                </label>
+              </div>
             )}
             {f.type === "set_field" && (
               <label className="ccw-field">

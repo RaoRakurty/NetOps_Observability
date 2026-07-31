@@ -201,3 +201,29 @@ func TestSealReachesTheGeneratedConfig(t *testing.T) {
 		t.Fatalf("seal statement missing from the generated router config:\n%s", out)
 	}
 }
+
+// A sealer that FAILS must not preview as "nothing matched". An operator whose
+// key custody is down would otherwise see the field sitting in the clear, read
+// it as "my rule is too narrow", and ship a processor that protects nothing.
+func TestSealFailureIsVisibleInPreview(t *testing.T) {
+	eng := newStubSealEngine()
+	eng.failFor["acme"] = true
+	withSealEngine(t, eng)
+
+	spec, _ := lookupAction(TypeSeal)
+	ev := map[string]any{"card": "4111111111111111"}
+	if !spec.Apply(ev, sealRule(t, nil)) {
+		t.Fatal("a failed seal must still report that the rule fired — silence reads as 'matched nothing'")
+	}
+	got, _ := ev["card"].(string)
+	if got == "4111111111111111" {
+		t.Fatal("preview left the PLAINTEXT visible after a seal failure")
+	}
+	if got != SealFailureMarker {
+		t.Fatalf("preview must show the failure, got %q", got)
+	}
+	// And the marker must never be mistakable for a real sealed value.
+	if strings.HasPrefix(got, "<enc:") {
+		t.Fatal("the failure marker is token-shaped — it could be mistaken for a real seal")
+	}
+}

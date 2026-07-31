@@ -127,9 +127,23 @@ func (sealAction) Apply(ev map[string]any, r Rule) bool {
 		return false
 	}
 	sealed, err := e.SealValue(r.TenantID, r.ID, r.Field, r.DataTypeOrField(), plaintext)
-	if err != nil || sealed == "" {
-		return false
+	if err != nil {
+		// A BROKEN sealer is not "nothing to seal". Returning false here would
+		// render an unchanged event and read as "this rule matched nothing" —
+		// so an operator whose key custody is down would preview a field sitting
+		// in the clear and conclude the rule was simply too narrow, then ship it.
+		// Preview must show the failure (§10: no silent failures).
+		parent[leaf] = SealFailureMarker
+		return true
+	}
+	if sealed == "" {
+		return false // genuinely nothing to seal
 	}
 	parent[leaf] = sealed
 	return true
 }
+
+// SealFailureMarker is what preview shows when sealing could not be performed.
+// Deliberately NOT token-shaped: it must be impossible to mistake for a real
+// sealed value, either by an operator reading it or by IsSealed().
+const SealFailureMarker = "[seal unavailable — key custody error]"

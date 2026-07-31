@@ -159,7 +159,7 @@ export type MaintenanceWindow = MaintenanceWindowInput & {
 export type ProcessorLane = "applogs" | "syslog" | "snmptrap" | "cloudlogs" | "flows";
 export type ProcessorRuleType =
   | "redact_field" | "redact_pattern" | "redact_keys" | "mask" | "hash" | "tag"
-  | "drop_field" | "set_field" | "drop_event";
+  | "drop_field" | "set_field" | "drop_event" | "seal";
 export type ProcessorMatchOp = "equals" | "contains" | "prefix" | "regex" | "attribute";
 export type ProcessorMatch = { field: string; op: ProcessorMatchOp; value: string };
 export type ProcessorRuleInput = {
@@ -173,6 +173,7 @@ export type ProcessorRuleInput = {
   replacement?: string;   // redact/mask token, e.g. "[EMAIL]"
   keep_last?: number;     // mask: retained tail length
   keys?: string[];        // redact_keys: field NAMES to redact
+  data_type?: string;     // seal: semantic type bound INTO the token (card, email, ssn)
   match?: ProcessorMatch;
   description?: string;
   order?: number;
@@ -2019,6 +2020,12 @@ export const api = {
   processorCatalog: () => request<ProcessorCatalog>("/api/pipeline/processors/catalog"),
   processorClone: (body: { managed_rule_id: string; lane: string; field: string; order?: number }) =>
     request<ProcessorRule>("/api/pipeline/processors/clone", { method: "POST", body: JSON.stringify(body) }),
+  // Reveal one sealed value. Requires sensitive_data:admin; every call is
+  // audited server-side, including the refusals — `reason` is what the audit
+  // trail shows a compliance reviewer, so the UI always asks for it.
+  processorUnseal: (body: { value: string; reason: string; processor_id?: string; field?: string; data_type?: string }) =>
+    request<{ value: string; field?: string; data_type?: string; processor_id?: string; key_version?: number }>(
+      "/api/pipeline/processors/unseal", { method: "POST", body: JSON.stringify(body) }),
   processorVersions: (id: string) =>
     request<{ versions: ProcessorVersion[]; count: number }>(
       `/api/pipeline/processors/${encodeURIComponent(id)}/versions`),

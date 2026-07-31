@@ -25,7 +25,9 @@ package sealing
 // unseal API operates on and because the tenant id is metadata.
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -169,3 +171,20 @@ func Display(plaintext string, keepLast int) string {
 // displayHeadCap bounds the mask head so a long value cannot produce an
 // unreadable wall of asterisks in a log line.
 const displayHeadCap = 16
+
+// TokenFingerprint is a short, non-reversible handle for a sealed value, so an
+// audit trail can tell "this same value was revealed three times by two people"
+// without STORING the value.
+//
+// It hashes the ciphertext, never the plaintext (which this package would have
+// to decrypt to see, and deliberately does not here). Storing the raw token in
+// the audit trail would be defensible — it is ciphertext — but it would also
+// hand anyone who later obtains a key a ready-made list of exactly the values
+// worth decrypting, concentrated in one admin-readable place.
+func TokenFingerprint(s string) string {
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:6])
+}
