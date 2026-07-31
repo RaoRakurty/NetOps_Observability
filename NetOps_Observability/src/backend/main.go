@@ -263,6 +263,13 @@ func newServer() *server {
 		log.Fatalf("secret custody: %v", err)
 	}
 
+	// Sealed Fields (#129): reversible masking. Dormant unless
+	// FEATURE_SEALED_FIELDS=true; fail closed when it is on but key custody is
+	// not, rather than accepting seal rules that would not encrypt.
+	if err := initSealedFields(vault, vaultWarn); err != nil {
+		log.Fatalf("sealed fields: %v", err)
+	}
+
 	// Hardened TLS for outbound calls to internal backends (#18 phase 3). Fail
 	// closed: a configured-but-unloadable trust bundle aborts boot.
 	if err := initBackendTransport(); err != nil {
