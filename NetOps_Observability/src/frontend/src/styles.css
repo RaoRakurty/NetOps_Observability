@@ -5410,3 +5410,61 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
   .tg-card { padding: 20px 18px 18px; }
   .tg-tenant { flex-wrap: wrap; }
 }
+
+/* ── Saved-dashboard builder (SavedDashboards.tsx) ─────────────────────────── */
+.dashb-list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.dashb-row { display: flex; align-items: center; gap: 8px; }
+.dashb-open {
+  flex: 1; display: flex; align-items: baseline; gap: 10px;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--fg); text-align: left; cursor: pointer;
+}
+.dashb-open:hover { border-color: var(--accent); }
+.dashb-meta { color: var(--muted); font-size: 12px; }
+.dashb-name {
+  font-family: "Space Grotesk", var(--font-ui); font-size: 22px; font-weight: 700;
+  min-width: 320px;
+}
+.dashb-cat {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+.dashb-pick-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 7px;
+}
+.dashb-pick {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--fg); cursor: pointer; text-align: left;
+}
+.dashb-pick:hover { border-color: var(--accent); }
+.dashb-pick-span { color: var(--muted); font-size: 11px; }
+.dashb-cell-tools { display: inline-flex; gap: 4px; align-items: center; }
+.dashb-span {
+  font-size: 11px; padding: 2px 4px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--fg);
+}
+
+/* ── Demo Showcase hero (DemoShowcase.tsx) ─────────────────────────────────── */
+.demo-hero {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 18px;
+  padding: 26px 26px 22px; margin-bottom: 18px; border-radius: 14px;
+  color: #eef2ff;
+  background:
+    radial-gradient(1200px 300px at 15% -40%, rgba(129, 140, 248, 0.55), transparent 60%),
+    radial-gradient(900px 260px at 85% -30%, rgba(6, 182, 212, 0.45), transparent 60%),
+    linear-gradient(135deg, #1e1b4b 0%, #0f172a 55%, #082f3a 100%);
+}
+.demo-hero .mydash-eyebrow { color: #a5b4fc; }
+.demo-hero-title {
+  font-family: "Space Grotesk", var(--font-ui);
+  font-size: clamp(24px, 3.4vw, 40px); font-weight: 700; line-height: 1.08;
+  margin: 4px 0 8px; letter-spacing: -0.02em;
+}
+.demo-hero-sub { color: #c7d2fe; max-width: 560px; margin: 0; font-size: 13.5px; }
+.demo-hero .mydash-live { color: #a7f3d0; }
+.demo-panel { transition: transform 160ms ease, box-shadow 160ms ease; }
+.demo-panel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(30, 27, 75, 0.16);
+}

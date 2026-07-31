@@ -3,6 +3,7 @@ import { AI_NAME } from "./brand";
 
 // Pages / tabs (existing components, reparented into product sections).
 import Dashboard from "./pages/Dashboard";
+import DemoShowcase from "./pages/DemoShowcase";
 import FrontPage from "./pages/FrontPage";
 import Devices from "./pages/Devices";
 import DeviceMonitoring from "./pages/DeviceMonitoring";
@@ -118,6 +119,9 @@ export const NAV: NavSection[] = [
       { id: "home", label: "Home", render: () => <CommandCenter /> },
       { id: "operations", label: "Operations Overview", render: () => <FrontPage /> },
       { id: "board", label: "My Dashboard", render: () => <Dashboard /> },
+      // Marketing demo board: same live panel registry, flashier chrome
+      // (gauge wheels + ranked bars + donuts). Style over depth, on purpose.
+      { id: "demo", label: "Demo Showcase", render: () => <DemoShowcase /> },
       {
         id: "list",
         label: "Dashboard List",
