@@ -854,9 +854,34 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 :root[data-theme="dark"], :root[data-theme="oled"],
 :root[data-theme="indigo"], :root[data-theme="graphite"] { --topo-node-fg: #ffffff; }
 
-.topo-root { display: flex; flex-direction: column; height: 100%; min-height: calc(100vh - 150px); }
-.topo-stage { position: relative; flex: 1 1 auto; min-height: 560px; border: 1px solid var(--border);
-  border-radius: 12px; overflow: hidden; background: var(--surface); margin-top: 10px; }
+/* FULL-BLEED CANVAS (owner redesign 2026-08-01).
+   The topology is the page, not a widget on it: the stage claims all remaining
+   viewport height instead of a fixed 560px box floated inside page padding.
+   The old 10px top margin + 12px radius framed the canvas like a card, which
+   cost vertical pixels at the exact moment a large fabric needs them most. */
+.topo-root { display: flex; flex-direction: column; height: 100%; min-height: calc(100vh - 118px); }
+.topo-stage { position: relative; flex: 1 1 auto; min-height: 60vh; border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; background: var(--surface); margin-top: 6px; }
+
+/* Network-domain rail — LAN · SD-WAN · DC · Cloud, moved OFF the top toolbar
+   (owner: the category strip was eating height that belongs to the topology).
+   Vertical on the stage's left edge: four items cost ~46px of width where the
+   canvas is emptiest, instead of a full toolbar row across the top. */
+.topo-domain-rail {
+  position: absolute; top: 12px; left: 10px; z-index: 7;
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.10);
+}
+.topo-domain-rail button {
+  appearance: none; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  padding: 7px 9px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+.topo-domain-rail button:hover { background: var(--surface-2, rgba(127,127,127,.10)); color: var(--fg); }
+.topo-domain-rail button.on { background: var(--accent, #0284c7); color: #fff; }
+.topo-domain-rail button:focus-visible { outline: 2px solid var(--accent, #0284c7); outline-offset: 1px; }
 .topo-stage .react-flow { background: transparent; }
 .topo-stage .react-flow__attribution { display: none; }
 /* Edge info-labels render into React Flow's edgelabel layer, which defaults to
@@ -866,8 +891,13 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    never blocks clicking the card underneath. */
 .topo-stage .react-flow__edgelabel-renderer { z-index: 6; }
 /* search docks top-left over the canvas; path panel docks bottom-left */
-.topo-search-dock { position: absolute; top: 12px; left: 12px; z-index: 6; width: 320px; max-width: 60%; }
-.topo-path-dock { position: absolute; bottom: 14px; left: 14px; z-index: 6; width: 340px; max-width: 70%;
+/* Docks sit RIGHT of the domain rail — the search bar and the inventory panel
+   colliding was a real reported defect, and a new left-edge rail must not
+   recreate it. --topo-rail-w is the single source both offsets derive from. */
+:root { --topo-rail-w: 78px; }
+.topo-search-dock { position: absolute; top: 12px; left: calc(var(--topo-rail-w) + 14px); z-index: 6;
+  width: 320px; max-width: 52%; }
+.topo-path-dock { position: absolute; bottom: 14px; left: calc(var(--topo-rail-w) + 14px); z-index: 6; width: 340px; max-width: 62%;
   max-height: 46%; overflow: auto; }
 /* Carrier overlay toggle — styled as a topo-render-toggle sibling (see TopologyCanvas). */
 .topo-carrier.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -5448,7 +5478,7 @@ button.cc-kpi-btn.on::after { content: "filtered"; display: block; margin-top: 5
 
 /* ── Topology inventory sidebar (TopologyInventoryPanel.tsx) ───────────────── */
 .topo-inventory {
-  position: absolute; top: 52px; left: 10px; bottom: 12px; width: 252px; z-index: 6;
+  position: absolute; top: 52px; left: calc(var(--topo-rail-w) + 12px); bottom: 12px; width: 252px; z-index: 6;
   display: flex; flex-direction: column; gap: 6px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 10px 10px 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);

@@ -652,24 +652,6 @@ function CanvasInner({
         onResetLayout={onResetLayout}
         layoutPinned={layoutPinned}
       >
-        {/* Network domain (LAN · SD-WAN · DC · Cloud) — the primary "where am I
-            looking" control, rendered as the SAME native segmented toggle as Data
-            source / Renderer so it reads as part of one toolbar, not a bolted-on
-            strip. Carrier is the cross-cutting transport overlay. */}
-        <div className="topo-render-toggle" role="tablist" aria-label="Network domain">
-          {DOMAINS.map((d) => (
-            <button
-              key={d.id}
-              role="tab"
-              aria-selected={domain === d.id}
-              className={domain === d.id ? "on" : ""}
-              onClick={() => onDomain?.(d.id)}
-              title={d.blurb}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
           role="switch"
@@ -822,6 +804,28 @@ function CanvasInner({
         <CloudTopologyView carrier={carrier} />
       ) : (
       <div className="topo-stage">
+        {/* Network domain — LAN · SD-WAN · DC · Cloud. Moved OFF the top
+            toolbar (owner redesign 2026-08-01): the category strip cost a
+            full toolbar row of height that belongs to the topology. A
+            vertical rail spends ~78px of WIDTH at the stage's left edge
+            instead, where a fabric is usually emptiest, and every other
+            dock offsets by --topo-rail-w so the search bar and the Devices
+            panel cannot collide with it (that collision was a real
+            reported defect and must not return in a new form). */}
+        <div className="topo-domain-rail" role="tablist" aria-label="Network domain">
+          {DOMAINS.map((d) => (
+            <button
+              key={d.id}
+              role="tab"
+              aria-selected={domain === d.id}
+              className={domain === d.id ? "on" : ""}
+              onClick={() => onDomain?.(d.id)}
+              title={d.blurb}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
         <button
           className="topo-fs-btn"
           onClick={() => setFullscreen((f) => !f)}
