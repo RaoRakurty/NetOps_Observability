@@ -61,3 +61,68 @@ describe("floatingEdge geometry", () => {
     expect(sideFor(n, { x: 50, y: 40 })).toBe(Position.Bottom);
   });
 });
+
+// The badge tier draws a 36px glyph centred in the SAME 120×56 cell the card
+// tier fills — the cell is fixed so changing zoom never reflows the layout.
+// Anchoring to that cell left far-zoom edges hanging ~42px off the visible
+// badge, which is exactly the tier used for the overview.
+describe("badge-tier anchoring", () => {
+  function badge(x: number, y: number) {
+    return {
+      internals: { positionAbsolute: { x, y } },
+      measured: { width: 120, height: 56 },
+      data: { tier: "badge" },
+    } as never;
+  }
+  function card(x: number, y: number) {
+    return {
+      internals: { positionAbsolute: { x, y } },
+      measured: { width: 120, height: 56 },
+      data: { tier: "card" },
+    } as never;
+  }
+
+  it("anchors a badge to the GLYPH, not the layout cell", () => {
+    const a = badge(0, 0); // centre (60,28); glyph spans x 42..78
+    const b = badge(400, 0); // directly to the right
+    const p = getEdgeParams(a, b);
+    // Right edge of the 36px glyph, not the 120px cell.
+    expect(p.sx).toBeCloseTo(78);
+    expect(p.tx).toBeCloseTo(442);
+    // Still the correct sides — the inset must not confuse side classification.
+    expect(p.sourcePos).toBe(Position.Right);
+    expect(p.targetPos).toBe(Position.Left);
+  });
+
+  it("leaves the card tier anchored to its full cell", () => {
+    const a = card(0, 0);
+    const b = card(400, 0);
+    const p = getEdgeParams(a, b);
+    expect(p.sx).toBeCloseTo(120); // full cell width
+    expect(p.tx).toBeCloseTo(400);
+  });
+
+  it("classifies all four sides correctly for a badge", () => {
+    const c = badge(0, 0); // centre (60,28)
+    for (const [ox, oy, want] of [
+      [400, 0, Position.Right],
+      [-400, 0, Position.Left],
+      [0, -400, Position.Top],
+      [0, 400, Position.Bottom],
+    ] as const) {
+      const other = badge(ox, oy);
+      const pt = nodeBorderPoint(c, other);
+      expect(sideFor(c, pt)).toBe(want);
+    }
+  });
+
+  it("never anchors outside the layout cell", () => {
+    const a = badge(0, 0);
+    const b = badge(400, 300);
+    const pt = nodeBorderPoint(a, b);
+    expect(pt.x).toBeGreaterThanOrEqual(0);
+    expect(pt.x).toBeLessThanOrEqual(120);
+    expect(pt.y).toBeGreaterThanOrEqual(0);
+    expect(pt.y).toBeLessThanOrEqual(56);
+  });
+});

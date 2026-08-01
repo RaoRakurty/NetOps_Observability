@@ -295,7 +295,18 @@ export function topologyToReactFlow(
     // soft hover: leave the rest of the links at full weight (don't mute the graph).
     else if (ui.spotlightSoft) emphasis = "normal";
 
-    const showLabel = ui.showAllLabels || emphasis === "strong" || ui.selection.edgeId === e.id;
+    // Edge labels obey the SAME zoom ladder node labels do. Without this, the
+    // Labels toggle (and engineer density, which implies it) rendered every port
+    // chip at global zoom — the all-labels-at-once pile the skill forbids, just
+    // on edges instead of nodes, where it is worse because chips overlap the
+    // links themselves.
+    //
+    // A focused edge — on the RCA path, or explicitly selected — is still named
+    // at any zoom: that is the one the operator is looking at, and hiding it
+    // because they zoomed out defeats the purpose of selecting it.
+    const focusedEdge = emphasis === "strong" || ui.selection.edgeId === e.id;
+    const labelLegibleAtZoom = ui.zoom === undefined || labelDensityForZoom(ui.zoom);
+    const showLabel = focusedEdge || (ui.showAllLabels && labelLegibleAtZoom);
 
     edges.push({
       id: e.id,

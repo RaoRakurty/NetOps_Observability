@@ -106,7 +106,6 @@ var isolationCoverageBaseline = map[string]string{
 	"/api/sessions/":                           "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/snmp/options":                        "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/tickets/audit":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
-	"/api/topology/graph":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/topology/links":                      "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/topology/view":                       "store/RLS-scoped; dedicated HTTP isolation test is backlog",
 	"/api/wan/circuits":                        "store/RLS-scoped; dedicated HTTP isolation test is backlog",

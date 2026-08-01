@@ -14,6 +14,7 @@ import {
   ReactFlowProvider,
   Background,
   Controls,
+  MiniMap,
   BackgroundVariant,
   useReactFlow,
   useNodesState,
@@ -35,6 +36,8 @@ import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
 /** Skill graph-scale-policy: past this, the WebGL overview owns the fabric. */
 const MAX_CANVAS_NODES = 1000;
+
+
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
 import type { LayoutResult } from "../../layout/layoutTypes";
@@ -56,7 +59,9 @@ const SigmaTopologyView = lazy(() => import("../sigma/SigmaTopologyView"));
 const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
+import { HEALTH_COLOR } from "../../utils/topologyHealth";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
+import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
 import { filterViewByDomain, DOMAINS, type NetworkDomain } from "../../utils/topologyDomains";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
@@ -76,6 +81,17 @@ import {
   RcaVerdictBanner,
 } from "../../components";
 import type { RcaPathView } from "../../../../services/api";
+
+// minimapNodeColor paints the overview by HEALTH, not role.
+//
+// At minimap scale a node is a few pixels: role iconography is unreadable, and
+// the only question the overview can usefully answer is "where is the trouble".
+// An unresolved node stays neutral rather than borrowing a health colour it
+// does not have — the map must not imply a state it never observed.
+function minimapNodeColor(n: Node<RFNodeData>): string {
+  const health = n.data?.node?.health;
+  return health ? HEALTH_COLOR[health] ?? "var(--border)" : "var(--border)";
+}
 
 type Density = "executive" | "operator" | "engineer" | "incident";
 
@@ -125,6 +141,10 @@ function CanvasInner({
   const [overlay, setOverlay] = useState<OverlayKind>("health");
   const [selection, setSelection] = useState<TopologySelection>({});
   const [searchMatches, setSearchMatches] = useState<Set<string>>(new Set());
+  // Focus NARROWS the canvas to the matches (plus a hop of context); search
+  // alone only spotlights. This is the escape hatch the >1000-node card
+  // advertises — without it, a large tenant's canvas is unreachable.
+  const [focusOn, setFocusOn] = useState(false);
   const [labelsToggle, setLabelsToggle] = useState(false);
   const [density, setDensity] = useState<Density>("operator");
   const [positions, setPositions] = useState<LayoutResult>({});
@@ -158,8 +178,13 @@ function CanvasInner({
   // Data source: "live" = the per-mode projection (GET /api/topology/view); other
   // value "persisted" = the reconciler-maintained graph with stable ids + stale +
   // coverage (GET /api/topology/graph, #77). The fetched view overrides the
-  // workflow's bundled sample; on an empty/errored fetch the fetcher returns the
-  // mock so the canvas never blanks.
+  // workflow's bundled sample.
+  //
+  // It does NOT fall back to a mock on failure — that is the point of
+  // topologyApi's honesty contract: a failed fetch returns an EMPTY view plus a
+  // status discriminator, and the canvas renders the error state rather than a
+  // fabricated network presented as the operator's own. (This comment claimed
+  // the opposite long after the behaviour changed; corrected 2026-08-01.)
   const [source, setSource] = useState<"live" | "persisted">("live");
   const [fetched, setFetched] = useState<TopologyView | null>(null);
   const [coverage, setCoverage] = useState<TopologyCoverage | null>(null);
@@ -297,7 +322,16 @@ function CanvasInner({
   }, [fetched, workflow?.view, domain, carrier]);
   // Tag-dimension regrouping: re-bucket the canvas by site/role/vendor/owner (or none)
   // — the operator's lens, not just the backend's fixed site hierarchy.
-  const view = useMemo(() => (baseView ? regroupView(baseView, groupBy) : baseView), [baseView, groupBy]);
+  const groupedView = useMemo(
+    () => (baseView ? regroupView(baseView, groupBy) : baseView),
+    [baseView, groupBy],
+  );
+  // Focus is applied LAST and BEFORE the ceiling check, so narrowing can bring
+  // an over-ceiling tenant back under it — that is the whole point.
+  const view = useMemo(
+    () => (groupedView && focusOn ? focusView(groupedView, searchMatches) : groupedView),
+    [groupedView, focusOn, searchMatches],
+  );
   // Group ids change with the lens, so any collapse state from the old grouping is
   // stale — clear it when the lens changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -845,30 +879,66 @@ function CanvasInner({
           // cards — audit S10). The WebGL overview handles this size; the canvas
           // stays for scoped subsets (search, groups, domains).
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ maxWidth: 460, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)" }}>
+            <div style={{ maxWidth: 520, textAlign: "center", padding: "18px 22px", border: "1px dashed var(--border)", borderRadius: 10, background: "var(--panel)" }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
                 {view.nodes.length.toLocaleString()} nodes — too many for the interactive canvas
               </div>
               <div style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.5, marginBottom: 10 }}>
-                Use the WebGL overview for the whole fabric, then narrow this canvas with search,
-                the domain tabs, or grouping to a subset under 1,000 nodes.
+                Search for the part you care about and focus the canvas on it, or open the
+                WebGL overview for the whole fabric.
               </div>
-              <button className="btn btn-sm btn-primary" onClick={() => setRenderer("overview")}>
-                Open enterprise overview
-              </button>
+              {/* The search dock lives in the OTHER branch, so an over-ceiling
+                  tenant previously had no way to act on the advice above. Mount
+                  it here too: this is the advertised escape hatch. */}
+              <div style={{ marginBottom: 10 }}>
+                <TopologySearch view={view} onMatches={setSearchMatches} onPick={onPick} />
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                <button
+                  className="btn btn-sm btn-primary"
+                  disabled={searchMatches.size === 0}
+                  onClick={() => setFocusOn(true)}
+                  title={searchMatches.size === 0
+                    ? "Search first — focus narrows the canvas to what you matched"
+                    : `Focus on ${searchMatches.size} matched node(s) and their neighbours`}
+                >
+                  Focus on {searchMatches.size || "matches"}
+                </button>
+                <button className="btn btn-sm" onClick={() => setRenderer("overview")}>
+                  Open enterprise overview
+                </button>
+              </div>
             </div>
           </div>
         ) : (
           <>
             {/* Search shifts clear of the inventory rail when it is open. */}
             <div className={`topo-search-dock${showInventory ? " with-inventory" : ""}`}>
-              <TopologySearch view={view} onMatches={setSearchMatches} onPick={onPick} />
+              <TopologySearch view={groupedView ?? view} onMatches={setSearchMatches} onPick={onPick} />
+              {/* Focus turns a spotlight into a filter. Offered only when there
+                  is something to focus ON, so it never reads as a dead control. */}
+              {searchMatches.size > 0 && !focusOn && (
+                <button className="btn btn-xs" onClick={() => setFocusOn(true)}
+                  title="Narrow the canvas to these matches and their neighbours">
+                  Focus on {searchMatches.size}
+                </button>
+              )}
             </div>
 
             {/* ContainerLab-style device inventory beside the canvas (vendor
                 research §b): same resolved view, bidirectional selection sync.
                 The toggle lives in the TOOLBAR (not docked on the stage) — an
                 overlay button at top-left collided with the search dock. */}
+            {focusOn && groupedView && (
+              <div className="topo-focus-banner">
+                <span>
+                  Focused — {focusSummary(groupedView.nodes.length, view.nodes.length, searchMatches.size)}
+                </span>
+                <button className="btn btn-xs" onClick={() => setFocusOn(false)}>
+                  Show everything
+                </button>
+              </div>
+            )}
             {showInventory && (
               <TopologyInventoryPanel view={view} selection={selection} onPick={onPick} />
             )}
@@ -896,6 +966,20 @@ function CanvasInner({
             >
               <Background variant={BackgroundVariant.Dots} gap={26} size={1} color="var(--border)" />
               <Controls showInteractive={false} />
+              {/* Wayfinding. Without it, any canvas larger than the viewport is
+                  pan-and-lose-your-place — the operator has no way to tell where
+                  they are in the fabric. Node colour carries HEALTH rather than
+                  role: at minimap scale the only question worth answering is
+                  "where is the trouble", and role is unreadable at 6px anyway. */}
+              <MiniMap
+                pannable
+                zoomable
+                ariaLabel="Topology overview"
+                nodeStrokeWidth={2}
+                nodeColor={(n) => minimapNodeColor(n as Node<RFNodeData>)}
+                maskColor="var(--panel-translucent, rgba(16,24,40,.55))"
+                style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8 }}
+              />
             </ReactFlow>
 
             {/* Honest empty state — a mode that resolves no nodes (e.g. Dependency

@@ -26,8 +26,15 @@ func TestTopologyStoreIsolation(t *testing.T) {
 	}
 }
 
-// TestTopologyGraphHTTPIsolation: GET /api/topology/graph returns only the
-// caller's tenant's graph; the platform owner sees all.
+// TestTopologyGraphHTTPIsolation is the cross-tenant isolation test for
+// GET /api/topology/graph: a scoped caller sees only their own tenant's graph;
+// the platform owner sees all.
+//
+// The route was carrying a "dedicated HTTP isolation test is backlog" row in
+// route_isolation_coverage_test.go while THIS test already existed — the
+// coverage guard scans for cross-tenant markers and this file happened to
+// contain none of them, so real coverage read as absent. Saying "cross-tenant"
+// plainly is what the file always meant.
 func TestTopologyGraphHTTPIsolation(t *testing.T) {
 	srv, s := newTestServerState(t)
 	s.topology = newTopologyStore() // the minimal test server doesn't wire it
