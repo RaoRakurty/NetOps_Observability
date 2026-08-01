@@ -3,6 +3,8 @@ package cloud
 import (
 	"testing"
 	"time"
+
+	"netops/backend/topology"
 )
 
 func fixedNow() time.Time { return time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC) }
@@ -47,12 +49,30 @@ func TestBuildTopologyView_AWS_ShapeAndGrouping(t *testing.T) {
 		t.Fatalf("tenant not stamped: %q", v.Scope.TenantID)
 	}
 
-	// One VPC group carrying every node in the VPC (subnets + gateways).
-	if len(v.Groups) != 1 || v.Groups[0].ID != "vpc-1" || v.Groups[0].GroupType != "vpc" {
-		t.Fatalf("groups wrong: %+v", v.Groups)
+	// TWO LEVELS: a region container, and the VPC nested inside it carrying
+	// every node in the VPC (subnets + gateways). The nesting is what lets the
+	// renderer keep a region's VPCs inside one boundary instead of letting
+	// blocks from different regions interleave.
+	groupByID := map[string]topology.Group{}
+	for _, g := range v.Groups {
+		groupByID[g.ID] = g
 	}
-	if want := 4; len(v.Groups[0].Children) != want { // 2 subnets + igw + nva
-		t.Fatalf("group children = %d, want %d: %v", len(v.Groups[0].Children), want, v.Groups[0].Children)
+	region, ok := groupByID["region:aws:us-west-2"]
+	if !ok || region.GroupType != "region" {
+		t.Fatalf("expected an aws/us-west-2 region group: %+v", v.Groups)
+	}
+	if region.ParentID != "" {
+		t.Fatalf("a region is top level, got parent %q", region.ParentID)
+	}
+	vpc, ok := groupByID["vpc-1"]
+	if !ok || vpc.GroupType != "vpc" {
+		t.Fatalf("expected a vpc-1 group: %+v", v.Groups)
+	}
+	if vpc.ParentID != region.ID {
+		t.Fatalf("vpc must nest under its region, got parent %q", vpc.ParentID)
+	}
+	if want := 4; len(vpc.Children) != want { // 2 subnets + igw + nva
+		t.Fatalf("group children = %d, want %d: %v", len(vpc.Children), want, vpc.Children)
 	}
 
 	byID := map[string]int{}
@@ -146,10 +166,28 @@ func TestBuildTopologyView_Azure_MultiPrefixVNet(t *testing.T) {
 	}
 	v := BuildTopologyView([]Topology{topo}, "", fixedNow())
 
-	if len(v.Groups) != 1 || v.Groups[0].ID != "vnet-1" {
-		t.Fatalf("expected a single deduped vnet group: %+v", v.Groups)
+	// One region + one deduped VNet nested inside it (the VNet's two address
+	// prefixes must not become two groups).
+	var vnet *topology.Group
+	regions := 0
+	for i := range v.Groups {
+		switch v.Groups[i].GroupType {
+		case "vpc":
+			if v.Groups[i].ID != "vnet-1" {
+				t.Fatalf("unexpected vpc-type group %q — the multi-prefix VNet must dedupe", v.Groups[i].ID)
+			}
+			vnet = &v.Groups[i]
+		case "region":
+			regions++
+		}
 	}
-	if got := v.Groups[0].Label; got[:4] != "VNet" {
+	if vnet == nil || regions != 1 {
+		t.Fatalf("expected one region + one deduped vnet group: %+v", v.Groups)
+	}
+	if vnet.ParentID != "region:azure:westeurope" {
+		t.Fatalf("vnet must nest under its region, got %q", vnet.ParentID)
+	}
+	if got := vnet.Label; got[:4] != "VNet" {
 		t.Fatalf("azure container label = %q, want VNet ·…", got)
 	}
 	var snetGroup string
@@ -170,5 +208,58 @@ func TestBuildTopologyView_Empty(t *testing.T) {
 	}
 	if v.ViewID == "" || v.Scope.TenantID != "t1" {
 		t.Fatalf("empty view still needs id + tenant scope: %+v", v)
+	}
+}
+
+// Live status must reach the nodes — and, more importantly, an UNMEASURED
+// component must never render as healthy. "unknown is not green" is the whole
+// point of the cloud status vocabulary.
+func TestBuildTopologyViewWithStatus(t *testing.T) {
+	lookup := func(id string) (NodeStatus, bool) {
+		switch id {
+		case "igw-1":
+			return NodeStatus{Status: StatusDown, Reason: "no route to gateway", Metric: "tunnels 0"}, true
+		case "i-nva":
+			return NodeStatus{Status: StatusDegraded, Reason: "targets 2/3 healthy"}, true
+		case "subnet-pub":
+			return NodeStatus{Status: StatusNotMeasured}, true
+		}
+		return NodeStatus{}, false
+	}
+	v := BuildTopologyViewWithStatus([]Topology{sampleAWS()}, "t_acme", fixedNow(), lookup)
+
+	byID := map[string]topology.Node{}
+	for _, n := range v.Nodes {
+		byID[n.ID] = n
+	}
+	if got := byID["igw-1"].Health; got != topology.HealthCritical {
+		t.Errorf("down component health = %q, want critical", got)
+	}
+	if got := byID["igw-1"].Tags["status_reason"]; got != "no route to gateway" {
+		t.Errorf("status reason lost: %q", got)
+	}
+	if got := byID["igw-1"].Tags["key_metric"]; got != "tunnels 0" {
+		t.Errorf("key metric lost: %q", got)
+	}
+	if got := byID["i-nva"].Health; got != topology.HealthWarning {
+		t.Errorf("degraded component health = %q, want warning", got)
+	}
+	// not_measured and unknown-to-the-lookup must BOTH stay unknown.
+	if got := byID["subnet-pub"].Health; got != topology.HealthUnknown {
+		t.Errorf("a NOT MEASURED component rendered as %q — unknown must never become green", got)
+	}
+	if got := byID["subnet-app"].Health; got != topology.HealthUnknown {
+		t.Errorf("a component the lookup does not know rendered as %q, want unknown", got)
+	}
+}
+
+// A nil lookup keeps the pure structural projection — the honest rendering of
+// "we could not ask the inventory".
+func TestBuildTopologyViewNilStatusIsNotHealthy(t *testing.T) {
+	v := BuildTopologyViewWithStatus([]Topology{sampleAWS()}, "t_acme", fixedNow(), nil)
+	for _, n := range v.Nodes {
+		if n.Health != topology.HealthUnknown {
+			t.Fatalf("node %s = %q with no status source; want unknown", n.ID, n.Health)
+		}
 	}
 }

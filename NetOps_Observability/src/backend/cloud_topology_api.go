@@ -16,6 +16,7 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -52,5 +53,51 @@ func (s *server) handleCloudTopology(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, cloud.BuildTopologyView(nil, tenant, now))
 		return
 	}
-	writeJSON(w, http.StatusOK, cloud.BuildTopologyView(topos, tenant, now))
+	writeJSON(w, http.StatusOK, cloud.BuildTopologyViewWithStatus(topos, tenant, now, s.cloudStatusLookup(r, tenant, cross)))
+}
+
+// cloudStatusLookup joins the discovered egress topology to the LIVE inventory,
+// so a gateway or NVA on the map carries the state the provider actually
+// reports rather than a uniform grey.
+//
+// Returns nil when the inventory cannot be read. That is deliberate: a nil
+// lookup leaves every node at "not measured", which is the honest rendering of
+// "we could not ask". Defaulting to healthy on a failed read would paint a
+// green map from no data at all.
+func (s *server) cloudStatusLookup(r *http.Request, tenant string, cross bool) cloud.StatusLookup {
+	if s.cloud == nil {
+		return nil
+	}
+	res, err := s.cloud.ListResources(r.Context(), tenant, cross)
+	if err != nil {
+		logError("cloud", "topology status join failed — nodes render as not measured", map[string]any{"err": err.Error()})
+		return nil
+	}
+	byID := make(map[string]cloud.NodeStatus, len(res))
+	for _, c := range res {
+		st := cloud.NodeStatus{Status: c.Status, Reason: c.StatusReason}
+		if c.KeyMetricValue != nil && c.KeyMetricName != "" {
+			st.Metric = fmt.Sprintf("%s %g%s", c.KeyMetricName, *c.KeyMetricValue, c.KeyMetricUnit)
+		}
+		// Index by resource id AND by any interface id, because the egress
+		// topology names NVAs by their instance id while the inventory may only
+		// carry the ENI that address belongs to.
+		if c.ResourceID != "" {
+			byID[c.ResourceID] = st
+		}
+		for _, nic := range c.NetworkInterfaceIDs {
+			if nic != "" {
+				if _, taken := byID[nic]; !taken {
+					byID[nic] = st
+				}
+			}
+		}
+	}
+	if len(byID) == 0 {
+		return nil
+	}
+	return func(id string) (cloud.NodeStatus, bool) {
+		st, ok := byID[id]
+		return st, ok
+	}
 }

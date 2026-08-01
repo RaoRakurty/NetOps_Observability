@@ -24,6 +24,8 @@ import {
   Controls,
   BackgroundVariant,
   useReactFlow,
+  useNodesState,
+  type OnNodeDrag,
   type Node,
   type Edge,
   type NodeMouseHandler,
@@ -186,6 +188,28 @@ export default function CloudTopologyView({
     [view, positions, selection, spotlight, collapsedGroups, onToggleGroup],
   );
 
+  // DRAGGABLE NODES. React Flow only persists a drag if the position change is
+  // applied to state — this view rendered `derived.nodes` straight from a memo,
+  // so every drag was discarded on the next render and nodes appeared frozen.
+  //
+  // Operator-moved positions are kept in `moved` and survive re-derives (a 30s
+  // refetch must not shove a hand-arranged canvas back to the ELK layout), but
+  // are dropped when the LAYOUT identity changes, because coordinates from a
+  // different topology are meaningless.
+  const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
+  useEffect(() => setMoved({}), [layoutKey]);
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<AnyNodeData>>([]);
+  useEffect(() => {
+    setRfNodes(
+      (derived.nodes as Node<AnyNodeData>[]).map((n) =>
+        moved[n.id] ? { ...n, position: moved[n.id] } : n,
+      ),
+    );
+  }, [derived.nodes, moved, setRfNodes]);
+  const onNodeDragStop = useCallback<OnNodeDrag>((_e, n) => {
+    setMoved((m) => ({ ...m, [n.id]: { x: n.position.x, y: n.position.y } }));
+  }, []);
+
   const fittedFor = useRef<string>("");
   useEffect(() => {
     if (laidOut && laidOut !== fittedFor.current && derived.nodes.length) {
@@ -212,8 +236,11 @@ export default function CloudTopologyView({
   return (
     <div className="topo-stage">
       <ReactFlow
-        nodes={derived.nodes as Node<AnyNodeData>[]}
+        nodes={rfNodes}
         edges={derived.edges as Edge<RFEdgeData>[]}
+        onNodesChange={onNodesChange}
+        onNodeDragStop={onNodeDragStop}
+        nodesDraggable
         nodeTypes={cloudNodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}

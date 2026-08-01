@@ -191,6 +191,15 @@ type Group struct {
 	ID        string   `json:"id"`
 	Label     string   `json:"label"`
 	GroupType string   `json:"group_type"` // site|pod|rack|cluster|zone|region|vpc|app
+	// ParentID nests this group inside another (a VPC inside its REGION). Empty
+	// = top level. Nesting is what makes cloud topology readable: without it a
+	// region is just a label on scattered VPCs, and the renderer has no way to
+	// keep a VPC's members inside a region boundary — which is exactly how the
+	// cloud tab ended up with overlapping, unreadable blocks.
+	//
+	// Additive and optional: every existing producer omits it and keeps its
+	// current flat behaviour.
+	ParentID  string   `json:"parent_id,omitempty"`
 	Children  []string `json:"children"`
 	Health    string   `json:"health"`
 	Collapsed bool     `json:"collapsed"`

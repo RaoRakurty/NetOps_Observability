@@ -194,6 +194,9 @@ export type TopologyGroup = {
   id: string;
   label: string;
   group_type: GroupType;
+  /** Nests this group inside another (a VPC inside its REGION). Absent = top
+   *  level. Optional and additive — flat producers are unaffected. */
+  parent_id?: string;
   children: string[]; // node ids
   health: Health; // rollup
   collapsed: boolean;

@@ -88,18 +88,17 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
       "elk.layered.spacing.nodeNodeBetweenLayers": String(preset.layerSpacing),
       "elk.spacing.nodeNode": String(preset.nodeSpacing),
       "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+      // Lay CONTAINERS out together with what is inside them. Without this ELK
+      // treats every node as a peer, group rectangles are drawn afterwards
+      // around wherever members happened to land, and blocks from different
+      // regions interleave — which is exactly why the cloud tab's VPC boxes
+      // overlapped and could not be read.
+      "elk.hierarchyHandling": "INCLUDE_CHILDREN",
       "elk.edgeRouting": "ORTHOGONAL",
       // Tier the graph by device role (spine above leaf, etc.) when the preset asks.
       ...(preset.partitionByRole ? { "elk.partitioning.activate": "true" } : {}),
     },
-    children: view.nodes.map((n) => ({
-      id: n.id,
-      width: NODE_SIZE.width,
-      height: NODE_SIZE.height,
-      ...(preset.partitionByRole
-        ? { layoutOptions: { "elk.partitioning.partition": String(roleTier(n.role, n.kind)) } }
-        : {}),
-    })),
+    children: buildChildren(view, preset),
     // Only edges between two laid-out nodes guide the layout.
     edges: view.edges
       .filter((e) => e.source && e.target)
@@ -109,9 +108,21 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
   let result: LayoutResult = {};
   try {
     const laid = await elk.layout(graph);
-    for (const c of laid.children ?? []) {
-      result[c.id] = { x: c.x ?? 0, y: c.y ?? 0 };
-    }
+    // ELK reports a nested child's position RELATIVE TO ITS PARENT, so the tree
+    // has to be walked with the parent origin accumulated. Reading only the top
+    // level (as this did while the graph was flat) would place every grouped
+    // node at its offset inside its container — i.e. all containers stacked at
+    // the origin, which looks exactly like the overlapping blocks this change
+    // exists to fix.
+    const walk = (children: ElkChild[] | undefined, ox: number, oy: number) => {
+      for (const c of children ?? []) {
+        const x = ox + ((c as { x?: number }).x ?? 0);
+        const y = oy + ((c as { y?: number }).y ?? 0);
+        result[c.id] = { x, y };
+        walk(c.children, x, y);
+      }
+    };
+    walk(laid.children as ElkChild[] | undefined, 0, 0);
   } catch {
     // ELK should not fail, but never blank the canvas — fall back to a calm grid.
     result = gridFallback(view);
@@ -141,4 +152,83 @@ function gridFallback(view: TopologyView): LayoutResult {
 /** Drop a cached layout (e.g. after a saved-layout edit). */
 export function invalidateLayout(view: TopologyView): void {
   cache.delete(viewKey(view));
+}
+
+// ── group hierarchy ──────────────────────────────────────────────────────────
+
+/** Padding inside a container so members never touch its border/label. */
+const GROUP_PADDING = "[top=38,left=18,bottom=18,right=18]";
+
+type ElkChild = {
+  id: string;
+  width?: number;
+  height?: number;
+  layoutOptions?: Record<string, string>;
+  children?: ElkChild[];
+};
+
+/**
+ * buildChildren turns the view into ELK's child tree.
+ *
+ * A view with no groups produces the FLAT list this always used to produce —
+ * every existing canvas is byte-for-byte unaffected. A view WITH groups nests
+ * its nodes inside container children (and containers inside their parent
+ * container, via Group.parent_id), which is what makes ELK pack each region's
+ * VPCs inside one boundary instead of scattering them.
+ */
+function buildChildren(view: TopologyView, preset: ReturnType<typeof presetFor>): ElkChild[] {
+  const leaf = (n: TopologyView["nodes"][number]): ElkChild => ({
+    id: n.id,
+    width: NODE_SIZE.width,
+    height: NODE_SIZE.height,
+    ...(preset.partitionByRole
+      ? { layoutOptions: { "elk.partitioning.partition": String(roleTier(n.role, n.kind)) } }
+      : {}),
+  });
+
+  const groups = view.groups ?? [];
+  if (groups.length === 0) return view.nodes.map(leaf);
+
+  const nodeById = new Map(view.nodes.map((n) => [n.id, n]));
+  const claimed = new Set<string>();
+  const containerById = new Map<string, ElkChild>();
+
+  for (const g of groups) {
+    const members: ElkChild[] = [];
+    for (const childId of g.children ?? []) {
+      const n = nodeById.get(childId);
+      // A node may be listed by only ONE group; a second claim would duplicate
+      // it in the layout and place the same id twice.
+      if (n && !claimed.has(childId)) {
+        claimed.add(childId);
+        members.push(leaf(n));
+      }
+    }
+    containerById.set(g.id, {
+      id: g.id,
+      layoutOptions: {
+        "elk.padding": GROUP_PADDING,
+        "elk.algorithm": "layered",
+        "elk.direction": preset.direction,
+      },
+      children: members,
+    });
+  }
+
+  // Nest containers under their parent container where one is declared.
+  const roots: ElkChild[] = [];
+  for (const g of groups) {
+    const c = containerById.get(g.id)!;
+    const parent = g.parent_id ? containerById.get(g.parent_id) : undefined;
+    // A parent that does not exist is treated as top level rather than dropped —
+    // losing a whole region because of one bad reference would be far worse than
+    // rendering it un-nested.
+    if (parent && parent !== c) (parent.children ??= []).push(c);
+    else roots.push(c);
+  }
+
+  // Anything no group claimed still has to be laid out — a node dropped from the
+  // graph is a node the operator cannot see.
+  for (const n of view.nodes) if (!claimed.has(n.id)) roots.push(leaf(n));
+  return roots;
 }

@@ -72,6 +72,13 @@ var gatewayLabelPrefix = map[string]string{
 //
 // Pure and deterministic (sorted output): no IO, no globals, fully unit-testable.
 func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.View {
+	return BuildTopologyViewWithStatus(topos, tenant, now, nil)
+}
+
+// BuildTopologyViewWithStatus is BuildTopologyView with LIVE per-resource state
+// painted onto the nodes. Split rather than changed in place so every existing
+// caller and test keeps the pure structural projection.
+func BuildTopologyViewWithStatus(topos []Topology, tenant string, now time.Time, status StatusLookup) topology.View {
 	nowStr := now.UTC().Format(time.RFC3339)
 	view := topology.View{
 		ViewID:      "cloud-network",
@@ -84,23 +91,39 @@ func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.
 		Edges:       []topology.Edge{},
 		Groups:      []topology.Group{},
 	}
-	// Group accumulation across all providers, keyed by VPC/VNet id.
+	// Group accumulation across all providers.
+	//
+	// TWO LEVELS: a REGION group per (provider, region), and a VPC/VNet group
+	// nested inside it. That nesting is the whole readability fix — a flat set
+	// of VPC boxes has nothing keeping one region's VPCs away from another's, so
+	// the blocks interleave and overlap. With a parent, the layout engine can
+	// pack each region's VPCs inside one boundary.
 	type groupAcc struct {
-		label    string
-		children []string
-		order    int // first-seen order for stable output
+		label     string
+		groupType string
+		parentID  string
+		children  []string
+		order     int // first-seen order for stable output
 	}
 	groups := map[string]*groupAcc{}
 	groupOrder := 0
-	ensureGroup := func(id, label string) {
+	ensureGroupTyped := func(id, label, groupType, parentID string) {
 		if id == "" {
 			return
 		}
 		if _, ok := groups[id]; !ok {
-			groups[id] = &groupAcc{label: label, order: groupOrder}
+			groups[id] = &groupAcc{label: label, groupType: groupType, parentID: parentID, order: groupOrder}
 			groupOrder++
-		} else if label != "" && groups[id].label == "" {
-			groups[id].label = label
+			return
+		}
+		g := groups[id]
+		if label != "" && g.label == "" {
+			g.label = label
+		}
+		// A parent discovered later must still take effect: the first sighting of
+		// a VPC may precede the region context that owns it.
+		if parentID != "" && g.parentID == "" {
+			g.parentID = parentID
 		}
 	}
 
@@ -110,6 +133,17 @@ func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.
 		if t.Provider == Azure {
 			vpcContainer = "VNet"
 		}
+
+		// The REGION container. Keyed by (provider, region) because "us-east-1"
+		// in two providers is two different places, and drawing them as one
+		// region would merge unrelated networks into a single block.
+		regionID := regionGroupID(provider, t.Region)
+		if regionID != "" {
+			ensureGroupTyped(regionID, regionLabel(provider, t.Region), "region", "")
+		}
+		// VPC groups nest inside the region they were discovered in.
+		ensureVPCGroup := func(id, label string) { ensureGroupTyped(id, label, "vpc", regionID) }
+		_ = ensureVPCGroup
 
 		// VPC/VNet lookup + prefixes (a VNet may carry several address prefixes,
 		// emitted as several vpc rows sharing one id — dedupe by id here).
@@ -145,7 +179,7 @@ func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.
 		// Register the VPC/VNet groups up front so an empty VPC still renders.
 		for _, v := range t.VPCs {
 			label := fmt.Sprintf("%s · %s · %s", vpcContainer, vpcName[v.ID], vpcPrimaryCIDR[v.ID])
-			ensureGroup(v.ID, label)
+			ensureVPCGroup(v.ID, label)
 		}
 
 		// Subnet nodes, grouped under their VPC by CIDR containment.
@@ -257,6 +291,30 @@ func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.
 		}
 	}
 
+	// Paint LIVE state onto every node in one pass, so no construction site can
+	// be forgotten. Absent status stays HealthUnknown — the honest vocabulary's
+	// "not measured". Unknown is never promoted to healthy.
+	if status != nil {
+		for i := range view.Nodes {
+			st, ok := status(view.Nodes[i].ID)
+			if !ok {
+				continue
+			}
+			if h := healthFromCloudStatus(st.Status); h != "" {
+				view.Nodes[i].Health = h
+			}
+			if view.Nodes[i].Tags == nil {
+				view.Nodes[i].Tags = map[string]string{}
+			}
+			if st.Reason != "" {
+				view.Nodes[i].Tags["status_reason"] = st.Reason
+			}
+			if st.Metric != "" {
+				view.Nodes[i].Tags["key_metric"] = st.Metric
+			}
+		}
+	}
+
 	// Emit groups in first-seen order with their accumulated children.
 	ordered := make([]*groupAcc, 0, len(groups))
 	idByAcc := map[*groupAcc]string{}
@@ -266,10 +324,15 @@ func BuildTopologyView(topos []Topology, tenant string, now time.Time) topology.
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
 	for _, g := range ordered {
+		gt := g.groupType
+		if gt == "" {
+			gt = "vpc"
+		}
 		view.Groups = append(view.Groups, topology.Group{
 			ID:        idByAcc[g],
 			Label:     g.label,
-			GroupType: "vpc",
+			GroupType: gt,
+			ParentID:  g.parentID,
 			Children:  g.children,
 			Health:    topology.HealthUnknown,
 			Collapsed: false,
@@ -313,4 +376,68 @@ func cloudNode(id, label, provider, role, groupID string, extra map[string]strin
 func routeEdgeID(source, target, destination string) string {
 	raw := fmt.Sprintf("route-%s-%s-%s", source, target, destination)
 	return strings.NewReplacer(".", "_", "/", "_", ":", "_", " ", "_").Replace(raw)
+}
+
+// regionGroupID keys a region container by PROVIDER and region.
+//
+// "us-east-1" exists in more than one provider's vocabulary, and an operator
+// running AWS and a private cloud with overlapping region names must not see
+// their networks merged into one block. Provider-qualifying costs nothing and
+// removes a whole class of wrong-looking topology.
+// NodeStatus is the LIVE per-resource signal the projection paints onto a node.
+//
+// It is deliberately a narrow injected lookup rather than a store dependency:
+// BuildTopologyView stays a pure function of its inputs (which is why it is
+// testable without a database), and the caller decides where status comes from.
+type NodeStatus struct {
+	Status string // healthy | degraded | down | not_measured (kinds.go vocabulary)
+	Reason string // the SIGNAL that produced it ("targets 2/3 healthy")
+	Metric string // one headline number, pre-rendered ("2/3 targets")
+}
+
+// StatusLookup answers "what is this cloud resource's live state?" for a
+// resource id. A nil lookup, or an id it does not know, yields no status —
+// which renders as NOT MEASURED, never as healthy. Unknown is not green.
+type StatusLookup func(resourceID string) (NodeStatus, bool)
+
+func regionGroupID(provider, region string) string {
+	provider, region = strings.TrimSpace(provider), strings.TrimSpace(region)
+	if provider == "" || region == "" {
+		return ""
+	}
+	return "region:" + strings.ToLower(provider) + ":" + strings.ToLower(region)
+}
+
+// regionLabel renders the region container's caption.
+func regionLabel(provider, region string) string {
+	provider, region = strings.TrimSpace(provider), strings.TrimSpace(region)
+	switch {
+	case provider == "" && region == "":
+		return ""
+	case provider == "":
+		return region
+	case region == "":
+		return provider
+	}
+	return provider + " · " + region
+}
+
+// healthFromCloudStatus maps the cloud component vocabulary (kinds.go) onto the
+// topology contract's health.
+//
+// "" and not_measured deliberately return "" — the caller then leaves the node
+// at HealthUnknown. Mapping an unmeasured component to healthy would be the
+// exact lie the status vocabulary was designed to prevent: an operator reading
+// green from a signal nobody ever collected.
+func healthFromCloudStatus(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case StatusHealthy:
+		return topology.HealthOK
+	case StatusDegraded:
+		return topology.HealthWarning
+	case StatusDown:
+		return topology.HealthCritical
+	default:
+		return ""
+	}
 }
