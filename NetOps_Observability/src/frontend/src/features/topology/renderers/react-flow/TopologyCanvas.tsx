@@ -14,7 +14,6 @@ import {
   ReactFlowProvider,
   Background,
   Controls,
-  MiniMap,
   BackgroundVariant,
   useReactFlow,
   useNodesState,
@@ -36,6 +35,14 @@ import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 
 /** Skill graph-scale-policy: past this, the WebGL overview owns the fabric. */
 const MAX_CANVAS_NODES = 1000;
+
+/** Fit padding as a fraction of the viewport.
+ *
+ *  Was 0.2 — a fifth of the canvas spent on empty margin, which is what made
+ *  the group box look small inside a field of white. 0.04 still keeps content
+ *  clear of the edges (and of the docked search/inventory panels) without
+ *  donating the viewport to whitespace. */
+const FIT_PADDING = 0.04;
 
 
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
@@ -59,7 +66,6 @@ const SigmaTopologyView = lazy(() => import("../sigma/SigmaTopologyView"));
 const GeoTopologyMap = lazy(() => import("../geo/GeoTopologyMap"));
 import { EMPTY_SPOTLIGHT } from "../../workflows/workflowTypes";
 import { availableOverlays } from "../../utils/topologyOverlays";
-import { HEALTH_COLOR } from "../../utils/topologyHealth";
 import { regroupView, GROUP_DIMENSIONS, type GroupDimension } from "../../utils/topologyRegroup";
 import { focusSummary, focusView } from "../../utils/topologyFocus";
 import { excludeInternalNodes } from "../../utils/topologyFilters";
@@ -82,16 +88,6 @@ import {
 } from "../../components";
 import type { RcaPathView } from "../../../../services/api";
 
-// minimapNodeColor paints the overview by HEALTH, not role.
-//
-// At minimap scale a node is a few pixels: role iconography is unreadable, and
-// the only question the overview can usefully answer is "where is the trouble".
-// An unresolved node stays neutral rather than borrowing a health colour it
-// does not have — the map must not imply a state it never observed.
-function minimapNodeColor(n: Node<RFNodeData>): string {
-  const health = n.data?.node?.health;
-  return health ? HEALTH_COLOR[health] ?? "var(--border)" : "var(--border)";
-}
 
 type Density = "executive" | "operator" | "engineer" | "incident";
 
@@ -416,7 +412,7 @@ function CanvasInner({
     if (layoutKey) clearSavedLayout(layoutKey);
     setPositions({ ...elkPositions.current });
     setLayoutPinned(false);
-    setTimeout(() => rf.fitView({ padding: 0.2, duration: 300 }), 40);
+    setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 300 }), 40);
   }, [layoutKey, rf]);
 
   // Reset transient selection when the workflow changes. Capacity opens on the
@@ -534,14 +530,14 @@ function CanvasInner({
   useEffect(() => {
     if (laidOutKey && laidOutKey !== fittedFor.current && rfNodes.length) {
       fittedFor.current = laidOutKey;
-      const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 320, maxZoom: 1.15 }), 60);
+      const t = setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 320, maxZoom: 1.15 }), 60);
       return () => clearTimeout(t);
     }
   }, [laidOutKey, rfNodes.length, rf]);
 
   // Fullscreen: toggle a class on the root and re-fit; Escape exits.
   useEffect(() => {
-    const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 260 }), 80);
+    const t = setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 260 }), 80);
     return () => clearTimeout(t);
   }, [fullscreen, rf]);
   useEffect(() => {
@@ -642,7 +638,7 @@ function CanvasInner({
   return (
     <div className={`topo-root${fullscreen ? " topo-fullscreen" : ""}`}>
       <TopologyToolbar
-        onFit={() => rf.fitView({ padding: 0.2, duration: 320 })}
+        onFit={() => rf.fitView({ padding: FIT_PADDING, duration: 320 })}
         onZoomIn={() => rf.zoomIn({ duration: 200 })}
         onZoomOut={() => rf.zoomOut({ duration: 200 })}
         showAllLabels={showAllLabels}
@@ -652,26 +648,27 @@ function CanvasInner({
         onResetLayout={onResetLayout}
         layoutPinned={layoutPinned}
       >
-        {/* Network domain (LAN · SD-WAN · DC · Cloud) — the primary "where am I
-            looking" control, as the SAME native segmented toggle as Data source /
-            Renderer so it reads as part of one toolbar.
-            Tried as a left-edge vertical rail (41ceb140) to reclaim the row;
-            reverted on owner trial — it did not work in practice. The full-bleed
-            stage from that change is kept. */}
-        <div className="topo-render-toggle" role="tablist" aria-label="Network domain">
-          {DOMAINS.map((d) => (
-            <button
-              key={d.id}
-              role="tab"
-              aria-selected={domain === d.id}
-              className={domain === d.id ? "on" : ""}
-              onClick={() => onDomain?.(d.id)}
-              title={d.blurb}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
+        {/* Network domain — a SELECT, not four buttons (owner 2026-08-01).
+            Four side-by-side options spend a fixed strip of toolbar width on
+            three choices that are not currently active; a dropdown spends one
+            control's worth and lets the rest of the row breathe. The label
+            stays visible on the closed control, so "where am I looking" is
+            still answerable at a glance without opening it. */}
+        <label className="topo-select-wrap" title="Network domain — which part of the estate the canvas is showing">
+          <span className="topo-select-label">Domain</span>
+          <select
+            className="topo-select"
+            aria-label="Network domain"
+            value={domain}
+            onChange={(e) => onDomain?.(e.target.value as NetworkDomain)}
+          >
+            {DOMAINS.map((d) => (
+              <option key={d.id} value={d.id} title={d.blurb}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
           role="switch"
@@ -968,20 +965,6 @@ function CanvasInner({
             >
               <Background variant={BackgroundVariant.Dots} gap={26} size={1} color="var(--border)" />
               <Controls showInteractive={false} />
-              {/* Wayfinding. Without it, any canvas larger than the viewport is
-                  pan-and-lose-your-place — the operator has no way to tell where
-                  they are in the fabric. Node colour carries HEALTH rather than
-                  role: at minimap scale the only question worth answering is
-                  "where is the trouble", and role is unreadable at 6px anyway. */}
-              <MiniMap
-                pannable
-                zoomable
-                ariaLabel="Topology overview"
-                nodeStrokeWidth={2}
-                nodeColor={(n) => minimapNodeColor(n as Node<RFNodeData>)}
-                maskColor="var(--panel-translucent, rgba(16,24,40,.55))"
-                style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8 }}
-              />
             </ReactFlow>
 
             {/* Honest empty state — a mode that resolves no nodes (e.g. Dependency

@@ -879,6 +879,26 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    never blocks clicking the card underneath. */
 .topo-stage .react-flow__edgelabel-renderer { z-index: 6; }
 /* search docks top-left over the canvas; path panel docks bottom-left */
+
+/* Compact toolbar SELECT — used by Domain and Density (owner 2026-08-01:
+   "instead of showing them as four different options make it a drop down so
+   the bottom ones come up and we save space"). One control's width instead of
+   a four-segment strip, with the current value still legible closed. */
+.topo-select-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.topo-select-label { font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--fg-subtle, var(--muted)); }
+.topo-select {
+  font: inherit; font-size: 11px; font-weight: 600; color: var(--fg);
+  padding: 4px 24px 4px 9px; border-radius: 7px;
+  border: 1px solid var(--border); background-color: var(--surface);
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a94a6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 7px center;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.topo-select:hover { border-color: var(--accent); }
+.topo-select:focus-visible { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(37,99,235,.18)); }
 .topo-search-dock { position: absolute; top: 12px; left: 12px; z-index: 6; width: 320px; max-width: 60%; }
 .topo-path-dock { position: absolute; bottom: 14px; left: 14px; z-index: 6; width: 340px; max-width: 70%;
   max-height: 46%; overflow: auto; }

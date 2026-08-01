@@ -66,45 +66,25 @@ export default function TopologyToolbar({
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{children}</div>
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-        <div
-          role="group"
-          aria-label="Density"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 2,
-            padding: 2,
-            border: "1px solid var(--border)",
-            borderRadius: 7,
-            background: "var(--surface)",
-          }}
-        >
-          {DENSITIES.map((d) => {
-            const active = d.id === density;
-            return (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => onDensityChange(d.id)}
-                aria-pressed={active}
-                style={{
-                  border: "none",
-                  borderRadius: 5,
-                  padding: "4px 9px",
-                  fontSize: 11,
-                  fontWeight: active ? 600 : 500,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  background: active ? "var(--panel)" : "transparent",
-                  color: active ? "var(--fg)" : "var(--fg-muted)",
-                  boxShadow: active ? "0 1px 2px rgba(0,0,0,0.12)" : "none",
-                }}
-              >
+        {/* Density — a SELECT, not four buttons (owner 2026-08-01). Same
+            reasoning as the domain control: four fixed segments spend toolbar
+            width on three inactive choices. The label stays on the closed
+            control so the current density is readable without opening it. */}
+        <label className="topo-select-wrap" title="Detail density — how much each node reveals">
+          <span className="topo-select-label">Density</span>
+          <select
+            className="topo-select"
+            aria-label="Density"
+            value={density}
+            onChange={(e) => onDensityChange(e.target.value as Density)}
+          >
+            {DENSITIES.map((d) => (
+              <option key={d.id} value={d.id}>
                 {d.label}
-              </button>
-            );
-          })}
-        </div>
+              </option>
+            ))}
+          </select>
+        </label>
 
         <button
           type="button"
