@@ -251,7 +251,12 @@ export default function App() {
             </div>
             {!resourceRoute && <SubNav section={section} activeLeaf={leaf?.id} />}
           </div>
-          <div className="page" key={tz}>
+          {/* Topology is a CANVAS, not a document: it gets the whole viewport
+              rather than the reading-width page box. Without this the map sits
+              inside a 1640px cap with side gutters on a wide monitor — the
+              "limited to the borders" the owner reported. Opt-in per leaf so
+              every other page keeps its comfortable measure. */}
+          <div className={`page${leaf?.id === "topology-canvas" ? " page-bleed" : ""}`} key={tz}>
             {/* Administration acts on config — always state the acting scope
                 (rendered in-page: shell-v2 hides the main-head strip). */}
             {section.id === "admin" && (
