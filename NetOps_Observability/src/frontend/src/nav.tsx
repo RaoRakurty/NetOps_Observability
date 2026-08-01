@@ -29,6 +29,7 @@ import SnmpProfileManager from "./tabs/SnmpProfileManager";
 import Alerts from "./tabs/Alerts";
 import MaintenanceWindows from "./tabs/MaintenanceWindows";
 import ProcessorsAdmin from "./tabs/ProcessorsAdmin";
+import SensitiveDataAccess from "./tabs/SensitiveDataAccess";
 import Rules from "./tabs/Rules";
 import Findings from "./tabs/Findings";
 import Incidents from "./tabs/Incidents";
@@ -297,6 +298,11 @@ export const NAV: NavSection[] = [
       // into the ingest router). Admin-gated server-side; sits with the plumbing
       // that feeds telemetry.
       { id: "processors", label: "Processors", group: "Data Collection", render: () => <ProcessorsAdmin /> },
+      // Sealed Fields (#129): who revealed protected data, when, and why. Sits
+      // beside the processors that seal it. Server-gated on sensitive_data:admin
+      // — the same permission revealing needs, because knowing WHICH values were
+      // worth looking at is itself sensitive.
+      { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data Collection", render: () => <SensitiveDataAccess /> },
       { id: "collectors", label: "Collectors", group: "Data Collection", platformOnly: true, render: () => <Collectors /> },
       { id: "snmp", label: "SNMP Profile Manager", group: "Data Collection", render: () => <SnmpProfileManager /> },
       // Identity & Access — consolidates Users · Roles · Security Settings,
