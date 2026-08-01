@@ -17,6 +17,10 @@ export type GroupCounts = { total: number; critical: number; warning: number; li
 /** `data` payload on a group React Flow node (container when expanded, aggregate
  *  when collapsed). Groups are TopologyGroups — distinct from device nodes. */
 export type RFGroupData = {
+  /** Nesting depth from parent_id: 0 = outermost (region), 1 = VPC, 2+ = subnet.
+   *  Drives per-level styling — every level drawn identically is what made
+   *  nested containers unreadable. */
+  depth?: number;
   group: TopologyGroup;
   collapsed: boolean;
   emphasis: NodeEmphasis;

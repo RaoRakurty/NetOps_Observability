@@ -6,8 +6,14 @@ import type { LayoutType } from "../api/topologyTypes";
 
 export type Direction = "DOWN" | "RIGHT";
 
-/** A computed position for one node. */
-export type NodePosition = { x: number; y: number };
+/** A computed position for one node — and, for a CONTAINER, the rectangle ELK
+ *  solved for it.
+ *
+ *  Containers carry w/h because the renderer must DRAW THE RECT ELK LAID OUT.
+ *  Re-deriving it from member positions (what the adapter used to do) produced
+ *  a different rectangle from the one the layout reserved space for, which is
+ *  how sibling boxes ended up nearly touching and padding ended up asymmetric. */
+export type NodePosition = { x: number; y: number; w?: number; h?: number };
 
 /** Result of a layout pass: node id → position. Edge routing is left to React Flow. */
 export type LayoutResult = Record<string, NodePosition>;
@@ -31,5 +37,10 @@ export type LayoutPreset = {
  *  phantom VERTICAL slack per row (fixed 2026-07-31), then the card shrank to
  *  120 wide while the cell stayed 200 — 80px of phantom HORIZONTAL slack, the
  *  same "sparse and banded" defect on the other axis (re-audit A2). */
-export const NODE_SIZE = { width: 150, height: 64 };
+//
+//  2026-08-01: the cell now equals the CARD. A layout cell larger than the thing
+//  drawn in it is phantom slack by definition — and when a group rect is
+//  computed from cells while the eye measures from cards, the box looks
+//  mis-padded on every side by the difference. See layout/groupGeometry.ts.
+export const NODE_SIZE = { width: 120, height: 56 };
 export const GROUP_PAD = 28;

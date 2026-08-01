@@ -9,6 +9,7 @@ import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
 import { NODE_SIZE } from "./layoutTypes";
 import { presetFor } from "./layoutPresets";
+import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_W, GROUP_MIN_H } from "./groupGeometry";
 
 const elk = new ELK();
 
@@ -118,7 +119,12 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
       for (const c of children ?? []) {
         const x = ox + ((c as { x?: number }).x ?? 0);
         const y = oy + ((c as { y?: number }).y ?? 0);
-        result[c.id] = { x, y };
+        const w = (c as { width?: number }).width;
+        const h = (c as { height?: number }).height;
+        // A CONTAINER carries its solved rect; a leaf carries only a position.
+        // This is the single-source rule: whatever ELK reserved is what gets
+        // drawn, so the layout and the picture cannot disagree.
+        result[c.id] = c.children?.length ? { x, y, w, h } : { x, y };
         walk(c.children, x, y);
       }
     };
@@ -156,8 +162,6 @@ export function invalidateLayout(view: TopologyView): void {
 
 // ── group hierarchy ──────────────────────────────────────────────────────────
 
-/** Padding inside a container so members never touch its border/label. */
-const GROUP_PADDING = "[top=38,left=18,bottom=18,right=18]";
 
 type ElkChild = {
   id: string;
@@ -207,7 +211,10 @@ function buildChildren(view: TopologyView, preset: ReturnType<typeof presetFor>)
     containerById.set(g.id, {
       id: g.id,
       layoutOptions: {
-        "elk.padding": GROUP_PADDING,
+        "elk.padding": ELK_GROUP_PADDING,
+        "elk.spacing.nodeNode": String(GROUP_GAP),
+        "elk.aspectRatio": String(GROUP_ASPECT),
+        "elk.nodeSize.minimum": `(${GROUP_MIN_W},${GROUP_MIN_H})`,
         "elk.algorithm": "layered",
         "elk.direction": preset.direction,
       },

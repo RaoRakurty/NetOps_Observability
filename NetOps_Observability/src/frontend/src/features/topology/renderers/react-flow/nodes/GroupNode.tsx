@@ -9,6 +9,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { RFGroupData } from "../rfTypes";
 import { HEALTH_COLOR, HEALTH_TINT, HEALTH_LABEL, HEALTH_GLYPH } from "../../../utils/topologyHealth";
+import { radiusForDepth } from "../../../layout/groupGeometry";
 
 const GROUP_TYPE_LABEL: Record<string, string> = {
   site: "Site",
@@ -34,6 +35,7 @@ function Chevron({ collapsed }: { collapsed: boolean }) {
 function GroupNodeBase(props: NodeProps) {
   const data = props.data as unknown as RFGroupData;
   const { group, collapsed, emphasis, counts, health, onToggle } = data;
+  const depth = data.depth ?? 0;
   const dim = emphasis === "dim";
   const spotlight = emphasis === "spotlight";
   const color = HEALTH_COLOR[health];
@@ -101,9 +103,17 @@ function GroupNodeBase(props: NodeProps) {
         width: "100%",
         height: "100%",
         boxSizing: "border-box",
-        borderRadius: 18,
-        background: `color-mix(in srgb, ${color} 6%, color-mix(in srgb, var(--surface) 60%, transparent))`,
-        border: `1.5px dashed ${spotlight ? "var(--accent)" : `color-mix(in srgb, ${color} 45%, var(--border))`}`,
+        borderRadius: radiusForDepth(depth),
+        // PER-LEVEL STYLING. Every level drawn identically (a tint + a dashed
+        // border) is what made nesting unreadable — a region and the VPCs inside
+        // it looked like the same kind of thing. Following the convention the
+        // cloud vendors converged on:
+        //   depth 0 (region) — SHADED fill, hairline border. It is a backdrop.
+        //   depth 1 (VPC)    — OPAQUE card on that shading, solid border. It is
+        //                      an object sitting on the backdrop.
+        //   depth 2+ (subnet/AZ) — no fill, DASHED. Dashed is reserved for
+        //                      "subdivision / uncertain", never for "is a group".
+        ...containerSkin(depth, color, spotlight),
         opacity: dim ? 0.5 : 1,
         pointerEvents: "none",
       }}
@@ -132,3 +142,30 @@ function GroupNodeBase(props: NodeProps) {
 
 export const GroupNode = memo(GroupNodeBase);
 export default GroupNode;
+
+/** containerSkin renders the fill/border for one nesting level.
+ *
+ *  Separated from the component so the three levels are legible side by side —
+ *  and so "what does depth 1 look like" is answerable without reading JSX. */
+function containerSkin(depth: number, color: string, spotlight: boolean) {
+  const accent = spotlight ? "var(--accent)" : undefined;
+  if (depth <= 0) {
+    return {
+      background: `color-mix(in srgb, ${color} 4%, color-mix(in srgb, var(--surface) 70%, transparent))`,
+      border: `1px solid ${accent ?? `color-mix(in srgb, ${color} 30%, var(--border))`}`,
+    };
+  }
+  if (depth === 1) {
+    return {
+      // Opaque: a VPC must read as a card ON the region shading, not as another
+      // wash of the same colour.
+      background: "var(--panel)",
+      border: `1.5px solid ${accent ?? `color-mix(in srgb, ${color} 45%, var(--border))`}`,
+      boxShadow: "0 1px 3px rgba(16,24,40,0.10)",
+    };
+  }
+  return {
+    background: "transparent",
+    border: `1px dashed ${accent ?? `color-mix(in srgb, ${color} 40%, var(--border))`}`,
+  };
+}

@@ -10,6 +10,7 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { TopologyView, OverlayKind, TopologySelection, Health } from "../../api/topologyTypes";
 import type { LayoutResult } from "../../layout/layoutTypes";
+import { GROUP_PAD, LABEL_BAND } from "../../layout/groupGeometry";
 import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT } from "./rfTypes";
@@ -140,6 +141,19 @@ export function topologyToReactFlow(
 
   // ── group nodes (container when expanded, aggregate card when collapsed) ──────
   const groupNodes: Node<RFGroupData>[] = [];
+  // Nesting depth per group, from parent_id. Bounded walk: a malformed cycle
+  // must not hang the renderer.
+  const groupById = new Map(view.groups.map((g) => [g.id, g]));
+  const depthOf = (id: string): number => {
+    let d = 0;
+    let cur = groupById.get(id)?.parent_id;
+    while (cur && d < 8) {
+      d++;
+      cur = groupById.get(cur)?.parent_id;
+    }
+    return d;
+  };
+
   for (const g of view.groups) {
     const memberNodes = g.children.map((id) => view.nodes.find((n) => n.id === id)).filter(Boolean) as typeof view.nodes;
     const bbox = bboxOf(g.children, positions);
@@ -167,14 +181,33 @@ export function topologyToReactFlow(
         draggable: false,
       });
     } else {
-      const pad = 28;
-      const top = 16; // room for the label chip above the children
+      // DRAW THE RECT ELK SOLVED. Re-deriving it here from member positions —
+      // with padding constants that differed from the ones ELK reserved with —
+      // is what produced asymmetric padding and sibling boxes that nearly
+      // touched despite a clean layout. The fallback keeps a view whose layout
+      // predates container geometry rendering rather than dropping the group.
+      const solved = positions[g.id];
+      const rect = solved?.w && solved?.h
+        ? { x: solved.x, y: solved.y, w: solved.w, h: solved.h }
+        : {
+            x: bbox.minX - GROUP_PAD,
+            y: bbox.minY - GROUP_PAD - LABEL_BAND,
+            w: bbox.w + GROUP_PAD * 2,
+            h: bbox.h + GROUP_PAD * 2 + LABEL_BAND,
+          };
       groupNodes.push({
         id: g.id,
         type: "groupNode",
-        position: { x: bbox.minX - pad, y: bbox.minY - pad - top },
-        data: { group: g, collapsed: false, emphasis, counts, health: worst, onToggle: ui.onToggleGroup },
-        style: { width: bbox.w + pad * 2, height: bbox.h + pad * 2 + top },
+        position: { x: rect.x, y: rect.y },
+        data: {
+          group: g, collapsed: false, emphasis, counts, health: worst,
+          onToggle: ui.onToggleGroup,
+          // Nesting depth drives per-level styling (region shaded, VPC outlined,
+          // subnet dashed) — identical styling at every level is why nested
+          // containers were unreadable.
+          depth: depthOf(g.id),
+        },
+        style: { width: rect.w, height: rect.h },
         zIndex: 0,
         selectable: true,
         draggable: false,

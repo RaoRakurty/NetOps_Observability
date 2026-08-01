@@ -24,6 +24,7 @@ import {
   type EdgeMouseHandler,
   type OnNodeDrag,
 } from "@xyflow/react";
+import type { Padding, PaddingWithUnit } from "@xyflow/system";
 import "@xyflow/react/dist/style.css";
 
 import type { OverlayKind, TopologySelection, WorkflowMode, TopologyView } from "../../api/topologyTypes";
@@ -36,13 +37,26 @@ import { CARD_W, CARD_H } from "./nodes/DeviceNode";
 /** Skill graph-scale-policy: past this, the WebGL overview owns the fabric. */
 const MAX_CANVAS_NODES = 1000;
 
-/** Fit padding as a fraction of the viewport.
+/** Width the Devices inventory overlay occupies (252px panel + 10px offset). */
+const INVENTORY_W = 262;
+
+/**
+ * fitPadding — viewport insets that ACCOUNT FOR DOCKED CHROME.
  *
- *  Was 0.2 — a fifth of the canvas spent on empty margin, which is what made
- *  the group box look small inside a field of white. 0.04 still keeps content
- *  clear of the edges (and of the docked search/inventory panels) without
- *  donating the viewport to whitespace. */
-const FIT_PADDING = 0.04;
+ * The inventory panel is an absolutely-positioned overlay ON the canvas, so the
+ * viewport has no idea it exists: a uniform padding fits content into the whole
+ * stage and the leftmost ~262px lands underneath the panel. That is the group
+ * box "going under the rail".
+ *
+ * React Flow ≥12.5 accepts per-side padding with units, so the inset can simply
+ * be told about the panel. Note this fixes FIT; it does not stop a user PANNING
+ * content under the panel — the structural cure is making the panel a flex
+ * sibling so the canvas element itself is narrower, which is a larger change.
+ */
+function fitPadding(showInventory: boolean): Padding {
+  const left: PaddingWithUnit = showInventory ? `${INVENTORY_W + 16}px` : "24px";
+  return { left, top: "60px", right: "24px", bottom: "24px" };
+}
 
 
 import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
@@ -412,7 +426,7 @@ function CanvasInner({
     if (layoutKey) clearSavedLayout(layoutKey);
     setPositions({ ...elkPositions.current });
     setLayoutPinned(false);
-    setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 300 }), 40);
+    setTimeout(() => rf.fitView({ padding: fitPadding(showInventory), duration: 300 }), 40);
   }, [layoutKey, rf]);
 
   // Reset transient selection when the workflow changes. Capacity opens on the
@@ -530,14 +544,14 @@ function CanvasInner({
   useEffect(() => {
     if (laidOutKey && laidOutKey !== fittedFor.current && rfNodes.length) {
       fittedFor.current = laidOutKey;
-      const t = setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 320, maxZoom: 1.15 }), 60);
+      const t = setTimeout(() => rf.fitView({ padding: fitPadding(showInventory), duration: 320, maxZoom: 1.15 }), 60);
       return () => clearTimeout(t);
     }
   }, [laidOutKey, rfNodes.length, rf]);
 
   // Fullscreen: toggle a class on the root and re-fit; Escape exits.
   useEffect(() => {
-    const t = setTimeout(() => rf.fitView({ padding: FIT_PADDING, duration: 260 }), 80);
+    const t = setTimeout(() => rf.fitView({ padding: fitPadding(showInventory), duration: 260 }), 80);
     return () => clearTimeout(t);
   }, [fullscreen, rf]);
   useEffect(() => {
@@ -638,7 +652,7 @@ function CanvasInner({
   return (
     <div className={`topo-root${fullscreen ? " topo-fullscreen" : ""}`}>
       <TopologyToolbar
-        onFit={() => rf.fitView({ padding: FIT_PADDING, duration: 320 })}
+        onFit={() => rf.fitView({ padding: fitPadding(showInventory), duration: 320 })}
         onZoomIn={() => rf.zoomIn({ duration: 200 })}
         onZoomOut={() => rf.zoomOut({ duration: 200 })}
         showAllLabels={showAllLabels}
