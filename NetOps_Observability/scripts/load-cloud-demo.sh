@@ -18,7 +18,16 @@ COMPOSE="$ROOT/deployment/docker/docker-compose.yml"
 SRC="$ROOT/deployment/docker/demo-fixtures/cloud"  # committed demo fixtures (source of truth)
 TGT="$ROOT/data/api/cloud-fixtures"                # runtime dir the api loads at boot
 
-mkdir -p "$TGT"
+# Create the target INSIDE a container, not on the host.
+#
+# data/ is root-owned (the api container writes it), so a host-side `mkdir -p`
+# fails with EACCES for the ordinary user running this script — before reaching
+# the busybox step that exists precisely to avoid that. Mounting the parent and
+# creating the leaf as root inside the container is the same trick the copy
+# already uses, applied one step earlier (§16.1: never let a script die on a
+# condition it already knows how to handle).
+docker run --rm -v "$(dirname "$TGT")":/parent busybox:latest \
+  mkdir -p "/parent/$(basename "$TGT")"
 
 case "${1:-load}" in
   load)
