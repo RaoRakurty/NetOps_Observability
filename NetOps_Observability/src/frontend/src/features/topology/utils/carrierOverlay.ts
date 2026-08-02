@@ -14,11 +14,45 @@ import type { TopologyView, TopologyNode, TopologyEdge } from "../api/topologyTy
 
 export const CARRIER_NODE_ID = "carrier-cloud";
 
-/** Roles/kinds that mark a WAN egress boundary in ANY domain. */
+/**
+ * Cloud egress roles matched EXACTLY against the discovered vocabulary the
+ * backend emits (`gatewayKinds` in cloud/topology_view.go).
+ *
+ * These used to be caught only by the substring regex below, and it missed the
+ * single most important one: `"vpn_gateway"` does not contain `"vpn_gw"`, so an
+ * AWS Site-to-Site VPN gateway or an Azure VirtualNetworkGateway — the ordinary
+ * way a cloud is joined to anything else — was NOT an egress point. The Carrier
+ * overlay would have stayed empty on the exact topology it exists to draw.
+ * `nat_gateway`, `carrier_gateway` and `local_gateway` (Outposts) were missing
+ * for the same reason. An exact role match cannot drift like that.
+ *
+ * Deliberately NOT here:
+ *  - `vpc_peering` — a peering is VPC↔VPC inside one provider, not transport to
+ *    a carrier; drawing it as an uplink would overstate what it is.
+ *  - `nva` — a network virtual appliance is a WORKLOAD that may or may not
+ *    terminate a tunnel, and discovery cannot tell which. Attaching every NAT
+ *    box to the carrier cloud would assert a fact we do not have (rule 6: never
+ *    draw a link without evidence).
+ */
+const CLOUD_EGRESS_ROLES = new Set([
+  "internet_gateway",
+  "nat_gateway",
+  "vpn_gateway",
+  "transit_gateway",
+  "expressroute_gateway",
+  "dx",
+  "egress_only_igw",
+  "carrier_gateway",
+  "local_gateway",
+]);
+
+/** Roles/kinds that mark a WAN egress boundary by NAMING (on-prem//LAN gear). */
 const EGRESS_RE = /(wan|edge|border|uplink|transit|vgw|vpn[-_]?gw|dx|expressroute|interconnect|igw|internet)/i;
 
 function isEgress(n: TopologyNode): boolean {
   if (n.kind === "wan") return true;
+  const role = (n.role ?? n.tags?.role ?? "").toLowerCase();
+  if (CLOUD_EGRESS_ROLES.has(role)) return true;
   const hay = `${n.role ?? ""} ${n.tags?.role ?? ""} ${n.kind}`;
   return EGRESS_RE.test(hay);
 }
