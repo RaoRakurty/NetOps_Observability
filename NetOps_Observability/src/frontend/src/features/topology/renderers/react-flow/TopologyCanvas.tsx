@@ -135,8 +135,8 @@ function mostActionableIncident(incidents: CorrObject[]): string {
 }
 
 function CanvasInner({
-  domain = "lan",
-  carrier = false,
+  domain: domainProp,
+  carrier: carrierProp,
   onDomain,
   onCarrier,
 }: {
@@ -146,6 +146,29 @@ function CanvasInner({
   onCarrier?: (v: boolean) => void;
 }) {
   const rf = useReactFlow();
+
+  // CONTROLLED-OR-NOT. These were prop-only with a `"lan"` default and an
+  // optional `onDomain?.()`. The canvas is mounted from the nav as
+  // `<TopologyCanvas />` with NO props — so `onDomain` was undefined and every
+  // domain click was a silent no-op. The domain could never leave "lan", which
+  // meant the Cloud tab never mounted and `/api/topology/cloud` was never
+  // called: the Cloud page was unreachable, not broken.
+  //
+  // Nothing errored, which is why it survived — an optional callback that is
+  // never supplied fails silently by design. Now the component owns the state
+  // when it is not given any, and still defers to a parent that does control it.
+  const [domainSelf, setDomainSelf] = useState<NetworkDomain>("lan");
+  const [carrierSelf, setCarrierSelf] = useState(false);
+  const domain = domainProp ?? domainSelf;
+  const carrier = carrierProp ?? carrierSelf;
+  const setDomain = useCallback(
+    (d: NetworkDomain) => { setDomainSelf(d); onDomain?.(d); },
+    [onDomain],
+  );
+  const setCarrier = useCallback(
+    (v: boolean) => { setCarrierSelf(v); onCarrier?.(v); },
+    [onCarrier],
+  );
 
   const [mode, setMode] = useState<WorkflowMode>("explore");
   const [overlay, setOverlay] = useState<OverlayKind>("health");
@@ -674,7 +697,7 @@ function CanvasInner({
             className="topo-select"
             aria-label="Network domain"
             value={domain}
-            onChange={(e) => onDomain?.(e.target.value as NetworkDomain)}
+            onChange={(e) => setDomain(e.target.value as NetworkDomain)}
           >
             {DOMAINS.map((d) => (
               <option key={d.id} value={d.id} title={d.blurb}>
@@ -687,7 +710,7 @@ function CanvasInner({
           className={`topo-render-toggle topo-carrier${carrier ? " on" : ""}`}
           role="switch"
           aria-checked={carrier}
-          onClick={() => onCarrier?.(!carrier)}
+          onClick={() => setCarrier(!carrier)}
           title="Overlay the shared carrier / transport network — the fabric that ties LAN, SD-WAN, DC and Cloud together."
         >
           Carrier
