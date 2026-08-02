@@ -80,6 +80,41 @@ test("selecting Cloud mounts the cloud canvas and renders the real discovered ne
   await page.screenshot({ path: "test-results/cloud-domain.png", fullPage: false });
 });
 
+// "Is it intentional that connection between the blocks inside vpc is not shown?"
+// It was not. The routes were all THERE — 19 edge elements, correct stroke, correct
+// geometry — and every single one was painted UNDER its own VPC's shade box, because
+// React Flow's edge layer is z-index:auto and loses a tree-order tie with the group
+// node at z 0. The canvas said "we don't know how these connect" while holding the
+// route table that says exactly how.
+//
+// Counting the edges is what MISSED it the first time, so this asserts what the
+// operator actually gets: hit-test the midpoint of an edge and require the topmost
+// element there to be the edge itself, not the box it lives in.
+test("routes inside a VPC are visible, not buried under the group box", async ({ page }) => {
+  await openCanvas(page);
+  await page.getByLabel("Network domain").selectOption("cloud");
+  await expect(page.getByTestId(`rf__node-${A_SUBNET}`)).toBeVisible();
+  await page.waitForTimeout(700); // fit animation
+
+  const probe = await page.evaluate(() => {
+    const paths = Array.from(document.querySelectorAll(".react-flow__edge-path"));
+    let occluded = 0, checked = 0;
+    for (const p of paths) {
+      const b = p.getBoundingClientRect();
+      if (b.width < 2 && b.height < 2) continue; // degenerate; nothing to see
+      checked++;
+      const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      // A hit on the group node means the shade box is on top of the line.
+      if (hit?.closest(".react-flow__node-groupNode")) occluded++;
+    }
+    return { total: paths.length, checked, occluded };
+  });
+
+  expect(probe.total, "route edges rendered").toBeGreaterThan(10);
+  expect(probe.checked, "edges with real geometry").toBeGreaterThan(0);
+  expect(probe.occluded, "edges hidden under their own group box").toBe(0);
+});
+
 // "Topology canvas should be 100." Two different things have to be true for that,
 // and only one of them is CSS — so both are measured here rather than eyeballed.
 test("the canvas fills the window, and the network fills the canvas", async ({ page }) => {

@@ -898,6 +898,18 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    label layer above the node layers. Labels stay pointer-events:none, so this
    never blocks clicking the card underneath. */
 .topo-stage .react-flow__edgelabel-renderer { z-index: 6; }
+/* …and the LINES had exactly the same problem, which lifting only the labels hid
+   rather than fixed. `.react-flow__edges` is z-index:auto and is the FIRST child
+   of the viewport, so it ties with the open group box (z 0) and loses on tree
+   order: every edge BETWEEN TWO MEMBERS OF THE SAME GROUP was painted underneath
+   that group's shade. On the Cloud tab that is every route in a VPC — 19 edges in
+   the DOM, correctly styled, and not one of them visible. It reads as "we don't
+   know how these connect", which is the opposite of what the route table says.
+
+   z-index 1 seats the layer between the group shade (0) and the device cards
+   (also 1, but later in tree order, so they still paint over the line ends where
+   they should). Collapsed groups (2) and labels (6) stay above, as intended. */
+.topo-stage .react-flow__edges { z-index: 1; }
 /* search docks top-left over the canvas; path panel docks bottom-left */
 
 /* Compact toolbar SELECT — used by Domain and Density (owner 2026-08-01:
