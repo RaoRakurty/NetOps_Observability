@@ -1,6 +1,8 @@
 package cloud
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -261,5 +263,42 @@ func TestBuildTopologyViewNilStatusIsNotHealthy(t *testing.T) {
 		if n.Health != topology.HealthUnknown {
 			t.Fatalf("node %s = %q with no status source; want unknown", n.ID, n.Health)
 		}
+	}
+}
+
+// A REQUIRED array in the wire contract must never serialize as `null`.
+//
+// This is the defect that blanked the Cloud tab: a REGION group parents VPC
+// groups through parent_id and holds no member nodes of its own, so its children
+// accumulator stayed nil and encoding/json wrote `"children":null`. The view
+// contract declares `children` a required array and every consumer iterates it,
+// so the SPA threw `g.children is not iterable` on the first region group and
+// React unmounted the entire page — an empty screen, no error, nothing in the
+// API log to suggest the payload was at fault (it was a 200 with 15 nodes).
+//
+// Asserted on the SERIALIZED bytes on purpose: `len(g.Children) == 0` is true for
+// both nil and `[]string{}`, so only the JSON tells the two apart.
+func TestBuildTopologyViewGroupChildrenNeverNull(t *testing.T) {
+	v := BuildTopologyView([]Topology{sampleAWS()}, "t_acme", fixedNow())
+
+	sawRegion := false
+	for _, g := range v.Groups {
+		if g.GroupType == "region" {
+			sawRegion = true
+		}
+		if g.Children == nil {
+			t.Errorf("group %q (%s) has nil Children — the contract requires an array", g.ID, g.GroupType)
+		}
+	}
+	if !sawRegion {
+		t.Fatal("fixture produced no region group — this test no longer covers the nil-children case")
+	}
+
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(b, []byte(`"children":null`)) {
+		t.Errorf(`serialized view contains "children":null — the Cloud tab crashes on it:\n%s`, b)
 	}
 }

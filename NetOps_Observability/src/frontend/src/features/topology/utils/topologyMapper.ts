@@ -67,11 +67,25 @@ export function normalizeView(v: TopologyView): TopologyView {
       evidence: e.evidence,
     }));
 
+  // A group's `children` is a REQUIRED array in the contract, and ~10 call sites
+  // iterate/spread it without a guard because the type promises it is there. A
+  // producer that emits `null` (a nil Go slice marshals to `null` — which is
+  // exactly what the cloud projection did for REGION groups, whose members are
+  // other groups) therefore did not degrade: it threw "children is not iterable"
+  // mid-render, React unmounted to the root, and the whole page went blank with a
+  // 200 on the wire. The boundary is where that gets fixed for every consumer at
+  // once — normalizeView already promises "every array exists".
+  const groupsIn = Array.isArray(v.groups) ? v.groups : [];
+  const groups = groupsIn.map((g) => ({
+    ...g,
+    children: Array.isArray(g.children) ? g.children : [],
+  }));
+
   return {
     ...v,
     nodes,
     edges,
-    groups: Array.isArray(v.groups) ? v.groups : [],
+    groups,
     overlays: Array.isArray(v.overlays) ? v.overlays : [],
   };
 }

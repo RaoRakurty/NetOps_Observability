@@ -46,6 +46,14 @@ import { withCarrierOverlay } from "../../utils/carrierOverlay";
 
 type AnyNodeData = RFNodeData | RFGroupData;
 
+// Fit insets in PIXELS, not the old `padding: 0.2`. A relative padding spends 20%
+// of BOTH axes on empty margin — on a 1224px-wide stage that is ~490px of nothing,
+// and the map shrinks to match. Fixed insets keep the same breathing room at any
+// window size and hand the rest to the network. The bigger bottom inset is the
+// docked legend + zoom controls, which sit ON the canvas (the LAN canvas does the
+// same thing in fitPadding()).
+const CLOUD_FIT_PADDING = { top: "24px", right: "24px", bottom: "56px", left: "24px" } as const;
+
 // A well-formed zero-node view: what the canvas holds while loading and when the
 // tenant owns no discovered cloud network. Rendering nothing honest beats
 // rendering a fabricated sample network.
@@ -214,7 +222,7 @@ export default function CloudTopologyView({
   useEffect(() => {
     if (laidOut && laidOut !== fittedFor.current && derived.nodes.length) {
       fittedFor.current = laidOut;
-      const t = setTimeout(() => rf.fitView({ padding: 0.2, duration: 320, maxZoom: 1.2 }), 60);
+      const t = setTimeout(() => rf.fitView({ padding: CLOUD_FIT_PADDING, duration: 320, maxZoom: 1.2 }), 60);
       return () => clearTimeout(t);
     }
   }, [laidOut, derived.nodes.length, rf]);

@@ -328,12 +328,22 @@ func BuildTopologyViewWithStatus(topos []Topology, tenant string, now time.Time,
 		if gt == "" {
 			gt = "vpc"
 		}
+		// `children` is a REQUIRED array in the view contract, and a REGION group
+		// holds no member nodes directly (it parents VPC groups via parent_id), so
+		// its accumulator stays nil — which encoding/json writes as `"children":null`.
+		// Every consumer of the contract iterates that field; the SPA crashed on the
+		// first region group and blanked the whole Cloud tab. A required array is
+		// emitted as `[]`, never null.
+		children := g.children
+		if children == nil {
+			children = []string{}
+		}
 		view.Groups = append(view.Groups, topology.Group{
 			ID:        idByAcc[g],
 			Label:     g.label,
 			GroupType: gt,
 			ParentID:  g.parentID,
-			Children:  g.children,
+			Children:  children,
 			Health:    topology.HealthUnknown,
 			Collapsed: false,
 		})

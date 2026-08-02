@@ -606,8 +606,28 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    A canvas is not a document — the reading-width cap and gutters that make
    prose comfortable just shrink a network map. Applied per leaf, so nothing
    else on the product loses its measure. */
-.page.page-bleed { max-width: none; padding: 6px 8px 8px; }
-.page.page-bleed .topo-root { min-height: calc(100vh - 96px); }
+/* 100% OF WHAT IS THERE (owner 2026-08-02: "topology canvas should be 100").
+   `min-height: calc(100vh - 96px)` was a GUESS at the height of everything above
+   the canvas, and it guessed 30px too much: the stage stopped 30px short of the
+   viewport and left a dead band under it. Any such constant is wrong the moment
+   the topbar, the page padding or a banner changes height.
+
+   So no constant. `.main` is a grid area with a definite height and is already a
+   flex column, so the page can simply CLAIM the remainder and hand it to the
+   canvas: page grows into main, topo-root grows into page, and .topo-stage's
+   existing `flex: 1 1 auto` takes everything the toolbar does not. `min-height: 0`
+   at each step is what lets a flex child actually shrink to its container instead
+   of being floored by its content. The result fills exactly, at any chrome height
+   and any viewport, with the 6px gutter that keeps the stage's rounded border
+   legible against the shell. */
+.page.page-bleed {
+  max-width: none; padding: 6px; display: flex; flex-direction: column;
+  flex: 1 1 auto; min-height: 0;
+}
+.page.page-bleed .topo-root { flex: 1 1 auto; min-height: 0; }
+/* The stage's 60vh floor exists for pages that scroll; inside the bleed layout it
+   would re-introduce overflow on a short viewport. Here the flex chain sizes it. */
+.page.page-bleed .topo-stage { min-height: 0; }
 
 /* --- v2 Overview density: tighter gaps + slimmer panel chrome so the board
    reads like a packed NOC wall, not a spacious page (per request). --- */

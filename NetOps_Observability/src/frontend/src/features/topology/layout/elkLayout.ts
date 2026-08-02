@@ -81,13 +81,34 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
     return pinned;
   }
 
+  const children = buildChildren(view, preset);
+
+  // ── FILL THE STAGE, DON'T STRIPE IT ──────────────────────────────────────
+  // A grouped cloud view's top level is a handful of independent boxes (regions,
+  // or VPCs when a region is not declared) with NO edges between them. "layered"
+  // has nothing to layer, so it puts all of them in ONE ROW: the deployed view
+  // came out roughly 2100×270, an 8:1 ribbon that fit-to-view then had to shrink
+  // to a thin strip across the middle of a 2:1 stage — the canvas looked mostly
+  // empty no matter how large the window was.
+  //
+  // Independent boxes are a PACKING problem, not a layering one. rectpacking with
+  // a target aspect ratio wraps them into a grid roughly the shape of the stage,
+  // so the same content fills both dimensions. Scoped to cloud_grouped: every
+  // other view has real edges whose direction is the whole point of layered.
+  const packRoot = view.layout_type === "cloud_grouped" && children.some((c) => c.children?.length);
+
   const graph = {
     id: "root",
     layoutOptions: {
-      "elk.algorithm": "layered",
+      "elk.algorithm": packRoot ? "rectpacking" : "layered",
       "elk.direction": preset.direction,
       "elk.layered.spacing.nodeNodeBetweenLayers": String(preset.layerSpacing),
-      "elk.spacing.nodeNode": String(preset.nodeSpacing),
+      // Gap between packed top-level boxes; the tighter per-node spacing is only
+      // right for leaves inside a container.
+      "elk.spacing.nodeNode": String(packRoot ? GROUP_GAP : preset.nodeSpacing),
+      // 2.0 ≈ the shape of a wide dashboard stage. Exact fit is fit-to-view's
+      // job; this only has to stop the one-row ribbon.
+      ...(packRoot ? { "elk.aspectRatio": "2.0" } : {}),
       "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
       // Lay CONTAINERS out together with what is inside them. Without this ELK
       // treats every node as a peer, group rectangles are drawn afterwards
@@ -99,7 +120,7 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
       // Tier the graph by device role (spine above leaf, etc.) when the preset asks.
       ...(preset.partitionByRole ? { "elk.partitioning.activate": "true" } : {}),
     },
-    children: buildChildren(view, preset),
+    children,
     // Only edges between two laid-out nodes guide the layout.
     edges: view.edges
       .filter((e) => e.source && e.target)
