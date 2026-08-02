@@ -61,10 +61,19 @@ async function openCanvas(page: Page) {
     return json({});
   });
   await page.goto("/#/infrastructure/topology-canvas");
-  await expect(page.getByText("sick-rtr")).toBeVisible(); // canvas rendered
+  // Scoped to the CANVAS node: the Devices rail lists the same names, so an
+  // unscoped locator matches twice and fails strict mode — which took every
+  // test in this file down at the shared entry point, not just the one that
+  // changed.
+  await expect(page.getByTestId("rf__node-sick-rtr")).toBeVisible(); // canvas rendered
 }
 
-const name = (page: Page, t: string) => page.locator("span", { hasText: t }).first();
+// The name AS RENDERED ON THE CANVAS. Scoped to the React Flow node on purpose:
+// the Devices inventory rail lists the same names, so an unscoped locator can
+// match the rail entry instead — which never responds to density, making the
+// assertion silently test the wrong element (and, once the rail defaulted open,
+// fail strict-mode with two matches).
+const name = (page: Page, t: string) => page.getByTestId(`rf__node-${t}`).getByText(t, { exact: true });
 
 test("density is a visible ramp: Exec hides calm names, Operator names all, Engineer adds metrics", async ({ page }) => {
   await openCanvas(page);
@@ -74,19 +83,19 @@ test("density is a visible ramp: Exec hides calm names, Operator names all, Engi
   await page.screenshot({ path: "test-results/knob-density-operator.png" });
 
   // Executive (wallboard): the calm node's name is suppressed; the troublemaker stays named.
-  await page.getByRole("button", { name: "Exec", exact: true }).click();
+  await page.getByLabel("Density").selectOption("executive");
   await expect(name(page, "calm-sw")).toBeHidden();
   await expect(name(page, "sick-rtr")).toBeVisible();
   await page.screenshot({ path: "test-results/knob-density-exec.png" });
 
   // Engineer: calm node named AGAIN and the inline metric strip appears.
-  await page.getByRole("button", { name: "Engineer", exact: true }).click();
+  await page.getByLabel("Density").selectOption("engineer");
   await expect(name(page, "calm-sw")).toBeVisible();
   await expect(page.getByText(/CPU/i).first()).toBeVisible();
   await page.screenshot({ path: "test-results/knob-density-engineer.png" });
 
   // Incident: distinct again (calm dimmed, trouble lifted) — the troublemaker stays named.
-  await page.getByRole("button", { name: "Incident", exact: true }).click();
+  await page.getByLabel("Density").selectOption("incident");
   await expect(name(page, "sick-rtr")).toBeVisible();
   await page.screenshot({ path: "test-results/knob-density-incident.png" });
 });

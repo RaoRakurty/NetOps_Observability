@@ -60,14 +60,14 @@ test("switching to Dependency renders the flow-derived service map", async ({ pa
   const { modes } = await openCanvas(page);
 
   // Explore loads first (the canvas's default fabric node).
-  await expect(page.getByText("edge1")).toBeVisible();
+  await expect(page.getByTestId("rf__node-edge1")).toBeVisible();
 
   await page.getByRole("button", { name: "Dependency" }).click();
 
   // The canvas requested the dependency projection and renders its endpoints.
-  await expect(page.getByText("app1")).toBeVisible();
-  await expect(page.getByText("db1")).toBeVisible();
+  await expect(page.getByTestId("rf__node-dev-app")).toBeVisible();
+  await expect(page.getByTestId("rf__node-dev-db")).toBeVisible();
   expect(modes).toContain("dependency");
   // The previous fabric node is gone — the canvas actually swapped projections.
-  await expect(page.getByText("edge1")).toHaveCount(0);
+  await expect(page.getByTestId("rf__node-edge1")).toHaveCount(0);
 });

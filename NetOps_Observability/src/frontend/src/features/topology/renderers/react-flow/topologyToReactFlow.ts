@@ -292,7 +292,13 @@ export function topologyToReactFlow(
           // (tests/static renders) keeps the full card.
           // A6: the tier comes from the SHARED ladder (semanticZoom.ts), so the
           // canvas's bucket boundaries and the render tiers can never disagree.
-          tier: tierForZoom(ui.zoom),
+          // Density is an EXPLICIT operator choice; zoom is implicit context, so
+          // density wins. Engineer/incident asked for maximum detail, and
+          // gating that behind a zoom threshold is why "Engineer" could look
+          // identical to "Operator" — the control appeared to do nothing at the
+          // zoom the canvas happens to fit to (1.15 → "fabric" → token tier,
+          // which omits the metric strip entirely).
+          tier: density === "engineer" || density === "incident" ? "card" : tierForZoom(ui.zoom),
         },
         zIndex: 1,
         selectable: true,
