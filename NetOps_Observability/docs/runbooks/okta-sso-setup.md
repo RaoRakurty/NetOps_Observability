@@ -56,9 +56,15 @@ exercised twice.
 | Flow | Supported | Why |
 |------|-----------|-----|
 | **SP-initiated** (start at Correlix → Okta → back) | ✅ Yes | The designed path: `/api/auth/sso/login?idp=okta` |
-| **IdP-initiated** (click tile in Okta → land in Correlix) | ❌ Not end-to-end | See below |
+| **IdP-initiated** (click tile in Okta → land in Correlix) | ✅ Yes — two ways | See §4 CORRECTION |
 
-IdP-initiated is blocked by design at `src/backend/oidc.go:98`:
+> **SUPERSEDED — read §4 first.** The paragraphs below were written believing
+> Correlix's CSRF state check made IdP-initiated impossible. That is wrong: the
+> assertion never reaches Correlix at all — Keycloak terminates it and then runs
+> a normal SP-initiated OIDC leg, so the state cookie is always present. The
+> correct mechanism is the client-scoped broker endpoint documented in §4.
+
+The state check itself is real, at `src/backend/oidc.go:98`:
 
 ```go
 state := r.URL.Query().Get("state")
@@ -83,9 +89,9 @@ The user clicks the tile in Okta, lands on Correlix, which starts a normal
 SP-initiated flow. Because the Okta session already exists, it completes with no
 further prompts. Same UX, full CSRF protection retained.
 
-Protocol-level IdP-initiated would require a deliberate code change (safe
-handling of unsolicited assertions, a replay cache, RelayState validation). Not
-in scope here; scope it separately if genuinely required.
+The bookmark remains a legitimate option, but it is NOT the only one — see §4
+for the client-scoped broker endpoint, which is true protocol-level
+IdP-initiated and needs no Correlix code change.
 
 ---
 
