@@ -25,6 +25,28 @@ Overlaps with `docs/design/package-decomposition-plan.md` are marked ⟳ inside
 the reports; the plan's 34 FAT-deferred files (~4.7k LOC) remain governed by
 the plan, not this audit.
 
+## EXECUTED 2026-08-03 (same day) — results
+
+Owner decisions: T1–T4 GO · segclass **RETIRE** · portintel scoring **KEEP**
+(wiring planned) · appid/cloud lanes **KEEP** (owner: "not sure if I need it,
+but keep it" — revisit when the RCA app-identity lane firms up; do not
+re-flag as junk). Commits `c6f09366` (T2/T3), `6b39bd1a` (T1 + segclass),
+`35566d14` (T4).
+
+| Tranche | Shipped result |
+|---|---|
+| T1 | ~575 LOC removed; 5 audit entries SKIPPED on live-caller discovery (QueryIDOf, ExecWithRetry, BackendFor, tacacsHeader, pathgraph.NewMemStore — audit errata); integration/ordering confirmed deliberate supersession and documented |
+| T2 | 7 dead components (~1,100 LOC) + brand-samples (1.0 MB) deleted; deps 19→15 |
+| T3 | Initial JS **4.6 MB → 302 KB raw / 1,388 → 90 KB gzip**, 79 chunks; elk/echarts/xterm/xyflow all lazy; new `components/EChart.tsx` over echarts/core |
+| T4 | Net −229 production LOC, zero non-test dupl groups remain; +554 LOC NEW characterization tests (F-62 accounting had no prior coverage); clone behavioral differences parameterized explicitly (channel severity defaults, ntfy watchdog refusal, SMTP starttls) |
+| T5 | segclass deleted (~908 LOC + CIDR embed, ratchet log annotated); portintel + appid/cloud kept per owner |
+| T6 | NOT scheduled work — opportunistic-on-touch guidance only (slices/maps/strings.Cut, authorize migration, DataTable/modal convergence, admin.tsx split) |
+
+Grand total removed: **~2,800 production LOC + ~4.3 MB initial-bundle weight
++ 1 MB static assets**; added: ~554 LOC of characterization coverage. All
+gates green at every step (full suite, vet, CI-image golangci, growth +
+isolation-coverage + silent-failure ratchets — two of which advanced).
+
 ---
 
 # PART 1 — Backend report (verbatim)
