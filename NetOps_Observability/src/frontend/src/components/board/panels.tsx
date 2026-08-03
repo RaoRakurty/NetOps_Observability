@@ -4,7 +4,7 @@
 // and pass the final query, keeping these primitives simple and reusable. See
 // docs/design/device-monitoring-dashboards.md.
 import { ReactNode, createContext, useContext, useEffect, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../EChart";
 import { api, PromSeries } from "../../services/api";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexToRgba } from "../../theme/charts";
 import { cssVar } from "../../theme/tokens";

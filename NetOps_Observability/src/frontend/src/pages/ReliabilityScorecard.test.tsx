@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 
-vi.mock("echarts-for-react", () => ({ default: () => <div data-testid="chart" /> }));
+vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
 vi.mock("../services/api", () => ({
   api: {
     reliabilityRollups: vi.fn(() => Promise.resolve({

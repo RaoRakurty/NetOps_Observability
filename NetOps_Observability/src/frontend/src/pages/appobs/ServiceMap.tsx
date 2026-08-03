@@ -23,7 +23,7 @@ import {
   type Node, type Edge, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import ELK from "elkjs/lib/elk.bundled.js";
+import type { ELK as ElkInstance } from "elkjs/lib/elk-api";
 import { Chip } from "../../components/noc";
 import { Skeleton } from "../../components/ui";
 import { fmtDateTime } from "../../lib/time";
@@ -39,7 +39,15 @@ import type { SvcMapEdge, SvcMapNode, SvcMapView } from "./serviceMap";
 // TopologyView contract — reusing it here would couple two domains for a few
 // lines of ELK options (topology-ui: clean adapter boundaries per renderer).
 
-const elk = new ELK();
+// elkjs is ~1.6 MB — dynamic-import it on first layout so it never rides in
+// the page chunk. Memoized: one in-flight/loaded instance per session.
+let elkPromise: Promise<ElkInstance> | null = null;
+function loadElk(): Promise<ElkInstance> {
+  if (!elkPromise) {
+    elkPromise = import("elkjs/lib/elk.bundled.js").then((m) => new m.default());
+  }
+  return elkPromise;
+}
 type Positions = Record<string, { x: number; y: number }>;
 
 async function layoutServiceMap(nodes: SvcMapNode[], edges: SvcMapEdge[]): Promise<Positions> {
@@ -56,6 +64,7 @@ async function layoutServiceMap(nodes: SvcMapNode[], edges: SvcMapEdge[]): Promi
     edges: edges.map((e) => ({ id: e.id, sources: [e.source], targets: [e.target] })),
   };
   try {
+    const elk = await loadElk();
     const laid = await elk.layout(graph);
     const out: Positions = {};
     for (const c of laid.children ?? []) out[c.id] = { x: c.x ?? 0, y: c.y ?? 0 };

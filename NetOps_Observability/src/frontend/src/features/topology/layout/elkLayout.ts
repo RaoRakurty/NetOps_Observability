@@ -4,14 +4,22 @@
 // CACHE by topology_id + mode + scope hash. Never recompute on every render. ELK
 // runs on demand and returns positions; React Flow renders them.
 
-import ELK from "elkjs/lib/elk.bundled.js";
+import type { ELK as ElkInstance } from "elkjs/lib/elk-api";
 import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
 import { NODE_SIZE } from "./layoutTypes";
 import { presetFor } from "./layoutPresets";
 import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_W, GROUP_MIN_H } from "./groupGeometry";
 
-const elk = new ELK();
+// elkjs is ~1.6 MB — dynamic-import it on first layout so it never rides in
+// the initial bundle. Memoized: one in-flight/loaded instance per session.
+let elkPromise: Promise<ElkInstance> | null = null;
+function loadElk(): Promise<ElkInstance> {
+  if (!elkPromise) {
+    elkPromise = import("elkjs/lib/elk.bundled.js").then((m) => new m.default());
+  }
+  return elkPromise;
+}
 
 // Role → vertical tier (0 = top). Drives ELK partitioning so a DC/campus graph
 // reads as a proper tree: WAN/edge on top, then spine, then leaf, then access/LAN —
@@ -129,6 +137,7 @@ export async function layoutView(view: TopologyView): Promise<LayoutResult> {
 
   let result: LayoutResult = {};
   try {
+    const elk = await loadElk();
     const laid = await elk.layout(graph);
     // ELK reports a nested child's position RELATIVE TO ITS PARENT, so the tree
     // has to be walked with the parent origin accumulated. Reading only the top

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../components/EChart";
 import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
 import { api, DeviceLocationRow, GeomapResponse, GeoSite, SiteRow, ImportResult } from "../services/api";

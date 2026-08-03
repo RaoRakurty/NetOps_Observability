@@ -3,7 +3,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 import ResourceMetricsPanel from "./ResourceMetricsPanel";
 import type { CloudMetricSeriesResponse } from "../../services/api";
 
-vi.mock("echarts-for-react", () => ({ default: () => <div data-testid="chart" /> }));
+vi.mock("../../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
 
 const seriesResp: CloudMetricSeriesResponse = {
   metric: "cloud_cpu_util", label: "CPU utilization", unit: "percent",

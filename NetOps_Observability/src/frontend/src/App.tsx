@@ -1,11 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, Health, LANDING_PENDING_KEY } from "./services/api";
 import { useAuth } from "./hooks/useAuth";
 import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell";
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { useTzMode, setTzMode } from "./lib/time";
+import { lazy } from "react";
 import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor } from "./nav";
-import ResourceDetail from "./pages/ResourceDetail";
+// Route-level page like the nav leaves (#/resource/{kind}/{id}) — lazy for the
+// same reason: it pulls the appobs metric panels (ECharts) into its own chunk.
+// It renders inside the same <Suspense> boundary as the nav pages below.
+const ResourceDetail = lazy(() => import("./pages/ResourceDetail"));
 import TopBar from "./components/TopBar";
 import Sidebar from "./components/Sidebar";
 import IconRail from "./components/IconRail";
@@ -269,7 +273,12 @@ export default function App() {
                 ten tenants' telemetry merged into one table. Tenant users and
                 already-scoped admins pass straight through. */}
             <TenantGate sectionId={resourceRoute ? "resource" : section.id} sectionLabel={resourceRoute ? "this resource" : section.label}>
-              {view}
+              {/* Single Suspense boundary for the route-level code-split pages
+                  (nav.tsx wraps every leaf in React.lazy). Same affordance as
+                  the app-boot loading state above. */}
+              <Suspense fallback={<div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>}>
+                {view}
+              </Suspense>
             </TenantGate>
           </div>
         </main>

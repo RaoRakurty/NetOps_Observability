@@ -1,69 +1,74 @@
+import { lazy } from "react";
 import { SectionCtx } from "./context/shell";
 import { AI_NAME } from "./brand";
 
 // Pages / tabs (existing components, reparented into product sections).
-import Dashboard from "./pages/Dashboard";
-import DemoShowcase from "./pages/DemoShowcase";
-import FrontPage from "./pages/FrontPage";
-import Devices from "./pages/Devices";
-import DeviceMonitoring from "./pages/DeviceMonitoring";
-import InterfacePerformance from "./pages/InterfacePerformance";
-import PortsWorkbench from "./pages/PortsWorkbench";
-import NmsIntegrations from "./pages/NmsIntegrations";
-import Wireless from "./pages/Wireless";
-import BgpOspf from "./pages/BgpOspf";
-import Troubleshooting from "./pages/Troubleshooting";
-import ThreatDetection from "./pages/ThreatDetection";
-import Events from "./pages/Events";
-import Correlations from "./tabs/Correlations";
-import RcaReports from "./pages/RcaReports";
-import AppObservability from "./pages/AppObservability";
-import ReliabilityScorecard from "./pages/ReliabilityScorecard";
-import Quality from "./pages/Quality";
-import DataSources from "./pages/DataSources";
-import NetworkPath from "./pages/NetworkPath";
-import Reports from "./pages/Reports";
-import TopologyCanvas from "./features/topology/renderers/react-flow/TopologyCanvas";
-import Collectors from "./tabs/Collectors";
-import SnmpProfileManager from "./tabs/SnmpProfileManager";
-import Alerts from "./tabs/Alerts";
-import MaintenanceWindows from "./tabs/MaintenanceWindows";
-import ProcessorsAdmin from "./tabs/ProcessorsAdmin";
-import SensitiveDataAccess from "./tabs/SensitiveDataAccess";
-import Rules from "./tabs/Rules";
-import Findings from "./tabs/Findings";
-import Incidents from "./tabs/Incidents";
-import Logs from "./tabs/Logs";
-import CloudLogs from "./pages/CloudLogs";
-import SavedSearches from "./tabs/SavedSearches";
-import Flows from "./tabs/Flows";
-import Tunnels from "./tabs/Tunnels";
-import WanCircuits from "./pages/WanCircuits";
-import MetricsExplorer from "./tabs/MetricsExplorer";
-import GrafanaTab from "./tabs/Grafana";
-import SearchDashboardsTab from "./tabs/SearchDashboards";
-import Settings from "./tabs/Settings";
-import SourceOfTruth from "./tabs/SourceOfTruth";
-import StackHealth from "./tabs/StackHealth";
-import AuditLog from "./tabs/AuditLog";
-import AccessExplorer from "./tabs/AccessExplorer";
-import {
-  IdentityAccess,
-  RegionsAdmin,
-  SessionsAdmin,
-  AuthenticationAdmin,
-  ApiAccessAdmin,
-  IntegrationsAdmin,
-  NotificationsAdmin,
-  IncidentPoliciesAdmin,
-  GraphQLExplorer,
-} from "./tabs/admin";
-import { DashboardList } from "./pages/Placeholders";
-import DeviceGeomap from "./pages/DeviceGeomap";
-import VulnerabilityManagement from "./pages/VulnerabilityManagement";
-import ComplianceMonitoring from "./pages/ComplianceMonitoring";
-import NewMonitor from "./pages/NewMonitor";
-import CommandCenter from "./pages/CommandCenter";
+// Every page is route-level code-split via React.lazy — the shell renders the
+// active leaf inside ONE <Suspense> boundary in App.tsx, so only the visited
+// page's chunk is fetched. nav.tsx itself stays in the initial bundle (it is
+// the route table), which is why nothing here may import a page eagerly.
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const DemoShowcase = lazy(() => import("./pages/DemoShowcase"));
+const FrontPage = lazy(() => import("./pages/FrontPage"));
+const Devices = lazy(() => import("./pages/Devices"));
+const DeviceMonitoring = lazy(() => import("./pages/DeviceMonitoring"));
+const InterfacePerformance = lazy(() => import("./pages/InterfacePerformance"));
+const PortsWorkbench = lazy(() => import("./pages/PortsWorkbench"));
+const NmsIntegrations = lazy(() => import("./pages/NmsIntegrations"));
+const Wireless = lazy(() => import("./pages/Wireless"));
+const BgpOspf = lazy(() => import("./pages/BgpOspf"));
+const Troubleshooting = lazy(() => import("./pages/Troubleshooting"));
+const ThreatDetection = lazy(() => import("./pages/ThreatDetection"));
+const Events = lazy(() => import("./pages/Events"));
+const Correlations = lazy(() => import("./tabs/Correlations"));
+const RcaReports = lazy(() => import("./pages/RcaReports"));
+const AppObservability = lazy(() => import("./pages/AppObservability"));
+const ReliabilityScorecard = lazy(() => import("./pages/ReliabilityScorecard"));
+const Quality = lazy(() => import("./pages/Quality"));
+const DataSources = lazy(() => import("./pages/DataSources"));
+const NetworkPath = lazy(() => import("./pages/NetworkPath"));
+const Reports = lazy(() => import("./pages/Reports"));
+const TopologyCanvas = lazy(() => import("./features/topology/renderers/react-flow/TopologyCanvas"));
+const Collectors = lazy(() => import("./tabs/Collectors"));
+const SnmpProfileManager = lazy(() => import("./tabs/SnmpProfileManager"));
+const Alerts = lazy(() => import("./tabs/Alerts"));
+const MaintenanceWindows = lazy(() => import("./tabs/MaintenanceWindows"));
+const ProcessorsAdmin = lazy(() => import("./tabs/ProcessorsAdmin"));
+const SensitiveDataAccess = lazy(() => import("./tabs/SensitiveDataAccess"));
+const Rules = lazy(() => import("./tabs/Rules"));
+const Findings = lazy(() => import("./tabs/Findings"));
+const Incidents = lazy(() => import("./tabs/Incidents"));
+const Logs = lazy(() => import("./tabs/Logs"));
+const CloudLogs = lazy(() => import("./pages/CloudLogs"));
+const SavedSearches = lazy(() => import("./tabs/SavedSearches"));
+const Flows = lazy(() => import("./tabs/Flows"));
+const Tunnels = lazy(() => import("./tabs/Tunnels"));
+const WanCircuits = lazy(() => import("./pages/WanCircuits"));
+const MetricsExplorer = lazy(() => import("./tabs/MetricsExplorer"));
+const GrafanaTab = lazy(() => import("./tabs/Grafana"));
+const SearchDashboardsTab = lazy(() => import("./tabs/SearchDashboards"));
+const Settings = lazy(() => import("./tabs/Settings"));
+const SourceOfTruth = lazy(() => import("./tabs/SourceOfTruth"));
+const StackHealth = lazy(() => import("./tabs/StackHealth"));
+const AuditLog = lazy(() => import("./tabs/AuditLog"));
+const AccessExplorer = lazy(() => import("./tabs/AccessExplorer"));
+// tabs/admin exports its 9 views by name; lazy() needs a default, so each
+// wrapper re-shapes the named export. They all share the one admin chunk.
+const IdentityAccess = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IdentityAccess })));
+const RegionsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.RegionsAdmin })));
+const SessionsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.SessionsAdmin })));
+const AuthenticationAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.AuthenticationAdmin })));
+const ApiAccessAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.ApiAccessAdmin })));
+const IntegrationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IntegrationsAdmin })));
+const NotificationsAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.NotificationsAdmin })));
+const IncidentPoliciesAdmin = lazy(() => import("./tabs/admin").then((m) => ({ default: m.IncidentPoliciesAdmin })));
+const GraphQLExplorer = lazy(() => import("./tabs/admin").then((m) => ({ default: m.GraphQLExplorer })));
+const DashboardList = lazy(() => import("./pages/Placeholders").then((m) => ({ default: m.DashboardList })));
+const DeviceGeomap = lazy(() => import("./pages/DeviceGeomap"));
+const VulnerabilityManagement = lazy(() => import("./pages/VulnerabilityManagement"));
+const ComplianceMonitoring = lazy(() => import("./pages/ComplianceMonitoring"));
+const NewMonitor = lazy(() => import("./pages/NewMonitor"));
+const CommandCenter = lazy(() => import("./pages/CommandCenter"));
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {

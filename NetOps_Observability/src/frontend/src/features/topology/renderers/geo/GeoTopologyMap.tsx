@@ -14,7 +14,7 @@
 // Truth — never GeoIP).
 
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../../../../components/EChart";
 import { registerMap } from "echarts/core";
 import { cssVar } from "../../../../theme/tokens";
 import { HEALTH_COLOR, HEALTH_LABEL, fmtUtil } from "../../utils/topologyHealth";

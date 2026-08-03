@@ -5,7 +5,7 @@
 // unavailable / workflow-dependent metrics — never a fabricated MTTR, never "0 ms".
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../components/EChart";
 import {
   api, type ReliabilityRollupResp, type ChronicOffender, type OwnerDomainStat, type ReliabilityQuery,
 } from "../services/api";

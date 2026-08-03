@@ -1,9 +1,13 @@
 import { fmtDateTime } from "../lib/time";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { api, Device, Alert, DeviceLocationRow, SiteRow } from "../services/api";
 import { takeDrill } from "../theme/drill";
 import DeviceDetailPage from "./DeviceDetailPage";
-import DeviceTerminal from "./DeviceTerminal";
+
+// xterm.js (~290 KB) rides only in the terminal chunk: the SSH console is an
+// opt-in feature (FEATURE_DEVICE_SSH, dormant by default) most users never
+// open, so it loads on first "Connect" click, not with the Devices page.
+const DeviceTerminal = lazy(() => import("./DeviceTerminal"));
 import Wizard from "../components/Wizard";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
@@ -435,7 +439,11 @@ export default function Devices() {
       </div>
 
       {detail && <DeviceDetailPage device={detail} onClose={() => setDetail(null)} />}
-      {term && <DeviceTerminal device={term} onClose={() => setTerm(null)} />}
+      {term && (
+        <Suspense fallback={<div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>}>
+          <DeviceTerminal device={term} onClose={() => setTerm(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

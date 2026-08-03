@@ -187,11 +187,11 @@
   --row-h: 28px; --toolbar-h: 32px; --rail-w: 60px;
 
   /* — type families (spec §7) — */
-  --font-ui:   "Inter", "Geist", -apple-system, system-ui, sans-serif;
+  --font-ui:   "Inter", -apple-system, system-ui, sans-serif;
   /* Body face token. Many rules reach for var(--font-sans, …) — it MUST be
      defined or they silently fall back to the OS font and the type drifts
      out of sync with the shell face (.shell-v2 re-points it at Manrope). */
-  --font-sans: "Inter", "Geist", -apple-system, system-ui, sans-serif;
+  --font-sans: "Inter", -apple-system, system-ui, sans-serif;
   /* IBM Plex Mono IS bundled (main.tsx) — JetBrains Mono was not, so the token
      fell back to OS mono everywhere. Use the bundled elegant mono app-wide. */
   --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -537,7 +537,7 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
 }
 
 /* v2 type face + compact top bar (dense-cockpit type scale). Scoped to .shell-v2
-   so the default (v1) shell is untouched. Geist reads elegant + legible at
+   so the default (v1) shell is untouched. Manrope reads elegant + legible at
    small sizes; the slightly negative tracking tightens it without crowding. */
 .shell-v2 {
   --topbar-h: 60px;

@@ -20,7 +20,7 @@ vi.mock("../services/api", () => ({
     { get: () => (...a: unknown[]) => (mode === "fail" ? failing() : ok(...(a as []))) },
   ),
 }));
-vi.mock("echarts-for-react", () => ({ default: () => <div data-testid="chart" /> }));
+vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
 vi.mock("../features/topology/renderers/react-flow/TopologyCanvas", () => ({ default: () => <div /> }));
 vi.mock("../context/shell", () => ({ useShell: () => ({ navigate: vi.fn() }) }));
 vi.mock("../components/ui", () => ({ Modal: () => null }));

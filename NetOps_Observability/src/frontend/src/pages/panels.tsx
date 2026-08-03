@@ -7,7 +7,7 @@
 
 import { fmtDateTime } from "../lib/time";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../components/EChart";
 import { api, Alert, PromRangeResponse, PromInstantResponse, CollectorStatus, Device, Finding, Tunnel } from "../services/api";
 import { chartBase, axisStyle, timeAxisTicks, areaGradient, paletteColor, hexToRgba } from "../theme/charts";
 import { cssVar } from "../theme/tokens";

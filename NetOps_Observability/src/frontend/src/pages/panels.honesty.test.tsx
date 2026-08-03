@@ -26,7 +26,7 @@ vi.mock("../services/api", () => ({
 }));
 // The chart lib and the topology canvas are irrelevant to the honesty contract
 // and pull heavy renderers; stub them.
-vi.mock("echarts-for-react", () => ({ default: () => <div data-testid="chart" /> }));
+vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
 vi.mock("../features/topology/renderers/react-flow/TopologyCanvas", () => ({ default: () => <div /> }));
 vi.mock("../context/shell", () => ({ useShell: () => ({ navigate: vi.fn() }) }));
 

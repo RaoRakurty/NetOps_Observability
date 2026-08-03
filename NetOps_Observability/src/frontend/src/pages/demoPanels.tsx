@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../components/EChart";
 import { api } from "../services/api";
 import { usePolled, latestFromProm, nowWindow, seriesLabel } from "./panels";
 import { hexToRgba } from "../theme/charts";

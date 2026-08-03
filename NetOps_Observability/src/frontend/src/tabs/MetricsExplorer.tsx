@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../components/EChart";
 import { api, PromSeries } from "../services/api";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric } from "../theme/charts";
 

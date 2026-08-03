@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 
-vi.mock("echarts-for-react", () => ({ default: () => <div data-testid="chart" /> }));
+vi.mock("../components/EChart", () => ({ default: () => <div data-testid="chart" /> }));
 
 const topTalkers = vi.fn();
 const flowsTopN = vi.fn();

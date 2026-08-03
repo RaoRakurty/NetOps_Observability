@@ -6,7 +6,7 @@
 // metric store is an error, never an empty chart.
 
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import ReactECharts from "../../components/EChart";
 import { api } from "../../services/api";
 import type { CloudMetricSeriesResponse } from "../../services/api";
 import { Segmented } from "../../components/ui";

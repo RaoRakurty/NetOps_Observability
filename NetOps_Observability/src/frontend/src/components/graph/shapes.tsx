@@ -16,8 +16,7 @@ import gcpMark from "../../assets/cloud/gcp.svg";
 // "evidence" is an off-spine evidence branch (metrics/logs/flows/alerts/traces),
 // deliberately NOT a device shape so it never reads as part of the path.
 // WCAG 2.3.3 / reduced-motion: the fault-ring pulse is SVG SMIL, which the
-// global CSS `prefers-reduced-motion` guard cannot reach — gate it in JS
-// (same pattern as FlowEdge).
+// global CSS `prefers-reduced-motion` guard cannot reach — gate it in JS.
 export function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
