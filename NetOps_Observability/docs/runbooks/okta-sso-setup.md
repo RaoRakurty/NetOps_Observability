@@ -243,5 +243,171 @@ docs should say "seed only — configure in the UI".** Filed as a tracker item.
 | 7 | Create Okta SAML app | ⏳ blocked on Okta API token |
 | 8 | Add Okta as SAML IdP in Keycloak | ⏳ |
 | 9 | Wire `OIDC_*` into `.env`, restart api | ⏳ |
-| 10 | Test SP-initiated login end-to-end | ⏳ |
-| 11 | Add Okta bookmark tile, test IdP-initiated UX | ⏳ |
+| 10 | Enable SSO via the admin API (what the GUI calls) | ✅ `PUT /api/auth/oidc/config` → 200, `ready: true` |
+| 11 | `/api/auth/sso/config` shows both providers | ✅ `enabled: true`, okta-saml + okta-oidc |
+| 12 | SP-initiated OIDC reaches Okta | ✅ chain ends at Okta `/oauth2/v1/authorize`, 200 |
+| 13 | SP-initiated SAML AuthnRequest correct | ✅ see below |
+| 14 | Complete the 4 cells in a browser | ⏳ needs a human at Okta's login page |
+
+### Verified chains (2026-08-03)
+
+**OIDC, SP-initiated** — followed with curl, ends on Okta's own login page:
+
+```
+/api/auth/sso/login?idp=okta-oidc
+  → 302 /auth/realms/correlix/protocol/openid-connect/auth?...&kc_idp_hint=okta-oidc
+  → 302 https://trial-4975697.okta.com/oauth2/v1/authorize?scope=openid+profile+email&state=…  [200]
+```
+
+**SAML, SP-initiated** — stops at Keycloak's self-submitting POST form (curl does
+not execute it; that is the HTTP-POST binding working, not a failure). The form
+and the AuthnRequest inside it are correct:
+
+```
+form action = https://trial-4975697.okta.com/app/…/exk15x4v3xdsXW0AJ698/sso/saml
+fields      = SAMLRequest, RelayState
+
+<samlp:AuthnRequest
+  AssertionConsumerServiceURL="http://10.70.245.122:8000/auth/realms/correlix/broker/okta-saml/endpoint"
+  Destination="https://trial-4975697.okta.com/app/…/sso/saml" …>
+```
+
+The ACS matches what was registered in the Okta app, and the Destination matches
+Okta's SSO endpoint from its metadata — so the round trip is correctly addressed
+in both directions.
+
+### ✅ CELL 1 — SAML, SP-initiated: PASSED (2026-08-03)
+
+Full chain exercised in a browser: Correlix → Keycloak → Okta (password + MFA)
+→ back to Correlix, signed in. Provisioning verified in Postgres:
+
+```
+id      rao.rakurty@versa-networks.com
+tenant  t_062d774a46c631273e4b9e9496df67e9   (Homedepot Retail — correct)
+src     oidc
+role    read-only                            (= OIDC_DEFAULT_ROLE)
+```
+
+Okta enforced MFA in the browser flow even though the `/api/v1/authn` API path
+did not — the org sign-on policy applies to app access, and Correlix honours it
+(`oidc.go:132` verifies the IdP asserted a second factor before accepting).
+
+#### Role mapping — the half that is invisible until it bites
+
+The user landed as `read-only`, which is correct-by-default but not useful.
+`RoleFor()` scans `realm_access.roles` + `groups` from the **ID token** against
+`OIDC_ADMIN_ROLES` / `OIDC_OPERATOR_ROLES`, falling back to `OIDC_DEFAULT_ROLE`.
+
+Granting a matching Keycloak realm role is **not sufficient on its own**:
+Keycloak's built-in realm-roles mapper sets `access.token.claim=true` but
+`id.token.claim=false`. The role is granted, the config looks right everywhere
+you would think to look, and the role never reaches Correlix. Both halves are
+required:
+
+```bash
+# 1. role whose NAME matches OIDC_ADMIN_ROLES, granted to the user
+POST /admin/realms/correlix/roles                      {"name":"netops-admin"}
+POST /admin/realms/correlix/users/{id}/role-mappings/realm
+# 2. and put it in the ID TOKEN (default is access-token only)
+PUT  /admin/realms/correlix/client-scopes/{roles}/protocol-mappers/models/{id}
+     config.id.token.claim = "true"
+```
+
+**Production note:** granting per user does not scale. Use
+Okta group → IdP mapper (*Advanced Claim to Role*) so group membership drives
+the Correlix role for both protocols.
+
+#### Administration 403s are partly CORRECT
+
+A tenant `super-admin` still cannot open platform-GLOBAL pages — Collectors,
+Regions, Sessions, Stack Health, Self-Monitoring, OpenSearch, GraphQL Explorer,
+Authentication, Token Policy, LLM keys, notification channels. These are
+`platformOnly` / `requirePlatformAdmin` (CLAUDE.md §3a): a tenant admin
+configuring the platform's own auth providers would leak privilege across every
+tenant. Only the platform `admin` account sees them. A *tenant-scoped* page
+that 403s for a tenant super-admin WOULD be a bug — none observed.
+
+### ✅ FINAL RESULTS — all four cells (2026-08-03)
+
+| # | Cell | Result |
+|---|------|--------|
+| 1 | SAML SP-initiated | ✅ PASS |
+| 3 | OIDC SP-initiated | ✅ PASS |
+| 4 | OIDC IdP-initiated | ✅ PASS — via `initiate_login_uri` (the spec's mechanism) |
+| 2 | SAML IdP-initiated | ✅ PASS via bookmark · ❌ NOT POSSIBLE protocol-level |
+
+Role mapping confirmed end to end after the realm role + ID-token fix:
+
+```
+rao.rakurty@versa-networks.com | super-admin | oidc | t_062d774a46c631273e4b9e9496df67e9
+```
+
+#### Protocol-level IdP-initiated SAML is NOT SUPPORTED — proven, not assumed
+
+Keycloak's SAML broker only accepts **solicited** responses. It requires a
+`RelayState` that Keycloak itself issued, so an unsolicited assertion — which is
+exactly what an Okta tile sends — can never be consumed. Demonstrated from both
+directions:
+
+| RelayState sent by Okta | Keycloak |
+|-------------------------|----------|
+| a destination URL | `RuntimeException: Illegal base64url string!` |
+| omitted | `SAML RelayState parameter was null when it should be returned by the IDP` |
+
+Both surface to the user as a Keycloak error page *after* they have already
+entered password and MFA. No configuration fixes this; it is structural.
+
+**The supported implementation is an Okta Bookmark app** pointing at
+`/api/auth/sso/login?idp=okta-saml`. The tile click starts a normal SP-initiated
+flow which completes silently (the Okta session already exists), so the operator
+experience is identical — and the CSRF state binding that makes unsolicited SAML
+risky in the first place is preserved.
+
+OIDC differs: `initiate_login_uri` IS the standard third-party-initiated login
+hook, so cell 4 is a genuine protocol-level pass.
+
+#### Okta app settings that are not obvious
+
+- OIDC apps are created **hidden** (`visibility.hide = {iOS:true, web:true}`) and
+  with `idp_initiated_login.mode = "DISABLED"`. Both must be flipped or the tile
+  never appears on the end-user dashboard. SAML apps get a tile automatically.
+- Every app create needs a `visibility` block; OIDC apps also need
+  `"name": "oidc_client"`.
+- App **assignment** controls who may sign in — it does NOT influence the role
+  the user receives in Correlix. That comes from Keycloak realm roles / groups.
+
+#### OIDC brokering needs Keycloak→IdP egress; SAML does not
+
+Observed live as `SocketTimeoutException: Read timed out` on
+`AbstractOAuth2IdentityProvider`, failing *after* successful Okta auth. SAML
+brokering is entirely front-channel — the browser carries the assertion and
+Keycloak verifies the signature offline against the imported certificate. OIDC
+requires a back-channel `/token` exchange and JWKS fetch from the Keycloak
+container itself.
+
+**In egress-restricted or proxied networks, SAML will work where OIDC silently
+will not**, and the failure appears only after the user has entered credentials
+and MFA. Recommend SAML as the default for locked-down deployments.
+
+### What is left, and why
+
+Everything up to the Okta login prompt is verified. The remaining step is
+entering credentials at Okta, which needs a browser — the Claude in Chrome
+extension is not connected in this session, and Okta admin sign-in is an
+interactive flow. The four cells to click through:
+
+| # | Cell | URL to open |
+|---|------|-------------|
+| 1 | SAML SP-initiated | `http://10.70.245.122:8000/api/auth/sso/login?idp=okta-saml` |
+| 2 | SAML IdP-initiated | the "Correlix (SAML via Keycloak)" tile in Okta |
+| 3 | OIDC SP-initiated | `http://10.70.245.122:8000/api/auth/sso/login?idp=okta-oidc` |
+| 4 | OIDC IdP-initiated | the "Correlix (OIDC via Keycloak)" tile in Okta |
+
+After each, confirm the user lands in Correlix and check the provisioned account:
+
+```sql
+select id, tenant_id, data->>'auth_source', data->>'role'
+from users where data->>'auth_source' = 'oidc';
+```
+
+Expect `tenant_id = t_062d774a46c631273e4b9e9496df67e9` (Homedepot) for all four.
