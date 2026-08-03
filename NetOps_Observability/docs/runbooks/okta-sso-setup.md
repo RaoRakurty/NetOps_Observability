@@ -334,7 +334,7 @@ that 403s for a tenant super-admin WOULD be a bug — none observed.
 | 1 | SAML SP-initiated | ✅ PASS |
 | 3 | OIDC SP-initiated | ✅ PASS |
 | 4 | OIDC IdP-initiated | ✅ PASS — via `initiate_login_uri` (the spec's mechanism) |
-| 2 | SAML IdP-initiated | ✅ PASS via bookmark · ❌ NOT POSSIBLE protocol-level |
+| 2 | SAML IdP-initiated | ✅ PASS via bookmark · ⏳ protocol-level NOW CONFIGURED, awaiting browser test |
 
 Role mapping confirmed end to end after the realm role + ID-token fix:
 
@@ -342,7 +342,63 @@ Role mapping confirmed end to end after the realm role + ID-token fix:
 rao.rakurty@versa-networks.com | super-admin | oidc | t_062d774a46c631273e4b9e9496df67e9
 ```
 
-#### Protocol-level IdP-initiated SAML is NOT SUPPORTED — proven, not assumed
+#### ⚠ CORRECTION (2026-08-03, later) — the claim below was WRONG
+
+The section that follows concluded that protocol-level IdP-initiated SAML is
+impossible through a Keycloak broker. **That is not true**, and the reasoning was
+faulty: two failed attempts were used to infer an architectural limit, when both
+failed for the same mundane reason — no landing target was ever configured.
+
+The owner pushed back from experience ("RelayState is embedded in the URL for
+IdP-initiated SAML"), which is correct and is the industry norm:
+
+- **AWS** requires the IdP to support "unsolicited IdP-initiated SSO with a deep
+  link target resource or relay state endpoint URL".
+- **Azure AD** exposes a static **Relay State** field on the enterprise app.
+- **ADFS** defines a composed format (URL-encoded RPID + state, re-encoded).
+
+The rule everywhere: **the SP defines what RelayState means; the IdP passes it
+through opaquely.** Keycloak is the SP here, and it has its own mechanism.
+
+#### The mechanism that actually works: a client-scoped broker endpoint
+
+Keycloak routes IdP-initiated brokered logins through a **client sub-path** on
+the broker endpoint:
+
+```
+{keycloak}/realms/{realm}/broker/{idp-alias}/endpoint/clients/{name}
+```
+
+`{name}` is the target client's `saml_idp_initiated_sso_url_name` attribute.
+Verified live: that path is routed (400 "Invalid Request" on a bare GET, i.e.
+"no SAMLResponse", rather than 404), while a nonexistent IdP alias responds
+differently.
+
+Configured 2026-08-03:
+
+```
+Keycloak client `netops`:  saml_idp_initiated_sso_url_name = netops
+Okta SAML app default ACS: …/broker/okta-saml/endpoint/clients/netops
+```
+
+**Both directions coexist** via Okta's multiple-ACS support, which matters
+because IdP-initiated uses the app's DEFAULT ACS while SP-initiated uses the ACS
+named in Keycloak's AuthnRequest:
+
+```
+allowMultipleAcsEndpoints = true
+acsEndpoints = [ …/endpoint/clients/netops   (index 0 — IdP-initiated default)
+                 …/endpoint                  (index 1 — SP-initiated request)  ]
+```
+
+Confirmed after the change that Keycloak's AuthnRequest still carries
+`AssertionConsumerServiceURL=…/broker/okta-saml/endpoint`, which is in the
+allowed list — so cell 1 is unaffected.
+
+**Not yet browser-tested** (no browser in the session that configured it). The
+Okta tile "Correlix (SAML via Keycloak)" is the test.
+
+#### Superseded reasoning, kept for the record
 
 Keycloak's SAML broker only accepts **solicited** responses. It requires a
 `RelayState` that Keycloak itself issued, so an unsolicited assertion — which is
