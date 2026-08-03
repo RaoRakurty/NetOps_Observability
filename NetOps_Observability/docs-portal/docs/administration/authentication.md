@@ -17,7 +17,7 @@ Correlix supports local accounts and your existing identity infrastructure, side
 | **TACACS+** | Authenticate operators against your existing AAA server. |
 
 :::note SAML
-There is no native SAML form. If your identity provider is SAML‑only, front it with an OIDC‑capable broker and connect Correlix to the broker via the Single Sign‑On tile.
+There is no native SAML form. If your identity provider is SAML‑only, front it with an OIDC‑capable broker and connect Correlix to the broker via the Single Sign‑On tile. The bundled Keycloak service does exactly this — the **[Okta SSO step‑by‑step guide](/administration/okta-sso)** walks through the whole setup, including the Okta dashboard tile.
 :::
 
 Required fields are marked with a red asterisk, and every stored secret is **write‑only** — after saving it shows as `••••••`; leaving it blank on a later edit keeps the existing value.
