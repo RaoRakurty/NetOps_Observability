@@ -3,7 +3,7 @@ package nms
 // scheduler.go — the NMS poll runtime (#95 P3b, extracted P2 W4.17). A single
 // supervised loop (ticketing-sweeper idiom) that, each tick, lists every
 // ENABLED integration across all tenants (platform scope), runs the due ones
-// through RunPoll, and fans the class-routed outputs to their sinks:
+// through RunPollSession, and fans the class-routed outputs to their sinks:
 //
 //	controller_metric → Sinks.EmitMetrics (VictoriaMetrics Lane 1)
 //	controller_event  → Sinks.ProduceEvents (bus → netops.controller_events)
@@ -246,9 +246,9 @@ func (rt *Runtime) PollIntegration(ctx context.Context, ic Integration) RunRecor
 	return rec
 }
 
-// pollOnce runs RunPoll and sinks the routed output. Returns the number of
+// pollOnce runs RunPollSession and sinks the routed output. Returns the number of
 // controller events emitted. Partial stream failures surface in the error while
-// successful streams' output still flows (RunPoll contract).
+// successful streams' output still flows (RunPollSession contract).
 func (rt *Runtime) pollOnce(ctx context.Context, ic Integration) (int64, error) {
 	conn, ok := rt.reg.Get(ic.Vendor)
 	if !ok {

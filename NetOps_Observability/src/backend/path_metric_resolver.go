@@ -185,9 +185,6 @@ func (m *ResolvedPathMetric) Source() PathSource {
 	}
 }
 
-// Tier is the headline tier (of the headline source).
-func (m *ResolvedPathMetric) Tier() MeasurementTier { return m.Source().Tier() }
-
 // resolveCurrentByDst runs the tier cascade once (a handful of VM vector queries)
 // and returns host → resolved current metric. Best-effort: a query error or a
 // missing tier simply leaves the lower tier (or nothing) in place.
@@ -275,31 +272,3 @@ func (s *server) resolveCurrentByDst(ctx context.Context) map[string]*ResolvedPa
 	return out
 }
 
-// sourceTierOrder is the canonical priority order (Tier 1 → Tier 5, and by
-// precision within a tier) — the single place the ranking is enumerated, used by
-// resolvedSources so a "measured by" summary lists sources highest-tier first.
-var sourceTierOrder = []PathSource{
-	SrcHTTPSynthetic, SrcDNSSynthetic, SrcTLSHandshake, SrcRUM, SrcDBProbe, // T1
-	SrcEcho, SrcSynthetic, SrcSyntheticTCP, SrcTraceroute, SrcUDPProbe, // T2
-	SrcSTAMP, SrcTWAMP, SrcOWAMP, SrcIPSLA, SrcRPM, // T3
-	SrcInterface, SrcTunnel, SrcFirewall, SrcSDWANPath, SrcRouting, // T4
-	SrcFlow, // T5
-}
-
-// resolvedSources returns the distinct sources present, highest-tier first —
-// handy for a "measured by: HTTP synthetic, echo" summary.
-func resolvedSources(ms map[string]*ResolvedPathMetric) []PathSource {
-	seen := map[PathSource]bool{}
-	for _, m := range ms {
-		if src := m.Source(); src != SrcNone {
-			seen[src] = true
-		}
-	}
-	var out []PathSource
-	for _, s := range sourceTierOrder {
-		if seen[s] {
-			out = append(out, s)
-		}
-	}
-	return out
-}

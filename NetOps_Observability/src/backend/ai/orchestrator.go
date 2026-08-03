@@ -1627,13 +1627,3 @@ func capitalize(s string) string {
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
 }
-
-// SortedModuleIDs is a small deterministic helper for tests/inspection.
-func SortedModuleIDs() []string {
-	out := make([]string, 0, len(modules))
-	for _, m := range modules {
-		out = append(out, m.ID)
-	}
-	sort.Strings(out)
-	return out
-}

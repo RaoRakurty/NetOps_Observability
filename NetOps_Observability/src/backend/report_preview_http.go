@@ -17,21 +17,17 @@ import (
 // "what will this look like" pane. Works on both backends (it only needs the
 // dataset builder + a renderer, not the queue).
 
-var (
-	previewOnce sync.Once
-	previewHTML reports.Renderer
-	previewXLSX reports.Renderer
-)
+var previewRenderers = sync.OnceValues(func() (html, xlsx reports.Renderer) {
+	html, _ = reports.NewHTMLRenderer()
+	return html, reports.NewXLSXRenderer()
+})
 
 func previewRenderer(format string) reports.Renderer {
-	previewOnce.Do(func() {
-		previewHTML, _ = reports.NewHTMLRenderer()
-		previewXLSX = reports.NewXLSXRenderer()
-	})
+	html, xlsx := previewRenderers()
 	if format == "xlsx" {
-		return previewXLSX
+		return xlsx
 	}
-	return previewHTML
+	return html
 }
 
 func (s *server) handleReportPreview(w http.ResponseWriter, r *http.Request) {

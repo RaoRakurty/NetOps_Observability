@@ -82,7 +82,7 @@ func ComputeTimeMetrics(lc Lifecycle, version string, now time.Time) []TimeMetri
 		}
 		m.DurationMs = dur.Milliseconds()
 		m.IsInferred = start.Source == SrcInferred || end.Source == SrcInferred
-		m.Confidence = minConf(start.Confidence, end.Confidence)
+		m.Confidence = min(start.Confidence, end.Confidence)
 		out = append(out, m)
 	}
 	return out
@@ -205,9 +205,3 @@ func DeriveTimeLossDriver(lc Lifecycle, ctx DriverContext) (TimeLossDriver, stri
 	return DeriveCurrentBottleneck(lc, ctx)
 }
 
-func minConf(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}

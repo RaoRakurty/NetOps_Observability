@@ -46,8 +46,6 @@ func init() {
 	}
 }
 
-// oidIndexVersion is logged at startup for replay/audit (content-hash version).
-func oidIndexVersion() string { return oidIdx.Version }
 
 // lookupOID resolves a dotted OID. Scalars/notifications match exactly; table
 // columns match by longest dotted-prefix (the trailing arcs are the row index),

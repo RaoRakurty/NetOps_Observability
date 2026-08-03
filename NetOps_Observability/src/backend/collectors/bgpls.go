@@ -46,9 +46,9 @@ import (
 // gives the display name we resolve against inventory.
 
 // topoNodesKeyBGPLS holds the published BGP-LS node metadata ([]BGPLSNode):
-// origin-node→prefix join + SR parameters. Read by the API (FetchTopologyNodes)
-// to enrich the topology graph with node-level data the adjacency link contract
-// cannot carry. TTL-expiring like the link keys so a dead peer self-heals.
+// origin-node→prefix join + SR parameters — node-level data the adjacency link
+// contract cannot carry. TTL-expiring like the link keys so a dead peer
+// self-heals.
 const topoNodesKeyBGPLS = "netops:topology:bgpls_nodes"
 
 const (
@@ -1176,24 +1176,6 @@ func (c *bgplsCollector) buildRoutingPairs() []RoutingPair {
 		names = append(names, n)
 	}
 	return forwardingPairs(names, adj)
-}
-
-// FetchTopologyNodes reads the published BGP-LS node metadata ([]BGPLSNode):
-// origin-node→prefix join + SR parameters. Empty slice when absent (collector
-// off / Redis down) — node enrichment is best-effort, never an error.
-func FetchTopologyNodes(ctx context.Context) ([]BGPLSNode, error) {
-	c, err := redisDial(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	raw, err := redisCmd(c, "GET", topoNodesKeyBGPLS)
-	if err != nil || raw == "" {
-		return []BGPLSNode{}, nil
-	}
-	var out []BGPLSNode
-	_ = json.Unmarshal([]byte(raw), &out)
-	return out, nil
 }
 
 // BGPLSNode is the published BGP-LS node shape (origin-node metadata that has no

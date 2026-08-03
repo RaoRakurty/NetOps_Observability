@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"netops/backend/internal/oidc"
 	"netops/backend/internal/session"
 	"netops/backend/internal/users"
 	"strings"
@@ -45,7 +46,7 @@ func newAuthCfgServer(t *testing.T) *httptest.Server {
 		ldap:      newLDAPConfigStore(dir+"/ldap_config.json", nil),
 		tacacs:    newTACACSConfigStore(dir+"/tacacs_config.json", nil),
 	}
-	s.oidc.Store(newOIDCProvider()) // disabled (no env) -> ready()==false
+	s.oidc.Store(oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())) // disabled (no env) -> ready()==false
 	s.oidcCfg = newOIDCConfigStore(dir+"/oidc_config.json", s)
 	mux := http.NewServeMux()
 	s.routes(mux)

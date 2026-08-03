@@ -22,16 +22,10 @@ const (
 	ScopeTypeResource = "resource"
 )
 
-// ScopeOrg / ScopeTenant / ScopeResource mint canonical scope ids.
+// ScopeOrg / ScopeTenant mint canonical scope ids.
 func ScopeOrg(id string) string { return ScopeTypeOrg + ":" + strings.ToLower(strings.TrimSpace(id)) }
 func ScopeTenant(id string) string {
 	return ScopeTypeTenant + ":" + strings.ToLower(strings.TrimSpace(id))
-}
-
-// ScopeResource is part of the scope-mint API (lazy resource scopes); consumers
-// arrive as resource-level ACLs land (Phase D+).
-func ScopeResource(kind, id string) string {
-	return ScopeTypeResource + ":" + strings.ToLower(strings.TrimSpace(kind)) + ":" + strings.ToLower(strings.TrimSpace(id))
 }
 
 // ParseScope splits a scope id into its type and the remainder (slug / kind:id).

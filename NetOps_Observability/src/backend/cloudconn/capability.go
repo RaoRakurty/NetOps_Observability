@@ -79,16 +79,6 @@ func PacksForProvider(p Provider) []CapabilityPack {
 	return out
 }
 
-// AllPacks returns every registered pack, deterministically ordered.
-func AllPacks() []CapabilityPack {
-	out := make([]CapabilityPack, 0, len(registry))
-	for _, pk := range registry {
-		out = append(out, pk)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].FullID() < out[j].FullID() })
-	return out
-}
-
 func init() {
 	// ── aws-observer-v1 ─ least-privilege, read-only. Mirrors the shipped
 	// deployment/docker/cloud-ingest/iam-policy-aws.json permission surface.

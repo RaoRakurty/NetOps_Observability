@@ -110,17 +110,6 @@ func (s *server) effectiveTenantRegion(t Tenant) string {
 	return RegionDefault
 }
 
-// tenantDataPlane is the routing/edge layer: tenant → region → data plane.
-func (s *server) tenantDataPlane(tenantID string) DataPlane {
-	region := RegionDefault
-	if s.tenants != nil {
-		if t, ok := s.tenants.Get(tenantID); ok {
-			region = s.effectiveTenantRegion(t)
-		}
-	}
-	return dataPlaneFor(region)
-}
-
 // RegionTopology is one region row of the topology view: its data plane plus the
 // orgs/tenants that live in it.
 type RegionTopology struct {

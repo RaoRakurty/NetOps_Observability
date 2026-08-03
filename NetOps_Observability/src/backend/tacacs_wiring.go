@@ -1,30 +1,17 @@
 package backend
 
 // tacacs_wiring.go — what stays in main after the TACACS+ wire client moved to
-// internal/tacacs (Phase-2 W1.9): the env constructor, the login handler and
-// the source-compat alias. The kv config store is in auth_config.go.
+// internal/tacacs (Phase-2 W1.9): the login handler and the source-compat
+// alias. The kv config store is in auth_config.go.
 
 import (
 	"errors"
 	"net/http"
-	"os"
-	"time"
 
 	"netops/backend/internal/tacacs"
 )
 
 type TACACS = tacacs.Client
-
-func newTACACS() *TACACS {
-	return tacacs.New(
-		envOr("TACACS_HOST", "")+":"+envOr("TACACS_PORT", "49"),
-		os.Getenv("TACACS_SECRET"),
-		durEnv("TACACS_TIMEOUT", 5*time.Second),
-		os.Getenv("TACACS_ENABLED") == "true" && os.Getenv("TACACS_HOST") != "",
-		envOr("TACACS_DEFAULT_ROLE", RoleReadOnly),
-		os.Getenv("TACACS_DEFAULT_TENANT"),
-	)
-}
 
 func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

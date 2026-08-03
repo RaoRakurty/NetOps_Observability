@@ -34,8 +34,8 @@ import (
 // a data race.
 
 // oidcConfig is the serialisable SSO provider configuration. It mirrors the
-// fields newOIDCProvider() reads from the environment, so behaviour is
-// unchanged when nothing has been saved.
+// fields the env-derived initial provider reads, so behaviour is unchanged
+// when nothing has been saved.
 func newOIDCConfigFromEnv() oidcConfig {
 	return oidcConfig{
 		Enabled:       os.Getenv("OIDC_ENABLED") == "true",

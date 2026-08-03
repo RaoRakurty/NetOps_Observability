@@ -301,17 +301,6 @@ func IsModuleEnabled(id string, flags FlagLookup) bool {
 	return true
 }
 
-// EnabledModules returns the ids of modules currently available to the tenant.
-func EnabledModules(flags FlagLookup) []string {
-	var out []string
-	for _, m := range modules {
-		if IsModuleEnabled(m.ID, flags) {
-			out = append(out, m.ID)
-		}
-	}
-	return out
-}
-
 // ProductNavEntry maps a feature to where it lives in the UI.
 type ProductNavEntry struct {
 	Feature       string `json:"feature"`

@@ -91,6 +91,9 @@ import (
 //	2026-07-27  259  internal/segclass (the ingest segment/device classifier
 //	                  mirror + its embedded provider-CIDR snapshot; zero Go
 //	                  consumers found — flagged in the plan for the owner)
+//	                  → RETIRED 2026-08-03 (owner decision, lightening audit
+//	                  #147/T5): still zero consumers a month later; deleted,
+//	                  recoverable from git history if ingest stamping revives
 //	2026-07-27  258  internal/seam (the canonical seam inventory: model,
 //	                  lifecycle, validation + pg store with seam.DB INJECTED
 //	                  via the portintel idiom; bootstrap rules, handlers and

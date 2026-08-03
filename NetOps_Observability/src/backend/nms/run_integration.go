@@ -32,22 +32,16 @@ type RunResult struct {
 	Errors      map[string]error      // stream → error (partial success allowed)
 }
 
-// RunPoll executes one poll cycle for an integration. Pure orchestration over
-// the injected connector + Doer + checkpoint store — fully testable with an
-// httptest server.
-func RunPoll(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer, cps CheckpointStore, pipe *Pipeline) (RunResult, error) {
-	res, _, err := RunPollSession(ctx, conn, cfg, do, cps, pipe, Session{})
-	return res, err
-}
-
-// RunPollSession is RunPoll with a caller-held session cache: a still-valid
-// cached Session skips the login round-trip (a scheduler polling every 30-60s
-// would otherwise log in on every cycle — controllers rate-limit and audit
-// logins, so steady-state polls must reuse the token until it expires). It
-// returns the session that ended the cycle so the caller can cache it; the
-// per-stream 401 re-auth stays the safety net for tokens the controller
-// invalidates early. A zero cached Session (or an expired one) authenticates
-// exactly like RunPoll.
+// RunPollSession executes one poll cycle for an integration — pure
+// orchestration over the injected connector + Doer + checkpoint store, fully
+// testable with an httptest server — with a caller-held session cache: a
+// still-valid cached Session skips the login round-trip (a scheduler polling
+// every 30-60s would otherwise log in on every cycle — controllers rate-limit
+// and audit logins, so steady-state polls must reuse the token until it
+// expires). It returns the session that ended the cycle so the caller can
+// cache it; the per-stream 401 re-auth stays the safety net for tokens the
+// controller invalidates early. A zero cached Session (or an expired one)
+// authenticates afresh.
 func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, do Doer, cps CheckpointStore, pipe *Pipeline, cached Session) (RunResult, Session, error) {
 	res := RunResult{Checkpoints: map[string]Checkpoint{}, Errors: map[string]error{}}
 	poller := conn.Poller()

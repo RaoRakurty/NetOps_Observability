@@ -253,12 +253,6 @@ func jwksTTL() time.Duration {
 // beyond a bare password). Broad on purpose to interop across IdPs (Okta, Entra,
 // Keycloak, Auth0, Ping…). "pwd"/"password" alone is NOT MFA.
 
-// newOIDCProvider builds the env-derived initial provider (the admin overlay
-// rebuilds via the same package path).
-func newOIDCProvider() *oidcProvider {
-	return oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())
-}
-
 // The provider + config domain moved to internal/oidc (Phase-2 W4.4); the
 // login-transaction store lives there too (#135 hardening).
 type (

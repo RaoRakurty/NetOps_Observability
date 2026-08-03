@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -88,9 +87,6 @@ func (t *Client) DefaultRole() string { return t.defaultRole }
 func (t *Client) Addr() string           { return t.addr }
 func (t *Client) Timeout() time.Duration { return t.timeout }
 func (t *Client) DefaultTenant() string  { return t.tenant }
-
-// Host returns the configured server address (for status/diagnostics).
-func (t *Client) Host() string { return strings.TrimSuffix(t.addr, ":") }
 
 // tacacsPad builds the MD5-chained pseudo-pad used to obfuscate a TACACS+ body
 // (RFC 8907 §4.5). The pad is the concatenation of MD5 hashes:

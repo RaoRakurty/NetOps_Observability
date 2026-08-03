@@ -41,8 +41,8 @@ func TestPathSourceTiers(t *testing.T) {
 
 func TestResolvedMetricHeadlineSource(t *testing.T) {
 	m := &ResolvedPathMetric{LatencySource: SrcEcho, LossSource: SrcSTAMP}
-	if m.Source() != SrcEcho || m.Tier() != Tier2AgentActive {
-		t.Errorf("headline should be latency's source (echo/Tier2), got %s/%d", m.Source(), m.Tier())
+	if m.Source() != SrcEcho || m.Source().Tier() != Tier2AgentActive {
+		t.Errorf("headline should be latency's source (echo/Tier2), got %s/%d", m.Source(), m.Source().Tier())
 	}
 	m2 := &ResolvedPathMetric{AvailabilitySource: SrcHTTPSynthetic, LossSource: SrcTraceroute}
 	if m2.Source() != SrcHTTPSynthetic {
@@ -51,17 +51,5 @@ func TestResolvedMetricHeadlineSource(t *testing.T) {
 	m3 := &ResolvedPathMetric{LossSource: SrcSTAMP}
 	if m3.Source() != SrcSTAMP {
 		t.Errorf("total-loss path -> loss headline, got %s", m3.Source())
-	}
-}
-
-func TestResolvedSourcesTierOrder(t *testing.T) {
-	ms := map[string]*ResolvedPathMetric{
-		"a": {LatencySource: SrcSTAMP},
-		"b": {LatencySource: SrcEcho},
-		"c": {LatencySource: SrcHTTPSynthetic},
-	}
-	got := resolvedSources(ms)
-	if len(got) != 3 || got[0] != SrcHTTPSynthetic || got[1] != SrcEcho || got[2] != SrcSTAMP {
-		t.Errorf("resolvedSources should list highest-tier first, got %v", got)
 	}
 }

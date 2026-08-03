@@ -56,17 +56,3 @@ func TestDataPlaneRouting(t *testing.T) {
 	}
 }
 
-// TestTenantDataPlane: the routing layer maps a tenant through its region to a
-// data plane.
-func TestTenantDataPlane(t *testing.T) {
-	s := newPBACTestServer(t)
-	if _, err := s.tenants.Create("Euro", "", "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.tenants.SetRegion("euro", "eu-west"); err != nil {
-		t.Fatal(err)
-	}
-	if dp := s.tenantDataPlane("euro"); dp.Region != "eu-west" {
-		t.Errorf("tenant data plane region = %q, want eu-west", dp.Region)
-	}
-}

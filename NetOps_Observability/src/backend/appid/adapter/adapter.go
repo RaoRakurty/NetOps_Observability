@@ -147,18 +147,6 @@ func protoName(s string) string {
 	}
 }
 
-// NamespaceVendorID builds a globally-unique key for a vendor app-id (a raw vendor id
-// is never unique on its own). Stable + lowercase: "vendor/product/id".
-func NamespaceVendorID(vendor, product, id string) string {
-	parts := make([]string, 0, 3)
-	for _, p := range []string{vendor, product, id} {
-		if p = strings.TrimSpace(p); p != "" {
-			parts = append(parts, strings.ToLower(p))
-		}
-	}
-	return strings.Join(parts, "/")
-}
-
 // rawHash is the integrity hash of the raw event (sorted keys → stable) — stored
 // instead of the raw body so an observation links back without copying the log.
 func rawHash(ev map[string]any) string {

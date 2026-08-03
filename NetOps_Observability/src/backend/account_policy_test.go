@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"netops/backend/internal/secpolicy"
 	"netops/backend/internal/token"
 	"strings"
 	"testing"
@@ -10,8 +11,8 @@ import (
 // account_policy_test.go — F-68. Every branch of the seven account-lifecycle
 // settings that were stored, displayed as active, and enforced by nothing.
 //
-// evaluateAccountPolicy is pure and takes `now` as a parameter, so an account
-// can be aged 200 days without sleeping and without a fake clock.
+// secpolicy.EvaluateAccountPolicy is pure and takes `now` as a parameter, so an
+// account can be aged 200 days without sleeping and without a fake clock.
 
 func localUser(mod func(*User)) User {
 	u := User{
@@ -31,7 +32,7 @@ var policyNow = time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 func TestAccountValidityDaysExpiresTheAccount(t *testing.T) {
 	ss := SecuritySettings{AccountValidityDays: 30}
 	// Created 2026-01-01, now 2026-07-22 — 202 days old, limit 30.
-	d := evaluateAccountPolicy(ss, localUser(nil), policyNow)
+	d := secpolicy.EvaluateAccountPolicy(ss, localUser(nil), policyNow)
 	if !d.Deny {
 		t.Fatalf("account 202 days old with a 30-day validity must be denied, got %+v", d)
 	}
@@ -40,7 +41,7 @@ func TestAccountValidityDaysExpiresTheAccount(t *testing.T) {
 	}
 	// Inside the window it must NOT fire.
 	fresh := localUser(func(u *User) { u.CreatedAt = policyNow.AddDate(0, 0, -29) })
-	if got := evaluateAccountPolicy(ss, fresh, policyNow); got.Blocked() {
+	if got := secpolicy.EvaluateAccountPolicy(ss, fresh, policyNow); got.Blocked() {
 		t.Errorf("29-day-old account under a 30-day validity must pass, got %+v", got)
 	}
 }
@@ -48,7 +49,7 @@ func TestAccountValidityDaysExpiresTheAccount(t *testing.T) {
 func TestAccountValidityIsSkippedWhenUnset(t *testing.T) {
 	// 0 = disabled. An ancient account must still sign in.
 	ancient := localUser(func(u *User) { u.CreatedAt = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC) })
-	if d := evaluateAccountPolicy(SecuritySettings{}, ancient, policyNow); d.Blocked() {
+	if d := secpolicy.EvaluateAccountPolicy(SecuritySettings{}, ancient, policyNow); d.Blocked() {
 		t.Fatalf("validity 0 must disable the rule, got %+v", d)
 	}
 }
@@ -56,12 +57,12 @@ func TestAccountValidityIsSkippedWhenUnset(t *testing.T) {
 func TestAccountInactivityLocksAfterTheWindow(t *testing.T) {
 	ss := SecuritySettings{AccountInactivityDays: 90}
 	stale := localUser(func(u *User) { u.LastLoginAt = policyNow.AddDate(0, 0, -91) })
-	d := evaluateAccountPolicy(ss, stale, policyNow)
+	d := secpolicy.EvaluateAccountPolicy(ss, stale, policyNow)
 	if !d.Deny || d.Reason != acctPolicyInactive {
 		t.Fatalf("91 days idle under a 90-day rule must lock, got %+v", d)
 	}
 	recent := localUser(func(u *User) { u.LastLoginAt = policyNow.AddDate(0, 0, -89) })
-	if got := evaluateAccountPolicy(ss, recent, policyNow); got.Blocked() {
+	if got := secpolicy.EvaluateAccountPolicy(ss, recent, policyNow); got.Blocked() {
 		t.Errorf("89 days idle must pass, got %+v", got)
 	}
 }
@@ -71,7 +72,7 @@ func TestAccountInactivityLocksAfterTheWindow(t *testing.T) {
 func TestNeverLoggedInIsNotInactive(t *testing.T) {
 	ss := SecuritySettings{AccountInactivityDays: 1}
 	brandNew := localUser(func(u *User) { u.LastLoginAt = time.Time{} })
-	if d := evaluateAccountPolicy(ss, brandNew, policyNow); d.Deny {
+	if d := secpolicy.EvaluateAccountPolicy(ss, brandNew, policyNow); d.Deny {
 		t.Fatalf("a never-used account must not be denied as inactive, got %+v", d)
 	}
 }
@@ -79,7 +80,7 @@ func TestNeverLoggedInIsNotInactive(t *testing.T) {
 func TestPasswordExpiryForcesAChangeNotADenial(t *testing.T) {
 	ss := SecuritySettings{PasswordExpireEnabled: true, PasswordExpireDays: 90}
 	old := localUser(func(u *User) { u.PasswordChangedAt = policyNow.AddDate(0, 0, -91) })
-	d := evaluateAccountPolicy(ss, old, policyNow)
+	d := secpolicy.EvaluateAccountPolicy(ss, old, policyNow)
 	if d.Deny {
 		t.Fatalf("an expired PASSWORD must not deny the account outright: %+v", d)
 	}
@@ -98,7 +99,7 @@ func TestUnknownPasswordAgeDoesNotForceAFleetWideReset(t *testing.T) {
 		u.CreatedAt = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC) // ancient
 		u.LastLoginAt = policyNow.AddDate(0, 0, -1)               // active user
 	})
-	if d := evaluateAccountPolicy(ss, legacy, policyNow); d.Blocked() {
+	if d := secpolicy.EvaluateAccountPolicy(ss, legacy, policyNow); d.Blocked() {
 		t.Fatalf("unknown password age must not block; got %+v", d)
 	}
 }
@@ -107,7 +108,7 @@ func TestPasswordExpiryDisabledByFlag(t *testing.T) {
 	// days set but the enable flag off — the flag must win.
 	ss := SecuritySettings{PasswordExpireEnabled: false, PasswordExpireDays: 1}
 	old := localUser(func(u *User) { u.PasswordChangedAt = policyNow.AddDate(0, 0, -400) })
-	if d := evaluateAccountPolicy(ss, old, policyNow); d.Blocked() {
+	if d := secpolicy.EvaluateAccountPolicy(ss, old, policyNow); d.Blocked() {
 		t.Fatalf("password_expire_enabled=false must disable expiry, got %+v", d)
 	}
 }
@@ -115,19 +116,19 @@ func TestPasswordExpiryDisabledByFlag(t *testing.T) {
 func TestResetOnFirstLogin(t *testing.T) {
 	ss := SecuritySettings{ResetOnFirstLogin: true}
 	first := localUser(func(u *User) { u.LastLoginAt = time.Time{} })
-	d := evaluateAccountPolicy(ss, first, policyNow)
+	d := secpolicy.EvaluateAccountPolicy(ss, first, policyNow)
 	if !d.MustChange || d.Reason != acctPolicyFirstLogin {
 		t.Fatalf("first login must force a reset, got %+v", d)
 	}
 	returning := localUser(func(u *User) { u.LastLoginAt = policyNow.AddDate(0, 0, -1) })
-	if got := evaluateAccountPolicy(ss, returning, policyNow); got.Blocked() {
+	if got := secpolicy.EvaluateAccountPolicy(ss, returning, policyNow); got.Blocked() {
 		t.Errorf("a returning user must not be asked to reset, got %+v", got)
 	}
 }
 
 func TestMustChangePasswordFlagIsHonoured(t *testing.T) {
 	flagged := localUser(func(u *User) { u.MustChangePassword = true })
-	d := evaluateAccountPolicy(SecuritySettings{}, flagged, policyNow)
+	d := secpolicy.EvaluateAccountPolicy(SecuritySettings{}, flagged, policyNow)
 	if !d.MustChange {
 		t.Fatalf("an explicit MustChangePassword must force a reset, got %+v", d)
 	}
@@ -146,7 +147,7 @@ func TestFederatedAccountsSkipPasswordRules(t *testing.T) {
 			u.LastLoginAt = time.Time{}
 			u.PasswordChangedAt = policyNow.AddDate(0, 0, -400)
 		})
-		if d := evaluateAccountPolicy(ss, u, policyNow); d.Blocked() {
+		if d := secpolicy.EvaluateAccountPolicy(ss, u, policyNow); d.Blocked() {
 			t.Errorf("%s account must skip local password rules, got %+v", src, d)
 		}
 	}
@@ -160,7 +161,7 @@ func TestHardDenialWinsOverForcedChange(t *testing.T) {
 		PasswordExpireEnabled: true, PasswordExpireDays: 1,
 	}
 	u := localUser(func(u *User) { u.PasswordChangedAt = policyNow.AddDate(0, 0, -400) })
-	d := evaluateAccountPolicy(ss, u, policyNow)
+	d := secpolicy.EvaluateAccountPolicy(ss, u, policyNow)
 	if !d.Deny || d.Reason != acctPolicyExpired {
 		t.Fatalf("account expiry must take precedence, got %+v", d)
 	}
@@ -192,7 +193,7 @@ func TestPasswordHistoryRejectsReuseOnlyWhenEnabled(t *testing.T) {
 func TestPasswordHistoryIsBounded(t *testing.T) {
 	hist := []string{}
 	for i := 0; i < 20; i++ {
-		hist = pushPasswordHistory(hist, "hash-"+intToString(i))
+		hist = secpolicy.PushPasswordHistory(hist, "hash-"+intToString(i))
 	}
 	if len(hist) != passwordHistoryDepth {
 		t.Fatalf("history len = %d, want the %d cap", len(hist), passwordHistoryDepth)
@@ -204,7 +205,7 @@ func TestPasswordHistoryIsBounded(t *testing.T) {
 
 func TestPushPasswordHistoryDoesNotAliasTheCallersSlice(t *testing.T) {
 	orig := []string{"a", "b"}
-	next := pushPasswordHistory(orig, "c")
+	next := secpolicy.PushPasswordHistory(orig, "c")
 	next[1] = "MUTATED"
 	if orig[0] != "a" {
 		t.Fatalf("caller slice was aliased and mutated: %v", orig)
@@ -249,12 +250,12 @@ func TestConcurrentLoginDeniedParsing(t *testing.T) {
 // The defaults ship expiry ON at 90 days. If a default ever changes to
 // something that would block the bootstrap admin on a fresh install, this fails.
 func TestDefaultSettingsDoNotBlockAFreshAdmin(t *testing.T) {
-	ss := defaultSecuritySettings(ScopeProvider)
+	ss := secpolicy.DefaultSettings(ScopeProvider)
 	admin := User{
 		Username: "admin", AuthSource: "local", Status: "active",
 		CreatedAt: policyNow, // just installed
 	}
-	if d := evaluateAccountPolicy(ss, admin, policyNow); d.Blocked() {
+	if d := secpolicy.EvaluateAccountPolicy(ss, admin, policyNow); d.Blocked() {
 		t.Fatalf("shipped defaults must let a freshly seeded admin sign in, got %+v", d)
 	}
 	if !strings.EqualFold(ss.ConcurrentLogin, "allow") {

@@ -25,18 +25,8 @@ const (
 	passwordHistoryDepth = secpolicy.HistoryDepth
 )
 
-type accountPolicyDecision = secpolicy.Decision
-
-func evaluateAccountPolicy(ss SecuritySettings, u User, now time.Time) accountPolicyDecision {
-	return secpolicy.EvaluateAccountPolicy(ss, u, now)
-}
-
 func checkPasswordHistory(ss SecuritySettings, u User, candidate string) error {
 	return secpolicy.CheckPasswordHistory(ss, u, candidate)
-}
-
-func pushPasswordHistory(existing []string, outgoing string) []string {
-	return secpolicy.PushPasswordHistory(existing, outgoing)
 }
 
 func applyPasswordChange(u *User, hash string, now time.Time) {

@@ -173,7 +173,6 @@ func TestErrorIsNotConflatedWithABenignState(t *testing.T) {
 		"cloudconn/exchange_gcp.go": true, // [was-invisible]
 		"cloudconn/probe_aws.go":    true, // [was-invisible]
 		"collectors/synthetics.go":  true, // [was-invisible]
-		"collectors/bgpls.go":       true,
 		"collectors/unifi.go":       true,
 	}
 

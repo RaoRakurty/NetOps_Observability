@@ -1412,7 +1412,7 @@ func BuildReport(in ReportInput) Report {
 			confidence = "Medium"
 			basis = fmt.Sprintf("%d evidence classes from %d observers align, but no fully independent confirming pair", nMod, nObs)
 		default:
-			basis = fmt.Sprintf("evidence rests on %s from %s", CountNoun(maxInt(nMod, 1), "evidence class"), strings.ToLower(CountNoun(maxInt(nObs, 1), "observer")))
+			basis = fmt.Sprintf("evidence rests on %s from %s", CountNoun(max(nMod, 1), "evidence class"), strings.ToLower(CountNoun(max(nObs, 1), "observer")))
 		}
 	}
 
@@ -1719,7 +1719,7 @@ func BuildReport(in ReportInput) Report {
 	// derived from synthetic/flow evidence; missing = "not measured", never zero.
 	rep.ImpactProvenance = buildImpactProvenance(rcaImpactInput{
 		Scope: scope, Probe: sigSummary.Probe, SyntheticFailures: impactSynthetic,
-		FlowAnomalies:   maxInt(laneAnomalous["passive_flow"], impactRealUserIndicator),
+		FlowAnomalies:   max(laneAnomalous["passive_flow"], impactRealUserIndicator),
 		RealUserSignals: impactRealUser,
 		ImpactRU:        impactRU, Validation: validation,
 	})
@@ -1745,12 +1745,6 @@ func BuildReport(in ReportInput) Report {
 	return rep
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE
 // actually concluded (mechanism + causal object, P1.3). A confirmed fault

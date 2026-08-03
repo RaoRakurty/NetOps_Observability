@@ -291,15 +291,6 @@ func withPort(addr string, def int) string {
 	return net.JoinHostPort(addr, strconv.Itoa(def))
 }
 
-// tcpProbe dials the address over TCP — proves the protocol port is open.
-func tcpProbe(ctx context.Context, addr string, _ Target) error {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
-	}
-	return c.Close()
-}
 
 // sshBannerProbe dials the NETCONF-over-SSH port and reads the server's SSH
 // identification string. Per RFC 4253 §4.2 an SSH server sends "SSH-2.0-<impl>"

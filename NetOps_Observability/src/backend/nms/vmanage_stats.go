@@ -62,7 +62,7 @@ func (VManageStatsTransformer) Transform(tenant, integrationID string, raw []byt
 
 // VManageAutoTransformer is the connector-level transformer: it routes each
 // polled payload to the stats or alarms transformer BY SHAPE — approute rows
-// carry vqoe_score / loss_percentage keys an alarm never does. RunPoll drives
+// carry vqoe_score / loss_percentage keys an alarm never does. RunPollSession drives
 // every stream through one Transformer seam, so without this the statistics
 // stream would fall into the alarms parser and the metric lane would stay
 // silently empty.

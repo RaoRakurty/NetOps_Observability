@@ -42,12 +42,6 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-func maxf(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 // toMap converts any JSON-encodable value to a generic map (duplicated from
 // main's search helpers — the marshal round-trip, NOT a type assertion, so
@@ -404,7 +398,7 @@ func (ds DataSource) DatasetDeviceUtil(tenant string) (string, []Section) {
 			break
 		}
 	}
-	n := maxf(float64(len(devs)), 1)
+	n := max(float64(len(devs)), 1)
 	summary := fmt.Sprintf("%d device(s) · avg CPU %.0f%% · avg mem %.0f%% · %d over 80%%", len(devs), cpuSum/n, memSum/n, hot)
 	return summary, []Section{
 		{Title: "Overview", Header: []string{"Metric", "Value"}, Rows: [][]string{

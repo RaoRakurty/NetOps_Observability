@@ -1,7 +1,5 @@
 package cloudconn
 
-import "strings"
-
 // LifecycleState is the connector lifecycle state machine. A connector cannot
 // collect telemetry until StateActive, and can only reach StateActive through
 // successful validation. Identity health (can we authenticate?) is tracked
@@ -126,13 +124,4 @@ type TrustAnchor struct {
 	OIDCIssuer      string `json:"oidc_issuer,omitempty"`       // Correlix workload OIDC issuer URL
 	OIDCSubject     string `json:"oidc_subject,omitempty"`      // subject Correlix presents in its assertion
 	OIDCAudience    string `json:"oidc_audience,omitempty"`     // audience the provider expects
-}
-
-// ParseLifecycleState normalizes a free-form state token.
-func ParseLifecycleState(s string) (LifecycleState, bool) {
-	st := LifecycleState(strings.ToUpper(strings.TrimSpace(s)))
-	if _, ok := validTransitions[st]; ok {
-		return st, true
-	}
-	return st, false
 }

@@ -50,9 +50,9 @@ func TestRunPollVManageEndToEnd(t *testing.T) {
 		BaseURL: srv.URL, Streams: []string{"alarms"},
 		Creds: Credentials{Username: "ro", Password: "pw"},
 	}
-	res, err := RunPoll(context.Background(), conn, cfg, do, NewMemCheckpoints(), NewPipeline(1000))
+	res, _, err := RunPollSession(context.Background(), conn, cfg, do, NewMemCheckpoints(), NewPipeline(1000), Session{})
 	if err != nil {
-		t.Fatalf("RunPoll: %v", err)
+		t.Fatalf("RunPollSession: %v", err)
 	}
 	if gotAuthHeader != "Bearer jwt-abc-123" {
 		t.Fatalf("poll did not carry the JWT: %q", gotAuthHeader)
@@ -106,9 +106,9 @@ func TestRunPollReauthOn401(t *testing.T) {
 		Tenant: "t-a", IntegrationID: "int-vm", BaseURL: srv.URL,
 		Streams: []string{"alarms"}, Creds: Credentials{Username: "ro", Password: "pw"},
 	}
-	res, err := RunPoll(context.Background(), conn, cfg, do, NewMemCheckpoints(), NewPipeline(1000))
+	res, _, err := RunPollSession(context.Background(), conn, cfg, do, NewMemCheckpoints(), NewPipeline(1000), Session{})
 	if err != nil {
-		t.Fatalf("RunPoll: %v", err)
+		t.Fatalf("RunPollSession: %v", err)
 	}
 	if logins < 2 {
 		t.Fatalf("expected a re-auth (>=2 logins), got %d", logins)

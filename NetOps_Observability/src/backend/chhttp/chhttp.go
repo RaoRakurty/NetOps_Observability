@@ -214,39 +214,11 @@ type Error struct {
 	wrapped        error // transport-level cause, if any
 }
 
-// Committed reports whether err represents a write that definitely landed.
-// A nil error is committed; anything else is not.
-func Committed(err error) bool { return err == nil }
-
-// OutcomeOf returns the commit state carried by err. A nil error is Committed.
-// A non-chhttp error is Unknown: we did not produce it, so we cannot claim to
-// know whether the write landed — and Unknown is the safe direction, because it
-// forbids both silent data loss and a blind non-idempotent retry.
-func OutcomeOf(err error) Outcome {
-	if err == nil {
-		return OutcomeCommitted
-	}
-	var e *Error
-	if errors.As(err, &e) {
-		return e.Outcome
-	}
-	return OutcomeUnknown
-}
-
 // QueryIDOf returns the ClickHouse query id carried by err, or "".
 func QueryIDOf(err error) string {
 	var e *Error
 	if errors.As(err, &e) {
 		return e.QueryID
-	}
-	return ""
-}
-
-// ClassificationOf returns the stable metric slug carried by err, or "".
-func ClassificationOf(err error) string {
-	var e *Error
-	if errors.As(err, &e) {
-		return e.Classification
 	}
 	return ""
 }
@@ -285,15 +257,6 @@ func Retryable(err error) bool {
 		return e.Retryable
 	}
 	return false
-}
-
-// Code returns the ClickHouse exception code carried by err, or 0.
-func Code(err error) int {
-	var e *Error
-	if errors.As(err, &e) {
-		return e.Code
-	}
-	return 0
 }
 
 // Client is a configured ClickHouse HTTP endpoint. Construct one per process

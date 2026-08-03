@@ -9,6 +9,16 @@ import (
 // Tests for the opaque-identity foundation (identity_ids.go + orgs/tenants):
 // opaque immutable ids, validated/unique/immutable slugs, and slug→id resolution.
 
+// isTenantID / isOrgID are test assertion helpers: a minted opaque id (vs a
+// slug or a legacy id==slug) carries the canonical prefix.
+func isTenantID(ref string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), tenantIDPrefix)
+}
+
+func isOrgID(ref string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), orgIDPrefix)
+}
+
 func TestOpaqueIDGenerator(t *testing.T) {
 	// Prefixed, opaque, and unique across many mints.
 	seen := map[string]bool{}

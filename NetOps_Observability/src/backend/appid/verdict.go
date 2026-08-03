@@ -215,7 +215,7 @@ func fuseRanked(signals []Signal, rank func(Source) int) Verdict {
 
 	conf := win.conf
 	if win.sources >= 2 && tier != Undetermined {
-		conf = minF(0.99, conf+0.10) // agreement boost
+		conf = min(0.99, conf+0.10) // agreement boost
 	}
 	if contradicted {
 		conf *= contradictionPenalty
@@ -293,12 +293,6 @@ func demote(t Tier) Tier {
 	}
 }
 
-func minF(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100

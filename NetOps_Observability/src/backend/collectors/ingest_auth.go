@@ -36,30 +36,23 @@ type ingestCredential struct {
 	token string
 }
 
-var (
-	ingestOnce sync.Once
-	ingestCred ingestCredential
-)
-
-func loadIngestCredential() ingestCredential {
-	ingestOnce.Do(func() {
-		user := os.Getenv("INGEST_USER")
-		if user == "" {
-			user = "netops-ingest"
-		}
-		ingestCred = ingestCredential{user: user, token: os.Getenv("INGEST_TOKEN")}
-	})
-	return ingestCred
+func readIngestCredential() ingestCredential {
+	user := os.Getenv("INGEST_USER")
+	if user == "" {
+		user = "netops-ingest"
+	}
+	return ingestCredential{user: user, token: os.Getenv("INGEST_TOKEN")}
 }
 
+var loadIngestCredential = sync.OnceValue(readIngestCredential)
+
 // resetIngestCredentialForTest re-reads the environment. Only tests call it:
-// the sync.Once is deliberate in production (a mid-flight env change must not
-// split the fleet's behaviour silently), but a test that cannot vary the
+// the once-only read is deliberate in production (a mid-flight env change must
+// not split the fleet's behaviour silently), but a test that cannot vary the
 // credential cannot exercise the rejection path — and the rejection path is
 // the half of F-08 that keeps a bad token from silently killing three lanes.
 func resetIngestCredentialForTest() {
-	ingestOnce = sync.Once{}
-	ingestCred = ingestCredential{}
+	loadIngestCredential = sync.OnceValue(readIngestCredential)
 }
 
 // ResetIngestCredentialForTest is the exported form of the reset below, for

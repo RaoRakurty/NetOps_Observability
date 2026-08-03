@@ -25,8 +25,6 @@ func newSecuritySettingsStore(path string) (*securitySettingsStore, error) {
 	return secpolicy.NewStore(path)
 }
 
-func defaultSecuritySettings(scope string) SecuritySettings { return secpolicy.DefaultSettings(scope) }
-
 func normalizeSettingsScope(scope string) string { return secpolicy.NormalizeScope(scope) }
 
 // handleSecuritySettings serves GET/PUT /api/security-settings?scope=provider|<tenant>.

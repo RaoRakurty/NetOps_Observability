@@ -2,10 +2,7 @@ package collectors
 
 import (
 	"bytes"
-	"context"
-	"net"
 	"testing"
-	"time"
 )
 
 // The SNMP v2c GET for sysUpTimeInstance is a fixed, well-known byte string
@@ -42,37 +39,6 @@ func TestBase128(t *testing.T) {
 		if got := base128(in); !bytes.Equal(got, want) {
 			t.Errorf("base128(%d)=%x want %x", in, got, want)
 		}
-	}
-}
-
-// tcpProbe should succeed against a live listener and fail against a dead port.
-func TestTCPProbe(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			c.Close()
-		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := tcpProbe(ctx, ln.Addr().String(), Target{}); err != nil {
-		t.Errorf("probe of live listener failed: %v", err)
-	}
-
-	// A port nobody is listening on should error promptly.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	if err := tcpProbe(ctx2, "127.0.0.1:1", Target{}); err == nil {
-		t.Errorf("probe of dead port unexpectedly succeeded")
 	}
 }
 

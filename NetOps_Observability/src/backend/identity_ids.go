@@ -57,17 +57,6 @@ func newOpaqueID(prefix string) string {
 func mintOrgID() string    { return newOpaqueID(orgIDPrefix) }
 func mintTenantID() string { return newOpaqueID(tenantIDPrefix) }
 
-// isTenantID reports whether a reference is a minted opaque tenant id (vs a slug
-// or a legacy id==slug). Used by the compatibility resolver to short-circuit.
-func isTenantID(ref string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), tenantIDPrefix)
-}
-
-// isOrgID reports whether a reference is a minted opaque org id.
-func isOrgID(ref string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), orgIDPrefix)
-}
-
 // reservedSlugs are handles a customer may never take, because they collide with
 // platform routes, sentinels, or well-known paths (an attacker must not be able
 // to register a tenant whose slug shadows /api, /admin, the global realm, etc.).

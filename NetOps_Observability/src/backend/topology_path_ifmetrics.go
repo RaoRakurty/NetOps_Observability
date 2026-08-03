@@ -52,7 +52,7 @@ func (s *server) pathIfaceMetrics(ctx context.Context) map[[2]string]ifaceMetric
 	}
 	for k := range union(inThr, outThr) {
 		m := get(k)
-		m.thrMbps, m.hasThr = maxf(inThr[k], outThr[k]), true
+		m.thrMbps, m.hasThr = max(inThr[k], outThr[k]), true
 		put(k, m)
 	}
 	for k := range mtu {
@@ -140,9 +140,3 @@ func union(a, b map[[2]string]float64) map[[2]string]struct{} {
 	return out
 }
 
-func maxf(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}

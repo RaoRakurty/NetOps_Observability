@@ -55,10 +55,8 @@ func UsePostgres(ctx context.Context, dsn string) error {
 	return nil
 }
 
-// Active returns the current backend; ActivePG additionally reports whether it
-// is the Postgres store (the selectors' pg-vs-file switch).
-func Active() Backend { return active }
-
+// ActivePG reports whether the current backend is the Postgres store (the
+// selectors' pg-vs-file switch), returning it when so.
 func ActivePG() (*PGStore, bool) {
 	pg, ok := active.(*PGStore)
 	return pg, ok

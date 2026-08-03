@@ -10,7 +10,7 @@ import (
 // v1-form BGP trap OID, and leave un-vendored enterprise OIDs honestly raw.
 
 func TestOIDIndex_SeedLoaded(t *testing.T) {
-	if oidIndexVersion() == "" {
+	if oidIdx.Version == "" {
 		t.Fatal("oid index version empty — embedded oididx.json failed to load")
 	}
 	if len(oidIdx.Nodes) == 0 {
