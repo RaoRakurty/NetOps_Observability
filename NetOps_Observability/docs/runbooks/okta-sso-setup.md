@@ -56,7 +56,28 @@ exercised twice.
 | Flow | Supported | Why |
 |------|-----------|-----|
 | **SP-initiated** (start at Correlix → Okta → back) | ✅ Yes | The designed path: `/api/auth/sso/login?idp=okta` |
-| **IdP-initiated** (click tile in Okta → land in Correlix) | ✅ Yes — two ways | See §4 CORRECTION |
+| **Okta dashboard launch** (Bookmark tile → Correlix launch URL) | ✅ Yes — **the supported product capability** | Bookmark → silent SP-initiated flow; Okta's live session completes it without prompts. Terminology: call this "Okta dashboard launch" / "Bookmark-based SSO launch", never "IdP-initiated SAML" — the flow is properly Correlix-initiated |
+| **Protocol-level unsolicited IdP-initiated SAML** | ❌ Deferred | Needs the native SAML SP (design `sso-saml-oidc-design-2026-08-03.md`, deferred until SaaS) |
+
+> **Hardening added 2026-08-03** (`oidc.go` + `internal/oidc`): the launch URL
+> now issues **PKCE S256 + nonce** and a **server-side single-use login
+> transaction** (state is consumed atomically at the callback — replays die
+> even with a valid cookie), and `?idp=` only accepts operator-configured
+> aliases (unknown → 404). Applies to every entry, including the Bookmark tile.
+>
+> **Re-verified live with the hardening, 2026-08-03 (owner, normal browser
+> window):** SAML bookmark ✅ · OIDC bookmark ✅ · OIDC app tile ✅ · raw SAML
+> app tile ❌ by design (deferred protocol gap — HIDE this tile from the
+> dashboard; it is Okta↔Keycloak plumbing, not a user entry point).
+>
+> **Browser caveats on this plain-HTTP lab:** incognito/third-party-cookie
+> blocking breaks the KEYCLOAK hop (`cookie_not_found` — its
+> `Secure; SameSite=None` cookies are rejected over HTTP and the legacy Lax
+> fallback is not sent on Okta's cross-site POST). Works in a normal window;
+> the real fix is TLS on the nginx edge (tracker #145). Separately, the OIDC
+> tiles depend on Keycloak→Okta back-channel egress and fail with
+> `SocketTimeoutException` when it stalls (documented above) — transient,
+> retry.
 
 > **SUPERSEDED — read §4 first.** The paragraphs below were written believing
 > Correlix's CSRF state check made IdP-initiated impossible. That is wrong: the
