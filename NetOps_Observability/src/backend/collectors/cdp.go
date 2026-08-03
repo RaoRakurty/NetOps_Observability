@@ -2,7 +2,6 @@ package collectors
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -67,59 +66,9 @@ func (c *cdpCollector) Run(ctx context.Context) error {
 	}
 }
 
+// pollOnce runs one poll cycle via the shared LLDP/CDP runner (lldp.go).
 func (c *cdpCollector) pollOnce(ctx context.Context) {
-	var targets []Target
-	if c.targets != nil {
-		targets = c.targets()
-	}
-	start := time.Now()
-	now := start.UnixMilli()
-	reachable := 0
-	// answered = the walk succeeded (health signal); reachable = it also found
-	// neighbours. A non-Cisco box with no CDP answers fine and reports nothing.
-	answered := 0
-	var all []LLDPNeighbor
-	var lastErr string
-
-	for _, tg := range targets {
-		addr := withPort(tg.Address, 161)
-		dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		neigh, err := pollCDP(dctx, addr, tg.creds(), tg.ID, now)
-		cancel()
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		answered++
-		if len(neigh) > 0 {
-			reachable++
-			all = append(all, neigh...)
-		}
-	}
-
-	if all == nil {
-		all = []LLDPNeighbor{} // store "[]" not "null" when empty
-	}
-	if b, err := json.Marshal(all); err == nil {
-		_ = redisSetEX(ctx, topoLinksKeyCDP, string(b), 1800)
-	}
-
-	healthy := cycleHealthy(len(targets), answered)
-	emitMetrics(ctx, strings.Join([]string{
-		collectorUpLine("cdp", healthy, now),
-		fmt.Sprintf(`collector_targets{collector="cdp"} %d %d`, len(targets), now),
-		fmt.Sprintf(`collector_targets_reachable{collector="cdp"} %d %d`, reachable, now),
-		fmt.Sprintf(`collector_cdp_neighbors{collector="cdp"} %d %d`, len(all), now),
-	}, "\n"))
-
-	c.mu.Lock()
-	c.status.LastTick = start.UTC()
-	c.status.Targets = len(targets)
-	c.status.Reachable = reachable
-	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = healthy
-	c.status.LastError = cycleError(len(targets), answered, lastErr)
-	c.mu.Unlock()
+	pollNeighborsOnce(ctx, "cdp", c.targets, topoLinksKeyCDP, pollCDP, &c.mu, &c.status)
 }
 
 // pollCDP walks the CDP cache for one device. Best-effort: a device with no CDP

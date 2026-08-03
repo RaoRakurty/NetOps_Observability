@@ -34,6 +34,95 @@ import (
 //     rejected rather than silently half-applied.
 
 // ---------------------------------------------------------------------------
+// Shared sealed-kv-config plumbing (#147 T4)
+// ---------------------------------------------------------------------------
+
+// loadSealedKVConfig reads a sealed provider-config overlay from the kv store.
+// THREE states, never two (the cloud_monitor_eval.go shape):
+//
+//	(nil, nil)  — absent key or empty blob: never configured, env defaults apply
+//	(nil, err)  — the store did not answer or the blob would not decode
+//	(&c, err)   — loaded, but the secret failed to UNSEAL: clearSecret has run so
+//	              the sealed bytes are never used as a credential, while the
+//	              non-secret fields stay usable for the operator to inspect
+//	(&c, nil)   — loaded
+//
+// kind is the error-message noun ("LDAP"/"TACACS"), component the log component,
+// secretDesc the unseal-failure noun ("LDAP bind password"/"TACACS shared secret").
+func loadSealedKVConfig[T any](path, kind, component, secretDesc string, unseal func(T) (T, error), clearSecret func(*T)) (*T, error) {
+	b, err := platformdb.Load(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil // absent key = never configured; env defaults apply
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s config: %w", kind, err)
+	}
+	if len(b) == 0 {
+		return nil, nil // present but empty = never configured
+	}
+	var c T
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, fmt.Errorf("decode %s config: %w", kind, err)
+	}
+	var loadErr error
+	if dec, derr := unseal(c); derr != nil {
+		// Keep the config (host etc. stay usable for the operator to inspect)
+		// but never authenticate with the SEALED bytes as the secret.
+		clearSecret(&c)
+		loadErr = fmt.Errorf("unseal %s: %w", secretDesc, derr)
+		logError(component, "decrypt secret", errf(derr))
+	} else {
+		c = dec
+	}
+	return &c, loadErr
+}
+
+// persistSealedKVConfig seals in (encrypt at rest; the caller's in-memory copy
+// stays plaintext) and writes it to the kv store.
+func persistSealedKVConfig[T any](path string, in T, seal func(T) (T, error)) error {
+	sealed, err := seal(in)
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(sealed, "", "  ")
+	if err != nil {
+		return err
+	}
+	return platformdb.Save(path, b)
+}
+
+// handleProviderConfig serves the admin-gated GET/PUT surface shared by the
+// LDAP and TACACS+ config endpoints: GET returns the redacted effective config;
+// PUT validates, persists and echoes the redacted result.
+func handleProviderConfig[T any](s *server, w http.ResponseWriter, r *http.Request,
+	effective func() T, set func(T) (T, error), public func(T) any,
+	logMsg string, logFields func(T) map[string]any) {
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"config": public(effective())})
+	case http.MethodPut:
+		var in T
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		out, err := set(in)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		logInfo("auth", logMsg, logFields(out))
+		writeJSON(w, http.StatusOK, map[string]any{"config": public(out)})
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // LDAP config store
 // ---------------------------------------------------------------------------
 
@@ -61,38 +150,18 @@ func newLDAPConfigStore(path string, v *vault.Vault) *ldapConfigStore {
 	return s
 }
 
-// load reads the stored LDAP overlay. THREE states, never two (the
-// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
-// with nothing (absent key or empty blob — env defaults apply) / loaded.
+// load reads the stored LDAP overlay via loadSealedKVConfig (three states,
+// never two).
 func (s *ldapConfigStore) load() error {
-	b, err := platformdb.Load(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil // absent key = never configured; env defaults apply
+	c, err := loadSealedKVConfig(s.path, "LDAP", "ldap.config", "LDAP bind password",
+		func(c ldapConfig) (ldapConfig, error) { return mapLDAP(c, openFn(s.vault)) },
+		func(c *ldapConfig) { c.BindPassword = "" })
+	if c != nil {
+		s.mu.Lock()
+		s.cfg = c
+		s.mu.Unlock()
 	}
-	if err != nil {
-		return fmt.Errorf("read LDAP config: %w", err)
-	}
-	if len(b) == 0 {
-		return nil // present but empty = never configured
-	}
-	var c ldapConfig
-	if err := json.Unmarshal(b, &c); err != nil {
-		return fmt.Errorf("decode LDAP config: %w", err)
-	}
-	var loadErr error
-	if dec, derr := mapLDAP(c, openFn(s.vault)); derr != nil {
-		// Keep the config (host/base-DN stay usable for the operator to inspect)
-		// but never bind with the SEALED bytes as a password.
-		c.BindPassword = ""
-		loadErr = fmt.Errorf("unseal LDAP bind password: %w", derr)
-		logError("ldap.config", "decrypt secret", errf(derr))
-	} else {
-		c = dec
-	}
-	s.mu.Lock()
-	s.cfg = &c
-	s.mu.Unlock()
-	return loadErr
+	return err
 }
 
 // effective returns the stored overlay when present, else the env-derived
@@ -124,15 +193,9 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 		}
 		in.BindPassword = s.cfg.BindPassword
 	}
-	sealed, err := mapLDAP(in, sealFn(s.vault)) // encrypt at rest; in-memory stays plaintext
-	if err != nil {
-		return ldapConfig{}, err
-	}
-	b, err := json.MarshalIndent(sealed, "", "  ")
-	if err != nil {
-		return ldapConfig{}, err
-	}
-	if err := platformdb.Save(s.path, b); err != nil {
+	if err := persistSealedKVConfig(s.path, in, func(c ldapConfig) (ldapConfig, error) {
+		return mapLDAP(c, sealFn(s.vault))
+	}); err != nil {
 		return ldapConfig{}, err
 	}
 	stored := in
@@ -144,29 +207,10 @@ func (s *ldapConfigStore) set(in ldapConfig) (ldapConfig, error) {
 // handleLDAPConfig: GET/PUT /api/auth/ldap/config (admin-gated). GET returns the
 // redacted effective config; PUT validates and persists.
 func (s *server) handleLDAPConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": s.ldap.effective().Public()})
-	case http.MethodPut:
-		var in ldapConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		out, err := s.ldap.set(in)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		logInfo("auth", "ldap config updated", map[string]any{"enabled": out.Enabled, "host": out.Host})
-		writeJSON(w, http.StatusOK, map[string]any{"config": out.Public()})
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleProviderConfig(s, w, r, s.ldap.effective, s.ldap.set,
+		func(c ldapConfig) any { return c.Public() },
+		"ldap config updated",
+		func(c ldapConfig) map[string]any { return map[string]any{"enabled": c.Enabled, "host": c.Host} })
 }
 
 // handleLDAPTest: POST /api/auth/ldap/test (admin-gated). With no body it checks
@@ -293,37 +337,18 @@ func newTACACSConfigStore(path string, v *vault.Vault) *tacacsConfigStore {
 	return s
 }
 
-// load reads the stored TACACS+ overlay. THREE states, never two (the
-// cloud_monitor_eval.go shape): the store did not answer (error) / it answered
-// with nothing (absent key or empty blob — env defaults apply) / loaded.
+// load reads the stored TACACS+ overlay via loadSealedKVConfig (three states,
+// never two).
 func (s *tacacsConfigStore) load() error {
-	b, err := platformdb.Load(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil // absent key = never configured; env defaults apply
+	c, err := loadSealedKVConfig(s.path, "TACACS", "tacacs.config", "TACACS shared secret",
+		func(c tacacsConfig) (tacacsConfig, error) { return mapTACACS(c, openFn(s.vault)) },
+		func(c *tacacsConfig) { c.Secret = "" })
+	if c != nil {
+		s.mu.Lock()
+		s.cfg = c
+		s.mu.Unlock()
 	}
-	if err != nil {
-		return fmt.Errorf("read TACACS config: %w", err)
-	}
-	if len(b) == 0 {
-		return nil // present but empty = never configured
-	}
-	var c tacacsConfig
-	if err := json.Unmarshal(b, &c); err != nil {
-		return fmt.Errorf("decode TACACS config: %w", err)
-	}
-	var loadErr error
-	if dec, derr := mapTACACS(c, openFn(s.vault)); derr != nil {
-		// Never authenticate with the SEALED bytes as the shared secret.
-		c.Secret = ""
-		loadErr = fmt.Errorf("unseal TACACS shared secret: %w", derr)
-		logError("tacacs.config", "decrypt secret", errf(derr))
-	} else {
-		c = dec
-	}
-	s.mu.Lock()
-	s.cfg = &c
-	s.mu.Unlock()
-	return loadErr
+	return err
 }
 
 func (s *tacacsConfigStore) effective() tacacsConfig {
@@ -353,15 +378,9 @@ func (s *tacacsConfigStore) set(in tacacsConfig) (tacacsConfig, error) {
 	// store so the provider is UI-configurable; it is redacted from every API
 	// response by publicTACACSConfig and never logged. Encrypted at rest under the
 	// platform DEK; the in-memory copy below stays plaintext for the client.
-	sealed, err := mapTACACS(in, sealFn(s.vault))
-	if err != nil {
-		return tacacsConfig{}, err
-	}
-	b, err := json.MarshalIndent(sealed, "", "  ")
-	if err != nil {
-		return tacacsConfig{}, err
-	}
-	if err := platformdb.Save(s.path, b); err != nil {
+	if err := persistSealedKVConfig(s.path, in, func(c tacacsConfig) (tacacsConfig, error) {
+		return mapTACACS(c, sealFn(s.vault))
+	}); err != nil {
 		return tacacsConfig{}, err
 	}
 	stored := in
@@ -394,29 +413,10 @@ func (c tacacsConfig) Public() publicTACACSConfig {
 
 // handleTACACSConfig: GET/PUT /api/auth/tacacs/config (admin-gated).
 func (s *server) handleTACACSConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"config": s.tacacs.effective().Public()})
-	case http.MethodPut:
-		var in tacacsConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		out, err := s.tacacs.set(in)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		logInfo("auth", "tacacs config updated", map[string]any{"enabled": out.Enabled, "host": out.Host})
-		writeJSON(w, http.StatusOK, map[string]any{"config": out.Public()})
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleProviderConfig(s, w, r, s.tacacs.effective, s.tacacs.set,
+		func(c tacacsConfig) any { return c.Public() },
+		"tacacs config updated",
+		func(c tacacsConfig) map[string]any { return map[string]any{"enabled": c.Enabled, "host": c.Host} })
 }
 
 type tacacsTestResult struct {

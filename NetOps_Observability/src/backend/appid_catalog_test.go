@@ -5,10 +5,59 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"netops/backend/appid"
 )
+
+// TestApplicationByIDHTTP characterizes the GET/DELETE-by-id surface (#147 T4
+// — the shape appid.go shares with services.go serveServiceRoot): invalid id →
+// 400, own get → 200, unknown/cross-tenant id → 404 (§3a: never reveal another
+// tenant's id), DELETE archives (never hard-deletes) and echoes {"archived"},
+// archiving the unknown id → 404, other methods → 405.
+func TestApplicationByIDHTTP(t *testing.T) {
+	srv, s := newTestServerState(t)
+	s.applications = appid.NewMemAppStore()
+	tok := adminToken(t, srv)
+
+	st, body := do(t, srv, "POST", "/api/applications", tok, map[string]any{"name": "Billing"})
+	if st != 201 {
+		t.Fatalf("create: %d %s", st, body)
+	}
+	var app appid.Application
+	if err := json.Unmarshal(body, &app); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, _ := do(t, srv, "GET", "/api/applications/not-a-uuid", tok, nil); st != 400 {
+		t.Fatalf("invalid id: %d, want 400", st)
+	}
+	if st, _ := do(t, srv, "GET", "/api/applications/"+app.ApplicationID, tok, nil); st != 200 {
+		t.Fatalf("own get: %d, want 200", st)
+	}
+	unknown := "11111111-1111-4111-8111-111111111111"
+	if st, _ := do(t, srv, "GET", "/api/applications/"+unknown, tok, nil); st != 404 {
+		t.Fatalf("unknown get: %d, want 404", st)
+	}
+	if st, _ := do(t, srv, "PUT", "/api/applications/"+app.ApplicationID, tok, map[string]any{}); st != 405 {
+		t.Fatalf("PUT: %d, want 405", st)
+	}
+	if st, _ := do(t, srv, "DELETE", "/api/applications/"+unknown, tok, nil); st != 404 {
+		t.Fatalf("unknown delete: %d, want 404", st)
+	}
+	st, body = do(t, srv, "DELETE", "/api/applications/"+app.ApplicationID, tok, nil)
+	if st != 200 || !strings.Contains(string(body), `"archived":"`+app.ApplicationID+`"`) {
+		t.Fatalf("archive: %d %s", st, body)
+	}
+	// Archive is soft: the row survives with archived visibility only.
+	if la, _ := s.applications.List(t.Context(), "", true, true); len(la) != 1 {
+		t.Fatalf("archived app must survive (soft delete): %d rows", len(la))
+	}
+	if la, _ := s.applications.List(t.Context(), "", true, false); len(la) != 0 {
+		t.Fatalf("archived app must leave the default list: %+v", la)
+	}
+}
 
 // reload from a snapshot dir, then resolve over HTTP — exercises the feed loader,
 // atomic swap, route wiring, and auth gate together.

@@ -699,3 +699,81 @@ func TestTicketing_NoConnectionGates(t *testing.T) {
 		t.Fatalf("manual+sweeper collapse to ONE create via the idempotency key; outbox has %d", len(items))
 	}
 }
+
+// TestITSMRCADestinationHandlers characterizes the PagerDuty/Slack RCA
+// destination PUT endpoints (#147 T4): PUT-only, tenant-keyed by the principal
+// (?tenant= honored only for cross principals), invalid enable → 400, valid
+// PUT echoes the redacted Public view and lands under the caller's own key.
+func TestITSMRCADestinationHandlers(t *testing.T) {
+	srv, s, fix := setupTicketingTenants(t)
+	s.itsmCfg = newITSMConfigStore(s, t.TempDir()+"/itsm.json")
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+	a, b := fix["A"], fix["B"]
+
+	cases := []struct {
+		path, setKey string
+		valid, bad   map[string]any
+		stored       func(tenant string) bool // reads the destination back from the store
+	}{
+		{path: "/api/itsm/pagerduty-rca", setKey: `"has_routing_key":true`,
+			valid: map[string]any{"enabled": true, "routing_key": "rk-secret"},
+			bad:   map[string]any{"enabled": true}, // enabled with no key ever stored
+			stored: func(tenant string) bool {
+				pub := s.itsmCfg.Public(tenant)
+				pd, _ := pub["pagerduty"].(map[string]any)
+				return pd["configured"] == true
+			}},
+		{path: "/api/itsm/slack-rca", setKey: `"has_webhook":true`,
+			valid: map[string]any{"enabled": true, "webhook_url": "https://hooks.slack.invalid/T/B/x"},
+			bad:   map[string]any{"enabled": true},
+			stored: func(tenant string) bool {
+				pub := s.itsmCfg.Public(tenant)
+				sl, _ := pub["slack"].(map[string]any)
+				return sl["configured"] == true
+			}},
+	}
+	for _, c := range cases {
+		t.Run(strings.TrimPrefix(c.path, "/api/itsm/"), func(t *testing.T) {
+			if st, _ := do(t, srv, "GET", c.path, a.token, nil); st != 405 {
+				t.Fatalf("GET must be 405 (PUT only), got %d", st)
+			}
+			if st, _ := do(t, srv, "PUT", c.path, "", c.valid); st != 401 {
+				t.Fatalf("unauthenticated PUT: %d, want 401", st)
+			}
+			if st, body := do(t, srv, "PUT", c.path, a.token, c.bad); st != 400 {
+				t.Fatalf("enable without a destination secret: %d %s, want 400", st, body)
+			}
+			st, body := do(t, srv, "PUT", c.path, a.token, c.valid)
+			if st != 200 {
+				t.Fatalf("valid PUT: %d %s", st, body)
+			}
+			if !strings.Contains(string(body), c.setKey) {
+				t.Fatalf("echo must carry the redacted flag %s: %s", c.setKey, body)
+			}
+			for _, secret := range []string{"rk-secret", "hooks.slack.invalid"} {
+				if strings.Contains(string(body), secret) {
+					t.Fatalf("echo leaked the write-only destination secret: %s", body)
+				}
+			}
+			if !c.stored(a.tenantID) {
+				t.Fatal("destination must land under the principal's own tenant key")
+			}
+			if c.stored(b.tenantID) {
+				t.Fatal("destination leaked into another tenant's key")
+			}
+			// A scoped principal's ?tenant= must be ignored; a cross principal's honored.
+			if st, _ := do(t, srv, "PUT", c.path+"?tenant="+b.tenantID, a.token, c.valid); st != 200 {
+				t.Fatal("scoped PUT with ?tenant= should still succeed against own tenant")
+			}
+			if c.stored(b.tenantID) {
+				t.Fatal("scoped principal wrote another tenant's destination via ?tenant=")
+			}
+			if st, _ := do(t, srv, "PUT", c.path+"?tenant="+b.tenantID, admin, c.valid); st != 200 {
+				t.Fatal("cross principal ?tenant= PUT failed")
+			}
+			if !c.stored(b.tenantID) {
+				t.Fatal("cross principal ?tenant= must target the named tenant")
+			}
+		})
+	}
+}

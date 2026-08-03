@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -141,6 +142,49 @@ func TestJiraAutoCloseOnResolve(t *testing.T) {
 	}
 	if got := len(j.Tickets()); got != 0 {
 		t.Errorf("ticket should be forgotten after resolve, still have %d", got)
+	}
+}
+
+// TestJiraStateWriteFailureAccounting characterizes the F-62 contract (#147
+// T4): a dedup-state persist failure must NOT fail Send (the remote issue
+// already exists — failing would re-file it) but must NEVER be silent — it is
+// counted, with the latest reason, via StateWriteFailures.
+func TestJiraStateWriteFailureAccounting(t *testing.T) {
+	var creates, resolves int32
+	srv := mockJira(t, &creates, &resolves, nil)
+	defer srv.Close()
+
+	// statePath under a REGULAR FILE → MkdirAll fails on every save.
+	blocker := t.TempDir() + "/blocker"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := newJiraConn(srv.URL).WithStateFile(blocker + "/sub/state.json")
+
+	if n, msg := j.StateWriteFailures(); n != 0 || msg != "" {
+		t.Fatalf("clean start: n=%d msg=%q", n, msg)
+	}
+	a := criticalAlert()
+	if err := j.Send(a); err != nil {
+		t.Fatalf("Send must not fail on a state-write failure: %v", err)
+	}
+	if creates != 1 {
+		t.Fatalf("issue must still be created, got %d", creates)
+	}
+	if n, msg := j.StateWriteFailures(); n != 1 || msg == "" {
+		t.Fatalf("open failure must be counted with a reason: n=%d msg=%q", n, msg)
+	}
+	resolved := a
+	now := time.Now().UTC()
+	resolved.ResolvedAt = &now
+	if err := j.Send(resolved); err != nil {
+		t.Fatalf("resolve must not fail on a state-write failure: %v", err)
+	}
+	if resolves != 1 {
+		t.Fatalf("issue must still be transitioned, got %d", resolves)
+	}
+	if n, _ := j.StateWriteFailures(); n != 2 {
+		t.Fatalf("resolve failure must also be counted: n=%d", n)
 	}
 }
 

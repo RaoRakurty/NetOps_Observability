@@ -1,11 +1,146 @@
 package backend
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"netops/backend/internal/session"
+	"netops/backend/internal/users"
 	"netops/backend/notify"
 )
+
+// newNotifyCfgServer wires a server with the identity stores + a real
+// notifyConfigStore, exercised through the router + auth middleware.
+func newNotifyCfgServer(t *testing.T) (*httptest.Server, *server) {
+	t.Helper()
+	dir := t.TempDir()
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	us, err := users.NewFileStore(dir+"/users.json", userDeps())
+	must(err)
+	rs, err := newRoleStore(dir + "/roles.json")
+	must(err)
+	ts, err := newTenantStore(dir + "/tenants.json")
+	must(err)
+	rf, err := session.NewRefreshStore(dir+"/refresh.json", time.Hour, platformKV{})
+	must(err)
+	must(us.SeedAdmin("admin", "Passw0rd!2345"))
+	s := &server{users: us, roles: rs, tenants: ts, refresh: rf, startedAt: time.Now().UTC()}
+	s.notifyCfg = newNotifyConfigStore(dir+"/notify.json", s)
+	mux := http.NewServeMux()
+	s.routes(mux)
+	srv := httptest.NewServer(s.withAuth(mux))
+	t.Cleanup(srv.Close)
+	return srv, s
+}
+
+// Characterization of the five channel-config PUT/GET handlers (#147 T4):
+// write-only secret redaction + preservation, per-channel defaulting, severity
+// validation, the ntfy watchdog-topic refusal, and the 405 posture.
+func TestNotifyChannelConfigHandlers(t *testing.T) {
+	t.Setenv("WATCHDOG_NTFY_TOPIC", "wd-topic")
+	srv, s := newNotifyCfgServer(t)
+	tok := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	type ch struct {
+		path       string
+		put        map[string]any // valid PUT carrying the secret
+		secret     string         // raw secret that must never appear in a response
+		setKey     string         // the *_set boolean key in the public view
+		defSev     string         // min_severity default applied on empty
+		stored     func() string  // reads the stored secret from the config store
+		defaulted  func() bool    // channel-specific defaults applied?
+		defaultDoc string
+	}
+	channels := []ch{
+		{path: "/api/notify/smtp",
+			put:    map[string]any{"enabled": true, "host": "smtp.example.com", "port": 587, "from": "a@b.c", "user": "u", "pass": "smtp-secret", "to": "x@y.z"},
+			secret: "smtp-secret", setKey: `"pass_set":true`, defSev: `"min_severity":"warning"`,
+			stored:    func() string { return s.notifyCfg.cfg.SMTP.Pass },
+			defaulted: func() bool { return s.notifyCfg.cfg.SMTP.Security == "starttls" }, defaultDoc: "security=starttls"},
+		{path: "/api/notify/twilio",
+			put:    map[string]any{"enabled": true, "account_sid": "AC123", "auth_token": "tw-secret", "from": "+1555", "to": "+1666"},
+			secret: "tw-secret", setKey: `"token_set":true`, defSev: `"min_severity":"critical"`,
+			stored:    func() string { return s.notifyCfg.cfg.Twilio.AuthToken },
+			defaulted: func() bool { return true }},
+		{path: "/api/notify/ntfy",
+			put:    map[string]any{"enabled": true, "topic": "alerts", "token": "ntfy-secret"},
+			secret: "ntfy-secret", setKey: `"token_set":true`, defSev: `"min_severity":"critical"`,
+			stored:    func() string { return s.notifyCfg.cfg.Ntfy.Token },
+			defaulted: func() bool { return s.notifyCfg.cfg.Ntfy.Server == "https://ntfy.sh" }, defaultDoc: "server=ntfy.sh"},
+		{path: "/api/notify/slack",
+			put:    map[string]any{"enabled": true, "webhook_url": "https://hooks.slack.example/slack-secret"},
+			secret: "slack-secret", setKey: `"webhook_set":true`, defSev: `"min_severity":"warning"`,
+			stored:    func() string { return s.notifyCfg.cfg.Slack.WebhookURL },
+			defaulted: func() bool { return true }},
+		{path: "/api/notify/pagerduty",
+			put:    map[string]any{"enabled": true, "routing_key": "pd-secret"},
+			secret: "pd-secret", setKey: `"routing_set":true`, defSev: `"min_severity":"critical"`,
+			stored:    func() string { return s.notifyCfg.cfg.PagerDuty.RoutingKey },
+			defaulted: func() bool { return true }},
+	}
+	for _, c := range channels {
+		t.Run(strings.TrimPrefix(c.path, "/api/notify/"), func(t *testing.T) {
+			// Invalid severity → 400, nothing stored.
+			bad := map[string]any{"min_severity": "shrug"}
+			if st, _ := do(t, srv, "PUT", c.path, tok, bad); st != 400 {
+				t.Fatalf("invalid min_severity: status %d, want 400", st)
+			}
+			// Valid PUT with the secret → 200, response redacts.
+			st, b := do(t, srv, "PUT", c.path, tok, c.put)
+			if st != 200 {
+				t.Fatalf("PUT status %d: %s", st, b)
+			}
+			if strings.Contains(string(b), c.secret) {
+				t.Fatalf("PUT response leaked secret: %s", b)
+			}
+			if !strings.Contains(string(b), c.setKey) {
+				t.Fatalf("expected %s in %s", c.setKey, b)
+			}
+			if !strings.Contains(string(b), c.defSev) {
+				t.Fatalf("expected default %s in %s", c.defSev, b)
+			}
+			if !c.defaulted() {
+				t.Fatalf("channel default not applied (%s)", c.defaultDoc)
+			}
+			// GET → same redaction.
+			st, b = do(t, srv, "GET", c.path, tok, nil)
+			if st != 200 || strings.Contains(string(b), c.secret) || !strings.Contains(string(b), c.setKey) {
+				t.Fatalf("GET redaction failed: %d %s", st, b)
+			}
+			// Empty-secret PUT preserves the stored secret.
+			repeat := map[string]any{}
+			for k, v := range c.put {
+				repeat[k] = v
+			}
+			for _, k := range []string{"pass", "auth_token", "token", "webhook_url", "routing_key"} {
+				delete(repeat, k)
+			}
+			if st, b := do(t, srv, "PUT", c.path, tok, repeat); st != 200 {
+				t.Fatalf("re-PUT status %d: %s", st, b)
+			}
+			if got := c.stored(); !strings.Contains(got, c.secret) {
+				t.Fatalf("write-only secret not preserved on empty PUT: %q", got)
+			}
+			// Method posture.
+			if st, _ := do(t, srv, "DELETE", c.path, tok, nil); st != 405 {
+				t.Fatalf("DELETE: status %d, want 405", st)
+			}
+		})
+	}
+	// ntfy refuses the watchdog topic (watchdog independence, #101).
+	st, b := do(t, srv, "PUT", "/api/notify/ntfy", tok, map[string]any{"enabled": true, "topic": "wd-topic"})
+	if st != 400 || !strings.Contains(string(b), "watchdog") {
+		t.Fatalf("watchdog topic must be refused: %d %s", st, b)
+	}
+}
 
 func TestPublicSlackMasksSecret(t *testing.T) {
 	s := &notifyConfigStore{cfg: notify.ChannelConfig{Slack: notify.SlackConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/pathgraph.ISOZPtr(t *timeX", MinSeverity: "warning"}}}

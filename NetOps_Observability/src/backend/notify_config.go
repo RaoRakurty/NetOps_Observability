@@ -198,34 +198,46 @@ func (s *notifyConfigStore) publicSMTPView() notify.PublicSMTP {
 	}
 }
 
-func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
+// handleChannelConfig is the generic GET/PUT admin surface every notification
+// channel shares (#147 T4 — the decomposition plan's anticipated generic
+// handler). GET returns the channel's redacted public view; PUT decodes the
+// channel config, validates min_severity (plus any channel-specific
+// preValidate), then under the store lock runs merge (preserve the write-only
+// secret + apply channel defaults), assigns the channel's slot and persists.
+//
+// F-78: a PUT whose save failed must NOT apply or report success — it would
+// work until the next restart and then vanish. The 500 is the contract.
+func handleChannelConfig[T any](s *server, w http.ResponseWriter, r *http.Request,
+	public func() any,
+	minSeverity func(T) string,
+	preValidate func(T) error,
+	merge func(in T, cur notify.ChannelConfig) T,
+	assign func(cfg *notify.ChannelConfig, in T)) {
 	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicSMTPView())
+		writeJSON(w, http.StatusOK, public())
 	case http.MethodPut:
-		var in notify.SMTPConfig
+		var in T
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if !notify.ValidSeverity(in.MinSeverity) {
+		if !notify.ValidSeverity(minSeverity(in)) {
 			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
 			return
 		}
+		if preValidate != nil {
+			if err := preValidate(in); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
 		s.notifyCfg.mu.Lock()
-		if in.Pass == "" {
-			in.Pass = s.notifyCfg.cfg.SMTP.Pass // preserve write-only secret
-		}
-		if in.Security == "" {
-			in.Security = "starttls"
-		}
-		if in.MinSeverity == "" {
-			in.MinSeverity = "warning"
-		}
-		s.notifyCfg.cfg.SMTP = in
+		in = merge(in, s.notifyCfg.cfg)
+		assign(&s.notifyCfg.cfg, in)
 		saveErr := s.notifyCfg.save()
 		s.notifyCfg.mu.Unlock()
 		if saveErr != nil {
@@ -235,11 +247,31 @@ func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.notifyCfg.apply()
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicSMTPView())
+		writeJSON(w, http.StatusOK, public())
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *server) handleSMTPConfig(w http.ResponseWriter, r *http.Request) {
+	handleChannelConfig(s, w, r,
+		func() any { return s.notifyCfg.publicSMTPView() },
+		func(in notify.SMTPConfig) string { return in.MinSeverity },
+		nil,
+		func(in notify.SMTPConfig, cur notify.ChannelConfig) notify.SMTPConfig {
+			if in.Pass == "" {
+				in.Pass = cur.SMTP.Pass // preserve write-only secret
+			}
+			if in.Security == "" {
+				in.Security = "starttls"
+			}
+			if in.MinSeverity == "" {
+				in.MinSeverity = "warning"
+			}
+			return in
+		},
+		func(cfg *notify.ChannelConfig, in notify.SMTPConfig) { cfg.SMTP = in })
 }
 
 func (s *server) handleSMTPTest(w http.ResponseWriter, r *http.Request) {
@@ -280,44 +312,20 @@ func (s *notifyConfigStore) publicTwilio() publicTwilio {
 }
 
 func (s *server) handleTwilioConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicTwilio())
-	case http.MethodPut:
-		var in notify.TwilioConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if !notify.ValidSeverity(in.MinSeverity) {
-			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
-			return
-		}
-		s.notifyCfg.mu.Lock()
-		if in.AuthToken == "" {
-			in.AuthToken = s.notifyCfg.cfg.Twilio.AuthToken
-		}
-		if in.MinSeverity == "" {
-			in.MinSeverity = "critical"
-		}
-		s.notifyCfg.cfg.Twilio = in
-		saveErr := s.notifyCfg.save()
-		s.notifyCfg.mu.Unlock()
-		if saveErr != nil {
-			// F-78: do NOT apply or report success for a config that was not
-			// written — it would work until the next restart and then vanish.
-			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
-			return
-		}
-		s.notifyCfg.apply()
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicTwilio())
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleChannelConfig(s, w, r,
+		func() any { return s.notifyCfg.publicTwilio() },
+		func(in notify.TwilioConfig) string { return in.MinSeverity },
+		nil,
+		func(in notify.TwilioConfig, cur notify.ChannelConfig) notify.TwilioConfig {
+			if in.AuthToken == "" {
+				in.AuthToken = cur.Twilio.AuthToken // preserve write-only secret
+			}
+			if in.MinSeverity == "" {
+				in.MinSeverity = "critical"
+			}
+			return in
+		},
+		func(cfg *notify.ChannelConfig, in notify.TwilioConfig) { cfg.Twilio = in })
 }
 
 func (s *server) handleTwilioTest(w http.ResponseWriter, r *http.Request) {
@@ -357,56 +365,33 @@ func (s *notifyConfigStore) publicNtfy() publicNtfy {
 }
 
 func (s *server) handleNtfyConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicNtfy())
-	case http.MethodPut:
-		var in notify.NtfyConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if !notify.ValidSeverity(in.MinSeverity) {
-			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
-			return
-		}
-		// #101: the external stack watchdog's topic is off-limits for product
-		// alerting — it must stay able to report the stack's own death, so the
-		// two must never share a channel. Enforced when the deployment exports
-		// WATCHDOG_NTFY_TOPIC; the first-customer gate script also checks
-		// host-side against the watchdog's own env file.
-		if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && in.Topic == wd {
-			writeError(w, http.StatusBadRequest, errors.New("this topic is reserved for the stack watchdog — use a dedicated topic for platform alerts (watchdog independence)"))
-			return
-		}
-		s.notifyCfg.mu.Lock()
-		if in.Token == "" {
-			in.Token = s.notifyCfg.cfg.Ntfy.Token
-		}
-		if in.Server == "" {
-			in.Server = "https://ntfy.sh"
-		}
-		if in.MinSeverity == "" {
-			in.MinSeverity = "critical"
-		}
-		s.notifyCfg.cfg.Ntfy = in
-		saveErr := s.notifyCfg.save()
-		s.notifyCfg.mu.Unlock()
-		if saveErr != nil {
-			// F-78: do NOT apply or report success for a config that was not
-			// written — it would work until the next restart and then vanish.
-			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
-			return
-		}
-		s.notifyCfg.apply()
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicNtfy())
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleChannelConfig(s, w, r,
+		func() any { return s.notifyCfg.publicNtfy() },
+		func(in notify.NtfyConfig) string { return in.MinSeverity },
+		func(in notify.NtfyConfig) error {
+			// #101: the external stack watchdog's topic is off-limits for product
+			// alerting — it must stay able to report the stack's own death, so the
+			// two must never share a channel. Enforced when the deployment exports
+			// WATCHDOG_NTFY_TOPIC; the first-customer gate script also checks
+			// host-side against the watchdog's own env file.
+			if wd := os.Getenv("WATCHDOG_NTFY_TOPIC"); wd != "" && in.Topic == wd {
+				return errors.New("this topic is reserved for the stack watchdog — use a dedicated topic for platform alerts (watchdog independence)")
+			}
+			return nil
+		},
+		func(in notify.NtfyConfig, cur notify.ChannelConfig) notify.NtfyConfig {
+			if in.Token == "" {
+				in.Token = cur.Ntfy.Token // preserve write-only secret
+			}
+			if in.Server == "" {
+				in.Server = "https://ntfy.sh"
+			}
+			if in.MinSeverity == "" {
+				in.MinSeverity = "critical"
+			}
+			return in
+		},
+		func(cfg *notify.ChannelConfig, in notify.NtfyConfig) { cfg.Ntfy = in })
 }
 
 func (s *server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
@@ -457,44 +442,20 @@ func (s *notifyConfigStore) slackIncidentTarget() (url, minSeverity string, ok b
 }
 
 func (s *server) handleSlackConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicSlack())
-	case http.MethodPut:
-		var in notify.SlackConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if !notify.ValidSeverity(in.MinSeverity) {
-			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
-			return
-		}
-		s.notifyCfg.mu.Lock()
-		if in.WebhookURL == "" {
-			in.WebhookURL = s.notifyCfg.cfg.Slack.WebhookURL // preserve write-only secret
-		}
-		if in.MinSeverity == "" {
-			in.MinSeverity = "warning"
-		}
-		s.notifyCfg.cfg.Slack = in
-		saveErr := s.notifyCfg.save()
-		s.notifyCfg.mu.Unlock()
-		if saveErr != nil {
-			// F-78: do NOT apply or report success for a config that was not
-			// written — it would work until the next restart and then vanish.
-			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
-			return
-		}
-		s.notifyCfg.apply()
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicSlack())
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleChannelConfig(s, w, r,
+		func() any { return s.notifyCfg.publicSlack() },
+		func(in notify.SlackConfig) string { return in.MinSeverity },
+		nil,
+		func(in notify.SlackConfig, cur notify.ChannelConfig) notify.SlackConfig {
+			if in.WebhookURL == "" {
+				in.WebhookURL = cur.Slack.WebhookURL // preserve write-only secret
+			}
+			if in.MinSeverity == "" {
+				in.MinSeverity = "warning"
+			}
+			return in
+		},
+		func(cfg *notify.ChannelConfig, in notify.SlackConfig) { cfg.Slack = in })
 }
 
 func (s *server) handleSlackTest(w http.ResponseWriter, r *http.Request) {
@@ -537,44 +498,20 @@ func (s *notifyConfigStore) publicPagerDuty() publicPagerDuty {
 }
 
 func (s *server) handlePagerDutyConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requirePlatformAdmin(w, r); !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicPagerDuty())
-	case http.MethodPut:
-		var in notify.PagerDutyConfig
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if !notify.ValidSeverity(in.MinSeverity) {
-			writeError(w, http.StatusBadRequest, errors.New("invalid min_severity"))
-			return
-		}
-		s.notifyCfg.mu.Lock()
-		if in.RoutingKey == "" {
-			in.RoutingKey = s.notifyCfg.cfg.PagerDuty.RoutingKey // preserve write-only secret
-		}
-		if in.MinSeverity == "" {
-			in.MinSeverity = "critical"
-		}
-		s.notifyCfg.cfg.PagerDuty = in
-		saveErr := s.notifyCfg.save()
-		s.notifyCfg.mu.Unlock()
-		if saveErr != nil {
-			// F-78: do NOT apply or report success for a config that was not
-			// written — it would work until the next restart and then vanish.
-			writeError(w, http.StatusInternalServerError, errors.New("notification settings could not be saved"))
-			return
-		}
-		s.notifyCfg.apply()
-		writeJSON(w, http.StatusOK, s.notifyCfg.publicPagerDuty())
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handleChannelConfig(s, w, r,
+		func() any { return s.notifyCfg.publicPagerDuty() },
+		func(in notify.PagerDutyConfig) string { return in.MinSeverity },
+		nil,
+		func(in notify.PagerDutyConfig, cur notify.ChannelConfig) notify.PagerDutyConfig {
+			if in.RoutingKey == "" {
+				in.RoutingKey = cur.PagerDuty.RoutingKey // preserve write-only secret
+			}
+			if in.MinSeverity == "" {
+				in.MinSeverity = "critical"
+			}
+			return in
+		},
+		func(cfg *notify.ChannelConfig, in notify.PagerDutyConfig) { cfg.PagerDuty = in })
 }
 
 func (s *server) handlePagerDutyTest(w http.ResponseWriter, r *http.Request) {

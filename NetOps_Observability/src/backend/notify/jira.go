@@ -7,12 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"netops/backend/models"
@@ -36,24 +31,18 @@ import (
 // JIRA_PROJECT_KEY (+ optional JIRA_ISSUE_TYPE, JIRA_MIN_SEVERITY,
 // JIRA_RESOLVE_TRANSITION). See docs/ITSM_INTEGRATION.md.
 type Jira struct {
-	baseURL       string // e.g. https://yourorg.atlassian.net
-	email         string
-	apiToken      string
-	projectKey    string
-	issueType     string
-	client        *http.Client
-	threshold     int    // minimum severity rank that cuts a ticket
-	thresholdName string // human label for the threshold
+	baseURL    string // e.g. https://yourorg.atlassian.net
+	email      string
+	apiToken   string
+	projectKey string
+	issueType  string
+	client     *http.Client
 	// resolveHint optionally pins the transition used to resolve an issue (its
 	// name or numeric id). Empty → auto-detect a done/resolve-like transition.
 	resolveHint string
-	statePath   string
 
-	mu sync.Mutex
-	// dedup-state persist observability (see noteStateWrite)
-	stateWriteFailures atomic.Uint64
-	lastStateErr       atomic.Value           // string
-	open               map[string]*JiraTicket // fingerprint -> ticket
+	// shared dedup/threshold/state-persistence core (ticket_state.go)
+	ticketCore[JiraTicket]
 }
 
 // ResolveExternal transitions a Jira issue to Done/Resolved by its KEY (the drift
@@ -120,26 +109,23 @@ type JiraTicket struct {
 
 func NewJira(baseURL, email, apiToken, projectKey string) *Jira {
 	return &Jira{
-		baseURL:       strings.TrimRight(baseURL, "/"),
-		email:         email,
-		apiToken:      apiToken,
-		projectKey:    strings.TrimSpace(projectKey),
-		issueType:     "Task",
-		client:        safehttp.Client(15 * time.Second),
-		threshold:     severityRank("critical"),
-		thresholdName: "critical",
-		open:          make(map[string]*JiraTicket),
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		email:      email,
+		apiToken:   apiToken,
+		projectKey: strings.TrimSpace(projectKey),
+		issueType:  "Task",
+		client:     safehttp.Client(15 * time.Second),
+		ticketCore: newTicketCore[JiraTicket](
+			func(t *JiraTicket) string { return t.Fingerprint },
+			func(t *JiraTicket) bool { return t.State == "open" },
+			func(t *JiraTicket) time.Time { return t.OpenedAt },
+		),
 	}
 }
 
 // WithThreshold sets the minimum severity that cuts a ticket (default critical).
 func (j *Jira) WithThreshold(sev string) *Jira {
-	sev = strings.ToLower(strings.TrimSpace(sev))
-	if sev == "" {
-		return j
-	}
-	j.threshold = severityRank(sev)
-	j.thresholdName = sev
+	j.setThreshold(sev)
 	return j
 }
 
@@ -159,11 +145,7 @@ func (j *Jira) WithResolveTransition(t string) *Jira {
 
 // WithStateFile makes open tickets durable across restarts.
 func (j *Jira) WithStateFile(path string) *Jira {
-	if path == "" {
-		return j
-	}
-	j.statePath = path
-	j.loadState()
+	j.setStateFile(path)
 	return j
 }
 
@@ -174,27 +156,11 @@ func (j *Jira) Configured() bool {
 	return j != nil && j.baseURL != "" && j.projectKey != ""
 }
 
-// ThresholdName is the minimum severity that cuts a ticket.
-func (j *Jira) ThresholdName() string { return j.thresholdName }
-
 // ProjectKey is the Jira project alerts open issues in (for the status UI).
 func (j *Jira) ProjectKey() string { return j.projectKey }
 
 // Tickets returns the currently-open issues (newest first) for the status UI.
-func (j *Jira) Tickets() []JiraTicket {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	out := make([]JiraTicket, 0, len(j.open))
-	for _, t := range j.open {
-		if t.State == "open" {
-			out = append(out, *t)
-		}
-	}
-	sort.Slice(out, func(i, k int) bool { return out[i].OpenedAt.After(out[k].OpenedAt) })
-	return out
-}
-
-func (j *Jira) meets(sev string) bool { return severityRank(sev) >= j.threshold }
+func (j *Jira) Tickets() []JiraTicket { return j.tickets() }
 
 func (j *Jira) Send(a models.Alert) error {
 	// Resolution events for a tracked ticket are handled even if the alert's
@@ -406,73 +372,5 @@ func isResolveLike(name string) bool {
 	return false
 }
 
-// ---- state persistence -----------------------------------------------------
-
-// noteStateWrite records a dedup-state persist outcome. The remote issue has
-// already been created or closed by the time we get here, so a write failure
-// must NOT fail the caller (that would re-file the ticket). It must also never
-// be silent: a lost dedup map means a restart re-files one issue per still-
-// firing alert. Counted here and exported via StateWriteFailures for /metrics.
-func (j *Jira) noteStateWrite(err error) {
-	if err != nil {
-		j.stateWriteFailures.Add(1)
-		j.lastStateErr.Store(err.Error())
-	}
-}
-
-// StateWriteFailures reports how many open-ticket dedup writes have failed and
-// the most recent reason ("" when none). Non-zero means duplicate tickets are
-// possible across a restart.
-func (j *Jira) StateWriteFailures() (uint64, string) {
-	n := j.stateWriteFailures.Load()
-	msg, _ := j.lastStateErr.Load().(string)
-	return n, msg
-}
-
-// saveLocked persists the open-ticket dedup map. It RETURNS its failure
-// (F-62/F-78 class): this map is what stops a restart from re-filing a
-// duplicate ticket for every still-firing alert, so a silent write failure is
-// an outage that survives the outage. Caller holds the lock.
-func (j *Jira) saveLocked() error {
-	if j.statePath == "" {
-		return nil
-	}
-	list := make([]JiraTicket, 0, len(j.open))
-	for _, t := range j.open {
-		if t.State == "open" {
-			list = append(list, *t)
-		}
-	}
-	b, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal open-ticket state: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(j.statePath), 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-	tmp := j.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fmt.Errorf("write open-ticket state: %w", err)
-	}
-	if err := os.Rename(tmp, j.statePath); err != nil {
-		return fmt.Errorf("commit open-ticket state: %w", err)
-	}
-	return nil
-}
-
-func (j *Jira) loadState() {
-	b, err := os.ReadFile(j.statePath)
-	if err != nil {
-		return
-	}
-	var list []JiraTicket
-	if err := json.Unmarshal(b, &list); err != nil {
-		return
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	for i := range list {
-		t := list[i]
-		j.open[t.Fingerprint] = &t
-	}
-}
+// State persistence (dedup map, F-62/F-78 write-failure accounting) lives in
+// the shared ticketCore — see ticket_state.go.

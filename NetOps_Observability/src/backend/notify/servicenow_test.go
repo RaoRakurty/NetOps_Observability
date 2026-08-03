@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -115,6 +116,47 @@ func TestServiceNowDedupAndReopen(t *testing.T) {
 	_ = sn.Send(a)
 	if calls != 2 {
 		t.Errorf("re-fire after resolve should open a new ticket: got %d", calls)
+	}
+}
+
+// TestServiceNowStateWriteFailureAccounting characterizes the F-62 contract
+// (#147 T4): a dedup-state persist failure must NOT fail Send but must NEVER
+// be silent — counted, with the latest reason, via StateWriteFailures.
+func TestServiceNowStateWriteFailureAccounting(t *testing.T) {
+	var creates, resolves int32
+	srv := mockServiceNowWithResolve(t, &creates, &resolves, nil)
+	defer srv.Close()
+
+	blocker := t.TempDir() + "/blocker"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sn := NewServiceNow(srv.URL, "admin", "secret").WithStateFile(blocker + "/sub/state.json")
+
+	if n, msg := sn.StateWriteFailures(); n != 0 || msg != "" {
+		t.Fatalf("clean start: n=%d msg=%q", n, msg)
+	}
+	a := criticalAlert()
+	if err := sn.Send(a); err != nil {
+		t.Fatalf("Send must not fail on a state-write failure: %v", err)
+	}
+	if creates != 1 {
+		t.Fatalf("incident must still be created, got %d", creates)
+	}
+	if n, msg := sn.StateWriteFailures(); n != 1 || msg == "" {
+		t.Fatalf("open failure must be counted with a reason: n=%d msg=%q", n, msg)
+	}
+	resolved := a
+	now := time.Now().UTC()
+	resolved.ResolvedAt = &now
+	if err := sn.Send(resolved); err != nil {
+		t.Fatalf("resolve must not fail on a state-write failure: %v", err)
+	}
+	if resolves != 1 {
+		t.Fatalf("incident must still be resolved, got %d", resolves)
+	}
+	if n, _ := sn.StateWriteFailures(); n != 2 {
+		t.Fatalf("resolve failure must also be counted: n=%d", n)
 	}
 }
 

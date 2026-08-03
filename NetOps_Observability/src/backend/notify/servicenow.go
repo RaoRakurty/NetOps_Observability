@@ -7,13 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"netops/backend/models"
@@ -39,16 +34,10 @@ type ServiceNow struct {
 	user            string
 	password        string
 	client          *http.Client
-	threshold       int    // minimum severity rank that cuts a ticket
-	thresholdName   string // human label for the threshold
 	assignmentGroup string
-	statePath       string
 
-	mu sync.Mutex
-	// dedup-state persist observability (see noteStateWrite)
-	stateWriteFailures atomic.Uint64
-	lastStateErr       atomic.Value                 // string
-	open               map[string]*ServiceNowTicket // fingerprint -> ticket
+	// shared dedup/threshold/state-persistence core (ticket_state.go)
+	ticketCore[ServiceNowTicket]
 }
 
 // ServiceNowTicket links a NetOps alert fingerprint to its ServiceNow incident.
@@ -144,34 +133,27 @@ func (s *ServiceNow) ResolveExternal(number string) error {
 
 func NewServiceNow(instanceURL, user, password string) *ServiceNow {
 	return &ServiceNow{
-		instanceURL:   strings.TrimRight(instanceURL, "/"),
-		user:          user,
-		password:      password,
-		client:        safehttp.Client(15 * time.Second),
-		threshold:     severityRank("critical"),
-		thresholdName: "critical",
-		open:          make(map[string]*ServiceNowTicket),
+		instanceURL: strings.TrimRight(instanceURL, "/"),
+		user:        user,
+		password:    password,
+		client:      safehttp.Client(15 * time.Second),
+		ticketCore: newTicketCore[ServiceNowTicket](
+			func(t *ServiceNowTicket) string { return t.Fingerprint },
+			func(t *ServiceNowTicket) bool { return t.State == "open" },
+			func(t *ServiceNowTicket) time.Time { return t.OpenedAt },
+		),
 	}
 }
 
 // WithThreshold sets the minimum severity that cuts a ticket (default critical).
 func (s *ServiceNow) WithThreshold(sev string) *ServiceNow {
-	sev = strings.ToLower(strings.TrimSpace(sev))
-	if sev == "" {
-		return s
-	}
-	s.threshold = severityRank(sev)
-	s.thresholdName = sev
+	s.setThreshold(sev)
 	return s
 }
 
 // WithStateFile makes open tickets durable across restarts.
 func (s *ServiceNow) WithStateFile(path string) *ServiceNow {
-	if path == "" {
-		return s
-	}
-	s.statePath = path
-	s.loadState()
+	s.setStateFile(path)
 	return s
 }
 
@@ -185,22 +167,8 @@ func (s *ServiceNow) Name() string { return "servicenow" }
 // Configured reports whether the connector has an instance URL.
 func (s *ServiceNow) Configured() bool { return s != nil && s.instanceURL != "" }
 
-// ThresholdName is the minimum severity that cuts a ticket.
-func (s *ServiceNow) ThresholdName() string { return s.thresholdName }
-
 // Tickets returns the currently-open incidents (newest first) for the status UI.
-func (s *ServiceNow) Tickets() []ServiceNowTicket {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]ServiceNowTicket, 0, len(s.open))
-	for _, t := range s.open {
-		if t.State == "open" {
-			out = append(out, *t)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt.After(out[j].OpenedAt) })
-	return out
-}
+func (s *ServiceNow) Tickets() []ServiceNowTicket { return s.tickets() }
 
 // severityRank orders the product's severity ladder so a threshold can be
 // "this and worse". Unknown severities sort low (won't ticket).
@@ -220,8 +188,6 @@ func severityRank(sev string) int {
 		return 0
 	}
 }
-
-func (s *ServiceNow) meets(sev string) bool { return severityRank(sev) >= s.threshold }
 
 func fingerprint(a models.Alert) string {
 	if a.ID != "" {
@@ -400,76 +366,8 @@ func severityToImpactUrgency(sev string) (impact, urgency string) {
 	}
 }
 
-// ---- state persistence -----------------------------------------------------
-
-// noteStateWrite records a dedup-state persist outcome. The remote incident has
-// already been created or closed by the time we get here, so a write failure
-// must NOT fail the caller (that would re-file the ticket). It must also never
-// be silent: a lost dedup map means a restart re-files one incident per still-
-// firing alert. Counted here and exported via StateWriteFailures for /metrics.
-func (s *ServiceNow) noteStateWrite(err error) {
-	if err != nil {
-		s.stateWriteFailures.Add(1)
-		s.lastStateErr.Store(err.Error())
-	}
-}
-
-// StateWriteFailures reports how many open-ticket dedup writes have failed and
-// the most recent reason ("" when none). Non-zero means duplicate tickets are
-// possible across a restart.
-func (s *ServiceNow) StateWriteFailures() (uint64, string) {
-	n := s.stateWriteFailures.Load()
-	msg, _ := s.lastStateErr.Load().(string)
-	return n, msg
-}
-
-// saveLocked persists the open-ticket dedup map. It RETURNS its failure
-// (F-62/F-78 class): this map is what stops a restart from re-filing a
-// duplicate ticket for every still-firing alert, so a silent write failure is
-// an outage that survives the outage. Caller holds the lock.
-func (s *ServiceNow) saveLocked() error {
-	if s.statePath == "" {
-		return nil
-	}
-	list := make([]ServiceNowTicket, 0, len(s.open))
-	for _, t := range s.open {
-		if t.State == "open" {
-			list = append(list, *t)
-		}
-	}
-	b, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal open-ticket state: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-	tmp := s.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fmt.Errorf("write open-ticket state: %w", err)
-	}
-	if err := os.Rename(tmp, s.statePath); err != nil {
-		return fmt.Errorf("commit open-ticket state: %w", err)
-	}
-	return nil
-}
-
-func (s *ServiceNow) loadState() {
-	b, err := os.ReadFile(s.statePath)
-	if err != nil {
-		return
-	}
-	var list []ServiceNowTicket
-	if err := json.Unmarshal(b, &list); err != nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range list {
-		t := list[i]
-		s.open[t.Fingerprint] = &t
-	}
-}
+// State persistence (dedup map, F-62/F-78 write-failure accounting) lives in
+// the shared ticketCore — see ticket_state.go.
 
 func incidentBody(a models.Alert) string {
 	var b strings.Builder

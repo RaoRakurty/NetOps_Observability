@@ -8,6 +8,7 @@ package backend
 // store enforces isolation (CLAUDE.md §3a) and the cross-org test is appid_isolation_test.go.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -68,6 +69,16 @@ func (s *server) handleApplicationByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid application id"))
 		return
 	}
+	serveGetOrArchive(s, w, r, id, s.applications.Get, s.applications.Archive)
+}
+
+// serveGetOrArchive is the shared GET/DELETE surface for a tenant-scoped
+// resource by id (#147 T4; used by applications here and serveServiceRoot in
+// services.go). DELETE archives — never hard-deletes. §3a: an absent or
+// cross-tenant id reads as 404 in both methods.
+func serveGetOrArchive[T any](s *server, w http.ResponseWriter, r *http.Request, id string,
+	get func(ctx context.Context, tenant string, cross bool, id string) (T, bool, error),
+	archive func(ctx context.Context, tenant string, cross bool, id string) (bool, error)) {
 	switch r.Method {
 	case http.MethodGet:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
@@ -75,7 +86,7 @@ func (s *server) handleApplicationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		app, found, err := s.applications.Get(r.Context(), tenant, cross, id)
+		v, found, err := get(r.Context(), tenant, cross, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -84,14 +95,14 @@ func (s *server) handleApplicationByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errNotFound)
 			return
 		}
-		writeJSON(w, http.StatusOK, app)
+		writeJSON(w, http.StatusOK, v)
 	case http.MethodDelete:
 		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
 		if !ok {
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		ok2, err := s.applications.Archive(r.Context(), tenant, cross, id)
+		ok2, err := archive(r.Context(), tenant, cross, id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return

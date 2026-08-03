@@ -125,16 +125,29 @@ func (c *lldpCollector) Run(ctx context.Context) error {
 }
 
 func (c *lldpCollector) pollOnce(ctx context.Context) {
+	pollNeighborsOnce(ctx, "lldp", c.targets, topoLinksKeyLLDP, pollLLDP, &c.mu, &c.status)
+}
+
+// pollNeighborsOnce is the shared LLDP/CDP poll cycle (#147 T4): walk every
+// target with a 10s budget, publish the full neighbour set to redisKey
+// (replace, not merge — stale devices drop off; the TTL self-expires the
+// topology if the collector dies, ADR 0001 share-via-Redis), emit the cycle's
+// health metrics, and stamp the collector status.
+//
+// answered counts devices whose walk SUCCEEDED, which is the health signal;
+// reachable counts the subset that actually reported neighbours. A device with
+// no neighbours (e.g. a non-Cisco box with no CDP) answered fine and must not
+// count as a failure.
+func pollNeighborsOnce(ctx context.Context, name string, targetsFn TargetFunc, redisKey string,
+	poll func(ctx context.Context, addr string, creds snmpCreds, devID string, now int64) ([]LLDPNeighbor, error),
+	mu *sync.RWMutex, status *Status) {
 	var targets []Target
-	if c.targets != nil {
-		targets = c.targets()
+	if targetsFn != nil {
+		targets = targetsFn()
 	}
 	start := time.Now()
 	now := start.UnixMilli()
 	reachable := 0
-	// answered counts devices whose LLDP walk SUCCEEDED, which is the health
-	// signal; reachable counts the subset that actually reported neighbours. A
-	// device with no LLDP peers answered fine and must not count as a failure.
 	answered := 0
 	var all []LLDPNeighbor
 	var lastErr string
@@ -142,7 +155,7 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 	for _, tg := range targets {
 		addr := withPort(tg.Address, 161)
 		dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		neigh, err := pollLLDP(dctx, addr, tg.creds(), tg.ID, now)
+		neigh, err := poll(dctx, addr, tg.creds(), tg.ID, now)
 		cancel()
 		if err != nil {
 			lastErr = err.Error()
@@ -155,31 +168,29 @@ func (c *lldpCollector) pollOnce(ctx context.Context) {
 		}
 	}
 
-	// Publish the full neighbour set (replace, not merge — stale devices drop off).
-	// TTL self-expires the topology if the collector dies (ADR 0001 share-via-Redis).
 	if all == nil {
 		all = []LLDPNeighbor{} // store "[]" not "null" when empty
 	}
 	if b, err := json.Marshal(all); err == nil {
-		_ = redisSetEX(ctx, topoLinksKeyLLDP, string(b), 1800)
+		_ = redisSetEX(ctx, redisKey, string(b), 1800)
 	}
 
 	healthy := cycleHealthy(len(targets), answered)
 	emitMetrics(ctx, strings.Join([]string{
-		collectorUpLine("lldp", healthy, now),
-		fmt.Sprintf(`collector_targets{collector="lldp"} %d %d`, len(targets), now),
-		fmt.Sprintf(`collector_targets_reachable{collector="lldp"} %d %d`, reachable, now),
-		fmt.Sprintf(`collector_lldp_neighbors{collector="lldp"} %d %d`, len(all), now),
+		collectorUpLine(name, healthy, now),
+		fmt.Sprintf(`collector_targets{collector=%q} %d %d`, name, len(targets), now),
+		fmt.Sprintf(`collector_targets_reachable{collector=%q} %d %d`, name, reachable, now),
+		fmt.Sprintf(`collector_%s_neighbors{collector=%q} %d %d`, name, name, len(all), now),
 	}, "\n"))
 
-	c.mu.Lock()
-	c.status.LastTick = start.UTC()
-	c.status.Targets = len(targets)
-	c.status.Reachable = reachable
-	c.status.LastPollMillis = time.Since(start).Milliseconds()
-	c.status.Healthy = healthy
-	c.status.LastError = cycleError(len(targets), answered, lastErr)
-	c.mu.Unlock()
+	mu.Lock()
+	status.LastTick = start.UTC()
+	status.Targets = len(targets)
+	status.Reachable = reachable
+	status.LastPollMillis = time.Since(start).Milliseconds()
+	status.Healthy = healthy
+	status.LastError = cycleError(len(targets), answered, lastErr)
+	mu.Unlock()
 }
 
 // pollLLDP walks the LLDP remote + local-port tables for one device and assembles

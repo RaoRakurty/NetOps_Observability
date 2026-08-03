@@ -103,7 +103,12 @@ func itsmStateFile(system, tenant string) string {
 // apply (re)builds a tenant's connectors from cfg and swaps them into the live
 // map. Connectors are reached only via incident projection (NOT the dispatcher).
 // Caller holds s.mu (or it's the constructor).
-func (s *server) handleITSMPagerDutyRCA(w http.ResponseWriter, r *http.Request) {
+// handleITSMRCADest is the shared PUT surface for a tenant's RCA-ticketing
+// destination (#147 T4): PagerDuty (#103) and Slack (#103-E) differ only in
+// payload type and store setter. Tenant-keyed by the principal (?tenant=
+// honored only for cross principals); the destination secret is write-only.
+func handleITSMRCADest[T any](s *server, w http.ResponseWriter, r *http.Request,
+	system string, set func(key string, in T) error, enabled func(T) bool) {
 	claims, ok := s.requireAdmin(w, r)
 	if !ok {
 		return
@@ -123,52 +128,31 @@ func (s *server) handleITSMPagerDutyRCA(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, errors.New("PUT only"))
 		return
 	}
-	var in pagerDutyRCAConfig
+	var in T
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.itsmCfg.SetPagerDutyRCA(key, in); err != nil {
+	if err := set(key, in); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	logInfo("itsm", "pagerduty RCA destination updated", map[string]any{"tenant": key, "enabled": in.Enabled, "actor": claims.Sub})
+	logInfo("itsm", system+" RCA destination updated", map[string]any{"tenant": key, "enabled": enabled(in), "actor": claims.Sub})
 	writeJSON(w, http.StatusOK, s.itsmCfg.Public(key))
+}
+
+func (s *server) handleITSMPagerDutyRCA(w http.ResponseWriter, r *http.Request) {
+	handleITSMRCADest(s, w, r, "pagerduty",
+		func(key string, in pagerDutyRCAConfig) error { return s.itsmCfg.SetPagerDutyRCA(key, in) },
+		func(in pagerDutyRCAConfig) bool { return in.Enabled })
 }
 
 // handleITSMSlackRCA serves PUT /api/itsm/slack-rca — the explicit mutation
 // path for a tenant's Slack RCA destination (#103-E). Webhook is write-only.
 func (s *server) handleITSMSlackRCA(w http.ResponseWriter, r *http.Request) {
-	claims, ok := s.requireAdmin(w, r)
-	if !ok {
-		return
-	}
-	tenant, cross := principalTenant(claims)
-	key := itsmKey(tenant)
-	if cross {
-		if q := strings.TrimSpace(r.URL.Query().Get("tenant")); q != "" {
-			key = itsmKey(q)
-		}
-	}
-	if s.itsmCfg == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("ITSM config store unavailable"))
-		return
-	}
-	if r.Method != http.MethodPut {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("PUT only"))
-		return
-	}
-	var in slackRCAConfig
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.itsmCfg.SetSlackRCA(key, in); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	logInfo("itsm", "slack RCA destination updated", map[string]any{"tenant": key, "enabled": in.Enabled, "actor": claims.Sub})
-	writeJSON(w, http.StatusOK, s.itsmCfg.Public(key))
+	handleITSMRCADest(s, w, r, "slack",
+		func(key string, in slackRCAConfig) error { return s.itsmCfg.SetSlackRCA(key, in) },
+		func(in slackRCAConfig) bool { return in.Enabled })
 }
 
 // handleITSMConfig serves GET/PUT /api/notify/itsm, scoped to the caller's tenant.

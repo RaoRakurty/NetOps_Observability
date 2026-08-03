@@ -584,34 +584,43 @@ ON CONFLICT (tenant_id, corr_object_id, external_system) DO UPDATE SET
 	})
 }
 
-func (s *PGStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]Link, int, error) {
+// listPagedRLS is the count-then-page read ListLinksForTenant and ListOutbox
+// share (#147 T4). The COUNT runs under the same RLS-scoped transaction as the
+// page query, so the total is the caller's total — never a cross-tenant row
+// count. pageSQL must take LIMIT $1 OFFSET $2.
+func listPagedRLS[T any](ctx context.Context, s *PGStore, tenant string, cross bool,
+	limit, offset, defPage int, countSQL, pageSQL string, scan func(pgx.Rows) (T, error)) ([]T, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	limit, offset = boundPage(limit, offset, LinksDefaultPage)
-	var out []Link
+	limit, offset = boundPage(limit, offset, defPage)
+	var out []T
 	var total int
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		// The COUNT runs under the same RLS-scoped transaction, so the total is
-		// the caller's total — never a cross-tenant row count.
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM correlix_ticket_links`).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, countSQL).Scan(&total); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT `+linkCols+` FROM correlix_ticket_links
-            ORDER BY updated_at DESC, corr_object_id, external_system LIMIT $1 OFFSET $2`, limit, offset)
+		rows, err := tx.Query(ctx, pageSQL, limit, offset)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			l, err := scanLink(rows)
+			v, err := scan(rows)
 			if err != nil {
 				return err
 			}
-			out = append(out, l)
+			out = append(out, v)
 		}
 		return rows.Err()
 	})
 	return out, total, err
+}
+
+func (s *PGStore) ListLinksForTenant(ctx context.Context, tenant string, cross bool, limit, offset int) ([]Link, int, error) {
+	return listPagedRLS(ctx, s, tenant, cross, limit, offset, LinksDefaultPage,
+		`SELECT count(*) FROM correlix_ticket_links`,
+		`SELECT `+linkCols+` FROM correlix_ticket_links
+            ORDER BY updated_at DESC, corr_object_id, external_system LIMIT $1 OFFSET $2`, scanLink)
 }
 
 // ListLinksForCorr is the exact per-object lookup that removes F-67's guess:
@@ -694,30 +703,9 @@ ON CONFLICT (idempotency_key) DO NOTHING`,
 }
 
 func (s *PGStore) ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	limit, offset = boundPage(limit, offset, OutboxDefaultPage)
-	var out []OutboxItem
-	var total int
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM ticket_outbox`).Scan(&total); err != nil {
-			return err
-		}
-		rows, err := tx.Query(ctx, `SELECT `+outboxCols+` FROM ticket_outbox ORDER BY created_at LIMIT $1 OFFSET $2`, limit, offset)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			it, err := scanOutbox(rows)
-			if err != nil {
-				return err
-			}
-			out = append(out, it)
-		}
-		return rows.Err()
-	})
-	return out, total, err
+	return listPagedRLS(ctx, s, tenant, cross, limit, offset, OutboxDefaultPage,
+		`SELECT count(*) FROM ticket_outbox`,
+		`SELECT `+outboxCols+` FROM ticket_outbox ORDER BY created_at LIMIT $1 OFFSET $2`, scanOutbox)
 }
 
 // claimOutboxSQL leases due rows with FOR UPDATE SKIP LOCKED (the report-queue

@@ -140,42 +140,8 @@ func (s *server) handleServiceByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) serveServiceRoot(w http.ResponseWriter, r *http.Request, id string) {
-	switch r.Method {
-	case http.MethodGet:
-		claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
-		if !ok {
-			return
-		}
-		tenant, cross := principalTenant(claims)
-		svc, found, err := s.services.GetService(r.Context(), tenant, cross, id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if !found {
-			writeError(w, http.StatusNotFound, errNotFound)
-			return
-		}
-		writeJSON(w, http.StatusOK, svc)
-	case http.MethodDelete:
-		claims, ok := s.requirePerm(w, r, "infrastructure", LevelWrite)
-		if !ok {
-			return
-		}
-		tenant, cross := principalTenant(claims)
-		ok2, err := s.services.ArchiveService(r.Context(), tenant, cross, id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if !ok2 {
-			writeError(w, http.StatusNotFound, errNotFound)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"archived": id})
-	default:
-		writeError(w, http.StatusMethodNotAllowed, errors.New("GET or DELETE"))
-	}
+	// Shared GET/DELETE-by-id shape with applications (serveGetOrArchive, appid.go).
+	serveGetOrArchive(s, w, r, id, s.services.GetService, s.services.ArchiveService)
 }
 
 func (s *server) serveServiceSelectors(w http.ResponseWriter, r *http.Request, id string) {

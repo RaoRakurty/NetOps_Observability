@@ -12,6 +12,7 @@ import (
 	"netops/backend/internal/oidc"
 	"netops/backend/internal/session"
 	"netops/backend/internal/users"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,86 @@ func TestLDAPPublicRoleMappingsNeverNil(t *testing.T) {
 	b, _ := json.Marshal(pub)
 	if !strings.Contains(string(b), `"role_mappings":[]`) {
 		t.Fatalf("expected role_mappings:[] in JSON, got %s", b)
+	}
+}
+
+// Characterization of the unseal-failure ladder (#147 T4): when the stored
+// secret cannot be UNSEALED (e.g. the platform DEK changed), the store must
+// (a) keep the non-secret config usable with the secret cleared, (b) surface
+// loadErr, (c) REFUSE an empty-secret save (which would silently wipe the
+// stored secret), and (d) accept a save that re-enters the secret — the
+// successful save IS the repair.
+func TestLDAPConfigUnsealFailureRefusesSecretWipingSave(t *testing.T) {
+	path := t.TempDir() + "/ldap.json"
+	st := newLDAPConfigStore(path, newTestVault(t))
+	in := ldapConfig{Enabled: true, Host: "h", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "orig"}
+	if _, err := st.set(in); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen under a DIFFERENT vault: the sealed bind password cannot decrypt.
+	st2 := newLDAPConfigStore(path, newTestVault(t))
+	if st2.loadErr == nil {
+		t.Fatal("expected loadErr when the stored secret cannot be unsealed")
+	}
+	eff := st2.effective()
+	if eff.Host != "h" || !eff.Enabled {
+		t.Fatalf("non-secret config must stay usable: %+v", eff)
+	}
+	if eff.BindPassword != "" {
+		t.Fatalf("sealed bytes must never be used as the password: %q", eff.BindPassword)
+	}
+	// Empty-secret save must be refused, not silently wipe the stored secret.
+	if _, err := st2.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc"}); err == nil {
+		t.Fatal("empty-secret save under loadErr must be refused")
+	}
+	// Re-entering the secret repairs the store.
+	out, err := st2.set(ldapConfig{Enabled: true, Host: "h2", BaseDN: "dc=x", UserFilter: "(uid=%s)", BindDN: "cn=svc", BindPassword: "renewed"})
+	if err != nil {
+		t.Fatalf("re-entering the secret must repair: %v", err)
+	}
+	if out.BindPassword != "renewed" || st2.loadErr != nil {
+		t.Fatalf("repair failed: %+v loadErr=%v", out, st2.loadErr)
+	}
+}
+
+func TestTACACSConfigUnsealFailureRefusesSecretWipingSave(t *testing.T) {
+	path := t.TempDir() + "/tac.json"
+	st := newTACACSConfigStore(path, newTestVault(t))
+	if _, err := st.set(tacacsConfig{Enabled: true, Host: "h", Secret: "orig"}); err != nil {
+		t.Fatal(err)
+	}
+	st2 := newTACACSConfigStore(path, newTestVault(t))
+	if st2.loadErr == nil {
+		t.Fatal("expected loadErr when the stored secret cannot be unsealed")
+	}
+	if eff := st2.effective(); eff.Secret != "" || eff.Host != "h" {
+		t.Fatalf("expected cleared secret + usable config: %+v", eff)
+	}
+	if _, err := st2.set(tacacsConfig{Enabled: true, Host: "h2"}); err == nil {
+		t.Fatal("empty-secret save under loadErr must be refused")
+	}
+	out, err := st2.set(tacacsConfig{Enabled: true, Host: "h2", Secret: "renewed"})
+	if err != nil || out.Secret != "renewed" || st2.loadErr != nil {
+		t.Fatalf("repair failed: %+v err=%v loadErr=%v", out, err, st2.loadErr)
+	}
+}
+
+// Characterization: a corrupt stored blob is a HARD load error — env defaults
+// apply (three states, never two) and the constructor records loadErr.
+func TestAuthConfigCorruptBlobFallsBackToEnvDefaults(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"ldap.json", "tac.json"} {
+		if err := os.WriteFile(dir+"/"+name, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lst := newLDAPConfigStore(dir+"/ldap.json", nil)
+	if lst.loadErr == nil || lst.effective().Enabled {
+		t.Fatalf("corrupt LDAP blob: loadErr=%v effective=%+v", lst.loadErr, lst.effective())
+	}
+	tst := newTACACSConfigStore(dir+"/tac.json", nil)
+	if tst.loadErr == nil || tst.effective().Enabled {
+		t.Fatalf("corrupt TACACS blob: loadErr=%v effective=%+v", tst.loadErr, tst.effective())
 	}
 }
 

@@ -1,6 +1,83 @@
 package collectors
 
-import "testing"
+import (
+	"context"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+// oncePoller is the poll-cycle seam both discovery collectors expose in-package.
+type oncePoller interface {
+	Collector
+	pollOnce(ctx context.Context)
+}
+
+// Characterization of the CDP/LLDP poll-cycle harness (#147 T4): the two
+// collectors must report identical cycle semantics — a collector with no
+// targets is healthy-and-idle; a device that ANSWERS but has no neighbours
+// counts as answered (healthy) yet not reachable; a device whose walk fails
+// makes the cycle unhealthy and surfaces the partial-blackout error.
+func TestNeighborPollCycleHarness(t *testing.T) {
+	// A local "agent" that answers every request with endOfMibView: the device
+	// answers fine but reports no neighbours.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			_, peer, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = conn.WriteTo(snmpResponse([]int{1, 3, 6, 1}, tagEndOfMibView, nil, 1), peer)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for name, mk := range map[string]func(TargetFunc) Collector{"cdp": NewCDP, "lldp": NewLLDP} {
+		t.Run(name+"/no targets is healthy-and-idle", func(t *testing.T) {
+			c := mk(func() []Target { return nil }).(oncePoller)
+			c.pollOnce(ctx)
+			st := c.Status()
+			if !st.Healthy || st.Targets != 0 || st.Reachable != 0 || st.LastError != "" {
+				t.Fatalf("empty cycle status: %+v", st)
+			}
+			if st.LastTick.IsZero() {
+				t.Fatal("LastTick must be stamped by the cycle")
+			}
+		})
+		t.Run(name+"/answered with no neighbours is healthy", func(t *testing.T) {
+			tg := Target{ID: "dev1", Address: conn.LocalAddr().String()}
+			c := mk(func() []Target { return []Target{tg} }).(oncePoller)
+			c.pollOnce(ctx)
+			st := c.Status()
+			if !st.Healthy || st.Targets != 1 || st.LastError != "" {
+				t.Fatalf("answered-empty cycle status: %+v", st)
+			}
+			if st.Reachable != 0 {
+				t.Fatalf("no neighbours must not count as reachable: %+v", st)
+			}
+		})
+		t.Run(name+"/failed walk degrades the cycle", func(t *testing.T) {
+			tg := Target{ID: "dev1", Address: "bad host"} // invalid name: dial fails fast
+			c := mk(func() []Target { return []Target{tg} }).(oncePoller)
+			c.pollOnce(ctx)
+			st := c.Status()
+			if st.Healthy {
+				t.Fatalf("a full blackout must be unhealthy: %+v", st)
+			}
+			if !strings.Contains(st.LastError, "1/1 targets did not answer") {
+				t.Fatalf("cycle error not surfaced: %+v", st)
+			}
+		})
+	}
+}
 
 // The composite remote-table index is "timeMark.localPortNum.remIndex"; we must
 // pull the MIDDLE arc to map a neighbour to its local port. Getting this wrong

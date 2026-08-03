@@ -105,6 +105,59 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 }
 
+// TestPgTicketingStore_LinksPaging characterizes PGStore.ListLinksForTenant
+// (#147 T4): the count-then-page read must report the caller's TRUE total under
+// RLS (F-67 — a truncated page must be tellable from a complete one), page
+// without loss, and never count another tenant's rows.
+func TestPgTicketingStore_LinksPaging(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres ticketing-store test")
+	}
+	ctx := context.Background()
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.DB().Close()
+	st := ticketing.NewPGStore(ps.DB())
+
+	for i := 0; i < 7; i++ {
+		if err := st.PutLink(ctx, ticketing.Link{TenantID: "acme", CorrObjectID: "c" + string(rune('a'+i)),
+			ExternalSystem: "servicenow", TicketNumber: "INC", Status: "open"}); err != nil {
+			t.Fatalf("PutLink %d: %v", i, err)
+		}
+	}
+	if err := st.PutLink(ctx, ticketing.Link{TenantID: "globex", CorrObjectID: "cz",
+		ExternalSystem: "servicenow", TicketNumber: "INC", Status: "open"}); err != nil {
+		t.Fatalf("PutLink globex: %v", err)
+	}
+	page, total, err := st.ListLinksForTenant(ctx, "acme", false, 3, 0)
+	if err != nil {
+		t.Fatalf("ListLinksForTenant: %v", err)
+	}
+	if len(page) != 3 || total != 7 {
+		t.Fatalf("page=%d total=%d, want 3/7 (true tenant total under RLS)", len(page), total)
+	}
+	// Page to the end — no cliff, no repeats, never the other tenant's row.
+	seen := map[string]bool{}
+	for off := 0; off < total; off += 3 {
+		rows, _, err := st.ListLinksForTenant(ctx, "acme", false, 3, off)
+		if err != nil {
+			t.Fatalf("page at %d: %v", off, err)
+		}
+		for _, l := range rows {
+			if l.TenantID != "acme" || seen[l.CorrObjectID] {
+				t.Fatalf("leak or repeat at offset %d: %+v", off, l)
+			}
+			seen[l.CorrObjectID] = true
+		}
+	}
+	if len(seen) != 7 {
+		t.Fatalf("paging lost rows: saw %d of 7", len(seen))
+	}
+}
+
 // TestPgTicketingStore_SingleEnabledPolicyInvariant proves the one-enabled-
 // policy-per-(tenant, system) invariant end to end against REAL Postgres:
 // (1) live writes — the incident_policies_one_enabled partial unique index

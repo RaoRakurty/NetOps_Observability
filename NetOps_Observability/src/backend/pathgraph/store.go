@@ -461,12 +461,16 @@ ON CONFLICT (tenant_id, endpoint_id) DO UPDATE SET
 	})
 }
 
-func (s *PGCHStore) ListEndpoints(ctx context.Context, tenant string, cross bool) ([]Endpoint, error) {
+// listJSONRegistry is the shared registry read (#147 T4): both PG registries
+// store the canonical record as a JSON `data` column, so ListEndpoints and
+// ListPathDefinitions differ only in query and element type. Runs under the
+// caller's RLS scope; returns a non-nil (possibly empty) slice.
+func listJSONRegistry[T any](ctx context.Context, s *PGCHStore, tenant string, cross bool, query string) ([]T, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out := []Endpoint{}
+	out := []T{}
 	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT data FROM path_endpoints ORDER BY tenant_id, endpoint_id LIMIT 5000`)
+		rows, err := tx.Query(ctx, query)
 		if err != nil {
 			return err
 		}
@@ -476,15 +480,20 @@ func (s *PGCHStore) ListEndpoints(ctx context.Context, tenant string, cross bool
 			if err := rows.Scan(&raw); err != nil {
 				return err
 			}
-			var ep Endpoint
-			if err := json.Unmarshal(raw, &ep); err != nil {
+			var v T
+			if err := json.Unmarshal(raw, &v); err != nil {
 				return err
 			}
-			out = append(out, ep)
+			out = append(out, v)
 		}
 		return rows.Err()
 	})
 	return out, err
+}
+
+func (s *PGCHStore) ListEndpoints(ctx context.Context, tenant string, cross bool) ([]Endpoint, error) {
+	return listJSONRegistry[Endpoint](ctx, s, tenant, cross,
+		`SELECT data FROM path_endpoints ORDER BY tenant_id, endpoint_id LIMIT 5000`)
 }
 
 func (s *PGCHStore) UpsertPathDefinition(ctx context.Context, pd PathDefinition) error {
@@ -513,29 +522,8 @@ ON CONFLICT (tenant_id, path_id) DO UPDATE SET last_seen = now(), data = EXCLUDE
 }
 
 func (s *PGCHStore) ListPathDefinitions(ctx context.Context, tenant string, cross bool) ([]PathDefinition, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out := []PathDefinition{}
-	err := s.db.WithTenant(ctx, tenant, cross, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT data FROM path_definitions ORDER BY tenant_id, path_id LIMIT 5000`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var raw []byte
-			if err := rows.Scan(&raw); err != nil {
-				return err
-			}
-			var pd PathDefinition
-			if err := json.Unmarshal(raw, &pd); err != nil {
-				return err
-			}
-			out = append(out, pd)
-		}
-		return rows.Err()
-	})
-	return out, err
+	return listJSONRegistry[PathDefinition](ctx, s, tenant, cross,
+		`SELECT data FROM path_definitions ORDER BY tenant_id, path_id LIMIT 5000`)
 }
 
 // AppendObservation writes the immutable run to ClickHouse (observation + ordered
