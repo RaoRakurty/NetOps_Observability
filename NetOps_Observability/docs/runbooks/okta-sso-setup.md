@@ -340,7 +340,7 @@ that 403s for a tenant super-admin WOULD be a bug — none observed.
 | 1 | SAML SP-initiated | ✅ PASS |
 | 3 | OIDC SP-initiated | ✅ PASS |
 | 4 | OIDC IdP-initiated | ✅ PASS — via `initiate_login_uri` (the spec's mechanism) |
-| 2 | SAML IdP-initiated | ✅ PASS via bookmark · ⏳ protocol-level NOW CONFIGURED, awaiting browser test |
+| 2 | SAML IdP-initiated | ✅ PASS via bookmark · ❌ protocol-level blocked: SAML-client-only lookup, OIDC downstream |
 
 Role mapping confirmed end to end after the realm role + ID-token fix:
 
@@ -401,8 +401,34 @@ Confirmed after the change that Keycloak's AuthnRequest still carries
 `AssertionConsumerServiceURL=…/broker/okta-saml/endpoint`, which is in the
 allowed list — so cell 1 is unaffected.
 
-**Not yet browser-tested** (no browser in the session that configured it). The
-Okta tile "Correlix (SAML via Keycloak)" is the test.
+**TESTED 2026-08-03 — DOES NOT WORK with an OIDC downstream client.**
+
+The error progressed usefully, which is how we know each step was real:
+
+```
+Illegal base64url string!          RelayState held a URL, Keycloak wanted its own token
+RelayState parameter was null      RelayState removed; no landing target at all
+invalid_redirect_uri (clientId=null)   client-scoped endpoint configured
+```
+
+The decisive detail is `clientId="null"`: Keycloak never resolves the client, so
+`invalid_redirect_uri` is a symptom rather than the cause. The reason fits the
+evidence — `saml_idp_initiated_sso_url_name` is a **SAML client** attribute and
+Keycloak matches it against SAML clients only. `netops` is an **OIDC** client, so
+the lookup finds nothing.
+
+So this mechanism bridges *SAML IdP → SAML client*. Our topology is
+*SAML IdP → OIDC client*, and that is the gap.
+
+**What is NOT yet established:** whether another Keycloak path bridges
+IdP-initiated SAML into an OIDC client (e.g. a SAML client in Keycloak that
+chains onward, or behaviour that differs in Keycloak 26+; this stack is pinned to
+25.0). Do not read this as "impossible" — that claim was made once already on
+thinner evidence and was wrong. It is "not achieved, by this mechanism, on this
+version".
+
+**Working today:** the Bookmark tile, which delivers the same operator
+experience via a silent SP-initiated flow.
 
 #### Superseded reasoning, kept for the record
 
