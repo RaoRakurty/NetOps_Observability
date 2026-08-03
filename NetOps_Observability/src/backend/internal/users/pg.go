@@ -377,7 +377,10 @@ func (s *PGStore) UpsertFederated(username, email, displayName, role, source, te
 			// Existing account. A LOCAL account is never re-roled by federation —
 			// local management wins; the federated login is just accepted against it.
 			if u.AuthSource != "local" {
-				u = MergeFederated(u, email, displayName, role, source)
+				// Federated account — keep it in sync with the IdP (SR-025: guard the
+				// IdP-mapped role against silent platform-owner escalation, using the
+				// account's existing tenant).
+				u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
 				if err := writeUserTx(ctx, tx, u); err != nil {
 					return err
 				}
@@ -390,6 +393,7 @@ func (s *PGStore) UpsertFederated(username, email, displayName, role, source, te
 			if tenant == "" {
 				tenant = s.deps.DefaultTenant
 			}
+			role = s.deps.GuardRole(role, tenant, username, source)
 			nu := User{
 				Username: username, Role: role, Email: email, DisplayName: displayName,
 				TenantID: tenant, Status: "active", AuthSource: source, CreatedAt: time.Now().UTC(),
