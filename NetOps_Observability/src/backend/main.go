@@ -201,6 +201,7 @@ type server struct {
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
 	oidc        atomic.Pointer[oidcProvider]
+	ssoTxns     *ssoTxnStore // server-side single-use login transactions (state → nonce + PKCE verifier)
 	oidcCfg     *oidcConfigStore
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
@@ -748,6 +749,7 @@ func newServer() *server {
 	// every admin save (see oidc_config.go).
 	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
 	srv.oidc.Store(oidc.NewProviderFromConfig(srv.oidcCfg.effective(), jwksTTL()))
+	srv.ssoTxns = newSSOTxnStore()
 	// PBAC Phase A: ensure every existing user has its mirror role_binding so the
 	// auditable artifact is complete on boot. Idempotent; behaviour-preserving.
 	srv.backfillBindings()

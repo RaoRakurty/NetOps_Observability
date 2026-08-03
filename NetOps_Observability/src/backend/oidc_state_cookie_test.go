@@ -50,7 +50,7 @@ func testSSOServer(t *testing.T, tokenEndpoint string) *server {
 	if !p.Ready() {
 		t.Fatal("test provider is not ready")
 	}
-	s := &server{}
+	s := &server{ssoTxns: newSSOTxnStore()}
 	s.oidc.Store(p)
 	return s
 }

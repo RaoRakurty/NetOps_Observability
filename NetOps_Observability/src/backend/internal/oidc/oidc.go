@@ -7,6 +7,9 @@
 package oidc
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -143,11 +146,42 @@ func NewProviderFromConfig(c Config, jwksTTL time.Duration) *Provider {
 	return p
 }
 
+// NewPKCEVerifier returns an RFC 7636 code_verifier and its S256 challenge.
+// 32 random bytes → 43 chars of base64url (unpadded), inside both the RFC's
+// 43–128 length window and its unreserved character set. S256 is the ONLY
+// method this package can produce — "plain" is structurally impossible.
+func NewPKCEVerifier() (verifier, challenge string, err error) {
+	b := make([]byte, 32)
+	if _, err = rand.Read(b); err != nil {
+		return "", "", err
+	}
+	verifier = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+// ValidIDP reports whether an idp alias may be forwarded as kc_idp_hint: "" is
+// always valid (the realm's own login page), anything else must be one of the
+// operator-configured provider buttons. The browser never gets to invent an
+// alias the server did not configure.
+func (p *Provider) ValidIDP(alias string) bool {
+	if alias == "" {
+		return true
+	}
+	for _, pi := range p.providers {
+		if pi.ID == alias {
+			return true
+		}
+	}
+	return false
+}
+
 // AuthorizeURL builds the IdP authorization redirect for the code flow:
-// client/scope/redirect/state, the optional kc_idp_hint, and — when MFA is
-// required — acr_values so the IdP steps up (enforcement still happens at the
-// callback via MFASatisfied).
-func (p *Provider) AuthorizeURL(redirectURI, state, idpHint string) (string, error) {
+// client/scope/redirect/state, the login transaction's nonce + PKCE S256
+// challenge, the optional kc_idp_hint, and — when MFA is required —
+// acr_values so the IdP steps up (enforcement still happens at the callback
+// via MFASatisfied).
+func (p *Provider) AuthorizeURL(redirectURI, state, nonce, codeChallenge, idpHint string) (string, error) {
 	disc, err := p.jwks.Discovery()
 	if err != nil {
 		return "", err
@@ -158,6 +192,13 @@ func (p *Provider) AuthorizeURL(redirectURI, state, idpHint string) (string, err
 	q.Set("scope", p.scopes)
 	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
+	if nonce != "" {
+		q.Set("nonce", nonce)
+	}
+	if codeChallenge != "" {
+		q.Set("code_challenge", codeChallenge)
+		q.Set("code_challenge_method", "S256") // constant: plain is never offered
+	}
 	if idpHint != "" {
 		q.Set("kc_idp_hint", idpHint)
 	}
@@ -241,7 +282,7 @@ func (p *Provider) CallbackURL(r *http.Request) string {
 
 // handleSSOConfig (public) tells the SPA whether SSO is on and which buttons to
 // render. Never leaks the client secret.
-func (p *Provider) Exchange(code, redirectURI string) (string, error) {
+func (p *Provider) Exchange(code, redirectURI, codeVerifier string) (string, error) {
 	disc, err := p.jwks.Discovery()
 	if err != nil {
 		return "", err
@@ -251,6 +292,9 @@ func (p *Provider) Exchange(code, redirectURI string) (string, error) {
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", p.clientID)
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
+	}
 	req, err := http.NewRequest(http.MethodPost, disc.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err

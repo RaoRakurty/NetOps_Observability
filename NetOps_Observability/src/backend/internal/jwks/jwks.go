@@ -71,6 +71,11 @@ type Claims struct {
 	// when the SSO config requires it.
 	Amr []string `json:"amr"`
 	Acr string   `json:"acr"`
+	// Nonce echoes the value the RP sent on the authorization request (OIDC Core
+	// §3.1.3.7 #11): the SSO callback compares it against the server-side login
+	// transaction so a captured/substituted ID token cannot complete a login it
+	// was not minted for.
+	Nonce string `json:"nonce"`
 }
 
 func (c Claims) Audiences() []string {

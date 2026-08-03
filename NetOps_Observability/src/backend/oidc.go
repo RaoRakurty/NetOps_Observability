@@ -52,9 +52,35 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("sso not configured"))
 		return
 	}
+	// The idp alias is forwarded to Keycloak as kc_idp_hint. Only aliases the
+	// operator configured (OIDC_PROVIDERS / saved config) are accepted — the
+	// browser never selects an IdP the server did not offer ("Okta dashboard
+	// launch" hardening; the bookmark URL carries one of these aliases).
+	idpHint := strings.TrimSpace(r.URL.Query().Get("idp"))
+	if !p.ValidIDP(idpHint) {
+		logWarn("auth", "sso login refused — unknown idp alias", map[string]any{"idp": idpHint})
+		writeError(w, http.StatusNotFound, errors.New("unknown identity provider"))
+		return
+	}
 	state, err := randomToken(24)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	nonce, err := randomToken(24)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	verifier, challenge, err := oidc.NewPKCEVerifier()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Server-side transaction: makes state single-use at the callback and keeps
+	// the nonce + PKCE verifier out of the browser entirely.
+	if err := s.ssoTxns.Create(state, nonce, verifier, time.Now()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	// Secure is decided per request by the SAME helper the session cookies use
@@ -72,7 +98,7 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
-	authURL, err := p.AuthorizeURL(p.CallbackURL(r), state, strings.TrimSpace(r.URL.Query().Get("idp")))
+	authURL, err := p.AuthorizeURL(p.CallbackURL(r), state, nonce, challenge, idpHint)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -114,12 +140,23 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
+	// Atomically consume the server-side transaction: state becomes single-use
+	// (a replayed callback dies here even with a stolen cookie), and the nonce +
+	// PKCE verifier come back from server memory, never from the browser. The
+	// browser-facing message stays identical to the cookie failure on purpose —
+	// an attacker learns nothing about WHICH binding failed.
+	txn, ok := s.ssoTxns.Consume(state, time.Now())
+	if !ok {
+		s.ssoFail(w, r, "invalid SSO state")
+		return
+	}
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		s.ssoFail(w, r, "missing authorization code")
 		return
 	}
-	idToken, err := p.Exchange(code, p.CallbackURL(r))
+	idToken, err := p.Exchange(code, p.CallbackURL(r), txn.Verifier)
 	if err != nil {
 		s.ssoFail(w, r, "token exchange failed: "+err.Error())
 		return
@@ -127,6 +164,13 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	claims, err := p.VerifyIDToken(idToken)
 	if err != nil {
 		s.ssoFail(w, r, "id token rejected: "+err.Error())
+		return
+	}
+	// OIDC Core §3.1.3.7 #11: the ID token must echo OUR nonce. A token without
+	// it, or with someone else's, was not minted for this login. Values are
+	// deliberately not logged.
+	if claims.Nonce == "" || claims.Nonce != txn.Nonce {
+		s.ssoFail(w, r, "id token rejected: nonce mismatch")
 		return
 	}
 	// Honor the IdP's MFA: when required, the token must assert a second factor
@@ -215,9 +259,13 @@ func newOIDCProvider() *oidcProvider {
 	return oidc.NewProviderFromConfig(newOIDCConfigFromEnv(), jwksTTL())
 }
 
-// The provider + config domain moved to internal/oidc (Phase-2 W4.4).
+// The provider + config domain moved to internal/oidc (Phase-2 W4.4); the
+// login-transaction store lives there too (#135 hardening).
 type (
 	oidcProvider    = oidc.Provider
 	oidcConfig      = oidc.Config
 	ssoProviderInfo = oidc.ProviderInfo
+	ssoTxnStore     = oidc.TxnStore
 )
+
+func newSSOTxnStore() *ssoTxnStore { return oidc.NewTxnStore() }
