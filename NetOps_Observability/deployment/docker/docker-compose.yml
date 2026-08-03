@@ -1361,11 +1361,13 @@ services:
       #
       # TLS-readiness (#145): if the OIDC issuer is https behind a SELF-SIGNED /
       # private-CA cert (nginx/tls.conf.example + gen-dev-cert.sh), the api's
-      # back-channel (discovery/JWKS/token) must trust that CA — uncomment BOTH
-      # the env below and a volume mounting the cert, e.g.
-      #   volumes: [ "./nginx/certs/fullchain.pem:/etc/ssl/private-ca.pem:ro" ]
-      # Go honors SSL_CERT_FILE natively. Real certificate chains need nothing.
-      # SSL_CERT_FILE: /etc/ssl/private-ca.pem
+      # back-channel (discovery/JWKS/token) must trust that CA. In a compose
+      # override, mount the cert into its own dir and set SSL_CERT_DIR:
+      #   environment: { SSL_CERT_DIR: /etc/ssl/dev-ca }
+      #   volumes: [ "./nginx/certs/fullchain.pem:/etc/ssl/dev-ca/dev-ca.pem:ro" ]
+      # Go consults SSL_CERT_DIR IN ADDITION to the image's default CA bundle —
+      # do NOT use SSL_CERT_FILE for this: it REPLACES the root store and would
+      # break every other outbound TLS call. Real cert chains need nothing.
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-netops}
@@ -1715,6 +1717,14 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    # TLS front (#145) is OPT-IN via a compose override — never enabled here,
+    # because mounting tls.conf without certs would stop nginx from booting on
+    # a fresh install. To enable, create docker-compose.override.yml with, under
+    # nginx: ports ["8443:8443"] and volumes for
+    #   ./nginx/tls.conf.example -> /etc/nginx/conf.d/tls.conf:ro
+    #   ./nginx/certs            -> /etc/nginx/certs:ro
+    # (certs from scripts/gen-dev-cert.sh or a real issuer; privkey readable by
+    # uid 101). Full walk-through: nginx/tls.conf.example.
     # opensearch-dashboards ("osd") and grafana ("self-monitoring") are
     # profile-gated add-ons; nginx proxies /search and /grafana to them only
     # when started, so they're intentionally not dependencies. Prometheus is

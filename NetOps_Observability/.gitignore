@@ -38,6 +38,8 @@ scripts/.host-hygiene.heartbeat
 
 # Lab-local compose overrides (site config — never product defaults)
 deployment/docker/docker-compose.override.yml
+# TLS certs/keys for the nginx front (gen-dev-cert.sh output or operator-mounted)
+deployment/docker/nginx/certs/
 dist/
 src/correlation/build/
 deployment/docker/resource-plan.json

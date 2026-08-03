@@ -70,14 +70,29 @@ exercised twice.
 > app tile ❌ by design (deferred protocol gap — HIDE this tile from the
 > dashboard; it is Okta↔Keycloak plumbing, not a user entry point).
 >
-> **Browser caveats on this plain-HTTP lab:** incognito/third-party-cookie
-> blocking breaks the KEYCLOAK hop (`cookie_not_found` — its
-> `Secure; SameSite=None` cookies are rejected over HTTP and the legacy Lax
-> fallback is not sent on Okta's cross-site POST). Works in a normal window;
-> the real fix is TLS on the nginx edge (tracker #145). Separately, the OIDC
+> **Browser caveats on plain HTTP:** incognito/third-party-cookie blocking
+> breaks the KEYCLOAK hop (`cookie_not_found` — its `Secure; SameSite=None`
+> cookies are rejected over HTTP and the legacy Lax fallback is not sent on
+> Okta's cross-site POST). Works in a normal window only. Separately, the OIDC
 > tiles depend on Keycloak→Okta back-channel egress and fail with
-> `SocketTimeoutException` when it stalls (documented above) — transient,
-> retry.
+> `SocketTimeoutException` when it stalls — transient, retry.
+>
+> **HTTPS enabled on this lab + INCOGNITO VERIFIED (2026-08-03, owner):**
+> TLS front live at `https://10.70.245.122` (self-signed, IP SAN, lab-local
+> `docker-compose.override.yml`; the :8000 http entry still works). The whole
+> federation triangle moved to the https origin: Correlix saved OIDC config
+> (issuer + redirect), Keycloak `netops` client redirect URI + `okta-saml`
+> IdP `entityId` (it is PINNED in IdP config — it does NOT follow the
+> frontend URL; forgetting it ⇒ Okta "Bad SAML request" on audience
+> mismatch), and all four Okta apps (SAML audience = the realm URL
+> `https://…/auth/realms/correlix`, both ACS entries, OIDC redirect URI +
+> initiate_login_uri, bookmark URLs). Two gotchas found live: (1) Keycloak's
+> cookie-less first response overflows nginx's default proxy header buffers
+> (502 "upstream sent too big header") — fixed with 16k buffers on /auth/ and
+> the TLS front; (2) `gen-dev-cert.sh` needed an IP SAN for bare-IP labs.
+> **Result: SAML bookmark, OIDC bookmark, and OIDC app tile all pass in
+> INCOGNITO over https** — the customer-shaped proof. Raw SAML tile still
+> fails by design (deferred native SP).
 
 > **SUPERSEDED — read §4 first.** The paragraphs below were written believing
 > Correlix's CSRF state check made IdP-initiated impossible. That is wrong: the

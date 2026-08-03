@@ -12,13 +12,22 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CERTS="$ROOT/deployment/docker/nginx/certs"
 DOMAIN="${1:-netops.local}"
 
+# Browsers match IP-address URLs against IP SANs, never DNS SANs — a cert for
+# a bare-IP deployment (https://10.0.0.5:8443) must carry IP:<addr> or every
+# browser rejects it as a name mismatch regardless of trust.
+if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  SAN="IP:$DOMAIN,DNS:localhost,IP:127.0.0.1"
+else
+  SAN="DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
+fi
+
 mkdir -p "$CERTS"
 
 openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
   -keyout "$CERTS/privkey.pem" \
   -out    "$CERTS/fullchain.pem" \
   -subj "/CN=$DOMAIN" \
-  -addext "subjectAltName=DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
+  -addext "subjectAltName=$SAN"
 
 chmod 600 "$CERTS/privkey.pem"
 
