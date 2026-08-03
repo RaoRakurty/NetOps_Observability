@@ -117,10 +117,24 @@ services:
   # stdlib-only and only validates the resulting tokens (see
   # docs/IDENTITY_ACCESS.md). It is opt-in so the default stack stays lean:
   #
+  #   # 1. the database must exist FIRST — Keycloak does not create it, and
+  #   #    without it the container dies with a bare
+  #   #    `FATAL: database "keycloak" does not exist`.
+  #   docker compose exec postgres createdb -U "$DB_USER" keycloak
+  #   # 2. then start it
   #   docker compose --profile sso up -d keycloak
   #
   # Then create a realm + an OIDC client for NetOps and set OIDC_ENABLED=true
   # and the OIDC_* vars in .env (the api service reads them).
+  #
+  # NOTE: those OIDC_* vars are the FALLBACK, not an override. A configuration
+  # saved from Administration → Authentication is persisted in the kv store and
+  # wins over the environment; the env applies only while nothing real has been
+  # saved (see oidcConfigStore.load / Config.NeverConfigured).
+  #
+  # Step 1 was previously only mentioned in the generated .env, so anyone
+  # following THESE instructions hit the crash (2026-08-03, first real SSO
+  # bring-up). See docs/runbooks/okta-sso-setup.md.
   keycloak:
     image: quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
     profiles: ["sso"]
@@ -128,12 +142,24 @@ services:
     cpus: ${KEYCLOAK_CPU_LIMIT:-2}
     command: ["start", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
     environment:
+      # BOOTSTRAP ADMIN — both spellings, on purpose.
+      #
+      # `KC_BOOTSTRAP_ADMIN_*` is the Keycloak **26+** name; `KEYCLOAK_ADMIN*` is
+      # the **25** name. This image is pinned to 25.0, which IGNORES the KC_ names
+      # entirely — so the initial admin was never created and the admin API
+      # answered `user_not_found` for every login. SSO could not be configured at
+      # all, which is why this went unnoticed: the profile is opt-in and had never
+      # been brought up (2026-08-02).
+      #
+      # Setting both means the pin can move to 26 without this breaking again.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       # SC-009: hard-required (`:?`), not a weak baked-in default. install.py
       # always generates a random KEYCLOAK_ADMIN_PASSWORD, and `docker compose up`
       # already requires .env anyway (DB_PASSWORD:?), so this never silently boots
       # Keycloak with a known password.
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required (install.py generates it)}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD required (install.py generates it)}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
       KC_DB_USERNAME: ${DB_USER}

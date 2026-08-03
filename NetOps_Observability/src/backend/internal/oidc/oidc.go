@@ -382,3 +382,16 @@ func (c Config) Public() PublicConfig {
 
 // ConfigStore is the kv-backed overlay. It holds a back-reference to the
 // server so set() can rebuild and atomically swap the live provider.
+
+// NeverConfigured reports whether this record is the default blank shape rather
+// than a decision anyone made: disabled, with no issuer and no client id.
+//
+// Persisting that blank is indistinguishable from never having configured SSO,
+// so the caller treats it exactly like an absent key and falls back to the
+// OIDC_* environment. Anything else — including a DISABLED record that carries
+// an issuer — is a real stored choice and must keep overriding the environment.
+func (c Config) NeverConfigured() bool {
+	return !c.Enabled &&
+		strings.TrimSpace(c.Issuer) == "" &&
+		strings.TrimSpace(c.ClientID) == ""
+}

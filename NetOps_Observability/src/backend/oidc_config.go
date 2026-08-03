@@ -95,6 +95,25 @@ func (s *oidcConfigStore) load() error {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return fmt.Errorf("decode OIDC config: %w", err)
 	}
+	// A stored record that was never actually filled in is NOT a configuration —
+	// it is the same "never configured" state as an absent or empty key, and it
+	// must fall through to the environment the same way.
+	//
+	// Without this, a default-shaped record (`enabled:false`, empty issuer and
+	// client_id — which is what a first GET of the config page persists) silently
+	// OVERRODE a completely correct `OIDC_*` environment. docker-compose.yml tells
+	// the operator to "set OIDC_ENABLED=true and the OIDC_* vars in .env — the api
+	// service reads them", and they were read, parsed, and then discarded: the
+	// stored blank won. `/api/auth/sso/config` answered {"enabled": false} and
+	// every SSO route 404'd, with no error anywhere to explain why (found while
+	// bringing Okta up for the first time, 2026-08-03).
+	//
+	// Deliberately narrow: ONLY the all-blank disabled shape falls through. A
+	// record someone genuinely saved — even a disabled one with an issuer set —
+	// is a real decision and keeps overriding the environment.
+	if c.NeverConfigured() {
+		return nil
+	}
 	var loadErr error
 	if dec, derr := mapOIDC(c, openFn(s.vault())); derr != nil {
 		// Never send the SEALED bytes to the IdP as the client secret.
