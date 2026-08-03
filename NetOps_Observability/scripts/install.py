@@ -537,10 +537,16 @@ JIRA_RESOLVE_TRANSITION=       # transition name/id to close; blank = auto-detec
 
 # SSO — OIDC/SAML/LDAP brokered by Keycloak (opt-in). The Go API only verifies
 # the resulting tokens (stdlib RS256/JWKS), so the backend stays dependency-free.
-# To enable: create the keycloak DB once
+# To enable: add "sso" to COMPOSE_PROFILES below and re-run install.py — it
+# creates the keycloak database (Keycloak cannot create its own and crash-loops
+# without it) and starts the service. Manual alternative:
 #   docker compose exec postgres createdb -U $DB_USER keycloak
-# then `docker compose --profile sso up -d keycloak`, configure a realm + OIDC
-# client, and set OIDC_ENABLED=true with the values below. See docs/IDENTITY_ACCESS.md.
+#   docker compose --profile sso up -d keycloak
+# Then configure a realm + OIDC client in Keycloak and enable SSO in the UI.
+# NOTE: the OIDC_* values below are a first-boot SEED / fallback only — a config
+# saved from Administration → Authentication is persisted in the kv store and
+# WINS over this file (see docs/runbooks/okta-sso-setup.md §2b). Editing them
+# here does nothing once a real config has been saved.
 OIDC_ENABLED=false
 OIDC_ISSUER=                   # e.g. http://localhost:{port}/auth/realms/netops
 OIDC_CLIENT_ID=netops
@@ -1238,6 +1244,66 @@ def _bootstrap_opensearch_via_exec(root: Path) -> None:
             warn(f"template {name}: {res.stderr.strip()}")
 
 
+# Postgres identifiers this installer will interpolate into SQL/shell. Both
+# values come from the operator's .env — validate at the boundary (§3) instead
+# of trusting them into a quoted string.
+_PG_IDENT = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
+    """Create Keycloak's database when the `sso` profile is active.
+
+    Keycloak does not create its own DB: without this it crash-loops on first
+    boot with `FATAL: database "keycloak" does not exist` (hit on the first
+    real SSO bring-up, 2026-08-03 — docs/runbooks/okta-sso-setup.md §1).
+    install.py owns first-boot provisioning, so it owns this too. Idempotent
+    (SELECT-then-CREATE); non-fatal like the other bootstrap steps — the rest
+    of the stack is healthy without Keycloak — but loud, with the manual
+    command, because Keycloak stays in a crash-loop until the DB exists."""
+    user = env.get("DB_USER", "netops")
+    db = env.get("KEYCLOAK_DB_NAME", "keycloak")
+    manual = f"docker compose exec postgres createdb -U {user} {db}"
+    if not _PG_IDENT.match(user) or not _PG_IDENT.match(db):
+        # Deliberately NOT echoed into a suggested command — a copy-pasted shell
+        # line containing the unvalidated value is exactly the injection this
+        # guard exists to prevent.
+        warn("DB_USER/KEYCLOAK_DB_NAME contain characters this step will not "
+             "interpolate into SQL ([A-Za-z0-9_] only) — fix them in .env and "
+             "re-run, or create the database manually")
+        return
+    # Bounded readiness wait (the postgres container may still be starting on a
+    # first boot), then the existence probe. -tAc → bare "1" when the row exists.
+    probe = [
+        "docker", "compose", "exec", "-T", "postgres", "bash", "-lc",
+        f"for i in $(seq 1 30); do pg_isready -q -U {user} && break; sleep 2; done; "
+        f"psql -U {user} -d postgres -tAc "
+        f"\"SELECT 1 FROM pg_database WHERE datname='{db}'\"",
+    ]
+    res = subprocess.run(probe, cwd=str(compose_dir), capture_output=True,
+                         text=True, timeout=120)
+    if res.returncode != 0:
+        warn(f"could not check for the {db} database (Keycloak will crash-loop "
+             f"until it exists): {res.stderr.strip()}")
+        info(f"re-run install.py once postgres is healthy, or run: {manual}")
+        return
+    if res.stdout.strip() == "1":
+        ok(f"keycloak database '{db}' already exists")
+        return
+    create = [
+        "docker", "compose", "exec", "-T", "postgres",
+        "psql", "-U", user, "-d", "postgres",
+        "-c", f'CREATE DATABASE "{db}" OWNER "{user}"',
+    ]
+    res = subprocess.run(create, cwd=str(compose_dir), capture_output=True,
+                         text=True, timeout=60)
+    if res.returncode != 0:
+        warn(f"creating the {db} database failed (Keycloak will crash-loop "
+             f"until it exists): {res.stderr.strip()}")
+        info(f"create it manually: {manual}")
+        return
+    ok(f"keycloak database '{db}' created (owner {user})")
+
+
 def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     """Enable Grafana's ClickHouse datasource: (1) create a read-only,
     tenant-scoped ClickHouse user the datasource binds to, and (2) install the
@@ -1493,6 +1559,14 @@ def main() -> None:
 
     step("bootstrap OpenSearch index templates")
     bootstrap_opensearch(root)
+
+    # Gate on the EFFECTIVE profiles from .env — the source of truth compose_up
+    # starts from — not args.profiles, which an existing install's .env ignores.
+    active = {p.strip() for p in
+              _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")}
+    if "sso" in active:
+        step("bootstrap Keycloak database (profile sso)")
+        bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
 
     if "self-monitoring" in args.profiles:
         step("wiring grafana clickhouse datasource")

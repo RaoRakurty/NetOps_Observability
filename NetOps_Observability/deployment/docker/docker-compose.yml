@@ -135,6 +135,11 @@ services:
   # Step 1 was previously only mentioned in the generated .env, so anyone
   # following THESE instructions hit the crash (2026-08-03, first real SSO
   # bring-up). See docs/runbooks/okta-sso-setup.md.
+  #
+  # AUTOMATED (#144): with "sso" in COMPOSE_PROFILES, re-running
+  # scripts/install.py performs step 1 itself (idempotent SELECT-then-CREATE
+  # via bootstrap_keycloak_db) and starts the service. The manual steps above
+  # remain valid for operators who enable the profile by hand.
   keycloak:
     image: quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
     profiles: ["sso"]
@@ -1350,6 +1355,17 @@ services:
       SSRF_ALLOW_PRIVATE: ${SSRF_ALLOW_PRIVATE:-false}
       # SSO — OIDC/SAML/LDAP brokered by Keycloak (the API only verifies tokens).
       # Bring Keycloak up with: docker compose --profile sso up -d keycloak
+      # These OIDC_* values are a first-boot SEED / fallback only: a config
+      # saved from Administration → Authentication lives in the kv store and
+      # WINS over the environment (see the keycloak block's NOTE above).
+      #
+      # TLS-readiness (#145): if the OIDC issuer is https behind a SELF-SIGNED /
+      # private-CA cert (nginx/tls.conf.example + gen-dev-cert.sh), the api's
+      # back-channel (discovery/JWKS/token) must trust that CA — uncomment BOTH
+      # the env below and a volume mounting the cert, e.g.
+      #   volumes: [ "./nginx/certs/fullchain.pem:/etc/ssl/private-ca.pem:ro" ]
+      # Go honors SSL_CERT_FILE natively. Real certificate chains need nothing.
+      # SSL_CERT_FILE: /etc/ssl/private-ca.pem
       OIDC_ENABLED: ${OIDC_ENABLED:-false}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-netops}

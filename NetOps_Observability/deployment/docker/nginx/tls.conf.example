@@ -30,10 +30,7 @@
 # denial routes, and the internal `/__osd_auth` + `/__osd_auth_search` subrequest
 # targets. Copying the proxy_pass lines only is the vulnerability described above.
 #
-# NOTE: scripts/gen-dev-cert.sh still prints the OLD instruction ("cp
-# tls.conf.example → default.conf"). Ignore it — follow the steps below instead;
-# copying over default.conf now removes the entire route table (and used to
-# remove the auth gates). That script's next-steps text needs updating.
+# scripts/gen-dev-cert.sh generates a dev cert and prints these same steps.
 #
 # ── To use ───────────────────────────────────────────────────────────────────
 #   1. Place fullchain.pem and privkey.pem under deployment/docker/nginx/certs/.
@@ -65,13 +62,25 @@
 # a live handshake: HTTP/2 up, HSTS emitted, TLS 1.3 (TLS_AES_256_GCM_SHA384) and
 # TLS 1.2 (ECDHE-RSA-AES128-GCM-SHA256, X25519) negotiated, TLS 1.1 refused.
 #
-# ── Known caveat when combining TLS with the optional profiles ────────────────
-# default.conf sets `X-Forwarded-Proto $scheme` on /netbox/, /search/ and /auth/.
-# At the inner hop $scheme is "http", so Keycloak (--profile sso) and NetBox
-# (--profile netbox) can build http:// issuer/redirect URLs behind this front. If
-# you run either profile over TLS, change those three lines in default.conf to
-# `proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;` so the value this
-# front sets is carried through. Everything else works unmodified.
+# ── Scheme pass-through (#145 — no hand-edits needed) ─────────────────────────
+# default.conf normalizes X-Forwarded-Proto via its $fwd_proto map: the "https"
+# this front sets is carried through to Keycloak (--profile sso), NetBox, OSD
+# and the Go API, so https issuer/redirect URLs and Secure cookies work out of
+# the box. Only the literal "https" is trusted; junk from direct clients falls
+# back to the real scheme.
+#
+# SSO behind TLS, two further notes:
+#   * Keycloak's Secure;SameSite=None auth-session cookies REQUIRE this https
+#     front — on plain HTTP browsers reject them and incognito/third-party-
+#     cookie-blocking windows fail with Keycloak "cookie_not_found" (verified
+#     live 2026-08-03). Any customer-facing deployment must use TLS.
+#   * If the OIDC issuer URL becomes https with a SELF-SIGNED/private-CA cert,
+#     the api container's back-channel (discovery/JWKS/token) must trust it:
+#     mount the CA and set SSL_CERT_FILE on the api service (Go honors it) —
+#     see the commented lines under `api:` in docker-compose.yml. With a real
+#     (Let's Encrypt etc.) chain nothing is needed.
+#   * Update the registered URLs at the IdP side to the https origin (Okta app
+#     ACS/redirect URIs, Keycloak client redirect URI, saved OIDC issuer).
 
 # WebSocket upgrade passthrough (/api/events, the device SSH gateway). `map` is an
 # http{}-level directive and conf.d is included inside http{}, so it belongs here.
