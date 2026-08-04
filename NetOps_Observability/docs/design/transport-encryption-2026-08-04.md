@@ -149,6 +149,32 @@ stdlib + what is already vendored).
 to an unauthenticated peer is worth less than an authenticated plaintext one on
 a trusted segment. Where we must choose an order, authenticate first.
 
+### 3.1 Crypto backend & the PSK question (settled 2026-08-04, owner review of the Zabbix build docs)
+
+Zabbix selects its crypto implementation at **compile time** (GnuTLS ≥3.1.18 /
+OpenSSL 1.0.1–3.5.x / LibreSSL ≥2.7.4) and its feature set varies by build —
+the LibreSSL variant cannot do PSK at all. That whole decision class does not
+exist for Correlix and must not be imported:
+
+- **Our components' crypto is Go's `crypto/tls`** — standard library, compiled
+  in, one behavior everywhere, no external crypto lib, no build matrix, and
+  `GOFIPS140` available if a customer ever requires FIPS-140-3. The non-Go
+  tier (nginx, OpenSearch, ClickHouse, Postgres, Kafka, the Python
+  correlation service) uses each upstream's TLS **by configuration**; we never
+  compile crypto, we bump images.
+- **TLS-PSK is REJECTED, permanently.** Go's stdlib deliberately implements no
+  PSK cipher suites, and §6 forbids a second TLS stack. We also do not need
+  it: PSK exists in Zabbix because operator-run PKI is heavy, and our internal
+  CA removes that burden (SVIDs auto-minted at boot, rotated at TTL/2, CA key
+  vault-sealed). Component↔component transport is therefore **certificate-only
+  mTLS**. Where the draft says "PSK" for device-facing lanes it means
+  protocol-native shared secrets carried OVER cert-based TLS or inside the
+  protocol itself (STAMP RFC 8762 authenticated mode, SNMPv3 USM, ingest
+  token) — never TLS-PSK cipher suites.
+- Zabbix's documented handshake-per-check cost does not transfer: Go does
+  session resumption by default and our inter-component connections are
+  long-lived (Kafka, gNMI subscriptions, HTTP keep-alive).
+
 ---
 
 ## 4. The policy object
