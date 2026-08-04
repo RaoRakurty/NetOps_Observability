@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -48,17 +49,11 @@ type memSealing struct{ kek []byte }
 
 func (m *memSealing) Unseal(context.Context) ([]byte, error) {
 	if len(m.kek) == 0 {
-		return nil, errNoKEK
+		return nil, ErrNoKEK // the one signal that permits first-run generation
 	}
 	return m.kek, nil
 }
 func (m *memSealing) Seal(_ context.Context, kek []byte) error { m.kek = kek; return nil }
-
-var errNoKEK = errTest("no-kek")
-
-type errTest string
-
-func (e errTest) Error() string { return string(e) }
 
 func newTestVault(t *testing.T) *Vault {
 	t.Helper()
@@ -143,5 +138,78 @@ func TestVaultTamperedCiphertextFails(t *testing.T) {
 	}
 	if _, err := v.Decrypt("acme", "f", string(body)); err == nil {
 		t.Fatal("tampered ciphertext must fail GCM auth")
+	}
+}
+
+// brokenSealing simulates a provider whose sealed KEK exists but is unreadable
+// (sidecar down, stale TPM context, corrupt state). It records Seal calls: the
+// Vault must NEVER seal a fresh KEK over one it merely failed to read.
+type brokenSealing struct {
+	unsealErr error
+	kek       []byte // returned when unsealErr is nil (may be wrong length)
+	sealCalls int
+}
+
+func (b *brokenSealing) Unseal(context.Context) ([]byte, error) {
+	if b.unsealErr != nil {
+		return nil, b.unsealErr
+	}
+	return b.kek, nil
+}
+func (b *brokenSealing) Seal(context.Context, []byte) error { b.sealCalls++; return nil }
+
+// TestVaultUnsealFailureDoesNotMintNewKEK pins the 2026-08-04 near-miss: a
+// stale swtpm primary context made unseal fail with a load error, activation
+// treated it as first-run, and only the seal ALSO failing kept the real KEK
+// from being overwritten (which would have orphaned every sealed secret).
+// Any unseal failure other than ErrNoKEK must abort activation with no Seal.
+func TestVaultUnsealFailureDoesNotMintNewKEK(t *testing.T) {
+	st, wn := testDeps()
+	p := &brokenSealing{unsealErr: errors.New("swtpm unseal: ERR load")}
+	if _, err := NewWithProvider(context.Background(), p, st, wn); err == nil {
+		t.Fatal("activation must fail when unseal fails for any reason other than ErrNoKEK")
+	}
+	if p.sealCalls != 0 {
+		t.Fatalf("Seal was called %d times after a non-first-run unseal failure — this overwrites the real KEK and orphans every sealed secret", p.sealCalls)
+	}
+}
+
+// TestVaultWrongLengthKEKRefusesActivation: a KEK of the wrong length is
+// corruption, not first-run — activation must abort without sealing.
+func TestVaultWrongLengthKEKRefusesActivation(t *testing.T) {
+	st, wn := testDeps()
+	p := &brokenSealing{kek: []byte("short")}
+	if _, err := NewWithProvider(context.Background(), p, st, wn); err == nil {
+		t.Fatal("activation must fail on a wrong-length KEK")
+	}
+	if p.sealCalls != 0 {
+		t.Fatalf("Seal was called %d times on a wrong-length KEK — refusing to overwrite is the whole point", p.sealCalls)
+	}
+}
+
+// TestVaultFirstRunSealsExactlyOnce: the explicit ErrNoKEK signal (and only
+// it) generates a fresh KEK, seals it once, and activates.
+func TestVaultFirstRunSealsExactlyOnce(t *testing.T) {
+	st, wn := testDeps()
+	m := &memSealing{}
+	v, err := NewWithProvider(context.Background(), m, st, wn)
+	if err != nil {
+		t.Fatalf("first-run activation: %v", err)
+	}
+	if len(m.kek) != kekLen {
+		t.Fatalf("first run sealed a KEK of length %d, want %d", len(m.kek), kekLen)
+	}
+	// The sealed KEK must be the one in use: a second activation over the same
+	// provider + store must decrypt what the first encrypted.
+	ct, err := v.Encrypt("acme", "f", "sealed-secret")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	v2, err := NewWithProvider(context.Background(), m, st, wn)
+	if err != nil {
+		t.Fatalf("re-activation: %v", err)
+	}
+	if pt, err := v2.Decrypt("acme", "f", ct); err != nil || pt != "sealed-secret" {
+		t.Fatalf("round-trip across activations: pt=%q err=%v", pt, err)
 	}
 }

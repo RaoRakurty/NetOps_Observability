@@ -13,7 +13,6 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -25,7 +24,9 @@ type memSealing struct{ kek []byte }
 
 func (m *memSealing) Unseal(context.Context) ([]byte, error) {
 	if len(m.kek) == 0 {
-		return nil, errors.New("no-kek")
+		// The explicit first-run sentinel: any OTHER error now refuses
+		// activation instead of minting a new KEK (the 2026-08-04 fix).
+		return nil, vault.ErrNoKEK
 	}
 	return m.kek, nil
 }

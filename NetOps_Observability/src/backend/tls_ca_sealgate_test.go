@@ -112,8 +112,12 @@ func TestInternalCAAcceptsSealedVault(t *testing.T) {
 // SEALED vault, without dragging in swtpm.
 type sealGateTestProvider struct{}
 
-func (sealGateTestProvider) Unseal(context.Context) ([]byte, error) { return nil, nil }
-func (sealGateTestProvider) Seal(context.Context, []byte) error     { return nil }
+func (sealGateTestProvider) Unseal(context.Context) ([]byte, error) {
+	// First-run sentinel: the vault generates + seals a fresh KEK. Returning
+	// (nil, nil) would now be refused as a wrong-length KEK (2026-08-04 fix).
+	return nil, vault.ErrNoKEK
+}
+func (sealGateTestProvider) Seal(context.Context, []byte) error { return nil }
 
 type sealGateTestStore struct{ m map[string][]byte }
 

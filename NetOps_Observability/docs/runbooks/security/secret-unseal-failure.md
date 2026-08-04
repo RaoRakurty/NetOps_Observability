@@ -81,7 +81,17 @@ ever (`docs/design/secret-custody.md` §5).
 6. Verify the sidecar is pointing at the intended swtpm state (a fresh, empty
    state unseals nothing and looks like corruption).
 7. Verify volume permissions and ownership.
-8. If the KEK genuinely cannot be unsealed, go to Path C.
+8. **Stale primary context after a restart (2026-08-04 incident, fixed).** A
+   saved TPM context file is bound to the TPM reset cycle: restarting swtpm
+   invalidates the previous `primary.ctx` (`Esys_ContextLoad` `0x1DF`
+   "integrity check failed"), which surfaces as `ERR load`/`ERR create` from
+   the handler while `seal.priv`/`seal.pub` — and therefore the KEK — are
+   perfectly intact. The entrypoint now recreates `primary.ctx` on every boot
+   (the primary is deterministic from the persisted owner-hierarchy seed, so
+   the same key returns and existing sealed blobs keep loading). If a sidecar
+   image predating this fix is in use: restart the sidecar after removing
+   `primary.ctx` from the state volume — never touch `seal.priv`/`seal.pub`.
+9. If the KEK genuinely cannot be unsealed, go to Path C.
 
 ### Path C — sealing state lost or corrupt (**data-loss event**)
 9. **Stop.** Escalate. Do not re-initialize anything yet.

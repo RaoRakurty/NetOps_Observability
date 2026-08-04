@@ -47,12 +47,25 @@ const (
 // tests can redirect it to a temp path.
 var wrappedKeysKey = "secrets_wrapped_keys.json"
 
+// ErrNoKEK is the explicit first-run signal: the provider is reachable and
+// healthy but holds no sealed KEK yet. It is the ONLY unseal outcome that
+// authorizes generating a fresh root KEK. Every other unseal failure aborts
+// activation — minting a new KEK over an existing (but momentarily unreadable)
+// one would permanently orphan every sealed secret. That is exactly what a
+// stale swtpm primary context nearly caused on 2026-08-04: unseal failed with
+// a load error, activation treated it as first-run, and only the seal ALSO
+// failing prevented the real KEK from being overwritten.
+var ErrNoKEK = errors.New("no sealed KEK (first run)")
+
 // SealingProvider seals/unseals the 32-byte root KEK — the ONLY component that
 // talks to the custody root. swtpm is impl #1; TPM2/KMS/HSM drop in with no
 // caller change. Selected by SEAL_PROVIDER (fail-closed: an unknown/unavailable
 // provider aborts boot rather than silently storing plaintext).
 type SealingProvider interface {
 	// Unseal returns the root KEK, or fails closed if the root is unavailable.
+	// A provider that is healthy but holds no sealed KEK yet MUST return an
+	// error wrapping ErrNoKEK — that is the only signal that permits first-run
+	// KEK generation.
 	Unseal(ctx context.Context) ([]byte, error)
 	// Seal persists a freshly generated root KEK under the custody root (first run).
 	Seal(ctx context.Context, kek []byte) error
@@ -113,11 +126,19 @@ func New(ctx context.Context, store Store, warn Warnf) (*Vault, error) {
 func NewWithProvider(ctx context.Context, p SealingProvider, store Store, warn Warnf) (*Vault, error) {
 	v := &Vault{provider: p, store: store, warn: warn, deks: map[string][]byte{}, wrapped: map[string]string{}}
 	kek, err := p.Unseal(ctx)
-	if err != nil || len(kek) != kekLen {
-		// First run: no sealed KEK yet → generate one and seal it.
+	switch {
+	case errors.Is(err, ErrNoKEK):
+		// Explicit first-run: the provider is healthy and holds no KEK yet.
 		if kek, err = v.firstRunKEK(ctx); err != nil {
-			return nil, fmt.Errorf("vault: unseal root KEK: %w", err)
+			return nil, fmt.Errorf("vault: seal first-run KEK: %w", err)
 		}
+	case err != nil:
+		// Any other failure means a KEK may exist but be unreadable right now
+		// (sidecar down, stale TPM context, corrupt state). Generating a fresh
+		// KEK here would overwrite it and orphan every sealed secret — abort.
+		return nil, fmt.Errorf("vault: unseal root KEK: %w", err)
+	case len(kek) != kekLen:
+		return nil, fmt.Errorf("vault: unsealed root KEK has length %d, want %d — custody state may be corrupt; refusing to overwrite it", len(kek), kekLen)
 	}
 	v.kek = kek
 	if err := v.loadWrapped(); err != nil {

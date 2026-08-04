@@ -31,10 +31,15 @@ until tpm2_startup -c >/dev/null 2>&1; do
 done
 
 # Primary key under the owner hierarchy — the parent of every sealed object.
-# Created once; persisted as a context file so restarts reuse it.
-if [ ! -f "$TPMDIR/primary.ctx" ]; then
-    tpm2_createprimary -C o -g sha256 -G rsa -c "$TPMDIR/primary.ctx" >/dev/null
-fi
+# Recreated on EVERY boot: a saved context blob is bound to the TPM reset cycle,
+# so a swtpm restart invalidates the previous primary.ctx (Esys_ContextLoad
+# 0x1DF "integrity check failed" — this took the API down in a restart loop on
+# 2026-08-04). The primary is derived deterministically from the owner-hierarchy
+# seed persisted in $TPMDIR, so recreating yields the SAME key and the existing
+# seal.pub/seal.priv blobs keep loading under it. Failure aborts boot (set -e) —
+# a sidecar that can't reach its primary must be loud, not "ready".
+tpm2_createprimary -C o -g sha256 -G rsa -c "$TPMDIR/primary.ctx.new" >/dev/null
+mv "$TPMDIR/primary.ctx.new" "$TPMDIR/primary.ctx"
 # swtpm exposes only 3 transient object slots; flush any left loaded by the
 # warm-up so the first SEAL/UNSEAL starts from a clean slate (the per-op handler
 # also flushes — see seal-handler.sh). Without this, slots leak and ops fail with

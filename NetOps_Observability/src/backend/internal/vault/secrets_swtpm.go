@@ -44,7 +44,12 @@ func (p *swtpmSidecarProvider) Unseal(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	// "OK <b64>" on success; a first-run sidecar with no sealed KEK replies
-	// "ERR no-kek", which the Vault treats as first-run (generate + Seal).
+	// "ERR no-kek" — the ONE reply that maps to ErrNoKEK and permits the Vault
+	// to generate + Seal a fresh KEK. Every other ERR (load, unseal, b64) means
+	// a sealed KEK may exist but be unreadable, and must abort activation.
+	if resp == "ERR no-kek" {
+		return nil, fmt.Errorf("swtpm unseal: %w", ErrNoKEK)
+	}
 	if !strings.HasPrefix(resp, "OK ") {
 		return nil, fmt.Errorf("swtpm unseal: %s", resp)
 	}
