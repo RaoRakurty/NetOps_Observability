@@ -461,6 +461,11 @@ func newServer() *server {
 	// itsm_config.go. Both connectors can run at once; either feeds alert
 	// auto-ticketing (the notifier) and the incident-projection worker.
 
+	// SEC-010: rule evaluation reaches VictoriaMetrics through the hardened
+	// backend client (mesh-CA verify + URL-userinfo credentials). Lazy — the
+	// transport is rebuilt after the internal CA bootstrap, and clientFn picks
+	// that up on the next evaluation.
+	alerts.SetHTTPClientFunc(func() *http.Client { return backendHTTPClient(8 * time.Second) })
 	engine := alerts.NewEngine(os.Getenv("RULES_FILE"), notifier)
 	userRules := newUserRulesStore(envOr("USER_RULES_FILE", "/data/user_rules.json"))
 

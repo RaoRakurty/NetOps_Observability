@@ -593,6 +593,7 @@ services:
       # F-51: DIRECTORY mount (same src/config dir the api/victoria mount).
       - ../../src/config:/etc/vmauth/config:ro
       - ../../data/tls/services/vmauth:/tls:ro
+    networks: [netops]
     depends_on:
       victoria:
         condition: service_started

@@ -35,6 +35,23 @@ type Sample struct {
 	Value  float64
 }
 
+// clientFn resolves the HTTP client per evaluation. Main injects the
+// platform's hardened backend client (mesh-CA verify + URL-userinfo auth,
+// SEC-010) via SetHTTPClientFunc; the default keeps the package
+// self-contained for tests. LAZY on purpose: the hardened transport is built
+// AFTER the internal CA mints the trust bundle, later in boot than the
+// engine's construction — a frozen client would miss it (hit live: every
+// rule failed x509 against vmauth, 2026-08-04).
+var clientFn = func() *http.Client { return &http.Client{Timeout: 8 * time.Second} }
+
+// SetHTTPClientFunc injects the lazy client provider. Call once at wiring
+// time, before the engine starts evaluating.
+func SetHTTPClientFunc(fn func() *http.Client) {
+	if fn != nil {
+		clientFn = fn
+	}
+}
+
 // Evaluate runs the rule's PromQL as an instant query against VictoriaMetrics
 // and returns every series that matched — the firing instances, each with its
 // labels and value. An empty slice means the rule is not firing (PromQL
@@ -54,7 +71,7 @@ func Evaluate(r Rule) ([]Sample, error) {
 	q.Set("time", strconv.FormatInt(time.Now().Unix(), 10))
 	u.RawQuery = q.Encode()
 
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := clientFn()
 	// Build the request explicitly so it carries a context (request builder is
 	// ready for a caller-supplied ctx; Evaluate's signature can take one later).
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.String(), nil)

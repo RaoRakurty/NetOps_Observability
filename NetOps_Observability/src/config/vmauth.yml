@@ -1,7 +1,9 @@
 # vmauth route/user config (SEC-010.1) — the authenticating TLS front for
 # VictoriaMetrics. One scoped user per SERVICE identity (owner steer: simplest
 # sufficient native auth); passwords come from the installer-generated .env
-# (VMAUTH_*_PASSWORD) via %{ENV} expansion — never from this file.
+# (VMAUTH_*_PASSWORD) via vmauth's percent-brace env expansion — never from
+# this file. NOTE: vmauth expands percent-brace tokens EVERYWHERE in this
+# file, comments included — never write a literal one here.
 #
 # Route scoping is per-SERVICE least privilege, NOT a tenant boundary: VM
 # tenant scoping remains the application-side device/tenant label filter
