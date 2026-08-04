@@ -349,7 +349,15 @@ func (s *server) handleSNMPProfiles(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, s.snmpProfiles.List())
 	case http.MethodPost:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		// SEC (2026-08-04): SNMP profiles are PLATFORM-GLOBAL reference data — the
+		// store is keyed by id with no tenant field, and every tenant's collectors
+		// resolve against the same rows. requirePerm is a role-grid check with no
+		// tenant term, so a tenant-scoped admin could poison or delete a profile
+		// the whole fleet depends on. The route-isolation ledger already declares
+		// this surface "mutated only by the platform owner" (globalRef); this is
+		// the gate that makes that true — same as handleRoleByID (CLAUDE.md §3a
+		// rule 3: platform-GLOBAL plumbing takes requirePlatformAdmin).
+		if _, ok := s.requirePlatformAdmin(w, r); !ok {
 			return
 		}
 		var p SNMPProfile
@@ -381,7 +389,15 @@ func (s *server) handleSNMPProfileByID(w http.ResponseWriter, r *http.Request) {
 
 	// POST /api/snmp/profiles/{id}/metrics — add custom metric(s).
 	if suffix == "metrics" && r.Method == http.MethodPost {
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		// SEC (2026-08-04): SNMP profiles are PLATFORM-GLOBAL reference data — the
+		// store is keyed by id with no tenant field, and every tenant's collectors
+		// resolve against the same rows. requirePerm is a role-grid check with no
+		// tenant term, so a tenant-scoped admin could poison or delete a profile
+		// the whole fleet depends on. The route-isolation ledger already declares
+		// this surface "mutated only by the platform owner" (globalRef); this is
+		// the gate that makes that true — same as handleRoleByID (CLAUDE.md §3a
+		// rule 3: platform-GLOBAL plumbing takes requirePlatformAdmin).
+		if _, ok := s.requirePlatformAdmin(w, r); !ok {
 			return
 		}
 		// F-32: this decodes into an UNBOUNDED SLICE. Under the 50 MiB global
@@ -421,7 +437,15 @@ func (s *server) handleSNMPProfileByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, p)
 	case http.MethodDelete:
-		if _, ok := s.requirePerm(w, r, "infrastructure", LevelWrite); !ok {
+		// SEC (2026-08-04): SNMP profiles are PLATFORM-GLOBAL reference data — the
+		// store is keyed by id with no tenant field, and every tenant's collectors
+		// resolve against the same rows. requirePerm is a role-grid check with no
+		// tenant term, so a tenant-scoped admin could poison or delete a profile
+		// the whole fleet depends on. The route-isolation ledger already declares
+		// this surface "mutated only by the platform owner" (globalRef); this is
+		// the gate that makes that true — same as handleRoleByID (CLAUDE.md §3a
+		// rule 3: platform-GLOBAL plumbing takes requirePlatformAdmin).
+		if _, ok := s.requirePlatformAdmin(w, r); !ok {
 			return
 		}
 		if err := s.snmpProfiles.Delete(id); err != nil {

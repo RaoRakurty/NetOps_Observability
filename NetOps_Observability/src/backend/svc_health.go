@@ -102,8 +102,13 @@ func (s *server) serveServiceHealthScore(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
+	// SEC (2026-08-04): the per-service path class reads VictoriaMetrics, so it
+	// carries the caller's device boundary like every other VM read. pathAllow
+	// narrows to the service's BOUND probes; f narrows to what this principal
+	// may see at all — both apply.
+	svcIDs, svcNames, svcCross := s.visibleDeviceMetricLabels(claims)
 	classes := []healthscore.ClassResult{
-		s.fetchPathHealthClassFiltered(r.Context(), pathAllow),
+		s.fetchPathHealthClassFiltered(r.Context(), pathAllow, metricsScopeFilters(svcIDs, svcNames, svcCross)),
 		s.fetchServiceFlowClass(r, svc),
 		s.fetchServiceCorrelationClass(r, serviceID, seams),
 	}

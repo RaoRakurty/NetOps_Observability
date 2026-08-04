@@ -88,7 +88,7 @@ func TestHealthScoreServiceScopeGates(t *testing.T) {
 func TestFetchPathHealthClassFilteredEmptyAllow(t *testing.T) {
 	t.Setenv("VICTORIA_URL", "http://127.0.0.1:9") // any dial would fail loudly
 	s := &server{}
-	res := s.fetchPathHealthClassFiltered(t.Context(), map[string]bool{})
+	res := s.fetchPathHealthClassFiltered(t.Context(), map[string]bool{}, nil)
 	if res.Live {
 		t.Fatal("no bound paths must leave the class not live")
 	}

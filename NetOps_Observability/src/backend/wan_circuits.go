@@ -350,12 +350,12 @@ type WanInterfaceRow struct {
 // rate ×8. Best-effort — a query error or a metrics-off environment yields an
 // empty map and the rows simply carry no sparkline. `nowUnix` is passed in so the
 // caller controls the clock (testable, no hidden time.Now here).
-func (s *server) wanSparkSeries(ctx context.Context, nowUnix, windowSec, stepSec int64) map[string][]float64 {
+func (s *server) wanSparkSeries(ctx context.Context, nowUnix, windowSec, stepSec int64, f []string) map[string][]float64 {
 	if s.vmRangeRaw == nil && s.metricsBase() == "" {
 		return nil
 	}
 	query := `(rate(device_if_in_octets[1m]) + rate(device_if_out_octets[1m])) * 8`
-	series, err := s.vmQueryRangeByIf(ctx, query, nowUnix-windowSec, nowUnix, stepSec)
+	series, err := s.vmQueryRangeByIf(ctx, query, nowUnix-windowSec, nowUnix, stepSec, f)
 	if err != nil {
 		return nil
 	}
@@ -369,12 +369,18 @@ func (s *server) metricsBase() string {
 
 // vmQueryRangeByIf runs a range query and returns per (device,ifName) value series
 // (oldest→newest), keyed by wanIfKey. A DI seam (s.vmRangeRaw) lets tests inject.
-func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end, step int64) (map[string][]float64, error) {
+func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end, step int64, filters []string) (map[string][]float64, error) {
 	if s.vmRangeRaw != nil {
 		return s.vmRangeRaw(ctx, query, start, end, step)
 	}
 	q := url.Values{}
 	q.Set("query", query)
+	// SEC (2026-08-04): this builds its own request rather than going through
+	// vmInstantScoped, so the caller's device boundary must be applied HERE —
+	// it is the sparkline behind every WAN row and was previously fleet-wide.
+	for _, f := range filters {
+		q.Add("extra_filters[]", f)
+	}
 	q.Set("start", strconv.FormatInt(start, 10))
 	q.Set("end", strconv.FormatInt(end, 10))
 	q.Set("step", strconv.FormatInt(step, 10))
@@ -430,7 +436,12 @@ func (s *server) vmQueryRangeByIf(ctx context.Context, query string, start, end,
 // wanInterfaceRows builds the per-interface table: every in-scope WAN interface
 // for the principal, joined with its derived target, the resolved SLA, and live
 // util. Target metrics are keyed by target HOST (the resolver's identity).
-func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool) []WanInterfaceRow {
+// f carries the caller's device boundary for every VictoriaMetrics read below
+// (SEC 2026-08-04): the util/sparkline/resolver maps are joined onto rows by
+// device+ifName NAME, so an unscoped read surfaces another tenant's link load,
+// speed and oper-state whenever a device name collides across tenants — the
+// defect topology_view.go:86-91 documents.
+func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool, f []string) []WanInterfaceRow {
 	endpoints, circuits := s.wanProject(ctx, tenant, cross)
 	if len(endpoints) == 0 {
 		return nil
@@ -445,7 +456,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 		}
 	}
 
-	resolved := s.resolveCurrentByDst(ctx)
+	resolved := s.resolveCurrentByDst(ctx, f)
 
 	// live interface load/state from VM, keyed by device+ifName.
 	type util struct {
@@ -464,7 +475,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 		return u
 	}
 	foldUtil := func(query string, set func(u *util, v float64)) {
-		samples, err := s.vmInstant(ctx, query)
+		samples, err := s.vmInstantScoped(ctx, query, f)
 		if err != nil {
 			return
 		}
@@ -482,7 +493,7 @@ func (s *server) wanInterfaceRows(ctx context.Context, tenant string, cross bool
 	foldUtil(`device_if_oper_status`, func(u *util, v float64) { u.oper, u.hasOper = v, true })
 
 	// Live throughput history for the in-row moving sparkline (last 10m @ 30s step).
-	spark := s.wanSparkSeries(ctx, time.Now().Unix(), 600, 30)
+	spark := s.wanSparkSeries(ctx, time.Now().Unix(), 600, 30, f)
 
 	rows := make([]WanInterfaceRow, 0, len(endpoints))
 	for _, e := range endpoints {
@@ -547,7 +558,8 @@ func (s *server) handleWanInterfaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, cross := principalTenant(claims)
-	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross)})
+	wIDs, wNames, wCross := s.visibleDeviceMetricLabels(claims)
+	writeJSON(w, http.StatusOK, map[string]any{"interfaces": s.wanInterfaceRows(r.Context(), tenant, cross, metricsScopeFilters(wIDs, wNames, wCross))})
 }
 
 // handleWanEndpoints: GET /api/wan/endpoints — the derived WAN endpoint registry.

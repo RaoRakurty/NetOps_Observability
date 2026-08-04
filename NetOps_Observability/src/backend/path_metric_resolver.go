@@ -188,7 +188,7 @@ func (m *ResolvedPathMetric) Source() PathSource {
 // resolveCurrentByDst runs the tier cascade once (a handful of VM vector queries)
 // and returns host → resolved current metric. Best-effort: a query error or a
 // missing tier simply leaves the lower tier (or nothing) in place.
-func (s *server) resolveCurrentByDst(ctx context.Context) map[string]*ResolvedPathMetric {
+func (s *server) resolveCurrentByDst(ctx context.Context, f []string) map[string]*ResolvedPathMetric {
 	out := map[string]*ResolvedPathMetric{}
 	get := func(h string) *ResolvedPathMetric {
 		m := out[h]
@@ -202,7 +202,7 @@ func (s *server) resolveCurrentByDst(ctx context.Context) map[string]*ResolvedPa
 	// filled by a higher tier is left untouched (the setter no-ops), so the first
 	// tier with data wins — per field.
 	fold := func(query string, src PathSource, set func(m *ResolvedPathMetric, v float64, src PathSource)) {
-		samples, err := s.vmInstant(ctx, query)
+		samples, err := s.vmInstantScoped(ctx, query, f)
 		if err != nil {
 			return
 		}

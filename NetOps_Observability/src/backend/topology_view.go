@@ -184,13 +184,18 @@ func (s *server) handleTopologyView(w http.ResponseWriter, r *http.Request) {
 	// Path Trace: attach per-hop STAMP metrics (latency/jitter/delay/loss) to the
 	// hops on the resolved path so the NetworkPathView ribbon shows them hop-by-hop.
 	if mode == topology.ModePathTrace && len(view.Path) > 0 {
-		enrichPathStamp(&view, s.stampByDst(r.Context()))
+		// SEC (2026-08-04): the same device boundary gatherTopoMetrics applies —
+		// these three enrichers join by device/host name onto the caller's path,
+		// so an unscoped read renders another tenant's metrics as this tenant's.
+		pIDs, pNames, pCross := s.visibleDeviceMetricLabels(claims)
+		pf := metricsScopeFilters(pIDs, pNames, pCross)
+		enrichPathStamp(&view, s.stampByDst(r.Context(), pf))
 		// Traceroute per-hop RTT/loss (keyed by hop IP) — covers the intermediate
 		// hops STAMP never targets; the UI prefers stamp_* and falls back to trace_*.
-		enrichPathTrace(&view, s.traceByHop(r.Context()))
+		enrichPathTrace(&view, s.traceByHop(r.Context(), pf))
 		// #85 — bandwidth/throughput/reliability/MTU onto the path edges (interface
 		// facts, same (device, ifName) join as Utilization).
-		enrichPathIfMetrics(&view, s.pathIfaceMetrics(r.Context()))
+		enrichPathIfMetrics(&view, s.pathIfaceMetrics(r.Context(), pf))
 	}
 	writeJSON(w, http.StatusOK, view)
 }

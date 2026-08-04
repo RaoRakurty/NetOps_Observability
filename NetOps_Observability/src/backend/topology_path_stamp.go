@@ -29,9 +29,14 @@ type stampSample struct {
 // whatever method measured it — not STAMP only. One-way delay (OWD) is
 // STAMP-specific (no resolver field), so it's filled directly where present.
 // Best-effort: a missing metric/series leaves its field unset (honest "—").
-func (s *server) stampByDst(ctx context.Context) map[string]stampSample {
+func (s *server) stampByDst(ctx context.Context, f []string) map[string]stampSample {
+	// SEC (2026-08-04): scoped like its sibling gatherTopoMetrics — an unscoped
+	// read let two tenants that both run a `core-sw1` render each other's
+	// metrics onto their own path (topology_view.go:86-91 documents the
+	// original defect; these three enrichers were missed by that fix).
+
 	out := map[string]stampSample{}
-	for h, m := range s.resolveCurrentByDst(ctx) {
+	for h, m := range s.resolveCurrentByDst(ctx, f) {
 		ss := stampSample{}
 		if m.HasLatency {
 			ss.rtt, ss.hasRTT = m.Latency, true
@@ -45,7 +50,7 @@ func (s *server) stampByDst(ctx context.Context) map[string]stampSample {
 		out[h] = ss
 	}
 	// OWD is STAMP-only (two-way timestamps) — no resolver field; fill directly.
-	if samples, err := s.vmInstant(ctx, `quantile_over_time(0.95, probe_owd_ms[5m])`); err == nil {
+	if samples, err := s.vmInstantScoped(ctx, `quantile_over_time(0.95, probe_owd_ms[5m])`, f); err == nil {
 		for _, sm := range samples {
 			h := hostOnly(sm.Labels["dst"])
 			if h == "" {

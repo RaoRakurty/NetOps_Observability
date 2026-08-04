@@ -165,9 +165,14 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
 		return
 	}
-	if _, ok := s.requirePerm(w, r, "infrastructure", LevelRead); !ok {
+	claims, ok := s.requirePerm(w, r, "infrastructure", LevelRead)
+	if !ok {
 		return
 	}
+	// SEC (2026-08-04): the resolver reads VictoriaMetrics keyed by destination
+	// host, so it carries the caller's device boundary like every other VM read.
+	phIDs, phNames, phCross := s.visibleDeviceMetricLabels(claims)
+	phFilters := metricsScopeFilters(phIDs, phNames, phCross)
 	ctx := r.Context()
 	win := durationToken(envOr("PATH_HEALTH_BASELINE_WINDOW", "7d"), "7d")
 	probeInterval := 30.0
@@ -204,7 +209,7 @@ func (s *server) handlePathsHealth(w http.ResponseWriter, r *http.Request) {
 	// current latency / jitter / loss come from the ONE source-agnostic resolver
 	// (#3): STAMP → wan-echo → synthetic ICMP → traceroute, with provenance. The
 	// path row carries the winning source so the UI shows HOW it was measured.
-	for h, m := range s.resolveCurrentByDst(ctx) {
+	for h, m := range s.resolveCurrentByDst(ctx, phFilters) {
 		a := paths[h]
 		if a == nil {
 			a = &pathAcc{dst: h}

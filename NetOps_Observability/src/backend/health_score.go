@@ -56,21 +56,25 @@ func (s *server) handleHealthScore(w http.ResponseWriter, r *http.Request) {
 	site := sanitizeCHText(r.URL.Query().Get("id"))
 	ctx := r.Context()
 
+	// SEC (2026-08-04): every VictoriaMetrics read below MUST carry the caller's
+	// device boundary. These classes emit device NAMES and their metrics, so an
+	// unscoped read renders other tenants' devices into this tenant's score —
+	// the same defect gatherTopoMetrics was hardened against (topology_view.go:86-91).
+	// metricsScopeFilters fails closed: a tenant with no visible device gets the
+	// __netops_no_visible_device__ sentinel, so a class reports "not live"
+	// rather than the whole fleet.
+	ids, names, cross := s.visibleDeviceMetricLabels(claims)
+	f := metricsScopeFilters(ids, names, cross)
+
 	// best-effort, independent class fetchers (a dead source → class not live)
 	classes := []healthscore.ClassResult{
-		s.fetchAvailabilityClass(ctx, site),
-		s.fetchDeviceHealthClass(ctx, site),
-		s.fetchPathHealthClass(ctx),
+		s.fetchAvailabilityClass(ctx, site, f),
+		s.fetchDeviceHealthClass(ctx, site, f),
+		s.fetchPathHealthClass(ctx, f),
 		s.fetchCorrelationClass(r, site),
 	}
 	resp := healthscore.Aggregate(scope, site, classes, time.Now().UTC().Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// qVecBy runs a VM vector query and returns value-by-label-key (e.g. "device").
-// Best-effort: an error yields an empty map + ok=false (class then not live).
-func (s *server) qVecBy(ctx context.Context, query, key string) (map[string]float64, bool) {
-	return s.qVecByScoped(ctx, query, key, nil)
 }
 
 // qVecByScoped is qVecBy constrained to a principal's visible devices.
@@ -90,14 +94,18 @@ func (s *server) qVecByScoped(ctx context.Context, query, key string, filters []
 	return out, true
 }
 
-// qVecBy2 is qVecBy keyed by two labels, taking the max value seen per (k1,k2)
-// pair. Returns nil (not an empty map) when the query fails, so callers can
-// treat "unreachable" and "no series" identically (both yield no lookups).
-func (s *server) qVecBy2(ctx context.Context, query, k1, k2 string) map[[2]string]float64 {
-	return s.qVecBy2Scoped(ctx, query, k1, k2, nil)
-}
-
-// qVecBy2Scoped is qVecBy2 constrained to a principal's visible devices.
+// qVecBy2Scoped runs a VM vector query keyed by two labels, taking the max
+// value seen per (k1,k2) pair, constrained to a principal's visible devices.
+// Returns nil (not an empty map) when the query fails, so callers can treat
+// "unreachable" and "no series" identically (both yield no lookups).
+//
+// SEC (2026-08-04): the unscoped convenience wrappers qVecBy/qVecBy2 that used
+// to sit here — one-liners passing a literal nil filter — were DELETED. They
+// were the proximate cause of three cross-tenant leaks (/api/health/score,
+// the /api/topology/view path enrichers, /api/wan/interfaces): a caller
+// reaching for the obvious short name silently got a fleet-wide read. If you
+// genuinely need an unscoped read (a background worker with no principal),
+// pass nil explicitly at the call site so it is visible in review.
 func (s *server) qVecBy2Scoped(ctx context.Context, query, k1, k2 string, filters []string) map[[2]string]float64 {
 	samples, err := s.vmInstantScoped(ctx, query, filters)
 	if err != nil {
@@ -118,10 +126,10 @@ func (s *server) qVecBy2Scoped(ctx context.Context, query, k1, k2 string, filter
 }
 
 // fetchAvailabilityClass: admin-up interfaces that are oper-down, per device.
-func (s *server) fetchAvailabilityClass(ctx context.Context, site string) healthscore.ClassResult {
+func (s *server) fetchAvailabilityClass(ctx context.Context, site string, f []string) healthscore.ClassResult {
 	res := healthscore.ClassResult{Class: "availability"}
-	total, ok1 := s.qVecBy(ctx, `count by (device) (device_if_admin_status == 1)`, "device")
-	down, ok2 := s.qVecBy(ctx, `count by (device) (device_if_admin_status == 1 and device_if_oper_status != 1)`, "device")
+	total, ok1 := s.qVecByScoped(ctx, `count by (device) (device_if_admin_status == 1)`, "device", f)
+	down, ok2 := s.qVecByScoped(ctx, `count by (device) (device_if_admin_status == 1 and device_if_oper_status != 1)`, "device", f)
 	if !ok1 || len(total) == 0 {
 		return res // not live
 	}
@@ -147,7 +155,7 @@ func (s *server) fetchAvailabilityClass(ctx context.Context, site string) health
 }
 
 // fetchDeviceHealthClass: utilization / errors+discards / CPU / mem, per device.
-func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) healthscore.ClassResult {
+func (s *server) fetchDeviceHealthClass(ctx context.Context, site string, f []string) healthscore.ClassResult {
 	res := healthscore.ClassResult{Class: "device_health"}
 	type dh struct {
 		b      float64
@@ -169,13 +177,13 @@ func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) health
 		}
 	}
 	live := false
-	if util, ok := s.qVecBy(ctx, `max by (device) (rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000))`, "device"); ok && len(util) > 0 {
+	if util, ok := s.qVecByScoped(ctx, `max by (device) (rate(device_if_in_octets[5m])*8 / ((device_if_speed > 0)*1000000))`, "device", f); ok && len(util) > 0 {
 		live = true
 		for dev, u := range util {
 			bump(dev, healthscore.HingeN(u, 0.70, 0.95), "Link utilization "+healthscore.Pct1(u)+" on "+dev)
 		}
 	}
-	if errs, ok := s.qVecBy(ctx, `max by (device) (rate(device_if_in_errors[5m])+rate(device_if_out_errors[5m])+rate(device_if_in_discards[5m])+rate(device_if_out_discards[5m]))`, "device"); ok {
+	if errs, ok := s.qVecByScoped(ctx, `max by (device) (rate(device_if_in_errors[5m])+rate(device_if_out_errors[5m])+rate(device_if_in_discards[5m])+rate(device_if_out_discards[5m]))`, "device", f); ok {
 		if len(errs) > 0 {
 			live = true
 		}
@@ -183,7 +191,7 @@ func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) health
 			bump(dev, healthscore.HingeN(e, 0.1, 5), "Interface errors/discards "+healthscore.Round2s(e)+"/s on "+dev)
 		}
 	}
-	if cpu, ok := s.qVecBy(ctx, `max by (device) (device_cpu_percent)`, "device"); ok {
+	if cpu, ok := s.qVecByScoped(ctx, `max by (device) (device_cpu_percent)`, "device", f); ok {
 		if len(cpu) > 0 {
 			live = true
 		}
@@ -191,7 +199,7 @@ func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) health
 			bump(dev, healthscore.HingeN(c, 70, 95), "CPU "+healthscore.Pct0(c)+" on "+dev)
 		}
 	}
-	if mem, ok := s.qVecBy(ctx, `max by (device) (device_mem_percent)`, "device"); ok {
+	if mem, ok := s.qVecByScoped(ctx, `max by (device) (device_mem_percent)`, "device", f); ok {
 		for dev, mv := range mem {
 			bump(dev, healthscore.HingeN(mv, 75, 95), "Memory "+healthscore.Pct0(mv)+" on "+dev)
 		}
@@ -214,14 +222,14 @@ func (s *server) fetchDeviceHealthClass(ctx context.Context, site string) health
 // PBH severity curves. GUARDRAIL: internal monitoring targets (env list) are
 // excluded so internal self-probes never drive customer health. (Full scope/
 // authority-based exclusion is V1 when probe metrics carry those labels.)
-func (s *server) fetchPathHealthClass(ctx context.Context) healthscore.ClassResult {
-	return s.fetchPathHealthClassFiltered(ctx, nil)
+func (s *server) fetchPathHealthClass(ctx context.Context, f []string) healthscore.ClassResult {
+	return s.fetchPathHealthClassFiltered(ctx, nil, f)
 }
 
 // fetchPathHealthClassFiltered is fetchPathHealthClass restricted to an allowed
 // destination set (nil = all paths; empty = none — used by the per-service
 // scope, where only the service's BOUND probes/paths may drive its score).
-func (s *server) fetchPathHealthClassFiltered(ctx context.Context, allow map[string]bool) healthscore.ClassResult {
+func (s *server) fetchPathHealthClassFiltered(ctx context.Context, allow map[string]bool, f []string) healthscore.ClassResult {
 	res := healthscore.ClassResult{Class: "path_health"}
 	if allow != nil && len(allow) == 0 {
 		return res // no bound paths → class honestly not live
@@ -232,10 +240,10 @@ func (s *server) fetchPathHealthClassFiltered(ctx context.Context, allow map[str
 			internal[t] = true
 		}
 	}
-	curLat, ok := s.qVecBy(ctx, `quantile_over_time(0.95, probe_rtt_ms[5m])`, "dst")
-	baseP50, _ := s.qVecBy(ctx, `quantile_over_time(0.50, probe_rtt_ms[7d])`, "dst")
-	baseP99, _ := s.qVecBy(ctx, `quantile_over_time(0.99, probe_rtt_ms[7d])`, "dst")
-	loss, _ := s.qVecBy(ctx, `avg_over_time(probe_loss_pct[5m])`, "dst")
+	curLat, ok := s.qVecByScoped(ctx, `quantile_over_time(0.95, probe_rtt_ms[5m])`, "dst", f)
+	baseP50, _ := s.qVecByScoped(ctx, `quantile_over_time(0.50, probe_rtt_ms[7d])`, "dst", f)
+	baseP99, _ := s.qVecByScoped(ctx, `quantile_over_time(0.99, probe_rtt_ms[7d])`, "dst", f)
+	loss, _ := s.qVecByScoped(ctx, `avg_over_time(probe_loss_pct[5m])`, "dst", f)
 	if !ok {
 		return res
 	}

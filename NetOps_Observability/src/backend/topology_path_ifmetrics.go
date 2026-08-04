@@ -23,23 +23,28 @@ type ifaceMetric struct {
 // pathIfaceMetrics queries VictoriaMetrics for the interface facts, keyed by
 // (device, canonIface). Best-effort: an unreachable VM or missing series yields an
 // empty/partial map, never an error (mirrors stampByDst).
-func (s *server) pathIfaceMetrics(ctx context.Context) map[[2]string]ifaceMetric {
+func (s *server) pathIfaceMetrics(ctx context.Context, f []string) map[[2]string]ifaceMetric {
+	// SEC (2026-08-04): scoped like its sibling gatherTopoMetrics — an unscoped
+	// read let two tenants that both run a `core-sw1` render each other's
+	// metrics onto their own path (topology_view.go:86-91 documents the
+	// original defect; these three enrichers were missed by that fix).
+
 	// Bandwidth — interface link speed (device_if_speed is in Mbps, per the
 	// utilization formula that divides octet-bits by speed*1e6).
-	bw := canonIfaceMap(s.qVecBy2(ctx, `max by (device, ifName) (device_if_speed)`, "device", "ifName"))
+	bw := canonIfaceMap(s.qVecBy2Scoped(ctx, `max by (device, ifName) (device_if_speed)`, "device", "ifName", f))
 	// Throughput — busiest-direction octet rate in Mbps (consistent with Utilization,
 	// which is the busiest direction as a fraction of speed).
-	inThr := canonIfaceMap(s.qVecBy2(ctx, `rate(device_if_in_octets[5m])*8/1e6`, "device", "ifName"))
-	outThr := canonIfaceMap(s.qVecBy2(ctx, `rate(device_if_out_octets[5m])*8/1e6`, "device", "ifName"))
+	inThr := canonIfaceMap(s.qVecBy2Scoped(ctx, `rate(device_if_in_octets[5m])*8/1e6`, "device", "ifName", f))
+	outThr := canonIfaceMap(s.qVecBy2Scoped(ctx, `rate(device_if_out_octets[5m])*8/1e6`, "device", "ifName", f))
 	// Reliability inputs — oper-status (1=up) and the error/discard vs packet rates.
-	oper := canonIfaceMap(s.qVecBy2(ctx, `max by (device, ifName) (device_if_oper_status)`, "device", "ifName"))
-	errDisc := canonIfaceMap(s.qVecBy2(ctx,
+	oper := canonIfaceMap(s.qVecBy2Scoped(ctx, `max by (device, ifName) (device_if_oper_status)`, "device", "ifName", f))
+	errDisc := canonIfaceMap(s.qVecBy2Scoped(ctx,
 		`rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m]) + rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m])`,
-		"device", "ifName"))
-	pkts := canonIfaceMap(s.qVecBy2(ctx,
+		"device", "ifName", f))
+	pkts := canonIfaceMap(s.qVecBy2Scoped(ctx,
 		`rate(device_if_in_ucast_pkts[5m]) + rate(device_if_out_ucast_pkts[5m])`,
-		"device", "ifName"))
-	mtu := canonIfaceMap(s.qVecBy2(ctx, `max by (device, ifName) (device_if_mtu)`, "device", "ifName"))
+		"device", "ifName", f))
+	mtu := canonIfaceMap(s.qVecBy2Scoped(ctx, `max by (device, ifName) (device_if_mtu)`, "device", "ifName", f))
 
 	out := map[[2]string]ifaceMetric{}
 	get := func(k [2]string) ifaceMetric { return out[k] }

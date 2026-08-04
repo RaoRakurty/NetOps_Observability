@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
@@ -118,6 +119,18 @@ func (m *caManager) writeBundle(path string) error {
 func bootstrapInternalCA(vault *vault.Vault) (*caManager, error) {
 	if os.Getenv("TLS_INTERNAL_CA") != "true" {
 		return nil, nil
+	}
+	// SEAL GATE (fail closed) — the foot-gun this file's own header describes:
+	// "When the Vault is also dormant the CA key is stored plaintext". That CA
+	// root is a 10-year credential that can mint an identity for EVERY service
+	// in the mesh, so enabling the mesh without custody is strictly worse than
+	// leaving TLS off — it manufactures a high-value key and leaves it in the
+	// clear. Refuse, in the same shape as ensureSigningSecret (SR-017).
+	if !vault.Sealed() && os.Getenv("ALLOW_DEV_SECRETS") != "true" {
+		return nil, errors.New("TLS_INTERNAL_CA=true but no sealing provider is active — refusing to create a 10-year CA private key in plaintext. Set SEAL_PROVIDER (e.g. swtpm) so the key is sealed at rest, or set ALLOW_DEV_SECRETS=true for local development only")
+	}
+	if !vault.Sealed() {
+		logWarn("tls", "internal CA key will be stored UNSEALED (ALLOW_DEV_SECRETS=true) — local development only; this key can mint an identity for every service", nil)
 	}
 	td := envOr("TLS_TRUST_DOMAIN", "netops")
 	m, err := loadOrCreateCA(vault, td)

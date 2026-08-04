@@ -40,11 +40,16 @@ const traceHopMaxAge = 15 * time.Minute
 // the VM per-hop RTT series and the probe-paths store (RTT fill + loss). Both are
 // best-effort with bounded IO (vmInstant carries a 15s timeout; the paths store is
 // a local/file/kv read) — a missing source just leaves fields unset.
-func (s *server) traceByHop(ctx context.Context) map[string]traceSample {
+func (s *server) traceByHop(ctx context.Context, f []string) map[string]traceSample {
+	// SEC (2026-08-04): scoped like its sibling gatherTopoMetrics — an unscoped
+	// read let two tenants that both run a `core-sw1` render each other's
+	// metrics onto their own path (topology_view.go:86-91 documents the
+	// original defect; these three enrichers were missed by that fix).
+
 	var vm []vmSample
 	// Fold to the best (min) recent RTT per hop across dst/method/ttl — the same
 	// "best RTT" semantics the collector itself uses per hop.
-	if got, err := s.vmInstant(ctx, `min by (hop) (last_over_time(probe_hop_rtt_ms[5m]))`); err == nil {
+	if got, err := s.vmInstantScoped(ctx, `min by (hop) (last_over_time(probe_hop_rtt_ms[5m]))`, f); err == nil {
 		vm = got
 	}
 	paths, err := s.currentProbePaths(ctx)

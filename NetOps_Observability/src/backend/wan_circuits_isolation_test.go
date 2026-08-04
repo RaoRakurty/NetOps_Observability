@@ -245,7 +245,7 @@ func TestWanSparkSeries(t *testing.T) {
 			wan.IfKey("wan-r2", "Ethernet4"): {1e6, 2e6, 3.6e7},
 		}, nil
 	}
-	got := s.wanSparkSeries(context.Background(), 1000, 600, 30)
+	got := s.wanSparkSeries(context.Background(), 1000, 600, 30, nil)
 	sp := got[wan.IfKey("wan-r2", "Ethernet4")]
 	if len(sp) != 3 || sp[2] != 3.6e7 {
 		t.Fatalf("expected the injected throughput series, got %v", sp)
