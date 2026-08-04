@@ -39,19 +39,24 @@ On boot the API logs `internal CA bootstrapped` and writes `api.{crt,key}`,
 now listens HTTPS and rejects any client without the nginx SVID.
 
 ### 3. nginx: present the client SVID over HTTPS
-Mount the shared dir into nginx (`../../data/api/tls:/etc/nginx/tls:ro`) and change
-each API upstream from `http://$up_api:8080` to `https://$up_api:8080` with:
-```nginx
-proxy_ssl_certificate         /etc/nginx/tls/nginx/nginx.crt;
-proxy_ssl_certificate_key     /etc/nginx/tls/nginx/nginx.key;
-proxy_ssl_trusted_certificate /etc/nginx/tls/ca.pem;
-proxy_ssl_verify              on;
-proxy_ssl_verify_depth        2;
-proxy_ssl_name                api;          # SAN the API server SVID carries
-proxy_ssl_server_name         on;
+Both halves ship committed — you swap files in the compose override, never edit
+configs by hand. `nginx/default-mtls.conf` is the mTLS variant of `default.conf`
+(identical except the seven api hops: `https://$up_api:8080` + an
+`api-mtls.conf` include carrying the `proxy_ssl_*` client-SVID directives —
+see `nginx/api-mtls.conf.example`). In `docker-compose.override.yml`, under
+`nginx:`:
+```yaml
+volumes:
+  - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  - ./nginx/default-mtls.conf:/etc/nginx/conf.d/default.conf:ro
+  - ./nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro
+  - ../../data/tls:/etc/nginx/tls:ro
 ```
-(Keep these in an included file you swap in, e.g. `nginx/api-mtls.conf`, so the
-plaintext default stays the fallback.)
+then `docker compose up -d nginx`. The base compose keeps mounting the
+plaintext `default.conf` because a fresh install has no CA and a plaintext API —
+mounting the mTLS variant without the include + certs stops nginx from booting
+(`scripts/preflight-configs.sh` fresh-loads BOTH variants to pin this). Rollback
+is the same swap in reverse.
 
 ### 4. Verify
 ```bash

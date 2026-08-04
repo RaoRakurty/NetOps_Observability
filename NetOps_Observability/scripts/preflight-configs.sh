@@ -114,6 +114,44 @@ check_nginx(){
   fi
 }
 
+# --- nginx mTLS variant: same check, deploy-time file set (Security v1, #18) --
+# An mTLS deployment mounts default-mtls.conf as default.conf plus the
+# api-mtls.conf include and the CA-minted certs. The include's proxy_ssl_*
+# files are loaded at CONFIG PARSE, so `nginx -t` needs cert material to exist;
+# a throwaway self-signed pair stands in for the runtime SVIDs — this validates
+# that the committed TOPOLOGY fresh-loads, not that a CA has been provisioned
+# (same reasoning as the stubbed Vector secrets above). Guards the exact
+# landmine shipped 2026-08-04: default.conf hard-included a file only a
+# gitignored override provided, so a clean install could not boot nginx.
+check_nginx_mtls(){
+  [ -f "$D/nginx/default-mtls.conf" ] || { skip "nginx-mtls (no default-mtls.conf)"; return; }
+  if ! command -v openssl >/dev/null 2>&1; then
+    # Visible, not fatal: only this one check needs openssl; CI has it.
+    skip "nginx-mtls (openssl not on PATH — cannot mint stub certs)"; return
+  fi
+  local tls out rc
+  tls="$(mktemp -d)" || { red "nginx-mtls — mktemp failed"; return; }
+  mkdir -p "$tls/nginx"
+  # Stub SVID + trust bundle (contents irrelevant; parse-time existence + parseability).
+  out="$(openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=preflight-stub" \
+      -keyout "$tls/nginx/nginx.key" -out "$tls/nginx/nginx.crt" 2>&1)" || {
+    red "nginx-mtls — stub cert mint failed: $(head -1 <<<"$out")"; rm -rf "$tls"; return; }
+  cp "$tls/nginx/nginx.crt" "$tls/ca.pem"
+  chmod -R a+rX "$tls"   # image may run nginx -t as non-root
+  out="$(docker run --rm \
+      -v "$D/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+      -v "$D/nginx/default-mtls.conf:/etc/nginx/conf.d/default.conf:ro" \
+      -v "$D/nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro" \
+      -v "$tls:/etc/nginx/tls:ro" \
+      "$NGINX_IMG" nginx -t 2>&1)"; rc=$?
+  rm -rf "$tls"
+  if [ "$rc" -eq 0 ]; then
+    green "nginx-mtls (default-mtls.conf + api-mtls include, nginx -t)"
+  else
+    red "nginx-mtls — $(grep -iE 'emerg|\[error\]' <<<"$out" | head -1)"
+  fi
+}
+
 # --- metrics: VM validates its scrape config; promtool validates rules.yaml ---
 # (Prometheus the SERVICE is gone — #97 footprint pass — but promtool remains
 # the best build-time validator for the Prometheus-rules-format file the Go
@@ -164,6 +202,7 @@ check_vector "deployment/docker/vector/vector.yaml"        "vector-aggregator"
 check_vector "deployment/docker/vector-router/vector.yaml" "vector-router" \
              "deployment/docker/vector-router/processors-default.yaml"
 check_nginx
+check_nginx_mtls
 check_metrics_configs
 check_syslogng
 

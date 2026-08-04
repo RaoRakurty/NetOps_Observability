@@ -1731,6 +1731,14 @@ services:
     #   ./nginx/certs            -> /etc/nginx/certs:ro
     # (certs from scripts/gen-dev-cert.sh or a real issuer; privkey readable by
     # uid 101). Full walk-through: nginx/tls.conf.example.
+    # nginx→API mTLS (Security v1, #18) is likewise OPT-IN via the same
+    # override — the base default.conf keeps plaintext inner hops because a
+    # fresh install has no CA and a plaintext API. To enable, mount under nginx:
+    #   ./nginx/default-mtls.conf     -> /etc/nginx/conf.d/default.conf:ro
+    #   ./nginx/api-mtls.conf.example -> /etc/nginx/conf.d/api-mtls.conf:ro
+    #   ../../data/tls                -> /etc/nginx/tls:ro
+    # and set TLS_INTERNAL_CA=true (+ seal provider) on the api service.
+    # Full recipe: docs/runbooks/tls-mtls.md; variant header: default-mtls.conf.
     # opensearch-dashboards ("osd") and grafana ("self-monitoring") are
     # profile-gated add-ons; nginx proxies /search and /grafana to them only
     # when started, so they're intentionally not dependencies. Prometheus is
