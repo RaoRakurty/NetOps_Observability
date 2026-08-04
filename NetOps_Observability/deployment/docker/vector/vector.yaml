@@ -1112,6 +1112,16 @@ sinks:
     # already exists for the cloud lane — no new service, no extra scrape job.
     inputs: [cloud_metrics_vm, opensearch_indexing_vm, opensearch_health_metrics]
     endpoint: "${VM_REMOTE_WRITE_URL:-http://victoria:8428/api/v1/write}"
+    # SEC-010: credential is ALWAYS presented; plaintext VictoriaMetrics
+    # ignores Authorization entirely, so the default deployment is unchanged,
+    # while a vmauth deployment (VM_REMOTE_WRITE_URL -> https://vmauth:8427)
+    # gets the scoped write-only identity. TLS trust rides SSL_CERT_FILE in
+    # the enabling override (this sink is the aggregator's only https-capable
+    # egress, so replacing the process root store with the mesh CA is safe).
+    auth:
+      strategy: basic
+      user: "${VMAUTH_VECTOR_USER:-svc-vector}"
+      password: "${VMAUTH_VECTOR_PASSWORD:-unused-on-plaintext-victoria}"
     healthcheck: false
 
   kafka_metrics:

@@ -132,7 +132,7 @@ outputs:
   # lane for parity checks before an ownership flip. Never queried by panels.
   victoria:
     type: prometheus_write
-    url: http://victoria:8428/api/v1/write
+    url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
     metric-prefix: gnmi
     interval: 15s
 
@@ -152,7 +152,7 @@ outputs:
   # from the SNMP profile for the affected devices in the same change.
   victoria-canonical:
     type: prometheus_write
-    url: http://victoria:8428/api/v1/write
+    url: ${VICTORIA_WRITE_URL}  # compose supplies the plaintext default; TLS deployments point it at vmauth (SEC-010)
     interval: 15s
     event-processors:
       - canon-override-ts

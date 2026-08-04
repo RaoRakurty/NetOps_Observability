@@ -1145,6 +1145,8 @@ services:
       INGEST_USER: ${INGEST_USER:-netops-ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:-}
       VICTORIA_URL: "http://victoria:8428"
+      # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
+      VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
       # Set (by install tooling) only when the self-monitoring add-on is
       # enabled — gates the Grafana stack-health probe.
       GRAFANA_URL: ${GRAFANA_URL:-}

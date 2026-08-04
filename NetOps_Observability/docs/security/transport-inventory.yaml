@@ -1,8 +1,13 @@
 {
-  "$schema_note": "SEC-001.1 as-built transport inventory. JSON-formatted (valid YAML 1.2) so the stdlib-only preflight gate can parse it. Companion prose: transport-inventory.md. Vocabulary aligned with docs/design/transport-encryption-2026-08-04.md §4 (channel, transport values) and the HLD §7 column set. 'current' = what the BASE compose ships on a fresh install; 'security_profile' = the state once the TLS override/profile is enabled (the lab runs this today); 'target' = the agreed v1 end state. Every claim carries evidence path:line (file must exist; line drift tolerated).",
+  "$schema_note": "SEC-001.1 as-built transport inventory. JSON-formatted (valid YAML 1.2) so the stdlib-only preflight gate can parse it. Companion prose: transport-inventory.md. Vocabulary aligned with docs/design/transport-encryption-2026-08-04.md \u00a74 (channel, transport values) and the HLD \u00a77 column set. 'current' = what the BASE compose ships on a fresh install; 'security_profile' = the state once the TLS override/profile is enabled (the lab runs this today); 'target' = the agreed v1 end state. Every claim carries evidence path:line (file must exist; line drift tolerated).",
   "schema_version": 1,
   "updated": "2026-08-04",
-  "external_peers": ["browser", "device", "operator", "remote-vantage"],
+  "external_peers": [
+    "browser",
+    "device",
+    "operator",
+    "remote-vantage"
+  ],
   "edges": [
     {
       "id": "browser-nginx",
@@ -11,9 +16,20 @@
       "channel": "api",
       "protocol": "https",
       "port": 443,
-      "current": { "transport": "plaintext", "authn": "jwt", "authz": "rbac-pbac" },
-      "security_profile": { "transport": "tls", "notes": "TLS 1.2+/HSTS via tls.conf override; plaintext :8000 STILL published alongside" },
-      "target": { "transport": "tls", "authn": "jwt", "authz": "rbac-pbac" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "jwt",
+        "authz": "rbac-pbac"
+      },
+      "security_profile": {
+        "transport": "tls",
+        "notes": "TLS 1.2+/HSTS via tls.conf override; plaintext :8000 STILL published alongside"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "jwt",
+        "authz": "rbac-pbac"
+      },
       "trust_domain": "public",
       "owning_epic": "SEC-004",
       "priority": "P1",
@@ -30,9 +46,20 @@
       "channel": "api",
       "protocol": "http",
       "port": 8080,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "app-jwt-downstream" },
-      "security_profile": { "transport": "mtls", "notes": "LIVE on the lab 2026-08-04: default-mtls.conf variant + TLS_INTERNAL_CA; API requires the nginx SVID (URI allowlist)" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "san-allowlist" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "app-jwt-downstream"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE on the lab 2026-08-04: default-mtls.conf variant + TLS_INTERNAL_CA; API requires the nginx SVID (URI allowlist)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-005",
       "priority": "P0",
@@ -50,13 +77,28 @@
       "channel": "api",
       "protocol": "http",
       "port": 8080,
-      "current": { "transport": "plaintext", "authn": "app-jwt", "authz": "rbac-pbac", "notes": "api port published to the HOST, bypassing nginx entirely on a fresh install" },
-      "security_profile": { "transport": "mtls", "notes": "mTLS listener refuses clients without an allowed SVID" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "san-allowlist", "notes": "host publication should be dropped or bound to localhost with SEC-004.2" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "app-jwt",
+        "authz": "rbac-pbac",
+        "notes": "api port published to the HOST, bypassing nginx entirely on a fresh install"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "mTLS listener refuses clients without an allowed SVID"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist",
+        "notes": "host publication should be dropped or bound to localhost with SEC-004.2"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-004",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "api-clickhouse",
@@ -65,12 +107,22 @@
       "channel": "store",
       "protocol": "http",
       "port": 8123,
-      "current": { "transport": "plaintext", "authn": "basic", "authz": "row-policies" },
-      "target": { "transport": "tls", "authn": "mtls+ch-user", "authz": "row-policies-KEEP" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic",
+        "authz": "row-policies"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "mtls+ch-user",
+        "authz": "row-policies-KEEP"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-009",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:974"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:974"
+      ]
     },
     {
       "id": "api-opensearch",
@@ -79,12 +131,23 @@
       "channel": "store",
       "protocol": "http",
       "port": 9200,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "DISABLE_SECURITY_PLUGIN=true — largest unauthenticated surface in the product" },
-      "target": { "transport": "mtls", "authn": "svid-to-os-role", "authz": "index-tenant-roles" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "DISABLE_SECURITY_PLUGIN=true \u2014 largest unauthenticated surface in the product"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-to-os-role",
+        "authz": "index-tenant-roles"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-008",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:538"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:538"
+      ]
     },
     {
       "id": "api-victoria",
@@ -93,12 +156,27 @@
       "channel": "store",
       "protocol": "http",
       "port": 8428,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "anonymous READ and WRITE — alert forgery/suppression possible" },
-      "target": { "transport": "tls-via-vmauth", "authn": "mtls-or-token", "authz": "route+tenant-scoping" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "anonymous READ and WRITE \u2014 alert forgery/suppression possible"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "mtls-or-token",
+        "authz": "route+tenant-scoping"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-010",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): https + svc-api credential (URL-userinfo seam); STORE-003 cleared, boot fatal 5->4"
+      }
     },
     {
       "id": "api-postgres",
@@ -107,13 +185,27 @@
       "channel": "store",
       "protocol": "postgres",
       "port": 5432,
-      "current": { "transport": "plaintext", "authn": "password", "authz": "FORCE-RLS", "notes": "sslmode=disable" },
-      "security_profile": { "transport": "tls-verify-full", "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL and correlation DSN at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5" },
-      "target": { "transport": "tls-verify-full", "authn": "scram", "authz": "per-service-roles+FORCE-RLS-KEEP" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "FORCE-RLS",
+        "notes": "sslmode=disable"
+      },
+      "security_profile": {
+        "transport": "tls-verify-full",
+        "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL and correlation DSN at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5"
+      },
+      "target": {
+        "transport": "tls-verify-full",
+        "authn": "scram",
+        "authz": "per-service-roles+FORCE-RLS-KEEP"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-011",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:977"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:977"
+      ]
     },
     {
       "id": "api-valkey",
@@ -122,12 +214,23 @@
       "channel": "store",
       "protocol": "resp",
       "port": 6379,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "carries RCA EVIDENCE (paths/topology), not just cache; publishers discard write errors so auth failure would be SILENT; RedisAddr() non-empty on bad password so file-fallback never triggers — both must be fixed with auth" },
-      "target": { "transport": "tls", "authn": "acl-user", "authz": "command+key-prefix-acl" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; publishers discard write errors so auth failure would be SILENT; RedisAddr() non-empty on bad password so file-fallback never triggers \u2014 both must be fixed with auth"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "acl-user",
+        "authz": "command+key-prefix-acl"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-012",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "api-correlation",
@@ -136,12 +239,23 @@
       "channel": "api",
       "protocol": "http",
       "port": 8000,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "service authenticates no caller and is cross-tenant capable" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "peer-allowlist" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "service authenticates no caller and is cross-tenant capable"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "peer-allowlist"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-013",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "vector-router-api-sealing-keys",
@@ -150,12 +264,23 @@
       "channel": "ingest",
       "protocol": "http",
       "port": 8080,
-      "current": { "transport": "plaintext", "authn": "basic-shared", "authz": "none", "notes": "PER-TENANT SEALING KEYS transit plaintext HTTP authenticated by the shared ingest credential — worst hop in the inventory (P0 double-flag)" },
-      "target": { "transport": "mtls", "authn": "svid-dedicated", "authz": "key-fetch-scope-only" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic-shared",
+        "authz": "none",
+        "notes": "PER-TENANT SEALING KEYS transit plaintext HTTP authenticated by the shared ingest credential \u2014 worst hop in the inventory (P0 double-flag)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-dedicated",
+        "authz": "key-fetch-scope-only"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-018",
       "priority": "P0",
-      "evidence": ["deployment/docker/vector-router/cx-secret-backend.sh"]
+      "evidence": [
+        "deployment/docker/vector-router/cx-secret-backend.sh"
+      ]
     },
     {
       "id": "victoria-api-metrics-scrape",
@@ -164,9 +289,21 @@
       "channel": "store",
       "protocol": "https",
       "port": 8080,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "base vmscrape.yml scrapes http" },
-      "security_profile": { "transport": "mtls", "notes": "LIVE on the lab 2026-08-04: victoria client SVID + vmscrape-mtls.yml variant (#149)" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "san-allowlist" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base vmscrape.yml scrapes http"
+      },
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE on the lab 2026-08-04: victoria client SVID + vmscrape-mtls.yml variant (#149)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "san-allowlist"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-003",
       "priority": "P1",
@@ -183,12 +320,22 @@
       "channel": "bus",
       "protocol": "kafka",
       "port": 9092,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "topic-acls" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:207"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ]
     },
     {
       "id": "vector-router-kafka",
@@ -197,12 +344,22 @@
       "channel": "bus",
       "protocol": "kafka",
       "port": 9092,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "topic-acls" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:207"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ]
     },
     {
       "id": "goflow2-kafka",
@@ -211,12 +368,23 @@
       "channel": "bus",
       "protocol": "kafka",
       "port": 9092,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "produce-netops.flows-only", "notes": "goflow2 kafka-TLS support is blocking-unknown U3 in the HLD" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "produce-netops.flows-only",
+        "notes": "goflow2 kafka-TLS support is blocking-unknown U3 in the HLD"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
       "priority": "P1",
-      "evidence": ["deployment/docker/docker-compose.yml:207"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ]
     },
     {
       "id": "api-kafka",
@@ -225,12 +393,22 @@
       "channel": "bus",
       "protocol": "kafka",
       "port": 9092,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "mtls", "authn": "svid", "authz": "topic-acls" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:207"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:207"
+      ]
     },
     {
       "id": "correlation-kafka-ch-pg",
@@ -238,12 +416,23 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "mixed",
-      "current": { "transport": "plaintext", "authn": "partial", "authz": "row-policies-on-ch", "notes": "kafka consume plaintext/none; CH basic; PG password — see docker-compose.yml:972-977" },
-      "target": { "transport": "mtls-tls", "authn": "svid+store-users", "authz": "consume-only-acls+row-policies" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "partial",
+        "authz": "row-policies-on-ch",
+        "notes": "kafka consume plaintext/none; CH basic; PG password \u2014 see docker-compose.yml:972-977"
+      },
+      "target": {
+        "transport": "mtls-tls",
+        "authn": "svid+store-users",
+        "authz": "consume-only-acls+row-policies"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
       "priority": "P0",
-      "evidence": ["deployment/docker/docker-compose.yml:972"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml:972"
+      ]
     },
     {
       "id": "collectors-vector-lanes",
@@ -251,12 +440,23 @@
       "destination": "vector-aggregator",
       "channel": "ingest",
       "protocol": "http",
-      "current": { "transport": "plaintext", "authn": "basic-shared", "authz": "none", "notes": "four http_server lanes share ONE ingest credential; no per-collector identity" },
-      "target": { "transport": "mtls", "authn": "svid-per-collector", "authz": "lane-scoped" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic-shared",
+        "authz": "none",
+        "notes": "four http_server lanes share ONE ingest credential; no per-collector identity"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-per-collector",
+        "authz": "lane-scoped"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-013",
       "priority": "P0",
-      "evidence": ["deployment/docker/vector/vector.yaml:126"]
+      "evidence": [
+        "deployment/docker/vector/vector.yaml:126"
+      ]
     },
     {
       "id": "syslog-ng-vector",
@@ -265,12 +465,22 @@
       "channel": "ingest",
       "protocol": "tcp",
       "port": 6601,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "tls", "authn": "cert", "authz": "none" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "cert",
+        "authz": "none"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-014",
       "priority": "P1",
-      "evidence": ["deployment/docker/vector/vector.yaml"]
+      "evidence": [
+        "deployment/docker/vector/vector.yaml"
+      ]
     },
     {
       "id": "device-syslog-ng",
@@ -279,12 +489,23 @@
       "channel": "syslog",
       "protocol": "udp-tcp",
       "port": 514,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "hostname-attribution-only" },
-      "target": { "transport": "tls-rfc5425-mtls", "authn": "device-cert", "authz": "tenant-from-cert", "notes": "PHASE 2+ per owner steer; v1 ships the honest labelling only (SEC-014.3)" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "hostname-attribution-only"
+      },
+      "target": {
+        "transport": "tls-rfc5425-mtls",
+        "authn": "device-cert",
+        "authz": "tenant-from-cert",
+        "notes": "PHASE 2+ per owner steer; v1 ships the honest labelling only (SEC-014.3)"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-014",
       "priority": "P0-deferred-phase2",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "device-goflow2",
@@ -292,12 +513,24 @@
       "destination": "goflow2",
       "channel": "flow",
       "protocol": "udp",
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "NetFlow/IPFIX/sFlow cannot be encrypted — permanent declared-plaintext lane (transport-encryption P4)" },
-      "target": { "transport": "plaintext-DECLARED", "authn": "exporter-allowlist", "authz": "tenant-map", "notes": "segmentation guidance + declaration in v1 (SEC-017.2); allowlist Phase 2+" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "NetFlow/IPFIX/sFlow cannot be encrypted \u2014 permanent declared-plaintext lane (transport-encryption P4)"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "exporter-allowlist",
+        "authz": "tenant-map",
+        "notes": "segmentation guidance + declaration in v1 (SEC-017.2); allowlist Phase 2+"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-017",
       "priority": "P1",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "device-snmp-poll",
@@ -306,12 +539,24 @@
       "channel": "snmp",
       "protocol": "udp",
       "port": 161,
-      "current": { "transport": "protocol_native", "authn": "community-or-usm", "authz": "per-device-creds", "notes": "v2c cleartext / v3 authPriv per credential; collectors are Go in-process (src/backend/collectors/)" },
-      "target": { "transport": "protocol_native", "authn": "usm-authPriv-min-level", "authz": "per-device-creds", "notes": "PHASE 2+ per owner steer (SEC-015)" },
+      "current": {
+        "transport": "protocol_native",
+        "authn": "community-or-usm",
+        "authz": "per-device-creds",
+        "notes": "v2c cleartext / v3 authPriv per credential; collectors are Go in-process (src/backend/collectors/)"
+      },
+      "target": {
+        "transport": "protocol_native",
+        "authn": "usm-authPriv-min-level",
+        "authz": "per-device-creds",
+        "notes": "PHASE 2+ per owner steer (SEC-015)"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-015",
       "priority": "P1-deferred-phase2",
-      "evidence": ["src/backend/collectors/poller.go"]
+      "evidence": [
+        "src/backend/collectors/poller.go"
+      ]
     },
     {
       "id": "device-snmp-trap",
@@ -320,12 +565,24 @@
       "channel": "snmptrap",
       "protocol": "udp",
       "port": 162,
-      "current": { "transport": "protocol_native", "authn": "partial-usm", "authz": "per-source", "notes": "v3 FAILS OPEN for unknown senders — the single most instructive fail-open in the inventory" },
-      "target": { "transport": "protocol_native", "authn": "usm-required-unknown-rejected", "authz": "per-source", "notes": "PHASE 2+ per owner steer (SEC-015); fail-open closure is the core of it" },
+      "current": {
+        "transport": "protocol_native",
+        "authn": "partial-usm",
+        "authz": "per-source",
+        "notes": "v3 FAILS OPEN for unknown senders \u2014 the single most instructive fail-open in the inventory"
+      },
+      "target": {
+        "transport": "protocol_native",
+        "authn": "usm-required-unknown-rejected",
+        "authz": "per-source",
+        "notes": "PHASE 2+ per owner steer (SEC-015); fail-open closure is the core of it"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-015",
       "priority": "P0-deferred-phase2",
-      "evidence": ["src/backend/collectors/snmptrap.go"]
+      "evidence": [
+        "src/backend/collectors/snmptrap.go"
+      ]
     },
     {
       "id": "gnmic-device",
@@ -333,12 +590,24 @@
       "destination": "device",
       "channel": "gnmi",
       "protocol": "grpc",
-      "current": { "transport": "tls-unverified", "authn": "user-pass", "authz": "per-target", "notes": "skip-verify:true globally — encryption without identity" },
-      "target": { "transport": "tls-verified", "authn": "device-cert-or-pinned-ca", "authz": "per-target", "notes": "PHASE 2+ per owner steer (SEC-016); prod must refuse insecure/skip-verify" },
+      "current": {
+        "transport": "tls-unverified",
+        "authn": "user-pass",
+        "authz": "per-target",
+        "notes": "skip-verify:true globally \u2014 encryption without identity"
+      },
+      "target": {
+        "transport": "tls-verified",
+        "authn": "device-cert-or-pinned-ca",
+        "authz": "per-target",
+        "notes": "PHASE 2+ per owner steer (SEC-016); prod must refuse insecure/skip-verify"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-016",
       "priority": "P1-deferred-phase2",
-      "evidence": ["deployment/docker/gnmic/gnmic.yaml:13"]
+      "evidence": [
+        "deployment/docker/gnmic/gnmic.yaml:13"
+      ]
     },
     {
       "id": "gnmic-victoria",
@@ -347,12 +616,26 @@
       "channel": "store",
       "protocol": "http",
       "port": 8428,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none" },
-      "target": { "transport": "tls-via-vmauth", "authn": "identity", "authz": "ingest-scope" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-010",
       "priority": "P1",
-      "evidence": ["deployment/docker/gnmic/gnmic.yaml"]
+      "evidence": [
+        "deployment/docker/gnmic/gnmic.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-gnmic write-only; TLS trust via SSL_CERT_FILE (gnmic has no per-output tls schema); lane verified by SAMPLE COUNTS after a silent 5-min blackhole proved logs alone lie"
+      }
     },
     {
       "id": "remote-vantage-api",
@@ -360,12 +643,23 @@
       "destination": "api",
       "channel": "ingest",
       "protocol": "https",
-      "current": { "transport": "tls-if-via-front", "authn": "shared-api-key", "authz": "infrastructure-write", "notes": "shared key lets any holder publish as any vantage" },
-      "target": { "transport": "mtls-or-per-vantage-secret", "authn": "per-vantage-identity", "authz": "vantage-scoped" },
+      "current": {
+        "transport": "tls-if-via-front",
+        "authn": "shared-api-key",
+        "authz": "infrastructure-write",
+        "notes": "shared key lets any holder publish as any vantage"
+      },
+      "target": {
+        "transport": "mtls-or-per-vantage-secret",
+        "authn": "per-vantage-identity",
+        "authz": "vantage-scoped"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-013",
       "priority": "P1",
-      "evidence": ["src/backend/probe_paths_ingest.go"]
+      "evidence": [
+        "src/backend/probe_paths_ingest.go"
+      ]
     },
     {
       "id": "operator-grafana-osd",
@@ -373,12 +667,22 @@
       "destination": "grafana",
       "channel": "api",
       "protocol": "http",
-      "current": { "transport": "plaintext-behind-nginx", "authn": "platform-owner-gate", "authz": "auth_request-gated" },
-      "target": { "transport": "unchanged-plus-osd-security", "authn": "platform-owner-gate+native-roles", "authz": "operator-scope" },
+      "current": {
+        "transport": "plaintext-behind-nginx",
+        "authn": "platform-owner-gate",
+        "authz": "auth_request-gated"
+      },
+      "target": {
+        "transport": "unchanged-plus-osd-security",
+        "authn": "platform-owner-gate+native-roles",
+        "authz": "operator-scope"
+      },
       "trust_domain": "operator",
       "owning_epic": "SEC-008",
       "priority": "P2",
-      "evidence": ["deployment/docker/nginx/default.conf"]
+      "evidence": [
+        "deployment/docker/nginx/default.conf"
+      ]
     },
     {
       "id": "vmauth-victoria",
@@ -387,12 +691,24 @@
       "channel": "store",
       "protocol": "http",
       "port": 8428,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "per-service-routes", "notes": "SEC-010 proxy hop: vmauth terminates TLS+auth and forwards on the compose network; victoria's port stays unpublished. True same-network segmentation is SEC-017." },
-      "target": { "transport": "plaintext-DECLARED", "authn": "none", "authz": "per-service-routes" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "per-service-routes",
+        "notes": "SEC-010 proxy hop: vmauth terminates TLS+auth and forwards on the compose network; victoria's port stays unpublished. True same-network segmentation is SEC-017."
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "per-service-routes"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-010",
       "priority": "P2",
-      "evidence": ["deployment/docker/docker-compose.yml", "src/config/vmauth.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml",
+        "src/config/vmauth.yml"
+      ]
     },
     {
       "id": "vector-router-opensearch",
@@ -401,12 +717,23 @@
       "channel": "store",
       "protocol": "http",
       "port": 9200,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "every log lane's persistence hop (elasticsearch sinks)" },
-      "target": { "transport": "mtls", "authn": "svid-to-os-role", "authz": "index-roles" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "every log lane's persistence hop (elasticsearch sinks)"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid-to-os-role",
+        "authz": "index-roles"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-008",
       "priority": "P0",
-      "evidence": ["deployment/docker/vector-router/vector.yaml"]
+      "evidence": [
+        "deployment/docker/vector-router/vector.yaml"
+      ]
     },
     {
       "id": "vector-router-clickhouse",
@@ -415,12 +742,22 @@
       "channel": "store",
       "protocol": "http",
       "port": 8123,
-      "current": { "transport": "plaintext", "authn": "basic", "authz": "row-policies" },
-      "target": { "transport": "tls", "authn": "mtls+ch-user", "authz": "row-policies-KEEP" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "basic",
+        "authz": "row-policies"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "mtls+ch-user",
+        "authz": "row-policies-KEEP"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-009",
       "priority": "P0",
-      "evidence": ["deployment/docker/vector-router/vector.yaml"]
+      "evidence": [
+        "deployment/docker/vector-router/vector.yaml"
+      ]
     },
     {
       "id": "vector-aggregator-victoria",
@@ -429,12 +766,27 @@
       "channel": "store",
       "protocol": "http",
       "port": 8428,
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "prometheus_remote_write sinks (cloud metrics)" },
-      "target": { "transport": "tls-via-vmauth", "authn": "identity", "authz": "ingest-scope" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "prometheus_remote_write sinks (cloud metrics)"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-010",
       "priority": "P0",
-      "evidence": ["deployment/docker/vector/vector.yaml"]
+      "evidence": [
+        "deployment/docker/vector/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "LIVE via vmauth 2026-08-04 (SEC-010): svc-vector write-only, always-present auth block (plaintext VM ignores it); F-17 series 3s fresh"
+      }
     },
     {
       "id": "mock-servicenow-lab-only",
@@ -442,12 +794,24 @@
       "destination": "mock-servicenow",
       "channel": "api",
       "protocol": "http",
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "LAB fixture with a published port; excluded from customer bundles" },
-      "target": { "transport": "plaintext-DECLARED", "authn": "none", "authz": "none", "notes": "lab-only; never ships" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "LAB fixture with a published port; excluded from customer bundles"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "lab-only; never ships"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",
       "priority": "P3",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     },
     {
       "id": "mock-services-lab-only",
@@ -455,12 +819,24 @@
       "destination": "mock-nms",
       "channel": "api",
       "protocol": "http",
-      "current": { "transport": "plaintext", "authn": "none", "authz": "none", "notes": "mock-nms + mock-servicenow are LAB fixtures with published ports; excluded from customer bundles — inventory row exists so the coverage gate is honest" },
-      "target": { "transport": "plaintext-DECLARED", "authn": "none", "authz": "none", "notes": "lab-only; never ships" },
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "mock-nms + mock-servicenow are LAB fixtures with published ports; excluded from customer bundles \u2014 inventory row exists so the coverage gate is honest"
+      },
+      "target": {
+        "transport": "plaintext-DECLARED",
+        "authn": "none",
+        "authz": "none",
+        "notes": "lab-only; never ships"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",
       "priority": "P3",
-      "evidence": ["deployment/docker/docker-compose.yml"]
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
     }
   ]
 }
