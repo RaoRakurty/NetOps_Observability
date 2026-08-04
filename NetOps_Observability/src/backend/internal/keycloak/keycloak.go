@@ -176,7 +176,7 @@ func (c *Client) authenticate(ctx context.Context, force bool) (string, error) {
 	}
 	endpoint := c.cfg.BaseURL + "/realms/master/protocol/openid-connect/token"
 	resp, err := c.send(ctx, "admin token", func() (*http.Request, error) {
-		req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +240,7 @@ func (c *Client) callRaw(ctx context.Context, op, method, path, contentType stri
 			if payload != nil {
 				body = bytes.NewReader(payload)
 			}
-			req, err := http.NewRequest(method, c.cfg.BaseURL+path, body)
+			req, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, body)
 			if err != nil {
 				return nil, err
 			}
