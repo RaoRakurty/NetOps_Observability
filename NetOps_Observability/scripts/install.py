@@ -574,6 +574,9 @@ TLS_INTERNAL_CA=
 # Multi-region SPIFFE federation (domain=/path/root.pem, comma-separated).
 # Malformed values or missing files refuse the boot — fail-closed by design.
 TLS_FEDERATED_BUNDLES=
+# Workload identity registry (SEC-003.3): a directory where the internal CA
+# mints one SVID per service (additive; consumed per-epic). e.g. /data/tls/services
+TLS_SERVICE_CERT_ROOT=
 
 # Bundled NetBox (Automation → Source of Truth). The platform runs NetBox
 # internally; the API auto-wires to it (NETBOX_INTERNAL_URL) with the seeded

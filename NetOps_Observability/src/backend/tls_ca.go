@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
+	"netops/backend/internal/workloadid"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -209,6 +210,22 @@ func (m *caManager) provisionFromEnv() error {
 		if err := m.issueService(filepath.Join(dir, "victoria.crt"), filepath.Join(dir, "victoria.key"),
 			"victoria", m.ttl, []string{"victoria"}, true, false); err != nil {
 			return err
+		}
+	}
+	// SEC-003.3: table-driven issuance for EVERY registered workload
+	// (internal/workloadid — the identity registry with its own completeness
+	// guards). Additive and dormant — nothing reads
+	// <root>/<service>/<service>.{crt,key} until that service's consuming
+	// epic mounts it — so minting cannot break a running stack. Re-issued by
+	// the same TTL/2 loop that calls this method.
+	if root := os.Getenv("TLS_SERVICE_CERT_ROOT"); root != "" {
+		for _, e := range workloadid.Registry {
+			dir := filepath.Join(root, e.Service)
+			if err := m.issueService(
+				filepath.Join(dir, e.Service+".crt"), filepath.Join(dir, e.Service+".key"),
+				e.Service, m.ttl, e.DNS, e.Client, e.Server); err != nil {
+				return fmt.Errorf("tls ca: svid registry: %s: %w", e.Service, err)
+			}
 		}
 	}
 	return nil

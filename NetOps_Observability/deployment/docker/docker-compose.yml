@@ -1473,6 +1473,11 @@ services:
       TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
       TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
       TLS_VICTORIA_CERT_DIR: ${TLS_VICTORIA_CERT_DIR:-}
+      # SEC-003.3 workload identity registry: when set, the CA mints an SVID
+      # for EVERY registered service under <root>/<service>/ at boot (rotated
+      # at TTL/2). Additive — nothing consumes a cert until that service's
+      # own epic mounts it. Registry + guards: src/backend/svid_registry.go.
+      TLS_SERVICE_CERT_ROOT: ${TLS_SERVICE_CERT_ROOT:-}
       # Multi-region SPIFFE federation (#18 phase 5): "domA=/a.pem,domB=/b.pem"
       # binds each peer trust DOMAIN to the CA root that anchored its chain.
       # Was parsed+enforced in Go but unreachable from compose (SEC-003.2) —

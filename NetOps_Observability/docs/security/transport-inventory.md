@@ -35,6 +35,20 @@ posture UI. `docs/TRACKER.md` #151 is the programme it belongs to.
 - In-process collectors (SNMP/gNMI pollers inside the api) appear as their
   *device-facing* hops only.
 
+## Workload identities (SEC-003.3)
+
+The identity table is CODE-AS-DATA: `src/backend/svid_registry.go` — one row
+per compose service (or an exemption with the reason), SPIFFE ID
+`spiffe://<trust-domain>/ns/default/sa/<service>` exactly as the CA has always
+emitted them (owner steer: no new scheme). `TLS_SERVICE_CERT_ROOT` turns on
+table-driven issuance; certs sit unused until each consuming epic mounts them.
+
+**Kubernetes mapping (documented, not built — input to SEC-022):** each
+registry row maps 1:1 to a ServiceAccount of the same name; the SPIFFE path
+becomes `spiffe://<td>/ns/<k8s-namespace>/sa/<service>` with `default`
+replaced by the deployment namespace at migration time. The registry's
+service names are the contract; nothing else about identity changes shape.
+
 ## Keeping it honest (enforced)
 
 `scripts/preflight-install.py` (wired into `fresh-install-integrity.yml`)
