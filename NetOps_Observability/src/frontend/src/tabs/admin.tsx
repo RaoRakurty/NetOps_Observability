@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, AdminUser, AdminSession, Role, Tenant, Org, Region, RoleBinding, SecuritySettings as SecuritySettingsT, ApiKey, CreateApiKeyRequest, LdapConfig, TacacsConfig, OidcConfig, AuthTestResult, LdapRoleMapping, TokenPolicy, ExportPolicy, SmtpConfig, TwilioConfig, NtfyConfig, SlackConfig, PagerDutyConfig, ContactPoint, ContactPointType, ItsmConfig, ItsmConfigInput, IntegrationConfig, ServiceNowStatus, JiraStatus, IncidentPolicy, IncidentPolicyTestFacts, TicketPolicyDecision } from "../services/api";
 import { BRAND } from "../brand";
 import Wizard, { WizardStep } from "../components/Wizard";
+import { SsoIdpPanel } from "./AdminSsoIdp";
 import { StatStrip, Stat, Skeleton, InfoTip, Modal, Segmented } from "../components/ui";
 import { Group } from "../components/board/panels";
 import { ServiceNowLogo, JiraLogo, SlackLogo, TwilioLogo, PagerDutyLogo } from "../components/ConnectorLogos";
@@ -2591,6 +2592,9 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
   const [ready, setReady] = useState(false);
   const [secret, setSecret] = useState(""); // typed client secret (only sent if non-empty)
   const [msg, setMsg] = useState<string | null>(null);
+  // Top-level view: the relying-party connection wizard vs the Keycloak-brokered
+  // upstream identity providers (GUI-configurable SSO, AdminSsoIdp.tsx).
+  const [view, setView] = useState<"connection" | "idps">("connection");
   const redirectHint = `${window.location.origin}/api/auth/sso/callback`;
 
   useEffect(() => {
@@ -2633,7 +2637,19 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
         </div>
       )}
       <p className="admin-sub">Federate sign-in to your OIDC identity provider (Authorization Code flow). The platform brokers the login and re-issues its own session. Upstream IdPs such as Okta, Azure AD, Google or any standards-compliant provider are supported. The client secret is write-only — leave blank to keep the stored one.</p>
-      <Wizard
+      <div style={{ marginBottom: 10 }}>
+        <Segmented
+          ariaLabel="SSO configuration section"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "connection", label: "Connection", title: "Relying-party settings: issuer, client, role mapping, sign-in" },
+            { value: "idps", label: "Identity Providers", title: "Upstream SAML/OIDC providers brokered through Keycloak" },
+          ]}
+        />
+      </div>
+      {view === "idps" && <SsoIdpPanel roleIds={roleIds} defaultRole={cfg.default_role} />}
+      {view === "connection" && <Wizard
         finishLabel="Save"
         onFinish={save}
         steps={[
@@ -2698,7 +2714,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
             ),
           },
         ]}
-      />
+      />}
       {msg && <p className="mini-meta" style={{ marginTop: 6 }}>{msg}</p>}
     </div>
   );

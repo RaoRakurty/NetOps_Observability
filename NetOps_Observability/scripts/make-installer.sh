@@ -75,12 +75,14 @@ if [ "${REBUILD_FRONTEND:-1}" != "0" ]; then
 fi
 
 # The customer BASE = the appliance every install gets (embedded Apache Kafka
-# bus + prober + all always-on services). Optional capability ships as ADD-ON
-# PACKS — a small image archive per pack, enabled post-install with
+# bus + prober + all always-on services, including Keycloak — SSO is
+# default-on, owner decision 2026-08-04, GUI-configured; costs ~the Keycloak
+# image in bundle size, a known #148 counterweight). Optional capability ships
+# as ADD-ON PACKS — a small image archive per pack, enabled post-install with
 # `./install-correlix.sh enable <addon>` (which flips the compose profile).
-# Lab/dev profiles (mock-*, sso, netbox, seal, flowgen) stay out of client
+# Lab/dev profiles (mock-*, netbox, seal, flowgen) stay out of client
 # bundles by construction.
-BASE_PROFILES=(--profile embedded-bus --profile prober)
+BASE_PROFILES=(--profile embedded-bus --profile prober --profile sso)
 ADDONS="log-search-ui:osd self-monitoring:self-monitoring"   # name:profile
 [ "$PROFILE" = "core" ] && ADDONS=""   # --core: base appliance only, no packs
 

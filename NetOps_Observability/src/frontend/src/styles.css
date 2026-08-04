@@ -3778,6 +3778,22 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* embedded provider form inside a glass modal — no nested card chrome */
 .auth-form { display: block; }
+
+/* GUI-configurable SSO (AdminSsoIdp): mapping tables, status banners, test-check
+   results — the .map-table / .banner / .result classes from the §6 design brief. */
+.map-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); margin: var(--sp-2) 0; }
+.map-table th, .map-table td { padding: 6px 8px; border-bottom: 1px solid var(--panel-border); text-align: left; vertical-align: middle; }
+.map-table th { color: var(--muted); font-size: var(--fs-meta); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.map-table input, .map-table select { width: 100%; padding: 6px 8px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--panel-border); border-radius: 6px; font-size: var(--fs-sm); }
+.map-table input:focus, .map-table select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.map-table tr.default-row td { background: var(--sev-warning-bg, rgba(212, 160, 23, .1)); color: var(--warn, #d4a017); }
+.banner { padding: 8px 12px; border-radius: 6px; font-size: var(--fs-sm); margin: var(--sp-2) 0; border: 1px solid transparent; }
+.banner.warn { background: var(--sev-warning-bg, rgba(212, 160, 23, .1)); color: var(--warn, #d4a017); border-color: var(--warn, #d4a017); }
+.banner.crit { background: var(--sev-critical-bg, rgba(214, 57, 57, .1)); color: var(--bad); border-color: var(--bad); }
+.result { font-size: var(--fs-sm); margin: 2px 0; }
+.result.ok { color: var(--good); }
+.result.err { color: var(--bad); }
 .auth-embed-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-2); }
 .auth-enable { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: var(--fs-sm); color: var(--muted); }
 .conn-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }

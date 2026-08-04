@@ -26,8 +26,9 @@ const (
 	fieldNtfyToken       = "notify.ntfy.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldSlackWebhookURL = "notify.slack.webhook_url"
 	fieldPagerDutyKey    = "notify.pagerduty.routing_key"
-	fieldOIDCSecret      = "oidc.client_secret" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
-	fieldLDAPBindPass    = "ldap.bind_password" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldOIDCSecret      = "oidc.client_secret"    // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldSSOIdPSecret    = "sso_idp.client_secret" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
+	fieldLDAPBindPass    = "ldap.bind_password"    // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldTACACSSecret    = "tacacs.secret"
 	fieldNetboxToken     = "netbox.token"        // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
 	fieldDiscoveryComm   = "discovery.community" // #nosec G101 -- vault.Vault AAD field-id (a config key name), not a credential value
@@ -85,6 +86,15 @@ func mapOIDC(c oidcConfig, f secretXform) (oidcConfig, error) {
 	var e error
 	c.ClientSecret, e = f("", fieldOIDCSecret, c.ClientSecret)
 	return c, e
+}
+
+// ssoIdPSecretXforms builds the ssoidp.Store's injected seal/open transforms
+// for the broker client secret (platform DEK) — the Keycloak-side sibling of
+// mapOIDC, kept here so the reversible-secret surface stays auditable in one
+// place even though the store itself lives in internal/ssoidp.
+func ssoIdPSecretXforms(v *vault.Vault) (seal, open func(string) (string, error)) {
+	return func(val string) (string, error) { return sealFn(v)("", fieldSSOIdPSecret, val) },
+		func(val string) (string, error) { return openFn(v)("", fieldSSOIdPSecret, val) }
 }
 
 func mapLDAP(c ldapConfig, f secretXform) (ldapConfig, error) {

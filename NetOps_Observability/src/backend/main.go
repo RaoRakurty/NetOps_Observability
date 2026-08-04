@@ -23,6 +23,7 @@ import (
 	"netops/backend/internal/applog"
 	"netops/backend/internal/audit"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/keycloak"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/platformdb"
@@ -34,6 +35,7 @@ import (
 	"netops/backend/internal/selfheal"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
+	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/tenant"
 	"netops/backend/internal/ticketing"
 	"netops/backend/internal/vault"
@@ -204,6 +206,8 @@ type server struct {
 	oidc        atomic.Pointer[oidcProvider]
 	ssoTxns     *ssoTxnStore // server-side single-use login transactions (state → nonce + PKCE verifier)
 	oidcCfg     *oidcConfigStore
+	ssoIdPCfg   *ssoidp.Store    // desired-state SSO identity providers (internal/ssoidp)
+	kc          *keycloak.Client // admin client for the bundled Keycloak broker (env-derived)
 	ldap        *ldapConfigStore
 	tacacs      *tacacsConfigStore
 	tokenPolicy *tokenPolicyStore
@@ -760,6 +764,24 @@ func newServer() *server {
 	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
 	srv.oidc.Store(oidc.NewProviderFromConfig(srv.oidcCfg.effective(), jwksTTL()))
 	srv.ssoTxns = newSSOTxnStore()
+	// GUI-configurable SSO (Keycloak side): the desired-state IdP store plus the
+	// admin client that reconciles it into the bundled broker (internal/ssoidp +
+	// internal/keycloak; HTTP boundary + apply path in oidc_config.go). Env is
+	// read HERE (wiring layer) and injected; the packages stay env-free.
+	ssoSeal, ssoOpen := ssoIdPSecretXforms(vault)
+	srv.ssoIdPCfg = ssoidp.NewStore(envOr("SSO_IDP_CONFIG_FILE", "/data/sso_idp_config.json"), ssoidp.Deps{
+		Seal:               ssoSeal,
+		Open:               ssoOpen,
+		RoleValid:          func(role string) bool { _, ok := srv.roles.Get(role); return ok },
+		AllowPlatformOwner: func() bool { return os.Getenv("FEDERATION_ALLOW_PLATFORM_OWNER") == "true" },
+		Errorf:             logError,
+	})
+	srv.kc = keycloak.New(keycloak.Config{
+		BaseURL:       envOr("KEYCLOAK_INTERNAL_URL", "http://keycloak:8080/auth"),
+		AdminUser:     os.Getenv("KEYCLOAK_ADMIN"),
+		AdminPassword: os.Getenv("KEYCLOAK_ADMIN_PASSWORD"),
+		Realm:         envOr("KEYCLOAK_REALM", "correlix"),
+	})
 	// PBAC Phase A: ensure every existing user has its mirror role_binding so the
 	// auditable artifact is complete on boot. Idempotent; behaviour-preserving.
 	srv.backfillBindings()
@@ -1493,7 +1515,9 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/sso/login", s.handleSSOLogin)
 	mux.HandleFunc("/api/auth/sso/callback", s.handleSSOCallback)
 	mux.HandleFunc("/api/auth/oidc/config", s.handleOIDCConfig)
-	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig) // ServiceNow/Jira config (platform-owner)
+	mux.HandleFunc("/api/auth/sso/idp", s.handleSSOIdPList)  // platform admin: configured IdPs + Keycloak ping
+	mux.HandleFunc("/api/auth/sso/idp/", s.handleSSOIdPItem) // platform admin: {alias} CRUD + {alias}/test probe
+	mux.HandleFunc("/api/notify/itsm", s.handleITSMConfig)   // ServiceNow/Jira config (platform-owner)
 	mux.HandleFunc("/api/auth/methods", s.handleAuthMethods)
 	mux.HandleFunc("/api/auth/ldap/login", s.handleLDAPLogin)
 	mux.HandleFunc("/api/auth/ldap/config", s.handleLDAPConfig)

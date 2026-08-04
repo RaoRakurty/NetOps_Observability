@@ -359,6 +359,8 @@ var routeIsolationLedger = map[string]string{
 	"/api/auth/tacacs/config": "platform",
 	"/api/auth/tacacs/test":   "platform",
 	"/api/auth/oidc/config":   "platform",
+	"/api/auth/sso/idp":       "platform", // GUI-configurable SSO IdPs (Keycloak reconcile); requirePlatformAdmin
+	"/api/auth/sso/idp/":      "platform", // {alias} CRUD + {alias}/test probe; requirePlatformAdmin
 	"/api/auth/sso/config":    "platform",
 	"/api/auth/token-policy":  "platform",
 	"/api/copilot/config":     "platform",

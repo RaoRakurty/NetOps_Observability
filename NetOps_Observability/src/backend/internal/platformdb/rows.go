@@ -119,6 +119,7 @@ func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 		"/data/snmp_credentials.json", "/data/snmp_profiles.json",
 		"/data/apikeys.json", "/data/saved.json", "/data/contact_points.json",
 		"/data/notify_config.json", "/data/oidc_config.json", "/data/ldap_config.json",
+		"/data/sso_idp_config.json",
 		"/data/tacacs_config.json", "/data/token_policy.json", "/data/copilot_config.json",
 		"/data/export_policy.json",
 	}

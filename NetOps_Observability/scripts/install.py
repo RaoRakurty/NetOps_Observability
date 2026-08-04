@@ -51,7 +51,10 @@ from pathlib import Path
 # COMPOSE_PROFILES — the single source of truth; see compose_up). --core
 # bundles install with --profiles "embedded-bus,prober" (no OSD image in the
 # bundle); external-broker installs drop embedded-bus.
-DEFAULT_PROFILES = "embedded-bus,prober,osd,self-monitoring"
+# "sso" (Keycloak) is DEFAULT-ON (owner decision 2026-08-04: enterprise SSO is
+# a first-class capability, configured entirely from the admin GUI) — it can
+# still be dropped from COMPOSE_PROFILES for footprint-constrained installs.
+DEFAULT_PROFILES = "embedded-bus,prober,osd,self-monitoring,sso"
 
 # ---- styling ----------------------------------------------------------------
 
@@ -535,14 +538,14 @@ JIRA_ISSUE_TYPE=Task
 JIRA_MIN_SEVERITY=critical     # critical|error|warning|notice|info
 JIRA_RESOLVE_TRANSITION=       # transition name/id to close; blank = auto-detect
 
-# SSO — OIDC/SAML/LDAP brokered by Keycloak (opt-in). The Go API only verifies
-# the resulting tokens (stdlib RS256/JWKS), so the backend stays dependency-free.
-# To enable: add "sso" to COMPOSE_PROFILES below and re-run install.py — it
-# creates the keycloak database (Keycloak cannot create its own and crash-loops
-# without it) and starts the service. Manual alternative:
-#   docker compose exec postgres createdb -U $DB_USER keycloak
-#   docker compose --profile sso up -d keycloak
-# Then configure a realm + OIDC client in Keycloak and enable SSO in the UI.
+# SSO — OIDC/SAML/LDAP brokered by Keycloak (DEFAULT-ON: "sso" is in the
+# default COMPOSE_PROFILES; drop it there for footprint-constrained installs).
+# The Go API only verifies the resulting tokens (stdlib RS256/JWKS), so the
+# backend stays dependency-free. install.py creates the keycloak database
+# (Keycloak cannot create its own and crash-loops without it) and starts the
+# service. Realm, OIDC client, identity providers and role mappings are all
+# configured from Administration → Authentication → SSO — no Keycloak console
+# work (the api drives Keycloak's admin API with the credentials below).
 # NOTE: the OIDC_* values below are a first-boot SEED / fallback only — a config
 # saved from Administration → Authentication is persisted in the kv store and
 # WINS over this file (see docs/runbooks/okta-sso-setup.md §2b). Editing them

@@ -1895,6 +1895,18 @@ export const api = {
   saveOidcConfig: (cfg: Partial<OidcConfig> & { client_secret?: string }) =>
     request<{ config: OidcConfig; ready: boolean }>("/api/auth/oidc/config", { method: "PUT", body: JSON.stringify(cfg) }),
 
+  // GUI-configurable SSO — Keycloak-brokered identity providers (platform-admin
+  // gated). The client secret is write-only (GET returns client_secret_set);
+  // PUT reports whether the change was applied to Keycloak plus any warnings
+  // (e.g. Keycloak unreachable → saved but not applied).
+  ssoIdps: () => request<SsoIdpListResponse>("/api/auth/sso/idp"),
+  saveSsoIdp: (idp: SsoIdP) =>
+    request<SsoIdpSaveResponse>(`/api/auth/sso/idp/${encodeURIComponent(idp.alias)}`, { method: "PUT", body: JSON.stringify(idp) }),
+  deleteSsoIdp: (alias: string) =>
+    request<void>(`/api/auth/sso/idp/${encodeURIComponent(alias)}`, { method: "DELETE" }),
+  testSsoIdp: (alias: string) =>
+    request<SsoIdpTestResult>(`/api/auth/sso/idp/${encodeURIComponent(alias)}/test`, { method: "POST" }),
+
   // Native-provider admin config (admin-gated; secrets are write-only on the server).
   ldapConfig: () => request<{ config: LdapConfig }>("/api/auth/ldap/config"),
   saveLdapConfig: (cfg: Partial<LdapConfig> & { bind_password?: string }) =>
@@ -3476,6 +3488,39 @@ export type OidcConfig = {
   require_mfa?: boolean; // reject SSO sign-ins the IdP didn't MFA (amr/acr)
   mfa_acr?: string; // optional csv of acr values that count as MFA
 };
+
+// Keycloak-brokered identity providers (GUI-configurable SSO). One record per
+// upstream IdP (SAML or OIDC) registered in the Keycloak realm. The client
+// secret is write-only: GET redacts it to client_secret_set. role_mappings is
+// an ORDERED array — first match wins, so the UI must preserve row order.
+export type SsoIdpAttrMapping = { idp_attr: string; user_attr: string };
+export type SsoIdpRoleMapping = { value: string; role: string };
+export type SsoIdP = {
+  alias: string;
+  display_name: string;
+  protocol: "saml" | "oidc";
+  enabled: boolean;
+  // SAML: point at metadata by URL, or paste/upload the XML; optionally pin the
+  // IdP signing certificate (drives the client-side expiry banner).
+  metadata_url?: string;
+  metadata_xml?: string;
+  signing_cert_pem?: string;
+  // OIDC: discovery + client credentials.
+  discovery_url?: string;
+  client_id?: string;
+  client_secret?: string; // write-only; never returned by GET
+  client_secret_set?: boolean; // GET only — whether a secret is stored
+  groups_attr: string;
+  attr_mappings: SsoIdpAttrMapping[];
+  role_mappings: SsoIdpRoleMapping[];
+};
+export type SsoIdpListResponse = {
+  idps: SsoIdP[];
+  keycloak: { reachable: boolean; realm: string; detail?: string };
+};
+export type SsoIdpSaveResponse = { idp: SsoIdP; applied: boolean; warnings: string[] };
+export type SsoIdpTestCheck = { name: string; ok: boolean; detail: string };
+export type SsoIdpTestResult = { ok: boolean; checks: SsoIdpTestCheck[]; cert_not_after?: string };
 
 // Native (non-Keycloak) auth providers, configured at runtime via the admin UI.
 export type LdapRoleMapping = { group: string; role: string };

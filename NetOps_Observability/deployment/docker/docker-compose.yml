@@ -1384,6 +1384,15 @@ services:
       OIDC_ADMIN_ROLES: ${OIDC_ADMIN_ROLES:-super-admin,admin,netops-admin}
       OIDC_OPERATOR_ROLES: ${OIDC_OPERATOR_ROLES:-operator,netops-operator}
       OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-read-only}
+      # Keycloak ADMIN automation (GUI-configurable SSO): the api drives the
+      # Keycloak admin REST API server-side (realm/client/IdP/mapper reconcile
+      # from Administration → Authentication), so operators never touch the
+      # Keycloak console. Same credentials install.py seeds for the keycloak
+      # service; used only by requirePlatformAdmin-gated handlers, never logged.
+      KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080/auth}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-correlix}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1h}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-168h}
       # App-state store backend: file (default; JSON on the data volume) or
