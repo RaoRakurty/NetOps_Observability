@@ -30,6 +30,7 @@ import (
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
@@ -245,6 +246,15 @@ func newServer() *server {
 	// ALLOW_DEV_SECRETS=true.
 	if err := ensureSigningSecret(); err != nil {
 		log.Fatalf("auth: %v", err)
+	}
+
+	// PRODUCTION SECURITY VALIDATOR (Security v1). Evaluates the deployment's
+	// security controls and, in the production profile, REFUSES TO START on any
+	// fatal finding. Lower profiles report the same findings without blocking,
+	// so an operator sees what production would refuse before they get there.
+	// There is deliberately no global bypass — the profile IS the escape hatch.
+	if err := runSecurityValidator(); err != nil {
+		log.Fatal(err)
 	}
 
 	// Select where the identity/saved stores persist (file by default; Postgres
@@ -1459,6 +1469,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/health", s.handleHealth)
 	mux.HandleFunc("/admin/readyz", s.handleReadyz)
 	mux.HandleFunc("/admin/version", s.handleVersion)
+	// Security v1: read-only posture feed for the Security page (platform admin).
+	mux.HandleFunc("/admin/security/posture", s.handleSecurityPosture)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/me", s.handleMe)
 	mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
@@ -1824,6 +1836,92 @@ func (s *server) handleHealthDetail(w http.ResponseWriter, r *http.Request) {
 
 // handleVersion reports the deployed build, including the git SHA baked in at
 // image build time. See build_provenance.go for why that matters.
+// ── Security v1: production validator wiring ────────────────────────────────
+// The RULES live in internal/secprofile (pure + unit-tested, so CI can evaluate
+// a candidate configuration without standing the stack up). What follows is
+// only wiring — read the profile, evaluate the real environment, log every
+// finding, abort in production — which is what this entrypoint file is for.
+
+// securityProfile resolves SECURITY_PROFILE. An unrecognized value is fatal —
+// silently treating "prod" as lab would disable every production check.
+func securityProfile() (secprofile.Profile, error) {
+	return secprofile.ParseProfile(os.Getenv("SECURITY_PROFILE"))
+}
+
+// evaluateSecurityPosture runs the rule set against the live environment.
+func evaluateSecurityPosture() (secprofile.Report, error) {
+	p, err := securityProfile()
+	if err != nil {
+		return secprofile.Report{}, err
+	}
+	return secprofile.Evaluate(p, os.Getenv, func(path string) bool {
+		_, statErr := os.Stat(path)
+		return statErr == nil
+	}), nil
+}
+
+// runSecurityValidator is called at boot. It returns an error only when the
+// deployment must NOT start.
+func runSecurityValidator() error {
+	rep, err := evaluateSecurityPosture()
+	if err != nil {
+		return err
+	}
+	for _, f := range rep.Findings {
+		fields := map[string]any{
+			"rule": f.Rule, "control": f.Control, "component": f.Component,
+			"source": f.Source, "observed": f.Observed, "required": f.Required,
+			"remedy": f.Remedy, "profile": string(rep.Profile),
+		}
+		switch f.Severity {
+		case secprofile.Fatal:
+			// Fatal-class findings are logged as errors in EVERY profile: a lab
+			// operator should be able to see exactly what production will refuse.
+			logError("security", "security control not satisfied", fields)
+		case secprofile.Warn:
+			logWarn("security", "security control not satisfied", fields)
+		default:
+			logInfo("security", "declared security exception", fields)
+		}
+	}
+	logInfo("security", "security posture evaluated", map[string]any{
+		"profile": string(rep.Profile), "fatal": rep.Fatal, "warn": rep.Warn, "info": rep.Info,
+		"blocking": rep.Blocking(),
+	})
+	if rep.Blocking() {
+		return &securityRefusal{rep: rep}
+	}
+	return nil
+}
+
+// securityRefusal renders the operator-facing boot refusal.
+type securityRefusal struct{ rep secprofile.Report }
+
+func (e *securityRefusal) Error() string { return e.rep.Error() }
+
+// handleSecurityPosture (GET /admin/security/posture) is the read-only feed for
+// the security posture page. Platform-admin gated: it enumerates which controls
+// are NOT satisfied, which is operational intelligence, not tenant data.
+//
+// It reports what the validator ACTUALLY EVALUATED — the UI must never compute
+// "secure" on its own, and anything unverifiable is reported as such rather
+// than assumed green.
+func (s *server) handleSecurityPosture(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+	rep, err := evaluateSecurityPosture()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.currentBuildInfo())
 }
