@@ -677,5 +677,10 @@ def run(tok: str, producer, tenant: str, st: dict) -> dict:
                                   "error": str(exc)[:200]}), flush=True)
         counts[lane] = sent
     if errors:
-        counts["errors"] = errors
+        # "error_count", NOT "errors": discover.py/azure.py log "errors" as an
+        # OBJECT (per-component error map), and OpenSearch permanently rejects
+        # any applog doc whose field shape conflicts with the day-index mapping
+        # (object vs scalar — 301 rejected lines/6h measured 2026-08-04). One
+        # field name must have ONE shape across every emitter.
+        counts["error_count"] = errors
     return counts

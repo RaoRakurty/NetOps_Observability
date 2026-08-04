@@ -364,7 +364,9 @@ def test_run_one_bad_container_never_kills_the_cycle(monkeypatch):
 
     prod = _Producer()
     counts = azure_logs.run("tok", prod, "t_lab", {})
-    assert counts["errors"] == 1
+    # "error_count", not "errors" — the object/scalar mapping-conflict fix
+    # (2026-08-04): other emitters log "errors" as an object map.
+    assert counts["error_count"] == 1
     assert counts["lb"] == 1                          # the healthy lane still fed
 
 

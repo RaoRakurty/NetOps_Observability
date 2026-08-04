@@ -213,8 +213,15 @@ func GenerateRouterConfig(rules []Rule) string {
 	// 3. execution metrics: one counter per processor that fired, tagged by
 	// processor id and lane. Reads the apply stage (BEFORE the drop filter) so
 	// a drop_event processor's own matches are still counted.
-	b.WriteString("  cx_processor_metrics:\n")
-	b.WriteString("    type: log_to_metric\n")
+	//
+	// The counter is fed through a filter that keeps only events a processor
+	// actually touched: log_to_metric emits "Field does not exist" and counts
+	// an UNINTENTIONAL drop for every event without the field, which kept
+	// VectorEventsDiscarded (F-18) firing continuously on ordinary untouched
+	// traffic — burying the exact alert that exists to catch real loss. A
+	// filter's discards are intentional=true, which F-18 correctly ignores.
+	b.WriteString("  cx_applied_only:\n")
+	b.WriteString("    type: filter\n")
 	b.WriteString("    inputs: [")
 	for i, lane := range laneOrder {
 		if i > 0 {
@@ -223,6 +230,10 @@ func GenerateRouterConfig(rules []Rule) string {
 		b.WriteString(applyName(lane))
 	}
 	b.WriteString("]\n")
+	fmt.Fprintf(&b, "    condition: 'exists(.%s)'\n", AppliedField)
+	b.WriteString("  cx_processor_metrics:\n")
+	b.WriteString("    type: log_to_metric\n")
+	b.WriteString("    inputs: [cx_applied_only]\n")
 	b.WriteString("    metrics:\n")
 	b.WriteString("      - type: counter\n")
 	fmt.Fprintf(&b, "        field: %s\n", AppliedField)

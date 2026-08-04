@@ -52,9 +52,13 @@ transforms:
     type: filter
     inputs: [flows_rules_apply]
     condition: '!(to_bool(.cx_drop) ?? false)'
+  cx_applied_only:
+    type: filter
+    inputs: [applogs_rules_apply, syslog_rules_apply, snmptrap_rules_apply, cloudlogs_rules_apply, flows_rules_apply]
+    condition: 'exists(.cx_applied)'
   cx_processor_metrics:
     type: log_to_metric
-    inputs: [applogs_rules_apply, syslog_rules_apply, snmptrap_rules_apply, cloudlogs_rules_apply, flows_rules_apply]
+    inputs: [cx_applied_only]
     metrics:
       - type: counter
         field: cx_applied
