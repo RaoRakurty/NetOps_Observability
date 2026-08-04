@@ -111,8 +111,18 @@ for svc in $EXPECTED_SERVICES; do
 done
 printf '%s' "$new_restart_state" > "$RESTART_STATE" 2>/dev/null || true
 if [ "${#oom_events[@]}" -gt 0 ]; then
-  push "🔥 NetOps container OOM/restart on $(hostname)" "fire" "high" \
-    "$(printf '%s\n' "${oom_events[@]}")"
+  # Title the alert for what ACTUALLY happened. The previous title said
+  # "OOM/restart" for every restart-count bump, so an operator doing a routine
+  # rebuild got a fire emoji and the word OOM — and a real OOM would have been
+  # indistinguishable from it (2026-08-04: 18 nginx restarts from config
+  # iteration were reported as OOM). Only claim OOM when we detected OOM.
+  if printf '%s\n' "${oom_events[@]}" | grep -q "OOM-KILLED"; then
+    push "🔥 NetOps container OOM-KILLED on $(hostname)" "fire" "high" \
+      "$(printf '%s\n' "${oom_events[@]}")"
+  else
+    push "🔁 NetOps container restarted on $(hostname)" "arrows_counterclockwise" "default" \
+      "$(printf '%s\n' "${oom_events[@]}")"
+  fi
 fi
 
 # End-to-end probe: the dashboard must answer through nginx.
