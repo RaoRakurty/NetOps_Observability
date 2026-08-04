@@ -1,0 +1,85 @@
+# ============================================================================
+# mTLS VARIANT (SEC-010) of datasources.yaml — identical EXCEPT the two
+# VictoriaMetrics datasources, which go https via vmauth with the svc-grafana
+# read-only credential + the mesh CA. Chosen at DEPLOY time by the TLS
+# override mounting THIS file over the base one (the default-mtls.conf
+# pattern). $VMAUTH_GRAFANA_PASSWORD expands from the grafana container env.
+# EDITING RULE: any change to datasources.yaml must be mirrored here; the only
+# permitted divergence is the two VM datasource blocks.
+# ============================================================================
+apiVersion: 1
+
+# Datasources auto-provisioned on Grafana startup.
+#
+# The ClickHouse datasource needs the `grafana-clickhouse-datasource` plugin.
+# Grafana normally downloads it from grafana.com at boot via GF_INSTALL_PLUGINS,
+# but networks doing TLS interception block that download. So the plugin is
+# installed by scripts/install.py (bootstrap_grafana), which falls back to an
+# insecure fetch on intercepted networks, into the bind-mounted plugins dir.
+# If this datasource shows "plugin not found", run: python3 scripts/install.py
+# (or the documented grafana-cli --insecure install) and restart Grafana.
+#
+# Tenancy: Grafana connects as the dedicated read-only `grafana` ClickHouse user
+# whose profile pins tenant_scope='' (a readonly CONST), so the row policies on
+# netops.flows/findings/tunnels return ONLY untagged platform/infra rows — never
+# another tenant's tagged data. See scripts/install.py:bootstrap_grafana and
+# deployment/docker/clickhouse/init.sql (#20 row policies).
+
+# Provisioning matches datasources BY NAME. Existing installs have a
+# datasource NAMED "Prometheus" already holding uid=prometheus, so the renamed
+# entry below would try to INSERT and fatally collide on the uid ("data source
+# with the same uid already exists" crash-loop). Retire the old name first —
+# idempotent: a no-op on fresh installs and after the first successful boot.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
+datasources:
+  # uid stays "prometheus" so existing dashboards keep working, but the
+  # Prometheus SERVICE is gone (#97): VictoriaMetrics scrapes the self-metrics
+  # and serves the same PromQL API, so this points at VM.
+  - name: Prometheus (VictoriaMetrics)
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: https://vmauth:8427
+    isDefault: true
+    editable: false
+    basicAuth: true
+    basicAuthUser: svc-grafana
+    jsonData:
+      timeInterval: 15s
+      tlsAuthWithCACert: true
+    secureJsonData:
+      basicAuthPassword: $VMAUTH_GRAFANA_PASSWORD
+      tlsCACert: $__file{/tls/ca.pem}
+
+  - name: VictoriaMetrics
+    uid: victoriametrics
+    type: prometheus
+    access: proxy
+    url: https://vmauth:8427
+    editable: false
+    basicAuth: true
+    basicAuthUser: svc-grafana
+    jsonData:
+      timeInterval: 15s
+      tlsAuthWithCACert: true
+    secureJsonData:
+      basicAuthPassword: $VMAUTH_GRAFANA_PASSWORD
+      tlsCACert: $__file{/tls/ca.pem}
+
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      defaultDatabase: netops
+      protocol: native
+      host: clickhouse
+      port: 9000
+      secure: false
+      username: grafana
+    secureJsonData:
+      password: ${GRAFANA_CH_PASSWORD}
