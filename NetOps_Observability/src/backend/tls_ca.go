@@ -8,6 +8,8 @@ import (
 	"netops/backend/internal/vault"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"netops/backend/internalca"
@@ -161,9 +163,37 @@ func (m *caManager) provisionFromEnv() error {
 		}
 	}
 	if dir := os.Getenv("TLS_NGINX_CERT_DIR"); dir != "" {
-		if err := m.issueService(filepath.Join(dir, "nginx.crt"), filepath.Join(dir, "nginx.key"),
+		certPath, keyPath := filepath.Join(dir, "nginx.crt"), filepath.Join(dir, "nginx.key")
+		if err := m.issueService(certPath, keyPath,
 			"nginx", m.ttl, []string{"nginx"}, true, false); err != nil {
 			return err
+		}
+		// CROSS-UID HANDOFF. This key is MINTED by the API (uid 65532) but READ
+		// by nginx (nginx-unprivileged, uid 101). A 0600 key owned by us is
+		// unreadable there and nginx refuses to boot —
+		//   "cannot load certificate key ...: Permission denied"
+		// — so enabling mTLS takes the edge down. Proven live, 2026-08-04.
+		//
+		// We cannot fix it by chown: this process is deliberately non-root, so
+		// os.Chown to another uid returns EPERM. The two honest options are
+		// (a) align the uids at deploy time (chown the mount, or run nginx with
+		// a matching user), or (b) widen the key mode for a mount that only
+		// these two containers see.
+		//
+		// The mode is therefore EXPLICIT and defaults to the safe value.
+		// TLS_NGINX_KEY_MODE=0644 opts into (b) and logs a warning naming the
+		// tradeoff — a private key readable by anything that can read the mount.
+		// Never silently widened.
+		if mode := envOr("TLS_NGINX_KEY_MODE", ""); mode != "" && mode != "0600" {
+			m64, perr := strconv.ParseUint(strings.TrimPrefix(mode, "0o"), 8, 32)
+			if perr != nil {
+				return fmt.Errorf("tls ca: TLS_NGINX_KEY_MODE %q is not an octal file mode: %w", mode, perr)
+			}
+			if err := os.Chmod(keyPath, os.FileMode(m64)); err != nil {
+				return fmt.Errorf("tls ca: set nginx key mode: %w", err)
+			}
+			logWarn("tls", "nginx SVID key mode widened by TLS_NGINX_KEY_MODE — the private key is readable beyond its owner; acceptable only when the mount is shared solely with nginx",
+				map[string]any{"path": keyPath, "mode": mode})
 		}
 	}
 	return nil

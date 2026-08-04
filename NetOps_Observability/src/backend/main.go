@@ -1332,6 +1332,13 @@ func Run() {
 	if err != nil {
 		log.Fatalf("internal CA: %v", err)
 	}
+	// The CA has now written the trust bundle (and the API/nginx SVIDs), so the
+	// internal-backend transport can be built for real. On the first boot of a
+	// TLS-enabled deployment the earlier call deferred (backend_client.go);
+	// this one fails closed exactly as it always did.
+	if err := initBackendTransport(); err != nil {
+		log.Fatalf("backend TLS (post-CA): %v", err)
+	}
 
 	// Opt-in TLS/mTLS (#18). Fail closed: a configured-but-broken cert/CA aborts
 	// boot. Dormant (plaintext, nginx terminates ingress) when unset.

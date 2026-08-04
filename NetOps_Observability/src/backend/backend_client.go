@@ -35,6 +35,24 @@ func initBackendTransport() error {
 	if caFile == "" {
 		return nil // dormant — default client (unchanged behavior)
 	}
+	// FIRST-BOOT ORDERING (2026-08-04). This runs early in main, but when
+	// TLS_INTERNAL_CA=true the bundle it needs is MINTED LATER by
+	// bootstrapInternalCA (which needs the Vault, built with the server). On a
+	// virgin deployment the file therefore does not exist yet, and failing
+	// closed here crash-looped the API — enabling internal TLS bricked the
+	// stack. Proven live on the lab, 2026-08-04.
+	//
+	// Defer, never skip: main calls initBackendTransport AGAIN after the CA
+	// bootstrap, and THAT call fails closed normally. The narrow tolerance is
+	// (a) only when the internal CA is enabled — i.e. something is about to
+	// create this exact file — and (b) only for "not exists", never for a
+	// malformed or unreadable bundle.
+	if os.Getenv("TLS_INTERNAL_CA") == "true" {
+		if _, statErr := os.Stat(caFile); os.IsNotExist(statErr) {
+			logInfo("tls", "backend trust bundle not present yet — deferring until the internal CA mints it", map[string]any{"path": caFile})
+			return nil
+		}
+	}
 	// SPIFFE federation (#18 phase 5): fold federated roots into BOTH the combined
 	// pool (chain building) and the registry (domain binding) — invariant
 	// anchorable ⊇ registered — so an outbound backend in another trust domain
