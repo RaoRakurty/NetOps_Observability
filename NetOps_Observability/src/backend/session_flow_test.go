@@ -24,10 +24,10 @@ func TestSessionPolicyPerRole(t *testing.T) {
 		t.Fatalf("set role override: %v", err)
 	}
 	s := &server{securitySettings: ss, secPolicy: sp}
-	if idle, _, _, _ := s.sessionPolicy("acme", "operator"); idle != 10*time.Minute {
+	if idle, _, _, _ := s.sessionPolicy("acme", "operator", "alice"); idle != 10*time.Minute {
 		t.Errorf("operator idle = %v, want 10m (per-role override)", idle)
 	}
-	if idle, _, _, _ := s.sessionPolicy("acme", "read-only"); idle != 30*time.Minute {
+	if idle, _, _, _ := s.sessionPolicy("acme", "read-only", "alice"); idle != 30*time.Minute {
 		t.Errorf("read-only idle = %v, want 30m (scope default)", idle)
 	}
 }

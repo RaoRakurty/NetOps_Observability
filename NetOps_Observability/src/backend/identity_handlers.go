@@ -194,6 +194,16 @@ func (s *server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// #146b: the IdP owns a federated account's credential. Setting a local
+		// password here would stamp PasswordChangedAt/PasswordHistory onto a
+		// record whose lifecycle rules never evaluate them — dead, misleading
+		// state that login can never reach. Refused BEFORE the profile patch so
+		// a mixed request doesn't half-apply. (Self-service change-password
+		// already refuses federated accounts the same way.)
+		if req.Password != "" && !isLocalAccount(target.AuthSource) {
+			writeError(w, http.StatusBadRequest, errors.New("password is managed by the identity provider for this account"))
+			return
+		}
 		// A tenant admin cannot move a user out of its own tenant.
 		tid := req.TenantID
 		if !cross {

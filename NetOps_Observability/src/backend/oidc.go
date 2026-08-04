@@ -197,6 +197,18 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoFail(w, r, "account disabled")
 		return
 	}
+	// #146b parity: the account-state gates every login path owes (tenant
+	// suspension + hard account-lifecycle denials) and the F-68 concurrent-
+	// login policy — previously enforced only on the local paths, so an
+	// expired account or a suspended tenant's users could still enter via SSO.
+	if msg := s.federatedLoginBarrier(r, user); msg != "" {
+		s.ssoFail(w, r, msg)
+		return
+	}
+	if err := s.enforceConcurrentLoginDeny(r, user); err != nil {
+		s.ssoFail(w, r, err.Error())
+		return
+	}
 
 	// Open a server-side session (same lifecycle as every other login path) and
 	// hand the SPA a fresh access token (with sid) + refresh token.

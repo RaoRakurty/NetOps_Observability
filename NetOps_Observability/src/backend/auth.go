@@ -195,14 +195,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A SUSPENDED tenant blocks its users from signing in (deny-by-default tenant
-	// lifecycle). The platform owner / global realm is never suspendable, so the
-	// operator can never lock itself out.
-	if user.TenantID != "" && user.TenantID != TenantGlobal && s.tenants != nil {
-		if t, ok := s.tenants.Get(user.TenantID); ok && t.EffectiveStatus() == TenantStatusSuspended {
-			logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.Username, "tenant_id": t.ID})
-			writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
-			return
-		}
+	// lifecycle; see userTenantSuspended for the never-lock-out-the-operator rule).
+	if s.userTenantSuspended(user) {
+		logWarn("auth", "login refused: tenant suspended", map[string]any{"user": user.Username, "tenant_id": user.TenantID})
+		writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+		return
 	}
 	// F-68: account lifecycle — expiry, inactivity, first-login reset, password
 	// age. These are the Security Settings the SPA has always rendered as active
@@ -258,11 +255,14 @@ func (s *server) lockoutPolicy(user User, found bool) (allowed, unlockSeconds in
 
 // sessionPolicy resolves the session lifecycle policy for an account. The
 // per-scope Security Settings (Provider / Org / Tenant) provide the baseline; the
-// #24 policy engine then layers PER-ROLE refinement on top — but only an EXPLICIT
-// override (not the catalog default) applies, and only if it is STRICTER (shorter
-// window), so a tighter role policy can harden but never loosen the scope's. Falls
-// back to standard defaults when neither store is wired (a minimal test server).
-func (s *server) sessionPolicy(tenant, role string) (idle, absolute time.Duration, enforceIdle, enforceAbsolute bool) {
+// #24 policy engine then layers PER-ROLE / PER-USER refinement on top — but only
+// an EXPLICIT override (not the catalog default) applies, and only if it is
+// STRICTER (shorter window), so a tighter policy can harden but never loosen the
+// scope's. username feeds the Subject's user dimension (mirroring
+// callerPasswordRules) — without it, a per-user override written via the policy
+// API was silently ignored at login. Falls back to standard defaults when
+// neither store is wired (a minimal test server).
+func (s *server) sessionPolicy(tenant, role, username string) (idle, absolute time.Duration, enforceIdle, enforceAbsolute bool) {
 	idle, absolute, enforceIdle, enforceAbsolute = 30*time.Minute, 12*time.Hour, true, true
 	scope := tenant
 	if scope == "" {
@@ -281,7 +281,7 @@ func (s *server) sessionPolicy(tenant, role string) (idle, absolute time.Duratio
 	// Per-role refinement (#24 engine, System→Tenant→Role→User). Durations are
 	// stored as whole seconds. Only an explicit override applies, stricter-wins.
 	if s.secPolicy != nil {
-		sub := policy.Subject{Tenant: tenant, Role: role}
+		sub := policy.Subject{Tenant: tenant, Role: role, User: username}
 		if r, ok := s.secPolicy.ResolveSetting(sub, "session.idle_timeout"); ok && !r.FromDefault {
 			if d := time.Duration(r.Value.Num) * time.Second; d > 0 && d < idle {
 				idle = d
@@ -329,7 +329,7 @@ func (s *server) mintSession(r *http.Request, user User) (access, refresh string
 	ttl := accessTokenTTL()
 	var sid string
 	if s.sessions != nil {
-		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role)
+		idle, absolute, enforceIdle, enforceAbsolute := s.sessionPolicy(user.TenantID, user.Role, user.Username)
 		if !enforceIdle {
 			idle = 0 // 0 = disabled at the Validate gate
 		}
@@ -365,27 +365,36 @@ func (s *server) mintSession(r *http.Request, user User) (access, refresh string
 // issueSession mints a session and returns the standard JSON login response
 // (also refreshing the console gate cookie). Shared by password login and
 // MFA-challenge completion (handleMFALogin).
+// enforceConcurrentLoginDeny applies F-68 concurrent_login=deny — one live
+// session per account. Prior sessions are revoked BEFORE minting, so the new
+// session is never the one culled. Last-login-wins (rather than refusing the
+// new sign-in) is the deliberate reading: an operator locked out by their own
+// stale session on a closed laptop is a support ticket, not a security
+// control. Returns an error when the revoke did not persist: minting a second
+// session then would leave two usable ones — the exact state the policy
+// forbids. Shared by issueSession (password/MFA/LDAP/TACACS) and the SSO
+// callback (#146b: SSO previously bypassed this policy entirely).
+func (s *server) enforceConcurrentLoginDeny(r *http.Request, user User) error {
+	if s.sessions == nil || !concurrentLoginDenied(s.securitySettingsFor(user)) {
+		return nil
+	}
+	n, err := s.sessions.RevokeAllForUser(user.Username)
+	if err != nil {
+		logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.Username, "err": err.Error()})
+		return errors.New("sign-in could not be completed; prior sessions could not be closed")
+	}
+	if n > 0 {
+		logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.Username, "count": n})
+		s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID,
+			map[string]any{"reason": "concurrent_login_deny", "count": n})
+	}
+	return nil
+}
+
 func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User) {
-	// F-68: concurrent_login=deny — one live session per account. Revoke the
-	// prior ones BEFORE minting, so the new session is never the one culled.
-	// Last-login-wins (rather than refusing the new sign-in) is the deliberate
-	// reading: an operator locked out by their own stale session on a closed
-	// laptop is a support ticket, not a security control.
-	if s.sessions != nil && concurrentLoginDenied(s.securitySettingsFor(user)) {
-		n, err := s.sessions.RevokeAllForUser(user.Username)
-		if err != nil {
-			// The whole point of deny is that only one session lives. If the
-			// revoke did not persist, minting a second session would leave two
-			// usable ones — the exact state the policy forbids.
-			logError("auth", "concurrent-login revoke did not persist", map[string]any{"user": user.Username, "err": err.Error()})
-			writeError(w, http.StatusInternalServerError, errors.New("sign-in could not be completed; prior sessions could not be closed"))
-			return
-		}
-		if n > 0 {
-			logInfo("auth", "concurrent sessions revoked by policy", map[string]any{"user": user.Username, "count": n})
-			s.recordSessionEvent(r, "SESSION_REVOKED", user.Username, "", user.TenantID,
-				map[string]any{"reason": "concurrent_login_deny", "count": n})
-		}
+	if err := s.enforceConcurrentLoginDeny(r, user); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 	ttl := accessTokenTTL()
 	tok, refresh, err := s.mintSession(r, user)
