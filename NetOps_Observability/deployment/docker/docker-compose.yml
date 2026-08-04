@@ -517,7 +517,13 @@ services:
   # =========================================================================
 
   opensearch:
-    image: opensearchproject/opensearch:2.16.0@sha256:d5dd094fd48bdc4dfd032b7137c9c44a697071dcf320f1a76bc4159fe079679c
+    # Slim build over the pinned stock image: ~560 MB of unused plugins removed
+    # (ml/knn/sql/PA/security-analytics/…, security KEPT for the prod flip) —
+    # see opensearch/Dockerfile for the full list + rationale. The FROM pin is
+    # the digest that used to sit on this line.
+    build:
+      context: ./opensearch
+    image: netops-opensearch:2.16.0-slim
     # mem_limit caps the heaviest service so it can't OOM the host. Heap is kept
     # well under the limit (rest is page cache). Sized for a 15 GiB host; bump
     # OS_MEM_LIMIT/OPENSEARCH_HEAP in .env when the host grows.
