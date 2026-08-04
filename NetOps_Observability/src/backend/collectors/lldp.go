@@ -172,7 +172,7 @@ func pollNeighborsOnce(ctx context.Context, name string, targetsFn TargetFunc, r
 		all = []LLDPNeighbor{} // store "[]" not "null" when empty
 	}
 	if b, err := json.Marshal(all); err == nil {
-		_ = redisSetEX(ctx, redisKey, string(b), 1800)
+		redisPublish(ctx, "lldp-neighbors", redisKey, string(b), 1800)
 	}
 
 	healthy := cycleHealthy(len(targets), answered)

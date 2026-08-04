@@ -97,7 +97,14 @@ services:
     # (noeviction default — this is app STATE, never silently evict) instead of
     # the kernel killing it. Measured use is ~8 MiB; 96mb is 12× headroom.
     mem_limit: ${REDIS_MEM_LIMIT:-128m}
-    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}"]
+    # SEC-012.1: authentication. Empty password = auth off (pre-existing
+    # installs whose .env predates the secret are unchanged); the installer
+    # ALWAYS generates REDIS_PASSWORD, so fresh installs are authenticated.
+    command: ["valkey-server", "--save", "60", "1", "--maxmemory", "${REDIS_MAXMEMORY:-96mb}", "--requirepass", "${REDIS_PASSWORD:-}"]
+    environment:
+      # valkey-cli honors REDISCLI_AUTH — the healthcheck stays authenticated
+      # without a password on the process cmdline.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
     volumes:
       - ../../data/redis:/data
     healthcheck:
@@ -1126,6 +1133,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-netops}
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_PORT: "6379"
       # Event bus: BROKER_URLS feeds the stack-health TCP probe; BUS_BRIDGE_URL
       # is the Vector HTTP ingress the api produces bus events through (the
@@ -1625,6 +1633,7 @@ services:
       GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_PORT: "6379"
       VICTORIA_URL: "http://victoria:8428"
       METRICS_URL: ${METRICS_URL:-http://victoria:8428}
@@ -1851,7 +1860,7 @@ services:
       DB_PASSWORD: ${NETBOX_DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DATABASE: "9"
       REDIS_CACHE_HOST: redis
       REDIS_CACHE_PORT: "6379"

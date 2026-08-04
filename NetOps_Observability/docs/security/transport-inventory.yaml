@@ -230,7 +230,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/docker-compose.yml"
-      ]
+      ],
+      "security_profile": {
+        "transport": "plaintext-authenticated",
+        "notes": "LIVE 2026-08-04 (SEC-012.1): requirepass enforced (NOAUTH proven), authed healthcheck via REDISCLI_AUTH, STORE-005 cleared (fatal 4->3). Write-path silence FIXED FIRST: all 8 evidence publishes surfaced via redisPublish (counter + throttled log). TLS + ACL = SEC-012.2."
+      }
     },
     {
       "id": "api-correlation",

@@ -1090,14 +1090,14 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 		links = []LLDPNeighbor{} // store "[]" not "null"
 	}
 	if b, err := json.Marshal(links); err == nil {
-		_ = redisSetEX(ctx, topoLinksKeyBGPLS, string(b), 1800)
+		redisPublish(ctx, "bgpls-links", topoLinksKeyBGPLS, string(b), 1800)
 	}
 	// Origin-node metadata (prefixes + SR) — NODE shape, never links.
 	if bgplsNodes == nil {
 		bgplsNodes = []BGPLSNode{}
 	}
 	if b, err := json.Marshal(bgplsNodes); err == nil {
-		_ = redisSetEX(ctx, topoNodesKeyBGPLS, string(b), 1800)
+		redisPublish(ctx, "bgpls-nodes", topoNodesKeyBGPLS, string(b), 1800)
 	}
 	// C7.5: directed forwarding pairs from SPF over the LSDB → the routing-direction
 	// source. Computed under the same read lock as buildLinks (no re-lock).
@@ -1108,7 +1108,7 @@ func (c *bgplsCollector) publish(ctx context.Context, peerCount int) {
 		pairs = []RoutingPair{}
 	}
 	if b, err := json.Marshal(pairs); err == nil {
-		_ = redisSetEX(ctx, routingDirKey, string(b), 1800)
+		redisPublish(ctx, "routing-directory", routingDirKey, string(b), 1800)
 	}
 
 	now := time.Now().UnixMilli()

@@ -209,14 +209,14 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 	// collector dies). Read by the topology API to enrich BGP-LS links.
 	if len(ifaddr) > 0 {
 		if b, err := json.Marshal(ifaddr); err == nil {
-			_ = redisSetEX(ctx, ifAddrKey, string(b), 1800)
+			redisPublish(ctx, "interface-addrs", ifAddrKey, string(b), 1800)
 		}
 	}
 	// ifIndex → ifName per device, for the C7.1 EntityResolver (flow exporter
 	// in/out ifIndex → device:ifName). Same replace+TTL discipline as ifaddr.
 	if len(ifindexMap) > 0 {
 		if b, err := json.Marshal(ifindexMap); err == nil {
-			_ = redisSetEX(ctx, ifIndexKey, string(b), 1800)
+			redisPublish(ctx, "interface-index", ifIndexKey, string(b), 1800)
 		}
 	}
 

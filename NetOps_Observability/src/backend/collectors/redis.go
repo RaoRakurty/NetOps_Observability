@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sort"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -151,6 +154,46 @@ func redisSetEX(ctx context.Context, key, val string, ttlSec int) error {
 	defer c.Close()
 	_, err = redisCmd(c, "SET", key, val, "EX", strconv.Itoa(ttlSec))
 	return err
+}
+
+// SEC-012.1 / F-62 class: the topology/path publishers used to discard write
+// errors (`_ = redisSetEX(...)`), so a failing Valkey — down, or refusing a
+// bad password once auth ships — silently starved RCA of probe paths,
+// LLDP/BGP-LS topology and interface maps: the "healthy process, dead data
+// path" failure again. redisPublish surfaces every failure: counted always,
+// logged once per minute per channel (the ingest_auth.go idiom).
+var (
+	redisPublishFailures sync.Map // channel string -> *int64
+	redisPublishThrottle sync.Map // channel string -> *int64 (unix seconds)
+)
+
+// RedisPublishFailureCount reports the failures for one publish channel —
+// the stack-health surface and tests read it; 0 = healthy.
+func RedisPublishFailureCount(channel string) int64 {
+	if v, ok := redisPublishFailures.Load(channel); ok {
+		return atomic.LoadInt64(v.(*int64))
+	}
+	return 0
+}
+
+// redisPublish is redisSetEX with the error SURFACED instead of returned —
+// for fire-and-forget topology/evidence publishers whose callers have nothing
+// useful to do with the error except make it visible.
+func redisPublish(ctx context.Context, channel, key, val string, ttlSec int) {
+	err := redisSetEX(ctx, key, val, ttlSec)
+	if err == nil {
+		return
+	}
+	v, _ := redisPublishFailures.LoadOrStore(channel, new(int64))
+	n := atomic.AddInt64(v.(*int64), 1)
+	now := time.Now().Unix()
+	lv, _ := redisPublishThrottle.LoadOrStore(channel, new(int64))
+	last := atomic.LoadInt64(lv.(*int64))
+	if now-last >= 60 && atomic.CompareAndSwapInt64(lv.(*int64), last, now) {
+		// The error string never contains the password (AUTH errors echo the
+		// server's message only), so this stays §8-clean.
+		log.Printf("valkey: %s publish FAILED (key %s, %d total): %v — RCA evidence is degrading; if this is an AUTH error, REDIS_PASSWORD is wrong or unset (SEC-012)", channel, key, n, err)
+	}
 }
 
 // FetchProbePaths reads the shared traceroute topology JSON published by the

@@ -170,9 +170,9 @@ func (r *pathRegistry) persist() {
 		// Background persistence with the dialer's own 3s timeout — the
 		// registry has no request context to inherit.
 		ctx := context.Background()
-		_ = redisSetEX(ctx, probePathsKeyFor(vantage), string(data), probePathsTTL)
+		redisPublish(ctx, "probe-paths", probePathsKeyFor(vantage), string(data), probePathsTTL)
 		_ = redisRegisterVantage(ctx, vantage)
-		_ = redisSetEX(ctx, probePathsKey, string(data), probePathsTTL) // legacy compat
+		redisPublish(ctx, "probe-paths-legacy", probePathsKey, string(data), probePathsTTL) // legacy compat
 		return
 	}
 	if path := os.Getenv("PROBE_PATHS_FILE"); path != "" {

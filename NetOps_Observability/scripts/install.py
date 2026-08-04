@@ -327,6 +327,8 @@ def generate_secrets() -> dict[str, str]:
         "VMAUTH_VECTOR_PASSWORD":    generate_password(24),
         "VMAUTH_VMALERT_PASSWORD":   generate_password(24),
         "VMAUTH_GRAFANA_PASSWORD":   generate_password(24),
+        # SEC-012: Valkey (RCA evidence store) authentication.
+        "REDIS_PASSWORD":            generate_password(24),
         # KRaft storage id for the embedded Kafka broker (22-char base64url
         # uuid, same format kafka-storage random-uuid emits). Generated ONCE
         # per install: the data dir is formatted with it, and a changed id
