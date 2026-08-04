@@ -46,6 +46,8 @@ isolation or the non-superuser role rule.
 | 🟠 **Backup and migration tooling are easy to forget** | They connect with their own DSNs. A migration run that still uses plaintext leaves the violation open and may fail once the server requires TLS. |
 | 🟠 **Certificate expiry becomes an outage class** | A Postgres server certificate expiring means the API cannot boot. Monitor it like any other. |
 | ⚪ **Reversible** | Postgres can accept both TLS and non-TLS during migration; the DSN ladder (`disable` → `require` → `verify-ca` → `verify-full`) is the staged path, provided the intermediate states are short and recorded. |
+| 🔴 **Bootstrap ordering: the minter needs the database** | The api mints the postgres SVID (SEC-003.3) but needs postgres to boot (`STORE_BACKEND=postgres`). Enabling the fail-closed TLS entrypoint BEFORE the first mint deadlocks the stack — postgres refuses to start without certs, the api can't mint without postgres (hit live, 2026-08-04). **First enablement order:** boot postgres stock → api mints under `TLS_SERVICE_CERT_ROOT` → then enable the TLS entrypoint. Steady-state restarts are safe (certs persist on disk). |
+| 🟠 **Cold start after >TTL downtime** | If the whole stack is down longer than `TLS_SVID_TTL` (24h), postgres serves an EXPIRED cert on cold boot, `verify-full` clients refuse it, and the api — the only thing that can re-mint — can't boot. Recovery: temporarily step the api DSN down one rung (`verify-ca`→`require`), boot, let re-issuance run, step back up. The durable fix is decoupled issuance (a mint-only pre-store step) — tracked as a SEC-019 rotation-design requirement. |
 
 ## 4. Pre-validation
 

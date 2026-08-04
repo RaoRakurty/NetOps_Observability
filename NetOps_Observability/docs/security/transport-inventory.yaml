@@ -108,6 +108,7 @@
       "protocol": "postgres",
       "port": 5432,
       "current": { "transport": "plaintext", "authn": "password", "authz": "FORCE-RLS", "notes": "sslmode=disable" },
+      "security_profile": { "transport": "tls-verify-full", "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL and correlation DSN at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5" },
       "target": { "transport": "tls-verify-full", "authn": "scram", "authz": "per-service-roles+FORCE-RLS-KEEP" },
       "trust_domain": "workload",
       "owning_epic": "SEC-011",
