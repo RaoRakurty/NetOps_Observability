@@ -87,6 +87,19 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
+    # SEC-010 vmauth per-service credentials: vmauth expands them from env at
+    # start; each CLIENT reads its URL env at start too — rotation = reset-env
+    # then recreate vmauth + the owning client.
+    "VMAUTH_API_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "VMAUTH_GNMIC_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "VMAUTH_VECTOR_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "VMAUTH_VMALERT_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "VMAUTH_GRAFANA_PASSWORD": Policy(
+        FREE, "", "", ""),
 
     # ---- alter: a credential inside a store's own catalog -------------------
     "DB_PASSWORD": Policy(

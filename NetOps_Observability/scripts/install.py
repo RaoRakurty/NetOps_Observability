@@ -320,6 +320,13 @@ def generate_secrets() -> dict[str, str]:
         "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
         # F-08 ingest credential shared by every in-stack telemetry producer.
         "INGEST_TOKEN":              generate_token(32),
+        # SEC-010: per-service credentials for the vmauth metrics front
+        # (profile `vmauth`; src/config/vmauth.yml expands them via %{ENV}).
+        "VMAUTH_API_PASSWORD":       generate_password(24),
+        "VMAUTH_GNMIC_PASSWORD":     generate_password(24),
+        "VMAUTH_VECTOR_PASSWORD":    generate_password(24),
+        "VMAUTH_VMALERT_PASSWORD":   generate_password(24),
+        "VMAUTH_GRAFANA_PASSWORD":   generate_password(24),
         # KRaft storage id for the embedded Kafka broker (22-char base64url
         # uuid, same format kafka-storage random-uuid emits). Generated ONCE
         # per install: the data dir is formatted with it, and a changed id

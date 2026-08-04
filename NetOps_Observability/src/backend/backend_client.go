@@ -96,13 +96,35 @@ func initBackendTransport() error {
 	return nil
 }
 
+// authURLTransport honors credentials embedded in a backend URL's userinfo
+// (e.g. VICTORIA_URL=https://svc-api:<pw>@vmauth:8427, SEC-010): net/http
+// deliberately does NOT apply URL userinfo itself, so the shared transport
+// does — one seam instead of auth code in nine call sites. The userinfo is
+// stripped from the outgoing request so the credential can never leak into a
+// proxy log, Location echo, or error string that prints the URL.
+type authURLTransport struct{ base http.RoundTripper }
+
+func (t authURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if u := req.URL.User; u != nil {
+		user := u.Username()
+		pass, _ := u.Password()
+		// Clone before mutating — a RoundTripper must not modify the caller's
+		// request (net/http contract).
+		req = req.Clone(req.Context())
+		req.URL.User = nil
+		req.SetBasicAuth(user, pass)
+	}
+	return t.base.RoundTrip(req)
+}
+
 // backendHTTPClient returns an *http.Client for an internal-backend call with the
 // given timeout, sharing the one hardened transport (connection pooling) when
-// internal TLS is configured, else a plain client.
+// internal TLS is configured, else a plain client. Either way the transport
+// honors URL-userinfo credentials (authURLTransport).
 func backendHTTPClient(timeout time.Duration) *http.Client {
-	c := &http.Client{Timeout: timeout}
+	var base http.RoundTripper = http.DefaultTransport
 	if backendTr != nil {
-		c.Transport = backendTr
+		base = backendTr
 	}
-	return c
+	return &http.Client{Timeout: timeout, Transport: authURLTransport{base: base}}
 }
