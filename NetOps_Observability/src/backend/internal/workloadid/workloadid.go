@@ -40,7 +40,8 @@ var Registry = []Entry{
 	// paths working):
 	{Service: "api", DNS: []string{"api", "localhost"}, Client: true, Server: true},
 	{Service: "nginx", Client: true}, // pure client toward the api; its PUBLIC server cert is the ingress cert, never an SVID
-	{Service: "victoria", DNS: []string{"victoria"}, Client: true, Server: true}, // client: scrapes the api; server: vmauth front (SEC-010)
+	{Service: "victoria", DNS: []string{"victoria"}, Client: true, Server: true}, // client: scrapes the api; server: TLS-native option later
+	{Service: "vmauth", DNS: []string{"vmauth"}, Server: true},                   // SEC-010: the authenticating TLS front for VictoriaMetrics
 
 	// Stores — servers their clients verify by compose DNS name.
 	{Service: "kafka", DNS: []string{"kafka"}, Server: true},           // SEC-006 broker listener

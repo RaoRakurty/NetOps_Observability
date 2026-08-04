@@ -564,6 +564,39 @@ services:
   # One-shot: installs the ISM retention policy (deletes netops-* log/flow indices
   # after OPENSEARCH_LOG_RETENTION_DAYS) once OpenSearch is healthy, then exits.
   # The #1 disk-fill protection for a multi-day run.
+  # SEC-010: authenticating TLS front for VictoriaMetrics — one scoped basic
+  # credential per service identity (src/config/vmauth.yml), serving HTTPS
+  # with its registry SVID (SEC-003.3). Profile-gated: a fresh install keeps
+  # the documented plaintext baseline (clients dial victoria:8428 directly);
+  # the TLS enablement activates the profile and repoints clients via their
+  # existing VICTORIA_URL/METRICS_URL seams. Anonymous WRITE to the metrics
+  # store (alert forgery/suppression, STORE-003) dies when the cutover lands.
+  vmauth:
+    image: victoriametrics/vmauth:v1.101.0@sha256:2b56af142a4a5549a333a3882b10cfb01de7807979ffec46f081152ad238d666
+    profiles: [vmauth]
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+    command:
+      - "-auth.config=/etc/vmauth/config/vmauth.yml"
+      - "-tls"
+      - "-tlsCertFile=/tls/vmauth.crt"
+      - "-tlsKeyFile=/tls/vmauth.key"
+      - "-httpListenAddr=:8427"
+    environment:
+      VMAUTH_API_PASSWORD: ${VMAUTH_API_PASSWORD:-}
+      VMAUTH_GNMIC_PASSWORD: ${VMAUTH_GNMIC_PASSWORD:-}
+      VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD:-}
+      VMAUTH_VMALERT_PASSWORD: ${VMAUTH_VMALERT_PASSWORD:-}
+      VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD:-}
+    volumes:
+      # F-51: DIRECTORY mount (same src/config dir the api/victoria mount).
+      - ../../src/config:/etc/vmauth/config:ro
+      - ../../data/tls/services/vmauth:/tls:ro
+    depends_on:
+      victoria:
+        condition: service_started
+
   opensearch-init:
     image: curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
     restart: "no"

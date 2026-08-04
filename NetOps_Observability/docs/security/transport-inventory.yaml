@@ -381,6 +381,20 @@
       "evidence": ["deployment/docker/nginx/default.conf"]
     },
     {
+      "id": "vmauth-victoria",
+      "source": "vmauth",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": { "transport": "plaintext", "authn": "none", "authz": "per-service-routes", "notes": "SEC-010 proxy hop: vmauth terminates TLS+auth and forwards on the compose network; victoria's port stays unpublished. True same-network segmentation is SEC-017." },
+      "target": { "transport": "plaintext-DECLARED", "authn": "none", "authz": "per-service-routes" },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": ["deployment/docker/docker-compose.yml", "src/config/vmauth.yml"]
+    },
+    {
       "id": "vector-router-opensearch",
       "source": "vector-router",
       "destination": "opensearch",
