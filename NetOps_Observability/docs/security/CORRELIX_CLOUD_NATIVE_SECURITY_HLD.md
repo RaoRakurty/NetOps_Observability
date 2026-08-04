@@ -58,7 +58,9 @@ OpenSearch runs with `DISABLE_SECURITY_PLUGIN: "true"` — **no authentication a
 all** over every tenant's logs; VictoriaMetrics and Valkey are unauthenticated;
 ClickHouse and the Vector→ClickHouse hop use **Basic credentials over
 plaintext**; Postgres is pinned `sslmode=disable`; nginx→api is plaintext; the
-correlation service exposes an **unauthenticated HTTP surface**; six services
+correlation service exposes an **unauthenticated HTTP surface that is also
+cross-tenant** (`main.py:1837` queries ClickHouse with `tenant_scope="__all__"`,
+bypassing the row policy — see correction C8); six services
 share **one `INGEST_TOKEN`**; and — the sharpest one —
 **per-tenant sealing keys are fetched over plaintext HTTP**
 (`vector-router/cx-secret-backend.sh:24,55`), which undoes the sealed-fields
@@ -67,7 +69,7 @@ feature's own guarantee.
 Two structural defects compound it: `TLS_FEDERATED_BUNDLES` is implemented in
 Go but **absent from compose** (unreachable through the supported surface), and
 enabling `TLS_INTERNAL_CA=true` without a seal provider **stores the CA private
-key in plaintext** (`tls_ca.go:22-24` admits this) — an easy foot-gun that must
+key in plaintext** (`tls_ca.go:23-24` admits this) — an easy foot-gun that must
 become a boot refusal.
 
 ### 1.2 Target end state
@@ -441,7 +443,7 @@ Priority: **P0** = fixes an unauthenticated/credential-exposing path;
 | api | correlation | HTTP | plaintext | mTLS | **none ⚠** | SVID | peer allowlist | workload | SVID | 24 h | fail closed | accept-set | handshake | **P0** |
 | vector-router | api (sealing keys) | HTTP | **plaintext + shared Basic ⚠⚠** | **mTLS, dedicated identity** | shared token | SVID | key-fetch scope only | workload | SVID | 24 h | fail closed | accept-set | key-fetch audit | **P0** |
 | vector-* | Kafka | TCP | **PLAINTEXT, no auth ⚠** | mTLS | **none** | SVID | **topic ACLs** | workload | SVID | 24 h | fail closed | dual listener + deadline | ACL denials | **P0** |
-| goflow2 | Kafka | TCP | plaintext | mTLS or SASL_SSL | none | identity | produce `netops.flows` only | workload | SVID | 24 h | fail closed | dual listener | ACL denials | P1 |
+| goflow2 | Kafka | TCP | plaintext | mTLS (D5; goflow2 TLS support = blocking unknown U3) | none | identity | produce `netops.flows` only | workload | SVID | 24 h | fail closed | dual listener | ACL denials | P1 |
 | correlation | Kafka/CH/PG | mixed | plaintext | mTLS/TLS | partial | SVID + users | consume-only ACLs, CH policies | workload | SVID | 24 h | fail closed | dual listener | denials | **P0** |
 | collectors/prober | Vector lanes | HTTP | plaintext + **one shared token ⚠** | mTLS, **per-collector identity** | shared Basic | SVID | lane-scoped | workload | SVID | 24 h | fail closed | accept-set | per-lane rejections | **P0** |
 | syslog-ng | Vector :6601 | TCP | plaintext | TLS | none | cert | — | workload | SVID | 24 h | fail closed | dual port | — | P1 |
@@ -621,6 +623,23 @@ errors cannot be trusted to have found the code's:
 | C4 | **No epic owned the transport-policy store**; it was implicit in the UI epic | The store is tenant-scoped, RLS-backed state — it belongs with the policy model, not the UI. Assigned explicitly in the backlog |
 | C5 | Decision 6 (**backup encryption domain**) was scoped in §2 and rated HIGH (T20) but had **no epic** | Either give it an epic or move it out of v1 scope explicitly — flagged for the owner in §11.2 |
 | C6 | `api → Valkey` row **understated the surface** | Valkey carries RCA *evidence*; write errors are discarded so failures would be silent; `RedisAddr()` stays non-empty on a bad password so the file-fallback never triggers. Row corrected in §7 |
+| C7 | Claimed the trap path "**already does this**" for a `transport_authenticated` stamp | **FALSE — verified: `transport_authenticated` does not exist anywhere in the codebase.** The real field is `Authenticated bool \`json:"authenticated"\`` at `collectors/snmptrap.go:60` (not `:64`), and it exists on the **trap lane only**. A stack-wide `transport_authenticated` stamp is therefore **new work**, not an existing control (LLD §6.15.4) |
+| C8 | Said the correlation service "exposes an unauthenticated HTTP surface" | **Understated.** It is unauthenticated **and cross-tenant**: `src/correlation/main.py:1837` issues ClickHouse queries with `tenant_scope: "__all__"`, deliberately bypassing the row policy (comment explains ClickHouse errors on an unset custom setting). So an unauthenticated caller reaches a client that reads **every tenant's data**. This raises the api↔correlation hop from "encrypt it" to "authenticate it **and** review its tenant scoping" |
+| C9 | Implied an `api → Kafka` path | The Go API has **no Kafka client** (`bus_producer.go:17-23` — it POSTs to the Vector bus bridge). The ACL matrix must have **no `api` row**; the bridge lane is Vector's |
+| C10 | `goflow2 → Kafka` row offered "mTLS **or SASL_SSL**" | Inconsistent with decision **D5** (mTLS, one credential system). Corrected to mTLS, with goflow2's actual TLS support flagged as blocking unknown **U3** |
+| C11 | "one `INGEST_TOKEN` for **6** clients" | Tracked compose has **4 clients + 1 verifier**; the 6th (`cloud-ingest`) lives in a gitignored override — which is itself the finding: a real Kafka producer holding the shared token and host cloud credentials is **invisible to the tracked configuration** |
+| C12 | Cited `tls_ca.go:22-24` for the plaintext-CA-key admission | Correct lines are `:23-24` |
+
+**Additional defects found during LLD verification (not in the first pass, all
+code-verified):** `writeTLSMetrics` emits **nothing when no leaf is loaded** —
+the TLS metrics vanish precisely when something is wrong; `tlsconfig.PeerPolicy`
+with an **empty allowlist accepts any cert the CA signed** (`verify.go:62-64`) —
+authentication without authorization; `initBackendTransport()` runs **before**
+the CA bootstrap (first-boot ordering hazard); `REQUIRE_SEAL` uses
+strict-equality parsing; 4–10 Kafka topics exist **only by auto-creation**;
+nginx has **no rate limiting**; `read_only`/`tmpfs` are used **nowhere** and
+`no-new-privileges` on only 7 of 32 services; and
+`clickhouse/users.d/tenant-scope.xml` is **referenced but missing**.
 
 ### 11.1 Residual risks under the simplified plan
 
