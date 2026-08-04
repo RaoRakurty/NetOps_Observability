@@ -207,6 +207,34 @@ and thereby certified the blind scope as healthy.
 
 ## How to use this file
 
+## 8. Transport security (SEC-001.3, 2026-08-04)
+
+The invariant: **no unauthenticated or plaintext hop between Correlix-owned
+components exists in production.** As-built per-hop truth:
+`docs/security/transport-inventory.yaml`; programme: tracker #151 →
+`docs/security/CORRELIX_SECURITY_IMPLEMENTATION_BACKLOG.md`. The production
+security validator (`internal/secprofile`, 16 rules, boot-refusal in the prod
+profile — note its rule ids `SEC-00x` predate and do NOT correspond to the
+backlog's `SEC-xxx` epics) is what puts a hop at RUNTIME; hops it has no rule
+for sit at **NONE**, which is the honest reading of "nothing checks this".
+
+| Hop | Tier today | Raised by | Target tier |
+|---|---|---|---|
+| browser → nginx (ingress TLS; plaintext :8000 alongside) | PROSE | SEC-004 (promote profile, retire :8000) | GATE + RUNTIME |
+| nginx → api | **RUNTIME** (TLS-001/002/003) | SEC-005 adds the accept-set narrowing test | RUNTIME + BUILD |
+| api → OpenSearch / ClickHouse / VictoriaMetrics / Postgres / Valkey | **RUNTIME** (STORE-001…005 refuse prod plaintext; lab reports) | SEC-008/009/010/011/012 make the stores SERVE TLS + BUILD tests | RUNTIME + BUILD |
+| api → correlation | **RUNTIME** (APP-001) | SEC-013 (workload auth — encryption alone insufficient) | RUNTIME + BUILD |
+| victoria → api (metrics scrape) | RUNTIME (mTLS listener rejects certless scrape in prod) | SEC-003.3 registry formalizes the victoria SVID | RUNTIME + BUILD |
+| **vector-router → api (per-tenant sealing keys)** | **NONE — no validator rule; keys transit plaintext HTTP under a shared credential** | SEC-018 | RUNTIME + BUILD |
+| **every producer/consumer → Kafka** | **NONE — no bus rule exists in the validator** | SEC-006 (mTLS) + SEC-007 (ACLs) | RUNTIME + BUILD |
+| collectors/prober → Vector ingest lanes (shared Basic token) | **NONE** | SEC-013 (per-client identity) | RUNTIME + BUILD |
+| syslog-ng → vector-aggregator | **NONE** | SEC-014.1 | RUNTIME |
+| gnmic → devices (`skip-verify: true`) | **RUNTIME** (DEV-001 refuses in prod) | SEC-016 (Phase 2+) | RUNTIME + BUILD |
+| device → syslog-ng (plaintext 514) | **RUNTIME** (DEV-002: lane must be *declared*) | SEC-014.2/.3 (Phase 2+ lane; v1 = declaration) | RUNTIME |
+| device → SNMP trap (v3 fail-open for unknown senders) | **NONE** | SEC-015 (Phase 2+) — the fail-open closure | BUILD |
+| device → goflow2 (protocol cannot encrypt) | PROSE | SEC-017.2: becomes a DECLARED plaintext risk acceptance | RUNTIME (declaration asserted) |
+| backup destination encryption | RUNTIME (BKP-001, operator-asserted) | #150 GUI surfaces it | RUNTIME |
+
 When adding a feature, state its invariant and pick the tier you will enforce it
 at. If the answer is PROSE, say so out loud in the PR rather than leaving a
 future reader to assume a gate exists. When an audit finding is closed, add the
