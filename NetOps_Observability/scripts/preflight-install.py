@@ -217,6 +217,64 @@ def main() -> int:
     else:
         ok(f"all {len(req_paths)} required scaffold paths ship")
 
+    # 7) SEC-001.1: transport-inventory coverage + evidence liveness.
+    # docs/security/transport-inventory.yaml is the machine-readable as-built
+    # statement every security epic validates against (JSON content — valid
+    # YAML 1.2 — so this stdlib-only gate can parse it). Two assertions:
+    #   coverage — every compose service that PUBLISHES a port appears in at
+    #     least one edge, and every service an edge names actually exists in
+    #     compose (a new externally-reachable service with no inventory row is
+    #     an untracked attack surface; a renamed service leaves a ghost row);
+    #   evidence — every evidence path resolves to an existing file (line
+    #     drift tolerated; a missing FILE means the claim is unverifiable).
+    print("[transport] SEC-001 inventory covers published services + evidence resolves")
+    import json
+    inv_path = ROOT / "docs" / "security" / "transport-inventory.yaml"
+    if not inv_path.exists():
+        bad("docs/security/transport-inventory.yaml missing (SEC-001.1 as-built inventory)")
+    else:
+        try:
+            inv = json.loads(inv_path.read_text())
+        except json.JSONDecodeError as exc:
+            inv = None
+            bad(f"transport-inventory.yaml is not parseable JSON/YAML: {exc}")
+        if inv is not None:
+            raw = COMPOSE.read_text()
+            svc_names, svc_published, cur = [], set(), None
+            for line in raw.splitlines():
+                m = re.match(r"^  ([a-z0-9-]+):\s*(#.*)?$", line)
+                if m:
+                    cur = m.group(1)
+                    svc_names.append(cur)
+                elif cur and re.match(r"^\s{4,6}ports:", line):
+                    svc_published.add(cur)
+            edges = inv.get("edges", [])
+            named = {e.get("source", "") for e in edges} | {e.get("destination", "") for e in edges}
+            externals = set(inv.get("external_peers", []))
+            uncovered = sorted(s for s in svc_published if s not in named)
+            if uncovered:
+                for s in uncovered:
+                    bad(f"compose service '{s}' publishes a port but has NO transport-inventory edge (SEC-001.1)")
+            else:
+                ok(f"all {len(svc_published)} port-publishing services appear in the inventory")
+            ghosts = sorted(n for n in named - externals if n and n not in svc_names)
+            if ghosts:
+                for g in ghosts:
+                    bad(f"inventory names service '{g}' which does not exist in compose (renamed or removed?)")
+            else:
+                ok("every inventory service resolves to a compose service")
+            dead = []
+            for e in edges:
+                for ev in e.get("evidence", []):
+                    p = ev.split(":")[0]
+                    if not (ROOT / p).exists():
+                        dead.append(f"{e.get('id','?')}: {p}")
+            if dead:
+                for d in dead:
+                    bad(f"inventory evidence path missing: {d}")
+            else:
+                ok(f"all evidence paths across {len(edges)} edges exist")
+
     # 6) informational: migrations auto-apply on api start; just surface the count
     migs = sorted((ROOT / "src" / "backend" / "migrations").glob("*.sql"))
     print(f"[migrations] {len(migs)} present, auto-applied by the api on startup (latest: {migs[-1].name if migs else 'none'})")

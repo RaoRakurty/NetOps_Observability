@@ -177,3 +177,71 @@ def test_source_enum_includes_audit_everywhere():
     assert "'audit'=13" in read("src", "backend", "internal", "chschema", "corr_schema.go")
     assert read("deployment", "docker", "clickhouse", "init.sql").count("'audit'=13") >= 2
     assert 'AUDIT = "audit"' in read("src", "correlation", "signals.py")
+
+
+# ---------------------------------------------------------------------------
+# SEC-001.1 — the as-built transport inventory stays truthful and complete.
+# docs/security/transport-inventory.yaml is JSON-formatted (valid YAML) so the
+# stdlib-only preflight gate can parse it; here we get yaml for free.
+# ---------------------------------------------------------------------------
+
+def _load_inventory():
+    import json
+    with open(os.path.join(ROOT, "docs", "security", "transport-inventory.yaml")) as fh:
+        return json.load(fh)
+
+
+def test_transport_inventory_covers_every_published_service():
+    """A compose service that publishes a port with no inventory edge is an
+    untracked attack surface — the exact drift SEC-001.1 exists to catch."""
+    inv = _load_inventory()
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    published = {name for name, svc in compose.get("services", {}).items()
+                 if isinstance(svc, dict) and svc.get("ports")}
+    named = set()
+    for e in inv["edges"]:
+        named.add(e["source"]); named.add(e["destination"])
+    missing = sorted(published - named)
+    assert not missing, (
+        f"compose services publish ports but have no transport-inventory edge: {missing} "
+        "— add an edge to docs/security/transport-inventory.yaml (SEC-001.1)")
+
+
+def test_transport_inventory_names_resolve_to_compose_services():
+    inv = _load_inventory()
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    services = set(compose.get("services", {}))
+    externals = set(inv.get("external_peers", []))
+    ghosts = sorted({n for e in inv["edges"] for n in (e["source"], e["destination"])}
+                    - externals - services)
+    assert not ghosts, f"inventory names non-existent compose services: {ghosts}"
+
+
+def test_transport_inventory_baseline_is_honest():
+    """Acceptance criterion (c) of SEC-001.1: until a SEC epic deliberately
+    changes a hop, the Kafka/OpenSearch/Valkey/VictoriaMetrics/Postgres rows
+    must state plaintext + no authn — matching the verified compose facts.
+    When an epic lands, it updates the inventory row AND this pin together."""
+    inv = _load_inventory()
+    by_id = {e["id"]: e for e in inv["edges"]}
+    for edge_id in ("vector-kafka", "api-opensearch", "api-valkey",
+                    "api-victoria", "api-postgres"):
+        cur = by_id[edge_id]["current"]
+        assert cur["transport"] == "plaintext", (
+            f"{edge_id}: inventory says current transport {cur['transport']!r}; "
+            "if this hop was really secured, update this pin with the epic that did it")
+    assert by_id["api-opensearch"]["current"]["authn"] == "none"
+    assert by_id["api-valkey"]["current"]["authn"] == "none"
+
+
+def test_transport_inventory_evidence_paths_exist():
+    inv = _load_inventory()
+    dead = []
+    for e in inv["edges"]:
+        for ev in e.get("evidence", []):
+            p = ev.split(":")[0]
+            if not os.path.exists(os.path.join(ROOT, p)):
+                dead.append(f"{e['id']}: {p}")
+    assert not dead, f"inventory evidence paths missing: {dead}"
