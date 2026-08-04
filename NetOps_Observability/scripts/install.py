@@ -564,6 +564,17 @@ KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD={secrets_map["KEYCLOAK_ADMIN_PASSWORD"]}
 KEYCLOAK_DB_NAME=keycloak
 
+# Transport security (#18 / tracker #151). All DORMANT when empty — a fresh
+# install runs the documented plaintext baseline (docs/security/
+# transport-inventory.yaml is the per-hop truth). The enable sequence is
+# docs/runbooks/tls-mtls.md; the full variable set lives on the api service in
+# docker-compose.yml (TLS_INTERNAL_CA, TLS_CERT_FILE, ...). Declared here so
+# the surface is discoverable from .env, not only from compose internals.
+TLS_INTERNAL_CA=
+# Multi-region SPIFFE federation (domain=/path/root.pem, comma-separated).
+# Malformed values or missing files refuse the boot — fail-closed by design.
+TLS_FEDERATED_BUNDLES=
+
 # Bundled NetBox (Automation → Source of Truth). The platform runs NetBox
 # internally; the API auto-wires to it (NETBOX_INTERNAL_URL) with the seeded
 # token, so the UI needs no URL/token. Start it with:  docker compose --profile

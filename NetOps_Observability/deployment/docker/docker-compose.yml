@@ -1472,6 +1472,12 @@ services:
       TLS_TRUST_DOMAIN: ${TLS_TRUST_DOMAIN:-netops}
       TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
       TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
+      TLS_VICTORIA_CERT_DIR: ${TLS_VICTORIA_CERT_DIR:-}
+      # Multi-region SPIFFE federation (#18 phase 5): "domA=/a.pem,domB=/b.pem"
+      # binds each peer trust DOMAIN to the CA root that anchored its chain.
+      # Was parsed+enforced in Go but unreachable from compose (SEC-003.2) —
+      # a malformed value or missing bundle file fails the boot, by design.
+      TLS_FEDERATED_BUNDLES: ${TLS_FEDERATED_BUNDLES:-}
       # Outbound TLS to internal backends (OpenSearch/ClickHouse/VictoriaMetrics/
       # correlation): verify their https certs against THIS explicit CA (not the
       # system pool); optional client SVID for backend mTLS. Defaults to the mesh
