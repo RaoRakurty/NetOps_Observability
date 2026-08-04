@@ -245,3 +245,25 @@ def test_transport_inventory_evidence_paths_exist():
             if not os.path.exists(os.path.join(ROOT, p)):
                 dead.append(f"{e['id']}: {p}")
     assert not dead, f"inventory evidence paths missing: {dead}"
+
+
+def test_legacy_profiled_services_not_presented_as_active():
+    """SEC-001.2: a compose service under profiles:[legacy] does not run; any
+    ARCHITECTURE.md line naming it must say so (legacy / does not run), or an
+    incident responder gets sent to a component that isn't there."""
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    legacy = {name for name, svc in compose.get("services", {}).items()
+              if isinstance(svc, dict) and "legacy" in (svc.get("profiles") or [])}
+    assert legacy, "expected at least one legacy-profiled service (telegraf); if the class is gone, delete this guard"
+    with open(os.path.join(ROOT, "docs", "ARCHITECTURE.md")) as fh:
+        lines = fh.readlines()
+    offenders = []
+    for name in legacy:
+        for i, line in enumerate(lines, 1):
+            if re.search(rf"\b{re.escape(name)}\b", line, re.IGNORECASE):
+                if not re.search(r"legacy|does not run|not running|archaeology", line, re.IGNORECASE):
+                    offenders.append(f"{name} at ARCHITECTURE.md:{i}: {line.strip()[:80]}")
+    assert not offenders, (
+        "legacy-profiled services presented as active in ARCHITECTURE.md: "
+        + "; ".join(offenders))

@@ -15,7 +15,8 @@
 #
 #   scripts/preflight-configs.sh            # validate all
 #
-# Used by: .github/workflows/config-preflight.yml (CI gate), the optional pre-push
+# Used by: .github/workflows/fresh-install-integrity.yml (via scripts/preflight.sh)
+# — there is no config-preflight.yml workflow — and the optional pre-push
 # hook (githooks/pre-push), and install.py (preflight before `docker compose up`).
 #
 # Image pins below MUST stay in sync with deployment/docker/docker-compose.yml.

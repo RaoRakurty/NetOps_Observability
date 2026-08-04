@@ -11,7 +11,8 @@ a React UI with ECharts and an LLM-backed copilot.
        │             │             │
     Syslog        SNMP          Flow (NetFlow/IPFIX/sFlow)
        ▼             ▼             ▼
-   syslog-ng     Telegraf       goflow2
+   syslog-ng   Go collectors    goflow2
+               (in the api)
        │             │             │
        └─────────────┼─────────────┘
                      ▼
@@ -53,9 +54,11 @@ deliberately not asked to do anything else.
 * **syslog-ng** listens on UDP/TCP 514, parses RFC3164 and RFC5424, and
   forwards to vector-aggregator over TCP/6601 with `syslog-protocol`
   framing. Config: `deployment/docker/syslog-ng/syslog-ng.conf`.
-* **Telegraf** polls SNMP on the configured device list, emits InfluxDB
-  line protocol over TCP/9094 to vector-aggregator's `socket` source.
-  Config: `deployment/docker/telegraf/telegraf.conf`.
+* **SNMP polling is native Go, in-process in the api** —
+  `src/backend/collectors/` (`poller.go`, `snmpmetrics.go`, `snmpv3.go`)
+  polls the device list and produces `netops.metrics` to the bus directly.
+  Telegraf is **legacy and does not run** (`profiles: [legacy]` in compose,
+  kept only for archaeology); do not point an incident investigation at it.
 * **goflow2** decodes NetFlow v5/v9, IPFIX, sFlow and emits one JSON
   record per flow to stdout. Vector picks them up via `docker_logs`.
   Config: `deployment/docker/goflow2/goflow2.yaml`.
@@ -75,7 +78,7 @@ topics:
 |--------------------|--------------------|----------------------------------|
 | `netops.applogs`   | docker_logs        | OpenSearch `netops-applogs-*`    |
 | `netops.syslog`    | syslog-ng          | OpenSearch `netops-syslog-*`     |
-| `netops.metrics`   | Telegraf           | VictoriaMetrics remote_write     |
+| `netops.metrics`   | Go collectors (api) | VictoriaMetrics remote_write     |
 | `netops.flows`     | goflow2 (stdout)   | OpenSearch + ClickHouse          |
 
 ### Apache Kafka

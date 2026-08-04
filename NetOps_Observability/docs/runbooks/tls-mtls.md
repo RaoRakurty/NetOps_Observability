@@ -1,5 +1,10 @@
 # Runbook — enable end-to-end TLS + nginx↔API mTLS (#18 phase 2)
 
+> **BUILT ≠ ENABLED.** Following this runbook enables the ingress + nginx↔API
+> (+ victoria scrape) edges only. The datastore, bus, and ingest-lane hops
+> remain plaintext until their own SEC epics land — current truth per hop:
+> `docs/security/transport-inventory.yaml`; programme: tracker #151.
+
 This turns on the internal mesh: the API serves HTTPS, requires a client cert
 from nginx (mTLS), and the internal CA self-bootstraps every certificate — with
 the CA private key sealed by the swtpm-backed Vault (#17). All of it is **opt-in

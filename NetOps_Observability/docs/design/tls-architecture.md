@@ -1,5 +1,17 @@
 # Transport Security (TLS / mTLS) Architecture — #18
 
+> **BUILT ≠ ENABLED (SEC-001.2, 2026-08-04).** The phase table below records
+> CODE completion: the machinery (tlsconfig, internal CA, SVIDs, backend
+> client TLS) is written, tested, and fails closed. It says nothing about
+> what a deployment RUNS: the base compose ships plaintext inner hops, a
+> fresh install's `.env` sets no `TLS_*`/`SEAL_*` variable, and each
+> datastore must be configured to SERVE TLS before the ready client side can
+> verify it. As-built truth per hop lives in
+> `docs/security/transport-inventory.yaml`; the enablement programme is
+> `docs/security/CORRELIX_SECURITY_IMPLEMENTATION_BACKLOG.md` (tracker #151).
+> On the lab, nginx→api and victoria→api mTLS are enabled via the compose
+> override; everything else is still plaintext there today.
+
 > Status: **phases 1–4 done; phase 5 (1/3 — SPIFFE federation) done** (2026-06-04).
 > Centralized `tlsconfig` package, opt-in API HTTPS/mTLS, internal CA + Vault-sealed
 > custody, backend client TLS, metrics/audit/readiness/re-issue, and multi-region
