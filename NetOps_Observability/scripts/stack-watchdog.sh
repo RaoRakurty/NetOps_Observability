@@ -103,7 +103,14 @@ for svc in $EXPECTED_SERVICES; do
     if [ "$oomed" = "true" ] || [ "${exitcode:-0}" = "137" ]; then
       oom_events+=("$svc: OOM-KILLED by its cgroup limit (restarts $prev->$rcount) — compare its resource-plan limit vs usage, then --replan")
     else
-      oom_events+=("$svc: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — check 'docker logs' / dmesg for OOM")
+      # Not an OOM (that's the branch above) — say what the container itself
+      # said instead of speculating. The last log line is the diagnostic that
+      # matters for a crash loop (2026-08-04: 109 api restarts pushed "check
+      # for OOM" while the real cause, an unseal failure, sat in the log).
+      # || true: the log fetch is diagnostic garnish; the restart event must
+      # still be reported even if docker logs itself errors.
+      lastlog=$(docker logs --tail 1 "$cid" 2>&1 | tr -d '\r' | cut -c1-200 || true)
+      oom_events+=("$svc: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — last log: ${lastlog:-<no output>}")
     fi
   elif [ "$oomed" = "true" ] && [ -z "$prev" ]; then
     oom_events+=("$svc: sitting OOM-killed (exit ${exitcode:-?})")
@@ -380,12 +387,24 @@ fi
 # -----------------------------------------------------------------------------
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 drift_check() {  # $1 = compose service, $2 = repo-relative path, $3 = in-container path
-  local cid host_sum cont_sum
+  local cid host_file host_sum cont_sum mnt_src
   cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
                      --filter "label=com.docker.compose.service=$1" 2>/dev/null | head -1)
   [ -n "$cid" ] || return 0
-  [ -f "$REPO_ROOT/$2" ] || return 0
-  host_sum=$(sha256sum "$REPO_ROOT/$2" 2>/dev/null | cut -d' ' -f1)
+  # Compare against the file the container ACTUALLY bind-mounts at $3, not the
+  # assumed repo path: a compose override may mount a deploy-time variant (the
+  # mTLS deployment mounts nginx/default-mtls.conf as default.conf), and hashing
+  # the base file against it reported CONFIG DRIFT for a correctly-configured
+  # stack (2026-08-04). Stale-inode drift is still caught — the mount source
+  # path yields the host's CURRENT content while the container serves the
+  # pinned old inode. The passed repo path is only the no-mount fallback.
+  mnt_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$3\"}}{{.Source}}{{end}}{{end}}" "$cid" 2>/dev/null)
+  host_file="$REPO_ROOT/$2"
+  if [ -n "$mnt_src" ] && [ -f "$mnt_src" ]; then
+    host_file="$mnt_src"
+  fi
+  [ -f "$host_file" ] || return 0
+  host_sum=$(sha256sum "$host_file" 2>/dev/null | cut -d' ' -f1)
   # Hash on the HOST from a streamed `cat`, rather than running sha256sum
   # inside the container. Half these images have no sha256sum (vector, the
   # syslog-ng image), and a missing TOOL produced an empty result that the
