@@ -98,11 +98,13 @@ func TestBootstrapInternalCAIssuesCerts(t *testing.T) {
 	keyF := filepath.Join(dir, "api.key")
 	caF := filepath.Join(dir, "ca.pem")
 	ngDir := filepath.Join(dir, "nginx")
+	vmDir := filepath.Join(dir, "victoria")
 	t.Setenv("TLS_INTERNAL_CA", "true")
 	t.Setenv("TLS_CERT_FILE", certF)
 	t.Setenv("TLS_KEY_FILE", keyF)
 	t.Setenv("TLS_CLIENT_CA_FILE", caF)
 	t.Setenv("TLS_NGINX_CERT_DIR", ngDir)
+	t.Setenv("TLS_VICTORIA_CERT_DIR", vmDir)
 	t.Setenv("TLS_SVID_TTL", "1h")
 
 	v, _ := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
@@ -117,5 +119,10 @@ func TestBootstrapInternalCAIssuesCerts(t *testing.T) {
 	}
 	if _, err := tlsconfig.NewCertReloader(filepath.Join(ngDir, "nginx.crt"), filepath.Join(ngDir, "nginx.key")); err != nil {
 		t.Fatalf("nginx SVID not usable: %v", err)
+	}
+	// #149: the metrics scraper's client SVID, so the api:8080 scrape survives
+	// the mTLS-only listener.
+	if _, err := tlsconfig.NewCertReloader(filepath.Join(vmDir, "victoria.crt"), filepath.Join(vmDir, "victoria.key")); err != nil {
+		t.Fatalf("victoria SVID not usable: %v", err)
 	}
 }

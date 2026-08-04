@@ -58,7 +58,25 @@ mounting the mTLS variant without the include + certs stops nginx from booting
 (`scripts/preflight-configs.sh` fresh-loads BOTH variants to pin this). Rollback
 is the same swap in reverse.
 
-### 4. Verify
+### 4. Metrics scrape: victoria's client SVID (#149)
+
+Once the API listens mTLS-only, the `netops-api` self-metrics scrape goes
+`up==0` and every `netops_*` metric goes dark (this happened live 2026-08-04 —
+`ScrapeTargetDown` critical for 12h). Three moves, all in the same override:
+
+1. On `api`: `TLS_VICTORIA_CERT_DIR=/data/tls/victoria` (the CA then mints
+   `victoria.{crt,key}` at boot and rotates them with the other SVIDs), and add
+   `spiffe://<trust-domain>/ns/default/sa/victoria` to `TLS_CLIENT_ALLOWED_URIS`.
+2. On `victoria`: mount `../../data/tls -> /etc/victoria/tls:ro` and point
+   `--promscrape.config` at `src/config/vmscrape-mtls.yml` — the deploy-time
+   variant of `vmscrape.yml` whose api job is `scheme: https` + `tls_config`
+   (same two-variant pattern as `default-mtls.conf`; see the file headers for
+   the mirror-editing rule).
+3. `docker compose up -d api victoria`, then verify
+   `up{instance="api:8080"} == 1`. No key-mode widening is needed: the stock
+   victoria image runs as root, which reads the 0600 key.
+
+### 5. Verify
 ```bash
 # API rejects a non-mTLS client (no cert) — fail-closed:
 curl -sk https://<api-host>:8080/admin/healthz            # → TLS handshake / 400 (no client cert)
@@ -66,6 +84,8 @@ curl -sk https://<api-host>:8080/admin/healthz            # → TLS handshake / 
 curl -s http://localhost:8000/api/health                  # → 200
 # Cert expiry is observable:
 curl -s http://localhost:8000/metrics | grep netops_tls_cert_expiry_seconds
+# The self-metrics scrape survives mTLS (§4):
+curl -s 'http://<victoria>/api/v1/query?query=up{instance="api:8080"}'  # value 1
 ```
 
 ## Outbound backend TLS (phase 3)

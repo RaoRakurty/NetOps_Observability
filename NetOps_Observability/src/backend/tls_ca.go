@@ -196,6 +196,21 @@ func (m *caManager) provisionFromEnv() error {
 				map[string]any{"path": keyPath, "mode": mode})
 		}
 	}
+	// VictoriaMetrics client SVID (#149): once the API listens mTLS-only, the
+	// self-metrics scraper must present an identity too or every netops_* API
+	// metric goes dark (proven live 2026-08-04 — the api:8080 scrape sat at
+	// up==0 from the moment mTLS shipped). Same shape as nginx above; no
+	// key-mode escape hatch is offered because the stock victoria-metrics
+	// image runs as root, which reads the 0600 key regardless of owner. The
+	// operator also adds spiffe://<td>/ns/default/sa/victoria to
+	// TLS_CLIENT_ALLOWED_URIS and points the scrape job at the mTLS variant
+	// config (vmscrape-mtls.yml) — see the tls-mtls runbook.
+	if dir := os.Getenv("TLS_VICTORIA_CERT_DIR"); dir != "" {
+		if err := m.issueService(filepath.Join(dir, "victoria.crt"), filepath.Join(dir, "victoria.key"),
+			"victoria", m.ttl, []string{"victoria"}, true, false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
