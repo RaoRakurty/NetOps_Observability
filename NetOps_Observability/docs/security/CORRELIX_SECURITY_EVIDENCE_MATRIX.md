@@ -111,3 +111,42 @@ Confidence: **H** = read the code · **M** = read config + inferred behavior ·
 **The two findings that outrank everything else:** the correlation replay
 cross-tenant leak (live, browser-reachable, ~15-line fix) and the unauthenticated
 datastores (OpenSearch, VictoriaMetrics, Valkey — reachable by any container).
+
+
+---
+
+## 7. What changed — 2026-08-04 (evening)
+
+The PKI stopped being theoretical. Enabling it also surfaced two bugs that
+would have bricked any deployment that tried, which is exactly why "built" was
+never the same as "working".
+
+| Control | Was | Now | Evidence |
+|---|---|---|---|
+| Internal CA + SVID issuance | IBD | **VI** | CA bootstrapped live, valid to 2036; api + nginx SVIDs minted with correct SPIFFE URI SANs; 0 restarts |
+| nginx→API mTLS | IBD | **VI** | api listening `(TLS, mTLS=true)`; plaintext→api **400**; TLS without client cert **handshake fails**; login through nginx **200** |
+| mTLS peer allowlist | PI | **VI** | `TLS_CLIENT_ALLOWED_URIS=spiffe://netops/ns/default/sa/nginx` — a valid cert issued to another service is refused |
+| Secret sealing (`SEAL_PROVIDER`) | IBD | **VI** | swtpm sidecar live; CA key sealed at rest |
+| CA key sealed (was the plaintext foot-gun) | CBE | **VI** | Boot refusal shipped (`tls_ca.go` seal gate) + 4 tests incl. the refusal message contract |
+| Production validator | PR | **VI** | `internal/secprofile`, 16 rules, 6 test suites; live: `profile=lab, fatal=6, warn=1`, non-blocking |
+| Security posture feed | PR | **VI** | `GET /admin/security/posture`, platform-admin gated, structured output |
+| Cross-tenant leaks (5) | CBE | **VI (fixed)** | `/replay` + 4 VictoriaMetrics leaks closed, each regression-proven |
+| SNMP profile write gate | CBE | **VI (fixed)** | now `requirePlatformAdmin`, matching the ledger's own globalRef contract |
+| ClickHouse SETTINGS precedence | UNK | **VI** | verified empirically against CH 24.8: the SQL clause wins, so the 18 cloud sites are safe; pinned by a contract test |
+
+**Two bugs found only by enabling it:**
+
+1. **First-boot ordering** — `initBackendTransport` demanded a trust bundle the
+   CA had not minted yet, so enabling internal TLS crash-looped the API.
+   Fixed by deferring (never skipping) that one call and re-initializing after
+   the CA bootstrap, where it fails closed as before.
+2. **Cross-uid key handoff** — the nginx SVID is minted by the API (uid 65532)
+   and read by nginx (uid 101); a 0600 key owned by the API made nginx refuse
+   to boot. `chown` cannot fix it (this process is deliberately non-root, so
+   `EPERM`), so the key mode is now explicit, defaults safe, and warns when
+   widened.
+
+**Still outstanding** — the validator names them precisely, which is the point:
+API→OpenSearch, →ClickHouse, →VictoriaMetrics, →Postgres, →Valkey and
+→correlation remain plaintext (6 fatal findings), plus backup-destination
+encryption (1 warn, deferred by decision).
