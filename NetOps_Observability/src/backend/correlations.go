@@ -760,6 +760,38 @@ SELECT from_node, to_node, grounding_kind, grounding_ref,
 // endpoint with platform authz. Replay re-runs the engine over the archived
 // window — bounded but not free, hence the longer timeout.
 func (s *server) proxyCorrelationReplay(w http.ResponseWriter, r *http.Request, id string) {
+	// SEC: authorize the ID under the CALLER's tenant scope before proxying.
+	//
+	// The correlation service is unauthenticated and reads at
+	// tenant_scope=__all__ (correlation/main.py CH.query), and its replay
+	// queries filter on correlation_id with no tenant predicate — so it will
+	// happily return another tenant's object for any id it is handed. This
+	// handler's requirePerm gate is a PERMISSION check, not an OWNERSHIP one,
+	// so without the read below a tenant-A caller holding infrastructure:read
+	// received tenant-B data (and the 404-vs-200 difference against the
+	// sibling route leaked the existence of any id, contra CLAUDE.md §3a
+	// rule 1).
+	//
+	// chRows applies chTenantScope(r), so the row policies filter server-side:
+	// zero rows means "not yours OR does not exist" — deliberately the same
+	// 404 the sibling detail route returns, so no existence oracle remains.
+	// Same prefilter-then-authorize pattern as rca_reports_list.go.
+	ownSQL := `
+SELECT toString(correlation_id) AS correlation_id
+  FROM netops.corr_objects
+ WHERE correlation_id = '` + id + `'
+ LIMIT 1
+ FORMAT JSON`
+	ownRows, err := s.chRows(r, ownSQL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if len(ownRows) == 0 {
+		writeError(w, http.StatusNotFound, errors.New("correlation object not found"))
+		return
+	}
+
 	base := envOr("CORRELATION_URL", "http://correlation:8000")
 	url := strings.TrimRight(base, "/") + "/correlations/" + id + "/replay"
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)

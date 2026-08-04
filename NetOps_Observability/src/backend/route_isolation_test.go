@@ -65,7 +65,18 @@ var routeIsolationLedger = map[string]string{
 	"/api/pipeline/processors/":        "scoped", // GET|PUT|DELETE {id} · POST preview, cross-tenant id → 404
 	"/api/compliance":               "scoped",
 	"/api/correlations":             "scoped",
-	"/api/correlations/":            "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
+	// SUBRESOURCE WARNING (2026-08-04): this prefix entry covers MANY handlers,
+	// and a prefix classification is NOT evidence that each one enforces tenant
+	// scope. {id}/replay was classified "scoped" by this very line while
+	// proxying a caller-supplied id to the (unauthenticated, __all__-reading)
+	// correlation service with NO ownership check — a live cross-tenant leak.
+	// Audited 2026-08-04: every OTHER subresource funnels through loadCorrSlice
+	// / buildRcaReportForID, which read at chTenantScope(r) and 404 on zero rows
+	// (correlations.go:578-579). {id}/replay now performs the same ownership
+	// pre-read (correlations_replay_isolation_test.go pins it).
+	// Adding a NEW subresource here? It must reach data through a tenant-scoped
+	// loader or do its own ownership check — this line does not do it for you.
+	"/api/correlations/": "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test) + {id}/replay (ownership pre-read, 2026-08-04): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/rca-reports": "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
 	"/api/correlations/stats":       "scoped",
 	"/api/correlations/summary":     "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
