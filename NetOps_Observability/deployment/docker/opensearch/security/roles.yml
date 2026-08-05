@@ -97,6 +97,17 @@ netops_bootstrap:
       allowed_actions:
         - "indices_all"
 
+# vector-aggregator: the F-17 stats scraper. Polls _nodes/stats and
+# _cluster/health to turn OpenSearch's per-document rejection counters into
+# metrics (the "cluster looks healthy while dropping every doc" defense).
+# Cluster-monitor ONLY — no index data access at all: a leaked scraper
+# credential reads operational counters, never a log line.
+netops_monitor:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/health"
+    - "cluster:monitor/nodes/stats*"
+
 # OpenSearch Dashboards: operator-facing read of the lanes + its own
 # .kibana index (which it must own outright).
 netops_dashboards:

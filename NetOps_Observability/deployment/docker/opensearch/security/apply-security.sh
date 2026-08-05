@@ -21,7 +21,7 @@ WORK=/tmp/netops-security
 export OPENSEARCH_JAVA_HOME="${OPENSEARCH_JAVA_HOME:-/usr/share/opensearch/jdk}"
 
 for v in OS_API_PASSWORD OS_ROUTER_PASSWORD OS_CORRELATION_PASSWORD \
-         OS_BOOTSTRAP_PASSWORD OS_DASHBOARDS_PASSWORD; do
+         OS_BOOTSTRAP_PASSWORD OS_DASHBOARDS_PASSWORD OS_AGGREGATOR_PASSWORD; do
     eval "val=\${$v:-}"
     if [ -z "$val" ]; then
         echo "apply-security: FATAL: $v is empty — refusing to bootstrap a role model with a blank credential" >&2
@@ -55,7 +55,8 @@ H_ROUTER=$(hash_of "$OS_ROUTER_PASSWORD")
 H_CORR=$(hash_of "$OS_CORRELATION_PASSWORD")
 H_BOOT=$(hash_of "$OS_BOOTSTRAP_PASSWORD")
 H_DASH=$(hash_of "$OS_DASHBOARDS_PASSWORD")
-for h in "$H_API" "$H_ROUTER" "$H_CORR" "$H_BOOT" "$H_DASH"; do
+H_AGG=$(hash_of "$OS_AGGREGATOR_PASSWORD")
+for h in "$H_API" "$H_ROUTER" "$H_CORR" "$H_BOOT" "$H_DASH" "$H_AGG"; do
     case "$h" in
         \$2*) : ;; # bcrypt
         *) echo "apply-security: FATAL: hash.sh did not return a bcrypt hash" >&2; exit 1 ;;
@@ -94,6 +95,11 @@ svc_dashboards:
   hash: "$H_DASH"
   reserved: false
   description: "OpenSearch Dashboards (SEC-008)"
+
+svc_aggregator:
+  hash: "$H_AGG"
+  reserved: false
+  description: "vector-aggregator F-17 stats scraper, cluster-monitor only (SEC-008)"
 EOF
 
 echo "apply-security: applying security configuration ..." >&2
@@ -107,4 +113,4 @@ echo "apply-security: applying security configuration ..." >&2
 
 # Never leave plaintext-derived material behind.
 rm -rf "$WORK"
-echo "apply-security: security configuration applied (5 service identities)" >&2
+echo "apply-security: security configuration applied (6 service identities)" >&2

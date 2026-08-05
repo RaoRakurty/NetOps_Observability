@@ -592,6 +592,7 @@ services:
       OS_CORRELATION_PASSWORD: ${OS_CORRELATION_PASSWORD:-}
       OS_BOOTSTRAP_PASSWORD: ${OS_BOOTSTRAP_PASSWORD:-}
       OS_DASHBOARDS_PASSWORD: ${OS_DASHBOARDS_PASSWORD:-}
+      OS_AGGREGATOR_PASSWORD: ${OS_AGGREGATOR_PASSWORD:-}
     volumes:
       - ./opensearch/security:/security:ro
       - ../../data/tls:/certs:ro

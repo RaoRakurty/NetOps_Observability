@@ -203,6 +203,18 @@ sources:
     endpoint: "${OPENSEARCH_STATS_URL:-http://opensearch:9200/_nodes/stats/indices/indexing}"
     scrape_interval_secs: 60
     scrape_timeout_secs: 10
+    # SEC-008: credential is ALWAYS presented (the SEC-010 doctrine, see the
+    # victoria_cloud_metrics sink): a plaintext cluster ignores Authorization
+    # entirely, so the default deployment is unchanged, while a secured
+    # cluster gets svc_aggregator — cluster-monitor only, no index access.
+    # An explicit auth block, not URL userinfo: it keeps the credential out
+    # of the endpoint string (and any log line that prints it) and needs no
+    # URL-encoding of special characters. TLS trust rides SSL_CERT_FILE in
+    # the enabling override (all of this process's https egress is mesh).
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_STATS_USER:-svc_aggregator}"
+      password: "${OPENSEARCH_STATS_PASSWORD:-unused-on-plaintext-opensearch}"
     decoding:
       codec: json
 
@@ -225,6 +237,11 @@ sources:
     endpoint: "${OPENSEARCH_HEALTH_URL:-http://opensearch:9200/_cluster/health}"
     scrape_interval_secs: 60
     scrape_timeout_secs: 10
+    # Same identity and doctrine as opensearch_indexing_stats above.
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_STATS_USER:-svc_aggregator}"
+      password: "${OPENSEARCH_STATS_PASSWORD:-unused-on-plaintext-opensearch}"
     decoding:
       codec: json
 

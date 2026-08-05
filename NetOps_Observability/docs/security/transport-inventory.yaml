@@ -809,6 +809,35 @@
       }
     },
     {
+      "id": "vector-aggregator-opensearch",
+      "source": "vector-aggregator",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "F-17 stats + cluster-health scrapes (http_client sources); edge MISSED by the SEC-001 audit, surfaced 2026-08-05 when the secured cluster refused it (OpenSearchStatsMissing fired)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-to-os-role",
+        "authz": "cluster-monitor-only"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/vector/vector.yaml"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1 follow-up): svc_aggregator identity, netops_monitor role (cluster:monitor/health + nodes/stats only, zero index access); always-present auth blocks on both scrapers (plaintext OS ignores them); TLS trust via SSL_CERT_FILE"
+      }
+    },
+    {
       "id": "mock-servicenow-lab-only",
       "source": "api",
       "destination": "mock-servicenow",

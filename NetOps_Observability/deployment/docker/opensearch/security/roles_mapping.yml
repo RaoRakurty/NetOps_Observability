@@ -31,6 +31,11 @@ netops_dashboards:
   users:
     - "svc_dashboards"
 
+netops_monitor:
+  reserved: false
+  users:
+    - "svc_aggregator"
+
 # The admin certificate's DN maps to all_access — that is how securityadmin
 # applies this very configuration. No human password holds admin.
 all_access:
