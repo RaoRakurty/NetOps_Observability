@@ -536,3 +536,71 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
         "Declare them in opensearch/index-templates.json, or add them to "
         "not_indexed above with a reason."
     )
+
+
+# ── SEC-006.1: no topic may exist only by auto-creation ─────────────────────
+
+def _compose() -> dict:
+    return yaml.safe_load(read("deployment", "docker", "docker-compose.yml"))
+
+
+def _kafka_init_topics() -> set:
+    """The topics kafka-init explicitly creates (parsed from its for-loop)."""
+    entry = _compose()["services"]["kafka-init"]["entrypoint"]
+    script = " ".join(entry) if isinstance(entry, list) else entry
+    m = re.search(r"for t in (.*?)\s*;\s*do", script, re.S)
+    assert m, ("kafka-init no longer enumerates topics in a `for t in ...; do` "
+               "loop — update _kafka_init_topics() together with it")
+    return {t for t in m.group(1).split() if t.startswith("netops.")}
+
+
+def _pipeline_topics() -> set:
+    """Every topic any live producer or consumer names: Vector kafka
+    components (sink `topic:` + source `topics:`), the correlation consumer's
+    TOPICS list (which also covers the Go bus-bridge producers — everything
+    they publish, correlation consumes), and goflow2's compose command."""
+    used = set()
+    for tier in ALL_TIERS:
+        cfg = vector_cfg(tier)
+        for section in ("sinks", "sources"):
+            for comp in (cfg.get(section) or {}).values():
+                if comp.get("type") != "kafka":
+                    continue
+                topic = comp.get("topic")
+                if isinstance(topic, str) and topic.startswith("netops."):
+                    used.add(topic)
+                for t in comp.get("topics") or []:
+                    if isinstance(t, str) and t.startswith("netops."):
+                        used.add(t)
+    m = re.search(r"^TOPICS\s*=\s*\[(.*?)\]", read("src", "correlation", "main.py"),
+                  re.S | re.M)
+    assert m, "correlation main.py no longer declares a TOPICS list"
+    used |= set(re.findall(r'"(netops\.[^"]+)"', m.group(1)))
+    goflow2 = _compose()["services"]["goflow2"]["command"]
+    if "-transport.kafka.topic" in goflow2:
+        used.add(goflow2[goflow2.index("-transport.kafka.topic") + 1])
+    return used
+
+
+def test_every_pipeline_topic_is_created_explicitly():
+    """SEC-006.1 turned KAFKA_AUTO_CREATE_TOPICS_ENABLE off (an authenticated
+    bus with auto-create is still an injection surface), which converts a
+    topic missing from kafka-init into a lane that silently never exists on a
+    fresh install — the single most likely data-loss vector of the epic (the
+    wireless topics were ALREADY relying on auto-creation when this test was
+    written). Every referenced topic must be pre-created."""
+    missing = sorted(_pipeline_topics() - _kafka_init_topics())
+    assert not missing, (
+        f"topics used by the pipeline but not created by kafka-init: {missing} "
+        "— with auto-creation off these lanes never exist on a fresh install; "
+        "add them to the kafka-init for-loop in docker-compose.yml"
+    )
+
+
+def test_broker_autocreate_stays_off():
+    env = _compose()["services"]["kafka"]["environment"]
+    assert env.get("KAFKA_AUTO_CREATE_TOPICS_ENABLE") == "false", (
+        "KAFKA_AUTO_CREATE_TOPICS_ENABLE must stay false (SEC-006.1): "
+        "auto-create lets anything that reaches the broker mint topics, and "
+        "it hides missing kafka-init entries until a fresh install loses data"
+    )

@@ -221,7 +221,14 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
       KAFKA_NUM_PARTITIONS: "1"
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # SEC-006.1: OFF. An authenticated bus with auto-create is still an
+      # injection surface — anything that can reach the broker could mint
+      # topics. Every canonical topic is created explicitly by kafka-init
+      # below (the wireless topics were relying on auto-creation — the exact
+      # silent-loss vector the epic warns about; test_ingest_contract.py
+      # pins pipeline-topics ⊆ kafka-init). A producer to a missing topic
+      # now fails LOUD instead of minting a lane nobody retains or consumes.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       # The bus is a transit lane, not a store (#96e): retention is bounded
       # cluster-wide — the durable copies live in ClickHouse / OpenSearch /
       # VictoriaMetrics. Same values the old redpanda-init applied.
@@ -262,7 +269,8 @@ services:
         for t in netops.applogs netops.syslog netops.flows netops.snmptrap
         netops.probes netops.metrics netops.cloud netops.app.identities.v1
         netops.controller_events netops.app.edge netops.verification
-        netops.cloudlogs netops.cloudcosts netops.deadletter; do
+        netops.cloudlogs netops.cloudcosts netops.deadletter
+        netops.wireless_sessions netops.wireless_events; do
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092
         --create --if-not-exists --topic "$$t"
         --partitions 1 --replication-factor 1 || exit 1; done
