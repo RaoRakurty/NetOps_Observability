@@ -1,0 +1,39 @@
+---
+# SEC-008.1 — one user per client identity, mapped to exactly one role.
+# No shared credentials (the INGEST_TOKEN lesson), no user in two roles.
+
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+
+netops_api:
+  reserved: false
+  users:
+    - "svc_api"
+
+netops_writer:
+  reserved: false
+  users:
+    - "svc_router"
+
+netops_correlation:
+  reserved: false
+  users:
+    - "svc_correlation"
+
+netops_bootstrap:
+  reserved: false
+  users:
+    - "svc_bootstrap"
+
+netops_dashboards:
+  reserved: false
+  users:
+    - "svc_dashboards"
+
+# The admin certificate's DN maps to all_access — that is how securityadmin
+# applies this very configuration. No human password holds admin.
+all_access:
+  reserved: true
+  backend_roles:
+    - "admin"

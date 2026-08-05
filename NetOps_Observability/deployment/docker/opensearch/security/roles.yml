@@ -1,0 +1,108 @@
+---
+# SEC-008.1 — MINIMAL role model (owner steer §0a: "one user per client
+# identity scoped to the index patterns it actually touches, and nothing
+# more"). Explicitly NOT per-tenant roles: tenant scoping is per-tenant
+# indices + osTenantFilter in the application, and it STAYS there (HLD §4
+# design law — workload identity is not a tenant boundary).
+#
+# Index-pattern discipline: every role names the concrete lanes its client
+# writes or reads. A new lane needs a deliberate edit here, which is the
+# point — an unlisted index is a 403, not a silent success.
+
+_meta:
+  type: "roles"
+  config_version: 2
+
+# The api: reads every netops lane (log search, RCA evidence, exports) and
+# writes the ones it owns (audit, saved objects, deadletter replays).
+netops_api:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    - "indices:data/read/scroll*"
+  index_permissions:
+    - index_patterns: ["netops-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+        - "indices:admin/mappings/get"
+        - "indices:admin/get"
+        - "indices:monitor/settings/get"
+    - index_patterns: ["netops-audit-*", "netops-saved-*", "netops-deadletter-*"]
+      allowed_actions:
+        - "crud"
+        - "create_index"
+
+# vector-router: the log-ingest writer. Write-only on the lanes it sinks;
+# no read, no cluster admin. TELEMETRY-CRITICAL — a wrong credential here
+# stops ALL app-log and syslog indexing (assert on doc counts, never on
+# "no errors": the .label mapping-conflict incident proved logs stay quiet).
+netops_writer:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "indices:data/write/bulk"
+  index_permissions:
+    - index_patterns:
+        - "netops-applogs-*"
+        - "netops-platformlogs-*"
+        - "netops-syslog-*"
+        - "netops-snmptrap-*"
+        - "netops-cloudlogs-*"
+        - "netops-flows-*"
+        - "netops-deadletter-*"
+      allowed_actions:
+        - "write"
+        - "create_index"
+        - "indices:admin/mapping/put"
+
+# correlation: reads evidence lanes to build findings; writes none of them.
+netops_correlation:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops_ro"
+  index_permissions:
+    - index_patterns: ["netops-syslog-*", "netops-snmptrap-*", "netops-applogs-*", "netops-flows-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+
+# opensearch-init: templates, ISM policies, snapshot repo/policy, replica
+# settings — cluster-admin scoped to what the bootstrap actually does.
+netops_bootstrap:
+  reserved: false
+  cluster_permissions:
+    - "cluster_manage_index_templates"
+    - "cluster:admin/ism/*"
+    - "cluster:admin/opendistro/ism/*"
+    - "cluster:admin/repository/*"
+    - "cluster:admin/snapshot/*"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    - "cluster_composite_ops"
+  index_permissions:
+    - index_patterns: ["netops-*", ".opendistro-ism-*", ".opensearch-sap*"]
+      allowed_actions:
+        - "indices_all"
+
+# OpenSearch Dashboards: operator-facing read of the lanes + its own
+# .kibana index (which it must own outright).
+netops_dashboards:
+  reserved: false
+  cluster_permissions:
+    - "cluster_composite_ops"
+    - "cluster:monitor/health"
+    - "cluster:monitor/state"
+    - "cluster:monitor/nodes/*"
+  index_permissions:
+    - index_patterns: ["netops-*"]
+      allowed_actions:
+        - "read"
+        - "search"
+        - "indices:admin/mappings/get"
+        - "indices:admin/get"
+    - index_patterns: [".kibana*", ".opensearch-dashboards*"]
+      allowed_actions:
+        - "indices_all"

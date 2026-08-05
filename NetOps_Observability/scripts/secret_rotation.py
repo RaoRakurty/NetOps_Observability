@@ -104,6 +104,19 @@ POLICY: dict[str, Policy] = {
     # their start — rotation = reset-env then recreate redis + api + prober.
     "REDIS_PASSWORD": Policy(
         FREE, "", "", ""),
+    # SEC-008: applied to the security index by the opensearch-init bootstrap,
+    # which re-runs on every stack start — a changed env var converges without
+    # operator action (hence FREE, not ALTER).
+    "OS_API_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "OS_ROUTER_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "OS_CORRELATION_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "OS_BOOTSTRAP_PASSWORD": Policy(
+        FREE, "", "", ""),
+    "OS_DASHBOARDS_PASSWORD": Policy(
+        FREE, "", "", ""),
 
     # ---- alter: a credential inside a store's own catalog -------------------
     "DB_PASSWORD": Policy(
