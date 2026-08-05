@@ -130,6 +130,33 @@ from wireless_onboarding import (
 
 LOG_LEVEL        = os.environ.get("LOG_LEVEL", "info").upper()
 KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
+
+
+def kafka_security_kwargs(env=os.environ) -> dict:
+    """mTLS to the bus (SEC-006.2): when the three cert paths are set, the
+    consumer dials the broker's authenticated listener presenting the
+    correlation SVID; unset, the plaintext baseline is bit-for-bit unchanged.
+    A PARTIAL config refuses to start rather than silently falling back to
+    plaintext — a downgrade that looks exactly like "the bus is quiet"."""
+    ca = env.get("KAFKA_SSL_CA", "")
+    cert = env.get("KAFKA_SSL_CERT", "")
+    key = env.get("KAFKA_SSL_KEY", "")
+    if not (ca or cert or key):
+        return {}
+    if not (ca and cert and key):
+        raise RuntimeError(
+            "KAFKA_SSL_CA, KAFKA_SSL_CERT and KAFKA_SSL_KEY must be set together "
+            f"(got ca={bool(ca)} cert={bool(cert)} key={bool(key)}) — refusing a "
+            "partial TLS config instead of silently downgrading to plaintext")
+    import ssl as _ssl
+    ctx = _ssl.create_default_context(purpose=_ssl.Purpose.SERVER_AUTH, cafile=ca)
+    ctx.load_cert_chain(cert, key)
+    return {"security_protocol": "SSL", "ssl_context": ctx}
+
+
+# Built once at import: a broken TLS config fails the BOOT, loudly, not the
+# Nth reconnect attempt at 3am.
+KAFKA_SECURITY = kafka_security_kwargs()
 CLICKHOUSE_URL   = os.environ.get("CLICKHOUSE_URL", "http://clickhouse:8123")
 CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER", "netops")
 CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
@@ -2237,6 +2264,9 @@ async def consume() -> None:
             bootstrap_servers=KAFKA_BOOTSTRAP,
             group_id="netops-correlation",
             auto_offset_reset="latest",
+            # SEC-006.2: {} on the plaintext baseline; SSL + the correlation
+            # SVID when the KAFKA_SSL_* env is present (kafka_security_kwargs).
+            **KAFKA_SECURITY,
             # NO value_deserializer, deliberately. aiokafka runs the deserializer
             # inside its fetcher (_consumer_record) BEFORE it advances
             # next_fetch_offset — so a malformed payload raised OUTSIDE the

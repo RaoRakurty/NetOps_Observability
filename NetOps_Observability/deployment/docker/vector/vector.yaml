@@ -1006,6 +1006,15 @@ transforms:
 sinks:
   kafka_cloud:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     inputs: [cloud_app_health]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.cloud"
@@ -1017,6 +1026,15 @@ sinks:
   # WAF/LB/DNS/flow/change lanes onto.
   kafka_cloudlogs:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     inputs: [cloud_host_log]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.cloudlogs"
@@ -1025,6 +1043,15 @@ sinks:
 
   kafka_applogs:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     inputs: [applogs_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.applogs"
@@ -1033,6 +1060,15 @@ sinks:
 
   kafka_syslog:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     inputs: [syslog_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.syslog"
@@ -1047,6 +1083,15 @@ sinks:
   # transform did). Alerted by VectorDeadLetters in rules.yaml.
   kafka_deadletter:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     inputs: [deadletter_encoded, misrouted_flows_deadletter]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.deadletter"
@@ -1055,6 +1100,15 @@ sinks:
 
   kafka_snmptrap:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
     # Buffered here and NOT on the other kafka sinks, deliberately. These four
@@ -1090,6 +1144,15 @@ sinks:
 
   kafka_probes:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
     # Buffered here and NOT on the other kafka sinks, deliberately. These four
@@ -1143,6 +1206,15 @@ sinks:
 
   kafka_metrics:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
     # Buffered here and NOT on the other kafka sinks, deliberately. These four
@@ -1183,6 +1255,15 @@ sinks:
   # value stays exactly the record the producer sent.
   kafka_bus:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
     # Buffered here and NOT on the other kafka sinks, deliberately. These four

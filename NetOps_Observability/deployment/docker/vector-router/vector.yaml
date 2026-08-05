@@ -103,6 +103,15 @@ sources:
 
   kafka_applogs:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.applogs"]
     group_id: "netops-router-applogs"
@@ -110,6 +119,15 @@ sources:
 
   kafka_syslog:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.syslog"]
     group_id: "netops-router-syslog"
@@ -117,6 +135,15 @@ sources:
 
   kafka_flows:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.flows"]
     group_id: "netops-router-flows"
@@ -124,6 +151,15 @@ sources:
 
   kafka_snmptrap:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.snmptrap"]
     group_id: "netops-router-snmptrap"
@@ -135,6 +171,15 @@ sources:
   # they are searchable as RAW logs, not only as correlation signals.
   kafka_cloudlogs:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.cloudlogs"]
     group_id: "netops-router-cloudlogs"
@@ -147,6 +192,15 @@ sources:
   # itself drop it.
   kafka_deadletter:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.deadletter"]
     group_id: "netops-router-deadletter"
@@ -158,6 +212,15 @@ sources:
   # row policy) — cost is not a log, so no OpenSearch index.
   kafka_cloudcosts:
     type: kafka
+    # SEC-006.2: mTLS to the broker when the deployment enables it — unquoted
+    # interpolation so the boolean lands as a boolean. Plaintext default; the
+    # enabling override sets KAFKA_TLS_ENABLED=true + the SVID paths and
+    # repoints BROKER_URLS at the mTLS listener.
+    tls:
+      enabled: ${KAFKA_TLS_ENABLED:-false}
+      ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
+      crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topics: ["netops.cloudcosts"]
     group_id: "netops-router-cloudcosts"
