@@ -1755,7 +1755,12 @@ class CH:
     def __init__(self, base_url: str, user: str, password: str) -> None:
         self.base = base_url.rstrip("/")
         self.auth = (user, password)
-        self.client = httpx.AsyncClient(timeout=10.0)
+        # SEC-009: when CLICKHOUSE_URL is https, verify against the mesh CA
+        # (CORRELATION_CA_FILE) — never the system pool, never verify=False.
+        # Plain http keeps the default (verify is irrelevant there), so the
+        # fresh-install baseline is byte-identical.
+        verify = os.environ.get("CORRELATION_CA_FILE") or True
+        self.client = httpx.AsyncClient(timeout=10.0, verify=verify)
 
     async def insert(self, table: str, rows: Iterable[dict], dedup_token: str = "") -> bool:
         """True on a POSITIVELY COMMITTED insert, False otherwise.

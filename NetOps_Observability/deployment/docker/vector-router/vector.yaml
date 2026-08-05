@@ -615,7 +615,7 @@ sinks:
   clickhouse_flows:
     type: clickhouse
     inputs: [flows_rules]
-    endpoint: "http://clickhouse:8123"
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
     database: netops
     table: flows
     auth:
@@ -631,7 +631,7 @@ sinks:
   clickhouse_cloudcosts:
     type: clickhouse
     inputs: [cloudcosts_normalized]
-    endpoint: "http://clickhouse:8123"
+    endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
     database: netops
     table: cloud_costs
     auth:

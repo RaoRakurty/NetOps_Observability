@@ -1,0 +1,24 @@
+<!-- SEC-009.1: ClickHouse HTTPS listener (dual-listener migration stage).
+     Mounted ONLY by TLS-enabled deployments (the override; installer
+     end-state), alongside tls-entrypoint.sh which stages the registry SVID
+     at these paths with clickhouse ownership. :8123 plaintext stays alive
+     until every client (api / vector-router / correlation / grafana) is cut
+     over; removing it is the epic's final hardening step. verificationMode
+     none = the server does not demand CLIENT certs yet — client mTLS is the
+     target's later half; transport encryption + credential protection first. -->
+<clickhouse>
+    <https_port>8443</https_port>
+    <!-- native-protocol TLS for grafana's clickhouse datasource (protocol: native) -->
+    <tcp_port_secure>9440</tcp_port_secure>
+    <openSSL>
+        <server>
+            <certificateFile>/etc/clickhouse-server/tls/server.crt</certificateFile>
+            <privateKeyFile>/etc/clickhouse-server/tls/server.key</privateKeyFile>
+            <verificationMode>none</verificationMode>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <cacheSessions>true</cacheSessions>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            <preferServerCiphers>true</preferServerCiphers>
+        </server>
+    </openSSL>
+</clickhouse>
