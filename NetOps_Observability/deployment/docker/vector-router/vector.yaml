@@ -538,7 +538,11 @@ sinks:
   opensearch_applogs:
     type: elasticsearch
     inputs: [applogs_rules]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       # log_index_base is "applogs" for application services and "platformlogs"
@@ -556,7 +560,11 @@ sinks:
   opensearch_deadletter:
     type: elasticsearch
     inputs: [deadletter_encoded, kafka_deadletter]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       index: "netops-deadletter-%Y.%m.%d"
@@ -568,7 +576,11 @@ sinks:
   opensearch_syslog:
     type: elasticsearch
     inputs: [syslog_rules]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
@@ -580,7 +592,11 @@ sinks:
   opensearch_snmptrap:
     type: elasticsearch
     inputs: [snmptrap_rules]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
@@ -592,7 +608,11 @@ sinks:
   opensearch_cloudlogs:
     type: elasticsearch
     inputs: [cloudlogs_rules]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
@@ -604,7 +624,11 @@ sinks:
   opensearch_flows:
     type: elasticsearch
     inputs: [flows_os_sample]
-    endpoints: ["http://opensearch:9200"]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
     mode: bulk
     bulk:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"

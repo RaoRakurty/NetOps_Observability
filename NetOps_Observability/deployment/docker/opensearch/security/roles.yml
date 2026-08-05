@@ -79,6 +79,16 @@ netops_bootstrap:
     - "cluster:admin/opendistro/ism/*"
     - "cluster:admin/repository/*"
     - "cluster:admin/snapshot/*"
+    # Snapshot Management is its own action namespace — the daily DR policy
+    # (netops-daily) writes through it, and without this the bootstrap 403s
+    # while everything else succeeds: backups would silently stop being
+    # scheduled. Found by the loud failure this role model is designed to
+    # produce (2026-08-05).
+    - "cluster:admin/opensearch/snapshot_management/*"
+    # Cluster settings: the bootstrap pins ISM history shard/replica settings
+    # (F-07/F-53 — a replica that can never be assigned pins the cluster
+    # yellow forever, destroying yellow as an alarm signal).
+    - "cluster:admin/settings/update"
     - "cluster:monitor/health"
     - "cluster:monitor/state"
     - "cluster_composite_ops"

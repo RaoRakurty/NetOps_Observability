@@ -111,6 +111,26 @@ func (m *caManager) issueService(certPath, keyPath, svc string, ttl time.Duratio
 	return writeFileAtomic(keyPath, svid.KeyPEM, 0o600)
 }
 
+// serviceKeyMode resolves the file mode for issued service keys. Default 0600.
+// The cross-uid handoff (keys minted by the api's uid, read by store
+// containers running as their own uids, this process non-root so Chown is
+// EPERM) makes widening necessary for some deployments; it is EXPLICIT via
+// TLS_SERVICE_KEY_MODE and warned, never silent. Each key lives in a dir
+// mounted read-only into exactly one container.
+func serviceKeyMode() (os.FileMode, error) {
+	mv := envOr("TLS_SERVICE_KEY_MODE", "")
+	if mv == "" || mv == "0600" {
+		return 0o600, nil
+	}
+	m64, err := strconv.ParseUint(strings.TrimPrefix(mv, "0o"), 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("tls ca: TLS_SERVICE_KEY_MODE %q is not an octal file mode: %w", mv, err)
+	}
+	logWarn("tls", "service SVID key mode widened by TLS_SERVICE_KEY_MODE — each key is readable by anything that can read its per-service mount; acceptable only because each dir is mounted into exactly one container",
+		map[string]any{"mode": mv})
+	return os.FileMode(m64), nil
+}
+
 // writeBundle writes the CA trust anchor (clients verify peers against it).
 func (m *caManager) writeBundle(path string) error {
 	return writeFileAtomic(path, m.ca.CertPEM(), 0o644)
@@ -219,9 +239,22 @@ func (m *caManager) provisionFromEnv() error {
 	// presents to write the security index, mapped by DN in admin_dn
 	// (internalca sets Subject CN = the SPIFFE ID, which IS that DN).
 	if dir := os.Getenv("TLS_OS_ADMIN_CERT_DIR"); dir != "" {
-		if err := m.issueService(filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key"),
+		keyPath := filepath.Join(dir, "admin.key")
+		if err := m.issueService(filepath.Join(dir, "admin.crt"), keyPath,
 			"opensearch-admin", m.ttl, nil, true, false); err != nil {
 			return fmt.Errorf("tls ca: opensearch admin identity: %w", err)
+		}
+		mode, err := serviceKeyMode()
+		if err != nil {
+			return err
+		}
+		if mode != 0o600 {
+			if err := os.Chmod(keyPath, mode); err != nil {
+				return fmt.Errorf("tls ca: set opensearch admin key mode: %w", err)
+			}
+		}
+		if err := m.writeBundle(filepath.Join(dir, "ca.pem")); err != nil {
+			return fmt.Errorf("tls ca: admin trust bundle: %w", err)
 		}
 	}
 	// SEC-003.3: table-driven issuance for EVERY registered workload
@@ -238,15 +271,9 @@ func (m *caManager) provisionFromEnv() error {
 		// EPERM. Each service dir is mounted read-only into exactly ONE
 		// container, so widening the mode exposes the key to that container
 		// and nothing else. EXPLICIT and warned — never silently widened.
-		mode := os.FileMode(0o600)
-		if mv := envOr("TLS_SERVICE_KEY_MODE", ""); mv != "" && mv != "0600" {
-			m64, perr := strconv.ParseUint(strings.TrimPrefix(mv, "0o"), 8, 32)
-			if perr != nil {
-				return fmt.Errorf("tls ca: TLS_SERVICE_KEY_MODE %q is not an octal file mode: %w", mv, perr)
-			}
-			mode = os.FileMode(m64)
-			logWarn("tls", "service SVID key mode widened by TLS_SERVICE_KEY_MODE — each key is readable by anything that can read its per-service mount; acceptable only because each dir is mounted into exactly one container",
-				map[string]any{"mode": mv})
+		mode, err := serviceKeyMode()
+		if err != nil {
+			return err
 		}
 		for _, e := range workloadid.Registry {
 			dir := filepath.Join(root, e.Service)
@@ -260,6 +287,14 @@ func (m *caManager) provisionFromEnv() error {
 				if err := os.Chmod(keyPath, mode); err != nil {
 					return fmt.Errorf("tls ca: set %s key mode: %w", e.Service, err)
 				}
+			}
+			// Each service dir is SELF-CONTAINED: cert + key + the trust
+			// anchor. Consumers can then mount one directory read-only and
+			// find everything they need — several (OpenSearch) reject config
+			// paths outside their own config dir, and docker cannot nest a
+			// file mount inside a read-only directory mount anyway.
+			if err := m.writeBundle(filepath.Join(dir, "ca.pem")); err != nil {
+				return fmt.Errorf("tls ca: %s trust bundle: %w", e.Service, err)
 			}
 		}
 	}

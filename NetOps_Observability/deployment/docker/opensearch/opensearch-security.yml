@@ -1,0 +1,52 @@
+# SEC-008.1 — Correlix OpenSearch config with the security plugin ON.
+#
+# WHY A WHOLE FILE, not env vars: the image's demo-config installer REWRITES
+# opensearch.yml when the security plugin is enabled, stamping its own demo
+# certs and admin DN (CN=kirk) over anything passed as plugins.security.*
+# environment settings — the securityadmin rejection that cost an hour on
+# 2026-08-05. The supported production path is
+# DISABLE_INSTALL_DEMO_CONFIG=true + this file.
+#
+# Derived from the image's own generated config (system_indices list kept
+# verbatim so plugin internals stay protected); ONLY the cert paths, the
+# admin/nodes DNs and the demo escape hatches differ. cluster.name, node.name,
+# discovery.type and path.repo continue to come from compose env vars.
+---
+network.host: 0.0.0.0
+
+# Node identity: the registry SVID (SEC-003.3), mounted at config/tls.
+# Paths are RELATIVE to the config dir — the plugin rejects absolute ones.
+plugins.security.ssl.transport.pemcert_filepath: tls/opensearch.crt
+plugins.security.ssl.transport.pemkey_filepath: tls/opensearch.key
+plugins.security.ssl.transport.pemtrustedcas_filepath: tls/ca.pem
+# Single-node: the node dials itself by container name, not by the SAN it
+# was issued for; hostname verification on the TRANSPORT layer buys nothing
+# here and breaks the loopback. HTTP-layer verification is unaffected.
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: tls/opensearch.crt
+plugins.security.ssl.http.pemkey_filepath: tls/opensearch.key
+plugins.security.ssl.http.pemtrustedcas_filepath: tls/ca.pem
+
+# The ONLY admin is the cert DN (internalca sets Subject CN = the SPIFFE ID).
+# No human password holds admin; the demo certificates are refused outright.
+plugins.security.allow_unsafe_democertificates: false
+plugins.security.allow_default_init_securityindex: true
+plugins.security.authcz.admin_dn: ['CN=spiffe://netops/ns/default/sa/opensearch-admin']
+plugins.security.nodes_dn: ['CN=spiffe://netops/ns/default/sa/opensearch']
+plugins.security.audit.type: internal_opensearch
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.check_snapshot_restore_write_privileges: true
+plugins.security.restapi.roles_enabled: [all_access]
+plugins.security.system_indices.enabled: true
+plugins.security.system_indices.indices: [.plugins-ml-agent, .plugins-ml-config, .plugins-ml-connector,
+  .plugins-ml-controller, .plugins-ml-model-group, .plugins-ml-model, .plugins-ml-task,
+  .plugins-ml-conversation-meta, .plugins-ml-conversation-interactions, .plugins-ml-memory-meta,
+  .plugins-ml-memory-message, .plugins-ml-stop-words, .opendistro-alerting-config,
+  .opendistro-alerting-alert*, .opendistro-anomaly-results*, .opendistro-anomaly-detector*,
+  .opendistro-anomaly-checkpoints, .opendistro-anomaly-detection-state, .opendistro-reports-*,
+  .opensearch-notifications-*, .opensearch-notebooks, .opensearch-observability, .ql-datasources,
+  .opendistro-asynchronous-search-response*, .replication-metadata-store, .opensearch-knn-models,
+  .geospatial-ip2geo-data*, .plugins-flow-framework-config, .plugins-flow-framework-templates,
+  .plugins-flow-framework-state]
+node.max_local_storage_nodes: 3

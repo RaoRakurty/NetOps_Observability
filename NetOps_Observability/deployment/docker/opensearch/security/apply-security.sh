@@ -30,6 +30,18 @@ for v in OS_API_PASSWORD OS_ROUTER_PASSWORD OS_CORRELATION_PASSWORD \
 done
 
 mkdir -p "$WORK"
+# securityadmin -cd requires the COMPLETE config set (action_groups, tenants,
+# nodes_dn, whitelist, config, audit ...), not just the files we customize.
+# Seed from the plugin's shipped defaults, then overlay ours — so we own
+# exactly three files and inherit the rest, which is also what keeps upgrades
+# cheap (a new default file appears automatically).
+DEFAULTS=/usr/share/opensearch/config/opensearch-security
+if [ ! -d "$DEFAULTS" ]; then
+    echo "apply-security: FATAL: $DEFAULTS missing — cannot seed the config set" >&2
+    exit 78
+fi
+cp "$DEFAULTS"/*.yml "$WORK/"
+rm -f "$WORK/opensearch.yml.example"
 cp "$CONF_SRC/roles.yml" "$CONF_SRC/roles_mapping.yml" "$WORK/"
 
 hash_of() {

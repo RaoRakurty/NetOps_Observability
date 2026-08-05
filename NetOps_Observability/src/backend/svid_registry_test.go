@@ -73,6 +73,13 @@ func TestRegistryIssuanceMintsEveryRow(t *testing.T) {
 		if e.Server != hasEKU(x509.ExtKeyUsageServerAuth) {
 			t.Errorf("%s: ServerAuth EKU presence = %v, want %v", e.Service, !e.Server, e.Server)
 		}
+		// Self-contained dir: the trust anchor ships beside the leaf so a
+		// consumer can mount ONE read-only directory (SEC-008: OpenSearch
+		// rejects paths outside its config dir; docker cannot nest a file
+		// mount inside a read-only dir mount).
+		if _, err := os.Stat(filepath.Join(root, e.Service, "ca.pem")); err != nil {
+			t.Errorf("%s: trust bundle missing from the service dir: %v", e.Service, err)
+		}
 		// 0600 keys: the mount decides who reads them; the file mode must not.
 		ki, err := os.Stat(filepath.Join(root, e.Service, e.Service+".key"))
 		if err != nil {
