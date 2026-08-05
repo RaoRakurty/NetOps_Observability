@@ -272,7 +272,7 @@
       ],
       "security_profile": {
         "transport": "mtls",
-        "notes": "LIVE 2026-08-05 (APP-001): correlation serves mTLS-ONLY :8443 (tls_serve.py, registry SVID, CERT_REQUIRED vs mesh CA — plaintext listener REMOVED, not kept beside) + SPIFFE peer authorization (tls_ident.py): api full access; victoria + own healthcheck scoped to /metrics+/healthz. Matrix proven: anon handshake refused, victoria SVID 403 on /findings + 200 on /metrics, api SVID 200. api dials https via backendHTTPClient presenting its services/api SVID (first-boot deferral added); scrape via vmscrape-mtls tls_config, up{job=correlation}=1. APP-001 cleared — boot validator fatal 1->0."
+        "notes": "LIVE 2026-08-05 (APP-001): correlation serves mTLS-ONLY :8443 (tls_serve.py, registry SVID, CERT_REQUIRED vs mesh CA \u2014 plaintext listener REMOVED, not kept beside) + SPIFFE peer authorization (tls_ident.py): api full access; victoria + own healthcheck scoped to /metrics+/healthz. Matrix proven: anon handshake refused, victoria SVID 403 on /findings + 200 on /metrics, api SVID 200. api dials https via backendHTTPClient presenting its services/api SVID (first-boot deferral added); scrape via vmscrape-mtls tls_config, up{job=correlation}=1. APP-001 cleared \u2014 boot validator fatal 1->0."
       }
     },
     {
@@ -353,7 +353,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/docker-compose.yml:207"
-      ]
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-aggregator (9 kafka sinks, SVID via env-driven tls blocks) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. PLAINTEXT:9092 removal + enforce flip (SEC-006.3/007.2) = programme-final hardening after the soak."
+      }
     },
     {
       "id": "vector-router-kafka",
@@ -377,7 +381,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/docker-compose.yml:207"
-      ]
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-router (7 kafka sources + deadletter sink) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. PLAINTEXT:9092 removal + enforce flip (SEC-006.3/007.2) = programme-final hardening after the soak."
+      }
     },
     {
       "id": "goflow2-kafka",
@@ -402,7 +410,11 @@
       "priority": "P1",
       "evidence": [
         "deployment/docker/docker-compose.yml:207"
-      ]
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-006.2 client 5/5, owner option-1): goflow2 v2.2.1 has no client-cert flags and SASL is rejected (\u00a70a), so it produces on FLOWS:9095 \u2014 encrypted, server-verified via SSL_CERT_FILE (Go system pool), ANONYMOUS principal ACL-bounded to Write+Describe on netops.flows LITERAL (SEC-007.1). Bound becomes exclusive at the SEC-007.2 enforce flip."
+      }
     },
     {
       "id": "api-kafka",
@@ -450,7 +462,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/docker-compose.yml:972"
-      ]
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "KAFKA HOP LIVE 2026-08-05 (SEC-006.2): aiokafka consumer on MTLS:9094 via kafka_security_kwargs (KAFKA_SSL_* env, partial config refuses boot); consume-only ACLs on its 12 topics + group. CH/PG hops were already converted (SEC-009.1/SEC-011.1)."
+      }
     },
     {
       "id": "collectors-vector-lanes",
