@@ -80,6 +80,36 @@ echo "acls: ANONYMOUS (goflow2/FLOWS) — produce netops.flows ONLY" >&2
 $ACLS --add --allow-principal "User:ANONYMOUS" \
     --operation Write --operation Describe --topic netops.flows >/dev/null
 
+# INTERIM (2026-08-05, expires with cloud-ingest's mTLS cutover): cloud-ingest
+# is a DIRECT kafka producer on the plaintext listener that the SEC-006.2
+# client list MISSED — the same service F-08 missed for the shared token; its
+# own source says so ("cloud-ingest was the missed producer"). The moment the
+# matrix landed, its lanes' ACLs disabled the per-RESOURCE allow-everyone
+# fallback and every ANONYMOUS produce was DENIED (17k+ denials, cloudcosts
+# lane dark ~25min). LESSON, recorded hard: allow.everyone.if.no.acl.found
+# is per-resource — "observe posture" only observes resources with NO ACLs;
+# writing an ACL for a topic IS enforcement against every principal not
+# named on it. These grants restore the lanes until cloud-ingest presents a
+# real identity (client 6/6); then DELETE them.
+echo "acls: ANONYMOUS INTERIM — cloud-ingest lanes until its mTLS cutover" >&2
+for t in netops.cloud netops.cloudcosts netops.cloudlogs; do
+    $ACLS --add --allow-principal "User:ANONYMOUS" \
+        --operation Write --operation Describe --topic "$t" >/dev/null
+done
+
+# INTERIM (same class, same expiry logic): scripts/rca-canary.sh injects its
+# two known failure events via kafka-console-producer on :9092 — ANONYMOUS.
+# The matrix broke it the same way it broke cloud-ingest (the canary paged
+# "bus→normalizer→CH path broken" within 15 minutes — working exactly as
+# designed). Until the canary produces through an authenticated path (the
+# aggregator's HTTP ingest lanes, or an mTLS client config), its two topics
+# carry ANONYMOUS Write; then DELETE these with the block above.
+echo "acls: ANONYMOUS INTERIM — rca-canary injection topics" >&2
+for t in netops.probes netops.app.edge; do
+    $ACLS --add --allow-principal "User:ANONYMOUS" \
+        --operation Write --operation Describe --topic "$t" >/dev/null
+done
+
 COUNT=$($ACLS --list 2>/dev/null | grep -c "principal=" || true)
 echo "acls: matrix applied — $COUNT ACL entries live (observe posture; the" >&2
 echo "acls: SEC-007.2 flip to allow.everyone=false is a separate, soaked step)" >&2
