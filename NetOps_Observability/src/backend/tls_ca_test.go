@@ -44,7 +44,7 @@ func TestCAManagerSealsKeyAndIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load sealed key: %v", err)
 	}
-	if strings.Contains(string(raw), "EC PRIVATE KEY") {
+	if strings.Contains(string(raw), "PRIVATE KEY") { // covers SEC1 and PKCS#8
 		t.Fatal("CA private key stored in plaintext")
 	}
 	if !strings.HasPrefix(string(raw), vault.VersionPrefix) {

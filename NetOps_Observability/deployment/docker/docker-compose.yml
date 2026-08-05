@@ -571,6 +571,35 @@ services:
   # One-shot: installs the ISM retention policy (deletes netops-* log/flow indices
   # after OPENSEARCH_LOG_RETENTION_DAYS) once OpenSearch is healthy, then exits.
   # The #1 disk-fill protection for a multi-day run.
+  # SEC-008: one-shot security-config bootstrap. Reuses the opensearch image
+  # (the only place securityadmin.sh + hash.sh live), applies users/roles/
+  # mappings REMOTELY (-h opensearch), then exits. Profile-gated: a fresh
+  # install keeps the documented plaintext baseline until TLS enablement.
+  opensearch-security-init:
+    image: netops-opensearch:2.16.0-slim
+    profiles: [security]
+    restart: "no"
+    entrypoint: ["/security/apply-security.sh"]
+    environment:
+      OS_HOST: opensearch
+      OS_PORT: "9200"
+      SEC_CONF_SRC: /security
+      OS_ADMIN_CA: /certs/ca.pem
+      OS_ADMIN_CERT: /certs/admin/admin.crt
+      OS_ADMIN_KEY: /certs/admin/admin.key
+      OS_API_PASSWORD: ${OS_API_PASSWORD:-}
+      OS_ROUTER_PASSWORD: ${OS_ROUTER_PASSWORD:-}
+      OS_CORRELATION_PASSWORD: ${OS_CORRELATION_PASSWORD:-}
+      OS_BOOTSTRAP_PASSWORD: ${OS_BOOTSTRAP_PASSWORD:-}
+      OS_DASHBOARDS_PASSWORD: ${OS_DASHBOARDS_PASSWORD:-}
+    volumes:
+      - ./opensearch/security:/security:ro
+      - ../../data/tls:/certs:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks: [netops]
+
   # SEC-010: authenticating TLS front for VictoriaMetrics — one scoped basic
   # credential per service identity (src/config/vmauth.yml), serving HTTPS
   # with its registry SVID (SEC-003.3). Profile-gated: a fresh install keeps

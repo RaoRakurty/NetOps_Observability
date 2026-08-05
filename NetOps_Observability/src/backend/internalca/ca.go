@@ -25,7 +25,13 @@ import (
 
 const (
 	pemCertType = "CERTIFICATE"
-	pemKeyType  = "EC PRIVATE KEY"
+	pemKeyType  = "EC PRIVATE KEY" // CA root key (read back only by FromPEM)
+	// pemLeafKeyType is PKCS#8 for ISSUED SVIDs. Go (tls.X509KeyPair) and
+	// OpenSSL consumers (nginx/postgres/clickhouse) accept both encodings,
+	// but the OpenSearch security plugin accepts ONLY PKCS#8 — it rejects a
+	// SEC1 "EC PRIVATE KEY" with an unhelpful error (SEC-008). One format
+	// for every leaf keeps that trap permanently shut.
+	pemLeafKeyType = "PRIVATE KEY"
 )
 
 // CA is an internal certificate authority (ECDSA P-256 root).
@@ -184,13 +190,13 @@ func (ca *CA) Issue(req Request) (*SVID, error) {
 	if err != nil {
 		return nil, err
 	}
-	kder, err := x509.MarshalECPrivateKey(key)
+	kder, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, err
 	}
 	return &SVID{
 		CertPEM:  encodePEM(pemCertType, der),
-		KeyPEM:   encodePEM(pemKeyType, kder),
+		KeyPEM:   encodePEM(pemLeafKeyType, kder),
 		NotAfter: tmpl.NotAfter,
 	}, nil
 }

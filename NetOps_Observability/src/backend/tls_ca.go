@@ -212,6 +212,18 @@ func (m *caManager) provisionFromEnv() error {
 			return err
 		}
 	}
+	// SEC-008: the OpenSearch security ADMIN identity. Deliberately NOT a
+	// workloadid.Registry row — the registry's completeness ratchet requires
+	// every row to name a real compose service, and "opensearch-admin" is a
+	// credential, not a workload. It is the identity securityadmin.sh
+	// presents to write the security index, mapped by DN in admin_dn
+	// (internalca sets Subject CN = the SPIFFE ID, which IS that DN).
+	if dir := os.Getenv("TLS_OS_ADMIN_CERT_DIR"); dir != "" {
+		if err := m.issueService(filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key"),
+			"opensearch-admin", m.ttl, nil, true, false); err != nil {
+			return fmt.Errorf("tls ca: opensearch admin identity: %w", err)
+		}
+	}
 	// SEC-003.3: table-driven issuance for EVERY registered workload
 	// (internal/workloadid — the identity registry with its own completeness
 	// guards). Additive and dormant — nothing reads
@@ -219,12 +231,35 @@ func (m *caManager) provisionFromEnv() error {
 	// epic mounts it — so minting cannot break a running stack. Re-issued by
 	// the same TTL/2 loop that calls this method.
 	if root := os.Getenv("TLS_SERVICE_CERT_ROOT"); root != "" {
+		// Cross-uid handoff, same tradeoff as the nginx SVID above: these keys
+		// are MINTED by the api (uid 65532) and READ by store containers
+		// running as their own uids (opensearch 1000, …), which cannot read a
+		// 0600 file owned by us, and this process is non-root so os.Chown is
+		// EPERM. Each service dir is mounted read-only into exactly ONE
+		// container, so widening the mode exposes the key to that container
+		// and nothing else. EXPLICIT and warned — never silently widened.
+		mode := os.FileMode(0o600)
+		if mv := envOr("TLS_SERVICE_KEY_MODE", ""); mv != "" && mv != "0600" {
+			m64, perr := strconv.ParseUint(strings.TrimPrefix(mv, "0o"), 8, 32)
+			if perr != nil {
+				return fmt.Errorf("tls ca: TLS_SERVICE_KEY_MODE %q is not an octal file mode: %w", mv, perr)
+			}
+			mode = os.FileMode(m64)
+			logWarn("tls", "service SVID key mode widened by TLS_SERVICE_KEY_MODE — each key is readable by anything that can read its per-service mount; acceptable only because each dir is mounted into exactly one container",
+				map[string]any{"mode": mv})
+		}
 		for _, e := range workloadid.Registry {
 			dir := filepath.Join(root, e.Service)
+			keyPath := filepath.Join(dir, e.Service+".key")
 			if err := m.issueService(
-				filepath.Join(dir, e.Service+".crt"), filepath.Join(dir, e.Service+".key"),
+				filepath.Join(dir, e.Service+".crt"), keyPath,
 				e.Service, m.ttl, e.DNS, e.Client, e.Server); err != nil {
 				return fmt.Errorf("tls ca: svid registry: %s: %w", e.Service, err)
+			}
+			if mode != 0o600 {
+				if err := os.Chmod(keyPath, mode); err != nil {
+					return fmt.Errorf("tls ca: set %s key mode: %w", e.Service, err)
+				}
 			}
 		}
 	}

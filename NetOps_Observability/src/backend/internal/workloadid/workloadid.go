@@ -45,7 +45,7 @@ var Registry = []Entry{
 
 	// Stores — servers their clients verify by compose DNS name.
 	{Service: "kafka", DNS: []string{"kafka"}, Server: true},           // SEC-006 broker listener
-	{Service: "opensearch", DNS: []string{"opensearch"}, Server: true}, // SEC-008
+	{Service: "opensearch", DNS: []string{"opensearch"}, Client: true, Server: true}, // SEC-008: node cert needs BOTH EKUs — the security plugin uses it for transport-layer mutual auth between nodes
 	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true}, // SEC-009
 	{Service: "postgres", DNS: []string{"postgres"}, Server: true},     // SEC-011
 	{Service: "redis", DNS: []string{"redis"}, Server: true},           // SEC-012 (Valkey; compose name is redis)
@@ -83,6 +83,7 @@ var Registry = []Entry{
 var Exempt = map[string]string{
 	"kafka-init":      "one-shot volume-format job; no listener, no steady-state network peer",
 	"opensearch-init": "one-shot template/ISM applier; runs and exits",
+	"opensearch-security-init": "one-shot securityadmin bootstrap; authenticates with the ADMIN cert (minted via TLS_OS_ADMIN_CERT_DIR, deliberately not a registry row — it is a credential, not a workload)",
 	"secrets-seal":    "custody sidecar reachable ONLY via a host-private unix socket (never TCP); an SVID would imply a network surface it must never have",
 	"telegraf":        "profiles:[legacy] — does not run (SEC-001.2)",
 	"mock-nms":        "lab fixture, excluded from customer bundles (declared in the transport inventory)",
