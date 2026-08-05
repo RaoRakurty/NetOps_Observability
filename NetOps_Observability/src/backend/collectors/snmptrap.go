@@ -1092,7 +1092,7 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 }
 
 func (r *trapReceiver) forwardLoop(ctx context.Context) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := meshHTTPClient(5 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():

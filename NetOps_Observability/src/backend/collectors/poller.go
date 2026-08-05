@@ -425,8 +425,7 @@ func emitMetrics(ctx context.Context, body string) {
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		notePushFailure(err.Error())
 		return

@@ -155,7 +155,7 @@ func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 	if sink == "" || len(events) == 0 {
 		return
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := meshHTTPClient(5 * time.Second)
 	for _, ev := range events {
 		body, err := json.Marshal(ev)
 		if err != nil {

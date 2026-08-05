@@ -612,6 +612,21 @@ groups:
         annotations:
           summary: "Collector {{ $labels.collector }} is down"
 
+      # The watcher's own death (2026-08-05): when the API's metric-push path
+      # broke (bare client vs the TLS store), EVERY collector_* series vanished
+      # at once — and `collector_up == 0` cannot fire on a series that does not
+      # exist, so all of noc-self-health went blind together for 9 hours.
+      # collector_up{collector="snmpv2c"} always exists on a default install
+      # (ENABLE_SNMP_COLLECTION defaults true), so absence = the push path is
+      # dead, not "nothing enabled".
+      - alert: CollectorTelemetryMissing
+        expr: absent(collector_up)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No collector telemetry is reaching the metric store — every collector alert in this group is blind"
+
       - alert: CollectorAllTargetsUnreachable
         expr: collector_targets_reachable == 0 and collector_targets > 0
         for: 5m

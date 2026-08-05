@@ -114,8 +114,7 @@ func (g *gnmiCollector) vmScalar(ctx context.Context, query string) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		return 0, err
 	}

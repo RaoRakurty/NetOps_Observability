@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -474,7 +473,7 @@ func insertTunnels(ctx context.Context, rows []tunnelRow) error {
 		Base:     base,
 		User:     chEnv("CLICKHOUSE_USER", "netops"),
 		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
-		HTTP:     &http.Client{Timeout: 12 * time.Second},
+		HTTP:     meshHTTPClient(12 * time.Second),
 	}).Exec(ctx, chhttp.Request{
 		SQL:      b.String(),
 		Op:       "insert netops.tunnels",

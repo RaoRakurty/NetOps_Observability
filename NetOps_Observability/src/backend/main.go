@@ -298,6 +298,11 @@ func newServer() *server {
 	if err := initBackendTransport(); err != nil {
 		log.Fatalf("backend TLS: %v", err)
 	}
+	// The collectors' mesh egress (ClickHouse inserts, VictoriaMetrics pushes
+	// and queries, the Vector ingest lanes) rides the same hardened client.
+	// The factory defers to the transport at call time, so the post-CA
+	// re-initialization below is picked up without re-wiring.
+	collectors.SetMeshHTTPClient(backendHTTPClient)
 
 	d := discovery.NewDiscoveryAggregator()
 	// Operator-created devices persist here and are seeded into the cache before
@@ -1471,6 +1476,15 @@ func Run() {
 func runProber() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Same mesh-client seam as the API process: the prober's probe-event
+	// forwarders POST to the Vector ingest tier, which SEC-013 moves behind
+	// TLS. Fail closed like the API does — a prober that silently downgraded
+	// to a bare client would recreate the 2026-08-05 defect on its lane.
+	if err := initBackendTransport(); err != nil {
+		log.Fatalf("prober backend TLS: %v", err)
+	}
+	collectors.SetMeshHTTPClient(backendHTTPClient)
 
 	pool := collectors.NewPool(nil)
 	pool.Enable("stamp-sender", os.Getenv("FEATURE_ACTIVE_PROBE") == "true")

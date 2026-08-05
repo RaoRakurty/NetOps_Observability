@@ -54,8 +54,10 @@ func nmsEmitMetrics(ctx context.Context, lines []string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	// The hardened internal-backend client, NOT a bare &http.Client{}: with
+	// vmauth in front of VictoriaMetrics this hop is https with URL-userinfo
+	// credentials, and the bare client failed the mesh CA (2026-08-05).
+	resp, err := backendHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}

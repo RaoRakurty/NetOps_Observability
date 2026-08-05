@@ -160,8 +160,7 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	SetIngestAuth(req) // F-08
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		return 0 // bus unreachable: collector keeps running; VM path unaffected
 	}
