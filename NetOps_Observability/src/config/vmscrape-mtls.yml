@@ -13,8 +13,9 @@
 # plaintext API. Fail closed within a mode, never across modes.
 #
 # EDITING RULE: any change to vmscrape.yml must be mirrored here (and vice
-# versa) — the only permitted divergence is the netops-api job's scheme +
-# tls_config block.
+# versa) — the only permitted divergences are the netops-api and correlation
+# jobs' scheme + target port + tls_config blocks (APP-001 moved correlation
+# to mTLS-only :8443 in this variant, 2026-08-05).
 # ============================================================================
 
 global:
@@ -45,10 +46,18 @@ scrape_configs:
 
   # Correlation engine intake counters (#99 R6) — silent ingestion failures
   # (received flat-lined / dropped rising / dead-letters) become alertable.
+  # APP-001: mTLS variant scrapes the :8443 listener presenting victoria's
+  # SVID; correlation's identity middleware scopes this identity to /metrics
+  # and /healthz only.
   - job_name: 'correlation'
+    scheme: https
     static_configs:
-      - targets: ['correlation:8000']
+      - targets: ['correlation:8443']
     metrics_path: '/metrics'
+    tls_config:
+      ca_file: /etc/victoria/tls/ca.pem
+      cert_file: /etc/victoria/tls/victoria/victoria.crt
+      key_file: /etc/victoria/tls/victoria/victoria.key
 
   # ClickHouse native Prometheus endpoint (enabled via <prometheus> in config).
   - job_name: 'clickhouse'

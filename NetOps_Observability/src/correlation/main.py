@@ -3323,6 +3323,16 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="netops-correlation", version="0.1.0", lifespan=lifespan)
 
+# APP-001: workload-identity authorization for the mTLS deployment. Dormant on
+# the plaintext baseline (no CORR_TLS_ALLOWED_URIS -> enforcement off); under
+# tls_serve.py the handshake has already limited callers to mesh-CA client
+# certificates, and this narrows them to named SPIFFE identities — the Go api
+# in full, the metric scraper and the container's own healthcheck on
+# /metrics + /healthz only. Added LAST so it runs FIRST (outermost).
+from tls_ident import PeerIdentityMiddleware  # noqa: E402
+
+app.add_middleware(PeerIdentityMiddleware)
+
 
 class Finding(BaseModel):
     ts: str

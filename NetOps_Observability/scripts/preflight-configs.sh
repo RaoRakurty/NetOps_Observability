@@ -168,6 +168,20 @@ check_metrics_configs(){
   else
     red "victoria scrape config — $(grep -iE 'cannot|error|invalid' <<<"$out" | head -1)"
   fi
+  # The mTLS variant is what a TLS-enabled deployment ACTUALLY runs — leaving
+  # it unvalidated meant the live lab's scrape config had no gate at all
+  # (found 2026-08-05 while converting the correlation job). tls_config paths
+  # resolve under /etc/victoria/tls at runtime; -dryRun does not stat them.
+  if [ -f "$ROOT/src/config/vmscrape-mtls.yml" ]; then
+    out="$(docker run --rm \
+        -v "$ROOT/src/config/vmscrape-mtls.yml:/etc/victoria/vmscrape.yml:ro" \
+        "$VM_IMG" -promscrape.config=/etc/victoria/vmscrape.yml -dryRun 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+      green "victoria mTLS variant (vmscrape-mtls.yml -dryRun)"
+    else
+      red "victoria mTLS scrape config — $(grep -iE 'cannot|error|invalid' <<<"$out" | head -1)"
+    fi
+  fi
   out="$(docker run --rm --entrypoint promtool \
       -v "$ROOT/src/config/rules.yaml:/etc/prometheus/rules.yaml:ro" \
       "$PROM_IMG" check rules /etc/prometheus/rules.yaml 2>&1)"; rc=$?

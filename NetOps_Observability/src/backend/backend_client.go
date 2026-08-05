@@ -82,11 +82,28 @@ func initBackendTransport() error {
 	}
 	// Optional mTLS: present the API's client SVID to backends that require it.
 	if cf, kf := os.Getenv("TLS_BACKEND_CERT_FILE"), os.Getenv("TLS_BACKEND_KEY_FILE"); cf != "" && kf != "" {
-		rl, err := tlsconfig.NewCertReloader(cf, kf)
-		if err != nil {
-			return err
+		// Same first-boot ordering hazard as the trust bundle above: on a
+		// virgin TLS-enabled deployment the API's own SVID is minted by
+		// bootstrapInternalCA AFTER this first call. Under exactly the same
+		// narrow condition (internal CA on + file not yet present) build the
+		// transport WITHOUT the client certificate — server-verified TLS to
+		// the stores still works — and let the post-CA re-initialization
+		// load it, failing closed as usual. (APP-001 made this path
+		// load-bearing: the api presents this SVID to correlation.)
+		deferSVID := false
+		if os.Getenv("TLS_INTERNAL_CA") == "true" {
+			if _, statErr := os.Stat(cf); os.IsNotExist(statErr) {
+				logInfo("tls", "backend client SVID not present yet — deferring until the internal CA mints it", map[string]any{"path": cf})
+				deferSVID = true
+			}
 		}
-		opts.Reloader = rl
+		if !deferSVID {
+			rl, err := tlsconfig.NewCertReloader(cf, kf)
+			if err != nil {
+				return err
+			}
+			opts.Reloader = rl
+		}
 	}
 	tr, err := tlsconfig.HTTPTransport(opts)
 	if err != nil {

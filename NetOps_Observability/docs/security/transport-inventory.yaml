@@ -266,8 +266,14 @@
       "owning_epic": "SEC-013",
       "priority": "P0",
       "evidence": [
-        "deployment/docker/docker-compose.yml"
-      ]
+        "deployment/docker/docker-compose.yml",
+        "src/correlation/tls_serve.py",
+        "src/correlation/tls_ident.py"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (APP-001): correlation serves mTLS-ONLY :8443 (tls_serve.py, registry SVID, CERT_REQUIRED vs mesh CA — plaintext listener REMOVED, not kept beside) + SPIFFE peer authorization (tls_ident.py): api full access; victoria + own healthcheck scoped to /metrics+/healthz. Matrix proven: anon handshake refused, victoria SVID 403 on /findings + 200 on /metrics, api SVID 200. api dials https via backendHTTPClient presenting its services/api SVID (first-boot deferral added); scrape via vmscrape-mtls tls_config, up{job=correlation}=1. APP-001 cleared — boot validator fatal 1->0."
+      }
     },
     {
       "id": "vector-router-api-sealing-keys",
