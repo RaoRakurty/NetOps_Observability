@@ -558,7 +558,6 @@ sinks:
       index: "netops-{{ log_index_base }}-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
   # records land here), so a non-empty netops-deadletter-* index is itself the
@@ -582,7 +581,6 @@ sinks:
       index: "netops-deadletter-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   # Syslog from network devices → OpenSearch
   opensearch_syslog:
@@ -604,7 +602,6 @@ sinks:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   # SNMP traps from network devices → OpenSearch
   opensearch_snmptrap:
@@ -626,7 +623,6 @@ sinks:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   # Tagged raw cloud logs → OpenSearch (the unified Cloud Logs search plane).
   opensearch_cloudlogs:
@@ -648,7 +644,6 @@ sinks:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
@@ -670,7 +665,6 @@ sinks:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index
     api_version: v7
-    healthcheck: { enabled: true }
 
   clickhouse_flows:
     type: clickhouse
