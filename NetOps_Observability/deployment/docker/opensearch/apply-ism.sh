@@ -18,10 +18,17 @@ SNAP_KEEP="${OPENSEARCH_SNAPSHOT_KEEP:-14}"
 # already hit NOT_ENOUGH_SPACE once (F-55). Dead-letter is included too: it is
 # tiny by construction but "tiny by construction" is exactly the assumption that
 # stops being true during the incident you wrote it for.
-PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-deadletter-*"]'
-ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-deadletter-*'
+# security-auditlog-*: the security plugin's own audit trail (SEC-008.1) rolls
+# a DAILY index like every lane above and is managed by no other policy —
+# without retention it is unbounded growth on the disk-fill path (F-53 class).
+PATTERNS='["netops-applogs-*","netops-platformlogs-*","netops-syslog-*","netops-flows-*","netops-snmptrap-*","netops-cloudlogs-*","netops-deadletter-*","security-auditlog-*"]'
+ADD_PATTERNS='netops-applogs-*,netops-platformlogs-*,netops-syslog-*,netops-flows-*,netops-snmptrap-*,netops-cloudlogs-*,netops-deadletter-*,security-auditlog-*'
 
-echo "ism: waiting for OpenSearch at $OS ..."
+# §8: OPENSEARCH_URL carries the bootstrap credential as URL userinfo on a
+# secured cluster — strip it before logging (this line used to echo the
+# password into the container log on every init run; found 2026-08-05).
+OS_REDACTED=$(printf '%s' "$OS" | sed 's#//[^@/]*@#//<redacted>@#')
+echo "ism: waiting for OpenSearch at $OS_REDACTED ..."
 until curl -sf "$OS/_cluster/health" >/dev/null 2>&1; do sleep 5; done
 
 # ---------------------------------------------------------------------------
@@ -90,6 +97,38 @@ for pat in '.opendistro-*' '.opensearch-*'; do
     -H 'Content-Type: application/json' \
     -d '{"index":{"number_of_replicas":0}}' >/dev/null 2>&1 || true
 done
+
+# security-auditlog-* joined the born-yellow class with SEC-008.1: the
+# security plugin's audit index rolls daily, matched no template, and pinned
+# the cluster yellow the day after the cutover (2026-08-05). Unlike the
+# dot-prefixed plugin bookkeeping above it is durable security EVIDENCE, so it
+# follows the F-07 replica POSTURE (like the netops lanes), not a hardcoded 0.
+# Existing indices first (same shape as the netops-* re-settle above):
+curl -sf -X PUT "$OS/security-auditlog-*/_settings" \
+  -H 'Content-Type: application/json' \
+  -d "{\"index\":{\"number_of_replicas\":$REPLICAS}}" >/dev/null 2>&1 ||
+  echo "ism: (no security-auditlog-* indices yet — nothing to re-settle)"
+
+# ...and tomorrow's audit index is born from NO template (it is deliberately
+# kept out of index-templates.json — that file declares the LOG-LANE field
+# contract, which the plugin's own document shape must not be forced into). A
+# settings-only template pins the replica posture at creation so the pin above
+# doesn't have to win a daily race against the roll. Checked, not swallowed:
+# if this PUT fails, every day re-yellows the cluster and yellow stops meaning
+# anything (F-54).
+TPL_RESP=$(curl -s -X PUT "$OS/_index_template/security-auditlog" \
+  -H 'Content-Type: application/json' -d @- <<JSON
+{
+  "index_patterns": ["security-auditlog-*"],
+  "priority": 10,
+  "template": { "settings": { "number_of_shards": 1, "number_of_replicas": ${REPLICAS} } }
+}
+JSON
+)
+case "$TPL_RESP" in
+  *'"acknowledged":true'*) echo "ism: security-auditlog replica template installed." ;;
+  *) echo "ism: WARNING security-auditlog template PUT did not take: $TPL_RESP" >&2 ;;
+esac
 
 echo "ism: installing retention policy (delete after ${DAYS}d) ..."
 

@@ -96,6 +96,15 @@ netops_bootstrap:
     - index_patterns: ["netops-*", ".opendistro-ism-*", ".opensearch-sap*"]
       allowed_actions:
         - "indices_all"
+    # security-auditlog-*: the bootstrap pins its replica posture and attaches
+    # the retention policy (born-yellow + unbounded daily growth, 2026-08-05).
+    # Settings + ISM attach ONLY — the bootstrap can neither read nor delete
+    # audit evidence.
+    - index_patterns: ["security-auditlog-*"]
+      allowed_actions:
+        - "indices:admin/settings/update"
+        - "indices:monitor/settings/get"
+        - "indices:admin/opensearch/ism/managedindex"
 
 # vector-aggregator: the F-17 stats scraper. Polls _nodes/stats and
 # _cluster/health to turn OpenSearch's per-document rejection counters into
