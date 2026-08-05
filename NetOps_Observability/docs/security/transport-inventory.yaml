@@ -151,7 +151,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/docker-compose.yml:538"
-      ]
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): security plugin ENABLED \u2014 HTTPS + 5 least-privilege identities (svc_api/svc_router write-only/svc_correlation read-only/svc_bootstrap/svc_dashboards), admin = cert DN only, demo certs REFUSED. Matrix proven: anon 401, valid 200, wrong-pw 401, write-only identity 403 on read. Zero-loss cutover (router parked, Kafka held the backlog; drain verified by DOC COUNTS +4406 syslog past the pre-flip baseline). STORE-001 cleared, fatal 2->1."
+      }
     },
     {
       "id": "api-victoria",
@@ -741,7 +745,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/vector-router/vector.yaml"
-      ]
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): security plugin ENABLED \u2014 HTTPS + 5 least-privilege identities (svc_api/svc_router write-only/svc_correlation read-only/svc_bootstrap/svc_dashboards), admin = cert DN only, demo certs REFUSED. Matrix proven: anon 401, valid 200, wrong-pw 401, write-only identity 403 on read. Zero-loss cutover (router parked, Kafka held the backlog; drain verified by DOC COUNTS +4406 syslog past the pre-flip baseline). STORE-001 cleared, fatal 2->1."
+      }
     },
     {
       "id": "vector-router-clickhouse",

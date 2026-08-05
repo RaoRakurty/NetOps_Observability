@@ -543,6 +543,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       # log_index_base is "applogs" for application services and "platformlogs"
@@ -565,6 +571,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       index: "netops-deadletter-%Y.%m.%d"
@@ -581,6 +593,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
@@ -597,6 +615,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
@@ -613,6 +637,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
@@ -629,6 +659,12 @@ sinks:
       strategy: basic
       user: "${OPENSEARCH_USER:-svc_router}"
       password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # SEC-008: Vector's elasticsearch healthcheck performs a READ, and this
+    # identity is deliberately WRITE-ONLY — so a passing healthcheck would
+    # mean the role model is too permissive. Disabled on purpose: the real
+    # liveness signal for this lane is document counts climbing (F-18 /
+    # F-17), never a probe, and never "no errors in the log".
+    healthcheck: false
     mode: bulk
     bulk:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
