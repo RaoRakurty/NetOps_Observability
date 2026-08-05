@@ -955,7 +955,25 @@ groups:
         # an OpenSearch restart resets it to 0, which yields a negative delta
         # and cannot false-fire.
         # ####################################################################
-        expr: delta(opensearch_indexing_doc_status{code="4xx"}[15m]) > 0
+        # ####################################################################
+        # 2026-08-05 ADDENDUM — everything above remains true AND incomplete:
+        # doc_status.4xx ALSO counts OpenSearch's own housekeeping conflicts
+        # (ISM retention/snapshot jobs update lock/policy docs with optimistic
+        # concurrency; a lost race is a per-doc 409 in the same 4xx bucket).
+        # Measured: ~0.8/min of 4xx overnight with ZERO router-sink drops and
+        # every lane indexing — so `>0` alone fires forever on a healthy
+        # cluster, which buries the real signal (the alert equivalent of the
+        # F-18 lesson). The composite below keeps doc_status as the COUNTER
+        # (it does move on real loss — the 1127-doc incident above) but only
+        # FIRES when a Vector opensearch sink simultaneously reports
+        # unintentional discards — i.e. a rejection some writer actually
+        # suffered. Non-vector writers log their own OS errors loudly and are
+        # not silenced by this (they don't tick vector metrics either way).
+        # ####################################################################
+        expr: >
+          delta(opensearch_indexing_doc_status{code="4xx"}[15m]) > 0
+          and on()
+          sum(increase(vector_component_discarded_events_total{component_id=~"opensearch.*",intentional="false"}[15m])) > 0
         for: 5m
         labels: { severity: critical, layer: storage }
         annotations:
