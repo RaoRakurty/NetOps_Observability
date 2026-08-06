@@ -49,7 +49,11 @@ type edgeKeyResponse struct {
 // credential; it is injected rather than read here so this package stays
 // testable without the server's auth stack, and so the credential check cannot
 // silently become a no-op when the env is unset (see the guard below).
-func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool) http.HandlerFunc {
+// audit, when non-nil, is invoked once per SERVED key fetch with the request
+// and tenant (SEC-018.1: every fetch is attributable — identity + tenant,
+// never key material). Refusals are not audited here; they surface as 401s
+// in the access log and the caller's own failure path.
+func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool, audit func(*http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeEdgeError(w, http.StatusMethodNotAllowed, "GET required")
@@ -81,6 +85,9 @@ func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request
 			return
 		}
 
+		if audit != nil {
+			audit(r, tenant)
+		}
 		// Padded standard base64: VRL's decode_base64 rejects unpadded input.
 		out := edgeKeyResponse{
 			SealKey:    base64.StdEncoding.EncodeToString(m.SealKey),

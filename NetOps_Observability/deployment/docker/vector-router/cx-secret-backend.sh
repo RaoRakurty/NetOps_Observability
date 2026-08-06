@@ -24,16 +24,64 @@ set -eu
 API="${SEALING_API_URL:-http://api:8080}"
 INGEST_USER="${INGEST_USER:-netops-ingest}"
 INGEST_TOKEN="${INGEST_TOKEN:-}"
+# SEC-018.1: on a TLS deployment the fetch authenticates with the router's
+# OWN workload certificate — the api's edge-key endpoint accepts only that
+# identity, so a stolen shared token can no longer fetch any tenant's keys.
+SEALING_TLS_CA="${SEALING_TLS_CA:-}"
+SEALING_TLS_CRT="${SEALING_TLS_CRT:-}"
+SEALING_TLS_KEY="${SEALING_TLS_KEY:-}"
 
-# Refuse to run unauthenticated rather than fetching key material over an
-# anonymous request. Mirrors the fail-closed posture of the endpoint itself.
-if [ -z "$INGEST_TOKEN" ]; then
-  echo '{"error":"INGEST_TOKEN is not set; refusing to fetch sealing keys unauthenticated"}' >&2
-  # Emit a well-formed reply so Vector reports a clean secret error rather than
-  # a parse failure, which is far harder to diagnose in a container log.
-  echo '{}'
-  exit 1
-fi
+# Authentication mode follows the API scheme, fail-closed in both:
+#   https:// → mutual TLS, all three cert paths REQUIRED (never -k, never a
+#              downgrade to token-over-tls: key material rides workload
+#              identity or it does not ride);
+#   http://  → the stack-internal token, exactly the documented plaintext
+#              baseline this script always had.
+case "$API" in
+  https://*)
+    if [ -z "$SEALING_TLS_CA" ] || [ -z "$SEALING_TLS_CRT" ] || [ -z "$SEALING_TLS_KEY" ]; then
+      echo '{"error":"SEALING_API_URL is https but SEALING_TLS_CA/CRT/KEY are not all set; refusing to fetch key material without mutual TLS"}' >&2
+      # Well-formed reply → Vector reports a clean secret error, not a parse
+      # failure (far harder to diagnose in a container log).
+      echo '{}'
+      exit 1
+    fi
+    for f in "$SEALING_TLS_CA" "$SEALING_TLS_CRT" "$SEALING_TLS_KEY"; do
+      if [ ! -r "$f" ]; then
+        echo "{\"error\":\"sealing TLS material not readable: $f\"}" >&2
+        echo '{}'
+        exit 1
+      fi
+    done
+    ;;
+  *)
+    # Refuse to run unauthenticated rather than fetching key material over an
+    # anonymous request. Mirrors the fail-closed posture of the endpoint.
+    if [ -z "$INGEST_TOKEN" ]; then
+      echo '{"error":"INGEST_TOKEN is not set; refusing to fetch sealing keys unauthenticated"}' >&2
+      echo '{}'
+      exit 1
+    fi
+    ;;
+esac
+
+# fetch <tenant>: one key-fetch against the API with the mode's credential.
+# Non-2xx/transport failure yields an empty body, which the caller turns into
+# a per-secret non-null error — Vector then refuses the config (see header).
+fetch() {
+  case "$API" in
+    https://*)
+      curl -fsS --max-time 10 \
+        --cacert "$SEALING_TLS_CA" --cert "$SEALING_TLS_CRT" --key "$SEALING_TLS_KEY" \
+        "${API}/internal/sealing/edge-keys?tenant=$1" 2>/dev/null || true
+      ;;
+    *)
+      curl -fsS --max-time 10 \
+        -u "${INGEST_USER}:${INGEST_TOKEN}" \
+        "${API}/internal/sealing/edge-keys?tenant=$1" 2>/dev/null || true
+      ;;
+  esac
+}
 
 request="$(cat)"
 
@@ -52,9 +100,7 @@ for name in $names; do
   backend="${name%%.*}"   # cxseal | cxmac
   tenant="${name#*.}"
 
-  body="$(curl -fsS --max-time 10 \
-      -u "${INGEST_USER}:${INGEST_TOKEN}" \
-      "${API}/internal/sealing/edge-keys?tenant=${tenant}" 2>/dev/null || true)"
+  body="$(fetch "$tenant")"
 
   case "$backend" in
     cxseal) field='seal_key' ;;

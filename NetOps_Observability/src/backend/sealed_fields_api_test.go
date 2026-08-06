@@ -12,9 +12,12 @@ package backend
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -410,5 +413,65 @@ func TestSealRotateRequiresThePermission(t *testing.T) {
 	operator := createUserFor(t, ts, admin, "rot-op", "operator", tenantID)
 	if st, _ := do(t, ts, "POST", "/api/pipeline/processors/seal/rotate", operator, map[string]any{}); st != http.StatusForbidden {
 		t.Fatalf("an operator must not rotate sealing keys, got %d", st)
+	}
+}
+
+// ── SEC-018.1: the edge-key gate accepts exactly one workload identity ──────
+
+func sealingTLSRequest(t *testing.T, spiffeURI string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/internal/sealing/edge-keys?tenant=t1", nil)
+	state := &tls.ConnectionState{}
+	if spiffeURI != "" {
+		u, err := url.Parse(spiffeURI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.PeerCertificates = []*x509.Certificate{{URIs: []*url.URL{u}}}
+	}
+	req.TLS = state
+	return req
+}
+
+func TestSealingEdgeCallerPlaintextKeepsTokenBaseline(t *testing.T) {
+	t.Setenv("INGEST_TOKEN", "tok")
+	s := &server{}
+	req := httptest.NewRequest(http.MethodGet, "/internal/sealing/edge-keys", nil)
+	req.SetBasicAuth("netops-ingest", "tok")
+	if !s.sealingEdgeCaller(req) {
+		t.Fatal("plaintext deployment with the stack token must keep working (documented baseline)")
+	}
+}
+
+func TestSealingEdgeCallerTLSAcceptsOnlyRouterIdentity(t *testing.T) {
+	t.Setenv("INGEST_TOKEN", "tok")
+	t.Setenv("SEALING_ACCEPT_TOKEN", "")
+	s := &server{}
+
+	if !s.sealingEdgeCaller(sealingTLSRequest(t, "spiffe://netops/ns/default/sa/vector-router")) {
+		t.Fatal("the vector-router identity must be accepted")
+	}
+	// Any other mesh workload — the api's own identity included — is refused:
+	// a compromised workload must not read tenant key material.
+	if s.sealingEdgeCaller(sealingTLSRequest(t, "spiffe://netops/ns/default/sa/api")) {
+		t.Fatal("a non-router mesh identity fetched key material")
+	}
+	// THE ACCEPTANCE CRITERION: a stolen INGEST_TOKEN over TLS, without the
+	// router identity, gets nothing once the migration window is closed.
+	req := sealingTLSRequest(t, "")
+	req.SetBasicAuth("netops-ingest", "tok")
+	if s.sealingEdgeCaller(req) {
+		t.Fatal("a stolen shared token fetched key material on a TLS deployment")
+	}
+}
+
+func TestSealingEdgeCallerDualAcceptWindow(t *testing.T) {
+	t.Setenv("INGEST_TOKEN", "tok")
+	t.Setenv("SEALING_ACCEPT_TOKEN", "true")
+	s := &server{}
+	req := sealingTLSRequest(t, "")
+	req.SetBasicAuth("netops-ingest", "tok")
+	if !s.sealingEdgeCaller(req) {
+		t.Fatal("the dual-accept window must honour the token while explicitly open")
 	}
 }

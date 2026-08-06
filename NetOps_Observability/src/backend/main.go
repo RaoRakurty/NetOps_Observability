@@ -1859,9 +1859,18 @@ func (s *server) routes(mux *http.ServeMux) {
 	// all — not even one that answers 501. Stack-internal credential required;
 	// see internal/sealedfields/edgekeys.go for why this is not a public route.
 	if s.sealProvider != nil {
+		// SEC-018.1: on a TLS deployment only the vector-router's workload
+		// identity may fetch keys (sealingEdgeCaller); plaintext baseline
+		// keeps the stack-internal token. Every served fetch is audited with
+		// tenant + caller identity — never the key.
 		mux.HandleFunc(sealedfields.EdgeKeyPath, sealedfields.EdgeKeyHandler(
 			func() sealing.CryptoProvider { return s.sealProvider },
-			s.internalStackCaller,
+			s.sealingEdgeCaller,
+			func(r *http.Request, tenant string) {
+				logInfo("sealing", "edge key served", map[string]any{
+					"tenant": tenant, "peer": sealingEdgePeer(r),
+				})
+			},
 		))
 	}
 }

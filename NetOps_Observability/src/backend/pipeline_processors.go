@@ -918,3 +918,58 @@ func (s *server) handleSealRotate(w http.ResponseWriter, r *http.Request) {
 // unsealRoutePath is the audited route, named once so the recorder and the
 // reader cannot drift.
 const unsealRoutePath = "/api/pipeline/processors/unseal"
+
+// sealingEdgeIdentity is the ONLY workload identity the edge-key endpoint
+// accepts over mTLS (SEC-018.1): the vector-router, whose exec secret
+// backend is the single legitimate consumer of derived tenant keys.
+// Env-overridable for split trust domains; the default matches the
+// registry's SPIFFE shape.
+func sealingEdgeIdentity() string {
+	if v := strings.TrimSpace(os.Getenv("SEALING_CLIENT_URI")); v != "" {
+		return v
+	}
+	td := os.Getenv("TLS_TRUST_DOMAIN")
+	if td == "" {
+		td = "netops"
+	}
+	return "spiffe://" + td + "/ns/default/sa/vector-router"
+}
+
+// sealingEdgeCaller — SEC-018.1's gate on edge key delivery, replacing the
+// shared ingest token that six other clients hold ("the sharpest one",
+// HLD §1.1). Three regimes, fail-closed in every one:
+//
+//   - plaintext deployment (r.TLS == nil): the stack-internal token, exactly
+//     as before — the documented baseline is unchanged.
+//   - TLS deployment: ONLY the vector-router's peer certificate URI. A
+//     stolen INGEST_TOKEN can no longer fetch any tenant's sealing key.
+//   - TLS deployment mid-migration (SEALING_ACCEPT_TOKEN=true): token OR
+//     identity — the dual-accept window the rollout plan requires; close it
+//     by unsetting the flag.
+func (s *server) sealingEdgeCaller(r *http.Request) bool {
+	if r.TLS == nil {
+		return s.internalStackCaller(r)
+	}
+	if len(r.TLS.PeerCertificates) > 0 {
+		want := sealingEdgeIdentity()
+		for _, uri := range r.TLS.PeerCertificates[0].URIs {
+			if uri.String() == want {
+				return true
+			}
+		}
+	}
+	if os.Getenv("SEALING_ACCEPT_TOKEN") == "true" {
+		return s.internalStackCaller(r)
+	}
+	return false
+}
+
+// sealingEdgePeer names the caller for the key-fetch audit line: the peer
+// certificate's SPIFFE URI when present, else the shared-token label. Never
+// key material, never a token value.
+func sealingEdgePeer(r *http.Request) string {
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 && len(r.TLS.PeerCertificates[0].URIs) > 0 {
+		return r.TLS.PeerCertificates[0].URIs[0].String()
+	}
+	return "stack-internal-token"
+}

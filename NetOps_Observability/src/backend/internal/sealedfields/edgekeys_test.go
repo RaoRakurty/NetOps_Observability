@@ -61,7 +61,7 @@ func allow(*http.Request) bool { return true }
 func deny(*http.Request) bool  { return false }
 
 func TestEdgeKeysServeDerivedMaterial(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, allow)
+	h := EdgeKeyHandler(testProvider, allow, nil)
 	w := edgeRequest(t, h, "acme")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d %s", w.Code, w.Body)
@@ -95,7 +95,7 @@ func TestEdgeKeysServeDerivedMaterial(t *testing.T) {
 
 // The whole point of the gate.
 func TestEdgeKeysRefuseUnauthenticated(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, deny)
+	h := EdgeKeyHandler(testProvider, deny, nil)
 	w := edgeRequest(t, h, "acme")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", w.Code)
@@ -108,7 +108,7 @@ func TestEdgeKeysRefuseUnauthenticated(t *testing.T) {
 // A nil authorizer must FAIL CLOSED. If a wiring mistake ever passes nil, the
 // endpoint must refuse rather than serve key material to anything on the port.
 func TestEdgeKeysFailClosedWithoutAnAuthorizer(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, nil)
+	h := EdgeKeyHandler(testProvider, nil, nil)
 	if w := edgeRequest(t, h, "acme"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("a nil authorizer must refuse, got %d", w.Code)
 	}
@@ -117,7 +117,7 @@ func TestEdgeKeysFailClosedWithoutAnAuthorizer(t *testing.T) {
 // Tenants without custody must be indistinguishable from tenants that do not
 // exist — otherwise this route enumerates who has sealing enabled.
 func TestEdgeKeysDoNotEnumerateTenants(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, allow)
+	h := EdgeKeyHandler(testProvider, allow, nil)
 	known := edgeRequest(t, h, "no-custody-tenant")
 	unknown := edgeRequest(t, h, "definitely-not-a-tenant")
 	if known.Code != http.StatusNotFound || unknown.Code != http.StatusNotFound {
@@ -129,7 +129,7 @@ func TestEdgeKeysDoNotEnumerateTenants(t *testing.T) {
 }
 
 func TestEdgeKeysRequireATenant(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, allow)
+	h := EdgeKeyHandler(testProvider, allow, nil)
 	r := httptest.NewRequest(http.MethodGet, EdgeKeyPath, nil)
 	w := httptest.NewRecorder()
 	h(w, r)
@@ -139,7 +139,7 @@ func TestEdgeKeysRequireATenant(t *testing.T) {
 }
 
 func TestEdgeKeysRejectNonGET(t *testing.T) {
-	h := EdgeKeyHandler(testProvider, allow)
+	h := EdgeKeyHandler(testProvider, allow, nil)
 	r := httptest.NewRequest(http.MethodPost, EdgeKeyPath+"?tenant=acme", nil)
 	w := httptest.NewRecorder()
 	h(w, r)
@@ -151,7 +151,7 @@ func TestEdgeKeysRejectNonGET(t *testing.T) {
 // With sealing off there is no provider, and the handler must say so rather
 // than panic on a nil.
 func TestEdgeKeysWithoutAProvider(t *testing.T) {
-	h := EdgeKeyHandler(func() sealing.CryptoProvider { return nil }, allow)
+	h := EdgeKeyHandler(func() sealing.CryptoProvider { return nil }, allow, nil)
 	if w := edgeRequest(t, h, "acme"); w.Code != http.StatusNotImplemented {
 		t.Fatalf("want 501, got %d", w.Code)
 	}
