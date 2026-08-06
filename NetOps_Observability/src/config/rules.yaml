@@ -599,6 +599,49 @@ groups:
           summary: "{{ $labels.device }} if{{ $labels.index }} 802.1X failures"
 
   # ----------------------------------------------------------------------------
+  # TLS posture (SEC-019.1). The 2026-08-05 incident: services that load
+  # certificates once at start SERVED expired copies while the on-disk SVIDs
+  # were perfectly fresh — the first signal was every client failing at once.
+  # netops_tls_peer_cert_expiry_seconds is measured on the WIRE by the api's
+  # prober, so these fire on the certificate clients actually see. Dormant on
+  # plaintext installs (the series simply doesn't exist).
+  # ----------------------------------------------------------------------------
+  - name: tls-posture
+    interval: 60s
+    rules:
+      - alert: TLSServedCertExpiringSoon
+        expr: netops_tls_peer_cert_expiry_seconds < 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.endpoint }} is SERVING a TLS certificate that expires in under 24h — the loading service needs a reload/restart to pick up the re-minted SVID"
+
+      - alert: TLSServedCertExpiryCritical
+        expr: netops_tls_peer_cert_expiry_seconds < 21600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.endpoint }} serves a certificate expiring in under 6h — clients of this endpoint WILL start failing; reload/restart it now"
+
+      - alert: TLSPeerProbeFailed
+        expr: netops_tls_peer_probe_ok == 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "served-certificate probe of {{ $labels.endpoint }} has captured nothing for 20m — endpoint down, not serving TLS, or unreachable; its expiry is UNWATCHED while this fires"
+
+      - alert: TLSApiCertExpiringSoon
+        expr: netops_tls_cert_expiry_seconds < 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api's own served certificate expires in under 24h — the in-process reloader should have rotated it; investigate the reissue loop"
+
+  # ----------------------------------------------------------------------------
   # Stack self-health
   # ----------------------------------------------------------------------------
   - name: noc-self-health

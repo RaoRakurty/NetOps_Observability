@@ -38,6 +38,7 @@ import (
 	"netops/backend/internal/ssoidp"
 	"netops/backend/internal/tenant"
 	"netops/backend/internal/ticketing"
+	"netops/backend/internal/tlsprobe"
 	"netops/backend/internal/vault"
 	"netops/backend/internal/verify"
 	"netops/backend/internal/vuln"
@@ -179,6 +180,7 @@ type server struct {
 	intMetrics      *integrationMetrics   // integration-platform Prometheus counters
 	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
+	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
 	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
 	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
@@ -1390,6 +1392,23 @@ func Run() {
 	}
 	srv.tlsSrv = tlsSrv
 
+	// SEC-019.1: served-certificate expiry prober. The 2026-08-05 incident:
+	// disk SVIDs were fresh (the reissue loop works) while clickhouse and
+	// postgres SERVED expired copies loaded at their last start — invisible
+	// until every client failed. Watch the wire, not the disk. Dormant on
+	// the plaintext baseline, active whenever the internal mesh is
+	// configured; a malformed endpoint override fails boot (a typo that
+	// silently un-watches an endpoint is this feature's own failure mode).
+	if os.Getenv("TLS_INTERNAL_CA") == "true" ||
+		strings.TrimSpace(envOr("TLS_BACKEND_CA_FILE", os.Getenv("TLS_CLIENT_CA_FILE"))) != "" {
+		prober, err := tlsprobe.New(os.Getenv("TLS_PROBE_ENDPOINTS"),
+			func(msg string, fields map[string]any) { logWarn("tls", msg, fields) })
+		if err != nil {
+			log.Fatalf("tls peer prober: %v", err)
+		}
+		srv.tlsPeerProber = prober
+	}
+
 	httpSrv := newAPIServer(addr, handler)
 	if tlsSrv != nil {
 		httpSrv.TLSConfig = tlsSrv.config
@@ -1409,6 +1428,9 @@ func Run() {
 		if caMgr != nil {
 			workers.start("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
 		}
+	}
+	if srv.tlsPeerProber != nil {
+		workers.start("tls-peer-probe", func() { srv.tlsPeerProber.Run(ctx) })
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -2258,6 +2280,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.tlsSrv != nil {
 		s.tlsSrv.writeTLSMetrics(w)
+	}
+	if s.tlsPeerProber != nil {
+		s.tlsPeerProber.WriteMetrics(w)
 	}
 	if s.cloudBroker != nil {
 		s.cloudBroker.Metrics().Write(w)
