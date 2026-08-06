@@ -89,6 +89,31 @@ RUNTIME_OUT = (os.environ.get("CLOUD_RUNTIME_OUT")
                or os.environ.get("CLOUD_FIXTURES_OUT", "/fixtures"))
 BROKERS = os.environ.get("BROKER_URLS", "kafka:9092")
 TENANT = os.environ.get("CLOUD_TENANT", "global")
+
+
+def kafka_security_kwargs(env=os.environ) -> dict:
+    """mTLS to the bus (SEC-006.2 / task #9): the three cert paths set →
+    kafka-python dials the broker's authenticated listener presenting the
+    cloud-ingest SVID; unset → the plaintext baseline unchanged. A PARTIAL
+    config refuses to start rather than silently downgrading (the failure
+    mode that presents as "the cost lane is quiet"). Mirrors the correlation
+    consumer's kafka_security_kwargs — same env names, same posture."""
+    ca = env.get("KAFKA_SSL_CA", "")
+    cert = env.get("KAFKA_SSL_CERT", "")
+    key = env.get("KAFKA_SSL_KEY", "")
+    if not (ca or cert or key):
+        return {}
+    if not (ca and cert and key):
+        raise RuntimeError(
+            "KAFKA_SSL_CA, KAFKA_SSL_CERT and KAFKA_SSL_KEY must be set together "
+            f"(got ca={bool(ca)} cert={bool(cert)} key={bool(key)}) — refusing a "
+            "partial TLS config")
+    return {"security_protocol": "SSL", "ssl_cafile": ca,
+            "ssl_certfile": cert, "ssl_keyfile": key}
+
+
+# Built once at import: a broken TLS config fails the boot, loudly.
+KAFKA_SECURITY = kafka_security_kwargs()
 # Unified Cloud Logs: raw cloud log lines are tagged (cloud_family/cloud_provider/
 # resource_id) and produced to this topic for vector-router → netops-cloudlogs-*
 # so they are searchable as RAW logs, not just correlation signals. Bounded per
@@ -702,7 +727,8 @@ def main():
     producer = producer_guard.GuardedProducer(KafkaProducer(
         bootstrap_servers=BROKERS.split(","),
         value_serializer=lambda v: json.dumps(v).encode(),
-        acks="all", linger_ms=100, retries=5))
+        acks="all", linger_ms=100, retries=5,
+        **KAFKA_SECURITY))
     jlog("cloud-ingest started", group=LOG_GROUP, brokers=BROKERS, tenant=TENANT)
     # Which ingestion mode(s) this process runs (Wave 1 #2). Ambient = today's
     # single-credential lanes (always on, unchanged); connectors = per-tenant

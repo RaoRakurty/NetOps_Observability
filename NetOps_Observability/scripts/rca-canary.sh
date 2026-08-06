@@ -69,19 +69,40 @@ dc() { docker compose --project-directory "$COMPOSE_DIR" "$@"; }
 # at high priority.
 PRODUCE_TRIES="${PRODUCE_TRIES:-3}"
 PRODUCE_ERR=""
-produce() { # $1 topic, stdin = one JSON event per line
+
+# SEC-013/task #9 (2026-08-06): injection moved from kafka-console-producer on
+# the plaintext listener (an ANONYMOUS principal the ACL matrix rightly
+# refuses) to the aggregator's AUTHENTICATED bus lane: an mTLS POST to bus_in
+# carrying a {topic,key,event} envelope — the same path and shape the api's
+# own bus producer uses — authorized by the bus lane token. Transport rides a
+# `docker compose exec` into the correlation container (always present, has
+# python + a client-EKU SVID); the token is read from the compose .env WITHOUT
+# sourcing it (passwords with shell metacharacters broke a naive source on
+# 2026-08-05) and travels via the environment, never argv.
+BUS_TOKEN="$(sed -n 's/^INGEST_TOKEN_BUS=//p' "$COMPOSE_DIR/.env" | head -1)"
+[ -n "$BUS_TOKEN" ] || BUS_TOKEN="$(sed -n 's/^INGEST_TOKEN=//p' "$COMPOSE_DIR/.env" | head -1)"
+if [ -z "$BUS_TOKEN" ]; then
+    fail "no INGEST_TOKEN_BUS (or INGEST_TOKEN) in $COMPOSE_DIR/.env — cannot authenticate to the bus lane"
+fi
+
+produce() { # $1 topic, stdin = ONE JSON event
     local topic="$1" payload err attempt=1
     payload="$(cat)"   # buffer: stdin is consumed once but may be sent twice
     while :; do
-        # Call `docker compose` directly, NOT the dc() shell function: `timeout`
-        # execs its argument as a program and cannot see a shell function, so
-        # `timeout dc …` fails with "No such file or directory". (Regression
-        # introduced 2026-07-22 when timeout+retry were added; the happy path was
-        # not re-tested — the exact miss this file's own hardening warns about.)
-        if err="$(printf '%s\n' "$payload" | timeout 60 \
-            docker compose --project-directory "$COMPOSE_DIR" exec -T kafka \
-            /opt/kafka/bin/kafka-console-producer.sh \
-            --bootstrap-server kafka:9092 --topic "$topic" 2>&1 >/dev/null)"; then
+        # `timeout` execs a program, so call docker compose directly, never a
+        # shell function (2026-07-22 regression, kept as a warning).
+        if err="$(printf '{"topic":"%s","key":"rca-canary","event":%s}' "$topic" "$payload" | timeout 60 \
+            docker compose --project-directory "$COMPOSE_DIR" exec -T -e BUS_TOKEN="$BUS_TOKEN" correlation python3 -c '
+import base64, os, ssl, sys, urllib.request
+ctx = ssl.create_default_context(cafile="/certs/ca.pem")
+ctx.load_cert_chain("/certs/svid/correlation.crt", "/certs/svid/correlation.key")
+auth = base64.b64encode(("netops-ingest:" + os.environ["BUS_TOKEN"]).encode()).decode()
+req = urllib.request.Request("https://vector-aggregator:8692/",
+    data=sys.stdin.buffer.read(),
+    headers={"Content-Type": "application/json", "Authorization": "Basic " + auth})
+resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+sys.exit(0 if resp.status == 200 else 1)
+' 2>&1 >/dev/null)"; then
             return 0
         fi
         PRODUCE_ERR="$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-300)"
