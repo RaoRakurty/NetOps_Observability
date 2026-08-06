@@ -3,6 +3,7 @@ package collectors
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,9 +11,12 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"netops/backend/tlsconfig"
 )
 
 // redis.go — a tiny, dependency-free RESP client (SET-with-TTL + GET only),
@@ -56,10 +60,36 @@ func RedisAddr() string {
 	return net.JoinHostPort(host, os.Getenv("REDIS_PORT"))
 }
 
+// redisTLSConfig builds the TLS client config for the Valkey channel
+// (SEC-012.2), or nil on the plaintext baseline. REDIS_TLS=true requires
+// REDIS_TLS_CA and fails closed on a missing/unloadable bundle — the AUTH
+// password from SEC-012.1 must never fall back to transiting in the clear
+// because a path was mistyped. Hostname verification is structural: the
+// config carries ServerName from REDIS_HOST and there is no insecure knob
+// at all (the ldap.go doctrine).
+func redisTLSConfig() (*tls.Config, error) {
+	if os.Getenv("REDIS_TLS") != "true" {
+		return nil, nil
+	}
+	caFile := strings.TrimSpace(os.Getenv("REDIS_TLS_CA"))
+	if caFile == "" {
+		return nil, fmt.Errorf("REDIS_TLS=true but REDIS_TLS_CA is unset — refusing to send AUTH over an unverified channel")
+	}
+	bundle, err := tlsconfig.LoadTrustBundle(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("redis TLS trust bundle: %w", err)
+	}
+	return &tls.Config{RootCAs: bundle.Pool(), ServerName: os.Getenv("REDIS_HOST"), MinVersion: tls.VersionTLS12}, nil
+}
+
 func redisDial(ctx context.Context) (net.Conn, error) {
 	addr := RedisAddr()
 	if addr == "" {
 		return nil, fmt.Errorf("redis not configured")
+	}
+	tcfg, err := redisTLSConfig()
+	if err != nil {
+		return nil, err
 	}
 	d := net.Dialer{Timeout: 3 * time.Second}
 	c, err := d.DialContext(ctx, "tcp", addr)
@@ -67,6 +97,14 @@ func redisDial(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if tcfg != nil {
+		tc := tls.Client(c, tcfg)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("redis TLS handshake: %w", err)
+		}
+		c = tc
+	}
 	if pass := os.Getenv("REDIS_PASSWORD"); pass != "" {
 		if _, err := redisCmd(c, "AUTH", pass); err != nil {
 			c.Close()
