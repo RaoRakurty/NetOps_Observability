@@ -451,6 +451,14 @@ services:
       # including into an existing .env on upgrade.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN required — run scripts/install.py to seed it}
+      # SEC-013.1: per-lane credentials, each defaulting to the shared token
+      # (compose nested interpolation) so an existing .env keeps working
+      # unchanged; install.py seeds distinct values on fresh installs, and
+      # the accept-set narrows lane by lane as clients cut over.
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-${INGEST_TOKEN}}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN}}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN}}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-${INGEST_TOKEN}}
     volumes:
       - ./vector:/etc/vector/conf:ro
       # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
@@ -1190,6 +1198,12 @@ services:
       # upgrade window. Vector is the fail-closed half of the pair.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # SEC-013.1: per-lane credentials (Go falls back to the shared token
+      # in-process; these deliver the rotated values once provisioned).
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-${INGEST_TOKEN:-}}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN:-}}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN:-}}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-${INGEST_TOKEN:-}}
       VICTORIA_URL: "http://victoria:8428"
       # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
       VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
@@ -1668,6 +1682,8 @@ services:
       # Missing here, its events are rejected 401 and silently dropped.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # SEC-013.1: the prober's only lane is probes.
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN:-}}
       GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"
       REDIS_HOST: redis
@@ -1736,6 +1752,30 @@ services:
     # in-network on :8090). Off the public surface — bind localhost only.
     ports:
       - "127.0.0.1:${MOCK_SNOW_HOST_PORT:-8099}:8090"
+    networks: [netops]
+    restart: *restart
+
+  # Cloud ingestion (P3B) — AWS/Azure/GCP pollers producing MetricEvents onto
+  # the aggregator's metrics lane and cloud events onto the bus lanes.
+  # Promoted from the lab override (SEC-013, 2026-08-06): it is a product
+  # ingestion plane, and workload identity (SEC-003.3 registry) can only be
+  # issued to services the base compose owns. Profile-gated — enabled where
+  # cloud credentials exist; every credential and bucket name arrives via env
+  # (the deployment's override/.env), never from this file.
+  cloud-ingest:
+    profiles: ["cloud-ingest"]
+    build:
+      context: ./cloud-ingest
+    image: netops-cloud-ingest
+    command: ["python", "-u", "/poller.py"]
+    user: poller
+    logging: *deflog
+    environment:
+      BROKER_URLS: ${BROKER_URLS:-kafka:9092}
+      INGEST_USER: ${INGEST_USER:-netops-ingest}
+      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN required — run scripts/install.py to seed it}
+      # SEC-013.1: cloud-ingest's only ingest lane is metrics.
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN}}
     networks: [netops]
     restart: *restart
 

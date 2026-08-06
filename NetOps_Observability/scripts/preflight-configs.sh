@@ -76,6 +76,10 @@ check_vector(){
       -e CLICKHOUSE_USER=x -e CLICKHOUSE_PASSWORD=x -e OPENSEARCH_URL=http://x:9200 \
       -e DB_HOST=x -e DB_USER=x -e DB_PASSWORD=x -e REDIS_HOST=x \
       -e INGEST_TOKEN=preflight-stub \
+      -e INGEST_TOKEN_TRAPS=preflight-stub \
+      -e INGEST_TOKEN_PROBES=preflight-stub \
+      -e INGEST_TOKEN_METRICS=preflight-stub \
+      -e INGEST_TOKEN_BUS=preflight-stub \
       -v "$ROOT/$rel:/etc/vector/vector.yaml:ro" \
       -v "$stub:/etc/vector/enrichment:ro" \
       "${extra_mounts[@]}" \

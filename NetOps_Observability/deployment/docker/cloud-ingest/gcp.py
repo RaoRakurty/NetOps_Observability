@@ -41,7 +41,7 @@ import gcp_log_lanes
 import gcp_workloads
 import trail_state
 
-from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+from ingest_auth import INGEST_SSL_CONTEXT, with_ingest_auth  # F-08 / SEC-013.2
 
 PROJECT = os.environ.get("GCP_PROJECT", "")
 CREDS_PATH = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
@@ -128,7 +128,7 @@ def _post_ndjson(events: list[dict]) -> None:
     body = "\n".join(json.dumps(e) for e in events).encode()
     req = urllib.request.Request(METRICS_SINK, data=body,
                                  headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
-    urllib.request.urlopen(req, timeout=10).read()  # noqa: S310
+    urllib.request.urlopen(req, timeout=10, context=INGEST_SSL_CONTEXT).read()  # noqa: S310
 
 
 APP_TAG_KEYS = ("app_id", "app", "application", "app_name", "app-name", "service", "workload")

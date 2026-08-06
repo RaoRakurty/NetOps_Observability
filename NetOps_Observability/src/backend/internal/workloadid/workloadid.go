@@ -61,6 +61,7 @@ var Registry = []Entry{
 	{Service: "prober", Client: true},
 	{Service: "syslog-ng", Client: true}, // its forward hop into vector (SEC-014.1)
 	{Service: "kafka-exporter", Client: true},
+	{Service: "cloud-ingest", Client: true}, // SEC-013: mTLS to the ingest lanes; task #9: mTLS kafka producer
 	{Service: "vmalert", Client: true}, // queries victoria via vmauth once SEC-010 lands
 
 	// Ops/UI tier behind nginx — server identities so their inner hops can be

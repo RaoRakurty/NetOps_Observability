@@ -28,23 +28,58 @@ import (
 // credential that does not work, and the failure would look exactly like
 // "that lane is quiet today".
 
-// ingestCredential is the shared ingest identity. Read once: it is process
-// configuration, and re-reading per request would let a mid-flight env change
-// split the fleet's behaviour without anything logging it.
+// ingestCredential is the ingest identity for ONE lane. Read once: it is
+// process configuration, and re-reading per request would let a mid-flight
+// env change split the fleet's behaviour without anything logging it.
 type ingestCredential struct {
 	user  string
 	token string
 }
 
-func readIngestCredential() ingestCredential {
+// Lane names — the four vector-aggregator http_server sources. SEC-013.1
+// scopes the credential per lane so a compromised collector credential
+// cannot write to another lane (the bus bridge above all). Every lane's
+// token falls back to the shared INGEST_TOKEN, so a pre-SEC-013 deployment
+// is bit-for-bit unchanged until per-lane tokens are provisioned.
+const (
+	LaneTraps   = "traps"
+	LaneProbes  = "probes"
+	LaneMetrics = "metrics"
+	LaneBus     = "bus"
+)
+
+func laneTokenEnv(lane string) string {
+	switch lane {
+	case LaneTraps:
+		return "INGEST_TOKEN_TRAPS"
+	case LaneProbes:
+		return "INGEST_TOKEN_PROBES"
+	case LaneMetrics:
+		return "INGEST_TOKEN_METRICS"
+	case LaneBus:
+		return "INGEST_TOKEN_BUS"
+	}
+	return ""
+}
+
+func readIngestCredentials() map[string]ingestCredential {
 	user := os.Getenv("INGEST_USER")
 	if user == "" {
 		user = "netops-ingest"
 	}
-	return ingestCredential{user: user, token: os.Getenv("INGEST_TOKEN")}
+	shared := os.Getenv("INGEST_TOKEN")
+	out := make(map[string]ingestCredential, 4)
+	for _, lane := range []string{LaneTraps, LaneProbes, LaneMetrics, LaneBus} {
+		token := os.Getenv(laneTokenEnv(lane))
+		if token == "" {
+			token = shared // accept-set: the shared token remains valid until narrowed
+		}
+		out[lane] = ingestCredential{user: user, token: token}
+	}
+	return out
 }
 
-var loadIngestCredential = sync.OnceValue(readIngestCredential)
+var loadIngestCredential = sync.OnceValue(readIngestCredentials)
 
 // resetIngestCredentialForTest re-reads the environment. Only tests call it:
 // the once-only read is deliberate in production (a mid-flight env change must
@@ -52,7 +87,7 @@ var loadIngestCredential = sync.OnceValue(readIngestCredential)
 // credential cannot exercise the rejection path — and the rejection path is
 // the half of F-08 that keeps a bad token from silently killing three lanes.
 func resetIngestCredentialForTest() {
-	loadIngestCredential = sync.OnceValue(readIngestCredential)
+	loadIngestCredential = sync.OnceValue(readIngestCredentials)
 }
 
 // ResetIngestCredentialForTest is the exported form of the reset below, for
@@ -60,27 +95,38 @@ func resetIngestCredentialForTest() {
 // production must never re-read the credential mid-flight.
 func ResetIngestCredentialForTest() { resetIngestCredentialForTest() }
 
-// SetIngestAuth stamps the ingest credential on an outbound bus request.
+// SetIngestAuth stamps the lane's ingest credential on an outbound request.
+// The lane is one of the Lane* constants — every call site knows which lane
+// it feeds, and the credential must match that lane's accept config
+// (SEC-013.1: per-lane tokens; a metrics credential opens nothing else).
 //
-// An EMPTY INGEST_TOKEN deliberately sends no header rather than sending an
-// empty password: that is the documented upgrade window in which Vector has
-// not yet been reconfigured, and an empty-password Basic header would fail
+// An EMPTY token deliberately sends no header rather than sending an empty
+// password: that is the documented upgrade window in which Vector has not
+// yet been reconfigured, and an empty-password Basic header would fail
 // against an authenticated Vector in a way that is harder to read in a packet
 // capture than no header at all. Vector is the fail-closed half of this pair —
-// it refuses to start without INGEST_TOKEN — so an unauthenticated client can
+// it refuses to start without a lane token — so an unauthenticated client can
 // never reach an unauthenticated collector by accident.
-func SetIngestAuth(req *http.Request) {
-	c := loadIngestCredential()
-	if c.token == "" {
+func SetIngestAuth(req *http.Request, lane string) {
+	c, ok := loadIngestCredential()[lane]
+	if !ok || c.token == "" {
 		return
 	}
 	req.SetBasicAuth(c.user, c.token)
 }
 
-// IngestAuthConfigured reports whether this process has an ingest credential.
-// Exported so the API's health surface can say "ingest is unauthenticated"
-// out loud instead of leaving it to be discovered during an incident.
-func IngestAuthConfigured() bool { return loadIngestCredential().token != "" }
+// IngestAuthConfigured reports whether this process has an ingest credential
+// for at least one lane. Exported so the API's health surface can say
+// "ingest is unauthenticated" out loud instead of leaving it to be
+// discovered during an incident.
+func IngestAuthConfigured() bool {
+	for _, c := range loadIngestCredential() {
+		if c.token != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // ingestRejections counts non-2xx responses from the Vector ingest tier, per
 // lane. Introducing authentication introduces a NEW way for three telemetry

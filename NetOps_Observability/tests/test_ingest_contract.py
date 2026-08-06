@@ -221,23 +221,33 @@ def test_every_http_ingest_source_requires_auth():
 
 def test_ingest_auth_fails_closed():
     """An ingest tier that silently reverts to unauthenticated when a variable
-    is unset is the defect, not the mitigation. `${INGEST_TOKEN:?}` makes Vector
-    refuse to start (verified: exit with 'Non-empty environment variable
-    required in config')."""
+    is unset is the defect, not the mitigation. SEC-013.1 scoped the credential
+    per lane: EVERY lane must carry its own `${INGEST_TOKEN_<LANE>:?}` guard so
+    Vector refuses to start without it (compose supplies the shared-token
+    fallback, never this file), and the pre-SEC-013 shared anchor must not
+    quietly return."""
     raw = read("deployment", "docker", "vector", "vector.yaml")
-    assert "${INGEST_TOKEN:?" in raw, "INGEST_TOKEN must be required, not defaulted"
+    for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
+        assert f"${{INGEST_TOKEN_{lane}:?" in raw, \
+            f"lane token INGEST_TOKEN_{lane} must be required, not defaulted"
+    assert "auth: &ingest_auth" not in raw and "auth: *ingest_auth" not in raw, (
+        "the shared ingest_auth anchor is back — one credential opening all "
+        "four lanes (the bus bridge included) is SEC-013.1's named defect")
 
 
 def test_every_go_ingest_forwarder_sends_the_credential():
     """Four ingest call sites in three files. A credential applied to three of
     them is a credential that does not work, and the symptom — one lane going
-    quiet — is indistinguishable from a quiet network."""
-    for rel in (("src", "backend", "collectors", "metric_events.go"),
-                ("src", "backend", "collectors", "probe_events.go"),
-                ("src", "backend", "collectors", "snmptrap.go"),
-                ("src", "backend", "bus_producer.go")):
+    quiet — is indistinguishable from a quiet network. SEC-013.1: each site
+    stamps its OWN lane's credential."""
+    for rel, lane in ((("src", "backend", "collectors", "metric_events.go"), "LaneMetrics"),
+                      (("src", "backend", "collectors", "probe_events.go"), "LaneProbes"),
+                      (("src", "backend", "collectors", "snmptrap.go"), "LaneTraps"),
+                      (("src", "backend", "bus_producer.go"), "LaneBus")):
         src = read(*rel)
-        assert "SetIngestAuth(req)" in src, f"{rel[-1]} does not authenticate to the ingest tier"
+        assert f"SetIngestAuth(req, {lane.replace('Lane', 'collectors.Lane') if 'bus_producer' in rel[-1] else lane})" in src \
+            or f"SetIngestAuth(req, {lane})" in src, \
+            f"{rel[-1]} does not authenticate with its lane credential ({lane})"
 
 
 def test_ingest_forwarders_observe_rejection():

@@ -1117,7 +1117,7 @@ func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *Tra
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	SetIngestAuth(req) // F-08
+	SetIngestAuth(req, LaneTraps) // F-08
 	resp, err := client.Do(req)
 	if err != nil {
 		r.mu.Lock()

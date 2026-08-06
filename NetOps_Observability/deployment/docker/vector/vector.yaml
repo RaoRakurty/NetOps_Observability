@@ -122,12 +122,29 @@ sources:
   # SNMP trap receiver (the in-API collectors/snmptrap.go listener on UDP/162)
   # POSTs each decoded trap here as a JSON object. Kept on the log bus so traps
   # inherit the same tenant-stamp/retention/export as syslog. (#SNMP traps)
+  # SEC-013.1: the shared &ingest_auth anchor is GONE on purpose. One token
+  # opening all four lanes — including the bus bridge — was the epic's named
+  # defect ("exactly today's INGEST_TOKEN problem", HLD §10). Each lane now
+  # verifies its OWN credential; compose supplies the fallback chain
+  # (INGEST_TOKEN_<LANE> defaulting to the shared token) so a pre-SEC-013
+  # install is unchanged until per-lane tokens are provisioned.
+  # SEC-013.2: each lane carries an env-driven tls block (unquoted bool
+  # interpolation, the kafka-sink pattern): the enabling override serves the
+  # aggregator SVID and REQUIRES a mesh client certificate
+  # (verify_certificate on a server = client-cert enforcement, proven
+  # empirically 2026-08-06: no-cert handshake refused, SVID accepted).
   trap_in:
     type: http_server
     address: 0.0.0.0:8688
-    auth: &ingest_auth
+    auth:
       username: "${INGEST_USER:-netops-ingest}"
-      password: "${INGEST_TOKEN:?INGEST_TOKEN required — see F-08; set it in .env}"
+      password: "${INGEST_TOKEN_TRAPS:?INGEST_TOKEN_TRAPS required — see F-08/SEC-013; compose defaults it to INGEST_TOKEN}"
+    tls: &ingest_tls
+      enabled: ${INGEST_TLS_ENABLED:-false}
+      crt_file: "${INGEST_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${INGEST_TLS_KEY:-/tls/ca.pem}"
+      ca_file: "${INGEST_TLS_CA:-/tls/ca.pem}"
+      verify_certificate: ${INGEST_TLS_ENABLED:-false}
     decoding:
       codec: json
 
@@ -137,7 +154,10 @@ sources:
   probe_in:
     type: http_server
     address: 0.0.0.0:8689
-    auth: *ingest_auth
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_PROBES:?INGEST_TOKEN_PROBES required — see F-08/SEC-013; compose defaults it to INGEST_TOKEN}"
+    tls: *ingest_tls
     decoding:
       codec: json
 
@@ -150,7 +170,10 @@ sources:
   metrics_in:
     type: http_server
     address: 0.0.0.0:8690
-    auth: *ingest_auth
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — see F-08/SEC-013; compose defaults it to INGEST_TOKEN}"
+    tls: *ingest_tls
     decoding:
       codec: json
     framing:
@@ -164,7 +187,10 @@ sources:
   bus_in:
     type: http_server
     address: 0.0.0.0:8692
-    auth: *ingest_auth
+    auth:
+      username: "${INGEST_USER:-netops-ingest}"
+      password: "${INGEST_TOKEN_BUS:?INGEST_TOKEN_BUS required — see F-08/SEC-013; compose defaults it to INGEST_TOKEN}"
+    tls: *ingest_tls
     decoding:
       codec: json
 

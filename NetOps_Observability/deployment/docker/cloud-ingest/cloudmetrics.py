@@ -29,7 +29,7 @@ import urllib.request
 
 import cloud_events
 
-from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+from ingest_auth import INGEST_SSL_CONTEXT, with_ingest_auth  # F-08 / SEC-013.2
 
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
 PERIOD_S = int(os.environ.get("CW_PERIOD_S", "300"))
@@ -60,7 +60,7 @@ def _post(events: list[dict]) -> None:
     body = "\n".join(json.dumps(e) for e in events).encode()
     req = urllib.request.Request(METRICS_SINK, data=body,
                                  headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
-    urllib.request.urlopen(req, timeout=10).read()  # noqa: S310 - operator-configured sink
+    urllib.request.urlopen(req, timeout=10, context=INGEST_SSL_CONTEXT).read()  # noqa: S310 - operator-configured sink
 
 
 def poll(cw, instances: list[dict], provider: str = "aws") -> int:

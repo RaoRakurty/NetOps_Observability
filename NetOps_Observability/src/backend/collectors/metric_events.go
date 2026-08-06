@@ -159,7 +159,7 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
-	SetIngestAuth(req) // F-08
+	SetIngestAuth(req, LaneMetrics) // F-08
 	resp, err := meshHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		return 0 // bus unreachable: collector keeps running; VM path unaffected

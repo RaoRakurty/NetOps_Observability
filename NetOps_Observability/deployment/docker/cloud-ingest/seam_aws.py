@@ -46,7 +46,7 @@ import urllib.request
 
 from seam_state import SeamStateTracker, counter_delta, material_route_drop
 
-from ingest_auth import with_ingest_auth  # F-08: cloud-ingest was the missed producer
+from ingest_auth import INGEST_SSL_CONTEXT, with_ingest_auth  # F-08 / SEC-013.2
 
 METRICS_SINK = os.environ.get("METRIC_EVENT_SINK_URL", "http://vector-aggregator:8690/")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -73,7 +73,7 @@ def _post_ndjson(events: list[dict]) -> None:
     body = "\n".join(json.dumps(e) for e in events).encode()
     req = urllib.request.Request(METRICS_SINK, data=body,
                                  headers=with_ingest_auth({"Content-Type": "application/x-ndjson"}))
-    urllib.request.urlopen(req, timeout=10).read()  # noqa: S310
+    urllib.request.urlopen(req, timeout=10, context=INGEST_SSL_CONTEXT).read()  # noqa: S310
 
 
 # ── discovery (free describes; paginated; each family isolated) ──────────────

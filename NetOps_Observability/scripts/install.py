@@ -336,6 +336,13 @@ def generate_secrets() -> dict[str, str]:
         "OS_BOOTSTRAP_PASSWORD":     generate_password(24),
         "OS_DASHBOARDS_PASSWORD":    generate_password(24),
         "OS_AGGREGATOR_PASSWORD":    generate_password(24),
+        # SEC-013.1: per-lane ingest tokens (compose falls back to the shared
+        # INGEST_TOKEN when these are absent, so upgrades are unchanged until
+        # rotated; fresh installs start lane-scoped).
+        "INGEST_TOKEN_TRAPS":        generate_password(32),
+        "INGEST_TOKEN_PROBES":       generate_password(32),
+        "INGEST_TOKEN_METRICS":      generate_password(32),
+        "INGEST_TOKEN_BUS":          generate_password(32),
         # KRaft storage id for the embedded Kafka broker (22-char base64url
         # uuid, same format kafka-storage random-uuid emits). Generated ONCE
         # per install: the data dir is formatted with it, and a changed id

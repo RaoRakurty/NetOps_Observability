@@ -29,7 +29,7 @@ func TestSetIngestAuthSendsBasicCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	SetIngestAuth(req)
+	SetIngestAuth(req, LaneMetrics)
 
 	user, pass, ok := req.BasicAuth()
 	if !ok {
@@ -49,7 +49,7 @@ func TestSetIngestAuthOmitsHeaderWhenUnset(t *testing.T) {
 	resetIngestCredentialForTest()
 
 	req, _ := http.NewRequest(http.MethodPost, "http://example/", nil)
-	SetIngestAuth(req)
+	SetIngestAuth(req, LaneMetrics)
 	if _, _, ok := req.BasicAuth(); ok {
 		t.Error("an empty INGEST_TOKEN must send no header at all")
 	}
@@ -103,11 +103,50 @@ func TestEveryIngestForwarderChecksStatus(t *testing.T) {
 			t.Fatalf("read %s: %v", file, err)
 		}
 		src := string(raw)
-		if !strings.Contains(src, "SetIngestAuth(req)") {
+		if !strings.Contains(src, "SetIngestAuth(req, Lane") {
 			t.Errorf("%s does not authenticate to the ingest tier (F-08)", file)
 		}
 		if !strings.Contains(src, "logIngestRejection(") {
 			t.Errorf("%s does not observe a rejected ingest POST — the lane would die silently", file)
 		}
+	}
+}
+
+// ── SEC-013.1: per-lane credentials ─────────────────────────────────────────
+
+func TestLaneTokensAreScopedWithSharedFallback(t *testing.T) {
+	// Per-lane tokens when provisioned; the shared token remains the
+	// fallback so a pre-SEC-013 deployment is bit-for-bit unchanged.
+	t.Setenv("INGEST_TOKEN", "shared-legacy")
+	t.Setenv("INGEST_TOKEN_BUS", "bus-only")
+	t.Setenv("INGEST_TOKEN_METRICS", "metrics-only")
+	resetIngestCredentialForTest()
+
+	check := func(lane, want string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, "http://example/", nil)
+		SetIngestAuth(req, lane)
+		_, pass, ok := req.BasicAuth()
+		if !ok || pass != want {
+			t.Errorf("lane %s: got %q ok=%v, want %q", lane, pass, ok, want)
+		}
+	}
+	check(LaneBus, "bus-only")
+	check(LaneMetrics, "metrics-only")
+	// Unprovisioned lanes ride the shared fallback (the accept-set window).
+	check(LaneTraps, "shared-legacy")
+	check(LaneProbes, "shared-legacy")
+}
+
+func TestUnknownLaneSendsNothing(t *testing.T) {
+	// Fail closed: a typo'd lane name must not silently borrow another
+	// lane's credential — the request goes out unauthenticated and the
+	// server's 401 (plus the rejection counter) makes the bug loud.
+	t.Setenv("INGEST_TOKEN", "shared")
+	resetIngestCredentialForTest()
+	req, _ := http.NewRequest(http.MethodPost, "http://example/", nil)
+	SetIngestAuth(req, "no-such-lane")
+	if _, _, ok := req.BasicAuth(); ok {
+		t.Fatal("unknown lane must not send any credential")
 	}
 }

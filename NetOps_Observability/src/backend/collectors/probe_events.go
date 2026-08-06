@@ -167,7 +167,7 @@ func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		SetIngestAuth(req) // F-08
+		SetIngestAuth(req, LaneProbes) // F-08
 		resp, err := client.Do(req)
 		if err != nil {
 			continue

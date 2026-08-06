@@ -78,7 +78,7 @@ func produceJSON(ctx context.Context, topic string, records []proxyRecord) (int,
 	// F-08: the bus bridge is authenticated now. Its netops.* prefix check is
 	// a ROUTING guard, never an identity guard — without this header anything
 	// on the compose network could produce onto any tenant's topic.
-	collectors.SetIngestAuth(req)
+	collectors.SetIngestAuth(req, collectors.LaneBus)
 	resp, err := backendHTTPClient(20 * time.Second).Do(req)
 	if err != nil {
 		return 0, err
