@@ -1064,7 +1064,13 @@ services:
       # SEC-011: overridable so a TLS deployment can supply
       # ?sslmode=verify-full&sslrootcert=... without editing this file (the
       # base default stays the documented plaintext baseline).
-      POSTGRES_DSN: ${CORRELATION_POSTGRES_DSN:-postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-netops}}
+      # SEC-011.2 (2026-08-06): POSTGRES_DSN REMOVED — correlation's code
+      # references it nowhere (verified against source and the running
+      # container), so the env var was an unused copy of the BOOTSTRAP
+      # SUPERUSER credential sitting in this container's environment: pure
+      # blast radius with zero function. If correlation ever needs Postgres,
+      # it gets its own least-privilege role (netops_correlation), never a
+      # shared or super credential.
       LOG_LEVEL: ${CORRELATION_LOG_LEVEL:-info}
       # Flow-lane correlation (netops.flows → signals). ON by default; =false
       # stops the engine deriving signals from flows, e.g. when goflow2 volume

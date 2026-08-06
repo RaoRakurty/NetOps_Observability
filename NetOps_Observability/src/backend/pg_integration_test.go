@@ -287,3 +287,34 @@ func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 
 // pgx import kept meaningful: withTenant callbacks take a pgx.Tx.
 var _ = pgx.Tx(nil)
+
+// ── SEC-011.2: the two ways FORCE-RLS is silently defeated ──────────────────
+
+// TestAppRoleCannotBypassRLS asserts the properties the tenant-isolation
+// guarantee actually rests on: the connected app role is not a superuser and
+// does not hold BYPASSRLS. Either one would make every FORCE-RLS policy a
+// no-op WITHOUT any error, log line, or failing query — isolation would
+// simply stop being true. (Ownership is deliberately permitted: the app role
+// owns its tables and runs migrations; FORCE RLS exists precisely to subject
+// the owner to policy. BYPASSRLS and superuser are the two attributes FORCE
+// cannot compensate for.)
+func TestAppRoleCannotBypassRLS(t *testing.T) {
+	db := openPG(t)
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var super, bypass bool
+	err := db.Pool().QueryRow(ctx,
+		`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).
+		Scan(&super, &bypass)
+	if err != nil {
+		t.Fatalf("role introspection: %v", err)
+	}
+	if super {
+		t.Fatal("the app role is a SUPERUSER — every RLS policy is silently void (SEC-011.2)")
+	}
+	if bypass {
+		t.Fatal("the app role holds BYPASSRLS — FORCE RLS is silently void (SEC-011.2)")
+	}
+}
