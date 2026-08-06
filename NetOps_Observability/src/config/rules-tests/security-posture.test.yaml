@@ -1,0 +1,89 @@
+# promtool unit tests for the security-posture alert group (SEC-020.2).
+#
+# Acceptance criterion from the backlog: "each rule fires on a synthetic
+# condition". These run in preflight-configs.sh (promtool test rules) — a rule
+# whose expression drifts away from the emitted vocabulary fails the build,
+# not the 3am operator. Paths are as mounted by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) Fatal-class findings in the running configuration page after 10m.
+  - interval: 1m
+    input_series:
+      - series: 'netops_sec_posture_findings{severity="fatal"}'
+        values: "2x30"
+      - series: 'netops_sec_posture_findings{severity="warn"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SecurityPostureFatalFindings
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "the boot security validator counts 2 fatal finding(s) in the RUNNING configuration — production would refuse this boot; fix the control or consciously accept it before it ships"
+      # And the all-clear: fatal=0 must NOT fire.
+  - interval: 1m
+    input_series:
+      - series: 'netops_sec_posture_findings{severity="fatal"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SecurityPostureFatalFindings
+        exp_alerts: []
+
+  # 2) A 90+ day-old declared exception goes loud after 6h of being stale.
+  #    8000000s ≈ 92.6d, held for 400 minutes (> the 6h for-clause).
+  - interval: 1m
+    input_series:
+      - series: 'netops_sec_exception_age_seconds{edge="device-goflow2"}'
+        values: "8000000+60x400"
+    alert_rule_test:
+      - eval_time: 6h35m
+        alertname: SecurityExceptionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              edge: device-goflow2
+            exp_annotations:
+              summary: "declared plaintext exception device-goflow2 was accepted over 90 days ago and never revisited — re-review it and bump its accepted date in the transport inventory (or retire the exception)"
+
+  # 3) Sustained handshake-error rate (0.1/s = 6/min) fires after 30m; a
+  #    one-off blip (single step of +3) does not.
+  - interval: 1m
+    input_series:
+      - series: "netops_tls_handshake_errors_total"
+        values: "0+6x70"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: TLSHandshakeErrorsSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'the api listener is failing TLS handshakes at 0.10/s sustained — some peer is presenting broken or expired material in a retry loop (the 2026-08-05 nginx-expired-SVID signature)'
+  - interval: 1m
+    input_series:
+      - series: "netops_tls_handshake_errors_total"
+        values: "0 0 0 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: TLSHandshakeErrorsSustained
+        exp_alerts: []
+
+  # 4) ANY trusted-chain-wrong-identity rejection fires (never noise).
+  - interval: 1m
+    input_series:
+      - series: "netops_tls_identity_rejected_total"
+        values: "0x10 5x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TLSIdentityRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "the api rejected 5 mTLS peer(s) in 30m whose chain was TRUSTED but whose identity is not allowed — a valid mesh credential is knocking from the wrong workload; investigate before widening any allowlist"

@@ -642,6 +642,58 @@ groups:
           summary: "the api's own served certificate expires in under 24h — the in-process reloader should have rotated it; investigate the reissue loop"
 
   # ----------------------------------------------------------------------------
+  # Security posture (SEC-020.2) — alerts over the SEC-020.1 vocabulary.
+  # Signals that exist today only; a rule on a reserved (not-yet-emitted)
+  # family would never fire and read as "covered" (the silent-misfire class).
+  # ----------------------------------------------------------------------------
+  - name: security-posture
+    interval: 60s
+    rules:
+      # A running configuration with fatal-class findings would REFUSE to boot
+      # in production. In lab/staging it runs — but must page, not idle, or the
+      # gap ships. Guarded by absent() logic elsewhere: the metric is emitted
+      # unconditionally from newServer, so ==0 is a real all-clear.
+      - alert: SecurityPostureFatalFindings
+        expr: max(netops_sec_posture_findings{severity="fatal"}) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the boot security validator counts {{ $value }} fatal finding(s) in the RUNNING configuration — production would refuse this boot; fix the control or consciously accept it before it ships"
+
+      # HLD §11 standing risk: declared plaintext degenerating into a rubber
+      # stamp. 90 days without a review (the inventory's accepted date) makes
+      # the exception loud again. 7776000s = 90d.
+      - alert: SecurityExceptionStale
+        expr: netops_sec_exception_age_seconds > 7776000
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "declared plaintext exception {{ $labels.edge }} was accepted over 90 days ago and never revisited — re-review it and bump its accepted date in the transport inventory (or retire the exception)"
+
+      # A trickle of handshake errors is normal noise (scanners, restarts); a
+      # sustained rate means a peer with broken/expired material is retrying in
+      # a loop — the 2026-08-05 nginx incident's signature.
+      - alert: TLSHandshakeErrorsSustained
+        expr: rate(netops_tls_handshake_errors_total[15m]) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the api listener is failing TLS handshakes at {{ $value | printf \"%.2f\" }}/s sustained — some peer is presenting broken or expired material in a retry loop (the 2026-08-05 nginx-expired-SVID signature)"
+
+      # Trusted chain + disallowed identity = a VALID mesh certificate is being
+      # presented from the wrong workload. That is never noise.
+      - alert: TLSIdentityRejected
+        expr: increase(netops_tls_identity_rejected_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the api rejected {{ $value | printf \"%.0f\" }} mTLS peer(s) in 30m whose chain was TRUSTED but whose identity is not allowed — a valid mesh credential is knocking from the wrong workload; investigate before widening any allowlist"
+
+  # ----------------------------------------------------------------------------
   # Stack self-health
   # ----------------------------------------------------------------------------
   - name: noc-self-health
