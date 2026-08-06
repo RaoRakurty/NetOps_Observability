@@ -59,3 +59,5 @@ src/frontend/public/brand-samples/
 src/backend/backend
 deployment/docker/mock-servicenow/mock-servicenow
 scripts/.restore-drill.report.json
+scripts/rotate-tls.heartbeat
+scripts/rotate-tls.log
