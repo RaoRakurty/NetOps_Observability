@@ -109,10 +109,15 @@ log "disk material OK (${left_h}h remaining); mode=$([ $CHECK_ONLY -eq 1 ] && ec
 # ── phase 1: native reloads (no restarts) ───────────────────────────────────
 if [ "$CHECK_ONLY" -eq 0 ]; then
     log "kafka: re-stage PEM keystore + dynamic reload on both secure listeners"
-    if dc exec -T kafka sh -c 'umask 077 && cat /certs-src/kafka.key /certs-src/kafka.crt > /tmp/kafka-tls/keystore.pem.new && mv /tmp/kafka-tls/keystore.pem.new /tmp/kafka-tls/keystore.pem && cp /certs-src/ca.pem /tmp/kafka-tls/truststore.pem'; then
+    if dc exec -T kafka sh -c 'umask 077 && cat /certs-src/kafka.key /certs-src/kafka.crt > /tmp/kafka-tls/keystore.pem.new && mv /tmp/kafka-tls/keystore.pem.new /tmp/kafka-tls/keystore.pem && cp /certs-src/ca.pem /tmp/kafka-tls/truststore.pem && printf "security.protocol=SSL\nssl.keystore.type=PEM\nssl.keystore.location=/tmp/kafka-tls/keystore.pem\nssl.truststore.type=PEM\nssl.truststore.location=/tmp/kafka-tls/truststore.pem\n" > /tmp/kafka-tls/admin.properties'; then
+        # Authenticated admin plane (2026-08-06): MTLS:9094 with the broker's
+        # own SVID (super-user; admin.properties written by tls-entrypoint.sh).
+        # 9092-as-ANONYMOUS goes blind at the SEC-007.2 flip and the listener
+        # itself dies at SEC-006.3 — this leg must not depend on either.
         for listener in mtls flows; do
             if ! dc exec -T kafka timeout 90 /opt/kafka/bin/kafka-configs.sh \
-                --bootstrap-server localhost:9092 --entity-type brokers --entity-name 1 \
+                --bootstrap-server kafka:9094 --command-config /tmp/kafka-tls/admin.properties \
+                --entity-type brokers --entity-name 1 \
                 --alter --add-config "listener.name.$listener.ssl.keystore.location=/tmp/kafka-tls/keystore.pem" >/dev/null; then
                 flag "kafka listener $listener dynamic keystore reload"
             fi

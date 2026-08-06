@@ -32,6 +32,22 @@ cat "$SRC/kafka.key" "$SRC/kafka.crt" > "$DST/keystore.pem"
 cp "$SRC/ca.pem" "$DST/truststore.pem"
 echo "tls-entrypoint: kafka broker SVID staged from $SRC (PEM keystore; SSL:9094 mTLS + FLOWS:9095 server-TLS)" >&2
 
+# Admin-plane client config (2026-08-06, pre-SEC-007.2): the broker's own SVID
+# is the KAFKA_SUPER_USERS principal AND carries clientAuth, so every in-
+# container admin exec (rotate-tls dynamic keystore re-set, consumer-group
+# diagnostics, console tools) authenticates on MTLS:9094 with this file
+# instead of riding 9092-as-ANONYMOUS — which goes blind at the default-deny
+# flip and dies with the 9092 listener. Written here so the paths can never
+# drift from the staging above.
+cat > "$DST/admin.properties" <<EOF
+security.protocol=SSL
+ssl.keystore.type=PEM
+ssl.keystore.location=$DST/keystore.pem
+ssl.truststore.type=PEM
+ssl.truststore.location=$DST/truststore.pem
+EOF
+echo "tls-entrypoint: admin-plane client config written to $DST/admin.properties (MTLS:9094, broker SVID = super-user)" >&2
+
 # "$@" is the image CMD (/etc/kafka/docker/run); the stock entrypoint chain
 # is preserved underneath.
 exec /__cacert_entrypoint.sh "$@"

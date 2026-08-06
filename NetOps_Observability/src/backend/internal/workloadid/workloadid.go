@@ -44,7 +44,14 @@ var Registry = []Entry{
 	{Service: "vmauth", DNS: []string{"vmauth"}, Server: true},                   // SEC-010: the authenticating TLS front for VictoriaMetrics
 
 	// Stores — servers their clients verify by compose DNS name.
-	{Service: "kafka", DNS: []string{"kafka"}, Server: true},           // SEC-006 broker listener
+	// SEC-006 broker listener. Client too (2026-08-06): the broker's DN is the
+	// KAFKA_SUPER_USERS principal, and after the SEC-007.2 default-deny flip
+	// every admin-plane operation (dynamic keystore re-set in rotate-tls,
+	// consumer-group diagnostics, kafka-init topic creation) must authenticate
+	// on MTLS:9094 — a serverAuth-only leaf cannot act as that client
+	// (broker rejects it with certificate_unknown; proven on the lab). Same
+	// both-EKU precedent as opensearch below.
+	{Service: "kafka", DNS: []string{"kafka"}, Client: true, Server: true},
 	{Service: "opensearch", DNS: []string{"opensearch"}, Client: true, Server: true}, // SEC-008: node cert needs BOTH EKUs — the security plugin uses it for transport-layer mutual auth between nodes
 	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true}, // SEC-009
 	{Service: "postgres", DNS: []string{"postgres"}, Server: true},     // SEC-011

@@ -109,3 +109,21 @@ func TestRegistryIdentitiesAreUniqueAndWildcardFree(t *testing.T) {
 		}
 	}
 }
+
+// TestKafkaIdentityKeepsClientEKU pins the 2026-08-06 decision: the broker's
+// SVID is also the Kafka ADMIN-PLANE client credential (its DN is the
+// KAFKA_SUPER_USERS principal; rotate-tls keystore re-sets, consumer-group
+// diagnostics and kafka-init all authenticate with it on MTLS:9094). Dropping
+// Client here would strand every admin operation after the SEC-007.2
+// default-deny flip — the broker refuses a serverAuth-only client cert.
+func TestKafkaIdentityKeepsClientEKU(t *testing.T) {
+	for _, e := range Registry {
+		if e.Service == "kafka" {
+			if !e.Client || !e.Server {
+				t.Fatalf("kafka identity must carry BOTH EKUs (got client=%v server=%v) — see comment for why", e.Client, e.Server)
+			}
+			return
+		}
+	}
+	t.Fatal("kafka missing from the registry")
+}
