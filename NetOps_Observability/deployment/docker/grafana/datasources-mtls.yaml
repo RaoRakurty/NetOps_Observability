@@ -81,10 +81,7 @@ datasources:
       # SEC-009: native-secure listener with the mesh CA.
       port: 9440
       secure: true
-    secureJsonData:
-      tlsCACert: $__file{/tls/ca.pem}
-      port: 9000
-      secure: false
       username: grafana
     secureJsonData:
+      tlsCACert: $__file{/tls/ca.pem}
       password: ${GRAFANA_CH_PASSWORD}
