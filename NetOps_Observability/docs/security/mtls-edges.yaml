@@ -1,0 +1,172 @@
+{
+  "$schema_note": "Step-2 assurance EDGE CONTRACTS (tracker #151). JSON content, valid YAML 1.2 — stdlib-parseable, same convention as transport-inventory.yaml. This file is a THIN OVERLAY over the inventory: every row references an inventory edge id and adds only what the inventory deliberately does not carry — the TLS-time endpoint (the inventory records base-compose ports), the expected server identity on the wire, the client-auth regime, and the negative expectations the assurance suite must prove. Coverage rule (enforced by tests/test_assurance_contracts.py): every inventory edge whose security_profile transport contains 'tls' MUST have a row here; every row must reference a real inventory edge.",
+  "schema_version": 1,
+  "updated": "2026-08-06",
+  "identity_format": "spiffe://<trust-domain>/ns/default/sa/<service> — trust domain default 'netops'; Kafka principals are the FULL DN string User:CN=spiffe://... (env->properties eats the mapping rules)",
+  "edges": [
+    {
+      "edge": "browser-nginx",
+      "endpoint": "nginx:8443",
+      "server_identity": "PUBLIC ingress cert (operator-supplied or gen-dev-cert.sh self-signed) — deliberately NOT an SVID",
+      "client_auth": "none (JWT at the application layer)",
+      "verify": "s_client handshake + HSTS header on :8443",
+      "negative": ["plaintext :8000 removal is enforce-wave; until then it must be DECLARED, never silent"]
+    },
+    {
+      "edge": "nginx-api",
+      "endpoint": "api:8080 (TLS-on-listener when TLS_CERT_FILE set)",
+      "server_identity": "spiffe://netops/ns/default/sa/api",
+      "client_auth": "required — TLS_CLIENT_ALLOWED_URIS allowlist",
+      "allowed_clients": ["spiffe://netops/ns/default/sa/nginx", "spiffe://netops/ns/default/sa/victoria", "spiffe://netops/ns/default/sa/vector-router"],
+      "verify": "netops_tls_identity_rejected_total stays flat under normal traffic; nginx upstream healthy",
+      "negative": ["no client cert -> handshake refused", "trusted chain + identity NOT in allowlist -> refused AND netops_tls_identity_rejected_total increments (TLSIdentityRejected alert)"]
+    },
+    {
+      "edge": "victoria-api-metrics-scrape",
+      "endpoint": "api:8080",
+      "server_identity": "spiffe://netops/ns/default/sa/api",
+      "client_auth": "required (same listener/allowlist as nginx-api)",
+      "allowed_clients": ["spiffe://netops/ns/default/sa/victoria"],
+      "verify": "up{job=~\".*api.*\"} == 1 via the mtls scrape variant (vmscrape-mtls.yml)",
+      "negative": ["scrape without SVID -> target down, not silently plaintext"]
+    },
+    {
+      "edge": "api-postgres",
+      "endpoint": "postgres:5432 (SSLRequest preamble)",
+      "server_identity": "spiffe://netops/ns/default/sa/postgres",
+      "client_auth": "password within TLS; DSN sslmode=verify-full",
+      "verify": "tlsprobe endpoint postgres:5432 (preamble-aware); pg_stat_ssl for live connections",
+      "negative": ["expired served cert -> clients fail (the 2026-08-05 incident class); TLSServedCertExpiring* alerts fire first"]
+    },
+    {
+      "edge": "api-clickhouse",
+      "endpoint": "clickhouse:8443 (https) + clickhouse:9440 (native TLS)",
+      "server_identity": "spiffe://netops/ns/default/sa/clickhouse",
+      "client_auth": "password within TLS",
+      "verify": "tlsprobe clickhouse:8443 + clickhouse:9440; tenant_scope survives the transport (chTenantScope tests)",
+      "negative": ["plaintext 8123 removal is enforce-wave; its continued presence must show in the posture view as drift/declared state"]
+    },
+    {
+      "edge": "api-opensearch",
+      "endpoint": "opensearch:9200 (https, security plugin ON)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "basic auth per identity (svc_api / svc_router / svc_correlation / svc_aggregator / svc_dashboards) within TLS",
+      "verify": "anon -> 401; svc_api read 200; svc_router write-only (read 403); doc counts move",
+      "negative": ["anonymous request -> 401 (never 200)", "write-only identity reading -> 403"]
+    },
+    {
+      "edge": "api-victoria",
+      "endpoint": "vmauth:8427 (https; victoria:8428 stays plaintext-DECLARED behind it)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth (svc-api), scoped routes",
+      "verify": "tlsprobe vmauth:8427; scoped user cannot reach another user's route set",
+      "negative": ["query path with WRITE-scoped credentials -> 401/403 (route scoping holds)"]
+    },
+    {
+      "edge": "api-correlation",
+      "endpoint": "correlation:8443 (mTLS-only listener)",
+      "server_identity": "spiffe://netops/ns/default/sa/correlation",
+      "client_auth": "required — peer allowlist by SPIFFE URI",
+      "allowed_clients": ["spiffe://netops/ns/default/sa/api (full)", "spiffe://netops/ns/default/sa/victoria (/metrics,/healthz only)", "spiffe://netops/ns/default/sa/correlation (own healthcheck)"],
+      "verify": "tlsprobe correlation:8443; vmscrape mtls job up==1",
+      "negative": ["victoria SVID requesting a non-metrics route -> refused (scope allowlist)", "no client cert -> handshake refused"]
+    },
+    {
+      "edge": "vector-kafka",
+      "endpoint": "kafka:9094 (MTLS listener)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required; principal = full DN User:CN=spiffe://.../vector-aggregator",
+      "verify": "produce succeeds; authorizer log carries the principal; per-lane consume-rate > 0 downstream",
+      "negative": ["no client cert on 9094 -> handshake refused", "post-007.2: principal without a topic grant -> DENIED and netops.deadletter does NOT grow"]
+    },
+    {
+      "edge": "vector-router-kafka",
+      "endpoint": "kafka:9094",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required; User:CN=spiffe://.../vector-router",
+      "verify": "ALL router lanes consume-rate > 0 after any broker bounce (lesson n — librdkafka wedges silently; the healthcheck cannot see it)",
+      "negative": ["a wedged consumer must be caught by KafkaConsumerLagGrowing/Stalled within 30m"]
+    },
+    {
+      "edge": "goflow2-kafka",
+      "endpoint": "kafka:9095 (FLOWS listener, server-TLS, client.auth=none)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "none BY OWNER DECISION (goflow2 v2.2.1 has no client-cert flags) — ANONYMOUS is ACL-bounded to Write netops.flows literal",
+      "verify": "flows lane moves; ANONYMOUS can produce netops.flows",
+      "negative": ["ANONYMOUS producing to ANY other topic -> DENIED", "ANONYMOUS metadata is blind beyond flows (diagnose with the authenticated admin config, never anonymous tools)"]
+    },
+    {
+      "edge": "correlation-kafka-ch-pg",
+      "endpoint": "kafka:9094 (consumer)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required; User:CN=spiffe://.../correlation; partial kafka_security_kwargs config refuses boot",
+      "verify": "aiokafka group netops-correlation synced with live member across all 12 topics",
+      "negative": ["stolen lane token over TLS without the SVID -> refused (SEC-018 class)"]
+    },
+    {
+      "edge": "vector-router-opensearch",
+      "endpoint": "opensearch:9200 (https)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "svc_router basic auth within TLS — WRITE-ONLY identity (its ES healthcheck must stay OFF: healthcheck READS)",
+      "verify": "fresh docs land per lane (timestamp field is 'timestamp', NOT '@timestamp' — a wrong-field count fakes an outage)",
+      "negative": ["svc_router attempting a read -> 403"]
+    },
+    {
+      "edge": "vector-router-clickhouse",
+      "endpoint": "clickhouse:8443 (https sink)",
+      "server_identity": "spiffe://netops/ns/default/sa/clickhouse",
+      "client_auth": "password within TLS",
+      "verify": "flows/cloudcosts rows land; per-lane count reconciliation",
+      "negative": []
+    },
+    {
+      "edge": "vector-aggregator-opensearch",
+      "endpoint": "opensearch:9200 (https, svc_aggregator)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "svc_aggregator basic auth — cluster:monitor/health + nodes/stats* ONLY (one-user-one-role)",
+      "verify": "F-17 stats panels populate; svc_aggregator cannot read app indexes",
+      "negative": ["svc_aggregator reading netops-applogs-* -> 403"]
+    },
+    {
+      "edge": "vector-aggregator-victoria",
+      "endpoint": "vmauth:8427 (svc-vector, write routes only)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth, src_paths limited to /api/v1/write + import",
+      "verify": "metric series land; write-scoped user cannot query",
+      "negative": ["svc-vector issuing /api/v1/query -> refused"]
+    },
+    {
+      "edge": "gnmic-victoria",
+      "endpoint": "vmauth:8427 (svc-gnmic, write routes only)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth (base-config env params; gnmic has no tls schema for this hop — SSL_CERT_FILE pattern)",
+      "verify": "device_* gNMI series land (the SILENT-BLACKHOLE regression class: gnmic drops writes without erroring — count series, never trust logs)",
+      "negative": ["a wrong credential must surface as missing series within one scrape cycle, alerted by the canonical-lane contract"]
+    },
+    {
+      "edge": "api-host-published",
+      "endpoint": "api:8080 via host (plaintext-DECLARED until enforce wave drops the host port)",
+      "server_identity": "spiffe://netops/ns/default/sa/api",
+      "client_auth": "same listener as nginx-api once TLS active",
+      "verify": "posture view carries the declared state; enforce wave removes the publish",
+      "negative": []
+    },
+    {
+      "edge": "vector-router-api-sealing-keys",
+      "endpoint": "api:8080 /internal/sealing-keys (feature-gated; dormant when Sealed Fields is off)",
+      "server_identity": "spiffe://netops/ns/default/sa/api",
+      "client_auth": "required — router SVID only (sealingEdgeCaller); token-only over TLS is refused",
+      "allowed_clients": ["spiffe://netops/ns/default/sa/vector-router"],
+      "verify": "STEP-2 MUST EXERCISE FEATURE-ON (unit-proven only today: stolen-token-over-TLS refused; the lab keeps the feature off so the hop is dormant)",
+      "negative": ["stolen SEALING_ACCEPT_TOKEN presented over TLS WITHOUT the router SVID -> refused", "plaintext fetch once https enforced -> refused"]
+    },
+    {
+      "edge": "api-valkey",
+      "endpoint": "redis:6380 (TLS listener; 6379 plaintext-DECLARED until enforce wave)",
+      "server_identity": "spiffe://netops/ns/default/sa/redis",
+      "client_auth": "REDIS_PASSWORD within TLS (--tls-auth-clients no — password stays the authn)",
+      "verify": "TLS+CA PONG; REDIS_TLS=true env seam is fail-closed and hostname-verified (source-guard test pins no insecure knob)",
+      "negative": ["plaintext client against 6380 -> connection reset", "no password -> NOAUTH"]
+    }
+  ]
+}

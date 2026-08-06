@@ -1,0 +1,106 @@
+{
+  "$schema_note": "Step-2 assurance LANE CONTRACTS (tracker #151). JSON content, valid YAML 1.2. One row per telemetry lane: the full path an event class rides (entry -> transport -> topic -> consumer group -> store), the identity at each hop, and the COUNT-RECONCILIATION recipe — the SEC-008 doc-counts technique generalized: an assurance phase proves a lane by comparing produced vs consumed vs landed counts over a window, never by the absence of an error line. tests/test_assurance_contracts.py pins topics to kafka-init's list and groups/stores to the as-built names.",
+  "schema_version": 1,
+  "updated": "2026-08-06",
+  "count_sources": {
+    "vector": "vector_component_received/sent_events_total{component_id=...} via vmauth (svc-api)",
+    "kafka": "kafka_topic_partition_current_offset / kafka_consumergroup_current_offset (kafka-exporter)",
+    "opensearch": "index _count over the window; timestamp field is 'timestamp' NOT '@timestamp'",
+    "clickhouse": "SELECT count() FROM <table> WHERE ts in window (chTenantScope-injected client)"
+  },
+  "lanes": [
+    {
+      "lane": "syslog",
+      "entry": "device -> syslog-ng:514 (udp/tcp) -> vector-aggregator syslog source",
+      "topic": "netops.syslog",
+      "producer_identity": "spiffe://netops/ns/default/sa/vector-aggregator (kafka:9094)",
+      "consumers": [
+        {"group": "netops-router-syslog", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch netops-syslog-*"},
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "aggregator sent(kafka_syslog) ~= topic offset delta ~= router received(kafka_syslog) ~= OS doc-count delta (netops-syslog-*)"
+    },
+    {
+      "lane": "applogs",
+      "entry": "container stdout -> vector-aggregator docker_logs source (del(.label) — dotted-key mapping guard)",
+      "topic": "netops.applogs",
+      "producer_identity": "spiffe://netops/ns/default/sa/vector-aggregator",
+      "consumers": [
+        {"group": "netops-router-applogs", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch netops-applogs-*"}
+      ],
+      "reconcile": "docker_applogs received ~= topic delta ~= OS doc delta; a broker log-level regression shows here FIRST (the DEBUG-flood class blew this lane to 21k/min)"
+    },
+    {
+      "lane": "flows",
+      "entry": "device -> goflow2:2055/6343 (udp) -> kafka:9095 FLOWS listener (TLS, ANONYMOUS, ACL-bounded to this topic)",
+      "topic": "netops.flows",
+      "producer_identity": "ANONYMOUS (owner option-1; goflow2 has no client-cert support)",
+      "consumers": [
+        {"group": "netops-router-flows", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch netops-flows-* (sampled) + clickhouse netops.flows"},
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "goflow2 stdout transport count ~= topic delta ~= CH row delta; deadletter must NOT grow (a misrouted flow lands as an applog — the goflow2.yaml lesson)"
+    },
+    {
+      "lane": "snmptrap",
+      "entry": "device -> api trap listener :162 -> TRAPS ingest lane (mTLS + INGEST_TOKEN_TRAPS) -> vector-aggregator",
+      "topic": "netops.snmptrap",
+      "producer_identity": "spiffe://netops/ns/default/sa/api (client) -> vector-aggregator lane (verify_certificate)",
+      "consumers": [
+        {"group": "netops-router-snmptrap", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch netops-snmptrap-*"},
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "trap sink accepted ~= topic delta ~= OS doc delta; lane token is AUTHZ only — metrics token on this lane must 401"
+    },
+    {
+      "lane": "probes",
+      "entry": "prober -> PROBES ingest lane (mTLS + INGEST_TOKEN_PROBES) -> vector-aggregator",
+      "topic": "netops.probes",
+      "producer_identity": "spiffe://netops/ns/default/sa/prober",
+      "consumers": [
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "prober F-08 publish counter ~= lane received ~= topic delta (the 95x401 rebuild-skew class lands here: ALWAYS rebuild api+prober together)"
+    },
+    {
+      "lane": "metrics",
+      "entry": "api collectors -> METRICS ingest lane (mTLS + INGEST_TOKEN_METRICS) -> vector-aggregator -> victoria (vmauth svc-vector) AND netops.metrics",
+      "topic": "netops.metrics",
+      "producer_identity": "spiffe://netops/ns/default/sa/api",
+      "consumers": [
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "collector_* series present (absent(collector_up) is its own alert — the erased-series class) + topic delta"
+    },
+    {
+      "lane": "bus-bridge",
+      "entry": "api/canary -> BUS ingest lane (mTLS + INGEST_TOKEN_BUS, {topic,key,event} envelope; bare-object AND array forms) -> vector-aggregator -> kafka per envelope topic",
+      "topic": "(envelope-addressed)",
+      "producer_identity": "spiffe://netops/ns/default/sa/api | correlation SVID (canary)",
+      "consumers": [{"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}],
+      "reconcile": "canary end-to-end (probes/app.edge injection -> RCA pipeline) within 15m — the canary IS this lane's reconciliation"
+    },
+    {
+      "lane": "cloud",
+      "entry": "cloud-ingest collectors -> kafka:9094 direct producer (kafka-python, kafka_security_kwargs mirror)",
+      "topic": "netops.cloud + netops.cloudlogs + netops.cloudcosts",
+      "producer_identity": "spiffe://netops/ns/default/sa/cloud-ingest",
+      "consumers": [
+        {"group": "netops-router-cloudcosts", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "clickhouse cloudcosts"},
+        {"group": "netops-router-cloudlogs", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch netops-cloudlogs-*"},
+        {"group": "netops-correlation", "identity": "spiffe://netops/ns/default/sa/correlation", "sink": "correlation engine"}
+      ],
+      "reconcile": "the F-08 twice-missed service: cloud-ingest is a DIRECT kafka producer, not HTTP-only — its counts come from topic deltas, not lane metrics"
+    },
+    {
+      "lane": "deadletter",
+      "entry": "any lane's rejects -> netops.deadletter",
+      "topic": "netops.deadletter",
+      "producer_identity": "(various)",
+      "consumers": [
+        {"group": "netops-router-deadletter", "identity": "spiffe://netops/ns/default/sa/vector-router", "sink": "opensearch (deadletter index)"}
+      ],
+      "reconcile": "STEADY-STATE ZERO GROWTH is the contract: any sustained deadletter growth fails the phase that observed it"
+    }
+  ]
+}
