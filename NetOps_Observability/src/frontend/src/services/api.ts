@@ -2701,6 +2701,24 @@ export const api = {
   saveSecuritySettings: (scope: string, s: SecuritySettings) =>
     request<SecuritySettings>(`/api/security-settings?scope=${encodeURIComponent(scope)}`, { method: "PUT", body: JSON.stringify(s) }),
 
+  // ---------- Transport Security posture (SEC-021.1, read-only) ------------
+  // Platform owner → the full path inventory + validator findings; tenant
+  // admin → its device lanes only. 403 below administration:admin; 503 when
+  // the inventory is unavailable (the caller renders the error message).
+  transportPosture: () => request<TransportPosture>("/api/security/transport-posture"),
+  // Platform-admin-only HTML posture report, returned as a Blob the caller
+  // turns into a browser download (same hand-built-headers blob idiom as
+  // downloadRcaReport: bearer token + acting-tenant scope).
+  exportTransportPosture: async (): Promise<Blob> => {
+    const token = getToken();
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const scope = getActiveScope();
+    if (scope) headers["X-Acting-Tenant"] = scope;
+    const res = await fetch("/api/security/transport-posture/export?format=html", { headers });
+    if (!res.ok) throw new Error(`Export failed: ${res.status} ${await res.text().catch(() => "")}`);
+    return res.blob();
+  },
+
   // ---------- Sessions (admin: live session listing + revocation) ----------
   listSessions: (user?: string) =>
     request<AdminSession[]>(`/api/sessions${user ? `?user=${encodeURIComponent(user)}` : ""}`),
@@ -3277,6 +3295,63 @@ export type AdminSession = {
   issued_ip?: string; user_agent_hash?: string; status: string;
   idle_timeout_sec: number; absolute_timeout_sec: number;
 };
+// ----- Transport Security posture (SEC-021.1, read-only) -----
+// Live probe observations for one transport path. `probe_ok` with a
+// `cert_not_after` means a certificate was presented and parsed.
+export interface PostureObserved {
+  probe_ok: boolean;
+  cert_not_after?: string;
+  last_checked?: string;
+}
+// A declared, owner-accepted deviation from the target tier.
+export interface PostureException { owner: string; accepted: string; reason: string }
+// One transport path (edge) in the posture inventory.
+export interface PostureRow {
+  edge: string;
+  source: string;
+  destination: string;
+  channel: string;
+  protocol: string;
+  port?: number;
+  trust_domain: string;
+  owning_epic: string;
+  current_tier: string;
+  declared_tier: string;
+  target_tier: string;
+  identity?: string;
+  observed?: PostureObserved | null;
+  drift?: string;
+  exception?: PostureException | null;
+  exception_age_days?: number;
+}
+export interface TransportValidatorFinding {
+  rule: string;
+  control: string;
+  component: string;
+  source: string;
+  observed: string;
+  required: string;
+  remedy: string;
+  severity: string;
+}
+export interface TransportValidator {
+  profile: string;
+  findings: TransportValidatorFinding[];
+  fatal: number;
+  warn: number;
+  info: number;
+}
+// scope:"platform" carries rows + validator; scope:"tenant" carries
+// device_lanes + device_count (the tenant never sees platform-internal paths).
+export interface TransportPosture {
+  scope: "platform" | "tenant";
+  generated: string;
+  rows?: PostureRow[];
+  validator?: TransportValidator;
+  device_lanes?: PostureRow[];
+  device_count?: number;
+}
+
 export type GrantReason = { role_id: string; scope_id: string; effect: string; granted_by?: string; reason?: string; break_glass?: boolean; expires_at?: string };
 export type TenantReach = { tenant_id: string; tenant_name: string; org_id: string; org_name: string; granted_by: GrantReason[] };
 export type AccessExplanation = { principal: string; all_tenants: boolean; org_admin_of: string[] | null; bindings: RoleBinding[] | null; reaches: TenantReach[] | null };

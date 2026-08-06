@@ -51,6 +51,7 @@ const Settings = lazy(() => import("./tabs/Settings"));
 const SourceOfTruth = lazy(() => import("./tabs/SourceOfTruth"));
 const StackHealth = lazy(() => import("./tabs/StackHealth"));
 const AuditLog = lazy(() => import("./tabs/AuditLog"));
+const TransportSecurity = lazy(() => import("./tabs/TransportSecurity"));
 const AccessExplorer = lazy(() => import("./tabs/AccessExplorer"));
 // tabs/admin exports its 9 views by name; lazy() needs a default, so each
 // wrapper re-shapes the named export. They all share the one admin chunk.
@@ -323,6 +324,9 @@ export const NAV: NavSection[] = [
       { id: "access", label: "Access Explorer", group: "Security", render: () => <AccessExplorer /> },
       { id: "sessions", label: "Sessions", group: "Security", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "audit", label: "Audit Log", group: "Security", render: () => <AuditLog /> },
+      // SEC-021.1: read-only TLS posture inventory. NOT platformOnly — tenant
+      // admins get their scoped device-lane view; the backend enforces scope.
+      { id: "transport", label: "Transport Security", group: "Security", render: () => <TransportSecurity /> },
       // Stack — the platform's OWN infra plumbing + raw-backend tools (was its
       // own rail section). Platform-owner only, leaf-stamped since the section
       // flag is gone; the backend enforces it independently (/api/stack/health

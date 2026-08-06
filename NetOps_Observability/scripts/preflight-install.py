@@ -274,6 +274,29 @@ def main() -> int:
                     bad(f"inventory evidence path missing: {d}")
             else:
                 ok(f"all evidence paths across {len(edges)} edges exist")
+            # SEC-020.1: accepted plaintext must carry an owner and a review
+            # date, or the declared-exception mechanism is a rubber stamp
+            # (mirrors internal/secobs LoadInventory validation for consumers
+            # that never run Go).
+            exc_bad = []
+            for e in edges:
+                exc = e.get("exception")
+                if e.get("target", {}).get("transport") == "plaintext-DECLARED" and exc is None:
+                    exc_bad.append(f"{e.get('id','?')}: plaintext-DECLARED target without an exception object")
+                if exc is not None:
+                    if not exc.get("owner") or not exc.get("reason"):
+                        exc_bad.append(f"{e.get('id','?')}: exception missing owner/reason")
+                    try:
+                        import datetime
+                        datetime.date.fromisoformat(exc.get("accepted", ""))
+                    except ValueError:
+                        exc_bad.append(f"{e.get('id','?')}: exception accepted date not YYYY-MM-DD")
+            if exc_bad:
+                for x in exc_bad:
+                    bad(f"transport exception invalid: {x}")
+            else:
+                n_exc = sum(1 for e in edges if e.get("exception"))
+                ok(f"declared plaintext exceptions well-formed ({n_exc} declared, each with owner + accepted date)")
 
     # 6) informational: migrations auto-apply on api start; just surface the count
     migs = sorted((ROOT / "src" / "backend" / "migrations").glob("*.sql"))

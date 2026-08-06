@@ -57,14 +57,14 @@ var routeIsolationLedger = map[string]string{
 	// Alert episodes (Wave 2 #6): list mirrors the /api/alerts visibility rule
 	// (own tenant + device-less platform rows); triage is own-tenant-only with
 	// cross-tenant ids → 404. Proven by alert_episodes_isolation_test.go.
-	"/api/alerts/episodes":          "scoped",
-	"/api/alerts/episodes/":         "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
+	"/api/alerts/episodes":             "scoped",
+	"/api/alerts/episodes/":            "scoped", // POST {id}/(ack|assign|mute|snooze|notes), alerts:write + tenant match
 	"/api/alerts/maintenance-windows":  "scoped", // planned-work windows (item 121), alerts:read/write + tenant filter
 	"/api/alerts/maintenance-windows/": "scoped", // GET|PUT|DELETE {id}, cross-tenant id → 404
 	"/api/pipeline/processors":         "scoped", // per-tenant processor rules (item 121), administration:admin + tenant filter
 	"/api/pipeline/processors/":        "scoped", // GET|PUT|DELETE {id} · POST preview, cross-tenant id → 404
-	"/api/compliance":               "scoped",
-	"/api/correlations":             "scoped",
+	"/api/compliance":                  "scoped",
+	"/api/correlations":                "scoped",
 	// SUBRESOURCE WARNING (2026-08-04): this prefix entry covers MANY handlers,
 	// and a prefix classification is NOT evidence that each one enforces tenant
 	// scope. {id}/replay was classified "scoped" by this very line while
@@ -76,7 +76,7 @@ var routeIsolationLedger = map[string]string{
 	// pre-read (correlations_replay_isolation_test.go pins it).
 	// Adding a NEW subresource here? It must reach data through a tenant-scoped
 	// loader or do its own ownership check — this line does not do it for you.
-	"/api/correlations/": "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test) + {id}/replay (ownership pre-read, 2026-08-04): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
+	"/api/correlations/":            "scoped", // incl. {id}/time-metrics + {id}/time-events (#84) + {id}/rca-promotion (#113 point 3, rca_promotion_test) + {id}/replay (ownership pre-read, 2026-08-04): chRows(chTenantScope) reads + tenant-stamped RLS writes (store isolation test); manual writes audited
 	"/api/correlations/rca-reports": "scoped", // #113 management library: chTenantScope prefilter + shared report pipeline + tenant-keyed manual-promotion union (TestRcaLibraryTenantIsolation)
 	"/api/correlations/stats":       "scoped",
 	"/api/correlations/summary":     "scoped", // window rollup counts: chRows(chTenantScope) over corr_current — a tenant counts only its OWN objects (correlations_summary_test.go)
@@ -330,23 +330,29 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/providers": "globalRef",
 
 	// ── identity/admin, scoped to caller's tenant/org by the handler ──
-	"/api/audit":             "adminScoped",
-	"/api/users":             "adminScoped",
-	"/api/users/":            "adminScoped",
-	"/api/users/mfa-reset":   "adminScoped",
-	"/api/tenants":           "adminScoped",
-	"/api/tenants/":          "adminScoped",
-	"/api/orgs":              "adminScoped",
-	"/api/orgs/":             "adminScoped",
-	"/api/bindings":          "adminScoped",
-	"/api/bindings/":         "adminScoped",
-	"/api/access/explain":    "adminScoped",
-	"/api/security-settings": "adminScoped",
-	"/api/policy/catalog":    "adminScoped",
-	"/api/policy/document":   "adminScoped",
-	"/api/policy/documents":  "adminScoped",
-	"/api/policy/effective":  "adminScoped",
-	"/api/policy/validate":   "adminScoped",
+	"/api/audit": "adminScoped",
+	// SEC-021.1 posture: tenant admins get ONLY device lanes + own fleet count
+	// (scoped by principal); the full table + validator require the platform
+	// identity. Isolation test: transport_posture_isolation_test.go.
+	"/api/security/transport-posture": "adminScoped",
+	// The export enumerates every internal hop — platform identity only.
+	"/api/security/transport-posture/export": "platform",
+	"/api/users":                             "adminScoped",
+	"/api/users/":                            "adminScoped",
+	"/api/users/mfa-reset":                   "adminScoped",
+	"/api/tenants":                           "adminScoped",
+	"/api/tenants/":                          "adminScoped",
+	"/api/orgs":                              "adminScoped",
+	"/api/orgs/":                             "adminScoped",
+	"/api/bindings":                          "adminScoped",
+	"/api/bindings/":                         "adminScoped",
+	"/api/access/explain":                    "adminScoped",
+	"/api/security-settings":                 "adminScoped",
+	"/api/policy/catalog":                    "adminScoped",
+	"/api/policy/document":                   "adminScoped",
+	"/api/policy/documents":                  "adminScoped",
+	"/api/policy/effective":                  "adminScoped",
+	"/api/policy/validate":                   "adminScoped",
 
 	// ── platform-GLOBAL plumbing, platform-owner only ──
 	// AI entitlement per tenant is platform PACKAGING (which tenants get the

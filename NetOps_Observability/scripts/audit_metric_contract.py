@@ -86,7 +86,14 @@ def emitted_metrics() -> set[str]:
         for f in files:
             if not f.endswith(".go") or f.endswith("_test.go"):
                 continue
-            txt = open(os.path.join(dirpath, f)).read()
+            path = os.path.join(dirpath, f)
+            # The security vocabulary DECLARES families with the same
+            # `Name: "..."` syntax the SNMP profiles use to emit them; a
+            # declaration is not an emission (reserved rows must not read as
+            # emitted).
+            if path == VOCAB_GO:
+                continue
+            txt = open(path).read()
             for rx in (name_re, expo_re, expo2_re, fmtpct_re):
                 names.update(rx.findall(txt))
     return names
@@ -163,6 +170,70 @@ def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
     return gnmi_emitted, problems
 
 
+VOCAB_GO = os.path.join(BACKEND, "internal", "secobs", "vocab.go")
+
+
+def security_vocabulary(emitted: set[str]) -> list[str]:
+    """SEC-020.1 contract: internal/secobs/vocab.go is THE security metric
+    vocabulary. Three invariants, cross-checked against the Go source:
+
+      1. every StatusEmitted family is actually emitted somewhere in the
+         backend (a vocabulary row claiming "emitted" while nothing emits it is
+         the silent-misfire SEC-020 exists to kill);
+      2. every emitted `netops_sec_*` family is IN the vocabulary (no name
+         squatting outside the registry);
+      3. no StatusReserved family is emitted (emission means the row must flip
+         to StatusEmitted in the same change — the table stays truthful).
+
+    Returns a list of problems; non-empty fails CI.
+    """
+    problems: list[str] = []
+    if not os.path.exists(VOCAB_GO):
+        return [f"security vocabulary not found at {VOCAB_GO}"]
+    txt = open(VOCAB_GO).read()
+    rows = re.findall(
+        r'\{Name:\s*"([a-z0-9_]+)",.*?Status:\s*Status(Emitted|Reserved)\}', txt)
+    if len(rows) < 8:
+        problems.append(
+            f"vocab.go: parsed only {len(rows)} vocabulary rows — the "
+            "one-row-per-line format this parser relies on has drifted")
+        return problems
+
+    # The generic emitted_metrics() only sees `name{` anchors; several
+    # security families are label-less (`netops_tls_cert_expiry_seconds %.0f`).
+    # Add the bare-exposition shape for this check.
+    bare_re = re.compile(r'"([a-z][a-z0-9_]+) %')
+    bare: set[str] = set()
+    for dirpath, _dirs, files in os.walk(BACKEND):
+        if "/vendor/" in dirpath:
+            continue
+        for f in files:
+            if not f.endswith(".go") or f.endswith("_test.go"):
+                continue
+            path = os.path.join(dirpath, f)
+            if path == VOCAB_GO:
+                continue
+            bare.update(bare_re.findall(open(path).read()))
+    sec_emitted = emitted | bare
+
+    vocab = {name: status for name, status in rows}
+    for name, status in sorted(vocab.items()):
+        if status == "Emitted" and name not in sec_emitted:
+            problems.append(
+                f"vocabulary family `{name}` is StatusEmitted but NO backend "
+                "code emits it — emit it or flip the row to StatusReserved")
+        if status == "Reserved" and name in sec_emitted:
+            problems.append(
+                f"vocabulary family `{name}` is StatusReserved but IS emitted — "
+                "flip the row to StatusEmitted in the same change")
+    for name in sorted(sec_emitted):
+        if name.startswith("netops_sec_") and name not in vocab:
+            problems.append(
+                f"backend emits `{name}` outside the vocabulary — register it "
+                "in internal/secobs/vocab.go (SEC-020.1: name the signals once)")
+    return problems
+
+
 def referenced_metrics() -> dict[str, set[str]]:
     """metric_name -> set of files referencing it, extracted from PromQL query
     strings in the frontend. A metric is an identifier immediately followed by
@@ -210,6 +281,7 @@ def waived(metric: str) -> bool:
 
 def main() -> int:
     emitted = emitted_metrics()
+    vocab_problems = security_vocabulary(emitted)
     gnmi_emitted, gnmi_problems = gnmi_canonical_lane(emitted)
     # The gNMI canonical lane is a producer too: a panel querying a gNMI-owned
     # family (e.g. device_mem_percent) is NOT an orphan.
@@ -226,7 +298,13 @@ def main() -> int:
     print(f"  metrics referenced by panels  : {len(refs)}")
     print(f"  tracked gaps (known, on the board): {len(tracked)}")
     print(f"  gNMI-lane contract problems       : {len(gnmi_problems)}")
+    print(f"  security-vocabulary problems      : {len(vocab_problems)}")
     print(f"  UNTRACKED orphans (regressions)   : {len(untracked)}")
+
+    if vocab_problems:
+        print("\n✗ SECURITY VOCABULARY PROBLEMS (SEC-020.1 single-vocabulary guard):")
+        for p in vocab_problems:
+            print(f"  ✗ {p}")
 
     if gnmi_problems:
         print("\n✗ gNMI CANONICAL-LANE CONTRACT PROBLEMS (single-contract guard):")
@@ -250,7 +328,12 @@ def main() -> int:
         print("\nFix the gNMI canonical-lane contract problems above "
               "(deployment/docker/gnmic/gnmic.yaml).")
         return 1
-    print("\n  ✓ contract clean — no untracked orphans, gNMI lane consistent")
+    if vocab_problems:
+        print("\nFix the security-vocabulary problems above "
+              "(src/backend/internal/secobs/vocab.go).")
+        return 1
+    print("\n  ✓ contract clean — no untracked orphans, gNMI lane consistent, "
+          "security vocabulary truthful")
     return 0
 
 

@@ -230,6 +230,26 @@ func postgresSSLPreamble(conn net.Conn) bool {
 	return reply[0] == 'S'
 }
 
+// Result is one endpoint's observation, exported for the SEC-021.1 posture
+// view. Zero CheckedAt means the endpoint has not been probed yet this boot.
+type Result struct {
+	OK        bool
+	NotAfter  time.Time
+	CheckedAt time.Time
+}
+
+// Results returns a snapshot of the latest observation per endpoint, keyed by
+// the stable endpoint name ("postgres:5432").
+func (p *Prober) Results() map[string]Result {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make(map[string]Result, len(p.results))
+	for n, r := range p.results {
+		out[n] = Result{OK: r.ok, NotAfter: r.notAfter, CheckedAt: r.checkedAt}
+	}
+	return out
+}
+
 // WriteMetrics emits the per-endpoint gauges at scrape time.
 func (p *Prober) WriteMetrics(w io.Writer) {
 	p.mu.RLock()

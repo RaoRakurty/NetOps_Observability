@@ -33,6 +33,10 @@ LABEL org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.created="${BUILD_TIME}" \
       org.opencontainers.image.title="correlix-backend"
 COPY --from=build /out/api /api
+# SEC-020.1: the declared-transport ledger rides with the binary so the posture
+# metrics and the transport-posture view read the same inventory the preflight
+# validated (TRANSPORT_INVENTORY_PATH overrides; internal/secobs reads it).
+COPY docs/security/transport-inventory.yaml /transport-inventory.yaml
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/api"]

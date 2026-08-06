@@ -559,6 +559,11 @@
         "authz": "tenant-map",
         "notes": "segmentation guidance + declaration in v1 (SEC-017.2); allowlist Phase 2+"
       },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "reason": "NetFlow/IPFIX/sFlow ride UDP and cannot be encrypted by the protocol; mitigation is exporter-address allowlisting (Phase 2+) and network segmentation, declared per SEC-017.2"
+      },
       "trust_domain": "device",
       "owning_epic": "SEC-017",
       "priority": "P1",
@@ -736,6 +741,11 @@
         "authn": "none",
         "authz": "per-service-routes"
       },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "reason": "last hop of the SEC-010 vmauth proxy: TLS and per-service auth terminate at vmauth on the same compose network, victoria's port stays unpublished; direct-listener removal is programme-final and same-network segmentation is SEC-017"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-010",
       "priority": "P2",
@@ -877,6 +887,11 @@
         "authz": "none",
         "notes": "lab-only; never ships"
       },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",
       "priority": "P3",
@@ -901,6 +916,11 @@
         "authn": "none",
         "authz": "none",
         "notes": "lab-only; never ships"
+      },
+      "exception": {
+        "owner": "platform-eng",
+        "accepted": "2026-08-04",
+        "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",

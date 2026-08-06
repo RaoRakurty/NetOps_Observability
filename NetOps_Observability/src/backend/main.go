@@ -15,6 +15,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
+
 	"netops/backend/ai"
 	"netops/backend/appid"
 	"netops/backend/cloud"
@@ -31,6 +33,7 @@ import (
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
 	"netops/backend/internal/seam"
+	"netops/backend/internal/secobs"
 	"netops/backend/internal/secprofile"
 	"netops/backend/internal/selfheal"
 	"netops/backend/internal/session"
@@ -42,6 +45,7 @@ import (
 	"netops/backend/internal/vault"
 	"netops/backend/internal/verify"
 	"netops/backend/internal/vuln"
+	"netops/backend/internal/workloadid"
 	"netops/backend/pathgraph"
 	"netops/backend/policy"
 	"netops/backend/portintel"
@@ -181,6 +185,8 @@ type server struct {
 	vault           *vault.Vault          // secret-custody envelope (dormant unless SEAL_PROVIDER set)
 	tlsSrv          *tlsServer            // opt-in HTTPS/mTLS listener config (nil = plaintext)
 	tlsPeerProber   *tlsprobe.Prober      // SEC-019.1 served-cert expiry watcher (nil = plaintext baseline)
+	secMetrics      *secobs.Metrics       // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
+	transportInv    *secobs.Inventory     // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
 	exportPolicy    *exportPolicyStore    // runtime-tunable log-export limits
 	exportLimiter   *ratelimit.Limiter    // per-tenant export rate limit
 	copilotLimiter  *ratelimit.Limiter    // per-principal copilot rate limit (SR-021)
@@ -686,6 +692,19 @@ func newServer() *server {
 	}
 	srv.incMetrics = &incidentMetrics{}
 	srv.sealMetrics = &sealMetrics{}
+	// SEC-020.1: the security-observability families. The validator re-runs
+	// here (pure env/file reads) so the finding counts ride /metrics for the
+	// life of the process — a boot log line is not a queryable posture.
+	// A missing inventory is loud but non-fatal: the api must still boot on
+	// images built before the inventory was baked in.
+	if rep, repErr := evaluateSecurityPosture(); repErr == nil {
+		inv, invErr := secobs.LoadInventory(transportInventoryPath())
+		if invErr != nil {
+			logError("security", "transport inventory unavailable — declared-edge metrics and the transport-posture view degrade to probe-only", errf(invErr))
+		}
+		srv.transportInv = inv
+		srv.secMetrics = secobs.NewMetrics(inv, rep.Fatal, rep.Warn, rep.Info, nil)
+	}
 	// nil unless FEATURE_SEALED_FIELDS + real key custody are BOTH present, which
 	// is what makes the reveal endpoint answer 501 instead of pretending.
 	srv.sealProvider = sealProvider
@@ -1843,6 +1862,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	// Platform-stack self-monitoring (platform-owner only).
 	mux.HandleFunc("/api/stack/health", s.handleStackHealth)
 	mux.HandleFunc("/api/audit", s.handleAudit)
+	// SEC-021.1: read-only transport posture (tenant-scoped; platform rows
+	// require the platform identity) + the exportable posture report.
+	mux.HandleFunc("/api/security/transport-posture", s.handleTransportPosture)
+	mux.HandleFunc("/api/security/transport-posture/export", s.handleTransportPostureExport)
 	// Authenticated detailed health (SR-009) — backs the in-app indicator;
 	// fleet/collector detail is platform-owner-gated inside the handler.
 	mux.HandleFunc("/api/health", s.handleHealthDetail)
@@ -1922,6 +1945,25 @@ func securityProfile() (secprofile.Profile, error) {
 	return secprofile.ParseProfile(os.Getenv("SECURITY_PROFILE"))
 }
 
+// transportInventoryPath resolves the SEC-001 inventory: the env override,
+// else the image-baked copy (Dockerfile.backend), else the repo checkout
+// relative to src/backend (developer `go run`). Returning the image path when
+// nothing exists keeps the error message pointed at the canonical location.
+func transportInventoryPath() string {
+	if p := strings.TrimSpace(os.Getenv("TRANSPORT_INVENTORY_PATH")); p != "" {
+		return p
+	}
+	const baked = "/transport-inventory.yaml"
+	if _, err := os.Stat(baked); err == nil {
+		return baked
+	}
+	repo := filepath.Join("..", "..", "docs", "security", "transport-inventory.yaml")
+	if _, err := os.Stat(repo); err == nil {
+		return repo
+	}
+	return baked
+}
+
 // evaluateSecurityPosture runs the rule set against the live environment.
 func evaluateSecurityPosture() (secprofile.Report, error) {
 	p, err := securityProfile()
@@ -1994,6 +2036,168 @@ func (s *server) handleSecurityPosture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// probeObservations maps the SEC-019.1 prober snapshot into the posture
+// package's injected shape. nil when the mesh is on the plaintext baseline.
+func (s *server) probeObservations() map[string]secobs.ProbeObservation {
+	if s.tlsPeerProber == nil {
+		return nil
+	}
+	res := s.tlsPeerProber.Results()
+	out := make(map[string]secobs.ProbeObservation, len(res))
+	for name, r := range res {
+		out[name] = secobs.ProbeObservation{OK: r.OK, NotAfter: r.NotAfter, CheckedAt: r.CheckedAt}
+	}
+	return out
+}
+
+// transportPostureRows builds the posture table and stamps each destination's
+// SPIFFE identity from the workload registry (the trust domain is config, so
+// the stamping lives here, not in the pure package).
+func (s *server) transportPostureRows() []secobs.PostureRow {
+	rows := secobs.BuildPosture(s.transportInv, s.probeObservations(), nil)
+	td := envOr("TLS_TRUST_DOMAIN", "netops")
+	registered := make(map[string]bool, len(workloadid.Registry))
+	for _, e := range workloadid.Registry {
+		registered[e.Service] = true
+	}
+	for i := range rows {
+		if registered[rows[i].Destination] {
+			rows[i].Identity = "spiffe://" + td + "/ns/default/sa/" + rows[i].Destination
+		}
+	}
+	return rows
+}
+
+// handleTransportPosture (GET /api/security/transport-posture) — SEC-021.1
+// read-only posture view. Two scopes, default-closed:
+//   - platform owner: every hop (declared vs observed vs drift) + the boot
+//     validator report. Platform-global operational intelligence, so the gate
+//     is the platform identity, not tenant-scoped administration:admin
+//     (CLAUDE.md §3a.3 — a tenant admin holds administration:admin too).
+//   - tenant admin: ONLY the device trust-domain lanes their fleet rides, plus
+//     their own device count. No workload/operator/public hops, no validator
+//     internals — those enumerate platform attack surface.
+func (s *server) handleTransportPosture(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if s.transportInv == nil {
+		// Inventory failed to load at boot (already logged). An empty table
+		// pretending to be posture is worse than a loud 503.
+		writeError(w, http.StatusServiceUnavailable, errors.New("transport inventory unavailable on this deployment"))
+		return
+	}
+	rows := s.transportPostureRows()
+	if isPlatformOwner(claims) {
+		rep, err := evaluateSecurityPosture()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"scope":     "platform",
+			"generated": time.Now().UTC(),
+			"rows":      rows,
+			"validator": rep,
+		})
+		return
+	}
+	// Tenant view. visibleDevices applies the caller's tenant scope (and
+	// ignores as_tenant for non-owners via claims), so the count is the
+	// caller's fleet, never another tenant's.
+	devices := visibleDevices(s.discovery.Devices(), claims)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scope":        "tenant",
+		"generated":    time.Now().UTC(),
+		"device_lanes": secobs.DeviceLaneRows(rows),
+		"device_count": len(devices),
+	})
+}
+
+// handleTransportPostureExport (GET /api/security/transport-posture/export)
+// renders the customer-facing posture report (SEC-021.1): every Correlix-owned
+// path with its declared/observed transport and peer identity, then a clearly
+// separated section for device lanes that are NOT authenticated, with the
+// declared reason. Platform-admin only — the full table enumerates internal
+// attack surface. Reuses the report renderers (html/xlsx; pdf arrives with the
+// report pipeline's sidecar when configured).
+func (s *server) handleTransportPostureExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET only"))
+		return
+	}
+	claims, ok := s.requirePlatformAdmin(w, r)
+	if !ok {
+		return
+	}
+	if s.transportInv == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("transport inventory unavailable on this deployment"))
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "html"
+	}
+	rend := previewRenderer(format)
+	if rend == nil {
+		writeError(w, http.StatusBadRequest, errors.New("unknown export format"))
+		return
+	}
+	rows := s.transportPostureRows()
+	var owned, deviceLanes []secobs.PostureRow
+	for _, row := range rows {
+		if row.TrustDomain == "device" {
+			deviceLanes = append(deviceLanes, row)
+		} else {
+			owned = append(owned, row)
+		}
+	}
+	ownedHeader, ownedCells := secobs.PostureTable(owned, nil)
+	devHeader, devCells := secobs.PostureTable(deviceLanes, nil)
+	now := time.Now().UTC()
+	vm := reports.ViewModel{
+		ReportID:    "transport-posture",
+		ReportName:  "Transport Security Posture",
+		Kind:        "security-posture",
+		TenantID:    TenantGlobal,
+		GeneratedAt: now,
+		Description: "Declared vs observed transport for every platform path (SEC-021.1). Observation source: the served-certificate probe; 'not probed' means exactly that, never 'assumed secure'.",
+		Summary:     fmt.Sprintf("%d paths declared; %d device lanes carry declared exceptions or protocol-native security", len(owned), len(deviceLanes)),
+		Sections: []reports.Section{
+			{Title: "Correlix-owned paths", Header: ownedHeader, Rows: ownedCells},
+			{Title: "Device lanes (NOT cryptographically authenticated unless protocol-native)", Header: devHeader, Rows: devCells,
+				Note: "Device-facing lanes carry the transport the device protocol supports. A lane listed with a declared exception is plaintext by explicit, owner-accepted decision — the reason and age are in the table. No claim of cryptographic authenticity is made for any device lane (HLD §6.6)."},
+		},
+	}
+	art, err := rend.Render(r.Context(), vm)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if s.audit != nil {
+		tenant, cross := principalTenant(claims)
+		s.audit.Record(AuditEvent{
+			Actor: claims.Sub, Tenant: tenant, Cross: cross,
+			Method: "EXPORT", Path: "/api/security/transport-posture/export",
+			Status: http.StatusOK, Decision: "allow", Remote: auditClientIP(r),
+			Detail: map[string]any{
+				secobs.SecEventKey: secobs.SecEventPostureExport,
+				"format":           format, "edges": len(rows),
+			},
+		})
+	}
+	w.Header().Set("Content-Type", art.ContentType)
+	if format != "html" {
+		w.Header().Set("Content-Disposition", `attachment; filename="transport-posture.`+format+`"`)
+	}
+	_, _ = w.Write(art.Bytes)
 }
 
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
@@ -2292,6 +2496,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.tlsPeerProber != nil {
 		s.tlsPeerProber.WriteMetrics(w)
+	}
+	if s.secMetrics != nil {
+		s.secMetrics.Write(w)
 	}
 	if s.cloudBroker != nil {
 		s.cloudBroker.Metrics().Write(w)
