@@ -15,8 +15,10 @@ flips happen; the shipped variant is `deployment/docker/compose.tls.yml`
 
 ## 0. Pre-flight (before touching anything)
 
-- [ ] Soak review: `docker logs netops-kafka-1 2>&1 | grep -iE "denied"` over
-      the full window → empty or fully explained.
+- [ ] Soak review: `bash scripts/soak-go-no-go.sh` → GO (exit 0). NOTE its
+      window is the broker's RETAINED log (json-file 50m×3) — if the broker
+      restarted recently, corroborate the earlier window from any denial
+      alerts/notes before treating GO as full-cycle.
 - [ ] `bash scripts/preflight-configs.sh` green.
 - [ ] Boot posture fatal=0; tlsprobe 9/9 (`netops_tls_peer_probe_ok`).
 - [ ] All consumer groups healthy (per-lane consume-rate > 0 where lanes have

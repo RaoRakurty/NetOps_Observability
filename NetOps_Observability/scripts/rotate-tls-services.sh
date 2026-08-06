@@ -178,6 +178,7 @@ verify() { # <endpoint host:port> <svc-dir> [starttls]
     fi
 }
 
+verify kafka:9093 kafka
 verify kafka:9094 kafka
 verify kafka:9095 kafka
 verify postgres:5432 postgres postgres
