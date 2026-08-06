@@ -60,6 +60,7 @@ var defaultPeerEndpoints = []peerEndpoint{
 	{Name: "clickhouse:8443", Addr: "clickhouse:8443"},
 	{Name: "clickhouse:9440", Addr: "clickhouse:9440"},
 	{Name: "opensearch:9200", Addr: "opensearch:9200"},
+	{Name: "kafka:9093", Addr: "kafka:9093"}, // KRaft controller (mTLS quorum since 2026-08-06) — unwatched expiry here is invisible until the quorum dies
 	{Name: "kafka:9094", Addr: "kafka:9094"},
 	{Name: "kafka:9095", Addr: "kafka:9095"},
 	{Name: "correlation:8443", Addr: "correlation:8443"},

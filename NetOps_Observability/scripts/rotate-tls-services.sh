@@ -114,7 +114,7 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
         # own SVID (super-user; admin.properties written by tls-entrypoint.sh).
         # 9092-as-ANONYMOUS goes blind at the SEC-007.2 flip and the listener
         # itself dies at SEC-006.3 — this leg must not depend on either.
-        for listener in mtls flows; do
+        for listener in mtls flows controller; do
             if ! dc exec -T kafka timeout 90 /opt/kafka/bin/kafka-configs.sh \
                 --bootstrap-server kafka:9094 --command-config /tmp/kafka-tls/admin.properties \
                 --entity-type brokers --entity-name 1 \
