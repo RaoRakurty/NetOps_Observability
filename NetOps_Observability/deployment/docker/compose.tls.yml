@@ -1,0 +1,531 @@
+# SUPPORTED TLS VARIANT (tracked) — the full internal-TLS/mTLS mesh (#151).
+# Activated by `install.py --tls`, which puts this file on the COMPOSE_FILE
+# chain (COMPOSE_FILE=docker-compose.yml:compose.tls.yml in .env) so every
+# later `docker compose` invocation layers it automatically.
+#
+# Two-variant doctrine: the base docker-compose.yml stays PLAINTEXT-DEFAULT —
+# a fresh install has no CA, no seal provider and no certs, and must boot
+# without them. This file is the ONLY supported way to turn the mesh on; it
+# assumes the api's internal CA (TLS_INTERNAL_CA) mints into ../../data/tls
+# and the swtpm sealing sidecar (`--profile seal`) is up.
+#
+# EDITING RULE (keep parity with the base file): several services below
+# restate their base `command:` / `entrypoint:` lists IN FULL — compose
+# REPLACES those lists, it does not merge them, so the restated base flags
+# are LOAD-BEARING. Any flag change to those services in docker-compose.yml
+# must be mirrored here (and vice versa) or this variant silently drops base
+# behavior.
+services:
+  nginx:
+    ports:
+      - "443:8443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # mTLS VARIANT of default.conf (repo default.conf keeps plaintext inner
+      # hops for fresh installs; this variant runs Security v1 mTLS end to end).
+      - ./nginx/default-mtls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/tls.conf.example:/etc/nginx/conf.d/tls.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      # nginx -> API mutual TLS: the include, plus the SVID + trust bundle the
+      # API's internal CA mints at boot (read-only).
+      - ./nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro
+      - ../../data/tls:/etc/nginx/tls:ro
+  api:
+    environment:
+      # ── Internal TLS enablement ──────────────────────────────────────────
+      # Order matters and is enforced in code: TLS_INTERNAL_CA without a seal
+      # provider REFUSES to boot (tls_ca.go seal gate), because the CA root
+      # is a 10-year credential that can mint an identity for every service.
+      SEAL_PROVIDER: swtpm
+      SEAL_SOCKET: /run/secrets-seal/seal.sock
+      TLS_INTERNAL_CA: "true"
+      TLS_TRUST_DOMAIN: netops
+      # 168h (owner-approved 2026-08-05, INTERIM until SEC-019.1 rotation):
+      # every service that loads its SVID once at start has a fuse of the
+      # cert's TTL from its last restart — at 24h that meant nightly store
+      # outages (clickhouse+postgres served EXPIRED certs and took the RCA
+      # pipeline down). 7 days converts a daily time bomb into a weekly
+      # maintenance restart. The api re-issues to disk at TTL/2 (84h)
+      # regardless.
+      TLS_SVID_TTL: 168h
+      # Where the CA writes the material it mints:
+      TLS_CLIENT_CA_FILE: /data/tls/ca.pem      # trust bundle (also nginx's)
+      TLS_CERT_FILE: /data/tls/api.crt          # api server SVID
+      TLS_KEY_FILE: /data/tls/api.key
+      TLS_NGINX_CERT_DIR: /data/tls/nginx       # nginx client SVID
+      # nginx runs as uid 101 and cannot read a 0600 key owned by the API's
+      # uid 65532; this mount is shared only with nginx. Explicit, warned.
+      TLS_NGINX_KEY_MODE: "0644"
+      # victoria client SVID (#149) — the metrics scraper must present an
+      # identity once the API listens mTLS-only. No key-mode widening: the
+      # stock victoria image runs as root, which reads the 0600 key.
+      TLS_VICTORIA_CERT_DIR: /data/tls/victoria
+      # SEC-003.3: table-driven issuance — one SVID per registered service
+      # under /data/tls/services/<name>/. Consumed per-epic (postgres first,
+      # SEC-011).
+      TLS_SERVICE_CERT_ROOT: /data/tls/services
+      # SEC-008: the securityadmin credential (not a workload identity), and
+      # the cross-uid key mode stores need to read their own SVIDs.
+      TLS_OS_ADMIN_CERT_DIR: /data/tls/admin
+      TLS_SERVICE_KEY_MODE: "0644"
+      # SEC-010 slice C: the api's metrics reads/writes go via vmauth (TLS +
+      # svc-api credential in URL userinfo — the authURLTransport seam);
+      # backend https verifies against the mesh CA.
+      TLS_BACKEND_CA_FILE: /data/tls/ca.pem
+      VICTORIA_URL: "https://svc-api:${VMAUTH_API_PASSWORD}@vmauth:8427"
+      # SEC-009: ClickHouse over TLS (registry SVID; chhttp rides backendHTTPClient).
+      CLICKHOUSE_URL: "https://clickhouse:8443"
+      # SEC-008: OpenSearch over TLS with the svc_api credential (the
+      # authURLTransport seam applies URL userinfo as basic auth).
+      OPENSEARCH_URL: "https://svc_api:${OS_API_PASSWORD}@opensearch:9200"
+      METRICS_URL: "https://svc-api:${VMAUTH_API_PASSWORD}@vmauth:8427"
+      # APP-001: correlation is mTLS-only on :8443; backendHTTPClient presents
+      # the api's registry SVID below (correlation accepts ONLY this identity
+      # on data paths). The SVID is minted by the api itself into
+      # TLS_SERVICE_CERT_ROOT (registry row "api").
+      CORRELATION_URL: "https://correlation:8443"
+      # SEC-013.2: the four ingest lanes are mTLS; backendHTTPClient presents
+      # the api SVID (TLS_BACKEND_CERT_FILE below) on all of them.
+      SNMP_TRAP_SINK_URL: "https://vector-aggregator:8688/"
+      PROBE_EVENT_SINK_URL: "https://vector-aggregator:8689/"
+      METRIC_EVENT_SINK_URL: "https://vector-aggregator:8690/"
+      BUS_BRIDGE_URL: "https://vector-aggregator:8692"
+      # SEC-012.2: the RESP channel rides verified TLS (AUTH never in the clear).
+      REDIS_TLS: "true"
+      REDIS_PORT: "6380"
+      REDIS_TLS_CA: /data/tls/ca.pem
+      TLS_BACKEND_CERT_FILE: /data/tls/services/api/api.crt
+      TLS_BACKEND_KEY_FILE: /data/tls/services/api/api.key
+      # Only nginx and victoria may call the API once mTLS is on (URI SAN
+      # allowlist; victoria only ever hits /metrics — app-layer auth still
+      # gates everything else).
+      # SEC-018.1: + vector-router — TLS-layer admission only; the sealing
+      # endpoint additionally requires exactly that identity, and every other
+      # route still demands app-layer auth the router does not hold.
+      TLS_CLIENT_ALLOWED_URIS: spiffe://netops/ns/default/sa/nginx,spiffe://netops/ns/default/sa/victoria,spiffe://netops/ns/default/sa/vector-router
+      # Additive trust for the self-signed/private-CA front cert (Go consults
+      # SSL_CERT_DIR alongside the image's default CA bundle — never
+      # SSL_CERT_FILE here, which would REPLACE the root store).
+      SSL_CERT_DIR: /etc/ssl/dev-ca
+    volumes:
+      - ./nginx/certs/fullchain.pem:/etc/ssl/dev-ca/dev-ca.pem:ro
+      # Host CA bundle: when the host's egress path SSL-inspects outbound 443
+      # (re-signing every site with a private CA the HOST trusts), outbound
+      # notify (Slack/ntfy) fails x509 verification inside the container while
+      # the host works. Mounting the host bundle additively (SSL_CERT_DIR
+      # loads every cert in the dir) closes that gap; a no-op on hosts with a
+      # stock bundle.
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/dev-ca/host-ca-bundle.pem:ro
+      - ../../data/secrets-seal:/run/secrets-seal
+      - ../../data/tls:/data/tls
+
+  # SEC-011: correlation's PG client at verify-full against the mesh CA.
+  # APP-001: correlation serves mTLS-only on :8443 (tls_serve.py — registry
+  # SVID, CERT_REQUIRED against the mesh CA) and authorizes callers by SPIFFE
+  # identity: the api in full; victoria's scraper and this container's own
+  # healthcheck on /metrics + /healthz only. The plaintext base CMD (:8000)
+  # is replaced, not kept beside — the api, the scrape (vmscrape-mtls.yml)
+  # and the healthcheck below all moved with it in the same cutover.
+  correlation:
+    command: ["python", "tls_serve.py"]
+    environment:
+      CLICKHOUSE_URL: "https://clickhouse:8443"
+      CORRELATION_CA_FILE: /certs/ca.pem
+      OPENSEARCH_URL: "https://svc_correlation:${OS_CORRELATION_PASSWORD}@opensearch:9200"
+      CORR_TLS_CERT: /certs/svid/correlation.crt
+      CORR_TLS_KEY: /certs/svid/correlation.key
+      CORR_TLS_CLIENT_CA: /certs/ca.pem
+      CORR_TLS_ALLOWED_URIS: spiffe://netops/ns/default/sa/api
+      CORR_TLS_MONITOR_URIS: spiffe://netops/ns/default/sa/victoria,spiffe://netops/ns/default/sa/correlation
+      # SEC-006.2 client 2/5: the consumer dials the broker's mTLS listener
+      # presenting the same SVID it serves with (kafka_security_kwargs).
+      KAFKA_BOOTSTRAP: kafka:9094
+      KAFKA_SSL_CA: /certs/ca.pem
+      KAFKA_SSL_CERT: /certs/svid/correlation.crt
+      KAFKA_SSL_KEY: /certs/svid/correlation.key
+    healthcheck:
+      # Same probe philosophy as the base (F-47: /metrics proves the app that
+      # hosts /findings is alive), now over mTLS presenting the service's own
+      # SVID — which the identity middleware scopes to exactly this surface.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,ssl,sys; ctx=ssl.create_default_context(cafile='/certs/ca.pem'); ctx.load_cert_chain('/certs/svid/correlation.crt','/certs/svid/correlation.key'); sys.exit(0 if urllib.request.urlopen('https://correlation:8443/metrics', timeout=4, context=ctx).status==200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+    volumes:
+      - ../../data/tls/ca.pem:/certs/ca.pem:ro
+      - ../../data/tls/services/correlation:/certs/svid:ro
+
+  # SEC-008: OSD authenticates with its own read-scoped identity.
+  opensearch-dashboards:
+    environment:
+      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
+      OPENSEARCH_USERNAME: svc_dashboards
+      OPENSEARCH_PASSWORD: ${OS_DASHBOARDS_PASSWORD}
+      OPENSEARCH_SSL_VERIFICATIONMODE: certificate
+      OPENSEARCH_SSL_CERTIFICATEAUTHORITIES: '["/certs/ca.pem"]'
+    volumes:
+      - ../../data/tls/services/opensearch/ca.pem:/certs/ca.pem:ro
+
+  # SEC-008: template/ISM/snapshot bootstrap authenticates too.
+  opensearch-init:
+    environment:
+      OPENSEARCH_URL: "https://svc_bootstrap:${OS_BOOTSTRAP_PASSWORD}@opensearch:9200"
+      CURL_CA_BUNDLE: /certs/ca.pem
+    volumes:
+      - ../../data/tls/services/opensearch/ca.pem:/certs/ca.pem:ro
+
+  # SEC-008: security plugin enabled — node TLS + admin DN + the minimal
+  # role model. Cert paths are RELATIVE to the config dir (plugin rule).
+  opensearch:
+    environment:
+      DISABLE_SECURITY_PLUGIN: "false"
+      # The demo-config installer REWRITES opensearch.yml (demo certs + the
+      # CN=kirk admin DN) over any plugins.security.* env setting — so the
+      # security config comes from our own mounted opensearch.yml instead.
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    volumes:
+      - ./opensearch/opensearch-security.yml:/usr/share/opensearch/config/opensearch.yml:ro
+      - ../../data/tls/services/opensearch:/usr/share/opensearch/config/tls:ro
+    healthcheck:
+      # LIVENESS = the TLS listener answers. NOT -f: a 401 (pre-bootstrap, or
+      # any unauthenticated probe) is a HEALTHY server refusing a request —
+      # treating it as death deadlocks the security bootstrap that must run
+      # against a "healthy" dependency (hit live 2026-08-05).
+      test: ["CMD-SHELL", "curl -sk -o /dev/null https://localhost:9200/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  # SEC-009: clickhouse dual-listener TLS (https 8443 + native-secure 9440;
+  # plaintext 8123 alive until every client is cut over). Wrapper stages the
+  # registry SVID for uid 101 (the postgres pattern).
+  clickhouse:
+    entrypoint: ["/tls-entrypoint.sh"]
+    volumes:
+      - ./clickhouse/tls-entrypoint.sh:/tls-entrypoint.sh:ro
+      - ./clickhouse/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
+      - ../../data/tls/services/clickhouse:/certs-src:ro
+
+  # SEC-011: postgres serves TLS with its registry SVID. The wrapper stages
+  # the cert with postgres-owned 0600 perms then execs the stock entrypoint
+  # with ssl=on. Server accepts BOTH TLS and plaintext at this stage (the
+  # migration ladder); clients climb to verify-full via their DSNs.
+  postgres:
+    entrypoint: ["/tls-entrypoint.sh"]
+    volumes:
+      - ./postgres/tls-entrypoint.sh:/tls-entrypoint.sh:ro
+      - ../../data/tls/services/postgres:/certs-src:ro
+
+  # SEC-010 slice C: vmalert reads+writes via vmauth with its own scoped
+  # credential over TLS (mesh CA). command REPLACES the base list (compose
+  # semantics) — every base flag repeated verbatim except the three URLs and
+  # the added CA flags.
+  vmalert:
+    command:
+      - "-rule=/etc/vmalert/config/rules.yaml"
+      - "-datasource.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
+      - "-remoteWrite.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
+      - "-remoteRead.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
+      - "-datasource.tlsCAFile=/tls/ca.pem"
+      - "-remoteWrite.tlsCAFile=/tls/ca.pem"
+      - "-remoteRead.tlsCAFile=/tls/ca.pem"
+      - "-evaluationInterval=${VMALERT_EVAL_INTERVAL:-30s}"
+      - "-configCheckInterval=60s"
+      - "-external.label=stack=${COMPOSE_PROJECT_NAME:-netops}"
+      - "${VMALERT_NOTIFIER_FLAG:--notifier.blackhole}"
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+
+  # SEC-010 slice C: grafana's VM datasources via vmauth (read-only
+  # svc-grafana credential, mesh CA). Variant file over the base one.
+  grafana:
+    environment:
+      VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD}
+    volumes:
+      - ./grafana/datasources-mtls.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+
+  # SEC-010 slice C: aggregator's VM remote_write via vmauth (svc-vector,
+  # write-only). SSL_CERT_FILE points the process at the mesh CA — safe: ALL
+  # of the aggregator's https egress is mesh-internal (vmauth sink + the two
+  # SEC-008 OpenSearch scrapes below).
+  # SEC-008: F-17 stats + cluster-health scrapes over TLS as svc_aggregator
+  # (cluster-monitor only; auth blocks live in vector.yaml).
+  vector-aggregator:
+    environment:
+      VM_REMOTE_WRITE_URL: "https://vmauth:8427/api/v1/write"
+      VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD}
+      OPENSEARCH_STATS_URL: "https://opensearch:9200/_nodes/stats/indices/indexing"
+      OPENSEARCH_HEALTH_URL: "https://opensearch:9200/_cluster/health"
+      OPENSEARCH_STATS_USER: svc_aggregator
+      OPENSEARCH_STATS_PASSWORD: ${OS_AGGREGATOR_PASSWORD}
+      # SEC-013.2: the four ingest lanes serve the aggregator SVID and REQUIRE
+      # a mesh client certificate (verify_certificate on a server, proven
+      # 2026-08-06); per-lane tokens arrive via the tracked compose chain.
+      INGEST_TLS_ENABLED: "true"
+      INGEST_TLS_CRT: /tls/svid/vector-aggregator.crt
+      INGEST_TLS_KEY: /tls/svid/vector-aggregator.key
+      INGEST_TLS_CA: /tls/ca.pem
+      SSL_CERT_FILE: /tls/ca.pem
+      # SEC-006.2 client 4/5: all nine kafka sinks produce on the mTLS
+      # listener presenting the aggregator SVID.
+      BROKER_URLS: kafka:9094
+      KAFKA_TLS_ENABLED: "true"
+      KAFKA_TLS_CA: /tls/ca.pem
+      KAFKA_TLS_CRT: /tls/svid/vector-aggregator.crt
+      KAFKA_TLS_KEY: /tls/svid/vector-aggregator.key
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/vector-aggregator:/tls/svid:ro
+
+  # SEC-010 slice C: gnmic writes via vmauth (svc-gnmic, write-only).
+  gnmic:
+    environment:
+      VICTORIA_WRITE_URL: "https://svc-gnmic:${VMAUTH_GNMIC_PASSWORD}@vmauth:8427/api/v1/write"
+      # Go honors SSL_CERT_FILE for its root store; gnmic's prometheus_write
+      # has no per-output tls schema (an unknown tls: block is silently
+      # dropped — proven from its parsed-config echo). Device-facing gNMI TLS
+      # is configured separately and unaffected.
+      SSL_CERT_FILE: /tls/ca.pem
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+
+  # SEC-009: router's two clickhouse sinks over TLS; mesh CA via
+  # SSL_CERT_FILE (router egress is all-internal, same rationale as the
+  # aggregator).
+  vector-router:
+    environment:
+      CLICKHOUSE_ENDPOINT: "https://clickhouse:8443"
+      OPENSEARCH_ENDPOINT: "https://opensearch:9200"
+      OPENSEARCH_USER: svc_router
+      OPENSEARCH_PASSWORD: ${OS_ROUTER_PASSWORD}
+      SSL_CERT_FILE: /tls/ca.pem
+      # SEC-006.2 client 3/5: every kafka source/sink dials the mTLS listener
+      # presenting the router SVID (tls blocks in vector.yaml, env-driven).
+      BROKER_URLS: kafka:9094
+      KAFKA_TLS_ENABLED: "true"
+      KAFKA_TLS_CA: /tls/ca.pem
+      KAFKA_TLS_CRT: /tls/svid/vector-router.crt
+      KAFKA_TLS_KEY: /tls/svid/vector-router.key
+      # SEC-018.1: sealing keys ride mutual TLS with the router's own SVID;
+      # the api's edge-key endpoint accepts only this identity.
+      SEALING_API_URL: "https://api:8080"
+      SEALING_TLS_CA: /tls/ca.pem
+      SEALING_TLS_CRT: /tls/svid/vector-router.crt
+      SEALING_TLS_KEY: /tls/svid/vector-router.key
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/vector-router:/tls/svid:ro
+
+  # victoria scrapes the mTLS API with its boot-minted client SVID (#149).
+  # command REPLACES the base list (compose semantics), so it is repeated
+  # verbatim except --promscrape.config, which points at the mTLS VARIANT
+  # (src/config/vmscrape-mtls.yml — see its header for the editing rule).
+  victoria:
+    command:
+      - "--retentionPeriod=${VICTORIA_RETENTION:-30d}"
+      - "--storageDataPath=/victoria"
+      - "--dedup.minScrapeInterval=${VICTORIA_DEDUP:-30s}"
+      - "--memory.allowedPercent=${VICTORIA_MEM_ALLOWED_PERCENT:-60}"
+      - "--promscrape.config=/etc/victoria/config/vmscrape-mtls.yml"
+      - "--promscrape.suppressScrapeErrors"
+      - "--promscrape.configCheckInterval=60s"
+    volumes:
+      - ../../data/tls:/etc/victoria/tls:ro
+
+  # SEC-013.2 + task #9: cloud-ingest's metrics lane over mTLS and its direct
+  # kafka producer on the mTLS listener, both with the cloud-ingest SVID.
+  # ONLY the TLS wiring lives here — provider credentials/identifiers are
+  # deployment-specific and stay in the (gitignored) local override / .env.
+  # The service itself remains profile-gated ("cloud-ingest") in the base.
+  cloud-ingest:
+    environment:
+      METRIC_EVENT_SINK_URL: "https://vector-aggregator:8690/"
+      INGEST_TLS_CA: /tls/ca.pem
+      INGEST_TLS_CRT: /tls/svid/cloud-ingest.crt
+      INGEST_TLS_KEY: /tls/svid/cloud-ingest.key
+      # task #9: the direct kafka producer moves to the mTLS listener with
+      # the same SVID — the interim ANONYMOUS grants on the cloud lanes die.
+      BROKER_URLS: kafka:9094
+      KAFKA_SSL_CA: /tls/ca.pem
+      KAFKA_SSL_CERT: /tls/svid/cloud-ingest.crt
+      KAFKA_SSL_KEY: /tls/svid/cloud-ingest.key
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/cloud-ingest:/tls/svid:ro
+
+  # SEC-006.1: dual secure listeners beside the plaintext baseline (accept-set
+  # migration — clients move one at a time, 9092 dies at programme-final).
+  #   SSL://9094   mTLS  (ssl.client.auth=required)  — every workload client
+  #   FLOWS://9095 TLS   (client.auth=none)          — goflow2 ONLY (owner
+  #     option-1 decision 2026-08-05: goflow2 v2.2.1 has no client-cert flags
+  #     and SASL is rejected §0a; its ANONYMOUS principal is ACL-bounded to
+  #     produce netops.flows — SEC-007.1).
+  # Authorizer runs in OBSERVE posture (allow.everyone=true) so denials log
+  # before anything enforces. Principal mapping folds the SVID's
+  # CN=spiffe://... down to the bare service name for readable ACLs.
+  kafka:
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    entrypoint: ["/kafka-tls-entrypoint.sh"]
+    # Overriding entrypoint DROPS the image CMD (proven live 2026-08-05: the
+    # broker crash-looped exec'ing the stock entrypoint with no args) — restate
+    # it so the wrapper's "$@" carries the run script.
+    command: ["/etc/kafka/docker/run"]
+    environment:
+      # Listener is named MTLS, not SSL, ON PURPOSE: the apache/kafka image's
+      # configure script greps ADVERTISED_LISTENERS for the literal "SSL://"
+      # and then demands its confluent-style JKS keystore + password-file
+      # contract (/etc/kafka/secrets + KAFKA_SSL_KEYSTORE_FILENAME...), which
+      # cannot express a passwordless PEM keystore — the broker crash-looped
+      # on `!1: unbound variable` (proven live 2026-08-05). A non-SSL listener
+      # NAME mapped to the SSL protocol bypasses that branch; every ssl.*
+      # property still flows through the generic env→server.properties path.
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,MTLS://0.0.0.0:9094,FLOWS://0.0.0.0:9095"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,MTLS://kafka:9094,FLOWS://kafka:9095"
+      # CONTROLLER on SSL (2026-08-06, pre-wave): KRaft quorum traffic rides
+      # mTLS — the broker dials its own controller presenting the dual-EKU
+      # broker SVID (clientAuth landed today; quorum voters address kafka:9093
+      # matches the SVID SAN, so hostname verification holds). The image
+      # config-script SSL:// hijack greps ADVERTISED_LISTENERS only — the
+      # controller listener is never advertised, so the name stays CONTROLLER.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:SSL,MTLS:SSL,FLOWS:SSL"
+      KAFKA_LISTENER_NAME_CONTROLLER_SSL_CLIENT_AUTH: required
+      KAFKA_SSL_KEYSTORE_TYPE: PEM
+      KAFKA_SSL_KEYSTORE_LOCATION: /tmp/kafka-tls/keystore.pem
+      KAFKA_SSL_TRUSTSTORE_TYPE: PEM
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /tmp/kafka-tls/truststore.pem
+      KAFKA_SSL_CLIENT_AUTH: required
+      KAFKA_LISTENER_NAME_FLOWS_SSL_CLIENT_AUTH: none
+      # NO ssl.principal.mapping.rules, deliberately: the value crosses THREE
+      # escaping layers (YAML → env → Java properties → the RULE parser, whose
+      # delimiter is the very / the SPIFFE URI is full of) and the properties
+      # layer silently eats backslashes — the broker crash-looped on
+      # "Invalid rule" (proven live 2026-08-05). Principals are therefore the
+      # full DN string, e.g. User:CN=spiffe://netops/ns/default/sa/goflow2 —
+      # verbose in ACLs, zero parser fragility.
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+      KAFKA_SUPER_USERS: "User:CN=spiffe://netops/ns/default/sa/kafka"
+      # SEC-007.1 observe phase, v2 (2026-08-06): INFO, not DEBUG. DEBUG logs
+      # every ALLOWED decision — hundreds/sec — and with no log cap it FILLED
+      # THE HOST DISK in ~18h (100%, broker died on its own log). DENIALS log
+      # at INFO, and post-lesson-(i) the soak signal IS actual denials, so
+      # INFO keeps the entire feed at 1/1000th the volume. Log capped above
+      # regardless: no observer is allowed to kill the observed again.
+      KAFKA_LOG4J_LOGGERS: "kafka.authorizer.logger=INFO"
+    volumes:
+      - ../../data/kafka:/var/lib/kafka/data
+      - ../../data/tls/services/kafka:/certs-src:ro
+      - ./kafka/tls-entrypoint.sh:/kafka-tls-entrypoint.sh:ro
+    # Readiness on the MTLS listener (2026-08-06): 9092 dies at SEC-006.3, and
+    # a healthcheck probing a removed listener would deadlock the bootstrap
+    # (the SEC-008 lesson, healthcheck edition). Same TCP-accept semantics —
+    # 9094 opens after KRaft init + log recovery exactly like 9092.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9094"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Pre-SEC-007.2 (2026-08-06): topic creation authenticates on MTLS:9094 with
+  # the broker's own SVID (super-user) instead of 9092-as-ANONYMOUS — Create on
+  # ACL'd topics goes deny at the flip, and 9092 dies at SEC-006.3. The PEM
+  # keystore wants key+crt concatenated (SEC-006 lesson), staged into /tmp
+  # (the only dir uid 1000 owns).
+  kafka-init:
+    volumes:
+      - ../../data/tls/services/kafka:/certs-src:ro
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        umask 077 && cat /certs-src/kafka.key /certs-src/kafka.crt > /tmp/ks.pem
+        && cp /certs-src/ca.pem /tmp/ts.pem
+        && printf 'security.protocol=SSL\nssl.keystore.type=PEM\nssl.keystore.location=/tmp/ks.pem\nssl.truststore.type=PEM\nssl.truststore.location=/tmp/ts.pem\n' > /tmp/admin.properties
+        && for t in netops.applogs netops.syslog netops.flows netops.snmptrap
+        netops.probes netops.metrics netops.cloud netops.app.identities.v1
+        netops.controller_events netops.app.edge netops.verification
+        netops.cloudlogs netops.cloudcosts netops.deadletter
+        netops.wireless_sessions netops.wireless_events; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094
+        --command-config /tmp/admin.properties
+        --create --if-not-exists --topic "$$t"
+        --partitions 1 --replication-factor 1 || exit 1; done
+
+  # SEC-006.2 client 1/5: kafka-exporter on the mTLS listener (metrics-only —
+  # lowest blast radius, per the epic's cutover order). `command` replaces the
+  # base list wholesale, so the topic/group filters are restated.
+  kafka-exporter:
+    command:
+      - "--kafka.server=kafka:9094"
+      - "--tls.enabled"
+      - "--tls.ca-file=/svid/ca.pem"
+      - "--tls.cert-file=/svid/kafka-exporter.crt"
+      - "--tls.key-file=/svid/kafka-exporter.key"
+      - "--topic.filter=^netops\\..*"
+      - "--group.filter=^netops-.*"
+    volumes:
+      - ../../data/tls/services/kafka-exporter:/svid:ro
+
+  # SEC-006.2 client 5/5 (owner option-1, 2026-08-05): goflow2 produces on
+  # FLOWS://9095 — encrypted + server-verified TLS, NO client cert (v2.2.1
+  # has no client-cert flags; SASL rejected §0a). Trust rides SSL_CERT_FILE
+  # (goflow2 is Go). Identity on this hop is ANONYMOUS by construction;
+  # SEC-007.1 bounds it to produce-only on netops.flows. `command` replaces
+  # the base list wholesale, so everything is restated.
+  goflow2:
+    command:
+      - "-listen"
+      - "netflow://:2055,sflow://:6343,netflow://:4739"
+      - "-format"
+      - "json"
+      - "-transport"
+      - "kafka"
+      - "-transport.kafka.brokers"
+      - "kafka:9095"
+      - "-transport.kafka.tls"
+      - "-transport.kafka.topic"
+      - "netops.flows"
+      - "-transport.kafka.compression"
+      - "snappy"
+    environment:
+      SSL_CERT_FILE: /tls/ca.pem
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+
+  # SEC-012.2: Valkey serves TLS on 6380 with its registry SVID beside the
+  # plaintext 6379 (dual-port migration; 6379 closes at programme-final with
+  # the other plaintext listeners). Password auth remains the authn
+  # (--tls-auth-clients no); TLS closes the password-in-the-clear gap.
+  # `command` replaces the base list wholesale — base flags restated.
+  redis:
+    command: ["valkey-server", "--save", "60", "1",
+      "--maxmemory", "${REDIS_MAXMEMORY:-96mb}",
+      "--requirepass", "${REDIS_PASSWORD:-}",
+      "--tls-port", "6380",
+      "--tls-cert-file", "/tls/svid/redis.crt",
+      "--tls-key-file", "/tls/svid/redis.key",
+      "--tls-ca-cert-file", "/tls/ca.pem",
+      "--tls-auth-clients", "no"]
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/redis:/tls/svid:ro
+
+  # SEC-013.2: prober presents its SVID to the mTLS probes lane; the api
+  # forwarders ride backendHTTPClient (SVID already wired by APP-001).
+  prober:
+    environment:
+      PROBE_EVENT_SINK_URL: "https://vector-aggregator:8689/"
+      TLS_BACKEND_CA_FILE: /tls/ca.pem
+      TLS_BACKEND_CERT_FILE: /tls/svid/prober.crt
+      TLS_BACKEND_KEY_FILE: /tls/svid/prober.key
+      REDIS_TLS: "true"
+      REDIS_PORT: "6380"
+      REDIS_TLS_CA: /tls/ca.pem
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/prober:/tls/svid:ro

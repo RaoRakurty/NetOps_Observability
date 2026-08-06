@@ -394,6 +394,22 @@ def write_env(env_path: Path, port: int, *, force: bool,
             additions.append("OPENSEARCH_REPLICAS=0")
         if "OPENSEARCH_SNAPSHOT_KEEP" not in env:
             additions.append("OPENSEARCH_SNAPSHOT_KEEP=14")
+        # Migration (SEC-010/012/013/008): credentials the security epics
+        # introduced. generate_secrets() has minted them since those epics
+        # landed, but a pre-epic .env lacks them and the fresh-install template
+        # only covers NEW installs. Values converge on the next compose up —
+        # every consumer reads the same .env.
+        if "REDIS_PASSWORD" not in env:
+            additions.append(f"REDIS_PASSWORD={generate_password(24)}")
+        for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
+            if f"INGEST_TOKEN_{lane}" not in env:
+                additions.append(f"INGEST_TOKEN_{lane}={generate_token(32)}")
+        for svc in ("API", "GNMIC", "VECTOR", "VMALERT", "GRAFANA"):
+            if f"VMAUTH_{svc}_PASSWORD" not in env:
+                additions.append(f"VMAUTH_{svc}_PASSWORD={generate_password(24)}")
+        for svc in ("API", "ROUTER", "CORRELATION", "BOOTSTRAP", "DASHBOARDS", "AGGREGATOR"):
+            if f"OS_{svc}_PASSWORD" not in env:
+                additions.append(f"OS_{svc}_PASSWORD={generate_password(24)}")
         if additions:
             with env_path.open("a") as f:
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
@@ -702,6 +718,35 @@ BROKER_URLS={broker_urls or "kafka:9092"}
 # data/kafka aside first).
 KAFKA_CLUSTER_ID={secrets_map["KAFKA_CLUSTER_ID"]}
 
+# Valkey (compose name: redis) AUTH. Read by the api/prober AND the server
+# command line — a fresh value converges on the next compose up.
+REDIS_PASSWORD={secrets_map["REDIS_PASSWORD"]}
+
+# Per-lane ingest tokens (SEC-013.2). Identity is mTLS's job; the lane token
+# is lane AUTHORIZATION. Producers and the collector both read these — the
+# shared INGEST_TOKEN above remains the fallback until the enforce wave drops it.
+INGEST_TOKEN_TRAPS={secrets_map["INGEST_TOKEN_TRAPS"]}
+INGEST_TOKEN_PROBES={secrets_map["INGEST_TOKEN_PROBES"]}
+INGEST_TOKEN_METRICS={secrets_map["INGEST_TOKEN_METRICS"]}
+INGEST_TOKEN_BUS={secrets_map["INGEST_TOKEN_BUS"]}
+
+# vmauth per-service credentials (SEC-010). Consumed only when the vmauth
+# profile is active; harmless otherwise. One user per client, scoped routes.
+VMAUTH_API_PASSWORD={secrets_map["VMAUTH_API_PASSWORD"]}
+VMAUTH_GNMIC_PASSWORD={secrets_map["VMAUTH_GNMIC_PASSWORD"]}
+VMAUTH_VECTOR_PASSWORD={secrets_map["VMAUTH_VECTOR_PASSWORD"]}
+VMAUTH_VMALERT_PASSWORD={secrets_map["VMAUTH_VMALERT_PASSWORD"]}
+VMAUTH_GRAFANA_PASSWORD={secrets_map["VMAUTH_GRAFANA_PASSWORD"]}
+
+# OpenSearch security-plugin identities (SEC-008). Consumed only when the
+# security plugin is enabled (TLS variant / security profile); harmless otherwise.
+OS_API_PASSWORD={secrets_map["OS_API_PASSWORD"]}
+OS_ROUTER_PASSWORD={secrets_map["OS_ROUTER_PASSWORD"]}
+OS_CORRELATION_PASSWORD={secrets_map["OS_CORRELATION_PASSWORD"]}
+OS_BOOTSTRAP_PASSWORD={secrets_map["OS_BOOTSTRAP_PASSWORD"]}
+OS_DASHBOARDS_PASSWORD={secrets_map["OS_DASHBOARDS_PASSWORD"]}
+OS_AGGREGATOR_PASSWORD={secrets_map["OS_AGGREGATOR_PASSWORD"]}
+
 # Active compose profiles (additive; non-profiled services always start).
 #   embedded-bus  the bundled Apache Kafka broker + topic init
 #   prober        raw-socket active-measurement sidecar
@@ -990,6 +1035,11 @@ def ensure_data_dirs(root: Path) -> None:
         # the directory must exist and be writable before first boot, or the very
         # first rejected RCA-critical evidence has nowhere durable to land.
         "correlation/deadletter": None,
+        # tracker #151: the internal CA's mint target (SVIDs, trust bundle).
+        # Docker would auto-create a bind-mount source as ROOT, and the api
+        # (uid 65532) could then never mint into it — pre-create owned by the
+        # api's uid. Dormant/empty on plaintext installs.
+        "tls": (65532, 65532),
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name
@@ -1134,6 +1184,183 @@ def write_offline_override(compose_dir: Path, env_path: Path) -> None:
             f.write("\n# Offline install: tag-pinned image override (see file header).\n")
             f.write("COMPOSE_FILE=docker-compose.yml:compose.offline-images.yml\n")
     ok(f"offline image override written ({len(overrides)} digest-pinned images → tag-pinned)")
+
+
+# ---- TLS/mTLS transport security (tracker #151 delivery shape) --------------
+# One question on a fresh install; --tls=yes|no for unattended runs. "yes" is
+# the COMPLETE mesh in two phases: phase A boots the plaintext baseline with
+# the mint variables set so the api's internal CA writes every SVID to
+# data/tls; phase B activates deployment/docker/compose.tls.yml (fail-closed
+# store wrappers, mTLS listeners) via the COMPOSE_FILE chain and recreates.
+# The two-phase shape exists because the CA's own state lives in the platform
+# store: a fail-closed postgres cannot start without certs that only a running
+# api can mint (the SEC-011 bootstrap-deadlock lesson).
+
+# These values MUST stay in lockstep with the api service block in
+# deployment/docker/compose.tls.yml — phase A mints from .env through the base
+# compose ${VAR:-} passthroughs; phase B serves from the variant's literals.
+TLS_ENV_VALUES: dict[str, str] = {
+    "TLS_INTERNAL_CA":       "true",
+    "TLS_TRUST_DOMAIN":      "netops",
+    "TLS_SVID_TTL":          "168h",
+    "TLS_CLIENT_CA_FILE":    "/data/tls/ca.pem",
+    "TLS_CERT_FILE":         "/data/tls/api.crt",
+    "TLS_KEY_FILE":          "/data/tls/api.key",
+    "TLS_NGINX_CERT_DIR":    "/data/tls/nginx",
+    "TLS_NGINX_KEY_MODE":    "0644",
+    "TLS_VICTORIA_CERT_DIR": "/data/tls/victoria",
+    "TLS_SERVICE_CERT_ROOT": "/data/tls/services",
+    "TLS_OS_ADMIN_CERT_DIR": "/data/tls/admin",
+    "TLS_SERVICE_KEY_MODE":  "0644",
+    "SEAL_PROVIDER":         "swtpm",
+}
+
+# Profiles the mesh requires beyond the defaults: the seal sidecar (the CA
+# seal-gate refuses a plaintext CA key), the OpenSearch security bootstrap,
+# and the authenticating VictoriaMetrics front.
+TLS_EXTRA_PROFILES = ("seal", "security", "vmauth")
+
+# Files whose existence proves the phase-A mint completed. One per issuance
+# surface — a partial mint must FAIL the install, not half-enable the mesh.
+TLS_MINT_SENTINELS = (
+    # Verified against a live minted tree 2026-08-06 — note the victoria dir
+    # does NOT hold a victoria.crt (it stages the scrape-client material), so
+    # it is deliberately not a sentinel.
+    "data/tls/ca.pem",
+    "data/tls/api.crt",
+    "data/tls/nginx/nginx.crt",
+    "data/tls/admin/admin.crt",
+    "data/tls/services/kafka/kafka.crt",
+    "data/tls/services/postgres/postgres.crt",
+    "data/tls/services/opensearch/opensearch.crt",
+)
+
+
+def resolve_tls_choice(args) -> bool:
+    """The one install question. Flag wins; interactive default is YES
+    (the owner's [Y/n] shape); unattended without the flag keeps the
+    declared-plaintext baseline — an install script must never surprise an
+    unattended run with a mesh it did not ask for."""
+    if args.tls is not None:
+        return args.tls == "yes"
+    if not sys.stdin.isatty():
+        info("no --tls given and stdin is not a TTY — keeping the declared-plaintext "
+             "baseline (rerun with --tls=yes for the full mTLS mesh)")
+        return False
+    answer = input("  Enable TLS/mTLS transport security? [Y/n] ").strip().lower()
+    return answer in ("", "y", "yes")
+
+
+def enable_tls_env(env_path: Path) -> None:
+    """Line-surgery the TLS values into .env (idempotent): substitute existing
+    keys in place, append the missing ones under one header. Never rewrites
+    the file wholesale — operator edits survive, same doctrine as rotation."""
+    text = env_path.read_text()
+    lines = text.splitlines()
+    present: dict[str, int] = {}
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if key in TLS_ENV_VALUES:
+            present[key] = i
+    changed = False
+    for key, idx in present.items():
+        want = f"{key}={TLS_ENV_VALUES[key]}"
+        if lines[idx] != want:
+            lines[idx] = want
+            changed = True
+    missing = [k for k in TLS_ENV_VALUES if k not in present]
+    if missing:
+        lines.append("")
+        lines.append("# ---- TLS/mTLS mesh (tracker #151) — written by install.py --tls=yes ----")
+        lines.append("# Values pair with deployment/docker/compose.tls.yml; keep in lockstep.")
+        for k in missing:
+            lines.append(f"{k}={TLS_ENV_VALUES[k]}")
+        changed = True
+    if changed:
+        env_path.write_text("\n".join(lines) + "\n")
+        ok(f"TLS variables set in .env ({len(present)} updated, {len(missing)} added)")
+    else:
+        info("TLS variables already present in .env")
+
+
+def augment_profiles_for_tls(env_path: Path) -> None:
+    """Ensure COMPOSE_PROFILES carries the mesh profiles. Line surgery."""
+    lines = env_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("COMPOSE_PROFILES="):
+            current = [p for p in line.split("=", 1)[1].split(",") if p]
+            added = [p for p in TLS_EXTRA_PROFILES if p not in current]
+            if added:
+                lines[i] = "COMPOSE_PROFILES=" + ",".join(current + added)
+                env_path.write_text("\n".join(lines) + "\n")
+                ok(f"compose profiles gained {', '.join(added)}")
+            return
+    # No COMPOSE_PROFILES line at all would already have failed compose; be loud.
+    fail(".env has no COMPOSE_PROFILES line — cannot enable the TLS profiles")
+    raise SystemExit(2)
+
+
+def activate_tls_compose_file(compose_dir: Path, env_path: Path) -> None:
+    """Append compose.tls.yml to the COMPOSE_FILE chain (idempotent). The TLS
+    variant goes LAST so its merges win; an offline-images chain stays ahead
+    of it."""
+    variant = compose_dir / "compose.tls.yml"
+    if not variant.exists():
+        fail(f"{variant} missing — the repo checkout is incomplete")
+        raise SystemExit(2)
+    lines = env_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("COMPOSE_FILE="):
+            chain = line.split("=", 1)[1]
+            if "compose.tls.yml" in chain.split(":"):
+                info("compose.tls.yml already active in COMPOSE_FILE")
+                return
+            lines[i] = f"COMPOSE_FILE={chain}:compose.tls.yml"
+            env_path.write_text("\n".join(lines) + "\n")
+            ok("compose.tls.yml appended to the COMPOSE_FILE chain")
+            return
+    with env_path.open("a") as f:
+        f.write("\n# TLS/mTLS variant (tracker #151): activated by install.py --tls=yes.\n")
+        f.write("COMPOSE_FILE=docker-compose.yml:compose.tls.yml\n")
+    ok("compose.tls.yml activated via COMPOSE_FILE")
+
+
+def wait_for_minted_certs(root: Path, timeout_s: int = 300) -> None:
+    """Phase-A gate: block until the api has minted every issuance surface.
+    A timeout is a loud install FAILURE — activating fail-closed wrappers on
+    a half-minted tree would take the whole stack down."""
+    step(f"waiting for the internal CA to mint service identities (≤{timeout_s}s)")
+    deadline = time.time() + timeout_s
+    remaining = list(TLS_MINT_SENTINELS)
+    while time.time() < deadline:
+        remaining = [p for p in remaining if not (root / p).exists()]
+        if not remaining:
+            ok("all service identities minted")
+            return
+        time.sleep(5)
+    fail("the api did not mint the full identity set in time; still missing:")
+    for p in remaining:
+        print(f"    - {p}")
+    fail("check `docker compose logs api` (seal sidecar up? SEAL_PROVIDER=swtpm? "
+         "data/tls writable by the api uid?) and rerun the installer — it is idempotent.")
+    raise SystemExit(2)
+
+
+def ensure_ingress_cert(root: Path) -> None:
+    """The nginx TLS ingress needs a cert before its first TLS start. Dev/lab:
+    self-signed via gen-dev-cert.sh; production replaces the files in place
+    (documented in the script header)."""
+    certs = root / "deployment" / "docker" / "nginx" / "certs"
+    if certs.exists() and any(certs.glob("*.crt")):
+        info("nginx ingress certs already present")
+        return
+    step("generating a self-signed ingress certificate (replace for production)")
+    res = subprocess.run(["bash", str(root / "scripts" / "gen-dev-cert.sh")],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        fail(f"gen-dev-cert.sh failed: {res.stderr.strip() or res.stdout.strip()}")
+        raise SystemExit(2)
+    ok("self-signed ingress certificate generated")
 
 
 def compose_up(compose_dir: Path, offline: bool = False,
@@ -1460,6 +1687,12 @@ def main() -> None:
                     dest="plan_resources",
                     help="Skip resource planning; keep the static compose defaults "
                          "(equivalent to CORRELIX_NO_SIZING=1).")
+    ap.add_argument("--tls", choices=["yes", "no"], default=None,
+                    help="Enable the full TLS/mTLS transport mesh (tracker #151): "
+                         "ingress TLS, nginx→api mTLS, all stores, Kafka mTLS+ACL "
+                         "listeners, Vector lanes, sealed CA custody. Interactive "
+                         "installs are asked ([Y/n]); unattended runs without this "
+                         "flag keep the declared-plaintext baseline.")
     ap.add_argument("--sizing-file", type=Path, default=None, metavar="YAML",
                     help="correlix-sizing.yaml workload inputs for --plan-resources.")
     ap.add_argument("--replan", action="store_true",
@@ -1577,11 +1810,27 @@ def main() -> None:
         step("planning resources (#102)")
         run_resource_plan(env_path, args.plan_resources, args.sizing_file)
 
+    # The one transport-security question (tracker #151 delivery shape).
+    # Resolved AFTER .env exists so both fresh and existing installs converge
+    # through the same line-surgery path; the actual activation is two-phase
+    # around compose_up below.
+    tls_enabled = resolve_tls_choice(args)
+    if tls_enabled:
+        step("enabling TLS/mTLS transport security")
+        enable_tls_env(env_path)
+        augment_profiles_for_tls(env_path)
+        ensure_ingress_cert(root)
+
     step("preparing data directories")
     ensure_data_dirs(root)
 
     if args.no_start:
-        ok(".env and data/ ready. Skipping docker compose up (per --no-start).")
+        if tls_enabled:
+            ok(".env and data/ ready with TLS variables set. compose.tls.yml is "
+               "NOT yet activated (the two-phase mint needs a running stack) — "
+               "rerun without --no-start to complete enablement.")
+        else:
+            ok(".env and data/ ready. Skipping docker compose up (per --no-start).")
         return
 
     if args.bundle:
@@ -1591,8 +1840,18 @@ def main() -> None:
     if args.offline:
         write_offline_override(compose_dir, env_path)
 
-    step("starting stack")
+    # Phase A (TLS): the baseline stack boots with the mint variables set; the
+    # api's internal CA writes every SVID to data/tls while the stores are
+    # still plaintext. On a rerun with certs already minted this converges in
+    # one pass (the sentinels exist, the variant is already in the chain).
+    step("starting stack" + (" (TLS phase A: mint identities)" if tls_enabled else ""))
     compose_up(compose_dir, offline=args.offline, root=root)
+
+    if tls_enabled:
+        wait_for_minted_certs(root)
+        activate_tls_compose_file(compose_dir, env_path)
+        step("starting stack (TLS phase B: fail-closed mesh)")
+        compose_up(compose_dir, offline=args.offline, root=root)
 
     step("status")
     compose_status(compose_dir)

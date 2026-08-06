@@ -85,6 +85,16 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     "INGEST_TOKEN": Policy(
         FREE, "", "", ""),
+    # SEC-013.2 per-lane tokens: same read-at-start contract as INGEST_TOKEN —
+    # vector expands them from env, producers read theirs at process start.
+    "INGEST_TOKEN_TRAPS": Policy(
+        FREE, "", "", ""),
+    "INGEST_TOKEN_PROBES": Policy(
+        FREE, "", "", ""),
+    "INGEST_TOKEN_METRICS": Policy(
+        FREE, "", "", ""),
+    "INGEST_TOKEN_BUS": Policy(
+        FREE, "", "", ""),
     "NETBOX_SECRET_KEY": Policy(
         FREE, "", "", ""),
     # SEC-010 vmauth per-service credentials: vmauth expands them from env at
@@ -116,6 +126,9 @@ POLICY: dict[str, Policy] = {
     "OS_BOOTSTRAP_PASSWORD": Policy(
         FREE, "", "", ""),
     "OS_DASHBOARDS_PASSWORD": Policy(
+        FREE, "", "", ""),
+    # F-17 stats identity (svc_aggregator) — same bootstrap-applied contract.
+    "OS_AGGREGATOR_PASSWORD": Policy(
         FREE, "", "", ""),
 
     # ---- alter: a credential inside a store's own catalog -------------------

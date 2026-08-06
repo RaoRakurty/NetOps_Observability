@@ -1577,12 +1577,20 @@ services:
       TLS_TRUST_DOMAIN: ${TLS_TRUST_DOMAIN:-netops}
       TLS_SVID_TTL: ${TLS_SVID_TTL:-24h}
       TLS_NGINX_CERT_DIR: ${TLS_NGINX_CERT_DIR:-}
+      # File mode for the nginx client SVID key (nginx's uid 101 cannot read a
+      # 0600 key owned by the CA's uid). Dormant when unset (0600 default).
+      TLS_NGINX_KEY_MODE: ${TLS_NGINX_KEY_MODE:-}
       TLS_VICTORIA_CERT_DIR: ${TLS_VICTORIA_CERT_DIR:-}
       # SEC-003.3 workload identity registry: when set, the CA mints an SVID
       # for EVERY registered service under <root>/<service>/ at boot (rotated
       # at TTL/2). Additive — nothing consumes a cert until that service's
       # own epic mounts it. Registry + guards: src/backend/svid_registry.go.
       TLS_SERVICE_CERT_ROOT: ${TLS_SERVICE_CERT_ROOT:-}
+      # Registry-wide SVID key mode for cross-uid stores, and the SEC-008
+      # securityadmin credential dir (not a workload identity). Both dormant
+      # when unset.
+      TLS_SERVICE_KEY_MODE: ${TLS_SERVICE_KEY_MODE:-}
+      TLS_OS_ADMIN_CERT_DIR: ${TLS_OS_ADMIN_CERT_DIR:-}
       # Multi-region SPIFFE federation (#18 phase 5): "domA=/a.pem,domB=/b.pem"
       # binds each peer trust DOMAIN to the CA root that anchored its chain.
       # Was parsed+enforced in Go but unreachable from compose (SEC-003.2) —
@@ -1633,6 +1641,11 @@ services:
       # Shared dir for the sealing sidecar's Unix socket (empty/unused when the
       # 'seal' profile isn't up — the Vault stays dormant, see SEAL_PROVIDER).
       - ../../data/secrets-seal:/run/secrets-seal
+      # Mint target for the internal CA (SEC-003 pattern): when TLS_INTERNAL_CA
+      # is on, the api writes the mesh trust bundle + per-service SVIDs here
+      # and the TLS variant (compose.tls.yml) mounts them into each service.
+      # Dormant/empty on plaintext installs — nothing writes or reads it.
+      - ../../data/tls:/data/tls
     # SNMP traps arrive on host UDP 162 and forward to the in-container
     # receiver on 1162 (unprivileged). Active only when FEATURE_SNMP_TRAPS=true;
     # the mapping is harmless otherwise (nothing binds 1162 inside). Override the

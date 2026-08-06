@@ -84,8 +84,16 @@ def _decomment(text: str) -> str:
 
 
 def compose_env_refs() -> dict[str, bool]:
-    """Map every ${VAR...} reference → has_default (True if ${VAR:-x} / ${VAR:?})."""
+    """Map every ${VAR...} reference → has_default (True if ${VAR:-x} / ${VAR:?}).
+
+    Scans the base compose AND the shipped TLS variant (compose.tls.yml,
+    tracker #151): a --tls install runs both, so a variant-only variable with
+    no default and no install.py provisioning is exactly the class of gap this
+    check exists to catch."""
     text = _decomment(COMPOSE.read_text())
+    tls_variant = COMPOSE.parent / "compose.tls.yml"
+    if tls_variant.exists():
+        text += "\n" + _decomment(tls_variant.read_text())
     refs: dict[str, bool] = {}
     for m in re.finditer(r"\$\{([A-Z][A-Z0-9_]+)(:?[-?][^}]*)?\}", text):
         name, mod = m.group(1), m.group(2)
