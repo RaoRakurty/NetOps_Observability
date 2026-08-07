@@ -3359,7 +3359,7 @@ app = FastAPI(title="netops-correlation", version="0.1.0", lifespan=lifespan)
 # certificates, and this narrows them to named SPIFFE identities — the Go api
 # in full, the metric scraper and the container's own healthcheck on
 # /metrics + /healthz only. Added LAST so it runs FIRST (outermost).
-from tls_ident import PeerIdentityMiddleware  # noqa: E402
+from tls_ident import PeerIdentityMiddleware
 
 app.add_middleware(PeerIdentityMiddleware)
 

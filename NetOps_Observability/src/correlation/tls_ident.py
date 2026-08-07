@@ -33,7 +33,7 @@ configured, so the plaintext baseline (base compose CMD) is unchanged.
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from collections.abc import Iterable
 
 from uvicorn.protocols.http.h11_impl import H11Protocol
 

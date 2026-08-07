@@ -12,8 +12,8 @@ import asyncio
 import tls_ident
 from tls_ident import (
     _PEERS,
-    IdentityH11Protocol,
     MONITOR_PATHS,
+    IdentityH11Protocol,
     PeerIdentityMiddleware,
     peer_identity,
 )
