@@ -40,6 +40,15 @@ users:
       - src_paths: ["/api/v1/write", "/api/v1/import.*"]
         url_prefix: "http://victoria:8428"
 
+  # Prober collector-sample pushes (emitMetrics -> /api/v1/import/prometheus)
+  # — WRITE ONLY. Same silent-lane risk as gnmic: the cutover asserts sample
+  # flow (collector_up freshness), never just 2xx.
+  - username: "svc-prober"
+    password: "%{VMAUTH_PROBER_PASSWORD}"
+    url_map:
+      - src_paths: ["/api/v1/write", "/api/v1/import.*"]
+        url_prefix: "http://victoria:8428"
+
   # vmalert: rule evaluation reads + ALERTS/recording writes + remoteRead.
   - username: "svc-vmalert"
     password: "%{VMAUTH_VMALERT_PASSWORD}"

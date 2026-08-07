@@ -76,6 +76,17 @@ _PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#%^&*-_=+"
 def generate_password(length: int = 24) -> str:
     return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
 
+# Credentials that ride URL userinfo (https://user:pw@host — the SEC-010
+# vmauth family today) must NOT contain @ # % ^ & + =: Go's url.Parse rejects
+# a stray %, # truncates as a fragment, and @ shifts the authority split.
+# 2026-08-07: found as a latent fresh-install landmine — generate_password's
+# alphabet gives each minted credential a ~2% chance of breaking its client
+# at startup. URL-embedded credentials use this alphabet instead.
+_URLSAFE_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "-_"
+
+def generate_urlsafe_password(length: int = 24) -> str:
+    return "".join(secrets.choice(_URLSAFE_PASSWORD_ALPHABET) for _ in range(length))
+
 def _git_sha(root: Path) -> str:
     """HEAD of the checkout, or "unknown".
 
@@ -322,11 +333,14 @@ def generate_secrets() -> dict[str, str]:
         "INGEST_TOKEN":              generate_token(32),
         # SEC-010: per-service credentials for the vmauth metrics front
         # (profile `vmauth`; src/config/vmauth.yml expands them via %{ENV}).
-        "VMAUTH_API_PASSWORD":       generate_password(24),
-        "VMAUTH_GNMIC_PASSWORD":     generate_password(24),
-        "VMAUTH_VECTOR_PASSWORD":    generate_password(24),
-        "VMAUTH_VMALERT_PASSWORD":   generate_password(24),
-        "VMAUTH_GRAFANA_PASSWORD":   generate_password(24),
+        # URL-safe: every consumer embeds them in URL userinfo
+        # (VICTORIA_URL=https://svc-*:pw@vmauth:8427).
+        "VMAUTH_API_PASSWORD":       generate_urlsafe_password(24),
+        "VMAUTH_GNMIC_PASSWORD":     generate_urlsafe_password(24),
+        "VMAUTH_VECTOR_PASSWORD":    generate_urlsafe_password(24),
+        "VMAUTH_VMALERT_PASSWORD":   generate_urlsafe_password(24),
+        "VMAUTH_GRAFANA_PASSWORD":   generate_urlsafe_password(24),
+        "VMAUTH_PROBER_PASSWORD":    generate_urlsafe_password(24),
         # SEC-012: Valkey (RCA evidence store) authentication.
         "REDIS_PASSWORD":            generate_password(24),
         # SEC-008: per-identity OpenSearch credentials (security plugin).
@@ -404,9 +418,9 @@ def write_env(env_path: Path, port: int, *, force: bool,
         for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
             if f"INGEST_TOKEN_{lane}" not in env:
                 additions.append(f"INGEST_TOKEN_{lane}={generate_token(32)}")
-        for svc in ("API", "GNMIC", "VECTOR", "VMALERT", "GRAFANA"):
+        for svc in ("API", "GNMIC", "VECTOR", "VMALERT", "GRAFANA", "PROBER"):
             if f"VMAUTH_{svc}_PASSWORD" not in env:
-                additions.append(f"VMAUTH_{svc}_PASSWORD={generate_password(24)}")
+                additions.append(f"VMAUTH_{svc}_PASSWORD={generate_urlsafe_password(24)}")
         for svc in ("API", "ROUTER", "CORRELATION", "BOOTSTRAP", "DASHBOARDS", "AGGREGATOR"):
             if f"OS_{svc}_PASSWORD" not in env:
                 additions.append(f"OS_{svc}_PASSWORD={generate_password(24)}")
@@ -737,6 +751,7 @@ VMAUTH_GNMIC_PASSWORD={secrets_map["VMAUTH_GNMIC_PASSWORD"]}
 VMAUTH_VECTOR_PASSWORD={secrets_map["VMAUTH_VECTOR_PASSWORD"]}
 VMAUTH_VMALERT_PASSWORD={secrets_map["VMAUTH_VMALERT_PASSWORD"]}
 VMAUTH_GRAFANA_PASSWORD={secrets_map["VMAUTH_GRAFANA_PASSWORD"]}
+VMAUTH_PROBER_PASSWORD={secrets_map["VMAUTH_PROBER_PASSWORD"]}
 
 # OpenSearch security-plugin identities (SEC-008). Consumed only when the
 # security plugin is enabled (TLS variant / security profile); harmless otherwise.

@@ -144,6 +144,14 @@
       "negative": ["a wrong credential must surface as missing series within one scrape cycle, alerted by the canonical-lane contract"]
     },
     {
+      "edge": "prober-victoria",
+      "endpoint": "vmauth:8427 (svc-prober, write routes only)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth via URL-userinfo (meshHTTPClient/authURLTransport applies it; mesh CA trust)",
+      "verify": "prober collector samples land (collector_up{} freshness for the prober's collectors); found as an UNDECLARED live plaintext 8428 client 2026-08-07 — the contract sweep must never miss a vmauth bypass again",
+      "negative": ["svc-prober issuing /api/v1/query -> refused"]
+    },
+    {
       "edge": "api-host-published",
       "endpoint": "api:8080 via host (plaintext-DECLARED until enforce wave drops the host port)",
       "server_identity": "spiffe://netops/ns/default/sa/api",

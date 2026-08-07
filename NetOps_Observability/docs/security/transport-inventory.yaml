@@ -677,6 +677,35 @@
       }
     },
     {
+      "id": "prober-victoria",
+      "source": "prober",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "target": {
+        "transport": "tls-via-vmauth",
+        "authn": "identity",
+        "authz": "ingest-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P1",
+      "evidence": [
+        "src/backend/collectors/poller.go",
+        "src/config/vmauth.yml"
+      ],
+      "security_profile": {
+        "transport": "tls-via-vmauth",
+        "notes": "Cutover 2026-08-07 (pre-enforce-wave sweep): prober emitMetrics import/prometheus pushes found riding victoria:8428 plaintext UNDECLARED in any contract — svc-prober write-only vmauth user added, VICTORIA_URL/METRICS_URL moved to vmauth in override + compose.tls.yml; verified by collector_up freshness"
+      }
+    },
+    {
       "id": "remote-vantage-api",
       "source": "remote-vantage",
       "destination": "api",

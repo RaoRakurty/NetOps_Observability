@@ -523,6 +523,12 @@ services:
       TLS_BACKEND_CA_FILE: /tls/ca.pem
       TLS_BACKEND_CERT_FILE: /tls/svid/prober.crt
       TLS_BACKEND_KEY_FILE: /tls/svid/prober.key
+      # SEC-010: collector-sample pushes (emitMetrics import/prometheus) ride
+      # vmauth write routes; meshHTTPClient applies the URL-userinfo credential
+      # + mesh CA. Both vars overridden — emitMetrics falls back VICTORIA_URL
+      # -> METRICS_URL, and a plaintext fallback must not lurk in either.
+      VICTORIA_URL: "https://svc-prober:${VMAUTH_PROBER_PASSWORD}@vmauth:8427"
+      METRICS_URL: "https://svc-prober:${VMAUTH_PROBER_PASSWORD}@vmauth:8427"
       REDIS_TLS: "true"
       REDIS_PORT: "6380"
       REDIS_TLS_CA: /tls/ca.pem

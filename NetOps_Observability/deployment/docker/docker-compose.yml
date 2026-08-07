@@ -642,6 +642,7 @@ services:
       VMAUTH_VECTOR_PASSWORD: ${VMAUTH_VECTOR_PASSWORD:-}
       VMAUTH_VMALERT_PASSWORD: ${VMAUTH_VMALERT_PASSWORD:-}
       VMAUTH_GRAFANA_PASSWORD: ${VMAUTH_GRAFANA_PASSWORD:-}
+      VMAUTH_PROBER_PASSWORD: ${VMAUTH_PROBER_PASSWORD:-}
     volumes:
       # F-51: DIRECTORY mount (same src/config dir the api/victoria mount).
       - ../../src/config:/etc/vmauth/config:ro

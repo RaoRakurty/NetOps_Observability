@@ -110,6 +110,8 @@ POLICY: dict[str, Policy] = {
         FREE, "", "", ""),
     "VMAUTH_GRAFANA_PASSWORD": Policy(
         FREE, "", "", ""),
+    "VMAUTH_PROBER_PASSWORD": Policy(
+        FREE, "", "", ""),
     # SEC-012: valkey reads --requirepass from env at start; clients read it at
     # their start — rotation = reset-env then recreate redis + api + prober.
     "REDIS_PASSWORD": Policy(
