@@ -1818,7 +1818,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/verification", s.handleVerificationSettings) // spec #8: active-verification opt-in + read-only SSH credential
 	mux.HandleFunc("/api/settings/required-tags", s.handleRequiredTagsSettings)
 	mux.HandleFunc("/api/settings/rca-window", s.handleRcaWindowSettings)
-	mux.HandleFunc("/api/system/backup", s.handleSystemBackup) // platform data-protection config + DR status
+	mux.HandleFunc("/api/system/backup", s.handleSystemBackup)                    // platform data-protection config + DR status
+	mux.HandleFunc("/api/system/backup/snapshots", s.handleSystemBackupSnapshots) // #150: SM policy view/control (platform admin)
 	mux.HandleFunc("/api/settings/attribution-precedence", s.handleAttributionPrecedenceSettings)
 	mux.HandleFunc("/api/settings/seam-owners", s.handleSeamOwnersSettings) // #113: owner class → tenant's actual responsible party
 	mux.HandleFunc("/api/settings/governance-audit", s.handleGovernanceAudit)

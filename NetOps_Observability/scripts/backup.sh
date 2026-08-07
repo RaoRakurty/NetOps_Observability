@@ -208,6 +208,7 @@ ROOT="$SCRIPT_ROOT"
 COMPOSE_DIR="$ROOT/deployment/docker"
 DATA_DIR="$ROOT/data"
 STAGE="$(mktemp -d -t netops-backup-XXXXXX)"
+START_EPOCH="$(date +%s)"
 # Single-quoted + quoted expansion (SC2064): the path is resolved when the trap
 # FIRES, and a staging path with a space can never word-split into `rm -rf /`.
 trap 'rm -rf -- "$STAGE"' EXIT
@@ -417,6 +418,25 @@ elif [[ ! -s "$OUT" ]]; then
     fail "prune SKIPPED: $OUT is missing or empty after tar — refusing to prune"
 elif ! prune_backups "$(dirname -- "$OUT")" "${BACKUP_PRUNE_DRY_RUN:-0}"; then
     fail "backup retention prune failed — old artifacts are accumulating on the backup disk"
+fi
+
+# Machine-readable run report (#150): the api's Backup & DR page reads this
+# (BACKUP_REPORT, default /data/backup-report.json inside the container; the
+# api's /data maps to data/api on the host — the same mapping
+# apply-backup-config.sh documents for system_backup.json) to show the
+# full-backup component's last_run {status,time,size,duration} — the host
+# cron's outcome is otherwise invisible to the GUI. Written on BOTH
+# outcomes; a report-write failure is a warning, never a masked backup error.
+REPORT_STATUS="success"; [[ $FAILURES -gt 0 ]] && REPORT_STATUS="failed"
+REPORT_SIZE=$(stat -c%s -- "$OUT" 2>/dev/null || echo 0)
+REPORT_DIR="$DATA_DIR/api"
+if [[ ! -d "$REPORT_DIR" ]] \
+   || ! printf '{"status":"%s","ended":"%s","size_bytes":%s,"duration_seconds":%s,"failures":%s,"artifact":"%s"}\n' \
+        "$REPORT_STATUS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$REPORT_SIZE" \
+        "$(( $(date +%s) - START_EPOCH ))" "$FAILURES" "$(basename -- "$OUT")" \
+        > "$REPORT_DIR/backup-report.json.tmp" \
+   || ! mv -f -- "$REPORT_DIR/backup-report.json.tmp" "$REPORT_DIR/backup-report.json"; then
+    echo "!! WARNING: could not write $REPORT_DIR/backup-report.json — the GUI will show a stale last-run" >&2
 fi
 
 # Exit non-zero when any component failed. THIS IS THE POINT: a cron entry

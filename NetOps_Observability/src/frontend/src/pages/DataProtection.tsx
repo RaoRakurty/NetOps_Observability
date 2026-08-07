@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, BackupConfig, BackupStatus } from "../services/api";
+import { api, BackupConfig, BackupStatus, SnapshotPolicy } from "../services/api";
 import Icon from "../components/Icon";
 
 // Data Protection — platform-global backup/DR posture. Two halves:
@@ -26,14 +26,39 @@ function Pill({ ok, warn, children }: { ok?: boolean; warn?: boolean; children: 
   return <span style={{ background: bg, color: fg, borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>{children}</span>;
 }
 
+function fmtBytes(n: number): string {
+  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(1) + " GiB";
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + " MiB";
+  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + " KiB";
+  return n + " B";
+}
+
 export default function DataProtection() {
   const [cfg, setCfg] = useState<BackupConfig>({ remote_url: "", schedule_enabled: false });
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // #150: the OpenSearch snapshot policy — live controls over netops-daily.
+  const [snap, setSnap] = useState<SnapshotPolicy | null>(null);
+  const [snapBusy, setSnapBusy] = useState(false);
+  const [snapMsg, setSnapMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
-  const load = () => api.backupConfig().then((r) => { setCfg(r.config); setStatus(r.status); }).catch(() => {});
+  const load = () => {
+    api.backupConfig().then((r) => { setCfg(r.config); setStatus(r.status); }).catch(() => {});
+    api.snapshotPolicy().then(setSnap).catch(() => {});
+  };
   useEffect(() => { load(); }, []);
+
+  const saveSnap = async (upd: { enabled?: boolean; schedule_cron?: string; retention_max_count?: number }) => {
+    setSnapBusy(true); setSnapMsg(null);
+    try {
+      const r = await api.setSnapshotPolicy(upd);
+      setSnap(r);
+      setSnapMsg({ kind: "ok", text: "Snapshot policy updated." });
+    } catch (e: unknown) {
+      setSnapMsg({ kind: "err", text: e instanceof Error ? e.message : "Update failed" });
+    } finally { setSnapBusy(false); }
+  };
 
   const save = async () => {
     setBusy(true); setMsg(null);
@@ -79,6 +104,20 @@ export default function DataProtection() {
                 <Pill ok={status.last_drill_result === "pass"}>{status.last_drill_result} · {status.last_drill_at}</Pill>
               </div>
             )}
+            {status.full_backup && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Last full backup</span>
+                <Pill ok={status.full_backup.status === "success"}>
+                  {status.full_backup.status} · {status.full_backup.ended} · {fmtBytes(status.full_backup.size_bytes)} · {status.full_backup.duration_seconds}s
+                </Pill>
+              </div>
+            )}
+            {!status.full_backup && status.schedule_enabled && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Last full backup</span>
+                <Pill warn>no run report — never ran, or the host cron is not reporting</Pill>
+              </div>
+            )}
             {status.on_host_only_warning && (
               <div style={{ ...hintStyle, marginTop: 4 }}>
                 ⚠ Backups currently share the primary data's disk/host. One disk failure loses both.
@@ -87,6 +126,63 @@ export default function DataProtection() {
             )}
           </div>
         ) : <div style={hintStyle}>Loading status…</div>}
+      </div>
+
+      {/* ── SNAPSHOT POLICY (#150: live control over the netops-daily SM policy) ── */}
+      <div className="card" style={{ display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 700 }}>Search-tier snapshots (OpenSearch)</div>
+          {snap && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={snap.enabled} disabled={snapBusy}
+                     onChange={(e) => saveSnap({ enabled: e.target.checked })} />
+              Enabled
+            </label>
+          )}
+        </div>
+        {snap ? (
+          <>
+            {snap.detail && <div style={{ fontSize: 12.5, color: "var(--warn, #e0b341)" }}>{snap.detail}</div>}
+            {!snap.enabled && (
+              <div style={{ fontSize: 12.5, color: "var(--warn, #e0b341)" }}>
+                ⚠ Snapshots are DISABLED — the search tier has no ongoing backup. Disabling is the explicit act; the default is on.
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
+              {snap.last_run && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Last snapshot run</span>
+                  <Pill ok={snap.last_run.status === "SUCCESS"}>
+                    {snap.last_run.status}{snap.last_run.time ? ` · ${snap.last_run.time}` : ""}{snap.last_run.duration_seconds ? ` · ${snap.last_run.duration_seconds}s` : ""}
+                  </Pill>
+                </div>
+              )}
+              {snap.next_run && snap.enabled && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Next scheduled run</span>
+                  <Pill ok>{snap.next_run}</Pill>
+                </div>
+              )}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ display: "grid", gap: 4 }}>
+                <label style={labelStyle}>Schedule (cron, UTC)</label>
+                <input style={inputStyle} defaultValue={snap.schedule_cron} disabled={snapBusy}
+                       onBlur={(e) => { if (e.target.value !== snap.schedule_cron) saveSnap({ schedule_cron: e.target.value }); }} />
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                <label style={labelStyle}>Retention (keep newest N)</label>
+                <input style={inputStyle} type="number" min={1} max={365} defaultValue={snap.retention_max_count} disabled={snapBusy}
+                       onBlur={(e) => { const n = parseInt(e.target.value, 10); if (n && n !== snap.retention_max_count) saveSnap({ retention_max_count: n }); }} />
+              </div>
+            </div>
+            <span style={hintStyle}>
+              Incremental snapshots taken by the cluster itself (policy netops-daily). Restore is deliberately not
+              available here — it is destructive and runbook-only.
+            </span>
+            {snapMsg && <div style={{ fontSize: 12.5, color: snapMsg.kind === "ok" ? "var(--ok, #38d16a)" : "var(--err, #ff6b6b)" }}>{snapMsg.text}</div>}
+          </>
+        ) : <div style={hintStyle}>Loading snapshot policy…</div>}
       </div>
 
       {/* ── CONFIG ── */}

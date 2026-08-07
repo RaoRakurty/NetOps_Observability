@@ -380,6 +380,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/cloud/ingest/source-status": "platform", // poller error reports (Wave 2 #4) — same service credential
 	"/api/system/network":             "platform",
 	"/api/system/backup":              "platform", // DR config + status; requirePlatformAdmin
+	"/api/system/backup/snapshots":    "platform", // #150 SM policy view/control; requirePlatformAdmin (gate test: system_backup_snapshots_test.go)
 	"/api/system/network/test":        "platform",
 	"/api/automation/netbox":          "platform",
 	"/api/automation/netbox/sync":     "platform",

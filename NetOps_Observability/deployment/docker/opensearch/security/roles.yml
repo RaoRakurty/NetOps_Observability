@@ -22,6 +22,20 @@ netops_api:
     - "cluster:monitor/health"
     - "cluster:monitor/state"
     - "indices:data/read/scroll*"
+    # Backup & DR surface (#150): the api is the GUI's thin truthful view over
+    # the snapshot posture — read repo + snapshots (the DR status panel 403'd
+    # here from the day SEC-008 went live, misreporting a healthy repo as
+    # broken) and manage the netops-daily SM policy (enable/disable, schedule,
+    # retention). Policy CRUD only — snapshot create/restore/delete stay
+    # OUT of this role (restore is runbook-only by owner decision).
+    - "cluster:admin/repository/get"
+    - "cluster:admin/snapshot/get"
+    - "cluster:admin/snapshot/status"
+    - "cluster:admin/opensearch/snapshot_management/policy/get"
+    - "cluster:admin/opensearch/snapshot_management/policy/write"
+    - "cluster:admin/opensearch/snapshot_management/policy/explain"
+    - "cluster:admin/opensearch/snapshot_management/policy/start"
+    - "cluster:admin/opensearch/snapshot_management/policy/stop"
   index_permissions:
     - index_patterns: ["netops-*"]
       allowed_actions:

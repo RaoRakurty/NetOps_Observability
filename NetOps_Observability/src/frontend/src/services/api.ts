@@ -1168,6 +1168,14 @@ export type BackupConfig = {
   updated_by?: string;
   updated_at?: string;
 };
+export type FullBackupRun = {
+  status: string;
+  ended: string;
+  size_bytes: number;
+  duration_seconds: number;
+  failures: number;
+  artifact?: string;
+};
 export type BackupStatus = {
   remote_configured: boolean;
   schedule_enabled: boolean;
@@ -1177,8 +1185,24 @@ export type BackupStatus = {
   on_host_only_warning: boolean;
   last_drill_result?: string;
   last_drill_at?: string;
+  full_backup?: FullBackupRun;
 };
 export type BackupConfigAndStatus = { config: BackupConfig; status: BackupStatus };
+// #150: thin truthful view over the OpenSearch netops-daily SM policy.
+export type SnapshotRun = { status: string; time?: string; duration_seconds?: number };
+export type SnapshotPolicy = {
+  enabled: boolean;
+  schedule_cron: string;
+  retention_max_count: number;
+  last_run?: SnapshotRun;
+  next_run?: string;
+  detail?: string;
+};
+export type SnapshotPolicyUpdate = {
+  enabled?: boolean;
+  schedule_cron?: string;
+  retention_max_count?: number;
+};
 export type SystemNetworkStatus = {
   dns: { servers: string[]; test_host: string; resolved?: string[]; ok: boolean; error?: string };
   ntp: { results: NTPResult[]; ok: boolean; offset_ms: number };
@@ -2235,6 +2259,9 @@ export const api = {
   backupConfig: () => request<BackupConfigAndStatus>(`/api/system/backup`),
   setBackupConfig: (cfg: BackupConfig) =>
     request<BackupConfigAndStatus>(`/api/system/backup`, { method: "PUT", body: JSON.stringify(cfg) }),
+  snapshotPolicy: () => request<SnapshotPolicy>(`/api/system/backup/snapshots`),
+  setSnapshotPolicy: (upd: SnapshotPolicyUpdate) =>
+    request<SnapshotPolicy>(`/api/system/backup/snapshots`, { method: "PUT", body: JSON.stringify(upd) }),
   testSystemNetwork: (host?: string) =>
     request<SystemNetworkStatus>(`/api/system/network/test${host ? `?host=${encodeURIComponent(host)}` : ""}`, { method: "POST" }),
   findings: (limit = 100, severity?: string) => {
