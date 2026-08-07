@@ -191,11 +191,14 @@ func (p *Prober) probe(ctx context.Context, ep peerEndpoint) peerProbeResult {
 
 	var captured *x509.Certificate
 	cfg := &tls.Config{
-		// #nosec G402 -- observability probe: it reads the served certificate
-		// and hangs up without exchanging data. Expiry of WHATEVER is served
-		// is the datum — including certs that would fail verification.
+		// #nosec G402 G123 -- observability probe: it reads the served
+		// certificate and hangs up without exchanging data. Expiry of
+		// WHATEVER is served is the datum — including certs that would fail
+		// verification. G123 (resumed sessions bypassing the capture
+		// callback) cannot occur: this Config is built fresh per dial with
+		// no ClientSessionCache, so no session is ever resumed.
 		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error { // #nosec G123 -- fresh Config per dial, no ClientSessionCache: sessions are never resumed, the capture callback always runs
 			if len(rawCerts) > 0 {
 				if c, err := x509.ParseCertificate(rawCerts[0]); err == nil {
 					captured = c

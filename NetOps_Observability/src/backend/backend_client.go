@@ -139,7 +139,9 @@ func (t authURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // internal TLS is configured, else a plain client. Either way the transport
 // honors URL-userinfo credentials (authURLTransport).
 func backendHTTPClient(timeout time.Duration) *http.Client {
-	var base http.RoundTripper = http.DefaultTransport
+	// http.DefaultTransport is declared as http.RoundTripper upstream, so the
+	// inferred type is already the interface (QF1011).
+	base := http.DefaultTransport
 	if backendTr != nil {
 		base = backendTr
 	}
