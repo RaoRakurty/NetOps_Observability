@@ -10,9 +10,11 @@ rate-limited WARN in Vector's own log.
 
 SEC-013.1 scoped the credential PER LANE (a compromised metrics credential
 must not open the bus bridge): each lane's token comes from
-INGEST_TOKEN_<LANE>, falling back to the shared INGEST_TOKEN so a
-pre-SEC-013 deployment is bit-for-bit unchanged until per-lane tokens are
-provisioned.
+INGEST_TOKEN_<LANE>. NARROWED (enforce wave step 4): the shared
+INGEST_TOKEN is no longer a fallback for any lane — install.py has seeded
+per-lane tokens since the epic landed and its migration path seeds them
+into pre-epic .envs, so the accept-set window is closed. A lane without its
+own token sends NO header and 401s loudly.
 
 Mirrors collectors/ingest_auth.go exactly, including its deliberate quirks:
 an EMPTY token sends NO header rather than an empty password (the documented
@@ -41,9 +43,9 @@ _LANE_ENV = {
 }
 
 _USER = os.environ.get("INGEST_USER") or "netops-ingest"
-_SHARED = os.environ.get("INGEST_TOKEN") or ""
+# Per-lane token ONLY (narrowing): the shared INGEST_TOKEN opens no lane.
 _TOKENS = {
-    lane: (os.environ.get(env) or _SHARED) for lane, env in _LANE_ENV.items()
+    lane: (os.environ.get(env) or "") for lane, env in _LANE_ENV.items()
 }
 
 

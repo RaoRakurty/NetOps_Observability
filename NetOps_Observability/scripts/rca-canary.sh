@@ -79,10 +79,12 @@ PRODUCE_ERR=""
 # python + a client-EKU SVID); the token is read from the compose .env WITHOUT
 # sourcing it (passwords with shell metacharacters broke a naive source on
 # 2026-08-05) and travels via the environment, never argv.
+# SEC-013 narrowing: the bus lane accepts ONLY its per-lane token — the
+# shared INGEST_TOKEN opens no lane anymore, so falling back to it here
+# would turn a missing bus token into a 401 storm blamed on the wrong secret.
 BUS_TOKEN="$(sed -n 's/^INGEST_TOKEN_BUS=//p' "$COMPOSE_DIR/.env" | head -1)"
-[ -n "$BUS_TOKEN" ] || BUS_TOKEN="$(sed -n 's/^INGEST_TOKEN=//p' "$COMPOSE_DIR/.env" | head -1)"
 if [ -z "$BUS_TOKEN" ]; then
-    fail "no INGEST_TOKEN_BUS (or INGEST_TOKEN) in $COMPOSE_DIR/.env — cannot authenticate to the bus lane"
+    fail "no INGEST_TOKEN_BUS in $COMPOSE_DIR/.env — run scripts/install.py (its migration seeds per-lane tokens); the shared INGEST_TOKEN no longer authenticates the bus lane"
 fi
 
 produce() { # $1 topic, stdin = ONE JSON event

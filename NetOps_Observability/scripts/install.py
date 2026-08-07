@@ -511,12 +511,14 @@ GRAFANA_CH_PASSWORD={secrets_map["GRAFANA_CH_PASSWORD"]}
 JWT_SECRET={secrets_map["JWT_SECRET"]}
 ENCRYPTION_KEY={secrets_map["ENCRYPTION_KEY"]}
 
-# Ingest credential (F-08). The four Vector http_server ingest sources
+# Ingest identity (F-08). The four Vector http_server ingest sources
 # (traps :8688, probes :8689, metrics :8690, bus bridge :8692) accepted
 # UNAUTHENTICATED writes to any netops.* topic, including a forged tenant_id —
 # a cross-tenant injection path guarded only by the assumption that nothing
-# hostile can reach the compose network. Every in-stack producer now presents
-# this credential; Vector refuses to start without it.
+# hostile can reach the compose network. Lane credentials are the PER-LANE
+# INGEST_TOKEN_<LANE> values below (SEC-013 narrowing: the shared token opens
+# no lane); INGEST_TOKEN itself remains only the stack-internal edge-keys
+# gate (vector-router -> api, internalStackCaller).
 INGEST_USER=netops-ingest
 INGEST_TOKEN={secrets_map["INGEST_TOKEN"]}
 

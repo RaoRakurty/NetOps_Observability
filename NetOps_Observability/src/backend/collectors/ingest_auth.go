@@ -38,9 +38,14 @@ type ingestCredential struct {
 
 // Lane names — the four vector-aggregator http_server sources. SEC-013.1
 // scopes the credential per lane so a compromised collector credential
-// cannot write to another lane (the bus bridge above all). Every lane's
-// token falls back to the shared INGEST_TOKEN, so a pre-SEC-013 deployment
-// is bit-for-bit unchanged until per-lane tokens are provisioned.
+// cannot write to another lane (the bus bridge above all). NARROWED
+// (enforce wave step 4): each lane reads ONLY its own INGEST_TOKEN_<LANE>;
+// the shared INGEST_TOKEN is no longer accepted as a lane credential in
+// any direction — install.py has seeded per-lane tokens since the epic
+// landed, and its migration path seeds them into pre-epic .envs. The
+// shared token's one remaining role is the stack-internal edge-keys gate
+// (internalStackCaller / sealingEdgeCaller in pipeline_processors.go),
+// which is a different trust decision on a different surface.
 const (
 	LaneTraps   = "traps"
 	LaneProbes  = "probes"
@@ -67,14 +72,15 @@ func readIngestCredentials() map[string]ingestCredential {
 	if user == "" {
 		user = "netops-ingest"
 	}
-	shared := os.Getenv("INGEST_TOKEN")
 	out := make(map[string]ingestCredential, 4)
 	for _, lane := range []string{LaneTraps, LaneProbes, LaneMetrics, LaneBus} {
-		token := os.Getenv(laneTokenEnv(lane))
-		if token == "" {
-			token = shared // accept-set: the shared token remains valid until narrowed
-		}
-		out[lane] = ingestCredential{user: user, token: token}
+		// Per-lane token ONLY. A missing lane token means this lane sends no
+		// header (see SetIngestAuth) and every POST 401s — observable in
+		// collector_ingest_rejected and the throttled log line, never silent.
+		// Falling back to the shared token here is the accept-set the
+		// narrowing closed: it made INGEST_TOKEN a skeleton key for whichever
+		// lanes lacked their own credential.
+		out[lane] = ingestCredential{user: user, token: os.Getenv(laneTokenEnv(lane))}
 	}
 	return out
 }
@@ -152,7 +158,7 @@ func logIngestRejection(lane, sink string, status int) {
 	if now-last >= 60 && atomic.CompareAndSwapInt64(lv.(*int64), last, now) {
 		hint := ""
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			hint = " — check INGEST_TOKEN matches vector-aggregator's (F-08)"
+			hint = fmt.Sprintf(" — check %s matches vector-aggregator's (F-08/SEC-013; the shared INGEST_TOKEN no longer opens lanes)", laneTokenEnv(lane))
 		}
 		// sink is logged without credentials: SetIngestAuth uses a header, not
 		// a userinfo URL, so there is nothing to redact here (§8 no PII/secret

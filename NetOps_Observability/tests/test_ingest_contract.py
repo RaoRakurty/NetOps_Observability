@@ -223,9 +223,8 @@ def test_ingest_auth_fails_closed():
     """An ingest tier that silently reverts to unauthenticated when a variable
     is unset is the defect, not the mitigation. SEC-013.1 scoped the credential
     per lane: EVERY lane must carry its own `${INGEST_TOKEN_<LANE>:?}` guard so
-    Vector refuses to start without it (compose supplies the shared-token
-    fallback, never this file), and the pre-SEC-013 shared anchor must not
-    quietly return."""
+    Vector refuses to start without it, and the pre-SEC-013 shared anchor must
+    not quietly return."""
     raw = read("deployment", "docker", "vector", "vector.yaml")
     for lane in ("TRAPS", "PROBES", "METRICS", "BUS"):
         assert f"${{INGEST_TOKEN_{lane}:?" in raw, \
@@ -233,6 +232,36 @@ def test_ingest_auth_fails_closed():
     assert "auth: &ingest_auth" not in raw and "auth: *ingest_auth" not in raw, (
         "the shared ingest_auth anchor is back — one credential opening all "
         "four lanes (the bus bridge included) is SEC-013.1's named defect")
+
+
+def test_no_lane_credential_falls_back_to_the_shared_token():
+    """SEC-013 NARROWING (enforce wave step 4), guarded as a CLASS: the shared
+    INGEST_TOKEN must not reappear as a fallback for ANY lane credential, in
+    any config surface that carries one. Before the narrowing, compose
+    defaulted every absent per-lane var to the shared token
+    (`${INGEST_TOKEN_X:-${INGEST_TOKEN}}`), which made one secret a skeleton
+    key for whichever lanes lacked their own — the epic's named defect wearing
+    a different file. The client halves (ingest_auth.go / ingest_auth.py) are
+    guarded here too: a fallback reintroduced on either side re-arms the
+    skeleton key without touching compose."""
+    lanes = ("TRAPS", "PROBES", "METRICS", "BUS")
+    # Compose: no nested-interpolation fallback from a lane var to the shared.
+    compose = read("deployment", "docker", "docker-compose.yml")
+    for lane in lanes:
+        assert f"${{INGEST_TOKEN_{lane}:-${{INGEST_TOKEN" not in compose, (
+            f"INGEST_TOKEN_{lane} defaults to the shared INGEST_TOKEN in "
+            "docker-compose.yml — the narrowing removed that fallback")
+    # Go client: the per-lane read must not fall back to the shared token.
+    go_src = read("src", "backend", "collectors", "ingest_auth.go")
+    assert 'os.Getenv("INGEST_TOKEN")' not in go_src, (
+        "collectors/ingest_auth.go reads the shared INGEST_TOKEN — lane "
+        "credentials are per-lane ONLY after the narrowing")
+    # Python mirror: same property (parity with the Go side is a documented
+    # invariant of the file).
+    py_src = read("deployment", "docker", "cloud-ingest", "ingest_auth.py")
+    assert '"INGEST_TOKEN"' not in py_src and "'INGEST_TOKEN'" not in py_src, (
+        "cloud-ingest/ingest_auth.py reads the shared INGEST_TOKEN — lane "
+        "credentials are per-lane ONLY after the narrowing")
 
 
 def test_every_go_ingest_forwarder_sends_the_credential():

@@ -349,11 +349,11 @@ services:
     # F-51: DIRECTORY mount (see vector-aggregator).
     command: ["subscribe", "--config", "/app/conf/gnmic.yaml"]
     environment:
-      # F-08: this container posts directly to a vector-aggregator http_server
-      # source, so it needs the SAME ingest credential the aggregator enforces.
-      # Missing here, its events are rejected 401 and silently dropped.
-      INGEST_USER: ${INGEST_USER:-netops-ingest}
-      INGEST_TOKEN: ${INGEST_TOKEN:-}
+      # SEC-013 narrowing note: gnmic held the shared INGEST_TOKEN from the
+      # F-08 era, but it has posted to no vector-aggregator lane since SEC-010
+      # moved its metric writes to vmauth (gnmic.yaml carries zero INGEST
+      # refs) — the credential was a dead grant and is dropped, shrinking the
+      # shared token's holder set.
       # SC-009: these are the bundled containerlab fabric's DEVICE login passwords
       # (creds the collector uses to reach lab nodes), not platform secrets — they
       # match the lab's device config and install.py can't generate them. For a
@@ -444,21 +444,18 @@ services:
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
       # default keeps preflight fresh-loads working without a full env).
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
-      # F-08: shared ingest credential for the four http_server sources. Vector
-      # refuses to start without it (${INGEST_TOKEN:?} in vector.yaml) — a
-      # deliberate fail-CLOSED: an ingest tier that silently reverts to
-      # unauthenticated is the defect, not the mitigation. install.py seeds it,
-      # including into an existing .env on upgrade.
+      # F-08/SEC-013.1 NARROWED (enforce wave step 4): one credential per lane,
+      # no shared fallback. Vector refuses to start without every lane token
+      # (${INGEST_TOKEN_<LANE>:?} in vector.yaml) — a deliberate fail-CLOSED:
+      # an ingest tier that silently reverts to unauthenticated is the defect,
+      # not the mitigation. install.py seeds distinct per-lane tokens on fresh
+      # installs AND into an existing .env on upgrade (the migration loop);
+      # the shared INGEST_TOKEN no longer opens any lane and is not passed here.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
-      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN required — run scripts/install.py to seed it}
-      # SEC-013.1: per-lane credentials, each defaulting to the shared token
-      # (compose nested interpolation) so an existing .env keeps working
-      # unchanged; install.py seeds distinct values on fresh installs, and
-      # the accept-set narrows lane by lane as clients cut over.
-      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-${INGEST_TOKEN}}
-      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN}}
-      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN}}
-      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-${INGEST_TOKEN}}
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:?INGEST_TOKEN_TRAPS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:?INGEST_TOKEN_PROBES required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:?INGEST_TOKEN_BUS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
     volumes:
       - ./vector:/etc/vector/conf:ro
       # F-04: disk-buffer spool (data_dir in vector.yaml). Host-mounted so the
@@ -1200,17 +1197,22 @@ services:
       # sends. Both halves must come from the same .env value or the pair
       # disagrees — which is the failure ingest_auth.go's error hint describes.
       #
-      # Default-empty (NOT :?) on purpose: an api that cannot resolve the token
-      # sends NO header rather than an empty password, which is the documented
-      # upgrade window. Vector is the fail-closed half of the pair.
+      # Default-empty (NOT :?) on purpose: an api that cannot resolve a lane
+      # token sends NO header rather than an empty password, which is the
+      # documented upgrade window. Vector is the fail-closed half of the pair.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
+      # INGEST_TOKEN here is NOT a lane credential anymore (SEC-013 narrowing):
+      # it remains ONLY the stack-internal edge-keys gate the api VERIFIES
+      # (internalStackCaller / sealingEdgeCaller) against what vector-router
+      # presents. Lane POSTs use the per-lane tokens below exclusively.
       INGEST_TOKEN: ${INGEST_TOKEN:-}
-      # SEC-013.1: per-lane credentials (Go falls back to the shared token
-      # in-process; these deliver the rotated values once provisioned).
-      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-${INGEST_TOKEN:-}}
-      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN:-}}
-      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN:-}}
-      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-${INGEST_TOKEN:-}}
+      # SEC-013.1 NARROWED: per-lane credentials, no shared fallback — a lane
+      # var absent from .env means that lane sends no header and 401s loudly
+      # (collector_ingest_rejected), never that the shared token rides instead.
+      INGEST_TOKEN_TRAPS: ${INGEST_TOKEN_TRAPS:-}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-}
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-}
+      INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-}
       VICTORIA_URL: "http://victoria:8428"
       # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
       VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
@@ -1700,10 +1702,10 @@ services:
       # F-08: this container posts directly to a vector-aggregator http_server
       # source, so it needs the SAME ingest credential the aggregator enforces.
       # Missing here, its events are rejected 401 and silently dropped.
+      # SEC-013.1 NARROWED: the prober's only lane is probes; the shared
+      # INGEST_TOKEN is no longer a lane credential and is not passed here.
       INGEST_USER: ${INGEST_USER:-netops-ingest}
-      INGEST_TOKEN: ${INGEST_TOKEN:-}
-      # SEC-013.1: the prober's only lane is probes.
-      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-${INGEST_TOKEN:-}}
+      INGEST_TOKEN_PROBES: ${INGEST_TOKEN_PROBES:-}
       GOMEMLIMIT: ${PROBER_GOMEMLIMIT:-115MiB}   # #102
       PROBER_ONLY: "true"
       REDIS_HOST: redis
@@ -1793,9 +1795,11 @@ services:
     environment:
       BROKER_URLS: ${BROKER_URLS:-kafka:9092}
       INGEST_USER: ${INGEST_USER:-netops-ingest}
-      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN required — run scripts/install.py to seed it}
-      # SEC-013.1: cloud-ingest's only ingest lane is metrics.
-      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-${INGEST_TOKEN}}
+      # SEC-013.1 NARROWED: cloud-ingest's only ingest lane is metrics; the
+      # shared INGEST_TOKEN opens no lane and is not passed. Hard-required —
+      # this is the service's sole credential and the 2026-07-22 401 blackhole
+      # is the failure mode a silent default would recreate.
+      INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:?INGEST_TOKEN_METRICS required — run scripts/install.py (its migration seeds per-lane tokens; SEC-013 narrowing removed the shared fallback)}
     networks: [netops]
     restart: *restart
 

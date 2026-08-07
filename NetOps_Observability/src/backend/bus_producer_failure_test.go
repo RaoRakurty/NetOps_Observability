@@ -139,7 +139,9 @@ func TestProduceIsBoundedWhenTheBridgeHangs(t *testing.T) {
 // ROUTING guard, not identity. Without this header anything on the compose
 // network could produce onto any tenant's topic.
 func TestProduceCarriesIngestAuth(t *testing.T) {
-	t.Setenv("INGEST_TOKEN", "secret-token")
+	// SEC-013 narrowing: the bus lane authenticates with its OWN token; the
+	// shared INGEST_TOKEN opens no lane.
+	t.Setenv("INGEST_TOKEN_BUS", "secret-token")
 	// The credential is cached behind a sync.Once (deliberate in production: a
 	// mid-flight env change must not split the fleet's behaviour). Re-read it so
 	// this test actually exercises the configured path.
