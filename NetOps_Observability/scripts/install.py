@@ -316,7 +316,9 @@ def generate_secrets() -> dict[str, str]:
     (audit FUNC-HIGH-1).
     """
     return {
-        "DB_PASSWORD":              generate_password(28),
+        # URL-safe: the documented DATABASE_URL shape embeds it in userinfo
+        # (postgres://netops:pw@postgres:5432/...) — see _URLSAFE alphabet note.
+        "DB_PASSWORD":              generate_urlsafe_password(28),
         "JWT_SECRET":               generate_token(48),
         "ENCRYPTION_KEY":           generate_token(32),
         "GRAFANA_ADMIN_PASSWORD":   generate_password(20),
@@ -326,7 +328,7 @@ def generate_secrets() -> dict[str, str]:
         "KEYCLOAK_ADMIN_PASSWORD":  generate_password(20),
         # Bundled (internal) NetBox source-of-truth.
         "NETBOX_SECRET_KEY":         generate_token(40),    # >=50 url-safe chars
-        "NETBOX_DB_PASSWORD":        generate_password(24),
+        "NETBOX_DB_PASSWORD":        generate_urlsafe_password(24),  # rides a DB URL like DB_PASSWORD
         "NETBOX_SUPERUSER_PASSWORD": generate_password(20),
         "NETBOX_TOKEN":              secrets.token_hex(20),  # 40-hex NetBox API token
         # F-08 ingest credential shared by every in-stack telemetry producer.
@@ -344,15 +346,18 @@ def generate_secrets() -> dict[str, str]:
         # SEC-012: Valkey (RCA evidence store) authentication.
         "REDIS_PASSWORD":            generate_password(24),
         # SEC-008: per-identity OpenSearch credentials (security plugin).
-        "OS_API_PASSWORD":           generate_password(24),
-        "OS_ROUTER_PASSWORD":        generate_password(24),
-        "OS_CORRELATION_PASSWORD":   generate_password(24),
-        "OS_BOOTSTRAP_PASSWORD":     generate_password(24),
-        "OS_DASHBOARDS_PASSWORD":    generate_password(24),
-        "OS_AGGREGATOR_PASSWORD":    generate_password(24),
-        # SEC-013.1: per-lane ingest tokens (compose falls back to the shared
-        # INGEST_TOKEN when these are absent, so upgrades are unchanged until
-        # rotated; fresh installs start lane-scoped).
+        # URL-safe: several ride OPENSEARCH_URL userinfo in the TLS variant
+        # (https://svc_x:pw@opensearch:9200); the whole family is minted
+        # URL-safe so no future consumer trips the userinfo landmine.
+        "OS_API_PASSWORD":           generate_urlsafe_password(24),
+        "OS_ROUTER_PASSWORD":        generate_urlsafe_password(24),
+        "OS_CORRELATION_PASSWORD":   generate_urlsafe_password(24),
+        "OS_BOOTSTRAP_PASSWORD":     generate_urlsafe_password(24),
+        "OS_DASHBOARDS_PASSWORD":    generate_urlsafe_password(24),
+        "OS_AGGREGATOR_PASSWORD":    generate_urlsafe_password(24),
+        # SEC-013.1 (narrowed): per-lane ingest tokens — the ONLY credentials
+        # the four Vector lanes accept; the shared INGEST_TOKEN opens no lane.
+        # The .env migration below seeds them into pre-epic installs.
         "INGEST_TOKEN_TRAPS":        generate_password(32),
         "INGEST_TOKEN_PROBES":       generate_password(32),
         "INGEST_TOKEN_METRICS":      generate_password(32),
@@ -423,7 +428,7 @@ def write_env(env_path: Path, port: int, *, force: bool,
                 additions.append(f"VMAUTH_{svc}_PASSWORD={generate_urlsafe_password(24)}")
         for svc in ("API", "ROUTER", "CORRELATION", "BOOTSTRAP", "DASHBOARDS", "AGGREGATOR"):
             if f"OS_{svc}_PASSWORD" not in env:
-                additions.append(f"OS_{svc}_PASSWORD={generate_password(24)}")
+                additions.append(f"OS_{svc}_PASSWORD={generate_urlsafe_password(24)}")
         if additions:
             with env_path.open("a") as f:
                 f.write("\n# ---- Event bus (Apache Kafka) — appended by install.py migration ----\n")
