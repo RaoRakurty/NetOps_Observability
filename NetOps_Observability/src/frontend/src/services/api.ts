@@ -1194,6 +1194,7 @@ export type SnapshotPolicy = {
   enabled: boolean;
   schedule_cron: string;
   retention_max_count: number;
+  retention_max_age_days: number; // 0 = no age limit (count-only retention)
   last_run?: SnapshotRun;
   next_run?: string;
   detail?: string;
@@ -1202,6 +1203,7 @@ export type SnapshotPolicyUpdate = {
   enabled?: boolean;
   schedule_cron?: string;
   retention_max_count?: number;
+  retention_max_age_days?: number; // 0 clears the age condition
 };
 export type SystemNetworkStatus = {
   dns: { servers: string[]; test_host: string; resolved?: string[]; ok: boolean; error?: string };

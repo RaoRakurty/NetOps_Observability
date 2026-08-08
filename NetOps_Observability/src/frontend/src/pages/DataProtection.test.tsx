@@ -27,7 +27,7 @@ const baseStatus = {
 };
 const baseCfg = { remote_url: "", schedule_enabled: false };
 const basePolicy = {
-  enabled: true, schedule_cron: "30 1 * * *", retention_max_count: 14,
+  enabled: true, schedule_cron: "30 1 * * *", retention_max_count: 14, retention_max_age_days: 0,
   last_run: { status: "SUCCESS", time: "2026-08-07T01:33:52Z", duration_seconds: 179 },
   next_run: "2026-08-08T01:30:00Z",
 };
@@ -73,6 +73,35 @@ describe("DataProtection snapshot policy (#150)", () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(mockApi.setSnapshotPolicy).toHaveBeenCalledWith({ enabled: false }));
     expect(await screen.findByText(/Snapshots are DISABLED/)).toBeTruthy();
+  });
+
+  it("max-age retention: renders the day count, PUTs changes, and clearing sends 0", async () => {
+    mockApi.backupConfig.mockResolvedValue({ config: baseCfg, status: baseStatus });
+    mockApi.snapshotPolicy.mockResolvedValue({ ...basePolicy, retention_max_age_days: 30 });
+    mockApi.setSnapshotPolicy.mockResolvedValue({ ...basePolicy, retention_max_age_days: 60 });
+    render(<DataProtection />);
+
+    const ageInput = (await screen.findByDisplayValue("30")) as HTMLInputElement;
+    fireEvent.change(ageInput, { target: { value: "60" } });
+    fireEvent.blur(ageInput);
+    await waitFor(() => expect(mockApi.setSnapshotPolicy).toHaveBeenCalledWith({ retention_max_age_days: 60 }));
+
+    // Emptying the field clears the age condition (0 = count-only retention).
+    fireEvent.change(ageInput, { target: { value: "" } });
+    fireEvent.blur(ageInput);
+    await waitFor(() => expect(mockApi.setSnapshotPolicy).toHaveBeenCalledWith({ retention_max_age_days: 0 }));
+  });
+
+  it("max-age 0 renders as the empty 'no age limit' field, not a literal 0", async () => {
+    mockApi.backupConfig.mockResolvedValue({ config: baseCfg, status: baseStatus });
+    mockApi.snapshotPolicy.mockResolvedValue(basePolicy);
+    render(<DataProtection />);
+
+    const ageInput = (await screen.findByPlaceholderText("no age limit")) as HTMLInputElement;
+    expect(ageInput.value).toBe("");
+    // Blurring the untouched empty field must NOT fire a no-op PUT.
+    fireEvent.blur(ageInput);
+    expect(mockApi.setSnapshotPolicy).not.toHaveBeenCalled();
   });
 
   it("a scheduled full backup with NO run report says so instead of rendering nothing", async () => {

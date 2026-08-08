@@ -295,12 +295,15 @@ type SnapshotRun struct {
 // SnapshotPolicyView is what the GUI renders. Detail carries the honest
 // explanation whenever any part could not be read — never a blank panel.
 type SnapshotPolicyView struct {
-	Enabled           bool         `json:"enabled"`
-	ScheduleCron      string       `json:"schedule_cron"`
-	RetentionMaxCount int          `json:"retention_max_count"`
-	LastRun           *SnapshotRun `json:"last_run,omitempty"`
-	NextRun           string       `json:"next_run,omitempty"` // RFC3339
-	Detail            string       `json:"detail,omitempty"`
+	Enabled           bool   `json:"enabled"`
+	ScheduleCron      string `json:"schedule_cron"`
+	RetentionMaxCount int    `json:"retention_max_count"`
+	// RetentionMaxAgeDays mirrors deletion.condition.max_age ("<N>d"); 0 = no
+	// age limit configured (count-only retention).
+	RetentionMaxAgeDays int          `json:"retention_max_age_days"`
+	LastRun             *SnapshotRun `json:"last_run,omitempty"`
+	NextRun             string       `json:"next_run,omitempty"` // RFC3339
+	Detail              string       `json:"detail,omitempty"`
 }
 
 // snapshotPolicyUpdate is the PUT body — all fields optional (partial update,
@@ -309,6 +312,8 @@ type snapshotPolicyUpdate struct {
 	Enabled           *bool   `json:"enabled,omitempty"`
 	ScheduleCron      *string `json:"schedule_cron,omitempty"`
 	RetentionMaxCount *int    `json:"retention_max_count,omitempty"`
+	// 0 clears the age condition (count-only retention); 1..3650 sets "<N>d".
+	RetentionMaxAgeDays *int `json:"retention_max_age_days,omitempty"`
 }
 
 const smPolicyPath = "/_plugins/_sm/policies/netops-daily"
@@ -398,6 +403,9 @@ func (s *server) snapshotPolicyView(ctx context.Context) SnapshotPolicyView {
 	if mc, ok := digMap(doc.Raw, "deletion", "condition", "max_count").(float64); ok {
 		v.RetentionMaxCount = int(mc)
 	}
+	if ma, ok := digMap(doc.Raw, "deletion", "condition", "max_age").(string); ok {
+		v.RetentionMaxAgeDays = maxAgeDays(ma)
+	}
 
 	// Explain: last execution + next trigger for the creation leg.
 	var expl struct {
@@ -436,7 +444,24 @@ func (s *server) snapshotPolicyView(ctx context.Context) SnapshotPolicyView {
 	return v
 }
 
-var errBadSnapshotUpdate = jsonError("schedule_cron must be a 5-field cron expression and retention_max_count must be 1..365")
+var errBadSnapshotUpdate = jsonError("schedule_cron must be a 5-field cron expression, retention_max_count must be 1..365 and retention_max_age_days must be 0..3650 (0 = no age limit)")
+
+// maxAgeDays parses the SM duration this surface writes ("<N>d") plus the hour
+// spelling ("<N>h") an operator may have set by hand. Anything else reads as 0
+// (no age limit) — the write side only ever emits days.
+func maxAgeDays(s string) int {
+	if n, ok := strings.CutSuffix(s, "d"); ok {
+		if v, err := strconv.Atoi(n); err == nil {
+			return v
+		}
+	}
+	if n, ok := strings.CutSuffix(s, "h"); ok {
+		if v, err := strconv.Atoi(n); err == nil {
+			return v / 24
+		}
+	}
+	return 0
+}
 
 // validCron5 is a shape check (5 whitespace-separated fields), not a parser —
 // OpenSearch validates semantics on write and its error is surfaced verbatim.
@@ -447,7 +472,7 @@ func validCron5(expr string) bool {
 func (s *server) smApplyUpdate(ctx context.Context, upd snapshotPolicyUpdate) error {
 	// Cron / retention changes mutate the policy document in place and PUT it
 	// back with the concurrency token (SM rejects a token-less PUT).
-	if upd.ScheduleCron != nil || upd.RetentionMaxCount != nil {
+	if upd.ScheduleCron != nil || upd.RetentionMaxCount != nil || upd.RetentionMaxAgeDays != nil {
 		doc, err := s.smGetPolicy(ctx)
 		if err != nil {
 			return err
@@ -464,6 +489,17 @@ func (s *server) smApplyUpdate(ctx context.Context, upd snapshotPolicyUpdate) er
 				cond["max_count"] = *upd.RetentionMaxCount
 			} else {
 				return jsonError("policy document has no deletion.condition to update")
+			}
+		}
+		if upd.RetentionMaxAgeDays != nil {
+			cond, ok := digMap(doc.Raw, "deletion", "condition").(map[string]any)
+			if !ok {
+				return jsonError("policy document has no deletion.condition to update")
+			}
+			if *upd.RetentionMaxAgeDays == 0 {
+				delete(cond, "max_age") // count-only retention
+			} else {
+				cond["max_age"] = strconv.Itoa(*upd.RetentionMaxAgeDays) + "d"
 			}
 		}
 		// The GET echoes server-side bookkeeping fields the PUT rejects.
@@ -512,12 +548,13 @@ func (s *server) handleSystemBackupSnapshots(w http.ResponseWriter, r *http.Requ
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad body: " + err.Error()})
 			return
 		}
-		if upd.Enabled == nil && upd.ScheduleCron == nil && upd.RetentionMaxCount == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "nothing to update — send enabled, schedule_cron and/or retention_max_count"})
+		if upd.Enabled == nil && upd.ScheduleCron == nil && upd.RetentionMaxCount == nil && upd.RetentionMaxAgeDays == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "nothing to update — send enabled, schedule_cron, retention_max_count and/or retention_max_age_days"})
 			return
 		}
 		if (upd.ScheduleCron != nil && !validCron5(*upd.ScheduleCron)) ||
-			(upd.RetentionMaxCount != nil && (*upd.RetentionMaxCount < 1 || *upd.RetentionMaxCount > 365)) {
+			(upd.RetentionMaxCount != nil && (*upd.RetentionMaxCount < 1 || *upd.RetentionMaxCount > 365)) ||
+			(upd.RetentionMaxAgeDays != nil && (*upd.RetentionMaxAgeDays < 0 || *upd.RetentionMaxAgeDays > 3650)) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": errBadSnapshotUpdate.Error()})
 			return
 		}
@@ -534,7 +571,8 @@ func (s *server) handleSystemBackupSnapshots(w http.ResponseWriter, r *http.Requ
 			Detail: map[string]any{
 				"action":  "snapshot_policy_update",
 				"enabled": upd.Enabled, "schedule_cron": upd.ScheduleCron,
-				"retention_max_count": upd.RetentionMaxCount,
+				"retention_max_count":    upd.RetentionMaxCount,
+				"retention_max_age_days": upd.RetentionMaxAgeDays,
 			},
 		})
 		if err != nil {

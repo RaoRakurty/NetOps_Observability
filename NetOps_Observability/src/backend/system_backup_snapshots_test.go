@@ -131,6 +131,9 @@ func TestSnapshotPolicyViewParsesPolicyAndExplain(t *testing.T) {
 	if v.RetentionMaxCount != 14 {
 		t.Errorf("retention: %d", v.RetentionMaxCount)
 	}
+	if v.RetentionMaxAgeDays != 0 {
+		t.Errorf("no max_age in the policy must read as 0 (no age limit), got %d", v.RetentionMaxAgeDays)
+	}
 	if v.NextRun == "" {
 		t.Error("next_run missing (explain trigger not parsed)")
 	}
@@ -142,6 +145,22 @@ func TestSnapshotPolicyViewParsesPolicyAndExplain(t *testing.T) {
 	}
 	if v.Detail != "" {
 		t.Errorf("healthy read must carry no Detail, got %q", v.Detail)
+	}
+}
+
+func TestSnapshotPolicyViewParsesMaxAge(t *testing.T) {
+	for expr, want := range map[string]int{"30d": 30, "336h": 14, "weird": 0} {
+		stub := newSMStub()
+		cond := stub.policy["deletion"].(map[string]any)["condition"].(map[string]any)
+		cond["max_age"] = expr
+		os := stub.server(t)
+		t.Setenv("OPENSEARCH_URL", os.URL)
+
+		_, s := newTestServerState(t)
+		if v := s.snapshotPolicyView(t.Context()); v.RetentionMaxAgeDays != want {
+			t.Errorf("max_age %q: got %d, want %d", expr, v.RetentionMaxAgeDays, want)
+		}
+		os.Close()
 	}
 }
 
@@ -169,9 +188,10 @@ func TestSMApplyUpdateDoesTheSeqNoDanceAndStartStop(t *testing.T) {
 
 	cron := "0 2 * * *"
 	keep := 21
+	age := 30
 	off := false
 	if err := s.smApplyUpdate(t.Context(), snapshotPolicyUpdate{
-		ScheduleCron: &cron, RetentionMaxCount: &keep, Enabled: &off,
+		ScheduleCron: &cron, RetentionMaxCount: &keep, RetentionMaxAgeDays: &age, Enabled: &off,
 	}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -191,6 +211,9 @@ func TestSMApplyUpdateDoesTheSeqNoDanceAndStartStop(t *testing.T) {
 	if got := digMap(doc, "deletion", "condition", "max_count"); got != float64(21) {
 		t.Errorf("retention not applied: %v", got)
 	}
+	if got := digMap(doc, "deletion", "condition", "max_age"); got != "30d" {
+		t.Errorf("max_age not applied as days: %v", got)
+	}
 	// Server-side bookkeeping fields must be stripped before the PUT — SM
 	// rejects them on write.
 	for _, k := range []string{"schema_version", "last_updated_time"} {
@@ -203,6 +226,33 @@ func TestSMApplyUpdateDoesTheSeqNoDanceAndStartStop(t *testing.T) {
 	}
 	if stub.startCalls.Load() != 0 {
 		t.Errorf("_start must not fire on a disable")
+	}
+}
+
+func TestSMApplyUpdateMaxAgeZeroClearsTheCondition(t *testing.T) {
+	stub := newSMStub()
+	cond := stub.policy["deletion"].(map[string]any)["condition"].(map[string]any)
+	cond["max_age"] = "30d"
+	os := stub.server(t)
+	defer os.Close()
+	t.Setenv("OPENSEARCH_URL", os.URL)
+
+	_, s := newTestServerState(t)
+	zero := 0
+	if err := s.smApplyUpdate(t.Context(), snapshotPolicyUpdate{RetentionMaxAgeDays: &zero}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	body, _ := stub.putBody.Load().([]byte)
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("PUT body: %v", err)
+	}
+	if got := digMap(doc, "deletion", "condition", "max_age"); got != nil {
+		t.Errorf("max_age=0 must remove the condition, PUT body still carries %v", got)
+	}
+	// The count condition must survive the round trip — 0 clears ONLY the age.
+	if got := digMap(doc, "deletion", "condition", "max_count"); got != float64(14) {
+		t.Errorf("max_count lost in the round trip: %v", got)
 	}
 }
 
@@ -270,6 +320,8 @@ func TestSystemBackupSnapshotsGate(t *testing.T) {
 		{"schedule_cron": "not-a-cron"},
 		{"retention_max_count": 0},
 		{"retention_max_count": 400},
+		{"retention_max_age_days": -1},
+		{"retention_max_age_days": 4000},
 		{},
 	} {
 		if st, _ = do(t, srv, "PUT", "/api/system/backup/snapshots", admin, bad); st != 400 {

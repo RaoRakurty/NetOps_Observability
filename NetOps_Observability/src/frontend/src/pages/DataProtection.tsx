@@ -49,7 +49,7 @@ export default function DataProtection() {
   };
   useEffect(() => { load(); }, []);
 
-  const saveSnap = async (upd: { enabled?: boolean; schedule_cron?: string; retention_max_count?: number }) => {
+  const saveSnap = async (upd: { enabled?: boolean; schedule_cron?: string; retention_max_count?: number; retention_max_age_days?: number }) => {
     setSnapBusy(true); setSnapMsg(null);
     try {
       const r = await api.setSnapshotPolicy(upd);
@@ -174,6 +174,15 @@ export default function DataProtection() {
                 <label style={labelStyle}>Retention (keep newest N)</label>
                 <input style={inputStyle} type="number" min={1} max={365} defaultValue={snap.retention_max_count} disabled={snapBusy}
                        onBlur={(e) => { const n = parseInt(e.target.value, 10); if (n && n !== snap.retention_max_count) saveSnap({ retention_max_count: n }); }} />
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                <label style={labelStyle}>Retention (max age, days)</label>
+                <input style={inputStyle} type="number" min={0} max={3650} placeholder="no age limit"
+                       defaultValue={snap.retention_max_age_days || ""} disabled={snapBusy}
+                       onBlur={(e) => {
+                         const n = e.target.value === "" ? 0 : parseInt(e.target.value, 10);
+                         if (!Number.isNaN(n) && n !== snap.retention_max_age_days) saveSnap({ retention_max_age_days: n });
+                       }} />
               </div>
             </div>
             <span style={hintStyle}>
