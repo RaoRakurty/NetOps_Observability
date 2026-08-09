@@ -5,8 +5,12 @@
      until every client (api / vector-router / correlation / grafana) is cut
      over; removing it is the epic's final hardening step. verificationMode
      none = the server does not demand CLIENT certs yet — client mTLS is the
-     target's later half; transport encryption + credential protection first. -->
+     target's later half; transport encryption + credential protection first.
+     2026-08-09 enforce wave (SEC-009 final hardening): plaintext 8123 REMOVED
+     — every client (api / vector-router / correlation / grafana) rides
+     8443/9440; the container healthcheck moved to https in the override. -->
 <clickhouse>
+    <http_port remove="remove"/>
     <https_port>8443</https_port>
     <!-- native-protocol TLS for grafana's clickhouse datasource (protocol: native) -->
     <tcp_port_secure>9440</tcp_port_secure>

@@ -48,6 +48,8 @@ deployment/docker/resource-plan.*.plan.bak
 # runtime output of the lab cloud-ingest poller (VPC flow logs etc.)
 deployment/docker/cloud-logs/
 deployment/docker/.env.plan.bak
+# secret-bearing .env safety copies (e.g. .env.bak-wave from the enforce wave)
+deployment/docker/.env.bak-*
 scripts/bundle-autoupdate.log
 scripts/bundle-autoupdate.build.log
 scripts/.stack-watchdog.restarts

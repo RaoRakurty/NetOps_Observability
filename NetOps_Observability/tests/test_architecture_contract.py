@@ -221,19 +221,28 @@ def test_transport_inventory_names_resolve_to_compose_services():
 
 def test_transport_inventory_baseline_is_honest():
     """Acceptance criterion (c) of SEC-001.1: until a SEC epic deliberately
-    changes a hop, the Kafka/OpenSearch/Valkey/VictoriaMetrics/Postgres rows
-    must state plaintext + no authn — matching the verified compose facts.
-    When an epic lands, it updates the inventory row AND this pin together."""
+    changes a hop, these rows must match the verified compose facts.
+    When an epic lands, it updates the inventory row AND this pin together.
+
+    Enforce wave 2026-08-09 (SEC-006.3/007.2/009/012.2 listener removals):
+    the kafka and valkey plaintext listeners no longer exist, so their edges'
+    `current` moved to the achieved state per the tls-enforce-wave runbook.
+    OpenSearch/Victoria/Postgres keep plaintext `current` (their base-compose
+    default listener still exists; the lab conversion lives in
+    security_profile)."""
     inv = _load_inventory()
     by_id = {e["id"]: e for e in inv["edges"]}
-    for edge_id in ("vector-kafka", "api-opensearch", "api-valkey",
-                    "api-victoria", "api-postgres"):
+    for edge_id in ("api-opensearch", "api-victoria", "api-postgres"):
         cur = by_id[edge_id]["current"]
         assert cur["transport"] == "plaintext", (
             f"{edge_id}: inventory says current transport {cur['transport']!r}; "
             "if this hop was really secured, update this pin with the epic that did it")
     assert by_id["api-opensearch"]["current"]["authn"] == "none"
-    assert by_id["api-valkey"]["current"]["authn"] == "none"
+    # Enforce-wave pins: a regression back to plaintext must fail this test.
+    assert by_id["vector-kafka"]["current"]["transport"] == "mtls"
+    assert by_id["vector-kafka"]["current"]["authz"] == "topic-acls"
+    assert by_id["api-valkey"]["current"]["transport"] == "tls"
+    assert by_id["api-valkey"]["current"]["authn"] == "password"
 
 
 def test_transport_inventory_evidence_paths_exist():

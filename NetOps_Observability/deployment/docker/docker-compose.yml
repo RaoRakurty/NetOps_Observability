@@ -361,6 +361,11 @@ services:
       # credentials. Left as lab defaults so the bundled lab works zero-config.
       SRL_GNMI_PASS: ${SRL_GNMI_PASS:-NokiaSrl1!}
       EOS_GNMI_PASS: ${EOS_GNMI_PASS:-admin}
+      # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
+      # Declared HERE (the consumer) — it sat under the api service until the
+      # 2026-08-09 enforce wave, where the api never reads it (dead env); TLS
+      # deployments point it at vmauth via the override/compose.tls.yml.
+      VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
     volumes:
       - ./gnmic:/app/conf:ro
     depends_on: [victoria]
@@ -1214,8 +1219,6 @@ services:
       INGEST_TOKEN_METRICS: ${INGEST_TOKEN_METRICS:-}
       INGEST_TOKEN_BUS: ${INGEST_TOKEN_BUS:-}
       VICTORIA_URL: "http://victoria:8428"
-      # SEC-010: the write endpoint gnmic.yaml expands (${VICTORIA_WRITE_URL}).
-      VICTORIA_WRITE_URL: ${VICTORIA_WRITE_URL:-http://victoria:8428/api/v1/write}
       # Set (by install tooling) only when the self-monitoring add-on is
       # enabled — gates the Grafana stack-health probe.
       GRAFANA_URL: ${GRAFANA_URL:-}

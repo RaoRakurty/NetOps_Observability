@@ -220,14 +220,14 @@ for sit at **NONE**, which is the honest reading of "nothing checks this".
 
 | Hop | Tier today | Raised by | Target tier |
 |---|---|---|---|
-| browser → nginx (ingress TLS; plaintext :8000 alongside) | PROSE | SEC-004 (promote profile, retire :8000) | GATE + RUNTIME |
+| browser → nginx (ingress TLS; plaintext :8000 REMOVED on the lab 2026-08-09 — `ports: !override` 443-only; compose.tls.yml keeps :8000 until install.py messaging is TLS-aware) | PROSE | SEC-004 (promote profile; retire :8000 in the shipped variant with the installer work) | GATE + RUNTIME |
 | nginx → api | **RUNTIME** (TLS-001/002/003) | SEC-005 adds the accept-set narrowing test | RUNTIME + BUILD |
 | api → OpenSearch / ClickHouse / VictoriaMetrics / Postgres / Valkey | **RUNTIME** (STORE-001…005 refuse prod plaintext; lab reports) | SEC-008/009/010/011/012 make the stores SERVE TLS + BUILD tests | RUNTIME + BUILD |
 | api → correlation | **RUNTIME** (APP-001) | SEC-013 (workload auth — encryption alone insufficient) | RUNTIME + BUILD |
 | victoria → api (metrics scrape) | RUNTIME (mTLS listener rejects certless scrape in prod) | SEC-003.3 registry formalizes the victoria SVID | RUNTIME + BUILD |
-| **vector-router → api (per-tenant sealing keys)** | **NONE — no validator rule; keys transit plaintext HTTP under a shared credential** | SEC-018 | RUNTIME + BUILD |
-| **every producer/consumer → Kafka** | **NONE — no bus rule exists in the validator** | SEC-006 (mTLS) + SEC-007 (ACLs) | RUNTIME + BUILD |
-| collectors/prober → Vector ingest lanes (shared Basic token) | **NONE** | SEC-013 (per-client identity) | RUNTIME + BUILD |
+| vector-router → api (per-tenant sealing keys) | **BUILD** (SEC-018.1 2026-08-06: router-SVID-only over TLS, fail-closed script, stolen-token-over-TLS refused — unit-proven; feature-OFF on the lab so the live hop is dormant; step 2 must exercise it feature-ON) | SEC-018 remainder | RUNTIME + BUILD |
+| **every producer/consumer → Kafka** | **RUNTIME-adjacent** (ENFORCED live 2026-08-09: default-deny authorizer + PLAINTEXT:9092 removed, only MTLS:9094/FLOWS:9095/CONTROLLER:9093-SSL listen; tlsprobe probes all three + posture join; ANONYMOUS = Write netops.flows only). No `secprofile` bus RULE yet — a prod boot with a plaintext bus would not be refused by the validator | SEC-006/007 remainder: a secprofile bus rule | RUNTIME + BUILD |
+| collectors/prober → Vector ingest lanes | **RUNTIME-adjacent** (SEC-013.1/.2 mTLS client-cert requirement + per-lane tokens; shared-token fallback REMOVED — narrowing matrix proven live 2026-08-09: 4× per-lane 200 / shared 401; class guard in test_ingest_contract.py) | a secprofile lane rule | RUNTIME + BUILD |
 | syslog-ng → vector-aggregator | **NONE** | SEC-014.1 | RUNTIME |
 | gnmic → devices (`skip-verify: true`) | **RUNTIME** (DEV-001 refuses in prod) | SEC-016 (Phase 2+) | RUNTIME + BUILD |
 | device → syslog-ng (plaintext 514) | **RUNTIME** (DEV-002: lane must be *declared*) | SEC-014.2/.3 (Phase 2+ lane; v1 = declaration) | RUNTIME |

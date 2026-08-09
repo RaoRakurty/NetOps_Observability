@@ -30,6 +30,10 @@ STATE_FILE="${WATCHDOG_STATE:-$SCRIPT_DIR/.stack-watchdog.state}"
 
 PROJECT="${COMPOSE_PROJECT:-netops}"
 APP_URL="${APP_URL:-http://localhost:8000/}"
+# When APP_URL is https behind a self-signed/dev ingress cert, point APP_CACERT
+# at the cert (PEM) so the probe VALIDATES it instead of riding -k. Empty =
+# system trust store (real certs need nothing here).
+APP_CACERT="${APP_CACERT:-}"
 NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
 
 # NOTE: telegraf is intentionally absent — it was retired (legacy compose
@@ -133,7 +137,7 @@ if [ "${#oom_events[@]}" -gt 0 ]; then
 fi
 
 # End-to-end probe: the dashboard must answer through nginx.
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$APP_URL" 2>/dev/null)
+code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 ${APP_CACERT:+--cacert "$APP_CACERT"} "$APP_URL" 2>/dev/null)
 case "$code" in
   200|301|302|401) ;;                               # served (401 = auth on / is fine)
   *) problems+=("dashboard $APP_URL: HTTP ${code:-no-response}") ;;
@@ -451,7 +455,7 @@ build_drift_check() { # $1 service, $2 url
   local running head_sha body
   head_sha=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)
   [ -n "$head_sha" ] || return 0   # not a git checkout (e.g. an offline bundle)
-  body=$(curl -fsS -m 10 "$2" 2>/dev/null) || {
+  body=$(curl -fsS -m 10 ${APP_CACERT:+--cacert "$APP_CACERT"} "$2" 2>/dev/null) || {
     problems+=("BUILD UNVERIFIABLE: $1 did not answer $2 — the provenance probe is blind, fix the probe rather than ignoring it")
     return 0
   }

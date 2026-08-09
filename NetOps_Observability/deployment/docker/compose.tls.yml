@@ -17,6 +17,11 @@
 # behavior.
 services:
   nginx:
+    # NOTE (enforce wave 2026-08-09): the LAB dropped the plaintext :8000 host
+    # ingress (`ports: !override` → 443 only). The shipped variant keeps 8000
+    # DELIBERATELY for now: install.py's printed URLs/readiness messaging are
+    # not TLS-aware yet — dropping it here would strand fresh --tls installs on
+    # dead http URLs. Close both together (installer messaging + this drop).
     ports:
       - "443:8443"
     volumes:
@@ -32,6 +37,10 @@ services:
       - ../../data/tls:/etc/nginx/tls:ro
   api:
     environment:
+      # Enforce wave 2026-08-09: 9092 is gone — the stack-health Event Bus TCP
+      # probe (firstBrokerAddr) must aim at the MTLS listener or the tile
+      # paints down forever.
+      BROKER_URLS: kafka:9094
       # ── Internal TLS enablement ──────────────────────────────────────────
       # Order matters and is enforced in code: TLS_INTERNAL_CA without a seal
       # provider REFUSES to boot (tls_ca.go seal gate), because the CA root
@@ -206,6 +215,16 @@ services:
       - ./clickhouse/tls-entrypoint.sh:/tls-entrypoint.sh:ro
       - ./clickhouse/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
       - ../../data/tls/services/clickhouse:/certs-src:ro
+    # Enforce wave 2026-08-09: tls.xml now REMOVES plaintext 8123, so the base
+    # healthcheck (http 8123 ping) would deadlock the bootstrap (SEC-008
+    # healthcheck lesson) — probe the https listener. --no-check-certificate is
+    # a LIVENESS concession only (SVID SAN is "clickhouse", not 127.0.0.1).
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8443/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   # SEC-011: postgres serves TLS with its registry SVID. The wrapper stages
   # the cert with postgres-owned 0600 perms then execs the stock entrypoint
@@ -383,15 +402,20 @@ services:
       # on `!1: unbound variable` (proven live 2026-08-05). A non-SSL listener
       # NAME mapped to the SSL protocol bypasses that branch; every ssl.*
       # property still flows through the generic env→server.properties path.
-      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,MTLS://0.0.0.0:9094,FLOWS://0.0.0.0:9095"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,MTLS://kafka:9094,FLOWS://kafka:9095"
+      # SEC-006.3 (enforce wave 2026-08-09): PLAINTEXT:9092 REMOVED.
+      # inter.broker.listener.name was null → defaults to the PLAINTEXT
+      # protocol, so it moves to MTLS in the SAME edit (verified 2026-08-06 —
+      # without it the broker will not start).
+      KAFKA_LISTENERS: "CONTROLLER://0.0.0.0:9093,MTLS://0.0.0.0:9094,FLOWS://0.0.0.0:9095"
+      KAFKA_ADVERTISED_LISTENERS: "MTLS://kafka:9094,FLOWS://kafka:9095"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "MTLS"
       # CONTROLLER on SSL (2026-08-06, pre-wave): KRaft quorum traffic rides
       # mTLS — the broker dials its own controller presenting the dual-EKU
       # broker SVID (clientAuth landed today; quorum voters address kafka:9093
       # matches the SVID SAN, so hostname verification holds). The image
       # config-script SSL:// hijack greps ADVERTISED_LISTENERS only — the
       # controller listener is never advertised, so the name stays CONTROLLER.
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:SSL,MTLS:SSL,FLOWS:SSL"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:SSL,MTLS:SSL,FLOWS:SSL"
       KAFKA_LISTENER_NAME_CONTROLLER_SSL_CLIENT_AUTH: required
       KAFKA_SSL_KEYSTORE_TYPE: PEM
       KAFKA_SSL_KEYSTORE_LOCATION: /tmp/kafka-tls/keystore.pem
@@ -407,7 +431,10 @@ services:
       # full DN string, e.g. User:CN=spiffe://netops/ns/default/sa/goflow2 —
       # verbose in ACLs, zero parser fragility.
       KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
-      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+      # SEC-007.2 ENFORCE (2026-08-09, post-soak GO): default-deny closes the
+      # unlisted-resource gap — the 49-entry apply-acls.sh matrix already
+      # enforced on ACL'd resources (lesson i). Rollback = "true" + recreate.
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
       KAFKA_SUPER_USERS: "User:CN=spiffe://netops/ns/default/sa/kafka"
       # SEC-007.1 observe phase, v2 (2026-08-06): INFO, not DEBUG. DEBUG logs
       # every ALLOWED decision — hundreds/sec — and with no log cap it FILLED
@@ -497,20 +524,27 @@ services:
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
 
-  # SEC-012.2: Valkey serves TLS on 6380 with its registry SVID beside the
-  # plaintext 6379 (dual-port migration; 6379 closes at programme-final with
-  # the other plaintext listeners). Password auth remains the authn
-  # (--tls-auth-clients no); TLS closes the password-in-the-clear gap.
-  # `command` replaces the base list wholesale — base flags restated.
+  # SEC-012.2: Valkey serves TLS on 6380 with its registry SVID. Password auth
+  # remains the authn (--tls-auth-clients no); TLS closes the
+  # password-in-the-clear gap. Enforce wave 2026-08-09: plaintext 6379 REMOVED
+  # (--port 0) — api+prober rode 6380 since SEC-012.2; the healthcheck rides
+  # the TLS listener. `command` replaces the base list wholesale — base flags
+  # restated.
   redis:
     command: ["valkey-server", "--save", "60", "1",
       "--maxmemory", "${REDIS_MAXMEMORY:-96mb}",
       "--requirepass", "${REDIS_PASSWORD:-}",
+      "--port", "0",
       "--tls-port", "6380",
       "--tls-cert-file", "/tls/svid/redis.crt",
       "--tls-key-file", "/tls/svid/redis.key",
       "--tls-ca-cert-file", "/tls/ca.pem",
       "--tls-auth-clients", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "--tls", "--cacert", "/tls/ca.pem", "-p", "6380", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/redis:/tls/svid:ro

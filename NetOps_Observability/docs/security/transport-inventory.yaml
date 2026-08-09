@@ -17,13 +17,13 @@
       "protocol": "https",
       "port": 443,
       "current": {
-        "transport": "plaintext",
+        "transport": "tls",
         "authn": "jwt",
         "authz": "rbac-pbac"
       },
       "security_profile": {
         "transport": "tls",
-        "notes": "TLS 1.2+/HSTS via tls.conf override; plaintext :8000 STILL published alongside"
+        "notes": "TLS 1.2+/HSTS via tls.conf override; enforce wave 2026-08-09: plaintext :8000 host publication REMOVED on the lab (ports !override, 443 only; watchdog probe moved to https+APP_CACERT). compose.tls.yml keeps 8000 until install.py messaging is TLS-aware — see the nginx NOTE there"
       },
       "target": {
         "transport": "tls",
@@ -106,9 +106,9 @@
       "destination": "clickhouse",
       "channel": "store",
       "protocol": "http",
-      "port": 8123,
+      "port": 8443,
       "current": {
-        "transport": "plaintext",
+        "transport": "tls",
         "authn": "basic",
         "authz": "row-policies"
       },
@@ -125,7 +125,7 @@
       ],
       "security_profile": {
         "transport": "tls",
-        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 removal = programme-final hardening."
+        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 REMOVED 2026-08-09 (enforce wave; tls.xml http_port remove, healthcheck moved to https 8443)."
       }
     },
     {
@@ -221,12 +221,12 @@
       "destination": "redis",
       "channel": "store",
       "protocol": "resp",
-      "port": 6379,
+      "port": 6380,
       "current": {
-        "transport": "plaintext",
-        "authn": "none",
+        "transport": "tls",
+        "authn": "password",
         "authz": "none",
-        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; publishers discard write errors so auth failure would be SILENT; RedisAddr() non-empty on bad password so file-fallback never triggers \u2014 both must be fixed with auth"
+        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; SEC-012.1 fixed the silent write-path fallback (redisPublish+counter) BEFORE auth; enforce wave 2026-08-09 removed plaintext 6379 (--port 0) \u2014 TLS 6380 (registry SVID, hostname-verified, REDIS_TLS seam) + requirepass is the only listener; key-prefix ACLs remain the target"
       },
       "target": {
         "transport": "tls",
@@ -337,11 +337,11 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9092,
+      "port": 9094,
       "current": {
-        "transport": "plaintext",
-        "authn": "none",
-        "authz": "none"
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
       },
       "target": {
         "transport": "mtls",
@@ -356,7 +356,7 @@
       ],
       "security_profile": {
         "transport": "mtls",
-        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-aggregator (9 kafka sinks, SVID via env-driven tls blocks) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. PLAINTEXT:9092 removal + enforce flip (SEC-006.3/007.2) = programme-final hardening after the soak."
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-aggregator (9 kafka sinks, SVID via env-driven tls blocks) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. ENFORCED 2026-08-09 (post-soak GO): allow.everyone=false (default-deny) + PLAINTEXT:9092 REMOVED (inter-broker on MTLS); ANONYMOUS retains only Write netops.flows via FLOWS:9095."
       }
     },
     {
@@ -365,11 +365,11 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9092,
+      "port": 9094,
       "current": {
-        "transport": "plaintext",
-        "authn": "none",
-        "authz": "none"
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
       },
       "target": {
         "transport": "mtls",
@@ -384,7 +384,7 @@
       ],
       "security_profile": {
         "transport": "mtls",
-        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-router (7 kafka sources + deadletter sink) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. PLAINTEXT:9092 removal + enforce flip (SEC-006.3/007.2) = programme-final hardening after the soak."
+        "notes": "LIVE 2026-08-05 (SEC-006.1/.2 + SEC-007.1): dual secure listeners \u2014 MTLS:9094 (ssl.client.auth=required, PEM keystore from the kafka registry SVID via tls-entrypoint) + FLOWS:9095 (TLS, client.auth=none, goflow2 only per owner option-1). vector-router (7 kafka sources + deadletter sink) authenticates as its full-DN SPIFFE principal on 9094; 49-entry ACL matrix applied in OBSERVE posture (allow.everyone=true, authorizer DEBUG = would-have-denied feed). Migration continuity proven vs banked offsets: zero deadletter growth, lag at baseline. ENFORCED 2026-08-09 (post-soak GO): allow.everyone=false (default-deny) + PLAINTEXT:9092 REMOVED (inter-broker on MTLS); ANONYMOUS retains only Write netops.flows via FLOWS:9095."
       }
     },
     {
@@ -393,11 +393,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9092,
+      "port": 9095,
       "current": {
-        "transport": "plaintext",
+        "transport": "tls",
         "authn": "none",
-        "authz": "none"
+        "authz": "anonymous-produce-netops.flows-only",
+        "notes": "FLOWS:9095 TLS listener, client.auth=none (owner option-1: goflow2 v2.2.1 has no client-cert flags); ANONYMOUS principal ACL-bounded to Write netops.flows literal — under default-deny this is the ONLY thing ANONYMOUS can do"
       },
       "target": {
         "transport": "mtls",
@@ -422,11 +423,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9092,
+      "port": 9094,
       "current": {
-        "transport": "plaintext",
+        "transport": "mtls",
         "authn": "none",
-        "authz": "none"
+        "authz": "none",
+        "notes": "the api holds NO kafka client today — BROKER_URLS feeds only the stack-health TCP liveness probe (firstBrokerAddr), repointed kafka:9094 at the enforce wave; bus writes go via the authenticated vector-aggregator bus lane"
       },
       "target": {
         "transport": "mtls",
@@ -818,9 +820,9 @@
       "destination": "clickhouse",
       "channel": "store",
       "protocol": "http",
-      "port": 8123,
+      "port": 8443,
       "current": {
-        "transport": "plaintext",
+        "transport": "tls",
         "authn": "basic",
         "authz": "row-policies"
       },
@@ -837,7 +839,7 @@
       ],
       "security_profile": {
         "transport": "tls",
-        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 removal = programme-final hardening."
+        "notes": "LIVE 2026-08-05 (SEC-009.1): dual listener \u2014 https 8443 + native-secure 9440 (registry SVID via tls-entrypoint, uid-101 staging); all four clients over TLS (api chhttp/backendHTTPClient, router sinks via CLICKHOUSE_ENDPOINT+SSL_CERT_FILE, correlation httpx verify=mesh-CA, grafana native-secure) \u2014 tenant_scope row-policy plumbing verified intact; STORE-002 cleared (fatal 3->2). Plaintext 8123 REMOVED 2026-08-09 (enforce wave; tls.xml http_port remove, healthcheck moved to https 8443)."
       }
     },
     {
