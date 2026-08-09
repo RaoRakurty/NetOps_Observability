@@ -1470,26 +1470,59 @@ def compose_status(compose_dir: Path) -> None:
     subprocess.run(["docker", "compose", "ps"], cwd=str(compose_dir), check=False)
 
 
-def bootstrap_opensearch(root: Path) -> None:
+def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
     """Apply index templates after the stack is up. Non-fatal on error —
-    OpenSearch may still be starting; the user can re-run the script."""
+    OpenSearch may still be starting; the user can re-run the script.
+
+    TLS installs (SEC-008): the security plugin is on, so the probe and every
+    template PUT ride https with the svc_bootstrap credential. The credential
+    is read from the CONTAINER's own environment inside `sh -c` (never argv —
+    argv is world-readable in /proc). Readiness must wait for the SEEDED
+    security config (the opensearch-security-init one-shot), not just the TLS
+    listener: an authenticated 200 proves both."""
     script = root / "scripts" / "bootstrap-opensearch.sh"
     if not script.exists():
         warn("bootstrap-opensearch.sh missing; skipping")
         return
     # Hit the cluster from inside via docker exec since :9200 isn't exposed.
     compose_dir = root / "deployment" / "docker"
-    cmd = [
-        "docker", "compose", "exec", "-T", "opensearch",
-        "bash", "-lc",
-        "for i in $(seq 1 30); do "
-        "curl -sf http://localhost:9200/_cluster/health >/dev/null && break; "
-        "sleep 2; done; echo opensearch ready",
-    ]
-    res = subprocess.run(cmd, cwd=str(compose_dir), capture_output=True, text=True)
+    if tls:
+        # opensearch-security-init needs OS healthy + securityadmin runtime
+        # (~40s); 90 attempts x 2s bounds the wait at 3 minutes.
+        ready_sh = (
+            "for i in $(seq 1 90); do "
+            'curl -sf --cacert /usr/share/opensearch/config/tls/ca.pem '
+            '-u "svc_bootstrap:$OS_BOOTSTRAP_PASSWORD" '
+            "https://opensearch:9200/_cluster/health >/dev/null && exit 0; "
+            "sleep 2; done; exit 1"
+        )
+        cmd = ["docker", "compose", "exec", "-T",
+               "--env", "OS_BOOTSTRAP_PASSWORD",
+               "opensearch", "bash", "-c", ready_sh]
+    else:
+        cmd = [
+            "docker", "compose", "exec", "-T", "opensearch",
+            "bash", "-lc",
+            "for i in $(seq 1 30); do "
+            "curl -sf http://localhost:9200/_cluster/health >/dev/null && break; "
+            "sleep 2; done; echo opensearch ready",
+        ]
+    env = {**os.environ}
+    if tls:
+        env["OS_BOOTSTRAP_PASSWORD"] = _parse_env(
+            compose_dir / ".env").get("OS_BOOTSTRAP_PASSWORD", "")
+        if not env["OS_BOOTSTRAP_PASSWORD"]:
+            warn("OS_BOOTSTRAP_PASSWORD missing from .env — cannot bootstrap "
+                 "templates on a secured cluster; re-run the installer")
+            return
+    res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
+                         capture_output=True, text=True)
     if res.returncode != 0:
         warn(f"opensearch not ready (skipping templates): {res.stderr.strip()}")
         info("re-run after a minute: scripts/bootstrap-opensearch.sh")
+        return
+    if tls:
+        _bootstrap_opensearch_via_exec(root, tls=True)
         return
     # Run the bootstrap from the host (it shells curl + python3 inline).
     res = subprocess.run(
@@ -1508,25 +1541,52 @@ def bootstrap_opensearch(root: Path) -> None:
     ok("index templates applied")
 
 
-def _bootstrap_opensearch_via_exec(root: Path) -> None:
-    """Apply index templates from inside the opensearch container."""
+def _bootstrap_opensearch_via_exec(root: Path, tls: bool = False) -> None:
+    """Apply index templates from inside the opensearch container.
+
+    TLS (SEC-008): https + svc_bootstrap basic auth, CA-validated. The
+    credential is expanded from the exec's OWN environment inside `sh -c`
+    (never on argv), and the template body arrives on stdin (`-d @-`)."""
     import json as _json
     compose_dir = root / "deployment" / "docker"
     tpl_path = root / "deployment" / "docker" / "opensearch" / "index-templates.json"
     if not tpl_path.exists():
         warn("index-templates.json missing")
         return
+    env = {**os.environ}
+    if tls:
+        env["OS_BOOTSTRAP_PASSWORD"] = _parse_env(
+            compose_dir / ".env").get("OS_BOOTSTRAP_PASSWORD", "")
     data = _json.loads(tpl_path.read_text())
     for name, body in (data.get("templates") or {}).items():
+        # §3: the name is interpolated into a shell line below — refuse
+        # anything that isn't a plain index-template identifier.
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            warn(f"template name {name!r} is not a valid identifier; skipping")
+            continue
         body_json = _json.dumps(body)
-        cmd = [
-            "docker", "compose", "exec", "-T", "opensearch",
-            "curl", "-sf", "-X", "PUT",
-            f"http://localhost:9200/_index_template/{name}",
-            "-H", "Content-Type: application/json",
-            "-d", body_json,
-        ]
-        res = subprocess.run(cmd, cwd=str(compose_dir), capture_output=True, text=True)
+        if tls:
+            put_sh = (
+                'curl -sf --cacert /usr/share/opensearch/config/tls/ca.pem '
+                '-u "svc_bootstrap:$OS_BOOTSTRAP_PASSWORD" -X PUT '
+                f'"https://opensearch:9200/_index_template/{name}" '
+                '-H "Content-Type: application/json" -d @-'
+            )
+            cmd = ["docker", "compose", "exec", "-T",
+                   "--env", "OS_BOOTSTRAP_PASSWORD",
+                   "opensearch", "sh", "-c", put_sh]
+            res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
+                                 input=body_json, capture_output=True, text=True)
+        else:
+            cmd = [
+                "docker", "compose", "exec", "-T", "opensearch",
+                "curl", "-sf", "-X", "PUT",
+                f"http://localhost:9200/_index_template/{name}",
+                "-H", "Content-Type: application/json",
+                "-d", body_json,
+            ]
+            res = subprocess.run(cmd, cwd=str(compose_dir),
+                                 capture_output=True, text=True)
         if res.returncode == 0:
             ok(f"template applied: {name}")
         else:
@@ -1879,7 +1939,7 @@ def main() -> None:
     compose_status(compose_dir)
 
     step("bootstrap OpenSearch index templates")
-    bootstrap_opensearch(root)
+    bootstrap_opensearch(root, tls=tls_enabled)
 
     # Gate on the EFFECTIVE profiles from .env — the source of truth compose_up
     # starts from — not args.profiles, which an existing install's .env ignores.
@@ -1895,9 +1955,25 @@ def main() -> None:
 
     print()
     print("==============================================================")
-    print(f"  Dashboard: http://localhost:{args.port}")
-    print(f"  API:       http://localhost:{args.port}/api/")
-    print(f"  Health:    http://localhost:{args.port}/admin/health")
+    if tls_enabled:
+        # compose.tls.yml publishes the TLS ingress on 443; the plaintext
+        # port stays alongside during the migration window (see the nginx
+        # NOTE in compose.tls.yml — it is removed together with this
+        # messaging becoming the only path).
+        print("  Dashboard: https://localhost/   (TLS ingress, port 443)")
+        print("  API:       https://localhost/api/")
+        print("  Health:    https://localhost/admin/health")
+        print(f"             (plaintext http://localhost:{args.port} remains "
+              "during the migration window)")
+        print()
+        print("  The ingress certificate is SELF-SIGNED (gen-dev-cert.sh) —")
+        print("  your browser will warn once; replace the files under")
+        print("  deployment/docker/nginx/certs/ with a real certificate for")
+        print("  production (same filenames, then: docker compose restart nginx).")
+    else:
+        print(f"  Dashboard: http://localhost:{args.port}")
+        print(f"  API:       http://localhost:{args.port}/api/")
+        print(f"  Health:    http://localhost:{args.port}/admin/health")
     print()
     if "ADMIN_INITIAL_PASSWORD" in secrets_map:
         print("  First-time sign-in to the dashboard:")
