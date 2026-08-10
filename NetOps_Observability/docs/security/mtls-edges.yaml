@@ -34,9 +34,12 @@
       "edge": "api-postgres",
       "endpoint": "postgres:5432 (SSLRequest preamble)",
       "server_identity": "spiffe://netops/ns/default/sa/postgres",
-      "client_auth": "password within TLS; DSN sslmode=verify-full",
-      "verify": "tlsprobe endpoint postgres:5432 (preamble-aware); pg_stat_ssl for live connections",
-      "negative": ["expired served cert -> clients fail (the 2026-08-05 incident class); TLSServedCertExpiring* alerts fire first"]
+      "client_auth": "password within TLS; DSN sslmode=verify-full; SERVER-ENFORCED since F-4 (pg_hba network row is hostssl, staged by tls-entrypoint.sh via -c hba_file)",
+      "verify": "tlsprobe endpoint postgres:5432 (preamble-aware); pg_stat_ssl for live connections; `show hba_file` points at the wrapper-staged file",
+      "negative": [
+        "expired served cert -> clients fail (the 2026-08-05 incident class); TLSServedCertExpiring* alerts fire first",
+        "sslmode=disable -> refused at the pg_hba gate BEFORE auth ('no pg_hba.conf entry ... no encryption'), never a password prompt (F-4; pinned by TestPostgresRefusesPlaintextTCP + test_postgres_tls_entrypoint_requires_hostssl)"
+      ]
     },
     {
       "edge": "api-clickhouse",

@@ -1618,7 +1618,9 @@ services:
       TLS_BACKEND_KEY_FILE: ${TLS_BACKEND_KEY_FILE:-}
       # When STORE_BACKEND=postgres over TLS, set DATABASE_URL with
       # sslmode=verify-full&sslrootcert=/path/ca.pem (pgx honors it). See the
-      # tls-mtls runbook §Postgres.
+      # tls-mtls runbook §Postgres. NOT optional on a TLS deployment: since F-4
+      # the server's pg_hba network row is `hostssl`, so a DSN without TLS is
+      # refused with "no pg_hba.conf entry ... no encryption".
       # App secrets and bootstrap admin
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY required}

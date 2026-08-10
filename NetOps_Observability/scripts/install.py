@@ -660,6 +660,8 @@ NETBOX_URL=
 # docs/IDENTITY_ACCESS.md — so the default build stays stdlib-only.
 STORE_BACKEND=file
 # DATABASE_URL=postgres://netops:netops@postgres:5432/netops?sslmode=disable
+# On a --tls install postgres REQUIRES TLS (pg_hba `hostssl`, F-4): use
+# ?sslmode=verify-full&sslrootcert=/data/tls/ca.pem instead of sslmode=disable.
 # DATABASE_DRIVER=postgres
 
 # Token lifetimes

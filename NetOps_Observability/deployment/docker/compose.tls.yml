@@ -228,8 +228,12 @@ services:
 
   # SEC-011: postgres serves TLS with its registry SVID. The wrapper stages
   # the cert with postgres-owned 0600 perms then execs the stock entrypoint
-  # with ssl=on. Server accepts BOTH TLS and plaintext at this stage (the
-  # migration ladder); clients climb to verify-full via their DSNs.
+  # with ssl=on. F-4 (assurance run 2026-08-09): the wrapper now also OWNS
+  # pg_hba (`-c hba_file`) and its network row is `hostssl`, so a non-TLS TCP
+  # connection is refused before auth — `host` matched non-SSL too, which made
+  # TLS here client-side convention only. In-container access (healthcheck,
+  # exec'd psql) rides the local/loopback rows. Clients MUST carry
+  # sslmode=verify-full (+ sslrootcert=the mesh CA) in their DSNs.
   postgres:
     entrypoint: ["/tls-entrypoint.sh"]
     volumes:

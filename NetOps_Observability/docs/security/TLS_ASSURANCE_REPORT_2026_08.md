@@ -435,7 +435,7 @@ as the pass condition.**
 | F-1 | P2 | 3 | syslog-ng→vector-aggregator plaintext TCP, no exception row | step-3 fix (convert or declare) |
 | F-2 | P3 | 3 | 3 inventory rows stale vs shipped SEC-012.2/013/018 | refresh rows |
 | F-3 | P3 | 3 | `target: mtls` predates owner-accepted TLS shapes (OS basic-in-TLS, goflow2 option-1) | owner sign-off / target edit |
-| F-4 | P2 | 6 | postgres pg_hba `host` (not `hostssl`) — non-TLS TCP accepted from compose network | step-3 fix + regression test |
+| F-4 | P2 | 6 | postgres pg_hba `host` (not `hostssl`) — non-TLS TCP accepted from compose network | **FIXED 2026-08-10** (below) |
 | F-5 | P2 | 9 | inventory missing aux-tier edges: api→gotenberg (tenant PDFs, plaintext) / api→keycloak / api→netbox / nginx→UI upstreams | declare or convert; add mechanical completeness check |
 | F-6 | P1 | 11 | seal VRL multi-line snippet breaks generated processors.yaml (YAML indent) — seal rules undeliverable AND block all other processor changes; no reload-failure alert | step-3 fix + YAML-parse regression test |
 | F-7 | P1 | 11 | vector image has no curl — cx-secret-backend.sh cannot fetch keys in any mode; sealed-fields edge path never executable in-image | step-3 fix (image + in-image contract test) |
@@ -443,6 +443,7 @@ as the pass condition.**
 | F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | add a `--tls=yes` boot leg to the workflow |
 | F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | api-triggered reload or watched-file touch on CSV write |
 | F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | owner decision: design boundary vs seal-or-quarantine semantics |
+| F-12 | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
 
 ---
 
@@ -479,3 +480,69 @@ The e2e also surfaced **F-10/F-11** above: round 1 of the injection landed
 UNTAGGED and UNSEALED because the aggregator's enrichment table predated the
 fixture device (stale CSV → no tenant stamp → tenant-guarded seal skipped);
 round 2 after an aggregator SIGHUP sealed correctly.
+
+## Step-3 progress (2026-08-10)
+
+**F-4 FIXED — postgres now REFUSES plaintext TCP.**
+
+`postgres/tls-entrypoint.sh` stages its own `pg_hba.conf` and hands it to the
+server with `-c hba_file`, network row `hostssl all all all scram-sha-256`.
+The wrapper OWNS the file rather than sed-editing PGDATA's copy, so the policy
+cannot depend on initdb having run first and survives a re-init; `local` +
+`127.0.0.1`/`::1` rows mirror the image's initdb defaults, keeping the
+in-container boundary (the `pg_isready` healthcheck, `docker compose exec …
+psql`, `secret_rotation.py`'s loopback psql) working untouched.
+
+Two tests, deliberately split by what each can prove without a live stack:
+
+- `test_postgres_tls_entrypoint_requires_hostssl`
+  (`tests/test_assurance_contracts.py`) — always runs. Asserts the wrapper
+  passes `hba_file`, that no plaintext-capable (`host`/`hostnossl`) row reaches
+  beyond loopback, and that `hostssl` *does* cover the compose network. RED on
+  the pre-fix script, and mutation-checked against two weaker fixes: a bare
+  `host all all all` row left alongside `hostssl` → caught; `hostssl` narrowed
+  to `127.0.0.1/32` so nothing serves the network → caught.
+- `TestPostgresRefusesPlaintextTCP` (`src/backend/pg_hostssl_guard_test.go`) —
+  the live negative. Strips TLS from the parsed pgx config **and every
+  fallback** (`sslmode=prefer` is "TLS first, then plaintext": clearing only the
+  primary would let a fallback negotiate TLS and turn the negative green for the
+  wrong reason), then requires the failure to name `pg_hba.conf` and to *not*
+  mention a password — reaching auth at all is the thing being prevented.
+
+**Proof (A/B on identical infrastructure, then live).** Two scratch containers
+off the same pinned `postgres:16-alpine` digest with the same self-signed SVID,
+differing only in wrapper version: pre-fix → `show hba_file` =
+`…/data/pg_hba.conf`, last row `host all all all scram-sha-256`, guard test
+**FAILS** (`plaintext TCP connection SUCCEEDED`); post-fix → `show hba_file` =
+`…/tls/pg_hba.conf`, last row `hostssl …`, guard test **PASSES**. On the live
+lab stack: `sslmode=disable` from a container on the compose network →
+`FATAL: no pg_hba.conf entry for host "172.18.0.31", user "netops_app",
+database "netops", no encryption`; the same image with the real
+`sslmode=verify-full` DSN → `ssl=true ver=TLSv1.3`; every network session in
+`pg_stat_ssl` is TLSv1.3, api and keycloak included.
+
+**Client fallout checked, not assumed.** Every postgres:5432 client was
+enumerated before landing this: the api's `DATABASE_URL` (already
+`verify-full`); the api's stack-health probe (bare TCP connect — never reaches
+hba); in-container `psql`/`pg_isready`/`createdb` and `secret_rotation.py`'s
+`-h 127.0.0.1` psql (loopback rows); and **keycloak** (`sso` profile), whose
+pgjdbc link survives hostssl — live `pg_stat_ssl` shows it on TLSv1.3 — but
+negotiates **without CA/hostname verification** and still has no inventory row.
+That last one is recorded against **F-5** rather than silently widened into this
+fix. `correlation` holds no postgres DSN at all (SEC-011.2 evicted
+`POSTGRES_DSN`), so the inventory row's claim of a "correlation DSN at
+verify-full" was stale and is corrected.
+
+Docs corrected in the same change (they now described the opposite of the
+behaviour): the "accepts BOTH TLS and plaintext / migration ladder" comment on
+both TLS compose variants, the `tls-mtls.md` §Postgres runbook (with the exact
+refusal string and how to read it — "this client is not speaking TLS", not a
+credential problem), the api's `DATABASE_URL` comment, `install.py`'s sample
+DSN, and the `api-postgres` rows in `mtls-edges.yaml` + `transport-inventory.yaml`.
+
+**F-12 filed** (register above): placing F-4's live guard exposed that the
+`pgintegration` suite has not compiled since the platformdb extraction, so
+backend-ci's pg-integration job has been failing at build for two weeks. That
+is why the F-4 guard is **env-gated, not tag-gated** — it compiles on every
+`go test ./...` and skips loudly rather than rotting unseen. Repair lands in its
+own commit.

@@ -114,6 +114,27 @@ DATABASE_URL=postgres://app@postgres:5432/netops?sslmode=verify-full&sslrootcert
 `verify-full` checks BOTH the chain and the hostname — do not use `require` (no
 verification). The non-superuser/non-BYPASSRLS rule (RLS, #15) still applies.
 
+**The server enforces this, it is not a client convention** (F-4, assurance run
+2026-08-09): `postgres/tls-entrypoint.sh` stages its own `pg_hba.conf` and hands
+it to the server (`-c hba_file`) with `hostssl` — not `host` — as the network
+row, because `host` matches non-SSL connections too. A DSN without TLS is now
+refused *before* authentication:
+
+```
+FATAL: no pg_hba.conf entry for host "172.18.0.31", user "netops_app", database "netops", no encryption
+```
+
+Read that error as "this client is not speaking TLS", never as a credential
+problem. In-container access (the `pg_isready` healthcheck, `docker compose exec
+… psql`, `secret_rotation.py`'s loopback psql) rides the `local`/`127.0.0.1`
+rows and is unaffected. Verify the live policy:
+
+```bash
+docker compose exec postgres psql -U "$DB_USER" -tAc "show hba_file"
+docker compose exec postgres psql -U "$DB_USER" \
+  -c "select usename, ssl, version from pg_stat_ssl join pg_stat_activity using (pid) where client_addr is not null"
+```
+
 ## Rotation
 
 - **Leaf SVIDs**: short TTL (`TLS_SVID_TTL`); re-issued on each API boot and

@@ -201,7 +201,7 @@
       },
       "security_profile": {
         "transport": "tls-verify-full",
-        "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL and correlation DSN at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5"
+        "notes": "LIVE on the lab 2026-08-04 (SEC-011.1): postgres serves TLSv1.3 with its registry SVID (tls-entrypoint.sh); api DATABASE_URL at verify-full vs the mesh CA; wrong-CA refused (tested); STORE-004 cleared, boot fatal 6->5. ENFORCED 2026-08-09 (F-4): the wrapper stages pg_hba with a hostssl network row and hands it over via -c hba_file, so plaintext TCP is refused before auth -- TLS here was client-side convention until then. (correlation holds no postgres DSN at all since SEC-011.2 evicted POSTGRES_DSN; earlier text claiming a correlation DSN was stale.)"
       },
       "target": {
         "transport": "tls-verify-full",

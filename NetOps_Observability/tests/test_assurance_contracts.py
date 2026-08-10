@@ -114,3 +114,60 @@ def test_router_image_provides_secret_backend_dependencies():
         assert re.search(rf"apk add[^\n]*\b{binary}\b", dockerfile), (
             f"vector-router/Dockerfile must `apk add {binary}` — the secret backend executes it"
         )
+
+
+def test_postgres_tls_entrypoint_requires_hostssl():
+    """F-4 (assurance run 2026-08-09): postgres accepted non-TLS TCP.
+
+    `host` in pg_hba matches SSL **and** non-SSL, so the image/initdb default
+    `host all all all scram-sha-256` let any credentialed client on the compose
+    network connect with sslmode=disable and put its password + rows on the
+    wire — TLS on this store was client-side convention only. Same class as the
+    plaintext clickhouse-8123 / valkey-6379 listeners the enforce wave removed;
+    postgres's plaintext "listener" lives in pg_hba and was missed.
+
+    The wrapper now OWNS the hba file (passed via -c hba_file) instead of
+    editing PGDATA's copy, so the policy cannot depend on initdb order or be
+    lost to a re-init. Pin the three properties that make it enforcement:
+    the network row is hostssl, no bare `host` row spans non-loopback space,
+    and the server is actually told to use this file.
+
+    Live counterpart (needs a TLS-wrapped postgres, hence env-gated):
+    TestPostgresRefusesPlaintextTCP in src/backend/pg_hostssl_guard_test.go.
+    """
+    entry = (ROOT / "deployment" / "docker" / "postgres" / "tls-entrypoint.sh").read_text()
+
+    assert re.search(r"^-c hba_file=|hba_file=", entry, re.M), (
+        "tls-entrypoint.sh must pass -c hba_file — an hba it writes but does not "
+        "hand to postgres enforces nothing (F-4)"
+    )
+
+    # The heredoc the wrapper writes is the policy; read the rows out of it.
+    body = re.search(r"cat > \"\$HBA\" <<'EOF'\n(.*?)\nEOF", entry, re.S)
+    assert body, "tls-entrypoint.sh no longer writes the pg_hba heredoc; update this pin"
+    rows = [
+        line.split()
+        for line in body.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert rows, "the staged pg_hba has no rows"
+
+    loopback = {"127.0.0.1/32", "::1/128", "samehost", "localhost"}
+    network_rows = [r for r in rows if r[0] in ("host", "hostssl", "hostnossl")]
+    assert network_rows, "the staged pg_hba has no TCP rows at all"
+
+    # (a) plaintext-capable TCP is confined to loopback (in-container boundary:
+    #     the healthcheck and exec'd psql), never the compose network.
+    plaintext_capable = [
+        r for r in network_rows
+        if r[0] in ("host", "hostnossl") and (len(r) < 4 or r[3] not in loopback)
+    ]
+    assert not plaintext_capable, (
+        "pg_hba rows reachable over the compose network must be `hostssl`, never "
+        f"`host`/`hostnossl` — `host` matches non-SSL too (F-4): {plaintext_capable}"
+    )
+
+    # (b) and the network IS served: at least one hostssl row spans beyond loopback.
+    assert any(
+        r[0] == "hostssl" and len(r) >= 4 and r[3] not in loopback for r in network_rows
+    ), "the staged pg_hba has no hostssl row for the compose network (F-4)"
