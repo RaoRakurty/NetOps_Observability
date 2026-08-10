@@ -40,12 +40,18 @@ api:
 # Pre-flight checks that shell out to `validate` therefore prove syntax, not key
 # availability — do not read a green validate as "the router will come up".
 secret:
+  # The backend KIND rides as an argv because Vector strips the backend name
+  # from the request: `SECRET[cxseal.<tenant>]` reaches the child as
+  # {"secrets":["<tenant>"]} — bare key, no prefix (verified on the wire
+  # against 0.40.0, 2026-08-09; the F-7 fix made this path executable for the
+  # first time and immediately surfaced it). Without the argv the script
+  # cannot know whether the seal or the MAC key is being asked for.
   cxseal:
     type: exec
-    command: ["/etc/vector/conf/cx-secret-backend.sh"]
+    command: ["/etc/vector/conf/cx-secret-backend.sh", "seal"]
   cxmac:
     type: exec
-    command: ["/etc/vector/conf/cx-secret-backend.sh"]
+    command: ["/etc/vector/conf/cx-secret-backend.sh", "mac"]
 
 # ----------------------------------------------------------------------------
 # DURABILITY (F-04) — end-to-end acknowledgements.

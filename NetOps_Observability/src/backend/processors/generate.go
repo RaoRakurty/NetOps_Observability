@@ -144,7 +144,16 @@ func ruleVRL(r Rule) string {
 	// The stamp is what the counter transform reads: one entry per processor
 	// that actually fired on this event.
 	stamp := fmt.Sprintf(".%s = push(array(.%s) ?? [], %s)", AppliedField, AppliedField, vrlString(r.ID))
-	return "if " + strings.Join(guards, " && ") + " { " + action + "; " + stamp + " }"
+	// Single-line actions join with "; " as they always have. A MULTI-LINE
+	// action (seal) must join on a newline instead: its trailing newline would
+	// otherwise leave the separator at line start, and a leading ";" is a VRL
+	// syntax error (F-6 follow-up, proven against the live router 2026-08-09).
+	sep := "; "
+	if strings.Contains(action, "\n") {
+		action = strings.TrimRight(action, " \n")
+		sep = "\n"
+	}
+	return "if " + strings.Join(guards, " && ") + " { " + action + sep + stamp + " }"
 }
 
 // orderRules sorts a lane's processors into the deterministic execution order.
@@ -200,7 +209,11 @@ func GenerateRouterConfig(rules []Rule) string {
 		fmt.Fprintf(&b, "      del(.__cx_noop__)\n")
 		for _, r := range rs {
 			if line := ruleVRL(r); line != "" {
-				fmt.Fprintf(&b, "      %s\n", line)
+				// An action may compile to multi-line VRL (seal does); every
+				// continuation line must carry the block scalar's indent or it
+				// escapes the `source: |` block and the whole file stops
+				// parsing (F-6, assurance run 2026-08-09).
+				fmt.Fprintf(&b, "      %s\n", strings.ReplaceAll(line, "\n", "\n      "))
 			}
 		}
 		// 2. the drop filter (intentional drops — counted, not dead-lettered)

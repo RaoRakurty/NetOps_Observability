@@ -6,8 +6,17 @@
 # in memory for the life of the process, which is the whole reason sealing can
 # put key material at the edge at all.
 #
-#   stdin :  {"version":"1.0","secrets":["cxseal.<tenant>","cxmac.<tenant>", ...]}
-#   stdout:  {"cxseal.<tenant>":{"value":"<base64>","error":null}, ...}
+# THE WIRE CONTRACT (verified against timberio/vector 0.40.0 on 2026-08-09,
+# the first day this path was executable in-image — see F-7): Vector STRIPS
+# the backend name from `SECRET[cxseal.<tenant>]` before invoking the backend,
+# so the request carries BARE keys:
+#
+#   stdin :  {"version":"1.0","secrets":["<tenant>", ...]}
+#   stdout:  {"<tenant>":{"value":"<base64>","error":null}, ...}
+#
+# Which KEY KIND is being asked for therefore cannot be inferred from the
+# request — it arrives as $1 ("seal" or "mac"), set per-backend in
+# vector.yaml's `secret:` block.
 #
 # A secret that cannot be resolved is returned with a non-null "error", which
 # makes Vector refuse to load the config. That is deliberate and it is the
@@ -20,6 +29,19 @@
 # customer data flows through.
 
 set -eu
+
+KIND="${1:-}"
+case "$KIND" in
+  seal) FIELD='seal_key' ;;
+  mac)  FIELD='mac_key'  ;;
+  *)
+    # $1 below is literal prose in the error message, not an expansion.
+    # shellcheck disable=SC2016
+    echo '{"error":"backend kind argument missing: expected \"seal\" or \"mac\" as $1 (set in vector.yaml secret.command)"}' >&2
+    echo '{}'
+    exit 1
+    ;;
+esac
 
 API="${SEALING_API_URL:-http://api:8080}"
 INGEST_USER="${INGEST_USER:-netops-ingest}"
@@ -85,44 +107,38 @@ fetch() {
 
 request="$(cat)"
 
-# Extract the requested secret names. There is no jq in the vector image, so
-# this is a deliberate minimal parse of the DOCUMENTED request shape rather than
-# a general JSON reader. Names are matched against a strict character class, so
-# nothing from the request can escape into the shell below.
+# Extract the requested tenant ids. There is no jq in the vector image, so this
+# is a deliberate minimal parse of the DOCUMENTED request shape rather than a
+# general JSON reader. Ids are matched against a strict character class, so
+# nothing from the request can escape into the shell below. A legacy
+# "cxseal."/"cxmac." prefix is tolerated and stripped, so a Vector that ever
+# starts sending fully-qualified names keeps working.
 names="$(printf '%s' "$request" \
+  | sed -n 's/.*"secrets"[[:space:]]*:[[:space:]]*\[\(.*\)\].*/\1/p' \
   | tr ',' '\n' \
-  | sed -n 's/.*"\(cxseal\.[A-Za-z0-9_-]\{1,128\}\)".*/\1/p; s/.*"\(cxmac\.[A-Za-z0-9_-]\{1,128\}\)".*/\1/p' \
+  | sed -n 's/^[[:space:]]*"\(cxseal\.\|cxmac\.\)\{0,1\}\([A-Za-z0-9_-]\{1,128\}\)"[[:space:]]*$/\2/p' \
   | sort -u)"
 
 printf '{'
 first=1
-for name in $names; do
-  backend="${name%%.*}"   # cxseal | cxmac
-  tenant="${name#*.}"
-
+for tenant in $names; do
   body="$(fetch "$tenant")"
 
-  case "$backend" in
-    cxseal) field='seal_key' ;;
-    cxmac)  field='mac_key'  ;;
-    *)      field=''         ;;
-  esac
-
   value=''
-  if [ -n "$body" ] && [ -n "$field" ]; then
+  if [ -n "$body" ]; then
     # Whitespace-tolerant: Go's encoder emits no space after the colon, but a
     # key-delivery path must not break if that ever changes or a proxy reformats.
     value="$(printf '%s' "$body" \
-      | sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+      | sed -n 's/.*"'"$FIELD"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   fi
 
   [ "$first" -eq 1 ] || printf ','
   first=0
   if [ -n "$value" ]; then
-    printf '"%s":{"value":"%s","error":null}' "$name" "$value"
+    printf '"%s":{"value":"%s","error":null}' "$tenant" "$value"
   else
     # Vector treats this as fatal and refuses the config — see the header.
-    printf '"%s":{"value":null,"error":"could not resolve sealing key for %s"}' "$name" "$tenant"
+    printf '"%s":{"value":null,"error":"could not resolve sealing %s key for %s"}' "$tenant" "$KIND" "$tenant"
   fi
 done
 printf '}\n'

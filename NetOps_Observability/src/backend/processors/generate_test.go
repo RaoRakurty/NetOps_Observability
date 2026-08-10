@@ -414,3 +414,65 @@ func TestFieldAllCompilesAsASweep(t *testing.T) {
 		}
 	}
 }
+
+// TestGeneratedConfigSurvivesMultilineActionVRL is the F-6 regression pin
+// (assurance run 2026-08-09): the seal action compiles to MULTI-LINE VRL, and
+// the generator used to splice it into the `source: |` block scalar without
+// re-indenting — continuation lines landed at column 1, the YAML never parsed,
+// and Vector refused every processor config for every tenant while a seal rule
+// existed. Vector kept the old topology (fail-safe held), but the whole
+// processors plane was undeliverable.
+//
+// The pin is structural, not a YAML library round-trip (§6: no yaml dependency):
+// inside every `source: |` block, each non-empty line must be indented past the
+// block scalar's own indentation, or YAML terminates the block early and reads
+// the remainder as keys.
+func TestGeneratedConfigSurvivesMultilineActionVRL(t *testing.T) {
+	withSealEngine(t, newStubSealEngine()) // stub emits a multi-line snippet, like the real sealing.SealVRL
+	rules := []Rule{
+		validRule(t, Rule{ID: "s1", TenantID: "acme", Lane: "snmptrap", Type: TypeSeal, Enabled: true,
+			Field: "secret_note", DataType: "note", Order: 1}),
+	}
+	out := GenerateRouterConfig(rules)
+
+	if !strings.Contains(out, "<enc:v1:stub>") {
+		t.Fatalf("seal rule did not compile into the config:\n%s", out)
+	}
+
+	// An escaped snippet line is indistinguishable from a legitimate next
+	// element by indent alone (the escape IS a dedent), so pin the generator's
+	// actual emission grammar: the only column-0 lines it writes are comments
+	// and the single `transforms:` key, and everything inside a rule chain sits
+	// at indent >= 6. Any other shallow line is VRL that fell out of its block.
+	lines := strings.Split(out, "\n")
+	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+	for i, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		ind := indentOf(ln)
+		if ind == 0 && trimmed != "transforms:" {
+			t.Fatalf("line %d sits at column 0 but is not a generator top-level key — VRL escaped its `source: |` block (the F-6 YAML break):\n%q\ncontext:\n%s",
+				i+1, ln, strings.Join(lines[max(0, i-3):min(len(lines), i+2)], "\n"))
+		}
+		if ind == 1 || ind == 3 || ind == 5 {
+			t.Fatalf("line %d has indent %d, which the generator never emits — VRL escaped its block:\n%q", i+1, ind, ln)
+		}
+	}
+	// And the snippet's own lines must be inside the chain body (>= 6).
+	for i, ln := range lines {
+		if strings.Contains(ln, "<enc:v1:stub>") && indentOf(ln) < 6 {
+			t.Fatalf("line %d: seal snippet line sits at indent %d (< 6), outside the source block:\n%q", i+1, indentOf(ln), ln)
+		}
+	}
+	// VRL discipline for the composed rule: a multi-line action's trailing
+	// newline must not push the "; stamp" separator to line start — a leading
+	// ";" is a VRL syntax error the real router refuses (proven live
+	// 2026-08-09, the F-6 follow-up).
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), ";") {
+			t.Fatalf("line %d starts with ';' — VRL rejects a leading semicolon:\n%q", i+1, ln)
+		}
+	}
+}

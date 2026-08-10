@@ -485,7 +485,14 @@ services:
 
   # Router: reads Kafka topics back out and fans into the storage tier.
   vector-router:
-    image: timberio/vector:0.40.0-alpine@sha256:7a81fdd62e056321055a9e4bdec4073d752ecf68f4c192e676b85001721523c2
+    # Derived image = stock pin + curl, which the Sealed Fields secret backend
+    # needs for its mTLS key fetch (F-7 — BusyBox wget cannot present a client
+    # certificate). See vector-router/Dockerfile; the FROM carries the digest
+    # that used to sit on this line.
+    build:
+      context: ./vector-router
+      dockerfile: Dockerfile
+    image: netops-vector-router:0.40.0-curl
     mem_limit: ${VECTOR_MEM_LIMIT:-512m}
     cpus: ${VECTOR_CPU_LIMIT:-2}
     logging: *deflog

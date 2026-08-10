@@ -84,3 +84,33 @@ def test_consumer_groups_match_asbuilt_names():
 def test_schema_versions():
     for fname in ("mtls-edges.yaml", "telemetry-lanes.yaml"):
         assert _load(fname)["schema_version"] == 1
+
+
+def test_router_image_provides_secret_backend_dependencies():
+    """F-7 (assurance run 2026-08-09): the Sealed Fields secret backend
+    (vector-router/cx-secret-backend.sh) executes `curl` for its key fetch —
+    over mTLS with the router's own certificate, which BusyBox wget cannot do.
+    The stock vector image ships no curl, so with a seal rule present Vector
+    refused every config load: fail-closed, but the feature was undeliverable.
+
+    Pin both halves: the compose vector-router service must use the derived
+    build (not the stock image), and the derived Dockerfile must install every
+    external binary the secret backend script invokes.
+    """
+    compose = (ROOT / "deployment" / "docker" / "docker-compose.yml").read_text()
+    m = re.search(r"^  vector-router:\n(.*?)(?=^  \S)", compose, re.M | re.S)
+    assert m, "vector-router service missing from docker-compose.yml"
+    svc = m.group(1)
+    assert "build:" in svc and "./vector-router" in svc, (
+        "vector-router must build the derived image (vector-router/Dockerfile) — "
+        "the stock timberio/vector image cannot run the sealed-fields secret backend (F-7)"
+    )
+
+    dockerfile = (ROOT / "deployment" / "docker" / "vector-router" / "Dockerfile").read_text()
+    script = (ROOT / "deployment" / "docker" / "vector-router" / "cx-secret-backend.sh").read_text()
+    # Every external fetch binary the script calls must be installed by the image.
+    for binary in ("curl",):
+        assert binary in script, f"secret backend no longer calls {binary}; update this pin"
+        assert re.search(rf"apk add[^\n]*\b{binary}\b", dockerfile), (
+            f"vector-router/Dockerfile must `apk add {binary}` — the secret backend executes it"
+        )
