@@ -1,9 +1,10 @@
 package backend
 
 import (
-	"netops/backend/internal/discovery"
+	"encoding/json"
 	"testing"
 
+	"netops/backend/internal/discovery"
 	"netops/backend/models"
 )
 
@@ -180,5 +181,98 @@ func TestManualDevicesAreTenantScoped(t *testing.T) {
 	}
 	if owners["a1"] != "t_a" || owners["b1"] != "t_b" {
 		t.Fatalf("tenant ownership after restart = %v, want a1->t_a b1->t_b", owners)
+	}
+}
+
+// ── F-8 (TLS assurance run 2026-08-09, phase 11) ─────────────────────────────
+// POST /api/devices accepted an id-less device: the API returned 201 with
+// "id":"", persisted it keyed "", and DELETE /api/devices/{id} can never
+// express the empty id — an unaddressable row forever (the phase-11 fixture
+// device sat on the lab in exactly this state). Three guards, layered:
+// the handler derives an id server-side (the ScanDeviceID convention),
+// the aggregator's Upsert refuses an empty id outright (storage-layer
+// enforcement — a future caller cannot reintroduce the row class), and
+// SetStore repairs pre-fix "" rows at load so existing deployments heal on
+// the next boot.
+
+func TestIdlessDeviceCreateDerivesId(t *testing.T) {
+	srv, _ := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, b := do(t, srv, "POST", "/api/devices", admin,
+		map[string]any{"name": "CX F8 Router", "address": "203.0.113.7"})
+	if st != 201 {
+		t.Fatalf("id-less create: status %d: %s", st, b)
+	}
+	var got models.Device
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("decode created device: %v (%s)", err, b)
+	}
+	if got.ID == "" {
+		t.Fatalf("201 returned an EMPTY id — the row is unaddressable and can " +
+			"never be deleted through the API (F-8)")
+	}
+	if got.ID != "cx-f8-router" {
+		t.Fatalf("derived id = %q, want the ScanDeviceID convention (name "+
+			"lowercased, unsafe runes collapsed) = %q", got.ID, "cx-f8-router")
+	}
+
+	// The device must be addressable end-to-end: delete by the derived id.
+	if st, b = do(t, srv, "DELETE", "/api/devices/"+got.ID, admin, nil); st != 204 {
+		t.Fatalf("delete by derived id: status %d: %s", st, b)
+	}
+}
+
+func TestIdlessDeviceWithNothingToDeriveFromIs400(t *testing.T) {
+	srv, _ := newTestServerState(t)
+	admin := login(t, srv, "admin", "Passw0rd!2345").Token
+
+	st, b := do(t, srv, "POST", "/api/devices", admin, map[string]any{"vendor": "x"})
+	if st != 400 {
+		t.Fatalf("device with no id, no name, no address: status %d (want 400): %s", st, b)
+	}
+}
+
+func TestUpsertRefusesEmptyID(t *testing.T) {
+	withBackend(t, newMemKV())
+	a := discovery.NewDiscoveryAggregator()
+	a.SetStore(newDeviceStore(devicesPath()))
+
+	if err := a.Upsert(models.Device{Name: "anon"}); err == nil {
+		t.Fatal("Upsert accepted an empty device id — that persists an " +
+			"unaddressable \"\"-keyed row (F-8)")
+	}
+}
+
+func TestEmptyIDRowIsRepairedAtLoad(t *testing.T) {
+	withBackend(t, newMemKV())
+
+	// Seed the pre-fix broken state directly at the store layer, exactly as
+	// the lab acquired it (the store faithfully persists what it is given;
+	// the guard lives above it).
+	st := newDeviceStore(devicesPath())
+	if err := st.Put(models.Device{ID: "", Name: "cx-phase11-assurance-dev",
+		Address: "203.0.113.99", Source: "manual", TenantID: "t_qa"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A fresh boot over the same backend heals the row.
+	a := discovery.NewDiscoveryAggregator()
+	a.SetStore(newDeviceStore(devicesPath()))
+
+	devs := a.Devices()
+	if len(devs) != 1 || devs[0].ID != "cx-phase11-assurance-dev" {
+		t.Fatalf("after load, devices = %+v — want exactly one row under the "+
+			"derived id (F-8 repair)", devs)
+	}
+	if devs[0].TenantID != "t_qa" {
+		t.Fatalf("repair must preserve tenant ownership; got %q", devs[0].TenantID)
+	}
+
+	// And the heal is PERSISTED — a second restart must not see a "" row either.
+	for _, d := range newDeviceStore(devicesPath()).Devices() {
+		if d.ID == "" {
+			t.Fatal("the \"\" row survived in the store — repair happened only in RAM")
+		}
 	}
 }

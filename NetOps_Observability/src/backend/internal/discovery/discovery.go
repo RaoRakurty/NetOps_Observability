@@ -472,6 +472,30 @@ func (a *DiscoveryAggregator) SetStore(st DeviceStore) {
 		if d.Source == "" {
 			d.Source = "manual"
 		}
+		// F-8 repair: rows persisted before the empty-id guard existed are
+		// keyed "" and unaddressable through the API. Heal them at load —
+		// derive the id the same way the create path now does, persist under
+		// the new key, drop the "" row. A row with nothing to derive from is
+		// dropped LOUDLY: it identifies no device and can never be addressed.
+		if strings.TrimSpace(d.ID) == "" {
+			derived := ScanDeviceID(d.Name, d.Address)
+			if derived == "" {
+				log.Printf("device store: dropping anonymous row (no id/name/address) — unaddressable (F-8): %+v", d)
+				if err := st.Remove(""); err != nil {
+					log.Printf("device store: could not remove anonymous row: %v", err)
+				}
+				continue
+			}
+			d.ID = derived
+			if err := st.Put(d); err != nil {
+				// Keep the row visible in RAM under the derived id even if the
+				// re-key could not persist; the next boot retries the repair.
+				log.Printf("device store: could not persist repaired id %q: %v", derived, err)
+			} else if err := st.Remove(""); err != nil {
+				log.Printf("device store: repaired %q but could not drop the old anonymous row: %v", derived, err)
+			}
+			log.Printf("device store: repaired empty-id row -> %q (F-8)", derived)
+		}
 		a.cache[d.ID] = d
 	}
 }
@@ -487,6 +511,13 @@ func (a *DiscoveryAggregator) SetStore(st DeviceStore) {
 func (a *DiscoveryAggregator) Upsert(d models.Device) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// F-8: an empty id persists a ""-keyed row no API path can ever address
+	// again (DELETE /api/devices/{id} cannot express it). The handler derives
+	// ids before calling here; this guard is the storage-layer enforcement so
+	// no future caller can reintroduce the row class.
+	if strings.TrimSpace(d.ID) == "" {
+		return errors.New("device id required (an empty id would persist an unaddressable row)")
+	}
 	if d.Source == "" {
 		d.Source = "manual"
 	}

@@ -2274,6 +2274,19 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if tenant, cross := principalTenant(claims); !cross {
 			d.TenantID = tenant
 		}
+		// F-8: an id-less create used to persist a device keyed "" — the API
+		// returned 201 and DELETE /api/devices/{id} can never express the empty
+		// id, so the row was unaddressable forever. Derive the id server-side
+		// (the ScanDeviceID convention every discovered device already follows)
+		// and refuse a device that offers nothing to derive from.
+		if strings.TrimSpace(d.ID) == "" {
+			d.ID = discovery.ScanDeviceID(d.Name, d.Address)
+		}
+		if d.ID == "" {
+			writeError(w, http.StatusBadRequest,
+				errors.New("device requires an id, name, or address"))
+			return
+		}
 		// 201 must mean the device survives a restart. Before this store existed
 		// the device lived only in RAM and vanished on the next deploy.
 		if err := s.discovery.Upsert(d); err != nil {
