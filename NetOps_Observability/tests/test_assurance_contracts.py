@@ -173,6 +173,26 @@ def test_postgres_tls_entrypoint_requires_hostssl():
     ), "the staged pg_hba has no hostssl row for the compose network (F-4)"
 
 
+def test_ci_runs_the_tls_install_path():
+    """F-9 (assurance run 2026-08-09): fresh-install-integrity ran only the two
+    preflights — no CI leg ever EXECUTED install.py, so the one-question
+    delivery shape and the two-phase mint (phase A mint-before-stores, phase B
+    fail-closed recreate) were validated by hand only. Pin that the workflow
+    both invokes `install.py --tls=yes` for real and asserts the mesh SERVES
+    afterwards (a boot that exits 0 into a crash-loop must not pass)."""
+    wf = (ROOT.parent / ".github" / "workflows" /
+          "fresh-install-integrity.yml").read_text()
+    assert re.search(r"install\.py\s+--tls=yes", wf), (
+        "fresh-install-integrity.yml has no leg RUNNING install.py --tls=yes — "
+        "the delivery shape is validated only by hand (F-9)")
+    assert "--cacert" in wf and "/admin/health" in wf, (
+        "the --tls leg must prove the TLS ingress actually SERVES "
+        "(CA-verified health probe), not merely that install.py exited 0")
+    assert "restarting" in wf, (
+        "the --tls leg must fail on crash-looping services — exit 0 from "
+        "install.py does not prove the mesh stayed up")
+
+
 def test_syslog_hop_serves_and_requires_mesh_tls():
     """F-1 (assurance run 2026-08-09): syslog-ng → vector-aggregator:6601 was
     plaintext TCP with no exception row — the last silent intra-stack hop, in

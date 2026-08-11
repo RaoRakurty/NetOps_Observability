@@ -440,7 +440,7 @@ as the pass condition.**
 | F-6 | P1 | 11 | seal VRL multi-line snippet breaks generated processors.yaml (YAML indent) — seal rules undeliverable AND block all other processor changes; no reload-failure alert | step-3 fix + YAML-parse regression test |
 | F-7 | P1 | 11 | vector image has no curl — cx-secret-backend.sh cannot fetch keys in any mode; sealed-fields edge path never executable in-image | step-3 fix (image + in-image contract test) |
 | F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | **FIXED 2026-08-11** (below) — id derived server-side + storage-layer guard + boot-time repair of existing `""` rows |
-| F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | add a `--tls=yes` boot leg to the workflow |
+| F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | **FIXED 2026-08-11** (below) — blocking `tls-install-boot` job runs the real two-phase install; first execution pending the owner's push (like the rest of CI) |
 | F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | api-triggered reload or watched-file touch on CSV write |
 | F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | owner decision: design boundary vs seal-or-quarantine semantics |
 | F-12 (**FIXED 2026-08-11**, below) | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
@@ -659,3 +659,23 @@ lock excludes a second migrator, audit Count/Offset paging, retention sweep,
 and the SEC-011.2 `TestAppRoleCannotBypassRLS` guard). Anti-rot: backend-ci's
 cheap lane now runs `go vet -tags=pgintegration ./...`, so tagged build rot
 fails immediately instead of hiding behind the PG-service job.
+
+**F-8 lab repair executed 2026-08-11:** the rebuilt api's boot logged
+`device store: repaired empty-id row -> "cx-phase11-assurance-dev"`; the healed
+fixture was then deleted through the API (GET 200 → DELETE 204 → GET 404). No
+residual phase-11 test state remains on the lab.
+
+**F-9 FIXED — CI runs the real installer.** Failed-first pin
+`test_ci_runs_the_tls_install_path` (the workflow must invoke
+`install.py --tls=yes`, prove the ingress serves CA-verified, and fail on
+crash-loops). New blocking `tls-install-boot` job in fresh-install-integrity:
+a scratch-host `install.py --tls=yes` end to end — phase A mint (its
+`wait_for_minted_certs` gate makes a bootstrap deadlock a loud install
+failure), phase B fail-closed recreate — then three explicit post-conditions
+install.py's exit code cannot see: no service restarting/exited-nonzero after
+a settle window (with logs dumped on failure), `/admin/health` 200 through the
+TLS ingress with `--cacert` (never `-k`) so the probe exercises
+nginx→api mTLS and the TLS-wrapped stores end to end, and the per-service
+SVID material present for ten identities (list cross-checked against the live
+minted tree — the victoria-sentinel gotcha respected). Like every other CI
+gate on this branch, its first actual execution awaits the owner's push.

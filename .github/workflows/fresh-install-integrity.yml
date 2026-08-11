@@ -42,3 +42,76 @@ jobs:
       # Pulls the pinned service images and boots each committed config.
       - name: config fresh-load (real runtime binaries)
         run: bash NetOps_Observability/scripts/preflight-configs.sh
+
+  # Layer 3 — F-9 (TLS assurance run 2026-08-09): neither preflight EXECUTES
+  # install.py, so the one-question TLS delivery shape and the two-phase first
+  # boot (phase A: baseline stack boots plaintext while the api's internal CA
+  # mints every SVID; phase B: compose.tls.yml joins the chain and the stack
+  # recreates fail-closed) were validated only by hand on the lab. This job is
+  # the real thing on a scratch host: a full `install.py --tls=yes`, then
+  # explicit post-conditions — install.py exiting 0 is necessary but NOT
+  # sufficient (it cannot see a service that crash-loops after phase B).
+  tls-install-boot:
+    name: install.py --tls=yes two-phase boot (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The full stack + the golang/node build layers need more than the ~14 GB
+      # the runner image leaves free on /.
+      - name: free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: install.py --tls=yes (phase A mint -> phase B fail-closed mesh)
+        working-directory: NetOps_Observability
+        # Unattended full path. Its own gates are load-bearing and loud:
+        # wait_for_minted_certs times out FATALLY if the mint stalls (the
+        # bootstrap-deadlock class), and the phase B compose_up fails on an
+        # invalid chain.
+        run: python3 scripts/install.py --tls=yes
+
+      - name: assert the mesh stayed up (no crash-loops behind exit 0)
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          set -euo pipefail
+          sleep 20   # give a would-be crash-looper time to show its state
+          ps_out=$(docker compose ps -a --format '{{.Name}} {{.State}} {{.ExitCode}}')
+          echo "$ps_out"
+          # restarting = crash-loop; exited non-zero = a service died. One-shot
+          # init jobs legitimately show 'exited 0'.
+          bad=$(echo "$ps_out" | awk '$2 == "restarting" || ($2 == "exited" && $3 != "0")' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::services unhealthy after the two-phase TLS boot:"; echo "$bad"
+            docker compose logs --tail 50 $(echo "$bad" | awk '{print $1}' | sed 's/^netops-//; s/-1$//') || true
+            exit 1
+          fi
+
+      - name: assert the TLS ingress SERVES (CA-verified, full mesh path)
+        working-directory: NetOps_Observability
+        # nginx :443 with the generated dev cert (SANs cover localhost), through
+        # nginx->api mTLS to the api and its TLS-wrapped stores — one probe
+        # exercising the mesh end to end. --cacert, never -k: an ingress serving
+        # the wrong certificate must fail here.
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --max-time 30 --retry 6 --retry-delay 10 \
+            --cacert deployment/docker/nginx/certs/fullchain.pem \
+            https://localhost/admin/health
+          echo "TLS ingress healthy"
+
+      - name: assert the identity mint is complete
+        working-directory: NetOps_Observability
+        run: |
+          set -euo pipefail
+          missing=0
+          for svc in api nginx vector-aggregator vector-router syslog-ng kafka postgres clickhouse opensearch redis; do
+            for f in "$svc.crt" "$svc.key"; do
+              [ -s "data/tls/services/$svc/$f" ] || { echo "::error::missing SVID material: $svc/$f"; missing=1; }
+            done
+          done
+          [ -s data/tls/ca.pem ] || { echo "::error::mesh CA missing"; missing=1; }
+          exit "$missing"
