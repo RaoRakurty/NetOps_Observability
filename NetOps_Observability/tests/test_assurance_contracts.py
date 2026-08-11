@@ -171,3 +171,87 @@ def test_postgres_tls_entrypoint_requires_hostssl():
     assert any(
         r[0] == "hostssl" and len(r) >= 4 and r[3] not in loopback for r in network_rows
     ), "the staged pg_hba has no hostssl row for the compose network (F-4)"
+
+
+def test_syslog_hop_serves_and_requires_mesh_tls():
+    """F-1 (assurance run 2026-08-09): syslog-ng → vector-aggregator:6601 was
+    plaintext TCP with no exception row — the last silent intra-stack hop, in
+    the same trust segment every converted hop lives in. Both ends speak TLS
+    and both identities already exist (aggregator server SVID serves the four
+    ingest lanes; the syslog-ng client identity was registered for exactly
+    this hop, SEC-014.1).
+
+    Pin the four halves of the conversion:
+    (a) vector.yaml `syslog_in` carries the env-gated tls block — same idiom
+        as the ingest lanes, with verify_certificate so a mesh client
+        certificate is REQUIRED when the hop is enabled (proven semantics,
+        SEC-013.1);
+    (b) the tracked syslog-ng TLS variant drives the hop over transport(tls),
+        verifies the mesh CA (peer-verify required-trusted), presents the
+        syslog-ng SVID, and KEEPS the F-48 reliable disk-buffer — losing the
+        buffer in the variant would silently re-open the restart-drop hole;
+    (c) compose.tls.yml flips both ends together (variant conf + CA/SVID
+        mounts on syslog-ng; SYSLOG_TLS_ENABLED on the aggregator);
+    (d) the inventory row records the shape in security_profile, which drags
+        the hop into the mtls-edges coverage rule (a contract row with
+        negatives becomes mandatory).
+    """
+    import yaml
+
+    # (a) the vector source: enabled + verify_certificate ride the SAME env
+    # gate so "TLS on" always means "client cert required", never server-only.
+    vec = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "vector" / "vector.yaml").read_text())
+    tls = (vec["sources"]["syslog_in"] or {}).get("tls") or {}
+    gate = "${SYSLOG_TLS_ENABLED:-false}"
+    assert tls.get("enabled") == gate, (
+        "vector.yaml syslog_in needs an env-gated tls block (F-1); plaintext "
+        "must remain the base-compose default")
+    assert tls.get("verify_certificate") == gate, (
+        "syslog_in tls must set verify_certificate on the same gate — without "
+        "it any client on the compose network reaches the source unauthenticated")
+    for key in ("crt_file", "key_file", "ca_file"):
+        assert tls.get(key), f"syslog_in tls block is missing {key}"
+
+    # (b) the syslog-ng variant conf.
+    d = ROOT / "deployment" / "docker" / "syslog-ng"
+    variant = (d / "syslog-ng-tls.conf").read_text()
+    assert 'transport("tls")' in variant
+    assert "port(6601)" in variant
+    assert "peer-verify(required-trusted)" in variant, (
+        "the variant must VERIFY the mesh CA — an unverified TLS hop is "
+        "encryption without authentication")
+    for opt in ("ca-file(", "cert-file(", "key-file("):
+        assert opt in variant, f"variant destination is missing tls {opt})"
+    assert "reliable(yes)" in variant and "disk-buffer" in variant, (
+        "the TLS variant dropped the F-48 reliable disk-buffer — an aggregator "
+        "restart would silently drop device syslog again")
+    # Both variants share one body: options/source/parser live in core.conf so
+    # the two top-level confs cannot drift apart.
+    base = (d / "syslog-ng.conf").read_text()
+    core_include = '@include "/etc/syslog-ng/conf.d/core.conf"'
+    assert core_include in variant and core_include in base, (
+        "both syslog-ng confs must @include the shared core.conf body")
+    assert (d / "core.conf").exists()
+
+    # (c) compose.tls.yml wires both ends.
+    tlsc = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "compose.tls.yml").read_text())
+    sy = tlsc["services"]["syslog-ng"]
+    assert any("syslog-ng-tls.conf" in part for part in sy["command"]), (
+        "compose.tls.yml must point syslog-ng at the TLS variant conf")
+    vols = " ".join(sy.get("volumes", []))
+    assert "data/tls/ca.pem" in vols and "data/tls/services/syslog-ng" in vols, (
+        "compose.tls.yml must mount the mesh CA and the syslog-ng SVID dir")
+    agg_env = tlsc["services"]["vector-aggregator"]["environment"]
+    assert str(agg_env.get("SYSLOG_TLS_ENABLED")).lower() == "true", (
+        "compose.tls.yml must enable SYSLOG_TLS_ENABLED on vector-aggregator")
+
+    # (d) the inventory row declares the achieved shape (current stays
+    # plaintext while the base-compose default listener is plaintext — the
+    # api-opensearch precedent; the conversion lives in security_profile).
+    inv = {e["id"]: e for e in _load("transport-inventory.yaml")["edges"]}
+    prof = inv["syslog-ng-vector"].get("security_profile") or {}
+    assert "tls" in (prof.get("transport") or "").lower(), (
+        "transport-inventory syslog-ng-vector needs a security_profile "
+        "recording the TLS conversion (F-1: declared, never silent)")

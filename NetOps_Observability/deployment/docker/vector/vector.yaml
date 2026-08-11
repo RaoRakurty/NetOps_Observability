@@ -83,10 +83,25 @@ sources:
     type: docker_logs
 
   # syslog-ng forwards parsed events here in RFC5424 frame.
+  #
+  # F-1 (SEC-014.1): env-gated mesh TLS, same idiom as the ingest lanes below —
+  # unquoted bool substitution (lesson h) and verify_certificate on the SAME
+  # gate as enabled, so "TLS on" always means a mesh client certificate is
+  # REQUIRED (verify_certificate on a Vector server = client-cert requirement,
+  # proven SEC-013.1). syslog-ng presents its own SVID; there is no app-layer
+  # token on this hop (the syslog frame carries none), so transport identity is
+  # the whole authentication story. Plaintext stays the base-compose default;
+  # compose.tls.yml / the lab override flip the gate.
   syslog_in:
     type: syslog
     address: 0.0.0.0:6601
     mode: tcp
+    tls:
+      enabled: ${SYSLOG_TLS_ENABLED:-false}
+      crt_file: "${INGEST_TLS_CRT:-/tls/ca.pem}"
+      key_file: "${INGEST_TLS_KEY:-/tls/ca.pem}"
+      ca_file: "${INGEST_TLS_CA:-/tls/ca.pem}"
+      verify_certificate: ${SYSLOG_TLS_ENABLED:-false}
 
   # --------------------------------------------------------------------------
   # INGEST AUTHENTICATION (F-08) — every http_server source below is gated.

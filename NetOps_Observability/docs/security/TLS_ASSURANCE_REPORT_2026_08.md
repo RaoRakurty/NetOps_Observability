@@ -432,7 +432,7 @@ as the pass condition.**
 
 | ID | Pri | Phase | Summary | Disposition |
 |----|-----|-------|---------|-------------|
-| F-1 | P2 | 3 | syslog-ng→vector-aggregator plaintext TCP, no exception row | step-3 fix (convert or declare) |
+| F-1 | P2 | 3 | syslog-ng→vector-aggregator plaintext TCP, no exception row | **FIXED 2026-08-11** (below) — hop converted to mesh TLS + required client cert |
 | F-2 | P3 | 3 | 3 inventory rows stale vs shipped SEC-012.2/013/018 | refresh rows |
 | F-3 | P3 | 3 | `target: mtls` predates owner-accepted TLS shapes (OS basic-in-TLS, goflow2 option-1) | owner sign-off / target edit |
 | F-4 | P2 | 6 | postgres pg_hba `host` (not `hostssl`) — non-TLS TCP accepted from compose network | **FIXED 2026-08-10** (below) |
@@ -546,3 +546,41 @@ backend-ci's pg-integration job has been failing at build for two weeks. That
 is why the F-4 guard is **env-gated, not tag-gated** — it compiles on every
 `go test ./...` and skips loudly rather than rotting unseen. Repair lands in its
 own commit.
+
+## Step-3 progress (2026-08-11)
+
+**F-1 FIXED — the syslog hop rides mesh TLS with a required client
+certificate.** The finding offered "convert or declare"; converted — both ends
+already spoke TLS and both identities already existed (the syslog-ng client
+SVID was registered for exactly this hop, SEC-014.1).
+
+Shape, mirroring the ingest lanes: vector.yaml `syslog_in` gains the env-gated
+tls block (`SYSLOG_TLS_ENABLED`, plaintext stays the base-compose default) with
+`verify_certificate` on the same gate — TLS on always means a mesh client cert
+is REQUIRED, never server-only, because this hop has no app-layer token to fall
+back on. syslog-ng gets a tracked TLS variant conf (`syslog-ng-tls.conf`,
+selected by compose.tls.yml / the lab override) that verifies the aggregator
+SVID against the mesh CA (`peer-verify(required-trusted)`) and presents the
+syslog-ng SVID; the shared body moved to `core.conf` so the two variants cannot
+drift. The F-48 reliable disk-buffer is retained in the variant — it is what
+held device syslog across the cutover window (173 messages drained, dropped=0).
+
+Test-first: `test_syslog_hop_serves_and_requires_mesh_tls`
+(`tests/test_assurance_contracts.py`) pins all four halves (vector tls block,
+variant conf shape incl. disk-buffer, compose.tls.yml wiring, inventory
+`security_profile`) — the security_profile in turn drags the hop into the
+mtls-edges coverage rule, which now carries a `syslog-ng-vector` contract row
+with negatives. `preflight-configs.sh` validates BOTH syslog-ng variants with
+the runtime dir mount (the tls() file arguments are existence-checked at parse
+time — stub certs, same idiom as the vector secret stubs).
+
+Proven live on the lab: 6601 serves `spiffe://…/sa/vector-aggregator`
+(chain-verified); handshake WITHOUT a client cert → alert 40 refusal;
+plaintext client → connection reset; marker injected at the device port landed
+in `netops-syslog-*` over the TLS hop; stats destination reads
+`d_vector#0,tls,vector-aggregator:6601` with dropped=0. Rotation folded in:
+`rotate-tls-services.sh` restarts syslog-ng (start-loaded client SVID — the
+2026-08-05 incident class) and wire-verifies `vector-aggregator:6601`; tlsprobe
+gains the same endpoint, which also puts the aggregator SVID — previously
+unwatched, though it backs all four ingest lanes — under expiry watch (10
+endpoints).

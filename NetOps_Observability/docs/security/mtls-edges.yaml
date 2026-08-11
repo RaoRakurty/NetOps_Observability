@@ -1,7 +1,7 @@
 {
   "$schema_note": "Step-2 assurance EDGE CONTRACTS (tracker #151). JSON content, valid YAML 1.2 — stdlib-parseable, same convention as transport-inventory.yaml. This file is a THIN OVERLAY over the inventory: every row references an inventory edge id and adds only what the inventory deliberately does not carry — the TLS-time endpoint (the inventory records base-compose ports), the expected server identity on the wire, the client-auth regime, and the negative expectations the assurance suite must prove. Coverage rule (enforced by tests/test_assurance_contracts.py): every inventory edge whose security_profile transport contains 'tls' MUST have a row here; every row must reference a real inventory edge.",
   "schema_version": 1,
-  "updated": "2026-08-06",
+  "updated": "2026-08-11",
   "identity_format": "spiffe://<trust-domain>/ns/default/sa/<service> — trust domain default 'netops'; Kafka principals are the FULL DN string User:CN=spiffe://... (env->properties eats the mapping rules)",
   "edges": [
     {
@@ -178,6 +178,14 @@
       "client_auth": "REDIS_PASSWORD within TLS (--tls-auth-clients no — password stays the authn)",
       "verify": "TLS+CA PONG; REDIS_TLS=true env seam is fail-closed and hostname-verified (source-guard test pins no insecure knob)",
       "negative": ["plaintext client against 6380 -> connection reset", "no password -> NOAUTH"]
+    },
+    {
+      "edge": "syslog-ng-vector",
+      "endpoint": "vector-aggregator:6601 (TLS when SYSLOG_TLS_ENABLED; plaintext is the base-compose default)",
+      "server_identity": "spiffe://netops/ns/default/sa/vector-aggregator",
+      "client_auth": "required — mesh client certificate (verify_certificate; syslog-ng presents its SVID). NO app-layer token exists on this hop: transport identity is the whole authentication (F-1)",
+      "verify": "tlsprobe vector-aggregator:6601; netops-syslog doc counts move after cutover; syslog-ng stats show dropped==0 once the disk-buffer drains",
+      "negative": ["plaintext client against 6601 -> refused once SYSLOG_TLS_ENABLED", "handshake without a client certificate -> refused (verify_certificate)"]
     }
   ]
 }

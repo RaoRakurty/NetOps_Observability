@@ -65,6 +65,10 @@ var defaultPeerEndpoints = []peerEndpoint{
 	{Name: "kafka:9095", Addr: "kafka:9095"},
 	{Name: "correlation:8443", Addr: "correlation:8443"},
 	{Name: "vmauth:8427", Addr: "vmauth:8427"},
+	// The aggregator SVID as served on the wire (F-1: the syslog source; the
+	// same certificate backs the four ingest lanes, which were previously
+	// unwatched — an expiry here stalls every ingest path at once).
+	{Name: "vector-aggregator:6601", Addr: "vector-aggregator:6601"},
 }
 
 type peerProbeResult struct {

@@ -515,8 +515,14 @@
       "owning_epic": "SEC-014",
       "priority": "P1",
       "evidence": [
-        "deployment/docker/vector/vector.yaml"
-      ]
+        "deployment/docker/vector/vector.yaml",
+        "deployment/docker/syslog-ng/syslog-ng-tls.conf",
+        "deployment/docker/compose.tls.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-11 (F-1, SEC-014.1): env-gated on both ends, plaintext stays the base-compose default (current above records the base shape, api-opensearch precedent). TLS deployments (compose.tls.yml / lab override) set SYSLOG_TLS_ENABLED on the aggregator — its syslog source serves the vector-aggregator SVID and REQUIRES a mesh client certificate (verify_certificate) — and point syslog-ng at syslog-ng-tls.conf, which verifies the mesh CA (peer-verify required-trusted) and presents the syslog-ng SVID. No app-layer token exists on this hop; transport identity is the authentication. F-48 reliable disk-buffer retained in the variant (holds device syslog across handshake gaps/rotation). Certs load at start on the syslog-ng side: rotate-tls-services.sh restarts it in the weekly sweep; served cert watched via tlsprobe vector-aggregator:6601."
+      }
     },
     {
       "id": "device-syslog-ng",

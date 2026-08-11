@@ -290,6 +290,11 @@ services:
       INGEST_TLS_CRT: /tls/svid/vector-aggregator.crt
       INGEST_TLS_KEY: /tls/svid/vector-aggregator.key
       INGEST_TLS_CA: /tls/ca.pem
+      # F-1 (SEC-014.1): the syslog source serves the same SVID and requires a
+      # mesh client certificate (syslog-ng presents its own; see the syslog-ng
+      # service below). Same cert material as the lanes, separate gate so the
+      # hop converts rung-by-rung.
+      SYSLOG_TLS_ENABLED: "true"
       SSL_CERT_FILE: /tls/ca.pem
       # SEC-006.2 client 4/5: all nine kafka sinks produce on the mTLS
       # listener presenting the aggregator SVID.
@@ -301,6 +306,19 @@ services:
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/vector-aggregator:/tls/svid:ro
+
+  # F-1 (SEC-014.1): the forward hop into the aggregator rides mesh TLS —
+  # the TLS variant conf verifies the aggregator SVID against the mesh CA and
+  # presents the syslog-ng client SVID (registered for exactly this hop).
+  # `command` replaces the base entry wholesale (compose merge semantics);
+  # the base conf.d and spool mounts merge in from docker-compose.yml by
+  # container path, so only the two TLS mounts are added here. Certs load AT
+  # START — the weekly rotation sweep restarts this service.
+  syslog-ng:
+    command: ["-F", "-e", "-f", "/etc/syslog-ng/conf.d/syslog-ng-tls.conf"]
+    volumes:
+      - ../../data/tls/ca.pem:/tls/ca.pem:ro
+      - ../../data/tls/services/syslog-ng:/tls/svid:ro
 
   # SEC-010 slice C: gnmic writes via vmauth (svc-gnmic, write-only).
   gnmic:

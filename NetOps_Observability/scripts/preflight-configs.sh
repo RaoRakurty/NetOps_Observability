@@ -214,20 +214,39 @@ check_metrics_configs(){
 }
 
 # --- syslog-ng: -s is the syntax-only config check (exit code is truth) -------
+# BOTH top-level variants are validated (F-1 added syslog-ng-tls.conf), each
+# with the SAME directory mount the compose service uses (F-51), so the shared
+# core.conf @include resolves exactly as it does at runtime. A variant that is
+# valid alone but missing from the dir would ship a container that cannot boot.
 check_syslogng(){
-  [ -f "$D/syslog-ng/syslog-ng.conf" ] || { skip "syslog-ng (no config)"; return; }
-  local out rc
-  # --entrypoint: the balabit image's entrypoint IS syslog-ng, so we pass only args.
-  out="$(docker run --rm --entrypoint syslog-ng \
-      -v "$D/syslog-ng/syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro" \
-      "$SYSLOGNG_IMG" -s -f /etc/syslog-ng/syslog-ng.conf 2>&1)"; rc=$?
-  # rc=0 on valid syntax; the "capability management disabled" line is a sandbox
-  # warning (rc stays 0), not a config error.
-  if [ "$rc" -eq 0 ]; then
-    green "syslog-ng (syntax check)"
-  else
-    red "syslog-ng — $(grep -iE 'error|parse' <<<"$out" | grep -viE 'capabilit' | head -1)"
-  fi
+  [ -d "$D/syslog-ng" ] || { skip "syslog-ng (no config dir)"; return; }
+  local conf out rc stub
+  # The tls() block's file arguments are EXISTENCE-checked at parse time
+  # (verified: "File /tls/ca.pem not found" is a parse error; empty files
+  # pass). Same stub idiom as check_vector: this validates that the committed
+  # config PARSES, not that certs are provisioned.
+  stub="$(mktemp -d)"
+  : > "$stub/ca.pem"; : > "$stub/syslog-ng.crt"; : > "$stub/syslog-ng.key"
+  for conf in syslog-ng.conf syslog-ng-tls.conf; do
+    if [ ! -f "$D/syslog-ng/$conf" ]; then
+      red "syslog-ng — $conf missing (both variants are tracked; compose.tls.yml boots the tls one)"
+      continue
+    fi
+    # --entrypoint: the balabit image's entrypoint IS syslog-ng, so we pass only args.
+    out="$(docker run --rm --entrypoint syslog-ng \
+        -v "$D/syslog-ng:/etc/syslog-ng/conf.d:ro" \
+        -v "$stub/ca.pem:/tls/ca.pem:ro" \
+        -v "$stub:/tls/svid:ro" \
+        "$SYSLOGNG_IMG" -s -f "/etc/syslog-ng/conf.d/$conf" 2>&1)"; rc=$?
+    # rc=0 on valid syntax; the "capability management disabled" line is a sandbox
+    # warning (rc stays 0), not a config error.
+    if [ "$rc" -eq 0 ]; then
+      green "syslog-ng ($conf syntax check)"
+    else
+      red "syslog-ng $conf — $(grep -iE 'error|parse' <<<"$out" | grep -viE 'capabilit' | head -1)"
+    fi
+  done
+  rm -rf "$stub"
 }
 
 echo "=== config preflight: fresh-load every committed service config ==="

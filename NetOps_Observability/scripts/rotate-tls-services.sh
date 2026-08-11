@@ -147,7 +147,9 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
     # correlation FIRST: the served-cert verifier below execs openssl inside
     # it, so it must be settled before verification. opensearch is here until
     # the security plugin's cert hot-reload flag is adopted.
-    for svc in correlation opensearch vector-router vector-aggregator kafka-exporter grafana gnmic opensearch-dashboards; do
+    # syslog-ng: its client SVID (F-1 hop) is loaded at start; skipping it here
+    # leaves the old cert in the running process until the aggregator refuses it.
+    for svc in correlation opensearch vector-router vector-aggregator syslog-ng kafka-exporter grafana gnmic opensearch-dashboards; do
         log "restart: $svc"
         if ! dc restart "$svc" >/dev/null 2>&1; then
             flag "$svc restart"
@@ -187,6 +189,7 @@ verify clickhouse:9440 clickhouse
 verify opensearch:9200 opensearch
 verify correlation:8443 correlation
 verify vmauth:8427 vmauth
+verify vector-aggregator:6601 vector-aggregator
 
 # Heartbeat so "the sweep stopped running" is itself detectable (§16.2).
 printf '%s status=%s failures=%d\n' "$(date -u +%FT%TZ)" \
