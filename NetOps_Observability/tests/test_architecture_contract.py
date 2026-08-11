@@ -245,6 +245,48 @@ def test_transport_inventory_baseline_is_honest():
     assert by_id["api-valkey"]["current"]["authn"] == "password"
 
 
+def test_every_compose_service_appears_in_the_transport_inventory():
+    """F-5 (assurance run 2026-08-09): the aux-tier intra-stack edges
+    (api→gotenberg tenant PDFs, api→keycloak, api→netbox, the nginx→UI
+    upstreams …) had NO inventory row, so the 'every edge declared' promise
+    (SEC-001) silently excluded them — the same class as the
+    aggregator→opensearch edge missed before F-17, and the coverage rule can
+    only validate edges that exist.
+
+    Mechanical ratchet, the workloadid two-table idiom: every compose service
+    appears in at least one edge (source or destination) OR carries an
+    explicit exemption with the reason on record. Adding a service forces an
+    explicit transport decision."""
+    EXEMPT = {
+        # legacy profile — does not run (see
+        # test_legacy_profiled_services_not_presented_as_active).
+        "telegraf": "legacy profile, not running",
+        # The seal provider is reached over a UNIX socket bind-mount
+        # (SEAL_SOCKET=/run/secrets-seal/seal.sock) — there is no network
+        # transport on this hop to declare.
+        "secrets-seal": "unix-socket seam, no network hop",
+    }
+    inv = _load_inventory()
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    services = set(compose.get("services", {}))
+    named = {n for e in inv["edges"] for n in (e["source"], e["destination"])}
+
+    missing = sorted(services - named - set(EXEMPT))
+    assert not missing, (
+        f"compose services with NO transport-inventory edge and no exemption: {missing} "
+        "— add an edge (docs/security/transport-inventory.yaml) or an exemption "
+        "with the reason on record (F-5)")
+
+    stale = sorted(set(EXEMPT) - services)
+    assert not stale, f"exemptions for services that no longer exist: {stale}"
+
+    double = sorted(set(EXEMPT) & named)
+    assert not double, (
+        f"services BOTH exempted and declared: {double} — a service is in exactly "
+        "one table (the workloadid ratchet rule)")
+
+
 def test_transport_inventory_rows_reflect_shipped_epics():
     """F-2 (assurance run 2026-08-09): three rows lagged the epics that
     changed their hops, so the inventory under-reported achieved security and

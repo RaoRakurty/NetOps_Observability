@@ -194,6 +194,78 @@
       "client_auth": "required — mesh client certificate (verify_certificate; syslog-ng presents its SVID). NO app-layer token exists on this hop: transport identity is the whole authentication (F-1)",
       "verify": "tlsprobe vector-aggregator:6601; netops-syslog doc counts move after cutover; syslog-ng stats show dropped==0 once the disk-buffer drains",
       "negative": ["plaintext client against 6601 -> refused once SYSLOG_TLS_ENABLED", "handshake without a client certificate -> refused (verify_certificate)"]
+    },
+    {
+      "edge": "osd-opensearch",
+      "endpoint": "opensearch:9200 (https, svc_dashboards)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "svc_dashboards basic auth within TLS, CA-verified (OPENSEARCH_SSL_VERIFICATIONMODE=certificate)",
+      "verify": "OSD loads index patterns / Discover works behind nginx",
+      "negative": ["wrong svc_dashboards password -> OSD reports auth failure, never silent plaintext fallback"]
+    },
+    {
+      "edge": "grafana-victoria",
+      "endpoint": "vmauth:8427 (https, svc-grafana read-only routes)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth (svc-grafana), mesh CA pinned via tlsAuthWithCACert",
+      "verify": "grafana VM datasources healthy; panels populate",
+      "negative": ["svc-grafana issuing a write (/api/v1/write) -> refused (route scoping)"]
+    },
+    {
+      "edge": "grafana-clickhouse",
+      "endpoint": "clickhouse:9440 (native-secure)",
+      "server_identity": "spiffe://netops/ns/default/sa/clickhouse",
+      "client_auth": "read-only grafana CH user password within TLS (secure:true + mesh tlsCACert)",
+      "verify": "CH datasource healthy; flow panels populate; user is read-only",
+      "negative": ["grafana CH user attempting DDL/write -> refused by CH grants"]
+    },
+    {
+      "edge": "cloud-ingest-kafka",
+      "endpoint": "kafka:9094 (MTLS listener)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required — cloud-ingest SVID (kafka-python KAFKA_SSL_* kwargs; the env seam refuses partial TLS config)",
+      "verify": "cloud topics move; its full-DN principal appears in the ACL matrix",
+      "negative": ["producing to a topic outside its ACL grant -> DENIED under default-deny"]
+    },
+    {
+      "edge": "kafka-exporter-kafka",
+      "endpoint": "kafka:9094 (MTLS listener)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required — kafka-exporter SVID (--tls.enabled + cert/key/ca flags)",
+      "verify": "kafka_* series fresh in victoria (job kafka); consumer-lag panels populate",
+      "negative": ["exporter without its SVID against 9094 -> handshake refused (ssl.client.auth=required)"]
+    },
+    {
+      "edge": "kafka-init-kafka",
+      "endpoint": "kafka:9094 (MTLS listener; bootstrap kafka:9094, never localhost — SVID SAN is the compose DNS name)",
+      "server_identity": "spiffe://netops/ns/default/sa/kafka",
+      "client_auth": "required — kafka SVID staged into a PEM keystore client config (the broker DN is the super-user)",
+      "verify": "one-shot exits 0 with all topics present (kafka-topics --describe over 9094)",
+      "negative": ["topic creation over an unauthenticated path is impossible once 9092 is dropped"]
+    },
+    {
+      "edge": "opensearch-init-opensearch",
+      "endpoint": "opensearch:9200 (https, svc_bootstrap)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "svc_bootstrap basic auth within TLS (CURL_CA_BUNDLE = mesh CA)",
+      "verify": "one-shot exits 0; templates/ISM policies present",
+      "negative": ["anonymous template PUT -> 401 (security plugin)"]
+    },
+    {
+      "edge": "opensearch-security-init-opensearch",
+      "endpoint": "opensearch:9200 (https, securityadmin)",
+      "server_identity": "spiffe://netops/ns/default/sa/opensearch",
+      "client_auth": "required — opensearch-admin clientAuth certificate; admin identity = cert DN, not a registry row",
+      "verify": "securityadmin applies the full config set (seeded from plugin defaults, ours overlaid); exits 0",
+      "negative": ["securityadmin with a non-admin-DN cert -> refused"]
+    },
+    {
+      "edge": "vmalert-victoria",
+      "endpoint": "vmauth:8427 (https, svc-vmalert)",
+      "server_identity": "spiffe://netops/ns/default/sa/vmauth",
+      "client_auth": "per-service basic auth (svc-vmalert) with the mesh CA (datasource/remoteWrite/remoteRead tlsCAFile)",
+      "verify": "vmalert groups evaluating (rules loaded, ALERTS series written back)",
+      "negative": ["svc-vmalert against a route outside its scope -> refused"]
     }
   ]
 }

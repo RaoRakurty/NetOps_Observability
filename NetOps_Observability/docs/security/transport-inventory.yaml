@@ -976,6 +976,601 @@
       "evidence": [
         "deployment/docker/docker-compose.yml"
       ]
+    },
+    {
+      "id": "api-gotenberg",
+      "source": "api",
+      "destination": "gotenberg",
+      "channel": "api",
+      "protocol": "http",
+      "port": 3000,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "multipart POST of RENDERED TENANT RCA REPORT PDFs (REPORT_PDF_SIDECAR_URL, profile pdf) — tenant data on the wire; highest-value hop of the F-5 batch"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "gotenberg holds a reserved server identity in the workload registry; conversion vs declared-exception is an OWNER decision pending (F-5) — gotenberg 8 has no native TLS listener, so conversion means a TLS proxy in front or an upstream feature"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1640"
+      ]
+    },
+    {
+      "id": "api-keycloak",
+      "source": "api",
+      "destination": "keycloak",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "OIDC discovery/JWKS + token exchange — bearer-token material when SSO is live. DORMANT today: profile sso + OIDC_ISSUER unset by default; SSO/SAML implementation itself is deferred until SaaS"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1496"
+      ]
+    },
+    {
+      "id": "keycloak-postgres",
+      "source": "keycloak",
+      "destination": "postgres",
+      "channel": "store",
+      "protocol": "postgres",
+      "port": 5432,
+      "current": {
+        "transport": "tls-unverified",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "pgjdbc negotiates TLSv1.3 (server-forced since F-4 hostssl; observed live in pg_stat_ssl) but WITHOUT CA/hostname verification — encryption yes, server authentication no. Recorded here per the F-4 fix notes"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "jdbc sslmode=verify-full with the mesh CA"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-011",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "api-netbox",
+      "source": "api",
+      "destination": "netbox",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "token",
+        "authz": "netbox-rbac",
+        "notes": "device-inventory sync. DORMANT by default: NETBOX_URL unset; the var can equally point at an EXTERNAL NetBox (then transport is that deployment's concern and this row covers only the in-stack profile netbox case)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "token",
+        "authz": "netbox-rbac"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml:1293"
+      ]
+    },
+    {
+      "id": "netbox-netbox-postgres",
+      "source": "netbox",
+      "destination": "netbox-postgres",
+      "channel": "store",
+      "protocol": "postgres",
+      "port": 5432,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "db-grants",
+        "notes": "dedicated single-purpose postgres, profile netbox, unpublished"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "db-grants"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "netbox-valkey",
+      "source": "netbox",
+      "destination": "redis",
+      "channel": "store",
+      "protocol": "resp",
+      "port": 6379,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "none",
+        "notes": "netbox task queue/cache on valkey db 9/10 over the base-compose 6379 listener. KNOWN INCOMPATIBILITY: TLS deployments remove 6379 (--port 0) and netbox carries NO TLS stanza in compose.tls.yml yet — the netbox profile does not work on a TLS deployment until that ships (step-3 audit truth, 2026-08-07)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "none",
+        "notes": "6380 with the mesh CA, like every other valkey client"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-012",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ]
+    },
+    {
+      "id": "nginx-frontend",
+      "source": "nginx",
+      "destination": "frontend",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "ingress-terminated upstream hop (SPA + docs paths) inside the compose network; static assets only — auth rides the api hop"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "frontend holds a reserved server identity for later meshing"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:42"
+      ]
+    },
+    {
+      "id": "nginx-grafana",
+      "source": "nginx",
+      "destination": "grafana",
+      "channel": "api",
+      "protocol": "http",
+      "port": 3000,
+      "current": {
+        "transport": "plaintext",
+        "authn": "header-sso",
+        "authz": "grafana-org-roles",
+        "notes": "auth_request-gated upstream (X-Grafana-User from the api session) — session identity crosses this hop in a header"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "header-sso",
+        "authz": "grafana-org-roles"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:192"
+      ]
+    },
+    {
+      "id": "nginx-osd",
+      "source": "nginx",
+      "destination": "opensearch-dashboards",
+      "channel": "api",
+      "protocol": "http",
+      "port": 5601,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "ingress-terminated upstream hop, profile osd"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:315"
+      ]
+    },
+    {
+      "id": "nginx-netbox",
+      "source": "nginx",
+      "destination": "netbox",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "header-sso",
+        "authz": "netbox-rbac",
+        "notes": "auth_request-gated upstream (X-Netbox-User), profile netbox"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "header-sso",
+        "authz": "netbox-rbac"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:254"
+      ]
+    },
+    {
+      "id": "nginx-keycloak",
+      "source": "nginx",
+      "destination": "keycloak",
+      "channel": "api",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "browser-facing SSO paths proxied to keycloak (proxy-headers=xforwarded), profile sso — credentials transit this hop during login when SSO is live; dormant today"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/nginx/default.conf:381"
+      ]
+    },
+    {
+      "id": "osd-opensearch",
+      "source": "opensearch-dashboards",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default (security plugin off): OPENSEARCH_HOSTS http"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles",
+        "notes": "same §0a shape as the other OpenSearch clients"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:168"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): https + svc_dashboards basic identity, CA-verified (OPENSEARCH_SSL_VERIFICATIONMODE=certificate, mesh CA mounted)"
+      }
+    },
+    {
+      "id": "grafana-victoria",
+      "source": "grafana",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose datasources read victoria directly"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-service",
+        "authz": "vmauth-route-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/grafana/datasources-mtls.yaml",
+        "deployment/docker/compose.tls.yml:265"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-010 slice C): datasources-mtls.yaml variant — https://vmauth:8427 as svc-grafana (read-only scoped routes), mesh CA pinned (tlsAuthWithCACert)"
+      }
+    },
+    {
+      "id": "grafana-clickhouse",
+      "source": "grafana",
+      "destination": "clickhouse",
+      "channel": "store",
+      "protocol": "clickhouse-native",
+      "port": 9440,
+      "current": {
+        "transport": "plaintext",
+        "authn": "password",
+        "authz": "ch-user-grants",
+        "notes": "base-compose datasource rides the plaintext native listener as the read-only grafana CH user"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "password",
+        "authz": "ch-user-grants"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-009",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/grafana/datasources-mtls.yaml",
+        "deployment/docker/compose.tls.yml:265"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-009): native-secure 9440, secure:true with the mesh CA ($__file tlsCACert), read-only grafana user within TLS"
+      }
+    },
+    {
+      "id": "cloud-ingest-kafka",
+      "source": "cloud-ingest",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9094,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: direct kafka-python producer on the baseline listener (the client SEC-006.2's list MISSED — surfaced by lesson i when its first topic ACL denied it). kafka_security_kwargs env seam refuses partial TLS config"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P1",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:383"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (task #9, interim-ANONYMOUS retired): MTLS:9094 with the cloud-ingest SVID (KAFKA_SSL_* kwargs mirror), full-DN principal named in the ACL matrix; exclusive under default-deny since the 2026-08-09 flip"
+      }
+    },
+    {
+      "id": "kafka-exporter-kafka",
+      "source": "kafka-exporter",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9094,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092}, profile self-monitoring"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:511"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06: --tls.enabled with the kafka-exporter SVID on MTLS:9094; its full-DN principal holds Describe-class ACLs; exclusive under default-deny since the flip"
+      }
+    },
+    {
+      "id": "kafka-init-kafka",
+      "source": "kafka-init",
+      "destination": "kafka",
+      "channel": "bus",
+      "protocol": "kafka",
+      "port": 9094,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "one-shot topic creator; base-compose default rides the baseline listener"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "svid",
+        "authz": "topic-acls"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-006",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:488"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (kafka admin plane): stages the kafka SVID into a PEM keystore client config and creates topics over authenticated MTLS:9094 (bootstrap kafka:9094 — the SVID SAN is the compose DNS name, never localhost)"
+      }
+    },
+    {
+      "id": "opensearch-init-opensearch",
+      "source": "opensearch-init",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "one-shot template/ISM bootstrap; base-compose default OPENSEARCH_URL is http (security plugin off)"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:179"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): https as svc_bootstrap with CURL_CA_BUNDLE = mesh CA"
+      }
+    },
+    {
+      "id": "opensearch-security-init-opensearch",
+      "source": "opensearch-security-init",
+      "destination": "opensearch",
+      "channel": "store",
+      "protocol": "http",
+      "port": 9200,
+      "current": {
+        "transport": "mtls",
+        "authn": "cert-dn",
+        "authz": "security-admin",
+        "notes": "profile security — this one-shot EXISTS only on security-enabled deployments and securityadmin always authenticates with the admin certificate DN; there is no plaintext mode for this hop"
+      },
+      "target": {
+        "transport": "mtls",
+        "authn": "cert-dn",
+        "authz": "security-admin"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-008",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/docker-compose.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-05 (SEC-008.1): securityadmin over TLS with the opensearch-admin clientAuth certificate (admin identity = cert DN, not a registry row); seeds the full plugin config set"
+      }
+    },
+    {
+      "id": "vmalert-victoria",
+      "source": "vmalert",
+      "destination": "victoria",
+      "channel": "store",
+      "protocol": "http",
+      "port": 8428,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: rule evaluation datasource + remoteWrite direct to victoria"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "basic-per-service",
+        "authz": "vmauth-route-scope"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-010",
+      "priority": "P2",
+      "evidence": [
+        "deployment/docker/compose.tls.yml:247"
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-010): datasource/remoteWrite/remoteRead all https://vmauth:8427 as svc-vmalert with the mesh CA (tlsCAFile flags)"
+      }
+    },
+    {
+      "id": "victoria-cadvisor",
+      "source": "victoria",
+      "destination": "cadvisor",
+      "channel": "scrape",
+      "protocol": "http",
+      "port": 8080,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "container-metrics scrape, profile self-monitoring; metrics only, no tenant data"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "cadvisor has no native TLS listener — candidate for a declared exception at owner review (F-5)"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "src/config/vmscrape.yml:79"
+      ]
+    },
+    {
+      "id": "victoria-node-exporter",
+      "source": "victoria",
+      "destination": "node-exporter",
+      "channel": "scrape",
+      "protocol": "http",
+      "port": 9100,
+      "current": {
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "host-metrics scrape, profile self-monitoring; metrics only, no tenant data"
+      },
+      "target": {
+        "transport": "tls",
+        "authn": "none",
+        "authz": "none",
+        "notes": "node-exporter supports web-config TLS — convertible; or a declared exception at owner review (F-5)"
+      },
+      "trust_domain": "workload",
+      "owning_epic": "SEC-001",
+      "priority": "P3",
+      "evidence": [
+        "src/config/vmscrape.yml:84"
+      ]
     }
   ]
 }

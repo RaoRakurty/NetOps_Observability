@@ -436,7 +436,7 @@ as the pass condition.**
 | F-2 | P3 | 3 | 3 inventory rows stale vs shipped SEC-012.2/013/018 | **FIXED 2026-08-11** (below) |
 | F-3 | P3 | 3 | `target: mtls` predates owner-accepted TLS shapes (OS basic-in-TLS, goflow2 option-1) | **FIXED 2026-08-11** (below) — targets restated citing the recorded owner decisions |
 | F-4 | P2 | 6 | postgres pg_hba `host` (not `hostssl`) — non-TLS TCP accepted from compose network | **FIXED 2026-08-10** (below) |
-| F-5 | P2 | 9 | inventory missing aux-tier edges: api→gotenberg (tenant PDFs, plaintext) / api→keycloak / api→netbox / nginx→UI upstreams | declare or convert; add mechanical completeness check |
+| F-5 | P2 | 9 | inventory missing aux-tier edges: api→gotenberg (tenant PDFs, plaintext) / api→keycloak / api→netbox / nginx→UI upstreams | **FIXED 2026-08-11** (below) — 22 rows added + mechanical service-coverage ratchet; api→gotenberg conversion is an owner decision recorded in the row |
 | F-6 | P1 | 11 | seal VRL multi-line snippet breaks generated processors.yaml (YAML indent) — seal rules undeliverable AND block all other processor changes; no reload-failure alert | step-3 fix + YAML-parse regression test |
 | F-7 | P1 | 11 | vector image has no curl — cx-secret-backend.sh cannot fetch keys in any mode; sealed-fields edge path never executable in-image | step-3 fix (image + in-image contract test) |
 | F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | step-3 fix + repair; then delete fixture |
@@ -608,3 +608,29 @@ authenticated" criterion met; the mTLS-to-OS-role HLD ideal explicitly not
 being built), goflow2-kafka to the option-1 shape (TLS-anon on FLOWS:9095,
 ACL-bounded, exclusive under default-deny) with its reopen condition
 (goflow2 growing client-cert support).
+
+**F-5 FIXED — the inventory is service-complete, mechanically.** Failed-first
+pin `test_every_compose_service_appears_in_the_transport_inventory`
+(the workloadid two-table idiom: every compose service appears in ≥1 edge OR
+carries an exemption with its reason on record; adding a service now forces an
+explicit transport decision). Exemptions: telegraf (legacy, not running) and
+secrets-seal (unix-socket seam — no network hop exists).
+
+22 rows added, each hand-verified against compose/nginx/datasource configs.
+The named F-5 edges: **api→gotenberg** (tenant RCA PDFs multipart over
+plaintext — P1; conversion vs declared-exception recorded as a pending OWNER
+decision in the row, since gotenberg 8 has no native TLS listener),
+api→keycloak + nginx→keycloak (dormant, sso profile), api→netbox +
+nginx→netbox, nginx→frontend/grafana/OSD upstreams (the grafana/netbox hops
+carry auth_request session headers — P2). Also surfaced by the sweep:
+**keycloak→postgres rides TLS WITHOUT CA/hostname verification** (the F-4
+fallout note, now a row: `tls-unverified`), **netbox→valkey is INCOMPATIBLE
+with TLS deployments** (rides 6379, which the wave removed; netbox has no TLS
+stanza yet — recorded in the row), and six already-converted client hops that
+had no row at all (osd/opensearch-init/security-init→opensearch,
+grafana→victoria+clickhouse via vmauth/9440, cloud-ingest/kafka-exporter/
+kafka-init→kafka:9094, vmalert→vmauth) — each now declares its
+security_profile, and the coverage rule forced matching mtls-edges contract
+rows with negatives. Two scrape hops (victoria→cadvisor/node-exporter,
+metrics-only) declared as open plaintext with their owner-review candidacy
+noted.
