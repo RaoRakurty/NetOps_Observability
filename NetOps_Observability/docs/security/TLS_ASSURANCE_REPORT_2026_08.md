@@ -441,7 +441,7 @@ as the pass condition.**
 | F-7 | P1 | 11 | vector image has no curl — cx-secret-backend.sh cannot fetch keys in any mode; sealed-fields edge path never executable in-image | step-3 fix (image + in-image contract test) |
 | F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | **FIXED 2026-08-11** (below) — id derived server-side + storage-layer guard + boot-time repair of existing `""` rows |
 | F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | **FIXED 2026-08-11** (below) — blocking `tls-install-boot` job runs the real two-phase install; first execution pending the owner's push (like the rest of CI) |
-| F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | api-triggered reload or watched-file touch on CSV write |
+| F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | **FIXED 2026-08-11** (below) — content-watching reload wrapper on BOTH vector tiers + content-aware CSV export; hot-reload e2e proven live |
 | F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | owner decision: design boundary vs seal-or-quarantine semantics |
 | F-12 (**FIXED 2026-08-11**, below) | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
 
@@ -679,3 +679,40 @@ nginx→api mTLS and the TLS-wrapped stores end to end, and the per-service
 SVID material present for ten identities (list cross-checked against the live
 minted tree — the victoria-sentinel gotcha respected). Like every other CI
 gate on this branch, its first actual execution awaits the owner's push.
+
+**F-10 FIXED — device→tenant changes take effect within a poll interval, on
+both vector tiers, without a restart.** (The router was equally affected: its
+compose comment claimed `--watch-config` covered enrichment reload — it does
+not; `--watch-config` watches config files only. Comment corrected.)
+
+Two halves, each failed-first:
+
+- **Writer** (`TestWriteEnrichmentCSV_UnchangedContentDoesNotRewrite`): the
+  api's 60-second export tick used to rewrite the CSV unconditionally, so
+  mtime churned with identical content. `writeEnrichmentCSV` now compares
+  bytes and skips the rename when nothing changed, and the export loop logs
+  only real changes.
+- **Reader** (`test_vector_tiers_reload_enrichment_on_change`):
+  `vector/cx-enrichment-reload.sh` — a PID-1 entrypoint wrapper on BOTH
+  vector services (reached through directory mounts per F-51; explicit
+  `command` retained per lesson e; lifecycle signals forwarded; shellcheck
+  clean, §16 bar). It polls the CSV's md5 (content, not mtime — robust
+  regardless of writer discipline) and sends Vector SIGHUP on change; Vector
+  validates before applying and re-reads enrichment on reload (proven in the
+  step-3 e2e).
+
+Live e2e on the lab, no restarts anywhere: device `cx-f10-reload-dev` created
+under the QA tenant → api logged a changed export (22 rows) → BOTH wrappers
+logged the SIGHUP → `Vector has reloaded` → a syslog marker for that hostname
+landed in `netops-syslog-t_69cb…` WITH `tenant_id` stamped. Device deleted →
+shrink export (20 rows) → second reload fired. Args of both running
+containers verified against the tracked compose (stale-container lesson).
+
+**F-11 scope after F-10:** the stale-CSV path into the fail-open window is
+closed — an attribution gap now lasts at most one export tick + poll
+(≤ ~75 s) after an assignment, instead of "until someone restarts the
+aggregator". The remaining F-11 exposure is the genuinely-unknown hostname
+(never attributable), which stores PLAINTEXT in the untagged index while
+tenant-guarded seal rules skip it. That semantic choice — accept as designed
+boundary vs seal-or-quarantine unattributed events — remains the OWNER
+decision the register row asks for.

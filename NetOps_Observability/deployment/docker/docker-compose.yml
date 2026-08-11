@@ -444,6 +444,15 @@ services:
     # container 291584 — the DEF-6 fix was "deployed" for hours and absent).
     # Mounting the DIRECTORY makes the path resolve per-open, so a rename is
     # picked up by a plain restart. Do not revert this to a file mount.
+    #
+    # F-10: boot through the enrichment-reload wrapper — vector reads
+    # device_tenant.csv ONCE per (re)load, so without this a device→tenant
+    # assignment took effect only at the next restart (untagged telemetry
+    # until then). The wrapper rides the existing ./vector directory mount
+    # (F-51: no file mounts); compose `command` arrives as its "$@". An
+    # entrypoint override DROPS the image CMD (lesson e) — keep `command`
+    # explicit here.
+    entrypoint: ["/bin/sh", "/etc/vector/conf/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml"]
     environment:
       # Kafka sink bootstrap servers (vector.yaml interpolates it; the in-file
@@ -504,7 +513,15 @@ services:
     # no-op default so a cold start never boots against a missing component).
     # --watch-config hot-applies rule changes; Vector validates a reload and
     # keeps the old topology on error, so a bad generate can't take the lane
-    # down. This is also the enrichment reload-on-change Phase 2 wanted.
+    # down. (--watch-config watches CONFIG files only — the earlier claim here
+    # that it also covered enrichment reload was WRONG; enrichment tables are
+    # read once per (re)load, which is F-10.)
+    #
+    # F-10: boot through the enrichment-reload wrapper (shared script from
+    # ./vector, mounted below as a DIRECTORY per F-51). compose `command`
+    # arrives as the wrapper's "$@"; an entrypoint override DROPS the image
+    # CMD (lesson e) — keep `command` explicit.
+    entrypoint: ["/bin/sh", "/etc/vector/shared/cx-enrichment-reload.sh"]
     command: ["--config", "/etc/vector/conf/vector.yaml", "--config", "/etc/vector/processors/processors.yaml", "--watch-config"]
     environment:
       # ClickHouse credentials are interpolated into vector.yaml at startup.
@@ -519,6 +536,9 @@ services:
       INGEST_TOKEN: ${INGEST_TOKEN:-}
     volumes:
       - ./vector-router:/etc/vector/conf:ro
+      # F-10: the shared enrichment-reload wrapper lives in ./vector — mounted
+      # as a DIRECTORY (F-51: file mounts pin inodes across edits).
+      - ./vector:/etc/vector/shared:ro
       # F-49: the device→tenant enrichment CSV, same read-only mount the
       # aggregator has. Flows reach the bus straight from goflow2 now, so this
       # tier is where their tenant stamp is applied.

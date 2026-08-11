@@ -173,6 +173,62 @@ def test_postgres_tls_entrypoint_requires_hostssl():
     ), "the staged pg_hba has no hostssl row for the compose network (F-4)"
 
 
+def test_vector_tiers_reload_enrichment_on_change():
+    """F-10 (assurance run 2026-08-09, step-3 e2e): Vector reads enrichment
+    tables ONCE at (re)load — --watch-config watches config files only — so a
+    device→tenant assignment took effect only at the next restart; until then
+    that device's telemetry landed UNTAGGED (and a tenant-guarded seal rule
+    silently did not apply). Pin the reload mechanism on BOTH tiers that load
+    device_tenant.csv:
+    (a) each vector service boots through the reload wrapper (entrypoint) and
+        mounts the script — and keeps an explicit `command` (an entrypoint
+        override DROPS the image CMD, lesson e);
+    (b) the wrapper watches CONTENT (md5, not mtime) and reloads via SIGHUP,
+        forwarding lifecycle signals since it runs as PID 1;
+    (c) the paths agree: the wrapper's default CSV is exactly where the
+        enrichment mount lands in both vector configs."""
+    import yaml
+
+    script_path = ROOT / "deployment" / "docker" / "vector" / "cx-enrichment-reload.sh"
+    assert script_path.exists(), (
+        "cx-enrichment-reload.sh missing — the vector tiers have no way to "
+        "notice a device→tenant change without a restart (F-10)")
+    script = script_path.read_text()
+    for needle, why in [
+        ("md5sum", "content hash, not mtime — the export tick used to churn mtime"),
+        ("kill -HUP", "SIGHUP is the reload signal"),
+        ("set -eu", "§16.3 bash hygiene"),
+        ("trap", "PID-1 wrapper must forward lifecycle signals to vector"),
+        ("device_tenant.csv", "must default to the mounted enrichment path"),
+    ]:
+        assert needle in script, f"reload wrapper lost {needle!r} ({why})"
+
+    compose = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "docker-compose.yml").read_text())
+    # The wrapper is REACHED through a ./vector DIRECTORY mount (F-51: file
+    # mounts pin inodes across edits): the aggregator's own conf mount for the
+    # aggregator, a shared mount for the router.
+    wrapper_mount = {
+        "vector-aggregator": ("/etc/vector/conf/cx-enrichment-reload.sh",
+                              "./vector:/etc/vector/conf"),
+        "vector-router": ("/etc/vector/shared/cx-enrichment-reload.sh",
+                          "./vector:/etc/vector/shared"),
+    }
+    for svc, (ep_path, mount) in wrapper_mount.items():
+        s = compose["services"][svc]
+        ep = " ".join(s.get("entrypoint") or [])
+        assert ep_path in ep, (
+            f"{svc} does not boot through the enrichment reload wrapper (F-10)")
+        assert s.get("command"), (
+            f"{svc} lost its explicit command — with an entrypoint override the "
+            "image CMD is dropped and vector starts with no config (lesson e)")
+        vols = " ".join(s.get("volumes") or [])
+        assert mount in vols, (
+            f"{svc}: the wrapper's directory mount {mount!r} is gone — the "
+            "entrypoint path would not resolve (F-51: directory mounts only)")
+        assert "/etc/vector/enrichment" in vols, f"{svc} lost the enrichment mount"
+
+
 def test_ci_runs_the_tls_install_path():
     """F-9 (assurance run 2026-08-09): fresh-install-integrity ran only the two
     preflights — no CI leg ever EXECUTED install.py, so the one-question

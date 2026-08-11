@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"log"
@@ -86,43 +87,63 @@ func buildEnrichmentRows(devices []models.Device) []enrichmentRow {
 // dir/device_tenant.csv (temp file + rename, so a reader never sees a partial
 // file). Header is `identity,tenant_id` — matched by the Vector enrichment
 // table and the correlation loader.
-func writeEnrichmentCSV(dir string, rows []enrichmentRow) error {
+//
+// F-10: it reports whether the file actually CHANGED, and it skips the rename
+// when the bytes are identical to what is already on disk. The Vector-side
+// reload wrapper (cx-enrichment-reload.sh) keys off this file — before this
+// guard, the every-60s export tick bumped the mtime with identical content,
+// which would have translated into a Vector reload a minute, forever.
+func writeEnrichmentCSV(dir string, rows []enrichmentRow) (bool, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return false, err
 	}
-	tmp, err := os.CreateTemp(dir, ".device_tenant-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename.
 
-	w := csv.NewWriter(tmp)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
 	if err := w.Write([]string{"identity", "tenant_id"}); err != nil {
-		tmp.Close()
-		return err
+		return false, err
 	}
 	for _, r := range rows {
 		if err := w.Write([]string{r.Identity, r.Tenant}); err != nil {
-			tmp.Close()
-			return err
+			return false, err
 		}
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
+		return false, err
+	}
+
+	final := filepath.Join(dir, enrichmentFileName)
+	// Unreadable/missing existing file → treat as changed and write; the write
+	// path below surfaces any real error.
+	if prev, err := os.ReadFile(final); err == nil && bytes.Equal(prev, buf.Bytes()) {
+		return false, nil
+	}
+
+	tmp, err := os.CreateTemp(dir, ".device_tenant-*.tmp")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename.
+
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
 		tmp.Close()
-		return err
+		return false, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return false, err
 	}
 	// os.CreateTemp creates 0600, but this file IS the shared cross-service plane:
 	// the Vector aggregator and the correlation engine (different uids) must read
 	// it. 0600 left them with PermissionError → silently empty tenant maps.
 	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
+		return false, err
 	}
-	return os.Rename(tmpName, filepath.Join(dir, enrichmentFileName))
+	if err := os.Rename(tmpName, final); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // startTenantEnrichment runs the export loop until ctx is cancelled. It is a
@@ -142,11 +163,16 @@ func (s *server) startTenantEnrichment(ctx context.Context) {
 	}
 	write := func() {
 		rows := buildEnrichmentRows(s.discovery.Devices())
-		if err := writeEnrichmentCSV(dir, rows); err != nil {
+		changed, err := writeEnrichmentCSV(dir, rows)
+		if err != nil {
 			log.Printf("tenant-enrichment: write %s: %v", dir, err)
 			return
 		}
-		log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s", len(rows), dir, enrichmentFileName)
+		if changed {
+			// The mtime bump is the signal the Vector-side reload wrapper
+			// (F-10) keys off — log it so a reload has a visible cause here.
+			log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s (changed — vector tiers will reload)", len(rows), dir, enrichmentFileName)
+		}
 	}
 	go func() {
 		write()
