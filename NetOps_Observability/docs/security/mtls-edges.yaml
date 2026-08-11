@@ -180,6 +180,14 @@
       "negative": ["plaintext client against 6380 -> connection reset", "no password -> NOAUTH"]
     },
     {
+      "edge": "collectors-vector-lanes",
+      "endpoint": "vector-aggregator:8688 (traps) / 8689 (probes) / 8690 (metrics) / 8692 (bus) — TLS when INGEST_TLS_ENABLED",
+      "server_identity": "spiffe://netops/ns/default/sa/vector-aggregator",
+      "client_auth": "required — mesh client certificate (verify_certificate) + per-lane token (INGEST_TOKEN_TRAPS/PROBES/METRICS/BUS): identity is mTLS's job, lane authz is the token's. Clients present the api SVID (api+prober via the mesh_client seam) or their own (cloud-ingest, canary via correlation SVID)",
+      "verify": "all four lanes ingest (doc/series movement per lane); tlsprobe vector-aggregator:6601 watches the same served SVID",
+      "negative": ["shared INGEST_TOKEN on any lane -> 401 (narrowing, proven live 2026-08-09)", "a lane token on a DIFFERENT lane (metrics token on bus) -> 401", "handshake without a client certificate -> refused"]
+    },
+    {
       "edge": "syslog-ng-vector",
       "endpoint": "vector-aggregator:6601 (TLS when SYSLOG_TLS_ENABLED; plaintext is the base-compose default)",
       "server_identity": "spiffe://netops/ns/default/sa/vector-aggregator",

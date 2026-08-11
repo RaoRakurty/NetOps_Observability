@@ -433,8 +433,8 @@ as the pass condition.**
 | ID | Pri | Phase | Summary | Disposition |
 |----|-----|-------|---------|-------------|
 | F-1 | P2 | 3 | syslog-ng→vector-aggregator plaintext TCP, no exception row | **FIXED 2026-08-11** (below) — hop converted to mesh TLS + required client cert |
-| F-2 | P3 | 3 | 3 inventory rows stale vs shipped SEC-012.2/013/018 | refresh rows |
-| F-3 | P3 | 3 | `target: mtls` predates owner-accepted TLS shapes (OS basic-in-TLS, goflow2 option-1) | owner sign-off / target edit |
+| F-2 | P3 | 3 | 3 inventory rows stale vs shipped SEC-012.2/013/018 | **FIXED 2026-08-11** (below) |
+| F-3 | P3 | 3 | `target: mtls` predates owner-accepted TLS shapes (OS basic-in-TLS, goflow2 option-1) | **FIXED 2026-08-11** (below) — targets restated citing the recorded owner decisions |
 | F-4 | P2 | 6 | postgres pg_hba `host` (not `hostssl`) — non-TLS TCP accepted from compose network | **FIXED 2026-08-10** (below) |
 | F-5 | P2 | 9 | inventory missing aux-tier edges: api→gotenberg (tenant PDFs, plaintext) / api→keycloak / api→netbox / nginx→UI upstreams | declare or convert; add mechanical completeness check |
 | F-6 | P1 | 11 | seal VRL multi-line snippet breaks generated processors.yaml (YAML indent) — seal rules undeliverable AND block all other processor changes; no reload-failure alert | step-3 fix + YAML-parse regression test |
@@ -584,3 +584,27 @@ in `netops-syslog-*` over the TLS hop; stats destination reads
 gains the same endpoint, which also puts the aggregator SVID — previously
 unwatched, though it backs all four ingest lanes — under expiry watch (10
 endpoints).
+
+**F-2 + F-3 FIXED — the inventory tells the truth again.** Failed-first pins:
+`test_transport_inventory_rows_reflect_shipped_epics` +
+`test_transport_inventory_targets_record_owner_accepted_shapes`
+(`tests/test_architecture_contract.py`, beside the honest-baseline pin).
+
+F-2: `collectors-vector-lanes` current.authn → `basic-per-lane` (a BASE fact —
+the lane tokens are fail-closed `${VAR:?}` with no shared fallback) + a
+security_profile recording the SEC-013 mTLS shape, which drags the lanes into
+the coverage rule — a `collectors-vector-lanes` contract row with the proven
+negatives (shared token 401, cross-lane token 401, no-cert refused) now exists
+in mtls-edges.yaml. `vector-router-api-sealing-keys` sheds the "worst hop"
+double-flag: current records the dormant plaintext-baseline token gate,
+security_profile records SEC-018.1 router-SVID-only (matrix proven twice).
+`api-valkey` security_profile → `tls` (6380 is the only listener since the
+wave; the `plaintext-authenticated` text was SEC-012.1-era).
+
+F-3: targets restated as the owner-accepted shapes WITH the decision cited in
+`target.notes` — api-opensearch / vector-router-opensearch to
+`tls`/`basic-per-identity` (§0a smallest-sufficient; SEC-008.2's "every client
+authenticated" criterion met; the mTLS-to-OS-role HLD ideal explicitly not
+being built), goflow2-kafka to the option-1 shape (TLS-anon on FLOWS:9095,
+ACL-bounded, exclusive under default-deny) with its reopen condition
+(goflow2 growing client-cert support).

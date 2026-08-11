@@ -142,9 +142,10 @@
         "notes": "DISABLE_SECURITY_PLUGIN=true \u2014 largest unauthenticated surface in the product"
       },
       "target": {
-        "transport": "mtls",
-        "authn": "svid-to-os-role",
-        "authz": "index-tenant-roles"
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-tenant-roles",
+        "notes": "restated 2026-08-11 (F-3): owner steer §0a (smallest sufficient mechanism) — SEC-008.2's acceptance criterion (every client authenticated, least-privilege) is met by HTTPS + per-service basic identities within TLS; the HLD's mTLS-mapped-to-OS-role ideal is NOT being built (the node cert keeps both EKUs for transport-layer mutual auth; the admin plane is cert-DN)"
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-008",
@@ -240,8 +241,8 @@
         "deployment/docker/docker-compose.yml"
       ],
       "security_profile": {
-        "transport": "plaintext-authenticated",
-        "notes": "LIVE 2026-08-04 (SEC-012.1): requirepass enforced (NOAUTH proven), authed healthcheck via REDISCLI_AUTH, STORE-005 cleared (fatal 4->3). Write-path silence FIXED FIRST: all 8 evidence publishes surfaced via redisPublish (counter + throttled log). TLS + ACL = SEC-012.2."
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-012.2), plaintext removed at the enforce wave 2026-08-09: TLS 6380 (registry SVID, hostname-verified, fail-closed REDIS_TLS seam with a no-insecure-knob source guard) is the ONLY listener (--port 0; healthcheck rides TLS). Password stays the authn (--tls-auth-clients no); matrix proven plaintext→reset, TLS+CA PONG. History: SEC-012.1 (2026-08-04) enforced requirepass and fixed the silent write-path fallback FIRST (all 8 evidence publishes surfaced via redisPublish counter). Key-prefix ACLs remain the open target half."
       }
     },
     {
@@ -284,9 +285,9 @@
       "port": 8080,
       "current": {
         "transport": "plaintext",
-        "authn": "basic-shared",
-        "authz": "none",
-        "notes": "PER-TENANT SEALING KEYS transit plaintext HTTP authenticated by the shared ingest credential \u2014 worst hop in the inventory (P0 double-flag)"
+        "authn": "token",
+        "authz": "route-gate",
+        "notes": "base-compose (plaintext baseline) keeps the INGEST_TOKEN gate on the edge-key route \u2014 after the wave narrowing this gate is INGEST_TOKEN's SOLE remaining role. The hop is DORMANT unless Sealed Fields is on (route 404s feature-off). TLS deployments are router-SVID-only \u2014 see security_profile"
       },
       "target": {
         "transport": "mtls",
@@ -298,7 +299,11 @@
       "priority": "P0",
       "evidence": [
         "deployment/docker/vector-router/cx-secret-backend.sh"
-      ]
+      ],
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-06 (SEC-018.1): edge-key endpoint accepts ONLY the vector-router SVID over TLS (sealingEdgeCaller; router added to TLS_CLIENT_ALLOWED_URIS); script side is https\u21d2mTLS-required fail-closed (3 failure paths tested first); stolen-token-over-TLS refused (unit-proven); every fetch audited (tenant+peer, never keys). Proven live feature-ON 2026-08-09 (step-2 phase 11 matrix: router-SVID 200+audit / nginx-SVID 401 / stolen token 401 / no cert refused / feature-off 404) and again in the step-3 sealed-fields e2e re-run."
+      }
     },
     {
       "id": "victoria-api-metrics-scrape",
@@ -401,10 +406,10 @@
         "notes": "FLOWS:9095 TLS listener, client.auth=none (owner option-1: goflow2 v2.2.1 has no client-cert flags); ANONYMOUS principal ACL-bounded to Write netops.flows literal — under default-deny this is the ONLY thing ANONYMOUS can do"
       },
       "target": {
-        "transport": "mtls",
-        "authn": "svid",
+        "transport": "tls",
+        "authn": "none",
         "authz": "produce-netops.flows-only",
-        "notes": "goflow2 kafka-TLS support is blocking-unknown U3 in the HLD"
+        "notes": "restated 2026-08-11 (F-3): owner option-1 decision 2026-08-05 IS the target (U3 resolved — goflow2 v2.2.1 has no client-cert flags; SASL rejected per §0a): TLS-anon on the dedicated FLOWS:9095 listener, ANONYMOUS ACL-bounded to Write on the netops.flows literal, exclusive under default-deny since the 2026-08-09 flip. REOPEN to mtls/svid only if goflow2 grows client-certificate support"
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-006",
@@ -478,9 +483,9 @@
       "protocol": "http",
       "current": {
         "transport": "plaintext",
-        "authn": "basic-shared",
-        "authz": "none",
-        "notes": "four http_server lanes share ONE ingest credential; no per-collector identity"
+        "authn": "basic-per-lane",
+        "authz": "lane-token",
+        "notes": "base-compose default is plaintext (TLS is env-gated, see security_profile) but the token narrowing is a BASE fact: each of the four lanes verifies its OWN fail-closed token (${INGEST_TOKEN_<LANE>:?}, no shared fallback) and the shared INGEST_TOKEN opens no lane (enforce wave step 4, proven 4x200/4x401)"
       },
       "target": {
         "transport": "mtls",
@@ -491,8 +496,13 @@
       "owning_epic": "SEC-013",
       "priority": "P0",
       "evidence": [
-        "deployment/docker/vector/vector.yaml:126"
-      ]
+        "deployment/docker/vector/vector.yaml:126",
+        "deployment/docker/compose.tls.yml"
+      ],
+      "security_profile": {
+        "transport": "mtls",
+        "notes": "LIVE 2026-08-06 (SEC-013.1/.2): all four lanes (traps 8688 / probes 8689 / metrics 8690 / bus 8692) serve the vector-aggregator SVID and REQUIRE a mesh client certificate (verify_certificate on a Vector server = client-cert enforcement, proven empirically); identity is mTLS's job, lane authz is the per-lane token's. Clients: api+prober via the collectors/mesh_client seam presenting the api SVID, cloud-ingest, rca-canary via the bus lane. Narrowing proven live at the enforce wave 2026-08-09: per-lane 200 / shared-token 401 on every lane over correlation-SVID mTLS."
+      }
     },
     {
       "id": "syslog-ng-vector",
@@ -805,9 +815,10 @@
         "notes": "every log lane's persistence hop (elasticsearch sinks)"
       },
       "target": {
-        "transport": "mtls",
-        "authn": "svid-to-os-role",
-        "authz": "index-roles"
+        "transport": "tls",
+        "authn": "basic-per-identity",
+        "authz": "index-roles",
+        "notes": "restated 2026-08-11 (F-3): same §0a decision as api-opensearch — svc_router is a write-only basic identity within TLS (read → 403)"
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-008",

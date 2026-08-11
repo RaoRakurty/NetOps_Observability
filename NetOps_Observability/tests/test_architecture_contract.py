@@ -245,6 +245,65 @@ def test_transport_inventory_baseline_is_honest():
     assert by_id["api-valkey"]["current"]["authn"] == "password"
 
 
+def test_transport_inventory_rows_reflect_shipped_epics():
+    """F-2 (assurance run 2026-08-09): three rows lagged the epics that
+    changed their hops, so the inventory under-reported achieved security and
+    the coverage rule (security_profile → mtls-edges row) never saw them.
+    Pin the refreshed truth; a regression back to the stale shape must fail.
+
+    `current` records BASE-COMPOSE facts (api-opensearch precedent): the lane
+    and sealing hops stay plaintext-by-default there, so what this pins for
+    them is the authn narrowing (a base fact — vector.yaml lane tokens are
+    fail-closed `${VAR:?}` with no shared fallback) and the security_profile
+    that records the TLS-deployment shape."""
+    inv = {e["id"]: e for e in _load_inventory()["edges"]}
+
+    lanes = inv["collectors-vector-lanes"]
+    assert lanes["current"]["authn"] == "basic-per-lane", (
+        "SEC-013.2 + wave narrowing: each lane verifies its OWN token and the "
+        "shared INGEST_TOKEN opens no lane — 'basic-shared' is the pre-epic shape")
+    assert "tls" in (lanes.get("security_profile", {}).get("transport") or "").lower(), (
+        "SEC-013.1 shipped four-lane mTLS 2026-08-06; the row must carry a "
+        "security_profile (F-2)")
+
+    sealing = inv["vector-router-api-sealing-keys"]
+    assert "tls" in (sealing.get("security_profile", {}).get("transport") or "").lower(), (
+        "SEC-018.1 shipped router-SVID-only key fetch over TLS 2026-08-06; "
+        "'worst hop in the inventory' is no longer the truth (F-2)")
+
+    valkey = inv["api-valkey"]
+    assert valkey["security_profile"]["transport"] == "tls", (
+        "SEC-012.2 + enforce wave: TLS 6380 is the ONLY listener; a "
+        "'plaintext-authenticated' profile misstates the store (F-2)")
+
+
+def test_transport_inventory_targets_record_owner_accepted_shapes():
+    """F-3 (assurance run 2026-08-09): three targets still said `mtls`/`svid`
+    from before the owner accepted different shapes. A target nobody intends
+    to build reads as an open gap forever; restate it as the accepted shape
+    WITH the decision recorded in notes, so posture reads 'achieved', not
+    'permanently behind target'."""
+    inv = {e["id"]: e for e in _load_inventory()["edges"]}
+
+    for edge_id in ("api-opensearch", "vector-router-opensearch"):
+        tgt = inv[edge_id]["target"]
+        assert tgt["transport"] == "tls" and tgt["authn"] == "basic-per-identity", (
+            f"{edge_id}: owner steer §0a (smallest sufficient mechanism) accepted "
+            "HTTPS + least-privilege basic identities; the mTLS-to-OS-role HLD "
+            "ideal is not being built (F-3)")
+        assert "0a" in (tgt.get("notes") or ""), (
+            f"{edge_id}: the target restatement must cite the owner steer that "
+            "authorized it")
+
+    goflow = inv["goflow2-kafka"]["target"]
+    assert goflow["transport"] == "tls" and goflow["authn"] == "none", (
+        "goflow2-kafka: owner option-1 (2026-08-05, U3 resolved) IS the target — "
+        "TLS-anon on FLOWS:9095, ACL-bounded (F-3)")
+    assert "option-1" in (goflow.get("notes") or ""), (
+        "goflow2-kafka: the target must record the option-1 decision, with its "
+        "reopen condition")
+
+
 def test_transport_inventory_evidence_paths_exist():
     inv = _load_inventory()
     dead = []
