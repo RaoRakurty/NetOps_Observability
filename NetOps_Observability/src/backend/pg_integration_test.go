@@ -88,7 +88,7 @@ func TestPGStatementTimeoutIsApplied(t *testing.T) {
 
 	// (a) the param reached the server.
 	var shown string
-	if err := db.pool.QueryRow(ctx, "SHOW statement_timeout").Scan(&shown); err != nil {
+	if err := db.PoolForTest().QueryRow(ctx, "SHOW statement_timeout").Scan(&shown); err != nil {
 		t.Fatalf("SHOW statement_timeout: %v", err)
 	}
 	if shown != "1500ms" {
@@ -97,7 +97,7 @@ func TestPGStatementTimeoutIsApplied(t *testing.T) {
 
 	// (b) it actually cancels. A 5s sleep must die at ~1.5s, not run to completion.
 	start := time.Now()
-	_, err := db.pool.Exec(ctx, "SELECT pg_sleep(5)")
+	_, err := db.PoolForTest().Exec(ctx, "SELECT pg_sleep(5)")
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("pg_sleep(5) completed — statement_timeout did NOT cancel a runaway query")
@@ -117,7 +117,7 @@ func TestPGLockTimeoutIsApplied(t *testing.T) {
 	t.Setenv("PG_LOCK_TIMEOUT", "2500ms")
 	db := openPG(t)
 	var shown string
-	if err := db.pool.QueryRow(context.Background(), "SHOW lock_timeout").Scan(&shown); err != nil {
+	if err := db.PoolForTest().QueryRow(context.Background(), "SHOW lock_timeout").Scan(&shown); err != nil {
 		t.Fatalf("SHOW lock_timeout: %v", err)
 	}
 	if shown != "2500ms" {
@@ -133,40 +133,40 @@ func TestPGMigrationAdvisoryLockSerialises(t *testing.T) {
 	db := openPG(t)
 	ctx := context.Background()
 
-	a, err := db.pool.Acquire(ctx)
+	a, err := db.PoolForTest().Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire A: %v", err)
 	}
 	defer a.Release()
-	b, err := db.pool.Acquire(ctx)
+	b, err := db.PoolForTest().Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire B: %v", err)
 	}
 	defer b.Release()
 
 	// A takes the migration lock (session-level, the same key migrate() uses).
-	if _, err := a.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+	if _, err := a.Exec(ctx, "SELECT pg_advisory_lock($1)", platformdb.MigrationLockKeyForTest()); err != nil {
 		t.Fatalf("A lock: %v", err)
 	}
 	// B must NOT be able to take it.
 	var got bool
-	if err := b.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&got); err != nil {
+	if err := b.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", platformdb.MigrationLockKeyForTest()).Scan(&got); err != nil {
 		t.Fatalf("B try-lock: %v", err)
 	}
 	if got {
 		t.Fatal("second holder acquired the migration lock — it does NOT serialise; concurrent migrations could race")
 	}
 	// A releases; B can now take it.
-	if _, err := a.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+	if _, err := a.Exec(ctx, "SELECT pg_advisory_unlock($1)", platformdb.MigrationLockKeyForTest()); err != nil {
 		t.Fatalf("A unlock: %v", err)
 	}
-	if err := b.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&got); err != nil {
+	if err := b.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", platformdb.MigrationLockKeyForTest()).Scan(&got); err != nil {
 		t.Fatalf("B re-try: %v", err)
 	}
 	if !got {
 		t.Error("after release the lock was still held — advisory lock did not free")
 	}
-	_, _ = b.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+	_, _ = b.Exec(ctx, "SELECT pg_advisory_unlock($1)", platformdb.MigrationLockKeyForTest())
 }
 
 // TestPGAuditCountAndOffsetPaging proves pgAuditStore.Count returns the true
@@ -174,10 +174,10 @@ func TestPGMigrationAdvisoryLockSerialises(t *testing.T) {
 // paths F-57/F-73 changed but never ran.
 func TestPGAuditCountAndOffsetPaging(t *testing.T) {
 	db := openPG(t)
-	store := &pgAuditStore{db: db}
+	store := audit.NewPGStore(db, nil)
 	ctx := context.Background()
 	// clean slate for a deterministic count.
-	if _, err := db.pool.Exec(ctx, "TRUNCATE audit_events"); err != nil {
+	if _, err := db.PoolForTest().Exec(ctx, "TRUNCATE audit_events"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestPGAuditCountAndOffsetPaging(t *testing.T) {
 func TestPGRetentionSweepDeletesOnlyOldRows(t *testing.T) {
 	db := openPG(t)
 	ctx := context.Background()
-	if _, err := db.pool.Exec(ctx, "TRUNCATE audit_events"); err != nil {
+	if _, err := db.PoolForTest().Exec(ctx, "TRUNCATE audit_events"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -305,7 +305,7 @@ func TestAppRoleCannotBypassRLS(t *testing.T) {
 	defer cancel()
 
 	var super, bypass bool
-	err := db.Pool().QueryRow(ctx,
+	err := db.PoolForTest().QueryRow(ctx,
 		`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).
 		Scan(&super, &bypass)
 	if err != nil {

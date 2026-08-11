@@ -58,6 +58,12 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
+      - name: go vet -tags=pgintegration
+        # F-12: the build-tagged pg suite is invisible to the default build, so
+        # it rotted uncompiled for two weeks while the ONLY job that builds it
+        # (pg-integration) needed a live service to even reach the compile.
+        # Vetting the tag here makes tagged build rot fail the cheap lane.
+        run: go vet -tags=pgintegration ./...
       - name: go test
         # Also runs every Fuzz* target against its SEED corpus deterministically
         # (FuzzParseSpiffeID/seed#N, FuzzParseFederationBundles/seed#N), so the

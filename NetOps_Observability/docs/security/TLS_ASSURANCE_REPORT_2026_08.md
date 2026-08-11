@@ -439,11 +439,11 @@ as the pass condition.**
 | F-5 | P2 | 9 | inventory missing aux-tier edges: api→gotenberg (tenant PDFs, plaintext) / api→keycloak / api→netbox / nginx→UI upstreams | **FIXED 2026-08-11** (below) — 22 rows added + mechanical service-coverage ratchet; api→gotenberg conversion is an owner decision recorded in the row |
 | F-6 | P1 | 11 | seal VRL multi-line snippet breaks generated processors.yaml (YAML indent) — seal rules undeliverable AND block all other processor changes; no reload-failure alert | step-3 fix + YAML-parse regression test |
 | F-7 | P1 | 11 | vector image has no curl — cx-secret-backend.sh cannot fetch keys in any mode; sealed-fields edge path never executable in-image | step-3 fix (image + in-image contract test) |
-| F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | step-3 fix + repair; then delete fixture |
+| F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | **FIXED 2026-08-11** (below) — id derived server-side + storage-layer guard + boot-time repair of existing `""` rows |
 | F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | add a `--tls=yes` boot leg to the workflow |
 | F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | api-triggered reload or watched-file touch on CSV write |
 | F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | owner decision: design boundary vs seal-or-quarantine semantics |
-| F-12 | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
+| F-12 (**FIXED 2026-08-11**, below) | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
 
 ---
 
@@ -634,3 +634,28 @@ security_profile, and the coverage rule forced matching mtls-edges contract
 rows with negatives. Two scrape hops (victoria→cadvisor/node-exporter,
 metrics-only) declared as open plaintext with their owner-review candidacy
 noted.
+
+**F-8 FIXED — no more unaddressable device rows.** Three layers, each with a
+test that failed first (`device_persist_test.go`): the handler derives an id
+server-side from name/address (the `ScanDeviceID` convention every discovered
+device already follows — `TestIdlessDeviceCreateDerivesId` proves 201 returns
+the derived id and DELETE by that id works) and 400s a device with nothing to
+derive from; `discovery.Upsert` refuses an empty id outright (storage-layer
+enforcement, so no future caller reintroduces the row class); and `SetStore`
+repairs pre-fix `""` rows at boot — derive, re-key, drop the anonymous row,
+loudly — so existing deployments heal on their next start
+(`TestEmptyIDRowIsRepairedAtLoad` seeds the exact lab shape and proves the
+heal persists). Lab repair + fixture deletion recorded below once deployed.
+
+**F-12 FIXED — the pgintegration suite compiles and PASSES again.** The suite
+had half-migrated to `platformdb` (its `openPG` already called
+`platformdb.NewDB`) but still reached the unexported `db.pool` /
+`migrationLockKey`. Repaired via the existing test-support seam
+(`PoolForTest()` / `MigrationLockKeyForTest()` beside `BeginForTest`) and
+`audit.NewPGStore` for the moved store; proven against a disposable
+postgres:16-alpine per the header recipe — **all six proofs PASS live**
+(statement_timeout cancels a runaway query, lock_timeout, migration advisory
+lock excludes a second migrator, audit Count/Offset paging, retention sweep,
+and the SEC-011.2 `TestAppRoleCannotBypassRLS` guard). Anti-rot: backend-ci's
+cheap lane now runs `go vet -tags=pgintegration ./...`, so tagged build rot
+fails immediately instead of hiding behind the PG-service job.
