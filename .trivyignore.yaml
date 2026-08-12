@@ -11,6 +11,18 @@ misconfigurations:
   - id: DS-0002
     paths:
       - "NetOps_Observability/deployment/docker/swtpm-sidecar/Dockerfile"
+  # DS-0002 — also excepted for the DERIVED vector-router image (F-7: stock
+  # timberio/vector + curl for the sealed-fields secret backend). It inherits
+  # the stock image's runtime user (root) — the vector-AGGREGATOR runs the
+  # same stock image identically, and pinning only the derived router to a
+  # non-root uid would silently diverge the two tiers' file-permission
+  # behavior across the enrichment/SVID/processor bind mounts (key modes are
+  # calibrated to today's uid). Converting the vector tier to non-root is a
+  # real change tracked for review, not a scanner checkbox (added
+  # 2026-08-12 when supply-chain first ran against the F-7 image).
+  - id: DS-0002
+    paths:
+      - "NetOps_Observability/deployment/docker/vector-router/Dockerfile"
   # DS-0002 — also excepted for the LAB traffic generator (tgen). It is a lab
   # tool deployed on the lab host (not part of the product stack) whose
   # raw-packet mode crafts packets on raw sockets — root/CAP_NET_RAW by

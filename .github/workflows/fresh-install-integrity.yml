@@ -89,8 +89,11 @@ jobs:
         # Unattended full path. Its own gates are load-bearing and loud:
         # wait_for_minted_certs times out FATALLY if the mint stalls (the
         # bootstrap-deadlock class), and the phase B compose_up fails on an
-        # invalid chain.
-        run: python3 scripts/install.py --tls=yes
+        # invalid chain. sudo: ensure_data_dirs chowns the store data dirs to
+        # each image's fixed uid ONLY when root (documented; without it kafka/
+        # opensearch die on AccessDenied over their bind mounts — the second
+        # failure of this leg).
+        run: sudo -E python3 scripts/install.py --tls=yes
 
       - name: failure diagnostics (compose state + logs + disk)
         if: failure()
@@ -135,10 +138,12 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
+          # sudo: the minted keys are 0600 owned by the api uid (65532) — an
+          # unprivileged -s test on them is a false negative, not a check.
           for svc in api nginx vector-aggregator vector-router syslog-ng kafka postgres clickhouse opensearch redis; do
             for f in "$svc.crt" "$svc.key"; do
-              [ -s "data/tls/services/$svc/$f" ] || { echo "::error::missing SVID material: $svc/$f"; missing=1; }
+              sudo test -s "data/tls/services/$svc/$f" || { echo "::error::missing SVID material: $svc/$f"; missing=1; }
             done
           done
-          [ -s data/tls/ca.pem ] || { echo "::error::mesh CA missing"; missing=1; }
+          sudo test -s data/tls/ca.pem || { echo "::error::mesh CA missing"; missing=1; }
           exit "$missing"
