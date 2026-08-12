@@ -561,6 +561,11 @@ def test_syslog_bucket_key_set_is_swept(monkeypatch):
     lists were pruned, the key set never was."""
     monkeypatch.setattr(main, "ch", None)
     monkeypatch.setattr(main, "SYSLOG_SWEEP_EVERY_S", 0.0)
+    # F-11: an identity the registry does not know quarantines before the
+    # bucket logic runs. This test is about SWEEP hygiene, so the fixture host
+    # is a KNOWN platform device (registry hit with the empty tenant).
+    monkeypatch.setattr(main, "_tenant_map", {"real1": ""})
+    monkeypatch.setattr(main, "_tenant_mtime", main.time.time() + 3600)
     old = main.time.time() - 10 * main.SYSLOG_WINDOW
     for i in range(100):
         main.SYSLOG_BUCKET[f"spoofed-{i}"] = [(old, 3)]

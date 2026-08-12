@@ -404,6 +404,15 @@ def verified_tenant(claimed: str, identity: str, lane: str, *,
     claim = str(claimed or "").strip()
     resolved = tenant_lookup(identity)
     if not claim:
+        # F-11 (INV-F11-10): on a registry-ANCHORED lane an identity the
+        # registry has never heard of is TENANT_UNATTRIBUTABLE — it must not
+        # be processed as the platform tenant (that path reaches RCA and the
+        # global tenant's ticketing/notification destinations). It joins the
+        # same durable quarantine the contradicted-claim path uses. A registry
+        # hit that maps a KNOWN platform device to "" still becomes "global":
+        # platform self-monitoring is load-bearing and unchanged.
+        if registry_anchored and resolved is None:
+            raise _tenant_refusal(lane, "identity_unattributable", identity, "", "")
         return canon_tenant(resolved or "")
     if resolved is not None:
         if canon_tenant(resolved) == canon_tenant(claim):

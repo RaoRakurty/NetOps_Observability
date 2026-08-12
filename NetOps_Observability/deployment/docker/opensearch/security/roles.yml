@@ -48,6 +48,12 @@ netops_api:
       allowed_actions:
         - "crud"
         - "create_index"
+    # F-11: the quarantine workflow — list metadata (read comes with the
+    # netops-* block above), tombstone after re-attribution (delete). The api
+    # never writes quarantine docs; only the router's sink does.
+    - index_patterns: ["netops-quarantine-*"]
+      allowed_actions:
+        - "crud"
 
 # vector-router: the log-ingest writer. Write-only on the lanes it sinks;
 # no read, no cluster admin. TELEMETRY-CRITICAL — a wrong credential here
@@ -67,6 +73,11 @@ netops_writer:
         - "netops-cloudlogs-*"
         - "netops-flows-*"
         - "netops-deadletter-*"
+        # F-11: TENANT_UNATTRIBUTABLE envelopes (payload sealed under the
+        # quarantine key). Absent from this list, the sink 403s and
+        # quarantined events would be LOST silently — write-only like every
+        # other lane.
+        - "netops-quarantine-*"
       allowed_actions:
         - "write"
         - "create_index"

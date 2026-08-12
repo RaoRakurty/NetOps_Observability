@@ -2,6 +2,7 @@ package backend
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"netops/backend/internal/oslog"
@@ -166,6 +167,63 @@ func TestAppLogPatternAllowed(t *testing.T) {
 			t.Errorf("non-owner %s must be allowed device-telemetry patterns", c.Sub)
 		}
 	}
+}
+
+// ── F-11 (INV-F11-04): quarantine is unreachable from tenant query paths ─────
+//
+// TENANT_UNATTRIBUTABLE envelopes live in netops-quarantine-<date> — no
+// tenant segment, payload sealed under the quarantine key. Storage-layer
+// isolation here means: no pattern a SCOPED principal's read resolves to may
+// even GLOB-MATCH that index, on any signal, including unknown ones. (A
+// cross/platform principal may reach the metadata+ciphertext — the same
+// information class the platform-only quarantine API serves it.)
+func TestQuarantineIndexUnreachableFromTenantPaths(t *testing.T) {
+	quarantineIdx := "netops-quarantine-2026.08.12"
+	signals := []string{"", "all", "applogs", "syslog", "snmptrap", "flows",
+		"cloud", "cloudlogs", "quarantine", "junk-signal"}
+	for _, sig := range signals {
+		pattern := oslog.TenantIndexPattern(sig, "acme", false)
+		for _, p := range strings.Split(pattern, ",") {
+			if globMatch(p, quarantineIdx) {
+				t.Errorf("signal %q: scoped pattern part %q matches the quarantine "+
+					"index — a tenant search would return quarantine docs (INV-F11-04)",
+					sig, p)
+			}
+		}
+	}
+	for _, p := range strings.Split(oslog.TenantCatPattern("acme", false), ",") {
+		if globMatch(p, quarantineIdx) {
+			t.Errorf("scoped _cat pattern part %q matches the quarantine index", p)
+		}
+	}
+	// The two unscoped background readers pin their patterns to the syslog
+	// base; neither may drift onto the quarantine index.
+	for _, p := range []string{"netops-syslog-*"} {
+		if globMatch(p, quarantineIdx) {
+			t.Errorf("background-reader pattern %q matches the quarantine index", p)
+		}
+	}
+}
+
+// globMatch implements the only glob OpenSearch index patterns use: `*`
+// matches any run of characters.
+func globMatch(pattern, name string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == name
+	}
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	name = name[len(parts[0]):]
+	for _, mid := range parts[1 : len(parts)-1] {
+		i := strings.Index(name, mid)
+		if i < 0 {
+			return false
+		}
+		name = name[i+len(mid):]
+	}
+	return strings.HasSuffix(name, parts[len(parts)-1])
 }
 
 func containsSub(s, sub string) bool {

@@ -155,11 +155,24 @@ def test_unresolvable_identity_fails_closed_on_an_anchored_lane(registry):
     assert main.TENANT_REFUSALS == {"syslog:identity_unknown": 1}
 
 
-def test_unresolvable_identity_never_falls_back_to_a_permissive_value(registry):
-    """No claim + unknown identity → the PLATFORM tenant (platform-only under the
-    strict row policy). Never "__all__", never another tenant, never a first
-    match off the registry."""
-    got = main.verified_tenant("", "ghost-device", "syslog", registry_anchored=True)
+def test_unattributable_identity_is_quarantined_not_processed_as_global(registry):
+    """F-11 (owner decision 2026-08-12, INV-F11-10): no claim + REGISTRY MISS on
+    an anchored lane is TENANT_UNATTRIBUTABLE. The old contract processed it as
+    the platform tenant — which reaches RCA and the global tenant's
+    ticketing/notification destinations. It now joins the durable quarantine,
+    the same path a contradicted claim takes. (This test previously pinned the
+    old fallback; the F-11 decision superseded it.)"""
+    with pytest.raises(main.TenantClaimRefused):
+        main.verified_tenant("", "ghost-device", "syslog", registry_anchored=True)
+    assert main.TENANT_REFUSALS == {"syslog:identity_unattributable": 1}
+    assert main.TENANT_CLAIMS_REFUSED == 1
+
+
+def test_known_platform_device_still_processes_as_global(registry):
+    """The F-11 discriminator is the registry MISS, never tenant=="": a registry
+    hit mapping a KNOWN platform device to "" is the platform's own telemetry —
+    self-monitoring RCA depends on it and it must keep flowing."""
+    got = main.verified_tenant("", "plat1", "syslog", registry_anchored=True)
     assert got == "global"
     assert main.TENANT_CLAIMS_REFUSED == 0
 
@@ -304,10 +317,16 @@ def test_legitimate_flow_still_aggregates(registry, monkeypatch):
     main._FLOW_AGG.clear()
 
 
-def test_no_registry_at_all_does_not_refuse_untenanted_traffic(monkeypatch, tmp_path):
-    """A missing/empty CSV is the cold-start and the broken-mount state. Events
-    that make no claim must keep flowing (as platform-owned); only CLAIMS are
-    unverifiable then, and those are the ones that fail closed."""
+def test_no_registry_at_all_quarantines_rather_than_processing(monkeypatch, tmp_path):
+    """F-11 (superseding the pre-decision contract this test used to pin): with
+    a missing/empty CSV, an anchored-lane event's identity is a registry MISS —
+    TENANT_UNATTRIBUTABLE. It must NOT be processed as the platform tenant
+    (that reaches RCA and the global tenant's ticket/notification
+    destinations); it joins the bounded durable quarantine and NO corr_* row
+    is written. Quarantine — encrypted at the storage tier, bounded and
+    recoverable here — is the safe failure mode for a broken registry mount;
+    plaintext-shared processing was the unsafe one. The vector-side miss-rate
+    alert (TenantEnrichmentMissRateJumped) is what surfaces the outage."""
     monkeypatch.setattr(main, "TENANT_ENRICHMENT_FILE", str(tmp_path / "absent.csv"))
     monkeypatch.setattr(main, "_tenant_map", {})
     monkeypatch.setattr(main, "_tenant_mtime", -1.0)
@@ -315,8 +334,9 @@ def test_no_registry_at_all_does_not_refuse_untenanted_traffic(monkeypatch, tmp_
     monkeypatch.setattr(main, "ch", ch)
 
     run(main.handle_syslog(_syslog()))
-    assert {r["tenant_id"] for r in ch.rows_for("netops.corr_signals")} == {"global"}
-    assert main.TENANT_REFUSALS == {}
+    assert ch.rows_for("netops.corr_signals") == [], \
+        "an unattributable event reached corr_* — the RCA/ticketing surface (INV-F11-10)"
+    assert main.TENANT_REFUSALS == {"syslog:identity_unattributable": 1}
 
     with pytest.raises(main.TenantClaimRefused):
         main.verified_tenant("acme", "leaf1", "syslog", registry_anchored=True)
@@ -485,7 +505,9 @@ def test_flow_lane_uses_locals_not_a_reread_of_the_assigned_path():
 
 
 def test_syslog_ng_documents_why_keep_hostname_is_not_an_identity():
-    conf = (REPO / "deployment" / "docker" / "syslog-ng" / "syslog-ng.conf").read_text()
+    # F-1 split the config: the shared body (options + the TENANT-HIGH-3
+    # residual-risk statement) lives in core.conf, included by both variants.
+    conf = (REPO / "deployment" / "docker" / "syslog-ng" / "core.conf").read_text()
     assert "keep_hostname(yes)" in conf
     assert "reliable device key" not in conf, \
         "the misleading NAT-survival-means-authenticated claim is back"
