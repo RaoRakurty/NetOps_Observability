@@ -1049,7 +1049,13 @@ def ensure_data_dirs(root: Path) -> None:
         # stack then reports that it HAS backups.
         "opensearch-snapshots": (1000, 1000),
         "clickhouse": (101, 101),
-        "api":        None,             # Go API runs as nonroot but writes JSON only
+        # The api (nonroot 65532) OWNS this tree: the file-kv store, the vault's
+        # wrapped-keys file, enrichment, processors. "None" was correct while the
+        # installer ran unprivileged (dir inherited the operator uid and the api
+        # could read it via world-r); run AS ROOT, a root-owned data/api makes
+        # custody unloadable and the CA mints NOTHING (CI tls-boot leg,
+        # 2026-08-12: "vault: load wrapped keys: permission denied").
+        "api":        (65532, 65532),
         "secrets-seal": None,           # #17 sealing-sidecar socket dir (root-owned; opt-in 'seal' profile)
         "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
         "netbox-postgres": None,        # bundled-NetBox DB (opt-in 'netbox' profile); initdb self-chowns
@@ -1058,7 +1064,9 @@ def ensure_data_dirs(root: Path) -> None:
         # runs as root inside its container and writes NDJSON, so no chown — but
         # the directory must exist and be writable before first boot, or the very
         # first rejected RCA-critical evidence has nowhere durable to land.
-        "correlation/deadletter": None,
+        # F-38: the correlation service (uid 10001) must own its durable DLQ —
+        # root-created on 2026-07-27 and invisible until the RCA canary paged.
+        "correlation/deadletter": (10001, 999),
         # tracker #151: the internal CA's mint target (SVIDs, trust bundle).
         # Docker would auto-create a bind-mount source as ROOT, and the api
         # (uid 65532) could then never mint into it — pre-create owned by the
