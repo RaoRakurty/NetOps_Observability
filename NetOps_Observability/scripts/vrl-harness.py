@@ -84,7 +84,7 @@ def transform_source(tier: str, name: str) -> str:
 
 
 def run_vrl(source: str, events: list[dict], *, drop: bool = False,
-            timeout: int = 60) -> list[dict]:
+            timeout: int = 60, enrichment: dict | None = None) -> list[dict]:
     """Run `source` over `events`, returning the emitted events.
 
     drop=True mirrors a transform configured with drop_on_error/drop_on_abort
@@ -105,6 +105,16 @@ def run_vrl(source: str, events: list[dict], *, drop: bool = False,
         }
         if drop:
             under_test.update(drop_on_abort=True, drop_on_error=True, reroute_dropped=True)
+
+        # F-11: transforms that call find_enrichment_table_records need the
+        # device_tenant table declared or they refuse to compile. `enrichment`
+        # is identity→tenant rows staged as the real CSV (empty dict = declared
+        # but empty table, the cold-start shape).
+        if enrichment is not None:
+            with open(os.path.join(stage, "device_tenant.csv"), "w") as fh:
+                fh.write("identity,tenant_id\n")
+                for ident, tenant in enrichment.items():
+                    fh.write(f"{ident},{tenant}\n")
 
         cfg = {
             # `stdin` (not `file`): it shuts the topology down at EOF, so the
@@ -127,6 +137,15 @@ def run_vrl(source: str, events: list[dict], *, drop: bool = False,
                 }
             },
         }
+        if enrichment is not None:
+            cfg["enrichment_tables"] = {
+                "device_tenant": {
+                    "type": "file",
+                    "file": {"path": "/harness/device_tenant.csv",
+                             "encoding": {"type": "csv"}},
+                    "schema": {"identity": "string", "tenant_id": "string"},
+                }
+            }
         with open(os.path.join(stage, "vector.yaml"), "w") as fh:
             yaml.safe_dump(cfg, fh)
 
@@ -186,8 +205,53 @@ def _selfcheck() -> int:
     check("F-10 ts derived from timestamp", out[3].get("ts") == 1784628000000
           and out[3].get("ts_source") == "timestamp", str(out[3]))
     check("F-11 unmatched tenant is stamped", out[0].get("tenant_attribution") == "unmatched", str(out[0]))
-    check("F-11 matched tenant is stamped", out[1].get("tenant_attribution") == "enriched", str(out[1]))
+    # F-11 Case 1: a tenant WITHOUT a registry stamp on this lane means an
+    # authenticated producer supplied it — its own outcome, never conflated
+    # with a registry hit and never quarantined.
+    check("F-11 producer-stamped tenant is its own outcome",
+          out[1].get("tenant_attribution") == "producer_stamped", str(out[1]))
     check("tenant segment is index-safe", out[1].get("tenant_seg") == "acme-corp", str(out[1]))
+    out = run_transform("router", "applogs_tagged", [
+        {"ts": 1784658034.77, "tenant_id": "t_a", "tenant_registry": "hit"},
+    ])
+    check("F-11 registry hit stays 'enriched'",
+          out[0].get("tenant_attribution") == "enriched", str(out[0]))
+
+    print("aggregator.syslog_normalized — F-11 registry-MISS discriminator")
+    # The CSV distinguishes three shapes the old config conflated:
+    #   known tenant device → hit + tenant; KNOWN PLATFORM device (row with
+    #   empty tenant) → hit + "" (the load-bearing untagged bucket, NOT a
+    #   miss); unknown sender → miss (TENANT_UNATTRIBUTABLE, quarantined by
+    #   the generated stage when sealing is on).
+    table = {"acme-sw1": "t_acme", "lab-core": ""}
+    out = run_transform("aggregator", "syslog_normalized", [
+        {"message": "<14>x", "hostname": "acme-sw1", "host": "acme-sw1"},
+        {"message": "<14>x", "hostname": "lab-core", "host": "lab-core"},
+        {"message": "<14>x", "hostname": "stranger-99", "host": "stranger-99"},
+    ], enrichment=table)
+    check("known tenant device -> hit + tenant",
+          out[0].get("tenant_registry") == "hit" and out[0].get("tenant_id") == "t_acme", str(out[0]))
+    check("KNOWN PLATFORM device -> hit + empty tenant (never a miss)",
+          out[1].get("tenant_registry") == "hit" and out[1].get("tenant_id") == "", str(out[1]))
+    check("unknown sender -> registry MISS",
+          out[2].get("tenant_registry") == "miss" and out[2].get("tenant_id") == "", str(out[2]))
+
+    print("router.flows_decoded — F-11 discriminator + spoofed-claim rejection")
+    out = run_transform("router", "flows_decoded", [
+        {"sampler_address": "10.0.0.1", "tenant_id": ""},          # known tenant exporter
+        {"sampler_address": "203.0.113.9", "tenant_id": ""},       # unknown exporter
+        {"sampler_address": "203.0.113.9", "tenant_id": "t_acme"}, # spoofed claim + unknown exporter
+    ], enrichment={"10.0.0.1": "t_acme"})
+    check("known exporter -> hit + tenant",
+          out[0].get("tenant_registry") == "hit" and out[0].get("tenant_id") == "t_acme", str(out[0]))
+    check("unknown exporter -> miss + untagged",
+          out[1].get("tenant_registry") == "miss" and out[1].get("tenant_seg") == "untagged", str(out[1]))
+    # INV-F11-05: a payload-supplied tenant claim NEVER survives — the registry
+    # answer wins, the claim is rejected, and (being a miss) the event heads to
+    # quarantine rather than any tenant's store.
+    check("spoofed claim -> rejected, registry MISS, claim never written",
+          out[2].get("tenant_id") == "" and out[2].get("tenant_registry") == "miss"
+          and out[2].get("tenant_attribution") == "claim_rejected", str(out[2]))
 
     print("aggregator.applogs_normalized — F-05 declared-field type poisoning")
     out = run_transform("aggregator", "applogs_normalized", [

@@ -148,6 +148,37 @@ map cannot reach it even cross; the two unscoped readers match
 roles: svc_router gains write on the index, svc_api read+delete; dashboards
 and correlation identities get NOTHING.
 
+## 2b. Attribution trust order — AS BUILT (owner-required documentation)
+
+Strongest first; each source names where it is enforced:
+
+1. **Authenticated workload identity (mTLS SVID + per-lane token)** — the
+   bus bridge and ingest lanes (8688-8692): the producer is a stack
+   component; its tenant stamp passes verbatim and the router marks it
+   `tenant_attribution=producer_stamped`. The correlation consumer
+   re-verifies any claim it can check (`verified_tenant`) and REFUSES a
+   contradicted one.
+2. **Tenant-bound connector credential** — cloud-ingest: tenant comes from
+   the server-stamped connector row, never the payload.
+3. **Authoritative inventory mapping (the device→tenant registry)** — the
+   device lanes: hostname (syslog), device-id falling back to source IP
+   (snmptrap), exporter address (flows). Registry hit → attributed;
+   ambiguous identities are fail-safe OMITTED from the registry (→ miss).
+4. **Registry hit onto the platform tenant (`""`)** — known
+   platform/global device: the load-bearing untagged bucket, platform-only
+   consumers plus device-join tenant visibility.
+5. **Registry MISS** — nothing above applies: TENANT_UNATTRIBUTABLE →
+   quarantine seal (this work).
+6. **Payload tenant claim WITHOUT verification** — trusted NOWHERE:
+   flows rejects (`claim_rejected`, registry answer wins, spoofed claim +
+   unknown exporter quarantines), correlation refuses + quarantines,
+   syslog/snmptrap reset the field unconditionally before lookup.
+
+There are deliberately NO per-tenant listeners today, and the syslog relay
+hides the device's transport address — so for syslog the registry hostname
+lookup is simultaneously #3 and the ceiling of what transport can prove.
+See §3.
+
 ## 3. F11.5 honesty note (spoofed hostname)
 
 Syslog device identity IS the sender-supplied hostname today; registry

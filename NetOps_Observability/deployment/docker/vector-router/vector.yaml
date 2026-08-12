@@ -267,7 +267,21 @@ transforms:
       # config alone, from "the CSV never loaded". Stamp the attribution
       # OUTCOME as its own field so the miss rate is a queryable number and
       # rules.yaml can alert on it (TenantEnrichmentMissRateHigh).
-      .tenant_attribution = if seg == "untagged" { "unmatched" } else { "enriched" }
+      #
+      # F-11 Case 1: a tenant present WITHOUT a registry stamp on this lane
+      # means an AUTHENTICATED producer supplied it (cloudlogs connector /
+      # bus bridge / a re-attributed quarantine restore) — the device may be
+      # unknown to inventory, and that is fine: tenant identity came from
+      # the transport credential, never from a payload hostname. Stamped as
+      # its own outcome so "device unknown but tenant authoritative" is
+      # never conflated with a registry hit — and never quarantined.
+      if seg == "untagged" {
+        .tenant_attribution = "unmatched"
+      } else if exists(.tenant_registry) {
+        .tenant_attribution = "enriched"
+      } else {
+        .tenant_attribution = "producer_stamped"
+      }
 
       # ── `ts` normalisation (DEF-6, 2026-07-21) ──────────────────────────
       # Producers on these topics emit `ts` in three incompatible shapes:
