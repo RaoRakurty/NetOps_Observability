@@ -615,6 +615,12 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
    invisible to the nav and ⌘K — the Service View's tabs were undiscoverable.
    Breadcrumbs stay compact beside the tab row rather than stacking above it. */
 .shell-v2 .main-head { display: flex; align-items: baseline; gap: var(--sp-4); }
+/* …except on the full-bleed canvas page (.main-bleed, set by App for
+   Investigate → Topology): the owner's "topology canvas should be 100" ruling
+   means every vertical pixel belongs to the map — the ~44px strip measurably
+   zoomed the fitted network out (caught by e2e cloudDomain "canvas fills the
+   window"). Siblings stay reachable via the rail flyout; v1 keeps its strip. */
+.shell-v2 .main-bleed .main-head { display: none; }
 .shell-v2 .crumbs { flex: none; padding: 6px 0 4px; color: var(--rail-fg-muted); }
 .shell-v2 .crumbs .crumb-section { color: var(--rail-fg-muted); }
 .shell-v2 .crumbs .crumb-leaf { color: var(--rail-fg); font-weight: 600; }

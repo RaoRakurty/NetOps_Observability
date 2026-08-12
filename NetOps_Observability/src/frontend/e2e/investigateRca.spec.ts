@@ -66,7 +66,10 @@ async function openInvestigate(page: Page) {
     return json({});
   });
   await page.goto("/#/investigate/topology");
-  await page.getByRole("button", { name: "Investigate" }).click();
+  // Scoped to the canvas' Workflow selector: since the 2026-08 nav redesign the
+  // RAIL also has a button accessibly named "Investigate" (the section), so a
+  // page-wide role query is ambiguous (strict-mode violation).
+  await page.getByRole("group", { name: "Workflow" }).getByRole("button", { name: "Investigate" }).click();
 }
 
 test("pinning an incident renders its grounded verdict + independent evidence", async ({ page }) => {

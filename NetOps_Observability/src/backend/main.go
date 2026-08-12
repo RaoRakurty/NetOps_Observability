@@ -1174,6 +1174,11 @@ func initStoreBackend() error {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("STORE_BACKEND"))) {
 	case "", "file":
 		platformdb.UseFile()
+		// Anchor RELATIVE store keys (the vault's wrapped-keys file) on the
+		// data volume — unanchored they resolved against the distroless CWD
+		// and sealing custody could not persist on the file backend at all
+		// (CI tls-boot find, 2026-08-12).
+		platformdb.SetFileRoot(envOr("DATA_DIR", "/data"))
 		return nil
 	case "postgres", "postgresql", "pg":
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

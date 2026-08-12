@@ -105,6 +105,12 @@ jobs:
           echo "=== docker compose logs (tail) ==="; sudo docker compose logs --tail 60 || true
           echo "=== docker system df ==="; docker system df || true
           echo "=== df -h ==="; df -h / || true
+          echo "=== data dir ownership (the EACCES suspect) ==="
+          cd ../..
+          sudo stat -c '%n %a %u:%g' data data/api data/tls 2>&1 || true
+          sudo ls -lan data/api | head -12 || true
+          echo "=== can uid 65532 read the store? ==="
+          sudo -u '#65532' sh -c 'ls /dev/null >/dev/null; test -r NetOps_Observability 2>/dev/null; cd '"$PWD"' && ls data/api >/dev/null 2>&1 && echo "read OK" || echo "read DENIED"' || true
 
       - name: assert the mesh stayed up (no crash-loops behind exit 0)
         working-directory: NetOps_Observability/deployment/docker

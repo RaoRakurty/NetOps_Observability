@@ -228,6 +228,12 @@ export default function App() {
   // the section/leaf nav tree — matched first, rendered as a full page in the
   // same shell. The id stays canonical/opaque; the page itself answers 404.
   const resourceRoute = resolveResourceRoute(hash);
+  // Full-bleed canvas page (Investigate → Topology): the map claims the whole
+  // viewport (owner: "topology canvas should be 100"), so under shell-v2 the
+  // breadcrumb/tab strip is CSS-hidden for this leaf only (.main-bleed) — its
+  // ~44px would shrink the canvas and zoom the fitted network out. Section
+  // siblings stay reachable via the rail flyout there.
+  const pageBleed = !resourceRoute && section.id === "investigate" && leaf?.id === "topology";
   const view = resourceRoute ? (
     <ResourceDetail key={`${resourceRoute.kind}:${resourceRoute.id}`} kind={resourceRoute.kind} id={resourceRoute.id} />
   ) : leaf ? (
@@ -266,7 +272,7 @@ export default function App() {
             homeRoute={homeRoute}
           />
         )}
-        <main className="main" id="main-content" tabIndex={-1}>
+        <main className={`main${pageBleed ? " main-bleed" : ""}`} id="main-content" tabIndex={-1}>
           <div className="main-head">
             <div className="crumbs">
               {resourceRoute ? (
@@ -290,7 +296,7 @@ export default function App() {
               inside a 1640px cap with side gutters on a wide monitor — the
               "limited to the borders" the owner reported. Opt-in per leaf so
               every other page keeps its comfortable measure. */}
-          <div className={`page${section.id === "investigate" && leaf?.id === "topology" ? " page-bleed" : ""}`} key={tz}>
+          <div className={`page${pageBleed ? " page-bleed" : ""}`} key={tz}>
             {/* Administration acts on config — always state the acting scope
                 (rendered in-page: shell-v2 hides the main-head strip). */}
             {section.id === "admin" && (

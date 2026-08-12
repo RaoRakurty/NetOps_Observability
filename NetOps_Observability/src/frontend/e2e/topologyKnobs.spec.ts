@@ -103,13 +103,18 @@ test("density is a visible ramp: Exec hides calm names, Operator names all, Engi
 test("no dead tabs: only implemented workflows are offered (no greyed do-nothing tabs)", async ({ page }) => {
   await openCanvas(page);
 
+  // Scoped to the canvas' Workflow selector: since the 2026-08 nav redesign the
+  // RAIL also has buttons accessibly named "Explore"/"Investigate" (sections),
+  // so page-wide role queries are ambiguous (strict-mode violation). Scoping
+  // also makes the absence assertions honest — they check THIS selector.
+  const workflows = page.getByRole("group", { name: "Workflow" });
   // Implemented modes are present and clickable.
   for (const m of ["Explore", "Investigate", "Path Trace", "Capacity", "Dependency"]) {
-    await expect(page.getByRole("button", { name: m, exact: true })).toBeVisible();
+    await expect(workflows.getByRole("button", { name: m, exact: true })).toBeVisible();
   }
   // The placeholder modes are NOT rendered (they were greyed + did nothing).
-  await expect(page.getByRole("button", { name: "Change Review", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
+  await expect(workflows.getByRole("button", { name: "Change Review", exact: true })).toHaveCount(0);
+  await expect(workflows.getByRole("button", { name: "Executive / Geo", exact: true })).toHaveCount(0);
 });
 
 test("clicking a critical device shows WHY (active issues), not just a colour", async ({ page }) => {

@@ -44,6 +44,28 @@ var active Backend = FileKV{}
 // UseFile selects the file backend (the default).
 func UseFile() { active = FileKV{} }
 
+// fileRoot anchors RELATIVE keys on the file backend. Store keys are
+// documented as absolute paths (":27 above"), but the vault's wrapped-keys key
+// is bare — which, unanchored, resolved against the process CWD
+// (/home/nonroot in the distroless image, unwritable) and silently broke
+// sealing custody on every file-backend deployment (found by the CI tls-boot
+// leg, 2026-08-12; invisible until then because every TLS deployment ran the
+// Postgres backend, where a bare key is a ROW KEY and must stay bare —
+// re-keying it would orphan the existing custody row). Empty = legacy
+// CWD-relative behavior (tests, default build).
+var fileRoot string
+
+// SetFileRoot sets the anchor for relative file-backend keys. Called once by
+// main's initStoreBackend with the data volume; absolute keys are unaffected.
+func SetFileRoot(root string) { fileRoot = root }
+
+func (FileKV) resolve(key string) string {
+	if fileRoot == "" || filepath.IsAbs(key) {
+		return key
+	}
+	return filepath.Join(fileRoot, key)
+}
+
 // UsePostgres connects the per-row RLS-backed store and makes it active.
 // Fails fast — never a silent fallback to files.
 func UsePostgres(ctx context.Context, dsn string) error {
@@ -73,9 +95,10 @@ func Save(key string, data []byte) error { return active.Save(key, data) }
 // contract (and removes the copy that used to live in each store's flushLocked).
 type FileKV struct{}
 
-func (FileKV) Load(key string) ([]byte, error) { return os.ReadFile(key) }
+func (f FileKV) Load(key string) ([]byte, error) { return os.ReadFile(f.resolve(key)) }
 
-func (FileKV) Save(key string, data []byte) error {
+func (f FileKV) Save(key string, data []byte) error {
+	key = f.resolve(key)
 	if err := os.MkdirAll(filepath.Dir(key), 0o755); err != nil {
 		return err
 	}
