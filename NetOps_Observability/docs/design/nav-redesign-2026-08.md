@@ -1,5 +1,33 @@
 # Correlix Navigation Redesign — Proposal (2026-08-12)
 
+> **AMENDMENT 2026-08-12 (supersedes §1–§2 below): the OWNER supplied the
+> authoritative tree.** Eight sections: **Overview** (Command Center,
+> Operations Overview, My Dashboard) · **Operations** (Incidents, Active
+> Alerts, Action Queue, Services, Network Health, Monitors{Rules, Create},
+> Maintenance Windows) · **Investigate** (RCA, Findings, Topology,
+> Paths&Overlays{Flow Trace, Tunnels, WAN Paths}, Troubleshooting) ·
+> **Infrastructure** (Devices, Interfaces & Optics, Sites, Source of Truth,
+> Discovery & NMS) · **Explore** (Metrics, Logs, Flows, Events, Saved
+> Searches — five routed leaves, replacing the Evidence Explorer composite)
+> · **Security** (Vulnerabilities, Threat Detection, Compliance) ·
+> **Analytics** (Dashboards, Reports, RCA Reports, Recovery Scorecard) ·
+> **Administration** (Integrations, Notifications, Ticketing & Automation,
+> Data Collection{Data Sources, Processors, Sensors[PO], SNMP Profiles},
+> Identity & Access{Users, Roles, SSO, Orgs & Tenants}, Platform
+> Security{Authentication, Access Explorer, Sessions[PO], Audit Log,
+> Transport Security}, Platform{Regions[PO], Stack Health, Self-Monitoring,
+> OpenSearch}, API Access, Settings). Dropped from the original proposal:
+> Tickets page, Runbooks page, Evidence Explorer shell, Analytics
+> capacity/change-review/executive entries (stay in-canvas topology modes).
+> **Omissions preserved pending owner veto** (pages the owner tree did not
+> mention, kept per the no-silent-deletion rule): Wireless (Infrastructure
+> leaf), Sensitive Data Access (admin, server-gated), GraphQL Explorer
+> (admin Platform, PO), Demo Showcase (under Analytics→Dashboards), Device
+> Geomap (folded into Sites as its Map tab), the three metric-dashboard
+> pages (under Analytics→Dashboards). All alias/ratchet/shell/gating
+> requirements of §3–§5 stand unchanged.
+
+
 **Status: PROPOSAL — no code changed.** Grounded in a full route/nav
 inventory of the frontend (11 sections, 59 leaves, 13 flyout sub-items,
 2 shells, hash routing; every claim file:line-verified). The mapping below
