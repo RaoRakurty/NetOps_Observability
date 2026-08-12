@@ -244,7 +244,7 @@ export default function ServiceMap({ ctl }: { ctl: CloudScopeControl }) {
           hint="this map draws ONLY observed cloud flow pairs (AWS VPC Flow Logs · Azure NSG flow logs · GCP VPC flows) — connect cloud flow telemetry in Data sources and talks_to dependencies appear here as they are observed; nothing is inferred from co-location or timing"
           action={
             <button className="ao-btn ao-btn--primary"
-              onClick={() => { location.hash = "#/monitoring/appobs/datasources"; }}>
+              onClick={() => { location.hash = "#/operations/services/datasources"; }}>
               Open Data sources
             </button>
           } />

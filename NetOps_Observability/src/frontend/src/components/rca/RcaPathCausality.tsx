@@ -40,7 +40,7 @@ function cloudLogsHref(role: string, provider: string, resourceId: string): stri
   const p = new URLSearchParams({ family });
   if (provider) p.set("provider", provider.toLowerCase());
   if (resourceId) p.set("resource_id", resourceId);
-  return `#/logs/cloud?${p.toString()}`;
+  return `#/explore/logs/cloud?${p.toString()}`;
 }
 
 // The display role: the discovery-driven canonical role when the backend

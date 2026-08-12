@@ -69,7 +69,10 @@ function relSweepTime(iso?: string): string {
 // which private CIDR ranges it may sweep, with what community, how often.
 // Guardrails mirror the server's: private (RFC 1918) IPv4 ranges only, bounded
 // expansion — the server refuses anything wider, this card just explains it.
-function DiscoveryCard() {
+// Exported: Infrastructure → Discovery & NMS surfaces this same card for
+// platform principals (2026-08 redesign) — one component, two homes, so the
+// two surfaces can never drift.
+export function DiscoveryCard() {
   const [cfg, setCfg] = useState<DiscoveryConfig | null>(null);
   const [limits, setLimits] = useState<DiscoveryConfigEnvelope["limits"]>();
   const [stats, setStats] = useState<DiscoveryConfigEnvelope["stats"]>();

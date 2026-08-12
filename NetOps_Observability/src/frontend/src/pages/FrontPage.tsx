@@ -166,11 +166,11 @@ function TopIssues() {
     return <Panel title="Top active issues" state="inactive" note="No active correlated issues." hint="A good sign — nothing needs attention right now." />;
   }
   return (
-    <Panel title="Top active issues" action={<a href="#/monitoring/correlations">all →</a>}>
+    <Panel title="Top active issues" action={<a href="#/investigate/rca">all →</a>}>
       {items.map((o) => {
         const tone = VERDICT_VAR[o.verdict_tier] ?? "var(--fg-subtle)";
         return (
-          <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("monitoring/correlations")}>
+          <div key={o.correlation_id} className="fp-row clk" style={{ borderLeftColor: tone }} role="button" onClick={() => navigate("investigate/rca")}>
             <Tag tone={tone}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</Tag>
             <span className="fp-row-t">{upProto(signatureNocTitle(o.top_hypothesis))}</span>
             {o.verdict_tier === "suspected" && <span style={{ fontSize: 10.5, color: "var(--fg-subtle)", letterSpacing: 0.04 }}>not confirmed</span>}
@@ -448,7 +448,7 @@ function InternalMonitoringChecks() {
   const { data } = usePoll(() => api.correlations(120, 2592000, "open"));
   const internal = (data?.data ?? []).filter((o) => isInternalStackAffected(o.affected));
   return (
-    <Panel title="Internal monitoring checks" action={<a href="#/monitoring/correlations" onClick={(e) => { e.preventDefault(); navigate("monitoring/correlations"); }}>view →</a>}>
+    <Panel title="Internal monitoring checks" action={<a href="#/investigate/rca" onClick={(e) => { e.preventDefault(); navigate("investigate/rca"); }}>view →</a>}>
       <div style={{ fontSize: 12.5, color: "var(--fg-muted)" }}>
         <b className="fp-num" style={{ fontSize: 18, color: "var(--fg)" }}>{internal.length}</b> internal self-monitoring object{internal.length === 1 ? "" : "s"}
       </div>
@@ -571,7 +571,7 @@ function TopIssueSpotlight() {
   const tail = confirmed ? "" : " · needs independent confirmation";
   const sentence = `${confirmed ? "Confirmed" : "Suspected"} ${sig} on ${device}${phrases.length ? " — " + phrases.join(" · ") : ""}${tail}`;
   return (
-    <a className="fp-panel-link" href="#/monitoring/correlations" style={{ display: "block" }}>
+    <a className="fp-panel-link" href="#/investigate/rca" style={{ display: "block" }}>
       <div className="fp-spot" style={{ borderLeft: `4px solid ${tone}` }}>
         <Tag tone={tone}>{confirmed ? "CONFIRMED" : "SUSPECTED"}</Tag>
         <span className="fp-spot-text">{sentence}</span>

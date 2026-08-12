@@ -78,7 +78,7 @@ describe("RcaReports page", () => {
     // both rows link into the RCA workspace
     const links = screen.getAllByText("Open workspace") as HTMLAnchorElement[];
     expect(links).toHaveLength(2);
-    expect(links[0].getAttribute("href")).toContain("#/monitoring/correlations?id=");
+    expect(links[0].getAttribute("href")).toContain("#/investigate/rca?id=");
     expect(screen.getByText("2 promoted")).toBeTruthy();
   });
 

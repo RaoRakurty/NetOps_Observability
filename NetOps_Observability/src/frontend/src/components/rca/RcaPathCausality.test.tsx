@@ -122,7 +122,7 @@ describe("RcaPathCausality", () => {
     render(<RcaPathCausality data={confirmed} />);
     const lb = screen.getByLabelText(/Load Balancer correlix-edge-urlmap.*open logs/i) as HTMLAnchorElement;
     expect(lb.tagName).toBe("A");
-    expect(lb.getAttribute("href")).toContain("#/logs/cloud?");
+    expect(lb.getAttribute("href")).toContain("#/explore/logs/cloud?");
     expect(lb.getAttribute("href")).toContain("family=lb");
     expect(lb.getAttribute("href")).toContain("provider=aws");
     expect(lb.getAttribute("href")).toContain("resource_id=correlix-edge-urlmap");

@@ -27,7 +27,7 @@ import Connections from "./Connections";
 
 type Sub = "accounts" | "sources" | "status";
 const PROVIDER = (p: string) => (p ? p.toUpperCase() : "—");
-const goIntegrations = () => { location.hash = "#/incident/integrations"; };
+const goIntegrations = () => { location.hash = "#/admin/integrations"; };
 
 const isSub = (v: string): v is Sub => v === "accounts" || v === "sources" || v === "status";
 

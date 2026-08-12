@@ -67,7 +67,7 @@ function luceneEscape(s: string): string {
   return s.replace(/([+\-!(){}[\]^"~*?:\\/ ]|&&|\|\|)/g, "\\$1");
 }
 
-// Deep-link params (#/logs/cloud?family=&provider=&resource_id=&account=). The
+// Deep-link params (#/explore/logs/cloud?family=&provider=&resource_id=&account=). The
 // path-causality RCA device-in-path drill (design §5) links here to open ONE
 // device's family-tagged logs in context. Read once at mount; unknown family →
 // falls back to the default lane (honest, never an empty tab).

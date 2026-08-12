@@ -95,7 +95,7 @@ function CloudTopologyState({ status }: { status: "loading" | "empty" | "error" 
           <button
             className="ao-btn ao-btn--primary"
             style={{ marginTop: 14 }}
-            onClick={() => { location.hash = "#/monitoring/appobs/datasources"; }}
+            onClick={() => { location.hash = "#/operations/services/datasources"; }}
           >
             Open Data sources
           </button>

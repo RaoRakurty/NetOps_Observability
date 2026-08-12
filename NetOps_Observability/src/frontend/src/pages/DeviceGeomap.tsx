@@ -95,7 +95,7 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
           Open the Source of Truth and set latitude / longitude on each site (decimal WGS 84),
           then assign devices to their sites — the map fills in from intent data.
         </div>
-        <a className="board-empty-link" href="#/automation/sot">Open Source of Truth →</a>
+        <a className="board-empty-link" href="#/infrastructure/sot">Open Source of Truth →</a>
       </div>
     );
   }
@@ -138,7 +138,7 @@ export function GeomapSection() {
       <div className="empty board-empty">
         <div className="board-empty-msg">Geomap needs the Source of Truth.</div>
         <div className="board-empty-hint">Connect it under Automation → Source of Truth, then set site coordinates.</div>
-        <a className="board-empty-link" href="#/automation/sot">Open Source of Truth →</a>
+        <a className="board-empty-link" href="#/infrastructure/sot">Open Source of Truth →</a>
       </div>
     );
   }
@@ -501,10 +501,22 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
   );
 }
 
-export default function DeviceGeomap() {
+export type GeoView = "map" | "sites" | "locations";
+
+// Controlled-or-not view state: mounted bare (legacy) it owns its Segmented
+// state; the Sites page (Infrastructure → Sites, 2026-08 redesign — this whole
+// surface folded into it) passes `view`/`onViewChange` so the active tab lives
+// in the route (#/infrastructure/sites/{map|sites|locations}) and stays
+// deep-linkable. Same pattern as TopologyCanvas's CanvasInner domain props.
+export default function DeviceGeomap({ view: viewProp, onViewChange }: {
+  view?: GeoView;
+  onViewChange?: (v: GeoView) => void;
+} = {}) {
   const [data, setData] = useState<GeomapResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<"map" | "sites" | "locations">("map");
+  const [viewSelf, setViewSelf] = useState<GeoView>("map");
+  const view = viewProp ?? viewSelf;
+  const setView = (v: GeoView) => { setViewSelf(v); onViewChange?.(v); };
   const [bump, setBump] = useState(0); // re-fetch signal after a location edit
 
   useEffect(() => {

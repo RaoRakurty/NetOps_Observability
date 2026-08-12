@@ -91,7 +91,7 @@ export default function ResourceDetail({ kind, id }: { kind: string; id: string 
           title="Resource not found"
           hint="This resource doesn't exist, is no longer in the inventory, or you don't have access to it."
           action={
-            <a className="ao-console-link" href="#/monitoring/appobs/resources">
+            <a className="ao-console-link" href="#/operations/services/resources">
               Browse resources
             </a>
           }
@@ -327,7 +327,7 @@ function EventsTab({ r }: { r: CloudResourceRow }) {
               <td>{e.severity}</td>
               <td>
                 {e.correlation_id ? (
-                  <a href={`#/monitoring/correlations?id=${encodeURIComponent(e.correlation_id)}`}>{e.title}</a>
+                  <a href={`#/investigate/rca?id=${encodeURIComponent(e.correlation_id)}`}>{e.title}</a>
                 ) : (
                   e.title
                 )}
@@ -351,7 +351,7 @@ function ServiceTab({ r }: { r: CloudResourceRow }) {
         title="Not attributed to a service"
         hint="No evidence links this resource to a service yet. Attribution comes from tags, the cloud graph, the operator catalog or traffic identity — never a guess."
         action={
-          <a className="ao-console-link" href="#/monitoring/appobs/resources">
+          <a className="ao-console-link" href="#/operations/services/resources">
             Review attribution in Service View
           </a>
         }
@@ -370,7 +370,7 @@ function ServiceTab({ r }: { r: CloudResourceRow }) {
             <Row k="Attribution" v={`${r.source} · ${r.confidence}`} />
           </tbody>
         </table>
-        <a className="ao-console-link" href="#/monitoring/appobs/services">
+        <a className="ao-console-link" href="#/operations/services/services">
           Open in Service View
         </a>
       </div>

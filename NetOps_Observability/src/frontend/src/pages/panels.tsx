@@ -486,7 +486,7 @@ function AlertsSeverity() {
           className="sev-count"
           style={{ borderLeftColor: SEVERITY_COLOR[k], cursor: "pointer" }}
           title={`View ${k} alerts`}
-          {...pressable(() => navigate("alerts/active"))}
+          {...pressable(() => navigate("operations/alerts"))}
         >
           <div className="n" style={{ color: SEVERITY_COLOR[k] }}>
             {counts[k] ?? 0}
@@ -515,7 +515,7 @@ function ActiveAlerts() {
           key={a.id ?? i}
           style={{ cursor: "pointer" }}
           title="Open in Alerts"
-          {...pressable(() => navigate("alerts/active"))}
+          {...pressable(() => navigate("operations/alerts"))}
         >
           <span className={`badge ${severityClass(a.severity)}`}>{a.severity || "info"}</span>
           <div className="mini-body">
@@ -815,7 +815,7 @@ type KpiSpec = {
 // PromQL with a short range, so we get both the headline number and a sparkline.
 const KPI_SPECS: KpiSpec[] = [
   { key: "reach", label: "Reachability", query: "100 * sum(collector_targets_reachable) / (sum(collector_targets) > 0)", fmt: (v) => `${v.toFixed(1)}%`, band: (v) => (v >= 99 ? "good" : v >= 95 ? "warn" : "bad"), drill: "infrastructure/devices" },
-  { key: "ifup", label: "Interfaces up", query: "100 * count(device_if_oper_status == 1) / (count(device_if_admin_status == 1) > 0)", fmt: (v) => `${v.toFixed(1)}%`, band: (v) => (v >= 98 ? "good" : v >= 90 ? "warn" : "bad"), drill: "infrastructure/ifperf" },
+  { key: "ifup", label: "Interfaces up", query: "100 * count(device_if_oper_status == 1) / (count(device_if_admin_status == 1) > 0)", fmt: (v) => `${v.toFixed(1)}%`, band: (v) => (v >= 98 ? "good" : v >= 90 ? "warn" : "bad"), drill: "analytics/interface-performance" },
   { key: "thru", label: "Throughput", query: "sum(rate(device_if_in_octets[5m]) * 8) + sum(rate(device_if_out_octets[5m]) * 8)", fmt: (v) => fmtBps(v), band: () => "accent", drill: "explore/flows" },
   { key: "bgp", label: "BGP established", query: "100 * count(device_bgp_peer_state == 6) / (count(device_bgp_peer_state) > 0)", fmt: (v) => `${Math.round(v)}%`, band: (v) => (v >= 100 ? "good" : v >= 90 ? "warn" : "bad"), drill: "infrastructure/devices" },
   { key: "rtt", label: "Path RTT", query: "avg(probe_rtt_ms)", fmt: (v) => `${v.toFixed(1)}ms`, band: (v) => (v < 50 ? "good" : v < 150 ? "warn" : "bad"), drill: "explore/metrics" },
@@ -880,9 +880,9 @@ function KpiTiles() {
 
   const counts = [
     countTile("Devices Down", "Devices down", true, { route: "infrastructure/devices", drill: { devices: "down" } }),
-    countTile("Critical Threats", "Critical alerts", true, { route: "alerts/active" }),
+    countTile("Critical Threats", "Critical alerts", true, { route: "operations/alerts" }),
     countTile("Devices", "Devices", false, { route: "infrastructure/devices" }),
-    countTile("Sites", "Sites", false, { route: "topology/map" }),
+    countTile("Sites", "Sites", false, { route: "infrastructure/sites" }),
   ];
 
   // Both feeds down = the KPI strip is unreadable; "Waiting for metrics…" would
@@ -997,7 +997,7 @@ function TunnelsHealth() {
   const avg = lats.length ? Math.round(lats.reduce((a, b) => a + b, 0) / lats.length) : null;
   const worst = lats.length ? Math.round(Math.max(...lats)) : null;
   return (
-    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("topology/tunnels"))}>
+    <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", cursor: "pointer" }} title="View tunnels" {...pressable(() => navigate("investigate/tunnels"))}>
       <div className="stat s-good"><span className="stat-label">Tunnels up</span><span className="stat-value">{up}</span></div>
       <div className={`stat ${down ? "s-bad" : "s-good"}`}><span className="stat-label">Tunnels down</span><span className="stat-value">{down}</span></div>
       <div className="stat s-accent"><span className="stat-label">Avg latency</span><span className="stat-value">{avg ?? "—"}<span style={{ fontSize: 16, color: "var(--muted)" }}> ms</span></span></div>
@@ -1018,7 +1018,7 @@ function RecentIncidents() {
   return (
     <div className="alerts-scroll">
       {rows.map((f, i) => (
-        <div className="mini-row" key={f.id ?? i} style={{ cursor: "pointer" }} title="Open in Incidents" {...pressable(() => navigate("alerts/incidents"))}>
+        <div className="mini-row" key={f.id ?? i} style={{ cursor: "pointer" }} title="Open in Incidents" {...pressable(() => navigate("operations/incidents"))}>
           <span className={`badge ${severityClass(f.severity)}`}>{f.severity || "info"}</span>
           <div className="mini-body">
             <div className="mini-title">{f.summary || f.kind || "(incident)"}</div>
@@ -1060,9 +1060,9 @@ export const PANELS: Record<string, PanelDef> = {
   "sat-storage": { type: "sat-storage", title: "Storage used", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="100 * sum by (device) (device_storage_used) / (sum by (device) (device_storage_size) > 0)" unit="%" />, drill: "explore/metrics" },
   "sat-temp": { type: "sat-temp", title: "Temperature", defaultSpan: 3, category: "Resources", render: () => <MetricArea query="max by (device) (device_temp_celsius)" unit="°C" fmt={(v) => `${Math.round(v)}°C`} /> },
   // Errors & quality (USE-Errors): rank the worst, separate errors from discards.
-  "if-util-topn": { type: "if-util-topn", title: "Interface utilization — Top 10", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(10, 100 * (rate(device_if_in_octets[5m]) * 8) / (device_if_speed * 1000000 > 0))" unit="%" n={10} warn={70} danger={90} />, drill: "infrastructure/ifperf" },
-  "if-errors-topn": { type: "if-errors-topn", title: "Interface errors — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "infrastructure/ifperf" },
-  "if-discards-topn": { type: "if-discards-topn", title: "Interface discards — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "infrastructure/ifperf" },
+  "if-util-topn": { type: "if-util-topn", title: "Interface utilization — Top 10", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(10, 100 * (rate(device_if_in_octets[5m]) * 8) / (device_if_speed * 1000000 > 0))" unit="%" n={10} warn={70} danger={90} />, drill: "analytics/interface-performance" },
+  "if-errors-topn": { type: "if-errors-topn", title: "Interface errors — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_errors[5m]) + rate(device_if_out_errors[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "analytics/interface-performance" },
+  "if-discards-topn": { type: "if-discards-topn", title: "Interface discards — Top 8", defaultSpan: 6, category: "Interfaces", render: () => <TopNBar query="topk(8, sum by (device, ifName) (rate(device_if_in_discards[5m]) + rate(device_if_out_discards[5m])))" unit="/s" fmt={(v) => `${v.toFixed(2)}/s`} warn={0.1} danger={1} />, drill: "analytics/interface-performance" },
   // Control-plane (routing) status — which peer/adjacency, not just a count.
   "bgp-peers": { type: "bgp-peers", title: "BGP peers", defaultSpan: 6, category: "Routing", render: () => <StatusGrid query="device_bgp_peer_state" classify={(v) => (v >= 6 ? "ok" : v <= 2 ? "bad" : "warn")} okLabel="established" />, drill: "infrastructure/devices" },
   "ospf-nbrs": { type: "ospf-nbrs", title: "OSPF / IS-IS adjacencies", defaultSpan: 6, category: "Routing", render: () => <StatusGrid query="device_ospf_nbr_state or device_isis_adj_state" classify={(v) => (v >= 8 ? "ok" : v <= 1 ? "bad" : "warn")} okLabel="full" />, drill: "infrastructure/devices" },
@@ -1070,16 +1070,16 @@ export const PANELS: Record<string, PanelDef> = {
   "probe-rtt": { type: "probe-rtt", title: "Path RTT", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_rtt_ms" unit="ms" fmt={(v) => `${v.toFixed(1)}ms`} windowSec={3600} />, drill: "explore/metrics" },
   "probe-jitter": { type: "probe-jitter", title: "Path jitter (PDV)", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_pdv_ms" unit="ms" fmt={(v) => `${v.toFixed(2)}ms`} windowSec={3600} />, drill: "explore/metrics" },
   "probe-loss": { type: "probe-loss", title: "Path packet loss", defaultSpan: 4, category: "Active measurement", render: () => <MetricArea query="probe_loss_pct" unit="%" fmt={(v) => `${v.toFixed(1)}%`} windowSec={3600} />, drill: "explore/metrics" },
-  "wan-interfaces": { type: "wan-interfaces", title: "WAN interfaces — live", defaultSpan: 8, category: "Traffic", render: () => <WanInterfaces />, drill: "infrastructure/ifperf" },
-  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity />, drill: "alerts/active" },
-  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts />, drill: "alerts/active" },
-  incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents />, drill: "alerts/incidents" },
+  "wan-interfaces": { type: "wan-interfaces", title: "WAN interfaces — live", defaultSpan: 8, category: "Traffic", render: () => <WanInterfaces />, drill: "analytics/interface-performance" },
+  "alerts-severity": { type: "alerts-severity", title: "Alerts by severity", defaultSpan: 12, category: "Alerts", render: () => <AlertsSeverity />, drill: "operations/alerts" },
+  "active-alerts": { type: "active-alerts", title: "Active alerts", defaultSpan: 6, category: "Alerts", render: () => <ActiveAlerts />, drill: "operations/alerts" },
+  incidents: { type: "incidents", title: "Recent incidents", defaultSpan: 6, category: "Alerts", render: () => <RecentIncidents />, drill: "operations/incidents" },
   traffic: { type: "traffic", title: "Traffic in / out", defaultSpan: 8, category: "Traffic", render: () => <TrafficInOut />, drill: "explore/flows" },
   "top-hosts": { type: "top-hosts", title: "Top hosts", defaultSpan: 4, category: "Traffic", render: () => <TopHosts />, drill: "explore/flows" },
   "flows-proto": { type: "flows-proto", title: "Traffic by protocol", defaultSpan: 4, category: "Traffic", render: () => <FlowsByProto />, drill: "explore/flows" },
-  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "topology/tunnels" },
+  "tunnels-health": { type: "tunnels-health", title: "Tunnels health", defaultSpan: 4, category: "Traffic", render: () => <TunnelsHealth />, drill: "investigate/tunnels" },
   "devices-vendor": { type: "devices-vendor", title: "Devices by vendor", defaultSpan: 4, category: "Inventory", render: () => <DevicesByVendor />, drill: "infrastructure/devices" },
-  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "topology-canvas" },
+  topology: { type: "topology", title: "Topology", defaultSpan: 12, category: "Topology", render: () => <TopologyPanel />, drill: "investigate/topology" },
 };
 
 // Category groups for the "Add panel" picker, in display order.

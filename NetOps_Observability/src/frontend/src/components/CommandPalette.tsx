@@ -163,7 +163,7 @@ export default function CommandPalette({ nav }: { nav: NavSection[] }) {
             sub: "OpenSearch",
             run: () => {
               setQuery(q.trim());
-              go("logs/logs");
+              go("explore/logs");
             },
           },
         ]

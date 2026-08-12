@@ -98,7 +98,7 @@ function notifyTone(state?: string): { tone: string; filled: boolean } {
 // live links sort above resolved above failed/pending; more destinations first
 const NOTIFY_RANK: Record<string, number> = { open: 3, updated: 3, resolved: 2, failed: 1 };
 
-// initial verdict-tier filter from a deep link (#/monitoring/correlations?tier=suspected)
+// initial verdict-tier filter from a deep link (#/investigate/rca?tier=suspected)
 // — the Front Page KPI strip drills through with this so "Suspected RCA" lands
 // pre-filtered to suspected, not the full list.
 function tierFromHash(): string {
@@ -107,7 +107,7 @@ function tierFromHash(): string {
   return ["confirmed", "suspected", "undetermined"].includes(t) ? t : "";
 }
 
-// Deep-link target id (#/monitoring/correlations?id=<correlation_id>). Command
+// Deep-link target id (#/investigate/rca?id=<correlation_id>). Command
 // Center / other surfaces link here to open ONE specific RCA.
 function idFromHash(): string {
   const q = (typeof location !== "undefined" ? location.hash : "").split("?")[1] || "";
@@ -371,7 +371,7 @@ export default function Correlations() {
   };
 
   // Deep link by id (#81 P3G + UI-1): App Observability / Command Center link
-  // here as #/monitoring/correlations?id=<correlation_id> to open ONE RCA.
+  // here as #/investigate/rca?id=<correlation_id> to open ONE RCA.
   //
   // Connect DIRECTLY via the unique id — fire once on mount, independent of the
   // candidate list, its 24h window, its 200-row cap, or its load timing. The

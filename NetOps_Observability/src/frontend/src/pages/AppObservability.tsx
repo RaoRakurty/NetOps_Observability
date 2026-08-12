@@ -210,13 +210,15 @@ export default function AppObservability() {
   // with ?inv=), feeds EVERY tab below. Narrows within the tenant view only.
   const scopeCtl = useCloudScope();
 
-  // deep-link: #/monitoring/appobs/<tab-or-alias> → opens that (sub-)view.
+  // deep-link: #/operations/services/<tab-or-alias> → opens that (sub-)view.
   // Re-read on hashchange too, so clicking a flyout sub-item while ALREADY on
   // this page switches tabs (the leaf component stays mounted, so a mount-only
   // effect would never see the new suffix → the click looked dead).
+  // NB: read the THIRD segment explicitly, not .pop() — the 2026-08 leaf id is
+  // "services", so .pop() on the bare route would false-match the Services tab.
   useEffect(() => {
     const apply = () => {
-      const suffix = location.hash.split("?")[0].split("/").pop() ?? "";
+      const suffix = location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] ?? "";
       if ((TABS as readonly string[]).includes(suffix)) {
         setTab(suffix as Tab); setSub("");
       } else if (TAB_ALIAS[suffix]) {
@@ -1436,9 +1438,9 @@ function Underlay({ goDataSources }: { goDataSources: () => void }) {
 //
 // Cloud accounts live in Data sources → Accounts (the connector wizard) — NOT in
 // Admin → Integrations, which is the ServiceNow / Jira ticketing gallery.
-function openCloudAccounts() { location.hash = "#/monitoring/appobs/accounts"; }
+function openCloudAccounts() { location.hash = "#/operations/services/accounts"; }
 // Attribution rules + precedence are Service View settings, not an ITSM concern.
-function openAttributionSettings() { location.hash = "#/monitoring/appobs/settings"; }
+function openAttributionSettings() { location.hash = "#/operations/services/settings"; }
 
 function Unknowns({ ctl }: { ctl: CloudScopeControl }) {
   const [fix, setFix] = useState<UnknownContributor | null>(null);
@@ -1669,7 +1671,7 @@ function Evidence({ openInvestigation, ctl }: {
             <tr><td>Grounded</td><td>{sel.grounded ? "yes — attached to the investigation by the engine" : "no — a declared gap"}</td></tr>
             <tr><td>Reason</td><td>{sel.reason}</td></tr>
             <tr><td>Investigation</td><td>{sel.rcaGroup
-              ? <a href={`#/monitoring/correlations?id=${encodeURIComponent(sel.rcaGroup)}`}>Open the full analysis</a>
+              ? <a href={`#/investigate/rca?id=${encodeURIComponent(sel.rcaGroup)}`}>Open the full analysis</a>
               : "—"}</td></tr>
             <tr><td>Evidence ref</td><td><span className="ao-mono ao-muted">{sel.evidenceRef}</span></td></tr>
             {sel.cloudRef && (

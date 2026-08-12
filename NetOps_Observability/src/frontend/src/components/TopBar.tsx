@@ -101,7 +101,7 @@ export default function TopBar({ health, user, onLogout, onChangePassword, hideU
 
   const runLogSearch = () => {
     setQuery(draft.trim() || "*");
-    navigate("logs/logs");
+    navigate("explore/logs");
     setOpen(false);
   };
 

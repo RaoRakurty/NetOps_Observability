@@ -31,7 +31,10 @@ import Icon from "./Icon";
 
 /** Sections that describe the PLATFORM or the tenant estate, not one tenant's
  *  telemetry. Everything not listed here is treated as tenant data and gated —
- *  a new section is gated by default, which is the safe direction. */
+ *  a new section is gated by default, which is the safe direction. The 2026-08
+ *  redesign sections (overview · operations · investigate · infrastructure ·
+ *  explore · security · analytics) are ALL tenant data and deliberately absent
+ *  from this allowlist. */
 const PLATFORM_SECTIONS = new Set(["admin", "copilot"]);
 
 export function isTenantScopedSection(sectionId: string): boolean {

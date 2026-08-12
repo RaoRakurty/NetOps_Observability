@@ -16,27 +16,27 @@ const DASHBOARD_GROUPS: { title: string; cards: DashboardCard[] }[] = [
   {
     title: "Network monitoring",
     cards: [
-      { id: "device-metric", label: "Device Metrics", href: "#/infrastructure/monitoring", icon: "infrastructure" },
-      { id: "interface-metric", label: "Interface Metrics", href: "#/infrastructure/ifperf", icon: "metrics" },
-      { id: "bgp-metric", label: "BGP Metrics", href: "#/infrastructure/bgpospf", icon: "topology" },
-      { id: "bandwidth", label: "Bandwidth Utilization", href: "#/infrastructure/monitoring", icon: "metrics" },
-      { id: "wan-circuit", label: "WAN Interface Metrics", href: "#/infrastructure/wan-circuits", icon: "stack" },
+      { id: "device-metric", label: "Device Metrics", href: "#/analytics/device-monitoring", icon: "infrastructure" },
+      { id: "interface-metric", label: "Interface Metrics", href: "#/analytics/interface-performance", icon: "metrics" },
+      { id: "bgp-metric", label: "BGP Metrics", href: "#/analytics/protocols", icon: "topology" },
+      { id: "bandwidth", label: "Bandwidth Utilization", href: "#/analytics/device-monitoring", icon: "metrics" },
+      { id: "wan-circuit", label: "WAN Interface Metrics", href: "#/investigate/wan-paths", icon: "stack" },
     ],
   },
   {
     title: "Traffic & paths",
     cards: [
-      { id: "flows-board", label: "Flow Analytics", href: "#/flows", icon: "flows" },
-      { id: "network-path", label: "Network Path", href: "#/infrastructure/flowtrace", icon: "explore" },
-      { id: "quality-board", label: "Quality", href: "#/monitoring/quality", icon: "monitoring" },
+      { id: "flows-board", label: "Flow Analytics", href: "#/explore/flows", icon: "flows" },
+      { id: "network-path", label: "Network Path", href: "#/investigate/flowtrace", icon: "explore" },
+      { id: "quality-board", label: "Quality", href: "#/operations/network-health", icon: "monitoring" },
     ],
   },
   {
     title: "Health & operations",
     cards: [
-      { id: "troubleshooting-board", label: "Troubleshooting", href: "#/infrastructure/troubleshooting", icon: "alerts" },
+      { id: "troubleshooting-board", label: "Troubleshooting", href: "#/investigate/troubleshooting", icon: "alerts" },
       { id: "datasources-board", label: "Data Sources", href: "#/admin/datasources", icon: "datasets" },
-      { id: "events-board", label: "Events", href: "#/monitoring/events", icon: "logs" },
+      { id: "events-board", label: "Events", href: "#/explore/events", icon: "logs" },
       { id: "threat-board", label: "Threat Detection", href: "#/security/threat", icon: "reports" },
     ],
   },

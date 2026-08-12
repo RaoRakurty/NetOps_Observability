@@ -105,7 +105,7 @@ export default function RcaReports() {
     { key: "actions", header: "", width: 190,
       render: (r) => (
         <span style={{ display: "inline-flex", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-          <a href={`#/monitoring/correlations?id=${encodeURIComponent(r.correlation_id)}`}
+          <a href={`#/investigate/rca?id=${encodeURIComponent(r.correlation_id)}`}
             style={{ fontSize: 12 }} title="Open the full RCA workspace for this outage">
             Open workspace
           </a>

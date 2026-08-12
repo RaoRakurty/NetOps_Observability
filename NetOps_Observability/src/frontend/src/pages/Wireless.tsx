@@ -87,7 +87,7 @@ export default function Wireless() {
           <h3>No wireless inventory yet</h3>
           <p className="muted">
             The wireless view fills from a vendor controller connector. Add a
-            <b> Cisco Catalyst 9800</b> integration under <a href="#/infrastructure/nms">NMS Integrations</a>
+            <b> Cisco Catalyst 9800</b> integration under <a href="#/infrastructure/discovery/nms">NMS Integrations</a>
             {" "}(RESTCONF read-only credentials) and the controllers, APs, radios and
             WLANs discovered there will appear here — along with AP join / radio
             state evidence in Correlations.

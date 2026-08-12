@@ -19,7 +19,7 @@ const FAULT_FILTERS: FaultDomain[] = ["LAN", "SD-WAN", "Data Center", "ISP / Car
 const EVID_FILTERS: EvidenceState[] = ["Complete", "Partial", "Single-stream"];
 const OWNER_FILTERS: OwnerState[] = ["Missing", "Recommended", "Assigned", "Escalated"];
 
-function FilterBar({ filters, setFilters, total, shown }: {
+export function FilterBar({ filters, setFilters, total, shown }: {
   filters: CcFilters; setFilters: (f: CcFilters) => void; total: number; shown: number;
 }) {
   const n = activeFilterCount(filters);
@@ -97,7 +97,7 @@ const impactLabel = (a: ActionItem["affected"]): string => {
 const blastRadius = (a: ActionItem["affected"]): number =>
   new Set([...a.devices, ...a.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))].filter(Boolean)).size;
 
-function queueColumns(openKey: string | null): Column<ActionItem>[] {
+export function queueColumns(openKey: string | null): Column<ActionItem>[] {
   return [
     {
       key: "sev", header: "Sev", width: 62,
@@ -184,17 +184,19 @@ function queueColumns(openKey: string | null): Column<ActionItem>[] {
 
 // Deep-links — the Action Queue is a launch pad, so every affordance jumps to the
 // exact place that resolves it (never a bare list/section).
-const rcaHref = (corrId: string) => `#/monitoring/correlations?id=${encodeURIComponent(corrId)}`;
+const rcaHref = (corrId: string) => `#/investigate/rca?id=${encodeURIComponent(corrId)}`;
 // shortProblemId renders a correlation UUID as a friendly, stable NOC handle
 // (P-5564D1) — the SAME scheme the backend AI cites (problemDisplayID in Go) so
 // an operator sees one consistent id across the queue, the RCA inspector and
 // Iris AI. Display-only: the full UUID stays in the hover title + the RCA
 // deep link, which is what the routes/API key on.
 const shortProblemId = (corrId: string): string => friendlyProblemId(corrId);
-// Topology Canvas leaf is infrastructure/topology-canvas; the old infrastructure/
-// topology route does not exist and silently fell back to Inventory→Devices.
-const topoHref = (focus?: string) =>
-  `#/infrastructure/topology-canvas${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`;
+// Topology Canvas (Investigate → Topology). The old link carried a ?focus=
+// param the canvas never read — a dead promise. The canvas's search input owns
+// its own state (TopologySearch has no seed-from-URL prop), so pre-focusing
+// from a link isn't cheap; the honest link is the plain canvas, and per-entity
+// drill-down goes through deviceStatusHref below instead.
+const topoHref = () => "#/investigate/topology";
 // Impacted entity → its OWN status (not a generic topology view). Deep-links to
 // the device inventory pre-filtered to the entity, where its live health
 // (up/degraded/down) shows and one click opens its full detail. End-to-end:
@@ -240,7 +242,7 @@ function CreateTicketButton({ corrId, label = "Create ticket", cls = "cc-btn cc-
   );
 }
 
-function ExpandPanel({ it }: { it: ActionItem }) {
+export function ExpandPanel({ it }: { it: ActionItem }) {
   const c = it.corr;
   const devs = [...new Set([...it.affected.devices, ...it.affected.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))])].filter(Boolean);
   // Evidence brief (UI-4): lazily pull the same RCA path view the detail renders and
@@ -309,7 +311,7 @@ function ExpandPanel({ it }: { it: ActionItem }) {
       </div>
       <div className="cc-actions">
         <a className="cc-btn cc-btn-primary" href={rcaHref(c.correlation_id)}>Open RCA</a>
-        <a className="cc-btn" href={topoHref(devs[0])}>View topology</a>
+        <a className="cc-btn" href={topoHref()}>View topology</a>
         {it.owner === "Missing" && <a className="cc-btn" href={rcaHref(c.correlation_id)}>Assign owner</a>}
         {it.ticket === "Ticket needed" && <CreateTicketButton corrId={c.correlation_id} />}
       </div>
@@ -414,7 +416,7 @@ export default function CommandCenter() {
           <CcKpi n={confirmed} label="Confirmed RCA" interp="≥2 evidence streams align" tone={confirmed ? "var(--crit)" : undefined} onClick={() => applyKpi({ rca: "Confirmed" })} active={kpiActive({ rca: "Confirmed" })} />
           <CcKpi n={ownerMissing} label="Owner missing" interp="needs assignment" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} onClick={() => applyKpi({ owner: "Missing" })} active={kpiActive({ owner: "Missing" })} />
           <CcKpi n={blocked} label="RCA blocked" interp="missing evidence streams" tone={blocked ? "var(--warn)" : "var(--ok)"} onClick={() => applyKpi({ rca: "Blocked" })} active={kpiActive({ rca: "Blocked" })} />
-          <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" interp="confirmed → ITSM" href="#/incident/integrations" />
+          <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" interp="confirmed → ITSM" href="#/admin/integrations" />
         </div>
         <div className="cc-decision">{decision}</div>
         {err && <p className="cc-err">{err}</p>}
@@ -423,7 +425,9 @@ export default function CommandCenter() {
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Action Queue</h3>
-          <span className="cc-panel-meta">correlated incidents — what to work next</span>
+          <span className="cc-panel-meta">
+            correlated incidents — what to work next · <a href="#/operations/queue">open as page →</a>
+          </span>
         </div>
         {loaded && items.length > 0 && (
           <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
@@ -459,7 +463,7 @@ export default function CommandCenter() {
           <CcKpi n={ticketed} label="Ticketed" interp="synced to ITSM" tone={ticketed ? "var(--ok)" : undefined} />
           <CcKpi n={ticketNeeded} label="Ticket needed" interp="confirmed RCA, not yet opened" tone={ticketNeeded ? "var(--warn)" : undefined} />
           <CcKpi n={items.filter((i) => i.ticket === "Not eligible").length} label="Not eligible" interp="RCA not confirmed — hold" />
-          <CcKpi n={incidents.filter((i) => i.sync_status === "failed").length} label="Sync failed" interp="ITSM push errored" tone={incidents.some((i) => i.sync_status === "failed") ? "var(--crit)" : undefined} href="#/incident/integrations" />
+          <CcKpi n={incidents.filter((i) => i.sync_status === "failed").length} label="Sync failed" interp="ITSM push errored" tone={incidents.some((i) => i.sync_status === "failed") ? "var(--crit)" : undefined} href="#/admin/integrations" />
         </div>
       </div>
     </div>

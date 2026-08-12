@@ -42,12 +42,16 @@ function ErrLine({ msg }: { msg: string | null }) {
 // useReload gives a [data, error, reload, setError] tuple over an async loader.
 // Curated, safe landing targets an admin can pick for the default page. Shared by
 // the per-tenant override (Tenants table) and the platform default (Settings).
+// (2026-08 nav redesign: same five semantics, canonical routes. The old
+// "#/incident/overview" and "#/dashboards/home" both rendered the Command
+// Center — the duplicate slot now points at the Operations Overview instead.
+// Previously-saved legacy landings keep validating via the nav alias table.)
 export const LANDING_OPTIONS: { route: string; label: string }[] = [
-  { route: "#/incident/overview", label: "Command Center" },
-  { route: "#/dashboards/home", label: "Dashboards · Home" },
-  { route: "#/monitoring/correlations", label: "Correlations" },
-  { route: "#/monitoring/incidents", label: "Incidents" },
-  { route: "#/infrastructure/topology-canvas", label: "Topo" },
+  { route: "#/overview/home", label: "Command Center" },
+  { route: "#/overview/operations", label: "Operations Overview" },
+  { route: "#/investigate/rca", label: "RCA" },
+  { route: "#/operations/incidents", label: "Incidents" },
+  { route: "#/investigate/topology", label: "Topology" },
 ];
 
 function useReload<T>(loader: () => Promise<T>): [T | undefined, string | null, () => void, (e: string | null) => void] {
@@ -1292,10 +1296,19 @@ export function BindingsAdmin() {
 // so org users get tenant_id = org id (strictly associated, never global) using
 // the exact tenant logic, WITHOUT requiring a tenant record to exist. `tabs` lets
 // the Provider show a slimmer set (roles + SSO mappings live per-organization).
-function IAItems({ kind, id = "", name, tabs = IA_TABS }: {
+function IAItems({ kind, id = "", name, tabs = IA_TABS, deepTab }: {
   kind: "provider" | "tenant" | "org"; id?: string; name?: string; tabs?: { id: IATab; label: string }[];
+  /** Flyout deep-link (#/admin/identity/<sub>): switch to this tab when it
+   *  exists in this scope's tab set; ignored otherwise (e.g. provider realm
+   *  has no roles/SSO tabs — the closest honest view is its default). */
+  deepTab?: IATab;
 }) {
-  const [tab, setTab] = useState<IATab>(tabs[0]?.id ?? "users");
+  const [tab, setTab] = useState<IATab>(deepTab && tabs.some((t) => t.id === deepTab) ? deepTab : tabs[0]?.id ?? "users");
+  // Re-apply when the suffix changes while mounted (flyout click on this page).
+  useEffect(() => {
+    if (deepTab && tabs.some((t) => t.id === deepTab)) setTab(deepTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepTab]);
   const cur = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "users");
   const roleScope = kind === "provider" ? undefined : id;  // platform-wide role defs; scoped note when set
   return (
@@ -1695,19 +1708,43 @@ function GuidedSetupWizard({ onDone, onClose }: { onDone: () => void; onClose: (
     </Modal>
   );
 }
+// Flyout deep-link vocabulary for Identity & Access (#/admin/identity/<sub>) —
+// the nav sub-items. Same suffix mechanism as admin/api's tiles.
+const IDENTITY_SUBS = ["users", "roles", "sso", "orgs"] as const;
+const IDENTITY_DEEP_TAB: Record<string, IATab> = { users: "users", roles: "userroles", sso: "sso" };
+function identitySub(): string {
+  const seg = window.location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] ?? "";
+  return (IDENTITY_SUBS as readonly string[]).includes(seg) ? seg : "";
+}
+
 export function IdentityAccess() {
   const { user } = useAuth();
   const platform = !!user?.platform_admin;
   const [sel, setSel] = useState<{ id: string; name: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  // Deep-link suffix (users/roles/sso/orgs), re-read on hashchange so a flyout
+  // sub-item click while ALREADY here switches views instead of looking dead.
+  const [deepSub, setDeepSub] = useState<string>(identitySub);
+  useEffect(() => {
+    const read = () => setDeepSub(identitySub());
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+  // "orgs" returns the platform view to the Organizations tree; users/roles/sso
+  // pick the matching tab in whichever scope is open (tenant admins have no
+  // tree — their IAItems gets the tab directly).
+  useEffect(() => {
+    if (deepSub === "orgs") setSel(null);
+  }, [deepSub]);
+  const deepTab = IDENTITY_DEEP_TAB[deepSub];
 
   // A tenant admin governs only its own tenant — no Provider, no picker.
   if (!platform) {
     return (
       <>
         <AdminHead title="Identity & Access" sub="Users, roles and security settings for your tenant." />
-        <IAItems kind="tenant" id={user?.tenant_id || ""} />
+        <IAItems kind="tenant" id={user?.tenant_id || ""} deepTab={deepTab} />
       </>
     );
   }
@@ -1732,8 +1769,8 @@ export function IdentityAccess() {
             <span className="mini-meta">{isProvider ? "the platform's own realm — users · security" : "users · access · roles · security · tenants"}</span>
           </div>
           {isProvider
-            ? <IAItems kind="provider" tabs={IA_TABS_PROVIDER} />
-            : <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} />}
+            ? <IAItems kind="provider" tabs={IA_TABS_PROVIDER} deepTab={deepTab} />
+            : <IAItems kind="org" id={sel.id} name={sel.name} tabs={IA_TABS_ORG} deepTab={deepTab} />}
         </>
       ) : (
         <OrgsAdmin key={refresh} onManageOrg={(id, name) => setSel({ id, name })} />

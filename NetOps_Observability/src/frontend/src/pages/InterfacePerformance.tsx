@@ -7,7 +7,7 @@ import {
 // Interface Performance — per-device / per-interface deep dive.
 // Scoped by a device + interface picker;
 // drillable from the Device Monitoring inventory row via
-// #/infrastructure/ifperf/<deviceId>. Every panel is backed by SNMP interface
+// #/analytics/interface-performance/<deviceId>. Every panel is backed by SNMP interface
 // metrics we already collect (device_if_* in VictoriaMetrics, labels device/index).
 
 // Parse an optional device id from the hash 3rd path segment (drill-down).

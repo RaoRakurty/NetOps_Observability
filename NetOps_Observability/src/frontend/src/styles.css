@@ -498,6 +498,32 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   .shell-v2 .rail-item { transition: none; }
 }
 
+/* ===== Expanded rail (2026-08 redesign): the foot toggle widens the icon pane
+   back to a labelled rail. `.rail-expanded` is mirrored onto the shell element
+   by IconRail (the width is a shell grid track). Everything below only
+   RESTORES the labelled-rail defaults that the 44px v2 rules above suppress —
+   the glass chrome, hues and flyouts stay identical in both states. */
+.shell.shell-v2.rail-expanded { --sidebar-w: 200px; }
+.shell-v2.rail-expanded .rail-label,
+.shell-v2.rail-expanded .rail-group-label { display: block; }
+.shell-v2.rail-expanded .rail-account-id { display: flex; }
+.shell-v2.rail-expanded .rail-util-icon span { display: inline; }
+.shell-v2.rail-expanded .rail-item {
+  justify-content: flex-start; gap: 9px; padding: 0 9px;
+  width: calc(100% - 12px); margin: 0 auto;
+}
+.shell-v2.rail-expanded .rail-group { align-items: stretch; }
+.shell-v2.rail-expanded .rail-main { padding: var(--sp-1) 6px; }
+.shell-v2.rail-expanded .rail-util-row { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+.shell-v2.rail-expanded .rail-util-icon { width: auto; padding: 0 8px; gap: 6px; }
+.shell-v2.rail-expanded .rail-account-btn { justify-content: flex-start; gap: 8px; padding: 6px 10px; }
+/* The toggle chevron points where the rail will go: right = expand, left = collapse. */
+.rail-expand-toggle svg { transition: transform 120ms ease; }
+.rail-expand-toggle.on svg { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) {
+  .rail-expand-toggle svg { transition: none; }
+}
+
 /* Utility cluster at the foot — Support · Help · Account (replaces top-right). */
 .rail-util {
   display: flex; flex-direction: column; padding: var(--sp-1) 8px;
@@ -584,12 +610,15 @@ code, .mono, td.mono { font-feature-settings: normal; letter-spacing: 0; }
   padding: var(--sp-2) var(--sp-5) 0 64px;
   background: var(--rail-bg); border-bottom: 1px solid var(--rail-border);
 }
-/* Per-page top tab/breadcrumb strip removed (owner request) to reclaim vertical
-   space — sub-views are reached via the rail's hover flyout, which renders the
-   same section children. Revert by removing this one rule. */
-.shell-v2 .main-head { display: none; }
-.shell-v2 .crumbs { display: none; }
-.shell-v2 .subnav { margin-top: 2px; }
+/* Per-page tab/breadcrumb strip UNHIDDEN (2026-08 nav redesign): it was
+   display:none'd to reclaim vertical space, which made every in-page tab bar
+   invisible to the nav and ⌘K — the Service View's tabs were undiscoverable.
+   Breadcrumbs stay compact beside the tab row rather than stacking above it. */
+.shell-v2 .main-head { display: flex; align-items: baseline; gap: var(--sp-4); }
+.shell-v2 .crumbs { flex: none; padding: 6px 0 4px; color: var(--rail-fg-muted); }
+.shell-v2 .crumbs .crumb-section { color: var(--rail-fg-muted); }
+.shell-v2 .crumbs .crumb-leaf { color: var(--rail-fg); font-weight: 600; }
+.shell-v2 .subnav { margin-top: 2px; min-width: 0; overflow-x: auto; }
 .shell-v2 .subnav button {
   padding: 6px 12px; font-size: 17px; font-weight: 600;
   color: var(--rail-fg-muted);

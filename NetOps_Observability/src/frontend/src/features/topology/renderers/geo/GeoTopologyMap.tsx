@@ -221,7 +221,7 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
           The geo view places sites from intent data — latitude / longitude set on each site in the
           Source of Truth (decimal WGS-84). GeoIP is never used.
         </div>
-        <a className="topo-geo-empty-link" href="#/automation/sot">Open Source of Truth →</a>
+        <a className="topo-geo-empty-link" href="#/infrastructure/sot">Open Source of Truth →</a>
       </div>
     );
   }
@@ -237,7 +237,7 @@ export default function GeoTopologyMap({ view }: { view: TopologyView }) {
       <GeoLegend />
       {isSample && (
         <div className="topo-geo-sample" title="No SoT-placed sites found — showing sample data">
-          Sample data · set site coordinates in the <a href="#/automation/sot">Source of Truth</a> for live geo
+          Sample data · set site coordinates in the <a href="#/infrastructure/sot">Source of Truth</a> for live geo
         </div>
       )}
       {model.unplaced > 0 && (

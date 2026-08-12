@@ -115,7 +115,7 @@ export default function NewMonitor() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-accent" onClick={() => navigate("monitoring/monitors")}>View monitors →</button>
+          <button className="btn-accent" onClick={() => navigate("operations/rules")}>View monitors →</button>
           <button className="btn-ghost" onClick={() => { setCreated(null); setTpl(null); }}>Create another</button>
         </div>
       </div>

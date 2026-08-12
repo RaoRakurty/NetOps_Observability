@@ -17,15 +17,13 @@ import ScopeBadge from "./ScopeBadge";
 // dark rail). Alerts (pink) and Copilot/ChatGPT (violet) are kept; the rest are
 // spread across the wheel: blue · cyan · green · teal · orange · amber · slate.
 const MOD_HUE: Record<string, string> = {
-  dashboards: "#3B82F6", // Dashboards — vivid blue
-  monitoring: "#EC4899", // Monitoring — pink (kept from Alerts)
-  incident: "#F97316", // Incident Response — vivid orange
-  automation: "#A855F7", // Automation — vivid purple
+  overview: "#3B82F6", // Overview — vivid blue (was Dashboards)
+  operations: "#EC4899", // Operations — pink (kept from Monitoring/Alerts)
+  investigate: "#F97316", // Investigate — vivid orange (the RCA heart)
   infrastructure: "#22C55E", // Fleet — vivid leafy green
+  explore: "#0EA5E9", // Explore (raw telemetry planes) — vivid sky
   security: "#EF4444", // Security — vivid red
-  metrics: "#0EA5E9", // Metrics — vivid sky
-  flows: "#14B8A6", // Flows — vivid teal
-  logs: "#EAB308", // Logs — vivid amber/gold
+  analytics: "#EAB308", // Analytics — vivid amber/gold
   copilot: "#8B5CF6", // Iris AI — violet (kept)
   admin: "#94A3B8", // Admin — slate (utility)
 };
@@ -35,12 +33,16 @@ const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
 // with the v1 sidebar and stays untouched). Sections render under their group's
 // label with a thin divider between groups. Any section not listed falls into a
 // trailing "More" group so nothing is ever dropped.
-// Three layers (the hybrid IA): Operations (monitor/operate) · Explain (access
-// reasoning) · and — anchored at the foot — Governance (Administration + Stack).
+// Zones follow the operator journey of the 2026-08 owner tree: Monitor (where
+// do I start / what is happening) · Investigate (why — RCA plus the raw
+// evidence planes, kept adjacent because Explore IS the evidence drawer) ·
+// Manage (what I own + its security posture) · Analyze (trend/management
+// views) — with Governance (Administration) anchored at the foot as before.
 const GROUPS: { label: string; ids: string[] }[] = [
-  { label: "Monitor", ids: ["dashboards", "monitoring", "incident", "automation"] },
-  { label: "Infrastructure", ids: ["infrastructure", "security"] },
-  { label: "Data", ids: ["metrics", "flows", "logs"] },
+  { label: "Monitor", ids: ["overview", "operations"] },
+  { label: "Investigate", ids: ["investigate", "explore"] },
+  { label: "Manage", ids: ["infrastructure", "security"] },
+  { label: "Analyze", ids: ["analytics"] },
 ];
 // Governance zone anchored at the foot: Administration alone (Explain + Stack
 // dissolved into it, 2026-07-10), above a thin-line-separated Support/Help
@@ -62,15 +64,49 @@ type Props = {
 
 type OpenState = { id: string; top: number; focus?: boolean } | null;
 
-// IconRail — the persistent labeled rail (icon before name, small font). Hovering
-// or focusing a section opens a flyout of its children to the right; the rail
-// never collapses and never reflows (the flyout is a fixed overlay). Click
-// navigates. All sections render in order (Administration is no longer pinned to
-// the very bottom), and a utility cluster (Account · Support · Help) sits at the
-// foot — replacing the top-right user menu.
+// Expanded-rail preference (2026-08 redesign): the v2 rail is icon-only by
+// default (44px, labels via flyout + title tooltips); the foot toggle expands
+// it to the labelled form. Persisted like the density preference — a plain
+// localStorage key, read once, written on toggle, never a hard requirement
+// (private-mode storage failures just mean the choice doesn't stick).
+const RAIL_EXPANDED_KEY = "netops.railExpanded";
+function readRailExpanded(): boolean {
+  try {
+    return localStorage.getItem(RAIL_EXPANDED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// IconRail — the persistent section rail. Hovering or focusing a section opens
+// a flyout of its children to the right; the rail never reflows mid-hover (the
+// flyout is a fixed overlay). Click navigates. Collapsed (default) it is the
+// 44px icon pane with title tooltips; the foot toggle expands it to icon+label.
+// A utility cluster (Account · Support · Help) sits at the foot — replacing the
+// top-right user menu.
 export default function IconRail({ nav, activeSection, activeLeaf, user, onLogout, onChangePassword }: Props) {
   const { navigate, setCopilotOpen, copilotOpen, setHelpOpen } = useShell();
   const [open, setOpen] = useState<OpenState>(null);
+  const [expanded, setExpanded] = useState<boolean>(readRailExpanded);
+  // The rail's width is a shell grid track (--sidebar-w on .shell), which lives
+  // ABOVE this component — mirror the state onto the shell element, the same
+  // pattern ShellGridSizing uses for the inspector/drawer tracks.
+  useEffect(() => {
+    const el = document.querySelector(".shell.shell-v2");
+    if (!el) return;
+    el.classList.toggle("rail-expanded", expanded);
+    return () => el.classList.remove("rail-expanded");
+  }, [expanded]);
+  const toggleExpanded = useCallback(() => {
+    setExpanded((v) => {
+      try {
+        localStorage.setItem(RAIL_EXPANDED_KEY, v ? "0" : "1");
+      } catch {
+        /* preference just won't persist */
+      }
+      return !v;
+    });
+  }, []);
   const [acctOpen, setAcctOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
@@ -203,6 +239,17 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
             <button className="rail-util-icon" type="button" title="Documentation" aria-label="Documentation" onClick={() => setHelpOpen(true)}>
               <Icon name="help" size={16} />
               <span>Help</span>
+            </button>
+            <button
+              className={`rail-util-icon rail-expand-toggle${expanded ? " on" : ""}`}
+              type="button"
+              title={expanded ? "Collapse navigation" : "Expand navigation"}
+              aria-label={expanded ? "Collapse navigation" : "Expand navigation"}
+              aria-pressed={expanded}
+              onClick={toggleExpanded}
+            >
+              <Icon name="chevron" size={16} />
+              <span>{expanded ? "Collapse" : "Expand"}</span>
             </button>
           </div>
         </div>

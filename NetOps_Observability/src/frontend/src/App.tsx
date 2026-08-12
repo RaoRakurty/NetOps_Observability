@@ -5,7 +5,7 @@ import { ShellContext, ShellState, TimeRange, SectionCtx } from "./context/shell
 import { rangeForSection, rememberSectionRange } from "./theme/timeprefs";
 import { useTzMode, setTzMode } from "./lib/time";
 import { lazy } from "react";
-import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor } from "./nav";
+import { resolveRoute, resolveResourceRoute, filteredNav, landingResolves, routeFor, canonicalHash } from "./nav";
 // Route-level page like the nav leaves (#/resource/{kind}/{id}) — lazy for the
 // same reason: it pulls the appobs metric panels (ECharts) into its own chunk.
 // It renders inside the same <Suspense> boundary as the nav pages below.
@@ -65,7 +65,24 @@ export default function App() {
   }, [user, nav]);
 
   // Shell state — the single source of truth that unifies the sections.
-  const [hash, setHash] = useState<string>(() => location.hash || "#/dashboards/home");
+  // Legacy hashes (pre-2026-08 IA + the Explain/Stack legacies) are rewritten
+  // to their canonical route BEFORE first paint via history.replaceState (no
+  // hashchange fires), so pages that read their tab from the third hash
+  // segment only ever see canonical routes — and the address bar shows the
+  // route worth bookmarking.
+  const [hash, setHash] = useState<string>(() => {
+    const h = location.hash || "#/overview/home";
+    const canon = canonicalHash(h);
+    if (canon) {
+      try {
+        history.replaceState(null, "", canon);
+      } catch {
+        /* sandboxed history: resolveRoute still aliases the legacy hash */
+      }
+      return canon;
+    }
+    return h;
+  });
   // Per-section time-range memory: each section restores the range it was last
   // viewed with (theme/timeprefs.ts). setRange persists under the active section.
   const sectionId = useMemo(() => resolveRoute(hash, nav).section.id, [hash, nav]);
@@ -113,7 +130,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setHash(location.hash || "#/dashboards/home");
+    const onHash = () => {
+      const h = location.hash || "#/overview/home";
+      const canon = canonicalHash(h);
+      if (canon) {
+        try {
+          history.replaceState(null, "", canon);
+        } catch {
+          /* resolveRoute still aliases the legacy hash */
+        }
+      }
+      setHash(canon ?? h);
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -135,7 +163,9 @@ export default function App() {
     }
     const freshLogin = sessionStorage.getItem(LANDING_PENDING_KEY) === "1";
     const h = initialHash.current;
-    const enteredAtHome = h === "" || h === "#/" || h === "#/dashboards/home";
+    // "#/dashboards/home" was the pre-redesign default route — old bookmarks of
+    // it still count as "entered at home".
+    const enteredAtHome = h === "" || h === "#/" || h === "#/overview/home" || h === "#/dashboards/home";
     if ((freshLogin || enteredAtHome) && want !== location.hash) {
       location.hash = want; // fires hashchange → setHash
     }
@@ -260,7 +290,7 @@ export default function App() {
               inside a 1640px cap with side gutters on a wide monitor — the
               "limited to the borders" the owner reported. Opt-in per leaf so
               every other page keeps its comfortable measure. */}
-          <div className={`page${leaf?.id === "topology-canvas" ? " page-bleed" : ""}`} key={tz}>
+          <div className={`page${section.id === "investigate" && leaf?.id === "topology" ? " page-bleed" : ""}`} key={tz}>
             {/* Administration acts on config — always state the acting scope
                 (rendered in-page: shell-v2 hides the main-head strip). */}
             {section.id === "admin" && (

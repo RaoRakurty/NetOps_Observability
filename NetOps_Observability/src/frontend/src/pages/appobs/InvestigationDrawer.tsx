@@ -232,7 +232,7 @@ export default function InvestigationDrawer({ id }: { id: string }) {
       <div className="inv-drawer-top">
         <span className="inv-drawer-id" title={id}>{friendlyProblemId(id)}</span>
         {/* deep work still has its page — the drawer never traps the analysis */}
-        <a className="ao-rowaction" href={`#/monitoring/correlations?id=${encodeURIComponent(id)}`}>
+        <a className="ao-rowaction" href={`#/investigate/rca?id=${encodeURIComponent(id)}`}>
           Open full analysis
         </a>
       </div>

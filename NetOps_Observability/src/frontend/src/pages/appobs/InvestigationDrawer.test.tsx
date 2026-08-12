@@ -155,7 +155,7 @@ describe("drawer content", () => {
   it("keeps the full-analysis escape hatch and embeds the real inspector", async () => {
     render(<InvestigationDrawer id="11111111-2222-3333-4444-555555555555" />);
     const link = await screen.findByRole("link", { name: /open full analysis/i });
-    expect(link.getAttribute("href")).toContain("#/monitoring/correlations?id=");
+    expect(link.getAttribute("href")).toContain("#/investigate/rca?id=");
     expect(screen.getByTestId("corr-detail").textContent).toBe("11111111-2222-3333-4444-555555555555");
   });
 });

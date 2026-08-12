@@ -720,8 +720,8 @@ function DeviceHealthSummary({ minutes }: { minutes: number }) {
         <div className="panel-tools"><h3>Device health</h3></div>
         <p className="mini-meta" style={{ margin: 0 }}>
           Health of the devices behind these flows, at a glance. Full per-device CPU/memory/interface health lives in{" "}
-          <a href="#/infrastructure/monitoring" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Monitoring</a> and{" "}
-          <a href="#/infrastructure/ifperf" style={{ color: "var(--accent)", fontWeight: 600 }}>Interface Performance</a>.
+          <a href="#/analytics/device-monitoring" style={{ color: "var(--accent)", fontWeight: 600 }}>Device Monitoring</a> and{" "}
+          <a href="#/analytics/interface-performance" style={{ color: "var(--accent)", fontWeight: 600 }}>Interface Performance</a>.
         </p>
       </div>
     </>

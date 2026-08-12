@@ -417,7 +417,7 @@ function EngineRcaBanner({ rca }: { rca: AppRca }) {
         <div><div className="ao-rca-l">Planes</div><div className="ao-rca-v">{rca.planeCount || rca.sources.length || "—"}</div></div>
         <div><div className="ao-rca-l">State</div><div className="ao-rca-v">{rca.state}</div></div>
       </div>
-      <a className="ao-rca-link" href={`#/monitoring/correlations?id=${encodeURIComponent(rca.correlationId)}`}>
+      <a className="ao-rca-link" href={`#/investigate/rca?id=${encodeURIComponent(rca.correlationId)}`}>
         View full RCA →
       </a>
     </div>
