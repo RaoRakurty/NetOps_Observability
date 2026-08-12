@@ -1362,12 +1362,15 @@ def wait_for_minted_certs(root: Path, timeout_s: int = 300) -> None:
             ok("all service identities minted")
             return
         time.sleep(5)
-    fail("the api did not mint the full identity set in time; still missing:")
+    # Print the evidence BEFORE failing — fail() exits immediately, so the
+    # original order made the missing-list and the hint unreachable dead code
+    # (found by the CI tls-boot leg's first mint timeout, 2026-08-12).
+    print("[fail ] the api did not mint the full identity set in time; still missing:",
+          file=sys.stderr)
     for p in remaining:
-        print(f"    - {p}")
+        print(f"    - {p}", file=sys.stderr)
     fail("check `docker compose logs api` (seal sidecar up? SEAL_PROVIDER=swtpm? "
          "data/tls writable by the api uid?) and rerun the installer — it is idempotent.")
-    raise SystemExit(2)
 
 
 def ensure_ingress_cert(root: Path) -> None:

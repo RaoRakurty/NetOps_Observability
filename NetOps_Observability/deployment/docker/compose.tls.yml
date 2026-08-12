@@ -36,6 +36,14 @@ services:
       - ./nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro
       - ../../data/tls:/etc/nginx/tls:ro
   api:
+    # Cold-boot ordering (CI tls-boot leg, 2026-08-12): the api's seal gate
+    # refuses TLS_INTERNAL_CA without custody, so on a fresh install it must
+    # wait for the swtpm sidecar's socket (the sidecar carries a socket-exists
+    # healthcheck in the base file). Both services are active on TLS installs
+    # (profile seal is in COMPOSE_PROFILES).
+    depends_on:
+      secrets-seal:
+        condition: service_healthy
     environment:
       # Enforce wave 2026-08-09: 9092 is gone — the stack-health Event Bus TCP
       # probe (firstBrokerAddr) must aim at the MTLS listener or the tile

@@ -100,6 +100,8 @@ jobs:
         working-directory: NetOps_Observability/deployment/docker
         run: |
           echo "=== docker compose ps -a ==="; docker compose ps -a || true
+          echo "=== api log (the mint owner) ==="; docker compose logs api --tail 120 || true
+          echo "=== seal sidecar log ==="; docker compose logs secrets-seal --tail 40 || true
           echo "=== docker compose logs (tail) ==="; docker compose logs --tail 60 || true
           echo "=== docker system df ==="; docker system df || true
           echo "=== df -h ==="; df -h / || true

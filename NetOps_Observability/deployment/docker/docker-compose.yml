@@ -1903,6 +1903,17 @@ services:
       - ../../data/swtpm:/tpmstate
     networks: [netops]
     restart: *restart
+    # Healthy = the seal socket EXISTS. This is what makes first-boot ordering
+    # expressible: the api's TLS_INTERNAL_CA seal gate refuses to boot without
+    # custody, so on a cold `install.py --tls` the api must not race the
+    # sidecar's socket creation (compose.tls.yml adds the depends_on; found by
+    # the CI tls-boot leg's mint timeout, 2026-08-12).
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/secrets-seal/seal.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   frontend:
     # SC-008: nginx-unprivileged (non-root, :8080); lock down escalation+caps.
