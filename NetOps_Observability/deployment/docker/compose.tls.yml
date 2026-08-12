@@ -35,6 +35,13 @@ services:
       # API's internal CA mints at boot (read-only).
       - ./nginx/api-mtls.conf.example:/etc/nginx/conf.d/api-mtls.conf:ro
       - ../../data/tls:/etc/nginx/tls:ro
+  # The TLS mesh REQUIRES custody — the seal sidecar is unconditional in this
+  # variant (profile-gating cleared): the api depends_on below must reference
+  # an always-defined service, or compose refuses the whole project whenever
+  # the profile env is absent (config -q, ad-hoc invocations).
+  secrets-seal:
+    profiles: !override []
+
   api:
     # Cold-boot ordering (CI tls-boot leg, 2026-08-12): the api's seal gate
     # refuses TLS_INTERNAL_CA without custody, so on a fresh install it must
