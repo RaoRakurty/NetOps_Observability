@@ -687,6 +687,10 @@ services:
     environment:
       OPENSEARCH_URL: http://opensearch:9200
       OPENSEARCH_LOG_RETENTION_DAYS: ${OPENSEARCH_LOG_RETENTION_DAYS:-14}
+      # F-11: quarantined (unattributable) envelopes keep their own bounded
+      # window — re-attribution may need longer than the log default, but
+      # retention is never unbounded (INV-F11-09).
+      QUARANTINE_RETENTION_DAYS: ${QUARANTINE_RETENTION_DAYS:-30}
       # F-07: replica posture. 0 on the single-node appliance (a replica can
       # never be assigned there and pins the cluster yellow forever — F-53's
       # root cause); >= 1 on any real multi-node cluster, where 0 replicas plus

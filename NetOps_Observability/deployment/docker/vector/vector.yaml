@@ -460,13 +460,21 @@ transforms:
       # `to_string(.tenant_id)` would be infallible once .tenant_id is known to
       # be a string — a dangling `??` on an infallible call is a VRL COMPILE
       # error, i.e. vector exits 78 at boot (the floor()/to_timestamp lesson).
+      # F-11: the registry-MISS discriminator. A registry HIT that maps a
+      # KNOWN platform/global device to "" is the platform's own telemetry
+      # (the load-bearing untagged bucket); a MISS is a sender the inventory
+      # does not know at all — TENANT_UNATTRIBUTABLE, quarantined by the
+      # router's generated stage when sealing is enabled. The two used to be
+      # indistinguishable (both left .tenant_id == "").
       .tenant_id = ""
+      .tenant_registry = "miss"
       tenant_resolved = ""
       if .hostname != "unknown" {
         trows = find_enrichment_table_records("device_tenant", { "identity": .hostname }) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
           .tenant_id = tenant_resolved
+          .tenant_registry = "hit"
         }
       }
 
@@ -628,11 +636,14 @@ transforms:
       if .hostname == "" { .hostname = host }
       key = dev
       if key == "" { key = host }
+      # F-11: registry-MISS discriminator — see the syslog lane's note.
       .tenant_id = ""
+      .tenant_registry = "miss"
       if key != "" {
         trows = find_enrichment_table_records("device_tenant", { "identity": key }) ?? []
         if length(trows) > 0 {
           .tenant_id = to_string(trows[0].tenant_id) ?? ""
+          .tenant_registry = "hit"
         }
       }
 

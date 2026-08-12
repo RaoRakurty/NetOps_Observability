@@ -344,20 +344,39 @@ def test_every_storage_sink_routes_through_its_processor_hook():
     the *_tagged transforms directly — otherwise a tenant's redaction rules
     exist in the API but never touch what is actually stored."""
     cfg = vector_cfg("router")
+    # F-11: the device-attribution lanes interpose a store ROUTE between the
+    # hook and the sink (quarantine envelopes peel off to the dedicated
+    # index). The hook is still mandatory — the route itself must read it, so
+    # the chain is <lane>_rules → <lane>_store_route → sink.
     expect = {
-        "opensearch_applogs": "applogs_rules",
-        "opensearch_syslog": "syslog_rules",
-        "opensearch_snmptrap": "snmptrap_rules",
-        "opensearch_cloudlogs": "cloudlogs_rules",
-        "clickhouse_flows": "flows_rules",
+        "opensearch_applogs": ("applogs_rules", None),
+        "opensearch_syslog": ("syslog_rules", "syslog_store_route"),
+        "opensearch_snmptrap": ("snmptrap_rules", "snmptrap_store_route"),
+        "opensearch_cloudlogs": ("cloudlogs_rules", None),
+        "clickhouse_flows": ("flows_rules", "flows_store_route"),
     }
     hooks = processors_default()["transforms"]
-    for sink, hook in expect.items():
-        assert cfg["sinks"][sink]["inputs"] == [hook], \
-            f"{sink} bypasses the processor hook (reads {cfg['sinks'][sink]['inputs']})"
+    for sink, (hook, route) in expect.items():
+        got = cfg["sinks"][sink]["inputs"]
+        if route is None:
+            assert got == [hook], \
+                f"{sink} bypasses the processor hook (reads {got})"
+        else:
+            assert got == [route + "._unmatched"], \
+                f"{sink} must read {route}._unmatched (quarantine peel-off, F-11); reads {got}"
+            assert cfg["transforms"][route]["inputs"] == [hook], \
+                f"{route} bypasses the processor hook (reads {cfg['transforms'][route]['inputs']})"
+            assert "quarantine" in cfg["transforms"][route].get("route", {}), \
+                f"{route} lost its quarantine route condition"
         assert hook in hooks, f"default processors file no longer defines {hook} — a cold start cannot boot"
-    assert cfg["transforms"]["flows_os_sample"]["inputs"] == ["flows_rules"], \
-        "the OS flow sample must see the SAME shaped records as ClickHouse"
+    assert cfg["transforms"]["flows_os_sample"]["inputs"] == ["flows_store_route._unmatched"], \
+        "the OS flow sample must see the SAME shaped (and quarantine-filtered) records as ClickHouse"
+    # The quarantine sink consumes exactly the three routes' quarantine outputs.
+    assert sorted(cfg["sinks"]["opensearch_quarantine"]["inputs"]) == [
+        "flows_store_route.quarantine",
+        "snmptrap_store_route.quarantine",
+        "syslog_store_route.quarantine",
+    ], "opensearch_quarantine must consume exactly the three lanes' quarantine routes"
 
 
 def test_processor_hooks_shape_after_attribution_not_before():
@@ -547,6 +566,8 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
     # scaffolding, ClickHouse-only columns, and the cloud-bus event shape.
     not_indexed = {
         "__topic", "__key",                      # kafka_bus routing, stripped at encode
+        "tenant_registry",                       # F-11 hit/miss discriminator — routing scaffolding, never a search field
+        "cx_quarantine", "cx_event_id",          # F-11 envelope fields — declared in the netops-quarantine template, not the lane templates
         "cloud_body", "cloud_provider",          # intermediate; replaced before the sink
         "proto", "tcp_flags", "flow_type",       # clickhouse flows columns (also declared)
         "kind", "metric_name", "value", "attrs", "entity_tokens", "app",

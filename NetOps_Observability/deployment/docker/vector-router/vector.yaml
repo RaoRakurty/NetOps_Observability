@@ -431,10 +431,16 @@ transforms:
       claimed_tenant = to_string(.tenant_id) ?? ""
       tenant_resolved = ""
       sampler = to_string(.sampler_address) ?? ""
+      # F-11: registry-MISS discriminator (see the aggregator's syslog note):
+      # hit-with-"" = KNOWN platform exporter (stays untagged, load-bearing);
+      # miss = unknown exporter, quarantined by the generated stage when
+      # sealing is on.
+      .tenant_registry = "miss"
       if sampler != "" {
         trows = find_enrichment_table_records("device_tenant", { "identity": sampler }) ?? []
         if length(trows) > 0 {
           tenant_resolved = to_string(trows[0].tenant_id) ?? ""
+          .tenant_registry = "hit"
         }
       }
       .tenant_id = tenant_resolved
@@ -544,9 +550,32 @@ transforms:
   # read-only (2026-06-10 outage: syslog/traps/applogs all stopped).
   # Input is the processor hook (item 121) so the OS sample and the ClickHouse
   # canonical store see the SAME shaped records.
+  # F-11 seal-or-quarantine: storage routing for the device-attribution lanes.
+  # The generated processors config (when sealing is enabled) replaces a
+  # registry-MISS event with a sealed quarantine envelope stamped
+  # `cx_quarantine: true`; these routes steer such envelopes to the dedicated
+  # operator-only index and everything else to the normal per-lane stores.
+  # STATIC on purpose: routes carry no secrets, so plaintext deployments are
+  # unaffected (without the generated stage nothing ever matches the route).
+  syslog_store_route:
+    type: route
+    inputs: [syslog_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+  snmptrap_store_route:
+    type: route
+    inputs: [snmptrap_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+  flows_store_route:
+    type: route
+    inputs: [flows_rules]
+    route:
+      quarantine: 'to_bool(.cx_quarantine) ?? false'
+
   flows_os_sample:
     type: sample
-    inputs: [flows_rules]
+    inputs: [flows_store_route._unmatched]
     rate: 50
 
   # F-11 — make a broken device→tenant enrichment table VISIBLE.
@@ -631,6 +660,30 @@ sinks:
   # Dead-letter → OpenSearch. Small by construction (only genuinely malformed
   # records land here), so a non-empty netops-deadletter-* index is itself the
   # signal that a producer has broken its contract.
+  # F-11 seal-or-quarantine: TENANT_UNATTRIBUTABLE envelopes (payload sealed
+  # under the quarantine key by the generated stage) land in a dedicated
+  # dateful index with NO tenant segment — the deadletter shape. No tenant
+  # read path ever names it; the operator workflow is the only consumer.
+  # id_key: every envelope carries a uuid cx_event_id, so a replayed write
+  # (router restart, kafka redelivery) UPSERTS instead of duplicating — the
+  # F11.11 idempotency half at the storage layer.
+  opensearch_quarantine:
+    type: elasticsearch
+    inputs: [syslog_store_route.quarantine, snmptrap_store_route.quarantine, flows_store_route.quarantine]
+    endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
+    auth:
+      strategy: basic
+      user: "${OPENSEARCH_USER:-svc_router}"
+      password: "${OPENSEARCH_PASSWORD:-unused-on-plaintext-opensearch}"
+    # Write-only identity — same rationale as the other lanes (SEC-008).
+    healthcheck: false
+    mode: bulk
+    id_key: cx_event_id
+    bulk:
+      index: "netops-quarantine-%Y.%m.%d"
+      action: index
+    api_version: v7
+
   opensearch_deadletter:
     type: elasticsearch
     inputs: [deadletter_encoded, kafka_deadletter]
@@ -654,7 +707,7 @@ sinks:
   # Syslog from network devices → OpenSearch
   opensearch_syslog:
     type: elasticsearch
-    inputs: [syslog_rules]
+    inputs: [syslog_store_route._unmatched]
     endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
     auth:
       strategy: basic
@@ -675,7 +728,7 @@ sinks:
   # SNMP traps from network devices → OpenSearch
   opensearch_snmptrap:
     type: elasticsearch
-    inputs: [snmptrap_rules]
+    inputs: [snmptrap_store_route._unmatched]
     endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
     auth:
       strategy: basic
@@ -737,7 +790,7 @@ sinks:
 
   clickhouse_flows:
     type: clickhouse
-    inputs: [flows_rules]
+    inputs: [flows_store_route._unmatched]
     endpoint: "${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}"  # SEC-009: TLS deployments point this at :8443
     database: netops
     table: flows

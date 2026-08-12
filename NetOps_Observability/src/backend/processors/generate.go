@@ -197,12 +197,35 @@ func GenerateRouterConfig(rules []Rule) string {
 	b.WriteString("# an explicit no-op, never an absent component.\n")
 	b.WriteString("transforms:\n")
 
+	// F-11 seal-or-quarantine: with sealing configured, the device-attribution
+	// lanes get a quarantine stage between the lane input and the rules chain.
+	// Emitted per-lane only when the engine can seal the quarantine scope —
+	// see quarantine.go for the invariant and the fail-closed shape.
+	engine := currentSealEngine()
+
 	for _, lane := range laneOrder {
 		rs := byLane[lane]
+		chainInput := laneInputs[lane]
+		if engine != nil && quarantineLanes[lane] {
+			if body, ok := quarantineStageVRL(lane, engine); ok {
+				qn := quarantineName(lane)
+				fmt.Fprintf(&b, "  %s:\n", qn)
+				b.WriteString("    type: remap\n")
+				fmt.Fprintf(&b, "    inputs: [%s]\n", laneInputs[lane])
+				// Abort/error ⇒ DROP (counted by vector's component error
+				// metrics), never a reroute: the deadletter index is durable
+				// plaintext and must not receive an unsealed payload.
+				b.WriteString("    drop_on_abort: true\n")
+				b.WriteString("    drop_on_error: true\n")
+				b.WriteString("    source: |\n")
+				fmt.Fprintf(&b, "      %s\n", strings.ReplaceAll(body, "\n", "\n      "))
+				chainInput = qn
+			}
+		}
 		// 1. the ordered apply chain
 		fmt.Fprintf(&b, "  %s:\n", applyName(lane))
 		b.WriteString("    type: remap\n")
-		fmt.Fprintf(&b, "    inputs: [%s]\n", laneInputs[lane])
+		fmt.Fprintf(&b, "    inputs: [%s]\n", chainInput)
 		b.WriteString("    source: |\n")
 		// Explicit no-op keeps the program non-empty (an empty VRL program is a
 		// compile error) and costs nothing.

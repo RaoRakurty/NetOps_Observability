@@ -173,6 +173,79 @@ def test_postgres_tls_entrypoint_requires_hostssl():
     ), "the staged pg_hba has no hostssl row for the compose network (F-4)"
 
 
+def test_quarantine_pipeline_wiring():
+    """F-11 seal-or-quarantine (owner decision 2026-08-12), slice 1: the
+    static halves of the quarantine path. The SEALING half lives in the
+    GENERATED processors config (see processors/quarantine_test.go); what the
+    tracked configs must provide:
+
+    (a) the registry-MISS discriminator: the attribution lookup sites stamp
+        `.tenant_registry` hit/miss — a registry hit that maps a KNOWN
+        platform device to the empty tenant is NOT a miss, which is what
+        keeps the load-bearing platform untagged bucket (Grafana, self-
+        monitoring RCA, device-join visibility) intact;
+    (b) the routing: quarantine-enveloped docs (`cx_quarantine == true`) go
+        to a dedicated operator-only index — never the per-lane indices,
+        never ClickHouse, never the plaintext deadletter;
+    (c) the storage contract: an index template that maps ONLY the metadata
+        (the sealed payload stays unmapped/unsearchable) and a bounded ISM
+        retention policy of its own.
+    """
+    root = ROOT / "deployment" / "docker"
+    agg = (root / "vector" / "vector.yaml").read_text()
+    rtr = (root / "vector-router" / "vector.yaml").read_text()
+
+    # (a) discriminator stamps at every device-registry lookup site.
+    for name, text, lane in (("aggregator", agg, "syslog"),
+                             ("aggregator", agg, "snmptrap"),
+                             ("router", rtr, "flows")):
+        assert text.count('.tenant_registry = "miss"') >= 1, (
+            f"{name}: no registry-miss stamp — the quarantine guard has "
+            f"nothing to key on (F-11 {lane})")
+    assert agg.count('.tenant_registry = "miss"') >= 2, (
+        "aggregator must stamp the miss on BOTH syslog and snmptrap lookups")
+    assert '.tenant_registry = "hit"' in agg and '.tenant_registry = "hit"' in rtr, (
+        "hit must be stamped explicitly — an absent field is indistinguishable "
+        "from a lane that predates the discriminator")
+
+    # (b) routing: route transforms + the dedicated sink.
+    assert "opensearch_quarantine" in rtr, "router has no quarantine sink (F-11)"
+    assert "netops-quarantine-%Y.%m.%d" in rtr, (
+        "quarantine index must be its own dateful index, no tenant segment")
+    for lane in ("syslog", "snmptrap", "flows"):
+        assert f"{lane}_store_route" in rtr, (
+            f"lane {lane}: no store route — quarantine docs would land in the "
+            f"normal per-lane index")
+        assert f"{lane}_store_route._unmatched" in rtr, (
+            f"lane {lane}: normal sink must consume the route's _unmatched output")
+    assert "clickhouse_flows" in rtr and "flows_store_route._unmatched" in rtr, (
+        "quarantined flows must not reach ClickHouse")
+    # The deadletter sink must not consume quarantine routes.
+    dl = rtr[rtr.index("opensearch_deadletter"):]
+    dl = dl[:dl.index("inputs:") + 200]
+    assert "quarantine" not in dl, "deadletter must not consume quarantine outputs"
+
+    # (c) template + retention.
+    tpl = json.loads((root / "opensearch" / "index-templates.json").read_text())
+    q = tpl["templates"].get("netops-quarantine")
+    assert q, "netops-quarantine index template missing"
+    props = q["template"]["mappings"]["properties"]
+    assert q["template"]["mappings"].get("dynamic") in (False, "false"), (
+        "quarantine template must be dynamic:false (field wall)")
+    assert "cx_quarantine_payload" not in props, (
+        "the sealed payload must stay UNMAPPED — mapping it makes ciphertext "
+        "searchable/aggregatable surface for no benefit")
+    for field in ("cx_event_id", "identity_sha", "reason", "lane", "received_at"):
+        assert field in props, f"quarantine template must map metadata field {field}"
+
+    ism = (root / "opensearch" / "apply-ism.sh").read_text()
+    assert "QUARANTINE_RETENTION_DAYS" in ism, (
+        "quarantine retention must be its own bounded, configurable window")
+    assert "netops-quarantine-*" in ism, (
+        "apply-ism.sh never attaches a policy to netops-quarantine-* — "
+        "unattributable payloads would be retained forever (INV-F11-09)")
+
+
 def test_vector_tiers_reload_enrichment_on_change():
     """F-10 (assurance run 2026-08-09, step-3 e2e): Vector reads enrichment
     tables ONCE at (re)load — --watch-config watches config files only — so a

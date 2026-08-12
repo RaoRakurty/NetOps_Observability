@@ -178,6 +178,48 @@ curl -s -X POST "$OS/_plugins/_ism/add/$ADD_PATTERNS" \
 echo "ism: retention policy applied — netops-* indices delete after ${DAYS}d."
 
 # ---------------------------------------------------------------------------
+# F-11 seal-or-quarantine: the quarantine index gets its OWN bounded window
+# (INV-F11-09 — unattributable payloads must never be retained indefinitely),
+# separate from the telemetry window because re-attribution may legitimately
+# need longer than the log-retention default. Same seq_no dance as above —
+# a bare PUT on an existing policy 409s and silently keeps the OLD window.
+QDAYS="${QUARANTINE_RETENTION_DAYS:-30}"
+echo "ism: installing quarantine retention policy (delete after ${QDAYS}d) ..."
+QSEQ=$(curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" 2>/dev/null |
+      sed -n 's/.*"_seq_no"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+QPTERM=$(curl -s "$OS/_plugins/_ism/policies/netops-quarantine-retention" 2>/dev/null |
+      sed -n 's/.*"_primary_term"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+if [ -n "${QSEQ:-}" ] && [ -n "${QPTERM:-}" ]; then
+  QPUT_URL="$OS/_plugins/_ism/policies/netops-quarantine-retention?if_seq_no=${QSEQ}&if_primary_term=${QPTERM}"
+  echo "ism: quarantine policy exists (seq_no=$QSEQ) — updating in place"
+else
+  QPUT_URL="$OS/_plugins/_ism/policies/netops-quarantine-retention"
+fi
+QPOLICY_RESP=$(curl -s -X PUT "$QPUT_URL" \
+  -H 'Content-Type: application/json' -d @- <<JSON
+{
+  "policy": {
+    "description": "F-11: delete unattributed quarantine envelopes after ${QDAYS} days (bounded retention, INV-F11-09).",
+    "default_state": "hot",
+    "states": [
+      { "name": "hot", "actions": [],
+        "transitions": [ { "state_name": "delete", "conditions": { "min_index_age": "${QDAYS}d" } } ] },
+      { "name": "delete", "actions": [ { "delete": {} } ], "transitions": [] }
+    ],
+    "ism_template": [ { "index_patterns": ["netops-quarantine-*"], "priority": 5 } ]
+  }
+}
+JSON
+)
+case "$QPOLICY_RESP" in
+  *'"_id":"netops-quarantine-retention"'*) echo "ism: quarantine policy written." ;;
+  *) echo "ism: WARNING quarantine policy PUT did not take: $QPOLICY_RESP" >&2 ;;
+esac
+curl -s -X POST "$OS/_plugins/_ism/add/netops-quarantine-*" \
+  -H 'Content-Type: application/json' -d '{"policy_id":"netops-quarantine-retention"}' >/dev/null 2>&1 || true
+echo "ism: quarantine retention applied — netops-quarantine-* deletes after ${QDAYS}d."
+
+# ---------------------------------------------------------------------------
 # F-59 — SNAPSHOTS. `GET _snapshot` returned `{}` on the live stack: no
 # repository was registered, so there was NO backup of any search index, ever.
 # Together with F-07's zero replicas that is no redundancy at either layer —
