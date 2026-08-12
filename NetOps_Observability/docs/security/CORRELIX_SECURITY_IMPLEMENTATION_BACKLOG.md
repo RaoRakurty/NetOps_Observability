@@ -1,10 +1,19 @@
 # Correlix Security — Implementation Backlog (SEC-001 … SEC-024)
 
-**Status: DRAFT for owner review. 2026-08-04. Nothing here is authorized to
-start** — the do-not-implement boundary in
-`docs/security/CORRELIX_CLOUD_NATIVE_SECURITY_HLD.md` §12 governs this file.
-Only SEC-001, SEC-002.1/.2 (warn-only), SEC-024.1 and test scaffolding are
-permitted before approval.
+**Status (2026-08-12): the v1 programme was EXECUTED under tracker #151.**
+Steps 1–3 are complete as of 2026-08-12 — the enforce wave (`ebadd2af`,
+2026-08-09: default-deny bus, plaintext listeners removed), the 13-phase
+assurance run (`d2e5cf65`), and the step-3 fixes F-1…F-12 (`4e5e0d00` …
+`8124d834`, including the F-11 seal-or-quarantine build) — with step 4
+(documentation/claims reconciliation, SEC-024) in flight. The owner steer in
+§0a was applied throughout; per-epic outcomes, every deviation, and every
+owner-accepted shape are recorded in
+`docs/security/TLS_ASSURANCE_REPORT_2026_08.md`, and dated per-row status now
+annotates the §"V1 COMPLETION DEFINITION" tables below. This file remains the
+**epic-spec record** — the item texts are the specs the work was built
+against, not a live to-do list (open work lives in `docs/TRACKER.md`). The
+original 2026-08-04 "DRAFT / nothing authorized to start" status and the HLD
+§12 do-not-implement boundary are discharged.
 
 **Binding parents:**
 `docs/security/CORRELIX_CLOUD_NATIVE_SECURITY_HLD.md` (component matrix §7,
@@ -2662,43 +2671,43 @@ honest.
 
 ### A. Every Correlix-owned network path is TLS, mutually authenticated, and identified
 
-| # | Path | Must be true | Proven by |
-|---|---|---|---|
-| A1 | Browser → nginx | TLS 1.2+, HSTS, PFS, no session tickets; **no plaintext `:8000` published** | SEC-004.1/.2 |
-| A2 | nginx → api | mTLS, SAN allowlist, plaintext API listener removed | SEC-005.1/.2 |
-| A3 | api ↔ correlation | mTLS; no unauthenticated HTTP surface remains | SEC-005 / backend client |
-| A4 | every Kafka client ↔ Kafka | mTLS with a per-service SVID; **no PLAINTEXT listener**; `allow.everyone.if.no.acl.found=false`; auto-create off | SEC-006.1/.2/.3, SEC-007.1/.2 |
-| A5 | api / vector-router / correlation ↔ OpenSearch | HTTPS with the Security plugin on; **no anonymous access** | SEC-008.1/.2 |
-| A6 | api / vector-router / correlation ↔ ClickHouse | TLS; credentials never in the clear | SEC-009.1 |
-| A7 | api / gnmic / vmalert ↔ VictoriaMetrics | via vmauth over TLS; no unauthenticated read or write | SEC-010.1 |
-| A8 | api / correlation ↔ Postgres | `sslmode=verify-full`; distinct non-`BYPASSRLS` roles | SEC-011.1/.2 |
-| A9 | api / prober ↔ Valkey | AUTH required **and** TLS | SEC-012.1/.2 |
-| A10 | collectors / prober / cloud-ingest → Vector lanes | per-client identity (no shared `INGEST_TOKEN`) and TLS on all four `http_server` lanes | SEC-013.1/.2 |
-| A11 | vector-router → api (sealing keys) | **mTLS with a dedicated, scope-limited identity** — no tenant key material over plaintext | SEC-018.1 |
-| A12 | syslog-ng → vector-aggregator | TLS on :6601 | SEC-014.1 *(the one internal hop that sits in the syslog epic — pull it into v1 with SEC-013.2)* |
+| # | Path | Must be true | Proven by | Status (2026-08-12; "ph." = assurance-report phase) |
+|---|---|---|---|---|
+| A1 | Browser → nginx | TLS 1.2+, HSTS, PFS, no session tickets; **no plaintext `:8000` published** | SEC-004.1/.2 | **PARTIAL** — TLS/HSTS live (ph. 5/12); the LAB dropped `:8000` 2026-08-09 (`ports: !override`, 443-only), but the SHIPPED `compose.tls.yml` still publishes `:8000` until `install.py` messaging is TLS-aware (`browser-nginx` inventory row) — the no-plaintext clause is NOT yet held for a fresh install |
+| A2 | nginx → api | mTLS, SAN allowlist, plaintext API listener removed | SEC-005.1/.2 | **HELD** (live since 2026-08-04) — no-cert handshake refused; wrong-but-valid identity refused AND counted (ph. 6) |
+| A3 | api ↔ correlation | mTLS; no unauthenticated HTTP surface remains | SEC-005 / backend client | **HELD** — correlation serves its SVID on :8443 (ph. 5); peer scoping enforced (monitor SVID: 200 on `/metrics`, 403 on app paths — ph. 6) |
+| A4 | every Kafka client ↔ Kafka | mTLS with a per-service SVID; **no PLAINTEXT listener**; `allow.everyone.if.no.acl.found=false`; auto-create off | SEC-006.1/.2/.3, SEC-007.1/.2 | **HELD** — enforce wave 2026-08-09 (`ebadd2af`): 9092 REMOVED, default-deny, auto-create off; declared exception: goflow2 produces TLS-anon on FLOWS:9095, ACL-bounded to Write `netops.flows` (owner option-1; ANONYMOUS sees 1/17 topics — ph. 6) |
+| A5 | api / vector-router / correlation ↔ OpenSearch | HTTPS with the Security plugin on; **no anonymous access** | SEC-008.1/.2 | **HELD in the owner-accepted shape** — plugin on; anon 401, write-only-read 403 (ph. 6); clients are per-identity basic-in-TLS, NOT client-cert mTLS (F-3 decision, recorded in the rows' `target.notes`) |
+| A6 | api / vector-router / correlation ↔ ClickHouse | TLS; credentials never in the clear | SEC-009.1 | **HELD** — 8443 + 9440 serve the clickhouse SVID (ph. 5) |
+| A7 | api / gnmic / vmalert ↔ VictoriaMetrics | via vmauth over TLS; no unauthenticated read or write | SEC-010.1 | **HELD** — per-user scoping proven: write-only users get 400 no-route on query paths, wrong password 401 (ph. 11) |
+| A8 | api / correlation ↔ Postgres | `sslmode=verify-full`; distinct non-`BYPASSRLS` roles | SEC-011.1/.2 | **HELD** — plus server-side enforcement: `hostssl` refuses plaintext TCP (F-4 fix 2026-08-10; `TestPostgresRefusesPlaintextTCP`); `TestAppRoleCannotBypassRLS` live 6/6 (F-12). Correlation holds NO postgres DSN at all (SEC-011.2). Adjacent honesty row: keycloak→postgres negotiates TLS without CA/hostname verification (F-5) |
+| A9 | api / prober ↔ Valkey | AUTH required **and** TLS | SEC-012.1/.2 | **HELD** — TLS 6380 is the only listener; NOAUTH / WRONGPASS / plaintext-6379-refused all proven (ph. 6) |
+| A10 | collectors / prober / cloud-ingest → Vector lanes | per-client identity (no shared `INGEST_TOKEN`) and TLS on all four `http_server` lanes | SEC-013.1/.2 | **HELD** — client cert REQUIRED on all four lanes (ph. 5); per-lane tokens with the shared token opening no lane (4× per-lane 200 / shared 401, proven live 2026-08-09) |
+| A11 | vector-router → api (sealing keys) | **mTLS with a dedicated, scope-limited identity** — no tenant key material over plaintext | SEC-018.1 | **HELD, proven feature-ON** — router-SVID 200 / wrong SVID 401 / stolen token 401 / no cert refused / feature-off 404 (ph. 11); end-to-end sealed-fields PASS after F-6/F-7 (2026-08-11) |
+| A12 | syslog-ng → vector-aggregator | TLS on :6601 | SEC-014.1 *(the one internal hop that sits in the syslog epic — pull it into v1 with SEC-013.2)* | **HELD, stronger than specified** — F-1 fix 2026-08-11: mesh TLS with a REQUIRED client certificate; `test_syslog_hop_serves_and_requires_mesh_tls`; tlsprobe watches the endpoint |
 
 ### B. The claim is enforced, not asserted
 
-| # | Must be true | Proven by |
-|---|---|---|
-| B1 | Production **refuses to boot** on any transport-policy violation | SEC-002.3 |
-| B2 | An insecure production config **fails CI** | SEC-002.2 |
-| B3 | `TLS_INTERNAL_CA=true` without a seal provider **cannot** produce a plaintext CA key | SEC-003.1 |
-| B4 | `REQUIRE_SEAL=true` in production; boot fails unsealed | SEC-018.2 |
-| B5 | Every service has exactly one non-wildcard SVID; a new service without one fails CI | SEC-003.3 |
-| B6 | Leaf rotation is proven not to drop data (≥3 rotations, per-lane counts) | SEC-019.1 |
-| B7 | Breaking any single control makes a negative-path test fail | SEC-023.1 |
-| B8 | The **running** stack's negotiated transport matches the declared inventory | SEC-023.2 |
+| # | Must be true | Proven by | Status (2026-08-12) |
+|---|---|---|---|
+| B1 | Production **refuses to boot** on any transport-policy violation | SEC-002.3 | **HELD for the ruled surfaces** — `internal/secprofile` 16 rules, prod boot-refusal; live fatal=0 warn=1 (BKP-001 deferred). HONEST GAP: no bus/ingest-lane rule exists — a prod boot with a plaintext bus would not be refused (INVARIANTS §8) |
+| B2 | An insecure production config **fails CI** | SEC-002.2 | **BUILT; first execution pending** — preflight gates + the blocking `tls-install-boot` job (F-9 fix, `test_ci_runs_the_tls_install_path`); like all CI on this branch, actual execution awaits the owner's push |
+| B3 | `TLS_INTERNAL_CA=true` without a seal provider **cannot** produce a plaintext CA key | SEC-003.1 | **HELD** since 2026-08-04 — `tls_ca.go` seal gate + 4 tests incl. the refusal-message contract |
+| B4 | `REQUIRE_SEAL=true` in production; boot fails unsealed | SEC-018.2 | **HELD in substance** — sealing custody live (`SEAL_PROVIDER=swtpm`, installer default) + secprofile sealed-secrets rule (fatal in prod); the literal `REQUIRE_SEAL=true` switch exists and fails closed (`internal/vault/secrets.go`) but is not set by default — enforcement rides the validator rule |
+| B5 | Every service has exactly one non-wildcard SVID; a new service without one fails CI | SEC-003.3 | **HELD** — workloadid registry (28 identities + 7 reasoned exemptions); ph. 4: 28/28 minted, exact SPIFFE SANs, zero unregistered dirs; registry membership contract-pinned (`tests/test_assurance_contracts.py`) |
+| B6 | Leaf rotation is proven not to drop data (≥3 rotations, per-lane counts) | SEC-019.1 | **HELD with a stated deviation** — three consecutive rotations, distinct serials each round, zero lane interruption (ph. 10); ran at the owner-approved interim TTL=168 h with forced mints, not a literal short-TTL validity-pressure soak |
+| B7 | Breaking any single control makes a negative-path test fail | SEC-023.1 | **HELD live; CI legs pending** — the negative matrix ran on the wire (ph. 6/11) and every step-3 finding carries a failed-first regression test; `-race`/staticcheck/gosec/govulncheck have NOT executed on this branch (owner push pending) |
+| B8 | The **running** stack's negotiated transport matches the declared inventory | SEC-023.2 | **HELD** — achieved-vs-declared comparison over all inventory edges (ph. 3) + wire identity per endpoint (ph. 5); continuously: tlsprobe (10 endpoints) + posture join + SEC-020.2 drift alerts |
 
 ### C. Tenant isolation is untouched, and the unsecurable lanes are labelled honestly
 
-| # | Must be true | Proven by |
-|---|---|---|
-| C1 | ClickHouse row policies and Postgres FORCE-RLS behave **identically** to before; the API refuses to serve if a row policy is missing | SEC-009.2, SEC-011.2 |
-| C2 | Every existing isolation test passes unchanged; every new data-returning surface ships its own cross-org test | §3a.5, SEC-021.1 |
-| C3 | Device lanes (syslog 514, SNMP v2c/traps, NetFlow/sFlow, gNMI `skip-verify`) carry `transport_authenticated=false` and are shown as **not authenticated** in the UI and the report | SEC-014.3, SEC-017.2 |
-| C4 | No UI, doc, report, or evidence chain claims cryptographic authenticity for a device lane | HLD §6.6, SEC-021.1 |
-| C5 | An operator can **export** the posture report: every Correlix path TLS ✓ with peer identity and cert expiry, and device lanes listed separately as unauthenticated with the declared reason | SEC-021.1 |
+| # | Must be true | Proven by | Status (2026-08-12) |
+|---|---|---|---|
+| C1 | ClickHouse row policies and Postgres FORCE-RLS behave **identically** to before; the API refuses to serve if a row policy is missing | SEC-009.2, SEC-011.2 | **HELD** — the datastore epics did not touch the tenant boundary (§0a direction); `TestAppRoleCannotBypassRLS` executed live 6/6 with the restored pgintegration suite (F-12); full Go isolation suite PASS (ph. 11) |
+| C2 | Every existing isolation test passes unchanged; every new data-returning surface ships its own cross-org test | §3a.5, SEC-021.1 | **HELD** — ph. 11 isolation suite PASS; `TestEveryScopedRouteHasIsolationCoverage` build guard; the F-11 quarantine surface shipped its own guards (`TestQuarantineIndexUnreachableFromTenantPaths`, `TestQuarantineRoutesArePlatformOnly`) |
+| C3 | Device lanes (syslog 514, SNMP v2c/traps, NetFlow/sFlow, gNMI `skip-verify`) carry `transport_authenticated=false` and are shown as **not authenticated** in the UI and the report | SEC-014.3, SEC-017.2 | **PARTIAL — not fully held.** The posture view lists device lanes as unauthenticated (`secobs.DeviceLaneRows`, SEC-021.1) and device-lane events carry `tenant_attribution`/`tenant_registry` stamps (F-11) plus the trap lane's `authenticated` field — but the stack-wide per-event `transport_authenticated` stamp named here does NOT exist (errata E7). Claim C8 in the claims doc stays partial accordingly |
+| C4 | No UI, doc, report, or evidence chain claims cryptographic authenticity for a device lane | HLD §6.6, SEC-021.1 | **HELD (prose-level)** — claims doc §5 limitations table + the anchor sentence + posture labeling; no mechanical guard scans for such claims |
+| C5 | An operator can **export** the posture report: every Correlix path TLS ✓ with peer identity and cert expiry, and device lanes listed separately as unauthenticated with the declared reason | SEC-021.1 | **HELD** — shipped `3c4c41ea` (SEC-020.1/021.1: posture visible and exportable); wire truth fed by tlsprobe |
 
 **The exact sentence v1 earns:** *"All Correlix platform components communicate
 over mutually-authenticated TLS with short-lived, per-service certificates, and
@@ -2707,6 +2716,14 @@ network devices uses the protocols those devices speak — where those protocols
 cannot authenticate (syslog, NetFlow/sFlow, SNMPv2c), Correlix labels the data as
 unauthenticated rather than implying otherwise, and secure device lanes are the
 next phase."* Anything stronger than that is not supported by v1.
+
+**Earned? (2026-08-12):** almost, with three dated qualifiers that must
+accompany the sentence until they close — (1) a fresh shipped install still
+publishes plaintext `:8000` (A1); (2) "refuses to start" holds for the ruled
+surfaces but no validator rule yet covers the bus/ingest lanes (B1); (3) the
+"labels the data" clause is posture-view/lane-level, not a per-event
+`transport_authenticated` stamp (C3). The per-claim customer wording lives in
+`CORRELIX_SECURITY_CLAIMS.md` §2a, which states the same three exceptions.
 
 ---
 

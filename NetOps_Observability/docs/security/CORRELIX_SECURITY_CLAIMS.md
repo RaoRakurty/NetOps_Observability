@@ -1,8 +1,11 @@
 # Correlix Security Claims — what we may and may not say
 
-**Status: owner-approved 2026-08-04.** This document governs marketing copy,
-sales answers, security questionnaires, the product UI, and the docs portal.
-If a claim is not listed as permitted here, it may not be made.
+**Status: owner-approved 2026-08-04. Evidence status refreshed 2026-08-12**
+after the tracker #151 programme (enforce wave 2026-08-09 → 13-phase assurance
+run → step-3 fixes F-1…F-12 incl. F-11 seal-or-quarantine); see §2a. This
+document governs marketing copy, sales answers, security questionnaires, the
+product UI, and the docs portal. If a claim is not listed as permitted here,
+it may not be made.
 
 **The governing principle:** a security claim is a *promise about behavior*.
 Every claim below is paired with the evidence that must exist before it is
@@ -35,9 +38,89 @@ conversation. It is deliberately precise about where our control ends.
 | C6 | "Correlix refuses to start in production when a required security control is missing or invalid, and tells you exactly which one." | Validator implemented, each prohibited configuration covered by a test asserting the specific error |
 | C7 | "Correlix shows you its own security posture, and marks anything it cannot verify as unverified." | Posture page live, states distinguish configured / observed / unknown / failed / n-a / deferred |
 | C8 | "Telemetry that arrives over unauthenticated protocols is labeled as such." | The labeling implemented end-to-end (note: this is NEW work — see errata E7) |
+| C9 | "When sealing custody is enabled, telemetry that cannot be attributed to a tenant is quarantined encrypted under a dedicated key scope — it is never stored in plaintext because attribution failed." | F-11 verdict PASS + F11.1–F11.12 acceptance battery run live (assurance report, step-3 2026-08-12 section); isolation guard `TestQuarantineIndexUnreachableFromTenantPaths`; workflow gates `TestQuarantineRoutesArePlatformOnly` + `TestQuarantineReattributeRequiresSensitiveDataAdmin`; retention policy `netops-quarantine-retention` attached |
 
 **Rule for all of the above: none may be spoken while the control is
 `implemented but disabled`.** Built-and-off is not a security property.
+C9 carries this rule *inside its own wording*: the quarantine seal exists only
+when sealing custody (`FEATURE_SEALED_FIELDS` + a seal provider) is enabled —
+that is the feature's own boundary (with custody off, no tenant sealing exists
+either, so there is no attribution asymmetry). For a deployment running
+without sealing custody, C9 may not be spoken at all.
+
+---
+
+## 2a. Evidence status — 2026-08-12 (tracker #151, steps 1–3)
+
+Dated status per claim. "EVIDENCED" means the required evidence exists TODAY
+and is cited; anything less says exactly what is missing. Sources: the
+13-phase run + step-3 fix log in
+`TLS_ASSURANCE_REPORT_2026_08.md` ("the report"), the as-built
+`transport-inventory.yaml` / `mtls-edges.yaml`, and named tests.
+
+- **C1 — EVIDENCED, with declared exceptions (2026-08-12).** Report phase 3
+  (all 34→56 inventory edges compared achieved-vs-target, every deliberate
+  plaintext row carries a dated `exception`), phase 5 (wire identity verify=0
+  per endpoint), F-1 fix 2026-08-11 (the last undeclared intra-stack plaintext
+  hop, syslog-ng→aggregator, converted to mesh TLS + required client cert).
+  The honest exceptions, all declared in `transport-inventory.yaml`:
+  `device-goflow2` (protocol cannot encrypt) and lab-only mocks;
+  `goflow2-kafka` rides TLS-**anon** on FLOWS:9095 per owner option-1
+  (encrypted + ACL-bounded, not client-authenticated); `api-gotenberg` and two
+  metrics-scrape hops remain declared plaintext pending owner decision (F-5
+  rows). Device-side legs are outside this claim per the §1 anchor sentence.
+- **C2 — EVIDENCED for the contracted mesh edges (2026-08-12).** Report
+  phase 4 (28/28 registry SVIDs on disk, exact SPIFFE URI SANs, one CA
+  bundle), phase 5 (9/9 wire), phase 6 (wrong-identity refused AND observable
+  via `netops_tls_identity_rejected_total`), phase 10 (three consecutive
+  rotations, distinct serials, zero lane interruption). Say it per-path, per
+  `mtls-edges.yaml`: two owner-accepted shapes are authenticated but not
+  client-cert mutual — OpenSearch clients use per-identity basic-in-TLS and
+  goflow2 is TLS-anon (F-3, decisions recorded in the rows' `target.notes`).
+- **C3 — EVIDENCED on the enforced lab state; one shipped-variant exception
+  (2026-08-12).** Report phase 5 (ingress TLS, HSTS, HTTP/2) + phase 12
+  (handshake latency). Plaintext `:8000` was removed on the lab 2026-08-09
+  (`browser-nginx` inventory row), but `compose.tls.yml` still publishes
+  `:8000` until `install.py` messaging is TLS-aware — so "no plaintext
+  listener published" may NOT yet be claimed for a fresh shipped install.
+- **C4 — EVIDENCED (2026-08-12).** Sealing custody live (`SEAL_PROVIDER=swtpm`,
+  installer default), CA-key seal gate boot refusal + tests (2026-08-04),
+  `REQUIRE_SEAL` fail-closed path, secprofile sealed-secrets rule; per-tenant
+  sealed-fields e2e re-run PASS 2026-08-11 (report step-3: sealed doc in
+  tenant index, zero plaintext, audited unseal round-trip); key-unavailable ⇒
+  Vector exit-78 refusal, live-demonstrated (report F11.6/F11.7).
+- **C5 — EVIDENCED (2026-08-12).** ClickHouse row policies + Postgres
+  FORCE-RLS; `TestAppRoleCannotBypassRLS` executed live and green with the
+  restored pgintegration suite, 6/6 proofs (F-12 fix 2026-08-11); report
+  phase 11 full Go isolation suite PASS.
+- **C6 — EVIDENCED (2026-08-12).** `internal/secprofile` (16 rules, per-rule
+  tests naming the exact control/observed/required values); live boot
+  validator fatal=0 warn=1 (BKP-001, deferred) at the assurance-run start.
+  Honest gap, keep stating it: no secprofile rule yet covers the bus or the
+  ingest lanes (INVARIANTS §8) — a prod boot with a plaintext bus would not
+  be refused by the validator today.
+- **C7 — EVIDENCED (2026-08-12).** SEC-020.1/021.1 posture page + exportable
+  report (states configured/observed/unknown/failed/n-a/deferred); tlsprobe
+  wire-watches 10 endpoints (`probe_ok`, expiry); SEC-020.2 posture drift
+  alerts, promtool-tested.
+- **C8 — PARTIAL (2026-08-12) — do not claim fully.** What exists: the
+  posture view labels the unauthenticated-protocol device lanes as such
+  (`secobs.DeviceLaneRows`, SEC-021.1); per-event attribution stamps
+  (`tenant_attribution`, `tenant_registry`) on the device lanes (F-11 work);
+  the trap lane's `authenticated` field. What errata E7 requires for the full
+  claim — a stack-wide per-event `transport_authenticated` stamp — is still
+  NOT built (the string exists only in a secprofile remedy text). C8 may be
+  spoken only in its lane-level/posture-view form.
+- **C9 — EVIDENCED, boundary stated (2026-08-12).** Report step-3 F-11
+  section: verdict PASS after the live F11.1–F11.12 battery — unknown-identity
+  telemetry lands in `netops-quarantine-*` with the whole event sealed
+  (`<enc:v1:quarantine:…>`), unreachable from every tenant/dashboards/
+  correlation read path, restorable only through the audited, doubly-gated
+  re-attribution workflow, retention-bounded (30 d ISM policy attached;
+  30-day wall-clock deletion not simulated). BOUNDARY: holds only when
+  sealing custody is enabled — see the rule note above. Known residuals are
+  stated in the report §8 (syslog hostname-spoof *injection*, Kafka
+  segment retention bytes, the pre-existing plaintext deadletter index).
 
 ---
 

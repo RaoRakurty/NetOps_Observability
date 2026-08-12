@@ -105,6 +105,11 @@ operator; everyone else is scoped through `memberships`.
 
 `Overview · Explore · Alerts · Infrastructure · Topology · Reports · Administration`
 
+As-built there is one additional, deliberately non-nav module:
+**`sensitive_data`** — see *Sensitive data & quarantine* below. It exists so
+that revealing protected values is its own grant, never a side effect of
+being an admin of something else.
+
 **Levels** are a 4-step ladder, monotonic (each implies the one below):
 
 | Level   | Means |
@@ -239,6 +244,55 @@ See `tenancy.go`; the cross-tenant leak cases are pinned by `tenancy_test.go`,
 `tenancy_saved_test.go` and `tenancy_flows_test.go`.
 
 ---
+
+## Sensitive data & quarantine (as-built)
+
+The **`sensitive_data`** module (`internal/rbac/roles.go`) gates reversible
+masking — the Sealed Fields feature — and is its own module rather than a
+level of `administration` on purpose: revealing a card number is a different
+capability from configuring the platform, and an infrastructure or alerting
+admin must not acquire it by being an admin of something else. On the
+monotonic ladder:
+
+| Level | Means |
+|---|---|
+| `read`  | see that a field is sealed, and its masked display form |
+| `write` | create and edit `seal` processors |
+| `admin` | reveal plaintext through the audited unseal endpoint |
+
+**It also gates quarantine re-attribution — dual-gated with the platform
+identity.** `POST /api/quarantine/reattribute` (the audited restore of
+unattributable telemetry — `docs/runbooks/security/quarantine-operations.md`,
+ADR-SEC-009) requires **both** `sensitive_data:admin` *and* the platform-admin
+gate, in that order. The pairing is deliberate: re-attribution unseals other
+parties' payloads, so it demands the unseal-equivalent capability **and**
+platform custody — a tenant's own `sensitive_data:admin` cannot reach it, and
+`GET /api/quarantine` (metadata only) is platform-admin gated as well.
+
+**The `quarantine` key scope is NOT a tenant.** Quarantined payloads are
+sealed under a dedicated scope whose token owner is `quarantine` — a name no
+tenant can ever be (`t_<hex>` minting). The unseal endpoint refuses any
+non-cross principal whose tenant does not match a token's owner **as a 404**
+(confirming another owner's token exists is itself a disclosure), which makes
+quarantine tokens structurally unreachable by every tenant principal: only a
+cross-tenant/platform principal holding `sensitive_data:admin` can ever
+resolve them, and in practice only through the re-attribution workflow.
+
+**Audit events involved:**
+
+- **`quarantine_reattribute`** (`secobs.SecEventQuarantineRestore`) — recorded
+  explicitly by the restore handler on top of the coarse request-audit
+  middleware: actor, actor tenant + cross flag, the `identity_sha`, the
+  resolved tenant, and the restored/failed/deleted/delete-failed counts.
+  Never payload contents, never a token.
+- **The unseal audit shape** (`POST /api/pipeline/processors/unseal`, path
+  recorded on every attempt): outcome (`granted`, `denied_cross_tenant`,
+  `key_unavailable`, `unreadable`), the value's owning tenant, the
+  field/processor/data-type context, the operator's stated reason (bounded),
+  the key version, and a token *fingerprint* — deliberately never the
+  plaintext or anything derived from it, because an audit trail that leaks
+  what it audits concentrates every revealed secret in one admin-readable
+  place.
 
 ## Storage backend (file ↔ Postgres)
 

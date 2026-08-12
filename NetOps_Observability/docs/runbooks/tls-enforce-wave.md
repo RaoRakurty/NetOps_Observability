@@ -111,7 +111,7 @@ metrics-token-on-bus test class).
       edges move current → their security_profile state; preflight green.
 - [ ] Update INVARIANTS §8 tiers (SEC-001.3) for the removed plaintext hops.
 - [ ] Boot validator: expect fatal=0 AND the plaintext-related warns to clear.
-- [ ] Run `scripts/rotate-tls-services.sh --check-only` (wire==disk 9/9).
+- [ ] Run `scripts/rotate-tls-services.sh --check` (wire==disk 9/9).
 - [ ] Kafka soak posture stays: authorizer at INFO, denials-only log review
       for 24h post-flip.
 - [ ] Delete the shipped rows from `docs/TRACKER.md` #151 step-1 scope; update

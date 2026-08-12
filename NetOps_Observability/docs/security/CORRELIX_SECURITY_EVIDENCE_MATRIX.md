@@ -4,6 +4,14 @@
 implemented without a file path and symbol. Verified 2026-08-04 against branch
 `feat/observability-platform`.
 
+> **Reading order (2026-08-12):** §1–6 are the 2026-08-04 PRE-PROGRAMME
+> baseline, kept verbatim as the honest "before" — their `file:line` anchors
+> are as-of-that-date and are NOT maintained. §7 (2026-08-04 evening) and
+> **§8 (the #151 programme, 2026-08-05…12)** record what changed since; where
+> a §1–6 row conflicts with §8, §8 wins. Current per-edge transport truth
+> lives in `transport-inventory.yaml` + `mtls-edges.yaml` (contract-pinned);
+> the proof ledger is `TLS_ASSURANCE_REPORT_2026_08.md`.
+
 ## Classification vocabulary
 
 | Class | Meaning |
@@ -98,7 +106,7 @@ Confidence: **H** = read the code · **M** = read config + inferred behavior ·
 
 ---
 
-## Summary
+## Summary (as of 2026-08-04 — superseded; see §7/§8 for what changed)
 
 | Class | Count | Note |
 |---|---|---|
@@ -150,3 +158,69 @@ never the same as "working".
 API→OpenSearch, →ClickHouse, →VictoriaMetrics, →Postgres, →Valkey and
 →correlation remain plaintext (6 fatal findings), plus backup-destination
 encryption (1 warn, deferred by decision).
+
+*(§7's "still outstanding" list is itself history now — every one of those six
+fatal findings was closed by the #151 programme below; the live validator
+reads fatal=0 warn=1, the warn being BKP-001 backup-destination encryption,
+deferred by decision.)*
+
+---
+
+## 8. What changed — tracker #151 programme (2026-08-05 … 2026-08-12)
+
+Report = `TLS_ASSURANCE_REPORT_2026_08.md` (13-phase run 2026-08-09 + step-3
+fix log F-1…F-12 + F-11 verdict). Inventory rows = ids in
+`transport-inventory.yaml`. All evidence pointers below resolve today.
+
+### 8.1 Transport + datastore controls
+
+| Control | Was | Now | Evidence |
+|---|---|---|---|
+| Kafka transport + authn | DO | **VI** | MTLS:9094 (client cert required) + FLOWS:9095 TLS-anon; PLAINTEXT:9092 REMOVED, default-deny ACLs (enforce wave `ebadd2af` 2026-08-09); report phase 6: ANONYMOUS sees 1/17 topics, consume refused; rows `vector-aggregator-kafka`, `goflow2-kafka` |
+| Kafka topic auto-creation | CBE | **VI (fixed)** | `KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"` (docker-compose.yml); lane topics ⊆ kafka-init create list pinned in `tests/test_assurance_contracts.py` |
+| OpenSearch authn | CBE | **VI** | Security plugin on, HTTPS, 6 least-privilege basic-in-TLS identities (owner-accepted shape, F-3); report phase 6: anon 401, write-only-read 403 |
+| VictoriaMetrics authn | CBE | **VI** | vmauth TLS + per-user scoping (`66894727`); report phase 11: write-only users 400 no-route on query paths, wrong password 401 |
+| Valkey authn + TLS | CBE | **VI** | TLS 6380 only; report phase 6: NOAUTH / WRONGPASS / plaintext 6379 refused; row `api-valkey` |
+| Postgres TLS enforced server-side | CBE (TLS) | **VI** | F-4 fix `e9b9541f` 2026-08-10: wrapper-owned `hostssl` pg_hba; `test_postgres_tls_entrypoint_requires_hostssl` (tests/test_assurance_contracts.py) + `TestPostgresRefusesPlaintextTCP` (src/backend/pg_hostssl_guard_test.go); live: every `pg_stat_ssl` session TLSv1.3 |
+| Ingest lane identity | PI | **VI** | SEC-013.1/.2: mTLS client-cert required + per-lane tokens, shared token opens no lane (`c1153aa5`); wave matrix 4× per-lane 200 / shared 401; report phases 5+7 |
+| syslog-ng → aggregator hop | CBE (undeclared plaintext, F-1) | **VI** | F-1 fix `4e5e0d00` 2026-08-11: mesh TLS + REQUIRED client cert; `test_syslog_hop_serves_and_requires_mesh_tls`; live: no-cert refused, plaintext reset, marker landed over TLS |
+| Sealing-key distribution | CBE | **VI** | SEC-018.1 router-SVID-only; report phase 11 gate matrix (router 200 / wrong SVID 401 / stolen token 401 / no cert refused / feature-off 404), proven feature-ON twice |
+| Sealed-fields edge path deliverable | CBE (F-6/F-7: never executable in-image) | **VI** | fixes `95b99e02`; `TestGeneratedConfigSurvivesMultilineActionVRL` (processors/generate_test.go) + `test_router_image_provides_secret_backend_dependencies`; e2e re-run PASS 2026-08-11 (sealed doc in tenant index, audited unseal) |
+| Secret sealing enforcement | IBD | **VI** | `SEAL_PROVIDER=swtpm` live + installer default (scripts/install.py); `REQUIRE_SEAL` fail-closed (internal/vault/secrets.go); secprofile sealed-secrets rule |
+| Production fail-closed validator | PR | **VI** | `internal/secprofile` 16 rules; live fatal=0 warn=1 (report header). Honest gap: no bus/ingest-lane rule yet (INVARIANTS §8) |
+| Inventory completeness | PI (aux edges missing, F-5) | **VI (mechanical)** | 22 rows added (incl. `api-gotenberg`, `keycloak-postgres` tls-unverified, `netbox-valkey` TLS-incompatible — honesty rows); `test_every_compose_service_appears_in_the_transport_inventory` forces a transport decision per compose service |
+| Inventory honesty vs shipped epics | CBE (stale rows, F-2/F-3) | **VI** | fixes `bae20f59`; `test_transport_inventory_rows_reflect_shipped_epics` + `test_transport_inventory_targets_record_owner_accepted_shapes` |
+| `transport_authenticated` labeling | CBE | **PI — still partial** | Posture view labels device lanes unauthenticated (`secobs.DeviceLaneRows`); `tenant_attribution`/`tenant_registry` per-event stamps on device lanes; trap-lane `authenticated`. The stack-wide per-event stamp E7 requires remains UNBUILT — claim C8 stays partial |
+| Rotation continuity | UNK | **VI** | report phase 10: three consecutive rotations, distinct serials, zero lane interruption (honest deviation: interim TTL=168 h, forced mints — not a literal short-TTL soak) |
+| Fresh `--tls` install in CI | CBE (F-9) | **VI (built; first run pending)** | blocking `tls-install-boot` job (`76626ffe`); `test_ci_runs_the_tls_install_path`; execution awaits owner push, like all CI on this branch |
+| Device→tenant map hot reload | CBE (F-10: restart-only) | **VI** | `cx-enrichment-reload.sh` on both tiers + content-aware export; `TestWriteEnrichmentCSV_UnchangedContentDoesNotRewrite` + `test_vector_tiers_reload_enrichment_on_change`; live convergence 61 s (≤ ~75 s bound) |
+| Id-less device rows | CBE (F-8) | **VI (fixed)** | `TestIdlessDeviceCreateDerivesId` + `TestEmptyIDRowIsRepairedAtLoad` (device_persist_test.go); lab fixture healed + deleted 2026-08-11 |
+| pgintegration proofs execute | CBE (F-12: suite dead 2 weeks) | **VI** | fix `7616f3d2`; all 6 proofs PASS live incl. `TestAppRoleCannotBypassRLS`; anti-rot `go vet -tags=pgintegration` in backend-ci |
+
+### 8.2 F-11 seal-or-quarantine (owner decision 2026-08-12; verdict PASS)
+
+Design: `docs/design/f11-seal-or-quarantine.md`. Commits `d92f8919`,
+`6ad927c8`, `24d7de81`, `fda3452d`, `8124d834`. Boundary: exists only when
+sealing custody is enabled (the feature's own boundary).
+
+| Control | Class | Evidence |
+|---|---|---|
+| Quarantine seal path (registry MISS ⇒ sealed envelope, dedicated `quarantine` key scope, never plaintext) | **VI** | `processors/quarantine.go`+test; F11.2 live: unknown-host syslog → `netops-quarantine-2026.08.12`, payload `<enc:v1:cXVhcmFudGluZQ:...>`, absent from every syslog index |
+| Case-1 preservation (authenticated producer stamps never quarantine) | **VI** | F11.1 live + VRL-harness discriminator matrix; `producer_stamped` path unchanged |
+| Isolation from tenant/dashboards/correlation reads | **VI** | `TestQuarantineIndexUnreachableFromTenantPaths` (logs_tenant_test.go) + OS roles (writer/api only); F11.8 live scoped search empty; F11.9 correlation refuses (`identity_unattributable`, quarantined NOT persisted) |
+| Operator workflow (platform-only, dual-gated, audited; live-inventory-derived tenant; cross-key re-encryption) | **VI** | `TestQuarantineRoutesArePlatformOnly` + `TestQuarantineReattributeRequiresSensitiveDataAdmin` + `TestQuarantineListOmitsSealedPayload` (quarantine_api_test.go); F11.3 live restore, audit row |
+| Idempotent re-attribution / replay | **VI** | `id_key: cx_event_id` on the five OS event sinks; F11.11 live: restore → replay → router restart ⇒ exactly ONE tenant doc (a real fix found by the battery). Residual: CH flows re-insert on re-restore (report §8.5) |
+| Retention bound | **VI (attachment proven)** | `netops-quarantine-retention` 30 d ISM policy attached live (F11.4); deletion action contract-pinned; 30-day wall-clock NOT simulated |
+| Fail-closed on key unavailability | **VI** | Vector exit-78 config refusal (live-demonstrated during the run); runtime seal failure ⇒ drop_on_abort, NO deadletter reroute |
+| Observability (3 alerts + depth/age metrics) | **VI** | `QuarantineGrowthAbnormal`, `QuarantineAttributionStalled`, `VectorQuarantineSealFailures` (src/config/rules.yaml; promtool suite src/config/rules-tests/f11-quarantine.test.yaml); `netops_sec_quarantine_depth` served through the mesh (F11.12) |
+
+### 8.3 Known-not-proven (state these, never round up)
+
+| Item | Status |
+|---|---|
+| CI legs: `-race`, staticcheck, gosec, govulncheck | **NOT EXECUTED on this branch** — no local gcc; awaits the owner's push. Local `go vet` + full test suites green (report phase 13 + F-11 §6/7) |
+| Shipped-variant plaintext `:8000` | Still published by `compose.tls.yml` (lab removed it 2026-08-09); claim C3 carries the exception until the installer-messaging work lands |
+| Device-side protocols (syslog 514, SNMP v2c/traps, NetFlow/sFlow, gNMI lifecycle) | Out of v1 scope by the anchor sentence; device programme P0–P4. Syslog hostname-spoof INJECTION residual documented (report §8.1) |
+| 30-day quarantine wall-clock expiry | Policy attachment + deletion action verified; full wall-clock not simulated |
+| api→gotenberg (tenant PDFs) + two metrics-scrape hops | Declared plaintext, owner decision pending (F-5 rows) |
+| Backup-destination encryption | BKP-001 warn, deferred by decision — unchanged |

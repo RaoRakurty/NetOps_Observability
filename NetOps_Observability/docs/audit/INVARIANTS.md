@@ -184,7 +184,7 @@ and thereby certified the blind scope as healthy.
 2. ~~**§3a rule 5 is unenforced.**~~ **CLOSED 2026-07-23** — `TestEveryScopedRouteHasIsolationCoverage` fails the build when a NEW scoped route has neither a real HTTP isolation test nor a frozen-baseline entry. Proven to fire on an injected uncovered route. 82 pre-existing scoped routes (store/RLS-covered) are baselined; the set only shrinks as dedicated tests are written. (§6)
 3. ~~**The tenant-create rollback is compile-reviewed only.**~~ **CLOSED 2026-07-26** — the named fix was made: `s.tenants` is now the `tenantRepo` interface (tenants.go), and `failRestrictRepo` (rca_window_test.go) injects the exact mid-request failure the gap said was impossible — CREATE succeeds, only `SetOperatorRestricted` fails. `TestTenantCreateRollsBackWhenRestrictionFails` and `TestOnboardRollsBackWhenRestrictionFails` exercise both F-81 rollbacks end-to-end through the real router (500 + tenant removed; onboard also removes the org). Proven to fire: deleting the handler's rollback `Delete` makes the test fail with "tenant still exists". (§7)
 4. ~~**Postgres-dependent paths are compile-reviewed only.**~~ **CLOSED 2026-07-25** (`33cb45f2`) — the `pg-integration` job in `backend-ci.yml` runs the build-tagged Postgres tests against a pinned postgres:16-alpine every CI run: `statement_timeout`, the migration advisory lock, `pgAuditStore.Count/Offset`, `sweepAuditRetention`'s DELETE. (§3)
-5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo.
+5. **`go test -race` runs only in CI.** No local gate; the sandboxes used for this work had no cgo. **2026-08-12:** the #151 branch is many commits ahead of origin and its CI — `-race`, staticcheck, gosec, govulncheck, the pg-integration job, the new `tls-install-boot` leg — has NOT executed; first run awaits the owner's push. Stated in the assurance report the same way.
 6. ~~**Documented env switches are unverified as a class.**~~ **CLOSED 2026-07-30** — `TestEveryDocumentedEnvSwitchIsConsumed` guards the class mechanically (documented ⇒ consumed, exemptions carry reasons; fired on first run: the phantom `LOKI_RETENTION_PERIOD` row). Per-switch behaviour remains each feature's own tests — the honest limit, stated in the guard. (§9)
 7. ~~**API response-shape stability is prose.**~~ **CLOSED 2026-07-30** — the shape is now pinned by build-time tests (`internal/httppage/contract_test.go`: the five header LITERALS, all-five-stamped-on-every-write, the envelope's exact keys) and documented for integrators (`docs/API_ACCESS.md` § Pagination & totals contract). The header-blind-client hazard has a documented, tested escape hatch: `?envelope=1` carries the same numbers in the body. Renaming any of it fails the build. (§8)
 8. ~~**`package main` still holds substantial business logic, against the repo's
@@ -218,22 +218,55 @@ profile — note its rule ids `SEC-00x` predate and do NOT correspond to the
 backlog's `SEC-xxx` epics) is what puts a hop at RUNTIME; hops it has no rule
 for sit at **NONE**, which is the honest reading of "nothing checks this".
 
+**Post-programme state (2026-08-12):** #151 steps 1–3 ran to completion — the
+enforce wave (2026-08-09), the 13-phase assurance run, and step-3 fixes
+F-1…F-12 incl. the F-11 seal-or-quarantine build. The proof ledger is
+`docs/security/TLS_ASSURANCE_REPORT_2026_08.md`; the inventory is now
+service-complete *mechanically*
+(`test_every_compose_service_appears_in_the_transport_inventory` — adding a
+compose service without a transport decision fails the contract suite), and
+its rows are pinned honest against shipped epics
+(`test_transport_inventory_rows_reflect_shipped_epics`). What was PROVEN vs
+merely built is per-row below. Gaps that REMAIN after the programme, stated
+plainly: **(a)** no secprofile rule covers the bus or ingest lanes — a prod
+boot with a plaintext bus would not be refused; **(b)** the CI legs `-race`,
+staticcheck, gosec, govulncheck have NOT executed on this branch (no local
+gcc; awaits the owner's push — extends standing gap 5); **(c)** the shipped
+`compose.tls.yml` still publishes plaintext `:8000` (removed on the lab only);
+**(d)** `api→gotenberg` (tenant PDFs) and two metrics-scrape hops remain
+declared plaintext pending an owner decision (F-5 rows).
+
 | Hop | Tier today | Raised by | Target tier |
 |---|---|---|---|
 | browser → nginx (ingress TLS; plaintext :8000 REMOVED on the lab 2026-08-09 — `ports: !override` 443-only; compose.tls.yml keeps :8000 until install.py messaging is TLS-aware) | PROSE | SEC-004 (promote profile; retire :8000 in the shipped variant with the installer work) | GATE + RUNTIME |
-| nginx → api | **RUNTIME** (TLS-001/002/003) | SEC-005 adds the accept-set narrowing test | RUNTIME + BUILD |
-| api → OpenSearch / ClickHouse / VictoriaMetrics / Postgres / Valkey | **RUNTIME** (STORE-001…005 refuse prod plaintext; lab reports) | SEC-008/009/010/011/012 make the stores SERVE TLS + BUILD tests | RUNTIME + BUILD |
-| api → correlation | **RUNTIME** (APP-001) | SEC-013 (workload auth — encryption alone insufficient) | RUNTIME + BUILD |
+| nginx → api | **RUNTIME + wire-proven** (TLS-001/002/003; step-2 phase 6: no-cert refused, wrong-but-valid identity refused AND counted via `netops_tls_identity_rejected_total`) | — (accept-set narrowing proven on the wire 2026-08-09) | RUNTIME + BUILD |
+| api → OpenSearch / ClickHouse / VictoriaMetrics / Postgres / Valkey | **RUNTIME + GATE** — the stores SERVE TLS (step-2 phase 5 wire identities; phase 6 negatives: OS anon 401 / write-only-read 403, valkey NOAUTH+plaintext refused); postgres additionally REFUSES plaintext TCP server-side (F-4 2026-08-10: `test_postgres_tls_entrypoint_requires_hostssl` + `TestPostgresRefusesPlaintextTCP`); per-edge contract rows with negatives pinned in `mtls-edges.yaml` (contract suite) | — (delivered by SEC-008…012 + F-4) | RUNTIME + BUILD |
+| api → correlation | **RUNTIME + wire-proven** (APP-001; correlation serves its SVID on :8443, peer scoping enforced — monitor SVID 403 on app paths; step-2 phases 5–6) | — | RUNTIME + BUILD |
 | victoria → api (metrics scrape) | RUNTIME (mTLS listener rejects certless scrape in prod) | SEC-003.3 registry formalizes the victoria SVID | RUNTIME + BUILD |
-| vector-router → api (per-tenant sealing keys) | **BUILD** (SEC-018.1 2026-08-06: router-SVID-only over TLS, fail-closed script, stolen-token-over-TLS refused — unit-proven; feature-OFF on the lab so the live hop is dormant; step 2 must exercise it feature-ON) | SEC-018 remainder | RUNTIME + BUILD |
-| **every producer/consumer → Kafka** | **RUNTIME-adjacent** (ENFORCED live 2026-08-09: default-deny authorizer + PLAINTEXT:9092 removed, only MTLS:9094/FLOWS:9095/CONTROLLER:9093-SSL listen; tlsprobe probes all three + posture join; ANONYMOUS = Write netops.flows only). No `secprofile` bus RULE yet — a prod boot with a plaintext bus would not be refused by the validator | SEC-006/007 remainder: a secprofile bus rule | RUNTIME + BUILD |
-| collectors/prober → Vector ingest lanes | **RUNTIME-adjacent** (SEC-013.1/.2 mTLS client-cert requirement + per-lane tokens; shared-token fallback REMOVED — narrowing matrix proven live 2026-08-09: 4× per-lane 200 / shared 401; class guard in test_ingest_contract.py) | a secprofile lane rule | RUNTIME + BUILD |
-| syslog-ng → vector-aggregator | **NONE** | SEC-014.1 | RUNTIME |
+| vector-router → api (per-tenant sealing keys) | **BUILD + wire-proven feature-ON** (SEC-018.1 gate matrix proven live twice — step-2 phase 11 and the step-3 e2e re-run 2026-08-11 after F-6/F-7: router-SVID 200/audited, wrong SVID 401, stolen token 401, no cert refused, feature-off 404; end-to-end seal→store→audited-unseal PASS) | — (feature remains OFF on the lab by owner state; the property is proven, not dormant-assumed) | RUNTIME + BUILD |
+| **every producer/consumer → Kafka** | **RUNTIME-adjacent** (ENFORCED live 2026-08-09: default-deny authorizer + PLAINTEXT:9092 removed, only MTLS:9094/FLOWS:9095/CONTROLLER:9093-SSL listen; tlsprobe probes all three + posture join; step-2 phase 6: ANONYMOUS sees 1/17 topics, Write netops.flows only, consume refused). No `secprofile` bus RULE yet — a prod boot with a plaintext bus would not be refused by the validator (GAP, remains) | SEC-006/007 remainder: a secprofile bus rule | RUNTIME + BUILD |
+| collectors/prober → Vector ingest lanes | **RUNTIME-adjacent** (SEC-013.1/.2 mTLS client-cert requirement + per-lane tokens; shared-token fallback REMOVED — narrowing matrix proven live 2026-08-09: 4× per-lane 200 / shared 401; class guard in test_ingest_contract.py). No `secprofile` lane rule (GAP, remains) | a secprofile lane rule | RUNTIME + BUILD |
+| syslog-ng → vector-aggregator | **GATE + RUNTIME** (F-1 fix 2026-08-11: mesh TLS with REQUIRED client cert — TLS-on never means server-only on this hop; pin `test_syslog_hop_serves_and_requires_mesh_tls`; proven live: no-cert refused, plaintext reset, marker landed over the TLS hop; tlsprobe + rotation sweep now cover :6601) | — (delivered by SEC-014.1/F-1) | RUNTIME |
 | gnmic → devices (`skip-verify: true`) | **RUNTIME** (DEV-001 refuses in prod) | SEC-016 (Phase 2+) | RUNTIME + BUILD |
 | device → syslog-ng (plaintext 514) | **RUNTIME** (DEV-002: lane must be *declared*) | SEC-014.2/.3 (Phase 2+ lane; v1 = declaration) | RUNTIME |
 | device → SNMP trap (v3 fail-open for unknown senders) | **NONE** | SEC-015 (Phase 2+) — the fail-open closure | BUILD |
 | device → goflow2 (protocol cannot encrypt) | PROSE | SEC-017.2: becomes a DECLARED plaintext risk acceptance | RUNTIME (declaration asserted) |
 | backup destination encryption | RUNTIME (BKP-001, operator-asserted) | #150 GUI surfaces it | RUNTIME |
+
+### 8a. Attribution + quarantine invariants (F-10/F-11, 2026-08-12)
+
+New properties from the step-3 fixes; proof = the named test or the F-11
+acceptance battery in the assurance report (F11.1–F11.12, run live on the lab
+with the full TLS mesh and sealing custody ON).
+
+| Invariant | Status | Enforced by |
+|---|---|---|
+| A device→tenant assignment takes effect on BOTH vector tiers without a restart (bound ≈ one export tick + content poll, ~75 s) | ✅ | **BUILD/GATE** — `TestWriteEnrichmentCSV_UnchangedContentDoesNotRewrite` + `test_vector_tiers_reload_enrichment_on_change` (F-10); live e2e measured **61 s** convergence (re-proven in the F-11 battery, INV-F11-11) |
+| **No durable telemetry payload is stored in plaintext because tenant attribution failed** — registry-MISS events are sealed wholesale into `netops-quarantine-*` under the dedicated `quarantine` key scope. BOUNDARY: holds when sealing custody is enabled (the feature's own boundary — custody off means no tenant sealing exists either, so there is no asymmetry; the claim may not be spoken for such a deployment) | ✅ | **GATE + RUNTIME** — generated-stage tests (`processors/quarantine.go`+test) + VRL-harness discriminator matrix; live F11.2 (sealed envelope, zero plaintext leak, absent from every syslog index). Fail-closed: missing key ⇒ Vector exit-78 refusal (live-demonstrated); runtime seal failure ⇒ drop_on_abort, NO deadletter reroute, `VectorQuarantineSealFailures` alert (promtool-tested) |
+| Authenticated producer stamps (`producer_stamped`) never downgrade to quarantine — Case-1 preserved | ✅ | **GATE** — VRL-harness matrix + live F11.1 (known tenant, unknown device → tenant index, zero quarantine docs) |
+| Quarantine isolation: no tenant-facing read path (scoped OS patterns incl. `_cat`, dashboards, correlation identities) can reach the quarantine index | ✅ | **BUILD** — `TestQuarantineIndexUnreachableFromTenantPaths` + OS role grants (writer/api only); live F11.8 (scoped search empty) + F11.9 (correlation refuses `identity_unattributable`, quarantined NOT persisted, no RCA/ticket path) |
+| Re-attribution is idempotent and crosses the key boundary through the real pipeline (quarantine-decrypt → authenticated bus → tenant rules under the tenant's key; tenant derived from live inventory, never the caller) | ✅ | **BUILD + RUNTIME-proven** — `TestQuarantineRoutesArePlatformOnly` + `TestQuarantineReattributeRequiresSensitiveDataAdmin` + `TestQuarantineReattributeHappyPathAndReplay`; live F11.3/F11.11: restore → replay → router restart ⇒ exactly ONE tenant doc (`id_key` on the five OS event sinks — a fix the battery itself forced). Residual: a re-restored FLOWS event re-inserts into ClickHouse (no upsert semantics there; report §8.5) |
+| Quarantine retention is bounded (default 30 d, `QUARANTINE_RETENTION_DAYS`) | 🟡 | ISM policy `netops-quarantine-retention` attached to the live index (F11.4) + contract-pinned deletion action; the 30-day wall-clock deletion has NOT been simulated — attachment proven, expiry asserted |
 
 When adding a feature, state its invariant and pick the tier you will enforce it
 at. If the answer is PROSE, say so out loud in the PR rather than leaving a
