@@ -20,6 +20,27 @@ def _load(name: str) -> dict:
     return json.loads((SEC / name).read_text())
 
 
+def _compose_yaml(text: str) -> dict:
+    """Parse a compose file that may carry compose's merge tags (!override,
+    !reset) — yaml.safe_load rejects unknown tags, and the TLS variant uses
+    !override to clear profile gating (seal sidecar, nginx ports on the lab)."""
+    import yaml
+
+    class _ComposeLoader(yaml.SafeLoader):
+        pass
+
+    def _passthrough(loader, node):
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return loader.construct_scalar(node)
+
+    _ComposeLoader.add_constructor("!override", _passthrough)
+    _ComposeLoader.add_constructor("!reset", _passthrough)
+    return yaml.load(text, Loader=_ComposeLoader)
+
+
 def test_mtls_edges_reference_real_inventory_edges():
     inv_ids = {e["id"] for e in _load("transport-inventory.yaml")["edges"]}
     rows = _load("mtls-edges.yaml")["edges"]
@@ -384,7 +405,7 @@ def test_syslog_hop_serves_and_requires_mesh_tls():
     assert (d / "core.conf").exists()
 
     # (c) compose.tls.yml wires both ends.
-    tlsc = yaml.safe_load(
+    tlsc = _compose_yaml(
         (ROOT / "deployment" / "docker" / "compose.tls.yml").read_text())
     sy = tlsc["services"]["syslog-ng"]
     assert any("syslog-ng-tls.conf" in part for part in sy["command"]), (
@@ -426,7 +447,7 @@ def test_gotenberg_pdf_sidecar_rides_mesh_tls():
 
     dc = ROOT / "deployment" / "docker"
     base = yaml.safe_load((dc / "docker-compose.yml").read_text())
-    tlsc = yaml.safe_load((dc / "compose.tls.yml").read_text())
+    tlsc = _compose_yaml((dc / "compose.tls.yml").read_text())
 
     # Two-variant pin: the base gotenberg keeps NO TLS flags and the base api
     # default stays the plaintext URL (fresh installs have no CA or certs).
