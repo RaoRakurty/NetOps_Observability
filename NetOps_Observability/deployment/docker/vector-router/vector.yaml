@@ -662,6 +662,11 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). Normal events
+    # don't carry the field and keep auto ids (verified empirically below).
+    id_key: cx_event_id
     bulk:
       # log_index_base is "applogs" for application services and "platformlogs"
       # for the platform's own infra (classified in the aggregator). Platform
@@ -734,6 +739,11 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). Normal events
+    # don't carry the field and keep auto ids (verified empirically below).
+    id_key: cx_event_id
     bulk:
       index: "netops-syslog-{{ tenant_seg }}-%Y.%m.%d"
       action: index
@@ -755,6 +765,11 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). Normal events
+    # don't carry the field and keep auto ids (verified empirically below).
+    id_key: cx_event_id
     bulk:
       index: "netops-snmptrap-{{ tenant_seg }}-%Y.%m.%d"
       action: index
@@ -776,6 +791,11 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). Normal events
+    # don't carry the field and keep auto ids (verified empirically below).
+    id_key: cx_event_id
     bulk:
       index: "netops-cloudlogs-{{ tenant_seg }}-%Y.%m.%d"
       action: index
@@ -797,6 +817,11 @@ sinks:
     # F-17), never a probe, and never "no errors in the log".
     healthcheck: false
     mode: bulk
+    # F-11 (INV-F11-08): restored quarantine events carry cx_event_id and must
+    # UPSERT on replay — without this, a re-run of the operator restore
+    # duplicated the tenant document (caught live 2026-08-12). Normal events
+    # don't carry the field and keep auto ids (verified empirically below).
+    id_key: cx_event_id
     bulk:
       index: "netops-flows-{{ tenant_seg }}-%Y.%m.%d"
       action: index

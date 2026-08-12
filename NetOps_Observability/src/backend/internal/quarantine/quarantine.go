@@ -214,10 +214,17 @@ func ParseSearch(r io.Reader) (docs []Doc, total int64, oldest string, err error
 			v, _ := h.Source[key].(string)
 			return v
 		}
+		// The quarantine sink's `id_key: cx_event_id` CONSUMES the field into
+		// the document _id (verified on the live index, 2026-08-12) — so the
+		// _id IS the original event id, and _source usually has no copy.
+		eventID := str("cx_event_id")
+		if eventID == "" {
+			eventID = h.ID
+		}
 		docs = append(docs, Doc{
 			Index:       h.Index,
 			ID:          h.ID,
-			EventID:     str("cx_event_id"),
+			EventID:     eventID,
 			ReceivedAt:  str("received_at"),
 			Lane:        str("lane"),
 			IdentitySha: str("identity_sha"),

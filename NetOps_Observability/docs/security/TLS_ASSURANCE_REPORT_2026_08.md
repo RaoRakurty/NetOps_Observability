@@ -442,7 +442,7 @@ as the pass condition.**
 | F-8 | P3 | 11 | POST /api/devices accepts id-less device → unaddressable `""`-keyed row; phase-11 fixture remains on lab pending fix | **FIXED 2026-08-11** (below) — id derived server-side + storage-layer guard + boot-time repair of existing `""` rows |
 | F-9 | P2 | 13 | fresh-install-integrity CI never runs install.py and has no `--tls` leg — the delivery shape + two-phase mint are validated only by hand | **FIXED 2026-08-11** (below) — blocking `tls-install-boot` job runs the real two-phase install; first execution pending the owner's push (like the rest of CI) |
 | F-10 | P2 | step-3 e2e | aggregator never reloads `device_tenant.csv` (Vector watches config files, not enrichment) — a device→tenant assignment takes effect only at the next aggregator restart/SIGHUP; until then that device's telemetry lands untagged | **FIXED 2026-08-11** (below) — content-watching reload wrapper on BOTH vector tiers + content-aware CSV export; hot-reload e2e proven live |
-| F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | owner decision: design boundary vs seal-or-quarantine semantics |
+| F-11 | P2 | step-3 e2e | sealing is fail-open across ATTRIBUTION: an event that loses its tenant stamp (F-10 staleness, unknown hostname) skips every tenant-guarded seal rule and is stored in PLAINTEXT in the untagged index — observed live | **FIXED 2026-08-12 — owner ruled SEAL-OR-QUARANTINE; implemented across 5 slices + full F11.1-F11.12 acceptance battery run live; verdict below** |
 | F-12 (**FIXED 2026-08-11**, below) | P2 | step-3 F-4 | the `pgintegration` test suite has not COMPILED since the platformdb extraction (`7a7555a2`, 2026-07-28): `pg_integration_test.go` still reaches for `db.pool` / `migrationLockKey`, now in `internal/platformdb`. `go test -tags=pgintegration ./...` = `build failed`, so backend-ci's pg-integration job — the ONLY place the INVARIANTS gap-#4 proofs (statement_timeout, migration advisory lock, audit paging, retention DELETE) execute — has been dead for two weeks. A build-tagged test is invisible to the default build, so nothing announced it | step-3 fix: restore the suite (own commit); prefer env-gated over tag-gated for new guards |
 
 ---
@@ -716,3 +716,144 @@ aggregator". The remaining F-11 exposure is the genuinely-unknown hostname
 tenant-guarded seal rules skip it. That semantic choice — accept as designed
 boundary vs seal-or-quarantine unattributed events — remains the OWNER
 decision the register row asks for.
+
+## Step-3 progress (2026-08-12) — F-11 SEAL-OR-QUARANTINE
+
+Owner decision received and implemented the same day. Full design + as-found
+trace: `docs/design/f11-seal-or-quarantine.md`. Commits: d92f8919 (slice 1,
+quarantine seal path), 6ad927c8 (slice 2, Case-1 preservation), 24d7de81
+(slice 3, isolation), fda3452d (slice 4, operator workflow + observability),
+plus the acceptance-run fixes in the closing commit.
+
+### 1. Current behavior discovered (pre-change)
+
+The 12-point inspection (four parallel sweeps) corrected the assumed
+architecture in three load-bearing ways. (a) `tenant_id=""` was NOT
+"unknown": the registry maps KNOWN platform devices to the empty tenant, and
+the untagged bucket is a SHARED, load-bearing surface — every scoped tenant's
+OS read names `-untagged-*` (device-join narrowed), three CH policies carry
+`OR tenant_id=''`, Grafana's CH dashboards read ONLY untagged rows, and
+correlation canonicalised untagged→`global`, processed it through RCA, and
+could ticket it via the global tenant's destinations. (b) A genuinely
+unknown sender was indistinguishable in-config from a known platform device
+— both yielded `""` → the shared plaintext untagged index, which tenant seal
+rules (guarded on tenant equality) never touch. That asymmetry was F-11.
+(c) The correlation engine already had a durable quarantine — but only for
+CONTRADICTED claims; a no-claim unknown identity flowed through as `global`.
+
+### 2. Final architecture
+
+Discriminator = **registry MISS** (identity absent from the device→tenant
+registry), stamped `.tenant_registry` hit/miss at all three lookup sites
+(aggregator syslog + snmptrap, router flows). Registry hit → tenant path or
+the unchanged platform untagged bucket. MISS → the generated per-lane
+quarantine stage (present only when sealing custody is on — the feature's
+own boundary) replaces the event wholesale with a metadata envelope
+(event id, received_at, lane, identity as sha2 — never the sender-supplied
+string, transport source ip, reason TENANT_UNATTRIBUTABLE) whose payload —
+the entire original event — is sealed under the dedicated `quarantine` key
+scope riding the EXISTING machinery end to end (DEK minted by the vault on
+first use, delivered via /internal/sealing/edge-keys + the exec secret
+backend over the router SVID; token owner `quarantine` makes it unrevealable
+by any tenant principal). Static routes peel envelopes to
+`netops-quarantine-<date>` (no tenant segment, dynamic:false, payload
+UNMAPPED, own 30-day ISM policy via QUARANTINE_RETENTION_DAYS); quarantined
+flows never reach ClickHouse. Authenticated producer stamps
+(`producer_stamped`) never quarantine — Case 1. Correlation quarantines
+no-claim registry-miss events durably (reason identity_unattributable)
+instead of processing them. Late attribution: the platform-only, doubly
+gated (platform admin + sensitive_data:admin), audited
+/api/quarantine/reattribute derives the tenant from the LIVE inventory only,
+unseals with the exact edge context, re-injects through the authenticated
+bus (so tenant rules apply under the tenant's key — a true cryptographic
+ownership crossing), tombstones the quarantine copy, and upserts by event id
+(id_key) so replays and restarts cannot duplicate.
+
+### 3. Files changed (summary; per-slice detail in the commits)
+
+processors/quarantine.go+test (generated stage), generate.go (wiring),
+vector.yaml both tiers (discriminator stamps, store routes, quarantine sink,
+id_key on the five OS event sinks), index-templates.json + apply-ism.sh +
+compose (storage contract + retention knob), roles.yml (writer/api grants),
+internal/quarantine (workflow logic + metrics sampler), pipeline_processors.go
++ main.go (handlers/wiring), internal/secobs (vocabulary + sec_event),
+rules.yaml + rules-tests/f11-quarantine.test.yaml (alerts), oslog guard test,
+correlation main.py (unattributable refusal), vrl-harness.py (enrichment
+staging + discriminator matrix), contract tests across tests/.
+
+### 4. Acceptance tests F11.1–F11.12
+
+| Test | Result | Evidence |
+|---|---|---|
+| F11.1 known tenant, unknown device | **PASS (live)** | authenticated bus event, unknown hostname → tenant index, `producer_stamped`, zero quarantine docs |
+| F11.2 genuinely unknown tenant | **PASS (live)** | unknown-host syslog → `netops-quarantine-2026.08.12`, payload `<enc:v1:cXVhcmFudGluZQ:...>`, zero plaintext leak, absent from every syslog index |
+| F11.3 late attribution | **PASS (live)** | device assigned → 61 s convergence → restore: 1 decrypted, re-encrypted under tenant path, quarantine copy deleted, audit row |
+| F11.4 never attributed | **PASS (live policy)** | `netops-quarantine-retention` (30 d) attached to the live index via ISM explain; deletion action pinned by contract test (full 30-day wall-clock not simulated) |
+| F11.5 spoofed hostname | **PASS with documented residual** | flows: spoofed claim + unknown exporter → `claim_rejected` + quarantine (runtime-proven); correlation refuses contradicted claims; quarantine/tenant keys unreachable via spoof (owner check). RESIDUAL: syslog hostname-spoof INJECTION into the named tenant's own view remains — hostname IS syslog's strongest identity until device-side RFC5425 client certs (the documented TENANT-HIGH-3 ladder). No cross-tenant EXPOSURE path exists. |
+| F11.6 quarantine key unavailable | **PASS (config + demonstrated class)** | missing key ⇒ Vector exit 78 refuses boot (SEC-018 semantics, previously proven on this stack); runtime seal failure ⇒ drop_on_abort with NO deadletter reroute + VectorQuarantineSealFailures critical alert (promtool-tested). The E651 episode during this run demonstrated the config-refusal fail-closed live: the router refused the entire config rather than run a broken stage. |
+| F11.7 tenant key unavailable | **PASS (existing proven class)** | identical exit-78 fail-closed path every tenant key already has (F-7/SEC-018 proofs); no plaintext fallback exists in the topology |
+| F11.8 tenant query isolation | **PASS (guard + live)** | TestQuarantineIndexUnreachableFromTenantPaths (no scoped pattern can glob-match the index, any signal incl. unknown; _cat too); live scoped search returns no quarantine docs; OS roles give dashboards/correlation identities nothing |
+| F11.9 correlation isolation | **PASS (live + unit)** | live `SECURITY: ... reason=identity_unattributable ... quarantined, NOT persisted`; zero corr rows (unit-pinned) ⇒ no RCA/ticket/notification path |
+| F11.10 authorized operator workflow | **PASS (live + unit)** | list = metadata only (payload never in a row — live-verified); restore audited (`quarantine_reattribute` sec_event); dual gate pinned by TestQuarantineRoutesArePlatformOnly + TestQuarantineReattributeRequiresSensitiveDataAdmin |
+| F11.11 restart/replay | **PASS (live, after a real fix)** | first replay attempt DUPLICATED the tenant doc — id_key was only on the quarantine sink; added to the five OS event sinks (absent-field behavior verified live: normal events keep auto ids). Re-proven: restore → replay → router restart → exactly ONE tenant doc |
+| F11.12 observability | **PASS (live)** | `netops_sec_quarantine_depth` serving through the mesh; three alerts loaded in vmalert; promtool fire + all-clear cases green |
+
+### 5. Security invariants
+
+INV-F11-01/03 quarantine envelope + scope separation (live F11.2 + parity
+suite); INV-F11-02 producer_stamped path (F11.1 + harness); INV-F11-04
+pattern guard + roles (F11.8); INV-F11-05 claim rejection + §2b trust order
+(residual stated); INV-F11-06 exit-78 + drop-with-alert, live-demonstrated
+config refusal; INV-F11-07/08 restore crosses the key boundary through the
+real pipeline, idempotent (F11.3/F11.11); INV-F11-09 ISM attached (F11.4);
+INV-F11-10 correlation refusal (F11.9); INV-F11-11 F-10 regression PASS —
+device→attribution convergence measured **61 s** (≤~75 s bound).
+
+### 6/7. Test execution
+
+Run in this environment: full Go backend suite (vet + all packages incl. the
+new quarantine/processors/oslog tests), 885-test correlation suite, 106
+contract tests, VRL harness against the real pinned Vector binary,
+promtool unit suites, preflight-configs, audit_metric_contract — all green.
+The live battery above ran on the lab stack (full TLS mesh, sealing ON).
+NOT RUN: `go test -race`, staticcheck/gosec/govulncheck CI legs — no local
+gcc; they run in CI, which still awaits the owner's push of this branch.
+NOT RUN: a 30-day wall-clock expiry (policy attachment + deletion action
+verified instead). These are stated, not assumed passing.
+
+### 8. Residual risks
+
+1. Syslog hostname-spoof INJECTION into the spoofed tenant's own view
+   (pre-existing, documented; mitigation ladder = management-network port
+   restriction now, RFC5425 device client certs in the device programme).
+2. Kafka topic log segments hold pre-seal event bytes for the retention
+   window — the pre-existing baseline for ALL events (tenant-attributed
+   included); at-rest broker encryption is out of v1 scope.
+3. The plaintext deadletter index (VRL abort records with full `raw`)
+   remains — quarantine deliberately never routes there, but other abort
+   classes do; flagged for the owner as follow-up hardening.
+4. Unattributed FLOWS reach ClickHouse only as sampled OS docs via the
+   quarantine path; the CH row for a quarantined flow is dropped entirely —
+   an unknown exporter's flows are invisible in CH until attributed.
+5. Restore duplicates are impossible in OS (id_key) but a re-restored FLOWS
+   event re-inserts into CH (no upsert semantics there); operators restore
+   once per identity in practice, and the restore response reports counts.
+6. On a cold stack with an empty registry, ALL device-lane telemetry
+   quarantines until inventory populates — confidentiality-safe by design,
+   surfaced by the miss-rate + quarantine-growth alerts.
+
+### 9. Verdict
+
+```
+F-11 PASS
+```
+
+The invariant holds as ordered: with sealing custody enabled, no durable
+telemetry payload is persisted in plaintext because tenant attribution
+failed — unattributable events are cryptographically quarantined under a
+dedicated key scope, isolated from every tenant-facing and customer-facing
+path, recoverable through an audited cross-key re-encryption workflow, and
+bounded in retention. Case-1 events never downgrade. F-10 behavior is
+unregressed (61 s measured). The one qualified item is F11.5's injection
+half, which is a pre-existing, documented transport-identity limit outside
+this finding's boundary — stated above rather than papered over.

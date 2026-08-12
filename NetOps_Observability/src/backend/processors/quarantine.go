@@ -116,9 +116,16 @@ func quarantineStageVRL(lane string, e SealEngine) (string, bool) {
 	fmt.Fprintf(&b, "    \"lane\": %q,\n", lane)
 	b.WriteString(`    "identity_sha": sha2(_cx_q_identity, variant: "SHA-256"),` + "\n")
 	b.WriteString(`    "source_ip": _cx_q_sip,` + "\n")
-	b.WriteString(`    "reason": "TENANT_UNATTRIBUTABLE",` + "\n")
-	fmt.Fprintf(&b, "    %q: _cx_q_payload\n", QuarantinePayloadField)
+	b.WriteString(`    "reason": "TENANT_UNATTRIBUTABLE"` + "\n")
 	b.WriteString("  }\n")
+	// The payload lands via set!() ON PURPOSE (found by the live router,
+	// 2026-08-12): a map-literal assignment types the field as a KNOWN string,
+	// which turns the engine snippet's `to_string(<path>) ?? ""` coalesce into
+	// a VRL E651 compile error ("unnecessary error coalescing") and the router
+	// refuses the whole config. set! returns an opaque object, so the field
+	// stays untyped and the SAME snippet every tenant rule uses compiles here
+	// unmodified.
+	fmt.Fprintf(&b, "  . = set!(value: ., path: [%q], data: _cx_q_payload)\n", QuarantinePayloadField)
 	// The engine's own snippet: seals .cx_quarantine_payload in place with
 	// SECRET[cxseal.quarantine]/SECRET[cxmac.quarantine] — identical VRL to a
 	// tenant seal rule, so the parity tests cover this cipher path too.

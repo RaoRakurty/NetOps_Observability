@@ -84,6 +84,17 @@ func TestGeneratedConfigCarriesQuarantineStage(t *testing.T) {
 		if !strings.Contains(block, "cx_quarantine_payload") {
 			t.Errorf("lane %s: quarantine stage never touches the payload field", lane)
 		}
+		// E651 regression (live router, 2026-08-12): the payload must land via
+		// set!() — a map-literal assignment types the field as a known string
+		// and the engine snippet's `?? ""` becomes a compile error that makes
+		// the router refuse the entire config.
+		if !strings.Contains(block, `set!(value: ., path: ["cx_quarantine_payload"]`) {
+			t.Errorf("lane %s: payload must be assigned via set!() type-erasure — "+
+				"a typed assignment breaks the shared seal snippet (E651)", lane)
+		}
+		if strings.Contains(block, `"cx_quarantine_payload": _cx_q_payload`) {
+			t.Errorf("lane %s: payload back in the map literal — E651 returns", lane)
+		}
 		if !strings.Contains(block, `starts_with(to_string(.cx_quarantine_payload) ?? "", "<enc:v1:")`) ||
 			!strings.Contains(block, "abort") {
 			t.Errorf("lane %s: missing the not-sealed-then-abort belt — a seal "+
