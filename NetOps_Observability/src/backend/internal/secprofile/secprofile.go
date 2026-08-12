@@ -336,6 +336,25 @@ var rules = []rule{
 			Severity: Fatal,
 		}, true
 	},
+	func(env Env, fx func(string) bool) (Finding, bool) {
+		// APP-002: the PDF sidecar receives FULL tenant RCA/report document
+		// bodies (multipart HTML) — plaintext here puts tenant document
+		// content on the wire. Gated on the mesh signal (TLS_INTERNAL_CA,
+		// the same signal SEC-002 keys on): a deployment that runs the mesh
+		// has the gotenberg SVID minted and the TLS variant available, so a
+		// remaining http:// sidecar URL is an unconverted hop, never a
+		// baseline. Unset = PDF disabled = nothing to protect.
+		if env("TLS_INTERNAL_CA") != "true" || !plaintextURL(env("REPORT_PDF_SIDECAR_URL")) {
+			return Finding{}, false
+		}
+		return Finding{
+			Rule: "APP-002", Control: "PDF sidecar reached over TLS", Component: "gotenberg",
+			Source: "REPORT_PDF_SIDECAR_URL", Observed: "http:// (tenant report/RCA document bodies in cleartext)",
+			Required: "https:// (mesh-CA-verified; compose.tls.yml stages the gotenberg SVID)",
+			Remedy:   "set REPORT_PDF_SIDECAR_URL=https://gotenberg:3000/forms/chromium/convert/html and run the TLS variant's gotenberg-tls-init + --api-tls flags",
+			Severity: Fatal,
+		}, true
+	},
 	// ── Device plane: never claim more than the protocol gives ────────────────
 	func(env Env, fx func(string) bool) (Finding, bool) {
 		if env("GNMI_ALLOW_INSECURE") != "true" {

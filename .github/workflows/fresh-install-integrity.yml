@@ -66,13 +66,40 @@ jobs:
             /opt/hostedtoolcache/CodeQL
           df -h /
 
+      # The frontend image COPYs pre-built web assets (src/frontend/dist and
+      # docs-portal/build) — they are build artifacts, not in git, so a fresh
+      # checkout must build them BEFORE compose builds images. This is the
+      # same invariant the deploy docs state for any tree: build the assets,
+      # then build the image. First run of this leg failed exactly here.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: build web assets the images bake in
+        run: |
+          set -euo pipefail
+          (cd NetOps_Observability/src/frontend && npm ci --no-audit --no-fund && npm run build)
+          (cd NetOps_Observability/docs-portal && npm ci --no-audit --no-fund && npm run build)
+
       - name: install.py --tls=yes (phase A mint -> phase B fail-closed mesh)
         working-directory: NetOps_Observability
+        env:
+          # Unbuffered so the log's line timing is real — the first failure of
+          # this leg flushed everything at exit and hid WHERE the time went.
+          PYTHONUNBUFFERED: "1"
         # Unattended full path. Its own gates are load-bearing and loud:
         # wait_for_minted_certs times out FATALLY if the mint stalls (the
         # bootstrap-deadlock class), and the phase B compose_up fails on an
         # invalid chain.
         run: python3 scripts/install.py --tls=yes
+
+      - name: failure diagnostics (compose state + logs + disk)
+        if: failure()
+        working-directory: NetOps_Observability/deployment/docker
+        run: |
+          echo "=== docker compose ps -a ==="; docker compose ps -a || true
+          echo "=== docker compose logs (tail) ==="; docker compose logs --tail 60 || true
+          echo "=== docker system df ==="; docker system df || true
+          echo "=== df -h ==="; df -h / || true
 
       - name: assert the mesh stayed up (no crash-loops behind exit 0)
         working-directory: NetOps_Observability/deployment/docker

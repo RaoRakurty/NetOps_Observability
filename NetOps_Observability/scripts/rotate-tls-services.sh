@@ -157,6 +157,30 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
         fi
         wait_state "$svc" || flag "$svc did not reach healthy/running after restart"
     done
+
+    # ── gotenberg (OPTIONAL pdf profile): re-stage + restart ────────────────
+    # Certs reach gotenberg only via the gotenberg-tls-init staging one-shot
+    # (cross-uid: the image runs uid 1001, the mint is uid 65532), so a
+    # rotation must re-run the one-shot BEFORE the restart or gotenberg
+    # reloads the same stale staged copy. The profile is optional — skip
+    # loudly-with-log when the service is not running (a deployment without
+    # pdf has nothing to rotate; flagging it would page on a non-fault).
+    if [ -n "$(dc ps -q --status running gotenberg 2>/dev/null)" ]; then
+        log "gotenberg: re-stage via gotenberg-tls-init + restart"
+        # stdout only is muted — the one-shot's diagnostics (incl. its FATAL
+        # refusal message) go to stderr and must reach the sweep log (§16.1).
+        if dc run --rm gotenberg-tls-init >/dev/null; then
+            if dc restart gotenberg >/dev/null 2>&1; then
+                wait_state gotenberg || flag "gotenberg did not reach healthy/running after restart"
+            else
+                flag "gotenberg restart"
+            fi
+        else
+            flag "gotenberg-tls-init re-stage"
+        fi
+    else
+        log "skip: gotenberg (pdf profile not running on this deployment)"
+    fi
 fi
 
 # ── phase 3: verify the WIRE, endpoint by endpoint ──────────────────────────
@@ -190,6 +214,14 @@ verify opensearch:9200 opensearch
 verify correlation:8443 correlation
 verify vmauth:8427 vmauth
 verify vector-aggregator:6601 vector-aggregator
+# gotenberg is profile-gated (pdf) — verify only when it is actually running,
+# same guard as its rotation leg above (an absent optional service is not a
+# degraded sweep).
+if [ -n "$(dc ps -q --status running gotenberg 2>/dev/null)" ]; then
+    verify gotenberg:3000 gotenberg
+else
+    log "skip: gotenberg:3000 (pdf profile not running on this deployment)"
+fi
 
 # Heartbeat so "the sweep stopped running" is itself detectable (§16.2).
 printf '%s status=%s failures=%d\n' "$(date -u +%FT%TZ)" \

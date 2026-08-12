@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // render_pdf.go — the PDF renderer as a SIDECAR seam. PDF generation needs a
@@ -27,11 +26,23 @@ type pdfRenderer struct {
 
 // NewPDFRenderer wires the PDF seam. sidecarURL is the full convert endpoint
 // (e.g. http://gotenberg:3000/forms/chromium/convert/html). Empty => disabled.
-func NewPDFRenderer(html Renderer, sidecarURL string) Renderer {
+//
+// client is the transport seam (SEC gotenberg TLS): on mesh-TLS deployments the
+// caller MUST inject the hardened backend client (main wires
+// backendHTTPClient), which verifies the sidecar's SVID against the mesh CA
+// and presents the api's SVID. Gotenberg 8 serves TLS but performs no
+// client-certificate verification, so the hop is server-verified TLS (not
+// mTLS) — the SVID is presented regardless via the shared transport. nil =>
+// a plain default client (plaintext fresh-install baseline); this package
+// deliberately has NO TLS knobs of its own — trust rides the injected client.
+func NewPDFRenderer(html Renderer, sidecarURL string, client *http.Client) Renderer {
 	if strings.TrimSpace(sidecarURL) == "" || html == nil {
 		return nil
 	}
-	return &pdfRenderer{html: html, url: sidecarURL, client: &http.Client{Timeout: 30 * time.Second}}
+	if client == nil {
+		client = defaultSidecarClient()
+	}
+	return &pdfRenderer{html: html, url: sidecarURL, client: client}
 }
 
 func (p *pdfRenderer) Format() string { return "pdf" }

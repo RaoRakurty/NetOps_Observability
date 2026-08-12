@@ -235,7 +235,12 @@ func (s *server) rcaReportPDF(ctx context.Context, rep rca.Report, html []byte) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Mesh transport, never a bare client (2026-08-05 incident class): on TLS
+	// deployments this verifies the gotenberg SVID against the mesh CA and
+	// presents the api's SVID (gotenberg 8 serves TLS without client-cert
+	// verification, so the hop is server-verified TLS, not mTLS — the SVID is
+	// presented regardless). Plain client on plaintext installs.
+	client := backendHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

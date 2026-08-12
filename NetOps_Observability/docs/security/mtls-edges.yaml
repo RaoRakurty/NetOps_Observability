@@ -266,6 +266,14 @@
       "client_auth": "per-service basic auth (svc-vmalert) with the mesh CA (datasource/remoteWrite/remoteRead tlsCAFile)",
       "verify": "vmalert groups evaluating (rules loaded, ALERTS series written back)",
       "negative": ["svc-vmalert against a route outside its scope -> refused"]
+    },
+    {
+      "edge": "api-gotenberg",
+      "endpoint": "gotenberg:3000 (native TLS when the pdf profile runs under the TLS variant)",
+      "server_identity": "spiffe://netops/ns/default/sa/gotenberg",
+      "client_auth": "none at the TLS layer (gotenberg 8 cannot verify client certs) — server-verified TLS; the api presents its SVID regardless, and the hop carries no credentials (multipart HTML in, PDF out)",
+      "verify": "s_client shows the gotenberg SVID chain-verified; in-network https convert returns %PDF; plaintext request refused",
+      "negative": ["http:// sidecar URL on a mesh-enabled deployment -> secprofile posture finding", "hostname mismatch (-verify_hostname wrong.name) -> verification failure"]
     }
   ]
 }

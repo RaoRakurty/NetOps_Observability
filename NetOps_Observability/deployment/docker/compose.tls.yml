@@ -93,6 +93,11 @@ services:
       # on data paths). The SVID is minted by the api itself into
       # TLS_SERVICE_CERT_ROOT (registry row "api").
       CORRELATION_URL: "https://correlation:8443"
+      # Gotenberg over TLS (pdf profile): the sidecar receives full tenant
+      # RCA/report document bodies. backendHTTPClient verifies the gotenberg
+      # SVID against the mesh CA (server-verified TLS — gotenberg 8 does not
+      # verify client certs, so not mTLS; the api presents its SVID anyway).
+      REPORT_PDF_SIDECAR_URL: "https://gotenberg:3000/forms/chromium/convert/html"
       # SEC-013.2: the four ingest lanes are mTLS; backendHTTPClient presents
       # the api SVID (TLS_BACKEND_CERT_FILE below) on all of them.
       SNMP_TRAP_SINK_URL: "https://vector-aggregator:8688/"
@@ -591,3 +596,65 @@ services:
     volumes:
       - ../../data/tls/ca.pem:/tls/ca.pem:ro
       - ../../data/tls/services/prober:/tls/svid:ro
+
+  # Gotenberg over TLS (pdf profile): the sidecar renders full tenant
+  # RCA/report document bodies, the last plaintext app hop. Gotenberg 8 serves
+  # TLS natively (--api-tls-cert-file/--api-tls-key-file) but performs NO
+  # client-certificate verification — so this hop is TLS with mesh-CA SERVER
+  # verification, not mTLS; the api still presents its SVID via the shared
+  # backend transport, gotenberg just doesn't check it.
+  #
+  # CROSS-UID STAGING (postgres/clickhouse tls-entrypoint precedent, init-
+  # one-shot flavor): the image starts as uid 1001 with no root entrypoint to
+  # chown, so a one-shot (kafka-init pattern) copies the minted SVID
+  # (uid 65532) into a staging dir owned by 1001 mode 0400 before gotenberg
+  # starts. Certs are staged ONCE at init — the rotation sweep
+  # (scripts/rotate-tls-services.sh) re-runs this one-shot and restarts
+  # gotenberg when the pdf profile is up.
+  #
+  # tlsprobe: gotenberg:3000 is deliberately NOT in the tlsprobe defaults —
+  # the pdf profile is optional and a permanently-failing probe on non-pdf
+  # deployments is noise. Pdf-enabled deployments add it via the
+  # TLS_PROBE_ENDPOINTS override.
+  gotenberg-tls-init:
+    image: curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
+    profiles: ["pdf"]
+    restart: "no"
+    # The staging copy must chown to gotenberg's uid — root, dropped at exit.
+    user: "0:0"
+    # A cp job needs no network at all (least privilege).
+    network_mode: none
+    entrypoint:
+      - sh
+      - -euc
+      # §16.1 FAIL-CLOSED: missing mint material refuses loudly (EX_CONFIG),
+      # never stages nothing — gotenberg's depends_on gate then keeps a
+      # cert-less sidecar from ever starting "TLS-enabled" without TLS.
+      - >-
+        if [ ! -f /certs-src/gotenberg.crt ] || [ ! -f /certs-src/gotenberg.key ];
+        then echo "gotenberg-tls-init: FATAL: /certs-src/gotenberg.{crt,key} not
+        found — the api's TLS_SERVICE_CERT_ROOT issuance has not minted the
+        gotenberg SVID yet; refusing to stage" >&2; exit 78; fi
+        && rm -f /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem
+        && cp /certs-src/gotenberg.crt /certs-src/gotenberg.key /certs-src/ca.pem /staged/
+        && chown 1001:1001 /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem
+        && chmod 0400 /staged/gotenberg.crt /staged/gotenberg.key /staged/ca.pem
+        && echo "gotenberg-tls-init: SVID staged for uid 1001 (0400)" >&2
+    volumes:
+      - ../../data/tls/services/gotenberg:/certs-src:ro
+      - ../../data/tls/services/gotenberg-staged:/staged
+
+  gotenberg:
+    # command REPLACES the base list wholesale (compose semantics) — the two
+    # base flags are restated; only the --api-tls pair is new.
+    command:
+      - gotenberg
+      - --chromium-disable-javascript=true
+      - --api-timeout=30s
+      - --api-tls-cert-file=/tls/gotenberg.crt
+      - --api-tls-key-file=/tls/gotenberg.key
+    depends_on:
+      gotenberg-tls-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../data/tls/services/gotenberg-staged:/tls:ro

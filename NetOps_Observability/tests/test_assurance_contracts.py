@@ -404,3 +404,81 @@ def test_syslog_hop_serves_and_requires_mesh_tls():
     assert "tls" in (prof.get("transport") or "").lower(), (
         "transport-inventory syslog-ng-vector needs a security_profile "
         "recording the TLS conversion (F-1: declared, never silent)")
+
+
+def test_gotenberg_pdf_sidecar_rides_mesh_tls():
+    """api → gotenberg carries TENANT RCA/report document content (full HTML
+    bodies) and was the last plaintext app hop on TLS deployments.
+
+    Gotenberg 8 natively serves TLS (--api-tls-cert-file/--api-tls-key-file)
+    but performs NO client-certificate verification, so this hop is TLS with
+    mesh-CA server verification, not mTLS — the api still PRESENTS its SVID
+    via the shared backend transport; gotenberg just doesn't check it.
+
+    The image starts as uid 1001 with no root entrypoint to chown, so the SVID
+    (minted uid 65532) is staged by a one-shot init service (kafka-init
+    precedent, cross-uid staging like postgres/clickhouse tls-entrypoint).
+
+    Pin the conversion in the TLS variant AND the two-variant doctrine (base
+    compose stays plaintext-default for fresh installs).
+    """
+    import yaml
+
+    dc = ROOT / "deployment" / "docker"
+    base = yaml.safe_load((dc / "docker-compose.yml").read_text())
+    tlsc = yaml.safe_load((dc / "compose.tls.yml").read_text())
+
+    # Two-variant pin: the base gotenberg keeps NO TLS flags and the base api
+    # default stays the plaintext URL (fresh installs have no CA or certs).
+    base_cmd = base["services"]["gotenberg"]["command"]
+    assert not any("--api-tls" in str(c) for c in base_cmd), (
+        "base docker-compose.yml gotenberg must stay plaintext-default — "
+        "TLS lives ONLY in compose.tls.yml (two-variant doctrine)")
+    base_url = base["services"]["api"]["environment"]["REPORT_PDF_SIDECAR_URL"]
+    assert "http://gotenberg:3000" in base_url, (
+        "base compose must keep the plaintext sidecar default for fresh installs")
+
+    # The cross-uid staging one-shot exists, is pdf-profile-gated, and stages
+    # into the dir gotenberg mounts read-only.
+    init = tlsc["services"].get("gotenberg-tls-init")
+    assert init, "compose.tls.yml is missing the gotenberg-tls-init one-shot"
+    assert "pdf" in (init.get("profiles") or []), (
+        "gotenberg-tls-init must be pdf-profile-gated like gotenberg itself")
+    init_vols = " ".join(str(v) for v in init.get("volumes", []))
+    assert "data/tls/services/gotenberg" in init_vols and "gotenberg-staged" in init_vols, (
+        "the init one-shot must copy the minted SVID into the staged dir")
+
+    got = tlsc["services"].get("gotenberg")
+    assert got, "compose.tls.yml has no gotenberg override"
+    cmd = [str(c) for c in got["command"]]
+    assert any(c.startswith("--api-tls-cert-file") for c in cmd), (
+        "TLS-variant gotenberg command must carry --api-tls-cert-file")
+    assert any(c.startswith("--api-tls-key-file") for c in cmd), (
+        "TLS-variant gotenberg command must carry --api-tls-key-file")
+    # command REPLACES wholesale — every base flag must be restated.
+    for flag in base_cmd:
+        assert str(flag) in cmd, (
+            f"TLS-variant gotenberg command dropped base flag {flag!r} — "
+            "compose replaces command lists, it does not merge them")
+    got_vols = [str(v) for v in got.get("volumes", [])]
+    assert any("gotenberg-staged" in v and v.endswith(":ro") for v in got_vols), (
+        "gotenberg must mount the staged cert dir read-only")
+    dep = (got.get("depends_on") or {}).get("gotenberg-tls-init") or {}
+    assert dep.get("condition") == "service_completed_successfully", (
+        "gotenberg must gate on the init one-shot completing — otherwise it "
+        "races the staging and crash-loops on missing cert files")
+
+    # The api rides https on the TLS variant (no silent plaintext fallback).
+    url = tlsc["services"]["api"]["environment"]["REPORT_PDF_SIDECAR_URL"]
+    assert url == "https://gotenberg:3000/forms/chromium/convert/html", (
+        "compose.tls.yml must point REPORT_PDF_SIDECAR_URL at the https sidecar")
+
+    # Rotation: the sweep re-stages via the init one-shot and verifies the
+    # served cert, both guarded on the optional pdf profile actually running.
+    rot = (ROOT / "scripts" / "rotate-tls-services.sh").read_text()
+    assert "gotenberg-tls-init" in rot, (
+        "rotate-tls-services.sh has no gotenberg re-stage leg — a rotated SVID "
+        "would never reach the running sidecar")
+    assert re.search(r"verify\s+gotenberg:3000\s+gotenberg", rot), (
+        "rotate-tls-services.sh must wire-verify gotenberg:3000 (guarded on "
+        "the pdf profile running)")

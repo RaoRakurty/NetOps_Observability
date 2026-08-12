@@ -59,7 +59,11 @@ func newReportPipeline(s *server, q reports.JobQueue, es reports.ExecutionStore,
 	// Build the renderer set: HTML always; Excel in-process; PDF only when a
 	// sidecar URL is configured (nil renderer => format unavailable, skipped).
 	renderers := map[string]reports.Renderer{"html": html, "xlsx": reports.NewXLSXRenderer()}
-	if pdf := reports.NewPDFRenderer(html, os.Getenv("REPORT_PDF_SIDECAR_URL")); pdf != nil {
+	// The PDF sidecar call rides the hardened backend client (mesh-CA trust +
+	// api SVID presentation, backend_client.go) — never a bare http.Client
+	// (2026-08-05 incident class). On plaintext installs backendHTTPClient
+	// degrades to a plain client, so the fresh-install baseline is unchanged.
+	if pdf := reports.NewPDFRenderer(html, os.Getenv("REPORT_PDF_SIDECAR_URL"), backendHTTPClient(30*time.Second)); pdf != nil {
 		renderers["pdf"] = pdf
 	}
 	return &reportPipeline{

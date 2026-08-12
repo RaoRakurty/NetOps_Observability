@@ -996,6 +996,10 @@
         "authz": "none",
         "notes": "gotenberg holds a reserved server identity in the workload registry; conversion vs declared-exception is an OWNER decision pending (F-5) — gotenberg 8 has no native TLS listener, so conversion means a TLS proxy in front or an upstream feature"
       },
+      "security_profile": {
+        "transport": "tls",
+        "notes": "LIVE 2026-08-12 (O10 decision 1): gotenberg 8 native TLS (--api-tls-cert-file/--api-tls-key-file) serving the gotenberg registry SVID (cross-uid staged by the gotenberg-tls-init one-shot — image runs uid 1001, mint is uid 65532); api + rca clients verify against the mesh CA via backendHTTPClient (server-verified TLS — gotenberg does not verify client certs, so NOT mTLS; the api presents its SVID regardless). Silent-plaintext-return blocked by the secprofile rule on REPORT_PDF_SIDECAR_URL. Rotation: re-stage via the init one-shot in the weekly sweep."
+      },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",
       "priority": "P1",
@@ -1534,10 +1538,15 @@
         "notes": "container-metrics scrape, profile self-monitoring; metrics only, no tenant data"
       },
       "target": {
-        "transport": "tls",
+        "transport": "plaintext-DECLARED",
         "authn": "none",
         "authz": "none",
         "notes": "cadvisor has no native TLS listener — candidate for a declared exception at owner review (F-5)"
+      },
+      "exception": {
+        "owner": "product-owner",
+        "accepted": "2026-08-12",
+        "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",
@@ -1560,10 +1569,15 @@
         "notes": "host-metrics scrape, profile self-monitoring; metrics only, no tenant data"
       },
       "target": {
-        "transport": "tls",
+        "transport": "plaintext-DECLARED",
         "authn": "none",
         "authz": "none",
         "notes": "node-exporter supports web-config TLS — convertible; or a declared exception at owner review (F-5)"
+      },
+      "exception": {
+        "owner": "product-owner",
+        "accepted": "2026-08-12",
+        "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
       },
       "trust_domain": "workload",
       "owning_epic": "SEC-001",

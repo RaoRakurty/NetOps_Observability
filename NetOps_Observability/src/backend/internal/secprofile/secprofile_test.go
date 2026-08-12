@@ -93,6 +93,33 @@ func TestEachProhibitedConfigurationIsCaught(t *testing.T) {
 	}
 }
 
+// APP-002: on a mesh-TLS deployment (TLS_INTERNAL_CA=true — the same signal
+// SEC-002 keys on) a plaintext PDF sidecar URL puts full tenant RCA/report
+// document bodies on the wire. http:// must be flagged fatally; https:// and
+// unset (PDF disabled) are clean — no silent plaintext return.
+func TestPlaintextPDFSidecarUnderMeshTLS(t *testing.T) {
+	env := secureEnv()
+	env["TLS_INTERNAL_CA"] = "true"
+	env["REPORT_PDF_SIDECAR_URL"] = "http://gotenberg:3000/forms/chromium/convert/html"
+	rep := Evaluate(Production, envOf(env), noFiles)
+	if rep.Fatal == 0 || !rep.Blocking() {
+		t.Fatalf("plaintext REPORT_PDF_SIDECAR_URL under mesh TLS must block a production boot, got:\n%s", rep.Error())
+	}
+	if msg := rep.Error(); !strings.Contains(msg, "REPORT_PDF_SIDECAR_URL") {
+		t.Fatalf("the refusal must name REPORT_PDF_SIDECAR_URL so an operator can act on it; got:\n%s", msg)
+	}
+
+	env["REPORT_PDF_SIDECAR_URL"] = "https://gotenberg:3000/forms/chromium/convert/html"
+	if rep := Evaluate(Production, envOf(env), noFiles); rep.Fatal != 0 {
+		t.Fatalf("https sidecar URL must be clean, got:\n%s", rep.Error())
+	}
+
+	delete(env, "REPORT_PDF_SIDECAR_URL")
+	if rep := Evaluate(Production, envOf(env), noFiles); rep.Fatal != 0 {
+		t.Fatalf("unset sidecar URL (PDF disabled) must be clean, got:\n%s", rep.Error())
+	}
+}
+
 // The escape hatch is the PROFILE, never a bypass flag. Lower profiles report
 // the same findings; only production refuses.
 func TestLowerProfilesReportButDoNotBlock(t *testing.T) {

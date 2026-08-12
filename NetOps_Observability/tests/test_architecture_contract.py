@@ -287,6 +287,78 @@ def test_every_compose_service_appears_in_the_transport_inventory():
         "one table (the workloadid ratchet rule)")
 
 
+def test_transport_is_deny_by_default():
+    """Owner decision 2026-08-12 (O10): the inventory is DENY-BY-DEFAULT —
+    every edge must be encrypted, OR carry an explicit declared exception,
+    OR appear in the grandfathered open-conversion list below (each entry =
+    a KNOWN open target, visible here instead of tribal knowledge). A new
+    plaintext transport that is none of those fails this test: introducing
+    one now requires either encrypting it, declaring the exception, or an
+    explicit, reviewable edit to this list."""
+    KNOWN_OPEN = {
+        # Device-side protocols — the transport-encryption device programme
+        # (P0–P4), phase 2+: cannot be closed intra-stack.
+        "device-syslog-ng", "device-snmp-poll", "device-snmp-trap",
+        # Post-v1 scoped rows (remote vantage; operator consoles behind the
+        # authenticated ingress).
+        "remote-vantage-api", "operator-grafana-osd",
+        # The F-5 aux tail — open conversion targets, dormant or
+        # ingress-terminated; each row carries its own honest notes.
+        "api-keycloak", "api-netbox", "netbox-netbox-postgres",
+        "netbox-valkey", "nginx-frontend", "nginx-grafana", "nginx-osd",
+        "nginx-netbox", "nginx-keycloak",
+    }
+    inv = _load_inventory()
+    offenders, stale = [], []
+    seen = set()
+    for e in inv["edges"]:
+        seen.add(e["id"])
+        prof = (e.get("security_profile", {}).get("transport") or "").lower()
+        cur = (e.get("current", {}).get("transport") or "").lower()
+        encrypted = ("tls" in prof) or ("mtls" in prof) or cur in (
+            "tls", "mtls", "tls-unverified")
+        if encrypted or e.get("exception"):
+            continue
+        if e["id"] not in KNOWN_OPEN:
+            offenders.append(e["id"])
+    stale = sorted(k for k in KNOWN_OPEN if k not in seen)
+    assert not offenders, (
+        f"UNREGISTERED plaintext transport(s): {offenders} — encrypt the hop, "
+        "declare an exception{owner,accepted,reason}, or (only with review) "
+        "add it to KNOWN_OPEN with the reason it stays open (O10 deny-by-default)")
+    assert not stale, f"KNOWN_OPEN entries no longer in the inventory: {stale}"
+
+
+def test_metrics_scrape_exceptions_hold_their_boundary():
+    """O10 decision 2: the two metrics-only scrape hops stay plaintext as
+    DECLARED exceptions. The exception is valid only while (a) it is on
+    record with owner+date+the payload/boundary policy in its reason, and
+    (b) the endpoints stay unpublished to the host — mechanical checks for
+    the two invalidation conditions this test can see. (Payload class is
+    re-verified live in the acceptance evidence; a scrape endpoint growing
+    non-metrics content is a code change that must revisit the rows.)"""
+    inv = {e["id"]: e for e in _load_inventory()["edges"]}
+    for edge_id in ("victoria-cadvisor", "victoria-node-exporter"):
+        e = inv[edge_id]
+        exc = e.get("exception")
+        assert exc, f"{edge_id}: the metrics-only exception is no longer declared (O10)"
+        assert e.get("target", {}).get("transport") == "plaintext-DECLARED", (
+            f"{edge_id}: exception rows carry target plaintext-DECLARED "
+            "(the preflight validates their exception object)")
+        for field in ("owner", "accepted", "reason"):
+            assert exc.get(field), f"{edge_id}: exception missing {field}"
+        for needle in ("metrics", "no credentials", "invalidates"):
+            assert needle in exc["reason"], (
+                f"{edge_id}: exception reason must state the payload boundary "
+                f"and its invalidation condition (missing {needle!r})")
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    for svc in ("cadvisor", "node-exporter"):
+        assert not compose["services"][svc].get("ports"), (
+            f"{svc}: host-published — the internal-boundary condition of the "
+            "metrics-only exception is violated; TLS/mTLS review required (O10)")
+
+
 def test_transport_inventory_rows_reflect_shipped_epics():
     """F-2 (assurance run 2026-08-09): three rows lagged the epics that
     changed their hops, so the inventory under-reported achieved security and
