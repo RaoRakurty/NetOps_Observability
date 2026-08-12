@@ -52,7 +52,7 @@ async function openCanvas(page: Page) {
     }
     return json({});
   });
-  await page.goto("/#/infrastructure/topology-canvas");
+  await page.goto("/#/investigate/topology");
   return { modes };
 }
 

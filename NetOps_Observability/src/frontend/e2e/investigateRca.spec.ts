@@ -65,7 +65,7 @@ async function openInvestigate(page: Page) {
     if (p.includes("/api/topology/view")) return json(exploreView());
     return json({});
   });
-  await page.goto("/#/infrastructure/topology-canvas");
+  await page.goto("/#/investigate/topology");
   await page.getByRole("button", { name: "Investigate" }).click();
 }
 

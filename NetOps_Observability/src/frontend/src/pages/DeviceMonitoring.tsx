@@ -131,7 +131,7 @@ function DeviceInventory() {
         <button
           className="btn-ghost"
           style={{ fontSize: 11, padding: "3px 8px" }}
-          onClick={() => navigate(`infrastructure/ifperf/${encodeURIComponent(d.name)}`)}
+          onClick={() => navigate(`analytics/interface-performance/${encodeURIComponent(d.name)}`)}
           title="Open Interface Performance scoped to this device"
         >
           Interface Performance →

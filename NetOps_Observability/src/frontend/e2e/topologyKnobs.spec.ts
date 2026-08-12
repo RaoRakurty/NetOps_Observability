@@ -60,7 +60,7 @@ async function openCanvas(page: Page) {
     if (p.includes("/api/topology/graph")) return json({ ...topoView("explore"), stale: false });
     return json({});
   });
-  await page.goto("/#/infrastructure/topology-canvas");
+  await page.goto("/#/investigate/topology");
   // Scoped to the CANVAS node: the Devices rail lists the same names, so an
   // unscoped locator matches twice and fails strict mode — which took every
   // test in this file down at the shared entry point, not just the one that

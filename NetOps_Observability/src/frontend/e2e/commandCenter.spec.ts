@@ -80,7 +80,7 @@ async function bootCommandCenter(page: Page) {
     // Everything else the shell pokes at on boot: a benign empty default.
     return json({});
   });
-  await page.goto("/#/incident/overview");
+  await page.goto("/#/overview/home");
   await expect(page.locator(".cc-h1")).toHaveText("Command Center");
 }
 

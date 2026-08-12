@@ -192,7 +192,7 @@ function RecommendedAction() {
   const { data: health } = usePoll(() => api.healthScore("global"));
   if (err) return <Panel title="Recommended action" state="degraded" />;
   const row = (verb: string, tone: string, text: string) => (
-    <Panel title="Recommended action" to="monitoring/correlations">
+    <Panel title="Recommended action" to="investigate/rca">
       <div className="fp-row" style={{ borderLeftColor: tone, cursor: "default" }}>
         <Tag tone={tone}>{verb}</Tag>
         <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{text}</span>
@@ -235,7 +235,7 @@ function RcaCoverage() {
   // "candidates" = open correlation objects incl. undetermined; confirmed/suspected
   // are the graded subset. Calling the raw count "open issues" overstated it.
   return (
-    <Panel title="RCA coverage" to="monitoring/correlations">
+    <Panel title="RCA coverage" to="investigate/rca">
       <div className="fp-kpis">
         <Kpi n={data.open} l="RCA candidates" tone="var(--accent)" />
         <Kpi n={data.open_confirmed} l="confirmed" tone={data.open_confirmed > 0 ? "var(--crit)" : undefined} />
@@ -253,7 +253,7 @@ function WhatChanged() {
   const items: FeedItem[] = data?.items ?? [];
   if (items.length === 0) return <Panel title="What changed" state="inactive" note="No changes in the last 24h." hint="Topology, inventory, and alert-state changes appear here." />;
   return (
-    <Panel title="What changed" to="monitoring/events">
+    <Panel title="What changed" to="explore/events">
       <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>
@@ -311,7 +311,7 @@ function CapacityOutlook() {
       hint={building > 0 ? `Needs ${data!.min_days} days of history — ${building} interface${building === 1 ? "" : "s"} still learning their trend.` : "No interfaces trending toward saturation."} />;
   }
   return (
-    <Panel title="Capacity outlook" to="infrastructure/ifperf">
+    <Panel title="Capacity outlook" to="analytics/interface-performance">
       {trending.slice(0, 6).map((r, i) => {
         const tone = r.status === "saturated" || r.days_to_90 < 14 ? "var(--crit)" : r.days_to_90 < 30 ? "var(--warn)" : "var(--fg-subtle)";
         return (
@@ -340,7 +340,7 @@ function TopHealthContributors() {
   if (contribs.length === 0)
     return <Panel title="Top health contributors" state="inactive" note="No degraded contributors." hint="All measured signals are nominal." />;
   return (
-    <Panel title="Top health contributors" action={<span>{contribs.length}</span>} to="monitoring/triggered">
+    <Panel title="Top health contributors" action={<span>{contribs.length}</span>} to="operations/alerts">
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
         {contribs.slice(0, 8).map((c, i) => (
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
@@ -403,7 +403,7 @@ function RcaPathPanel() {
   if (!top || !tl) return <Panel title="RCA path view" state="inactive" note="No issue to locate yet."
     hint="When an issue is suspected or confirmed, its path and likely fault location appear here." />;
   return (
-    <Panel title="RCA path view" to="monitoring/correlations">
+    <Panel title="RCA path view" to="investigate/rca">
       {/* The merged single path view (pathModel.ts): the front page has no
           decoded attribution, so it renders the honest fallback chain —
           measured spine → routing adjacency → "path not fully discovered". */}
@@ -528,12 +528,12 @@ function KpiStrip() {
   };
   return (
     <div className="kpi-grid">
-      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "monitoring/triggered", "health")}
-      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "monitoring/correlations?tier=confirmed", "confirmed")}
-      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "monitoring/correlations?tier=suspected", "suspected")}
+      {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "operations/alerts", "health")}
+      {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "investigate/rca?tier=confirmed", "confirmed")}
+      {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "investigate/rca?tier=suspected", "suspected")}
       {cell("Impacted sites", sites.size, undefined, sites.size ? undefined : "none tagged", "infrastructure/topology", "sites")}
       {cell("Impacted devices", devs.size, undefined, undefined, "infrastructure/topology", "devices")}
-      {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "monitoring/triggered")}
+      {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "operations/alerts")}
     </div>
   );
 }
@@ -620,7 +620,7 @@ export default function FrontPage() {
           <Safe><RcaCoverage /></Safe>
           <Safe><TopHealthContributors /></Safe>
           <Safe><TopIssues /></Safe>
-          <Safe><Panel title="Hot paths" to="infrastructure/flowtrace"><PathHealthList limit={5} /></Panel></Safe>
+          <Safe><Panel title="Hot paths" to="investigate/flowtrace"><PathHealthList limit={5} /></Panel></Safe>
         </div>
         <div className="fp-col" style={{ flex: "1 1 320px" }}>
           <Safe><RecommendedAction /></Safe>

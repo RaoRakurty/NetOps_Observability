@@ -55,7 +55,7 @@ async function openCanvas(page: Page): Promise<{ cloudCalls: () => number }> {
     }
     return json({});
   });
-  await page.goto("/#/infrastructure/topology-canvas");
+  await page.goto("/#/investigate/topology");
   await expect(page.getByTestId("rf__node-lan1")).toBeVisible(); // LAN canvas up first
   return { cloudCalls: () => calls };
 }

@@ -45,7 +45,7 @@ async function openPathTrace(page: Page, pathSource: "computed" | "measured") {
       return json(topoView(url.searchParams.get("mode") || "explore", url.searchParams.get("src"), url.searchParams.get("dst"), pathSource));
     return json({});
   });
-  await page.goto("/#/infrastructure/topology-canvas");
+  await page.goto("/#/investigate/topology");
 
   // Switch to Path Trace, then choose endpoints (the picker populates from the
   // loaded fabric's nodes).
