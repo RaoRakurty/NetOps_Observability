@@ -63,6 +63,12 @@ var Vocabulary = []Family{
 	{Name: "netops_sec_exception_age_seconds", Type: "gauge", Labels: []string{"edge"}, Help: "Age of each declared plaintext exception since it was last reviewed (accepted date in the transport inventory).", Epic: "SEC-020", Status: StatusEmitted},
 	{Name: "netops_sec_posture_findings", Type: "gauge", Labels: []string{"severity"}, Help: "Boot security-posture validator finding counts (fatal/warn/info) for the running configuration.", Epic: "SEC-020", Status: StatusEmitted},
 
+	// Emitted by F-11 seal-or-quarantine (internal/quarantine.Metrics, wired
+	// into the api /metrics writer; sampler over netops-quarantine-*).
+	{Name: "netops_sec_quarantine_depth", Type: "gauge", Labels: nil, Help: "Sealed unattributable events currently held in the quarantine index.", Epic: "F-11", Status: StatusEmitted},
+	{Name: "netops_sec_quarantine_oldest_seconds", Type: "gauge", Labels: nil, Help: "Age of the oldest quarantined event; 0 when the quarantine is empty.", Epic: "F-11", Status: StatusEmitted},
+	{Name: "netops_sec_quarantine_restored_total", Type: "counter", Labels: []string{"outcome"}, Help: "Quarantined events processed by operator re-attribution, by outcome (restored|failed).", Epic: "F-11", Status: StatusEmitted},
+
 	// Reserved for their owning epics. Emission points are named in the epic
 	// specs (docs/security/CORRELIX_SECURITY_IMPLEMENTATION_BACKLOG.md).
 	{Name: "netops_sec_acl_denials_total", Type: "counter", Labels: []string{"principal_kind"}, Help: "Kafka authorizer denials observed by the platform (SEC-007 enforce flip).", Epic: "SEC-007", Status: StatusReserved},

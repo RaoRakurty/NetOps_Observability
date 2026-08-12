@@ -32,6 +32,11 @@ const (
 	// SecEventCredentialRotation — a platform credential or SVID surface was
 	// rotated outside the automatic re-issue loop (SEC-019; reserved).
 	SecEventCredentialRotation = "security_credential_rotation"
+	// SecEventQuarantineRestore — an operator re-attributed sealed quarantine
+	// envelopes back into the pipeline (F-11 D5; emitted by the
+	// /api/quarantine/reattribute handler). Detail carries identifiers and
+	// counts only — never payload contents.
+	SecEventQuarantineRestore = "quarantine_reattribute"
 )
 
 // SecEventTypes is the closed set, for tests and for the audit view's filter
@@ -41,4 +46,5 @@ var SecEventTypes = []string{
 	SecEventConfigChange,
 	SecEventExceptionReview,
 	SecEventCredentialRotation,
+	SecEventQuarantineRestore,
 }

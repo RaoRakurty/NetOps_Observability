@@ -29,6 +29,7 @@ import (
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/metricval"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/quarantine"
 	"netops/backend/internal/ratelimit"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/sealedfields"
@@ -141,7 +142,11 @@ type server struct {
 	// pretending to be available.
 	sealProvider sealing.CryptoProvider
 	sealMetrics  *sealMetrics
-	ticketing    ticketing.Store // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
+	// F-11 quarantine observability (D6): depth/age sampler over the
+	// netops-quarantine-* index + re-attribution outcome counters. nil unless
+	// sealing custody is on (no custody ⇒ no quarantine stage exists).
+	quarMetrics *quarantine.Metrics
+	ticketing   ticketing.Store // RCA auto-ticketing store #78 (in-memory or pg); worker+sweeper start in main() under FEATURE_RCA_TICKETING
 	// ticketing invariant/contract counters (exposed on /metrics): enable attempts
 	// rejected by the one-enabled-policy rule, fail-closed holds on a violated
 	// invariant, and manual actions redirected off a merged object.
@@ -708,6 +713,11 @@ func newServer() *server {
 	// nil unless FEATURE_SEALED_FIELDS + real key custody are BOTH present, which
 	// is what makes the reveal endpoint answer 501 instead of pretending.
 	srv.sealProvider = sealProvider
+	if sealProvider != nil {
+		// F-11 D6: the quarantine index only exists on deployments with sealing
+		// custody, so the depth/age families follow the same boundary.
+		srv.quarMetrics = quarantine.NewMetrics(openSearch, nil)
+	}
 	// Integration platform (#43): persistence is Postgres-only; the provider
 	// registry (inbound translators) is always available.
 	if ps, ok := platformdb.ActivePG(); ok {
@@ -1640,6 +1650,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/alerts/maintenance-windows/", s.handleMaintenanceWindowByID) // GET|PUT|DELETE {id}
 	mux.HandleFunc("/api/pipeline/processors", s.handleProcessors)                    // per-tenant processor rules (item 121)
 	mux.HandleFunc("/api/pipeline/processors/", s.handleProcessorByID)                // GET|PUT|DELETE {id} · POST preview
+	mux.HandleFunc("/api/quarantine", s.handleQuarantineList)                         // F-11 D5: sealed-quarantine metadata list (platform-owner)
+	mux.HandleFunc("/api/quarantine/reattribute", s.handleQuarantineReattribute)      // F-11 D5: unseal + re-inject (platform-owner + sensitive_data:admin)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	// Feature availability only (no credential/integration posture) — any
@@ -2498,6 +2510,9 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.sealMetrics != nil {
 		s.sealMetrics.write(w)
+	}
+	if s.quarMetrics != nil {
+		s.quarMetrics.Write(w)
 	}
 	if s.incMetrics != nil {
 		s.incMetrics.write(w)

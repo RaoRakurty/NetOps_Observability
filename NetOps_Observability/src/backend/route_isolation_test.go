@@ -403,6 +403,12 @@ var routeIsolationLedger = map[string]string{
 	"/api/onboard/snmp-config":    "platform",
 	"/api/discovery/refresh":      "platform",
 	"/api/integrations/reconcile": "platform",
+	// F-11 seal-or-quarantine (D5): the quarantine holds OTHER tenants'
+	// unattributable events by definition — platform-owner only, and
+	// reattribute additionally demands sensitive_data:admin (the
+	// unseal-equivalent capability). Gate tests: quarantine_api_test.go.
+	"/api/quarantine":             "platform",
+	"/api/quarantine/reattribute": "platform",
 
 	// ── platform-wide reference data (admin-readable, owner-mutated) ──
 	"/api/roles":          "globalRef",

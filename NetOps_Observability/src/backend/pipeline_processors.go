@@ -35,10 +35,14 @@ import (
 	"time"
 
 	"io"
+	"net/url"
 	"netops/backend/internal/audit"
 	"netops/backend/internal/httppage"
 	"netops/backend/internal/platformdb"
+	"netops/backend/internal/quarantine"
 	"netops/backend/internal/rbac"
+	"netops/backend/internal/secobs"
+	"netops/backend/models"
 	"netops/backend/processors"
 	"netops/backend/sealing"
 	"sync/atomic"
@@ -972,4 +976,259 @@ func sealingEdgePeer(r *http.Request) string {
 		return r.TLS.PeerCertificates[0].URIs[0].String()
 	}
 	return "stack-internal-token"
+}
+
+// ── F-11 seal-or-quarantine: the operator workflow (design doc D5) ──────────
+//
+// THIN GLUE ONLY (root file-count ratchet): the logic lives in
+// internal/quarantine; these handlers wire the injected effects — the
+// openSearch fetch, the seal provider, the bus producer and the audit trail —
+// and enforce the gates. Both routes are ledger category `platform`
+// (route_isolation_test.go): the quarantine holds OTHER tenants'
+// unattributable data by definition, so no tenant principal may see it.
+
+const (
+	quarantineReattrRoutePath = "/api/quarantine/reattribute"
+	// quarantineSearchPath targets every daily quarantine index; a missing
+	// index resolves to zero hits (allow_no_indices), never an error.
+	quarantineSearchPath = "/netops-quarantine-*/_search"
+	// quarantineBatchLimit bounds one re-attribution call; the response
+	// reports the remainder so the operator repeats until zero.
+	quarantineBatchLimit = 500
+	quarantineListLimit  = 50 // default page size for the metadata list
+)
+
+// handleQuarantineList — GET /api/quarantine (requirePlatformAdmin): the
+// metadata listing plus a depth/age summary. NEVER the sealed payload: the
+// _source projection excludes it AND quarantine.Doc cannot serialize it.
+func (s *server) handleQuarantineList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET required"))
+		return
+	}
+	// The sealed-fields idiom (handleProcessorUnseal): without sealing custody
+	// there is no quarantine stage — say so, not 404 or an empty list.
+	if s.sealProvider == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("sealed fields are not enabled on this deployment"))
+		return
+	}
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+	if err := httppage.RejectUnknownQuery(r); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	page, err := httppage.Parse(r, quarantineListLimit, quarantineBatchLimit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := openSearch(http.MethodPost, quarantineSearchPath, quarantine.ListQuery(page.Offset, page.Limit))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable,
+			errors.New("quarantine index is unreachable — this is NOT an empty quarantine; retry"))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		writeError(w, http.StatusServiceUnavailable,
+			fmt.Errorf("quarantine index read failed (opensearch status %d) — this is NOT an empty quarantine; retry", resp.StatusCode))
+		return
+	}
+	docs, total, oldest, err := quarantine.ParseSearch(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	httppage.WriteHeaders(w, page, len(docs), int(total))
+	summary := map[string]any{"total": total, "oldest_received_at": nil}
+	if oldest != "" {
+		summary["oldest_received_at"] = oldest
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"quarantine": docs, "summary": summary})
+}
+
+// isHex64 reports whether s is a well-formed sha256 hex digest (the only
+// accepted identity reference — validate at the boundary, §3).
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// quarantineIdentityRows projects the live inventory onto the SAME identity
+// strings the ingest tier hashes (device name + management address — the
+// buildEnrichmentRows identities), each with its owning tenant.
+func quarantineIdentityRows(devices []models.Device) []quarantine.IdentityRow {
+	rows := make([]quarantine.IdentityRow, 0, len(devices)*2)
+	for _, d := range devices {
+		t := deviceTenant(d)
+		if d.Name != "" {
+			rows = append(rows, quarantine.IdentityRow{Identity: d.Name, Tenant: t})
+		}
+		if d.Address != "" {
+			rows = append(rows, quarantine.IdentityRow{Identity: d.Address, Tenant: t})
+		}
+	}
+	return rows
+}
+
+// handleQuarantineReattribute — POST /api/quarantine/reattribute: unseal every
+// envelope whose identity now resolves (authoritatively, via the live
+// inventory) to exactly one tenant, re-inject the original events onto their
+// lanes' bus topics, then tombstone the envelopes.
+//
+// Gates, in order: sensitive_data:admin FIRST — it is the unseal-equivalent
+// capability and the deliberate second key next to the platform gate (today
+// every platform owner is a super-admin and so holds it; the explicit check
+// pins the policy against a future role-model change) — then the platform
+// gate itself.
+//
+// Replay-safe end to end: re-runs upsert the same cx_event_id (`id_key` on
+// the OS event sinks), so calling this twice can never duplicate tenant docs
+// — proven by TestQuarantineReattributeHappyPathAndReplay.
+func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeError(w, http.StatusMethodNotAllowed, errors.New("POST required"))
+		return
+	}
+	if s.sealProvider == nil {
+		writeError(w, http.StatusNotImplemented, errors.New("sealed fields are not enabled on this deployment"))
+		return
+	}
+	claims, ok := s.requirePerm(w, r, rbac.ModuleSensitiveData, rbac.LevelAdmin)
+	if !ok {
+		return
+	}
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
+		return
+	}
+
+	var req struct {
+		IdentitySha string `json:"identity_sha"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxUnsealBody)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	sha := strings.ToLower(strings.TrimSpace(req.IdentitySha))
+	if !isHex64(sha) {
+		writeError(w, http.StatusBadRequest, errors.New("identity_sha must be a 64-character sha256 hex digest"))
+		return
+	}
+
+	// Resolve AUTHORITATIVELY against the live inventory. The caller names an
+	// identity hash, never a tenant — zero matches, platform-only and
+	// ambiguous identities are all 409s that name the fix.
+	tenant, matched, err := quarantine.ResolveIdentity(quarantineIdentityRows(s.discovery.Devices()), sha)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+
+	resp, err := openSearch(http.MethodPost, quarantineSearchPath, quarantine.ShaQuery(sha, quarantineBatchLimit))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("quarantine index is unreachable; retry"))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		writeError(w, http.StatusServiceUnavailable,
+			fmt.Errorf("quarantine search failed (opensearch status %d); retry", resp.StatusCode))
+		return
+	}
+	docs, total, _, err := quarantine.ParseSearch(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	deps := quarantine.RestoreDeps{
+		Unseal: func(ctx context.Context, token string) (string, error) {
+			return s.sealProvider.Unseal(ctx, quarantine.SealContext(), token)
+		},
+		Produce: func(ctx context.Context, topic, tenant string, event map[string]any) error {
+			n, err := produceJSON(ctx, topic, []proxyRecord{{Key: tenant, Value: event}})
+			if err != nil {
+				return err
+			}
+			// produceJSON is a silent no-op when the bus bridge is disabled
+			// (BUS_BRIDGE_URL=""). Acceptable for best-effort feeds; here it
+			// would tombstone events that were never re-injected — data loss.
+			if n != 1 {
+				return errors.New("bus bridge disabled — restore refused")
+			}
+			return nil
+		},
+		Delete: func(ctx context.Context, index, id string) error {
+			err := s.osJSON(ctx, http.MethodDelete, "/"+index+"/_doc/"+url.PathEscape(id), nil, nil)
+			if err != nil {
+				// §10 no silent failures: the count reaches the response, the
+				// specifics land here. The leftover doc is noise, not
+				// duplication (id_key upsert).
+				logError("quarantine", "tombstone delete failed after successful re-injection",
+					map[string]any{"index": index, "doc": id, "error": err.Error()})
+			}
+			return err
+		},
+	}
+	res := quarantine.Restore(r.Context(), deps, docs, tenant)
+	remaining := int(total) - res.Restored
+	if remaining < 0 {
+		remaining = 0
+	}
+	if s.quarMetrics != nil {
+		s.quarMetrics.RecordRestore(res.Restored, res.Failed)
+	}
+	s.auditQuarantineRestore(claims, sha, tenant, res)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"matched_identity_count": matched,
+		"tenant":                 tenant,
+		"restored":               res.Restored,
+		"failed":                 res.Failed,
+		"remaining":              remaining,
+		"deleted":                res.Deleted,
+		"delete_failed":          res.DeleteFailed,
+	})
+}
+
+// auditQuarantineRestore records the act EXPLICITLY (the withAudit middleware
+// also records the request coarsely) with the SecEventQuarantineRestore
+// vocabulary type. Identifiers and counts only — never payload contents, and
+// no token reference at all (auditUnseal's redaction rule).
+func (s *server) auditQuarantineRestore(claims jwtClaims, sha, tenant string, res quarantine.RestoreResult) {
+	if s.audit == nil {
+		return
+	}
+	actorTenant, cross := principalTenant(claims)
+	s.audit.Record(AuditEvent{
+		Actor:    claims.Sub,
+		Tenant:   actorTenant,
+		Cross:    cross,
+		Method:   http.MethodPost,
+		Path:     quarantineReattrRoutePath,
+		Status:   http.StatusOK,
+		Decision: "allow",
+		Detail: map[string]any{
+			secobs.SecEventKey: secobs.SecEventQuarantineRestore,
+			"identity_sha":     sha, // a hash of a device identity — not PII, not payload
+			"tenant":           tenant,
+			"restored":         res.Restored,
+			"failed":           res.Failed,
+			"deleted":          res.Deleted,
+			"delete_failed":    res.DeleteFailed,
+			"actor_tenant":     actorTenant,
+			"cross_tenant":     cross,
+		},
+	})
 }

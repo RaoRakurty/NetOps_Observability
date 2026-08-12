@@ -1287,6 +1287,59 @@ groups:
         annotations:
           summary: "The tenant-attribution counter is gone — enrichment-miss alerting is BLIND (check vector-router's tenant_attribution_metric transform)"
 
+      - alert: VectorQuarantineSealFailures
+        # F-11 (INV-F11-06): the quarantine seal stage is fail-closed by
+        # design — a runtime seal failure ABORTS the event (drop_on_abort, no
+        # reroute to the plaintext deadletter), so it can never continue
+        # plaintext to the shared sinks. The cost of that honesty is silent
+        # LOSS unless the drop is alerted on: this rule is the other half of
+        # the invariant. Vector counts the aborts in component_errors_total on
+        # the generated <lane>_quarantine transforms (syslog_quarantine,
+        # snmptrap_quarantine, flows_quarantine); ANY error here means
+        # unattributable events are being dropped right now.
+        expr: sum by (component_id) (increase(vector_component_errors_total{component_id=~".*_quarantine"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          layer: ingest
+        annotations:
+          summary: "quarantine seal stage {{ $labels.component_id }} is failing — unattributable events are being DROPPED (fail-closed, INV-F11-06); check the router's sealing key delivery and the vector-router error log"
+
+      - alert: QuarantineGrowthAbnormal
+        # F-11: a steady trickle into netops-quarantine-* is normal life (a
+        # new device in the window before assignment, the F-10 <=75s reload
+        # window). A RISE against the deployment's own baseline is not: the
+        # enrichment CSV went stale or empty, or a fleet of unknown senders
+        # appeared. Same change-not-level shape as
+        # TenantEnrichmentMissRateJumped: last-hour intake at the
+        # opensearch_quarantine sink vs 3x the prior-6h hourly average, plus a
+        # 10-event floor so single-digit noise cannot trip it.
+        expr: |
+          sum(increase(vector_component_sent_events_total{component_id="opensearch_quarantine"}[1h]))
+          >
+          (sum(increase(vector_component_sent_events_total{component_id="opensearch_quarantine"}[6h] offset 1h)) / 6) * 3 + 10
+        for: 15m
+        labels:
+          severity: warning
+          layer: ingest
+        annotations:
+          summary: "quarantine intake over the last hour is far above its 6h baseline — tenant attribution is failing at scale (stale/empty device_tenant.csv, or a fleet of unknown senders); triage via GET /api/quarantine"
+
+      - alert: QuarantineAttributionStalled
+        # F-11: quarantined events are recoverable only until ISM deletes them
+        # (QUARANTINE_RETENTION_DAYS, default 30). An envelope older than 7
+        # days means nobody is re-attributing and the backlog is drifting
+        # toward the retention cliff. Source: the api's quarantine sampler
+        # (netops_sec_quarantine_oldest_seconds, secobs vocabulary — scraped
+        # from the api job, not a Vector transform).
+        expr: netops_sec_quarantine_oldest_seconds > 7 * 86400
+        for: 6h
+        labels:
+          severity: warning
+          layer: ingest
+        annotations:
+          summary: "the oldest quarantined event has been unattributed for over 7 days — assign its device to a tenant and POST /api/quarantine/reattribute before retention deletes it"
+
       # NOTE ON F-59 (backup freshness): there is deliberately NO metric-based
       # snapshot-age rule here. The metrics path runs INSIDE the stack, and a
       # backup alarm that dies with the thing it protects is theatre — the same

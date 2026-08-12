@@ -473,7 +473,11 @@ def test_ingest_alerts_reference_metrics_the_pipeline_actually_emits():
     rule would have been permanently silent.
 
     So: every `netops_*` metric an ingest rule names must be produced by a
-    log_to_metric transform in one of the Vector configs, spelled identically.
+    log_to_metric transform in one of the Vector configs — or be a
+    StatusEmitted family of the api's security-metric vocabulary
+    (internal/secobs/vocab.go), whose emission is itself contract-guarded by
+    scripts/audit_metric_contract.py (F-11 added api-sourced quarantine gauges
+    to this group), spelled identically either way.
     """
     produced = set()
     for tier in ALL_TIERS:
@@ -484,6 +488,13 @@ def test_ingest_alerts_reference_metrics_the_pipeline_actually_emits():
                 # Vector's prometheus_exporter emits the configured name
                 # VERBATIM — no _total suffix, no namespace prefix.
                 produced.add(m["name"])
+    # The api's /metrics surface: StatusEmitted rows of the secobs vocabulary
+    # (same line-oriented parse as scripts/audit_metric_contract.py, which is
+    # what keeps "StatusEmitted" and "actually emitted" from drifting apart).
+    vocab = read("src", "backend", "internal", "secobs", "vocab.go")
+    produced |= {name for name, status in
+                 re.findall(r'\{Name:\s*"([a-z0-9_]+)",.*?Status:\s*Status(Emitted|Reserved)\}', vocab)
+                 if status == "Emitted"}
 
     rules = yaml.safe_load(read("src", "config", "rules.yaml"))
     group = next(g for g in rules["groups"] if g["name"] == "ingest-integrity")

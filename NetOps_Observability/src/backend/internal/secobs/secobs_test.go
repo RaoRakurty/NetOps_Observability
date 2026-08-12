@@ -25,6 +25,18 @@ func TestVocabularyIsValid(t *testing.T) {
 	}
 }
 
+// emittedByOtherWriters names the StatusEmitted families whose emission point
+// is NOT this package's Metrics.Write. Each entry must name its writer — a
+// blanket skip would let a row claim "emitted" while nothing emits it, which
+// is the silent mis-fire SEC-020 exists to prevent. The cross-package half of
+// the check (that the named writer really does emit the family) is enforced
+// mechanically by scripts/audit_metric_contract.py.
+var emittedByOtherWriters = map[string]string{
+	"netops_sec_quarantine_depth":          "internal/quarantine.Metrics.Write (F-11 sampler)",
+	"netops_sec_quarantine_oldest_seconds": "internal/quarantine.Metrics.Write (F-11 sampler)",
+	"netops_sec_quarantine_restored_total": "internal/quarantine.Metrics.Write (F-11 restore counters)",
+}
+
 func TestVocabularyEmittedFamiliesAreWritten(t *testing.T) {
 	// Every StatusEmitted netops_sec_* family must appear in the writer's
 	// output — a vocabulary row that claims "emitted" while nothing emits it
@@ -40,11 +52,25 @@ func TestVocabularyEmittedFamiliesAreWritten(t *testing.T) {
 		if f.Status != StatusEmitted || !strings.HasPrefix(f.Name, "netops_sec_") {
 			continue
 		}
+		if _, elsewhere := emittedByOtherWriters[f.Name]; elsewhere {
+			continue
+		}
 		if !strings.Contains(out, f.Name+"{") {
 			t.Errorf("vocabulary family %s is StatusEmitted but absent from Metrics.Write output", f.Name)
 		}
 		if !strings.Contains(out, "# TYPE "+f.Name+" "+f.Type) {
 			t.Errorf("family %s missing TYPE %s declaration", f.Name, f.Type)
+		}
+	}
+	// The ownership ledger itself must stay honest: every entry names a real,
+	// currently-registered StatusEmitted family.
+	registered := map[string]FamilyStatus{}
+	for _, f := range Vocabulary {
+		registered[f.Name] = f.Status
+	}
+	for name := range emittedByOtherWriters {
+		if st, okr := registered[name]; !okr || st != StatusEmitted {
+			t.Errorf("emittedByOtherWriters names %q, which is not a StatusEmitted vocabulary row", name)
 		}
 	}
 }

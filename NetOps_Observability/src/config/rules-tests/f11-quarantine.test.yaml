@@ -1,0 +1,88 @@
+# promtool unit tests for the F-11 quarantine alerts (ingest-integrity group).
+#
+# Acceptance criterion (same as security-posture.test.yaml): each rule fires on
+# a synthetic condition AND stays silent on the all-clear — an expression that
+# drifted off the emitted vocabulary fails the build, not the 3am operator.
+# These run in preflight-configs.sh (promtool test rules); paths are as mounted
+# by the preflight docker run.
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) VectorQuarantineSealFailures — ANY error on a *_quarantine transform is
+  #    a dropped event (fail-closed, INV-F11-06). Fires; a clean counter does
+  #    not.
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_errors_total{component_id="syslog_quarantine"}'
+        values: "0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: VectorQuarantineSealFailures
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              layer: ingest
+              component_id: syslog_quarantine
+            exp_annotations:
+              summary: "quarantine seal stage syslog_quarantine is failing — unattributable events are being DROPPED (fail-closed, INV-F11-06); check the router's sealing key delivery and the vector-router error log"
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_errors_total{component_id="syslog_quarantine"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VectorQuarantineSealFailures
+        exp_alerts: []
+
+  # 2) QuarantineGrowthAbnormal — six quiet hours, then a sustained surge of
+  #    ~100 events/min into the quarantine sink. The 1h intake (~6000) dwarfs
+  #    3x the prior-6h hourly baseline. The steady-trickle case must not fire.
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_id="opensearch_quarantine"}'
+        values: "0x360 0+100x120"
+    alert_rule_test:
+      - eval_time: 7h45m
+        alertname: QuarantineGrowthAbnormal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+            exp_annotations:
+              summary: "quarantine intake over the last hour is far above its 6h baseline — tenant attribution is failing at scale (stale/empty device_tenant.csv, or a fleet of unknown senders); triage via GET /api/quarantine"
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_sent_events_total{component_id="opensearch_quarantine"}'
+        values: "0+10x480"
+    alert_rule_test:
+      - eval_time: 7h45m
+        alertname: QuarantineGrowthAbnormal
+        exp_alerts: []
+
+  # 3) QuarantineAttributionStalled — the oldest envelope is > 7 days old for
+  #    6h straight: nobody is re-attributing and the docs are drifting toward
+  #    the ISM retention cliff. A young quarantine must not fire.
+  - interval: 1m
+    input_series:
+      - series: "netops_sec_quarantine_oldest_seconds"
+        values: "700000+60x500"
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: QuarantineAttributionStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              layer: ingest
+            exp_annotations:
+              summary: "the oldest quarantined event has been unattributed for over 7 days — assign its device to a tenant and POST /api/quarantine/reattribute before retention deletes it"
+  - interval: 1m
+    input_series:
+      - series: "netops_sec_quarantine_oldest_seconds"
+        values: "3600x500"
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: QuarantineAttributionStalled
+        exp_alerts: []
