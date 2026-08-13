@@ -85,6 +85,7 @@ const (
 	ackShutdownDelay = 60 * time.Second // H2: auto-stop after POST /api/done
 	resultShutdown   = 15 * time.Minute // H2: auto-stop after an unacked result
 	logRingSize      = 5000             // bounded buffers (§9)
+	watchdogTimeout  = 2 * time.Minute  // §9: bound the synchronous watchdog op
 )
 
 // CheckItem is one PASS/FIX line from prepare-host.sh --check.
@@ -124,6 +125,9 @@ type state struct {
 	installKey string // Idempotency-Key of the accepted install job (H5)
 	factsJSON  []byte
 	factsHash  string
+
+	watchdogBusy      bool // single-flight guard for the synchronous watchdog op
+	watchdogInstalled bool // POST /api/watchdog succeeded (surfaced in /api/state)
 
 	logMu   sync.Mutex
 	logBuf  []string // raw sanitized log lines (support bundle)
@@ -389,6 +393,10 @@ func upsertStage(stages []Stage, ev Stage) []Stage {
 // Returns false if another phase is already running (single-flight).
 func (s *server) runPhase(running Phase, done Phase, stdin []byte, extraEnv []string, onLine func(string), after func(err error, out []string), argv ...string) bool {
 	s.st.mu.Lock()
+	if s.st.watchdogBusy { // the synchronous watchdog op holds the run guard too
+		s.st.mu.Unlock()
+		return false
+	}
 	switch s.st.phase {
 	case PhaseChecking, PhasePreparing, PhaseInstalling:
 		s.st.mu.Unlock()
@@ -750,7 +758,8 @@ func (s *server) apiInstall(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"job": "existing"})
 		return
 	}
-	busy := s.st.phase == PhaseChecking || s.st.phase == PhasePreparing || s.st.phase == PhaseInstalling
+	busy := s.st.phase == PhaseChecking || s.st.phase == PhasePreparing ||
+		s.st.phase == PhaseInstalling || s.st.watchdogBusy
 	s.st.mu.Unlock()
 	if busy {
 		writeErr(w, http.StatusConflict, "another job is already running")
@@ -873,14 +882,15 @@ func (s *server) apiState(w http.ResponseWriter, r *http.Request) {
 		uiURL = "http://" + host + ":8000"
 	}
 	resp := map[string]any{
-		"phase":       s.st.phase,
-		"check_items": s.st.checks,
-		"error":       s.st.err,
-		"stages":      s.st.stages,
-		"ui_url":      uiURL,
-		"admin_pw":    s.st.adminPW,
-		"bundle":      filepath.Base(s.bundle),
-		"facts_hash":  s.st.factsHash,
+		"phase":              s.st.phase,
+		"check_items":        s.st.checks,
+		"error":              s.st.err,
+		"stages":             s.st.stages,
+		"ui_url":             uiURL,
+		"admin_pw":           s.st.adminPW,
+		"bundle":             filepath.Base(s.bundle),
+		"facts_hash":         s.st.factsHash,
+		"watchdog_installed": s.st.watchdogInstalled,
 	}
 	if s.st.result != nil {
 		res := map[string]any{
@@ -957,6 +967,222 @@ func (s *server) apiStream(w http.ResponseWriter, r *http.Request) {
 func (s *server) apiDone(w http.ResponseWriter, _ *http.Request) {
 	s.armShutdown(ackShutdownDelay, "success screen acknowledged")
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// API: watchdog handover (design §8 — privileged op #3)
+
+var (
+	ntfyTopicRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	emailRE     = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`)
+	httpsURLRE  = regexp.MustCompile(`^https://[A-Za-z0-9.-]+/[A-Za-z0-9/_-]+$`)
+	tokenRE     = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]{8,256}$`)
+	appURLRE    = regexp.MustCompile(`^https?://[A-Za-z0-9.:\[\]-]+$`)
+)
+
+// watchdogReq is the POST /api/watchdog body. The sudo password rides the same
+// TLS-only stdin path as prepare; everything else mirrors an
+// install-watchdog.sh flag and is validated here BEFORE sudo runs (defense in
+// depth — the script re-validates on its side).
+type watchdogReq struct {
+	Password     string `json:"password"`
+	NtfyTopic    string `json:"ntfy_topic"`
+	NtfyServer   string `json:"ntfy_server"`
+	NtfyToken    string `json:"ntfy_token"`
+	Email        string `json:"email"`
+	HCURL        string `json:"hc_url"`
+	WebhookURL   string `json:"webhook_url"`
+	WebhookToken string `json:"webhook_token"`
+}
+
+func checkHTTPSURL(field, v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) > 200 || !httpsURLRE.MatchString(v) {
+		return fmt.Errorf("%s: must be an https://host/path URL of at most 200 characters", field)
+	}
+	return nil
+}
+
+func checkToken(field, v string) error {
+	if v == "" {
+		return nil
+	}
+	if !tokenRE.MatchString(v) {
+		return fmt.Errorf("%s: must be 8-256 characters of A-Za-z0-9._~+/=-", field)
+	}
+	return nil
+}
+
+// validateWatchdogReq enforces the per-field shapes and the "at least one
+// notification channel" rule (ntfy_topic, email, hc_url, or webhook_url).
+// Every error names the offending field; secret values never appear in errors.
+func validateWatchdogReq(q *watchdogReq) error {
+	if q.NtfyTopic != "" && !ntfyTopicRE.MatchString(q.NtfyTopic) {
+		return fmt.Errorf("ntfy_topic: must be 1-64 characters of A-Za-z0-9_-")
+	}
+	if err := checkHTTPSURL("ntfy_server", q.NtfyServer); err != nil {
+		return err
+	}
+	if err := checkToken("ntfy_token", q.NtfyToken); err != nil {
+		return err
+	}
+	if q.Email != "" && (len(q.Email) > 254 || !emailRE.MatchString(q.Email)) {
+		return fmt.Errorf("email: not a valid address")
+	}
+	if err := checkHTTPSURL("hc_url", q.HCURL); err != nil {
+		return err
+	}
+	if err := checkHTTPSURL("webhook_url", q.WebhookURL); err != nil {
+		return err
+	}
+	if err := checkToken("webhook_token", q.WebhookToken); err != nil {
+		return err
+	}
+	if q.NtfyTopic == "" && q.Email == "" && q.HCURL == "" && q.WebhookURL == "" {
+		return fmt.Errorf("at least one of ntfy_topic, email, hc_url, or webhook_url is required")
+	}
+	return nil
+}
+
+// watchdogArgv builds the fixed watchdog install command (I1): every element is
+// a discrete argv entry — validated request values never touch a shell string.
+// The option order is fixed so tests can assert exact assembly. scriptPath is
+// server-derived (rootDir-resolved — the script lives under scripts/ in both
+// the extracted-bundle and source-tree layouts), never from the request.
+func watchdogArgv(scriptPath, appURL string, q *watchdogReq) []string {
+	argv := []string{"sudo", "-k", "-S", "-p", "", "bash", scriptPath, "--app-url", appURL}
+	if q.NtfyTopic != "" {
+		argv = append(argv, "--topic", q.NtfyTopic)
+	}
+	if q.NtfyServer != "" {
+		argv = append(argv, "--ntfy-server", q.NtfyServer)
+	}
+	if q.NtfyToken != "" {
+		argv = append(argv, "--ntfy-token", q.NtfyToken)
+	}
+	if q.Email != "" {
+		argv = append(argv, "--email", q.Email)
+	}
+	if q.HCURL != "" {
+		argv = append(argv, "--hc-url", q.HCURL)
+	}
+	if q.WebhookURL != "" {
+		argv = append(argv, "--webhook-url", q.WebhookURL)
+	}
+	if q.WebhookToken != "" {
+		argv = append(argv, "--webhook-token", q.WebhookToken)
+	}
+	return argv
+}
+
+// scrubArgv returns a copy of argv safe to log: the value following a
+// secret-bearing flag is replaced so tokens never reach the log ring or the
+// SSE stream (§8 — no secrets in logs).
+func scrubArgv(argv []string) []string {
+	out := append([]string(nil), argv...)
+	for i := 0; i < len(out)-1; i++ {
+		switch out[i] {
+		case "--ntfy-token", "--webhook-token":
+			out[i+1] = "<secret>"
+		}
+	}
+	return out
+}
+
+// apiWatchdog installs the stack-watchdog cron — the wizard's final privileged
+// op (design §8). The app URL comes from the install result held server-side,
+// never from the request. The handler is synchronous: the script finishes in
+// seconds and the caller needs the pass/fail verdict in the response; the SSE
+// stream still carries every output line live.
+func (s *server) apiWatchdog(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil {
+		// H3: the sudo password is accepted over TLS only — this server always
+		// serves TLS, so a cleartext arrival means a broken deployment.
+		writeErr(w, http.StatusForbidden, "the sudo password is accepted over TLS only")
+		return
+	}
+	var body watchdogReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body); err != nil || body.Password == "" {
+		writeErr(w, http.StatusBadRequest, "password required")
+		return
+	}
+	if err := validateWatchdogReq(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Single-flight against the run guard: acquire the watchdog slot only when
+	// no phase job is running AND a successful install result exists.
+	s.st.mu.Lock()
+	busy := s.st.phase == PhaseChecking || s.st.phase == PhasePreparing ||
+		s.st.phase == PhaseInstalling || s.st.watchdogBusy
+	appURL := ""
+	if !busy && s.st.result != nil && s.st.result.Status == "ok" {
+		appURL = firstNonEmpty(s.st.result.URL, s.st.uiURL)
+	}
+	acquired := !busy && appURL != ""
+	if acquired {
+		s.st.watchdogBusy = true
+	}
+	s.st.mu.Unlock()
+	if busy {
+		writeErr(w, http.StatusConflict, "another job is already running")
+		return
+	}
+	if !acquired {
+		writeErr(w, http.StatusConflict, "install first — the watchdog needs a successful install's stack URL")
+		return
+	}
+	defer func() {
+		s.st.mu.Lock()
+		s.st.watchdogBusy = false
+		s.st.mu.Unlock()
+	}()
+	if !appURLRE.MatchString(appURL) {
+		// Server-held state, but it crossed the engine boundary (§3: validate
+		// at every boundary before it becomes an argv element).
+		writeErr(w, http.StatusInternalServerError, "install result URL is malformed")
+		return
+	}
+
+	argv := watchdogArgv(filepath.Join(s.rootDir(), "scripts", "install-watchdog.sh"), appURL, &body)
+	pw := append([]byte(body.Password), '\n')
+	body.Password = ""
+	s.appendLog("installing the stack watchdog cron: " + strings.Join(scrubArgv(argv), " "))
+	rc, err := s.run.start(s.bundle, pw, nil, argv...)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not start the watchdog installer: "+err.Error())
+		return
+	}
+	var last string
+	done := make(chan error, 1)
+	go func() {
+		done <- s.stream(rc, func(l string) {
+			s.appendLog(l)
+			if strings.TrimSpace(l) != "" {
+				last = l // read only after <-done (channel happens-before)
+			}
+		})
+	}()
+	select {
+	case err = <-done:
+	case <-time.After(watchdogTimeout):
+		_ = rc.Close() // kills the child (killReader); the stream goroutine drains and exits
+		writeErr(w, http.StatusInternalServerError, fmt.Sprintf("watchdog install timed out after %s", watchdogTimeout))
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError,
+			"watchdog install failed: "+firstNonEmpty(strings.TrimSpace(last), err.Error()))
+		return
+	}
+	s.st.mu.Lock()
+	s.st.watchdogInstalled = true
+	s.st.mu.Unlock()
+	s.appendLog("stack watchdog installed")
+	writeJSON(w, map[string]bool{"watchdog_installed": true})
 }
 
 func (s *server) armShutdown(d time.Duration, reason string) {
@@ -1515,6 +1741,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/run/check", s.auth(s.apiCheck))
 	mux.HandleFunc("POST /api/run/prepare", s.auth(s.apiPrepare))
 	mux.HandleFunc("POST /api/run/install", s.auth(s.apiInstall))
+	mux.HandleFunc("POST /api/watchdog", s.auth(s.apiWatchdog))
 	mux.HandleFunc("POST /api/done", s.auth(s.apiDone))
 	return secureHeaders(mux)
 }

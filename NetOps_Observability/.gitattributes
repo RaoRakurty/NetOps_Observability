@@ -3,14 +3,19 @@ src/config/devices.lab-clos.yaml export-ignore
 # the bundle source of truth — anything NOT export-ignored ships to customers.
 scripts/bundle-autoupdate.sh export-ignore
 scripts/host-hygiene.sh export-ignore
-scripts/stack-watchdog.sh export-ignore
-scripts/stack-watchdog.env.example export-ignore
+# stack-watchdog.sh + env.example + install-watchdog.sh SHIP since 2026-08-13
+# (owner decision: watchdog with phone/email alerting in customer bundles) —
+# deliberately NOT export-ignored.
 scripts/pipeline-watchdog.sh export-ignore
 scripts/rca-canary.sh export-ignore
 scripts/tracker_staleness.py export-ignore
 scripts/cloud-discover-azure.py export-ignore
 scripts/demo_fill.py export-ignore
 scripts/lab/** export-ignore
+# The bundle BUILDER is operator tooling, not a customer artifact — and its
+# LAB_MARKERS regex contains the very literals the lab-leak guard greps for,
+# so shipping it would self-trip the content scan.
+scripts/make-installer.sh export-ignore
 docs/** export-ignore
 README.md export-ignore
 deployment/docker/mock-servicenow/** export-ignore

@@ -437,7 +437,7 @@ export function isInternalEntity(raw: string): boolean {
 
 // mentionsInternal — true when ANY part of the entity is platform infra / a
 // monitoring agent. Used for ENTITY-LEVEL display filtering: a path episode like
-// "api->10.70.245.120" must NOT show to the operator (its source is a platform
+// "api->192.0.2.120" must NOT show to the operator (its source is a platform
 // service), even though isInternalEntity() (all-parts) returns false for it.
 // (Object-level HIDING still uses the conservative all-parts isInternalEntity so a
 // real customer incident touching some infra is never hidden wholesale.)

@@ -8,7 +8,7 @@ import { buildTimeline, cleanVal, isStateEvent, stateLabel, stateReason } from "
 import type { ChangeEvent, HealthSignal } from "./types";
 
 const hs = (time: string, over: Partial<HealthSignal> = {}): HealthSignal => ({
-  time, app: "correlix-faultlab", resource: "vm-1", signal: "cloud_resource_health",
+  time, app: "correlix-demoapp", resource: "vm-1", signal: "cloud_resource_health",
   state: "down", metric: "", current: "", baseline: "—", severity: "critical", source: "aws", ...over,
 });
 
@@ -135,7 +135,7 @@ describe("buildTimeline", () => {
   it("orders newest-first and merges health + change feeds", () => {
     const change: ChangeEvent = {
       time: new Date(Date.UTC(2026, 6, 15, 11, 0, 0)).toISOString(),
-      app: "correlix-faultlab", resource: "sg-1", changeType: "security_policy_change",
+      app: "correlix-demoapp", resource: "sg-1", changeType: "security_policy_change",
       actor: "role/deployer", source: "cloudtrail", confidence: "confirmed", relatedSymptoms: [],
     };
     const health = hs(new Date(Date.UTC(2026, 6, 15, 10, 0, 0)).toISOString());

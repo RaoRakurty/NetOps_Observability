@@ -15,18 +15,35 @@
 # Alerts fire only on a state TRANSITION (up->down, down->up), so a sustained
 # outage produces one push, not one per minute.
 #
-# Config (NTFY_TOPIC, HC_PING_URL, ...) lives in stack-watchdog.env next to
-# this script — see stack-watchdog.env.example. No secrets are baked in here.
+# Config (NTFY_TOPIC, HC_PING_URL, WATCHDOG_EMAIL, ...) lives in
+# stack-watchdog.env next to this script, or — for packaged installs, written
+# by install-watchdog.sh — in /etc/correlix/stack-watchdog.env. The sibling
+# file wins when both exist; WATCHDOG_ENV overrides both. See
+# stack-watchdog.env.example for every knob. No secrets are baked in here.
 
 set -uo pipefail
 export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${WATCHDOG_ENV:-$SCRIPT_DIR/stack-watchdog.env}"
-STATE_FILE="${WATCHDOG_STATE:-$SCRIPT_DIR/.stack-watchdog.state}"
+# Config resolution: explicit WATCHDOG_ENV > sibling env file (the original
+# layout — unchanged) > the packaged-install location install-watchdog.sh
+# writes (root-owned 0600; the cron line it installs passes WATCHDOG_ENV
+# explicitly, so this fallback only matters for by-hand runs).
+SYSTEM_ENV_FILE="/etc/correlix/stack-watchdog.env"
+if [ -n "${WATCHDOG_ENV:-}" ]; then
+  ENV_FILE="$WATCHDOG_ENV"
+elif [ -f "$SCRIPT_DIR/stack-watchdog.env" ]; then
+  ENV_FILE="$SCRIPT_DIR/stack-watchdog.env"
+else
+  ENV_FILE="$SYSTEM_ENV_FILE"
+fi
 
 # shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && { set -a; . "$ENV_FILE"; set +a; }
+
+# Resolved AFTER the env file so WATCHDOG_STATE may be set there too (default:
+# state lives next to the script; cron runs as root, which owns both).
+STATE_FILE="${WATCHDOG_STATE:-$SCRIPT_DIR/.stack-watchdog.state}"
 
 PROJECT="${COMPOSE_PROJECT:-netops}"
 APP_URL="${APP_URL:-http://localhost:8000/}"
@@ -43,23 +60,72 @@ NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
 # metric-alerting engine, so if it dies every metric-based alert silently stops
 # and nothing else would notice. cadvisor/node-exporter/grafana/kafka-exporter
 # stay out — they belong to the optional self-monitoring profile.
-EXPECTED_SERVICES="api clickhouse correlation frontend goflow2 grafana kafka \
+# WATCHDOG_SERVICES (space-separated compose service names) overrides the
+# default below. Packaged installs write the customer base set (no
+# self-monitoring / osd add-ons); the default preserves the original layout.
+EXPECTED_SERVICES="${WATCHDOG_SERVICES:-api clickhouse correlation frontend goflow2 grafana kafka \
 nginx opensearch opensearch-dashboards postgres prober redis \
-syslog-ng vector-aggregator vector-router victoria vmalert"
+syslog-ng vector-aggregator vector-router victoria vmalert}"
 
 push() {  # title, tags, priority, body
-  [ -n "${NTFY_TOPIC:-}" ] || return 0
-  curl -fsS -m 10 \
-    -H "Title: $1" -H "Tags: $2" -H "Priority: $3" \
+  if [ -z "${NTFY_TOPIC:-}" ]; then
+    # ntfy can only publish TO A TOPIC; email fan-out rides the topic publish.
+    # WATCHDOG_EMAIL alone is therefore a misconfiguration — name it (§16.1)
+    # instead of silently delivering nothing.
+    [ -n "${WATCHDOG_EMAIL:-}" ] &&
+      echo "watchdog: WATCHDOG_EMAIL is set but NTFY_TOPIC is empty — ntfy requires a topic, notification NOT sent" >&2
+    return 0
+  fi
+  local hdr=(-H "Title: $1" -H "Tags: $2" -H "Priority: $3")
+  # Authenticated (self-hosted) ntfy: bearer token on every publish.
+  [ -n "${NTFY_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $NTFY_TOKEN")
+  # Per-message email fan-out: the ntfy server also delivers this notification
+  # to the address (needs a server with SMTP configured; ntfy.sh has it).
+  [ -n "${WATCHDOG_EMAIL:-}" ] && hdr+=(-H "Email: $WATCHDOG_EMAIL")
+  curl -fsS -m 10 "${hdr[@]}" \
     -d "$4" "$NTFY_SERVER/$NTFY_TOPIC" -o /dev/null \
     || echo "watchdog: ntfy push failed" >&2
 }
 
-# --test sends one push so you can confirm your phone is subscribed, then exits.
+json_str() {  # encode $1 as a JSON string literal (incl. surrounding quotes)
+  local s
+  # Drop control chars JSON forbids raw; \n, \r and \t survive and are escaped
+  # below (detail text carries newline-joined problem lists and log excerpts).
+  s=$(printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037')
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '"%s"' "$s"
+}
+
+# Generic enterprise channel: one JSON POST per up<->down transition to
+# WATCHDOG_WEBHOOK_URL (Slack / Teams / Opsgenie incoming webhooks, or any
+# relay). Optional WATCHDOG_WEBHOOK_TOKEN rides as a bearer header. Payload:
+#   {"host":"...","status":"down|up|test","detail":"...","ts":"..."}
+notify_webhook() {  # status, detail
+  [ -n "${WATCHDOG_WEBHOOK_URL:-}" ] || return 0
+  local hdr=(-H "Content-Type: application/json")
+  [ -n "${WATCHDOG_WEBHOOK_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $WATCHDOG_WEBHOOK_TOKEN")
+  local payload
+  payload=$(printf '{"host":%s,"status":%s,"detail":%s,"ts":%s}' \
+    "$(json_str "$(hostname)")" "$(json_str "$1")" \
+    "$(json_str "$2")" "$(json_str "$(date -Is)")")
+  curl -fsS -m 10 "${hdr[@]}" -d "$payload" "$WATCHDOG_WEBHOOK_URL" -o /dev/null \
+    || echo "watchdog: webhook notify failed" >&2
+}
+
+# --test exercises every configured channel so you can confirm delivery
+# (phone subscribed, email arriving, webhook wired), then exits.
 if [ "${1:-}" = "--test" ]; then
   push "NetOps watchdog test" "test_tube" "default" \
     "Test alert from $(hostname) at $(date -Is). If you see this, alerting works."
   echo "Sent test push to topic '${NTFY_TOPIC:-<unset>}' on $NTFY_SERVER"
+  if [ -n "${WATCHDOG_WEBHOOK_URL:-}" ]; then
+    notify_webhook "test" "Test notification from $(hostname) at $(date -Is). If you see this, the webhook channel works."
+    echo "Sent test webhook POST to $WATCHDOG_WEBHOOK_URL"
+  fi
   exit 0
 fi
 
@@ -508,6 +574,7 @@ if [ ${#problems[@]} -eq 0 ]; then
   if [ "$prev" = "down" ]; then
     push "✅ NetOps stack RECOVERED on $(hostname)" "white_check_mark" "default" \
       "All $nsvc services healthy again at $(date -Is)."
+    notify_webhook "up" "All $nsvc services healthy again."
   fi
   echo up > "$STATE_FILE"
   exit 0
@@ -517,6 +584,7 @@ msg=$(printf '%s\n' "${problems[@]}")
 [ -n "${HC_PING_URL:-}" ] && curl -fsS -m 10 --data-raw "$msg" "${HC_PING_URL%/}/fail" -o /dev/null
 if [ "$prev" = "up" ]; then
   push "🚨 NetOps stack DOWN on $(hostname)" "rotating_light" "urgent" "$msg"
+  notify_webhook "down" "$msg"
 fi
 echo down > "$STATE_FILE"
 echo "watchdog: DOWN -> $msg" >&2

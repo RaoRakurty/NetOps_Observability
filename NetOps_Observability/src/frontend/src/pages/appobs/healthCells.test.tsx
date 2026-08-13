@@ -19,7 +19,7 @@ afterEach(cleanup);
 // the real shape the Azure Resource Health poller emits: no metric_name, no
 // value, no baseline — a declared state plus reasonType (cloud-ingest/azure.py).
 const stateEvent: HealthSignal = {
-  time: "2026-07-15T10:00:00.000Z", app: "correlix-faultlab", resource: "vm-web-1",
+  time: "2026-07-15T10:00:00.000Z", app: "correlix-demoapp", resource: "vm-web-1",
   signal: "cloud_resource_health", state: "down",
   metric: "—", current: "—", baseline: "—",
   severity: "critical", source: "azure", reason: "Customer Initiated",

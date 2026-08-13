@@ -409,6 +409,39 @@
           <dt>Password</dt><dd><span id="done-pass"></span><span class="tag adv">SHOWN ONCE</span></dd>
         </dl>
       </div>
+      <div class="sect"><div class="cap">KEEP WATCH ON THIS STACK — OPTIONAL</div>
+        <p class="lede" style="margin-bottom:12px">An external watchdog cron checks every service, the ingress, and telemetry flow each minute — independent of the stack, so it can report the stack's death. Configure at least one channel.</p>
+        <div class="facts">
+          <div class="field"><label for="wd-topic">NTFY TOPIC — PHONE PUSH</label>
+            <input type="text" id="wd-topic" autocomplete="off">
+            <div class="hint">high-entropy name generated for you — a guessable public topic is not private</div></div>
+          <div class="field"><label for="wd-email">EMAIL — VIA NTFY FORWARDING</label>
+            <input type="text" id="wd-email" placeholder="noc@example.com" autocomplete="off"></div>
+          <div class="field"><label for="wd-hc">HEALTHCHECKS PING URL — DEAD-MAN'S SWITCH</label>
+            <input type="text" id="wd-hc" placeholder="https://healthchecks ping URL" autocomplete="off">
+            <div class="hint">content-free pings; email/SMS/PagerDuty fan-out configured on the healthchecks side</div></div>
+          <div class="field"><label for="wd-webhook">WEBHOOK URL — SLACK / TEAMS / RELAY</label>
+            <input type="text" id="wd-webhook" placeholder="https://hooks.example.com/…" autocomplete="off"></div>
+        </div>
+        <details style="margin:6px 0 2px">
+          <summary class="hint" style="cursor:pointer">Enterprise ntfy — self-hosted server / access token · webhook token</summary>
+          <div class="facts" style="margin-top:8px">
+            <div class="field"><label for="wd-server">NTFY SERVER — SELF-HOSTED, AUTHENTICATED</label>
+              <input type="text" id="wd-server" placeholder="https://ntfy.corp.example" autocomplete="off"></div>
+            <div class="field"><label for="wd-token">NTFY ACCESS TOKEN</label>
+              <input type="password" id="wd-token" autocomplete="off"></div>
+            <div class="field"><label for="wd-whtoken">WEBHOOK BEARER TOKEN</label>
+              <input type="password" id="wd-whtoken" autocomplete="off"></div>
+          </div>
+        </details>
+        <div class="field"><label for="wd-sudo">SUDO PASSWORD — THE CRON INSTALL IS THE ONE PRIVILEGED ACTION HERE</label>
+          <input type="password" id="wd-sudo" autocomplete="off"></div>
+        <div class="err" id="wd-err"></div>
+        <div id="wd-done" hidden></div>
+        <div class="btns" style="margin-top:2px;padding-top:8px">
+          <button class="btn" id="b-watchdog">Enable watchdog</button>
+        </div>
+      </div>
       <div class="btns">
         <button class="btn ghost" id="b-export2">Download installation profile</button>
         <span class="spacer"></span>
@@ -749,6 +782,41 @@ async function onResult(d) {
   doneShown = true; installing = false;
   show('done');
 }
+
+/* ---------- watchdog handover ---------- */
+(function initWatchdog(){
+  const a = new Uint8Array(12); crypto.getRandomValues(a);
+  $('wd-topic').value = 'cx-' + Array.from(a, b => b.toString(16).padStart(2,'0')).join('');
+})();
+$('b-watchdog').addEventListener('click', async () => {
+  const body = {
+    password:      $('wd-sudo').value,
+    ntfy_topic:    $('wd-topic').value.trim(),
+    email:         $('wd-email').value.trim(),
+    hc_url:        $('wd-hc').value.trim(),
+    webhook_url:   $('wd-webhook').value.trim(),
+    ntfy_server:   $('wd-server').value.trim(),
+    ntfy_token:    $('wd-token').value,
+    webhook_token: $('wd-whtoken').value
+  };
+  Object.keys(body).forEach(k => { if (!body[k]) delete body[k]; });
+  if (!body.password) { $('wd-err').textContent = 'sudo password required to install the cron'; return; }
+  if (!body.ntfy_topic && !body.email && !body.hc_url && !body.webhook_url) {
+    $('wd-err').textContent = 'configure at least one channel'; return;
+  }
+  $('wd-err').textContent = ''; $('b-watchdog').disabled = true;
+  try {
+    await api('/api/watchdog', {method:'POST', body: JSON.stringify(body)});
+    ['wd-sudo','wd-token','wd-whtoken'].forEach(id => { $(id).value = ''; });
+    $('wd-done').hidden = false;
+    $('wd-done').innerHTML = fact('ok','Watchdog installed — checks every minute, alerts on up/down transitions',
+      'config: /etc/correlix/stack-watchdog.env');
+    $('b-watchdog').textContent = 'Watchdog enabled';
+  } catch (e) {
+    $('wd-err').textContent = e.message;
+    $('b-watchdog').disabled = false;
+  }
+});
 
 /* ---------- boot ---------- */
 (async function boot(){

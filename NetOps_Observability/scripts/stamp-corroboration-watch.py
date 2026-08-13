@@ -11,7 +11,7 @@ single corr_object reaching `confirmed` with `active_probe` in trusted_modalitie
 
 Usage:
     NM_USER=admin NM_PASS=... NM_BASE=http://localhost:8000 \
-        python3 scripts/stamp-corroboration-watch.py [--target 10.70.245.120] [--interval 15]
+        python3 scripts/stamp-corroboration-watch.py [--target 192.0.2.120] [--interval 15]
 
 Reads creds from env (NM_USER/NM_PASS/NM_BASE) so no secret is hard-coded.
 Press Ctrl-C to stop. Prints a one-line status each tick and a loud banner the
@@ -78,7 +78,7 @@ def probe_corroborated(token):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", default="10.70.245.120", help="probe target host (the reflector)")
+    ap.add_argument("--target", default="192.0.2.120", help="probe target host (the reflector)")
     ap.add_argument("--interval", type=int, default=15)
     args = ap.parse_args()
 

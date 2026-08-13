@@ -192,11 +192,19 @@ git -C "$ROOT" archive --format=tar.gz --prefix=NetOps_Observability/ -o "$SRC_O
 # 5b. Lab-leak guard (audit 2026-07-20): the tarball is git-archive-of-HEAD, so
 #     a single mistaken commit can ship lab infrastructure to a customer. Fail
 #     the build if any lab marker appears in the archive's paths or contents.
-LAB_MARKERS='10\.70\.245\.120|rao123|correlix-faultlab|healthchecks\.io|hc-ping|ntfy\.sh|8d0f8a4e-c36e'
-LAB_PATHS='scripts/lab/|scripts/bundle-autoupdate|scripts/stack-watchdog|scripts/host-hygiene|docs/GTM_PLAN|docs/TRACKER|mock-servicenow/|mock-nms/|brand-samples/'
-if tar -tzf "$SRC_OUT" | grep -qE "$LAB_PATHS"; then
+#     `healthchecks.io` and `ntfy.sh` stopped being lab markers on 2026-08-13:
+#     the stack watchdog (stack-watchdog.sh + env.example + install-watchdog.sh)
+#     now SHIPS in customer bundles (owner decision) and its docs must name
+#     those services. The credential-bearing forms remain fatal: `hc-ping`
+#     (the ping-URL domain — a live check UUID) and the lab topic id.
+LAB_MARKERS='10\.70\.245\.120|rao123|correlix-faultlab|hc-ping|8d0f8a4e-c36e'
+LAB_PATHS='scripts/lab/|scripts/bundle-autoupdate|scripts/host-hygiene|docs/GTM_PLAN|docs/TRACKER|mock-servicenow/|mock-nms/|brand-samples/'
+# grep -v '/$': git archive emits a bare DIRECTORY entry for a tree whose
+# files are all export-ignored (mock-nms/, scripts/lab/, ...) — an empty dir
+# ships no content, so only match actual files.
+if tar -tzf "$SRC_OUT" | grep -v '/$' | grep -qE "$LAB_PATHS"; then
   echo "FATAL: lab-only path leaked into the customer source archive:" >&2
-  tar -tzf "$SRC_OUT" | grep -E "$LAB_PATHS" | head >&2
+  tar -tzf "$SRC_OUT" | grep -v '/$' | grep -E "$LAB_PATHS" | head >&2
   exit 1
 fi
 if tar -xzOf "$SRC_OUT" 2>/dev/null | grep -qaE "$LAB_MARKERS"; then

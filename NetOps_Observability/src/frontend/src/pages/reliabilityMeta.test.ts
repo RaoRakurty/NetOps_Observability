@@ -69,8 +69,8 @@ describe("reliabilityMeta", () => {
     expect(b.display).toBe("DC Spine-1");
 
     // an ip:ip pair is honestly a "Path segment", not a fabricated circuit name
-    const c = offenderDisplay("root_entity:10.70.245.120:192.168.100.5");
+    const c = offenderDisplay("root_entity:192.0.2.120:192.168.100.5");
     expect(c.display).toBe("Path segment");
-    expect(c.secondary).toBe("10.70.245.120:192.168.100.5");
+    expect(c.secondary).toBe("192.0.2.120:192.168.100.5");
   });
 });

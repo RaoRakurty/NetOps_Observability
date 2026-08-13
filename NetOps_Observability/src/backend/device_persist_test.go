@@ -59,8 +59,8 @@ func TestDeletedDeviceStaysDeleted(t *testing.T) {
 	st := newDeviceStore(devicesPath())
 	a.SetStore(st)
 
-	const id = "snmp-10.70.245.120"
-	if err := a.Upsert(models.Device{ID: id, Name: "lab-sw", Address: "10.70.245.120"}); err != nil {
+	const id = "snmp-192.0.2.120"
+	if err := a.Upsert(models.Device{ID: id, Name: "lab-sw", Address: "192.0.2.120"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Delete(id); err != nil {
