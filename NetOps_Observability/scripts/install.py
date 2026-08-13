@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import os
 import re
@@ -61,8 +62,78 @@ DEFAULT_PROFILES = "embedded-bus,prober,osd,self-monitoring,sso"
 def info(msg: str) -> None:    print(f"[info ] {msg}")
 def ok(msg: str) -> None:      print(f"[ ok  ] {msg}")
 def warn(msg: str) -> None:    print(f"[warn ] {msg}", file=sys.stderr)
-def fail(msg: str) -> "None":  print(f"[fail ] {msg}", file=sys.stderr); sys.exit(1)
-def step(msg: str) -> None:    print(); print(f"=== {msg} ===")
+
+
+def fail(msg: str) -> "None":
+    _stage_fail(msg)
+    print(f"[fail ] {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def step(msg: str, stage: "str | None" = None) -> None:
+    if stage is not None:
+        _stage_start(stage, msg)
+    print()
+    print(f"=== {msg} ===")
+
+
+# ---- GUI progress markers (design gui-installer-2026-08.md §6, phase P0) ----
+# One ADDITIONAL stdout line per stage transition: `@CX@ {json}` — the human
+# output is unchanged, parsers ignore non-marker lines. Activated by
+# --progress-json or CORRELIX_PROGRESS_JSON=1 (set by the GUI when spawning).
+# The terminal `result` marker carries url + admin_user ONLY — NEVER a
+# password (the GUI reads credentials via its own trusted channel).
+
+# Stage ids in contract order. `step(..., stage=)` call sites must use exactly
+# these ids; tests/test_installer_gui_contract.py pins the set.
+PROGRESS_STAGES = (
+    "prereq", "scaffold", "env", "sizing", "tls-env", "data-dirs",
+    "bundle", "up-a", "mint", "up-b", "status",
+    "bootstrap-os", "bootstrap-kc", "bootstrap-grafana",
+)
+
+# Module state, not a hidden singleton: activation + the one currently-open
+# stage, so the NEXT stage start (or the run end) closes it with "ok".
+_PROGRESS: dict = {
+    "on": os.environ.get("CORRELIX_PROGRESS_JSON", "") == "1",
+    "stage": None,  # (id, title) of the open stage, or None
+}
+
+
+def _progress(obj: dict) -> None:
+    """Emit one marker line, unbuffered (the GUI streams stdout live)."""
+    if not _PROGRESS["on"]:
+        return
+    print("@CX@ " + json.dumps(obj, separators=(",", ":")), flush=True)
+
+
+def _stage_close_ok() -> None:
+    if _PROGRESS["stage"] is not None:
+        sid, title = _PROGRESS["stage"]
+        _PROGRESS["stage"] = None
+        _progress({"kind": "stage", "id": sid, "title": title, "status": "ok"})
+
+
+def _stage_start(sid: str, title: str) -> None:
+    _stage_close_ok()
+    _PROGRESS["stage"] = (sid, title)
+    _progress({"kind": "stage", "id": sid, "title": title, "status": "start"})
+
+
+def _stage_fail(message: str) -> None:
+    """fail() path: close the open stage as failed, then the terminal result."""
+    if _PROGRESS["stage"] is not None:
+        sid, title = _PROGRESS["stage"]
+        _PROGRESS["stage"] = None
+        _progress({"kind": "stage", "id": sid, "title": title,
+                   "status": "fail", "message": message})
+    _progress({"kind": "result", "status": "fail"})
+
+
+def _result_ok(url: str, admin_user: str) -> None:
+    _stage_close_ok()
+    _progress({"kind": "result", "status": "ok", "url": url,
+               "admin_user": admin_user})
 
 # ---- secret generation ------------------------------------------------------
 
@@ -109,9 +180,9 @@ def generate_token(bytes_: int = 32) -> str:
 
 # ---- prerequisite checks ----------------------------------------------------
 
-def check_docker() -> None:
+def check_docker(bootstrap_docker: "str | None" = None) -> None:
     if shutil.which("docker") is None:
-        _maybe_bootstrap_ubuntu("docker is not installed.")
+        _maybe_bootstrap_ubuntu("docker is not installed.", bootstrap_docker)
         # If the bootstrap ran, we still exit afterwards — the user must
         # re-login for the docker group to take effect. _maybe_bootstrap
         # never returns normally on a missing Docker.
@@ -122,7 +193,8 @@ def check_docker() -> None:
         capture_output=True, text=True,
     )
     if res.returncode != 0:
-        _maybe_bootstrap_ubuntu("Docker Compose v2 plugin is not available.")
+        _maybe_bootstrap_ubuntu("Docker Compose v2 plugin is not available.",
+                                bootstrap_docker)
         fail(
             "Docker Compose v2 plugin is not available. The legacy "
             "`docker-compose` binary is not supported by this installer. "
@@ -151,11 +223,16 @@ def _is_debian_family() -> bool:
     )
 
 
-def _maybe_bootstrap_ubuntu(reason: str) -> None:
+def _maybe_bootstrap_ubuntu(reason: str, choice: "str | None" = None) -> None:
     """Offer to run scripts/bootstrap-ubuntu.sh when Docker is missing on
     a Debian-family host. Exits the installer afterwards either way —
     the user has to log out + back in for the docker group to take
-    effect before re-running install.py."""
+    effect before re-running install.py.
+
+    `choice` is the --bootstrap-docker flag ("yes"/"no"): like --tls in
+    resolve_tls_choice, the flag WINS over the prompt so a non-TTY run is
+    never blocked here. Without the flag, behavior is unchanged (interactive
+    prompt; EOF means no)."""
     if not _is_debian_family():
         return  # caller will fall through to the generic fail() message
     here = Path(__file__).resolve().parent
@@ -165,14 +242,18 @@ def _maybe_bootstrap_ubuntu(reason: str) -> None:
 
     print()
     warn(reason)
-    print(f"\n  This is an Ubuntu/Debian host, and {script.name} can install everything")
-    print( "  the stack needs (Docker Engine, Compose v2, OpenSearch sysctl, docker group).")
-    print( "  You'll be prompted for your sudo password.")
-    print()
-    try:
-        ans = input("  Install Docker now? [y/N] ").strip().lower()
-    except EOFError:
-        ans = "n"
+    if choice is not None:
+        info(f"--bootstrap-docker {choice} given — skipping the prompt")
+        ans = "y" if choice == "yes" else "n"
+    else:
+        print(f"\n  This is an Ubuntu/Debian host, and {script.name} can install everything")
+        print( "  the stack needs (Docker Engine, Compose v2, OpenSearch sysctl, docker group).")
+        print( "  You'll be prompted for your sudo password.")
+        print()
+        try:
+            ans = input("  Install Docker now? [y/N] ").strip().lower()
+        except EOFError:
+            ans = "n"
     if ans not in ("y", "yes"):
         fail("aborted. Install Docker manually, then re-run install.py.")
 
@@ -274,9 +355,11 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: "Path | None") 
         profile = doc.get("profile") or None
     host = rp.detect_host(data_path=str(env_path.parent))
     if profile is None:
+        # Shared thresholds: resource_planner.suggest_profile is the single
+        # source of the auto-profile mapping (also served to the GUI via
+        # `resource_planner.py --detect-json`).
         gib = host["memory_bytes"] / (1 << 30)
-        profile = ("demo" if gib < 24 else "small" if gib < 48 else
-                   "medium" if gib < 96 else "large")
+        profile = rp.suggest_profile(host["memory_bytes"])
         info(f"auto-selected profile '{profile}' for {gib:.0f} GiB host")
     env_text = env_path.read_text() if env_path.exists() else ""
     legacy = rp.read_env_overrides(env_text)
@@ -1308,36 +1391,58 @@ def resolve_tls_choice(args) -> bool:
     return answer in ("", "y", "yes")
 
 
-def enable_tls_env(env_path: Path) -> None:
-    """Line-surgery the TLS values into .env (idempotent): substitute existing
-    keys in place, append the missing ones under one header. Never rewrites
-    the file wholesale — operator edits survive, same doctrine as rotation."""
+def splice_env_values(env_path: Path, values: dict[str, str],
+                      header: list[str], label: str) -> None:
+    """Line-surgery `values` into .env (idempotent): substitute existing keys
+    in place, append the missing ones under one header. Never rewrites the
+    file wholesale — operator edits survive, same doctrine as rotation."""
     text = env_path.read_text()
     lines = text.splitlines()
     present: dict[str, int] = {}
     for i, line in enumerate(lines):
         key = line.split("=", 1)[0].strip()
-        if key in TLS_ENV_VALUES:
+        if key in values:
             present[key] = i
     changed = False
     for key, idx in present.items():
-        want = f"{key}={TLS_ENV_VALUES[key]}"
+        want = f"{key}={values[key]}"
         if lines[idx] != want:
             lines[idx] = want
             changed = True
-    missing = [k for k in TLS_ENV_VALUES if k not in present]
+    missing = [k for k in values if k not in present]
     if missing:
         lines.append("")
-        lines.append("# ---- TLS/mTLS mesh (tracker #151) — written by install.py --tls=yes ----")
-        lines.append("# Values pair with deployment/docker/compose.tls.yml; keep in lockstep.")
+        lines.extend(header)
         for k in missing:
-            lines.append(f"{k}={TLS_ENV_VALUES[k]}")
+            lines.append(f"{k}={values[k]}")
         changed = True
     if changed:
         env_path.write_text("\n".join(lines) + "\n")
-        ok(f"TLS variables set in .env ({len(present)} updated, {len(missing)} added)")
+        ok(f"{label} set in .env ({len(present)} updated, {len(missing)} added)")
     else:
-        info("TLS variables already present in .env")
+        info(f"{label} already present in .env")
+
+
+def enable_tls_env(env_path: Path) -> None:
+    """Line-surgery the TLS values into .env (idempotent)."""
+    splice_env_values(
+        env_path, TLS_ENV_VALUES,
+        ["# ---- TLS/mTLS mesh (tracker #151) — written by install.py --tls=yes ----",
+         "# Values pair with deployment/docker/compose.tls.yml; keep in lockstep."],
+        "TLS variables")
+
+
+def enable_snmp_discovery_env(env_path: Path, cidrs: str) -> None:
+    """--snmp-discovery: opt the install in to SNMP discovery over the given
+    (already validated) CIDR ranges. Line surgery, same doctrine as
+    enable_tls_env — idempotent, operator edits elsewhere in .env survive.
+    Discovery stays OPT-IN: without the flag the template defaults
+    (disabled, empty scope) are untouched."""
+    splice_env_values(
+        env_path,
+        {"ENABLE_SNMP_DISCOVERY": "true", "SNMP_CIDR_RANGES": cidrs},
+        ["# ---- SNMP discovery scope — written by install.py --snmp-discovery ----"],
+        "SNMP discovery variables")
 
 
 def augment_profiles_for_tls(env_path: Path) -> None:
@@ -1386,7 +1491,8 @@ def wait_for_minted_certs(root: Path, timeout_s: int = 300) -> None:
     """Phase-A gate: block until the api has minted every issuance surface.
     A timeout is a loud install FAILURE — activating fail-closed wrappers on
     a half-minted tree would take the whole stack down."""
-    step(f"waiting for the internal CA to mint service identities (≤{timeout_s}s)")
+    step(f"waiting for the internal CA to mint service identities (≤{timeout_s}s)",
+         stage="mint")
     deadline = time.time() + timeout_s
     remaining = list(TLS_MINT_SENTINELS)
     while time.time() < deadline:
@@ -1845,9 +1951,40 @@ def main() -> None:
                     help="ADVANCED: use an external Kafka-compatible broker instead of the "
                          "embedded one. Disables the embedded-bus profile and points every "
                          "service at this bootstrap list.")
+    ap.add_argument("--progress-json", action="store_true",
+                    help="Emit machine-readable '@CX@ {json}' progress markers on "
+                         "stdout alongside the human output (GUI installer contract; "
+                         "also activated by CORRELIX_PROGRESS_JSON=1).")
+    ap.add_argument("--bootstrap-docker", choices=["yes", "no"], default=None,
+                    help="Answer the Ubuntu/Debian Docker-bootstrap prompt "
+                         "non-interactively — the flag wins over the prompt, "
+                         "exactly like --tls. Without it, non-TTY behavior is "
+                         "unchanged.")
+    ap.add_argument("--snmp-discovery", default=None, metavar="CIDR[,CIDR]",
+                    help="Enable SNMP discovery scoped to these CIDR ranges: sets "
+                         "ENABLE_SNMP_DISCOVERY=true + SNMP_CIDR_RANGES in .env "
+                         "(line surgery on an existing .env). Absent flag keeps "
+                         "discovery off (the opt-in default).")
     args = ap.parse_args()
+    if args.progress_json:
+        _PROGRESS["on"] = True
     if args.bundle:
         args.offline = True
+
+    # --snmp-discovery: validate every CIDR at the boundary (§3) BEFORE any
+    # install step runs — an invalid range must fail fast, not after compose up.
+    if args.snmp_discovery is not None:
+        cidrs = [c.strip() for c in args.snmp_discovery.split(",") if c.strip()]
+        if not cidrs:
+            fail("--snmp-discovery needs at least one CIDR, "
+                 "e.g. --snmp-discovery 10.70.0.0/16")
+        for c in cidrs:
+            try:
+                ipaddress.ip_network(c, strict=False)
+            except ValueError:
+                fail(f"--snmp-discovery: {c!r} is not a valid CIDR "
+                     "(e.g. 10.70.0.0/16)")
+        args.snmp_discovery = ",".join(cidrs)
 
     # External-broker mode: the embedded Kafka must not start, and the
     # bootstrap list must actually be usable. Reachability is best-effort
@@ -1906,7 +2043,7 @@ def main() -> None:
         # something has actually started — a pre-start rotation is file-only.
         if env_path.exists() and sr.install_started(
                 root, _parse_env(env_path).get("COMPOSE_PROFILES", "")):
-            check_docker()
+            check_docker(args.bootstrap_docker)
         _rotated, failures = rotate_secrets(
             root, compose_dir, env_path, strict=False,
             allow_kafka_wipe=args.rotate_kafka_cluster_id,
@@ -1918,13 +2055,13 @@ def main() -> None:
             fail(f"{failures} secret(s) could not be rotated (details above)")
         return
 
-    step("checking prerequisites")
-    check_docker()
+    step("checking prerequisites", stage="prereq")
+    check_docker(args.bootstrap_docker)
 
-    step("validating scaffold")
+    step("validating scaffold", stage="scaffold")
     validate_scaffold(root)
 
-    step("generating environment")
+    step("generating environment", stage="env")
     # --reset-env on a STARTED install is a rotation, not a regeneration: the
     # stores already hold most of these credentials, and rewriting the template
     # would also revert every operator setting in .env.
@@ -1947,8 +2084,13 @@ def main() -> None:
                                 profiles=args.profiles, broker_urls=args.broker_urls,
                                 retention_profile=args.retention_profile)
 
+    # --snmp-discovery: same line-surgery doctrine as --tls, so a fresh
+    # template and an existing operator-edited .env converge identically.
+    if args.snmp_discovery:
+        enable_snmp_discovery_env(env_path, args.snmp_discovery)
+
     if args.plan_resources:
-        step("planning resources (#102)")
+        step("planning resources (#102)", stage="sizing")
         run_resource_plan(env_path, args.plan_resources, args.sizing_file)
 
     # The one transport-security question (tracker #151 delivery shape).
@@ -1956,13 +2098,14 @@ def main() -> None:
     # through the same line-surgery path; the actual activation is two-phase
     # around compose_up below.
     tls_enabled = resolve_tls_choice(args)
+    dash_url = "https://localhost/" if tls_enabled else f"http://localhost:{args.port}"
     if tls_enabled:
-        step("enabling TLS/mTLS transport security")
+        step("enabling TLS/mTLS transport security", stage="tls-env")
         enable_tls_env(env_path)
         augment_profiles_for_tls(env_path)
         ensure_ingress_cert(root)
 
-    step("preparing data directories")
+    step("preparing data directories", stage="data-dirs")
     ensure_data_dirs(root)
 
     if args.no_start:
@@ -1972,10 +2115,11 @@ def main() -> None:
                "rerun without --no-start to complete enablement.")
         else:
             ok(".env and data/ ready. Skipping docker compose up (per --no-start).")
+        _result_ok(dash_url, _parse_env(env_path).get("ADMIN_USERNAME", "admin"))
         return
 
     if args.bundle:
-        step("loading image bundle")
+        step("loading image bundle", stage="bundle")
         load_bundle(args.bundle)
 
     if args.offline:
@@ -1985,19 +2129,20 @@ def main() -> None:
     # api's internal CA writes every SVID to data/tls while the stores are
     # still plaintext. On a rerun with certs already minted this converges in
     # one pass (the sentinels exist, the variant is already in the chain).
-    step("starting stack" + (" (TLS phase A: mint identities)" if tls_enabled else ""))
+    step("starting stack" + (" (TLS phase A: mint identities)" if tls_enabled else ""),
+         stage="up-a")
     compose_up(compose_dir, offline=args.offline, root=root)
 
     if tls_enabled:
         wait_for_minted_certs(root)
         activate_tls_compose_file(compose_dir, env_path)
-        step("starting stack (TLS phase B: fail-closed mesh)")
+        step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b")
         compose_up(compose_dir, offline=args.offline, root=root)
 
-    step("status")
+    step("status", stage="status")
     compose_status(compose_dir)
 
-    step("bootstrap OpenSearch index templates")
+    step("bootstrap OpenSearch index templates", stage="bootstrap-os")
     bootstrap_opensearch(root, tls=tls_enabled)
 
     # Gate on the EFFECTIVE profiles from .env — the source of truth compose_up
@@ -2005,11 +2150,11 @@ def main() -> None:
     active = {p.strip() for p in
               _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")}
     if "sso" in active:
-        step("bootstrap Keycloak database (profile sso)")
+        step("bootstrap Keycloak database (profile sso)", stage="bootstrap-kc")
         bootstrap_keycloak_db(compose_dir, _parse_env(env_path))
 
     if "self-monitoring" in args.profiles:
-        step("wiring grafana clickhouse datasource")
+        step("wiring grafana clickhouse datasource", stage="bootstrap-grafana")
         bootstrap_grafana(root, secrets_map)
 
     print()
@@ -2048,6 +2193,9 @@ def main() -> None:
     print("  Stop:      cd deployment/docker && docker compose down")
     print("  Logs:      cd deployment/docker && docker compose logs -f")
     print("==============================================================")
+    # Terminal machine-readable marker (GUI contract): url + admin_user ONLY —
+    # the password never rides a progress event.
+    _result_ok(dash_url, _parse_env(env_path).get("ADMIN_USERNAME", "admin"))
 
 
 if __name__ == "__main__":

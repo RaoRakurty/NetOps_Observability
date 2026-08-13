@@ -417,7 +417,10 @@ if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDL
   echo "FATAL: customer-facing bundle docs mention redpanda" >&2; exit 1
 fi
 
-(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh > SHA256SUMS)
+# Integrity manifest covers EVERY shipped artifact, including the
+# correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
+# outside SHA256SUMS is an unverifiable execution path on the customer host).
+(cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh correlix-setup > SHA256SUMS)
 
 # TODO(#97, owner-gated): GPG-sign SHA256SUMS with the product signing key —
 #   gpg --batch --detach-sign --armor -o SHA256SUMS.asc SHA256SUMS

@@ -225,6 +225,27 @@ def main() -> int:
     else:
         ok(f"all {len(req_paths)} required scaffold paths ship")
 
+    # 5b) Prompt/flag parity (GUI installer design §6.2): every interactive
+    # prompt in install.py must have a non-interactive flag, or an unattended/
+    # GUI run can block on a TTY read. Known input() sites: the TLS question
+    # (--tls), the Docker bootstrap offer (--bootstrap-docker), and the
+    # destructive-rotation confirm (--assume-yes). A NEW input() without a new
+    # flag fails this gate.
+    print("[parity] every install.py prompt has a non-interactive flag")
+    itext = INSTALL.read_text()
+    n_prompts = len(re.findall(r"\binput\(", itext))
+    parity_flags = ("--tls", "--bootstrap-docker", "--assume-yes")
+    missing_flags = [f for f in parity_flags if f'"{f}"' not in itext]
+    if missing_flags:
+        bad(f"install.py lost non-interactive flag(s): {', '.join(missing_flags)}")
+    elif n_prompts > len(parity_flags):
+        bad(f"install.py has {n_prompts} input() prompts but only "
+            f"{len(parity_flags)} declared non-interactive flags — add a flag "
+            "for the new prompt (prompt/flag parity rule)")
+    else:
+        ok(f"{n_prompts} interactive prompt(s), each covered by a flag "
+           f"({', '.join(parity_flags)})")
+
     # 7) SEC-001.1: transport-inventory coverage + evidence liveness.
     # docs/security/transport-inventory.yaml is the machine-readable as-built
     # statement every security epic validates against (JSON content — valid

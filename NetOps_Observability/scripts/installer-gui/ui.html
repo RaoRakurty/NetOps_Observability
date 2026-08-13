@@ -1,306 +1,761 @@
 <!doctype html>
+<!-- Correlix Setup — wizard UI. Single file, inline everything: the appliance
+     host is offline by design (no CDNs, no webfonts, no frameworks).
+     Served by main.go via go:embed; talks only to the same-origin API defined
+     in the setup server. Visual language: matte instrument panel — monospace
+     voice, hairline rules, one accent. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Correlix Setup</title>
-<!-- Everything inline: the appliance host is offline by design (no CDNs).
-     Brand language mirrors the product: obsidian ground, ice-cyan light,
-     the watchful-eye mark, and the topbar dot matrix. -->
 <style>
   :root{
-    --bg:#070b16; --bg2:#0b1224; --panel:rgba(17,25,48,.72);
-    --line:rgba(125,211,252,.14); --ink:#e6edf8; --mut:#8ea0bf;
-    --cy:#38bdf8; --cy2:#7dd3fc; --blue:#3b82f6; --ok:#34d399; --bad:#fb7185;
-    --glow:0 0 24px rgba(56,189,248,.35);
+    --bg:#0a0c0f; --panel:#0f1216; --panel2:#12161b;
+    --line:#232a33; --line2:#2e3945;
+    --ink:#e7ebef; --mut:#97a2af; --dim:#5c6773;
+    --acc:#4dd6e8; --acc-ink:#06171b;
+    --ok:#46d6a0; --warn:#e5b34a; --bad:#f0716b;
+    --mono:ui-monospace,"Cascadia Code","JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%}
+  html{-webkit-text-size-adjust:100%}
   body{
-    font:15px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif;
-    color:var(--ink); background:
-      radial-gradient(1100px 600px at 75% -10%, rgba(59,130,246,.16), transparent 60%),
-      radial-gradient(900px 500px at -10% 110%, rgba(56,189,248,.10), transparent 55%),
-      var(--bg);
-    overflow-x:hidden;
+    background:var(--bg); color:var(--ink);
+    font:13px/1.6 var(--mono);
+    min-height:100vh;
   }
-  /* brand dot-matrix, same motif as the product topbar */
-  body::before{content:"";position:fixed;inset:0;pointer-events:none;
-    background-image:radial-gradient(circle,rgba(56,189,248,.10) 1px,transparent 1.4px);
-    background-size:22px 22px;
-    -webkit-mask-image:radial-gradient(900px 700px at 30% 20%,#000,transparent 75%);
-    mask-image:radial-gradient(900px 700px at 30% 20%,#000,transparent 75%);}
-  .wrap{max-width:1060px;margin:0 auto;padding:34px 26px 60px;position:relative}
+  ::selection{background:rgba(77,214,232,.25)}
 
-  /* ── hero ─────────────────────────────────────────────── */
-  .hero{display:flex;align-items:center;gap:22px;margin-bottom:30px}
-  .eye{width:86px;height:60px;flex:none;position:relative}
-  .eye svg{display:block;width:100%;height:100%}
-  @keyframes pulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.25)}}
-  @keyframes orbit{to{transform:rotate(360deg)}}
-  .eye .hub{animation:pulse 2.6s ease-in-out infinite;transform-origin:center}
-  .eye .ring{animation:orbit 14s linear infinite;transform-origin:32px 22px}
-  @media (prefers-reduced-motion: reduce){.eye .hub,.eye .ring{animation:none}}
-  h1{font-size:30px;letter-spacing:.10em;font-weight:700}
-  h1 .x{background:linear-gradient(135deg,var(--blue) 30%,var(--cy2) 85%);
-    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
-  .sub{color:var(--mut);margin-top:3px}
-  .bundle{margin-left:auto;color:var(--mut);font-size:12.5px;border:1px solid var(--line);
-    border-radius:999px;padding:5px 14px;background:rgba(56,189,248,.05)}
+  /* ---------- header ---------- */
+  .hd{
+    display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;
+    padding:20px 28px 16px;border-bottom:1px solid var(--line);
+  }
+  .mark{font-size:15px;font-weight:700;letter-spacing:.34em}
+  .mark b{color:var(--acc);font-weight:700}
+  .mark span{color:var(--dim);letter-spacing:.34em}
+  .hd .meta{margin-left:auto;color:var(--dim);font-size:11px;letter-spacing:.08em;display:flex;gap:22px}
+  .hd .meta b{color:var(--mut);font-weight:400}
 
-  /* ── step rail ───────────────────────────────────────── */
-  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
-  .step{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--panel);
-    backdrop-filter:blur(8px);position:relative;transition:border-color .4s, box-shadow .4s}
-  .step .n{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-size:12.5px;font-weight:700;border:1px solid var(--line);color:var(--mut);margin-bottom:8px;
-    transition:all .4s}
-  .step .t{font-weight:600;font-size:13.5px}
-  .step .d{color:var(--mut);font-size:12px;margin-top:2px}
-  .step.active{border-color:rgba(56,189,248,.55);box-shadow:var(--glow)}
-  .step.active .n{background:var(--cy);border-color:var(--cy);color:#04121f}
-  .step.done .n{background:var(--ok);border-color:var(--ok);color:#04121f}
-  .step.done .t{color:var(--ok)}
+  /* ---------- shell ---------- */
+  .shell{display:grid;grid-template-columns:224px 1fr;min-height:calc(100vh - 62px)}
+  @media (max-width:780px){.shell{grid-template-columns:1fr}.rail{display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--line)}}
 
-  /* ── main card ───────────────────────────────────────── */
-  .card{border:1px solid var(--line);border-radius:18px;background:var(--panel);
-    backdrop-filter:blur(10px);padding:26px 28px;margin-bottom:20px}
-  .card h2{font-size:19px;margin-bottom:6px}
-  .card p.lead{color:var(--mut);margin-bottom:18px;max-width:640px}
-  .btn{appearance:none;border:0;border-radius:12px;padding:12px 26px;font-size:15px;font-weight:600;
-    cursor:pointer;color:#04121f;background:linear-gradient(135deg,var(--cy) 0%,var(--blue) 120%);
-    box-shadow:var(--glow);transition:transform .15s, filter .15s}
-  .btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
-  .btn:disabled{opacity:.45;cursor:default;transform:none;box-shadow:none}
-  .btn.ghost{background:transparent;color:var(--cy2);border:1px solid var(--line);box-shadow:none}
-  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  input[type=password]{background:#0a1120;border:1px solid var(--line);border-radius:12px;
-    color:var(--ink);padding:12px 16px;font-size:15px;min-width:260px;outline:none}
-  input[type=password]:focus{border-color:rgba(56,189,248,.6);box-shadow:var(--glow)}
+  .rail{border-right:1px solid var(--line);padding:26px 0}
+  .rs{
+    display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;
+    background:none;border:none;border-left:2px solid transparent;
+    color:var(--dim);font:inherit;font-size:12px;letter-spacing:.10em;
+    padding:10px 24px;cursor:pointer;white-space:nowrap;
+  }
+  .rs em{font-style:normal;font-size:11px;color:var(--dim);min-width:20px}
+  .rs:hover{color:var(--mut)}
+  .rs:focus-visible{outline:1px solid var(--acc);outline-offset:-1px}
+  .rs[aria-current="step"]{color:var(--ink);border-left-color:var(--acc)}
+  .rs[aria-current="step"] em{color:var(--acc)}
+  .rs.done em{color:var(--ok)}
+  .rs:disabled{opacity:.45;cursor:default}
+  .rail .cap{font-size:10px;letter-spacing:.28em;color:var(--dim);padding:0 24px 14px}
 
-  .checks{display:grid;gap:8px;margin:14px 0 6px}
-  .chk{display:flex;gap:10px;align-items:baseline;font-size:13.5px;padding:8px 12px;border-radius:10px;
-    background:rgba(10,17,32,.6);border:1px solid transparent}
-  .chk .ic{font-weight:700;flex:none}
-  .chk.ok .ic{color:var(--ok)} .chk.fix .ic{color:var(--bad)}
-  .chk.fix{border-color:rgba(251,113,133,.35)}
+  /* ---------- stage ---------- */
+  .stage{display:none;padding:30px 40px 26px;max-width:860px;flex-direction:column}
+  .stage.on{display:flex}
+  .crumb{font-size:10px;letter-spacing:.28em;color:var(--acc);margin-bottom:10px}
+  h1{font-size:19px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .lede{color:var(--mut);max-width:66ch;margin-bottom:22px}
 
-  .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(125,211,252,.25);
-    border-top-color:var(--cy);animation:orbit 0.9s linear infinite;display:inline-block;vertical-align:-4px}
-  .err{color:var(--bad);margin-top:10px;font-size:13.5px}
+  .sect{border-top:1px solid var(--line);padding:16px 0 6px;margin-bottom:10px}
+  .sect > .cap{font-size:10px;letter-spacing:.24em;color:var(--dim);margin-bottom:12px}
 
-  /* ── success ─────────────────────────────────────────── */
-  .success{display:none;text-align:center;padding:38px 20px 30px}
-  .success.show{display:block;animation:rise .6s ease}
-  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-  .success .big{font-size:24px;font-weight:700;margin:16px 0 4px}
-  .success .halo{width:92px;height:92px;margin:0 auto;border-radius:50%;
-    display:flex;align-items:center;justify-content:center;font-size:40px;
-    background:radial-gradient(circle,rgba(52,211,153,.25),transparent 70%);color:var(--ok)}
-  .cred{display:inline-grid;grid-template-columns:auto auto;gap:8px 18px;text-align:left;
-    margin:18px auto 8px;padding:16px 22px;border:1px solid var(--line);border-radius:14px;
-    background:rgba(10,17,32,.6);font-size:14.5px}
-  .cred b{color:var(--mut);font-weight:600}
-  .cred code{color:var(--cy2);font-family:ui-monospace,Consolas,monospace}
-  a.open{display:inline-block;margin-top:16px;text-decoration:none}
+  .facts{display:grid;grid-template-columns:1fr 1fr;gap:2px 40px}
+  @media (max-width:680px){.facts{grid-template-columns:1fr}}
+  .f{display:flex;gap:12px;align-items:baseline;padding:4px 0}
+  .f .s{min-width:14px;font-weight:700}
+  .s.ok{color:var(--ok)} .s.warn{color:var(--warn)} .s.bad{color:var(--bad)} .s.dim{color:var(--dim)}
+  .f small{margin-left:auto;color:var(--dim);font-size:11px;white-space:nowrap;padding-left:12px}
 
-  /* ── terminal ────────────────────────────────────────── */
-  .term{border:1px solid var(--line);border-radius:14px;background:#05080f;overflow:hidden}
-  .term .bar{display:flex;gap:6px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--line);
-    color:var(--mut);font-size:12px;letter-spacing:.05em}
-  .term .bar i{width:9px;height:9px;border-radius:50%;background:#26314b;display:inline-block}
-  .term .bar i:first-child{background:rgba(56,189,248,.7)}
-  .term pre{margin:0;padding:14px 16px;height:300px;overflow:auto;font:12.5px/1.6 ui-monospace,Consolas,monospace;
-    color:#9fb4d8;white-space:pre-wrap;word-break:break-word}
-  .term pre .ok{color:var(--ok)} .term pre .bad{color:var(--bad)} .term pre .hd{color:var(--cy2)}
-  @media (max-width:860px){.steps{grid-template-columns:repeat(2,1fr)}.hero{flex-wrap:wrap}}
+  .tag{font-size:9.5px;letter-spacing:.16em;padding:2px 7px;border:1px solid var(--line2);color:var(--mut);margin-left:10px;vertical-align:1px}
+  .tag.rec{color:var(--acc);border-color:rgba(77,214,232,.4)}
+  .tag.det{color:var(--mut)}
+  .tag.adv{color:var(--warn);border-color:rgba(229,179,74,.4)}
+
+  /* options */
+  label.opt{display:flex;gap:12px;align-items:flex-start;padding:8px 10px;cursor:pointer;border:1px solid transparent}
+  label.opt:hover{border-color:var(--line)}
+  label.opt input{accent-color:var(--acc);margin-top:4px;width:13px;height:13px;flex:none}
+  label.opt input:focus-visible{outline:1px solid var(--acc);outline-offset:2px}
+  .opt b{font-weight:700;letter-spacing:.04em}
+  .opt .why{display:block;color:var(--dim);font-size:12px;max-width:60ch}
+
+  .field{margin:10px 0 6px}
+  .field label{display:block;font-size:10px;letter-spacing:.2em;color:var(--dim);margin-bottom:6px}
+  input[type=text],input[type=password]{
+    background:var(--panel);border:1px solid var(--line2);color:var(--ink);
+    font:13px var(--mono);padding:9px 12px;min-width:260px;border-radius:0;
+  }
+  input[type=text]:focus,input[type=password]:focus{outline:1px solid var(--acc);outline-offset:-1px}
+  input::placeholder{color:var(--dim)}
+  select{background:var(--panel);border:1px solid var(--line2);color:var(--ink);font:13px var(--mono);padding:9px 12px;border-radius:0}
+  select:focus{outline:1px solid var(--acc);outline-offset:-1px}
+
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{font-size:10px;letter-spacing:.2em;color:var(--dim);text-align:left;font-weight:400;padding:4px 12px 8px 0;border-bottom:1px solid var(--line)}
+  td{padding:6px 12px 6px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  td.n{text-align:right}
+  .scroll{overflow-x:auto}
+
+  /* progress */
+  .ps{display:flex;gap:14px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--panel2)}
+  .ps .s{min-width:14px;font-weight:700}
+  .ps.todo{color:var(--dim)}
+  .ps.run{color:var(--ink)}
+  .ps.run .s{color:var(--acc)}
+  .ps .msg{color:var(--bad);font-size:12px;display:block}
+  .meter{height:2px;background:var(--line);margin:18px 0 8px}
+  .meter i{display:block;height:100%;background:var(--acc);width:0;transition:width .6s}
+  @media (prefers-reduced-motion:reduce){.meter i{transition:none}}
+  .pct{text-align:right;color:var(--dim);font-size:11px;letter-spacing:.12em}
+
+  .note{border:1px solid var(--line2);border-left:2px solid var(--acc);padding:14px 18px;margin-top:16px;background:var(--panel)}
+  .note.warn{border-left-color:var(--warn)}
+  .note.bad{border-left-color:var(--bad)}
+  .note.ok{border-left-color:var(--ok)}
+  .note h3{font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+  .note p{color:var(--mut);font-size:12.5px;max-width:66ch}
+
+  pre.log{
+    background:#07090b;border:1px solid var(--line);padding:12px 14px;
+    font:11.5px/1.5 var(--mono);color:var(--mut);max-height:260px;overflow:auto;
+    white-space:pre-wrap;word-break:break-all;margin-top:12px;
+  }
+  .kv{display:grid;grid-template-columns:170px 1fr;gap:5px 20px;font-size:12.5px}
+  .kv dt{color:var(--dim);letter-spacing:.06em} .kv dd{color:var(--ink)}
+  .url{font-size:15px;color:var(--acc);letter-spacing:.03em;word-break:break-all}
+
+  /* buttons */
+  .btns{margin-top:auto;padding-top:26px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .btn{
+    border:1px solid var(--line2);background:none;color:var(--ink);
+    font:700 11px var(--mono);letter-spacing:.18em;text-transform:uppercase;
+    padding:12px 20px;cursor:pointer;border-radius:0;
+  }
+  .btn:hover{border-color:var(--mut)}
+  .btn:focus-visible{outline:1px solid var(--acc);outline-offset:2px}
+  .btn:disabled{opacity:.4;cursor:default}
+  .btn.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
+  .btn.pri:hover{filter:brightness(1.1)}
+  .btn.ghost{border-color:transparent;color:var(--dim)}
+  .btn.ghost:hover{color:var(--mut)}
+  .spacer{flex:1}
+  .hint{color:var(--dim);font-size:11px;letter-spacing:.06em}
+  .err{color:var(--bad);font-size:12px;margin-top:8px;min-height:1em}
 </style>
 </head>
 <body>
-<div class="wrap">
-
-  <div class="hero">
-    <div class="eye" aria-hidden="true">
-      <svg viewBox="0 0 64 44" fill="none">
-        <path d="M2.5 22 C12 6.5,52 6.5,61.5 22 C52 37.5,12 37.5,2.5 22 Z" fill="#0d1b3d"/>
-        <g class="ring" stroke="#38bdf8" stroke-opacity=".55" stroke-width="1">
-          <line x1="32" y1="22" x2="32" y2="10"/><line x1="32" y1="22" x2="44.5" y2="15"/>
-          <line x1="32" y1="22" x2="46" y2="28.5"/><line x1="32" y1="22" x2="33.5" y2="33.5"/>
-          <line x1="32" y1="22" x2="19.5" y2="29.5"/><line x1="32" y1="22" x2="18" y2="15.5"/>
-        </g>
-        <circle class="hub" cx="32" cy="22" r="6" fill="#38bdf8" opacity=".3"/>
-        <circle class="hub" cx="32" cy="22" r="2.8" fill="#bae6fd"/>
-        <path d="M2.5 22 C12 6.5,52 6.5,61.5 22 C52 37.5,12 37.5,2.5 22 Z"
-              stroke="#3b82f6" stroke-width="3.6" stroke-linejoin="round"/>
-      </svg>
+  <div class="hd">
+    <div class="mark">CORRELI<b>X</b> <span>// SETUP</span></div>
+    <div class="meta">
+      <b id="m-bundle">bundle —</b>
+      <b id="m-host">host —</b>
+      <b id="m-sess">session active</b>
     </div>
-    <div>
-      <h1>C&#8202;&#9673;&#8202;RRELI<span class="x">X</span> <span style="font-weight:300;color:var(--mut)">Setup</span></h1>
-      <div class="sub">Network observability appliance — guided installation</div>
-    </div>
-    <div class="bundle" id="bundle">bundle</div>
   </div>
 
-  <div class="steps" id="steps">
-    <div class="step" data-s="1"><div class="n">1</div><div class="t">System check</div><div class="d">Audit this host, read-only</div></div>
-    <div class="step" data-s="2"><div class="n">2</div><div class="t">Prepare host</div><div class="d">Docker, kernel, limits</div></div>
-    <div class="step" data-s="3"><div class="n">3</div><div class="t">Install</div><div class="d">Load images, start stack</div></div>
-    <div class="step" data-s="4"><div class="n">4</div><div class="t">Launch</div><div class="d">Sign in to Correlix</div></div>
+  <div class="shell">
+    <nav class="rail" aria-label="Setup steps">
+      <div class="cap">SEQUENCE</div>
+      <button class="rs" data-s="ready"   ><em>01</em> READINESS</button>
+      <button class="rs" data-s="prepare" ><em>02</em> PREPARE HOST</button>
+      <button class="rs" data-s="deploy"  ><em>03</em> DEPLOYMENT</button>
+      <button class="rs" data-s="disc"    ><em>04</em> DISCOVERY</button>
+      <button class="rs" data-s="size"    ><em>05</em> SIZING</button>
+      <button class="rs" data-s="sec"     ><em>06</em> SECURITY</button>
+      <button class="rs" data-s="review"  ><em>07</em> REVIEW</button>
+      <button class="rs" data-s="install" disabled><em>08</em> INSTALL</button>
+    </nav>
+
+    <!-- 01 READINESS -->
+    <section class="stage" id="st-ready" aria-label="Readiness">
+      <div class="crumb">01 / READ-ONLY — NOTHING CHANGES ON THIS HOST YET</div>
+      <h1>System readiness</h1>
+      <p class="lede">Detected before asking. Facts come from the host, the preparation audit, and the bundle manifest.</p>
+      <div class="sect"><div class="cap">HOST</div>
+        <div class="facts" id="facts-host"><div class="f"><span class="s dim">…</span> reading host facts</div></div>
+      </div>
+      <div class="sect"><div class="cap">PREPARATION AUDIT</div>
+        <div id="check-items"><div class="f"><span class="s dim">…</span> running prepare-host --check</div></div>
+      </div>
+      <div class="sect"><div class="cap">INSTALLATION SOURCE</div>
+        <div class="facts" id="facts-src"></div>
+      </div>
+      <div class="btns">
+        <span class="hint" id="ready-hint"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="b-recheck">Re-run checks</button>
+        <button class="btn pri" id="b-ready-next" disabled>Continue</button>
+      </div>
+    </section>
+
+    <!-- 02 PREPARE -->
+    <section class="stage" id="st-prepare" aria-label="Prepare host">
+      <div class="crumb">02 / THE ONLY PRIVILEGED STEP</div>
+      <h1>Prepare this host</h1>
+      <p class="lede">Runs prepare-host.sh with sudo to fix the items below. The install itself never runs as root.</p>
+      <div class="sect"><div class="cap">WILL BE CHANGED</div><div id="prep-items"></div></div>
+      <div class="sect"><div class="cap">OPTIONAL</div>
+        <label class="opt"><input type="checkbox" id="prep-fw">
+          <span><b>Configure UFW firewall rules</b><span class="tag adv">POLICY CHANGE</span>
+          <span class="why">Off by default. Docker-published ports bypass UFW — enabling a host firewall is a policy decision, and it does not by itself fence the stack's ports.</span></span></label>
+      </div>
+      <div class="field">
+        <label for="sudo-pw">SUDO PASSWORD — SENT OVER TLS · USED ONCE · NEVER STORED</label>
+        <input type="password" id="sudo-pw" autocomplete="off">
+        <div class="err" id="prep-err"></div>
+      </div>
+      <pre class="log" id="prep-log" hidden></pre>
+      <div class="btns">
+        <button class="btn" data-back="ready">Back</button>
+        <span class="spacer"></span>
+        <button class="btn pri" id="b-prepare">Prepare host</button>
+      </div>
+    </section>
+
+    <!-- 03 DEPLOYMENT -->
+    <section class="stage" id="st-deploy" aria-label="Deployment">
+      <div class="crumb">03 / CONFIGURATION</div>
+      <h1>Deployment</h1>
+      <p class="lede">One preset decision plus add-ons. Everything maps to the same profiles the command-line installer uses.</p>
+      <div class="sect"><div class="cap">PRESET</div>
+        <label class="opt"><input type="radio" name="preset" value="standard" checked>
+          <span><b>Standard</b><span class="tag rec">RECOMMENDED</span>
+          <span class="why">Everything on this server — collectors, correlation, storage, dashboard.</span></span></label>
+        <label class="opt"><input type="radio" name="preset" value="external-kafka">
+          <span><b>Standard + external Kafka</b>
+          <span class="why">Use existing Kafka-compatible brokers instead of the embedded bus.</span></span></label>
+        <div class="field" id="f-brokers" hidden>
+          <label for="brokers">BROKER URLS — HOST:PORT, COMMA-SEPARATED</label>
+          <input type="text" id="brokers" placeholder="kafka-1.corp:9092,kafka-2.corp:9092" style="min-width:340px">
+        </div>
+      </div>
+      <div class="sect"><div class="cap">ADD-ONS</div>
+        <label class="opt"><input type="checkbox" id="ad-selfmon" checked>
+          <span><b>Self-monitoring</b><span class="why">Grafana + host metrics for the stack itself.</span></span></label>
+        <label class="opt"><input type="checkbox" id="ad-logui" checked>
+          <span><b>Log search UI</b><span class="why">OpenSearch Dashboards behind the ingress.</span></span></label>
+        <label class="opt"><input type="checkbox" id="ad-sso">
+          <span><b>Single sign-on</b><span class="why">Keycloak — broker SAML / LDAP / OIDC identity providers.</span></span></label>
+        <label class="opt"><input type="checkbox" id="ad-netbox">
+          <span><b>NetBox (bundled)</b><span class="why">Source-of-truth inventory, embedded.</span></span></label>
+      </div>
+      <div class="sect"><div class="cap">BASICS</div>
+        <div class="facts">
+          <div class="field"><label for="port">DASHBOARD PORT</label>
+            <input type="text" id="port" value="8000" inputmode="numeric" style="min-width:120px">
+            <span class="hint" id="port-state"></span></div>
+          <div class="field"><label for="retention">DATA RETENTION PROFILE</label>
+            <select id="retention">
+              <option value="production" selected>production</option>
+              <option value="extended">extended</option>
+              <option value="demo">demo</option>
+              <option value="lab">lab</option>
+            </select></div>
+        </div>
+        <div class="err" id="deploy-err"></div>
+      </div>
+      <div class="btns">
+        <button class="btn" data-back="ready">Back</button>
+        <span class="spacer"></span>
+        <button class="btn pri" data-next="disc">Continue</button>
+      </div>
+    </section>
+
+    <!-- 04 DISCOVERY -->
+    <section class="stage" id="st-disc" aria-label="Discovery">
+      <div class="crumb">04 / CONFIGURATION</div>
+      <h1>Which networks should Correlix discover?</h1>
+      <p class="lede">Discovery is opt-in — an appliance never scans a network unasked. Changeable later in Administration.</p>
+      <div class="sect"><div class="cap">SNMP DISCOVERY</div>
+        <label class="opt"><input type="checkbox" id="disc-on">
+          <span><b>Enable scheduled discovery</b></span></label>
+        <div class="field" id="f-cidrs" hidden>
+          <label for="cidrs">NETWORKS TO SCAN — CIDR, COMMA-SEPARATED</label>
+          <input type="text" id="cidrs" placeholder="10.70.0.0/16, 192.168.40.0/24" style="min-width:340px">
+          <div class="hint" id="cidr-scope"></div>
+          <div class="err" id="cidr-err"></div>
+        </div>
+      </div>
+      <div class="sect"><div class="cap">POINT YOUR DEVICES HERE — READ-ONLY</div>
+        <div class="scroll"><table>
+          <tr><th>SIGNAL</th><th>PROTOCOL</th><th class="n" style="text-align:right">PORT</th></tr>
+          <tr><td>Syslog</td><td>udp + tcp</td><td class="n">5514</td></tr>
+          <tr><td>NetFlow</td><td>udp</td><td class="n">2055</td></tr>
+          <tr><td>IPFIX</td><td>udp</td><td class="n">4739</td></tr>
+          <tr><td>sFlow</td><td>udp</td><td class="n">6343</td></tr>
+          <tr><td>SNMP traps</td><td>udp</td><td class="n">1162</td></tr>
+        </table></div>
+      </div>
+      <div class="btns">
+        <button class="btn" data-back="deploy">Back</button>
+        <span class="spacer"></span>
+        <button class="btn pri" data-next="size">Continue</button>
+      </div>
+    </section>
+
+    <!-- 05 SIZING -->
+    <section class="stage" id="st-size" aria-label="Sizing">
+      <div class="crumb">05 / CONFIGURATION</div>
+      <h1>Sizing</h1>
+      <p class="lede">Correlix budgets memory and CPU per component from this host. The plan is validated before install — a workload that doesn't fit is refused, not squeezed.</p>
+      <div class="sect"><div class="cap">HOST — DETECTED</div>
+        <dl class="kv" id="size-host"><dt>reading…</dt><dd></dd></dl>
+      </div>
+      <div class="sect"><div class="cap">PROFILE</div>
+        <div class="field">
+          <label for="size-prof">SIZING PROFILE</label>
+          <select id="size-prof">
+            <option value="auto" selected>auto — from host capacity</option>
+            <option value="demo">demo</option>
+            <option value="small">small</option>
+            <option value="medium">medium</option>
+            <option value="large">large</option>
+          </select>
+          <span class="hint" id="size-hint"></span>
+        </div>
+        <p class="lede" style="margin:8px 0 0">The full per-component plan (with storage projection and any refusal) is computed and shown during install; fine-grained workload inputs live in <span style="color:var(--mut)">correlix-sizing.yaml</span> for the CLI path.</p>
+      </div>
+      <div class="btns">
+        <button class="btn" data-back="disc">Back</button>
+        <span class="spacer"></span>
+        <button class="btn pri" data-next="sec">Continue</button>
+      </div>
+    </section>
+
+    <!-- 06 SECURITY -->
+    <section class="stage" id="st-sec" aria-label="Security">
+      <div class="crumb">06 / CONFIGURATION</div>
+      <h1>Security</h1>
+      <p class="lede">Transport security is on by default. The full mesh means every internal hop — bus, stores, collectors — speaks mTLS, not just your browser.</p>
+      <div class="sect"><div class="cap">TRANSPORT</div>
+        <label class="opt"><input type="radio" name="tls" value="yes" checked>
+          <span><b>Full TLS/mTLS mesh</b><span class="tag rec">RECOMMENDED</span>
+          <span class="why">An internal CA mints per-service identities during install — you'll see a certificate phase. Dashboard served over HTTPS.</span></span></label>
+        <label class="opt"><input type="radio" name="tls" value="no">
+          <span><b>Plaintext</b><span class="tag adv">LAB ONLY</span>
+          <span class="why">Every hop unencrypted. Never expose this to a real network.</span></span></label>
+      </div>
+      <div class="sect"><div class="cap">CORRELIX ADMINISTRATOR</div>
+        <div class="f"><span class="s ok">✓</span> User <b>&nbsp;admin&nbsp;</b> is created on first boot <small>password generated · shown once at the end</small></div>
+        <div class="f"><span class="s ok">✓</span> This is a Correlix login, not an OS account <small>no root password is ever asked</small></div>
+      </div>
+      <div class="btns">
+        <button class="btn" data-back="size">Back</button>
+        <span class="spacer"></span>
+        <button class="btn pri" data-next="review">Review</button>
+      </div>
+    </section>
+
+    <!-- 07 REVIEW -->
+    <section class="stage" id="st-review" aria-label="Review">
+      <div class="crumb">07 / NOTHING HAS CHANGED YET</div>
+      <h1>Review</h1>
+      <p class="lede">The last screen before anything mutates. Export this configuration to repeat the install headless on any host.</p>
+      <div class="sect"><div class="cap">CONFIGURATION</div>
+        <dl class="kv" id="rev-kv"></dl>
+      </div>
+      <div class="note" id="rev-note"><h3>Ready</h3><p id="rev-note-p">Preflight will run first; the install stops before mutating if it finds a blocker.</p></div>
+      <div class="btns">
+        <button class="btn" data-back="sec">Back</button>
+        <button class="btn ghost" id="b-export">Export profile</button>
+        <span class="spacer"></span>
+        <button class="btn pri" id="b-install">Install Correlix</button>
+      </div>
+    </section>
+
+    <!-- 08 INSTALL -->
+    <section class="stage" id="st-install" aria-label="Install">
+      <div class="crumb">08 / INSTALLING</div>
+      <h1 id="inst-h">Installing Correlix</h1>
+      <div class="sect" style="border-top:none;padding-top:4px">
+        <div id="stages"></div>
+        <div class="meter"><i id="meter-i"></i></div>
+        <div class="pct" id="pct">0%</div>
+      </div>
+      <div class="note bad" id="inst-fail" hidden>
+        <h3 id="fail-h">Installation stopped</h3>
+        <p id="fail-p"></p>
+        <div class="btns" style="padding-top:14px;margin-top:0">
+          <button class="btn" id="b-retry">Retry (idempotent)</button>
+          <button class="btn" id="b-bundle">Download support bundle</button>
+        </div>
+      </div>
+      <div class="btns">
+        <button class="btn ghost" id="b-log">Show technical log</button>
+        <span class="spacer"></span>
+      </div>
+      <pre class="log" id="inst-log" hidden></pre>
+    </section>
+
+    <!-- DONE -->
+    <section class="stage" id="st-done" aria-label="Complete">
+      <div class="crumb">COMPLETE — VERIFIED, NOT ASSUMED</div>
+      <h1>Correlix is ready</h1>
+      <div class="sect"><div class="cap">VERIFICATION</div><div id="done-checks"></div></div>
+      <div class="note ok">
+        <h3>Your dashboard</h3>
+        <p class="url" id="done-url"></p>
+        <dl class="kv" style="margin-top:12px">
+          <dt>Administrator</dt><dd id="done-user"></dd>
+          <dt>Password</dt><dd><span id="done-pass"></span><span class="tag adv">SHOWN ONCE</span></dd>
+        </dl>
+      </div>
+      <div class="btns">
+        <button class="btn ghost" id="b-export2">Download installation profile</button>
+        <span class="spacer"></span>
+        <button class="btn pri" id="b-open">Open Correlix</button>
+      </div>
+      <p class="hint" style="margin-top:12px">The setup service stops automatically after you open Correlix.</p>
+    </section>
   </div>
-
-  <div class="card" id="panel">
-    <!-- step content swapped by JS -->
-    <div id="p-welcome">
-      <h2>Welcome</h2>
-      <p class="lead">This wizard installs the Correlix appliance on this host — the same
-        audited steps as the command-line install, with everything visible below as it runs.
-        Start with a read-only check of the host.</p>
-      <div class="row">
-        <button class="btn" id="b-check">Run system check</button>
-        <span id="s-check"></span>
-      </div>
-    </div>
-
-    <div id="p-prepare" style="display:none">
-      <h2>Prepare host</h2>
-      <p class="lead">The check found items to fix. Preparation uses <code>sudo</code> —
-        enter the password of this Linux user (<span id="who">the current user</span>). It is
-        passed directly to sudo and never stored or logged.</p>
-      <div class="checks" id="checks"></div>
-      <div class="row" style="margin-top:12px">
-        <input type="password" id="sudo" placeholder="sudo password" autocomplete="current-password">
-        <button class="btn" id="b-prep">Prepare this host</button>
-        <span id="s-prep"></span>
-      </div>
-    </div>
-
-    <div id="p-install" style="display:none">
-      <h2>Ready to install</h2>
-      <p class="lead">The host passed every check. Installing loads the appliance images,
-        generates fresh secrets, and starts the full stack — typically a few minutes.</p>
-      <div class="checks" id="checks2"></div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn" id="b-install">Install Correlix</button>
-        <span id="s-install"></span>
-      </div>
-    </div>
-
-    <div class="success" id="p-done">
-      <div class="halo">✓</div>
-      <div class="big">Correlix is up and watching</div>
-      <div class="sub">All services healthy — your appliance is ready.</div>
-      <div class="cred">
-        <b>Dashboard</b><code id="d-url">—</code>
-        <b>Username</b><code>admin</code>
-        <b>Password</b><code id="d-pw">see install log</code>
-      </div>
-      <div class="sub" style="font-size:12.5px">Change the password right after first sign-in (Settings → Change password).</div>
-      <a class="open" id="d-open" href="#" target="_blank" rel="noopener"><button class="btn">Open Correlix →</button></a>
-    </div>
-
-    <div class="err" id="err" style="display:none"></div>
-  </div>
-
-  <div class="term">
-    <div class="bar"><i></i><i></i><i></i>&nbsp;LIVE INSTALL LOG</div>
-    <pre id="log" aria-live="polite"></pre>
-  </div>
-</div>
 
 <script>
 "use strict";
-// All server text lands via textContent — never innerHTML (LLM02/§15 rule:
-// treat every upstream byte as hostile, even our own installer's output).
+/* ---------- tiny helpers ---------- */
 const $ = id => document.getElementById(id);
-const logEl = $("log");
-let phase = "idle";
-
-function line(txt){
-  const s = document.createElement("span");
-  if (/^(PASS|✔| *ok\b)/i.test(txt)) s.className = "ok";
-  else if (/^(FIX|ERROR|FATAL|✘)/i.test(txt)) s.className = "bad";
-  else if (/^(==|--|::)/.test(txt)) s.className = "hd";
-  s.textContent = txt;
-  logEl.appendChild(s); logEl.appendChild(document.createTextNode("\n"));
-  logEl.scrollTop = logEl.scrollHeight;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({headers: Object.assign({'Content-Type':'application/json'}, (opts&&opts.headers)||{})}, opts));
+  if (!r.ok) { let m; try { m = (await r.json()).error; } catch { m = r.statusText; } throw new Error(m || ('HTTP '+r.status)); }
+  const ct = r.headers.get('Content-Type')||'';
+  return ct.includes('json') ? r.json() : r.text();
+}
+function fact(st, text, small) {
+  return '<div class="f"><span class="s '+st+'">'+({ok:'✓',warn:'✻',bad:'✕',dim:'○'}[st]||'○')+
+         '</span> <span>'+text+'</span>'+(small?'<small>'+esc(small)+'</small>':'')+'</div>';
 }
 
-function setSteps(active, doneUpTo){
-  document.querySelectorAll(".step").forEach(el=>{
-    const n = +el.dataset.s;
-    el.classList.toggle("active", n === active);
-    el.classList.toggle("done", n < doneUpTo || (doneUpTo===5));
+/* ---------- wizard state ---------- */
+const ORDER = ['ready','prepare','deploy','disc','size','sec','review','install'];
+let facts = null, checkItems = [], prepared = false, installing = false, doneShown = false;
+let cur = 'ready';
+
+function show(step) {
+  cur = step;
+  document.querySelectorAll('.stage').forEach(s => s.classList.toggle('on', s.id === 'st-'+step));
+  document.querySelectorAll('.rs').forEach(r => {
+    if (r.dataset.s === step) r.setAttribute('aria-current','step'); else r.removeAttribute('aria-current');
   });
 }
-function show(id){
-  ["p-welcome","p-prepare","p-install"].forEach(p=>$(p).style.display = p===id ? "" : "none");
-  $("p-done").classList.toggle("show", id==="p-done");
-  if (id==="p-done"){ ["p-welcome","p-prepare","p-install"].forEach(p=>$(p).style.display="none"); }
-}
-function renderChecks(el, checks){
-  el.textContent = "";
-  (checks||[]).forEach(c=>{
-    const d = document.createElement("div");
-    d.className = "chk " + (c.ok ? "ok" : "fix");
-    const i = document.createElement("span"); i.className="ic"; i.textContent = c.ok ? "✔" : "✘";
-    const t = document.createElement("span"); t.textContent = c.text;
-    d.append(i,t); el.appendChild(d);
-  });
+document.querySelectorAll('.rs').forEach(r => r.addEventListener('click', () => {
+  if (r.disabled) return;
+  if (r.dataset.s === 'install' && !installing) return;
+  show(r.dataset.s);
+}));
+document.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.next === 'disc' && !validateDeploy()) return;
+  if (b.dataset.next === 'size' && !validateDiscovery()) return;
+  if (b.dataset.next === 'review') buildReview();
+  show(b.dataset.next);
+}));
+document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', () => show(b.dataset.back)));
+function markDone(step) {
+  const r = document.querySelector('.rs[data-s="'+step+'"]');
+  if (r) r.classList.add('done');
 }
 
-async function refresh(){
-  const r = await fetch("api/state"); if (!r.ok) return;
-  const st = await r.json();
-  phase = st.phase;
-  $("bundle").textContent = st.bundle;
-  $("err").style.display = st.error ? "" : "none";
-  $("err").textContent = st.error || "";
-  const busy = '<span class="spin"></span>';
-  $("s-check").innerHTML = phase==="checking" ? busy : "";
-  $("s-prep").innerHTML  = phase==="preparing" ? busy : "";
-  $("s-install").innerHTML = phase==="installing" ? busy : "";
-  $("b-check").disabled = phase==="checking";
-  $("b-prep").disabled = phase==="preparing";
-  $("b-install").disabled = phase==="installing";
+/* ---------- 01 readiness ---------- */
+function gib(b){ return (b/1073741824).toFixed(b>=107374182400?0:1); }
+async function loadFacts() {
+  try { facts = await api('/api/facts'); } catch (e) {
+    $('facts-host').innerHTML = fact('bad', 'could not read host facts: '+esc(e.message)); return;
+  }
+  const f = facts, h = [];
+  h.push(fact(f.os_supported?'ok':'bad', esc(f.os_pretty||f.os_id||'unknown OS'), f.os_supported?'supported':'unsupported'));
+  h.push(fact(f.arch_supported?'ok':'bad', esc(f.arch)+' · '+f.cpus+' cores', f.cpus>=4?'':'≥ 4 recommended'));
+  h.push(fact(f.mem_bytes>=16*1073741824?'ok':'warn', gib(f.mem_bytes)+' GiB RAM', '≥ 16 GiB recommended'));
+  h.push(fact(f.disk_free_bytes>=100*1073741824?'ok':'warn', gib(f.disk_free_bytes)+' GB free', '≥ 100 GB recommended'));
+  h.push(fact(f.docker&&f.docker.present?(f.docker.compose_v2?'ok':'warn'):'warn',
+    f.docker&&f.docker.present?('Docker '+esc(f.docker.version||'')+(f.docker.compose_v2?' + Compose v2':' — Compose v2 missing')):'Docker not installed',
+    f.docker&&f.docker.present?(f.docker.daemon_ok?'daemon healthy':'daemon unreachable'):'Prepare host installs it'));
+  h.push(fact(f.time_sync?'ok':'warn', 'System clock '+(f.time_sync?'synchronized':'not synchronized')));
+  h.push(fact(f.ports&&f.ports.stack&&f.ports.stack.free?'ok':'warn',
+    'Port '+((f.ports&&f.ports.stack)?f.ports.stack.port:8000)+' '+((f.ports&&f.ports.stack&&f.ports.stack.free)?'free':'IN USE'),
+    'dashboard port'));
+  $('facts-host').innerHTML = h.join('');
+  $('m-host').textContent = 'host ' + (f.os_id||'');
+  const src = [];
+  if (f.bundle && f.bundle.version) {
+    src.push(fact('ok','Offline bundle <b>'+esc(f.bundle.version)+'</b>','integrity verified at unpack'));
+    $('m-bundle').textContent = 'bundle '+f.bundle.version;
+  } else {
+    src.push(fact('ok','Source tree install','images build locally'));
+    $('m-bundle').textContent = 'source tree';
+  }
+  if (f.sizing && f.sizing.suggested_profile) {
+    $('size-hint').textContent = 'auto → '+f.sizing.suggested_profile+' ('+gib(f.mem_bytes)+' GiB host)';
+    renderSizeHost();
+  }
+  $('facts-src').innerHTML = src.join('');
+}
+function renderSizeHost() {
+  if (!facts) return;
+  $('size-host').innerHTML =
+    '<dt>Memory</dt><dd>'+gib(facts.mem_bytes)+' GiB</dd>'+
+    '<dt>CPU</dt><dd>'+facts.cpus+' cores</dd>'+
+    '<dt>Disk free</dt><dd>'+gib(facts.disk_free_bytes)+' GB</dd>'+
+    (facts.sizing?('<dt>Suggested profile</dt><dd>'+esc(facts.sizing.suggested_profile)+' <span class="tag rec">AUTO</span></dd>'):'');
+}
+async function runCheck() {
+  $('check-items').innerHTML = fact('dim','running prepare-host --check …');
+  try {
+    await api('/api/run/check', {method:'POST'});
+    const st = await waitPhase(['ready','needs-prep','error']);
+    checkItems = st.check_items || st.checkItems || [];
+    const fixes = checkItems.filter(i => !i.ok);
+    $('check-items').innerHTML = checkItems.length
+      ? checkItems.map(i => fact(i.ok?'ok':'warn', esc(i.text))).join('')
+      : fact('warn','audit produced no items — see log');
+    prepared = fixes.length === 0;
+    $('b-ready-next').disabled = false;
+    $('b-ready-next').textContent = prepared ? 'Continue' : 'Prepare host';
+    $('ready-hint').textContent = prepared ? 'all checks pass — host is ready'
+      : fixes.length+' item(s) need the preparation step';
+    if (prepared) { markDone('ready'); markDone('prepare'); }
+    renderPrepItems(fixes);
+  } catch (e) {
+    $('check-items').innerHTML = fact('bad','check failed: '+esc(e.message));
+    $('b-ready-next').disabled = true;
+  }
+}
+function renderPrepItems(fixes) {
+  $('prep-items').innerHTML = fixes.length
+    ? fixes.map(i => fact('warn', esc(i.text))).join('') +
+      fact('ok', (checkItems.length - fixes.length)+' other checks already pass', 'nothing else is touched')
+    : fact('ok','nothing to fix — host is already prepared');
+}
+$('b-recheck').addEventListener('click', runCheck);
+$('b-ready-next').addEventListener('click', () => show(prepared ? 'deploy' : 'prepare'));
 
-  switch(phase){
-    case "idle": case "checking": setSteps(1,1); show("p-welcome"); break;
-    case "needs-prep": case "preparing":
-      setSteps(2,2); show("p-prepare"); renderChecks($("checks"), st.checks); break;
-    case "ready": case "installing":
-      setSteps(3,3); show("p-install"); renderChecks($("checks2"), st.checks); break;
-    case "installed":
-      setSteps(4,5); show("p-done");
-      $("d-url").textContent = st.ui_url; $("d-open").href = st.ui_url;
-      if (st.admin_pw) $("d-pw").textContent = st.admin_pw;
-      break;
-    case "error": /* stay on current panel; err box shows the reason */ break;
+/* poll /api/state until phase settles */
+async function waitPhase(phases) {
+  for (;;) {
+    const st = await api('/api/state');
+    if (phases.includes(st.phase)) return st;
+    await new Promise(r => setTimeout(r, 700));
   }
 }
 
-async function post(path, body){
-  await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
-                     body: body ? JSON.stringify(body) : "{}"});
-  refresh();
-}
-$("b-check").onclick  = () => post("api/run/check");
-$("b-install").onclick= () => post("api/run/install");
-$("b-prep").onclick   = () => {
-  const pw = $("sudo").value;
-  if (!pw) { $("sudo").focus(); return; }
-  post("api/run/prepare", {sudo_password: pw});
-  $("sudo").value = "";
-};
+/* ---------- 02 prepare ---------- */
+$('b-prepare').addEventListener('click', async () => {
+  const pw = $('sudo-pw').value;
+  if (!pw) { $('prep-err').textContent = 'sudo password required'; return; }
+  $('prep-err').textContent = ''; $('b-prepare').disabled = true;
+  $('prep-log').hidden = false; $('prep-log').textContent = '';
+  attachStream(line => { $('prep-log').textContent += line + "\n"; $('prep-log').scrollTop = 1e9; });
+  try {
+    await api('/api/run/prepare', {method:'POST', body: JSON.stringify({password: pw, firewall: $('prep-fw').checked})});
+    $('sudo-pw').value = '';
+    const st = await waitPhase(['ready','needs-prep','error']);
+    if (st.phase === 'ready') { prepared = true; markDone('ready'); markDone('prepare'); await runCheck(); show('deploy'); }
+    else $('prep-err').textContent = st.error || 'preparation did not complete — see log';
+  } catch (e) { $('prep-err').textContent = e.message; }
+  $('b-prepare').disabled = false;
+});
 
-// Live log over SSE; phase markers trigger a state refresh.
-const es = new EventSource("api/stream");
-es.onmessage = e => {
-  if (e.data === "::ping::") return;
-  if (e.data.startsWith("::phase::")) { refresh(); return; }
-  line(e.data);
+/* ---------- 03 deployment ---------- */
+document.querySelectorAll('input[name=preset]').forEach(r => r.addEventListener('change', () => {
+  $('f-brokers').hidden = document.querySelector('input[name=preset]:checked').value !== 'external-kafka';
+}));
+$('port').addEventListener('input', () => {
+  const v = parseInt($('port').value, 10);
+  $('port-state').textContent = (v>=1 && v<=65535) ? '' : 'invalid port';
+});
+function validateDeploy() {
+  const v = parseInt($('port').value, 10);
+  if (!(v>=1 && v<=65535)) { $('deploy-err').textContent = 'dashboard port must be 1–65535'; return false; }
+  if (document.querySelector('input[name=preset]:checked').value === 'external-kafka' && !$('brokers').value.trim()) {
+    $('deploy-err').textContent = 'external Kafka needs at least one broker URL'; return false;
+  }
+  $('deploy-err').textContent = ''; markDone('deploy'); return true;
+}
+
+/* ---------- 04 discovery ---------- */
+$('disc-on').addEventListener('change', () => { $('f-cidrs').hidden = !$('disc-on').checked; scope(); });
+$('cidrs').addEventListener('input', scope);
+function cidrHosts(c) {
+  const m = c.match(/^\s*(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})\s*$/);
+  if (!m) return null;
+  const bits = parseInt(m[2],10);
+  if (bits<0||bits>32) return null;
+  if (m[1].split('.').some(o => parseInt(o,10)>255)) return null;
+  return Math.pow(2, 32-bits);
+}
+function scope() {
+  if (!$('disc-on').checked) return;
+  const parts = $('cidrs').value.split(',').map(s=>s.trim()).filter(Boolean);
+  let total = 0, bad = [];
+  parts.forEach(p => { const n = cidrHosts(p); if (n===null) bad.push(p); else total += n; });
+  $('cidr-err').textContent = bad.length ? 'invalid CIDR: '+bad.join(', ') : '';
+  $('cidr-scope').textContent = (!bad.length && parts.length)
+    ? 'scan scope ≈ '+total.toLocaleString()+' hosts'+(total>1048576?' — keep it narrow':'') : '';
+}
+function validateDiscovery() {
+  if ($('disc-on').checked) {
+    const parts = $('cidrs').value.split(',').map(s=>s.trim()).filter(Boolean);
+    if (!parts.length) { $('cidr-err').textContent = 'add at least one CIDR or disable discovery'; return false; }
+    if (parts.some(p => cidrHosts(p)===null)) return false;
+  }
+  markDone('disc'); return true;
+}
+
+/* ---------- profile assembly ---------- */
+function buildProfile() {
+  const preset = document.querySelector('input[name=preset]:checked').value;
+  const addons = [];
+  if ($('ad-logui').checked)   addons.push('log-search-ui');
+  if ($('ad-selfmon').checked) addons.push('self-monitoring');
+  if ($('ad-sso').checked)     addons.push('sso');
+  if ($('ad-netbox').checked)  addons.push('netbox');
+  return {
+    version: 1,
+    port: parseInt($('port').value, 10),
+    tls: document.querySelector('input[name=tls]:checked').value,
+    retention_profile: $('retention').value,
+    addons: addons,
+    external_kafka: preset === 'external-kafka' ? {broker_urls: $('brokers').value.trim()} : null,
+    discovery: {enabled: $('disc-on').checked,
+                cidrs: $('disc-on').checked ? $('cidrs').value.split(',').map(s=>s.trim()).filter(Boolean) : []},
+    sizing: {profile: $('size-prof').value}
+  };
+}
+function buildReview() {
+  markDone('size'); markDone('sec');
+  const p = buildProfile();
+  $('rev-kv').innerHTML =
+    '<dt>Dashboard</dt><dd>:'+p.port+(p.tls==='yes'?' → https after TLS enablement':' (http — lab only)')+'</dd>'+
+    '<dt>Preset</dt><dd>'+(p.external_kafka?'standard + external kafka':'standard')+'</dd>'+
+    '<dt>Add-ons</dt><dd>'+(p.addons.length?esc(p.addons.join(' · ')):'none')+'</dd>'+
+    '<dt>Discovery</dt><dd>'+(p.discovery.enabled?esc(p.discovery.cidrs.join(', ')):'off')+'</dd>'+
+    '<dt>Retention</dt><dd>'+esc(p.retention_profile)+'</dd>'+
+    '<dt>Sizing</dt><dd>'+esc(p.sizing.profile)+(facts&&facts.sizing&&p.sizing.profile==='auto'?' → '+esc(facts.sizing.suggested_profile):'')+'</dd>'+
+    '<dt>Transport</dt><dd>'+(p.tls==='yes'?'full mTLS mesh':'plaintext — lab only')+'</dd>'+
+    '<dt>Source</dt><dd>'+esc($('m-bundle').textContent)+'</dd>';
+}
+function exportProfile() {
+  const blob = new Blob([JSON.stringify(buildProfile(), null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'correlix-install-profile.json';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+$('b-export').addEventListener('click', exportProfile);
+$('b-export2').addEventListener('click', exportProfile);
+
+/* ---------- 08 install ---------- */
+const STAGE_TITLES = {
+  preflight:'Host preflight', prereq:'Prerequisites', scaffold:'Scaffold verified',
+  env:'Environment generated — secrets minted on this host', sizing:'Resource plan',
+  'tls-env':'Transport security variables', 'data-dirs':'Data directories',
+  bundle:'Images loaded from bundle', 'up-a':'Stack started — TLS phase A',
+  mint:'Minting service identities', 'up-b':'TLS phase B — fail-closed mesh restart',
+  status:'Service status', 'bootstrap-os':'Search index bootstrap',
+  'bootstrap-kc':'SSO database bootstrap', 'bootstrap-grafana':'Grafana datasource',
+  'verify-health':'Verifying platform health', 'verify-login':'Verifying administrator login'
 };
-refresh();
-setInterval(refresh, 4000);
+let stages = [], es = null, streamHooks = [];
+function attachStream(onLog) {
+  if (onLog) streamHooks.push(onLog);
+  if (es) return;
+  es = new EventSource('/api/stream');
+  es.onmessage = ev => {
+    let d; try { d = JSON.parse(ev.data); } catch { d = {kind:'log', line: ev.data}; }
+    if (d.kind === 'stage') upsertStage(d);
+    else if (d.kind === 'result') onResult(d);
+    else if (d.kind === 'log' || d.line !== undefined) {
+      const line = d.line !== undefined ? d.line : ev.data;
+      $('inst-log').textContent += line + "\n";
+      if (!$('inst-log').hidden) $('inst-log').scrollTop = 1e9;
+      streamHooks.forEach(h => h(line));
+    }
+  };
+}
+function upsertStage(d) {
+  const i = stages.findIndex(s => s.id === d.id);
+  if (i >= 0) stages[i] = Object.assign(stages[i], d); else stages.push(d);
+  renderStages();
+}
+function renderStages() {
+  const total = Math.max(stages.length, 12);
+  const done = stages.filter(s => s.status === 'ok').length;
+  $('stages').innerHTML = stages.map(s => {
+    const st = s.status==='ok'?'ok':(s.status==='fail'?'bad':'run');
+    const icon = s.status==='ok'?'✓':(s.status==='fail'?'✕':'▸');
+    return '<div class="ps '+(s.status==='start'?'run':'')+'"><span class="s '+st+'">'+icon+'</span>'+
+      '<span>'+esc(STAGE_TITLES[s.id]||s.title||s.id)+
+      (s.message?'<span class="msg">'+esc(s.message)+'</span>':'')+'</span></div>';
+  }).join('');
+  const pct = Math.min(99, Math.round(done/total*100));
+  $('meter-i').style.width = pct+'%'; $('pct').textContent = pct+'%';
+}
+function idemKey() {
+  const a = new Uint8Array(16); crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2,'0')).join('');
+}
+async function startInstall() {
+  installing = true; stages = []; renderStages();
+  $('inst-fail').hidden = true;
+  document.querySelector('.rs[data-s="install"]').disabled = false;
+  markDone('review'); show('install'); attachStream();
+  try {
+    await api('/api/run/install', {method:'POST', headers:{'Idempotency-Key': idemKey()},
+                                   body: JSON.stringify(buildProfile())});
+  } catch (e) { onFail('The install could not start', e.message); }
+}
+$('b-install').addEventListener('click', startInstall);
+$('b-retry').addEventListener('click', startInstall);
+$('b-log').addEventListener('click', () => {
+  $('inst-log').hidden = !$('inst-log').hidden;
+  $('b-log').textContent = $('inst-log').hidden ? 'Show technical log' : 'Hide technical log';
+});
+$('b-bundle').addEventListener('click', () => { location.href = '/api/support-bundle'; });
+function onFail(head, msg) {
+  installing = false;
+  $('fail-h').textContent = head || 'Installation stopped';
+  $('fail-p').textContent = (msg||'') + ' — your data has not been deleted; retry resumes idempotently.';
+  $('inst-fail').hidden = false;
+}
+async function onResult(d) {
+  if (d.status !== 'ok') {
+    const failed = stages.find(s => s.status==='fail');
+    onFail(failed ? (STAGE_TITLES[failed.id]||failed.id)+' failed' : 'Installation stopped',
+           (failed && failed.message) || d.message || 'see the technical log');
+    return;
+  }
+  $('meter-i').style.width = '100%'; $('pct').textContent = '100%';
+  let st = {};
+  try { st = await api('/api/state'); } catch {}
+  const res = st.result || d;
+  $('done-url').textContent = res.url || '';
+  $('done-user').textContent = res.admin_user || 'admin';
+  $('done-pass').textContent = res.admin_password || 'see deployment/docker/.env';
+  $('done-checks').innerHTML =
+    fact('ok','All services healthy — held stable through a re-check') +
+    fact('ok','Ingress answered end to end') +
+    fact('ok','Administrator login verified');
+  $('b-open').onclick = async () => {
+    try { await api('/api/done', {method:'POST'}); } catch {}
+    if (res.url) window.open(res.url, '_blank');
+  };
+  doneShown = true; installing = false;
+  show('done');
+}
+
+/* ---------- boot ---------- */
+(async function boot(){
+  show('ready');
+  await loadFacts();
+  await runCheck();
+})();
 </script>
 </body>
 </html>

@@ -248,6 +248,22 @@ CGROUP_MEM_PATHS = ("/sys/fs/cgroup/memory.max",                    # cgroup v2
                     "/sys/fs/cgroup/memory/memory.limit_in_bytes")  # cgroup v1
 
 
+# Auto-profile thresholds (GiB of host RAM → named profile). SINGLE source of
+# truth shared by install.py's --plan-resources auto selection and the GUI
+# facts endpoint (`--detect-json`); duplicate these nowhere.
+AUTO_PROFILE_GIB = ((24, "demo"), (48, "small"), (96, "medium"))
+
+
+def suggest_profile(mem_bytes):
+    """The profile an auto-sizing install picks for a host with this much RAM:
+    <24 GiB demo, <48 small, <96 medium, else large."""
+    gib = mem_bytes / GIB
+    for cap, name in AUTO_PROFILE_GIB:
+        if gib < cap:
+            return name
+    return "large"
+
+
 def detect_host(mem_override=None, cpu_override=None, disk_override=None,
                 data_path=".", cgroup_paths=CGROUP_MEM_PATHS):
     mem = parse_size(mem_override) if mem_override else None
@@ -864,7 +880,24 @@ def main(argv=None):
         os.path.dirname(os.path.abspath(__file__)), "..", "deployment", "docker", ".env"))
     ap.add_argument("--write", action="store_true", help="splice the block into --env-file")
     ap.add_argument("--output-dir", help="write resource-plan.json/.txt here")
+    ap.add_argument("--detect-json", action="store_true",
+                    help="print detected host capacity + suggested auto profile "
+                         "as one JSON object and exit (no side effects; GUI "
+                         "installer facts endpoint)")
     args = ap.parse_args(argv)
+
+    if args.detect_json:
+        # Read-only: detect_host() + the shared auto-profile thresholds.
+        # Never writes a file, never touches .env.
+        host = detect_host(args.memory, args.cpus, args.disk_free)
+        sys.stdout.write(json.dumps({
+            "mem_bytes": host["memory_bytes"],
+            "mem_gib": round(host["memory_bytes"] / GIB, 1),
+            "cpus": host["cpus"],
+            "disk_free_bytes": host["disk_free_bytes"],
+            "suggested_profile": suggest_profile(host["memory_bytes"]),
+        }, sort_keys=True) + "\n")
+        return 0
 
     doc = {}
     if args.sizing_file:

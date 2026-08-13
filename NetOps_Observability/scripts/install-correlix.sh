@@ -17,7 +17,7 @@
 # choices, no topic names, no compose internals.
 #
 # Commands (no argument = install):
-#     ./install-correlix.sh install [--ui-port N]
+#     ./install-correlix.sh install [--ui-port N] [--config profile.json]
 #     ./install-correlix.sh status
 #     ./install-correlix.sh logs [service]
 #     ./install-correlix.sh stop
@@ -35,6 +35,12 @@
 #         Internal/developer mode: source-checkout install with the full dev
 #         profile set. Not part of customer distribution and intentionally
 #         undocumented in customer docs.
+#     install --config profile.json
+#         Unattended install from an exported installation profile (Profile
+#         JSON v1, produced by the graphical installer). Expands to the
+#         existing flags, fully non-interactive; unknown keys are a hard
+#         error. Add --print-flags to print the expanded install.py argument
+#         list and exit (contract/debug aid).
 #
 # The script runs in two contexts and detects which:
 #   * BUNDLE ROOT (offline customer install): next to correlix-images-*.tar.zst
@@ -72,6 +78,31 @@ ENV_FILE="$COMPOSE_DIR/.env"
 compose() { (cd "$COMPOSE_DIR" && docker compose "$@"); }
 env_get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
 
+# ---------- GUI progress markers (design gui-installer-2026-08.md §6, P0) ----
+# Same `@CX@ {json}` stdout line format install.py emits; activated by
+# CORRELIX_PROGRESS_JSON=1 (exported by the GUI — install.py inherits it and
+# emits its own stages). This script owns the stages install.py cannot see:
+# preflight, verify-health, verify-login — plus the terminal result line.
+# Callers pass only fixed, quote-free constant strings, so no JSON escaping
+# machinery is needed here; never pass user-controlled text.
+cx_stage() { # id title status [message]
+  [ "${CORRELIX_PROGRESS_JSON:-0}" = "1" ] || return 0
+  if [ -n "${4:-}" ]; then
+    printf '@CX@ {"kind":"stage","id":"%s","title":"%s","status":"%s","message":"%s"}\n' \
+      "$1" "$2" "$3" "$4"
+  else
+    printf '@CX@ {"kind":"stage","id":"%s","title":"%s","status":"%s"}\n' "$1" "$2" "$3"
+  fi
+}
+cx_result() { # "ok" url admin_user | "fail"
+  [ "${CORRELIX_PROGRESS_JSON:-0}" = "1" ] || return 0
+  if [ "$1" = "ok" ]; then
+    printf '@CX@ {"kind":"result","status":"ok","url":"%s","admin_user":"%s"}\n' "$2" "$3"
+  else
+    printf '@CX@ {"kind":"result","status":"fail"}\n'
+  fi
+}
+
 # ---------- args ---------------------------------------------------------
 CMD="install"
 UI_PORT=8000
@@ -80,6 +111,8 @@ BROKER_URLS_ARG="${BROKER_URLS:-}"
 LAB=0
 PURGE=0
 LOG_SVC=""
+CONFIG_FILE=""
+PRINT_FLAGS=0
 if [ $# -gt 0 ]; then
   case "$1" in
     install|status|logs|stop|start|uninstall|reset-demo-data|enable|disable|menu|gui) CMD="$1"; shift ;;
@@ -101,6 +134,8 @@ while [ $# -gt 0 ]; do
     --ui-port)        UI_PORT="${2:?--ui-port needs a number}"; shift 2 ;;
     --external-kafka) EXTERNAL_KAFKA=1; shift ;;
     --broker-urls)    BROKER_URLS_ARG="${2:?--broker-urls needs host:port[,host:port]}"; shift 2 ;;
+    --config)         CONFIG_FILE="${2:?--config needs a profile.json path}"; shift 2 ;;
+    --print-flags)    PRINT_FLAGS=1; shift ;;
     --lab)            LAB=1; shift ;;
     --purge)          PURGE=1; shift ;;
     -h|--help)        sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -364,21 +399,147 @@ friendly_status() {
   say "  UI: http://localhost:${port}"
 }
 
-# ---------- commands ----------------------------------------------------
-cmd_install() {
-  # Full transcript of the installation — tail-able live from another
-  # terminal, and the first thing support asks for when something fails.
-  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
-  say "${BOLD}Correlix installer${RST}"
-  say "Full log: $INSTALL_LOG"
-  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
-  exec > >(tee -a "$INSTALL_LOG") 2>&1
-  preflight
-  [ "$MODE" = "bundle" ] && verify_bundle
+# ---------- installation profile (Profile JSON v1, GUI contract) ---------
+# `install --config FILE` expands an exported profile to the existing flags.
+# Fail-closed: unknown top-level keys (and unknown add-ons) are hard errors;
+# every value is validated BEFORE anything touches the host. The validator is
+# a bounded python3 helper (python3 is already a hard prerequisite) that only
+# ever emits CFG_* lines whose values are restricted to shell-safe charsets.
+CFG_PORT="" CFG_TLS="" CFG_RETENTION="" CFG_ADDONS=""
+CFG_BROKER_URLS="" CFG_SNMP_CIDRS="" CFG_SIZING=""
+CONFIG_ADDON_PROFILES=""
 
-  # Assemble install.py arguments. Defaults are the appliance path: embedded
-  # Apache Kafka + embedded Valkey + everything else, zero questions asked.
-  local args=(--port "$UI_PORT")
+load_config() {
+  local file="$1" out line
+  [ -f "$file" ] || die "Config file not found: $file"
+  if ! out=$(python3 - "$file" <<'PYCFG'
+import ipaddress, json, re, sys
+
+def bad(msg):
+    print(f"profile config: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    with open(sys.argv[1]) as f:
+        doc = json.load(f)
+except (OSError, ValueError) as e:
+    bad(f"cannot parse JSON: {e}")
+if not isinstance(doc, dict):
+    bad("top level must be a JSON object")
+
+ALLOWED = {"version", "port", "tls", "retention_profile", "addons",
+           "external_kafka", "discovery", "sizing"}
+unknown = sorted(set(doc) - ALLOWED)
+if unknown:
+    bad("unknown top-level key(s): " + ", ".join(unknown))
+if doc.get("version") != 1:
+    bad("missing or unsupported \"version\" (this installer expects 1)")
+
+port = doc.get("port", 8000)
+if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+    bad(f"\"port\" must be an integer 1-65535, got {port!r}")
+
+tls = doc.get("tls", "no")
+if tls not in ("yes", "no"):
+    bad(f"\"tls\" must be \"yes\" or \"no\", got {tls!r}")
+
+retention = doc.get("retention_profile", "production")
+if retention not in ("lab", "demo", "production", "extended"):
+    bad(f"\"retention_profile\" must be lab|demo|production|extended, got {retention!r}")
+
+addons = doc.get("addons") or []
+if not isinstance(addons, list) or any(
+        not isinstance(a, str) or not re.fullmatch(r"[a-z0-9-]+", a) for a in addons):
+    bad("\"addons\" must be a list of add-on names (lowercase, digits, dashes)")
+
+broker = ""
+ek = doc.get("external_kafka")
+if ek is not None:
+    if not isinstance(ek, dict) or set(ek) != {"broker_urls"}:
+        bad("\"external_kafka\" must be null or {\"broker_urls\": \"host:port[,host:port]\"}")
+    broker = ek["broker_urls"]
+    if not isinstance(broker, str) or not re.fullmatch(r"[A-Za-z0-9_.:,\[\]-]+", broker):
+        bad(f"\"external_kafka.broker_urls\" is not a valid broker list: {broker!r}")
+
+cidrs = ""
+disc = doc.get("discovery")
+if disc is not None:
+    if not isinstance(disc, dict) or not set(disc) <= {"enabled", "cidrs"}:
+        bad("\"discovery\" must be {\"enabled\": bool, \"cidrs\": [\"CIDR\", ...]}")
+    if not isinstance(disc.get("enabled", False), bool):
+        bad("\"discovery.enabled\" must be true or false")
+    if disc.get("enabled"):
+        ranges = disc.get("cidrs") or []
+        if not isinstance(ranges, list) or not ranges:
+            bad("\"discovery.enabled\" is true but \"discovery.cidrs\" is empty")
+        for c in ranges:
+            try:
+                ipaddress.ip_network(c, strict=False)
+            except ValueError:
+                bad(f"\"discovery.cidrs\" entry is not a valid CIDR: {c!r}")
+        cidrs = ",".join(ranges)
+
+sizing = doc.get("sizing") or {}
+if not isinstance(sizing, dict) or not set(sizing) <= {"profile"}:
+    bad("\"sizing\" must be {\"profile\": \"auto|demo|small|medium|large\"}")
+sizing_profile = sizing.get("profile", "auto")
+if sizing_profile not in ("auto", "demo", "small", "medium", "large"):
+    bad(f"\"sizing.profile\" must be auto|demo|small|medium|large, got {sizing_profile!r}")
+
+print(f"CFG_PORT={port}")
+print(f"CFG_TLS={tls}")
+print(f"CFG_RETENTION={retention}")
+print(f"CFG_ADDONS={','.join(addons)}")
+print(f"CFG_BROKER_URLS={broker}")
+print(f"CFG_SNMP_CIDRS={cidrs}")
+print(f"CFG_SIZING={sizing_profile}")
+PYCFG
+  ); then
+    die "Invalid installation profile: $file" \
+      "Fix the config (see the message above) and re-run. Unknown keys are rejected on purpose."
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      CFG_PORT=*)        CFG_PORT="${line#CFG_PORT=}" ;;
+      CFG_TLS=*)         CFG_TLS="${line#CFG_TLS=}" ;;
+      CFG_RETENTION=*)   CFG_RETENTION="${line#CFG_RETENTION=}" ;;
+      CFG_ADDONS=*)      CFG_ADDONS="${line#CFG_ADDONS=}" ;;
+      CFG_BROKER_URLS=*) CFG_BROKER_URLS="${line#CFG_BROKER_URLS=}" ;;
+      CFG_SNMP_CIDRS=*)  CFG_SNMP_CIDRS="${line#CFG_SNMP_CIDRS=}" ;;
+      CFG_SIZING=*)      CFG_SIZING="${line#CFG_SIZING=}" ;;
+      *) die "Unexpected config-parser output: $line" ;;
+    esac
+  done <<< "$out"
+  UI_PORT="$CFG_PORT"
+  if [ -n "$CFG_BROKER_URLS" ]; then
+    EXTERNAL_KAFKA=1
+    BROKER_URLS_ARG="$CFG_BROKER_URLS"
+  fi
+  # Add-ons map through the SAME registry `enable` uses — an add-on unknown to
+  # the registry is a hard error, not a silently dropped profile entry.
+  CONFIG_ADDON_PROFILES=""
+  if [ -n "$CFG_ADDONS" ]; then
+    local a spec prof
+    for a in ${CFG_ADDONS//,/ }; do
+      spec=$(addon_spec "$a")
+      [ -n "$spec" ] || die "Unknown add-on in config: '$a'" \
+        "Available add-ons: log-search-ui (log forensics UI), self-monitoring (Grafana + container/host metrics)"
+      prof="${spec%%|*}"
+      case ",$CONFIG_ADDON_PROFILES," in
+        *",$prof,"*) ;;
+        *) CONFIG_ADDON_PROFILES="${CONFIG_ADDON_PROFILES:+$CONFIG_ADDON_PROFILES,}$prof" ;;
+      esac
+    done
+  fi
+}
+
+# ---------- install.py argument assembly ---------------------------------
+# Fills the global INSTALL_ARGS array (bash functions cannot return arrays).
+# Config mode is fully non-interactive: --tls comes from the profile and
+# --bootstrap-docker no guarantees no prompt can ever block the run.
+INSTALL_ARGS=()
+assemble_install_args() {
+  INSTALL_ARGS=(--port "$UI_PORT")
   # Bundle installs start as the BASE appliance (add-ons come later via
   # `enable`); source checkouts get the developer default incl. dashboards +
   # self-monitoring.
@@ -388,26 +549,34 @@ cmd_install() {
     images=$(compgen -G "$BUNDLE_DIR/correlix-images-*.tar.zst" | head -1 || true)
     [ -n "$images" ] || die "Image archive not found in the bundle." \
       "Expected correlix-images-core-<version>.tar.zst (or its .partNN pieces) next to this script."
-    args+=(--bundle "$images")
+    INSTALL_ARGS+=(--bundle "$images")
     profiles="embedded-bus,prober"
+  fi
+  if [ -n "$CONFIG_FILE" ]; then
+    # The profile owns the add-on set: base appliance + exactly the addons
+    # listed (mapped to compose profiles via the registry in load_config).
+    profiles="embedded-bus,prober${CONFIG_ADDON_PROFILES:+,$CONFIG_ADDON_PROFILES}"
   fi
   if [ "$EXTERNAL_KAFKA" = 1 ]; then
     [ -n "$BROKER_URLS_ARG" ] || die "External Kafka mode needs your broker endpoints." \
       "Provide them like this:
   ./install-correlix.sh install --external-kafka --broker-urls broker1:9092,broker2:9092
 (or set the BROKER_URLS environment variable). See ADVANCED.md."
-    args+=(--broker-urls "$BROKER_URLS_ARG")
+    INSTALL_ARGS+=(--broker-urls "$BROKER_URLS_ARG")
     say "Using your external Kafka-compatible broker: $BROKER_URLS_ARG"
   elif [ -n "$BROKER_URLS_ARG" ] && [ "$BROKER_URLS_ARG" != "kafka:9092" ]; then
     warn "BROKER_URLS is set but --external-kafka was not given — ignoring it and using the embedded bus."
   fi
   [ "$LAB" = 1 ] && say "${DIM}(lab mode: developer profiles; internal use only)${RST}"
-  args+=(--profiles "$profiles")
+  INSTALL_ARGS+=(--profiles "$profiles")
   # #101: correlation history retention profile (hot TTLs + cold export
   # cadence). Appliance default is production (180/90/90 days); override via
-  # CORR_RETENTION_PROFILE=lab|demo|production|extended before running.
-  if [ -n "${CORR_RETENTION_PROFILE:-}" ]; then
-    args+=(--retention-profile "$CORR_RETENTION_PROFILE")
+  # CORR_RETENTION_PROFILE=lab|demo|production|extended before running, or
+  # the profile config's retention_profile in config mode.
+  if [ -n "$CONFIG_FILE" ]; then
+    INSTALL_ARGS+=(--retention-profile "$CFG_RETENTION")
+  elif [ -n "${CORR_RETENTION_PROFILE:-}" ]; then
+    INSTALL_ARGS+=(--retention-profile "$CORR_RETENTION_PROFILE")
   fi
   # #102: host/workload-derived resource sizing (scripts/resource_planner.py).
   # Fresh customer installs size to the detected host by default; drop a
@@ -416,31 +585,91 @@ cmd_install() {
   # with a sizing report when the workload cannot safely fit — that is the
   # feature, not a bug. Opt out with CORRELIX_NO_SIZING=1 (lab-tier defaults).
   if [ "${CORRELIX_NO_SIZING:-0}" != 1 ]; then
-    args+=(--plan-resources)
+    if [ -n "$CONFIG_FILE" ] && [ "$CFG_SIZING" != "auto" ]; then
+      INSTALL_ARGS+=(--plan-resources "$CFG_SIZING")
+    else
+      INSTALL_ARGS+=(--plan-resources)
+    fi
     if [ -f "$HERE/correlix-sizing.yaml" ]; then
-      args+=(--sizing-file "$HERE/correlix-sizing.yaml")
+      INSTALL_ARGS+=(--sizing-file "$HERE/correlix-sizing.yaml")
       say "Resource sizing: detected host + correlix-sizing.yaml workload inputs."
     else
       say "Resource sizing: detected host resources (auto profile)."
       say "${DIM}(declare your workload in correlix-sizing.yaml for workload-aware sizing — see docs/RESOURCE_SIZING.md)${RST}"
     fi
   fi
+  if [ -n "$CONFIG_FILE" ]; then
+    INSTALL_ARGS+=(--tls "$CFG_TLS" --bootstrap-docker no)
+    if [ -n "$CFG_SNMP_CIDRS" ]; then
+      INSTALL_ARGS+=(--snmp-discovery "$CFG_SNMP_CIDRS")
+    fi
+  fi
+}
 
-  say ""
-  if ! python3 "$ROOT/scripts/install.py" "${args[@]}"; then
-    print_failure
+# ---------- commands ----------------------------------------------------
+cmd_install() {
+  if [ -n "$CONFIG_FILE" ]; then
+    load_config "$CONFIG_FILE"
+  fi
+  if [ "$PRINT_FLAGS" = 1 ]; then
+    # Contract/debug aid: print the expanded install.py argv (one per line)
+    # and exit without touching the host. Assembly chatter goes to stderr so
+    # stdout is exactly the argument list.
+    assemble_install_args >&2
+    printf '%s\n' "${INSTALL_ARGS[@]}"
+    return 0
+  fi
+  # Full transcript of the installation — tail-able live from another
+  # terminal, and the first thing support asks for when something fails.
+  INSTALL_LOG="$HERE/correlix-install-$(date +%Y%m%d-%H%M%S).log"
+  say "${BOLD}Correlix installer${RST}"
+  say "Full log: $INSTALL_LOG"
+  say "${DIM}(watch live from another terminal:  tail -f $INSTALL_LOG)${RST}"
+  exec > >(tee -a "$INSTALL_LOG") 2>&1
+  # The subshell exists for the fail marker: die() inside preflight exits it,
+  # and we translate that into a stage-fail + result before stopping. The
+  # human output and the exit code are unchanged from the direct call.
+  cx_stage preflight "checking this host" start
+  if ! ( preflight ); then
+    cx_stage preflight "checking this host" fail "host preflight failed (see messages above)"
+    cx_result fail
     exit 1
   fi
+  cx_stage preflight "checking this host" ok
+  [ "$MODE" = "bundle" ] && verify_bundle
+
+  # Assemble install.py arguments. Defaults are the appliance path: embedded
+  # Apache Kafka + embedded Valkey + everything else, zero questions asked.
+  assemble_install_args
+
+  say ""
+  if ! python3 "$ROOT/scripts/install.py" "${INSTALL_ARGS[@]}"; then
+    print_failure
+    cx_result fail
+    exit 1
+  fi
+  cx_stage verify-health "waiting for services to become healthy" start
   if wait_healthy; then
+    cx_stage verify-health "waiting for services to become healthy" ok
     # Reclaim superseded image layers from any previous version this host ran —
     # upgrades load new tags and the old layers otherwise sit on the appliance
     # disk forever. Dangling-only: everything the running stack references is
     # untouchable by definition.
     docker image prune -f >/dev/null 2>&1 || true
+    cx_stage verify-login "verifying the admin credential" start
     verify_admin_login
+    # verify_admin_login is advisory by design (it warns, never blocks), so
+    # the stage always closes ok; the credential itself NEVER rides a marker.
+    cx_stage verify-login "verifying the admin credential" ok
     print_success
+    local ip host
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}'); host=${ip:-localhost}
+    cx_result ok "http://${host}:${UI_PORT}" "$(env_get ADMIN_USERNAME || echo admin)"
   else
+    cx_stage verify-health "waiting for services to become healthy" fail \
+      "services did not become healthy within the wait window"
     print_failure
+    cx_result fail
     exit 1
   fi
 }
