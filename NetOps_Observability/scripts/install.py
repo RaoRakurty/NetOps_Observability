@@ -1024,6 +1024,30 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
 
 # ---- data dirs --------------------------------------------------------------
 
+def api_runtime_uid(root: Path) -> tuple[int, int]:
+    """The uid:gid the api container actually RUNS as.
+
+    Compose maps the api to `user: ${CORRELIX_UID:-65532}` — write_env stamps
+    CORRELIX_UID with the installer's uid, so everything the api writes
+    (data/api, data/tls) must be owned by THAT uid, never a hardcoded one.
+    Hardcoding 65532 broke root installs (CI tls-boot leg, 2026-08-13): under
+    sudo the api runs as uid 0 with cap_drop:ALL — no CAP_DAC_OVERRIDE — so a
+    65532-owned data/api is unwritable and the api crash-loops before minting.
+    Reads the freshly-written .env; falls back to the compose default (65532)
+    if the variable is absent, because that is what compose would resolve."""
+    env_path = root / "deployment" / "docker" / ".env"
+    uid, gid = 65532, 65532
+    try:
+        for line in env_path.read_text().splitlines():
+            if line.startswith("CORRELIX_UID="):
+                uid = int(line.split("=", 1)[1].strip())
+            elif line.startswith("CORRELIX_GID="):
+                gid = int(line.split("=", 1)[1].strip())
+    except (OSError, ValueError):
+        pass  # no .env yet (e.g. --no-start dry paths) → compose default
+    return uid, gid
+
+
 def ensure_data_dirs(root: Path) -> None:
     """Create per-service subdirectories under data/ and (where we know
     the container runs as a non-root user) chown them to that UID/GID.
@@ -1036,6 +1060,7 @@ def ensure_data_dirs(root: Path) -> None:
         kafka        1000 (appuser)
     The other services (postgres, redis, api correlation store) either
     chown their own data dirs on first boot or write as root."""
+    api_uid, api_gid = api_runtime_uid(root)
     owners: dict[str, tuple[int, int] | None] = {
         "postgres":   None,             # initdb chowns its own
         "redis":      None,             # writes as redis user via its own init
@@ -1049,13 +1074,12 @@ def ensure_data_dirs(root: Path) -> None:
         # stack then reports that it HAS backups.
         "opensearch-snapshots": (1000, 1000),
         "clickhouse": (101, 101),
-        # The api (nonroot 65532) OWNS this tree: the file-kv store, the vault's
-        # wrapped-keys file, enrichment, processors. "None" was correct while the
-        # installer ran unprivileged (dir inherited the operator uid and the api
-        # could read it via world-r); run AS ROOT, a root-owned data/api makes
-        # custody unloadable and the CA mints NOTHING (CI tls-boot leg,
-        # 2026-08-12: "vault: load wrapped keys: permission denied").
-        "api":        (65532, 65532),
+        # The api OWNS this tree (file-kv store, vault wrapped-keys, enrichment,
+        # processors) — and it runs user-mapped as CORRELIX_UID with
+        # cap_drop:ALL, so the owner MUST be that runtime uid. A fixed 65532
+        # here broke sudo installs (api ran as 0 without CAP_DAC_OVERRIDE →
+        # EACCES crash-loop before minting; CI tls-boot leg, 2026-08-13).
+        "api":        (api_uid, api_gid),
         "secrets-seal": None,           # #17 sealing-sidecar socket dir (root-owned; opt-in 'seal' profile)
         "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
         "netbox-postgres": None,        # bundled-NetBox DB (opt-in 'netbox' profile); initdb self-chowns
@@ -1068,10 +1092,10 @@ def ensure_data_dirs(root: Path) -> None:
         # root-created on 2026-07-27 and invisible until the RCA canary paged.
         "correlation/deadletter": (10001, 999),
         # tracker #151: the internal CA's mint target (SVIDs, trust bundle).
-        # Docker would auto-create a bind-mount source as ROOT, and the api
-        # (uid 65532) could then never mint into it — pre-create owned by the
-        # api's uid. Dormant/empty on plaintext installs.
-        "tls": (65532, 65532),
+        # Docker would auto-create a bind-mount source as ROOT, and a
+        # non-matching api uid could then never mint into it — pre-create
+        # owned by the api's RUNTIME uid. Dormant/empty on plaintext installs.
+        "tls": (api_uid, api_gid),
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name
@@ -1095,18 +1119,19 @@ def ensure_data_dirs(root: Path) -> None:
                     f"  Fix: sudo chown -R {uid_gid[0]}:{uid_gid[1]} {d}"
                 )
 
-    # #20: device→tenant enrichment dir. The api (nonroot 65532) exports the CSV
-    # here; the Vector aggregator + correlation mount it read-only. Seed a
-    # header-only CSV so the aggregator's enrichment-table load never fails on a
-    # cold start (before the api has written its first map). Owned by the api uid.
+    # #20: device→tenant enrichment dir. The api exports the CSV here; the
+    # Vector aggregator + correlation mount it read-only. Seed a header-only
+    # CSV so the aggregator's enrichment-table load never fails on a cold
+    # start (before the api has written its first map). Owned by the api's
+    # runtime uid (CORRELIX_UID).
     enrich = root / "data" / "api" / "enrichment"
     enrich.mkdir(parents=True, exist_ok=True)
     seed = enrich / "device_tenant.csv"
     if not seed.exists():
         seed.write_text("identity,tenant_id\n")
     try:
-        os.chown(enrich, 65532, 65532)
-        os.chown(seed, 65532, 65532)
+        os.chown(enrich, api_uid, api_gid)
+        os.chown(seed, api_uid, api_gid)
     except (PermissionError, OSError):
         pass  # not root; api will adopt it on first write where it can
 
@@ -1122,9 +1147,9 @@ def ensure_data_dirs(root: Path) -> None:
         default = root / "deployment" / "docker" / "vector-router" / "processors-default.yaml"
         proc_seed.write_text(default.read_text())
     try:
-        os.chown(proc_dir.parent, 65532, 65532)
-        os.chown(proc_dir, 65532, 65532)
-        os.chown(proc_seed, 65532, 65532)
+        os.chown(proc_dir.parent, api_uid, api_gid)
+        os.chown(proc_dir, api_uid, api_gid)
+        os.chown(proc_seed, api_uid, api_gid)
     except (PermissionError, OSError):
         pass  # not root; api will adopt it on first write where it can
 
@@ -1149,7 +1174,7 @@ def ensure_data_dirs(root: Path) -> None:
     cloud_runtime.mkdir(parents=True, exist_ok=True)
     for d in (appid_feeds, cloud_fixtures):
         try:
-            os.chown(d, 65532, 65532)
+            os.chown(d, api_uid, api_gid)
         except (PermissionError, OSError):
             pass  # not root; api adopts it where it can
 

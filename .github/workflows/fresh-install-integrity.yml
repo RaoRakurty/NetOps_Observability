@@ -109,8 +109,14 @@ jobs:
           cd ../..
           sudo stat -c '%n %a %u:%g' data data/api data/tls 2>&1 || true
           sudo ls -lan data/api | head -12 || true
-          echo "=== can uid 65532 read the store? ==="
-          sudo -u '#65532' sh -c 'ls /dev/null >/dev/null; test -r NetOps_Observability 2>/dev/null; cd '"$PWD"' && ls data/api >/dev/null 2>&1 && echo "read OK" || echo "read DENIED"' || true
+          echo "=== can the api's RUNTIME uid (CORRELIX_UID) write the store? ==="
+          # The api runs user-mapped (`user: ${CORRELIX_UID}` with cap_drop:ALL,
+          # so no DAC override) — probe as THAT uid, via setuid (sudo -u '#uid'
+          # needs a passwd entry and fails 'unknown user' for container uids).
+          uid=$(sudo grep -oP '^CORRELIX_UID=\K.*' deployment/docker/.env || echo 65532)
+          gid=$(sudo grep -oP '^CORRELIX_GID=\K.*' deployment/docker/.env || echo 65532)
+          echo "api runtime uid: $uid:$gid"
+          sudo python3 -c "import os; os.setgid($gid); os.setuid($uid); open('data/api/.ci-write-probe','w').write('x'); os.remove('data/api/.ci-write-probe'); print('write OK')" 2>&1 || echo "write DENIED as $uid:$gid"
 
       - name: assert the mesh stayed up (no crash-loops behind exit 0)
         working-directory: NetOps_Observability/deployment/docker
