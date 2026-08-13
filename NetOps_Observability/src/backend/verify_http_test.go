@@ -274,6 +274,27 @@ func TestVerifyManualRateLimited(t *testing.T) {
 		t.Fatalf("second verify inside the window: want 429, got %d", st)
 	}
 	waitVerifyDone(t, s, fix["A"].tenantID, caseA)
+
+	// The status flip is the run's COMMIT POINT: once a reader observes
+	// "completed", every completion side effect — the audit record above all —
+	// must already have landed. The old order (store Put first, audit after)
+	// left a window where the run claimed completed with no audit trail, and
+	// the trailing audit append raced test teardown (CI -race, 2026-08-13:
+	// "TempDir RemoveAll cleanup: directory not empty").
+	events, err := s.audit.List(fix["A"].tenantID, false, auditQuery{Limit: 50})
+	if err != nil {
+		t.Fatalf("audit list: %v", err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Method == "VERIFY_RUN" && ev.Detail["action"] == "active_verification_complete" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("run observed as completed but its completion audit record has not landed — the status flip must be the last side effect")
+	}
 }
 
 func TestVerifyTriggerCooldownDedupe(t *testing.T) {

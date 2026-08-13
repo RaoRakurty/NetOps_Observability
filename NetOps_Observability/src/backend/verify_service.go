@@ -222,13 +222,19 @@ func (s *server) startVerificationRun(tenant, caseID, trigger, actor, why string
 		run.Results = results
 		run.FinishedAt = time.Now().UTC()
 		run.Status = "completed"
-		s.verifyRuns.Put(run)
+		// The status flip in the run store is the COMMIT POINT and must come
+		// LAST: every completion side effect (evidence emit, audit record,
+		// log) happens before a reader can observe "completed". Putting the
+		// record first let observers act on a run whose audit trail had not
+		// landed yet — surfaced as a test-temp-dir teardown race (CI -race
+		// leg, 2026-08-13: the audit append hit the dir mid-removal).
 		s.emitVerificationResults(run)
 		s.auditVerifyRun(run, "complete", why, nil)
 		logInfo("verify", "verification run completed", map[string]any{
 			"tenant": tenant, "correlation_id": caseID, "run_id": run.RunID,
 			"trigger": trigger, "devices": len(targets), "results": len(results),
 		})
+		s.verifyRuns.Put(run)
 	})
 	return rec, nil
 }
