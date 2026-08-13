@@ -63,3 +63,15 @@ f861d29ae5a0e16c4864708a1bbc03b281feb3cd:NetOps_Observability/deployment/docker/
 9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:jwt:55
 9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:private-key:83
 9e811744a5d0d819f04d6c1b69678c48ddb6d7ec:NetOps_Observability/src/backend/ai/redact_test.go:generic-api-key:207
+# 2026-08-13 watchdog-handover tests (commit 0d6eb324): FAKE fixture bearer
+# tokens (e.g. "nt_secret=1234") tripping generic-api-key; replaced with
+# low-entropy "test-*-000..." values in the follow-up commit — these pins
+# cover the one historical commit only. No real credential was ever present.
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:86
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:163
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:165
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:170
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:174
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/scripts/installer-gui/watchdog_test.go:generic-api-key:187
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:112
+0d6eb3240a0a1dc60c903ffc00dcf95abb2be273:NetOps_Observability/tests/test_watchdog_ship.py:generic-api-key:114

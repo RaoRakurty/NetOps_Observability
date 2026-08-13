@@ -123,8 +123,9 @@ fi
 # (/etc/cron.d, a sourced env file), so every value is allowlist-validated.
 # ---------------------------------------------------------------------------
 [ -n "$APP_URL" ] || die "--app-url is required"
-[ "${#APP_URL}" -le 200 ] && [[ "$APP_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] \
-  || die "--app-url must be http(s)://host[:port][/path], <=200 chars (got: $APP_URL)"
+if ! { [ "${#APP_URL}" -le 200 ] && [[ "$APP_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]]; }; then
+  die "--app-url must be http(s)://host[:port][/path], <=200 chars (got: $APP_URL)"
+fi
 
 if [ -n "$TOPIC" ]; then
   [[ "$TOPIC" =~ ^[A-Za-z0-9_-]{1,64}$ ]] \
@@ -132,20 +133,23 @@ if [ -n "$TOPIC" ]; then
 fi
 
 if [ -n "$EMAIL" ]; then
-  [ "${#EMAIL}" -le 254 ] && [[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
-    || die "--email is not a valid address (RFC-lite check, <=254 chars)"
+  if ! { [ "${#EMAIL}" -le 254 ] && [[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; }; then
+    die "--email is not a valid address (RFC-lite check, <=254 chars)"
+  fi
   [ -n "$TOPIC" ] || die "--email requires --topic: ntfy can only publish to a topic, and email delivery rides the topic publish"
 fi
 
 if [ -n "$HC_URL" ]; then
-  [ "${#HC_URL}" -le 200 ] && [[ "$HC_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9/_-]+$ ]] \
-    || die "--hc-url must be https://host/path ([A-Za-z0-9/_-] path, <=200 chars)"
+  if ! { [ "${#HC_URL}" -le 200 ] && [[ "$HC_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9/_-]+$ ]]; }; then
+    die "--hc-url must be https://host/path ([A-Za-z0-9/_-] path, <=200 chars)"
+  fi
 fi
 
 if [ -n "$NTFY_SERVER" ]; then
   NTFY_SERVER="${NTFY_SERVER%/}"
-  [ "${#NTFY_SERVER}" -le 200 ] && [[ "$NTFY_SERVER" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] \
-    || die "--ntfy-server must be http(s)://host[:port], <=200 chars"
+  if ! { [ "${#NTFY_SERVER}" -le 200 ] && [[ "$NTFY_SERVER" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]]; }; then
+    die "--ntfy-server must be http(s)://host[:port], <=200 chars"
+  fi
 fi
 
 if [ -n "$NTFY_TOKEN" ]; then
@@ -157,8 +161,9 @@ if [ -n "$WEBHOOK_URL" ]; then
   # Same shape as --hc-url plus the chars real incoming-webhook URLs use
   # (Teams embeds '@', some relays use '?='). https only: a bearer token must
   # never ride plaintext.
-  [ "${#WEBHOOK_URL}" -le 512 ] && [[ "$WEBHOOK_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9/_.@%=\&?~-]+$ ]] \
-    || die "--webhook-url must be https://host/path, <=512 chars"
+  if ! { [ "${#WEBHOOK_URL}" -le 512 ] && [[ "$WEBHOOK_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9/_.@%=\&?~-]+$ ]]; }; then
+    die "--webhook-url must be https://host/path, <=512 chars"
+  fi
 fi
 
 if [ -n "$WEBHOOK_TOKEN" ]; then

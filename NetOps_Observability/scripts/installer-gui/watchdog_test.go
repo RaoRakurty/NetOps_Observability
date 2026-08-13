@@ -83,7 +83,7 @@ func TestWatchdogValidation(t *testing.T) {
 		{"webhook_token bad chars", `{"password":"pw","webhook_url":"https://hooks.example.com/T0/B0","webhook_token":"has spaces!"}`, "webhook_token"},
 		{"webhook_token too long", `{"password":"pw","webhook_url":"https://hooks.example.com/T0/B0","webhook_token":"` + strings.Repeat("t", 257) + `"}`, "webhook_token"},
 		{"no channel at all", `{"password":"pw"}`, "at least one"},
-		{"token only is not a channel", `{"password":"pw","ntfy_token":"tok=12345678"}`, "at least one"},
+		{"token only is not a channel", `{"password":"pw","ntfy_token":"test-tok-0000"}`, "at least one"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,18 +160,18 @@ func TestWatchdogArgvAssembly(t *testing.T) {
 		{"webhook only", watchdogReq{WebhookURL: "https://hooks.example.com/T0/B0"},
 			append(append([]string{}, base...), "--webhook-url", "https://hooks.example.com/T0/B0")},
 		{"all fields", watchdogReq{
-			NtfyTopic: "ops-alerts", NtfyServer: "https://ntfy.example.com/ops", NtfyToken: "nt_secret=1234",
+			NtfyTopic: "ops-alerts", NtfyServer: "https://ntfy.example.com/ops", NtfyToken: "test-nt-00000000",
 			Email: "noc@example.com", HCURL: "https://hc-ping.com/uuid-1",
-			WebhookURL: "https://hooks.example.com/T0/B0", WebhookToken: "wh_secret=5678",
+			WebhookURL: "https://hooks.example.com/T0/B0", WebhookToken: "test-wh-00000000",
 		},
 			append(append([]string{}, base...),
 				"--topic", "ops-alerts",
 				"--ntfy-server", "https://ntfy.example.com/ops",
-				"--ntfy-token", "nt_secret=1234",
+				"--ntfy-token", "test-nt-00000000",
 				"--email", "noc@example.com",
 				"--hc-url", "https://hc-ping.com/uuid-1",
 				"--webhook-url", "https://hooks.example.com/T0/B0",
-				"--webhook-token", "wh_secret=5678")},
+				"--webhook-token", "test-wh-00000000")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,17 +184,17 @@ func TestWatchdogArgvAssembly(t *testing.T) {
 }
 
 func TestScrubArgv(t *testing.T) {
-	in := []string{"sudo", "--ntfy-token", "nt_secret=1234", "--topic", "ops", "--webhook-token", "wh_secret=5678"}
+	in := []string{"sudo", "--ntfy-token", "test-nt-00000000", "--topic", "ops", "--webhook-token", "test-wh-00000000"}
 	got := scrubArgv(in)
 	joined := strings.Join(got, " ")
-	if strings.Contains(joined, "nt_secret=1234") || strings.Contains(joined, "wh_secret=5678") {
+	if strings.Contains(joined, "test-nt-00000000") || strings.Contains(joined, "test-wh-00000000") {
 		t.Fatalf("scrubArgv leaked a token: %q", joined)
 	}
 	if got[2] != "<secret>" || got[6] != "<secret>" || got[3] != "--topic" || got[4] != "ops" {
 		t.Fatalf("scrubArgv = %q", got)
 	}
 	// The original argv (which the child receives) must be untouched.
-	if in[2] != "nt_secret=1234" || in[6] != "wh_secret=5678" {
+	if in[2] != "test-nt-00000000" || in[6] != "test-wh-00000000" {
 		t.Fatalf("scrubArgv mutated its input: %q", in)
 	}
 }
@@ -206,8 +206,8 @@ func TestWatchdogEndToEndSuccess(t *testing.T) {
 	c := sessionClient(t, ts)
 
 	body := `{"password":"hunter2","ntfy_topic":"ops-alerts","ntfy_server":"https://ntfy.example.com/ops",` +
-		`"ntfy_token":"nt_secret_token=1","email":"noc@example.com","hc_url":"https://hc-ping.com/uuid-1",` +
-		`"webhook_url":"https://hooks.example.com/T0/B0","webhook_token":"wh_secret_token=2"}`
+		`"ntfy_token":"test-nt-000000000","email":"noc@example.com","hc_url":"https://hc-ping.com/uuid-1",` +
+		`"webhook_url":"https://hooks.example.com/T0/B0","webhook_token":"test-wh-000000000"}`
 	res := postJSON(t, c, ts.URL+"/api/watchdog", body, nil)
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -232,11 +232,11 @@ func TestWatchdogEndToEndSuccess(t *testing.T) {
 		"--app-url", wdAppURL,
 		"--topic", "ops-alerts",
 		"--ntfy-server", "https://ntfy.example.com/ops",
-		"--ntfy-token", "nt_secret_token=1",
+		"--ntfy-token", "test-nt-000000000",
 		"--email", "noc@example.com",
 		"--hc-url", "https://hc-ping.com/uuid-1",
 		"--webhook-url", "https://hooks.example.com/T0/B0",
-		"--webhook-token", "wh_secret_token=2",
+		"--webhook-token", "test-wh-000000000",
 	}
 	if got := fr.argv(0); strings.Join(got, "\x1f") != strings.Join(want, "\x1f") {
 		t.Fatalf("argv = %q, want %q", got, want)
@@ -260,7 +260,7 @@ func TestWatchdogEndToEndSuccess(t *testing.T) {
 	s.st.logMu.Lock()
 	logged := strings.Join(s.st.logBuf, "\n") + "\n" + strings.Join(s.st.events, "\n")
 	s.st.logMu.Unlock()
-	for _, secret := range []string{"nt_secret_token=1", "wh_secret_token=2", "hunter2"} {
+	for _, secret := range []string{"test-nt-000000000", "test-wh-000000000", "hunter2"} {
 		if strings.Contains(logged, secret) {
 			t.Fatalf("secret %q leaked into the log/SSE stream", secret)
 		}

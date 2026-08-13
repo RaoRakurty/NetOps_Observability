@@ -109,9 +109,9 @@ VALID = {
     "email": "noc@example.com",
     "hc": "https://hc.example.com/ping/0a1b2c3d-1111-2222-3333-444455556666",
     "ntfy_server": "https://ntfy.corp.example.com",
-    "ntfy_token": "tk_abcdefghij0123456789",
+    "ntfy_token": "test-token-00000000",
     "webhook": "https://hooks.example.com/services/T000/B000/XXXXYYYYZZZZ",
-    "webhook_token": "wh_abcdefghij0123456789",
+    "webhook_token": "test-hook-00000000",
 }
 
 
