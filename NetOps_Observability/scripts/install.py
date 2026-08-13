@@ -1411,8 +1411,16 @@ def ensure_ingress_cert(root: Path) -> None:
     self-signed via gen-dev-cert.sh; production replaces the files in place
     (documented in the script header)."""
     certs = root / "deployment" / "docker" / "nginx" / "certs"
-    if certs.exists() and any(certs.glob("*.crt")):
+    if certs.exists() and (any(certs.glob("*.crt")) or (certs / "fullchain.pem").exists()):
         info("nginx ingress certs already present")
+        # Re-run path: a previous root install may have left the key unreadable
+        # by nginx (uid 101, cap_drop:ALL). Idempotent fix-up, root only.
+        key = certs / "privkey.pem"
+        if key.exists() and os.getuid() == 0:
+            try:
+                os.chown(key, 101, 101)
+            except OSError as e:
+                warn(f"could not chown {key} to uid 101: {e}")
         return
     step("generating a self-signed ingress certificate (replace for production)")
     res = subprocess.run(["bash", str(root / "scripts" / "gen-dev-cert.sh")],
@@ -1420,6 +1428,19 @@ def ensure_ingress_cert(root: Path) -> None:
     if res.returncode != 0:
         fail(f"gen-dev-cert.sh failed: {res.stderr.strip() or res.stdout.strip()}")
         raise SystemExit(2)
+    # The hardened nginx image runs as USER 101 with cap_drop:ALL (no
+    # DAC_OVERRIDE), so the 0600 key MUST be owned by uid 101 or the ingress
+    # crash-loops on "cannot load certificate key ... Permission denied" —
+    # gen-dev-cert.sh documents this as a manual step; an unattended install
+    # has to complete it itself (CI tls-boot leg, 2026-08-13). Non-root
+    # installs can't chown: leave the operator instruction to do it.
+    key = certs / "privkey.pem"
+    try:
+        os.chown(key, 101, 101)
+    except (PermissionError, OSError):
+        warn(f"can't chown {key} to uid 101 (not root) — nginx (uid 101) "
+             "cannot read a 0600 key owned by you.")
+        info(f"  Fix: sudo chown 101 {key}")
     ok("self-signed ingress certificate generated")
 
 

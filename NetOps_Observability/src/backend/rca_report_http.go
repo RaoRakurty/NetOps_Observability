@@ -141,6 +141,19 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	}
 	rep.Integrity = &integ
 
+	// Deterministic document regeneration: if this exact analysis (snapshot +
+	// policy + template) already produced a revision in this format, render
+	// with THAT revision's generation stamp — the bytes and their content hash
+	// then reproduce the existing revision instead of appending a
+	// same-analysis revision on every wall-clock second (the register dedupes
+	// by content, and the rendered document embeds its generation timestamp).
+	if format == "html" || format == "pdf" {
+		if prior, ok := s.rcaRevisions.FindBySnapshot(rep.OwnerTenant(), id, integ, format); ok {
+			rep.GeneratedAt = prior.Integrity.GeneratedAt
+			integ.GeneratedAt = prior.Integrity.GeneratedAt
+		}
+	}
+
 	switch format {
 	case "", "json":
 		writeJSON(w, http.StatusOK, rep)

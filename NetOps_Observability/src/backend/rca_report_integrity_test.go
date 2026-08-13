@@ -12,6 +12,7 @@ import (
 	"netops/backend/internal/rca"
 	"strings"
 	"testing"
+	"time"
 )
 
 // integrityReport builds a minimal report for the register tests — the store
@@ -119,6 +120,50 @@ func TestServeRcaReportRecordsRevisionOnDocument(t *testing.T) {
 	}
 	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
 		t.Fatalf("identical regeneration duplicated the revision: %+v", revs)
+	}
+}
+
+// Regenerating an UNCHANGED analysis in a LATER wall-clock second must still
+// reuse the existing revision. The rendered document embeds its generation
+// timestamp, so a naive re-render across a second boundary produces different
+// bytes → different content hash → a junk revision per view until the
+// register hits RevisionsMaxPerCase (surfaced as a rare -race CI failure of
+// TestServeRcaReportRecordsRevisionOnDocument, 2026-08-12). The fix renders
+// with the ORIGINAL revision's generation stamp when the analysis is
+// unchanged, reproducing revision N byte-for-byte.
+func TestServeRcaReportRegenerationAcrossSecondsIsIdempotent(t *testing.T) {
+	promoFakeCH(t, "acme")
+	s := corrTestServer(t)
+	s.rcaPromotions = newRcaPromotionStore("")
+	s.rcaRevisions = newRcaRevisionStore("")
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+
+	w := httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first render = %d (%s)", w.Code, w.Body.String())
+	}
+	first := w.Body.String()
+	revs := s.rcaRevisions.List("acme", promoCorrID)
+	if len(revs) != 1 {
+		t.Fatalf("first render must record exactly one revision: %+v", revs)
+	}
+
+	// Force the re-render into a DIFFERENT wall-clock second — the exact
+	// window the naive implementation loses.
+	now := time.Now()
+	time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second + 50*time.Millisecond)))
+
+	w = httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("re-render = %d (%s)", w.Code, w.Body.String())
+	}
+	if w.Body.String() != first {
+		t.Fatal("unchanged analysis must re-render byte-identically (the document is a snapshot of the ANALYSIS, not of the wall clock)")
+	}
+	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
+		t.Fatalf("cross-second regeneration duplicated the revision: %+v", revs)
 	}
 }
 

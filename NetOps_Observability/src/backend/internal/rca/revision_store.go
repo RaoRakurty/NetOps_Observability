@@ -83,6 +83,31 @@ func (s *RevisionStore) List(tenant, corrID string) []ReportRevision {
 // Record appends a NEW revision unless an existing one already carries the
 // same analysis snapshot, content, template and policy (idempotent re-render).
 // Returns the effective revision and whether it was newly created.
+// FindBySnapshot returns the existing revision generated from the SAME
+// analysis (snapshot hash + policy + template) in the same format, if any —
+// content hash is deliberately ignored. The renderer uses it to reproduce an
+// unchanged analysis byte-for-byte (re-rendering with the original revision's
+// generation stamp): the rendered document embeds its generation timestamp, so
+// without this every re-render in a later wall-clock second hashed differently
+// and appended a junk revision per view until the register hit
+// RevisionsMaxPerCase (rare -race CI failure, 2026-08-12).
+func (s *RevisionStore) FindBySnapshot(tenant, corrID string, integ ReportIntegrity, format string) (ReportRevision, bool) {
+	if s == nil {
+		return ReportRevision{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, ex := range s.m[tenant][corrID] {
+		if ex.Integrity.AnalysisSnapshotHash == integ.AnalysisSnapshotHash &&
+			ex.Integrity.TemplateVersion == integ.TemplateVersion &&
+			ex.Integrity.PolicyVersion == integ.PolicyVersion &&
+			ex.Format == format {
+			return ex, true
+		}
+	}
+	return ReportRevision{}, false
+}
+
 func (s *RevisionStore) Record(tenant, corrID string, rev ReportRevision) (ReportRevision, bool, error) {
 	if s == nil {
 		return ReportRevision{}, false, errors.New("revision store unavailable")
