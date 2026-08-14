@@ -39,7 +39,9 @@
 #     8  vm.overcommit_memory=1    cache store (Valkey) background saves
 #     9  vm.swappiness=10          keep the JVM/stores out of swap
 #    10  net.core.rmem_max=26214400 (+default)  UDP ingest burst headroom
-#                                   (syslog / NetFlow / sFlow receivers)
+#                                   (syslog / NetFlow / sFlow receivers);
+#                                   must stay >= the syslog-ng so-rcvbuf
+#                                   request — see the sysctl block below
 #    11  Baseline network hardening: ICMP-redirect accept/send off,
 #        source-routing off, tcp_syncookies on
 #
@@ -183,6 +185,15 @@ declare -A SYSCTLS=(
   [vm.max_map_count]=262144
   [vm.overcommit_memory]=1
   [vm.swappiness]=10
+  # UDP receive buffers: net.core.rmem_max is a HOST-GLOBAL clamp (not
+  # namespaced — it cannot be raised per-container) on every SO_RCVBUF
+  # request, and syslog-ng's udp() source asks for so-rcvbuf(8388608) in
+  # deployment/docker/syslog-ng/core.conf (syslog-ng 4.7 has no
+  # SO_RCVBUFFORCE fallback, so a lower clamp silently wins and kernel-side
+  # burst drops return, invisible to every counter the stack scrapes).
+  # These two values MUST stay >= that request; 25 MiB gives the NetFlow/
+  # sFlow/trap receivers the same headroom. Pinned against core.conf by
+  # tests/test_ingest_contract.py (test_syslog_edge_absorbs_bursts...).
   [net.core.rmem_max]=26214400
   [net.core.rmem_default]=26214400
   [net.ipv4.conf.all.accept_redirects]=0

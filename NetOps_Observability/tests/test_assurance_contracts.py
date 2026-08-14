@@ -304,6 +304,83 @@ def test_router_lanes_strip_inbound_quarantine_mark():
             f"any logic can observe or propagate the forged mark")
 
 
+def test_router_lanes_strip_forgeable_drop_and_event_id_marks():
+    """F-11 hardening follow-up (2026-08-14): cx_quarantine is not the only
+    producer-controlled field in a trusted position — bus producers' JSON
+    passes verbatim into the lane heads, so two more marks must die there:
+
+    (a) .cx_drop — the generated <lane>_rules filter discards any event where
+        to_bool(.cx_drop) is true. Only an operator-configured drop_event
+        processor (which runs DOWNSTREAM of the lane head, in the generated
+        rules chain) may mint it; inbound it is a forged kill-switch — a
+        compromised producer pre-marks events and this tier silently discards
+        them with no dead-letter and no processor metric attributing the
+        drop. Strip must be UNCONDITIONAL.
+
+    (b) .cx_event_id — `id_key` on every OpenSearch sink, i.e. the storage
+        document _id: whoever controls it can OVERWRITE the doc bearing that
+        id or collapse N events into one (silent suppression). It CANNOT be
+        stripped unconditionally: the operator restore path
+        (internal/quarantine) re-injects restored events onto the ORIGINAL
+        lane topics carrying the envelope's uuid so a re-run UPSERTS instead
+        of duplicating (INV-F11-08). The strip must therefore be GUARDED —
+        keep only a uuid-shaped id accompanied by the
+        cx_restored_from="quarantine" provenance marker, strip everything
+        else. (Residual: the marker itself is unauthenticated; the config
+        documents why that is accepted and what full closure needs.)
+    """
+    import yaml
+    cfg = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "vector-router" / "vector.yaml").read_text())
+    transforms = cfg["transforms"]
+
+    for name in ("applogs_tagged", "syslog_tagged", "snmptrap_tagged",
+                 "cloudlogs_tagged", "flows_decoded"):
+        src = transforms[name]["source"]
+
+        # (a) cx_drop dies unconditionally at the lane head (own statement,
+        # not inside any guard — pinned as a whole line at any indent depth
+        # equal to the top-level del(.cx_quarantine)).
+        drop_stmts = re.findall(r"^(\s*)del\(\.cx_drop\)\s*$", src, re.M)
+        assert drop_stmts, (
+            f"{name}: inbound cx_drop is not stripped — a compromised "
+            f"producer can pre-mark its events for a silent, unattributed "
+            f"drop by the <lane>_rules filter")
+        quar = re.search(r"^(\s*)del\(\.cx_quarantine\)\s*$", src, re.M)
+        assert quar and drop_stmts[0] == quar.group(1), (
+            f"{name}: del(.cx_drop) must sit at the lane head's top level "
+            f"(same depth as del(.cx_quarantine)) — a conditional strip is "
+            f"a conditional forgery window")
+
+        # (b) cx_event_id strip exists...
+        assert "del(.cx_event_id)" in src, (
+            f"{name}: inbound cx_event_id is not stripped — a producer-"
+            f"chosen id becomes the OpenSearch _id (id_key) and can "
+            f"overwrite or dedup-suppress stored documents")
+        # ...is guarded by the restore provenance marker + uuid shape
+        # (NEVER unconditional — that breaks restore replay idempotency,
+        # INV-F11-08)...
+        guarded = re.search(
+            r"if\s+!\(\(to_string\(\.cx_restored_from\)\s*\?\?\s*\"\"\)\s*==\s*\"quarantine\""
+            r"[^\n]*match\(to_string\(\.cx_event_id\)[^\n]*\)\s*\{\s*\n\s*del\(\.cx_event_id\)",
+            src)
+        assert guarded, (
+            f"{name}: del(.cx_event_id) must be guarded on "
+            f"cx_restored_from==\"quarantine\" AND a uuid-shaped id — "
+            f"unconditional stripping breaks quarantine-restore upserts "
+            f"(INV-F11-08), while an unguarded keep re-opens the forgery")
+        # ...and is the ONLY cx_event_id strip (no second, unguarded copy).
+        assert src.count("del(.cx_event_id)") == 1, (
+            f"{name}: exactly one (guarded) del(.cx_event_id) expected")
+
+        # Ordering: the marks die at the head, before any lane logic.
+        assert (src.index("del(.cx_quarantine)")
+                < src.index("del(.cx_drop)")
+                < src.index("del(.cx_event_id)")), (
+            f"{name}: strip order must be cx_quarantine, cx_drop, then the "
+            f"guarded cx_event_id — all before the lane's own logic")
+
+
 def test_vector_tiers_reload_enrichment_on_change():
     """F-10 (assurance run 2026-08-09, step-3 e2e): Vector reads enrichment
     tables ONCE at (re)load — --watch-config watches config files only — so a

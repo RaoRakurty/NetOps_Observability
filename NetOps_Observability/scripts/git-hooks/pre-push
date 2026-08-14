@@ -13,7 +13,23 @@ fi
 
 # #97 customer-bundle lockstep: WARN (never block) when the newest offline
 # bundle in dist/ lags the shippable code being pushed. Rebuild: make bundle
-if ! bash "$root/NetOps_Observability/scripts/bundle-staleness.sh" --quiet; then
-  echo "⚠ pre-push: customer bundle is STALE (details above) — push continues; rebuild with 'make bundle'"
+#
+# BOUNDED (2026-08-14, §16.3): the staleness check lists dist/ and walks git
+# history — a wedged mount or pathological rev-list once hung `git push`
+# indefinitely, turning a warn-only convenience into a workflow outage. An
+# ADVISORY check may never block a push: hard 10s timeout (KILL 2s after TERM
+# if the child ignores it); on expiry warn LOUDLY and continue. Expiry
+# (124/137) is reported as "freshness UNKNOWN", never conflated with "stale".
+if command -v timeout >/dev/null 2>&1; then
+  staleness_rc=0
+  timeout --kill-after=2 10 bash "$root/NetOps_Observability/scripts/bundle-staleness.sh" --quiet || staleness_rc=$?
+  if [ "$staleness_rc" -eq 124 ] || [ "$staleness_rc" -eq 137 ]; then
+    echo "⚠⚠ pre-push: bundle-staleness check TIMED OUT after 10s — bundle freshness UNKNOWN; push continues. Investigate with: make bundle-status" >&2
+  elif [ "$staleness_rc" -ne 0 ]; then
+    echo "⚠ pre-push: customer bundle is STALE (details above) — push continues; rebuild with 'make bundle'"
+  fi
+else
+  # §16.2: never assume the tool; and never fall back to the unbounded call.
+  echo "⚠ pre-push: 'timeout' not found — skipping the advisory bundle-staleness check (install coreutils to restore it)" >&2
 fi
 exit 0

@@ -6,3 +6,4 @@ secrets_wrapped_keys.json
 
 # Local Claude Code config / skills (not shared)
 .claude/
+NetOps_Observability/scripts/installer-gui/installer-gui

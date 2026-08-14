@@ -653,7 +653,8 @@ def test_syslog_edge_absorbs_bursts_and_fleet_scale():
     m = re.search(r"udp\([^;]*so-rcvbuf\((\d+)\)", src)
     assert m, "core.conf udp() sets no so-rcvbuf — kernel-default ~208 KiB, " \
               "burst drops happen in the kernel where no counter sees them"
-    assert int(m.group(1)) >= 8388608, f"so-rcvbuf({m.group(1)}) is below the 8 MiB burst budget"
+    rcvbuf = int(m.group(1))
+    assert rcvbuf >= 8388608, f"so-rcvbuf({rcvbuf}) is below the 8 MiB burst budget"
     m = re.search(r"tcp\([^;]*max-connections\((\d+)\)", src)
     assert m, "core.conf tcp() lost its max-connections bound"
     assert int(m.group(1)) >= 1024, (
@@ -666,6 +667,29 @@ def test_syslog_edge_absorbs_bursts_and_fleet_scale():
     # silently capped to the kernel default.
     assert "rmem_max" in src, \
         "core.conf must document the net.core.rmem_max host prerequisite for so-rcvbuf"
+
+    # And the SHIPPED host preparation must DELIVER that prerequisite, not
+    # just document it: prepare-host.sh's sysctl set raises net.core.rmem_max
+    # (and rmem_default, which the same block manages) to at least the
+    # so-rcvbuf request — and ties the value to the clamp in a comment, so a
+    # future edit can't lower it without tripping the WHY. Two files, one
+    # budget: this cross-pin is what keeps them from drifting apart silently.
+    prep = read("scripts", "prepare-host.sh")
+    pm = re.search(r"\[net\.core\.rmem_max\]=(\d+)", prep)
+    assert pm, ("prepare-host.sh no longer manages net.core.rmem_max — on a "
+                "default kernel (212992) the so-rcvbuf request is silently "
+                "clamped back to ~208 KiB and burst drops return")
+    assert int(pm.group(1)) >= rcvbuf, (
+        f"prepare-host.sh rmem_max ({pm.group(1)}) is below the syslog-ng "
+        f"so-rcvbuf request ({rcvbuf}) — the clamp wins and the buffer is "
+        f"silently smaller than configured")
+    pd = re.search(r"\[net\.core\.rmem_default\]=(\d+)", prep)
+    assert pd and int(pd.group(1)) >= rcvbuf, (
+        "prepare-host.sh must keep net.core.rmem_default >= the so-rcvbuf "
+        "request alongside rmem_max (the block manages both)")
+    assert "so-rcvbuf" in prep, (
+        "prepare-host.sh must tie the rmem sysctls to the syslog-ng "
+        "so-rcvbuf clamp — without the WHY, the next tidy-up lowers them")
 
 
 # ── app-log lane: rotation-race disk buffer on the kafka sink ───────────────

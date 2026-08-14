@@ -261,6 +261,39 @@ transforms:
       # lane). Restored quarantine events do NOT carry the field (the sealed
       # payload is the pre-envelope event), so re-attribution is unaffected.
       del(.cx_quarantine)
+      # ── the other producer-forgeable control marks (2026-08-14) ─────────
+      # .cx_drop is minted ONLY by an operator drop_event processor in the
+      # generated <lane>_rules chain, which runs AFTER this transform; the
+      # lane's filter then discards marked events. Inbound it is a forged
+      # kill-switch — a compromised producer pre-marks its events and this
+      # tier silently discards them: no dead-letter, no cx_applied metric
+      # attributing the drop. Same fate as cx_quarantine, unconditionally.
+      del(.cx_drop)
+      # .cx_event_id becomes the OpenSearch document _id (`id_key` on every
+      # OS sink): whoever controls it can OVERWRITE the doc bearing that id
+      # or collapse N events into one (silent suppression). It CANNOT be
+      # stripped unconditionally: the operator restore path
+      # (internal/quarantine) re-injects restored events onto the ORIGINAL
+      # lane topics carrying the envelope's uuid precisely so a re-run
+      # UPSERTS instead of duplicating (INV-F11-08) — an unconditional strip
+      # here would break that replay idempotency. Strongest safe variant:
+      # keep the field ONLY when it looks like a restore — uuid_v4-shaped
+      # AND accompanied by the cx_restored_from provenance marker — and
+      # strip everything else (including every id on the applogs/cloudlogs
+      # lanes, which no restore ever re-enters, since restores only ride
+      # netops.{syslog,snmptrap,flows}).
+      # RESIDUAL, accepted + documented: the marker itself is unauthenticated,
+      # so a compromised bus producer can still forge the pair on this lane.
+      # The damage is bounded — uuid_v4 ids are unguessable and restored-doc
+      # ids are operator-visible only, so there is no practical overwrite
+      # target — and self-evidencing: cx_restored_from is stored on the doc,
+      # so forged "restores" are queryable. Closing it fully needs a MAC over
+      # the id under the quarantine key scope, verified in the GENERATED
+      # config where SECRET[] material exists; this static config must stay
+      # secret-free or plaintext deployments refuse to boot (SEC-018).
+      if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
+        del(.cx_event_id)
+      }
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
@@ -394,6 +427,18 @@ transforms:
       # the generated flows_quarantine stage (downstream of this transform)
       # may mint it. Same rationale and same position as the &log_lane head.
       del(.cx_quarantine)
+      # Producer-forgeable control marks — same rationale, ordering and
+      # restore-guard as the &log_lane head (see applogs_tagged): cx_drop is
+      # a forged kill-switch and dies unconditionally; cx_event_id is the
+      # storage doc id and is kept ONLY for a uuid-shaped id carried by the
+      # quarantine restore path (INV-F11-08 replay idempotency — restores
+      # re-enter on this very topic), stripped otherwise. This lane
+      # hand-rolls its head, so it must be audited whenever the anchor
+      # changes — the F-11 lesson repeated.
+      del(.cx_drop)
+      if !((to_string(.cx_restored_from) ?? "") == "quarantine" && match(to_string(.cx_event_id) ?? "", r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')) {
+        del(.cx_event_id)
+      }
       proto_names = {
         "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "TCP": 6, "UDP": 17,
         "GRE": 47, "ESP": 50, "AH": 51, "ICMPv6": 58, "EIGRP": 88,
