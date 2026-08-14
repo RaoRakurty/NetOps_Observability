@@ -2195,7 +2195,7 @@ BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
 
 
 class _TableBatch:
-    __slots__ = ("rows", "first_mono")
+    __slots__ = ("first_mono", "rows")
 
     def __init__(self) -> None:
         self.rows: list[dict] = []
@@ -2253,7 +2253,7 @@ class CHBatcher:
                               for r in b.rows).encode()).hexdigest()[:32]
                 try:
                     ok = await ch.insert(table, b.rows, dedup_token=token)
-                except Exception as exc:  # noqa: BLE001 — counted, retained, re-raised
+                except Exception as exc:  # counted, retained, re-raised
                     _note_ch_failure(table, type(exc).__name__,
                                      {"batched_rows": len(b.rows)})
                     # Re-queue the popped batch (front-merge: rows added while the
@@ -2310,8 +2310,9 @@ async def batch_flush_loop() -> None:
         try:
             if SIGNAL_BATCH.due():
                 await SIGNAL_BATCH.flush()
-        except Exception:  # noqa: BLE001 — flush already counted+logged the loss
+        except Exception as exc:  # noqa: BLE001 — supervisor loop must survive any flush error
             # Rows are retained; the next tick (or the pre-commit flush) retries.
+            log.debug("batch flush tick failed; retrying next tick: %s", exc)
             continue
 
 
