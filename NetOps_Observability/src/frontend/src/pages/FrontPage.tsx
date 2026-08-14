@@ -287,7 +287,7 @@ function ImpactSummary() {
   // Don't claim "nothing impacted" (health may be critical from contributors).
   if (objs.length === 0) return <Panel title="Impact" state="inactive" note="No confirmed service impact." hint="No active RCA incident is currently tied to affected users, apps, or paths." />;
   return (
-    <Panel title="Impact" action={<a href="#/infrastructure/topology">topology →</a>}>
+    <Panel title="Impact" action={<a href="#/investigate/topology">topology →</a>}>
       <div className="fp-kpis">
         <Kpi n={devices.size} l="devices affected" />
         <Kpi n={sites.size} l="sites" />
@@ -531,8 +531,8 @@ function KpiStrip() {
       {cell("Health score", insufficient ? "—" : h!.score, scoreColor, insufficient ? "insufficient" : (h?.band ?? ""), "operations/alerts", "health")}
       {cell("Active incidents", confirmed, confirmed > 0 ? "var(--crit)" : undefined, "confirmed RCA", "investigate/rca?tier=confirmed", "confirmed")}
       {cell("Suspected RCA", suspected, suspected > 0 ? "var(--warn)" : undefined, "candidates", "investigate/rca?tier=suspected", "suspected")}
-      {cell("Impacted sites", sites.size, undefined, sites.size ? undefined : "none tagged", "infrastructure/topology", "sites")}
-      {cell("Impacted devices", devs.size, undefined, undefined, "infrastructure/topology", "devices")}
+      {cell("Impacted sites", sites.size, undefined, sites.size ? undefined : "none tagged", "investigate/topology", "sites")}
+      {cell("Impacted devices", devs.size, undefined, undefined, "investigate/topology", "devices")}
       {cell("Telemetry", `${live}/4`, stale > 0 ? "var(--warn)" : live >= 2 ? "var(--ok)" : "var(--fg-subtle)", stale > 0 ? `${stale} stale` : "signal classes", "operations/alerts")}
     </div>
   );

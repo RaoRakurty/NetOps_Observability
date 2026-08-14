@@ -312,7 +312,10 @@ export const NAV: NavSection[] = [
       ] },
       // Platform Security — authentication providers, access reasoning, live
       // sessions, the audit trail and the TLS posture inventory.
-      { id: "auth", label: "Authentication", group: "Platform Security", render: () => <AuthenticationAdmin /> },
+      // Authentication providers (OIDC/LDAP/TACACS) are platform-GLOBAL config:
+      // every endpoint behind this page is requirePlatformAdmin-gated, so for a
+      // tenant admin the leaf is only dead "Loading…" tiles and 403'd saves.
+      { id: "auth", label: "Authentication", group: "Platform Security", platformOnly: true, render: () => <AuthenticationAdmin /> },
       { id: "access", label: "Access Explorer", group: "Platform Security", render: () => <AccessExplorer /> },
       { id: "sessions", label: "Sessions", group: "Platform Security", platformOnly: true, render: () => <SessionsAdmin /> },
       { id: "audit", label: "Audit Log", group: "Platform Security", render: () => <AuditLog /> },
@@ -444,6 +447,9 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "infrastructure/bgpospf": "analytics/protocols",
   "infrastructure/troubleshooting": "investigate/troubleshooting",
   "infrastructure/topology-canvas": "investigate/topology",
+  // Topology's pre-move home (also an old FrontPage drill target). Without the
+  // alias it silently resolved to Infrastructure's first leaf — Devices.
+  "infrastructure/topology": "investigate/topology",
   "infrastructure/geomap": "infrastructure/sites/map",
   "infrastructure/flowtrace": "investigate/flowtrace",
   "infrastructure/wan-circuits": "investigate/wan-paths",

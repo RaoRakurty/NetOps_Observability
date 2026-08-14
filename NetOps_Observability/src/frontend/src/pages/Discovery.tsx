@@ -30,7 +30,11 @@ function tabFromHash(): Tab {
 }
 
 export default function Discovery() {
-  const { user } = useAuth();
+  // Honor the resolved-auth pattern (App.tsx gates the shell on `loading` the
+  // same way): user is transiently null while /api/auth/me is in flight, and
+  // deciding the audience from that null flashes the tenant copy at the
+  // platform operator. Wait for auth to RESOLVE before picking whose page this is.
+  const { user, loading: authLoading } = useAuth();
   const platform = !!user?.platform_admin;
   const [tab, setTab] = useState<Tab>(tabFromHash);
   // Re-read on hashchange so flyout sub-item clicks switch tabs while mounted.
@@ -59,6 +63,9 @@ export default function Discovery() {
       <Suspense fallback={<div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>}>
         {tab === "nms" ? (
           <NmsIntegrations />
+        ) : authLoading ? (
+          // Same placeholder the lazy chunks use — never wrong-audience content.
+          <div style={{ padding: 40, color: "var(--muted)" }}>Loading…</div>
         ) : platform ? (
           <DiscoveryCard />
         ) : (

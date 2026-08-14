@@ -3285,6 +3285,13 @@ function SyncSettings({ integration, inboundEnabled, webhookHint, onSaved }: {
 }
 
 export function NotificationsAdmin() {
+  // The five delivery channels (SMTP, Twilio SMS, ntfy push, Slack, PagerDuty)
+  // are platform-GLOBAL plumbing — every config endpoint behind their tiles is
+  // platform-gated, so for a tenant admin the tiles are only 403'd loads and
+  // dead forms. Render them (and fetch their config) only for the resolved
+  // platform principal; contact points ARE tenant-scoped and stay for everyone.
+  const { user, loading: authLoading } = useAuth();
+  const platform = !authLoading && !!user?.platform_admin;
   const [smtp, setSmtp] = useState<SmtpConfig | null>(null);
   const [twilio, setTwilio] = useState<TwilioConfig | null>(null);
   const [ntfy, setNtfy] = useState<NtfyConfig | null>(null);
@@ -3307,14 +3314,20 @@ export function NotificationsAdmin() {
   const loadCps = () => api.contactPoints().then(setCps).catch(() => {});
 
   useEffect(() => {
+    loadCps();
+  }, []);
+
+  // Channel config is platform-gated server-side — don't fire five calls that
+  // can only 403 for a tenant admin; wait until auth resolves platform.
+  useEffect(() => {
+    if (!platform) return;
     api.smtpConfig().then(setSmtp).catch(() => {});
     api.twilioConfig().then(setTwilio).catch(() => {});
     api.ntfyConfig().then(setNtfy).catch(() => {});
     api.slackConfig().then(setSlack).catch(() => {});
     api.pagerDutyConfig().then(setPager).catch(() => {});
     api.integrations().then((r) => { setIntegrations(r.integrations); setInboundEnabled(r.inbound_enabled); }).catch(() => {});
-    loadCps();
-  }, []);
+  }, [platform]);
 
   const integrationFor = (id: string): IntegrationConfig => integrations?.find((i) => i.provider === id) ?? blankIntegration(id);
   const onIntegrationSaved = (next: IntegrationConfig) =>
@@ -3400,8 +3413,13 @@ export function NotificationsAdmin() {
 
   return (
     <>
-      <AdminHead title="Notifications" sub="Email, SMS and push channels. Critical alerts route here; secrets are write-only." />
-      {(() => {
+      <AdminHead
+        title="Notifications"
+        sub={platform
+          ? "Email, SMS and push channels. Critical alerts route here; secrets are write-only."
+          : "Reusable contact points that scheduled reports deliver to. Delivery channels are operated at the platform level."}
+      />
+      {platform ? (() => {
         const loaded = smtp !== null;
         const groups = [!!smtp?.enabled, !!(twilio?.enabled || ntfy?.enabled), !!slack?.enabled, !!pager?.enabled];
         const enabled = groups.filter(Boolean).length;
@@ -3412,10 +3430,15 @@ export function NotificationsAdmin() {
             <Stat label="Contact points" value={cps.length} tone="accent" />
           </StatStrip>
         );
-      })()}
+      })() : (
+        <StatStrip>
+          <Stat label="Contact points" value={cps.length} tone="accent" />
+        </StatStrip>
+      )}
 
-      {/* Channel gallery — pick a channel to open its guided setup. */}
-      <div className="conn-grid">
+      {/* Channel gallery — pick a channel to open its guided setup. Platform
+          principal only: every tile's API surface is requirePlatformAdmin. */}
+      {platform && <div className="conn-grid">
         {CHANNELS.map((c) => {
           const loaded = smtp !== null;
           let enabled = false, configured = false, metaLine = "";
@@ -3447,10 +3470,10 @@ export function NotificationsAdmin() {
             </button>
           );
         })}
-      </div>
+      </div>}
 
       {/* Channel setup modal — the selected channel's full configuration. */}
-      {openCh && (() => {
+      {platform && openCh && (() => {
         const ch = CHANNELS.find((c) => c.id === openCh)!;
         return (
           <Modal title={ch.name} subtitle={ch.tagline} logo={<span className={`conn-logo ${ch.id}`}>{ch.logo}</span>} onClose={() => setOpenCh(null)}>

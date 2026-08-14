@@ -119,6 +119,37 @@ describe("TenantGate", () => {
     expect(screen.queryByText("Target Retail")).toBeNull();
   });
 
+  // A persisted scope is a claim, not a fact: the tenant may have been deleted
+  // or unbound since it was stored. The backend ignores an unresolvable
+  // X-Acting-Tenant, so honouring the stale claim would render the forbidden
+  // merged cross-tenant view. The gate must validate `active` against the
+  // myScopes fetch it already makes, clear the stale key, and LOCK.
+  it("re-locks when the persisted scope is no longer among the principal's scopes", async () => {
+    mockScopes(true);
+    setActiveScope("t_deleted");
+    render(
+      <TenantGate sectionId="logs" sectionLabel="Logs">
+        <div>TENANT DATA</div>
+      </TenantGate>,
+    );
+    await waitFor(() => expect(screen.getByRole("region", { name: /select a tenant/i })).toBeTruthy());
+    expect(screen.queryByText("TENANT DATA")).toBeNull();
+    // The stale key is cleared so API calls stop carrying a dead X-Acting-Tenant.
+    expect(getActiveScope()).toBe("");
+  });
+
+  it("still honours a persisted scope that IS among the principal's scopes", async () => {
+    mockScopes(true);
+    setActiveScope("t_tgt");
+    render(
+      <TenantGate sectionId="logs" sectionLabel="Logs">
+        <div>TENANT DATA</div>
+      </TenantGate>,
+    );
+    expect(await screen.findByText("TENANT DATA")).toBeTruthy();
+    expect(getActiveScope()).toBe("t_tgt");
+  });
+
   it("fails OPEN when scopes cannot be loaded", async () => {
     vi.spyOn(api, "myScopes").mockRejectedValue(new Error("network"));
     render(

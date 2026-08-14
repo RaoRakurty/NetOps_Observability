@@ -23,13 +23,31 @@ export default function ScopeSelector() {
     api.myScopes().then((r) => {
       setScopes(r.scopes);
       setAllTenants(r.all_tenants);
-      // Validate the persisted scope is still reachable; if not, fall back.
+      // Validate the persisted scope is still reachable; if not, fall back —
+      // and ANNOUNCE the fallback so TenantGate re-locks in-tab (it listens on
+      // netops:scope; silently clearing localStorage would leave an already-
+      // unlocked gate open on the merged view).
       const cur = getActiveScope();
       if (cur && !r.scopes.some((s) => s.tenant_id === cur)) {
         setActiveScope("");
         setActive("");
+        window.dispatchEvent(new CustomEvent("netops:scope", { detail: "" }));
       }
     }).catch(() => { /* not fatal — selector just stays empty */ });
+  }, []);
+
+  // Follow scope changes made elsewhere in the shell — TenantGate's pick
+  // dispatches netops:scope (same-tab, no reload), other tabs arrive via
+  // storage. Without this the label freezes on "All organizations" while every
+  // page renders one tenant's data. Same pattern as TenantGate's sync effect.
+  useEffect(() => {
+    const sync = () => setActive(getActiveScope());
+    window.addEventListener("storage", sync);
+    window.addEventListener("netops:scope", sync as EventListener);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener("netops:scope", sync as EventListener);
+    };
   }, []);
 
   useEffect(() => {

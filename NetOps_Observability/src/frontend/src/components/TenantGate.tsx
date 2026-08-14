@@ -85,6 +85,18 @@ export default function TenantGate({ sectionId, sectionLabel, children }: Props)
         if (dead) return;
         setScopes(r.scopes);
         setCrossTenant(!!r.all_tenants);
+        // A persisted scope is a CLAIM, not a fact: the tenant may have been
+        // deleted or unbound since it was stored. The backend ignores an
+        // unresolvable X-Acting-Tenant, so honouring a stale claim here would
+        // unlock the exact merged cross-tenant view this gate forbids. Honour
+        // `active` only if the fetch we just made still lists it; otherwise
+        // clear it (stop sending a dead header) and let the gate lock.
+        const cur = getActiveScope();
+        if (cur && !r.scopes.some((s) => s.tenant_id === cur)) {
+          setActiveScope("");
+          setActive("");
+          window.dispatchEvent(new CustomEvent("netops:scope", { detail: "" }));
+        }
       })
       // Fail OPEN on a scopes error: the gate is an organising device, not a
       // security control (the server enforces isolation regardless). Blocking

@@ -61,6 +61,9 @@ const LEGACY: [string, string, string][] = [
   ["#/infrastructure/bgpospf", "analytics", "protocols"],
   ["#/infrastructure/troubleshooting", "investigate", "troubleshooting"],
   ["#/infrastructure/topology-canvas", "investigate", "topology"],
+  // Topology's pre-move home — old bookmarks/panel drills must land on the
+  // canvas, not silently fall back to the Devices inventory.
+  ["#/infrastructure/topology", "investigate", "topology"],
   ["#/infrastructure/geomap", "infrastructure", "sites"],
   ["#/infrastructure/flowtrace", "investigate", "flowtrace"],
   ["#/infrastructure/wan-circuits", "investigate", "wan-paths"],
@@ -180,12 +183,28 @@ describe("new tree shape (owner tree, 2026-08)", () => {
     const ids = (section: string) =>
       (tenantNav.find((s) => s.id === section)?.children ?? []).map((l) => l.id);
     expect(ids("infrastructure")).not.toContain("sot");
-    for (const gated of ["sensors", "sessions", "regions", "health", "grafana", "opensearch", "graphql"]) {
+    // "auth" (Authentication providers — OIDC/LDAP/TACACS) is platform plumbing:
+    // every endpoint behind it is requirePlatformAdmin-gated, so showing it to a
+    // tenant admin yields only dead "Loading…" tiles and 403'd saves.
+    for (const gated of ["sensors", "auth", "sessions", "regions", "health", "grafana", "opensearch", "graphql"]) {
       expect(ids("admin")).not.toContain(gated);
     }
     // ...and legacy deep links to them cannot resolve onto the gated leaf.
     expect(resolveRoute("#/admin/collectors", tenantNav).leaf?.id).not.toBe("sensors");
     expect(resolveRoute("#/automation/sot", tenantNav).leaf?.id).not.toBe("sot");
+  });
+});
+
+describe("FrontPage drill links stay routable", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(resolve(here, "pages/FrontPage.tsx"), "utf8");
+
+  it("never links the moved infrastructure/topology route (canvas lives at investigate/topology)", () => {
+    // 'infrastructure/topology' resolves to Infrastructure's FIRST leaf (the
+    // Devices inventory) with no error — a silent mis-drill. The Impact panel
+    // and KPI cells must point at the canvas's real home.
+    expect(src).not.toContain("infrastructure/topology");
+    expect(src).toContain("investigate/topology");
   });
 });
 
