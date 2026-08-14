@@ -184,7 +184,7 @@ def test_installer_print_only_emits_contract_and_writes_nothing():
     # Cron: minute cadence, root, explicit env file, bounded log, sane PATH.
     assert re.search(
         r"^\* \* \* \* \* root WATCHDOG_ENV=/etc/correlix/stack-watchdog\.env "
-        r"\S*scripts/stack-watchdog\.sh >>/var/log/correlix-watchdog\.log 2>&1$",
+        r"/etc/correlix/stack-watchdog\.sh >>/var/log/correlix-watchdog\.log 2>&1$",
         out, re.M,
     ), out
     assert re.search(r"^PATH=\S*/usr/bin\S*$", out, re.M), "cron PATH= line missing"
@@ -296,7 +296,10 @@ def test_webhook_posts_bounded_valid_json_with_bearer(tmp_path):
     assert f"Authorization: Bearer {VALID['webhook_token']}" in args
     assert VALID["webhook"] in args
     payload = json.loads(args[args.index("-d") + 1])
-    assert set(payload) == {"host", "status", "detail", "ts"}
+    assert set(payload) == {"text", "host", "status", "detail", "ts"}
+    # "text" is load-bearing: Slack/Teams incoming webhooks reject
+    # bodies without it (ultra-review find, 2026-08-14).
+    assert payload["text"].startswith("Correlix watchdog:")
     assert payload["status"] == "down"
     assert 'nginx: state="exited"' in payload["detail"]
 

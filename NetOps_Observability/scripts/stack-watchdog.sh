@@ -103,13 +103,17 @@ json_str() {  # encode $1 as a JSON string literal (incl. surrounding quotes)
 # Generic enterprise channel: one JSON POST per up<->down transition to
 # WATCHDOG_WEBHOOK_URL (Slack / Teams / Opsgenie incoming webhooks, or any
 # relay). Optional WATCHDOG_WEBHOOK_TOKEN rides as a bearer header. Payload:
-#   {"host":"...","status":"down|up|test","detail":"...","ts":"..."}
+#   {"text":"...","host":"...","status":"down|up|test","detail":"...","ts":"..."}
+# The "text" field is load-bearing: Slack and Teams incoming webhooks REJECT
+# bodies without it (400), while relays that want structure read the typed
+# fields — one payload serves both audiences (ultra-review find, 2026-08-14).
 notify_webhook() {  # status, detail
   [ -n "${WATCHDOG_WEBHOOK_URL:-}" ] || return 0
   local hdr=(-H "Content-Type: application/json")
   [ -n "${WATCHDOG_WEBHOOK_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $WATCHDOG_WEBHOOK_TOKEN")
   local payload
-  payload=$(printf '{"host":%s,"status":%s,"detail":%s,"ts":%s}' \
+  payload=$(printf '{"text":%s,"host":%s,"status":%s,"detail":%s,"ts":%s}' \
+    "$(json_str "Correlix watchdog: $(hostname) is $1 — $2")" \
     "$(json_str "$(hostname)")" "$(json_str "$1")" \
     "$(json_str "$2")" "$(json_str "$(date -Is)")")
   curl -fsS -m 10 "${hdr[@]}" -d "$payload" "$WATCHDOG_WEBHOOK_URL" -o /dev/null \

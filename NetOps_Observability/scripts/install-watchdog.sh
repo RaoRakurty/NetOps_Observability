@@ -43,6 +43,11 @@ set -euo pipefail
 export PATH="/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 ENV_FILE="/etc/correlix/stack-watchdog.env"
+# Root-owned COPY of the watchdog script: cron must never execute a file the
+# unprivileged bundle owner can edit (user->root escalation), and deleting the
+# extracted bundle dir must not silently kill monitoring (ultra-review finds,
+# 2026-08-14). The source path is validated, then copied here at install.
+INSTALLED_SCRIPT="/etc/correlix/stack-watchdog.sh"
 CRON_FILE="/etc/cron.d/correlix-watchdog"
 LOGROTATE_FILE="/etc/logrotate.d/correlix-watchdog"
 LOG_FILE="/var/log/correlix-watchdog.log"
@@ -97,12 +102,12 @@ require_root() {
 # ---------------------------------------------------------------------------
 if [ "$UNINSTALL" = 1 ]; then
   if [ "$PRINT_ONLY" = 1 ]; then
-    echo "print-only: would remove $CRON_FILE, $ENV_FILE, $LOGROTATE_FILE"
+    echo "print-only: would remove $CRON_FILE, $ENV_FILE, $LOGROTATE_FILE, $INSTALLED_SCRIPT"
     exit 0
   fi
   require_root
   removed=0
-  for f in "$CRON_FILE" "$ENV_FILE" "$LOGROTATE_FILE"; do
+  for f in "$CRON_FILE" "$ENV_FILE" "$LOGROTATE_FILE" "$INSTALLED_SCRIPT"; do
     if [ -e "$f" ]; then
       rm -f "$f"
       echo "removed $f"
@@ -220,7 +225,7 @@ cron_content() {
 # $LOGROTATE_FILE.
 SHELL=/bin/sh
 PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-* * * * * root WATCHDOG_ENV=$ENV_FILE $WATCHDOG_SCRIPT >>$LOG_FILE 2>&1
+* * * * * root WATCHDOG_ENV=$ENV_FILE $INSTALLED_SCRIPT >>$LOG_FILE 2>&1
 EOF
 }
 
@@ -267,6 +272,12 @@ chown root:root "$tmp"
 chmod 0600 "$tmp"
 mv -f "$tmp" "$ENV_FILE"
 
+tmp="$(mktemp /etc/correlix/.stack-watchdog.sh.XXXXXX)"
+cp "$WATCHDOG_SCRIPT" "$tmp"
+chown root:root "$tmp"
+chmod 0755 "$tmp"
+mv -f "$tmp" "$INSTALLED_SCRIPT"
+
 tmp="$(mktemp /etc/cron.d/.correlix-watchdog.XXXXXX)"
 cron_content > "$tmp"
 chown root:root "$tmp"
@@ -279,6 +290,6 @@ chown root:root "$tmp"
 chmod 0644 "$tmp"
 mv -f "$tmp" "$LOGROTATE_FILE"
 
-echo "installed: $ENV_FILE (0600), $CRON_FILE, $LOGROTATE_FILE"
-echo "watchdog:  $WATCHDOG_SCRIPT runs every minute; log: $LOG_FILE"
-echo "verify:    sudo WATCHDOG_ENV=$ENV_FILE $WATCHDOG_SCRIPT --test"
+echo "installed: $ENV_FILE (0600), $INSTALLED_SCRIPT (root 0755), $CRON_FILE, $LOGROTATE_FILE"
+echo "watchdog:  $INSTALLED_SCRIPT runs every minute; log: $LOG_FILE"
+echo "verify:    sudo WATCHDOG_ENV=$ENV_FILE $INSTALLED_SCRIPT --test"
