@@ -338,6 +338,50 @@ def test_scripts_are_bash_clean():
         assert r.returncode == 0, f"bash -n {script.name}: {r.stderr}"
 
 
+# ---------------------------------------------------------------------------
+# pre-push hook: advisory checks may never hang a push
+# ---------------------------------------------------------------------------
+
+PRE_PUSH = SCRIPTS / "git-hooks" / "pre-push"
+
+
+def test_pre_push_bundle_staleness_is_bounded_and_advisory():
+    """(fix 2026-08-14) The hook's bundle-staleness step is ADVISORY (§16.5
+    warn-only by design), but it shells into `ls dist/` + `git rev-list` with
+    no bound — a wedged mount or pathological history hung `git push`
+    indefinitely, which converts a warn-only convenience into a workflow
+    outage. §16.3: every external call bounded. Pin:
+      (a) the staleness invocation runs under a hard 10s `timeout` (with a
+          kill escalation so a TERM-ignoring child still dies);
+      (b) expiry (124 TERM / 137 KILL) is detected DISTINCTLY and warned
+          loudly — "freshness unknown" must not read as "bundle stale";
+      (c) the hook still ends `exit 0`: the advisory tail never blocks;
+      (d) a host without `timeout` skips the check with a warning rather
+          than reintroducing the unbounded call (§16.2: assume nothing)."""
+    text = PRE_PUSH.read_text()
+    # (a) bounded, with kill escalation, still --quiet hook mode
+    assert re.search(
+        r"timeout\s+--kill-after=\S+\s+10\s+bash\s+\S*bundle-staleness\.sh\"?\s+--quiet",
+        text), (
+        "pre-push: bundle-staleness.sh must run under `timeout --kill-after=… 10` "
+        "— an advisory hook may never hang the push")
+    # (b) timeout exit codes handled as their own loud outcome
+    assert "124" in text and "137" in text, (
+        "pre-push: timeout expiry (124/137) must be distinguished from a "
+        "stale bundle — unknown is not stale")
+    assert "TIMED OUT" in text, "pre-push: expiry warning must be loud and explicit"
+    # (c) advisory to the end
+    assert text.rstrip().endswith("exit 0"), (
+        "pre-push must end `exit 0` — the staleness tail is warn-only")
+    # (d) no unbounded fallback path
+    assert re.search(r"command -v timeout", text), (
+        "pre-push: probe for `timeout` and SKIP (with a warning) when absent "
+        "— never fall back to the unbounded call")
+    # floor: the hook itself parses
+    r = subprocess.run(["bash", "-n", str(PRE_PUSH)], capture_output=True, text=True)
+    assert r.returncode == 0, f"bash -n pre-push: {r.stderr}"
+
+
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_scripts_are_shellcheck_clean():
     for script in (WATCHDOG, INSTALLER):

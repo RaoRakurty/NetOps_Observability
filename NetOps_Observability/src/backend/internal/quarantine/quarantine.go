@@ -110,6 +110,28 @@ func TopicForLane(lane string) (string, bool) {
 	return t, ok
 }
 
+// laneReplayGuarded reports whether a lane's CANONICAL store cannot
+// deduplicate a replayed event by id. The OS event sinks upsert by `id_key:
+// cx_event_id`, so a syslog/snmptrap replay is an upsert; the flows lane's
+// canonical store is the ClickHouse netops.flows table (plain MergeTree, no
+// id column at all — the sink's skip_unknown_fields silently drops
+// cx_event_id), so every re-produce lands a DUPLICATE canonical row. Guarded
+// lanes get at-most-once produce semantics instead: the envelope is claimed
+// (CAS on the OS doc, see RestoreDeps.Claim) before its single produce, and
+// an envelope carrying a claim is never produced again — only its tombstone
+// is retried.
+func laneReplayGuarded(lane string) bool { return lane == "flows" }
+
+// ErrClaimConflict is returned by RestoreDeps.Claim when the CAS lost: another
+// restore run claimed the envelope between our search and our claim. The
+// winner produces and tombstones; this run must do neither.
+var ErrClaimConflict = errors.New("quarantine: envelope already claimed by a concurrent restore")
+
+// RestoredAtField is the envelope field a successful claim stamps
+// (RestoreDeps.Claim) and ParseSearch reads back — the persistent "produce was
+// attempted" marker that survives a failed tombstone.
+const RestoredAtField = "cx_restored_at"
+
 // SealContext is the exact authenticated context the router sealed quarantine
 // payloads under (processors/quarantine.go). The MAC covers every field, so
 // any drift here makes every envelope unrecoverable — which is why the
@@ -136,7 +158,17 @@ type Doc struct {
 	IdentitySha string `json:"identity_sha"`
 	SourceIP    string `json:"source_ip,omitempty"`
 	Reason      string `json:"reason"`
-	Payload     string `json:"-"` // sealed token — NEVER serialized
+	// RestoredAt is the replay-guard claim stamp (RestoredAtField): non-empty
+	// means an earlier restore already ATTEMPTED the produce and only the
+	// tombstone remains. Listed so a lingering claimed envelope is visible to
+	// the operator, not a mystery row.
+	RestoredAt string `json:"cx_restored_at,omitempty"`
+	Payload    string `json:"-"` // sealed token — NEVER serialized
+	// Optimistic-concurrency coordinates of the doc at search time; the claim
+	// CAS (RestoreDeps.Claim) conditions on them so two concurrent restores
+	// cannot both win the same envelope. Transport detail, never serialized.
+	SeqNo       int64 `json:"-"`
+	PrimaryTerm int64 `json:"-"`
 }
 
 // quarantineIndexPrefix guards the tombstone path: a DELETE is issued only
@@ -146,7 +178,7 @@ const quarantineIndexPrefix = "netops-quarantine-"
 
 // metadataFields is the _source projection for the list query — the payload
 // is not even transferred from OpenSearch for a metadata listing.
-var metadataFields = []string{"cx_event_id", "received_at", "lane", "identity_sha", "source_ip", "reason"}
+var metadataFields = []string{"cx_event_id", "received_at", "lane", "identity_sha", "source_ip", "reason", RestoredAtField}
 
 // ListQuery is the metadata-list search body: newest first, exact totals, and
 // a min aggregation over received_at for the summary.
@@ -172,7 +204,10 @@ func ShaQuery(sha string, limit int) map[string]any {
 	return map[string]any{
 		"size":             limit,
 		"track_total_hits": true,
-		"query":            map[string]any{"term": map[string]any{"identity_sha": sha}},
+		// The replay-guard claim (RestoreDeps.Claim) is a CAS conditioned on
+		// each hit's _seq_no/_primary_term — request them with the hits.
+		"seq_no_primary_term": true,
+		"query":               map[string]any{"term": map[string]any{"identity_sha": sha}},
 		"sort": []any{
 			map[string]any{"received_at": map[string]any{"order": "asc", "unmapped_type": "date"}},
 		},
@@ -187,9 +222,11 @@ type osSearchResponse struct {
 			Value int64 `json:"value"`
 		} `json:"total"`
 		Hits []struct {
-			Index  string         `json:"_index"`
-			ID     string         `json:"_id"`
-			Source map[string]any `json:"_source"`
+			Index       string         `json:"_index"`
+			ID          string         `json:"_id"`
+			SeqNo       int64          `json:"_seq_no"`
+			PrimaryTerm int64          `json:"_primary_term"`
+			Source      map[string]any `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 	Aggregations struct {
@@ -230,7 +267,10 @@ func ParseSearch(r io.Reader) (docs []Doc, total int64, oldest string, err error
 			IdentitySha: str("identity_sha"),
 			SourceIP:    str("source_ip"),
 			Reason:      str("reason"),
+			RestoredAt:  str(RestoredAtField),
 			Payload:     str(processors.QuarantinePayloadField),
+			SeqNo:       h.SeqNo,
+			PrimaryTerm: h.PrimaryTerm,
 		})
 	}
 	if body.Aggregations.OldestReceived.Value != nil {
@@ -270,26 +310,53 @@ type RestoreDeps struct {
 	Produce func(ctx context.Context, topic, tenant string, event map[string]any) error
 	// Delete tombstones one quarantine doc after successful re-injection.
 	Delete func(ctx context.Context, index, id string) error
+	// Claim stamps RestoredAtField on the envelope doc BEFORE a replay-guarded
+	// lane's produce, conditioned on the doc's (seqNo, primaryTerm) as seen at
+	// search time — a CAS, so exactly one concurrent restore run wins each
+	// envelope. Must return an error wrapping ErrClaimConflict when the CAS
+	// lost. Required for guarded lanes: Restore fails such docs closed when
+	// Claim is nil, because producing a flow without the guard reopens the
+	// canonical-store duplication path.
+	Claim func(ctx context.Context, index, id string, seqNo, primaryTerm int64) error
+	// Unclaim clears the claim stamp after the bus REFUSED the produce (the
+	// event is provably not in the canonical store), so the envelope stays
+	// restorable. Best-effort: a failed rollback leaves the claim in place and
+	// the next run refuses the replay — the deliberate at-most-once loss
+	// window, and it takes a produce failure AND a rollback failure to hit it.
+	Unclaim func(ctx context.Context, index, id string) error
 }
 
 // RestoreResult counts one run's outcomes. Restored counts events accepted by
 // the bus; DeleteFailed counts restored events whose tombstone failed (the
-// doc lingers as noise — the restore itself is idempotent, see Restore).
+// doc lingers as noise — replays are refused or upsert, see Restore).
+// ReplayRefused counts envelopes skipped by the replay guard (already claimed
+// by an earlier or concurrent run); UnclaimFailed counts claim rollbacks that
+// failed after a refused produce (the envelope will be refused, not retried).
 type RestoreResult struct {
-	Restored     int
-	Failed       int
-	Deleted      int
-	DeleteFailed int
+	Restored      int
+	Failed        int
+	Deleted       int
+	DeleteFailed  int
+	ReplayRefused int
+	UnclaimFailed int
 }
 
 // Restore unseals and re-injects each doc, then tombstones it. Per-doc
 // failures are counted and never abort the batch.
 //
-// REPLAY-SAFE by construction: the re-injected event carries the envelope's
-// original cx_event_id and the OpenSearch event sinks use `id_key:
-// cx_event_id`, so running the same restore twice UPSERTS the same document
-// ids instead of duplicating tenant data — which is also why a failed
-// tombstone is noise rather than corruption.
+// REPLAY SAFETY — two dedup contracts, by lane, both promising "re-running
+// the same restore never duplicates tenant data":
+//
+//   - OS-canonical lanes (syslog, snmptrap): the re-injected event carries the
+//     envelope's original cx_event_id and the OpenSearch event sinks use
+//     `id_key: cx_event_id`, so a replay UPSERTS the same document ids — a
+//     failed tombstone is noise, not corruption.
+//   - flows (laneReplayGuarded): the canonical store is ClickHouse (plain
+//     MergeTree, no id dedup), so the same outcome is enforced restore-side
+//     with at-most-once produce: each envelope is claimed via CAS before its
+//     single produce, an envelope already carrying a claim only gets its
+//     tombstone retried, and a claim is rolled back only when the bus refused
+//     the event outright.
 func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) RestoreResult {
 	var res RestoreResult
 	for _, d := range docs {
@@ -305,6 +372,21 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			res.Failed++
 			continue
 		}
+		guarded := laneReplayGuarded(d.Lane)
+		if guarded && d.RestoredAt != "" {
+			// An earlier run claimed this envelope: its produce was at least
+			// ATTEMPTED and may have landed in ClickHouse (the common way
+			// here is a produce that succeeded but a tombstone that failed).
+			// At-most-once for canonical flow data: never produce again —
+			// finish the tombstone instead.
+			res.ReplayRefused++
+			if err := deps.Delete(ctx, d.Index, d.ID); err != nil {
+				res.DeleteFailed++
+			} else {
+				res.Deleted++
+			}
+			continue
+		}
 		plaintext, err := deps.Unseal(ctx, d.Payload)
 		if err != nil {
 			res.Failed++
@@ -315,8 +397,36 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 			res.Failed++
 			continue
 		}
+		if guarded {
+			if deps.Claim == nil {
+				// Fail closed: a guarded produce without the replay guard
+				// would reopen the duplication path.
+				res.Failed++
+				continue
+			}
+			if err := deps.Claim(ctx, d.Index, d.ID, d.SeqNo, d.PrimaryTerm); err != nil {
+				if errors.Is(err, ErrClaimConflict) {
+					// A concurrent run won the CAS — it produces and
+					// tombstones; this run must do neither.
+					res.ReplayRefused++
+				} else {
+					res.Failed++
+				}
+				continue
+			}
+		}
 		if err := deps.Produce(ctx, topic, tenant, ev); err != nil {
 			res.Failed++
+			if guarded {
+				// The bus refused, so the event is NOT in ClickHouse — roll
+				// the claim back so the envelope stays restorable. If the
+				// rollback also fails, the claim sticks and the next run
+				// refuses the replay: the accepted at-most-once loss window
+				// (it takes BOTH failures), surfaced via UnclaimFailed.
+				if deps.Unclaim == nil || deps.Unclaim(ctx, d.Index, d.ID) != nil {
+					res.UnclaimFailed++
+				}
+			}
 			continue
 		}
 		res.Restored++

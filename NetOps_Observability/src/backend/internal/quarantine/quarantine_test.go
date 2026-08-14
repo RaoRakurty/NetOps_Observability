@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -260,6 +261,205 @@ func TestRestoreProduceFailureKeepsTheDoc(t *testing.T) {
 	}
 	if deleteCalled {
 		t.Fatal("DELETE was issued for an event that never reached the bus — that is data loss")
+	}
+}
+
+// FAILING-FIRST (2026-08-14 verification): ClickHouse is the canonical flow
+// store (vector-router clickhouse_flows sink → netops.flows, ENGINE=MergeTree,
+// no cx_event_id column — skip_unknown_fields drops it — and no id-based
+// dedup analogue to the OS sinks' id_key). Re-producing a flows event is
+// therefore NOT an upsert: every extra Produce lands a duplicate canonical
+// row. A lingering envelope (tombstone delete failed) must never be produced
+// a second time, however many times the operator re-runs the restore.
+func TestRestoreFlowsNeverProducesTheSameEventTwice(t *testing.T) {
+	doc := Doc{Index: "netops-quarantine-2026.08.12", ID: "d1", EventID: "e1", Lane: "flows", Payload: "tok"}
+	produced := 0
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Produce: func(context.Context, string, string, map[string]any) error { produced++; return nil },
+		// The tombstone fails, so the SAME doc is still in the index when the
+		// operator retries the restore.
+		Delete: func(context.Context, string, string) error { return errors.New("os hiccup") },
+	}
+	_ = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	_ = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if produced > 1 {
+		t.Fatalf("a quarantined FLOW was produced %d times — duplicate rows in the canonical ClickHouse store", produced)
+	}
+}
+
+// The flows replay guard, happy path: claim (CAS on the doc's search-time
+// seq_no/primary_term) strictly BEFORE the produce, tombstone after — and the
+// OS lanes' behavior is untouched (no claim calls at all).
+func TestRestoreFlowsClaimProtocol(t *testing.T) {
+	docs := []Doc{
+		{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 7, PrimaryTerm: 2},
+		{Index: "netops-quarantine-2026.08.12", ID: "s1", EventID: "e2", Lane: "syslog", Payload: "tok"},
+	}
+	var calls []string
+	deps := RestoreDeps{
+		Unseal: func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim: func(_ context.Context, index, id string, seqNo, primaryTerm int64) error {
+			if index != "netops-quarantine-2026.08.12" || id != "f1" || seqNo != 7 || primaryTerm != 2 {
+				t.Errorf("claim coordinates wrong: %s/%s %d/%d", index, id, seqNo, primaryTerm)
+			}
+			calls = append(calls, "claim:"+id)
+			return nil
+		},
+		Unclaim: func(_ context.Context, _, id string) error { calls = append(calls, "unclaim:"+id); return nil },
+		Produce: func(_ context.Context, topic, _ string, ev map[string]any) error {
+			calls = append(calls, "produce:"+topic+":"+ev["cx_event_id"].(string))
+			return nil
+		},
+		Delete: func(_ context.Context, _, id string) error { calls = append(calls, "delete:"+id); return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if res.Restored != 2 || res.Deleted != 2 || res.Failed != 0 || res.ReplayRefused != 0 || res.UnclaimFailed != 0 {
+		t.Fatalf("counts: %+v", res)
+	}
+	want := []string{
+		"claim:f1", "produce:netops.flows:e1", "delete:f1", // guarded lane: claim strictly first
+		"produce:netops.syslog:e2", "delete:s1", // OS lane: NO claim — id_key upsert is the guard
+	}
+	if fmt.Sprint(calls) != fmt.Sprint(want) {
+		t.Fatalf("call order = %v, want %v", calls, want)
+	}
+}
+
+// An envelope already carrying the claim stamp (an earlier run produced but
+// its tombstone failed) is never produced again — only the tombstone is
+// retried. This is the at-most-once contract that keeps the canonical
+// ClickHouse store duplicate-free.
+func TestRestoreFlowsAlreadyClaimedOnlyTombstones(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows",
+		Payload: "tok", RestoredAt: "2026-08-14T01:00:00Z"}}
+	var produced, unsealed bool
+	var deleted []string
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { unsealed = true; return `{"bytes":42}`, nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { return nil },
+		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:  func(_ context.Context, index, id string) error { deleted = append(deleted, index+"/"+id); return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if produced {
+		t.Fatal("a claimed flows envelope was produced AGAIN — duplicate canonical row")
+	}
+	if unsealed {
+		t.Error("no reason to unseal an envelope that will not be produced")
+	}
+	if res.ReplayRefused != 1 || res.Restored != 0 || res.Failed != 0 || res.Deleted != 1 {
+		t.Fatalf("counts: %+v", res)
+	}
+	if len(deleted) != 1 || deleted[0] != "netops-quarantine-2026.08.12/f1" {
+		t.Fatalf("tombstone not retried: %v", deleted)
+	}
+}
+
+// A lost claim CAS means a CONCURRENT restore owns the envelope: this run must
+// neither produce (duplicate) nor delete (stealing the winner's tombstone
+// while its produce may still be in flight).
+func TestRestoreFlowsClaimConflictDoesNothingElse(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
+	var produced, deleted bool
+	deps := RestoreDeps{
+		Unseal: func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim: func(context.Context, string, string, int64, int64) error {
+			return fmt.Errorf("wrapped: %w", ErrClaimConflict)
+		},
+		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:  func(context.Context, string, string) error { deleted = true; return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if produced || deleted {
+		t.Fatalf("conflict must be a full stop: produced=%v deleted=%v", produced, deleted)
+	}
+	if res.ReplayRefused != 1 || res.Failed != 0 {
+		t.Fatalf("counts: %+v", res)
+	}
+}
+
+// A claim error that is NOT a CAS conflict (OS down, etc.) is a plain failure
+// — no produce, no tombstone, envelope intact for a later run.
+func TestRestoreFlowsClaimErrorFails(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
+	var produced bool
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { return errors.New("os down") },
+		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:  func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if produced || res.Failed != 1 || res.ReplayRefused != 0 {
+		t.Fatalf("produced=%v counts=%+v", produced, res)
+	}
+}
+
+// A refused produce rolls the claim back (the event is provably not in
+// ClickHouse, so the envelope must stay restorable), and the doc is kept.
+func TestRestoreFlowsProduceFailureRollsBackClaim(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
+	var unclaimed, deleted bool
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { return nil },
+		Unclaim: func(context.Context, string, string) error { unclaimed = true; return nil },
+		Produce: func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
+		Delete:  func(context.Context, string, string) error { deleted = true; return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if !unclaimed {
+		t.Fatal("claim was not rolled back after a refused produce — the envelope would be stranded")
+	}
+	if deleted {
+		t.Fatal("DELETE was issued for an event that never reached the bus — data loss")
+	}
+	if res.Failed != 1 || res.UnclaimFailed != 0 {
+		t.Fatalf("counts: %+v", res)
+	}
+}
+
+// The double-failure window (produce refused AND rollback failed) must be
+// loud: the envelope will be replay-refused next run, and the operator sees
+// exactly how many envelopes are in that state.
+func TestRestoreFlowsUnclaimFailureIsCounted(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { return nil },
+		Unclaim: func(context.Context, string, string) error { return errors.New("os down too") },
+		Produce: func(context.Context, string, string, map[string]any) error { return errors.New("bus down") },
+		Delete:  func(context.Context, string, string) error { t.Error("tombstone without produce"); return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if res.Failed != 1 || res.UnclaimFailed != 1 {
+		t.Fatalf("counts: %+v", res)
+	}
+}
+
+// A guarded lane without a Claim dependency fails CLOSED: producing a flow
+// without the replay guard would reopen the duplication path.
+func TestRestoreFlowsFailsClosedWithoutClaimDep(t *testing.T) {
+	docs := []Doc{{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok"}}
+	var produced bool
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":42}`, nil },
+		Produce: func(context.Context, string, string, map[string]any) error { produced = true; return nil },
+		Delete:  func(context.Context, string, string) error { return nil },
+	}
+	res := Restore(context.Background(), deps, docs, "acme")
+	if produced || res.Failed != 1 {
+		t.Fatalf("produced=%v counts=%+v", produced, res)
+	}
+}
+
+// The re-attribution search must request the CAS coordinates the claim
+// conditions on.
+func TestShaQueryRequestsSeqNoPrimaryTerm(t *testing.T) {
+	q := ShaQuery("ab", 10)
+	if v, ok := q["seq_no_primary_term"].(bool); !ok || !v {
+		t.Fatalf("seq_no_primary_term missing from ShaQuery: %v", q)
 	}
 }
 

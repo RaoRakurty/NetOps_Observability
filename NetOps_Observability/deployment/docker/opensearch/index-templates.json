@@ -647,7 +647,7 @@
       }
     },
     "netops-quarantine": {
-      "_comment": "F-11 seal-or-quarantine: TENANT_UNATTRIBUTABLE envelopes. Metadata only is mapped; cx_quarantine_payload (the <enc:v1:quarantine:...> token over the whole original event) is DELIBERATELY UNMAPPED \u2014 dynamic:false keeps it in _source for the operator workflow while never making ciphertext searchable/aggregatable surface. No tenant segment: no tenant read path names this index; the platform-only quarantine API is the sole consumer. Retention is its own ISM policy (QUARANTINE_RETENTION_DAYS), never unbounded (INV-F11-09).",
+      "_comment": "F-11 seal-or-quarantine: TENANT_UNATTRIBUTABLE envelopes. Metadata only is mapped; cx_quarantine_payload (the <enc:v1:quarantine:...> token over the whole original event) is DELIBERATELY UNMAPPED \u2014 dynamic:false keeps it in _source for the operator workflow while never making ciphertext searchable/aggregatable surface. cx_restored_at is the flows replay-guard claim stamp (quarantine.RestoredAtField): set by the restore API before a flows produce, and a stamped envelope is only ever tombstoned, never re-produced (the ClickHouse canonical flow store has no id dedup) \u2014 mapped as a date so operators can find lingering claimed envelopes. No tenant segment: no tenant read path names this index; the platform-only quarantine API is the sole consumer. Retention is its own ISM policy (QUARANTINE_RETENTION_DAYS), never unbounded (INV-F11-09).",
       "index_patterns": [
         "netops-quarantine-*"
       ],
@@ -688,6 +688,10 @@
             },
             "reason": {
               "type": "keyword"
+            },
+            "cx_restored_at": {
+              "type": "date",
+              "format": "strict_date_optional_time||epoch_millis"
             }
           }
         }

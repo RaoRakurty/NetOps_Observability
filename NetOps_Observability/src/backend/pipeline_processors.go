@@ -1106,9 +1106,14 @@ func quarantineIdentityRows(devices []models.Device) []quarantine.IdentityRow {
 // pins the policy against a future role-model change) — then the platform
 // gate itself.
 //
-// Replay-safe end to end: re-runs upsert the same cx_event_id (`id_key` on
-// the OS event sinks), so calling this twice can never duplicate tenant docs
-// — proven by TestQuarantineReattributeHappyPathAndReplay.
+// Replay-safe end to end, two contracts by lane: on the OS-canonical lanes
+// (syslog, snmptrap) re-runs upsert the same cx_event_id (`id_key` on the OS
+// event sinks); on the flows lane the canonical store is ClickHouse (plain
+// MergeTree — no id dedup), so the quarantine package enforces at-most-once
+// produce via a CAS claim on the envelope doc (quarantine.Restore) wired to
+// the Claim/Unclaim deps below. Either way, calling this twice can never
+// duplicate tenant data — proven by TestQuarantineReattributeHappyPathAndReplay
+// and TestQuarantineReattributeFlowsReplayGuard.
 func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1188,15 +1193,53 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 			if err != nil {
 				// §10 no silent failures: the count reaches the response, the
 				// specifics land here. The leftover doc is noise, not
-				// duplication (id_key upsert).
+				// duplication: OS lanes upsert by id_key, the flows lane is
+				// claim-stamped so a re-run refuses the replay.
 				logError("quarantine", "tombstone delete failed after successful re-injection",
+					map[string]any{"index": index, "doc": id, "error": err.Error()})
+			}
+			return err
+		},
+		// Claim is the flows replay guard (quarantine.laneReplayGuarded): a CAS
+		// update stamping cx_restored_at, conditioned on the doc's search-time
+		// seq_no/primary_term so exactly one concurrent restore wins each
+		// envelope. 409 = lost the race (or the doc changed) → ErrClaimConflict.
+		Claim: func(ctx context.Context, index, id string, seqNo, primaryTerm int64) error {
+			path := "/" + index + "/_update/" + url.PathEscape(id) +
+				"?if_seq_no=" + strconv.FormatInt(seqNo, 10) +
+				"&if_primary_term=" + strconv.FormatInt(primaryTerm, 10)
+			resp, err := openSearch(http.MethodPost, path, map[string]any{
+				"doc": map[string]any{quarantine.RestoredAtField: time.Now().UTC().Format(time.RFC3339)},
+			})
+			if err != nil {
+				return err
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode == http.StatusConflict {
+				return fmt.Errorf("%w (doc %s/%s)", quarantine.ErrClaimConflict, index, id)
+			}
+			if resp.StatusCode < 200 || resp.StatusCode > 299 {
+				return fmt.Errorf("quarantine claim failed (opensearch status %d on %s/%s)", resp.StatusCode, index, id)
+			}
+			return nil
+		},
+		// Unclaim rolls the stamp back after the bus refused a produce, so the
+		// envelope stays restorable. Failure is surfaced (UnclaimFailed count +
+		// this log): the envelope would be replay-refused on the next run.
+		Unclaim: func(ctx context.Context, index, id string) error {
+			err := s.osJSON(ctx, http.MethodPost, "/"+index+"/_update/"+url.PathEscape(id),
+				[]byte(`{"doc":{"`+quarantine.RestoredAtField+`":null}}`), nil)
+			if err != nil {
+				logError("quarantine", "flows replay-claim rollback failed — envelope will be refused on the next restore",
 					map[string]any{"index": index, "doc": id, "error": err.Error()})
 			}
 			return err
 		},
 	}
 	res := quarantine.Restore(r.Context(), deps, docs, tenant)
-	remaining := int(total) - res.Restored
+	// Replay-refused envelopes are resolved too: either their tombstone was
+	// just retried or a concurrent restore owns them — they do not remain.
+	remaining := int(total) - res.Restored - res.ReplayRefused
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -1213,6 +1256,8 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 		"remaining":              remaining,
 		"deleted":                res.Deleted,
 		"delete_failed":          res.DeleteFailed,
+		"replay_refused":         res.ReplayRefused,
+		"unclaim_failed":         res.UnclaimFailed,
 	})
 }
 
@@ -1241,6 +1286,8 @@ func (s *server) auditQuarantineRestore(claims jwtClaims, sha, tenant string, re
 			"failed":           res.Failed,
 			"deleted":          res.Deleted,
 			"delete_failed":    res.DeleteFailed,
+			"replay_refused":   res.ReplayRefused,
+			"unclaim_failed":   res.UnclaimFailed,
 			"actor_tenant":     actorTenant,
 			"cross_tenant":     cross,
 		},

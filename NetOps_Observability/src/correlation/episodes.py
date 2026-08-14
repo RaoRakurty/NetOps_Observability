@@ -24,10 +24,11 @@ first, calibrated at P4 (replay-driven calibration), never silently tuned.
 
 from __future__ import annotations
 
-import os
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from series_budget import derive_max_series
 
 # --- Detection constants (config-hash members; P4 calibration re-fits them) ---
 WINDOW_SIZE = 200          # rolling baseline samples
@@ -38,9 +39,12 @@ CLEAR_SIGMA = 1.0          # |z| considered "back to normal"
 CLEAR_HOLD = 3             # consecutive normal samples to close
 DEFAULT_INTERVAL_S = 60.0  # assumed sampling interval until observed
 # Bound on distinct (tenant, entity, metric) series held in memory (§9: all
-# queues bounded). Sized well above a real fleet's cardinality; it exists so
-# entity-id churn cannot become an OOM.
-MAX_SERIES = int(os.environ.get("CORR_MAX_SERIES", "200000"))
+# queues bounded); it exists so entity-id churn cannot become an OOM. Derived
+# from the container memory budget (series_budget.py) — the old flat 200k
+# default measured ~2.9 GiB at cap across this store + main.SERIES, so the
+# 768 MiB container OOM'd long before the cap engaged and the bound never
+# bounded. CORR_MAX_SERIES still overrides verbatim.
+MAX_SERIES = derive_max_series()
 
 # Owner: source-specific timing budget. Clock quality widens onset uncertainty
 # beyond the sampling-interval term (seconds).

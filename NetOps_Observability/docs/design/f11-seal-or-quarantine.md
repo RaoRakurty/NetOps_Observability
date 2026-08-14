@@ -124,7 +124,13 @@ category `platform`), all audited with new `SecEventQuarantine*` constants:
   then deletes the quarantine doc (first api OS doc-delete; `osJSON`).
   Cross-crypto-boundary by construction: quarantine-decrypt → normal
   pipeline → tenant rules apply on re-consumption (tenant seal under the
-  tenant key). Replay-safe: re-runs upsert the same `_id`.
+  tenant key). Replay-safe, per lane: OS-canonical lanes re-run as upserts of
+  the same `_id`; the flows lane's canonical store is ClickHouse (plain
+  MergeTree, no id dedup — verified 2026-08-14), so the api enforces
+  at-most-once produce restore-side instead: a CAS `_update` stamps
+  `cx_restored_at` on the envelope before the produce, a stamped envelope is
+  only ever tombstoned (never re-produced), and the stamp is rolled back only
+  when the bus refused the event (`quarantine.Restore` replay guard).
 - `POST /api/quarantine/inspect` (audited decrypt-view, sensitive_data:admin,
   fingerprint-only audit detail) — optional; ship if cheap.
 - Retention: `apply-ism.sh` gains a second policy
@@ -201,7 +207,9 @@ mitigation ladder. State this in the verdict.
 - INV-F11-05: correlation claim refusal + flows claim_rejected + §3 note.
 - INV-F11-06: exit-78 boot semantics + drop_on_abort no-reroute + alert.
 - INV-F11-07/08: D5 re-attribution (decrypt→re-encrypt via pipeline;
-  id_key idempotency).
+  id_key idempotency on OS lanes, `cx_restored_at` CAS replay guard on the
+  flows/ClickHouse lane — TestRestoreFlowsNeverProducesTheSameEventTwice,
+  TestQuarantineReattributeFlowsReplayGuard).
 - INV-F11-09: ISM quarantine policy + contract test.
 - INV-F11-10: D4 correlation skip + ticketing chain tests.
 - INV-F11-11: F-10 e2e re-run post-change.

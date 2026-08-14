@@ -39,12 +39,16 @@ func f11Sha(s string) string {
 }
 
 // quarFakeOS is a purpose-built OpenSearch stand-in: search replies come from
-// the queue (last one repeats), DELETEs are recorded and acknowledged.
+// the queue (last one repeats), DELETEs are recorded and acknowledged, _update
+// calls (the flows replay-guard claim/rollback) are recorded with their query
+// string and acknowledged — or 409'd when updateConflict is set.
 type quarFakeOS struct {
-	mu       sync.Mutex
-	searches []string // recorded search request bodies
-	deletes  []string // recorded DELETE paths
-	replies  []string // consumed one per search; last repeats
+	mu             sync.Mutex
+	searches       []string // recorded search request bodies
+	deletes        []string // recorded DELETE paths
+	updates        []string // recorded _update "path?query|body" entries
+	replies        []string // consumed one per search; last repeats
+	updateConflict bool     // every _update answers 409 (lost CAS)
 }
 
 func newQuarFakeOS(t *testing.T, replies ...string) *quarFakeOS {
@@ -66,6 +70,15 @@ func newQuarFakeOS(t *testing.T, replies ...string) *quarFakeOS {
 				i = len(f.replies) - 1
 			}
 			_, _ = w.Write([]byte(f.replies[i]))
+		case strings.Contains(r.URL.Path, "/_update/"):
+			b, _ := io.ReadAll(r.Body)
+			f.updates = append(f.updates, r.URL.Path+"?"+r.URL.RawQuery+"|"+string(b))
+			if f.updateConflict {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":{"type":"version_conflict_engine_exception"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"result":"updated"}`))
 		default:
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 		}
@@ -441,4 +454,133 @@ func quarJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The flows lane's canonical store is ClickHouse (plain MergeTree — no id_key
+// dedup), so its restore path must be guarded end to end: claim the envelope
+// via CAS _update BEFORE the produce, refuse the replay of an already-claimed
+// envelope, and stand down entirely on a lost CAS. This pins the handler
+// wiring of quarantine.RestoreDeps.{Claim,Unclaim}.
+func TestQuarantineReattributeFlowsReplayGuard(t *testing.T) {
+	flowsReply := func(sha, tok, restoredAt string) string {
+		restored := ""
+		if restoredAt != "" {
+			restored = `"cx_restored_at":"` + restoredAt + `",`
+		}
+		return `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[
+		  {"_index":"netops-quarantine-2026.08.14","_id":"fd1","_seq_no":7,"_primary_term":2,"_source":{
+		    "cx_event_id":"fe1","received_at":"2026-08-14T01:00:00Z","lane":"flows",
+		    ` + restored + `"identity_sha":"` + sha + `","reason":"TENANT_UNATTRIBUTABLE",
+		    "cx_quarantine_payload":` + tok + `}}
+		]},"aggregations":{}}`
+	}
+	newFlowsFixture := func(t *testing.T, restoredAt string) (*httptest.Server, string, *quarFakeOS, *quarBusRecorder, string) {
+		t.Helper()
+		ts, s, p := sealTestServer(t)
+		admin := login(t, ts, "admin", "Passw0rd!2345").Token
+		s.discovery.Upsert(models.Device{ID: "edge-9", Name: "edge-9", Address: "10.9.9.19", TenantID: "acme"})
+		sha := f11Sha("edge-9")
+		raw, err := json.Marshal(map[string]any{
+			"src_addr": "10.1.1.1", "dst_addr": "10.2.2.2", "bytes": 42,
+			"tenant_id": "", "tenant_registry": "miss",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok, err := p.Seal(context.Background(), quarantine.SealContext(), string(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		osRec := newQuarFakeOS(t, flowsReply(sha, quarJSON(t, tok), restoredAt), emptyQuarSearchReply())
+		bus := newQuarBusRecorder(t)
+		return ts, admin, osRec, bus, sha
+	}
+	reattr := func(t *testing.T, ts *httptest.Server, admin, sha string) map[string]any {
+		t.Helper()
+		st, body := do(t, ts, "POST", quarReattrPath, admin, map[string]any{"identity_sha": sha})
+		if st != http.StatusOK {
+			t.Fatalf("reattribute: %d %s", st, body)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	busCount := func(b *quarBusRecorder) int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.envelopes)
+	}
+
+	t.Run("happy path claims before producing", func(t *testing.T) {
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "")
+		out := reattr(t, ts, admin, sha)
+		if out["restored"] != float64(1) || out["replay_refused"] != float64(0) || out["deleted"] != float64(1) {
+			t.Fatalf("counts: %v", out)
+		}
+		if busCount(bus) != 1 {
+			t.Fatalf("bus envelopes = %d, want 1", busCount(bus))
+		}
+		osRec.mu.Lock()
+		updates := append([]string(nil), osRec.updates...)
+		deletes := append([]string(nil), osRec.deletes...)
+		osRec.mu.Unlock()
+		if len(updates) != 1 {
+			t.Fatalf("claim _update calls = %v, want exactly 1", updates)
+		}
+		u := updates[0]
+		if !strings.HasPrefix(u, "/netops-quarantine-2026.08.14/_update/fd1?") {
+			t.Errorf("claim update outside the quarantine envelope: %s", u)
+		}
+		if !strings.Contains(u, "if_seq_no=7") || !strings.Contains(u, "if_primary_term=2") {
+			t.Errorf("claim is not a CAS on the search-time doc version: %s", u)
+		}
+		if !strings.Contains(u, "cx_restored_at") {
+			t.Errorf("claim does not stamp cx_restored_at: %s", u)
+		}
+		if len(deletes) != 1 {
+			t.Errorf("tombstone deletes = %v, want 1", deletes)
+		}
+	})
+
+	t.Run("lost CAS produces nothing", func(t *testing.T) {
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "")
+		osRec.mu.Lock()
+		osRec.updateConflict = true
+		osRec.mu.Unlock()
+		out := reattr(t, ts, admin, sha)
+		if out["restored"] != float64(0) || out["replay_refused"] != float64(1) {
+			t.Fatalf("counts: %v", out)
+		}
+		if busCount(bus) != 0 {
+			t.Fatal("a flows event was produced after LOSING the claim CAS — duplicate canonical row")
+		}
+		osRec.mu.Lock()
+		nDeletes := len(osRec.deletes)
+		osRec.mu.Unlock()
+		if nDeletes != 0 {
+			t.Fatal("tombstoned an envelope owned by the concurrent claim winner")
+		}
+	})
+
+	t.Run("already claimed envelope is never re-produced", func(t *testing.T) {
+		ts, admin, osRec, bus, sha := newFlowsFixture(t, "2026-08-14T00:30:00Z")
+		out := reattr(t, ts, admin, sha)
+		if out["restored"] != float64(0) || out["replay_refused"] != float64(1) || out["deleted"] != float64(1) {
+			t.Fatalf("counts: %v", out)
+		}
+		if busCount(bus) != 0 {
+			t.Fatal("an already-claimed flows envelope was produced AGAIN — duplicate canonical row")
+		}
+		osRec.mu.Lock()
+		nUpdates, nDeletes := len(osRec.updates), len(osRec.deletes)
+		osRec.mu.Unlock()
+		if nUpdates != 0 {
+			t.Error("no claim update expected for an envelope that already carries the stamp")
+		}
+		if nDeletes != 1 {
+			t.Error("the lingering tombstone was not retried")
+		}
+	})
 }

@@ -1,21 +1,27 @@
-"""NetOps Observability — Correlation + AI Engine.
+"""Correlation service — the impure shell around the pure engine core.
 
-A FastAPI service that:
+FastAPI + aiokafka. engine.py owns determinism (pure ``run_window``, replayable
+forever); this module owns everything that touches the world:
 
-  * Consumes the netops.syslog, netops.flows, netops.metrics Kafka
-    topics (Kafka-compatible).
-  * Runs lightweight stream processing — rolling z-score anomaly
-    detection over per-device metric series, severity-weighted event
-    correlation, and a stub for RCA.
-  * Writes findings into ClickHouse (netops.findings table) so the UI
-    can render them as ranked incident cards.
-  * Exposes a REST API for the Go layer to query findings and trigger
-    on-demand analyses.
+  * Consume the 12 ``TOPICS`` lanes (syslog / flows / metrics / probes /
+    snmptrap / cloud / app identities / controller events / app edge /
+    verification / wireless sessions + events) under a supervised consumer —
+    offsets commit only after the ClickHouse flush succeeds, so a crash
+    replays instead of losing signals.
+  * Normalize every event into canonical Signals (producers + the cloud /
+    app-identity / wireless intakes), tenant-scoped end to end — a signal
+    never crosses its tenant.
+  * Assemble per-tenant windows and run engine v3 in the default thread-pool
+    executor: storm-window CPU must never starve the consumer heartbeat or
+    /healthz (inputs are snapshotted tuples, so purity survives the offload).
+  * Persist snapshots + signals through CHBatcher (bounded, size/time-flushed
+    batches), with verdict / attribution fields flattened for the UI.
+  * Serve the read API: /findings, /correlations (incl. /{id}/replay, which
+    re-runs the stored snapshot byte-identically), /metrics, /healthz, and
+    POST /analyze.
 
-The implementation is intentionally minimal — replace the algorithms
-with sklearn / Prophet / a real CEP engine as the workload demands. The
-service contract (consume from Kafka, emit findings to ClickHouse,
-serve /findings) stays stable.
+The dividing line is load-bearing: anything deterministic belongs in
+engine.py; anything with IO, clocks, or retries belongs here.
 """
 
 from __future__ import annotations
@@ -99,6 +105,7 @@ from producers import (
 )
 from replay import replay_object
 from routing_direction import forwarding_pairs, routing_direction_source
+from series_budget import derive_max_series
 from signals import (
     DeadLetter,
     EntityType,
@@ -518,8 +525,12 @@ class Series:
 # (device, metric) with no eviction, so cardinality churn (ephemeral cloud
 # resource ids arriving as `device`) grew it until the container hit its memory
 # limit. Dropping the least-recently-scored series only costs it its warm-up.
+# The cap is DERIVED from the container memory budget (series_budget.py): the
+# old flat 200k default measured ~2.9 GiB at cap across this store + the
+# episode detector's — the 768 MiB container OOM'd long before the cap engaged.
+# CORR_MAX_SERIES still overrides verbatim.
 SERIES: OrderedDict[tuple[str, str], Series] = OrderedDict()
-SERIES_MAX = int(os.environ.get("CORR_MAX_SERIES", "200000"))
+SERIES_MAX = derive_max_series()
 
 # ---------------------------------------------------------------------------
 # Correlation Engine v2 — build ②: episode model (stages [1]+[2] of the
