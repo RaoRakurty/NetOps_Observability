@@ -54,6 +54,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: NetOps_Observability/src/backend/go.sum
+      - name: gofmt (blocking, both Go modules)
+        # Canonical formatting is a merge gate like vet/staticcheck: `gofmt -l`
+        # must print nothing for src/backend AND the installer-gui module. The
+        # fix is always mechanical (`gofmt -w <file>`), so there is no reason a
+        # violation should ever reach main.
+        working-directory: NetOps_Observability
+        run: |
+          unformatted="$(gofmt -l src/backend scripts/installer-gui)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt violations — run 'gofmt -w' on:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
       - name: go build
         run: go build ./...
       - name: go vet

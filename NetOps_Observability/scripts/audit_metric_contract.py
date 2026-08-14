@@ -26,6 +26,11 @@ FRONTEND = os.path.join(ROOT, "src", "frontend", "src")
 BACKEND = os.path.join(ROOT, "src", "backend")
 GNMIC_YAML = os.path.join(ROOT, "deployment", "docker", "gnmic", "gnmic.yaml")
 
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
 # Canonical families gNMI is allowed to emit even though NO SNMP collector emits
 # them — i.e. gNMI is the sole owner because the device has no SNMP source. Each
 # entry MUST carry a reason (the ownership ledger for the gNMI side, mirroring
@@ -93,7 +98,7 @@ def emitted_metrics() -> set[str]:
             # emitted).
             if path == VOCAB_GO:
                 continue
-            txt = open(path).read()
+            txt = _read(path)
             for rx in (name_re, expo_re, expo2_re, fmtpct_re):
                 names.update(rx.findall(txt))
     return names
@@ -116,7 +121,7 @@ def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
     problems: list[str] = []
     if not os.path.exists(GNMIC_YAML):
         return set(), [f"gnmic.yaml not found at {GNMIC_YAML}"]
-    txt = open(GNMIC_YAML).read()
+    txt = _read(GNMIC_YAML)
 
     # canon-names is the only processor whose `new:` targets are device_* names
     # (canon-status-enums → "1".."7", canon-tags → "ifName"/"device"). So every
@@ -136,7 +141,7 @@ def gnmi_canonical_lane(snmp_emitted: set[str]) -> tuple[set[str], list[str]]:
     # ownership-gate: the value-names delete-list (anchored regexes). Extract the
     # block between `ownership-gate:` and the next 2-space-indented processor key.
     gate_block = ""
-    m = re.search(r"^  ownership-gate:\n(.*?)(?=^  [a-z])", txt, re.S | re.M)
+    m = re.search(r"^  ownership-gate:\n(.*?)(?=^  [a-z])", txt, re.DOTALL | re.MULTILINE)
     if m:
         gate_block = m.group(1)
     gate_patterns = re.findall(r'-\s*"([^"]+)"', gate_block)
@@ -190,7 +195,7 @@ def security_vocabulary(emitted: set[str]) -> list[str]:
     problems: list[str] = []
     if not os.path.exists(VOCAB_GO):
         return [f"security vocabulary not found at {VOCAB_GO}"]
-    txt = open(VOCAB_GO).read()
+    txt = _read(VOCAB_GO)
     rows = re.findall(
         r'\{Name:\s*"([a-z0-9_]+)",.*?Status:\s*Status(Emitted|Reserved)\}', txt)
     if len(rows) < 8:
@@ -213,7 +218,7 @@ def security_vocabulary(emitted: set[str]) -> list[str]:
             path = os.path.join(dirpath, f)
             if path == VOCAB_GO:
                 continue
-            bare.update(bare_re.findall(open(path).read()))
+            bare.update(bare_re.findall(_read(path)))
     sec_emitted = emitted | bare
 
     vocab = {name: status for name, status in rows}
@@ -252,10 +257,10 @@ def referenced_metrics() -> dict[str, set[str]]:
     refs: dict[str, set[str]] = {}
     for dirpath, _dirs, files in os.walk(FRONTEND):
         for f in files:
-            if not (f.endswith(".tsx") or f.endswith(".ts")):
+            if not f.endswith((".tsx", ".ts")):
                 continue
             path = os.path.join(dirpath, f)
-            txt = open(path).read()
+            txt = _read(path)
             for m in promql_str.finditer(txt):
                 for tok in metric_tok.findall(m.group(1)):
                     if tok in PROMQL_KEYWORDS:

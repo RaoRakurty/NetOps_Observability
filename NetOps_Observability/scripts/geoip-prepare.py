@@ -37,10 +37,10 @@ import os
 import sys
 import tempfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Tuple
 
-Row = Tuple[str, str]  # (cidr_network, iso_country)
+Row = tuple[str, str]  # (cidr_network, iso_country)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO_ROOT / "data" / "clickhouse" / "user_files" / "geoip" / "country.csv"

@@ -291,7 +291,6 @@ func withPort(addr string, def int) string {
 	return net.JoinHostPort(addr, strconv.Itoa(def))
 }
 
-
 // sshBannerProbe dials the NETCONF-over-SSH port and reads the server's SSH
 // identification string. Per RFC 4253 §4.2 an SSH server sends "SSH-2.0-<impl>"
 // (or "SSH-1.99-…") in cleartext immediately on connect, before any key exchange

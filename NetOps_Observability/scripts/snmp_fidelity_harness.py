@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -141,11 +142,11 @@ def docker_ip(container: str) -> str | None:
             ["docker", "inspect", "-f",
              "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}",
              container],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
         )
         ip = (out.stdout or "").split()
         return ip[0] if ip else None
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort probe: no IP is a normal answer
         return None
 
 
@@ -153,10 +154,10 @@ def container_running(container: str) -> bool:
     try:
         out = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Running}}", container],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
         )
         return out.stdout.strip() == "true"
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort probe: not-running is the degraded answer
         return False
 
 
@@ -195,7 +196,7 @@ def load_inventory() -> dict:
         with open(DEVICES_YAML) as fh:
             doc = yaml.safe_load(fh) or {}
         devs = doc.get("devices", {})
-    except Exception:
+    except Exception:  # noqa: BLE001 — yaml optional; fall back to the minimal parser
         devs = _minimal_devices_parse()
     inv = {}
     for name, d in (devs or {}).items():
@@ -259,7 +260,7 @@ def vm_query(vm: str, promql: str) -> list[dict]:
         if doc.get("status") != "success":
             return []
         return doc["data"]["result"]
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort query: empty result set degrades the check to SKIP
         return []
 
 
@@ -379,7 +380,7 @@ def hop_c_contract(ep: dict, inv: dict, observed: set) -> None:
     names = []
     try:
         names = json.loads(http_get(ep["vm"] + "/api/v1/label/__name__/values"))["data"]
-    except Exception:
+    except Exception:  # noqa: S110, BLE001 — probe is optional; empty names still yields a recorded verdict below
         pass
     leaked = [n for n in names if n.startswith("device_") and re.search(r"[/.A-Z]", n)]
     record("C", "canonical lane has no path-shaped/dotted leak",
@@ -461,7 +462,7 @@ def hop_e_ownership(ep: dict) -> None:
     # E3: raw gnmi_* liveness/parity lane intact.
     try:
         names = json.loads(http_get(ep["vm"] + "/api/v1/label/__name__/values"))["data"]
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort: empty label list degrades the lane check
         names = []
     raw = [n for n in names if n.startswith("gnmi_")]
     record("E", "raw gnmi_* parity lane present", PASS if raw else WARN,
@@ -475,7 +476,7 @@ def hop_f_sanity(ep: dict) -> None:
     for r in vm_query(ep["vm"], "device_if_speed"):
         v = r["value"][1]
         x = fnum(v)
-        if v in ("+Inf", "-Inf", "NaN") or x != x or x < 0:
+        if v in ("+Inf", "-Inf", "NaN") or math.isnan(x) or x < 0:
             bad_speed.append(f"{r['metric'].get('device','?')}/{r['metric'].get('ifName','?')}={v}")
     record("F", "device_if_speed has no +Inf/NaN/negative",
            PASS if not bad_speed else FAIL,
@@ -487,7 +488,7 @@ def hop_f_sanity(ep: dict) -> None:
         bad = []
         for r in vm_query(ep["vm"], fam):
             x = fnum(r["value"][1])
-            if x == x and int(x) not in dom:
+            if not math.isnan(x) and int(x) not in dom:
                 bad.append(f"{r['metric'].get('device','?')}/{r['metric'].get('ifName','?')}={int(x)}")
         record("F", f"{label}_status within IF-MIB enum domain",
                PASS if not bad else FAIL,
@@ -498,7 +499,7 @@ def hop_f_sanity(ep: dict) -> None:
         bad = []
         for r in vm_query(ep["vm"], fam):
             x = fnum(r["value"][1])
-            if x == x and not (0 <= x <= 100):
+            if not math.isnan(x) and not (0 <= x <= 100):
                 bad.append(f"{r['metric'].get('device','?')}={x:.1f}")
         rows = vm_query(ep["vm"], fam)
         record("F", f"{fam} in [0,100]",
@@ -511,10 +512,10 @@ def kafka_cli(args: list[str]) -> str:
     try:
         out = subprocess.run(
             ["docker", "exec", f"{PROJECT}-kafka-1", *args],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, check=False,
         )
         return out.stdout
-    except Exception:
+    except Exception:  # noqa: BLE001 — docstring contract: '' on error
         return ""
 
 

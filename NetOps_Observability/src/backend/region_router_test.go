@@ -55,4 +55,3 @@ func TestDataPlaneRouting(t *testing.T) {
 		t.Error("unconfigured region should stay local")
 	}
 }
-

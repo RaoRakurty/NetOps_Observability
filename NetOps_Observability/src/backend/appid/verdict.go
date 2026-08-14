@@ -293,7 +293,6 @@ func demote(t Tier) Tier {
 	}
 }
 
-
 func round2(f float64) float64 {
 	return float64(int(f*100+0.5)) / 100
 }

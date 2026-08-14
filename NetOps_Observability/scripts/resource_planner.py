@@ -23,6 +23,7 @@ benchmark calibration (design §10) — generated plans say so explicitly.
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -52,33 +53,33 @@ _MULT = {
 def parse_size(value):
     """'5g' | '512MiB' | '2GB' | 1024 -> bytes (int). Raises ValueError."""
     if isinstance(value, (int, float)):
-        if value < 0 or value != value or value in (float("inf"),):
-            raise ValueError("negative or non-finite size: %r" % (value,))
+        if value < 0 or math.isnan(value) or value in (float("inf"),):
+            raise ValueError(f"negative or non-finite size: {value!r}")
         return int(value)
     m = _SIZE_RE.match(str(value))
     if not m:
-        raise ValueError("malformed size: %r" % (value,))
+        raise ValueError(f"malformed size: {value!r}")
     num = float(m.group(1))
     unit = (m.group(2) or "b").lower()
     if unit not in _MULT:
-        raise ValueError("unknown unit in size: %r" % (value,))
+        raise ValueError(f"unknown unit in size: {value!r}")
     out = int(num * _MULT[unit])
     if out < 0 or out > (1 << 62):
-        raise ValueError("size out of range: %r" % (value,))
+        raise ValueError(f"size out of range: {value!r}")
     return out
 
 
 def fmt_bytes(n):
     """Bytes -> compose-compatible string, binary units, deterministic."""
     if n % GIB == 0:
-        return "%dg" % (n // GIB)
-    return "%dm" % (max(1, round(n / MIB)))
+        return f"{n // GIB}g"
+    return f"{max(1, round(n / MIB))}m"
 
 
 def fmt_human(n):
     if n >= GIB:
-        return "%.1f GiB" % (n / GIB)
-    return "%d MiB" % round(n / MIB)
+        return f"{n / GIB:.1f} GiB"
+    return f"{round(n / MIB)} MiB"
 
 
 # --------------------------------------------------------------------------
@@ -277,7 +278,8 @@ def detect_host(mem_override=None, cpu_override=None, disk_override=None,
     # below MemTotal (cgroup v2 then v1).
     for p in cgroup_paths:
         try:
-            raw = open(p).read().strip()
+            with open(p) as fh:
+                raw = fh.read().strip()
             if raw not in ("max", "") and int(raw) > 0:
                 mem = min(mem, int(raw)) if not mem_override else mem
         except (OSError, ValueError):
@@ -330,9 +332,9 @@ def parse_sizing_file(text):
             continue
         indent = len(raw) - len(raw.lstrip(" "))
         if raw.lstrip().startswith("- "):
-            raise ValueError("lists are not supported in the sizing file: %r" % raw)
+            raise ValueError(f"lists are not supported in the sizing file: {raw!r}")
         if ":" not in raw:
-            raise ValueError("malformed line in sizing file: %r" % raw)
+            raise ValueError(f"malformed line in sizing file: {raw!r}")
         key, _, rest = raw.strip().partition(":")
         key = key.strip()
         while stack and indent <= stack[-1][0]:
@@ -380,18 +382,18 @@ def normalize_workload(doc):
                 break
         if ok and cur is not None:
             if not isinstance(cur, (int, float)) or isinstance(cur, bool):
-                raise ValueError("workload value %s must be numeric, got %r" % (out_key, cur))
+                raise ValueError(f"workload value {out_key} must be numeric, got {cur!r}")
             if cur < 0:
-                raise ValueError("workload value %s is negative: %r" % (out_key, cur))
+                raise ValueError(f"workload value {out_key} is negative: {cur!r}")
             if cur > 10 ** 12:
-                raise ValueError("workload value %s is implausibly large: %r" % (out_key, cur))
+                raise ValueError(f"workload value {out_key} is implausibly large: {cur!r}")
             w[out_key] = cur
     # top-level convenience keys (flat files/tests)
     for k in list(flat_map):
         if k in src and src[k] is not None and k not in w:
             v = src[k]
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or v > 10 ** 12:
-                raise ValueError("workload value %s invalid: %r" % (k, v))
+                raise ValueError(f"workload value {k} invalid: {v!r}")
             w[k] = v
     dep = doc.get("deployment", {}) or {}
     w["high_availability"] = bool(dep.get("high_availability", False))
@@ -461,7 +463,7 @@ def derive_internal(limits, w):
     env = {}
     ch = limits.get("clickhouse")
     if ch:
-        env["CH_MEM_RATIO"] = "%.2f" % C("ch_server_ram_ratio")
+        env["CH_MEM_RATIO"] = "{:.2f}".format(C("ch_server_ram_ratio"))
         env["CH_HOT_UI_MEM"] = str(max(1 * GIB, int(ch * C("ch_hot_ui_ratio"))))
         env["CH_BG_MEM"] = str(max(2 * GIB if ch >= 4 * GIB else int(ch * 0.5),
                                    int(ch * C("ch_background_ratio"))))
@@ -480,7 +482,7 @@ def derive_internal(limits, w):
     if r:
         # Valkey/Redis units: "mb" is binary (1024^2), bare "m" is DECIMAL —
         # docker-style fmt_bytes would silently shrink the value ~4.8%.
-        env["REDIS_MAXMEMORY"] = "%dmb" % (int(r * C("valkey_maxmemory_ratio")) // MIB)
+        env["REDIS_MAXMEMORY"] = f"{int(r * C('valkey_maxmemory_ratio')) // MIB}mb"
     v = limits.get("victoria")
     if v:
         env["VICTORIA_MEM_ALLOWED_PERCENT"] = str(int(C("victoria_allowed_percent")))
@@ -489,15 +491,15 @@ def derive_internal(limits, w):
         sb = int(pg * C("pg_shared_buffers_ratio"))
         conns = 50  # api pool 25 [repository-existing] + correlation + reserve
         wm = max(4 * MIB, min(64 * MIB, (pg - sb) // (3 * conns)))
-        env["PG_SHARED_BUFFERS"] = "%dMB" % (sb // MIB)
-        env["PG_EFFECTIVE_CACHE_SIZE"] = "%dMB" % (int(pg * C("pg_effective_cache_ratio")) // MIB)
-        env["PG_WORK_MEM"] = "%dMB" % max(4, wm // MIB)
-        env["PG_MAINTENANCE_WORK_MEM"] = "%dMB" % max(64, int(pg * C("pg_maintenance_ratio")) // MIB)
+        env["PG_SHARED_BUFFERS"] = f"{sb // MIB}MB"
+        env["PG_EFFECTIVE_CACHE_SIZE"] = f"{int(pg * C('pg_effective_cache_ratio')) // MIB}MB"
+        env["PG_WORK_MEM"] = f"{max(4, wm // MIB)}MB"
+        env["PG_MAINTENANCE_WORK_MEM"] = f"{max(64, int(pg * C('pg_maintenance_ratio')) // MIB)}MB"
         env["PG_MAX_CONNECTIONS"] = str(conns * 2)  # server headroom over pools
     for svc, var in (("api", "API_GOMEMLIMIT"), ("prober", "PROBER_GOMEMLIMIT"),
                      ("goflow2", "GOFLOW2_GOMEMLIMIT")):
         if limits.get(svc):
-            env[var] = "%dMiB" % (int(limits[svc] * C("gomemlimit_ratio")) // MIB)
+            env[var] = f"{int(limits[svc] * C('gomemlimit_ratio')) // MIB}MiB"
     corr = limits.get("correlation")
     if corr:
         keps = w.get("syslog_events_per_second", 0) / 1000.0
@@ -518,7 +520,7 @@ class SizingError(Exception):
 def compute_plan(host, profile_name, workload=None, overrides=None,
                  legacy=None, enabled_profiles=None):
     if profile_name not in PROFILES:
-        raise ValueError("unknown profile %r (choose from %s)" % (profile_name, "/".join(sorted(PROFILES))))
+        raise ValueError("unknown profile {!r} (choose from {})".format(profile_name, "/".join(sorted(PROFILES))))
     prof = PROFILES[profile_name]
     w = dict(prof.get("workload", {}))
     w.update({k: v for k, v in (workload or {}).items() if v is not None})
@@ -542,8 +544,7 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
     safety = int(host_mem * safety_pct / 100.0)
     allocatable = host_mem - os_reserve - safety
     if allocatable <= 0:
-        raise SizingError("host memory %s is below the minimum supported size"
-                          % fmt_human(host_mem))
+        raise SizingError(f"host memory {fmt_human(host_mem)} is below the minimum supported size")
 
     active = [s for s in SERVICES if s[5] is None or s[5] in enabled]
     terms = workload_terms(w)
@@ -571,10 +572,9 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
                                                floors, w, storage_estimate(w),
                                                host["disk_free_bytes"]))
         warnings.append(
-            "evaluation profile: service caps (%s) oversubscribe the host "
-            "budget (%s) — mem_limit is a cap, not a reservation; this "
-            "matches shipped evaluation behavior and is NOT production sizing"
-            % (fmt_human(total(floors)), fmt_human(budget)))
+            f"evaluation profile: service caps ({fmt_human(total(floors))}) oversubscribe the host "
+            f"budget ({fmt_human(budget)}) — mem_limit is a cap, not a reservation; this "
+            "matches shipped evaluation behavior and is NOT production sizing")
 
     limits = dict(desires)
     if relaxed and total(floors) > budget:
@@ -604,9 +604,8 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
                     raise SizingError(_refusal_message(
                         host, allocatable, total(desires), desires, w,
                         storage_estimate(w), host["disk_free_bytes"]))
-        warnings.append("workload-derived allocations were trimmed %s to fit the "
-                        "budget; consider a larger host for full headroom"
-                        % fmt_human(total(desires) - total(limits)))
+        warnings.append(f"workload-derived allocations were trimmed {fmt_human(total(desires) - total(limits))} to fit the "
+                        "budget; consider a larger host for full headroom")
 
     # apply explicit customer overrides (validated), then legacy pins
     pinned = {}
@@ -615,8 +614,8 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
         if ov:
             val = parse_size(ov)
             if val < floors[name]:
-                raise SizingError("override %s_mem=%s is below the component "
-                                  "minimum %s" % (name, ov, fmt_human(floors[name])))
+                raise SizingError(f"override {name}_mem={ov} is below the component "
+                                  f"minimum {fmt_human(floors[name])}")
             limits[name] = val
             pinned[name] = "customer-override"
     env_names = {s[0]: s[1] for s in SERVICES}
@@ -626,22 +625,19 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
                 limits[name] = parse_size(legacy[envn])
                 pinned[name] = "legacy-env-override"
                 warnings.append(
-                    "legacy override %s=%s pins %s (generated recommendation "
-                    "was %s); remove it from .env to adopt generated sizing"
-                    % (envn, legacy[envn], name, fmt_human(desires[name])))
+                    f"legacy override {envn}={legacy[envn]} pins {name} (generated recommendation "
+                    f"was {fmt_human(desires[name])}); remove it from .env to adopt generated sizing")
             except ValueError:
-                warnings.append("legacy value %s=%r is malformed; ignored"
-                                % (envn, legacy[envn]))
+                warnings.append(f"legacy value {envn}={legacy[envn]!r} is malformed; ignored")
     if total(limits) > budget:
-        warnings.append("overrides push total limits %s above the overcommit "
-                        "budget %s — reduced safety headroom"
-                        % (fmt_human(total(limits)), fmt_human(budget)))
+        warnings.append(f"overrides push total limits {fmt_human(total(limits))} above the overcommit "
+                        f"budget {fmt_human(budget)} — reduced safety headroom")
 
     # reservations: guaranteed floor per service; must fit allocatable exactly
     reservations = dict(floors)
     if total(reservations) > allocatable:
         warnings.append("sum of reservations exceeds allocatable (profile "
-                        "'%s' relaxed mode)" % profile_name)
+                        f"'{profile_name}' relaxed mode)")
 
     # CPU
     cpu = {}
@@ -650,9 +646,8 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
     cpu_budget = host["cpus"] * C("cpu_overcommit_factor")
     cpu_total = sum(v * DOUBLE_COUNTED.get(k, 1) for k, v in cpu.items())
     if cpu_total > cpu_budget:
-        warnings.append("CPU allocations (%.1f) exceed cores x %.1f (%.1f) — "
-                        "CPU is compressible but expect contention under load"
-                        % (cpu_total, C("cpu_overcommit_factor"), cpu_budget))
+        warnings.append("CPU allocations ({:.1f}) exceed cores x {:.1f} ({:.1f}) — "
+                        "CPU is compressible but expect contention under load".format(cpu_total, C("cpu_overcommit_factor"), cpu_budget))
 
     # storage validation (design §4.4)
     store = storage_estimate(w)
@@ -671,17 +666,16 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
         # evaluation mode, and on a replan of a RUNNING system the retained
         # data already on disk double-counts against free space — warn only.
         warnings.append(
-            "retention estimate %s exceeds free disk %s — evaluation profile "
-            "continues; reduce retention or grow the disk before real load"
-            % (fmt_human(store["total"]), fmt_human(host["disk_free_bytes"])))
+            "retention estimate {} exceeds free disk {} — evaluation profile "
+            "continues; reduce retention or grow the disk before real load".format(fmt_human(store["total"]), fmt_human(host["disk_free_bytes"])))
 
     internal = derive_internal(limits, w)
     # legacy pins for internal vars too
     for var in list(internal):
         if var in legacy:
             internal[var] = legacy[var]
-            warnings.append("legacy override %s=%s preserved (generated "
-                            "recommendation differed)" % (var, legacy[var]))
+            warnings.append(f"legacy override {var}={legacy[var]} preserved (generated "
+                            "recommendation differed)")
 
     # #102-signoff: pinned/override PG values can silently oversubscribe the
     # postgres container. Generation identity is SB + 3*conns*wm == limit;
@@ -695,12 +689,11 @@ def compute_plan(host, profile_name, workload=None, overrides=None,
             _maint = parse_size(internal.get("PG_MAINTENANCE_WORK_MEM", "64MB"))
             if _sb + 3 * _conns * _wm + _maint > pgl * 1.10:
                 warnings.append(
-                    "postgres internal settings (shared_buffers %s + %d ops x "
-                    "work_mem %s x3 + maintenance %s) oversubscribe its %s "
+                    f"postgres internal settings (shared_buffers {fmt_human(_sb)} "
+                    f"+ {_conns} ops x work_mem {fmt_human(_wm)} x3 + maintenance "
+                    f"{fmt_human(_maint)}) oversubscribe its {fmt_human(pgl)} "
                     "container limit — lower the pinned values or raise "
-                    "postgres memory" % (fmt_human(_sb), _conns,
-                                         fmt_human(_wm), fmt_human(_maint),
-                                         fmt_human(pgl)))
+                    "postgres memory")
         except (ValueError, KeyError):
             pass
 
@@ -740,16 +733,15 @@ def _refusal_message(host, allocatable, required, contrib, w, store, disk_free,
                      disk=False):
     top = sorted(contrib.items(), key=lambda kv: kv[1], reverse=True)[:3]
     lines = ["The requested workload cannot safely fit on this deployment."]
-    lines.append("  Available Correlix memory : %s" % fmt_human(allocatable))
-    lines.append("  Estimated minimum memory  : %s" % fmt_human(required))
-    lines.append("  Available storage (free)  : %s" % fmt_human(disk_free))
-    lines.append("  Estimated required storage: %s" % fmt_human(store["total"]))
+    lines.append(f"  Available Correlix memory : {fmt_human(allocatable)}")
+    lines.append(f"  Estimated minimum memory  : {fmt_human(required)}")
+    lines.append(f"  Available storage (free)  : {fmt_human(disk_free)}")
+    lines.append("  Estimated required storage: {}".format(fmt_human(store["total"])))
     lines.append("  Primary contributors:")
     for name, v in top:
-        lines.append("    - %-12s %s" % (name, fmt_human(v)))
+        lines.append(f"    - {name:<12} {fmt_human(v)}")
     if disk:
-        lines.append("    - retained data exceeds disk: clickhouse %s / opensearch %s / victoria %s"
-                     % (fmt_human(store["clickhouse"]), fmt_human(store["opensearch"]),
+        lines.append("    - retained data exceeds disk: clickhouse {} / opensearch {} / victoria {}".format(fmt_human(store["clickhouse"]), fmt_human(store["opensearch"]),
                         fmt_human(store["victoria"])))
     lines.append("  Recommended corrective action:")
     lines.append("    - Increase host memory%s" % (" / disk" if disk else ""))
@@ -769,45 +761,45 @@ def env_block(plan):
     lines = [BLOCK_BEGIN,
              "# Generated by scripts/resource_planner.py — DO NOT EDIT inside this block.",
              "# Re-run 'python3 scripts/install.py --replan' after host/workload changes.",
-             "# profile=%s host=%s" % (plan["profile"], plan["host"]["memory"])]
+             "# profile={} host={}".format(plan["profile"], plan["host"]["memory"])]
     for name in sorted(plan["limits_bytes"]):
         if name in plan.get("pinned", {}) and plan["pinned"][name] == "legacy-env-override":
-            lines.append("# %s pinned by legacy override outside this block" % name)
+            lines.append(f"# {name} pinned by legacy override outside this block")
             continue
         if env_mem.get(name):
-            lines.append("%s=%s" % (env_mem[name], fmt_bytes(plan["limits_bytes"][name])))
+            lines.append("{}={}".format(env_mem[name], fmt_bytes(plan["limits_bytes"][name])))
         if env_cpu.get(name):
-            lines.append("%s=%s" % (env_cpu[name], ("%g" % plan["cpus"][name])))
+            lines.append("{}={}".format(env_cpu[name], ("{:g}".format(plan["cpus"][name]))))
     for var in sorted(plan["internal"]):
-        lines.append("%s=%s" % (var, plan["internal"][var]))
+        lines.append("{}={}".format(var, plan["internal"][var]))
     lines.append(BLOCK_END)
     return "\n".join(lines) + "\n"
 
 
 def plan_txt(plan):
-    out = ["Correlix resource plan (profile: %s)" % plan["profile"],
-           "host: %s RAM, %g cpus, %s free disk" % (
+    out = ["Correlix resource plan (profile: {})".format(plan["profile"]),
+           "host: {} RAM, {:g} cpus, {} free disk".format(
                plan["host"]["memory"], plan["host"]["cpus"], plan["host"]["disk_free"]),
-           "reserves: os %s | safety %s | allocatable %s | overcommit x%.2f" % (
+           "reserves: os {} | safety {} | allocatable {} | overcommit x{:.2f}".format(
                plan["reserves"]["os"], plan["reserves"]["safety"],
                plan["reserves"]["allocatable"], plan["reserves"]["overcommit_factor"]),
-           "", "%-14s %10s %10s %6s" % ("component", "limit", "reserve", "cpus")]
+           "", f"{'component':<14} {'limit':>10} {'reserve':>10} {'cpus':>6}"]
     for name in sorted(plan["limits_bytes"]):
-        out.append("%-14s %10s %10s %6g%s" % (
-            name, fmt_human(plan["limits_bytes"][name]),
-            fmt_human(plan["reservations_bytes"][name]), plan["cpus"][name],
-            "  [pinned:%s]" % plan["pinned"][name] if name in plan["pinned"] else ""))
-    out.append("%-14s %10s   (budget %s)" % ("TOTAL", plan["totals"]["limits"],
-                                             plan["totals"]["budget"]))
+        pin = f"  [pinned:{plan['pinned'][name]}]" if name in plan["pinned"] else ""
+        out.append(f"{name:<14} {fmt_human(plan['limits_bytes'][name]):>10} "
+                   f"{fmt_human(plan['reservations_bytes'][name]):>10} "
+                   f"{plan['cpus'][name]:>6g}{pin}")
+    out.append(f"{'TOTAL':<14} {plan['totals']['limits']:>10}   "
+               f"(budget {plan['totals']['budget']})")
     out.append("")
     out.append("internal limits (derived from each component's limit):")
     for var in sorted(plan["internal"]):
-        out.append("  %s=%s" % (var, plan["internal"][var]))
+        out.append("  {}={}".format(var, plan["internal"][var]))
     out.append("")
-    out.append("storage estimate: %s" % ", ".join(
-        "%s %s" % (k, v) for k, v in sorted(plan["storage_estimate"].items())))
+    out.append("storage estimate: {}".format(", ".join(
+        f"{k} {v}" for k, v in sorted(plan["storage_estimate"].items()))))
     for wmsg in plan["warnings"]:
-        out.append("WARNING: %s" % wmsg)
+        out.append(f"WARNING: {wmsg}")
     out.append(plan["notice"])
     return "\n".join(out) + "\n"
 
@@ -922,7 +914,7 @@ def main(argv=None):
     try:
         plan = compute_plan(host, profile, workload, overrides, legacy)
     except SizingError as e:
-        sys.stderr.write("ERROR: %s\n" % e)
+        sys.stderr.write(f"ERROR: {e}\n")
         return 2
 
     sys.stdout.write(plan_txt(plan))
@@ -941,8 +933,7 @@ def main(argv=None):
         with open(args.env_file, "w") as f:
             f.write(splice_env(env_text, env_block(plan)))
         os.chmod(args.env_file, 0o600)
-        sys.stdout.write("wrote managed block to %s (backup: %s)\n"
-                         % (args.env_file, backup))
+        sys.stdout.write(f"wrote managed block to {args.env_file} (backup: {backup})\n")
     return 0
 
 

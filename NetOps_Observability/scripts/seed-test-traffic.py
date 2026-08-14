@@ -216,7 +216,7 @@ def _victoria_import(body_text):
          "curl", "-s", "-m", "20", "-X", "POST", "--data-binary", "@-",
          "http://victoria:8428/api/v1/import/prometheus"],
         input=body_text.encode(), cwd=_compose_dir(),
-        capture_output=True,
+        capture_output=True, check=False,
     )
     if p.returncode != 0:
         raise RuntimeError(p.stderr.decode()[:300] or "victoria import failed")
@@ -269,7 +269,7 @@ def _clickhouse_insert(sql, body_bytes):
     p = subprocess.run(
         ["docker", "compose", "exec", "-T", "clickhouse",
          "clickhouse-client", "-q", sql],
-        input=body_bytes, cwd=_compose_dir(), capture_output=True,
+        input=body_bytes, cwd=_compose_dir(), capture_output=True, check=False,
     )
     if p.returncode != 0:
         raise RuntimeError(p.stderr.decode()[:300] or "clickhouse insert failed")

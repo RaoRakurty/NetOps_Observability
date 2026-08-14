@@ -447,18 +447,18 @@ func auditSignalRow(e AuditEvent) (row map[string]any, scope string) {
 		scope = "__all__" // deliberately platform-scoped write (visible choice)
 	}
 	return map[string]any{
-		"tenant_id":     tenant,
-		"signal_id":     uuidV5("audit|" + e.ID + "|" + e.Actor + "|" + e.Method + "|" + e.Path + "|" + strconv.FormatInt(ts.UnixNano(), 10)),
-		"ts":            ts.UTC().Format("2006-01-02 15:04:05.000"),
-		"source":        "audit",
-		"kind":          "audit_change",
-		"observer_id":   "platform-api",
-		"observer_type": "platform",
+		"tenant_id":      tenant,
+		"signal_id":      uuidV5("audit|" + e.ID + "|" + e.Actor + "|" + e.Method + "|" + e.Path + "|" + strconv.FormatInt(ts.UnixNano(), 10)),
+		"ts":             ts.UTC().Format("2006-01-02 15:04:05.000"),
+		"source":         "audit",
+		"kind":           "audit_change",
+		"observer_id":    "platform-api",
+		"observer_type":  "platform",
 		"modality_class": "management_plane",
-		"entity_type":   "service",
-		"entity_id":     auditSignalArea(e.Path),
-		"severity":      "info",
-		"attrs":         string(attrsJSON),
+		"entity_type":    "service",
+		"entity_id":      auditSignalArea(e.Path),
+		"severity":       "info",
+		"attrs":          string(attrsJSON),
 	}, scope
 }
 

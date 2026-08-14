@@ -144,4 +144,3 @@ func union(a, b map[[2]string]float64) map[[2]string]struct{} {
 	}
 	return out
 }
-

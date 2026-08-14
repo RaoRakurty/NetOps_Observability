@@ -39,7 +39,7 @@ var Registry = []Entry{
 	// the single source of truth; tls_ca.go keeps their historical env-var
 	// paths working):
 	{Service: "api", DNS: []string{"api", "localhost"}, Client: true, Server: true},
-	{Service: "nginx", Client: true}, // pure client toward the api; its PUBLIC server cert is the ingress cert, never an SVID
+	{Service: "nginx", Client: true},                                             // pure client toward the api; its PUBLIC server cert is the ingress cert, never an SVID
 	{Service: "victoria", DNS: []string{"victoria"}, Client: true, Server: true}, // client: scrapes the api; server: TLS-native option later
 	{Service: "vmauth", DNS: []string{"vmauth"}, Server: true},                   // SEC-010: the authenticating TLS front for VictoriaMetrics
 
@@ -53,9 +53,9 @@ var Registry = []Entry{
 	// both-EKU precedent as opensearch below.
 	{Service: "kafka", DNS: []string{"kafka"}, Client: true, Server: true},
 	{Service: "opensearch", DNS: []string{"opensearch"}, Client: true, Server: true}, // SEC-008: node cert needs BOTH EKUs — the security plugin uses it for transport-layer mutual auth between nodes
-	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true}, // SEC-009
-	{Service: "postgres", DNS: []string{"postgres"}, Server: true},     // SEC-011
-	{Service: "redis", DNS: []string{"redis"}, Server: true},           // SEC-012 (Valkey; compose name is redis)
+	{Service: "clickhouse", DNS: []string{"clickhouse"}, Server: true},               // SEC-009
+	{Service: "postgres", DNS: []string{"postgres"}, Server: true},                   // SEC-011
+	{Service: "redis", DNS: []string{"redis"}, Server: true},                         // SEC-012 (Valkey; compose name is redis)
 
 	// Application services.
 	{Service: "correlation", DNS: []string{"correlation"}, Client: true, Server: true}, // SEC-013: serves the api, consumes the bus/stores
@@ -69,7 +69,7 @@ var Registry = []Entry{
 	{Service: "syslog-ng", Client: true}, // its forward hop into vector (SEC-014.1)
 	{Service: "kafka-exporter", Client: true},
 	{Service: "cloud-ingest", Client: true}, // SEC-013: mTLS to the ingest lanes; task #9: mTLS kafka producer
-	{Service: "vmalert", Client: true}, // queries victoria via vmauth once SEC-010 lands
+	{Service: "vmalert", Client: true},      // queries victoria via vmauth once SEC-010 lands
 
 	// Ops/UI tier behind nginx — server identities so their inner hops can be
 	// meshed later without re-deciding identity.
@@ -89,11 +89,11 @@ var Registry = []Entry{
 // tables — the guard fails the build otherwise, which is the ratchet: adding
 // a service forces an explicit identity decision.
 var Exempt = map[string]string{
-	"kafka-init":      "one-shot volume-format job; no listener, no steady-state network peer",
-	"opensearch-init": "one-shot template/ISM applier; runs and exits",
+	"kafka-init":               "one-shot volume-format job; no listener, no steady-state network peer",
+	"opensearch-init":          "one-shot template/ISM applier; runs and exits",
 	"opensearch-security-init": "one-shot securityadmin bootstrap; authenticates with the ADMIN cert (minted via TLS_OS_ADMIN_CERT_DIR, deliberately not a registry row — it is a credential, not a workload)",
-	"secrets-seal":    "custody sidecar reachable ONLY via a host-private unix socket (never TCP); an SVID would imply a network surface it must never have",
-	"telegraf":        "profiles:[legacy] — does not run (SEC-001.2)",
-	"mock-nms":        "lab fixture, excluded from customer bundles (declared in the transport inventory)",
-	"mock-servicenow": "lab fixture, excluded from customer bundles (declared in the transport inventory)",
+	"secrets-seal":             "custody sidecar reachable ONLY via a host-private unix socket (never TCP); an SVID would imply a network surface it must never have",
+	"telegraf":                 "profiles:[legacy] — does not run (SEC-001.2)",
+	"mock-nms":                 "lab fixture, excluded from customer bundles (declared in the transport inventory)",
+	"mock-servicenow":          "lab fixture, excluded from customer bundles (declared in the transport inventory)",
 }

@@ -1745,7 +1745,6 @@ func BuildReport(in ReportInput) Report {
 	return rep
 }
 
-
 // reportTypeFor — the document may only call itself an RCA when the ROOT CAUSE
 // actually concluded (mechanism + causal object, P1.3). A confirmed fault
 // condition alone yields a fault-confirmed incident analysis, never an "RCA".

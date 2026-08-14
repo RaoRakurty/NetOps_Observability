@@ -50,7 +50,7 @@ TIMEOUT_S = 30
 
 def _fetch_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "netops-provider-ranges-refresh"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (fixed https feeds)
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
         return json.load(resp)
 
 

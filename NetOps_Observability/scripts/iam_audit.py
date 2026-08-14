@@ -41,7 +41,6 @@ import argparse
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -492,10 +491,10 @@ class Audit:
         for oid in self.orgs:
             self.admin("DELETE", f"/api/orgs/{_q(oid)}")
         # verify clean
-        st, users = self.admin("GET", "/api/users")
+        _st, users = self.admin("GET", "/api/users")
         leftover = [u.get("username") for u in users if isinstance(u, dict) and u.get("username", "").startswith(self.tag)] if isinstance(users, list) else []
         self.rep.expect("All audit users cleaned up", not leftover, bad_detail=f"leftover: {leftover}", warn_on_fail=True)
-        st, orgs = self.admin("GET", "/api/orgs")
+        _st, orgs = self.admin("GET", "/api/orgs")
         oleft = [o.get("id") for o in orgs if isinstance(o, dict) and o.get("name", "").startswith(self.tag)] if isinstance(orgs, list) else []
         self.rep.expect("All audit orgs cleaned up", not oleft, bad_detail=f"leftover: {oleft}", warn_on_fail=True)
 

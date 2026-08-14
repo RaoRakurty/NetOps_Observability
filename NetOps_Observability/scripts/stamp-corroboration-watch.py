@@ -17,7 +17,13 @@ Reads creds from env (NM_USER/NM_PASS/NM_BASE) so no secret is hard-coded.
 Press Ctrl-C to stop. Prints a one-line status each tick and a loud banner the
 moment a probe-corroborated confirmation appears.
 """
-import argparse, json, os, sys, time, urllib.request, urllib.error
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
 
 BASE = os.environ.get("NM_BASE", "http://localhost:8000")
 USER = os.environ.get("NM_USER", "admin")
@@ -50,7 +56,7 @@ def metric(token, query):
         r = _req("/api/metrics/query?query=" + urllib.parse.quote(query), token=token)
         res = (r.get("data", {}) or {}).get("result", [])
         return float(res[0]["value"][1]) if res else None
-    except Exception:
+    except Exception:  # noqa: BLE001 — watch loop: a failed sample prints as n/a next tick
         return None
 
 
@@ -60,7 +66,7 @@ def probe_corroborated(token):
     hits = []
     try:
         lst = _req("/api/correlations?limit=50", token=token).get("data") or []
-    except Exception:
+    except Exception:  # noqa: BLE001 — watch loop: an unreachable API means no hits this tick
         return hits
     for row in lst:
         if row.get("verdict_tier") != "confirmed":
@@ -69,7 +75,7 @@ def probe_corroborated(token):
         try:
             o = _req("/api/correlations/" + cid, token=token)["object"]
             v = json.loads(o.get("hypotheses", "{}"))["ranking"]["hypotheses"][0]["verdict"]
-        except Exception:
+        except Exception:  # noqa: S112, BLE001 — per-row best-effort: a malformed row must not kill the watch
             continue
         if "active_probe" in v.get("trusted_modalities", []) and "prober" in v.get("observer_coverage", []):
             hits.append((cid, v.get("reasons", [])))

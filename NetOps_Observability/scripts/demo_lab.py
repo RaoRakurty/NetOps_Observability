@@ -30,7 +30,6 @@ Stdlib only, except PyYAML for .yaml profiles (JSON profiles need nothing).
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import random
@@ -135,7 +134,7 @@ def load_profile(path: str | None) -> dict:
 # api plumbing
 # ---------------------------------------------------------------------------
 
-def die(msg: str) -> "None":
+def die(msg: str) -> None:
     print(f"error: {msg}", file=sys.stderr)
     raise SystemExit(2)
 
@@ -489,10 +488,9 @@ def cmd_teardown(args) -> int:
             print(f"    … and {len(devices)-10} more")
         print("[dry-run] nothing deleted")
         return 0
-    if not args.yes:
-        if input("proceed? [y/N] ").strip().lower() not in ("y", "yes"):
-            print("aborted")
-            return 1
+    if not args.yes and input("proceed? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("aborted")
+        return 1
 
     api = Api(login())
     failed = []

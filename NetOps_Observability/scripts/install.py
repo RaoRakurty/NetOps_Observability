@@ -64,13 +64,13 @@ def ok(msg: str) -> None:      print(f"[ ok  ] {msg}")
 def warn(msg: str) -> None:    print(f"[warn ] {msg}", file=sys.stderr)
 
 
-def fail(msg: str) -> "None":
+def fail(msg: str) -> None:
     _stage_fail(msg)
     print(f"[fail ] {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-def step(msg: str, stage: "str | None" = None) -> None:
+def step(msg: str, stage: str | None = None) -> None:
     if stage is not None:
         _stage_start(stage, msg)
     print()
@@ -167,7 +167,7 @@ def _git_sha(root: Path) -> str:
     """
     try:
         r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root),
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=10, check=False)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -180,7 +180,7 @@ def generate_token(bytes_: int = 32) -> str:
 
 # ---- prerequisite checks ----------------------------------------------------
 
-def check_docker(bootstrap_docker: "str | None" = None) -> None:
+def check_docker(bootstrap_docker: str | None = None) -> None:
     if shutil.which("docker") is None:
         _maybe_bootstrap_ubuntu("docker is not installed.", bootstrap_docker)
         # If the bootstrap ran, we still exit afterwards — the user must
@@ -190,7 +190,7 @@ def check_docker(bootstrap_docker: "str | None" = None) -> None:
 
     res = subprocess.run(
         ["docker", "compose", "version"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if res.returncode != 0:
         _maybe_bootstrap_ubuntu("Docker Compose v2 plugin is not available.",
@@ -223,7 +223,7 @@ def _is_debian_family() -> bool:
     )
 
 
-def _maybe_bootstrap_ubuntu(reason: str, choice: "str | None" = None) -> None:
+def _maybe_bootstrap_ubuntu(reason: str, choice: str | None = None) -> None:
     """Offer to run scripts/bootstrap-ubuntu.sh when Docker is missing on
     a Debian-family host. Exits the installer afterwards either way —
     the user has to log out + back in for the docker group to take
@@ -258,7 +258,7 @@ def _maybe_bootstrap_ubuntu(reason: str, choice: "str | None" = None) -> None:
         fail("aborted. Install Docker manually, then re-run install.py.")
 
     info(f"running: sudo bash {script} --yes")
-    res = subprocess.run(["sudo", "bash", str(script), "--yes"])
+    res = subprocess.run(["sudo", "bash", str(script), "--yes"], check=False)
     if res.returncode != 0:
         fail(f"bootstrap-ubuntu.sh failed (exit {res.returncode}).")
 
@@ -343,7 +343,7 @@ def validate_scaffold(root: Path) -> None:
 
 # ---- resource plan (#102) ---------------------------------------------------
 
-def run_resource_plan(env_path: Path, profile: str, sizing_file: "Path | None") -> None:
+def run_resource_plan(env_path: Path, profile: str, sizing_file: Path | None) -> None:
     """Compute + splice the managed resource block. Sole sizing entry point."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import resource_planner as rp
@@ -879,7 +879,7 @@ def _parse_env(path: Path) -> dict[str, str]:
 
 # ---- secret rotation (FUNC-HIGH-1) ------------------------------------------
 
-def refuse(msg: str) -> "None":
+def refuse(msg: str) -> None:
     """Refuse a rotation we cannot honour. Exit 2 (distinct from fail()'s 1)
     so callers/CI can tell "refused, nothing changed" from "broke halfway"."""
     print(f"[fail ] {msg}", file=sys.stderr)
@@ -908,7 +908,7 @@ class ComposeRunner:
         sr = _rotation_module()
         try:
             r = subprocess.run(argv, cwd=str(self.compose_dir), input=stdin,
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             return sr.ExecResult(124, "", f"timed out after {timeout}s: {argv[:4]}")
         except (OSError, subprocess.SubprocessError) as e:
@@ -1530,7 +1530,7 @@ def ensure_ingress_cert(root: Path) -> None:
         return
     step("generating a self-signed ingress certificate (replace for production)")
     res = subprocess.run(["bash", str(root / "scripts" / "gen-dev-cert.sh")],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, check=False)
     if res.returncode != 0:
         fail(f"gen-dev-cert.sh failed: {res.stderr.strip() or res.stdout.strip()}")
         raise SystemExit(2)
@@ -1596,7 +1596,7 @@ def compose_up(compose_dir: Path, offline: bool = False,
     last = 1
     for attempt in range(1, 4):
         r = subprocess.run(["docker", "compose", "up", "-d", build_flag],
-                           cwd=str(compose_dir), env=build_env)
+                           cwd=str(compose_dir), env=build_env, check=False)
         if r.returncode == 0:
             ok("services started")
             return
@@ -1622,7 +1622,7 @@ def load_bundle(bundle: Path) -> None:
         if shutil.which("zstd") is None:
             fail("zstd is required to unpack the image bundle: apt-get install zstd")
         zstd = subprocess.Popen(["zstd", "-dc", str(bundle)], stdout=subprocess.PIPE)
-        res = subprocess.run(["docker", "load"], stdin=zstd.stdout)
+        res = subprocess.run(["docker", "load"], stdin=zstd.stdout, check=False)
         zstd.stdout.close()
         if zstd.wait() != 0 or res.returncode != 0:
             fail("docker load from bundle failed")
@@ -1668,9 +1668,9 @@ def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
         cmd = [
             "docker", "compose", "exec", "-T", "opensearch",
             "bash", "-lc",
-            "for i in $(seq 1 30); do "
-            "curl -sf http://localhost:9200/_cluster/health >/dev/null && break; "
-            "sleep 2; done; echo opensearch ready",
+            ("for i in $(seq 1 30); do "
+             "curl -sf http://localhost:9200/_cluster/health >/dev/null && break; "
+             "sleep 2; done; echo opensearch ready"),
         ]
     env = {**os.environ}
     if tls:
@@ -1681,7 +1681,7 @@ def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
                  "templates on a secured cluster; re-run the installer")
             return
     res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, check=False)
     if res.returncode != 0:
         warn(f"opensearch not ready (skipping templates): {res.stderr.strip()}")
         info("re-run after a minute: scripts/bootstrap-opensearch.sh")
@@ -1696,7 +1696,7 @@ def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
         # OpenSearch isn't reachable on the host by default — we need
         # docker compose port forwarding OR we copy templates from inside.
         # For now, do it from inside the container.
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if res.returncode != 0:
         # Fallback: apply each template via docker exec curl.
@@ -1741,7 +1741,7 @@ def _bootstrap_opensearch_via_exec(root: Path, tls: bool = False) -> None:
                    "--env", "OS_BOOTSTRAP_PASSWORD",
                    "opensearch", "sh", "-c", put_sh]
             res = subprocess.run(cmd, cwd=str(compose_dir), env=env,
-                                 input=body_json, capture_output=True, text=True)
+                                 input=body_json, capture_output=True, text=True, check=False)
         else:
             cmd = [
                 "docker", "compose", "exec", "-T", "opensearch",
@@ -1751,7 +1751,7 @@ def _bootstrap_opensearch_via_exec(root: Path, tls: bool = False) -> None:
                 "-d", body_json,
             ]
             res = subprocess.run(cmd, cwd=str(compose_dir),
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, check=False)
         if res.returncode == 0:
             ok(f"template applied: {name}")
         else:
@@ -1789,12 +1789,12 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
     # first boot), then the existence probe. -tAc → bare "1" when the row exists.
     probe = [
         "docker", "compose", "exec", "-T", "postgres", "bash", "-lc",
-        f"for i in $(seq 1 30); do pg_isready -q -U {user} && break; sleep 2; done; "
-        f"psql -U {user} -d postgres -tAc "
-        f"\"SELECT 1 FROM pg_database WHERE datname='{db}'\"",
+        (f"for i in $(seq 1 30); do pg_isready -q -U {user} && break; sleep 2; done; "
+         f"psql -U {user} -d postgres -tAc "
+         f"\"SELECT 1 FROM pg_database WHERE datname='{db}'\""),
     ]
     res = subprocess.run(probe, cwd=str(compose_dir), capture_output=True,
-                         text=True, timeout=120)
+                         text=True, timeout=120, check=False)
     if res.returncode != 0:
         warn(f"could not check for the {db} database (Keycloak will crash-loop "
              f"until it exists): {res.stderr.strip()}")
@@ -1809,7 +1809,7 @@ def bootstrap_keycloak_db(compose_dir: Path, env: dict) -> None:
         "-c", f'CREATE DATABASE "{db}" OWNER "{user}"',
     ]
     res = subprocess.run(create, cwd=str(compose_dir), capture_output=True,
-                         text=True, timeout=60)
+                         text=True, timeout=60, check=False)
     if res.returncode != 0:
         warn(f"creating the {db} database failed (Keycloak will crash-loop "
              f"until it exists): {res.stderr.strip()}")
@@ -1862,13 +1862,13 @@ def bootstrap_grafana(root: Path, secrets_map: dict) -> None:
     plug = "grafana-clickhouse-datasource"
     base = ["docker", "compose", "exec", "-T", "grafana", "grafana", "cli",
             "--pluginsDir", "/var/lib/grafana/plugins", "plugins", "install", plug]
-    r = subprocess.run(base, cwd=str(compose_dir), capture_output=True, text=True)
+    r = subprocess.run(base, cwd=str(compose_dir), capture_output=True, text=True, check=False)
     if r.returncode != 0:
         info("plugin download failed verified; retrying with --insecure (TLS-intercepted network)")
         r = subprocess.run(
             ["docker", "compose", "exec", "-T", "grafana", "grafana", "cli", "--insecure",
              "--pluginsDir", "/var/lib/grafana/plugins", "plugins", "install", plug],
-            cwd=str(compose_dir), capture_output=True, text=True)
+            cwd=str(compose_dir), capture_output=True, text=True, check=False)
     if r.returncode != 0:
         warn(f"ClickHouse plugin not installed: {r.stderr.strip() or r.stdout.strip()}")
         info("flow/findings dashboards will be unavailable until the plugin installs")
@@ -2181,13 +2181,13 @@ def main() -> None:
     print()
     if "ADMIN_INITIAL_PASSWORD" in secrets_map:
         print("  First-time sign-in to the dashboard:")
-        print(f"    user: admin")
+        print("    user: admin")
         print(f"    pass: (see ADMIN_INITIAL_PASSWORD in {env_path})")
-        print(f"    -> Change it on Settings > Change password.")
+        print("    -> Change it on Settings > Change password.")
     if "GRAFANA_ADMIN_PASSWORD" in secrets_map:
         print()
         print("  First-time Grafana login (separate from app auth):")
-        print(f"    user: admin")
+        print("    user: admin")
         print(f"    pass: (see GRAFANA_ADMIN_PASSWORD in {env_path})")
     print()
     print("  Stop:      cd deployment/docker && docker compose down")

@@ -113,8 +113,7 @@ def run_vrl(source: str, events: list[dict], *, drop: bool = False,
         if enrichment is not None:
             with open(os.path.join(stage, "device_tenant.csv"), "w") as fh:
                 fh.write("identity,tenant_id\n")
-                for ident, tenant in enrichment.items():
-                    fh.write(f"{ident},{tenant}\n")
+                fh.writelines(f"{ident},{tenant}\n" for ident, tenant in enrichment.items())
 
         cfg = {
             # `stdin` (not `file`): it shuts the topology down at EOF, so the

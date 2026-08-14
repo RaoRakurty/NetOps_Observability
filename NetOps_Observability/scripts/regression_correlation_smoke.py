@@ -54,10 +54,10 @@ def docker_ip(container: str) -> str | None:
         out = subprocess.run(
             ["docker", "inspect", "-f",
              "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", container],
-            capture_output=True, text=True, timeout=15)
+            capture_output=True, text=True, timeout=15, check=False)
         ip = (out.stdout or "").split()
         return ip[0] if ip else None
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort probe: no IP is a normal answer
         return None
 
 
@@ -86,14 +86,14 @@ def http_get_json(url: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             return json.loads(r.read())
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort probe: empty doc is the degraded answer
         return {}
 
 
 def iso(ts: float) -> str:
     # RFC3339 UTC from an epoch float (no tz libs needed).
     import datetime
-    return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def main() -> int:

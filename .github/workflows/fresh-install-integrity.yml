@@ -14,7 +14,7 @@ on:
       - 'NetOps_Observability/deployment/docker/**'
       - 'NetOps_Observability/src/config/**'
       - 'NetOps_Observability/src/backend/migrations/**'
-      - 'NetOps_Observability/scripts/install.py'
+      - 'NetOps_Observability/scripts/*.py'
       - 'NetOps_Observability/scripts/preflight*'
       - '.github/workflows/fresh-install-integrity.yml'
   # No paths filter on pull_request: a required check must report on EVERY PR to
@@ -28,7 +28,31 @@ concurrency:
   group: fresh-install-integrity-${{ github.ref }}
   cancel-in-progress: true
 
+# Pinned for determinism, mirroring correlation-ci: an unpinned `pip install
+# ruff` lets a new ruff release turn a green branch red with no code change
+# (that is exactly what happened there on 2026-07-25). Bump deliberately, in a
+# commit that also fixes whatever the new rules find.
+env:
+  RUFF_VERSION: '0.16.0'
+
 jobs:
+  scripts-lint:
+    name: ruff (scripts/*.py, blocking)
+    runs-on: ubuntu-latest
+    # The operational Python scripts (install.py, resource_planner.py,
+    # secret_rotation.py, …) run unattended on the host customer data flows
+    # through (CLAUDE.md §16) — they get the same lint gate the correlation
+    # service gets. Top-level scripts only: scripts/lab/ is operator-local
+    # tooling and deliberately out of scope.
+    steps:
+      - uses: actions/checkout@v4
+      - name: install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+      - name: ruff check (top-level operational scripts)
+        working-directory: NetOps_Observability/scripts
+        run: ruff check *.py
+
+
   integrity:
     runs-on: ubuntu-latest
     steps:

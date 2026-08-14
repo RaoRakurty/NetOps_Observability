@@ -204,4 +204,3 @@ func isProviderOwner(owner string) bool {
 func DeriveTimeLossDriver(lc Lifecycle, ctx DriverContext) (TimeLossDriver, string) {
 	return DeriveCurrentBottleneck(lc, ctx)
 }
-

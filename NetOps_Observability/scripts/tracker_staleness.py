@@ -44,22 +44,22 @@ TRACKER = os.path.join(ROOT, "docs", "TRACKER.md")
 # a user-action item is correctly open until the user acts).
 OPEN_GLYPHS = ("🔜", "🟡", "⏳", "🔬", "🧪", "📋")
 # Open-status WORDS, matched in the status cell only (not the description prose).
-OPEN_WORDS = re.compile(r"\b(in progress|not started|not begun|queued|building|partial|next)\b", re.I)
+OPEN_WORDS = re.compile(r"\b(in progress|not started|not begun|queued|building|partial|next)\b", re.IGNORECASE)
 # "NOT-STARTED" status — these should have NO shipping commits. A shipping commit
 # here is a HIGH-confidence stale flag (the dangerous direction: looks untouched but
 # was built — exactly what sends someone to rebuild it). 🟡/in-progress/partial/"N of
 # M"/phase items are EXPECTED to have per-phase commits → INFO only, not a red flag.
 NOTSTARTED_GLYPHS = ("🔜", "⏳", "📋")
-NOTSTARTED_WORDS = re.compile(r"\b(not started|not begun|queued|next)\b", re.I)
-PROGRESS_WORDS = re.compile(r"\b(in progress|partial|building|phase|\d+\s+of\s+\d+)\b", re.I)
+NOTSTARTED_WORDS = re.compile(r"\b(not started|not begun|queued|next)\b", re.IGNORECASE)
+PROGRESS_WORDS = re.compile(r"\b(in progress|partial|building|phase|\d+\s+of\s+\d+)\b", re.IGNORECASE)
 # A commit subject that represents SHIPPED work (vs docs/chore/test-only).
-SHIPPED_KIND = re.compile(r"^(feat|fix)\b", re.I)
+SHIPPED_KIND = re.compile(r"^(feat|fix)\b", re.IGNORECASE)
 
 
 def sh(*args: str) -> str:
     try:
-        return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=30).stdout
-    except Exception:
+        return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=30, check=False).stdout
+    except Exception:  # noqa: BLE001 — best-effort: empty git output degrades to "no data"
         return ""
 
 
@@ -67,17 +67,18 @@ def parse_tracker() -> list[dict]:
     """Each table row → {id, title, status}. Only numeric-id rows are checkable
     (an id we can grep commits for); '—' rows are skipped."""
     items = []
-    for line in open(TRACKER, encoding="utf-8"):
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        rid = cells[0]
-        if not rid.isdigit():
-            continue
-        title = re.sub(r"\*\*|`", "", cells[1])[:70]
-        items.append({"id": rid, "title": title, "status": cells[-1]})
+    with open(TRACKER, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) < 4:
+                continue
+            rid = cells[0]
+            if not rid.isdigit():
+                continue
+            title = re.sub(r"\*\*|`", "", cells[1])[:70]
+            items.append({"id": rid, "title": title, "status": cells[-1]})
     return items
 
 

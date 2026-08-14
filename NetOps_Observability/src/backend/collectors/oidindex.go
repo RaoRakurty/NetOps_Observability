@@ -46,7 +46,6 @@ func init() {
 	}
 }
 
-
 // lookupOID resolves a dotted OID. Scalars/notifications match exactly; table
 // columns match by longest dotted-prefix (the trailing arcs are the row index),
 // returning the index suffix. ok=false ⇒ unknown OID (caller keeps it raw).

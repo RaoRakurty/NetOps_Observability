@@ -148,7 +148,7 @@ func TestProcessorRulesCrossOrgIsolation(t *testing.T) {
 		t.Fatalf("preview: %d %s", st, body)
 	}
 	var prev struct {
-		Event   map[string]any      `json:"event"`
+		Event   map[string]any       `json:"event"`
 		Applied []processors.Applied `json:"applied"`
 	}
 	if err := json.Unmarshal(body, &prev); err != nil {

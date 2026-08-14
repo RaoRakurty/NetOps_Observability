@@ -55,7 +55,7 @@ def dexec(service, *cmd, timeout=20):
     try:
         p = subprocess.run(
             ["docker", "compose", "exec", "-T", service, *cmd],
-            cwd=compose_dir(), capture_output=True, timeout=timeout,
+            cwd=compose_dir(), capture_output=True, timeout=timeout, check=False,
         )
         return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
     except subprocess.TimeoutExpired:
@@ -113,7 +113,7 @@ def dexec_ps():
     try:
         p = subprocess.run(
             ["docker", "compose", "ps", "--format", "{{.Service}} {{.State}}"],
-            cwd=compose_dir(), capture_output=True, timeout=20,
+            cwd=compose_dir(), capture_output=True, timeout=20, check=False,
         )
         return p.returncode, p.stdout.decode(), p.stderr.decode()
     except Exception as e:  # noqa: BLE001
@@ -350,9 +350,9 @@ def main():
     print(f"\n{B}API surface{X}")
     token = get_token(base)
     if token:
-        print(f"  (authenticated — verifying 200-level responses)")
+        print("  (authenticated — verifying 200-level responses)")
     else:
-        print(f"  (no token — auth'd routes reported as WARN; set NETOPS_TOKEN or NETOPS_USER/NETOPS_PASSWORD)")
+        print("  (no token — auth'd routes reported as WARN; set NETOPS_TOKEN or NETOPS_USER/NETOPS_PASSWORD)")
     check_api_endpoints(base, token)
 
     # Summary

@@ -188,9 +188,9 @@ type Edge struct {
 // ── output: group ────────────────────────────────────────────────────────────
 
 type Group struct {
-	ID        string   `json:"id"`
-	Label     string   `json:"label"`
-	GroupType string   `json:"group_type"` // site|pod|rack|cluster|zone|region|vpc|app
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	GroupType string `json:"group_type"` // site|pod|rack|cluster|zone|region|vpc|app
 	// ParentID nests this group inside another (a VPC inside its REGION). Empty
 	// = top level. Nesting is what makes cloud topology readable: without it a
 	// region is just a label on scattered VPCs, and the renderer has no way to

@@ -52,8 +52,9 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Iterable, NamedTuple
+from typing import NamedTuple
 
 # ---- classes ----------------------------------------------------------------
 
@@ -301,12 +302,9 @@ def classify(root: Path, profiles: str = "", *,
             # Fresh volume: the store adopts whatever .env says on first boot.
             out.append(Verdict(name, pol.cls, True, False, pol.store, "", ""))
             continue
-        if pol.cls in NEEDS_STORE:
+        if pol.cls in NEEDS_STORE or (pol.cls == IMMUTABLE and allow_kafka_wipe and name == "KAFKA_CLUSTER_ID"):
             out.append(Verdict(name, pol.cls, True, True, pol.store,
                                pol.why, pol.remedy))
-        elif pol.cls == IMMUTABLE and allow_kafka_wipe and name == "KAFKA_CLUSTER_ID":
-            out.append(Verdict(name, pol.cls, True, True, pol.store, pol.why,
-                               pol.remedy))
         else:
             out.append(Verdict(name, pol.cls, False, False, pol.store,
                                pol.why, pol.remedy))
@@ -331,8 +329,8 @@ def refusal_text(blocked_verdicts: list[Verdict], total: int,
     """The exact operator-facing refusal. Names only — never values."""
     width = max((len(v.name) for v in blocked_verdicts), default=0)
     lines = [
-        f"{command} cannot rotate {len(blocked_verdicts)} of the {total} generated "
-        "secrets on this install.",
+        (f"{command} cannot rotate {len(blocked_verdicts)} of the {total} generated "
+         "secrets on this install."),
         "Nothing was written: a .env that no longer matches the running stores is",
         "worse than no rotation at all.",
         "",
@@ -589,9 +587,26 @@ def preflight(runner, name: str, env: dict[str, str],
 
 
 __all__ = [
-    "FREE", "ALTER", "RECREATE", "SEEDED", "IMMUTABLE", "POLICY", "Policy",
-    "Verdict", "ExecResult", "STORE_DIRS", "STORE_MARKERS",
-    "classify", "blocked", "refusal_text", "store_initialized",
-    "install_started", "substitute_env", "preflight", "reconcile_postgres",
-    "reconcile_clickhouse_admin", "reconcile_grafana_ch_user", "redact",
+    "ALTER",
+    "FREE",
+    "IMMUTABLE",
+    "POLICY",
+    "RECREATE",
+    "SEEDED",
+    "STORE_DIRS",
+    "STORE_MARKERS",
+    "ExecResult",
+    "Policy",
+    "Verdict",
+    "blocked",
+    "classify",
+    "install_started",
+    "preflight",
+    "reconcile_clickhouse_admin",
+    "reconcile_grafana_ch_user",
+    "reconcile_postgres",
+    "redact",
+    "refusal_text",
+    "store_initialized",
+    "substitute_env",
 ]

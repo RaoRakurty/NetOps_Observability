@@ -208,7 +208,7 @@ def main() -> int:
     # install, 2026-07-04).
     print("[scaffold] install.py REQUIRED_PATHS exist in the committed tree")
     import subprocess
-    req = re.search(r"REQUIRED_PATHS = \[(.*?)\]", INSTALL.read_text(), re.S)
+    req = re.search(r"REQUIRED_PATHS = \[(.*?)\]", INSTALL.read_text(), re.DOTALL)
     req_paths = re.findall(r'"([^"]+)"', req.group(1)) if req else []
     try:
         tracked = set(subprocess.run(["git", "ls-files"], capture_output=True,

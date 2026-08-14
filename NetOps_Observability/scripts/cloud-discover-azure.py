@@ -38,7 +38,7 @@ NEXT_HOP_KIND = {
 def az(*args) -> object:
     env = dict(os.environ, REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt")
     out = subprocess.run(["az", *args, "-o", "json"], capture_output=True, text=True,
-                         env=env, timeout=180)
+                         env=env, timeout=180, check=False)
     if out.returncode != 0:
         raise RuntimeError(f"az {' '.join(args)}: {out.stderr.strip()[:200]}")
     return json.loads(out.stdout or "null")

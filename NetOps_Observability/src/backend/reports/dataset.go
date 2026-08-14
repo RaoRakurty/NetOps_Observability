@@ -42,7 +42,6 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-
 // toMap converts any JSON-encodable value to a generic map (duplicated from
 // main's search helpers — the marshal round-trip, NOT a type assertion, so
 // struct values convert too).

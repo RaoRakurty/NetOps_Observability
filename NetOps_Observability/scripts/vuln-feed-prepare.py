@@ -38,8 +38,8 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO_ROOT / "data" / "vuln" / "advisories.csv"
