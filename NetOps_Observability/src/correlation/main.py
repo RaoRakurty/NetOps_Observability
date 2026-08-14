@@ -113,6 +113,7 @@ from signals import (
     derive_probe_scope,
 )
 from synthetic_normalize import synthetic_app_signal
+from tls_ident import PeerIdentityMiddleware
 from verification_producer import verification_signal_from_event
 from wireless_onboarding import (
     assemble_episode as assemble_wireless_episode,
@@ -3367,9 +3368,9 @@ app = FastAPI(title="netops-correlation", version="0.1.0", lifespan=lifespan)
 # tls_serve.py the handshake has already limited callers to mesh-CA client
 # certificates, and this narrows them to named SPIFFE identities — the Go api
 # in full, the metric scraper and the container's own healthcheck on
-# /metrics + /healthz only. Added LAST so it runs FIRST (outermost).
-from tls_ident import PeerIdentityMiddleware
-
+# /metrics + /healthz only. Registered LAST so it runs FIRST (outermost) —
+# only this add_middleware call's position matters for ordering; the import
+# lives at the top of the file (E402).
 app.add_middleware(PeerIdentityMiddleware)
 
 
