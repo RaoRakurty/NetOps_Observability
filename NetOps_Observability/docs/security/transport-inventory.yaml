@@ -1,7 +1,7 @@
 {
-  "$schema_note": "SEC-001.1 as-built transport inventory. JSON-formatted (valid YAML 1.2) so the stdlib-only preflight gate can parse it. Companion prose: transport-inventory.md. Vocabulary aligned with docs/design/transport-encryption-2026-08-04.md \u00a74 (channel, transport values) and the HLD \u00a77 column set. 'current' = what the BASE compose ships on a fresh install; 'security_profile' = the state once the TLS override/profile is enabled (the lab runs this today); 'target' = the agreed v1 end state. Every claim carries evidence path:line (file must exist; line drift tolerated).",
+  "$schema_note": "SEC-001.1 as-built transport inventory. JSON-formatted (valid YAML 1.2) so the stdlib-only preflight gate can parse it. Companion prose: transport-inventory.md. Vocabulary aligned with docs/design/transport-encryption-2026-08-04.md \u00a74 (channel, transport values) and the HLD \u00a77 column set. 'current' = what the BASE compose ships on a fresh install; 'security_profile' = the state once the TLS override/profile is enabled (the lab runs this today); 'target' = the agreed v1 end state. 'port' = the base-compose port (the TLS-time endpoint lives in the mtls-edges.yaml contract row). Exception objects carry owner/accepted/reason/review_by; review_by must stay in the future or CI (test_transport_exceptions_carry_future_review_by) forces an owner re-review. Every claim carries evidence path:line (file must exist; line drift tolerated).",
   "schema_version": 1,
-  "updated": "2026-08-04",
+  "updated": "2026-08-14",
   "external_peers": [
     "browser",
     "device",
@@ -106,11 +106,12 @@
       "destination": "clickhouse",
       "channel": "store",
       "protocol": "http",
-      "port": 8443,
+      "port": 8123,
       "current": {
-        "transport": "tls",
+        "transport": "plaintext",
         "authn": "basic",
-        "authz": "row-policies"
+        "authz": "row-policies",
+        "notes": "base-compose default: CLICKHOUSE_URL http://clickhouse:8123 with basic auth + tenant row-policies; the https:8443 + native-secure:9440 shape (incl. plaintext-8123 removal at the 2026-08-09 enforce wave) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
       },
       "target": {
         "transport": "tls",
@@ -222,12 +223,12 @@
       "destination": "redis",
       "channel": "store",
       "protocol": "resp",
-      "port": 6380,
+      "port": 6379,
       "current": {
-        "transport": "tls",
+        "transport": "plaintext",
         "authn": "password",
         "authz": "none",
-        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; SEC-012.1 fixed the silent write-path fallback (redisPublish+counter) BEFORE auth; enforce wave 2026-08-09 removed plaintext 6379 (--port 0) \u2014 TLS 6380 (registry SVID, hostname-verified, REDIS_TLS seam) + requirepass is the only listener; key-prefix ACLs remain the target"
+        "notes": "carries RCA EVIDENCE (paths/topology), not just cache; base-compose default: plaintext 6379 with requirepass (SEC-012.1 enforced auth and fixed the silent write-path fallback, redisPublish+counter); the TLS-6380-only shape (registry SVID, hostname-verified, REDIS_TLS seam, plaintext removed via --port 0 at the 2026-08-09 enforce wave) exists only under compose.tls.yml \u2014 see security_profile (restated 2026-08-14: current had claimed the TLS-variant state); key-prefix ACLs remain the target"
       },
       "target": {
         "transport": "tls",
@@ -342,11 +343,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
-        "transport": "mtls",
-        "authn": "svid",
-        "authz": "topic-acls"
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener (KAFKA_LISTENERS in docker-compose.yml); the mTLS:9094 SVID + topic-ACL shape exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state, but the 2026-08-09 enforce wave removed 9092 on the LAB variant only)"
       },
       "target": {
         "transport": "mtls",
@@ -370,11 +372,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
-        "transport": "mtls",
-        "authn": "svid",
-        "authz": "topic-acls"
+        "transport": "plaintext",
+        "authn": "none",
+        "authz": "none",
+        "notes": "base-compose default: ${BROKER_URLS:-kafka:9092} against the single PLAINTEXT:9092 client listener; the mTLS:9094 SVID + topic-ACL shape exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state, but the 2026-08-09 enforce wave removed 9092 on the LAB variant only)"
       },
       "target": {
         "transport": "mtls",
@@ -398,12 +401,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9095,
+      "port": 9092,
       "current": {
-        "transport": "tls",
+        "transport": "plaintext",
         "authn": "none",
-        "authz": "anonymous-produce-netops.flows-only",
-        "notes": "FLOWS:9095 TLS listener, client.auth=none (owner option-1: goflow2 v2.2.1 has no client-cert flags); ANONYMOUS principal ACL-bounded to Write netops.flows literal — under default-deny this is the ONLY thing ANONYMOUS can do"
+        "authz": "none",
+        "notes": "base-compose default: -transport.kafka.brokers ${BROKER_URLS:-kafka:9092}, plaintext against the single PLAINTEXT:9092 client listener; the FLOWS:9095 TLS-anon shape (owner option-1, ANONYMOUS ACL-bounded to Write netops.flows literal under default-deny) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
       },
       "target": {
         "transport": "tls",
@@ -428,12 +431,12 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
-        "transport": "mtls",
+        "transport": "plaintext",
         "authn": "none",
         "authz": "none",
-        "notes": "the api holds NO kafka client today — BROKER_URLS feeds only the stack-health TCP liveness probe (firstBrokerAddr), repointed kafka:9094 at the enforce wave; bus writes go via the authenticated vector-aggregator bus lane"
+        "notes": "the api holds NO kafka client today — BROKER_URLS (base default kafka:9092, plaintext) feeds only the stack-health TCP liveness probe (firstBrokerAddr); compose.tls.yml repoints the probe at MTLS:9094 (a TCP dial, no TLS handshake, so no security_profile is claimed); bus writes go via the authenticated vector-aggregator bus lane"
       },
       "target": {
         "transport": "mtls",
@@ -580,6 +583,7 @@
       "exception": {
         "owner": "platform-eng",
         "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
         "reason": "NetFlow/IPFIX/sFlow ride UDP and cannot be encrypted by the protocol; mitigation is exporter-address allowlisting (Phase 2+) and network segmentation, declared per SEC-017.2"
       },
       "trust_domain": "device",
@@ -791,6 +795,7 @@
       "exception": {
         "owner": "platform-eng",
         "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
         "reason": "last hop of the SEC-010 vmauth proxy: TLS and per-service auth terminate at vmauth on the same compose network, victoria's port stays unpublished; direct-listener removal is programme-final and same-network segmentation is SEC-017"
       },
       "trust_domain": "workload",
@@ -837,11 +842,12 @@
       "destination": "clickhouse",
       "channel": "store",
       "protocol": "http",
-      "port": 8443,
+      "port": 8123,
       "current": {
-        "transport": "tls",
+        "transport": "plaintext",
         "authn": "basic",
-        "authz": "row-policies"
+        "authz": "row-policies",
+        "notes": "base-compose default: router sinks ride ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123} with basic auth + tenant row-policies; the https:8443 shape (CLICKHOUSE_ENDPOINT + SSL_CERT_FILE) exists only under compose.tls.yml — see security_profile (restated 2026-08-14: current had claimed the TLS-variant state)"
       },
       "target": {
         "transport": "tls",
@@ -938,6 +944,7 @@
       "exception": {
         "owner": "platform-eng",
         "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
         "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
       },
       "trust_domain": "workload",
@@ -968,6 +975,7 @@
       "exception": {
         "owner": "platform-eng",
         "accepted": "2026-08-04",
+        "review_by": "2027-02-04",
         "reason": "lab test fixture excluded from customer bundles; the row exists so the coverage gate is honest"
       },
       "trust_domain": "workload",
@@ -994,7 +1002,7 @@
         "transport": "tls",
         "authn": "none",
         "authz": "none",
-        "notes": "gotenberg holds a reserved server identity in the workload registry; conversion vs declared-exception is an OWNER decision pending (F-5) — gotenberg 8 has no native TLS listener, so conversion means a TLS proxy in front or an upstream feature"
+        "notes": "restated 2026-08-14 (review): O10 decision 1 (2026-08-12) IS the target and is LIVE on the TLS profile the same day — gotenberg 8 native TLS (--api-tls-cert-file/--api-tls-key-file) serving the gotenberg registry SVID, clients verifying against the mesh CA: server-verified TLS, NOT mTLS (gotenberg performs no client-cert verification; the api presents its SVID regardless). REOPEN to mtls only if gotenberg grows client-certificate verification"
       },
       "security_profile": {
         "transport": "tls",
@@ -1356,7 +1364,7 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
         "transport": "plaintext",
         "authn": "none",
@@ -1385,7 +1393,7 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
         "transport": "plaintext",
         "authn": "none",
@@ -1414,7 +1422,7 @@
       "destination": "kafka",
       "channel": "bus",
       "protocol": "kafka",
-      "port": 9094,
+      "port": 9092,
       "current": {
         "transport": "plaintext",
         "authn": "none",
@@ -1546,6 +1554,7 @@
       "exception": {
         "owner": "product-owner",
         "accepted": "2026-08-12",
+        "review_by": "2027-02-12",
         "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
       },
       "trust_domain": "workload",
@@ -1577,6 +1586,7 @@
       "exception": {
         "owner": "product-owner",
         "accepted": "2026-08-12",
+        "review_by": "2027-02-12",
         "reason": "O10 metrics-only plaintext exception (owner decision 2026-08-12): valid ONLY while the endpoint carries operational metrics only, stays inside the compose-internal trust boundary (never host-published), and contains no credentials, tenant/customer content, logs, events, or configuration payloads. Any change in payload classification or network exposure invalidates the exception and requires TLS/mTLS review. Live payload verification recorded in the O10 acceptance evidence; the boundary conditions are pinned by test_metrics_scrape_exceptions_hold_their_boundary."
       },
       "trust_domain": "workload",

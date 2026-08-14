@@ -224,25 +224,60 @@ def test_transport_inventory_baseline_is_honest():
     changes a hop, these rows must match the verified compose facts.
     When an epic lands, it updates the inventory row AND this pin together.
 
-    Enforce wave 2026-08-09 (SEC-006.3/007.2/009/012.2 listener removals):
-    the kafka and valkey plaintext listeners no longer exist, so their edges'
-    `current` moved to the achieved state per the tls-enforce-wave runbook.
-    OpenSearch/Victoria/Postgres keep plaintext `current` (their base-compose
-    default listener still exists; the lab conversion lives in
-    security_profile)."""
+    Truthfulness review 2026-08-14: the schema note DEFINES `current` as what
+    the BASE compose ships on a fresh install, and the mtls-edges.yaml schema
+    note defines the inventory `port` as the base-compose port (the TLS-time
+    endpoint lives in the mtls-edges contract row). The 2026-08-09 enforce
+    wave removed the plaintext listeners on the LAB / TLS variant only
+    (compose.tls.yml); the base docker-compose.yml still ships kafka
+    PLAINTEXT:9092 as the only client listener, valkey plaintext 6379, and
+    clickhouse http 8123 (install.py defaults --tls off on non-TTY). So every
+    one of these edges keeps plaintext `current` + the base port; the
+    achieved TLS shape lives in security_profile and a regression THERE fails
+    this test instead."""
     inv = _load_inventory()
     by_id = {e["id"]: e for e in inv["edges"]}
-    for edge_id in ("api-opensearch", "api-victoria", "api-postgres"):
+    for edge_id in ("api-opensearch", "api-victoria", "api-postgres",
+                    # base compose: ${BROKER_URLS:-kafka:9092} on the single
+                    # PLAINTEXT listener (docker-compose.yml KAFKA_LISTENERS)
+                    "vector-kafka", "vector-router-kafka", "api-kafka",
+                    "goflow2-kafka",
+                    # base compose: REDIS_PORT 6379, CLICKHOUSE_URL/-ENDPOINT
+                    # default http://clickhouse:8123
+                    "api-valkey", "api-clickhouse", "vector-router-clickhouse"):
         cur = by_id[edge_id]["current"]
         assert cur["transport"] == "plaintext", (
-            f"{edge_id}: inventory says current transport {cur['transport']!r}; "
-            "if this hop was really secured, update this pin with the epic that did it")
+            f"{edge_id}: inventory says current transport {cur['transport']!r} "
+            "but `current` is DEFINED as the base-compose (plaintext-default) "
+            "state; the TLS-variant state belongs in security_profile. If the "
+            "BASE compose really secured this hop, update this pin with the "
+            "epic that did it")
     assert by_id["api-opensearch"]["current"]["authn"] == "none"
-    # Enforce-wave pins: a regression back to plaintext must fail this test.
-    assert by_id["vector-kafka"]["current"]["transport"] == "mtls"
-    assert by_id["vector-kafka"]["current"]["authz"] == "topic-acls"
-    assert by_id["api-valkey"]["current"]["transport"] == "tls"
-    assert by_id["api-valkey"]["current"]["authn"] == "password"
+    # Base-compose authn facts (verified against docker-compose.yml env).
+    assert by_id["api-valkey"]["current"]["authn"] == "password"      # requirepass
+    assert by_id["api-clickhouse"]["current"]["authn"] == "basic"     # CLICKHOUSE_USER/PASSWORD
+    assert by_id["vector-router-clickhouse"]["current"]["authn"] == "basic"
+    for edge_id in ("vector-kafka", "vector-router-kafka", "goflow2-kafka",
+                    "api-kafka"):
+        assert by_id[edge_id]["current"]["authn"] == "none", (
+            f"{edge_id}: base kafka listener has no SASL/mTLS authn")
+    # `port` records the BASE-compose port (mtls-edges.yaml carries the
+    # TLS-time endpoint); a TLS-only listener port here misleads reviewers.
+    for edge_id in ("vector-kafka", "vector-router-kafka", "api-kafka",
+                    "goflow2-kafka", "kafka-init-kafka",
+                    "kafka-exporter-kafka", "cloud-ingest-kafka"):
+        assert by_id[edge_id]["port"] == 9092, (
+            f"{edge_id}: base compose dials kafka:9092; 9094/9095 exist only "
+            "under compose.tls.yml")
+    assert by_id["api-valkey"]["port"] == 6379
+    assert by_id["api-clickhouse"]["port"] == 8123
+    assert by_id["vector-router-clickhouse"]["port"] == 8123
+    # Enforce-wave achievements stay pinned where they live: the profile.
+    # A regression of the TLS-variant shape must still fail loudly.
+    assert by_id["vector-kafka"]["security_profile"]["transport"] == "mtls"
+    assert by_id["vector-router-kafka"]["security_profile"]["transport"] == "mtls"
+    assert by_id["api-valkey"]["security_profile"]["transport"] == "tls"
+    assert by_id["api-clickhouse"]["security_profile"]["transport"] == "tls"
 
 
 def test_every_compose_service_appears_in_the_transport_inventory():
@@ -299,6 +334,10 @@ def test_transport_is_deny_by_default():
         # Device-side protocols — the transport-encryption device programme
         # (P0–P4), phase 2+: cannot be closed intra-stack.
         "device-syslog-ng", "device-snmp-poll", "device-snmp-trap",
+        # gnmic dials devices with skip-verify:true — tls-UNVERIFIED, i.e.
+        # plaintext-equivalent against an active MITM, so it registers here
+        # like plaintext until SEC-016 (phase 2+) makes prod refuse insecure.
+        "gnmic-device",
         # Post-v1 scoped rows (remote vantage; operator consoles behind the
         # authenticated ingress).
         "remote-vantage-api", "operator-grafana-osd",
@@ -307,7 +346,22 @@ def test_transport_is_deny_by_default():
         "api-keycloak", "api-netbox", "netbox-netbox-postgres",
         "netbox-valkey", "nginx-frontend", "nginx-grafana", "nginx-osd",
         "nginx-netbox", "nginx-keycloak",
+        # pgjdbc negotiates TLS since F-4 hostssl but does NO CA/hostname
+        # verification (tls-unverified) — open until SEC-011 verify-full.
+        "keycloak-postgres",
+        # No kafka client exists on this edge — BROKER_URLS feeds only the
+        # stack-health TCP liveness probe (firstBrokerAddr); the base listener
+        # is plaintext and there is no api-side TLS profile to declare.
+        "api-kafka",
     }
+
+    def _counts_encrypted(transport: str) -> bool:
+        # "tls-unverified" (e.g. skip-verify / no CA check) does NOT count:
+        # without server verification the hop is plaintext-equivalent against
+        # an active MITM, so it needs a declared exception or a KNOWN_OPEN
+        # entry exactly like plaintext (review finding 2026-08-14).
+        return "tls" in transport and "unverified" not in transport
+
     inv = _load_inventory()
     offenders, stale = [], []
     seen = set()
@@ -315,8 +369,7 @@ def test_transport_is_deny_by_default():
         seen.add(e["id"])
         prof = (e.get("security_profile", {}).get("transport") or "").lower()
         cur = (e.get("current", {}).get("transport") or "").lower()
-        encrypted = ("tls" in prof) or ("mtls" in prof) or cur in (
-            "tls", "mtls", "tls-unverified")
+        encrypted = _counts_encrypted(prof) or _counts_encrypted(cur)
         if encrypted or e.get("exception"):
             continue
         if e["id"] not in KNOWN_OPEN:
@@ -327,6 +380,131 @@ def test_transport_is_deny_by_default():
         "declare an exception{owner,accepted,reason}, or (only with review) "
         "add it to KNOWN_OPEN with the reason it stays open (O10 deny-by-default)")
     assert not stale, f"KNOWN_OPEN entries no longer in the inventory: {stale}"
+
+
+def test_transport_inventory_edges_are_unique_per_pair_and_port():
+    """Review finding 2026-08-14 (ratchet granularity): KNOWN_OPEN and the
+    deny-by-default gate key on edge ids, so an id must denote exactly ONE
+    (source, destination, port) hop — two rows sharing a hop (or one id
+    reused) would let a grandfather entry silently cover a second, different
+    transport."""
+    inv = _load_inventory()
+    ids, keys = {}, {}
+    for e in inv["edges"]:
+        assert e["id"] not in ids, f"duplicate edge id {e['id']!r}"
+        ids[e["id"]] = True
+        key = (e["source"], e["destination"], e.get("port"))
+        assert key not in keys, (
+            f"edges {keys[key]!r} and {e['id']!r} both declare hop {key} — "
+            "one hop, one row (edge-granular ratchet)")
+        keys[key] = e["id"]
+
+
+def test_compose_connection_facts_resolve_to_inventory_edges():
+    """Review finding 2026-08-14: the deny-by-default gate iterates only
+    DECLARED edges and the coverage tests check service NAMES, so a NEW
+    plaintext hop between two already-inventoried services (the class that
+    shipped undeclared twice: aggregator→opensearch pre-F-17, prober→victoria
+    2026-08-07) triggered nothing.
+
+    Edge-granular ratchet: derive (client, server, port) connection facts
+    from the base compose itself — every env value / command argument that
+    names another compose service with a port is a hop somebody wired — and
+    require each fact to resolve to an inventory edge for that service pair
+    (matching the declared base-compose port, or a pair edge declaring no
+    single port). New wiring between inventoried services now forces a new
+    inventory row, which the deny-by-default gate then adjudicates."""
+    # Edge-keyed grandfather list: facts the scanner sees today that predate
+    # this ratchet and have no inventory row of their own yet. Each entry is
+    # (client, server, port) with the reason it is tolerated — removing the
+    # wiring OR adding the row removes the entry.
+    KNOWN_UNDECLARED = {
+        ("correlation", "opensearch", 9200):
+            "rides the combined correlation-kafka-ch-pg row's notes today; "
+            "needs its own edge row (same class as pre-F-17 aggregator hop)",
+        ("correlation", "clickhouse", 8123):
+            "rides the combined correlation-kafka-ch-pg row (CH hop named in "
+            "its notes); needs its own edge row",
+        ("prober", "vector-aggregator", 8689):
+            "probe-lane client beside the api on collectors-vector-lanes "
+            "(PROBE_EVENT_SINK_URL); needs its own edge row",
+    }
+    inv = _load_inventory()
+    pair_ports = {}
+    for e in inv["edges"]:
+        pair_ports.setdefault((e["source"], e["destination"]), set()).add(e.get("port"))
+    with open(os.path.join(ROOT, "deployment", "docker", "docker-compose.yml")) as fh:
+        compose = yaml.safe_load(fh)
+    services = set(compose.get("services", {}))
+
+    facts = set()
+    for name, svc in compose["services"].items():
+        if not isinstance(svc, dict):
+            continue
+        blobs = []
+        env = svc.get("environment") or {}
+        if isinstance(env, dict):
+            blobs += [f"{k}={v}" for k, v in env.items()]
+        else:
+            blobs += [str(v) for v in env]
+        cmd = svc.get("command")
+        if isinstance(cmd, list):
+            blobs += [str(x) for x in cmd]
+        elif cmd:
+            blobs.append(str(cmd))
+        for m in re.finditer(r"\b([a-z][a-z0-9-]*):(\d{2,5})\b", "\n".join(blobs)):
+            dest, port = m.group(1), int(m.group(2))
+            if dest != name and dest in services:
+                facts.add((name, dest, port))
+    # Scanner self-check: if compose parsing or the pattern rots, this test
+    # must fail loudly instead of silently asserting over nothing.
+    assert len(facts) >= 15, (
+        f"compose connection-fact scanner found only {len(facts)} facts — "
+        "the extraction rotted; fix the scanner, do not delete the ratchet")
+
+    offenders = []
+    for src, dst, port in sorted(facts):
+        ports = pair_ports.get((src, dst))
+        covered = ports is not None and (port in ports or None in ports)
+        if not covered and (src, dst, port) not in KNOWN_UNDECLARED:
+            offenders.append(f"{src} -> {dst}:{port}")
+    assert not offenders, (
+        f"compose wires hops with NO matching transport-inventory edge: {offenders} "
+        "— add an edge row (docs/security/transport-inventory.yaml) so the "
+        "deny-by-default gate can adjudicate it (edge-granular ratchet)")
+
+    stale_grandfather = [k for k in KNOWN_UNDECLARED if k not in facts]
+    assert not stale_grandfather, (
+        f"KNOWN_UNDECLARED entries no longer wired in compose: {stale_grandfather} "
+        "— delete them (a grandfather entry may only cover live wiring)")
+
+
+def test_transport_exceptions_carry_future_review_by():
+    """Review finding 2026-08-14: exception rows carried only
+    owner/accepted/reason, so an accepted exception whose environment drifts
+    in ways the mechanical checks cannot see stayed accepted forever. Every
+    exception must now carry a review_by date in the future; when it comes
+    due, CI fails until an owner re-reviews and re-dates (or removes) it."""
+    import datetime
+    bad = []
+    for e in _load_inventory()["edges"]:
+        exc = e.get("exception")
+        if not exc:
+            continue
+        rb = exc.get("review_by")
+        if not rb:
+            bad.append(f"{e['id']}: exception has no review_by date")
+            continue
+        try:
+            due = datetime.date.fromisoformat(rb)
+        except ValueError:
+            bad.append(f"{e['id']}: review_by {rb!r} is not YYYY-MM-DD")
+            continue
+        if due <= datetime.date.today():
+            bad.append(
+                f"{e['id']}: review_by {rb} is due — re-review the exception "
+                "with its owner and re-date it (or encrypt/remove the hop)")
+    assert not bad, "transport exception review_by violations: " + "; ".join(bad)
 
 
 def test_metrics_scrape_exceptions_hold_their_boundary():
@@ -408,6 +586,18 @@ def test_transport_inventory_targets_record_owner_accepted_shapes():
         assert "0a" in (tgt.get("notes") or ""), (
             f"{edge_id}: the target restatement must cite the owner steer that "
             "authorized it")
+
+    goten = inv["api-gotenberg"]["target"]
+    goten_notes = goten.get("notes") or ""
+    assert "O10" in goten_notes and "pending" not in goten_notes.lower(), (
+        "api-gotenberg: the owner decided (O10 decision 1, 2026-08-12, LIVE "
+        "same day) — native gotenberg TLS, server-verified against the mesh "
+        "CA; a target.notes still saying the decision is pending re-opens a "
+        "decided item (the F-2/F-3 stale-row class)")
+    assert "server-verified" in goten_notes.lower(), (
+        "api-gotenberg: target.notes must record the accepted shape — "
+        "server-verified TLS (gotenberg does not verify client certs, so not "
+        "mTLS), mirroring the goflow2-kafka option-1 restatement pattern")
 
     goflow = inv["goflow2-kafka"]["target"]
     assert goflow["transport"] == "tls" and goflow["authn"] == "none", (
