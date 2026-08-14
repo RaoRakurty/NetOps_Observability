@@ -6,7 +6,7 @@ name: backend-ci
 # for those packages, and run repo-wide as non-blocking triage until the existing
 # backlog is burned down (then flip `full-lint` to blocking).
 #
-# Go is pinned to a patched toolchain (go1.25.12): govulncheck flagged a batch of
+# Go is pinned to a patched toolchain (go1.25.13): govulncheck flagged a batch of
 # stdlib CVEs (crypto/tls, crypto/x509, net/http, …) present in go1.24. The same
 # bump is applied to deployment/docker/Dockerfile.backend so prod ships patched.
 
@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.25.12'
+  GO_VERSION: '1.25.13'
   # All scanners pinned for reproducible, supply-chain-sound builds (SC-010): an
   # unpinned @latest would let a compromised/regressed release run in CI. Bump
   # deliberately (Dependabot watches these too).
