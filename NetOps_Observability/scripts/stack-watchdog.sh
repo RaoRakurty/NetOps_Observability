@@ -206,6 +206,89 @@ if [ "${#oom_events[@]}" -gt 0 ]; then
   fi
 fi
 
+# -----------------------------------------------------------------------------
+# Kernel UDP-drop sentinel for the syslog lane. syslog-ng can only count what
+# it READS; datagrams the KERNEL drops before syslog-ng dequeues them (socket
+# receive-buffer overflow under burst) never appear in any syslog-ng counter,
+# so the lane silently loses messages while every liveness check stays green.
+# The truth lives in the syslog-ng container's network namespace: /proc/net/snmp
+# `Udp:` RcvbufErrors (buffer overflow) and InErrors (its superset). Tracked as
+# a run-over-run delta in its own state file (same mechanism as the restart /
+# reject checks), with the same transition-only discipline as the up/down
+# machine: one push when drops START, one when they STOP — never one per
+# minute. A counter that moves BACKWARD (container/kernel restart reset) makes
+# the delta unknowable: re-baseline silently, never alert a bogus huge delta.
+# Degrades gracefully — no container, a failed exec or unparsable output is a
+# named stderr "not measurable" note (§16.1), never a false alarm.
+# -----------------------------------------------------------------------------
+UDP_STATE="${WATCHDOG_UDPDROPS:-$SCRIPT_DIR/.stack-watchdog.udpdrops}"
+
+check_syslog_udp_drops() {
+  local cid snmp rcv_now inerr_now prev_rcv prev_inerr prev_state state d_rcv d_inerr
+  # §16.3: every external call bounded — docker exec has no timeout of its own,
+  # so without the wrapper a wedged daemon hangs the whole watchdog run. No
+  # `timeout` on the host means we degrade to "not measurable", never to an
+  # unbounded call.
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "watchdog: syslog UDP-drop check not measurable: no 'timeout' on PATH (docker exec must stay bounded)" >&2
+    return 0
+  fi
+  cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                     --filter "label=com.docker.compose.service=syslog-ng" 2>/dev/null | head -1)
+  if [ -z "$cid" ]; then
+    echo "watchdog: syslog UDP-drop check not measurable: no running syslog-ng container in project $PROJECT" >&2
+    return 0
+  fi
+  if ! snmp=$(timeout 10 docker exec "$cid" cat /proc/net/snmp 2>&1); then
+    echo "watchdog: syslog UDP-drop check not measurable: docker exec failed: $(printf '%s' "$snmp" | head -1 | cut -c1-120)" >&2
+    return 0
+  fi
+  # /proc/net/snmp: the first `Udp:` line names the columns, the second carries
+  # the values. Column POSITIONS differ across kernel versions, so resolve
+  # RcvbufErrors / InErrors by NAME — a positional read silently tracks the
+  # wrong counter forever.
+  read -r rcv_now inerr_now <<<"$(printf '%s\n' "$snmp" | awk '
+    $1=="Udp:" && !h { for (i=2; i<=NF; i++) { if ($i=="RcvbufErrors") r=i; if ($i=="InErrors") e=i }; h=1; next }
+    $1=="Udp:" && h  { if (r && e) print $r, $e; exit }')"
+  if [ -z "${rcv_now:-}" ] || [ -z "${inerr_now:-}" ]; then
+    echo "watchdog: syslog UDP-drop check not measurable: no parsable Udp: RcvbufErrors/InErrors in /proc/net/snmp" >&2
+    return 0
+  fi
+  prev_rcv=""; prev_inerr=""; prev_state=""
+  # First run has no state file — that is the baseline case, not an error.
+  if [ -f "$UDP_STATE" ]; then
+    read -r prev_rcv prev_inerr prev_state < "$UDP_STATE" 2>/dev/null ||
+      echo "watchdog: UDP-drop state file $UDP_STATE unreadable — re-baselining" >&2
+  fi
+  state="${prev_state:-clean}"
+  # Delta is only meaningful when BOTH counters moved forward (or held); a
+  # backward move is a reset and falls through to the silent re-baseline.
+  if [ -n "$prev_rcv" ] && [ -n "$prev_inerr" ] &&
+     [ "$rcv_now" -ge "$prev_rcv" ] 2>/dev/null && [ "$inerr_now" -ge "$prev_inerr" ] 2>/dev/null; then
+    d_rcv=$(( rcv_now - prev_rcv ))
+    d_inerr=$(( inerr_now - prev_inerr ))
+    if [ $(( d_rcv + d_inerr )) -gt 0 ]; then
+      if [ "$state" != "dropping" ]; then
+        push "📉 Syslog UDP datagrams DROPPED by the kernel on $(hostname)" "chart_with_downwards_trend" "high" \
+          "The kernel dropped syslog UDP datagrams inside the syslog-ng container's netns since the last check (RcvbufErrors +${d_rcv}, InErrors +${d_inerr}). These drops are INVISIBLE to syslog-ng's own counters — messages are lost before ingestion. Usual cause: socket receive-buffer overflow under burst; check so-rcvbuf() / net.core.rmem_max and the sender rate."
+        notify_webhook "degraded" "syslog UDP drops started: kernel RcvbufErrors +${d_rcv}, InErrors +${d_inerr} since last check (invisible to syslog-ng's own stats)"
+      fi
+      state="dropping"
+    else
+      if [ "$state" = "dropping" ]; then
+        push "✅ Syslog UDP kernel drops STOPPED on $(hostname)" "white_check_mark" "default" \
+          "No new kernel-level UDP drops in the syslog-ng netns since the last check."
+        notify_webhook "recovered" "syslog UDP kernel drops stopped: no new RcvbufErrors/InErrors since last check"
+      fi
+      state="clean"
+    fi
+  fi
+  printf '%s %s %s\n' "$rcv_now" "$inerr_now" "$state" > "$UDP_STATE" 2>/dev/null ||
+    echo "watchdog: could not persist UDP-drop state to $UDP_STATE" >&2
+  return 0
+}
+check_syslog_udp_drops
+
 # End-to-end probe: the dashboard must answer through nginx.
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 ${APP_CACERT:+--cacert "$APP_CACERT"} "$APP_URL" 2>/dev/null)
 case "$code" in
@@ -260,6 +343,68 @@ if [ -f "$hh_beat" ]; then
   [ "$hh_age_min" -gt "${HOST_HYGIENE_MAX_AGE_MIN:-45}" ] &&
     problems+=("host-hygiene cron stale: heartbeat ${hh_age_min}m old (10-min cron dead? disk-full protection is OFF)")
 fi
+
+# -----------------------------------------------------------------------------
+# #150 backup-intent applier — the host-side half of the Data Protection GUI.
+#
+# The API stores the operator's backup intent (remote, schedule, retention) to
+# data/api/system_backup.json but runs in a container: it cannot write the host
+# crontab or the host .env (system_backup.go ARCHITECTURE NOTE). Until this
+# hook existed NOTHING invoked scripts/apply-backup-config.sh, so the GUI
+# showed "enabled" while no cron was ever installed — F-59 reborn. This cron
+# (root, every minute) is the natural host-side agent, so it closes the loop:
+# whenever the intent file is NEWER than the last-applied stamp, run the
+# applier once. Stamp discipline keeps it event-driven (§16.4): the stamp
+# mtime is set to the intent's mtime on success, so a quiet steady state costs
+# one -nt test per minute and applies exactly once per GUI change
+# (transition-only logging — the apply is the event, not the poll). A FAILED
+# apply keeps the stamp untouched (retried next minute, §16.3 idempotent) and
+# is reported through the problems machine, which is itself transition-only.
+#
+# Packaged installs (watchdog copied to /etc/correlix) must point these at the
+# bundle via stack-watchdog.env: BACKUP_INTENT_FILE, BACKUP_APPLY_SCRIPT,
+# BACKUP_APPLY_STAMP. An absent intent file is a quiet no-op (GUI never used);
+# intent WITH no applier is a loud problem — stored intent nobody enforces is
+# the exact defect this hook removes.
+# -----------------------------------------------------------------------------
+BACKUP_INTENT="${BACKUP_INTENT_FILE:-$SCRIPT_DIR/../data/api/system_backup.json}"
+BACKUP_APPLY="${BACKUP_APPLY_SCRIPT:-$SCRIPT_DIR/apply-backup-config.sh}"
+BACKUP_STAMP="${BACKUP_APPLY_STAMP:-$SCRIPT_DIR/.backup-config.applied}"
+
+apply_backup_intent() {
+  local out detail
+  [ -f "$BACKUP_INTENT" ] || return 0   # no stored intent — nothing to enforce
+  if [ -f "$BACKUP_STAMP" ] && [ ! "$BACKUP_INTENT" -nt "$BACKUP_STAMP" ]; then
+    return 0                            # intent unchanged since the last successful apply
+  fi
+  if [ ! -x "$BACKUP_APPLY" ]; then
+    problems+=("backup intent stored at $BACKUP_INTENT but applier $BACKUP_APPLY is missing/not executable — GUI backup settings are NOT enforced on this host")
+    return 0
+  fi
+  # §16.3: every external call bounded — the applier shells into python3 and
+  # crontab; a wedged one must not hang the whole watchdog run. No `timeout`
+  # on the host degrades to a named skip (§16.2), never to an unbounded call.
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "watchdog: backup-intent apply skipped: no 'timeout' on PATH (the apply must stay bounded)" >&2
+    return 0
+  fi
+  if out=$(timeout 120 "$BACKUP_APPLY" 2>&1); then
+    # Stamp carries the intent's OWN mtime, so -nt stays false until the API
+    # writes a genuinely newer intent (its atomic rename bumps the mtime).
+    if touch -r "$BACKUP_INTENT" "$BACKUP_STAMP" 2>/dev/null; then
+      echo "watchdog: backup intent applied ($BACKUP_INTENT -> $BACKUP_APPLY): $(printf '%s' "$out" | tail -1)"
+    else
+      problems+=("backup intent applied but stamp $BACKUP_STAMP is unwritable — the apply would repeat every minute")
+    fi
+  else
+    # Prefer the applier's own ERROR line; a timeout kill or bare failure has
+    # none, so fall back to its last output line (never an empty diagnostic).
+    detail=$(printf '%s' "$out" | grep 'ERROR' | tail -1)
+    [ -n "$detail" ] || detail=$(printf '%s' "$out" | tail -1)
+    problems+=("backup-config apply FAILED (GUI intent NOT enforced): $(printf '%s' "${detail:-no output}" | cut -c1-200)")
+  fi
+}
+apply_backup_intent
 
 # Ingestion liveness — a pipeline that stops silently is invisible until someone
 # looks at an empty dashboard. Container logs (applogs) flow continuously, so

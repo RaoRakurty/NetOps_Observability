@@ -30,7 +30,12 @@
 #     --stores  comma list; default: pg,ch,os (all proven). Restrict to debug one.
 #
 # Exit non-zero on ANY failed assertion. Emits a machine-readable JSON report to
-# $REPORT (default scripts/.restore-drill.report.json).
+# $REPORT — default data/api/restore-drill.report.json, because that host dir is
+# the api container's /data mount and system_backup.go reads the drill result
+# from RESTORE_DRILL_REPORT (default /data/restore-drill.report.json) to render
+# LastDrillResult in the Data Protection GUI. The old default
+# (scripts/.restore-drill.report.json) was a path NOTHING read: proof-of-restore
+# could never surface (fixed 2026-08-14). Override with RESTORE_DRILL_REPORT.
 
 set -uo pipefail
 
@@ -58,7 +63,8 @@ done
 
 # DRILL_ID must be deterministic-per-run and safe as an SQL/redis identifier.
 DRILL_ID="drill_$(date -u +%Y%m%d_%H%M%S)_$$"
-REPORT="${RESTORE_DRILL_REPORT:-$DIR/.restore-drill.report.json}"
+# Default = the path the api reads (host data/api ↔ container /data, see header).
+REPORT="${RESTORE_DRILL_REPORT:-$ROOT/data/api/restore-drill.report.json}"
 WORK="$(mktemp -d)"
 BACKUP_TAR="$WORK/backup-$DRILL_ID.tar.zst"
 SCRATCH_PREFIX="restore-drill-$$"
@@ -402,7 +408,10 @@ done
 END_TS="$(date -u +%FT%TZ)"
 
 # --- machine-readable report ------------------------------------------------
-{
+# The report is the GUI's only proof-of-restore, so a write that cannot land
+# must be LOUD, and success must not be claimed for a failed write (the exit
+# code still carries the drill verdict either way).
+write_report() {
   printf '{\n'
   printf '  "drill_id": "%s",\n' "$DRILL_ID"
   printf '  "started": "%s",\n' "$START_TS"
@@ -415,8 +424,12 @@ END_TS="$(date -u +%FT%TZ)"
   printf '  "rto_os_seconds": %s,\n' "${RTO_OS:-null}"
   printf '  "result": "%s"\n' "$([ "$ASSERT_FAIL" -eq 0 ] && echo pass || echo fail)"
   printf '}\n'
-} > "$REPORT"
-log "report → $REPORT"
+}
+if write_report > "$REPORT" 2>/dev/null; then
+  log "report → $REPORT"
+else
+  err "could not write report to $REPORT (missing data/api dir? permissions?) — the GUI will show no drill result"
+fi
 log "assertions: $ASSERT_PASS passed, $ASSERT_FAIL failed"
 
 [ "$ASSERT_FAIL" -eq 0 ] || { err "restore drill FAILED (${ASSERT_FAIL} assertion(s))"; exit 1; }

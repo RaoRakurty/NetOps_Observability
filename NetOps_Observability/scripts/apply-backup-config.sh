@@ -4,17 +4,24 @@
 #
 # The backend runs in a container and cannot write the host crontab or the host
 # .env where BACKUP_REMOTE lives (system_backup.go ARCHITECTURE NOTE). It stores
-# the operator's INTENT to /data/system_backup.json; THIS script, run host-side
-# by install/upgrade (or by hand), enforces it: it writes BACKUP_REMOTE/BACKUP_PUSH
-# into deployment/docker/.env and installs or removes the backup cron.
+# the operator's INTENT to /data/system_backup.json; THIS script, run host-side,
+# enforces it: it writes BACKUP_REMOTE/BACKUP_PUSH into deployment/docker/.env
+# and installs or removes the backup cron.
+#
+# WHO RUNS IT (#150 loop closure, 2026-08-14): the stack watchdog cron invokes
+# this every time the stored intent file is NEWER than its last-applied stamp
+# (scripts/stack-watchdog.sh, apply_backup_intent) — so a GUI change is live on
+# the host within a minute. It can also be run by hand.
 #
 # CLAUDE.md §16: no swallowed errors, explicit PATH, idempotent, and it REFUSES
 # to schedule a full backup without an off-host remote (F-55 — a local-only
-# nightly backup fills the disk it needs).
+# nightly backup fills the disk it needs). Every mutation (.env write, crontab
+# install) is CHECKED and verified; a failed apply exits non-zero and loud —
+# it must never print "applied"/"updated" for a write that did not land.
 #
 # Usage: scripts/apply-backup-config.sh [--dry-run]
 
-set -uo pipefail
+set -euo pipefail
 _HOME="${HOME:-/home/$(id -un 2>/dev/null || echo rao)}"
 export PATH="/usr/local/bin:/usr/bin:/bin:${_HOME}/.local/bin:${PATH:-}"
 
@@ -24,7 +31,7 @@ ENV_FILE="$ROOT/deployment/docker/.env"
 # The config the backend writes. Its /data maps to data/api on the host.
 CONFIG="${BACKUP_CONFIG_FILE:-$ROOT/data/api/system_backup.json}"
 DRY=0
-[ "${1:-}" = "--dry-run" ] && DRY=1
+if [ "${1:-}" = "--dry-run" ]; then DRY=1; fi
 
 die() { echo "apply-backup-config: ERROR: $*" >&2; exit 1; }
 say() { echo "apply-backup-config: $*"; }
@@ -36,21 +43,28 @@ if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
 
-# Parse the JSON without assuming jq is present.
-read_json() { python3 -c "import json,sys; d=json.load(open('$CONFIG')); print(d.get('$1',''))" 2>/dev/null; }
+# Refuse unparsable intent OUTRIGHT: the previous read_json swallowed parse
+# errors (2>/dev/null), so a corrupt config read as all-empty values and the
+# script would happily apply BACKUP_REMOTE=<empty> + remove the cron.
+python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG" 2>/dev/null \
+  || die "config $CONFIG is not valid JSON — refusing to apply garbage (fix or re-save it in Settings → Data Protection)"
+
+# Parse the JSON without assuming jq is present. Parse errors are impossible
+# here (validated above); a missing key is legitimately empty.
+read_json() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$CONFIG" "$1"; }
 REMOTE="$(read_json remote_url)"
 PUSH="$(read_json push_command)"
 SCHED="$(read_json schedule_enabled)"    # 'True' / 'False'
 CRON="$(read_json schedule_cron)"
-[ -z "$CRON" ] && CRON="30 2 * * *"
+if [ -z "$CRON" ]; then CRON="30 2 * * *"; fi
 
 # Retention (2026-07-27). The nightly cron wrote a full backup a day and NOTHING
 # pruned them; the only retention in the product was OPENSEARCH_SNAPSHOT_KEEP.
 # BACKUP_KEEP mirrors that convention exactly (keep the N newest, 0 = disabled)
 # and backup.sh reads it out of .env, so it works under cron's bare environment.
 KEEP="$(read_json retain_count)"
-[ -z "$KEEP" ] && KEEP="$(read_json keep_count)"
-[ -z "$KEEP" ] && KEEP=7
+if [ -z "$KEEP" ]; then KEEP="$(read_json keep_count)"; fi
+if [ -z "$KEEP" ]; then KEEP=7; fi
 case "$KEEP" in
   ''|*[!0-9]*) die "retain_count in $CONFIG is not a non-negative integer: '$KEEP'" ;;
 esac
@@ -60,14 +74,15 @@ if [ "$SCHED" = "True" ] && [ -z "$REMOTE" ]; then
   die "schedule is enabled but no off-host remote is set — refusing to schedule a local-only nightly backup that would fill the disk (F-55). Set a remote first."
 fi
 
-# --- 1. write BACKUP_REMOTE / BACKUP_PUSH into .env (idempotent) -------------
-set_env() { # key value
+# --- 1. write BACKUP_REMOTE / BACKUP_PUSH into .env (idempotent, VERIFIED) ---
+set_env() { # key value — dies unless the key VERIFIABLY lands in .env
   local key="$1" val="$2"
   [ -f "$ENV_FILE" ] || die "no .env at $ENV_FILE (run install.py first)"
   if grep -q "^${key}=" "$ENV_FILE"; then
     if [ "$DRY" = 1 ]; then say "[dry-run] would set ${key} in .env"; return; fi
     # Use a python rewrite so a value with slashes/spaces is safe (no sed escaping).
-    python3 - "$ENV_FILE" "$key" "$val" <<'PY'
+    python3 - "$ENV_FILE" "$key" "$val" <<'PY' \
+      || die "failed to rewrite ${key} in $ENV_FILE (permissions? disk full?)"
 import sys
 path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = open(path).read().splitlines()
@@ -75,9 +90,16 @@ out = [f"{key}={val}" if l.startswith(key + "=") else l for l in lines]
 open(path, "w").write("\n".join(out) + "\n")
 PY
   else
-    [ "$DRY" = 1 ] && { say "[dry-run] would append ${key} to .env"; return; }
-    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+    if [ "$DRY" = 1 ]; then say "[dry-run] would append ${key} to .env"; return; fi
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE" \
+      || die "failed to append ${key} to $ENV_FILE (permissions? disk full?)"
   fi
+  # Verify the key actually landed with the intended value before EVER claiming
+  # success: the pre-fix version printed "applied …" after a silently failed
+  # write, leaving cron to run backup.sh with no BACKUP_REMOTE (local-only
+  # nightly backups filling the primary disk while reporting green — F-55).
+  grep -qxF "${key}=${val}" "$ENV_FILE" \
+    || die "verification failed: ${key}=${val} is not in $ENV_FILE after writing it"
 }
 set_env BACKUP_REMOTE "$REMOTE"
 set_env BACKUP_PUSH "${PUSH:-rsync -a}"
@@ -93,6 +115,8 @@ CRON_TAG="# correlix-backup (managed by apply-backup-config.sh)"
 BACKUP_CMD="$DIR/backup.sh $ROOT/data/backups/correlix-\$(date +\\%Y\\%m\\%d).tar.zst >> $DIR/backup.log 2>&1"
 CRON_LINE="$CRON $BACKUP_CMD $CRON_TAG"
 
+# `crontab -l` legitimately fails when the user has no crontab yet — that is
+# the empty-crontab case, not an error to surface.
 current="$(crontab -l 2>/dev/null | grep -v "correlix-backup (managed" || true)"
 if [ "$SCHED" = "True" ]; then
   new="$current"$'\n'"$CRON_LINE"
@@ -108,8 +132,24 @@ if [ "$DRY" = 1 ]; then
   say "[dry-run] resulting crontab backup line:"
   if [ "$SCHED" = "True" ]; then echo "$CRON_LINE"; else echo "(none — schedule disabled)"; fi
 else
-  mkdir -p "$ROOT/data/backups"
-  printf '%s\n' "$new" | grep -v '^$' | crontab -
+  mkdir -p "$ROOT/data/backups" || die "could not create $ROOT/data/backups"
+  # Stage the new crontab in a file so the `crontab` exit status is judged on
+  # its own (a bare pipe conflates grep's "no lines" with a crontab failure),
+  # then VERIFY the installed crontab matches the intent before claiming so.
+  tmp_cron="$(mktemp)" || die "mktemp failed"
+  # grep rc=1 here means the resulting crontab is empty — legitimate when the
+  # schedule is disabled and no other entries exist.
+  printf '%s\n' "$new" | grep -v '^$' > "$tmp_cron" || true
+  crontab "$tmp_cron" || { rm -f "$tmp_cron"; die "crontab update failed — the schedule intent was NOT applied"; }
+  rm -f "$tmp_cron"
+  if [ "$SCHED" = "True" ]; then
+    crontab -l 2>/dev/null | grep -qF "$CRON_TAG" \
+      || die "verification failed: managed backup cron line missing after install"
+  else
+    if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
+      die "verification failed: managed backup cron line still present after removal"
+    fi
+  fi
   say "crontab updated"
 fi
 

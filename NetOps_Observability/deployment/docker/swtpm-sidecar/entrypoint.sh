@@ -11,6 +11,25 @@ TPMDIR="${TPMDIR:-/tpmstate}"
 SEAL_SOCKET="${SEAL_SOCKET:-/run/secrets-seal/seal.sock}"
 mkdir -p "$TPMDIR" "$(dirname "$SEAL_SOCKET")"
 
+# Stray-plaintext purge (2026-08-14). Before the stdin-pipe fix, SEAL staged the
+# decoded root KEK at $TPMDIR/kek.bin (a PERSISTENT host bind mount) and relied
+# on a post-hoc shred — a crash/OOM-kill in that window left the KEK in
+# cleartext on host disk indefinitely. Nothing writes kek.bin anymore, so its
+# presence at boot is INCIDENT EVIDENCE (a pre-fix crash, or something else
+# placed a file there): log it LOUDLY before removal — per the 2026-08-04
+# custody-incident discipline, evidence is named before it is destroyed — then
+# purge it. shred is best-effort (ineffective on CoW/journaled filesystems);
+# rm is the part that must succeed, and a failed purge aborts boot (set -e):
+# a custodian that cannot remove plaintext key material must not serve.
+if [ -e "$TPMDIR/kek.bin" ]; then
+    echo "secrets-seal: SECURITY WARNING: stray plaintext KEK file found at $TPMDIR/kek.bin (size $(wc -c < "$TPMDIR/kek.bin" 2>/dev/null || echo '?') bytes) — this is evidence of a pre-fix SEAL crash: the root KEK may have been exposed on the host disk backing this bind mount. Purging it now. Consider an operator-driven RESEAL/key rotation per docs/design/secret-custody.md." >&2
+    shred -u "$TPMDIR/kek.bin" 2>/dev/null || rm -f "$TPMDIR/kek.bin"
+    [ ! -e "$TPMDIR/kek.bin" ] || { echo "secrets-seal: FATAL: could not purge $TPMDIR/kek.bin — refusing to serve with plaintext key material on disk" >&2; exit 1; }
+fi
+# Interrupted (RE)SEAL leftovers: harmless (sealed ciphertext, temp names) but
+# stale — a completed rename pair is the only valid blob state. Quiet cleanup.
+rm -f "$TPMDIR/seal.pub.new" "$TPMDIR/seal.priv.new"
+
 # Software TPM: server (commands) + ctrl on localhost TCP; tpm2-tools reach it via
 # the swtpm TCTI. State (incl. the sealed KEK objects) lives in $TPMDIR.
 swtpm socket --tpm2 --tpmstate dir="$TPMDIR" \

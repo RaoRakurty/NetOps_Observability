@@ -83,9 +83,12 @@ Leave it off. OpenSearch daily snapshots already give you real search-tier DR at
 - **Config** — the off-host remote, push command, and the full-backup schedule.
 
 The backend stores the intent (`/data/system_backup.json`); the host applier
-(`scripts/apply-backup-config.sh`, run by install/upgrade) enforces it — writes
-`BACKUP_REMOTE` into `.env` and installs/removes the backup cron. This split
-exists because the backend runs in a container and cannot write the host crontab.
+(`scripts/apply-backup-config.sh`) enforces it — writes `BACKUP_REMOTE` into
+`.env` and installs/removes the backup cron. This split exists because the
+backend runs in a container and cannot write the host crontab. The applier is
+invoked automatically by the stack watchdog cron whenever the stored intent is
+newer than its last-applied stamp (`stack-watchdog.sh`, `apply_backup_intent`
+— a GUI change is live on the host within a minute), and can be run by hand.
 
 ## 4. Prove a restore works — the drill
 
@@ -98,7 +101,9 @@ scripts/restore-drill.sh --keep          # leave scratch for inspection
 It writes a canary into each live store, backs it up the real way, restores into
 an **empty disposable container** (never a live volume), and asserts the canary
 (magic + exact timestamp) came back. Emits JSON to
-`scripts/.restore-drill.report.json` and exits non-zero on any failed assertion.
+`data/api/restore-drill.report.json` — the api container's `/data` mount, so
+the Data Protection page surfaces the last drill result — and exits non-zero
+on any failed assertion (`RESTORE_DRILL_REPORT` overrides the path).
 
 Proven: 17/17 assertions, RTO pg ~21s / ch ~9s / os ~52s.
 

@@ -69,7 +69,9 @@
 #   scripts/backup.sh --prune <dir> [--dry-run]   exercises it standalone.
 # ---------------------------------------------------------------------------
 
-set -euo pipefail
+# -E (errtrace): the ERR trap below must fire inside functions/subshells too,
+# so an abort's failing command lands in the report's reason.
+set -Eeuo pipefail
 
 # §16.2 — cron gives us PATH=/usr/bin:/bin only, and docker/zstd/rsync commonly
 # live in /usr/local/bin. This script IS a cron job now, so it states its PATH.
@@ -209,9 +211,55 @@ COMPOSE_DIR="$ROOT/deployment/docker"
 DATA_DIR="$ROOT/data"
 STAGE="$(mktemp -d -t netops-backup-XXXXXX)"
 START_EPOCH="$(date +%s)"
-# Single-quoted + quoted expansion (SC2064): the path is resolved when the trap
-# FIRES, and a staging path with a space can never word-split into `rm -rf /`.
-trap 'rm -rf -- "$STAGE"' EXIT
+
+# ---------------------------------------------------------------------------
+# Honest run report on EVERY exit path (2026-08-14). The report used to be
+# written only by straight-line code at the end of the run, so any set -e
+# abort (rsync of the live tree, zstd refusing an overwrite, an unexpected
+# failure anywhere) skipped it — and the GUI (system_backup.go reads
+# data/api/backup-report.json) kept rendering the PREVIOUS run's green
+# "success" pill as current truth. Now:
+#   * write_report is the single writer (atomic tmp+rename, both outcomes);
+#   * the EXIT trap writes a status=failed report — naming the aborted step
+#     and the failing command — whenever the run dies before the normal
+#     report write (REPORT_DONE guards double writes);
+#   * a report-write failure stays a WARNING, never a masked backup error.
+# ---------------------------------------------------------------------------
+CURRENT_STEP="startup"
+REPORT_DONE=0
+ERR_CMD=""
+trap 'ERR_CMD=$BASH_COMMAND' ERR
+
+write_report() { # <status> <reason>  (reason may be empty)
+    local status="$1" reason="$2" size rdir="$DATA_DIR/api"
+    size=$(stat -c%s -- "$OUT" 2>/dev/null || echo 0)
+    # JSON-safety: the reason can carry a shell command line — strip quotes,
+    # backslashes and control chars, and bound it.
+    reason=$(printf '%s' "$reason" | tr -d '\042\134' | tr -s '[:cntrl:]' ' ' | cut -c1-300)  # \042="  \134=backslash
+    if [[ ! -d "$rdir" ]] \
+       || ! printf '{"status":"%s","ended":"%s","size_bytes":%s,"duration_seconds":%s,"failures":%s,"artifact":"%s","reason":"%s"}\n' \
+            "$status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$size" \
+            "$(( $(date +%s) - START_EPOCH ))" "${FAILURES:-0}" "$(basename -- "$OUT")" "$reason" \
+            > "$rdir/backup-report.json.tmp" \
+       || ! mv -f -- "$rdir/backup-report.json.tmp" "$rdir/backup-report.json"; then
+        echo "!! WARNING: could not write $rdir/backup-report.json — the GUI will show a stale last-run" >&2
+        return 0
+    fi
+    REPORT_DONE=1
+}
+
+# Single-quoted trap body (SC2064): everything resolves when the trap FIRES,
+# and a staging path with a space can never word-split into `rm -rf /`.
+finish() {
+    local rc=$?
+    rm -rf -- "$STAGE"
+    if [[ $rc -ne 0 && ${REPORT_DONE:-0} -eq 0 ]]; then
+        echo "!! backup ABORTED during: ${CURRENT_STEP:-startup} (exit $rc)" >&2
+        write_report "failed" "aborted during ${CURRENT_STEP:-startup} (exit $rc)${ERR_CMD:+ — failed command: $ERR_CMD}"
+    fi
+    return "$rc"
+}
+trap finish EXIT
 
 # is_running <service>  → returns 0 if the named compose service has a
 # container currently in Running state, non-zero otherwise.
@@ -232,6 +280,7 @@ skip()  { echo "SKIP $*" >> "$MANIFEST"; }
 
 # ---- Postgres -------------------------------------------------------------
 
+CURRENT_STEP="postgres dump"
 if is_running postgres; then
     echo "→ Postgres dump"
     DB_USER_VAL="${DB_USER:-netops}"
@@ -258,6 +307,7 @@ fi
 # below plus scripts/ch-cold-export.sh (Parquet, the durable tier); the schema
 # dump is what makes an empty-volume restore reproducible.
 
+CURRENT_STEP="clickhouse dump"
 if is_running clickhouse; then
     echo "→ ClickHouse schema dump (all tables)"
     CH_TABLES=$(docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T clickhouse \
@@ -327,6 +377,7 @@ fi
 # against the netops-fs repository, so this costs roughly the day's new
 # segments. data/opensearch-snapshots is picked up by the data/ copy below.
 
+CURRENT_STEP="opensearch snapshot"
 if is_running opensearch; then
     SNAP="backup-$(date -u +%Y%m%d-%H%M%S)"
     echo "→ OpenSearch snapshot $SNAP"
@@ -348,28 +399,55 @@ fi
 # ---- data dir snapshot ----------------------------------------------------
 
 echo "→ Snapshotting data/"
+CURRENT_STEP="data/ snapshot (rsync)"
 mkdir -p "$STAGE/data"
 if [[ -d "$DATA_DIR" ]]; then
-    rsync -a --delete --info=stats1 "$DATA_DIR/" "$STAGE/data/"
+    # rsync of the LIVE, mutating data/ tree. rc=24 ("some files vanished
+    # before they could be transferred") is the EXPECTED outcome on a running
+    # stack — files legitimately appear and disappear mid-scan — and is a
+    # warning, not a failure: the stores whose consistency matters (PG/CH/OS)
+    # were dumped with their own consistent mechanisms above; this copy only
+    # minimises the mutation window for the rest. Before 2026-08-14 this was a
+    # bare statement under set -e, so rc=24 killed the whole run with no
+    # report. Any OTHER rc (23 = partial transfer from real errors, I/O,
+    # permissions) is a genuine failure and is recorded as one.
+    rsync_rc=0
+    rsync -a --delete --info=stats1 "$DATA_DIR/" "$STAGE/data/" || rsync_rc=$?
+    case "$rsync_rc" in
+        0)  note "data/ snapshot (rsync)" ;;
+        24) note "data/ snapshot (rsync rc=24: vanished files — expected on a live stack)" ;;
+        *)  fail "data/ snapshot rsync failed (rc=$rsync_rc)" ;;
+    esac
 else
     echo "  (no data/ directory yet)"
+    skip "no data/ directory yet"
 fi
 
 # ---- .env + configs --------------------------------------------------------
 
 echo "→ Snapshotting .env and configs"
+CURRENT_STEP=".env + config snapshot"
 if [[ -f "$COMPOSE_DIR/.env" ]]; then
     cp "$COMPOSE_DIR/.env" "$STAGE/env.backup"   # 0600 preserved by tar
 fi
 mkdir -p "$STAGE/src-config"
 if [[ -d "$ROOT/src/config" ]]; then
-    rsync -a "$ROOT/src/config/" "$STAGE/src-config/"
+    # Near-static source configs: any rsync failure here is real (no vanished-
+    # file tolerance needed) — record it instead of aborting reportless.
+    if ! rsync -a "$ROOT/src/config/" "$STAGE/src-config/"; then
+        fail "src/config snapshot rsync failed"
+    fi
 fi
 
 # ---- tar + zstd ------------------------------------------------------------
 
 echo "→ Tar + zstd"
-tar -C "$STAGE" -cf - . | zstd -T0 -19 -o "$OUT"
+CURRENT_STEP="tar+zstd archive write"
+# -f: the cron names its artifact correlix-YYYYMMDD.tar.zst, so a same-day
+# re-run (manual retry after a failure) targets an EXISTING file — without -f
+# zstd refuses the overwrite and the whole run aborted (found 2026-08-14).
+# Overwriting the same-day artifact with a fresh complete one is the intent.
+tar -C "$STAGE" -cf - . | zstd -T0 -19 -f -o "$OUT"
 
 echo
 echo "─── MANIFEST ───"
@@ -391,6 +469,7 @@ echo "→ Done: $OUT ($(du -h "$OUT" | cut -f1))"
 # UNSET is reported as a WARNING, never a silent pass: an operator who thinks
 # they have DR and does not is the exact looks-backed-up-but-isnt state F-59 was
 # about. A push FAILURE is fatal (the off-host copy is the whole point).
+CURRENT_STEP="off-host copy"
 if [[ -n "${BACKUP_REMOTE:-}" ]]; then
     PUSH_CMD="${BACKUP_PUSH:-rsync -a}"
     echo "→ Off-host copy: $PUSH_CMD $OUT $BACKUP_REMOTE"
@@ -410,6 +489,7 @@ fi
 # LAST, and only on a clean run. Ordering is deliberate: we prune history only
 # once THIS artifact exists, is non-empty, and every component reported PASS —
 # otherwise a broken night would delete good backups to make room for a bad one.
+CURRENT_STEP="retention prune"
 echo "→ Retention (BACKUP_KEEP=$BACKUP_KEEP)"
 if [[ $FAILURES -gt 0 ]]; then
     echo "  prune SKIPPED: this run recorded $FAILURES failure(s) — refusing to delete" >&2
@@ -425,19 +505,16 @@ fi
 # api's /data maps to data/api on the host — the same mapping
 # apply-backup-config.sh documents for system_backup.json) to show the
 # full-backup component's last_run {status,time,size,duration} — the host
-# cron's outcome is otherwise invisible to the GUI. Written on BOTH
-# outcomes; a report-write failure is a warning, never a masked backup error.
-REPORT_STATUS="success"; [[ $FAILURES -gt 0 ]] && REPORT_STATUS="failed"
-REPORT_SIZE=$(stat -c%s -- "$OUT" 2>/dev/null || echo 0)
-REPORT_DIR="$DATA_DIR/api"
-if [[ ! -d "$REPORT_DIR" ]] \
-   || ! printf '{"status":"%s","ended":"%s","size_bytes":%s,"duration_seconds":%s,"failures":%s,"artifact":"%s"}\n' \
-        "$REPORT_STATUS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$REPORT_SIZE" \
-        "$(( $(date +%s) - START_EPOCH ))" "$FAILURES" "$(basename -- "$OUT")" \
-        > "$REPORT_DIR/backup-report.json.tmp" \
-   || ! mv -f -- "$REPORT_DIR/backup-report.json.tmp" "$REPORT_DIR/backup-report.json"; then
-    echo "!! WARNING: could not write $REPORT_DIR/backup-report.json — the GUI will show a stale last-run" >&2
+# cron's outcome is otherwise invisible to the GUI. Written on EVERY outcome
+# (write_report is also the EXIT trap's abort path — see its header); a
+# report-write failure is a warning, never a masked backup error.
+CURRENT_STEP="run report"
+REPORT_STATUS="success"; REPORT_REASON=""
+if [[ $FAILURES -gt 0 ]]; then
+    REPORT_STATUS="failed"
+    REPORT_REASON="$FAILURES component(s) failed — see MANIFEST in the archive"
 fi
+write_report "$REPORT_STATUS" "$REPORT_REASON"
 
 # Exit non-zero when any component failed. THIS IS THE POINT: a cron entry
 # whose script always exits 0 cannot alert, so `backup.sh` silently producing
