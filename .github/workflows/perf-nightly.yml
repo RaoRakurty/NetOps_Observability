@@ -1,0 +1,76 @@
+name: perf-nightly
+
+# Performance rung of the pipeline ladder (owner-approved). NON-BLOCKING on
+# PRs by construction — schedule + manual dispatch only, never a required
+# check — mirroring fuzz-nightly's placement: wall-clock behavior has no
+# business gating merges on busy 2-core PR runners.
+#
+# Two tiers, deliberately different in kind:
+#   1. The deterministic complexity/perf suites — OPERATION-COUNT assertions
+#      (candidate-pair counts, per-node precompute call counts, batch/budget
+#      arithmetic), so they are runner-speed independent and can never flake
+#      on a slow runner. These also run inside correlation-ci's full pytest;
+#      here they run nightly against main as the perf rung's named contract.
+#   2. A bounded WALL-CLOCK canary (test_perf_canary.py, marker perf_canary,
+#      opted in via PERF_CANARY=1): the synthetic 1k-node build_edges window
+#      must finish under a generous 30s ceiling. A catastrophic-regression
+#      detector — the naive O(n²) engine measured ~48s — NOT a benchmark.
+#
+# Failure policy: a failed run is the alert — GitHub notifies on workflow
+# failure, and the run stays red on the Actions page. Wiring failures to the
+# ntfy phone-alert channel (as stack-watchdog does for the stack) is a
+# FOLLOW-UP, noted here so the gap is a decision, not an oversight.
+
+on:
+  schedule:
+    - cron: '30 5 * * *'   # daily ~05:30 UTC (fuzz-nightly holds 07:00)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Pinned for the same reason correlation-ci pins it: an unpinned test-runner
+# upgrade can turn a green branch red with no code change. Keep in lockstep
+# with correlation-ci.yml's PYTEST_VERSION when bumping deliberately.
+env:
+  PYTEST_VERSION: '9.1.1'
+
+concurrency:
+  group: perf-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: NetOps_Observability/src/correlation
+
+jobs:
+  perf:
+    name: complexity suites + wall-clock canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          # 3.12 to match the runtime and the hash-locked requirements.txt
+          # (see correlation-ci.yml for the exceptiongroup rationale).
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: NetOps_Observability/src/correlation/requirements.txt
+      - name: install deps + pytest
+        run: |
+          python -m pip install --upgrade pip
+          # requirements.txt is hash-locked (SC-011) → pip auto-enables
+          # --require-hashes, so it installs alone; pytest installs after.
+          pip install -r requirements.txt
+          pip install "pytest==${PYTEST_VERSION}"
+      - name: operation-count perf suites (runner-speed independent)
+        run: >
+          python -m pytest -v
+          test_engine_complexity.py
+          test_rolling_stats.py
+          test_ch_batching.py
+          test_series_budget.py
+      - name: wall-clock canary (catastrophic-regression detector, 30s ceiling)
+        env:
+          PERF_CANARY: '1'
+        run: python -m pytest -v -m perf_canary test_perf_canary.py

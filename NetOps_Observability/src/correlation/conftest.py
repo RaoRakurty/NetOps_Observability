@@ -11,9 +11,35 @@ commit.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import main
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "perf_canary: bounded WALL-CLOCK catastrophic-regression canary "
+        "(perf-nightly rung, not the PR gate); collected but skipped unless "
+        "PERF_CANARY=1",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """perf_canary tests measure wall-clock time, so unlike the rest of the
+    suite (operation-count based, runner-speed independent) they are opted
+    INTO, not out of: perf-nightly.yml sets PERF_CANARY=1. Everywhere else —
+    the blocking correlation-ci PR gate included — they show up as explicit
+    skips, never as silent timing hazards on a busy 2-core runner."""
+    if os.environ.get("PERF_CANARY") == "1":
+        return
+    skip = pytest.mark.skip(
+        reason="wall-clock canary: set PERF_CANARY=1 (perf-nightly rung)")
+    for item in items:
+        if "perf_canary" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

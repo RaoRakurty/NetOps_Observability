@@ -248,6 +248,42 @@ then re-run ./install-correlix.sh"
   ok "docker + compose ready"
 }
 
+# Release-signature check (#97 owner-gated signing). Called by verify_bundle
+# only AFTER SHA256SUMS itself verified and only when SHA256SUMS.asc exists.
+# Outcomes, most to least trusted:
+#   GOODSIG   → ok (bundle provenance proven)
+#   NO_PUBKEY → warn-and-continue: the customer has not imported the Correlix
+#               release public key, so the signature cannot be checked — say
+#               exactly how to import it. Checksums already verified.
+#   otherwise → die: a BAD/forged signature over verified checksums means the
+#               .asc does not belong to this bundle. Never install.
+# gpg not installed → warn-and-continue for the same reason as NO_PUBKEY: the
+# host cannot check what it cannot run, and the checksum gate already passed.
+verify_release_signature() {
+  if ! command -v gpg >/dev/null 2>&1; then
+    warn "SHA256SUMS.asc is present but gpg is not installed — release signature NOT verified (checksums OK)."
+    warn "To verify it: install gnupg, import the Correlix release public key, and re-run."
+    return 0
+  fi
+  say "Verifying release signature..."
+  local status rc=0
+  # --status-fd 1 puts gpg's machine-readable verdict lines on stdout; the
+  # human chatter on stderr is discarded because the verdict below is acted on
+  # and reported in our own words (gpg's wording varies across versions).
+  status=$(gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$status" | grep -q '^\[GNUPG:\] GOODSIG '; then
+    ok "release signature verified (SHA256SUMS.asc)"
+  elif printf '%s\n' "$status" | grep -q '^\[GNUPG:\] NO_PUBKEY '; then
+    warn "release signature present but the Correlix release PUBLIC KEY is not in your keyring — signature NOT verified (checksums OK)."
+    warn "To verify: obtain the Correlix release public key from your Correlix contact"
+    warn "(its fingerprint is recorded in MANIFEST as 'signing-key'), then:"
+    warn "  gpg --import <correlix-release-key.asc>   and re-run this installer."
+  else
+    die "Release signature verification FAILED (SHA256SUMS.asc is not a good signature over SHA256SUMS)." \
+      "The bundle may have been tampered with. Do not install. Re-download from the official source and contact Correlix support."
+  fi
+}
+
 verify_bundle() {
   cd "$BUNDLE_DIR"
   # Re-join a split image archive (release assets are capped at 2 GiB/file).
@@ -268,6 +304,12 @@ verify_bundle() {
         "The download is incomplete or corrupted. Re-download the bundle and try again."
     fi
     ok "bundle integrity verified"
+    # Owner-gated release signature (#97): a signed bundle ships SHA256SUMS.asc
+    # next to SHA256SUMS; a checksum-only bundle ships neither — that absence
+    # keeps today's behavior exactly.
+    if [ -f SHA256SUMS.asc ]; then
+      verify_release_signature
+    fi
   fi
   if [ ! -d "$ROOT" ]; then
     say "Extracting Correlix..."

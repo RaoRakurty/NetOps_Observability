@@ -425,15 +425,46 @@ if grep -qi 'redpanda' "$BUNDLE_DIR/README.md" "$BUNDLE_DIR/ADVANCED.md" "$BUNDL
   echo "FATAL: customer-facing bundle docs mention redpanda" >&2; exit 1
 fi
 
+# --- Release signing (#97, owner-gated) --------------------------------------
+# Key custody is an OWNER decision: the product signing key is owner-held and
+# lives OUTSIDE the repo and outside CI — NEVER generate or embed a signing
+# key in this script or in a workflow. When CORRELIX_SIGNING_KEY (a GPG key id
+# or fingerprint) is exported and its SECRET key exists in the local keyring,
+# the bundle gains SHA256SUMS.asc (detached, ASCII-armored) and MANIFEST
+# records the signing-key fingerprint. The fingerprint goes into MANIFEST
+# BEFORE checksumming, so the signed SHA256SUMS covers the fingerprint claim.
+# Unset ⇒ checksum-only bundle — unchanged behavior, announced loudly below so
+# an unsigned release is a visible choice, never an accident. Set-but-missing
+# key is a hard failure (§16.1): the operator asked for a signed bundle;
+# silently shipping unsigned would be worse than failing the build.
+SIGNING_FPR=""
+if [ -n "${CORRELIX_SIGNING_KEY:-}" ]; then
+  command -v gpg >/dev/null || { echo "FATAL: CORRELIX_SIGNING_KEY is set but gpg is not installed" >&2; exit 1; }
+  # `|| true` + discarded stderr are justified (§16.1): a missing key makes
+  # gpg exit non-zero with noisy chatter, and that exact failure is handled
+  # LOUDLY on the next line as a FATAL with a clearer message than gpg's.
+  SIGNING_FPR="$(gpg --batch --with-colons --list-secret-keys "$CORRELIX_SIGNING_KEY" 2>/dev/null \
+    | awk -F: '$1 == "fpr" { print $10; exit }')" || true
+  [ -n "$SIGNING_FPR" ] || { echo "FATAL: CORRELIX_SIGNING_KEY='$CORRELIX_SIGNING_KEY' has no secret key in the GPG keyring" >&2; exit 1; }
+  printf 'signing-key %s\n' "$SIGNING_FPR" >> "$BUNDLE_DIR/MANIFEST"
+fi
+
 # Integrity manifest covers EVERY shipped artifact, including the
 # correlix-setup binary (design gui-installer-2026-08.md §5 H6 — a binary
 # outside SHA256SUMS is an unverifiable execution path on the customer host).
 (cd "$BUNDLE_DIR" && sha256sum ./*.tar.* ./*.md MANIFEST install-correlix.sh prepare-host.sh correlix-setup > SHA256SUMS)
 
-# TODO(#97, owner-gated): GPG-sign SHA256SUMS with the product signing key —
-#   gpg --batch --detach-sign --armor -o SHA256SUMS.asc SHA256SUMS
-# install-correlix.sh should verify SHA256SUMS.asc when present. The key is
-# owner-held; NEVER generate or embed a signing key in this script or CI.
+if [ -n "$SIGNING_FPR" ]; then
+  gpg --batch --yes --local-user "$SIGNING_FPR" --armor \
+    --output "$BUNDLE_DIR/SHA256SUMS.asc" --detach-sign "$BUNDLE_DIR/SHA256SUMS"
+  # Self-check the fresh signature: an agent/passphrase hiccup must fail the
+  # build HERE, not on the customer host (stderr left visible on purpose).
+  gpg --batch --verify "$BUNDLE_DIR/SHA256SUMS.asc" "$BUNDLE_DIR/SHA256SUMS" \
+    || { echo "FATAL: self-verification of fresh SHA256SUMS.asc failed" >&2; exit 1; }
+  echo "== signed SHA256SUMS (key fingerprint $SIGNING_FPR — recorded in MANIFEST)"
+else
+  echo "NOTE: CORRELIX_SIGNING_KEY unset — bundle is CHECKSUM-ONLY (no SHA256SUMS.asc; key custody is an owner decision, #97)."
+fi
 
 echo "== done"
 du -sh "$BUNDLE_DIR"/* | sed 's/^/   /'
