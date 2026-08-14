@@ -149,6 +149,12 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	// by content, and the rendered document embeds its generation timestamp).
 	if format == "html" || format == "pdf" {
 		if prior, ok := s.rcaRevisions.FindBySnapshot(rep.OwnerTenant(), id, integ, format); ok {
+			// EscalationAt is the generation stamp when triggered (buildDecision) —
+			// re-stamp it together with GeneratedAt, or a confirmed case's document
+			// would still embed the fresh clock and never reproduce the revision.
+			if rep.Decision.EscalationAt == rep.GeneratedAt {
+				rep.Decision.EscalationAt = prior.Integrity.GeneratedAt
+			}
 			rep.GeneratedAt = prior.Integrity.GeneratedAt
 			integ.GeneratedAt = prior.Integrity.GeneratedAt
 		}
@@ -164,7 +170,13 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 			return
 		}
 		integ.ContentHash = rca.HashContent(html)
-		s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "html")
+		// The register's whole point is that a served document IS registered —
+		// a refused/unpersisted row must fail the request, never serve an
+		// unregistered immutable document.
+		if err := s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "html"); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("report revision register refused this generation: %w", err))
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
 		w.WriteHeader(http.StatusOK)
@@ -183,8 +195,18 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 				fmt.Errorf("pdf renderer unavailable: %w (fetch ?format=html and print, or start the pdf sidecar)", err))
 			return
 		}
-		integ.ContentHash = rca.HashContent(pdf)
-		s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "pdf")
+		// A pdf revision's ContentHash attests the DETERMINISTIC HTML source
+		// document fed to the converter, NOT the sidecar's output: Gotenberg
+		// (Chromium print) embeds a random /ID and CreationDate, so hashing the
+		// pdf bytes minted a "new" revision on every download of an unchanged
+		// analysis and FindBySnapshot dedupe could never reproduce one. The
+		// served PDF stays the sidecar's output; what the revision register
+		// certifies is the source document it was converted from.
+		integ.ContentHash = rca.HashContent(html)
+		if err := s.recordReportRevision(claims, rep.OwnerTenant(), id, rep, integ, "pdf"); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("report revision register refused this generation: %w", err))
+			return
+		}
 		fname := fmt.Sprintf("%s-%s.pdf", strings.ToLower(strings.ReplaceAll(rep.ReportType, " ", "-")), rep.DisplayID)
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)

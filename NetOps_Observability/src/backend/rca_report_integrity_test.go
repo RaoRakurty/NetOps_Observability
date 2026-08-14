@@ -7,6 +7,7 @@ package backend
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/rca"
@@ -164,6 +165,137 @@ func TestServeRcaReportRegenerationAcrossSecondsIsIdempotent(t *testing.T) {
 	}
 	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
 		t.Fatalf("cross-second regeneration duplicated the revision: %+v", revs)
+	}
+}
+
+// A CONFIRMED case stamps Decision.EscalationAt ("TRIGGERED at <generation
+// stamp>") into the rendered document. Like GeneratedAt it is generation-clock
+// display, not analysis: re-rendering the unchanged analysis in a later second
+// must reproduce the existing revision byte-for-byte — not hash a fresh
+// escalation stamp into a new snapshot + revision on every view.
+func TestServeRcaReportConfirmedCaseCrossSecondIdempotent(t *testing.T) {
+	promoFakeCHVerdict(t, "acme", "confirmed")
+	s := corrTestServer(t)
+	s.rcaPromotions = newRcaPromotionStore("")
+	s.rcaRevisions = newRcaRevisionStore("")
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+
+	w := httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first render = %d (%s)", w.Code, w.Body.String())
+	}
+	first := w.Body.String()
+	if !strings.Contains(first, "TRIGGERED at ") {
+		t.Fatal("fixture must render a triggered escalation stamp (confirmed analysis)")
+	}
+	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
+		t.Fatalf("first render must record exactly one revision: %+v", revs)
+	}
+
+	// Cross into a DIFFERENT wall-clock second.
+	now := time.Now()
+	time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second + 50*time.Millisecond)))
+
+	w = httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("re-render = %d (%s)", w.Code, w.Body.String())
+	}
+	if w.Body.String() != first {
+		t.Fatal("unchanged CONFIRMED analysis must re-render byte-identically (EscalationAt is generation-clock display, not analysis)")
+	}
+	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
+		t.Fatalf("confirmed-case re-render appended a revision (escalation-stamp revision spam): %+v", revs)
+	}
+}
+
+// PDF bytes from the Gotenberg sidecar are NONDETERMINISTIC (random /ID,
+// CreationDate): hashing them makes every download a "new" revision. A pdf
+// revision instead attests the DETERMINISTIC HTML source document fed to the
+// sidecar, so identical analyses dedupe; the served PDF stays the sidecar's
+// output.
+func TestServeRcaReportPDFRevisionAttestsSourceDocument(t *testing.T) {
+	promoFakeCH(t, "acme")
+	// Fake sidecar: different bytes on every conversion, like real Gotenberg.
+	n := 0
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "application/pdf")
+		fmt.Fprintf(w, "%%PDF-1.4 fake body, conversion %d", n)
+	}))
+	t.Cleanup(sidecar.Close)
+	t.Setenv("REPORT_PDF_SIDECAR_URL", sidecar.URL)
+
+	s := corrTestServer(t)
+	s.rcaPromotions = newRcaPromotionStore("")
+	s.rcaRevisions = newRcaRevisionStore("")
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+
+	get := func() string {
+		w := httptest.NewRecorder()
+		s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=pdf", "", acme()), promoCorrID)
+		if w.Code != http.StatusOK {
+			t.Fatalf("pdf = %d (%s)", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	pdf1 := get()
+	pdf2 := get()
+	if pdf1 == pdf2 {
+		t.Fatal("fixture defect: sidecar must produce nondeterministic bytes")
+	}
+	revs := s.rcaRevisions.List("acme", promoCorrID)
+	if len(revs) != 1 {
+		t.Fatalf("re-downloading an unchanged analysis as PDF must reuse the revision, got %d revisions (nondeterministic sidecar bytes were hashed): %+v", len(revs), revs)
+	}
+	ch := revs[0].Integrity.ContentHash
+	if !strings.HasPrefix(ch, "sha256:") {
+		t.Fatalf("pdf revision content hash malformed: %q", ch)
+	}
+	if ch == rca.HashContent([]byte(pdf1)) || ch == rca.HashContent([]byte(pdf2)) {
+		t.Fatal("pdf revision must attest the deterministic HTML source document, not the sidecar's nondeterministic output bytes")
+	}
+}
+
+// The register's whole point is that a served document IS registered. When the
+// register refuses the row (full) or cannot persist it, the DOCUMENT request
+// must fail — never silently serve an unregistered immutable document. The
+// JSON tier never touches the register and stays readable.
+func TestServeRcaReportFailsClosedWhenRegisterFull(t *testing.T) {
+	promoFakeCH(t, "acme")
+	s := corrTestServer(t)
+	s.rcaPromotions = newRcaPromotionStore("")
+	s.rcaRevisions = newRcaRevisionStore("")
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+
+	// Fill the per-case register to its bound with distinct revisions.
+	for i := 0; i < rca.RevisionsMaxPerCase; i++ {
+		integ := rca.ReportIntegrity{
+			AnalysisSnapshotHash: fmt.Sprintf("sha256:%064d", i),
+			ContentHash:          fmt.Sprintf("sha256:%064d", i),
+			PolicyVersion:        rca.ReportPolicyVersion,
+			TemplateVersion:      rca.ReportTemplateVersion,
+		}
+		if _, _, err := s.rcaRevisions.Record("acme", promoCorrID, rcaReportRevision{Format: "html", Integrity: integ}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+	if w.Code < 500 {
+		t.Fatalf("document render with a refusing register = %d, want 5xx — an immutable document must never be served unregistered (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(w.Body.String()), "register") {
+		t.Fatalf("error must name the revision register: %s", w.Body.String())
+	}
+
+	// JSON tier (workspace data) is untouched by the register.
+	w = httptest.NewRecorder()
+	s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report", "", acme()), promoCorrID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("json with full register = %d, want 200", w.Code)
 	}
 }
 

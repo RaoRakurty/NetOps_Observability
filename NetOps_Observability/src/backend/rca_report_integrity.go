@@ -66,11 +66,15 @@ SELECT tenant_id FROM netops.corr_objects
 }
 
 // recordReportRevision computes+embeds nothing itself; it stores the register
-// row for a document generation. Failures are logged, never fatal to the
-// response (the document was already produced) — but they are observable.
-func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, rep rca.Report, integ rca.ReportIntegrity, format string) {
+// row for a document generation. A failure (register full, persist error) is
+// returned to the caller, which FAILS the document request — the register
+// exists to prove every served document is registered, so serving an
+// unregistered immutable document on a swallowed error would defeat it. A nil
+// store means the register is not configured (memory-only test servers) — not
+// a Record failure.
+func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, rep rca.Report, integ rca.ReportIntegrity, format string) error {
 	if s.rcaRevisions == nil {
-		return
+		return nil
 	}
 	_, _, err := s.rcaRevisions.Record(tenant, corrID, rcaReportRevision{
 		ReportID:  rep.ReportID,
@@ -82,4 +86,5 @@ func (s *server) recordReportRevision(claims jwtClaims, tenant, corrID string, r
 	if err != nil {
 		logWarn("rca", "record report revision failed", map[string]any{"correlation_id": corrID, "err": err.Error()})
 	}
+	return err
 }

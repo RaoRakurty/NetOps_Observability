@@ -24,8 +24,12 @@ type ReportIntegrity struct {
 	AnalysisSnapshotHash string `json:"analysis_snapshot_hash"`
 	PolicyVersion        string `json:"policy_version"`
 	TemplateVersion      string `json:"template_version"`
-	// ContentHash: sha256 of the rendered artifact bytes. Set only when a
-	// document (html/pdf source) was actually rendered.
+	// ContentHash: sha256 of the rendered DETERMINISTIC document bytes. Set
+	// only when a document was actually rendered. For html this is the served
+	// bytes; for pdf it is the HTML SOURCE document fed to the converter — a
+	// pdf revision attests the source document, because converter output
+	// (Chromium print: random /ID, CreationDate) is nondeterministic and would
+	// defeat revision dedupe.
 	ContentHash string `json:"content_hash,omitempty"`
 	GeneratedAt string `json:"generated_at"`
 	// StatusAsOf: the workflow states AT generation time — a published
@@ -47,8 +51,42 @@ func ComputeReportIntegrity(rep Report) (ReportIntegrity, error) {
 	// idempotency whenever two identical renders straddled a second boundary
 	// (latent since Phase 1; surfaced by the wave-2 move's test runs).
 	cp.Quality.EvaluatedAt = ""
+	// A confirmed case stamps its escalation trigger with the GENERATION clock
+	// (buildDecision: EscalationAt = generatedAt) — same class of volatile field
+	// as GeneratedAt/EvaluatedAt. Hashed, it minted a new snapshot on every
+	// render of every confirmed case (revision spam per view).
+	cp.Decision.EscalationAt = ""
+	// Symptom freshness ("9m ago") is agoShort(now, ·) display, sibling of
+	// Evidence.LastObservation — hashed, the snapshot drifted every minute.
+	// The semantics block projects the same strings (rcaSemanticSymptom.Last).
+	// cp is a SHALLOW copy — the slices must be copied before normalizing or
+	// the caller's report (which still renders these strings) would be mutated.
+	if len(cp.Evidence.Symptoms) > 0 {
+		syms := make([]rcaSymptomRow, len(cp.Evidence.Symptoms))
+		copy(syms, cp.Evidence.Symptoms)
+		for i := range syms {
+			syms[i].Last = ""
+		}
+		cp.Evidence.Symptoms = syms
+	}
+	if len(cp.Semantics.Symptoms) > 0 {
+		syms := make([]rcaSemanticSymptom, len(cp.Semantics.Symptoms))
+		copy(syms, cp.Semantics.Symptoms)
+		for i := range syms {
+			syms[i].Last = ""
+		}
+		cp.Semantics.Symptoms = syms
+	}
 	if cp.Times.DurationBasis == "elapsed_still_active" {
 		cp.Times.DurationMS = 0
+		// The still-ticking elapsed duration also appears FORMATTED in the
+		// derived presentation projections (management summary sentence, NOC
+		// quick-read "Duration" row). Both are deterministic projections of
+		// fields hashed elsewhere in the report, so normalizing them loses no
+		// analysis discrimination — keeping them would re-leak the wall clock
+		// the DurationMS normalization exists to remove.
+		cp.Summary.Management = ""
+		cp.Summary.Noc = nil
 	}
 	b, err := json.Marshal(cp)
 	if err != nil {

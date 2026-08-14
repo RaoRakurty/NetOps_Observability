@@ -43,11 +43,19 @@ const promoCorrID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 // __all__ sees NO rows — exactly what the ClickHouse row policy enforces.
 func promoFakeCH(t *testing.T, owner string) {
 	t.Helper()
+	promoFakeCHVerdict(t, owner, "suspected")
+}
+
+// promoFakeCHVerdict is promoFakeCH with the object's verdict tier chosen by
+// the test — "confirmed" exercises the Decision escalation stamp (triggered at
+// generation time), which the immutability contract must normalize.
+func promoFakeCHVerdict(t *testing.T, owner, verdict string) {
+	t.Helper()
 	metaRow := map[string]any{
 		"version": "3", "tenant_id": owner, "state": "open", "merged_into": "",
 		"window_start": "2026-07-12T18:10:00Z", "window_end": "2026-07-12T18:30:00Z",
 		"trigger_signal": "00000000-0000-0000-0000-000000000000",
-		"verdict_tier":   "suspected", "top_hypothesis": "undetermined", "top_confidence": "0.4",
+		"verdict_tier":   verdict, "top_hypothesis": "undetermined", "top_confidence": "0.4",
 		"evidence_missing": "[]", "hypotheses": "{}", "affected": "{}",
 		"layer_coverage": "{}", "app_impact": "{}", "attribution": "{}",
 	}
