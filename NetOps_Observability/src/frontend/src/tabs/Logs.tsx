@@ -1,6 +1,6 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, OSHit, ExportFmt, LogRetention, LogSearchOpts } from "../services/api";
+import { api, OSHit, ExportFmt, LogRetention, LogSampling, LogSearchOpts } from "../services/api";
 import { severityColor, severityRank } from "../theme/severity";
 import { LogTime, LogSource, LogLevel, LogMessage, LogJson } from "../lib/logfmt";
 import DataTable, { Column } from "../components/DataTable";
@@ -44,6 +44,14 @@ const SIGNALS: { id: SignalId; label: string }[] = [
   { id: "flows", label: "Flows" },
 ];
 
+// Sample honesty (finder 2026-08-14): the flows signal reads netops-flows-*,
+// which holds the router's 1-in-N OpenSearch sample (ClickHouse keeps the
+// canonical, unsampled flow store — the Flows tab). Fallback rate when a
+// response predates the backend's sampling metadata; MUST match the router's
+// flows_os_sample rate and logs.go flowsOSSampleRate
+// (tests/test_ingest_contract.py pins all of them together).
+const FLOWS_OS_SAMPLE_RATE = 50;
+
 // #81 — "Firewall (all vendors)" is a convenience filter over the syslog index:
 // it narrows to records a firewall vendor parser produced (FortiGate .fgt,
 // Palo Alto .pan, Versa .versa) or that carry the vendor-neutral app contract
@@ -77,6 +85,8 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   const lastRun = useRef<LogSearchOpts | null>(null);
   // Retention floor: how far back the visible store goes + exact total stored.
   const [retention, setRetention] = useState<LogRetention | null>(null);
+  // Sampling disclosure from the last search response (flows: 1:50 sample).
+  const [sampling, setSampling] = useState<LogSampling | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -115,11 +125,15 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
       lastRun.current = opts;
       setHits(r?.hits?.hits ?? []);
       setTotal(r?.hits?.total?.value ?? null);
+      // Sample honesty: trust the response's metadata; fall back to the known
+      // rate so a flows result is NEVER presented as exact.
+      setSampling(r?.sampling ?? (sig === "flows" ? { rate: FLOWS_OS_SAMPLE_RATE } : null));
       setSelected(new Set()); // a new result set invalidates row indices
     } catch (e) {
       setError((e as Error).message);
       setHits([]);
       setTotal(null);
+      setSampling(null);
     } finally {
       setBusy(false);
     }
@@ -257,6 +271,14 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
     }
   };
 
+  // Sample honesty: the flows signal serves a 1:N OpenSearch sample — every
+  // count shown or exported for it is an estimate (multiply by N).
+  const sampleRate = sampling?.rate ?? FLOWS_OS_SAMPLE_RATE;
+  const flowsSampled = signal === "flows";
+  const flowsExportNote = flowsSampled
+    ? ` Flows are a 1:${sampleRate} sample — totals are estimates (×${sampleRate}).`
+    : "";
+
   // Mode B — export the ENTIRE result set for the current query/time/signal.
   // Small sets download immediately; large sets queue and we poll for the link.
   const exportAll = async (format: ExportFmt) => {
@@ -278,16 +300,16 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
         to: end.toISOString(),
       });
       if (!executionId) {
-        setExportMsg("Export downloaded.");
+        setExportMsg(`Export downloaded.${flowsExportNote}`);
         return;
       }
-      setExportMsg(`Large export (${matched ?? "?"} rows) queued — preparing…`);
+      setExportMsg(`Large export (${matched ?? "?"} rows) queued — preparing…${flowsExportNote}`);
       for (let i = 0; i < 160; i++) {
         await new Promise((r) => setTimeout(r, 1500));
         const st = await api.exportStatus(executionId);
         if (st.status === "completed" && st.download_url) {
           triggerDownload(st.download_url);
-          setExportMsg("Export ready — downloaded.");
+          setExportMsg(`Export ready — downloaded.${flowsExportNote}`);
           return;
         }
         if (st.status === "failed") throw new Error(st.error || "export failed");
@@ -391,6 +413,8 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
                 This store holds <strong style={{ color: "var(--fg)" }}>{retention.total.toLocaleString()}</strong> logs —
                 going back to <strong style={{ color: "var(--fg)" }}>{fmtDateTime(retention.oldest)}</strong>
                 {" "}({retention.days < 1 ? "less than a day" : `${retention.days} day${retention.days === 1 ? "" : "s"}`} of history).
+                {(flowsSampled || retention.sampling) &&
+                  ` A 1:${retention.sampling?.rate ?? sampleRate} sample — the stream holds ~${retention.sampling?.rate ?? sampleRate}× more.`}
               </>
             ) : (
               "No logs stored yet for this signal."
@@ -438,6 +462,14 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
             )}
           </div>
         </div>
+        {/* Sample honesty (owner directive: DON'T HIDE): the flows store is a
+            1:N sample, so its "matched"/"total" figures are never exact. */}
+        {flowsSampled && lines.length > 0 && (
+          <p data-testid="flows-sampling-note" style={{ color: "var(--warn, #b45309)", fontSize: 12.5, marginTop: 6, marginBottom: 0 }}>
+            Flow search reads a 1:{sampleRate} sample — totals are estimates (×{sampleRate}).
+            Exact flow analytics live in the Flows tab (unsampled store).
+          </p>
+        )}
         {exportMsg && (
           <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
             {exporting ? "⏳ " : ""}

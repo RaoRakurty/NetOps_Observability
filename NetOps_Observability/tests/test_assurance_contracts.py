@@ -267,6 +267,43 @@ def test_quarantine_pipeline_wiring():
         "unattributable payloads would be retained forever (INV-F11-09)")
 
 
+def test_router_lanes_strip_inbound_quarantine_mark():
+    """F-11 review fix (2026-08-14): the store routes match
+    `to_bool(.cx_quarantine) ?? false`, but the mark is only trustworthy when
+    the router's OWN generated stage minted it. Bus producers' JSON passes
+    verbatim, so a compromised producer stamping cx_quarantine:true could
+    divert its events — full plaintext — into the operator-only
+    netops-quarantine-* index, bypassing the tenant indices and ClickHouse
+    (and Restore refuses them, so they linger until ISM delete). Pin that
+    every router lane's FIRST transform deletes the inbound field before the
+    generated quarantine stage (which runs later in the chain) can set it —
+    the del(.label) pattern from the applogs mapping fix."""
+    import yaml
+    cfg = yaml.safe_load(
+        (ROOT / "deployment" / "docker" / "vector-router" / "vector.yaml").read_text())
+    transforms = cfg["transforms"]
+
+    def first_statement(src: str) -> str:
+        for line in src.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                return s
+        return ""
+
+    # Every lane whose events reach an OpenSearch/ClickHouse store — not just
+    # the three quarantine-routed ones: an un-stripped mark on any lane is an
+    # attacker-controlled field in a trusted routing position.
+    for name in ("applogs_tagged", "syslog_tagged", "snmptrap_tagged",
+                 "cloudlogs_tagged", "flows_decoded"):
+        src = transforms[name]["source"]
+        assert "del(.cx_quarantine)" in src, (
+            f"{name}: inbound cx_quarantine is not stripped — a producer can "
+            f"plant plaintext docs in the quarantine index (F-11)")
+        assert first_statement(src) == "del(.cx_quarantine)", (
+            f"{name}: del(.cx_quarantine) must be the FIRST statement, before "
+            f"any logic can observe or propagate the forged mark")
+
+
 def test_vector_tiers_reload_enrichment_on_change():
     """F-10 (assurance run 2026-08-09, step-3 e2e): Vector reads enrichment
     tables ONCE at (re)load — --watch-config watches config files only — so a

@@ -390,12 +390,18 @@ export type OSHit = {
   _id: string;
   _source: Record<string, any>;
 };
+// Sampling disclosure the backend injects on sampled stores (today: the flows
+// signal, whose OpenSearch index holds the router's 1:50 sample — ClickHouse
+// keeps the canonical flow store). Present ⇒ counts/totals are estimates.
+export type LogSampling = { rate: number; note?: string };
+
 export type OSResponse = {
   took?: number;
   hits: {
     total?: { value: number };
     hits: OSHit[];
   };
+  sampling?: LogSampling;
 };
 
 export type LogSearchOpts = {
@@ -410,7 +416,8 @@ export type LogSearchOpts = {
 
 // Retention floor for the caller's visible log store: exact doc count + oldest
 // timestamp ("logs go back to <date>, N days"). Tenant-scoped server-side.
-export type LogRetention = { signal: string; total: number; oldest: string | null; days: number };
+// `sampling` present (flows) ⇒ `total` counts a 1:N sample, not the stream.
+export type LogRetention = { signal: string; total: number; oldest: string | null; days: number; sampling?: LogSampling };
 
 export type ExportFmt = "csv" | "json" | "ndjson" | "xlsx";
 

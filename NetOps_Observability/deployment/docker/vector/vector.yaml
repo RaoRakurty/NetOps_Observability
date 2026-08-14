@@ -418,11 +418,41 @@ transforms:
       # So coerce every DECLARED scalar back to a string after the merge. A
       # structured value is preserved as its JSON text rather than dropped, so
       # the offending producer stays greppable instead of invisible.
+      #
+      # The list must cover EVERY string-typed field the applogs template
+      # declares (finder 2026-08-14: the first fix listed 12 fields but the
+      # template also declares container_id / image / source_type — a producer
+      # logging {"image": {...}} still destroyed its own line).
+      # tests/test_ingest_contract.py now derives the required set from the
+      # template, so a newly declared scalar cannot ship uncoerced.
       for_each(["message", "msg", "level", "component", "service", "log_class",
-                "log_index_base", "container_name", "host", "stream", "error", "trace_id"]) -> |_i, name| {
+                "log_index_base", "container_name", "container_id", "image",
+                "source_type", "host", "stream", "error", "trace_id",
+                "timestamp_raw"]) -> |_i, name| {
         v = get(., [name]) ?? null
         if v != null && !is_string(v) {
           . = set!(., [name], encode_json(v))
+        }
+      }
+
+      # `timestamp` is declared `date` and CANNOT ride the loop above —
+      # encode_json() would JSON-quote the NATIVE timestamp docker_logs stamps
+      # on every normal doc. But the merge lets a producer clobber it with an
+      # object/array ({"timestamp": {...}}), which ignore_malformed does NOT
+      # cover on a date field either — whole-doc rejection, silent loss.
+      # Guard it separately: native and string values pass through untouched
+      # (a malformed STRING is a scalar, which ignore_malformed does tolerate);
+      # anything else is re-parsed if its string render is a timestamp, else
+      # moved aside to timestamp_raw (declared keyword — the offending
+      # producer stays greppable) and dropped so the router derives ts from
+      # its receive-time fallback instead of the doc being destroyed.
+      if exists(.timestamp) && !is_timestamp(.timestamp) && !is_string(.timestamp) {
+        tparsed, terr = parse_timestamp(to_string(.timestamp) ?? "", "%+")
+        if terr == null {
+          .timestamp = tparsed
+        } else {
+          .timestamp_raw = encode_json(.timestamp)
+          del(.timestamp)
         }
       }
 
@@ -601,8 +631,15 @@ transforms:
       # stronger (lower RFC5424 number wins) — e.g. PRI=notice + body "W:" → warning.
       # .severity was already coalesced to a string above (line ~173), so a second
       # `?? "info"` here is flagged E651 (unnecessary) by a fresh vector compile.
+      # SHORT keywords included deliberately: Vector 0.40's syslog source emits
+      # the ABBREVIATED severity for PRI-derived values — a PRI-0 frame arrives
+      # as "emerg", not "emergency" (proven empirically against
+      # timberio/vector:0.40.0-alpine, RFC5424 and RFC3164 both; finder
+      # 2026-08-14). Without "emerg"/"panic" here the single most severe syslog
+      # class fell through to else=info and sorted below a warning.
+      # tests/test_ingest_contract.py pins the keyword→severity map.
       sysv = downcase(string(.severity))
-      sysint = if sysv == "emergency" || sysv == "alert" || sysv == "critical" || sysv == "crit" { 2 } else if sysv == "error" || sysv == "err" { 3 } else if sysv == "warning" || sysv == "warn" { 4 } else if sysv == "notice" { 5 } else if sysv == "debug" { 7 } else { 6 }
+      sysint = if sysv == "emergency" || sysv == "emerg" || sysv == "panic" || sysv == "alert" || sysv == "critical" || sysv == "crit" { 2 } else if sysv == "error" || sysv == "err" { 3 } else if sysv == "warning" || sysv == "warn" { 4 } else if sysv == "notice" { 5 } else if sysv == "debug" { 7 } else { 6 }
       eff = if embedded_sev < sysint { embedded_sev } else { sysint }
       .normalized_severity = if eff <= 2 { "critical" } else if eff == 3 { "error" } else if eff == 4 { "warning" } else if eff == 5 { "notice" } else { "info" }
 
@@ -1103,6 +1140,29 @@ sinks:
       ca_file: "${KAFKA_TLS_CA:-/tls/ca.pem}"
       crt_file: "${KAFKA_TLS_CRT:-/tls/ca.pem}"
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
+    # Rotation-race DISK buffer (finder 2026-08-14; the F-49 loss mechanism,
+    # still live for applogs). docker_logs tails the json-file logs that
+    # containers keep writing during a Kafka outage; with the default 500-event
+    # memory buffer this sink blocks the source as soon as the broker stalls,
+    # and the json-file driver's 3x50 MB cap then rotates unread lines away —
+    # silent, uncounted, unrecoverable (exactly how flows were lost before
+    # F-49 moved them off stdout). The disk buffer decouples the tail from the
+    # broker: docker_logs keeps draining container logs into the spool for the
+    # length of the outage, and the spool replays into Kafka on recovery.
+    #
+    # This is NOT an ack-backed durability promise — docker_logs supports no
+    # acknowledgements (see the F-04 note on the http_server lanes); it
+    # narrows the loss window from "any stall longer than 500 events" to
+    # "a stall that fills 256 MiB AND then outlasts the json-file window".
+    #
+    # when_full: block parks the docker_logs tail at its last read offset when
+    # the spool fills (backpressure, never a silent drop). 256 MiB is Vector's
+    # topology-build FLOOR — a smaller value is rejected at boot, and NOT by
+    # `vector validate` (see the F-04 note).
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
     inputs: [applogs_normalized]
     bootstrap_servers: "${BROKER_URLS:-kafka:9092}"
     topic: "netops.applogs"
@@ -1162,16 +1222,16 @@ sinks:
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
-    # Buffered here and NOT on the other kafka sinks, deliberately. These four
-    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
-    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
-    # by returning HTTP 200 to its own backend, and they have no upstream that
-    # can replay. kafka_applogs/kafka_flows come from docker_logs and
-    # kafka_syslog from the syslog source; neither supports acknowledgements at
-    # all (Vector warns about this at boot), and syslog now has its OWN reliable
-    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
-    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
-    # cannot carry an ack would be cost without the guarantee.
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
     #
     # when_full: block applies backpressure to the source rather than dropping,
     # so together with the global `acknowledgements` block a full buffer becomes
@@ -1180,9 +1240,9 @@ sinks:
     # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
     # 268435488 bytes at topology-build time. Note that `vector validate` does
     # NOT catch a smaller value — it only fails when the process actually starts,
-    # so validate-then-deploy is not sufficient for this setting. Four sinks x
-    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
-    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
     buffer:
       type: disk
       max_size: 268435488
@@ -1206,16 +1266,16 @@ sinks:
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
-    # Buffered here and NOT on the other kafka sinks, deliberately. These four
-    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
-    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
-    # by returning HTTP 200 to its own backend, and they have no upstream that
-    # can replay. kafka_applogs/kafka_flows come from docker_logs and
-    # kafka_syslog from the syslog source; neither supports acknowledgements at
-    # all (Vector warns about this at boot), and syslog now has its OWN reliable
-    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
-    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
-    # cannot carry an ack would be cost without the guarantee.
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
     #
     # when_full: block applies backpressure to the source rather than dropping,
     # so together with the global `acknowledgements` block a full buffer becomes
@@ -1224,9 +1284,9 @@ sinks:
     # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
     # 268435488 bytes at topology-build time. Note that `vector validate` does
     # NOT catch a smaller value — it only fails when the process actually starts,
-    # so validate-then-deploy is not sufficient for this setting. Four sinks x
-    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
-    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
     buffer:
       type: disk
       max_size: 268435488
@@ -1268,16 +1328,16 @@ sinks:
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
-    # Buffered here and NOT on the other kafka sinks, deliberately. These four
-    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
-    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
-    # by returning HTTP 200 to its own backend, and they have no upstream that
-    # can replay. kafka_applogs/kafka_flows come from docker_logs and
-    # kafka_syslog from the syslog source; neither supports acknowledgements at
-    # all (Vector warns about this at boot), and syslog now has its OWN reliable
-    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
-    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
-    # cannot carry an ack would be cost without the guarantee.
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
     #
     # when_full: block applies backpressure to the source rather than dropping,
     # so together with the global `acknowledgements` block a full buffer becomes
@@ -1286,9 +1346,9 @@ sinks:
     # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
     # 268435488 bytes at topology-build time. Note that `vector validate` does
     # NOT catch a smaller value — it only fails when the process actually starts,
-    # so validate-then-deploy is not sufficient for this setting. Four sinks x
-    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
-    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
     buffer:
       type: disk
       max_size: 268435488
@@ -1317,16 +1377,16 @@ sinks:
       key_file: "${KAFKA_TLS_KEY:-/tls/ca.pem}"
     # F-04: DISK buffer, not the 500-event in-memory default.
     #
-    # Buffered here and NOT on the other kafka sinks, deliberately. These four
-    # lanes are fed by `http_server` sources (trap_in / probe_in / metrics_in /
-    # bus_in) — they are the ones where the platform ISSUES A DURABILITY PROMISE
-    # by returning HTTP 200 to its own backend, and they have no upstream that
-    # can replay. kafka_applogs/kafka_flows come from docker_logs and
-    # kafka_syslog from the syslog source; neither supports acknowledgements at
-    # all (Vector warns about this at boot), and syslog now has its OWN reliable
-    # disk-buffer one hop upstream in syslog-ng.conf, which is the correct place
-    # for it. Spending 256 MiB of a nearly-full filesystem on a buffer that
-    # cannot carry an ack would be cost without the guarantee.
+    # Buffered on these four lanes for the DURABILITY PROMISE: they are fed by
+    # `http_server` sources (trap_in / probe_in / metrics_in / bus_in) — the
+    # lanes where the platform ISSUES that promise by returning HTTP 200 to
+    # its own backend, and which have no upstream that can replay.
+    # kafka_syslog stays unbuffered HERE because the syslog source supports no
+    # acknowledgements (Vector warns about this at boot) and the signal already
+    # has its reliable disk-buffer one hop upstream in syslog-ng.conf — the
+    # correct place for it. kafka_applogs carries a disk buffer too, for a
+    # DIFFERENT reason (the json-file rotation race, not an ack-backed
+    # promise) — see the comment on that sink.
     #
     # when_full: block applies backpressure to the source rather than dropping,
     # so together with the global `acknowledgements` block a full buffer becomes
@@ -1335,9 +1395,9 @@ sinks:
     # 256 MiB is the FLOOR, not a choice: Vector rejects anything below
     # 268435488 bytes at topology-build time. Note that `vector validate` does
     # NOT catch a smaller value — it only fails when the process actually starts,
-    # so validate-then-deploy is not sufficient for this setting. Four sinks x
-    # 256 MiB caps the spool at 1 GiB, which the 77 GB shared filesystem (F-55)
-    # can absorb; the files are allocated lazily, so steady-state use is ~0.
+    # so validate-then-deploy is not sufficient for this setting. Five buffered
+    # sinks x 256 MiB cap the spool at 1.25 GiB, which the 77 GB shared
+    # filesystem (F-55) can absorb; files are allocated lazily, steady-state ~0.
     buffer:
       type: disk
       max_size: 268435488

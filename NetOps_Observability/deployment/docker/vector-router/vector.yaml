@@ -249,6 +249,18 @@ transforms:
     # lane needs. Anchored (not copy-pasted) so the four lanes can never drift
     # apart again — divergence between sibling lanes is what caused DEF-6.
     source: &log_lane |
+      # ── F-11: the quarantine mark is MINTED here, never accepted ────────
+      # The store routes below steer `.cx_quarantine == true` docs into the
+      # operator-only netops-quarantine-* index, trusting that only the
+      # generated <lane>_quarantine stage (which runs AFTER this transform)
+      # can set the field. Bus producers' JSON passes verbatim, so an inbound
+      # cx_quarantine must be stripped FIRST — otherwise a compromised
+      # producer could stamp it and plant full-plaintext docs in the
+      # quarantine index / divert its events past the tenant stores (the
+      # del(.label) lesson: hostile-capable fields die at the head of the
+      # lane). Restored quarantine events do NOT carry the field (the sealed
+      # payload is the pre-envelope event), so re-attribution is unaffected.
+      del(.cx_quarantine)
       seg = downcase(to_string(.tenant_id) ?? "")
       if seg == "" { seg = "untagged" } else { seg = replace(seg, r'[^a-z0-9_-]', "-") }
       .tenant_seg = seg
@@ -378,6 +390,10 @@ transforms:
     type: remap
     inputs: [kafka_flows]
     source: |
+      # F-11: strip the inbound quarantine mark before anything else — only
+      # the generated flows_quarantine stage (downstream of this transform)
+      # may mint it. Same rationale and same position as the &log_lane head.
+      del(.cx_quarantine)
       proto_names = {
         "HOPOPT": 0, "ICMP": 1, "IGMP": 2, "TCP": 6, "UDP": 17,
         "GRE": 47, "ESP": 50, "AH": 51, "ICMPv6": 58, "EIGRP": 88,
@@ -592,6 +608,21 @@ transforms:
     inputs: [flows_store_route._unmatched]
     rate: 50
 
+  # Sample honesty (finder 2026-08-14): every doc written to the sampled OS
+  # store carries the rate it was sampled at. The Logs API/UI/export serve
+  # this lane for signal=flows and must never present its counts as exact —
+  # the stamp is what lets them (and any future consumer) disclose "1:50
+  # sample — totals are estimates (×50)" instead of understating traffic 50x.
+  # The literal here MUST match flows_os_sample.rate, logs.go
+  # flowsOSSampleRate and Logs.tsx FLOWS_OS_SAMPLE_RATE —
+  # tests/test_ingest_contract.py pins all four to the sampler's rate.
+  # ClickHouse stays the canonical UNSAMPLED store and never sees this stamp.
+  flows_os_stamped:
+    type: remap
+    inputs: [flows_os_sample]
+    source: |
+      .sample_rate = 50
+
   # F-11 — make a broken device→tenant enrichment table VISIBLE.
   #
   # THE DEFECT THIS FIXES: tenant_id="" is a legitimate value (platform-owned
@@ -804,7 +835,9 @@ sinks:
   # Flow records → both OpenSearch (search) and ClickHouse (analytics)
   opensearch_flows:
     type: elasticsearch
-    inputs: [flows_os_sample]
+    # Reads the STAMPED sample (sample honesty — see flows_os_stamped), never
+    # the raw sampler output: every doc in netops-flows-* carries sample_rate.
+    inputs: [flows_os_stamped]
     endpoints: ["${OPENSEARCH_ENDPOINT:-http://opensearch:9200}"]  # SEC-008: TLS deployments point this at https
     auth:
       strategy: basic

@@ -99,7 +99,13 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		logInfo("logs.export", "export enqueued", map[string]any{"execution_id": execID, "tenant_id": tenant, "signal": spec.Signal, "format": format, "matched": count})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": execID, "status": "queued", "matched": count})
+		out := map[string]any{"execution_id": execID, "status": "queued", "matched": count}
+		// Sample honesty: a flows export contains the 1:50 OS sample, not the
+		// flow stream — the disclosure travels with the queued-export receipt.
+		if isFlowsSignal(spec.Signal) {
+			out["sampling"] = flowsSamplingMeta()
+		}
+		_ = json.NewEncoder(w).Encode(out)
 		return
 	}
 
@@ -120,6 +126,13 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditExport(r, claims, tenant, cross, "sync", spec, len(data.Rows), "")
 	logInfo("logs.export", "export delivered (sync)", map[string]any{"tenant_id": tenant, "signal": spec.Signal, "format": format, "rows": len(data.Rows), "bytes": len(art.Bytes)})
+	// Sample honesty: the downloaded file holds the 1:50 OS flow sample. The
+	// artifact bytes stay untouched (a note row would corrupt csv/xlsx), so
+	// the disclosure rides a response header (ASCII note) — and the UI states
+	// it alongside the download (Logs.tsx).
+	if isFlowsSignal(spec.Signal) {
+		w.Header().Set("X-Sampling-Note", flowsSamplingMeta()["note"].(string))
+	}
 	writeDownload(w, art, "logs-export")
 }
 

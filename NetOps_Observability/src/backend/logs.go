@@ -63,6 +63,31 @@ type logSearchReq struct {
 // reachable page instead of a 500 from the engine.
 const logsMaxWindow = 10000
 
+// flowsOSSampleRate is the 1-in-N flow sample the router writes to
+// netops-flows-* (vector-router/vector.yaml: flows_os_sample rate + the
+// flows_os_stamped `.sample_rate` stamp). ClickHouse holds the canonical,
+// UNSAMPLED flow store; OpenSearch — what this search serves for signal=flows
+// — holds the 1:N sample, so hit counts and totals are estimates (multiply by
+// N). Sample honesty (finder 2026-08-14, owner directive DON'T HIDE): every
+// flows response carries this disclosure so no consumer can present the
+// sample as exact. tests/test_ingest_contract.py pins this constant, the
+// router config and the UI to the same N.
+const flowsOSSampleRate = 50
+
+// isFlowsSignal reports whether a Logs request targets the sampled flows store.
+func isFlowsSignal(signal string) bool {
+	return strings.ToLower(strings.TrimSpace(signal)) == "flows"
+}
+
+// flowsSamplingMeta is the disclosure attached to flows search/retention/export
+// responses (ASCII only — the same text rides an HTTP header on sync exports).
+func flowsSamplingMeta() map[string]any {
+	return map[string]any{
+		"rate": flowsOSSampleRate,
+		"note": fmt.Sprintf("1:%d sample - counts and totals are estimates (multiply by %d); ClickHouse holds the canonical unsampled flow store", flowsOSSampleRate, flowsOSSampleRate),
+	}
+}
+
 // logsScope resolves the caller's tenant-scoped OpenSearch read surface for one
 // signal — the SINGLE scoping path shared by the interactive search and the
 // retention-floor read, so isolation (#20 Phase 3 + the applogs platform
@@ -220,6 +245,29 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
+	// Sample honesty: signal=flows serves the router's 1:50 OpenSearch sample
+	// (ClickHouse keeps the canonical store). Inject the sampling disclosure
+	// into the successful response object so "showing X of Y matched" can never
+	// read as exact — the payload itself passes through untouched. Any body
+	// that fails to parse as a JSON object is streamed verbatim instead.
+	if isFlowsSignal(req.Signal) && resp.StatusCode < 300 {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+		if err != nil {
+			logError("logs", "read flows search response", map[string]any{"err": err.Error()})
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		var out map[string]any
+		if json.Unmarshal(raw, &out) == nil {
+			out["sampling"] = flowsSamplingMeta()
+			w.WriteHeader(resp.StatusCode)
+			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(raw)
+		return
+	}
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		log.Printf("logs: copy response: %v", err)
@@ -302,12 +350,18 @@ func (s *server) handleLogsRetention(w http.ResponseWriter, r *http.Request) {
 		oldest = t.Format(time.RFC3339)
 		days = int(time.Since(t).Hours() / 24)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"signal": signal,
 		"total":  parsed.Hits.Total.Value,
 		"oldest": oldest,
 		"days":   days,
-	})
+	}
+	// Sample honesty: "This store holds N logs" would otherwise present the
+	// 1:50 flows sample count as the flow count.
+	if isFlowsSignal(signal) {
+		out["sampling"] = flowsSamplingMeta()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {

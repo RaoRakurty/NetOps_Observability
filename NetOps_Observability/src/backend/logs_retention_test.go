@@ -157,3 +157,80 @@ func TestLogsSearchExactTotalsAndBoundedOffset(t *testing.T) {
 		t.Errorf("offset must clamp to max_result_window-size (9000):\n%s", body)
 	}
 }
+
+// Sample honesty (finder 2026-08-14): netops-flows-* holds the router's 1:50
+// OpenSearch sample (ClickHouse is the canonical flow store), so every flows
+// search/retention response must carry the sampling disclosure — and no other
+// signal may, because their stores ARE exact.
+func TestLogsSearchFlowsSamplingDisclosed(t *testing.T) {
+	fakeOS(t, `{"took":3,"hits":{"total":{"value":10,"relation":"eq"},"hits":[]}}`)
+	s := logsTestServer(t)
+
+	w := httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodPost, "/api/logs/search",
+		`{"query":"*","signal":"flows"}`, acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var out struct {
+		Took int64 `json:"took"`
+		Hits struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+		} `json:"hits"`
+		Sampling *struct {
+			Rate int    `json:"rate"`
+			Note string `json:"note"`
+		} `json:"sampling"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Sampling == nil {
+		t.Fatalf("flows search response carries no sampling disclosure — the 1:50 sample reads as exact")
+	}
+	// 50 is asserted literally (not just == flowsOSSampleRate) so a drifted
+	// constant cannot make this test agree with itself; the python contract
+	// test pins the same literal to the router's sampler rate.
+	if out.Sampling.Rate != 50 || flowsOSSampleRate != 50 {
+		t.Errorf("sampling.rate = %d (const %d), want 50 (the router's flows_os_sample rate)", out.Sampling.Rate, flowsOSSampleRate)
+	}
+	if !strings.Contains(out.Sampling.Note, "1:50 sample") || !strings.Contains(out.Sampling.Note, "estimates") {
+		t.Errorf("sampling.note must state the 1:50 sample and that totals are estimates, got %q", out.Sampling.Note)
+	}
+	// The engine payload passes through untouched around the injected key.
+	if out.Hits.Total.Value != 10 || out.Took != 3 {
+		t.Errorf("flows payload was altered beyond the sampling key: %+v", out)
+	}
+
+	// Retention: "This store holds N logs" must carry the same disclosure.
+	w = httptest.NewRecorder()
+	s.handleLogsRetention(w, req(http.MethodGet, "/api/logs/retention?signal=flows", "", acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("retention status = %d, want 200", w.Code)
+	}
+	var ret map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&ret); err != nil {
+		t.Fatalf("decode retention: %v", err)
+	}
+	if _, ok := ret["sampling"]; !ok {
+		t.Errorf("flows retention response carries no sampling disclosure: %v", ret)
+	}
+
+	// Exact stores stay undisclosed: a sampling key on syslog would be a lie
+	// in the opposite direction.
+	w = httptest.NewRecorder()
+	s.handleLogsSearch(w, req(http.MethodPost, "/api/logs/search",
+		`{"query":"*","signal":"syslog"}`, acme()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("syslog status = %d, want 200", w.Code)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&m); err != nil {
+		t.Fatalf("decode syslog: %v", err)
+	}
+	if _, ok := m["sampling"]; ok {
+		t.Errorf("syslog search response must NOT carry a sampling key — that store is exact")
+	}
+}

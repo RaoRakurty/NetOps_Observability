@@ -164,12 +164,92 @@ def test_declared_scalar_fields_are_coerced_before_indexing():
     """ignore_malformed does NOT cover an object/array landing on a text field —
     that still rejects the document. So the merge must coerce the DECLARED
     fields back to strings, or one service logging {"message": {...}} destroys
-    its own log line permanently (400 inside a 200 bulk response, F-17)."""
+    its own log line permanently (400 inside a 200 bulk response, F-17).
+
+    The coercion list must cover EVERY string-typed field the applogs template
+    declares (finder 2026-08-14: the first fix coerced 12 fields but the
+    template also declares container_id / image / source_type — a producer
+    logging {"image": {...}} still destroyed its own line). Enumerated from the
+    template rather than hand-listed so a newly declared scalar cannot ship
+    uncoerced."""
     src = vector_cfg("aggregator")["transforms"]["applogs_normalized"]["source"]
     assert "for_each(" in src and "encode_json(v)" in src, \
         "applogs_normalized no longer coerces merged producer values (F-05)"
-    for field in ("message", "msg", "level", "component", "service"):
-        assert f'"{field}"' in src, f"declared field {field} is not coerced after merge()"
+    m = re.search(r"for_each\(\[(.*?)\]\)", src, re.S)
+    assert m, "applogs_normalized lost the for_each coercion loop (F-05)"
+    coerced = set(re.findall(r'"([a-z_]+)"', m.group(1)))
+    props = templates()["netops-applogs"]["template"]["mappings"]["properties"]
+    declared_strings = {name for name, spec in props.items()
+                        if spec.get("type") in ("keyword", "text")}
+    # `ts`/`ts_source`/`ts_invalid`/tenant fields/topic are overwritten AFTER
+    # the merge from code — the aggregator resets .tenant_id unconditionally
+    # and the router derives/stamps the rest — so producer JSON cannot reach
+    # the sink through them. Everything else the merge can reach must be in
+    # the loop (timestamp_raw included: it is a declared keyword a producer
+    # could clobber with an object just like any other).
+    router_stamped = {"ts_source", "ts_invalid", "tenant_id", "tenant_seg",
+                      "tenant_attribution", "topic"}
+    missing = sorted(declared_strings - coerced - router_stamped)
+    assert not missing, (
+        f"declared string fields not coerced after merge(): {missing} — a producer "
+        "logging an object under any of these keys rejects its own document (F-05)"
+    )
+
+
+def test_applog_timestamp_is_guarded_not_string_coerced():
+    """`timestamp` is DECLARED `date`. Producer JSON with {"timestamp": {...}}
+    puts an object on a date field — ignore_malformed does NOT cover objects/
+    arrays, so the whole document is rejected (400 inside a 200 bulk response)
+    and the log line silently lost. The fix must NOT be the string-coercion
+    loop (encode_json would corrupt the NATIVE timestamp docker_logs stamps on
+    every normal doc); it needs its own guard: keep native/string timestamps,
+    re-parse what still renders as a timestamp, and move anything else aside to
+    `timestamp_raw` so the offending producer stays greppable instead of
+    invisible (finder 2026-08-14)."""
+    src = vector_cfg("aggregator")["transforms"]["applogs_normalized"]["source"]
+    m = re.search(r"for_each\(\[(.*?)\]\)", src, re.S)
+    assert m and '"timestamp"' not in m.group(1), \
+        "timestamp must NOT ride the string-coercion loop — encode_json(v) would " \
+        "JSON-quote every native timestamp"
+    assert "is_timestamp(" in src and "timestamp_raw" in src and "del(.timestamp)" in src, \
+        "applogs_normalized does not guard a non-string producer .timestamp (F-05)"
+    # The move-aside field must be searchable: declared on both applog templates.
+    for tpl in ("netops-applogs", "netops-platformlogs"):
+        assert "timestamp_raw" in templates()[tpl]["template"]["mappings"]["properties"], \
+            f"{tpl} does not declare timestamp_raw — the moved-aside producer " \
+            "timestamp would be stored but unsearchable"
+
+
+def test_syslog_severity_reconcile_covers_short_keywords():
+    """Vector 0.40's syslog source emits SHORT severity keywords — a PRI-0
+    frame arrives as severity="emerg" (proven empirically against
+    timberio/vector:0.40.0-alpine, RFC5424 and RFC3164 both; finder
+    2026-08-14). The reconcile matched only the long forms, so the single most
+    severe syslog class fell through to else=info: every filter/sort on
+    normalized_severity ranked a system-unusable message below a warning."""
+    src = vector_cfg("aggregator")["transforms"]["syslog_normalized"]["source"]
+    m = re.search(r"sysint = if (.*?)\{ 2 \}", src)
+    assert m, "syslog_normalized lost the sysint severity reconcile expression"
+    crit_branch = m.group(1)
+    for kw in ("emergency", "alert", "critical", "crit", "emerg", "panic"):
+        assert f'"{kw}"' in crit_branch, (
+            f"severity keyword {kw!r} missing from the ==2/critical branch — a "
+            "PRI-0 frame would store normalized_severity=info"
+        )
+    # Fixture: walk the map exactly as VRL evaluates it (first match wins) and
+    # assert the PRI-0 keyword lands on critical, not the else=info arm.
+    branches = re.findall(r"if ([^{}]+)\{ (\d) \}", src.split("sysint = ", 1)[1].split("\n", 1)[0])
+    assert branches, "cannot parse the sysint branch map; update this fixture with it"
+
+    def lookup(word: str) -> int:
+        for cond, value in branches:
+            if f'"{word}"' in cond:
+                return int(value)
+        return 6  # the else arm
+
+    assert lookup("emerg") == 2, "PRI-0 'emerg' must map to critical (2)"
+    assert lookup("panic") == 2, "legacy 'panic' must map to critical (2)"
+    assert lookup("warning") == 4 and lookup("debug") == 7, "fixture drifted from the map"
 
 
 # ── F-07: the replica count is a posture, not a constant ────────────────────
@@ -558,6 +638,95 @@ def test_flows_keep_tenant_attribution_after_the_transport_move():
     mounts = " ".join(compose["services"]["vector-router"]["volumes"])
     assert "/etc/vector/enrichment" in mounts, \
         "vector-router reads the enrichment table but the compose file does not mount it"
+
+
+# ── syslog-ng edge capacity: burst absorption + fleet-scale TCP ─────────────
+
+def test_syslog_edge_absorbs_bursts_and_fleet_scale():
+    """(finder 2026-08-14) udp() with no so-rcvbuf() left the ~208 KiB kernel
+    default: a device storm (link-flap fan-out, reboot bursts — when logs
+    matter most) overflows the socket and the KERNEL drops datagrams before
+    syslog-ng ever reads them, invisible to the F-48 dropped/queued stats.
+    tcp max-connections(64) accept()ed-then-closed the 65th device connection
+    with only a stderr line — its syslog silently never arrived."""
+    src = read("deployment", "docker", "syslog-ng", "core.conf")
+    m = re.search(r"udp\([^;]*so-rcvbuf\((\d+)\)", src)
+    assert m, "core.conf udp() sets no so-rcvbuf — kernel-default ~208 KiB, " \
+              "burst drops happen in the kernel where no counter sees them"
+    assert int(m.group(1)) >= 8388608, f"so-rcvbuf({m.group(1)}) is below the 8 MiB burst budget"
+    m = re.search(r"tcp\([^;]*max-connections\((\d+)\)", src)
+    assert m, "core.conf tcp() lost its max-connections bound"
+    assert int(m.group(1)) >= 1024, (
+        f"tcp max-connections({m.group(1)}) refuses device N+1 silently — "
+        "size it above the TCP-logging fleet"
+    )
+    # The rcvbuf request is clamped at net.core.rmem_max (host-global sysctl;
+    # syslog-ng 4.7 has no SO_RCVBUFFORCE — verified against the pinned image).
+    # The config must SAY so, or the setting reads as delivered when it is
+    # silently capped to the kernel default.
+    assert "rmem_max" in src, \
+        "core.conf must document the net.core.rmem_max host prerequisite for so-rcvbuf"
+
+
+# ── app-log lane: rotation-race disk buffer on the kafka sink ───────────────
+
+def test_applogs_kafka_sink_buffers_to_disk():
+    """(finder 2026-08-14) kafka_applogs rode Vector's 500-event memory
+    default: a Kafka stall stops docker_logs reading while containers keep
+    writing json-file logs capped at 3x50 MB — a chatty service under incident
+    load rotates unread lines away, uncounted and unrecoverable. This is the
+    same rotation-loss mechanism F-49 removed for flows; a bounded disk buffer
+    decouples the tail from the broker so the spool absorbs the outage and
+    replays on recovery."""
+    sink = vector_cfg("aggregator")["sinks"]["kafka_applogs"]
+    buf = sink.get("buffer") or {}
+    assert buf.get("type") == "disk", \
+        "kafka_applogs has no disk buffer — a Kafka stall loses rotated json-file logs"
+    assert int(buf.get("max_size") or 0) >= 268435488, (
+        "disk buffer below Vector's 268435488-byte floor is rejected at BOOT "
+        "(not by `vector validate`) — see the F-04 sink comments"
+    )
+    assert buf.get("when_full") == "block", \
+        "when_full must block (backpressure), never drop newest silently"
+
+
+# ── flows sample honesty: the 1:N OS sample must SAY it is a sample ─────────
+
+def test_flows_os_sample_is_stamped_and_disclosed():
+    """(finder 2026-08-14) netops-flows-* holds a 1-in-50 SAMPLE (ClickHouse is
+    the canonical flow store), but the Logs surface served it as exact —
+    "showing X of Y matched", retention totals, "Export all" — so an operator
+    concluded ~50x too little traffic existed, from a view labeled exact.
+    Every surface that serves the sample must carry the rate: the stored doc
+    (sample_rate stamp), the search/retention response (logs.go), the UI
+    (Logs.tsx) and the export path (logs_export.go) — all pinned to the SAME
+    rate so the disclosure cannot drift from the sampler."""
+    cfg = vector_cfg("router")
+    rate = int(cfg["transforms"]["flows_os_sample"]["rate"])
+    stamp = cfg["transforms"].get("flows_os_stamped")
+    assert stamp, "router has no flows_os_stamped transform — sampled docs carry no rate"
+    assert stamp["inputs"] == ["flows_os_sample"], \
+        "the stamp must ride AFTER the sampler (only sampled docs carry it)"
+    assert f".sample_rate = {rate}" in stamp["source"], \
+        f"flows_os_stamped must stamp .sample_rate = {rate} (the sampler's rate)"
+    assert cfg["sinks"]["opensearch_flows"]["inputs"] == ["flows_os_stamped"], \
+        "opensearch_flows must write the STAMPED sample"
+    # The canonical ClickHouse store stays unsampled and unstamped.
+    assert cfg["sinks"]["clickhouse_flows"]["inputs"] == ["flows_store_route._unmatched"], \
+        "clickhouse_flows must keep reading the full (quarantine-filtered) stream"
+    assert "sample_rate" in templates()["netops-flows"]["template"]["mappings"]["properties"], \
+        "netops-flows must declare sample_rate or the stamp is unsearchable (dynamic: false)"
+    # Cross-language parity: backend and UI disclose the SAME rate.
+    go = read("src", "backend", "logs.go")
+    assert f"flowsOSSampleRate = {rate}" in go, \
+        "logs.go flowsOSSampleRate has drifted from the router's sample rate"
+    assert "sampling" in read("src", "backend", "logs_export.go"), \
+        "logs_export.go no longer discloses sampling on flow exports"
+    tsx = read("src", "frontend", "src", "tabs", "Logs.tsx")
+    assert f"FLOWS_OS_SAMPLE_RATE = {rate}" in tsx, \
+        "Logs.tsx FLOWS_OS_SAMPLE_RATE has drifted from the router's sample rate"
+    assert "totals are estimates" in tsx, \
+        "Logs.tsx lost the flows sampling disclosure"
 
 
 # ── cross-cutting: the pipeline may not stamp a field no template declares ──
