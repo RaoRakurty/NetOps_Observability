@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import csv
+import functools
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -354,7 +356,19 @@ class TenantClaimRefused(DeadLetter):
     the durable quarantine (keep_deadletter_payload → CORR_DLQ_DIR), so a
     refused event keeps its payload for forensics instead of vanishing. It is
     NEVER downgraded to "use the registry value anyway" — the two sources
-    disagree about who owns the data, and guessing is the defect."""
+    disagree about who owns the data, and guessing is the defect.
+
+    EXCEPTION (F-11, INV-F11-10): the `identity_unattributable` class keeps NO
+    payload — the ROUTER seals that very event under the quarantine key, and a
+    plaintext copy here (ring + NDJSON) would be the durable confidentiality
+    downgrade the owner invariant forbids. _quarantine_record keys on the
+    `reason` attribute below to store metadata + identity hash only."""
+
+    # Structured refusal facts, stamped by _tenant_refusal. Class defaults keep
+    # older pickled/hand-built instances harmless.
+    lane: str = ""
+    reason: str = ""
+    identity: str = ""
 
 
 def _tenant_refusal(lane: str, reason: str, identity: str,
@@ -373,9 +387,11 @@ def _tenant_refusal(lane: str, reason: str, identity: str,
             "refused_total=%d",
             lane, reason, identity or "-", claimed or "-", resolved or "-",
             TENANT_REFUSALS[key])
-    return TenantClaimRefused(
+    exc = TenantClaimRefused(
         f"tenant claim refused ({reason}): lane={lane} identity={identity or '-'} "
         f"claimed={claimed or '-'} registry={resolved or '-'}")
+    exc.lane, exc.reason, exc.identity = lane, reason, identity
+    return exc
 
 
 def verified_tenant(claimed: str, identity: str, lane: str, *,
@@ -438,23 +454,64 @@ def verified_tenant(claimed: str, identity: str, lane: str, *,
 WINDOW_SIZE = 200
 Z_THRESHOLD = 3.0
 
+# O(1) rolling-stats drift guard (perf defect #4): mean/stddev are maintained as
+# shifted running sums (sum, sum-of-squares around a pivot) instead of a full
+# O(window) pass per query — ~6 full 200-deque passes per metric sample saturated
+# a core near 2-5k samples/s. Floating-point drift from incremental subtraction
+# is bounded by an EXACT recompute every this-many pushes (amortized O(window/N)
+# ≪ 1 op/sample) plus a clamp-and-recompute whenever variance goes negative.
+STATS_RECOMPUTE_EVERY = 1024
+
 
 @dataclass
 class Series:
     values: deque[float] = field(default_factory=lambda: deque(maxlen=WINDOW_SIZE))
+    # Shifted running aggregates: _sum/_sumsq accumulate (v - _shift) so a large
+    # baseline mean with a small variance does not cancel catastrophically. The
+    # shift re-pivots to the current mean at every exact recompute.
+    _sum: float = 0.0
+    _sumsq: float = 0.0
+    _shift: float = 0.0
+    _pushes: int = 0
+
+    def _recompute(self) -> None:
+        """Exact O(window) rebuild of the aggregates — the float-drift guard."""
+        n = len(self.values)
+        self._shift = (sum(self.values) / n) if n else 0.0
+        self._sum = sum(v - self._shift for v in self.values)
+        self._sumsq = sum((v - self._shift) ** 2 for v in self.values)
 
     def mean(self) -> float:
-        return sum(self.values) / len(self.values) if self.values else 0.0
+        n = len(self.values)
+        return (self._shift + self._sum / n) if n else 0.0
 
     def stddev(self) -> float:
         n = len(self.values)
         if n < 2:
             return 0.0
-        m = self.mean()
-        return (sum((v - m) ** 2 for v in self.values) / (n - 1)) ** 0.5
+        var = (self._sumsq - self._sum * self._sum / n) / (n - 1)
+        if var < 0.0:
+            # Cancellation artifact — rebuild exactly, then re-derive.
+            self._recompute()
+            var = max(0.0, (self._sumsq - self._sum * self._sum / n) / (n - 1))
+        return var ** 0.5
 
     def push(self, v: float) -> None:
+        if not self.values:
+            # Pivot on the first sample: a 1e9-baseline series must not
+            # accumulate (v − 0)² terms before the first periodic re-pivot.
+            self._shift, self._sum, self._sumsq = v, 0.0, 0.0
+        elif len(self.values) == self.values.maxlen:
+            old = self.values[0] - self._shift
+            self._sum -= old
+            self._sumsq -= old * old
         self.values.append(v)
+        d = v - self._shift
+        self._sum += d
+        self._sumsq += d * d
+        self._pushes += 1
+        if self._pushes % STATS_RECOMPUTE_EVERY == 0:
+            self._recompute()
 
 
 # Legacy z-score series, bounded + LRU. Unbounded before: keyed by
@@ -1369,6 +1426,67 @@ def _current_badges(hypotheses_blob: str) -> dict:
     }
 
 
+# ── Stage [8] archive sizing (perf defect #3: archive amplification) ─────────
+# Every persisted version used to archive the ENTIRE tenant window (50k floor)
+# — N spray-minted objects per cycle × full window = ~1M rows/30s at N=20, each
+# batch serialized as one multi-MB NDJSON string on the event loop. The slice is
+# now BOUNDED and NODE-COMPLETE (see _archive_slice) and re-archiving an
+# UNCHANGED slice for the same object is skipped (readers — replay._select_slice
+# and the Go timeline query — already fall back to the newest archived_version
+# ≤ the requested one, exactly as close-versions have always relied on).
+CORR_ARCHIVE_CHUNK_ROWS = int(os.environ.get("CORR_ARCHIVE_CHUNK_ROWS", "10000"))
+ARCHIVE_ROWS_WRITTEN = 0     # archive rows actually inserted (monotonic)
+ARCHIVE_SLICES_DAMPED = 0    # re-persists whose slice membership was unchanged
+_ARCHIVE_SLICE_HASH: dict[str, str] = {}  # cid → last successfully archived slice id-hash
+
+
+def _archive_slice(snap: ObjectSnapshot, window: list[Signal]) -> list[Signal]:
+    """The BOUNDED, replay-exact archive slice for one object version.
+
+    Contents:
+      * every signal of every evidence NODE (same (entity_type, entity_id, kind)
+        grouping as engine.build_nodes) whose activity interval [first ts, last
+        ts] overlaps the object's [window_start, window_end] — nodes are never
+        CLIPPED, so each included node is byte-identical to its live twin;
+      * every non-node signal (kind *_clear, source=app_identity — both excluded
+        from build_nodes) inside the object's bounds, plus the identity signals
+        this object actually matched (snap.identity_signals), so the Inspector
+        timeline and the app-impact enrichment reproduce.
+
+    Replay exactness argument (pinned by test_replay_archive_slice.py):
+    edge admission is PAIR-LOCAL (resolve_grounding reads only the two nodes +
+    the embedded seams/adjacency/paths context), so restricting the window to a
+    node-complete subset that contains the whole component reproduces the SAME
+    component — every component node overlaps [window_start, window_end] by
+    construction (those bounds ARE the component's min/max ts), included nodes
+    carry all their signals (identical tokens/onset/intervals ⇒ identical pair
+    verdicts), and an excluded node could only have joined through an edge the
+    live run would also have admitted — contradiction with it not being in the
+    component. Ranking/verdict/confidence are component-local. What legitimately
+    differs on replay: the window-global gap-hint COUNT (not diffed, not part of
+    the stored row set) — the trade for not re-writing the full tenant window
+    per object version.
+    """
+    ws, we = snap.window_start, snap.window_end
+    matched_identities = {str(s.signal_id) for s in snap.identity_signals}
+    keep: list[Signal] = []
+    by_node: dict[str, list[Signal]] = {}
+    for s in window:
+        if s.kind.endswith("_clear") or s.source is Source.APP_IDENTITY:
+            if (ws <= s.ts <= we) or str(s.signal_id) in matched_identities:
+                keep.append(s)
+            continue
+        by_node.setdefault(f"{s.entity_type.value}:{s.entity_id}:{s.kind}", []).append(s)
+    for key in sorted(by_node):
+        sigs = by_node[key]
+        lo = min(s.ts for s in sigs)
+        hi = max(s.ts for s in sigs)
+        if lo <= we and ws <= hi:
+            keep.extend(sigs)
+    keep.sort(key=lambda s: (s.ts, str(s.signal_id)))
+    return keep
+
+
 async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
@@ -1421,20 +1539,43 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     if ev_rows:
         await ch_insert("netops.corr_evidence", ev_rows,
                         corr_id=snap.correlation_id, version=version)
-    # Stage [8] archive: the WHOLE tenant window, not just attached signals —
-    # candidate-pool decisions depend on non-attached episodes, so a
-    # participating-only archive would break bit-perfect replay. Slices are
-    # version-scoped (basic-testing fix): replay re-runs exactly the window
-    # THIS version was computed from, not the union of every version's window.
-    archive_rows = []
-    for s in window:
-        row = s.to_ch_row()
-        row["archived_for"] = snap.correlation_id
-        row["archived_version"] = version
-        archive_rows.append(row)
-    if archive_rows:
-        await ch_insert("netops.corr_signals_archive", archive_rows,
-                        corr_id=snap.correlation_id, version=version, row_count=len(archive_rows))
+    # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
+    # (see _archive_slice — replay-exact for THIS object, no longer the whole
+    # 50k-floor tenant window per object version). Slices stay version-scoped:
+    # replay re-runs exactly the window slice THIS version was computed from.
+    global ARCHIVE_ROWS_WRITTEN, ARCHIVE_SLICES_DAMPED
+    slice_sigs = _archive_slice(snap, window)
+    if slice_sigs:
+        slice_hash = hashlib.sha256(
+            "|".join(str(s.signal_id) for s in slice_sigs).encode()).hexdigest()[:16]
+        if _ARCHIVE_SLICE_HASH.get(snap.correlation_id) == slice_hash:
+            # Same membership as the last archived version of this object —
+            # skip the re-write. Readers (replay._select_slice, the Go timeline
+            # archived_version fallback) resolve to the newest slice ≤ version.
+            ARCHIVE_SLICES_DAMPED += 1
+        else:
+            archive_rows = []
+            for s in slice_sigs:
+                row = s.to_ch_row()
+                row["archived_for"] = snap.correlation_id
+                row["archived_version"] = version
+                archive_rows.append(row)
+            # Chunked: one 50k-row batch built a tens-of-MB NDJSON string in a
+            # single event-loop step; chunks bound the body AND yield between
+            # inserts. All chunks must land before the slice hash is recorded —
+            # a partial slice must be retried whole on the next persist.
+            all_ok = True
+            for start in range(0, len(archive_rows), CORR_ARCHIVE_CHUNK_ROWS):
+                chunk = archive_rows[start:start + CORR_ARCHIVE_CHUNK_ROWS]
+                ok = await ch_insert(
+                    "netops.corr_signals_archive", chunk,
+                    corr_id=snap.correlation_id, version=version, row_count=len(chunk))
+                if ok is False:
+                    all_ok = False
+                else:
+                    ARCHIVE_ROWS_WRITTEN += len(chunk)
+            if all_ok:
+                _ARCHIVE_SLICE_HASH[snap.correlation_id] = slice_hash
     log.info("corr-object %s v%d %s: top=%s tier=%s nodes=%d edges=%d",
              snap.correlation_id[:8], version, state, snap.ranking.top_hypothesis,
              snap.ranking.verdict_tier.value, len(snap.nodes), len(snap.edges))
@@ -1541,9 +1682,20 @@ async def engine_cycle() -> None:
         # byte-identical to pre-P2.
         discovery = discovery_paths_for(tenant, pgv, window)
         try:
-            snapshots = run_window(window, CATALOG, seams, ENGINE_CFG, adjacency=adjacency,
-                                   topology_stale=topo_stale, storm_mode=storm, directed=directed,
-                                   paths=pgv, discovery=discovery)
+            # Perf defect #1c: run_window is pure CPU work (seconds-to-minutes on a
+            # storm window) and used to run SYNCHRONOUSLY on the loop hosting the
+            # Kafka consumer and /healthz — a broad fault blocked heartbeats until
+            # the group rebalanced the consumer out and the healthcheck flapped.
+            # It now runs in the default thread-pool executor. The ENGINE stays
+            # pure/deterministic (no IO/clock/randomness inside run_window); the
+            # executor is strictly a main.py call-site concern, and the inputs are
+            # snapshotted (tuple) so concurrent buffer appends can never leak in.
+            snapshots = await asyncio.get_running_loop().run_in_executor(
+                None,
+                functools.partial(
+                    run_window, tuple(window), CATALOG, seams, ENGINE_CFG,
+                    adjacency=adjacency, topology_stale=topo_stale, storm_mode=storm,
+                    directed=directed, paths=pgv, discovery=discovery))
         except ValueError as exc:
             log.error("engine window rejected: %s", exc)
             continue
@@ -1632,6 +1784,7 @@ async def engine_cycle() -> None:
         log.info("corr-object %s merged into %s (split-brain de-duplicated)",
                  merged_cid[:8], survivor_cid[:8])
         del OPEN_OBJECTS[merged_cid]
+        _ARCHIVE_SLICE_HASH.pop(merged_cid, None)
 
     # Quiesce: an object whose component no longer materializes (episodes aged
     # out / cleared) closes after CORR_QUIESCE_S — terminal version, append-only.
@@ -1645,6 +1798,7 @@ async def engine_cycle() -> None:
             _wa_note_outcome(reg["snapshot"].tenant_id, "persisted")
             await _persist_snapshot(reg["snapshot"], reg["version"], "closed", [])
             del OPEN_OBJECTS[cid]
+            _ARCHIVE_SLICE_HASH.pop(cid, None)
     LAST_GAP_HINTS = gap_hints
     # #101: flush the per-tenant write-amplification window (no-op until
     # CORR_WA_FLUSH_S has elapsed; resets even when the insert fails).
@@ -1716,7 +1870,7 @@ async def feed_episode_detector(
         keep_deadletter_payload("provenance", ev, exc)
         log.warning("dead-letter (provenance): %s", exc)
         return False
-    await ch_insert("netops.corr_signals", [row], lane="metrics", kind=row.get("kind", ""))
+    await batch_signal(row)  # batched: lane=metrics (perf defect #2)
     if modality is ModalityClass.DEVICE_TELEMETRY:
         DEVICE_TELEMETRY_SIGNALS += 1
     # Build ⑥: every spine signal also feeds the engine's evidence window.
@@ -2006,6 +2160,162 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Consume-loop ClickHouse batching (perf defect #2).
+#
+# Every consumed event used to await 1–3 SINGLE-ROW corr_signals inserts with
+# wait_end_of_query=1 — a full ClickHouse round-trip per row in the sequential
+# consume loop capped ALL topics at a few hundred events/s and exploded
+# MergeTree parts (TOO_MANY_PARTS → valid signals quarantined). Rows now
+# accumulate per table and flush as ONE insert when a batch reaches
+# CORR_BATCH_MAX_ROWS, ages past CORR_BATCH_MAX_S (background flusher), the
+# total buffered rows hit CORR_BATCH_QUEUE_MAX (bounded queue — the sequential
+# consume loop awaits the flush, which IS the backpressure), on shutdown, and —
+# the at-least-once anchor — ALWAYS before a Kafka offset commit (_commit
+# flushes first; a failed flush aborts the commit, so the supervisor replays
+# from the last committed offset and no acknowledged row can be lost).
+#
+# Failure semantics mirror the per-row path at batch granularity:
+#   * transport failure (outcome UNKNOWN): counted, rows RETAINED for retry,
+#     re-raised — the current event is quarantined (payload kept) and a run of
+#     failures hands the stream back to the supervisor's backoff, exactly as
+#     single-row transport failures did.
+#   * positive rejection: counted, every row of the batch preserved in the
+#     durable dead-letter file (never acknowledge a write that neither
+#     committed nor was durably kept), batch dropped, consumption continues.
+# The dedup token is a content hash of the batch, so a retry of an UNCHANGED
+# retained batch after an unknown outcome dedups instead of duplicating.
+# ---------------------------------------------------------------------------
+
+CORR_BATCH_MAX_ROWS = int(os.environ.get("CORR_BATCH_MAX_ROWS", "500"))
+CORR_BATCH_MAX_S = float(os.environ.get("CORR_BATCH_MAX_S", "2.0"))
+CORR_BATCH_QUEUE_MAX = int(os.environ.get("CORR_BATCH_QUEUE_MAX", "5000"))
+BATCH_FLUSHES = 0            # committed batch inserts (monotonic)
+BATCH_ROWS_FLUSHED = 0       # rows landed through the batcher (monotonic)
+BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
+
+
+class _TableBatch:
+    __slots__ = ("rows", "first_mono")
+
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+        self.first_mono = time.monotonic()
+
+
+class CHBatcher:
+    """Bounded per-table row accumulator for the consume-loop write path."""
+
+    def __init__(self) -> None:
+        self._batches: dict[str, _TableBatch] = {}
+        self._lock = asyncio.Lock()
+
+    def pending(self) -> int:
+        return sum(len(b.rows) for b in self._batches.values())
+
+    def drop_pending(self) -> int:
+        """Discard buffered rows WITHOUT writing them. Test-hermeticity hook
+        (conftest resets the batcher between tests so one test's unflushed rows
+        can never surface in another test's fake ClickHouse) — production code
+        never drops; it flushes."""
+        n = self.pending()
+        self._batches.clear()
+        return n
+
+    def due(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        return any(len(b.rows) >= CORR_BATCH_MAX_ROWS
+                   or (now - b.first_mono) >= CORR_BATCH_MAX_S
+                   for b in self._batches.values())
+
+    async def add(self, table: str, row: dict) -> None:
+        b = self._batches.get(table)
+        if b is None:
+            b = self._batches[table] = _TableBatch()
+        b.rows.append(row)
+        if len(b.rows) >= CORR_BATCH_MAX_ROWS or self.pending() >= CORR_BATCH_QUEUE_MAX:
+            await self.flush()
+
+    async def flush(self) -> None:
+        """Flush every pending table batch. Raises on a transport failure
+        (rows retained); a positive rejection quarantines the rows durably."""
+        global BATCH_FLUSHES, BATCH_ROWS_FLUSHED, BATCH_ROWS_QUARANTINED
+        async with self._lock:
+            for table in sorted(self._batches):
+                b = self._batches.pop(table, None)
+                if b is None or not b.rows:
+                    continue
+                if ch is None:
+                    continue  # startup/shutdown edge: nothing to write to yet
+                # Content-hash token: a retry of the SAME retained batch after an
+                # unknown outcome dedups server-side instead of duplicating.
+                token = "batch:" + hashlib.sha256(
+                    "\n".join(json.dumps(r, sort_keys=True, default=str)
+                              for r in b.rows).encode()).hexdigest()[:32]
+                try:
+                    ok = await ch.insert(table, b.rows, dedup_token=token)
+                except Exception as exc:  # noqa: BLE001 — counted, retained, re-raised
+                    _note_ch_failure(table, type(exc).__name__,
+                                     {"batched_rows": len(b.rows)})
+                    # Re-queue the popped batch (front-merge: rows added while the
+                    # insert was in flight live in a fresh batch created by add()).
+                    cur = self._batches.get(table)
+                    if cur is not None:
+                        b.rows.extend(cur.rows)
+                    self._batches[table] = b
+                    raise
+                if ok is False:
+                    _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows)})
+                    self._quarantine_rows(table, b.rows)
+                    BATCH_ROWS_QUARANTINED += len(b.rows)
+                    continue
+                BATCH_FLUSHES += 1
+                BATCH_ROWS_FLUSHED += len(b.rows)
+
+    @staticmethod
+    def _quarantine_rows(table: str, rows: list[dict]) -> None:
+        """Durably preserve every row of a positively-rejected batch: one DLQ
+        record per row (replayable), ONE ring summary (the 200-slot ring must
+        not be wiped by a single 500-row batch)."""
+        ts = datetime.now(timezone.utc).isoformat()
+        for r in rows:
+            _dlq_append({
+                "ts": ts,
+                "topic": f"chbatch:{table}",
+                "error": "clickhouse rejected the batched insert",
+                "payload": json.dumps(r, default=str)[:CORR_QUARANTINE_PAYLOAD_CHARS],
+            })
+        QUARANTINE.append({
+            "ts": ts,
+            "topic": f"chbatch:{table}",
+            "error": f"clickhouse rejected a batched insert — {len(rows)} rows "
+                     f"preserved in the durable dead-letter file",
+            "payload": "",
+        })
+
+
+SIGNAL_BATCH = CHBatcher()
+
+
+async def batch_signal(row: dict) -> None:
+    """Enqueue one corr_signals row on the consume-loop batcher (see CHBatcher)."""
+    await SIGNAL_BATCH.add("netops.corr_signals", row)
+
+
+async def batch_flush_loop() -> None:
+    """Bounds batch latency to ≤ CORR_BATCH_MAX_S when the bus goes quiet —
+    the consume loop only flushes on traffic/commit, and a trailing burst must
+    not sit buffered until the next event arrives."""
+    while True:
+        await asyncio.sleep(max(CORR_BATCH_MAX_S / 2, 0.25))
+        try:
+            if SIGNAL_BATCH.due():
+                await SIGNAL_BATCH.flush()
+        except Exception:  # noqa: BLE001 — flush already counted+logged the loss
+            # Rows are retained; the next tick (or the pre-commit flush) retries.
+            continue
+
+
+# ---------------------------------------------------------------------------
 # Kafka consumer loop.
 # ---------------------------------------------------------------------------
 
@@ -2214,6 +2524,30 @@ def _dlq_append(record: dict) -> None:
 
 def _quarantine_record(topic: str, event: object, exc: BaseException) -> dict:
     """Build + store one quarantine record (ring + optional on-disk NDJSON)."""
+    if isinstance(exc, TenantClaimRefused) and exc.reason == "identity_unattributable":
+        # F-11 (INV-F11-10): a registry-MISS event is sealed by the ROUTER's
+        # quarantine stage. Keeping its body here — in the /deadletters ring
+        # AND the durable corr-deadletter.ndjson — would be a second, PLAINTEXT
+        # durable copy of what the router just encrypted: the exact
+        # confidentiality downgrade the owner invariant forbids. Store metadata
+        # plus the identity's sha256 only (the SAME digest the router envelope
+        # carries as identity_sha, so an operator can join the two records and
+        # feed /api/quarantine/reattribute). Never the event body, and never
+        # the plaintext identity (D2: hostname deliberately not kept). Every
+        # other dead-letter class keeps its payload for forensics, unchanged.
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "topic": topic,
+            "lane": exc.lane,
+            "reason": exc.reason,
+            "identity_sha": hashlib.sha256(
+                exc.identity.encode("utf-8", "replace")).hexdigest(),
+            "error": "TenantClaimRefused: identity_unattributable "
+                     "(payload withheld — the router's sealed quarantine holds it; F-11)",
+        }
+        QUARANTINE.append(record)
+        _dlq_append(record)
+        return record
     if isinstance(event, (bytes, bytearray)):
         # Raw wire bytes — a payload that failed to DECODE. Keep them as text
         # (errors="replace": a mangled byte becomes U+FFFD, nothing is dropped)
@@ -2311,6 +2645,13 @@ async def consume() -> None:
             if not force and uncommitted < CORR_COMMIT_EVERY_N \
                     and (time.monotonic() - last_commit) < CORR_COMMIT_EVERY_S:
                 return
+            # At-least-once anchor for the batched writes: never acknowledge an
+            # offset whose corr_signals rows are still buffered. A flush failure
+            # (transport/unknown) raises HERE, the commit is skipped, and the
+            # supervisor replays from the last committed offset; a positive
+            # rejection preserved the rows durably inside flush(), which counts
+            # as handled — exactly the per-row discipline, at batch granularity.
+            await SIGNAL_BATCH.flush()
             await asyncio.wait_for(consumer.commit(), timeout=CONSUMER_STOP_TIMEOUT_S)
             uncommitted = 0
             last_commit = time.monotonic()
@@ -2525,7 +2866,23 @@ async def handle_metric(ev: dict) -> None:
 
 # Severity weights for syslog correlation. A burst of high-severity
 # events from one device within a short window is itself a finding.
-SEVERITY_WEIGHT = {"emerg": 8, "alert": 7, "crit": 6, "err": 5, "warning": 3, "notice": 2, "info": 1, "debug": 0}
+# BOTH spellings are keyed: the RFC 3164 short keywords (Cisco et al.) AND the
+# long-form levels vendors like FortiOS emit (Vector's syslog_normalized passes
+# kv.level through verbatim — 'critical'/'error'/'emergency'). Before the
+# long forms were added, 50 FortiGate level=critical lines in 60s scored weight
+# 0 and the burst finding silently never fired while identical Cisco 'crit'
+# traffic did (vendor blind spot, journal PRI-0/F-severity finding). 'panic' and
+# 'emerg' parity mirrors the aggregator's severity reconcile map.
+SEVERITY_WEIGHT = {
+    "emerg": 8, "panic": 8, "emergency": 8,
+    "alert": 7,
+    "crit": 6, "critical": 6,
+    "err": 5, "error": 5,
+    "warning": 3, "warn": 3,
+    "notice": 2,
+    "info": 1, "information": 1, "informational": 1,
+    "debug": 0,
+}
 SYSLOG_BUCKET: dict[str, list[tuple[float, int]]] = {}
 SYSLOG_WINDOW = 60.0   # seconds
 SYSLOG_THRESHOLD = 30  # cumulative weight
@@ -2701,7 +3058,7 @@ async def handle_probe(ev: dict) -> None:
         return
     for sig in sigs:
         classify_probe(ev, sig)
-        await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="probes")
+        await batch_signal(sig.to_ch_row())  # batched: lane=probes
         buffer_signal(sig)
         log.info("probe signal %s: %s sev=%s value=%.1f scope=%s auth=%s",
                  sig.kind, sig.entity_id, sig.severity.value, sig.value,
@@ -2717,7 +3074,7 @@ async def handle_probe(ev: dict) -> None:
     app_sig = synthetic_app_signal(ev, tenant, now)
     if app_sig is not None:
         classify_probe(ev, app_sig)
-        await ch_insert("netops.corr_signals", [app_sig.to_ch_row()], lane="probes")
+        await batch_signal(app_sig.to_ch_row())  # batched: lane=probes
         buffer_signal(app_sig)
         log.info("synthetic app-experience signal %s: %s reason=%s app=%s",
                  app_sig.kind, app_sig.entity_id, app_sig.attrs.get("reason"),
@@ -2746,12 +3103,22 @@ async def handle_snmptrap(ev: dict) -> None:
             ev = {**ev, "device": recovered}
             device = recovered
             TRAPS_RECANON += 1
-    # A trap's tenant claim must agree with the registry entry for the device it
-    # was attributed to. Not registry-anchored: G2a can attribute a trap to a
-    # device the exporter omitted as ambiguous (NAT-collapsed source), and that
-    # must not become a data-loss event — but a positive disagreement is refused.
+    # F-11 (D1/D4, INV-F11-10): registry-ANCHORED like syslog and flows — the
+    # aggregator stamps the trap tenant SOLELY from the device→tenant registry,
+    # and the router's generated quarantine stage seals snmptrap misses. A
+    # no-claim trap whose identity the registry never heard of is therefore
+    # TENANT_UNATTRIBUTABLE and joins the durable quarantine; it must NOT
+    # process as 'global' into corr_signals/RCA/ticketing while the router
+    # seals the same event. The old NAT-ambiguity concern is answered by D1:
+    # ambiguous identities are deliberately OMITTED from the registry, so they
+    # are misses that must quarantine (recoverable), not process. The identity
+    # mirrors the router's quarantine stage: device, falling back to the
+    # transport source address — the two tiers must agree on what is
+    # attributable, or a router-restored trap would be re-refused here.
     try:
-        tenant = verified_tenant(str(ev.get("tenant_id") or ""), device, "snmptrap")
+        tenant = verified_tenant(str(ev.get("tenant_id") or ""),
+                                 device or str(ev.get("host") or ""),
+                                 "snmptrap", registry_anchored=True)
     except TenantClaimRefused as exc:
         DEADLETTER_COUNT += 1
         TRAPS_DROPPED += 1
@@ -2767,7 +3134,7 @@ async def handle_snmptrap(ev: dict) -> None:
     if sig is None:
         TRAPS_DROPPED += 1   # unclassified — no RCA signal, kept searchable
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="snmptrap")
+    await batch_signal(sig.to_ch_row())  # batched: lane=snmptrap
     TRAPS_NORMALIZED += 1
     buffer_signal(sig)
     log.info("trap signal %s: %s %s", sig.kind, sig.entity_id, sig.attrs.get("state", ""))
@@ -2788,7 +3155,7 @@ async def handle_controller_event(ev: dict) -> None:
     if sig is None:
         CONTROLLER_EVENTS_DROPPED += 1  # no tenant/kind identity — default-closed
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="controller_events")
+    await batch_signal(sig.to_ch_row())  # batched: lane=controller_events
     CONTROLLER_EVENTS_SIGNALS += 1
     buffer_signal(sig)
     log.info("controller signal %s: %s", sig.kind, sig.entity_id)
@@ -2812,7 +3179,7 @@ async def handle_verification(ev: dict) -> None:
     if sig is None:
         VERIFICATION_DROPPED += 1  # no tenant/device identity or skipped — default-closed
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="verification")
+    await batch_signal(sig.to_ch_row())  # batched: lane=verification
     VERIFICATION_SIGNALS += 1
     buffer_signal(sig)
     log.info("verification signal %s %s: %s", sig.kind, sig.attrs.get("check", ""), sig.entity_id)
@@ -2939,7 +3306,7 @@ async def handle_wireless_event(ev: dict) -> None:
                         lane="wireless")
         sig = wireless_episode_signal(ep)
         if sig is not None and CORR_SIGNALS_ENABLED:
-            await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="wireless")
+            await batch_signal(sig.to_ch_row())  # batched: lane=wireless
             WIRELESS_SIGNALS += 1
             buffer_signal(sig)
             log.info("wireless onboarding signal %s: %s", sig.kind, sig.entity_id)
@@ -3012,12 +3379,12 @@ async def handle_cloud(ev: dict) -> None:
         # too — defense in depth against a chatty poller.
         global CLOCK_SKEW_SIGNALS
         if _clock_skew_due(tenant, sig.entity_id):
-            await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="cloud")
+            await batch_signal(sig.to_ch_row())  # batched: lane=cloud
             CLOCK_SKEW_SIGNALS += 1
             log.info("clock-skew signal (cloud lane): %s skew=%.0fs",
                      sig.entity_id, float(sig.value))
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="cloud")
+    await batch_signal(sig.to_ch_row())  # batched: lane=cloud
     CLOUD_SIGNALS += 1
     buffer_signal(sig)
     log.info("cloud signal %s: %s sev=%s acct=%s region=%s",
@@ -3053,7 +3420,7 @@ async def handle_app_identity(ev: dict) -> None:
         keep_deadletter_payload("app_identity", ev, exc)
         log.warning("dead-letter (app-identity): %s", exc)
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="app_identity")
+    await batch_signal(sig.to_ch_row())  # batched: lane=app_identity
     APP_ID_SIGNALS += 1
     buffer_signal(sig)
     # #98 Phase 4 — feed the tenant-scoped dst_ip→app index the flow lane joins
@@ -3089,7 +3456,7 @@ async def handle_app_edge(ev: dict) -> None:
     if sig is None:
         APP_EDGE_DROPPED += 1
         return
-    await ch_insert("netops.corr_signals", [sig.to_ch_row()], lane="app_edge")
+    await batch_signal(sig.to_ch_row())  # batched: lane=app_edge
     APP_EDGE_SIGNALS += 1
     buffer_signal(sig)
     log.info("app-edge signal %s: %s reason=%s lb=%s",
@@ -3131,7 +3498,7 @@ async def handle_syslog(ev: dict) -> None:
             log.warning("dead-letter (syslog): %s", exc)
             cp_sig = None
         if cp_sig is not None:
-            await ch_insert("netops.corr_signals", [cp_sig.to_ch_row()], lane="syslog")
+            await batch_signal(cp_sig.to_ch_row())  # batched: lane=syslog
             SYSLOG_SIGNALS += 1
             buffer_signal(cp_sig)
             log.info("control-plane signal %s: %s %s",
@@ -3147,7 +3514,7 @@ async def handle_syslog(ev: dict) -> None:
             log.warning("dead-letter (port-event): %s", exc)
             pe_sig = None
         if pe_sig is not None:
-            await ch_insert("netops.corr_signals", [pe_sig.to_ch_row()], lane="syslog")
+            await batch_signal(pe_sig.to_ch_row())  # batched: lane=syslog
             SYSLOG_SIGNALS += 1
             buffer_signal(pe_sig)
             log.info("port-event signal %s: %s", pe_sig.kind, pe_sig.entity_id)
@@ -3168,7 +3535,7 @@ async def handle_syslog(ev: dict) -> None:
             skew_sig = None
         if skew_sig is not None and _clock_skew_due(cp_tenant, skew_sig.entity_id):
             global CLOCK_SKEW_SIGNALS
-            await ch_insert("netops.corr_signals", [skew_sig.to_ch_row()], lane="syslog")
+            await batch_signal(skew_sig.to_ch_row())  # batched: lane=syslog
             CLOCK_SKEW_SIGNALS += 1
             SYSLOG_SIGNALS += 1
             log.info("clock-skew signal: %s skew=%.0fs", skew_sig.entity_id,
@@ -3347,6 +3714,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(consume()),
         asyncio.create_task(engine_loop()),
         asyncio.create_task(cloud_log_tailer()),  # #81 P3B file source (opt-in)
+        asyncio.create_task(batch_flush_loop()),  # ≤2s latency bound for batched writes
     ]
     try:
         yield
@@ -3358,6 +3726,11 @@ async def lifespan(_app: FastAPI):
                 await task
             except asyncio.CancelledError:
                 pass
+        # Shutdown flush: rows still buffered (e.g. engine-cycle episode signals
+        # with no Kafka offset to hold them) must not die with the process. A
+        # failure here was already counted by _note_ch_failure inside flush.
+        with contextlib.suppress(Exception):
+            await SIGNAL_BATCH.flush()
         await ch.close()
 
 
@@ -3441,6 +3814,20 @@ async def metrics_exposition():
     ]
     for table, n in sorted(CH_INSERT_FAILURES.items()):
         lines.append(f'corr_ch_insert_failures_total{{table="{table}"}} {n}')
+    lines += [
+        # Perf defect #2/#3: batched write path + bounded archive slices.
+        "# HELP corr_signal_batch Batched corr_signals write-path events.",
+        "# TYPE corr_signal_batch counter",
+        f'corr_signal_batch{{event="flushes"}} {BATCH_FLUSHES}',
+        f'corr_signal_batch{{event="rows_flushed"}} {BATCH_ROWS_FLUSHED}',
+        f'corr_signal_batch{{event="rows_quarantined"}} {BATCH_ROWS_QUARANTINED}',
+        "# TYPE corr_signal_batch_pending gauge",
+        f"corr_signal_batch_pending {SIGNAL_BATCH.pending()}",
+        "# TYPE corr_archive_rows_written counter",
+        f"corr_archive_rows_written {ARCHIVE_ROWS_WRITTEN}",
+        "# TYPE corr_archive_slices_damped counter",
+        f"corr_archive_slices_damped {ARCHIVE_SLICES_DAMPED}",
+    ]
     lines += [
         # F-40: events lost to a handler exception. Non-zero means a producer is
         # emitting a shape the engine cannot process — the payloads are in
@@ -3535,6 +3922,17 @@ async def health() -> dict:
             "quarantined_events": len(QUARANTINE),
             "quarantine_write_failures": QUARANTINE_WRITE_FAILURES,
             "topology_stale": _topology_stale(datetime.now(timezone.utc)),
+            # Perf defect #2: the batched corr_signals write path. pending>0 is
+            # normal (≤2s of traffic); rows_quarantined>0 means a rejected batch
+            # parked rows in the durable DLQ.
+            "signal_batch_pending": SIGNAL_BATCH.pending(),
+            "signal_batch_flushes": BATCH_FLUSHES,
+            "signal_batch_rows_flushed": BATCH_ROWS_FLUSHED,
+            "signal_batch_rows_quarantined": BATCH_ROWS_QUARANTINED,
+            # Perf defect #3: bounded archive slices — damped = re-persists whose
+            # slice membership had not moved (no re-write; readers fall back).
+            "archive_rows_written": ARCHIVE_ROWS_WRITTEN,
+            "archive_slices_damped": ARCHIVE_SLICES_DAMPED,
         },
         # Metric/trap lane observability — proves netops.metrics is fed and where
         # events are accepted vs dropped (the lane was historically empty).

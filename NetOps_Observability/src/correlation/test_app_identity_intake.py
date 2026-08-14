@@ -50,6 +50,7 @@ def test_handle_app_identity_valid_event_signals_and_buffers():
           "fusion_version": "appfuse-1", "dst_ip": "13.107.6.152", "flow_id": "f-1",
           "ts": datetime.now(timezone.utc).isoformat()}
     asyncio.run(main.handle_app_identity(ev))
+    asyncio.run(main.SIGNAL_BATCH.flush())  # drain the batched write path (see CHBatcher)
     rows = _appid_rows(ch)
     assert len(rows) == 1
     assert rows[0]["entity_id"] == "Microsoft Teams" and rows[0]["kind"] == "app_identity"

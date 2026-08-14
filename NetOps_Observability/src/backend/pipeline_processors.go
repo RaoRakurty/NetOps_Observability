@@ -82,7 +82,21 @@ func (s *server) writeProcessorsConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	content := processors.GenerateRouterConfig(rules)
+	content, err := processors.GenerateRouterConfig(rules)
+	if err != nil {
+		// F-11 (INV-F11-01/06, review fix 2026-08-14): generation fails when the
+		// quarantine stage cannot be rendered while sealing is configured.
+		// Returning here — BEFORE any write — keeps the last-good config live at
+		// the router (its quarantine stage intact), instead of hot-loading a
+		// config that lets registry-MISS events flow plaintext with no exit-78
+		// backstop. Loud and structured (§10): this line rides the applogs
+		// pipeline into OpenSearch, alongside the callers' stdout log; the 60s
+		// ticker and the next mutation both retry, so a transient custody
+		// failure self-heals.
+		logError("processors", "router config generation FAILED — keeping the last-good config (a config without the quarantine stage would store unattributable events in plaintext)",
+			map[string]any{"error": err.Error()})
+		return fmt.Errorf("generate router config: %w", err)
+	}
 	routerDir := filepath.Join(dir, "router")
 	target := filepath.Join(routerDir, processorsFileName)
 	// #nosec G304 -- the path is $PROCESSORS_DIR (operator-set env, from compose)

@@ -115,6 +115,7 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_interface_event_creates_device_telemetry_signal(self):
         await main.handle_metric(iface_event())
+        await main.SIGNAL_BATCH.flush()  # drain the batched write path
         self.assertEqual(main.METRICS_RECEIVED, 1)
         self.assertEqual(main.METRICS_ACCEPTED, 1)
         self.assertEqual(main.METRICS_DROPPED, 0)
@@ -136,6 +137,7 @@ class HandleMetricTest(unittest.IsolatedAsyncioTestCase):
             {"device": "leaf2", "signal_family": "bgp", "peer": "10.0.0.5",
              "collection_path": "snmp_poll", "metric": "device_bgp_peer_state",
              "value": 1, "ts": datetime.now(timezone.utc).isoformat()})
+        await main.SIGNAL_BATCH.flush()  # drain the batched write path
         sig = next(r for r in self.ch.rows if r["_table"] == "netops.corr_signals")
         self.assertEqual(sig["entity_id"], "leaf2:10.0.0.5")
         self.assertEqual(sig["modality_class"], "device_telemetry")

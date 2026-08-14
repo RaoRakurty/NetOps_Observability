@@ -101,6 +101,7 @@ class WirelessIntakeTest(unittest.TestCase):
 
     def test_onboarding_failure_writes_episode_and_one_signal(self):
         run(main.handle("netops.wireless_events", dict(ONBOARD_FAIL_EV)))
+        run(main.SIGNAL_BATCH.flush())  # drain the batched write path
         eps = self.rows("netops.wireless_onboarding_episodes")
         self.assertEqual(len(eps), 1)
         self.assertEqual(eps[0]["terminal_phase"], "addressing")

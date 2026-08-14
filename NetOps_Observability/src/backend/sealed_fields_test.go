@@ -82,10 +82,13 @@ func TestSealedFieldsWiringRoundTrips(t *testing.T) {
 func TestSealedFieldsReachTheRouterConfig(t *testing.T) {
 	liveSealing(t)
 
-	out := processors.GenerateRouterConfig([]processors.Rule{{
+	out, err := processors.GenerateRouterConfig([]processors.Rule{{
 		ID: "p-1", TenantID: "acme", Lane: "applogs", Type: processors.TypeSeal,
 		Enabled: true, Field: "card", DataType: "card", Order: 10,
 	}})
+	if err != nil {
+		t.Fatalf("GenerateRouterConfig: %v", err)
+	}
 	for _, want := range []string{
 		`encrypt!`,
 		`hmac(`,

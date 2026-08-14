@@ -567,6 +567,85 @@ def _direction(a: Node, b: Node, cfg: EngineConfig,
     return 0.0, "none"
 
 
+def _candidate_pairs(
+    n: int,
+    toks: list[frozenset[str]],
+    refs: list[frozenset[str]],
+    seam_evs: list[frozenset[str]],
+    devs: list[str | None],
+    adjacency: TopologyAdjacency,
+    memb: list[dict] | None,
+    route_hits: list[bool] | None,
+) -> set[tuple[int, int]]:
+    """The SOUND candidate superset for resolve_grounding: every pair NOT in this
+    set is guaranteed to ground to None (each grounding rung requires one of the
+    overlaps indexed here), so pruning changes operation count only — never the
+    admitted edges or the gap-hint total. Derivation, rung by rung:
+
+      ranks 1–6 via PathIndex.relate  → shared observation membership, or both
+                                        sides touching an evidence-bearing route ref
+      rank 2/7 seam membership        → both sides intersect one seam's
+                                        endpoint-values ∪ {seam_id} (by identity
+                                        refs OR tokens — both are indexed)
+      rank 1 shared resource identity → identity_refs overlap (⊆ token∪ref index:
+                                        every identity ref except the typed
+                                        `type:id` form is also a token, and a
+                                        shared typed form implies a shared id)
+      rank 3 L2/L3 adjacency          → device pair in the adjacency inventory
+      rank 7 shared token             → tokens overlap
+
+    Pure + deterministic: derived only from the same inputs resolve_grounding
+    reads; the returned pair set is order-independent."""
+    cand: set[tuple[int, int]] = set()
+
+    def _link(members: list[int]) -> None:
+        for x in range(len(members)):
+            for y in range(x + 1, len(members)):
+                a, b = members[x], members[y]
+                if a != b:
+                    cand.add((a, b) if a < b else (b, a))
+
+    # tokens ∪ identity refs (covers ranks 1, 7 and feeds the seam groups)
+    index: dict[str, list[int]] = {}
+    for i in range(n):
+        for t in toks[i] | refs[i]:
+            index.setdefault(t, []).append(i)
+    for members in index.values():
+        if len(members) > 1:
+            _link(members)
+    # seam groups: all nodes matching one seam's endpoint values / seam_id
+    for ev in seam_evs:
+        group = sorted({m for v in ev for m in index.get(v, ())})
+        if len(group) > 1:
+            _link(group)
+    # L2/L3 adjacency: nodes on the two ends of an inventoried link
+    dev_index: dict[str, list[int]] = {}
+    for i, d in enumerate(devs):
+        if d:
+            dev_index.setdefault(d, []).append(i)
+    for pair in adjacency.pairs:
+        ends = sorted(pair)
+        if len(ends) != 2:
+            continue
+        for i in dev_index.get(ends[0], ()):
+            for j in dev_index.get(ends[1], ()):
+                if i != j:
+                    cand.add((i, j) if i < j else (j, i))
+    # path relations: shared observation membership; route-touching nodes
+    if memb is not None:
+        obs_index: dict[str, list[int]] = {}
+        for i, m in enumerate(memb):
+            for oid in m:
+                obs_index.setdefault(oid, []).append(i)
+        for members in obs_index.values():
+            if len(members) > 1:
+                _link(members)
+    if route_hits is not None:
+        routed = [i for i in range(n) if route_hits[i]]
+        _link(routed)
+    return cand
+
+
 def build_edges(
     nodes: tuple[Node, ...], seams: tuple[SeamView, ...], cfg: EngineConfig,
     adjacency: TopologyAdjacency = NO_ADJACENCY,
@@ -575,55 +654,135 @@ def build_edges(
     paths: PathIndex | None = None,
 ) -> tuple[tuple[Edge, ...], int]:
     """Returns (admitted edges, topology_gap_hints). Pairs are evaluated in
-    deterministic node order; the earlier-onset node is always from_node."""
+    deterministic node order; the earlier-onset node is always from_node.
+
+    PERFORMANCE SHAPE (the #151-adjacent perf fix): the naive form recomputed
+    tokens()/identity_refs()/path memberships and re-sorted the seams for every
+    PAIR (~100µs/pair ⇒ ~48s synchronous at 1k nodes). Everything node-local is
+    now precomputed ONCE per node, the seams are sorted once, and only pairs the
+    inverted token/identity/seam/adjacency/observation index says are plausibly
+    relatable are scored at all (_candidate_pairs is a sound superset, so the
+    admitted edges and the gap-hint count are byte-identical to the naive loop —
+    pinned by test_engine_complexity.py against a brute-force reference).
+    Purity is untouched: no IO, no clock, no dict-order dependence."""
+    n = len(nodes)
+    if n < 2:
+        return (), 0
+    # ── per-node precomputation (node-local, pure) ────────────────────────────
+    toks = [nd.tokens() for nd in nodes]
+    refs = [nd.identity_refs() for nd in nodes]
+    declared = [nd.declared_path_ids() for nd in nodes]
+    windows = [nd.window() for nd in nodes]
+    devs = [nd.device_part() for nd in nodes]
+    seams_sorted = tuple(sorted(seams, key=lambda s: s.seam_id))
+    seam_evs = [s.endpoint_values() | {s.seam_id} for s in seams_sorted]
+    # per-node seam memberships, by STRUCTURAL identity and by token (rank 2 vs 7)
+    seam_ident = [frozenset(k for k, ev in enumerate(seam_evs) if refs[i] & ev)
+                  for i in range(n)]
+    seam_token = [frozenset(k for k, ev in enumerate(seam_evs) if toks[i] & ev)
+                  for i in range(n)]
+    memb: list[dict] | None = None
+    route_hits: list[bool] | None = None
+    if paths is not None:
+        memb = [paths.node_memberships(refs[i], windows[i], declared[i])
+                for i in range(n)]
+        rrefs = paths.route_refs()
+        route_hits = [bool(refs[i] & rrefs) for i in range(n)]
+
+    def _grounded(ai: int, bi: int) -> Grounding | None:
+        """resolve_grounding over the precomputed per-node views — same rungs,
+        same order, same tie-breaks (min seam ordinal == first seam in seam_id
+        order; relate_memberships ≡ relate)."""
+        rel = None
+        if paths is not None and memb is not None:
+            rel = paths.relate_memberships(memb[ai], memb[bi], refs[ai], refs[bi],
+                                           windows[ai], windows[bi])
+            if rel is not None and rel.rank <= 5:
+                return Grounding("topo", f"path:{rel.ref}", rel)
+        # rank 2 — seam membership by structural identity (first seam in seam_id order)
+        ident_both = seam_ident[ai] & seam_ident[bi]
+        if ident_both:
+            seam = seams_sorted[min(ident_both)]
+            return Grounding("seam", seam.seam_id, seam_relation(seam.seam_id, True))
+        # rank 1 — shared resource identity
+        shared_ident = refs[ai] & refs[bi]
+        if shared_ident:
+            ref = min(sorted(shared_ident))
+            return Grounding("topo", "shared:" + ref, resource_identity_relation(ref))
+        # rank 3 — L2/L3 adjacency
+        da, db = devs[ai], devs[bi]
+        if da and db and adjacency.adjacent(da, db):
+            lo, hi = sorted((da, db))
+            return Grounding("topo", f"adj:{lo}--{hi}", topology_link_relation(lo, hi))
+        # rank 6 — INFERRED route (the SAME deterministic relate result as above:
+        # a rank ≤ 5 relation already returned, so only a route relation reaches here)
+        if rel is not None:
+            return Grounding("topo", f"route:{rel.ref}", rel)
+        # rank 7 — candidate only: token-matched seam, then bare shared token
+        token_both = seam_token[ai] & seam_token[bi]
+        if token_both:
+            seam = seams_sorted[min(token_both)]
+            return Grounding("seam", seam.seam_id, seam_relation(seam.seam_id, False))
+        shared = toks[ai] & toks[bi]
+        if shared:
+            tok = min(sorted(shared))
+            return Grounding("topo", "shared:" + tok, shared_token_relation(tok))
+        return None
+
     edges: list[Edge] = []
-    gap_hints = 0
-    for i in range(len(nodes)):
-        for j in range(i + 1, len(nodes)):
-            a, b = nodes[i], nodes[j]
-            if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
-                a, b = b, a
-            grounding = resolve_grounding(a, b, seams, adjacency, paths)
-            if grounding is None:
-                gap_hints += 1
-                continue
-            # Temporal proximity is measured between the two nodes' ACTIVITY
-            # INTERVALS [onset … last signal], not their onsets. A long-running
-            # condition (e.g. a chronically flapping BGP session whose first sample
-            # in the window is minutes old) must not be penalized against a recent
-            # partner it OVERLAPS in time: onset-to-onset distance would decay the
-            # edge below attach_threshold and split a real cross-modality
-            # corroboration (customer-path probe ⟂ control-plane fault) into two
-            # objects. Overlapping intervals → gap 0 → full temporal weight; the
-            # grounding gate above still bounds WHICH pairs may edge at all.
-            a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
-            gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
-            w_t = math.exp(-gap / cfg.tau_s)
-            if grounding.ref.startswith("path:"):
-                # An OBSERVED path relation (ranks 1–5): measured, evidence-bearing.
-                w_topo = cfg.w_topo_path
-            elif grounding.ref.startswith("route:"):
-                # INFERRED (§4): a control-plane relation may support, never assert.
-                w_topo = cfg.w_topo_inferred
-            elif grounding.kind == "seam":
-                w_topo = cfg.w_topo_seam
-            elif grounding.ref.startswith("adj:"):
-                w_topo = cfg.w_topo_adjacency
-            else:
-                w_topo = cfg.w_topo_containment
-            # §8 degradation: a stale topology view (the Go exporter stopped
-            # refreshing seams/links) means grounding resolves against a last-known
-            # snapshot whose confidence has decayed — cap w_topo so a stale edge can
-            # never weigh like a fresh one. The admission gate itself never relaxes.
-            if topology_stale:
-                w_topo = min(w_topo, cfg.w_topo_stale_cap)
-            cross = a.signals[0].modality_class is not b.signals[0].modality_class
-            w_r = cfg.reinforce_cross_modality if cross else 1.0
-            weight = min(w_t * w_topo * w_r, 1.0)
-            if weight < cfg.attach_threshold:
-                continue
-            conf, basis = _direction(a, b, cfg, directed)
-            edges.append(Edge(a.key, b.key, grounding, weight, w_t, w_topo, w_r, conf, basis))
+    total_pairs = n * (n - 1) // 2
+    grounded_pairs = 0
+    for i, j in sorted(_candidate_pairs(n, toks, refs, seam_evs, devs, adjacency,
+                                        memb, route_hits)):
+        a, b = nodes[i], nodes[j]
+        ai, bi = i, j
+        if b.onset < a.onset or (b.onset == a.onset and b.key < a.key):
+            a, b = b, a
+            ai, bi = bi, ai
+        grounding = _grounded(ai, bi)
+        if grounding is None:
+            continue
+        grounded_pairs += 1
+        # Temporal proximity is measured between the two nodes' ACTIVITY
+        # INTERVALS [onset … last signal], not their onsets. A long-running
+        # condition (e.g. a chronically flapping BGP session whose first sample
+        # in the window is minutes old) must not be penalized against a recent
+        # partner it OVERLAPS in time: onset-to-onset distance would decay the
+        # edge below attach_threshold and split a real cross-modality
+        # corroboration (customer-path probe ⟂ control-plane fault) into two
+        # objects. Overlapping intervals → gap 0 → full temporal weight; the
+        # grounding gate above still bounds WHICH pairs may edge at all.
+        a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
+        gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
+        w_t = math.exp(-gap / cfg.tau_s)
+        if grounding.ref.startswith("path:"):
+            # An OBSERVED path relation (ranks 1–5): measured, evidence-bearing.
+            w_topo = cfg.w_topo_path
+        elif grounding.ref.startswith("route:"):
+            # INFERRED (§4): a control-plane relation may support, never assert.
+            w_topo = cfg.w_topo_inferred
+        elif grounding.kind == "seam":
+            w_topo = cfg.w_topo_seam
+        elif grounding.ref.startswith("adj:"):
+            w_topo = cfg.w_topo_adjacency
+        else:
+            w_topo = cfg.w_topo_containment
+        # §8 degradation: a stale topology view (the Go exporter stopped
+        # refreshing seams/links) means grounding resolves against a last-known
+        # snapshot whose confidence has decayed — cap w_topo so a stale edge can
+        # never weigh like a fresh one. The admission gate itself never relaxes.
+        if topology_stale:
+            w_topo = min(w_topo, cfg.w_topo_stale_cap)
+        cross = a.signals[0].modality_class is not b.signals[0].modality_class
+        w_r = cfg.reinforce_cross_modality if cross else 1.0
+        weight = min(w_t * w_topo * w_r, 1.0)
+        if weight < cfg.attach_threshold:
+            continue
+        conf, basis = _direction(a, b, cfg, directed)
+        edges.append(Edge(a.key, b.key, grounding, weight, w_t, w_topo, w_r, conf, basis))
+    # gap hints = pairs with NO grounding at all. Non-candidate pairs are
+    # guaranteed-None (soundness above), so the count is exactly the naive loop's.
+    gap_hints = total_pairs - grounded_pairs
     return tuple(sorted(edges, key=lambda e: (e.from_node, e.to_node))), gap_hints
 
 

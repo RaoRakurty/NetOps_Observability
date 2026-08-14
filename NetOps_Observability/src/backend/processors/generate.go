@@ -172,7 +172,13 @@ func orderRules(rs []Rule) {
 // GenerateRouterConfig renders the full processors.yaml from the enabled
 // processor set (disabled ones are filtered here — spec: short-circuit
 // disabled processors, so a disabled rule costs nothing at the edge).
-func GenerateRouterConfig(rules []Rule) string {
+//
+// It FAILS — rather than degrading — when sealing is configured but the
+// quarantine stage for a device-attribution lane cannot be rendered
+// (F-11 review fix 2026-08-14): a config silently missing that stage lets
+// registry-MISS events flow plaintext with no exit-78 backstop, no error and
+// no metric. On error the caller must keep the last-good config live.
+func GenerateRouterConfig(rules []Rule) (string, error) {
 	byLane := map[string][]Rule{}
 	total := 0
 	for _, r := range rules {
@@ -207,20 +213,26 @@ func GenerateRouterConfig(rules []Rule) string {
 		rs := byLane[lane]
 		chainInput := laneInputs[lane]
 		if engine != nil && quarantineLanes[lane] {
-			if body, ok := quarantineStageVRL(lane, engine); ok {
-				qn := quarantineName(lane)
-				fmt.Fprintf(&b, "  %s:\n", qn)
-				b.WriteString("    type: remap\n")
-				fmt.Fprintf(&b, "    inputs: [%s]\n", laneInputs[lane])
-				// Abort/error ⇒ DROP (counted by vector's component error
-				// metrics), never a reroute: the deadletter index is durable
-				// plaintext and must not receive an unsealed payload.
-				b.WriteString("    drop_on_abort: true\n")
-				b.WriteString("    drop_on_error: true\n")
-				b.WriteString("    source: |\n")
-				fmt.Fprintf(&b, "      %s\n", strings.ReplaceAll(body, "\n", "\n      "))
-				chainInput = qn
+			body, err := quarantineStageVRL(lane, engine)
+			if err != nil {
+				// Never render a config WITHOUT the quarantine stage while
+				// sealing is configured — see quarantineStageVRL. The caller
+				// keeps the last-good config (its stage intact) and surfaces
+				// the failure loudly.
+				return "", fmt.Errorf("quarantine stage for lane %s: %w", lane, err)
 			}
+			qn := quarantineName(lane)
+			fmt.Fprintf(&b, "  %s:\n", qn)
+			b.WriteString("    type: remap\n")
+			fmt.Fprintf(&b, "    inputs: [%s]\n", laneInputs[lane])
+			// Abort/error ⇒ DROP (counted by vector's component error
+			// metrics), never a reroute: the deadletter index is durable
+			// plaintext and must not receive an unsealed payload.
+			b.WriteString("    drop_on_abort: true\n")
+			b.WriteString("    drop_on_error: true\n")
+			b.WriteString("    source: |\n")
+			fmt.Fprintf(&b, "      %s\n", strings.ReplaceAll(body, "\n", "\n      "))
+			chainInput = qn
 		}
 		// 1. the ordered apply chain
 		fmt.Fprintf(&b, "  %s:\n", applyName(lane))
@@ -277,5 +289,5 @@ func GenerateRouterConfig(rules []Rule) string {
 	b.WriteString("        tags:\n")
 	fmt.Fprintf(&b, "          processor: \"{{ %s }}\"\n", AppliedField)
 	b.WriteString("          topic: \"{{ topic }}\"\n")
-	return b.String()
+	return b.String(), nil
 }

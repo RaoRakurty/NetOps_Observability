@@ -48,6 +48,7 @@ def test_handle_cloud_valid_event_signals_and_buffers():
     ev = {"tenant_id": "acme", "kind": "cloud_health", "app": "billing", "account": "123",
           "region": "us-east-1", "severity": "high", "ts": datetime.now(timezone.utc).isoformat()}
     asyncio.run(main.handle_cloud(ev))
+    asyncio.run(main.SIGNAL_BATCH.flush())  # drain the batched write path
     rows = _cloud_rows(ch)
     assert len(rows) == 1
     assert rows[0]["entity_id"] == "billing" and rows[0]["kind"] == "cloud_health"
@@ -92,6 +93,7 @@ def test_cloud_log_tailer_feeds_and_is_offset_tracked(tmp_path):
     main.CLOUD_LOGS_TENANT = "acme"
 
     fed = asyncio.run(main._scan_cloud_logs())
+    asyncio.run(main.SIGNAL_BATCH.flush())  # drain the batched write path
     assert fed == 2
     kinds = sorted(r["kind"] for r in _cloud_rows(ch))
     assert kinds == ["cloud_flow_log", "cloud_lb_log"]
@@ -119,5 +121,6 @@ def test_cloud_log_tailer_skips_non_signal_lines(tmp_path):
     main.CLOUD_LOGS_DIR = str(tmp_path)
     main.CLOUD_LOGS_TENANT = "acme"
     assert asyncio.run(main._scan_cloud_logs()) == 2  # 2 ACCEPT records → 2 rollups
+    asyncio.run(main.SIGNAL_BATCH.flush())  # drain the batched write path
     kinds = sorted(r["kind"] for r in _cloud_rows(ch))
     assert kinds == ["cloud_flow_pair", "cloud_flow_volume"]

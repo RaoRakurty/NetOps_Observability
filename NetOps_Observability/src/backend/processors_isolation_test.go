@@ -131,7 +131,10 @@ func TestProcessorRulesCrossOrgIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vrl := processors.GenerateRouterConfig(all)
+	vrl, err := processors.GenerateRouterConfig(all)
+	if err != nil {
+		t.Fatalf("GenerateRouterConfig: %v", err)
+	}
 	if !strings.Contains(vrl, `== "`+a.tenantID+`"`) || !strings.Contains(vrl, `== "`+b.tenantID+`"`) {
 		t.Fatalf("each rule must carry its own tenant guard:\n%s", vrl)
 	}

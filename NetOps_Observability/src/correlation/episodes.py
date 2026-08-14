@@ -51,6 +51,17 @@ CLOCK_BUDGET_S = {
     "free_running": 10.0,
 }
 
+# O(1) rolling-stats drift guard (perf: mean()/std() used to walk the full
+# 200-sample deque on EVERY call — ~6 full passes per metric sample across
+# episodes + the legacy z-score, saturating a core near 2-5k samples/s). The
+# baseline now carries shifted running sums (Σ(v−shift), Σ(v−shift)²) updated
+# O(1) per push; floating-point drift from the incremental eviction subtraction
+# is bounded by an EXACT O(window) recompute every this-many pushes (amortized
+# ≪ 1 op/sample) plus a clamp-and-recompute whenever variance goes negative.
+# Determinism is unchanged: the same ordered (ts, value) stream still yields
+# the same events (the aggregates are a pure function of the pushed values).
+STATS_RECOMPUTE_EVERY = 1024
+
 
 @dataclass(frozen=True)
 class EpisodeEvent:
@@ -94,16 +105,55 @@ class _SeriesState:
     last_ts: datetime | None = None
     interval_s: float = DEFAULT_INTERVAL_S
     clock_quality: str = "unknown"
+    # Shifted running aggregates over `values` (see STATS_RECOMPUTE_EVERY):
+    # _sum/_sumsq accumulate (v − _shift) so a large baseline mean with a small
+    # variance does not cancel catastrophically; the shift re-pivots to the
+    # current mean at every exact recompute. Maintained ONLY through push() —
+    # never append to `values` directly.
+    _sum: float = 0.0
+    _sumsq: float = 0.0
+    _shift: float = 0.0
+    _pushes: int = 0
+
+    def _recompute(self) -> None:
+        """Exact O(window) rebuild of the aggregates — the float-drift guard."""
+        n = len(self.values)
+        self._shift = (sum(self.values) / n) if n else 0.0
+        self._sum = sum(v - self._shift for v in self.values)
+        self._sumsq = sum((v - self._shift) ** 2 for v in self.values)
+
+    def push(self, v: float) -> None:
+        """Append one baseline sample, updating the rolling aggregates O(1)."""
+        if not self.values:
+            # Pivot on the first sample: a 1e9-baseline series must not
+            # accumulate (v − 0)² terms before the first periodic re-pivot.
+            self._shift, self._sum, self._sumsq = v, 0.0, 0.0
+        elif len(self.values) == self.values.maxlen:
+            old = self.values[0] - self._shift
+            self._sum -= old
+            self._sumsq -= old * old
+        self.values.append(v)
+        d = v - self._shift
+        self._sum += d
+        self._sumsq += d * d
+        self._pushes += 1
+        if self._pushes % STATS_RECOMPUTE_EVERY == 0:
+            self._recompute()
 
     def mean(self) -> float:
-        return sum(self.values) / len(self.values) if self.values else 0.0
+        n = len(self.values)
+        return (self._shift + self._sum / n) if n else 0.0
 
     def std(self) -> float:
         n = len(self.values)
         if n < 2:
             return 0.0
-        m = self.mean()
-        return (sum((v - m) ** 2 for v in self.values) / (n - 1)) ** 0.5
+        var = (self._sumsq - self._sum * self._sum / n) / (n - 1)
+        if var < 0.0:
+            # Cancellation artifact — rebuild exactly, then re-derive.
+            self._recompute()
+            var = max(0.0, (self._sumsq - self._sum * self._sum / n) / (n - 1))
+        return var ** 0.5
 
 
 class EpisodeDetector:
@@ -165,14 +215,14 @@ class EpisodeDetector:
 
         # Baseline warm-up: collect only.
         if len(st.values) < MIN_SAMPLES:
-            st.values.append(value)
+            st.push(value)
             return None
 
         mean = st.frozen_mean if st.open else st.mean()
         std = st.frozen_std if st.open else st.std()
         if std <= 0.0:
             if not st.open:
-                st.values.append(value)
+                st.push(value)
             return None
         z = (value - mean) / std
 
@@ -231,7 +281,7 @@ class EpisodeDetector:
                 peak_deviation=st.peak, integral=st.integral,
             )
 
-        st.values.append(value)  # below threshold: sample joins the baseline
+        st.push(value)  # below threshold: sample joins the baseline
         return None
 
     # -- open: track peak/integral, watch for clear ---------------------------
@@ -265,7 +315,7 @@ class EpisodeDetector:
             st.peak = 0.0
             st.integral = 0.0
             st.clear_run = 0
-            st.values.append(value)
+            st.push(value)
             return ev
         return None
 

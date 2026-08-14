@@ -26,7 +26,7 @@ var wantQuarantineLanes = []string{"syslog", "snmptrap", "flows"}
 
 func TestGeneratedConfigCarriesQuarantineStage(t *testing.T) {
 	withSealEngine(t, newStubSealEngine())
-	cfg := GenerateRouterConfig(nil)
+	cfg := mustGenerate(t, nil)
 
 	for _, lane := range wantQuarantineLanes {
 		qName := lane + "_quarantine"
@@ -117,7 +117,7 @@ func TestGeneratedConfigCarriesQuarantineStage(t *testing.T) {
 
 func TestQuarantineStageAbsentWithoutSealing(t *testing.T) {
 	withSealEngine(t, nil)
-	cfg := GenerateRouterConfig(nil)
+	cfg := mustGenerate(t, nil)
 	if strings.Contains(cfg, "_quarantine:") {
 		t.Fatal("without a seal engine the quarantine stage must not exist — " +
 			"a SECRET[] reference with no custody makes the router refuse to " +
@@ -131,16 +131,29 @@ func TestQuarantineStageAbsentWithoutSealing(t *testing.T) {
 	}
 }
 
-func TestQuarantineSurvivesEngineRefusal(t *testing.T) {
-	// The engine can refuse a scope (custody hiccup at generation time). The
-	// generator must then OMIT the quarantine stage entirely — never emit a
-	// half-built stage whose events would flow plaintext past a broken guard.
+func TestQuarantineEngineRefusalFailsGeneration(t *testing.T) {
+	// Review fix 2026-08-14 (supersedes the omit-the-stage contract this test
+	// used to pin): with sealing configured, an engine that refuses the
+	// quarantine scope (custody hiccup at generation time — e.g. a lazy
+	// first-mint store failure) must FAIL the whole generation. The old
+	// behavior omitted the stage silently: no error, no SECRET[] refs (so no
+	// exit-78 boot backstop), and every registry-MISS event flowed plaintext
+	// into the shared -untagged- indices until the next regen. The caller
+	// (writeProcessorsConfig) keeps the last-good config on error — pinned by
+	// TestProcessorsRegenKeepsLastGoodConfigOnQuarantineSealFailure.
 	e := newStubSealEngine()
-	e.failFor["quarantine"] = true
+	e.failFor[QuarantineScope] = true
 	withSealEngine(t, e)
-	cfg := GenerateRouterConfig(nil)
-	if strings.Contains(cfg, "_quarantine:") {
-		t.Fatal("engine refused the quarantine scope but the stage was emitted anyway")
+	cfg, err := GenerateRouterConfig(nil)
+	if err == nil {
+		t.Fatal("engine refused the quarantine scope but generation succeeded — " +
+			"the config would silently store unattributable events in plaintext (INV-F11-06)")
+	}
+	if !strings.Contains(err.Error(), QuarantineScope) {
+		t.Fatalf("the error must name the quarantine scope so the operator can act on it, got: %v", err)
+	}
+	if cfg != "" {
+		t.Fatalf("a failed generation must not hand back a partial config:\n%s", cfg)
 	}
 }
 

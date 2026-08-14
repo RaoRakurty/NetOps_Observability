@@ -27,6 +27,7 @@ at the bottom).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -275,6 +276,153 @@ def test_dead_letter_file_keeps_the_refused_payload(registry, monkeypatch, tmp_p
     assert "tenant claim refused" in rec["error"]
 
 
+# ── F-11 review fix 1: an UNATTRIBUTABLE refusal keeps NO payload ────────────
+#
+# The router seals the very same registry-MISS event under the quarantine key
+# (docs/design/f11-seal-or-quarantine.md D2). If the correlation DLQ kept the
+# event BODY — in the /deadletters ring and the durable corr-deadletter.ndjson
+# — that would be a second, PLAINTEXT durable copy of what the router just
+# encrypted: the exact confidentiality downgrade the owner invariant forbids.
+# For this refusal class the record is metadata + identity sha256 only. Every
+# OTHER dead-letter class (claim_mismatch, poison payloads, handler crashes)
+# keeps its payload for forensics, unchanged — pinned by the tests above.
+
+
+def test_unattributable_refusal_stores_metadata_and_identity_hash_only(
+        registry, monkeypatch, tmp_path):
+    dlq = tmp_path / "dlq"
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", str(dlq))
+    ch = RecordingCH()
+    monkeypatch.setattr(main, "ch", ch)
+    secret = "user jsmith password=hunter2 tried su on console"
+    want_sha = hashlib.sha256(b"ghost-device").hexdigest()
+
+    run(main.handle_syslog(_syslog(hostname="ghost-device", message=secret)))
+
+    assert ch.inserts == []
+    assert main.TENANT_REFUSALS == {"syslog:identity_unattributable": 1}
+
+    # The in-memory ring (/deadletters): metadata only.
+    rec = main.QUARANTINE[-1]
+    assert rec["topic"] == "deadletter:syslog"
+    assert rec["lane"] == "syslog"
+    assert rec["reason"] == "identity_unattributable"
+    assert rec["identity_sha"] == want_sha
+    assert rec["ts"]
+    assert "payload" not in rec, \
+        "the raw event body must never be kept for an unattributable event (F-11)"
+    dumped = json.dumps(rec)
+    assert secret not in dumped and "hunter2" not in dumped
+    assert "ghost-device" not in dumped, \
+        "the identity must be kept as a hash, never plaintext (F-11 D2)"
+
+    # The durable NDJSON: same contract.
+    lines = (dlq / "corr-deadletter.ndjson").read_text().strip().splitlines()
+    assert len(lines) == 1
+    assert secret not in lines[0] and "ghost-device" not in lines[0]
+    written = json.loads(lines[0])
+    assert written["identity_sha"] == want_sha
+    assert written["reason"] == "identity_unattributable"
+    assert "payload" not in written
+
+
+def test_unattributable_flow_refusal_keeps_no_payload_either(registry, monkeypatch):
+    monkeypatch.setattr(main, "ch", RecordingCH())
+    monkeypatch.setattr(main, "FLOW_CORRELATION_ENABLED", True)
+    main._FLOW_AGG.clear()
+
+    run(main.handle_flow(_flow(sampler_address="198.51.100.7")))
+
+    assert main._FLOW_AGG == {}
+    assert main.TENANT_REFUSALS == {"flows:identity_unattributable": 1}
+    rec = main.QUARANTINE[-1]
+    assert rec["reason"] == "identity_unattributable"
+    assert rec["identity_sha"] == hashlib.sha256(b"198.51.100.7").hexdigest()
+    assert "payload" not in rec
+    assert "198.51.100.7" not in json.dumps(rec)
+
+
+# ── F-11 review fix 3: the snmptrap lane is registry-anchored too ────────────
+#
+# The trap tenant is stamped by the aggregator SOLELY from the device→tenant
+# registry (same trust source as syslog/flows), and the router's generated
+# quarantine stage seals snmptrap misses. Correlation must agree: a no-claim
+# trap from an identity the registry never heard of is TENANT_UNATTRIBUTABLE
+# and joins the quarantine — it must NOT process as 'global' into
+# corr_signals/RCA/ticketing (INV-F11-10). D1 answers the NAT-ambiguity
+# concern: ambiguous identities are deliberate registry misses that must
+# quarantine, not process.
+
+
+def _trap(**over) -> dict:
+    ev = {
+        "device": "leaf1",
+        "host": "10.1.1.1",
+        "trap_oid": "1.3.6.1.6.3.1.1.5.3",
+        "trap_name": "linkDown",
+        "severity": "warning",
+        "varbinds": [{"oid": "1.3.6.1.2.1.31.1.1.1.1.7", "value": "Ethernet7"}],
+    }
+    ev.update(over)
+    return ev
+
+
+def test_unattributable_trap_is_quarantined_not_processed_as_global(registry, monkeypatch):
+    ch = RecordingCH()
+    monkeypatch.setattr(main, "ch", ch)
+
+    run(main.handle_snmptrap(_trap(device="ghost-sw", host="203.0.113.50")))
+
+    assert ch.inserts == [], \
+        "an unattributable trap reached corr_signals — the RCA/ticketing surface (INV-F11-10)"
+    assert main.TENANT_REFUSALS == {"snmptrap:identity_unattributable": 1}
+    rec = main.QUARANTINE[-1]
+    assert rec["topic"] == "deadletter:trap"
+    assert rec["reason"] == "identity_unattributable"
+    assert "payload" not in rec
+
+
+def test_trap_from_known_platform_device_still_processes_as_global(registry, monkeypatch):
+    """The discriminator is the registry MISS, never tenant=="" — a KNOWN
+    platform device's traps keep feeding platform self-monitoring RCA."""
+    ch = RecordingCH()
+    monkeypatch.setattr(main, "ch", ch)
+
+    run(main.handle_snmptrap(_trap(device="plat1", host="10.9.9.9")))
+    run(main.SIGNAL_BATCH.flush())  # drain the batched write path (see CHBatcher)
+
+    rows = ch.rows_for("netops.corr_signals")
+    assert rows, "a known platform device's trap stopped producing a signal"
+    assert {r["tenant_id"] for r in rows} == {"global"}
+    assert main.TENANT_REFUSALS == {}
+
+
+def test_trap_identity_falls_back_to_source_address_like_the_router(registry, monkeypatch):
+    """quarantine.go keys the snmptrap identity on device-falling-back-to-host;
+    correlation must key on the SAME identity, or the two tiers disagree about
+    what is attributable (router restores an event correlation then refuses)."""
+    from entity_resolver import EMPTY_RESOLVER
+    ch = RecordingCH()
+    monkeypatch.setattr(main, "ch", ch)
+    monkeypatch.setattr(main, "cached_entity_resolver_all", lambda: EMPTY_RESOLVER)
+
+    # device unattributed, but the source address IS a registry identity
+    # (10.1.1.1 → acme): attributable, so NOT refused. The classifier still
+    # emits no signal for a device-less trap — that is the anti-phantom
+    # guardrail, not a refusal.
+    run(main.handle_snmptrap(_trap(device="")))
+
+    assert main.TENANT_REFUSALS == {}
+    assert list(main.QUARANTINE) == []
+
+
+def test_forged_trap_tenant_on_unknown_device_fails_closed(registry, monkeypatch):
+    monkeypatch.setattr(main, "ch", RecordingCH())
+    run(main.handle_snmptrap(_trap(device="ghost-sw", host="203.0.113.50",
+                                   tenant_id="acme")))
+    assert main.TENANT_REFUSALS == {"snmptrap:identity_unknown": 1}
+
+
 # ── (b) the legitimate event still flows, unchanged ──────────────────────────
 
 
@@ -283,6 +431,7 @@ def test_legitimate_claim_flows_end_to_end_under_the_registry_tenant(registry, m
     monkeypatch.setattr(main, "ch", ch)
 
     run(main.handle_syslog(_syslog(tenant_id="acme")))
+    run(main.SIGNAL_BATCH.flush())  # drain the batched write path
 
     rows = ch.rows_for("netops.corr_signals")
     assert rows, "a legitimate syslog event stopped producing a signal"
@@ -299,6 +448,7 @@ def test_untenanted_event_still_resolves_through_the_registry(registry, monkeypa
     monkeypatch.setattr(main, "ch", ch)
 
     run(main.handle_syslog(_syslog()))
+    run(main.SIGNAL_BATCH.flush())  # drain the batched write path
 
     rows = ch.rows_for("netops.corr_signals")
     assert rows and {r["tenant_id"] for r in rows} == {"acme"}
@@ -420,6 +570,7 @@ def test_signal_inserts_carry_the_signals_own_scope(registry, monkeypatch):
 
     monkeypatch.setattr(main, "ch", ScopeCH())
     run(main.handle_syslog(_syslog(tenant_id="acme")))
+    run(main.SIGNAL_BATCH.flush())  # drain the batched write path
     assert scopes and set(scopes) == {"acme"}
 
 

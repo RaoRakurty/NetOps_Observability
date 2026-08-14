@@ -917,6 +917,28 @@ class PathIndex:
         return obs.definition.network_context if obs.definition else ""
 
     # ── §6: the join rules, applied to every candidate relation ──────────────
+    def node_memberships(self, refs: frozenset[str],
+                         window: tuple[datetime, datetime],
+                         path_ids: frozenset[str] = frozenset(),
+                         ) -> dict[str, _Membership]:
+        """ONE node's explicit path-observation memberships, keyed by observation
+        id. Pure and node-local, so the caller (build_edges) can compute it ONCE
+        per node instead of once per PAIR — relate() is exactly
+        relate_memberships(node_memberships(a), node_memberships(b), …)."""
+        return {m.observation.observation_id: m
+                for m in self._memberships(refs, window, path_ids)}
+
+    def route_refs(self) -> frozenset[str]:
+        """Every ref named by an evidence-bearing rank-6 route — the pruning
+        surface for route-relatable candidate pairs. A pair where either side
+        intersects none of these can never receive a route relation."""
+        out: set[str] = set()
+        for r in self.view.routes:
+            if r.evidence_ref:
+                out.add(r.from_ref)
+                out.add(r.to_ref)
+        return frozenset(out)
+
     def relate(self, a_refs: frozenset[str], b_refs: frozenset[str],
                a_window: tuple[datetime, datetime], b_window: tuple[datetime, datetime],
                a_paths: frozenset[str] = frozenset(),
@@ -925,10 +947,19 @@ class PathIndex:
 
         Never falls back to token overlap — the caller owns that (as a candidate).
         """
-        ma = {m.observation.observation_id: m
-              for m in self._memberships(a_refs, a_window, a_paths)}
-        mb = {m.observation.observation_id: m
-              for m in self._memberships(b_refs, b_window, b_paths)}
+        return self.relate_memberships(
+            self.node_memberships(a_refs, a_window, a_paths),
+            self.node_memberships(b_refs, b_window, b_paths),
+            a_refs, b_refs, a_window, b_window,
+        )
+
+    def relate_memberships(self, ma: dict[str, _Membership], mb: dict[str, _Membership],
+                           a_refs: frozenset[str], b_refs: frozenset[str],
+                           a_window: tuple[datetime, datetime],
+                           b_window: tuple[datetime, datetime]) -> Relation | None:
+        """relate() over PRECOMPUTED per-node memberships (see node_memberships).
+        Byte-identical result to relate(); exists so an O(n²) pair loop does not
+        recompute each node's memberships O(n) times."""
         best: Relation | None = None
         for oid in sorted(set(ma) & set(mb)):
             rel = self._relation_from(ma[oid], mb[oid], a_window, b_window)

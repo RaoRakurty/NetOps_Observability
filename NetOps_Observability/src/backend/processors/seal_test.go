@@ -196,7 +196,7 @@ func TestSealAlwaysBindsADataType(t *testing.T) {
 // all line up.
 func TestSealReachesTheGeneratedConfig(t *testing.T) {
 	withSealEngine(t, newStubSealEngine())
-	out := GenerateRouterConfig([]Rule{sealRule(t, nil)})
+	out := mustGenerate(t, []Rule{sealRule(t, nil)})
 	if !strings.Contains(out, "# seal p-seal/card/card") {
 		t.Fatalf("seal statement missing from the generated router config:\n%s", out)
 	}

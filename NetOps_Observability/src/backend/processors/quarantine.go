@@ -90,16 +90,21 @@ func quarantineSourceIPVRL(lane string) string {
 	}
 }
 
-// quarantineStageVRL renders the stage body for one lane, or ("", false)
-// when the engine cannot seal the quarantine scope — the caller must then
-// omit the stage entirely (a half-built stage would pass plaintext through
-// a broken guard; absent means the baseline untagged path, which is exactly
-// the pre-F-11 state and is at least honest).
-func quarantineStageVRL(lane string, e SealEngine) (string, bool) {
+// quarantineStageVRL renders the stage body for one lane, or an error when
+// the engine cannot seal the quarantine scope. The error is FATAL to the
+// whole generation on purpose (review fix 2026-08-14): the previous contract
+// — omit the stage and carry on — silently rendered a config with no
+// quarantine stage AND no SECRET[] references, so neither the exit-78 boot
+// check nor any log or metric fired, and registry-MISS events flowed
+// plaintext into the shared -untagged- indices until the next regen. With
+// sealing configured there is no honest config without this stage; the
+// caller must fail the regeneration so the router keeps the LAST-GOOD
+// config, whose stage is intact.
+func quarantineStageVRL(lane string, e SealEngine) (string, error) {
 	snippet, err := e.EdgeSnippet(QuarantineScope, QuarantineProcessorID,
 		QuarantinePayloadField, "quarantine", "."+QuarantinePayloadField)
 	if err != nil {
-		return "", false
+		return "", fmt.Errorf("seal engine refused the %s scope: %w", QuarantineScope, err)
 	}
 	var b strings.Builder
 	// Guard: registry MISS and still-untenanted. Both conditions on purpose —
@@ -134,5 +139,5 @@ func quarantineStageVRL(lane string, e SealEngine) (string, bool) {
 	// regression, empty-plaintext edge — abort, which drops the event.
 	b.WriteString(`  if !starts_with(to_string(.` + QuarantinePayloadField + `) ?? "", "<enc:v1:") { abort }` + "\n")
 	b.WriteString("}")
-	return b.String(), true
+	return b.String(), nil
 }

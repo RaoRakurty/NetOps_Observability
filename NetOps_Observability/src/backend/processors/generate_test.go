@@ -17,6 +17,18 @@ func validRule(t *testing.T, r Rule) Rule {
 	return r
 }
 
+// mustGenerate wraps GenerateRouterConfig for the tests that exercise a
+// HEALTHY generation path — since the F-11 review fix the generator can fail
+// (quarantine stage unrenderable), and these tests must notice, not ignore it.
+func mustGenerate(t *testing.T, rules []Rule) string {
+	t.Helper()
+	out, err := GenerateRouterConfig(rules)
+	if err != nil {
+		t.Fatalf("GenerateRouterConfig: %v", err)
+	}
+	return out
+}
+
 func TestValidateRejectsUnsafeShapes(t *testing.T) {
 	bad := []struct {
 		why string
@@ -67,7 +79,7 @@ func TestGenerateEscapesUserInput(t *testing.T) {
 		TenantID: "acme", Lane: "syslog", Type: TypeSetField, Enabled: true,
 		Field: "note", Value: `x" } .tenant_id = "evil" if true { "`,
 	})
-	out := GenerateRouterConfig([]Rule{r})
+	out := mustGenerate(t, []Rule{r})
 	if !strings.Contains(out, `\" } .tenant_id = \"evil\" if true { \"`) {
 		t.Fatalf("value must be escaped into a string literal:\n%s", out)
 	}
@@ -87,7 +99,7 @@ func TestGenerateShapeAndOrdering(t *testing.T) {
 			Field: "card", KeepLast: 4, Order: 20, CreatedAt: base}),
 		{ID: "off", TenantID: "acme", Lane: "syslog", Type: TypeDropField, Field: "x", Enabled: false},
 	}
-	out := GenerateRouterConfig(rules)
+	out := mustGenerate(t, rules)
 
 	for _, lane := range []string{"applogs", "syslog", "snmptrap", "cloudlogs", "flows"} {
 		if !strings.Contains(out, lane+"_rules:") || !strings.Contains(out, lane+"_rules_apply:") {
@@ -112,7 +124,7 @@ func TestGenerateShapeAndOrdering(t *testing.T) {
 	if !strings.Contains(out, "type: filter") || !strings.Contains(out, DropField) {
 		t.Fatalf("drop filter missing:\n%s", out)
 	}
-	if out != GenerateRouterConfig(rules) {
+	if out != mustGenerate(t, rules) {
 		t.Fatal("generator must be deterministic (watch-config sees phantom diffs otherwise)")
 	}
 }
@@ -346,7 +358,7 @@ func TestDefaultConfigMatchesGenerator(t *testing.T) {
 	if err != nil {
 		t.Skipf("seed file not readable from this tree: %v", err)
 	}
-	if got := GenerateRouterConfig(nil); got != string(want) {
+	if got := mustGenerate(t, nil); got != string(want) {
 		t.Errorf("processors-default.yaml is stale — regenerate it from GenerateRouterConfig(nil).\n"+
 			"got %d bytes, seed %d bytes", len(got), len(want))
 	}
@@ -379,7 +391,7 @@ func TestGeneratedLiteralsEscapeDollar(t *testing.T) {
 		Field: "message", PatternKind: PatternRegex, Pattern: `secret=[a-z]+$`,
 		Replacement: "$1[GONE]",
 	})
-	out := GenerateRouterConfig([]Rule{r})
+	out := mustGenerate(t, []Rule{r})
 	for _, bad := range []string{"[a-z]+$'", `"$1[GONE]"`} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("unescaped $ reached the config (%q) — Vector would refuse to start:\n%s", bad, out)
@@ -400,7 +412,7 @@ func TestFieldAllCompilesAsASweep(t *testing.T) {
 		ID: "s", TenantID: "acme", Lane: "syslog", Type: TypeRedactPattern, Enabled: true,
 		Field: FieldAll, PatternKind: PatternBuiltin, Pattern: "email",
 	})
-	out := GenerateRouterConfig([]Rule{r})
+	out := mustGenerate(t, []Rule{r})
 	if strings.Contains(out, ".*") {
 		t.Fatalf("FieldAll must not compile to the single-field form (invalid VRL):\n%s", out)
 	}
@@ -433,7 +445,7 @@ func TestGeneratedConfigSurvivesMultilineActionVRL(t *testing.T) {
 		validRule(t, Rule{ID: "s1", TenantID: "acme", Lane: "snmptrap", Type: TypeSeal, Enabled: true,
 			Field: "secret_note", DataType: "note", Order: 1}),
 	}
-	out := GenerateRouterConfig(rules)
+	out := mustGenerate(t, rules)
 
 	if !strings.Contains(out, "<enc:v1:stub>") {
 		t.Fatalf("seal rule did not compile into the config:\n%s", out)

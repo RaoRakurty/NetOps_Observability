@@ -13,6 +13,8 @@ Proves the trap guardrail the architecture requires (Layer 1G + Layer 4D):
     alarm is a blind spot
   * handle_snmptrap counts received / normalized / dropped and never crashes
 """
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 
@@ -147,9 +149,30 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
         main.ch = FakeCH()
         main.CORR_SIGNALS_ENABLED = True
         main.TRAPS_RECEIVED = main.TRAPS_NORMALIZED = main.TRAPS_DROPPED = main.TRAPS_RECANON = 0
+        # F-11: the snmptrap lane is registry-ANCHORED (like syslog/flows), so
+        # these handler tests need the device→tenant registry to know leaf1 —
+        # a KNOWN platform device (tenant "") that still processes as global.
+        # The NAT-collapsed test's 192.0.2.120 stays a registry MISS on
+        # purpose: it now drops via the identity_unattributable quarantine.
+        self._tmp = tempfile.TemporaryDirectory()
+        csv_path = os.path.join(self._tmp.name, "device_tenant.csv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("identity,tenant_id\nleaf1,\n")
+        self._prev_registry = (main.TENANT_ENRICHMENT_FILE, main._tenant_map,
+                               main._tenant_mtime)
+        main.TENANT_ENRICHMENT_FILE = csv_path
+        main._tenant_map = {}
+        main._tenant_mtime = -1.0
+        self.addCleanup(self._restore_registry)
+
+    def _restore_registry(self):
+        (main.TENANT_ENRICHMENT_FILE, main._tenant_map,
+         main._tenant_mtime) = self._prev_registry
+        self._tmp.cleanup()
 
     async def test_classified_trap_creates_signal_and_counts(self):
         await main.handle_snmptrap(trap())
+        await main.SIGNAL_BATCH.flush()  # drain the batched write path
         self.assertEqual(main.TRAPS_RECEIVED, 1)
         self.assertEqual(main.TRAPS_NORMALIZED, 1)
         self.assertEqual(main.TRAPS_DROPPED, 0)
@@ -179,6 +202,7 @@ class HandleSnmptrapCountersTest(unittest.IsolatedAsyncioTestCase):
             await main.handle_snmptrap(trap(device="", host="10.0.12.1"))
         finally:
             main.cached_entity_resolver_all = orig
+        await main.SIGNAL_BATCH.flush()  # drain the batched write path
         self.assertEqual(main.TRAPS_RECANON, 1)
         self.assertEqual(main.TRAPS_NORMALIZED, 1)
         sigs = [r for r in self.rows if r["_table"] == "netops.corr_signals"]
