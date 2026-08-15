@@ -11,6 +11,8 @@
 #   docker compose up -d
 
 set -euo pipefail
+# §16.2: state the PATH — this may run from a minimal recovery shell.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 IN="${1:-}"
 if [[ -z "$IN" || ! -f "$IN" ]]; then
@@ -28,6 +30,93 @@ STAGE="$(mktemp -d -t netops-restore-XXXXXX)"
 # and print THAT path.
 KEEP="${RESTORE_KEEP_DIR:-$ROOT/data/restore-staging}"
 trap 'rm -rf "$STAGE"' EXIT
+
+# ---------------------------------------------------------------------------
+# H4: authenticate the artifact BEFORE extracting a byte. backup.sh writes a
+# $OUT.sig sidecar (sha256 + optional HMAC-SHA256 keyed with BACKUP_SIGN_KEY);
+# a restore is the single most credulous moment in the system's life — it
+# overwrites data/ and .env with whatever the file says — so an artifact that
+# cannot prove what it is gets refused, not extracted.
+#
+#   * sidecar missing            → refuse (RESTORE_FORCE=1 for pre-H4 files)
+#   * sha256 mismatch            → refuse, NO override (corrupt/tampered)
+#   * HMAC present, no local key → refuse (RESTORE_FORCE=1 if you accept
+#                                  integrity-only)
+#   * HMAC mismatch              → refuse, NO override (tampered or wrong key)
+#   * HMAC absent but we HOLD a key → refuse (a stripped MAC is exactly what a
+#                                  downgrade attack looks like; RESTORE_FORCE=1)
+# ---------------------------------------------------------------------------
+hmac_file() {  # HMAC-SHA256 of $1, keyed via the environment — never argv
+  python3 - "$1" <<'PY'
+import hashlib, hmac, os, sys
+h = hmac.new(os.environ["BACKUP_SIGN_KEY"].encode(), digestmod=hashlib.sha256)
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+}
+
+SIG="$IN.sig"
+SIGN_KEY="${BACKUP_SIGN_KEY:-}"
+if [[ -z "$SIGN_KEY" && -f "$COMPOSE_DIR/.env" ]]; then
+  SIGN_KEY="$(sed -n 's/^BACKUP_SIGN_KEY=//p' "$COMPOSE_DIR/.env" | head -1)"
+fi
+if [[ ! -f "$SIG" ]]; then
+  if [[ "${RESTORE_FORCE:-0}" != "1" ]]; then
+    echo "!! REFUSING: $IN has no signature sidecar ($SIG)." >&2
+    echo "   Without it, integrity and provenance are unverifiable (H4). If this is" >&2
+    echo "   a pre-signature backup you trust, re-run with RESTORE_FORCE=1." >&2
+    exit 1
+  fi
+  echo "!! RESTORE_FORCE=1: proceeding WITHOUT signature verification." >&2
+else
+  echo "→ Verifying signature"
+  WANT_SHA="$(sed -n 's/^sha256 //p' "$SIG" | head -1)"
+  HAVE_SHA="$(sha256sum -- "$IN" | cut -d' ' -f1)"
+  if [[ -z "$WANT_SHA" || "$WANT_SHA" != "$HAVE_SHA" ]]; then
+    echo "!! REFUSING: sha256 mismatch against $SIG — the artifact was modified or" >&2
+    echo "   corrupted after it was written. There is no override for this: restore" >&2
+    echo "   from a known-good copy instead." >&2
+    exit 1
+  fi
+  WANT_MAC="$(sed -n 's/^hmac-sha256 //p' "$SIG" | head -1)"
+  if [[ -n "$WANT_MAC" ]]; then
+    if [[ -z "$SIGN_KEY" ]]; then
+      if [[ "${RESTORE_FORCE:-0}" != "1" ]]; then
+        echo "!! REFUSING: $SIG carries an HMAC but no BACKUP_SIGN_KEY is available" >&2
+        echo "   (environment or $COMPOSE_DIR/.env) — authenticity cannot be checked." >&2
+        echo "   Provide the key, or RESTORE_FORCE=1 to accept sha256-only integrity." >&2
+        exit 1
+      fi
+      echo "!! RESTORE_FORCE=1: HMAC present but unverifiable (no key) — sha256 only." >&2
+    else
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "!! REFUSING: python3 is required to verify the HMAC and is not on PATH." >&2
+        exit 1
+      fi
+      HAVE_MAC="$(BACKUP_SIGN_KEY="$SIGN_KEY" hmac_file "$IN")"
+      if [[ "$WANT_MAC" != "$HAVE_MAC" ]]; then
+        echo "!! REFUSING: HMAC mismatch — the artifact does NOT authenticate against" >&2
+        echo "   BACKUP_SIGN_KEY (tampered, or signed with a different key). No override." >&2
+        exit 1
+      fi
+      echo "   signature OK (sha256 + HMAC)"
+    fi
+  else
+    if [[ -n "$SIGN_KEY" ]]; then
+      if [[ "${RESTORE_FORCE:-0}" != "1" ]]; then
+        echo "!! REFUSING: this host holds BACKUP_SIGN_KEY but $SIG has no HMAC line —" >&2
+        echo "   a stripped MAC is exactly what a downgrade attack looks like." >&2
+        echo "   RESTORE_FORCE=1 to accept sha256-only integrity anyway." >&2
+        exit 1
+      fi
+      echo "!! RESTORE_FORCE=1: accepting MAC-less sidecar (sha256 verified)." >&2
+    else
+      echo "   sha256 OK (no HMAC in sidecar, no local key — integrity only)"
+    fi
+  fi
+fi
 
 echo "→ Unpacking"
 zstd -dc "$IN" | tar -C "$STAGE" -xf -
@@ -51,11 +140,30 @@ else
 fi
 
 echo "→ Restoring data/"
-rsync -a --delete "$STAGE/data/" "$DATA_DIR/"
+# H4/H5: backup.sh EXCLUDES the custody root (data/swtpm, data/secrets-seal)
+# and the generated dirs (data/backups, data/restore-staging) from the
+# archive. The excludes here MUST match: without them, --delete would read the
+# archive's absence of data/swtpm as "delete the live swtpm state" — i.e. a
+# routine restore would destroy the host's KEK. The custody root is restored
+# only by the operator key ceremony, never by this script.
+rsync -a --delete \
+    --exclude=/swtpm --exclude=/secrets-seal \
+    --exclude=/backups --exclude=/restore-staging \
+    "$STAGE/data/" "$DATA_DIR/"
 
 if [[ -f "$STAGE/env.backup" ]]; then
   echo "→ Restoring .env"
+  # backup.sh strips BACKUP_SIGN_KEY out of env.backup on purpose (the archive
+  # must not carry the key that authenticates it). Carry the live host's key
+  # forward so the NEXT backup is still signed after this restore.
+  CUR_SIGN_KEY=""
+  if [[ -f "$COMPOSE_DIR/.env" ]]; then
+    CUR_SIGN_KEY="$(sed -n 's/^BACKUP_SIGN_KEY=//p' "$COMPOSE_DIR/.env" | head -1)"
+  fi
   install -m 0600 "$STAGE/env.backup" "$COMPOSE_DIR/.env"
+  if [[ -n "$CUR_SIGN_KEY" ]] && ! grep -q '^BACKUP_SIGN_KEY=' "$COMPOSE_DIR/.env"; then
+    printf 'BACKUP_SIGN_KEY=%s\n' "$CUR_SIGN_KEY" >> "$COMPOSE_DIR/.env"
+  fi
 fi
 
 if [[ -d "$STAGE/src-config" ]]; then
@@ -86,3 +194,9 @@ echo "   docker compose exec -T opensearch curl -s \\"
 echo "     -X POST 'http://localhost:9200/_snapshot/netops-fs/<snapshot>/_restore' \\"
 echo "     -H 'Content-Type: application/json' -d '{\"indices\":\"netops-*\"}'"
 echo "   (list them: curl 'http://localhost:9200/_cat/snapshots/netops-fs?v')"
+echo
+echo "CUSTODY: data/swtpm and data/secrets-seal were NOT in this archive and were"
+echo "NOT touched (deliberate — swtpm state re-derives the KEK, so it is backed up"
+echo "separately under the operator key ceremony). If this host's custody root is"
+echo "lost, restore it from that ceremony's media BEFORE starting the stack, or"
+echo "the vault cannot unwrap its DEKs."

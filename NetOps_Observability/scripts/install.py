@@ -373,10 +373,8 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: Path | None) ->
     # generated plan artifacts, so rollback restores everything managed.
     for src, bak in rp.plan_backup_paths(env_path).items():
         if os.path.exists(src):
-            Path(bak).write_text(Path(src).read_text())
-            os.chmod(bak, 0o600)
-    env_path.write_text(rp.splice_env(env_text, rp.env_block(plan)))
-    env_path.chmod(0o600)
+            _write_private(Path(bak), Path(src).read_text())
+    _write_private(env_path, rp.splice_env(env_text, rp.env_block(plan)))
     for name, text in (("resource-plan.json",
                         json.dumps(plan, indent=2, sort_keys=True) + "\n"),
                        ("resource-plan.txt", rp.plan_txt(plan))):
@@ -388,6 +386,29 @@ def run_resource_plan(env_path: Path, profile: str, sizing_file: Path | None) ->
 
 
 # ---- .env generation --------------------------------------------------------
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` owner-only FROM THE FIRST BYTE (M26).
+
+    Path.write_text() + chmod(0o600) leaves a umask-wide window (0644 on a
+    stock host) between creation and chmod during which any local user can
+    open the file — and every caller here writes stack secrets (.env, its
+    .rotate.bak / .plan.bak siblings). O_EXCL on a fresh temp name in the same
+    directory, mode 0600 at open, then an atomic rename over the destination;
+    a crashed run leaves at worst a 0600 temp file, never a half-written or
+    world-readable secret."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass  # the normal case: replace() already moved it into place
+
 
 def generate_secrets() -> dict[str, str]:
     """Every secret a fresh install mints.
@@ -860,8 +881,7 @@ OS_AGGREGATOR_PASSWORD={secrets_map["OS_AGGREGATOR_PASSWORD"]}
 #   osd           OpenSearch Dashboards (omitted by --core bundles)
 COMPOSE_PROFILES={profiles}
 """
-    env_path.write_text(body)
-    env_path.chmod(0o600)
+    _write_private(env_path, body)
     ok(f"wrote {env_path} (mode 0600)")
     return secrets_map
 
@@ -1031,14 +1051,12 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
     # -- write .env (line surgery: operator edits survive) -------------------
     text = env_path.read_text()
     backup = env_path.with_suffix(env_path.suffix + ".rotate.bak")
-    backup.write_text(text)
-    backup.chmod(0o600)
+    _write_private(backup, text)
     new_text, missing = sr.substitute_env(text, new_values)
     if missing:
         new_text += ("\n# ---- added by install.py secret rotation ----\n"
                      + "".join(f"{k}={new_values[k]}\n" for k in missing))
-    env_path.write_text(new_text)
-    env_path.chmod(0o600)
+    _write_private(env_path, new_text)
     rotated.update(new_values)
     ok(f"{env_path} updated ({len(new_values)} secrets; previous copy at "
        f"{backup.name}, mode 0600)")
@@ -1053,8 +1071,7 @@ def rotate_secrets(root: Path, compose_dir: Path, env_path: Path, *,
                  "verify the store before relying on it")
             return
         reverted, _ = sr.substitute_env(env_path.read_text(), {name: env[name]})
-        env_path.write_text(reverted)
-        env_path.chmod(0o600)
+        _write_private(env_path, reverted)
         info(f"{name} rolled back in .env so it still matches the running store")
 
     ch_admin_pw = env.get("CLICKHOUSE_PASSWORD", "")
@@ -2021,8 +2038,7 @@ def main() -> None:
         restored = []
         for src, bak in paths.items():
             if os.path.exists(bak):
-                Path(src).write_text(Path(bak).read_text())
-                os.chmod(src, 0o600)
+                _write_private(Path(src), Path(bak).read_text())
                 restored.append(os.path.basename(src))
         ok(f"restored {', '.join(restored)} from .plan.bak backups — "
            "run 'docker compose up -d' to apply")

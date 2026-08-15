@@ -644,10 +644,346 @@ def test_drill_report_env_override_and_writer_work(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# H4/H5/M26 (2026-08-15): custody exclusion, artifact signature, no backup
+# nesting, private permissions — REAL rsync + tar + zstd over a temp tree.
+#
+# The earlier _backup_tree harness fakes rsync/zstd, which is exactly the
+# fake that would have hidden these findings: a fake rsync ignores --exclude
+# and a fake zstd writes no real archive to list members of. Only `docker` is
+# faked here (services "not running" → store dumps SKIP); the archive is
+# produced and inspected with the real tools.
+# ---------------------------------------------------------------------------
+
+RESTORE = SCRIPTS / "restore.sh"
+SIGN_KEY = "test-sign-key-0123456789"
+
+
+def _real_backup_tree(tmp_path: Path, sign_key=SIGN_KEY):
+    tmp_path.mkdir(parents=True, exist_ok=True)  # callers pass sub-trees too
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _write_exec(bindir / "docker", "#!/bin/sh\nexit 0\n")
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts" / "backup.sh"
+    _sandboxed_copy(BACKUP, script, bindir)
+
+    (tmp_path / "deployment" / "docker").mkdir(parents=True)
+    env_lines = "DB_PASSWORD=super-secret\nBACKUP_KEEP=3\n"
+    if sign_key:
+        env_lines += f"BACKUP_SIGN_KEY={sign_key}\n"
+    (tmp_path / "deployment" / "docker" / ".env").write_text(env_lines)
+
+    data = tmp_path / "data"
+    (data / "swtpm").mkdir(parents=True)
+    (data / "swtpm" / "tpm2-00.permall").write_bytes(b"KEK-MATERIAL")
+    (data / "secrets-seal").mkdir()
+    (data / "secrets-seal" / "seal.priv").write_bytes(b"SEALED-KEK")
+    (data / "api").mkdir()
+    (data / "api" / "secrets_wrapped_keys.json").write_text('{"dek":"wrapped"}')
+    (data / "postgres").mkdir()
+    (data / "postgres" / "pg.dat").write_text("rows")
+    (data / "backups").mkdir()
+    (data / "backups" / "correlix-old.tar.zst").write_bytes(b"YESTERDAYS-ARCHIVE")
+    (data / "restore-staging").mkdir()
+    (data / "restore-staging" / "postgres.sql").write_text("old dump")
+    (tmp_path / "src" / "config").mkdir(parents=True)
+    (tmp_path / "src" / "config" / "rules.yaml").write_text("x: 1\n")
+
+    out = data / "backups" / "correlix-20260815.tar.zst"
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    r = subprocess.run(["bash", str(script), str(out)], env=env,
+                       capture_output=True, text=True, timeout=300)
+    return r, out, tmp_path
+
+
+def _members(out: Path) -> list[str]:
+    zs = subprocess.run(["zstd", "-dc", str(out)], capture_output=True, timeout=120)
+    assert zs.returncode == 0, zs.stderr
+    tr = subprocess.run(["tar", "-tf", "-"], input=zs.stdout,
+                        capture_output=True, timeout=120)
+    assert tr.returncode == 0, tr.stderr
+    return tr.stdout.decode().splitlines()
+
+
+def _member_bytes(out: Path, name: str) -> bytes:
+    zs = subprocess.run(["zstd", "-dc", str(out)], capture_output=True, timeout=120)
+    tr = subprocess.run(["tar", "-xO", name], input=zs.stdout,
+                        capture_output=True, timeout=120)
+    assert tr.returncode == 0, tr.stderr.decode()
+    return tr.stdout
+
+
+def _hmac(path: Path, key: str) -> str:
+    import hashlib
+    import hmac as hmac_mod
+    return hmac_mod.new(key.encode(), path.read_bytes(), hashlib.sha256).hexdigest()
+
+
+def test_h4_h5_archive_excludes_custody_root_and_nested_backups(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path)
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    members = _members(out)
+    joined = "\n".join(members)
+    for forbidden in ("./data/swtpm", "./data/secrets-seal",
+                      "./data/backups", "./data/restore-staging"):
+        assert not any(m.startswith(forbidden) for m in members), (
+            f"{forbidden} must never ship in the archive (H4 custody / H5 "
+            f"nesting):\n{joined}")
+    # H5 explicitly: yesterday's artifact is NOT inside today's.
+    assert "correlix-old.tar.zst" not in joined,         "previous backups nested inside the new archive — exponential growth"
+    # Wrapped DEKs are ciphertext without the KEK and MUST still ship, as must
+    # the ordinary stores and the manifest.
+    assert "./data/api/secrets_wrapped_keys.json" in members, joined
+    assert "./data/postgres/pg.dat" in members, joined
+    assert "./MANIFEST" in members, joined
+    assert "./env.backup" in members, joined
+
+
+def test_h4_env_backup_never_carries_the_sign_key(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path)
+    assert r.returncode == 0, r.stderr
+    env_backup = _member_bytes(out, "./env.backup").decode()
+    assert "BACKUP_SIGN_KEY" not in env_backup, (
+        "the archive must not carry the key that authenticates it")
+    assert "DB_PASSWORD=super-secret" in env_backup,         "every other .env line must survive the strip"
+
+
+def test_h4_artifact_signature_sha256_and_hmac(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path)
+    assert r.returncode == 0, r.stderr
+    sig = Path(str(out) + ".sig")
+    assert sig.exists(), "backup.sh must write the signature sidecar"
+    lines = dict(ln.split(" ", 1) for ln in sig.read_text().splitlines())
+    import hashlib
+    assert lines["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
+    assert lines["hmac-sha256"] == _hmac(out, SIGN_KEY),         "the HMAC must be keyed with BACKUP_SIGN_KEY over the artifact bytes"
+    # --verify accepts its own artifact...
+    env = os.environ.copy()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    v = subprocess.run(["bash", str(tmp_path / "scripts" / "backup.sh"),
+                        "--verify", str(out)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert v.returncode == 0, f"--verify must pass a clean artifact: {v.stdout}{v.stderr}"
+    # ...and rejects it once a byte changes.
+    with open(out, "ab") as f:
+        f.write(b"X")
+    v2 = subprocess.run(["bash", str(tmp_path / "scripts" / "backup.sh"),
+                         "--verify", str(out)], env=env,
+                        capture_output=True, text=True, timeout=120)
+    assert v2.returncode != 0 and "sha256 mismatch" in v2.stderr,         f"--verify must reject a modified artifact: {v2.stdout}{v2.stderr}"
+
+
+def test_h4_unsigned_run_warns_and_writes_sha_only_sidecar(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path, sign_key=None)
+    assert r.returncode == 0, r.stderr
+    assert "BACKUP_SIGN_KEY unset" in r.stderr,         "an unauthenticated artifact must be a LOUD warning, never a silent default"
+    sig = Path(str(out) + ".sig").read_text()
+    assert sig.startswith("sha256 ") and "hmac-sha256" not in sig
+
+
+def test_m26_artifact_sidecar_and_dir_are_private(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file modes")
+    r, out, _ = _real_backup_tree(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600, oct(out.stat().st_mode)
+    sig = Path(str(out) + ".sig")
+    assert stat.S_IMODE(sig.stat().st_mode) == 0o600, oct(sig.stat().st_mode)
+    assert stat.S_IMODE(out.parent.stat().st_mode) == 0o700,         f"backup dir must be 0700, got {oct(out.parent.stat().st_mode)}"
+
+
+# ---------------------------------------------------------------------------
+# restore.sh — the verification gate + custody-preserving restore
+# ---------------------------------------------------------------------------
+
+def _restore_tree(tmp_path: Path, archive: Path, sig: Path | None,
+                  env_key=SIGN_KEY, force=False):
+    """A separate 'target host' tree; only real tools run (restore.sh needs no
+    docker). The live tree carries custody material and old backups that a
+    correct restore must never touch."""
+    host = tmp_path / "host"
+    # exist_ok: some tests run two restore attempts against the same host tree
+    (host / "scripts").mkdir(parents=True, exist_ok=True)
+    script = host / "scripts" / "restore.sh"
+    bindir = tmp_path / "host-bin"
+    bindir.mkdir(exist_ok=True)
+    _sandboxed_copy(RESTORE, script, bindir)
+    (host / "deployment" / "docker").mkdir(parents=True, exist_ok=True)
+    (host / "src" / "config").mkdir(parents=True, exist_ok=True)
+    env_lines = "OLD_HOST_KEY=1\n"
+    if env_key:
+        env_lines += f"BACKUP_SIGN_KEY={env_key}\n"
+    (host / "deployment" / "docker" / ".env").write_text(env_lines)
+    data = host / "data"
+    (data / "swtpm").mkdir(parents=True, exist_ok=True)
+    (data / "swtpm" / "live-kek").write_bytes(b"LIVE-KEK")
+    (data / "secrets-seal").mkdir(exist_ok=True)
+    (data / "secrets-seal" / "seal.priv").write_bytes(b"LIVE-SEAL")
+    (data / "backups").mkdir(exist_ok=True)
+    (data / "backups" / "keepme.tar.zst").write_bytes(b"EXISTING")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(exist_ok=True)
+    arc = inbox / archive.name
+    shutil.copy(archive, arc)
+    if sig is not None:
+        shutil.copy(sig, Path(str(arc) + ".sig"))
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    if force:
+        env["RESTORE_FORCE"] = "1"
+    r = subprocess.run(["bash", str(script), str(arc)], env=env,
+                       capture_output=True, text=True, timeout=300)
+    return r, host, arc
+
+
+@pytest.fixture()
+def signed_archive(tmp_path):
+    r, out, _ = _real_backup_tree(tmp_path / "src-host")
+    assert r.returncode == 0, r.stderr
+    return out, Path(str(out) + ".sig")
+
+
+def test_h4_restore_refuses_unsigned_artifact(tmp_path, signed_archive):
+    out, _ = signed_archive
+    r, host, _ = _restore_tree(tmp_path, out, sig=None)
+    assert r.returncode != 0, "an artifact without a sidecar must be refused"
+    assert "no signature sidecar" in r.stderr, r.stderr
+    assert (host / "data" / "swtpm" / "live-kek").exists(),         "a refused restore must not have touched data/"
+
+
+def test_h4_restore_refuses_tampered_artifact(tmp_path, signed_archive):
+    out, sig = signed_archive
+    tampered = tmp_path / "tampered.tar.zst"
+    tampered.write_bytes(out.read_bytes() + b"EVIL")
+    tsig = Path(str(tampered) + ".sig")
+    shutil.copy(sig, tsig)
+    r, host, _ = _restore_tree(tmp_path, tampered, sig=tsig)
+    assert r.returncode != 0
+    assert "sha256 mismatch" in r.stderr, r.stderr
+    # sha mismatch has NO force override
+    r2, _, _ = _restore_tree(tmp_path, tampered, sig=tsig, force=True)
+    assert r2.returncode != 0, "RESTORE_FORCE must never override a hash mismatch"
+
+
+def test_h4_restore_refuses_wrong_key(tmp_path, signed_archive):
+    out, sig = signed_archive
+    r, _, _ = _restore_tree(tmp_path, out, sig=sig, env_key="a-different-key-000")
+    assert r.returncode != 0
+    assert "HMAC mismatch" in r.stderr, r.stderr
+
+
+def test_h4_restore_refuses_macless_sidecar_when_key_is_held(tmp_path, signed_archive):
+    out, sig = signed_archive
+    stripped = tmp_path / "stripped.sig"
+    stripped.write_text("".join(
+        ln for ln in sig.read_text().splitlines(keepends=True)
+        if not ln.startswith("hmac-sha256")))
+    r, _, _ = _restore_tree(tmp_path, out, sig=stripped)
+    assert r.returncode != 0,         "a stripped MAC while we hold the key is a downgrade — refuse (H4)"
+    assert "downgrade" in r.stderr, r.stderr
+
+
+def test_h4_h5_restore_good_archive_preserves_custody_and_backups(tmp_path, signed_archive):
+    out, sig = signed_archive
+    r, host, _ = _restore_tree(tmp_path, out, sig=sig)
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    assert "signature OK" in r.stdout
+    # the restore delivered the payload...
+    assert (host / "data" / "postgres" / "pg.dat").exists()
+    # ...but --delete NEVER removed the live custody root or existing backups
+    # the archive (correctly) does not contain.
+    assert (host / "data" / "swtpm" / "live-kek").exists(),         "restore --delete destroyed the live KEK — the matching-excludes guard failed"
+    assert (host / "data" / "secrets-seal" / "seal.priv").exists()
+    assert (host / "data" / "backups" / "keepme.tar.zst").exists()
+    # the live host's sign key survives the .env swap (env.backup is stripped)
+    env_text = (host / "deployment" / "docker" / ".env").read_text()
+    assert f"BACKUP_SIGN_KEY={SIGN_KEY}" in env_text,         "the restored .env must carry the live host's sign key forward"
+    assert "DB_PASSWORD=super-secret" in env_text
+
+
+def test_h5_prune_removes_signature_sidecar_with_artifact(tmp_path):
+    d = tmp_path / "backups"
+    d.mkdir()
+    import time
+    now = time.time()
+    for i in range(4):
+        f = d / f"correlix-2026081{i}.tar.zst"
+        f.write_bytes(b"x")
+        Path(str(f) + ".sig").write_text("sha256 aa\n")
+        os.utime(f, (now - (4 - i) * 86400, now - (4 - i) * 86400))
+    env = os.environ.copy()
+    env["BACKUP_KEEP"] = "2"
+    r = subprocess.run(["bash", str(BACKUP), "--prune", str(d)], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    left = sorted(x.name for x in d.iterdir())
+    assert left == ["correlix-20260812.tar.zst", "correlix-20260812.tar.zst.sig",
+                    "correlix-20260813.tar.zst", "correlix-20260813.tar.zst.sig"], (
+        f"pruned artifacts must take their sidecars with them: {left}")
+
+
+# ---------------------------------------------------------------------------
+# M26 — install.py private writes + gitignore coverage
+# ---------------------------------------------------------------------------
+
+def test_m26_env_backups_are_gitignored():
+    """.env.rotate.bak (secret rotation) and .env.plan.bak (replan) carry the
+    full pre-rotation secret set; deployment/docker/.env* must cover them."""
+    for name in (".env", ".env.rotate.bak", ".env.plan.bak"):
+        r = subprocess.run(
+            ["git", "check-ignore", "-q", f"deployment/docker/{name}"],
+            cwd=ROOT, capture_output=True, text=True)
+        assert r.returncode == 0, f"deployment/docker/{name} is NOT gitignored"
+
+
+def test_m26_install_write_private_no_world_readable_window(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file modes")
+    import sys
+    sys.path.insert(0, str(SCRIPTS))
+    import install
+    old_umask = os.umask(0o022)  # the hostile default the fix exists for
+    try:
+        target = tmp_path / ".env"
+        install._write_private(target, "SECRET=1\n")
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600, oct(target.stat().st_mode)
+        assert target.read_text() == "SECRET=1\n"
+        # overwrite of a pre-existing world-readable file ends 0600 too
+        loose = tmp_path / "loose.env"
+        loose.write_text("OLD=1\n")
+        loose.chmod(0o644)
+        install._write_private(loose, "NEW=1\n")
+        assert stat.S_IMODE(loose.stat().st_mode) == 0o600
+        assert loose.read_text() == "NEW=1\n"
+        leftovers = [x.name for x in tmp_path.iterdir() if x.name.endswith(".tmp")]
+        assert leftovers == [], f"temp files left behind: {leftovers}"
+    finally:
+        os.umask(old_umask)
+
+
+def test_m26_write_env_lands_0600_under_hostile_umask(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file modes")
+    import sys
+    sys.path.insert(0, str(SCRIPTS))
+    import install
+    env_path = tmp_path / ".env"
+    old_umask = os.umask(0o022)
+    try:
+        install.write_env(env_path, 8000, force=True)
+    finally:
+        os.umask(old_umask)
+    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600, oct(env_path.stat().st_mode)
+    assert "ADMIN_INITIAL_PASSWORD" in env_path.read_text()
+
+
+# ---------------------------------------------------------------------------
 # hygiene gates: every touched script parses and stays shellcheck-clean
 # ---------------------------------------------------------------------------
 
-BASH_SCRIPTS = [WATCHDOG, APPLY, BACKUP, DRILL, SCRIPTS / "install-watchdog.sh"]
+BASH_SCRIPTS = [WATCHDOG, APPLY, BACKUP, DRILL, RESTORE,
+                SCRIPTS / "install-watchdog.sh"]
 SH_SCRIPTS = [SEAL_HANDLER, ENTRYPOINT]
 
 
@@ -662,7 +998,7 @@ def test_touched_scripts_parse():
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_touched_scripts_shellcheck_clean():
-    for s in [WATCHDOG, APPLY, BACKUP, SCRIPTS / "install-watchdog.sh",
+    for s in [WATCHDOG, APPLY, BACKUP, RESTORE, SCRIPTS / "install-watchdog.sh",
               SEAL_HANDLER, ENTRYPOINT]:
         r = subprocess.run(["shellcheck", str(s)], capture_output=True, text=True)
         assert r.returncode == 0, f"shellcheck {s.name}:\n{r.stdout}{r.stderr}"

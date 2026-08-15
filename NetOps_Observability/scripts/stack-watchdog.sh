@@ -12,8 +12,11 @@
 #   * Down      -> hits the healthchecks.io /fail endpoint AND pushes an
 #                  ntfy.sh notification to your phone naming the dead service.
 #
-# Alerts fire only on a state TRANSITION (up->down, down->up), so a sustained
-# outage produces one push, not one per minute.
+# Alerts fire only on a state TRANSITION, tracked PER PROBLEM CLASS (H16,
+# 2026-08-15): a sustained outage produces one push, not one per minute — and
+# a STANDING advisory problem (config drift, a stale backup) can no longer
+# swallow the push for a NEW critical one (a service dying), which is exactly
+# what the old single up/down flag did.
 #
 # Config (NTFY_TOPIC, HC_PING_URL, WATCHDOG_EMAIL, ...) lives in
 # stack-watchdog.env next to this script, or — for packaged installs, written
@@ -44,6 +47,22 @@ fi
 # Resolved AFTER the env file so WATCHDOG_STATE may be set there too (default:
 # state lives next to the script; cron runs as root, which owns both).
 STATE_FILE="${WATCHDOG_STATE:-$SCRIPT_DIR/.stack-watchdog.state}"
+
+# ---------------------------------------------------------------------------
+# M25 §16.3: EVERY docker call bounded. docker ps/inspect/logs/exec against a
+# wedged dockerd block forever; from a one-minute cron that means runs pile up
+# behind the hang (see the flock below) and the watchdog stops watching.
+# dkr = the default 20s bound; dkr_slow = for calls that legitimately work
+# (builder prune). §16.2: a host without `timeout` degrades LOUDLY, once.
+# ---------------------------------------------------------------------------
+if command -v timeout >/dev/null 2>&1; then
+  dkr()      { timeout "${WATCHDOG_DOCKER_TIMEOUT:-20}" docker "$@"; }
+  dkr_slow() { timeout "${WATCHDOG_DOCKER_SLOW_TIMEOUT:-120}" docker "$@"; }
+else
+  echo "watchdog: 'timeout' not on PATH — docker calls run unbounded this run" >&2
+  dkr()      { docker "$@"; }
+  dkr_slow() { docker "$@"; }
+fi
 
 PROJECT="${COMPOSE_PROJECT:-netops}"
 APP_URL="${APP_URL:-http://localhost:8000/}"
@@ -133,6 +152,25 @@ if [ "${1:-}" = "--test" ]; then
   exit 0
 fi
 
+# M25: overlap guard. When dockerd wedges, a run outlives its minute; without
+# a lock every later minute stacks another blocked watchdog behind it. flock
+# -n: the newcomer yields (the RUNNING probe is the valid one) and says so —
+# a skipped minute is visible in the log, and the healthchecks dead-man's
+# switch still fires if the holder never finishes.
+LOCK_FILE="${WATCHDOG_LOCK:-${STATE_FILE}.lock}"
+if command -v flock >/dev/null 2>&1; then
+  if exec 9>"$LOCK_FILE"; then
+    if ! flock -n 9; then
+      echo "watchdog: previous run still holds $LOCK_FILE — skipping this minute (wedged docker?)" >&2
+      exit 0
+    fi
+  else
+    echo "watchdog: cannot open lock file $LOCK_FILE — running without overlap protection" >&2
+  fi
+else
+  echo "watchdog: 'flock' not on PATH — running without overlap protection" >&2
+fi
+
 problems=()
 
 # -----------------------------------------------------------------------------
@@ -162,7 +200,7 @@ check_pid_capacity() {  # service-name, container-id
   local svc="$1" cid="$2" t
   local cid_full cg pids_cur="" pids_max="" pids_evt="" util live=""
 
-  cid_full=$(docker inspect -f '{{.Id}}' "$cid" 2>/dev/null)
+  cid_full=$(dkr inspect -f '{{.Id}}' "$cid" 2>/dev/null)
   [ -n "$cid_full" ] || return 0
   for cg in "${PID_CGROUP_ROOT:-/sys/fs/cgroup}/system.slice/docker-${cid_full}.scope" \
             "${PID_CGROUP_ROOT:-/sys/fs/cgroup}/docker/${cid_full}"; do
@@ -237,22 +275,54 @@ check_pid_capacity() {  # service-name, container-id
 # -----------------------------------------------------------------------------
 CH_PROBE_FROM="${CH_PROBE_FROM:-vector-router}"
 CH_PROBE_CACERT="${CH_PROBE_CACERT:-/tls/ca.pem}"
-CH_PROBE_URL="${CH_PROBE_URL:-https://clickhouse:8443}"
 CH_ENV_FILE="${CH_ENV_FILE:-$SCRIPT_DIR/../deployment/docker/.env}"
+# H16(c): the probe URL is DETECTED, not assumed. The old hard-coded
+# https://clickhouse:8443 default made every plaintext install report a
+# permanent CLICKHOUSE_TLS_FAILURE (8443 exists only on the TLS variant), and
+# that standing false problem then masked real outages under the old single
+# up/down state flag. Detection order: an explicit CH_PROBE_URL wins; else the
+# stack's own .env says which variant runs (install.py appends compose.tls.yml
+# to COMPOSE_FILE when TLS is enabled); else — .env unreadable — the probe
+# container's CA bundle decides at probe time (check_clickhouse_health).
+if [ -z "${CH_PROBE_URL:-}" ]; then
+  if [ -r "$CH_ENV_FILE" ]; then
+    if grep -q '^COMPOSE_FILE=.*compose\.tls\.yml' "$CH_ENV_FILE"; then
+      CH_PROBE_URL="https://clickhouse:8443"
+    else
+      CH_PROBE_URL="http://clickhouse:8123"
+    fi
+  else
+    CH_PROBE_URL=""
+  fi
+fi
 
 check_clickhouse_health() {  # tel_stale_min
   local stale_min="$1" probe_cid out rc code age user pw cfg detail
+  local -a tlsopt=()
 
-  probe_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+  probe_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=$CH_PROBE_FROM" 2>/dev/null)
   if [ -z "$probe_cid" ]; then
     problems+=("clickhouse: CANNOT PROBE — no running '$CH_PROBE_FROM' container to reach ClickHouse from (set CH_PROBE_FROM). ClickHouse health is UNKNOWN, not healthy.")
     return 0
   fi
 
-  # --- connectivity + TLS, unauthenticated ------------------------------------
-  out=$(timeout 20 docker exec "$probe_cid" curl -sS --max-time 8 \
-    --cacert "$CH_PROBE_CACERT" "$CH_PROBE_URL/ping" 2>&1)
+  # H16(c) fallback: no readable .env told us the variant, so let the probe
+  # container itself — the internal CA bundle is mounted only on TLS installs.
+  if [ -z "$CH_PROBE_URL" ]; then
+    if dkr exec "$probe_cid" test -f "$CH_PROBE_CACERT" 2>/dev/null; then
+      CH_PROBE_URL="https://clickhouse:8443"
+    else
+      CH_PROBE_URL="http://clickhouse:8123"
+    fi
+  fi
+  case "$CH_PROBE_URL" in
+    https://*) tlsopt=(--cacert "$CH_PROBE_CACERT") ;;
+  esac
+
+  # --- connectivity (+ TLS on the https variant), unauthenticated -------------
+  out=$(dkr exec "$probe_cid" curl -sS --max-time 8 \
+    ${tlsopt[@]+"${tlsopt[@]}"} "$CH_PROBE_URL/ping" 2>&1)
   rc=$?
   detail=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)
   if [ "$rc" -ne 0 ]; then
@@ -286,19 +356,18 @@ check_clickhouse_health() {  # tel_stale_min
 
   # curl config on stdin: url/credentials/CA all arrive off the command line.
   # write-out appends the HTTP status so auth/query faults are distinguishable
-  # from transport faults.
+  # from transport faults. The cacert line rides only on the https variant.
   cfg=$(printf '%s\n' \
     "url = \"$CH_PROBE_URL/\"" \
-    "cacert = \"$CH_PROBE_CACERT\"" \
     "user = \"${user:-netops}:$pw\"" \
     "data = \"SELECT toInt64(dateDiff('second', max(ts), now())) FROM netops.corr_signals WHERE ts > now() - INTERVAL 1 DAY SETTINGS tenant_scope='__all__'\"" \
     "max-time = 8" "silent" "show-error" "write-out = \"\\nHTTP:%{http_code}\"")
-  out=$(printf '%s' "$cfg" | timeout 20 docker exec -i "$probe_cid" curl --config - 2>&1)
+  case "$CH_PROBE_URL" in
+    https://*) cfg="$cfg"$'\n'"cacert = \"$CH_PROBE_CACERT\"" ;;
+  esac
+  out=$(printf '%s' "$cfg" | dkr exec -i "$probe_cid" curl --config - 2>&1)
   rc=$?
   code=$(printf '%s' "$out" | sed -n 's/.*HTTP:\([0-9]*\).*/\1/p' | tail -1)
-  # Strip the write-out marker before reading the value, and never echo the body
-  # verbatim into an alert without truncation.
-  age=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr -dc '0-9-')
   detail=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr '\n' ' ' | cut -c1-160)
 
   case "$code" in
@@ -306,8 +375,20 @@ check_clickhouse_health() {  # tel_stale_min
       problems+=("CLICKHOUSE_AUTH_FAILURE: ClickHouse rejected the watchdog's credentials (HTTP $code). The store is REACHABLE — this is a credential/permission fault, not an outage.")
       return 0 ;;
   esac
-  if [ "$rc" -ne 0 ] || [ -z "$age" ]; then
-    problems+=("CLICKHOUSE_QUERY_FAILURE: ClickHouse is reachable over TLS but the corr_signals freshness query did not return a value (curl rc=$rc, HTTP ${code:-none}): ${detail:-no output}")
+  # M25: judge the HTTP status BEFORE mining a number out of the body. An
+  # error body (UNKNOWN_TABLE, READONLY, a memory-limit exception) is full of
+  # digits — error codes, byte counts, server versions — and the old
+  # tr -dc '0-9-' happily concatenated them into a plausible "age" that then
+  # drove (or suppressed) the staleness compare on garbage.
+  if [ "$rc" -ne 0 ] || [ "${code:-}" != "200" ]; then
+    problems+=("CLICKHOUSE_QUERY_FAILURE: ClickHouse is reachable but the corr_signals freshness query FAILED (curl rc=$rc, HTTP ${code:-none}): ${detail:-no output}")
+    return 0
+  fi
+  # A healthy reply is ONE integer (negative only under clock skew). Anything
+  # else — even with HTTP 200 — is not an age; never arithmetic on it.
+  age=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr -d '[:space:]')
+  if ! printf '%s' "$age" | grep -qE '^-?[0-9]{1,12}$'; then
+    problems+=("CLICKHOUSE_QUERY_FAILURE: corr_signals freshness query returned a non-numeric body (HTTP 200): ${detail:-no output}")
     return 0
   fi
   if [ "$age" -gt $(( stale_min * 60 )) ]; then
@@ -316,19 +397,19 @@ check_clickhouse_health() {  # tel_stale_min
 }
 
 for svc in $EXPECTED_SERVICES; do
-  cid=$(docker ps -q \
+  cid=$(dkr ps -q \
     --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=$svc" 2>/dev/null)
   if [ -z "$cid" ]; then
     problems+=("$svc: not running")
     continue
   fi
-  state=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)
+  state=$(dkr inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)
   if [ "$state" != "running" ]; then
     problems+=("$svc: state=$state")
     continue
   fi
-  health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)
+  health=$(dkr inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)
   if [ -n "$health" ] && [ "$health" != "healthy" ]; then
     problems+=("$svc: health=$health")
   fi
@@ -347,11 +428,11 @@ touch "$RESTART_STATE" 2>/dev/null || true
 oom_events=()
 new_restart_state=""
 for svc in $EXPECTED_SERVICES; do
-  cid=$(docker ps -aq \
+  cid=$(dkr ps -aq \
     --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=$svc" 2>/dev/null | head -1)
   [ -n "$cid" ] || continue
-  read -r rcount oomed exitcode <<<"$(docker inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}' "$cid" 2>/dev/null)"
+  read -r rcount oomed exitcode <<<"$(dkr inspect -f '{{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}' "$cid" 2>/dev/null)"
   [ -n "${rcount:-}" ] || continue
   prev=$(awk -v s="$svc" '$1==s{print $2}' "$RESTART_STATE" 2>/dev/null)
   new_restart_state+="$svc ${rcount}"$'\n'
@@ -365,7 +446,7 @@ for svc in $EXPECTED_SERVICES; do
       # for OOM" while the real cause, an unseal failure, sat in the log).
       # || true: the log fetch is diagnostic garnish; the restart event must
       # still be reported even if docker logs itself errors.
-      lastlog=$(docker logs --tail 1 "$cid" 2>&1 | tr -d '\r' | cut -c1-200 || true)
+      lastlog=$(dkr logs --tail 1 "$cid" 2>&1 | tr -d '\r' | cut -c1-200 || true)
       oom_events+=("$svc: restarted (${prev}->${rcount}, exit ${exitcode:-?}) — last log: ${lastlog:-<no output>}")
     fi
   elif [ "$oomed" = "true" ] && [ -z "$prev" ]; then
@@ -415,8 +496,8 @@ check_syslog_udp_drops() {
     echo "watchdog: syslog UDP-drop check not measurable: no 'timeout' on PATH (docker exec must stay bounded)" >&2
     return 0
   fi
-  cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
-                     --filter "label=com.docker.compose.service=syslog-ng" 2>/dev/null | head -1)
+  cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                  --filter "label=com.docker.compose.service=syslog-ng" 2>/dev/null | head -1)
   if [ -z "$cid" ]; then
     echo "watchdog: syslog UDP-drop check not measurable: no running syslog-ng container in project $PROJECT" >&2
     return 0
@@ -491,7 +572,7 @@ if [ -n "$disk_pct" ] && [ "$disk_pct" -ge "${DISK_WARN_PCT:-85}" ]; then
     # reclaimed nothing — the watchdog would report the disk problem without
     # ever revealing that its own fix had failed. Report the failure; the disk
     # warning below still fires on the re-measured value either way.
-    if ! prune_err=$(docker builder prune -f 2>&1 >/dev/null); then
+    if ! prune_err=$(dkr_slow builder prune -f 2>&1 >/dev/null); then
       problems+=("disk auto-prune FAILED: ${prune_err:-unknown error} (disk still ${disk_pct}%)")
     fi
     disk_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')
@@ -592,20 +673,73 @@ apply_backup_intent
 # looks at an empty dashboard. Container logs (applogs) flow continuously, so
 # zero docs in the recent window means the log bus stalled (disk block, dead
 # Vector/Kafka consumer). Counts via the opensearch container (not host-exposed).
-os_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+#
+# H17 (2026-08-15): on the TLS variant OpenSearch serves https WITH auth on
+# 9200, so the old plain http://localhost:9200 probes got empty replies — and
+# every consumer guarded its result with [ -n ], so ingest-stall, doc-reject,
+# cluster-status and backup-freshness all became silent no-ops: the watchdog
+# was BLIND on exactly the installs that carry customer data. Now the probe
+# mirrors the ClickHouse pattern (variant detected from COMPOSE_FILE, CA
+# verified, credentials from the stack's .env via a curl config on stdin —
+# never argv), and "no parsable reply" is a NAMED problem, never silence.
+os_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
   --filter "label=com.docker.compose.service=opensearch" 2>/dev/null)
 if [ -n "$os_cid" ]; then
   stale_min="${INGEST_STALE_MIN:-15}"
 
+  OS_PROBE_URL="http://localhost:9200"
+  OS_TLS=0
+  # In-container path: compose.tls.yml mounts data/tls/services/opensearch at
+  # /usr/share/opensearch/config/tls (ca.pem lives there).
+  OS_PROBE_CACERT="${OS_PROBE_CACERT:-/usr/share/opensearch/config/tls/ca.pem}"
+  OS_API_PW=""
+  OS_MON_PW=""
+  if [ -r "$CH_ENV_FILE" ] && grep -q '^COMPOSE_FILE=.*compose\.tls\.yml' "$CH_ENV_FILE"; then
+    OS_TLS=1
+    OS_PROBE_URL="https://localhost:9200"
+    # svc_api: read netops-*, cluster health, snapshot get. svc_aggregator:
+    # cluster:monitor/nodes/stats (the doc-reject counter). One user per
+    # probe, matching the SEC-008 role model — no shared/admin credential.
+    OS_API_PW=$(sed -n 's/^OS_API_PASSWORD=//p' "$CH_ENV_FILE" | head -1)
+    OS_MON_PW=$(sed -n 's/^OS_AGGREGATOR_PASSWORD=//p' "$CH_ENV_FILE" | head -1)
+  fi
+  os_blind=""
+
+  # os_fetch <user> <password> <path+query> [json-body] — one bounded curl in
+  # the opensearch container. TLS installs add CA verification + basic auth
+  # through a config file on STDIN (credentials never in argv/ps). A transport
+  # or auth fault yields empty output; the CALLER records that as blindness.
+  os_fetch() {
+    local cfg body
+    cfg=$(printf '%s\n' \
+      "url = \"$OS_PROBE_URL$3\"" \
+      "max-time = 8" "silent")
+    if [ "$OS_TLS" = 1 ]; then
+      cfg="$cfg"$'\n'"cacert = \"$OS_PROBE_CACERT\""$'\n'"user = \"$1:$2\""
+    fi
+    if [ -n "${4:-}" ]; then
+      body=${4//\"/\\\"}
+      cfg="$cfg"$'\n'"header = \"Content-Type: application/json\""$'\n'"data = \"$body\""
+    fi
+    printf '%s' "$cfg" | dkr exec -i "$os_cid" curl --config - 2>/dev/null
+  }
+
+  if [ "$OS_TLS" = 1 ] && [ -z "$OS_API_PW" ]; then
+    # A TLS install without readable credentials cannot be probed at all —
+    # name it once and skip the sub-checks rather than emitting four echoes.
+    problems+=("OPENSEARCH_UNVERIFIABLE: TLS install but OS_API_PASSWORD is unreadable from $CH_ENV_FILE — ingest/reject/cluster/backup checks are BLIND (set CH_ENV_FILE)")
+  else
+
   os_count() {  # $1 = gte, $2 = lt  -> doc count in that window
-    docker exec "$os_cid" curl -s -m 5 \
-      "http://localhost:9200/netops-applogs-*/_count" -H 'Content-Type: application/json' \
-      -d "{\"query\":{\"range\":{\"timestamp\":{\"gte\":\"$1\",\"lt\":\"$2\"}}}}" 2>/dev/null |
+    os_fetch svc_api "$OS_API_PW" "/netops-applogs-*/_count" \
+        "{\"query\":{\"range\":{\"timestamp\":{\"gte\":\"$1\",\"lt\":\"$2\"}}}}" |
       grep -oE '"count":[0-9]+' | grep -oE '[0-9]+'
   }
 
   cnt=$(os_count "now-${stale_min}m" "now")
-  if [ -n "$cnt" ] && [ "$cnt" -eq 0 ]; then
+  if [ -z "$cnt" ]; then
+    os_blind="$os_blind ingest-stall"
+  elif [ "$cnt" -eq 0 ]; then
     problems+=("log ingest stalled: 0 applogs in last ${stale_min}m (Vector/disk/consumer?)")
   fi
 
@@ -624,6 +758,7 @@ if [ -n "$os_cid" ]; then
   # ---------------------------------------------------------------------------
   base_win=$(( stale_min * 4 ))
   base_cnt=$(os_count "now-$(( base_win + stale_min ))m" "now-${stale_min}m")
+  [ -z "${base_cnt:-}" ] && os_blind="$os_blind ingest-baseline"
   if [ -n "${cnt:-}" ] && [ -n "${base_cnt:-}" ] && [ "$base_cnt" -gt 0 ]; then
     base_rate=$(( base_cnt / 4 ))                      # per stale_min window
     min_base="${INGEST_MIN_BASELINE:-200}"
@@ -643,8 +778,7 @@ if [ -n "$os_cid" ]; then
   # ignored.
   # ---------------------------------------------------------------------------
   REJ_STATE="${WATCHDOG_REJECTS:-$SCRIPT_DIR/.stack-watchdog.rejects}"
-  rej_now=$(docker exec "$os_cid" curl -s -m 5 \
-    "http://localhost:9200/_nodes/stats/indices/indexing" 2>/dev/null |
+  rej_now=$(os_fetch svc_aggregator "$OS_MON_PW" "/_nodes/stats/indices/indexing" |
     tr ',' '\n' | grep -oE '"4xx"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
   if [ -n "${rej_now:-}" ]; then
     rej_prev=$(cat "$REJ_STATE" 2>/dev/null || echo "")
@@ -652,6 +786,8 @@ if [ -n "$os_cid" ]; then
       problems+=("OpenSearch REJECTED $(( rej_now - rej_prev )) documents since last check — permanent loss (mapping/field-limit; index_failed will read ~0, ignore it)")
     fi
     echo "$rej_now" > "$REJ_STATE" 2>/dev/null || true
+  else
+    os_blind="$os_blind doc-rejects"
   fi
 
   # Cluster status. This only became a usable signal on 2026-07-21: previously
@@ -659,10 +795,12 @@ if [ -n "$os_cid" ]; then
   # lane + unmanaged ISM history indices, both defaulting to 1 replica on a
   # SINGLE-node cluster), so the cluster was always yellow and yellow meant
   # nothing. Replicas are pinned to 0 now, so a departure from green is real.
-  os_status=$(docker exec "$os_cid" curl -s -m 5 "http://localhost:9200/_cluster/health" 2>/dev/null |
+  os_status=$(os_fetch svc_api "$OS_API_PW" "/_cluster/health" |
     grep -oE '"status"[[:space:]]*:[[:space:]]*"[a-z]+"' | grep -oE '(green|yellow|red)' | head -1)
   case "${os_status:-}" in
     yellow|red) problems+=("OpenSearch cluster is ${os_status} (was pinned green on 2026-07-21 — check for a lane with no index template, i.e. replicas>0)") ;;
+    green) : ;;
+    *) os_blind="$os_blind cluster-status" ;;
   esac
 
   # ---------------------------------------------------------------------------
@@ -684,8 +822,7 @@ if [ -n "$os_cid" ]; then
   # ---------------------------------------------------------------------------
   snap_max_age_h="${SNAPSHOT_MAX_AGE_H:-36}"
   if [ "$snap_max_age_h" -gt 0 ]; then
-    snap_json=$(docker exec "$os_cid" curl -s -m 10 \
-      "http://localhost:9200/_cat/snapshots/netops-fs?h=id,status,end_epoch&format=json" 2>/dev/null)
+    snap_json=$(os_fetch svc_api "$OS_API_PW" "/_cat/snapshots/netops-fs?h=id,status,end_epoch&format=json")
     case "${snap_json:-}" in
       *repository_missing*|*RepositoryMissingException*)
         problems+=("NO OPENSEARCH BACKUPS: snapshot repository 'netops-fs' is not registered — every search index is unrecoverable if data/ is lost (run docker compose up opensearch-init)") ;;
@@ -705,7 +842,16 @@ if [ -n "$os_cid" ]; then
           problems+=("OpenSearch snapshot is PARTIAL — some shards were NOT captured; a restore from it would be incomplete")
         fi
         ;;
+      # No reply / unrecognized reply: the backup-freshness sentinel is blind,
+      # which is NOT the same as backups being fresh.
+      *) os_blind="$os_blind backup-freshness" ;;
     esac
+  fi
+
+  fi  # end of the OS_TLS credentialed-probe guard
+
+  if [ -n "$os_blind" ]; then
+    problems+=("OPENSEARCH_UNVERIFIABLE: no parsable reply for:${os_blind} — these search-tier checks are BLIND this run (TLS/auth mismatch? probe fault?), which is not the same as healthy")
   fi
 fi
 
@@ -732,7 +878,7 @@ tel_stale_min="${TELEMETRY_STALE_MIN:-20}"
 if [ "$tel_stale_min" -gt 0 ]; then
   check_clickhouse_health "$tel_stale_min"
 
-  vm_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+  vm_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=victoria" 2>/dev/null)
   if [ -n "$vm_cid" ]; then
     # Age of the newest collector sample. NOTE the query shape: last_over_time
@@ -743,7 +889,7 @@ if [ "$tel_stale_min" -gt 0 ]; then
     # (its own healthcheck uses 127.0.0.1 for the same reason).
     # The 6h lookback means a long blackout still yields a large AGE rather than
     # an empty result, so "stale" and "absent" stay distinguishable.
-    vm_age=$(docker exec "$vm_cid" wget -qO- --timeout=5 \
+    vm_age=$(dkr exec "$vm_cid" wget -qO- --timeout=5 \
       'http://127.0.0.1:8428/api/v1/query?query=time()-max(timestamp(last_over_time(collector_up%5B6h%5D)))' 2>/dev/null |
       sed -n 's/.*"value":\[[^,]*,"\([0-9.]*\)".*/\1/p' | cut -d. -f1)
     if [ -z "$vm_age" ]; then
@@ -774,8 +920,8 @@ fi
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 drift_check() {  # $1 = compose service, $2 = repo-relative path, $3 = in-container path
   local cid host_file host_sum cont_sum mnt_src
-  cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
-                     --filter "label=com.docker.compose.service=$1" 2>/dev/null | head -1)
+  cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                  --filter "label=com.docker.compose.service=$1" 2>/dev/null | head -1)
   [ -n "$cid" ] || return 0
   # Compare against the file the container ACTUALLY bind-mounts at $3, not the
   # assumed repo path: a compose override may mount a deploy-time variant (the
@@ -784,7 +930,7 @@ drift_check() {  # $1 = compose service, $2 = repo-relative path, $3 = in-contai
   # stack (2026-08-04). Stale-inode drift is still caught — the mount source
   # path yields the host's CURRENT content while the container serves the
   # pinned old inode. The passed repo path is only the no-mount fallback.
-  mnt_src=$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$3\"}}{{.Source}}{{end}}{{end}}" "$cid" 2>/dev/null)
+  mnt_src=$(dkr inspect -f "{{range .Mounts}}{{if eq .Destination \"$3\"}}{{.Source}}{{end}}{{end}}" "$cid" 2>/dev/null)
   host_file="$REPO_ROOT/$2"
   if [ -n "$mnt_src" ] && [ -f "$mnt_src" ]; then
     host_file="$mnt_src"
@@ -796,11 +942,11 @@ drift_check() {  # $1 = compose service, $2 = repo-relative path, $3 = in-contai
   # syslog-ng image), and a missing TOOL produced an empty result that the
   # first version of this check read as "fine" — a drift probe that silently
   # cannot detect drift is precisely the class of defect it exists to catch.
-  cont_sum=$(docker exec "$cid" cat "$3" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
+  cont_sum=$(dkr exec "$cid" cat "$3" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1)
   # A MISSING file is not "unknown", it is a broken mount: the service is
   # running on the image's built-in default while the repo believes it is
   # configured. Report it.
-  if ! docker exec "$cid" test -f "$3" 2>/dev/null; then
+  if ! dkr exec "$cid" test -f "$3" 2>/dev/null; then
     problems+=("CONFIG MISSING: $1 has no $3 in the container — the bind mount for $2 is not in effect. Fix: docker compose up -d --force-recreate $1")
     return 0
   fi
@@ -872,36 +1018,137 @@ drift_check nginx             deployment/docker/nginx/nginx.conf          /etc/n
 # window, so this cannot become the noise that gets the watchdog muted.
 # -----------------------------------------------------------------------------
 if [ "${WATCHDOG_REPORT_ALERTS:-1}" = "1" ]; then
-  vm_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
-                        --filter "label=com.docker.compose.service=opensearch" 2>/dev/null | head -1)
+  vm_cid=$(dkr ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                     --filter "label=com.docker.compose.service=opensearch" 2>/dev/null | head -1)
   if [ -n "$vm_cid" ]; then
-    firing=$(docker exec "$vm_cid" curl -s -m 5 -G "http://victoria:8428/api/v1/query" \
+    firing=$(dkr exec "$vm_cid" curl -s -m 5 -G "http://victoria:8428/api/v1/query" \
       --data-urlencode 'query=ALERTS{alertstate="firing",severity="critical"}' 2>/dev/null |
       grep -oE '"alertname":"[^"]+"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')
     [ -n "${firing// /}" ] && problems+=("vmalert CRITICAL firing: ${firing}")
   fi
 fi
 
-prev=$(cat "$STATE_FILE" 2>/dev/null || echo up)
+# -----------------------------------------------------------------------------
+# H16 (2026-08-15): per-problem-class transition machine.
+#
+# The old machine kept ONE up/down flag. Any standing problem — a config
+# drift, a stale backup, one misdetected probe — parked the flag at "down",
+# and every LATER problem (including a service actually dying) arrived into
+# "already down": no transition, no push, ever. On shipped layouts with one
+# permanently-red advisory check the watchdog could therefore never page for
+# a real outage again.
+#
+# Now the state file holds the SET of active problem classes, one per line,
+# "C <key>" (critical: service down/unhealthy, dashboard down, exec ceiling,
+# store unreachable, ingest stalled) or "A <key>" (advisory: drift, stale
+# backups, capacity warnings, ...). Each run:
+#   * a NEW critical key        -> urgent push, regardless of what was already
+#                                  standing (the fix);
+#   * criticals all cleared but
+#     advisories remain         -> default-priority all-clear-of-criticals;
+#   * a NEW advisory key        -> one default-priority push (transition-only,
+#                                  same as before);
+#   * everything cleared        -> the RECOVERED push;
+#   * unchanged set             -> silence (sustained problems never re-push).
+# Keys are the problem text with digits stripped (ages/percentages/counts
+# change run to run and must not mint a "new" problem), bounded, reduced to a
+# safe charset. A legacy one-word up/down state file reads as an empty set, so
+# the first post-upgrade run re-announces whatever is standing — once.
+# -----------------------------------------------------------------------------
+problem_key() {
+  printf '%s' "$1" | cut -c1-160 | tr -d '0-9' | tr -c 'A-Za-z_:.-' '.' | tr -s '.'
+}
+
+problem_is_critical() {
+  case "$1" in
+    *": not running"*|*": state="*|*": health="*|"dashboard "*|\
+    *PID_LIMIT_REACHED*|*CONTAINER_RUNTIME_EXEC_FAILURE*|\
+    *CLICKHOUSE_UNREACHABLE*|*CLICKHOUSE_TLS_FAILURE*|*"CANNOT PROBE"*|\
+    *"log ingest stalled"*)
+      return 0 ;;
+  esac
+  return 1
+}
+
 nsvc=$(echo "$EXPECTED_SERVICES" | wc -w | tr -d ' ')
+
+declare -A prev_set=()
+prev_had_any=0
+prev_had_crit=0
+if [ -f "$STATE_FILE" ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      "C "*) prev_set["$line"]=1; prev_had_any=1; prev_had_crit=1 ;;
+      "A "*) prev_set["$line"]=1; prev_had_any=1 ;;
+      down)  prev_had_any=1 ;;   # legacy v1 state: something stood, class unknown
+      *) : ;;
+    esac
+  done < "$STATE_FILE"
+fi
+
+declare -A cur_set=()
+new_crit=()
+new_adv=()
+cur_has_crit=0
+if [ ${#problems[@]} -gt 0 ]; then
+  for prob in "${problems[@]}"; do
+    pkey=$(problem_key "$prob")
+    if problem_is_critical "$prob"; then
+      psev="C"; cur_has_crit=1
+    else
+      psev="A"
+    fi
+    cur_set["$psev $pkey"]=1
+    if [ -z "${prev_set["$psev $pkey"]:-}" ]; then
+      if [ "$psev" = "C" ]; then new_crit+=("$prob"); else new_adv+=("$prob"); fi
+    fi
+  done
+fi
+cleared=0
+for k in "${!prev_set[@]}"; do
+  [ -z "${cur_set[$k]:-}" ] && cleared=$((cleared + 1))
+done
+[ "$cleared" -gt 0 ] &&
+  echo "watchdog: $cleared problem class(es) cleared since the last run" >&2
+
+write_state() {
+  if [ ${#cur_set[@]} -gt 0 ]; then
+    printf '%s\n' "${!cur_set[@]}" > "$STATE_FILE" 2>/dev/null ||
+      echo "watchdog: could not persist state to $STATE_FILE" >&2
+  else
+    : > "$STATE_FILE" 2>/dev/null ||
+      echo "watchdog: could not persist state to $STATE_FILE" >&2
+  fi
+}
 
 if [ ${#problems[@]} -eq 0 ]; then
   [ -n "${HC_PING_URL:-}" ] && curl -fsS -m 10 "$HC_PING_URL" -o /dev/null
-  if [ "$prev" = "down" ]; then
+  if [ "$prev_had_any" = 1 ]; then
     push "✅ NetOps stack RECOVERED on $(hostname)" "white_check_mark" "default" \
       "All $nsvc services healthy again at $(date -Is)."
     notify_webhook "up" "All $nsvc services healthy again."
   fi
-  echo up > "$STATE_FILE"
+  write_state
   exit 0
 fi
 
 msg=$(printf '%s\n' "${problems[@]}")
 [ -n "${HC_PING_URL:-}" ] && curl -fsS -m 10 --data-raw "$msg" "${HC_PING_URL%/}/fail" -o /dev/null
-if [ "$prev" = "up" ]; then
-  push "🚨 NetOps stack DOWN on $(hostname)" "rotating_light" "urgent" "$msg"
+
+if [ ${#new_crit[@]} -gt 0 ]; then
+  push "🚨 NetOps stack DOWN on $(hostname)" "rotating_light" "urgent" \
+    "$(printf 'NEW: %s\n' "${new_crit[@]}"; printf 'ALL CURRENT PROBLEMS:\n'; printf '%s\n' "${problems[@]}")"
   notify_webhook "down" "$msg"
+elif [ "$prev_had_crit" = 1 ] && [ "$cur_has_crit" = 0 ]; then
+  push "✅ NetOps criticals CLEARED on $(hostname)" "white_check_mark" "default" \
+    "$(printf 'Critical problems cleared; %s advisory issue(s) remain:\n' "${#problems[@]}"; printf '%s\n' "${problems[@]}")"
+  notify_webhook "degraded" "criticals cleared; advisories remain: $msg"
+elif [ ${#new_adv[@]} -gt 0 ]; then
+  push "⚠️ NetOps advisory on $(hostname)" "warning" "default" \
+    "$(printf '%s\n' "${new_adv[@]}")"
+  notify_webhook "degraded" "$(printf '%s\n' "${new_adv[@]}")"
 fi
-echo down > "$STATE_FILE"
+
+write_state
 echo "watchdog: DOWN -> $msg" >&2
 exit 1

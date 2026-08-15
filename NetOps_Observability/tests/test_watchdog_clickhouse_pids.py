@@ -91,7 +91,9 @@ def _fake_docker(bindir: Path) -> Path:
         "      *--config*)\n"
         # Drain stdin so the config (with the password) is consumed, never echoed.
         "        cat >/dev/null\n"
-        '        printf "%s" "${FAKE_QUERY_BODY:-10\\nHTTP:200}"\n'
+        # %b: the built-in default carries a literal \n that must become a real
+        # newline (M25 rejects a body that is not one clean integer line).
+        '        printf "%b" "${FAKE_QUERY_BODY:-10\\nHTTP:200}"\n'
         "        ;;\n"
         "    esac\n"
         "    ;;\n"
@@ -113,6 +115,8 @@ def _run_ch(tmp_path, **env_over):
     script = (
         f'SCRIPT_DIR="{tmp_path}"\nPROJECT=netops\n'
         f'CH_ENV_FILE="{envfile}"\n'
+        # M25: docker rides the watchdog's bounded dkr wrapper.
+        'dkr() { docker "$@"; }\n'
         + body
         + '\nproblems=()\ncheck_clickhouse_health "${STALE_MIN:-20}"\n'
         'printf "%s\\n" "${problems[@]:-}"\n'
@@ -140,7 +144,8 @@ def _run_pids(tmp_path, current, maximum, live_threads=None, events="max 0"):
     (cg / "cgroup.procs").write_text(f"{os.getpid()}\n" if live_threads else "")
 
     script = (
-        _extract("^check_pid_capacity() {")
+        'dkr() { docker "$@"; }\n'
+        + _extract("^check_pid_capacity() {")
         + '\nproblems=()\ncheck_pid_capacity clickhouse cid-x\n'
         'printf "%s\\n" "${problems[@]:-}"\n'
     )
@@ -268,6 +273,66 @@ def test_leak_signature_reports_observation_not_diagnosis(tmp_path):
     assert "observation, not a diagnosis" in joined
     for unproven in ("runc bug", "kernel bug"):
         assert unproven not in joined.lower()
+
+
+# ---------------------------------------------------------------------------
+# M25 — the freshness "age" is only ever mined from a CLEAN HTTP-200 reply.
+#
+# ClickHouse error bodies are FULL of digits (error codes, byte counts, server
+# versions). The pre-fix parse ran tr -dc '0-9-' over the whole body before
+# looking at the HTTP status, so an UNKNOWN_TABLE / READONLY / memory-limit
+# exception became a plausible concatenated "age" that silently passed — or
+# fired DATA_STALE about — the staleness compare. HTTP != 200 must be a named
+# CLICKHOUSE_QUERY_FAILURE before any number is extracted, and even a 200 body
+# must match ^-?[0-9]{1,12}$ to be treated as an age.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("body", [
+    pytest.param(
+        "Code: 60. DB::Exception: Table netops.corr_signals does not exist. "
+        "(UNKNOWN_TABLE) (version 24.8.1.2026 (official build))\nHTTP:404",
+        id="unknown-table-404"),
+    pytest.param(
+        "Code: 242. DB::Exception: Table is in readonly mode "
+        "(TABLE_IS_READ_ONLY) (version 24.8.1.2026)\nHTTP:503",
+        id="readonly-503"),
+    pytest.param(
+        "Code: 241. DB::Exception: Memory limit (total) exceeded: would use "
+        "9.32 GiB (attempt to allocate chunk of 4194304 bytes), maximum: 9.31 "
+        "GiB (MEMORY_LIMIT_EXCEEDED)\nHTTP:500",
+        id="memory-limit-500"),
+])
+def test_m25_error_bodies_are_query_failure_not_bogus_age(tmp_path, body):
+    r, problems = _run_ch(tmp_path, FAKE_QUERY_BODY=body, STALE_MIN=20)
+    joined = " ".join(problems)
+    assert "CLICKHOUSE_QUERY_FAILURE" in joined, (
+        f"an error body must be a named QUERY_FAILURE, got: {problems}")
+    assert "CLICKHOUSE_DATA_STALE" not in joined, (
+        "digits mined out of an error body must never drive the staleness "
+        f"compare: {problems}")
+
+
+def test_m25_clean_number_with_non200_is_query_failure(tmp_path):
+    # A parsable number under a failing HTTP status is still not an age.
+    r, problems = _run_ch(tmp_path, FAKE_QUERY_BODY="86400\nHTTP:500", STALE_MIN=20)
+    joined = " ".join(problems)
+    assert "CLICKHOUSE_QUERY_FAILURE" in joined, problems
+    assert "CLICKHOUSE_DATA_STALE" not in joined, problems
+
+
+def test_m25_http200_garbage_body_is_query_failure(tmp_path):
+    r, problems = _run_ch(
+        tmp_path, FAKE_QUERY_BODY="warning: 123 partial 456\nHTTP:200", STALE_MIN=20)
+    joined = " ".join(problems)
+    assert "CLICKHOUSE_QUERY_FAILURE" in joined, (
+        f"a 200 body that is not one integer must not be arithmetic'd: {problems}")
+    assert "CLICKHOUSE_DATA_STALE" not in joined, problems
+
+
+def test_m25_negative_age_clock_skew_is_not_stale(tmp_path):
+    # Negative by clock skew: a valid integer, and not stale.
+    r, problems = _run_ch(tmp_path, FAKE_QUERY_BODY="-42\nHTTP:200", STALE_MIN=20)
+    assert problems == [], problems
 
 
 # ---------------------------------------------------------------------------

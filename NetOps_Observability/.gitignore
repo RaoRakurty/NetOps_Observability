@@ -1,5 +1,7 @@
-# Generated at install time
-deployment/docker/.env
+# Generated at install time. `.env*` also covers the secret-bearing siblings
+# install.py writes next to it — .env.rotate.bak (secret rotation) and
+# .env.plan.bak (resource replan) — which were previously committable (M26).
+deployment/docker/.env*
 data/
 
 # Pre-cutover app-state snapshots (contain live secrets — never commit)
@@ -17,10 +19,10 @@ src/backend/*.test
 **/__pycache__/
 *.pyc
 
-# Watchdog private config + runtime state
+# Watchdog private config + runtime state (.stack-watchdog.* covers the
+# state/lock/rejects/restarts/udpdrops files the watchdog persists per-run)
 scripts/stack-watchdog.env
-scripts/.stack-watchdog.state
-scripts/.stack-watchdog.udpdrops
+scripts/.stack-watchdog.*
 scripts/stack-watchdog.log
 scripts/docker-hygiene.log
 scripts/rca-canary.log

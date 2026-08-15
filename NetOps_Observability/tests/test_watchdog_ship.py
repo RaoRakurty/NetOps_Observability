@@ -317,12 +317,14 @@ def test_webhook_skipped_when_unconfigured(tmp_path):
 
 
 def test_webhook_fires_on_both_transitions():
-    """The state machine, not just the function: both up->down and down->up
-    branches must notify the webhook alongside the ntfy push."""
+    """The state machine, not just the function: the new-critical branch must
+    notify the webhook alongside the urgent ntfy push, and the full-recovery
+    branch must notify "up" (H16: per-problem-class machine)."""
     text = WATCHDOG.read_text()
-    down = re.search(r'if \[ "\$prev" = "up" \]; then\n(.*?)\nfi', text, re.S)
+    down = re.search(
+        r'if \[ \$\{#new_crit\[@\]\} -gt 0 \]; then\n(.*?)\nelif ', text, re.S)
     assert down and 'notify_webhook "down"' in down.group(1)
-    up = re.search(r'if \[ "\$prev" = "down" \]; then\n(.*?)\n  fi', text, re.S)
+    up = re.search(r'if \[ "\$prev_had_any" = 1 \]; then\n(.*?)\n  fi', text, re.S)
     assert up and 'notify_webhook "up"' in up.group(1)
 
 
@@ -396,6 +398,9 @@ def _run_udp_check(tmp_path, snmp_content, state_before=None,
     stubs = (
         'push() { printf \'%s|%s|%s|%s\\n\' "$1" "$2" "$3" "$4" >> "$PUSH_LOG"; }\n'
         'notify_webhook() { printf \'%s|%s\\n\' "$1" "$2" >> "$WEBHOOK_LOG"; }\n'
+        # M25: the watchdog routes docker through its bounded dkr wrapper;
+        # standalone extraction needs the same seam.
+        'dkr() { docker "$@"; }\n'
         f'PROJECT=netops\nUDP_STATE="{state}"\n'
     )
     env = os.environ.copy()

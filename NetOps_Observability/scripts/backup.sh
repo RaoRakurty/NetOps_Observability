@@ -42,6 +42,34 @@
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# CUSTODY + SIGNATURE (H4/H5, 2026-08-15) — what this archive deliberately
+# DOES NOT contain, and how it proves it was not tampered with.
+#
+# The archive used to rsync ALL of data/ and then ship plaintext + unsigned:
+#   * data/swtpm — the software TPM's persistent state. That state
+#     deterministically re-derives the root KEK, so a copy of it IS the KEK.
+#   * data/secrets-seal — the sealed-KEK blobs (seal.pub/seal.priv).
+#   * data/api/secrets_wrapped_keys.json — every wrapped DEK.
+#   * env.backup — the full .env, every stack credential.
+# One file on a backup host therefore held the KEK, the DEKs it wraps and the
+# service credentials: the entire custody model, collapsed. Now:
+#   * the CUSTODY ROOT (data/swtpm + data/secrets-seal) is EXCLUDED. swtpm
+#     state == the KEK: back it up SEPARATELY, under an operator key ceremony
+#     (offline media / a secrets vault — never next to the data it unlocks).
+#     Wrapped DEKs still ship — they are ciphertext without the KEK.
+#   * data/backups and data/restore-staging are EXCLUDED: the artifact is
+#     written INTO data/backups, so including it nested every previous backup
+#     inside tonight's (night N contained nights 1..N-1 — exponential growth).
+#   * the artifact is SIGNED: $OUT.sig carries a sha256 and, when
+#     BACKUP_SIGN_KEY is set (environment or .env — never from data/), an
+#     HMAC-SHA256. restore.sh verifies BEFORE extracting and refuses a
+#     missing/wrong signature; BACKUP_SIGN_KEY is stripped out of env.backup
+#     so the archive never carries the key that authenticates it.
+#   * everything this run writes is private: umask 077, artifact + sidecar
+#     chmod 0600, backup dir 0700 (M26).
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # RETENTION (2026-07-27) — the other half of "this is a real backup".
 #
 # apply-backup-config.sh installs a DAILY cron writing
@@ -77,26 +105,25 @@ set -Eeuo pipefail
 # live in /usr/local/bin. This script IS a cron job now, so it states its PATH.
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# --verify <file>: check a previously written backup instead of taking one.
-if [[ "${1:-}" == "--verify" ]]; then
-  IN="${2:-}"
-  if [[ -z "$IN" || ! -f "$IN" ]]; then
-    echo "usage: $0 --verify <backup.tar.zst>" >&2
-    exit 2
-  fi
-  MAN=$(zstd -dc "$IN" | tar -xO ./MANIFEST 2>/dev/null || true)
-  if [[ -z "$MAN" ]]; then
-    echo "VERIFY FAILED: $IN has no MANIFEST — it predates F-59 or is truncated." >&2
-    exit 1
-  fi
-  echo "$MAN"
-  if grep -q '^FAIL' <<<"$MAN"; then
-    echo "VERIFY FAILED: the manifest records at least one failed component." >&2
-    exit 1
-  fi
-  echo "VERIFY OK: $IN"
-  exit 0
-fi
+# M26: nothing about a backup is world-readable — the artifact is whole-store
+# dumps plus (signed) config. Every file this run creates (stage contents,
+# artifact, sidecar, report) starts life owner-only; cron's umask never widens it.
+umask 077
+
+# hmac_file <file> — HMAC-SHA256 of <file> keyed with $BACKUP_SIGN_KEY, hex on
+# stdout. The key crosses to python through the ENVIRONMENT (exported by
+# load_env_default / the caller), never argv — argv is world-readable in /proc
+# for as long as the hash runs.
+hmac_file() {
+    python3 - "$1" <<'PY'
+import hashlib, hmac, os, sys
+h = hmac.new(os.environ["BACKUP_SIGN_KEY"].encode(), digestmod=hashlib.sha256)
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+}
 
 SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$SCRIPT_ROOT/deployment/docker/.env"
@@ -121,6 +148,54 @@ load_env_default() {
 load_env_default BACKUP_REMOTE
 load_env_default BACKUP_PUSH
 load_env_default BACKUP_KEEP
+load_env_default BACKUP_SIGN_KEY
+
+# --verify <file>: check a previously written backup instead of taking one.
+# Lives AFTER load_env_default so the HMAC check finds BACKUP_SIGN_KEY in .env
+# the same way the writer did.
+if [[ "${1:-}" == "--verify" ]]; then
+  IN="${2:-}"
+  if [[ -z "$IN" || ! -f "$IN" ]]; then
+    echo "usage: $0 --verify <backup.tar.zst>" >&2
+    exit 2
+  fi
+  # H4: signature sidecar first — a tampered archive must be named as
+  # tampered, not merely "manifest unreadable".
+  if [[ -f "$IN.sig" ]]; then
+    WANT_SHA=$(sed -n 's/^sha256 //p' "$IN.sig" | head -1)
+    HAVE_SHA=$(sha256sum -- "$IN" | cut -d' ' -f1)
+    if [[ -z "$WANT_SHA" || "$WANT_SHA" != "$HAVE_SHA" ]]; then
+      echo "VERIFY FAILED: sha256 mismatch against $IN.sig — the artifact was modified or corrupted." >&2
+      exit 1
+    fi
+    WANT_MAC=$(sed -n 's/^hmac-sha256 //p' "$IN.sig" | head -1)
+    if [[ -n "$WANT_MAC" ]]; then
+      if [[ -z "${BACKUP_SIGN_KEY:-}" ]]; then
+        echo "VERIFY FAILED: $IN.sig carries an HMAC but BACKUP_SIGN_KEY is not available (environment or .env) — authenticity cannot be checked." >&2
+        exit 1
+      fi
+      HAVE_MAC=$(hmac_file "$IN")
+      if [[ "$WANT_MAC" != "$HAVE_MAC" ]]; then
+        echo "VERIFY FAILED: HMAC mismatch — the artifact does NOT authenticate against BACKUP_SIGN_KEY (tampered, or signed with a different key)." >&2
+        exit 1
+      fi
+    fi
+  else
+    echo "VERIFY WARNING: no signature sidecar ($IN.sig) — integrity is unauthenticated (pre-H4 artifact?). restore.sh refuses it without RESTORE_FORCE=1." >&2
+  fi
+  MAN=$(zstd -dc "$IN" | tar -xO ./MANIFEST 2>/dev/null || true)
+  if [[ -z "$MAN" ]]; then
+    echo "VERIFY FAILED: $IN has no MANIFEST — it predates F-59 or is truncated." >&2
+    exit 1
+  fi
+  echo "$MAN"
+  if grep -q '^FAIL' <<<"$MAN"; then
+    echo "VERIFY FAILED: the manifest records at least one failed component." >&2
+    exit 1
+  fi
+  echo "VERIFY OK: $IN"
+  exit 0
+fi
 
 BACKUP_KEEP="${BACKUP_KEEP:-7}"
 if ! [[ "$BACKUP_KEEP" =~ ^[0-9]+$ ]]; then
@@ -167,13 +242,20 @@ prune_backups() {
             continue
         fi
         if [[ "$dry" == "1" ]]; then
-            echo "    [dry-run] would delete $path"
+            echo "    [dry-run] would delete $path (+ its .sig sidecar, if any)"
             removed=$((removed + 1))
             continue
         fi
         if rm -f -- "$path" 2>"$dir/.prune.err"; then
             echo "    deleted $path"
             removed=$((removed + 1))
+            # H4: the signature sidecar travels with its artifact — an orphaned
+            # .sig is noise at best and a re-signing aid at worst. A sidecar
+            # delete failure is as fatal as an artifact delete failure.
+            if [[ -e "$path.sig" ]] && ! rm -f -- "$path.sig" 2>"$dir/.prune.err"; then
+                echo "    !! FAILED to delete sidecar $path.sig: $(tail -1 "$dir/.prune.err" 2>/dev/null)" >&2
+                rc=1
+            fi
         else
             echo "    !! FAILED to delete $path: $(tail -1 "$dir/.prune.err" 2>/dev/null)" >&2
             rc=1
@@ -411,10 +493,24 @@ if [[ -d "$DATA_DIR" ]]; then
     # bare statement under set -e, so rc=24 killed the whole run with no
     # report. Any OTHER rc (23 = partial transfer from real errors, I/O,
     # permissions) is a genuine failure and is recorded as one.
+    # H4/H5: what the data/ snapshot must NOT carry (all paths anchored at the
+    # transfer root, i.e. directly under data/):
+    #   /swtpm, /secrets-seal — the CUSTODY ROOT (swtpm state re-derives the
+    #     KEK; secrets-seal holds the sealed blobs). Never in the same file as
+    #     the wrapped DEKs + .env it would unlock — see the header block.
+    #   /backups — where THIS artifact lands; including it nests every
+    #     previous backup inside tonight's (exponential growth).
+    #   /restore-staging — restore.sh's durable extraction of a previous
+    #     restore (a full postgres.sql); same nesting problem.
+    # restore.sh carries the MATCHING excludes so its --delete can never
+    # remove the live custody root just because the archive lacks it.
     rsync_rc=0
-    rsync -a --delete --info=stats1 "$DATA_DIR/" "$STAGE/data/" || rsync_rc=$?
+    rsync -a --delete --info=stats1 \
+        --exclude=/swtpm --exclude=/secrets-seal \
+        --exclude=/backups --exclude=/restore-staging \
+        "$DATA_DIR/" "$STAGE/data/" || rsync_rc=$?
     case "$rsync_rc" in
-        0)  note "data/ snapshot (rsync)" ;;
+        0)  note "data/ snapshot (rsync; custody root + backups excluded)" ;;
         24) note "data/ snapshot (rsync rc=24: vanished files — expected on a live stack)" ;;
         *)  fail "data/ snapshot rsync failed (rc=$rsync_rc)" ;;
     esac
@@ -428,7 +524,16 @@ fi
 echo "→ Snapshotting .env and configs"
 CURRENT_STEP=".env + config snapshot"
 if [[ -f "$COMPOSE_DIR/.env" ]]; then
-    cp "$COMPOSE_DIR/.env" "$STAGE/env.backup"   # 0600 preserved by tar
+    # H4: BACKUP_SIGN_KEY must NOT ride inside the artifact it authenticates —
+    # an archive carrying its own MAC key is tamper-evident to nobody. Strip
+    # that one line; every other .env line ships (0600 preserved by tar).
+    env_grep_rc=0
+    grep -v '^BACKUP_SIGN_KEY=' "$COMPOSE_DIR/.env" > "$STAGE/env.backup" || env_grep_rc=$?
+    # grep rc=1 = zero lines survived (a .env holding only the sign key) — an
+    # empty env.backup is then the correct content. rc>=2 is a real read error.
+    if [[ $env_grep_rc -ge 2 ]]; then
+        fail ".env snapshot failed (grep rc=$env_grep_rc reading $COMPOSE_DIR/.env)"
+    fi
 fi
 mkdir -p "$STAGE/src-config"
 if [[ -d "$ROOT/src/config" ]]; then
@@ -443,11 +548,58 @@ fi
 
 echo "→ Tar + zstd"
 CURRENT_STEP="tar+zstd archive write"
+# M26: the directory holding whole-stack backups is operator-only. install -d
+# also tightens a pre-existing world-readable data/backups to 0700.
+install -d -m 0700 -- "$(dirname -- "$OUT")"
 # -f: the cron names its artifact correlix-YYYYMMDD.tar.zst, so a same-day
 # re-run (manual retry after a failure) targets an EXISTING file — without -f
 # zstd refuses the overwrite and the whole run aborted (found 2026-08-14).
 # Overwriting the same-day artifact with a fresh complete one is the intent.
 tar -C "$STAGE" -cf - . | zstd -T0 -19 -f -o "$OUT"
+# umask 077 already makes a fresh artifact 0600; the chmod covers the same-day
+# OVERWRITE path, where zstd keeps the existing file's (possibly wider) mode.
+chmod 0600 -- "$OUT"
+
+# ---- artifact signature (H4) -----------------------------------------------
+#
+# $OUT.sig: a sha256 line (integrity — bit rot, truncation) and, when
+# BACKUP_SIGN_KEY is set, an hmac-sha256 line (authenticity — a tamperer
+# without the key cannot re-sign). The key comes from the environment or from
+# .env, NEVER from data/ (the archive contains data/), and env.backup above is
+# stripped of it. restore.sh verifies this sidecar before extracting a byte.
+CURRENT_STEP="artifact signing"
+echo "→ Signing"
+sig_ok=1
+SIGN_SHA=$(sha256sum -- "$OUT" | cut -d' ' -f1) || sig_ok=0
+if [[ $sig_ok -eq 1 && -n "$SIGN_SHA" ]]; then
+    {
+        printf 'sha256 %s\n' "$SIGN_SHA"
+        if [[ -n "${BACKUP_SIGN_KEY:-}" ]]; then
+            printf 'hmac-sha256 %s\n' "$(BACKUP_SIGN_KEY="$BACKUP_SIGN_KEY" hmac_file "$OUT")"
+        fi
+    } > "$OUT.sig" || sig_ok=0
+    # A key that was set but produced no MAC line (python3 missing, OOM) must
+    # fail the component — restore.sh would flag the MAC-less sidecar anyway.
+    if [[ $sig_ok -eq 1 && -n "${BACKUP_SIGN_KEY:-}" ]] && ! grep -q '^hmac-sha256 [0-9a-f]' "$OUT.sig"; then
+        sig_ok=0
+    fi
+else
+    sig_ok=0
+fi
+if [[ $sig_ok -eq 1 ]]; then
+    chmod 0600 -- "$OUT.sig"
+    if [[ -n "${BACKUP_SIGN_KEY:-}" ]]; then
+        note "artifact signature (sha256 + HMAC) → $(basename -- "$OUT").sig"
+    else
+        note "artifact signature (sha256 only — no BACKUP_SIGN_KEY)"
+        echo "!! WARNING: BACKUP_SIGN_KEY unset — the artifact carries a sha256 only." >&2
+        echo "!!          Corruption is detectable; TAMPERING is not. Set BACKUP_SIGN_KEY" >&2
+        echo "!!          (deployment/docker/.env or the cron environment) to add the" >&2
+        echo "!!          HMAC that restore.sh authenticates against." >&2
+    fi
+else
+    fail "artifact signing FAILED — restore.sh will refuse $OUT (python3 present? disk full?)"
+fi
 
 echo
 echo "─── MANIFEST ───"
@@ -473,8 +625,11 @@ CURRENT_STEP="off-host copy"
 if [[ -n "${BACKUP_REMOTE:-}" ]]; then
     PUSH_CMD="${BACKUP_PUSH:-rsync -a}"
     echo "→ Off-host copy: $PUSH_CMD $OUT $BACKUP_REMOTE"
-    if $PUSH_CMD "$OUT" "$BACKUP_REMOTE" 2>"$STAGE/push.err"; then
-        note "off-host copy → $BACKUP_REMOTE"
+    # The .sig sidecar rides along: a remote copy that cannot be authenticated
+    # at restore time re-creates the unsigned-artifact problem off-host.
+    if $PUSH_CMD "$OUT" "$BACKUP_REMOTE" 2>"$STAGE/push.err" \
+       && { [[ ! -f "$OUT.sig" ]] || $PUSH_CMD "$OUT.sig" "$BACKUP_REMOTE" 2>>"$STAGE/push.err"; }; then
+        note "off-host copy (artifact + signature) → $BACKUP_REMOTE"
     else
         fail "off-host copy FAILED: $(tail -1 "$STAGE/push.err" 2>/dev/null) — the artifact is ON-HOST ONLY (no DR)"
     fi

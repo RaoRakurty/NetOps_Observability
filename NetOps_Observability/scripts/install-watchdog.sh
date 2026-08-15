@@ -193,6 +193,22 @@ WATCHDOG_SCRIPT="$(cd "$(dirname "$WATCHDOG_SCRIPT")" && pwd)/$(basename "$WATCH
 [[ "$WATCHDOG_SCRIPT" =~ ^/[A-Za-z0-9._/-]+$ ]] \
   || die "watchdog script path may only contain [A-Za-z0-9._/-] (cron-safe): $WATCHDOG_SCRIPT"
 
+# H16(b)/M27 (2026-08-15): the packaged watchdog runs from /etc/correlix, so
+# every default in stack-watchdog.sh that assumes "I live in the repo's
+# scripts/ dir" resolves under /etc and silently misses the bundle:
+#   * CH_ENV_FILE -> /etc/deployment/docker/.env (never exists), so the
+#     ClickHouse/OpenSearch checks lose their credentials AND the TLS-variant
+#     detection, leaving a permanent false problem on plaintext installs;
+#   * the #150 backup-intent trio -> /etc/data/... , so GUI-stored backup
+#     settings were NEVER applied on packaged hosts.
+# Derive the real bundle paths from the validated SOURCE script location and
+# write them into the env file explicitly. The stamp lives in /etc/correlix
+# (root-owned, survives bundle re-extraction). Both derived paths inherit the
+# cron-safe charset validated above, which excludes the single quote the env
+# values are wrapped in.
+BUNDLE_SCRIPTS_DIR="$(dirname "$WATCHDOG_SCRIPT")"
+BUNDLE_ROOT="$(cd "$BUNDLE_SCRIPTS_DIR/.." && pwd)"
+
 # ---------------------------------------------------------------------------
 # File contents. Env values are single-quoted: the watchdog SOURCES this file,
 # and every charset above excludes the single quote, so no value can escape.
@@ -214,6 +230,11 @@ HC_PING_URL='$HC_URL'
 WATCHDOG_WEBHOOK_URL='$WEBHOOK_URL'
 WATCHDOG_WEBHOOK_TOKEN='$WEBHOOK_TOKEN'
 WATCHDOG_SERVICES='$CUSTOMER_SERVICES'
+COMPOSE_PROJECT='netops'
+CH_ENV_FILE='$BUNDLE_ROOT/deployment/docker/.env'
+BACKUP_INTENT_FILE='$BUNDLE_ROOT/data/api/system_backup.json'
+BACKUP_APPLY_SCRIPT='$BUNDLE_SCRIPTS_DIR/apply-backup-config.sh'
+BACKUP_APPLY_STAMP='/etc/correlix/.backup-config.applied'
 EOF
 }
 
