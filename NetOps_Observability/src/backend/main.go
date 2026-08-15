@@ -47,6 +47,7 @@ import (
 	"netops/backend/internal/verify"
 	"netops/backend/internal/vuln"
 	"netops/backend/internal/workloadid"
+	"netops/backend/internal/wsticket"
 	"netops/backend/pathgraph"
 	"netops/backend/policy"
 	"netops/backend/portintel"
@@ -217,8 +218,12 @@ type server struct {
 	// oidc holds the live SSO provider. It is swapped atomically when an operator
 	// saves config from the admin UI (oidc_config.go), and is read on the hot
 	// auth path (withAuth RS256) and in the SSO handlers via oidcProvider().
-	oidc        atomic.Pointer[oidcProvider]
-	ssoTxns     *ssoTxnStore // server-side single-use login transactions (state → nonce + PKCE verifier)
+	oidc    atomic.Pointer[oidcProvider]
+	ssoTxns *ssoTxnStore // server-side single-use login transactions (state → nonce + PKCE verifier)
+	// wsTickets: one-time, scope-bound WebSocket tickets. A browser cannot set
+	// an Authorization header on a WebSocket, and putting the session JWT in the
+	// URL wrote a reusable privileged credential into the nginx access log.
+	wsTickets   *wsticket.Store
 	oidcCfg     *oidcConfigStore
 	ssoIdPCfg   *ssoidp.Store    // desired-state SSO identity providers (internal/ssoidp)
 	kc          *keycloak.Client // admin client for the bundled Keycloak broker (env-derived)
@@ -806,6 +811,7 @@ func newServer() *server {
 	srv.oidcCfg = newOIDCConfigStore(envOr("OIDC_CONFIG_FILE", "/data/oidc_config.json"), srv)
 	srv.oidc.Store(oidc.NewProviderFromConfig(srv.oidcCfg.effective(), jwksTTL()))
 	srv.ssoTxns = newSSOTxnStore()
+	srv.wsTickets = wsticket.NewStore()
 	// GUI-configurable SSO (Keycloak side): the desired-state IdP store plus the
 	// admin client that reconciles it into the bundled broker (internal/ssoidp +
 	// internal/keycloak; HTTP boundary + apply path in oidc_config.go). Env is
@@ -2321,6 +2327,10 @@ func (s *server) handleDevices(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	// SSH gateway lives under the device path: /api/devices/{id}/ssh (opt-in,
 	// dormant unless FEATURE_DEVICE_SSH). Delegate before the id parse below.
+	if strings.HasSuffix(r.URL.Path, "/ssh-ticket") {
+		s.handleDeviceSSHTicket(w, r)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/ssh") {
 		s.handleDeviceSSH(w, r)
 		return

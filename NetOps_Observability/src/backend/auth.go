@@ -840,14 +840,42 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// /api/events is a WebSocket — the browser's WS API can't set the
-		// Authorization header, so we accept ?token=<jwt> there.
+		// WebSocket authentication: ONE-TIME TICKET, never a session credential.
+		//
+		// A browser cannot set an Authorization header on a WebSocket, so this
+		// used to accept ?token=<session JWT> for /api/events and the device-SSH
+		// gateway. nginx logs the request line, so every device-terminal open
+		// wrote a privileged, reusable, still-valid JWT into the log pipeline
+		// (stdout → Vector → OpenSearch) — turning "can read logs" into "can act
+		// as that operator" for the token's remaining lifetime.
+		//
+		// Now the browser first POSTs /api/devices/{id}/ssh-ticket over ordinary
+		// authenticated HTTPS and opens the socket with ?ticket=<opaque>. The
+		// ticket is single-use, ~30s, and bound to tenant/user/device/purpose, so
+		// a logged ticket is worthless. Redemption is atomic (delete-under-lock),
+		// so a replayed or concurrently-raced ticket yields exactly one winner.
+		//
+		// /api/events no longer accepts a query credential at all: it is a
+		// WebSocket hub that no shipped client opens (the SPA calls the REST
+		// /api/events/feed with an Authorization header), so an unused credential
+		// transport was retired rather than left standing. A future browser
+		// consumer adopts the ticket flow with its own purpose.
 		var bearer string
-		// WebSocket routes accept ?token=<jwt> (browsers can't set Authorization on
-		// a WS): the events hub and the device-SSH gateway (/api/devices/{id}/ssh).
-		if r.URL.Path == "/api/events" ||
-			(strings.HasPrefix(r.URL.Path, "/api/devices/") && strings.HasSuffix(r.URL.Path, "/ssh")) {
-			bearer = r.URL.Query().Get("token")
+		if strings.HasPrefix(r.URL.Path, "/api/devices/") && strings.HasSuffix(r.URL.Path, "/ssh") {
+			if raw := r.URL.Query().Get("ticket"); raw != "" && s.wsTickets != nil {
+				if tkt, ok := s.wsTickets.Consume(raw, time.Now()); ok {
+					ctx := context.WithValue(r.Context(), wsTicketCtxKey, tkt)
+					ctx = context.WithValue(ctx, userCtxKey, s.withActingTenant(r, jwtClaims{
+						Sub: tkt.UserID, Role: tkt.Role, Tenant: tkt.TenantID,
+					}))
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				// Burned, expired or unknown: refuse here. Falling through to
+				// another credential would defeat the single-use property.
+				writeError(w, http.StatusUnauthorized, errors.New("websocket ticket invalid, expired or already used"))
+				return
+			}
 		}
 		if bearer == "" {
 			auth := r.Header.Get("Authorization")

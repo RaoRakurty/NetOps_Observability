@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { Device, getToken } from "../services/api";
+import { api, Device } from "../services/api";
 import Icon from "../components/Icon";
 
 // DeviceTerminal — in-browser SSH console for a device, backed by the Go
@@ -12,6 +12,16 @@ import Icon from "../components/Icon";
 // surfaced as a banner on first connect.
 
 type Phase = "form" | "connecting" | "open" | "closed";
+
+// sshSocketUrl builds the WebSocket URL for a device terminal. Exported (and
+// pure) so a test can pin the security property directly: the ONLY credential
+// in this URL is the one-time ticket. The session JWT must never appear here —
+// nginx logs the request line, and a JWT in it was a reusable privileged
+// credential written into the log pipeline on every terminal open.
+export function sshSocketUrl(deviceId: string, ticket: string, loc: { protocol: string; host: string } = location): string {
+  const proto = loc.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${loc.host}/api/devices/${encodeURIComponent(deviceId)}/ssh?ticket=${encodeURIComponent(ticket)}`;
+}
 
 export default function DeviceTerminal({ device, onClose }: { device: Device; onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>("form");
@@ -37,17 +47,25 @@ export default function DeviceTerminal({ device, onClose }: { device: Device; on
     };
   }, []);
 
-  const connect = (e: React.FormEvent) => {
+  const connect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim()) return;
     setPhase("connecting");
     setBanner(null);
 
-    // Build the WS URL — wss when the page is https. Token rides the query string
-    // because the browser WS API can't set an Authorization header.
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const token = getToken() ?? "";
-    const url = `${proto}//${location.host}/api/devices/${encodeURIComponent(device.id)}/ssh?token=${encodeURIComponent(token)}`;
+    // Step 1: obtain a one-time WebSocket ticket over an ordinary authenticated
+    // request. The session JWT stays in that request's Authorization header. The
+    // browser WS API cannot set headers, so the socket carries only the ticket:
+    // opaque, single-use, ~30s, bound to this device — worthless if logged.
+    let ticket: string;
+    try {
+      ({ ticket } = await api.deviceSSHTicket(device.id));
+    } catch (err) {
+      setPhase("form");
+      setBanner({ kind: "error", text: `Could not start terminal session: ${(err as Error)?.message ?? String(err)}` });
+      return;
+    }
+    const url = sshSocketUrl(device.id, ticket);
 
     // Defer terminal creation a tick so the host div is mounted.
     setTimeout(() => {

@@ -291,3 +291,71 @@ func TestNginxAccessLogDoesNotCaptureCapabilityTokens(t *testing.T) {
 		}
 	}
 }
+
+// TestNginxRedactsWebSocketTicketAndAnyCredentialQuery is WS-11/WS-12: the
+// generic credential-query redaction added for the device-SSH ticket flow must
+// strip credential-bearing QUERY parameters, not just the per-route PATH
+// tokens. The device-SSH WebSocket leaked ?token=<session JWT> for exactly the
+// reason a per-route allowlist misses a route nobody remembered to add.
+//
+// nginx runs PCRE; the map pattern is written in the RE2 subset so Go's regexp
+// can evaluate the SAME source pattern here — we extract the pattern text from
+// nginx.conf (not a copy) and apply it, so the test cannot drift from the
+// deployed config.
+func TestNginxRedactsWebSocketTicketAndAnyCredentialQuery(t *testing.T) {
+	const path = "../../deployment/docker/nginx/nginx.conf"
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	conf := string(b)
+
+	// Pull the generic credential-query map line's regex + replacement out of
+	// the config: `"~<pattern>"  "<replacement>";`
+	line := regexp.MustCompile(`"~(\^\(\?<cqm>[^"]*credential[^"]*)"\s+"([^"]*)"`).FindStringSubmatch(conf)
+	if line == nil {
+		t.Fatal("generic credential-query redaction map entry not found in nginx.conf")
+	}
+	pat, repl := line[1], line[2]
+
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		t.Fatalf("the redaction pattern is not RE2-valid, so this test cannot vouch for it: %v", err)
+	}
+
+	// nginx $N in the replacement → RE2 $cqm/$cqp; translate the replacement's
+	// $cqm/$cqp to Go's ${cqm}/${cqp} for expansion. The point is only to prove
+	// the CREDENTIAL VALUE is gone, so we assert on the expanded result.
+	goRepl := strings.NewReplacer("$cqm", "${cqm}", "$cqp", "${cqp}", "$cqv", "${cqv}").Replace(repl)
+
+	// WS-11/WS-12: a device-SSH connect line with a fake ticket, and the legacy
+	// ?token= shape, plus other credential keys. None of the secret markers may
+	// survive.
+	const secret = "DO_NOT_LOG_SECRET_123"
+	for _, reqline := range []string{
+		"GET /api/devices/dev-1/ssh?ticket=" + secret + " HTTP/1.1",
+		"GET /api/devices/dev-1/ssh?token=" + secret + " HTTP/1.1",
+		"GET /api/events?access_token=" + secret + " HTTP/1.1",
+		"POST /api/whatever?foo=1&api_key=" + secret + "&bar=2 HTTP/1.1",
+		"GET /x?password=" + secret + " HTTP/1.1",
+	} {
+		if !re.MatchString(reqline) {
+			t.Errorf("redaction pattern did not match a credential-bearing line: %q", reqline)
+			continue
+		}
+		out := re.ReplaceAllString(reqline, goRepl)
+		if strings.Contains(out, secret) {
+			t.Errorf("credential survived redaction:\n  in:  %q\n  out: %q", reqline, out)
+		}
+		if !strings.Contains(out, "credentials-redacted") {
+			t.Errorf("redacted line missing the marker: %q", out)
+		}
+	}
+
+	// A request with NO credential parameter must be left ALONE (method + path
+	// + benign query preserved for traffic analysis).
+	benign := "GET /api/devices?limit=50 HTTP/1.1"
+	if re.MatchString(benign) {
+		t.Errorf("redaction pattern over-matched a benign request: %q", benign)
+	}
+}

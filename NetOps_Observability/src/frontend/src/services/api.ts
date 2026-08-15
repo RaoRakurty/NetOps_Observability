@@ -2227,6 +2227,15 @@ export const api = {
   clearDeviceLocation: (id: string) =>
     request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}/location`, { method: "DELETE" }),
 
+  // One-time WebSocket ticket for the device SSH terminal. The session JWT
+  // rides THIS request's Authorization header (a normal authenticated call);
+  // the returned ticket is opaque, single-use, ~30s, and bound to this device —
+  // it is the ONLY credential that goes into the WebSocket URL, so a logged
+  // request line yields nothing reusable. Never put getToken() in a WS URL.
+  deviceSSHTicket: (id: string) =>
+    request<{ ticket: string; expires_in_seconds: number }>(
+      `/api/devices/${encodeURIComponent(id)}/ssh-ticket`, { method: "POST" }),
+
   // Operator device→site binding (the internal SoT provider's editable intent):
   // assign a device to a DECLARED site by slug; coords resolve live from the site.
   deviceSite: (id: string) =>

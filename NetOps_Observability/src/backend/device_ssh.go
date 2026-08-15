@@ -6,10 +6,15 @@ package backend
 //
 // Security posture (CLAUDE.md §3/§8/§9):
 //   - Dormant unless FEATURE_DEVICE_SSH=true (a 404 otherwise — don't reveal it).
-//   - Authenticated by the normal JWT (over ?token= since browsers can't set an
-//     Authorization header on a WebSocket), then authorized: the caller must be
-//     able to SEE the device (tenant/visibility) AND hold an operator/admin role.
-//     Read-only principals and API-key machine clients are refused.
+//   - Authenticated by a ONE-TIME WebSocket ticket (internal/wsticket): the
+//     browser POSTs /api/devices/{id}/ssh-ticket over ordinary authenticated
+//     HTTPS and opens the socket with ?ticket=<opaque, ~30s, single-use,
+//     scope-bound>. The session JWT never enters a URL — it used to ride
+//     ?token= and was written verbatim into the nginx access log. Then
+//     authorized (at BOTH issuance and connect, via one shared primitive): the
+//     caller must be able to SEE the device (tenant/visibility) AND hold an
+//     operator/admin role. Read-only principals and API-key machine clients
+//     are refused.
 //   - SSH credentials are supplied per-connection by the operator and are NEVER
 //     persisted — the operator authenticates to the device as themselves, which
 //     also gives honest audit attribution. (A stored-SSH-credential vault keyed
@@ -37,6 +42,7 @@ import (
 	"time"
 
 	"netops/backend/internal/ws"
+	"netops/backend/internal/wsticket"
 	"netops/backend/models"
 
 	"golang.org/x/crypto/ssh"
@@ -124,20 +130,28 @@ func sshRoleAllowed(role string) bool {
 	return role == RoleOperator || isSuperAdminRole(role)
 }
 
-// handleDeviceSSH upgrades to a WebSocket and bridges it to an SSH shell on the
-// device named in the path: GET /api/devices/{id}/ssh.
-func (s *server) handleDeviceSSH(w http.ResponseWriter, r *http.Request) {
+// authorizeDeviceSSH is THE single authorization primitive for the SSH gateway.
+// Ticket issuance and WebSocket redemption both call it, so the two paths can
+// never drift — the ticket endpoint cannot become a weaker door than the socket
+// it opens. It writes the HTTP error and returns ok=false on refusal.
+//
+// Order matters and mirrors the original handler: feature gate (404, do not
+// disclose a dormant capability) → id shape → authenticated principal → role
+// (api-key principals are refused outright; SSH is a human operator action) →
+// tenant visibility (404, never reveal another tenant's device) → usable
+// address.
+func (s *server) authorizeDeviceSSH(w http.ResponseWriter, r *http.Request, suffix string) (id string, claims jwtClaims, tenant string, cross bool, dev models.Device, ok bool) {
 	if os.Getenv("FEATURE_DEVICE_SSH") != "true" {
 		http.NotFound(w, r) // dormant: don't disclose the capability
 		return
 	}
-	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/devices/"), "/ssh")
+	id = strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/devices/"), suffix)
 	if id == "" || strings.Contains(id, "/") {
 		http.NotFound(w, r)
 		return
 	}
-	claims, ok := userFrom(r.Context())
-	if !ok {
+	claims, found := userFrom(r.Context())
+	if !found {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
 	}
@@ -145,14 +159,86 @@ func (s *server) handleDeviceSSH(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New("device SSH requires an operator or admin session"))
 		return
 	}
-	tenant, cross := principalTenant(claims)
-	dev, found := s.discovery.Get(id)
+	tenant, cross = principalTenant(claims)
+	dev, found = s.discovery.Get(id)
 	if !found || !canSeeDevice(dev, tenant, cross) {
 		http.NotFound(w, r) // out-of-tenant: don't reveal existence
 		return
 	}
 	if strings.TrimSpace(dev.Address) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("device has no address"))
+		return
+	}
+	return id, claims, tenant, cross, dev, true
+}
+
+// handleDeviceSSHTicket mints a one-time WebSocket ticket:
+// POST /api/devices/{id}/ssh-ticket.
+//
+// This is an ORDINARY authenticated HTTPS request, so the session credential
+// rides the Authorization header where it belongs and never reaches a URL. The
+// browser then opens the WebSocket with ?ticket=<opaque>, which is single-use,
+// device/tenant/user/purpose-bound and expires in ~30s — worthless in a log.
+//
+// Full SSH authorization runs HERE, not only at connect: a caller who may not
+// SSH must not be able to obtain a ticket at all.
+func (s *server) handleDeviceSSHTicket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, claims, tenant, _, _, ok := s.authorizeDeviceSSH(w, r, "/ssh-ticket")
+	if !ok {
+		return
+	}
+	raw, err := s.wsTickets.Issue(wsticket.Ticket{
+		TenantID: tenant, UserID: claims.Sub, Role: claims.Role,
+		DeviceID: id, Purpose: wsticket.PurposeDeviceSSH,
+	}, time.Now())
+	if err != nil {
+		// Capacity refusal is a real condition, not silence (§16.1 in spirit).
+		logWarn("device-ssh", "ws ticket not issued", map[string]any{
+			"device_id": id, "tenant": tenant, "error": err.Error()})
+		writeError(w, http.StatusServiceUnavailable, errors.New("too many terminal sessions starting — retry shortly"))
+		return
+	}
+	// Fingerprint only — the raw ticket is a credential and never enters a log.
+	logInfo("device-ssh", "ws ticket issued", map[string]any{
+		"device_id": id, "tenant": tenant, "user": claims.Sub,
+		"purpose": wsticket.PurposeDeviceSSH, "ticket_fp": wsticket.Fingerprint(raw)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ticket": raw, "expires_in_seconds": int(wsticket.TTL.Seconds()),
+	})
+}
+
+// handleDeviceSSH upgrades to a WebSocket and bridges it to an SSH shell on the
+// device named in the path: GET /api/devices/{id}/ssh?ticket=<one-time ticket>.
+//
+// The ticket was already consumed by withAuth (which is where the request's
+// principal comes from). What remains here is the scope check that binds the
+// ticket to THIS device, plus the same authorization the issuer applied — the
+// ticket is a transport credential, never a substitute for authorization.
+func (s *server) handleDeviceSSH(w http.ResponseWriter, r *http.Request) {
+	id, claims, tenant, cross, dev, ok := s.authorizeDeviceSSH(w, r, "/ssh")
+	if !ok {
+		return
+	}
+	// Ticket scope: the consumed ticket must have been minted for this device
+	// and this purpose. A ticket for device-A presented at device-B is refused
+	// even though both are visible to the caller.
+	if tkt, seen := wsTicketFrom(r.Context()); seen {
+		if tkt.DeviceID != id || tkt.Purpose != wsticket.PurposeDeviceSSH {
+			logWarn("device-ssh", "ws ticket scope mismatch", map[string]any{
+				"device_id": id, "ticket_device_id": tkt.DeviceID,
+				"purpose": tkt.Purpose, "tenant": tenant})
+			writeError(w, http.StatusForbidden, errors.New("ticket is not valid for this device"))
+			return
+		}
+	} else if r.URL.Query().Get("ticket") != "" {
+		// A ticket was supplied but did not survive redemption (expired, already
+		// used, or unknown). Never fall through to another credential.
+		writeError(w, http.StatusUnauthorized, errors.New("websocket ticket invalid, expired or already used"))
 		return
 	}
 
@@ -415,3 +501,16 @@ func (w *wsBinWriter) Write(p []byte) (int, error) {
 // The events.go hub is server→client text-only and never unmasks; a terminal is
 // bidirectional binary, so this is a fuller (still small) implementation:
 // fragmentation reassembly, client-frame unmasking, ping/pong, close.
+
+// wsTicketCtxKey carries the redeemed WebSocket ticket from withAuth (which
+// consumes it) to the handler (which checks its scope). Distinct from
+// userCtxKey so a ticket can never be mistaken for a session principal.
+type wsTicketKey struct{}
+
+var wsTicketCtxKey = wsTicketKey{}
+
+// wsTicketFrom returns the ticket redeemed for this request, if any.
+func wsTicketFrom(ctx context.Context) (wsticket.Ticket, bool) {
+	t, ok := ctx.Value(wsTicketCtxKey).(wsticket.Ticket)
+	return t, ok
+}

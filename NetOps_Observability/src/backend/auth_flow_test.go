@@ -17,6 +17,7 @@ import (
 	"netops/backend/internal/session"
 	"netops/backend/internal/snmpcred"
 	"netops/backend/internal/users"
+	"netops/backend/internal/wsticket"
 	"netops/backend/wireless"
 	"testing"
 	"time"
@@ -70,6 +71,7 @@ func newTestServerState(t *testing.T) (*httptest.Server, *server) {
 		audit: au, startedAt: time.Now().UTC(),
 		wireless:        wireless.NewMemStore(),   // #128: always set, like the runtime wiring
 		wirelessActions: newWirelessActionStore(), // #128 Phase 8: dormant unless FEATURE_WIRELESS_ACTIONS
+		wsTickets:       wsticket.NewStore(),      // one-time WebSocket tickets (device SSH)
 	}
 	must(us.SeedAdmin("admin", "Passw0rd!2345"))
 	s.backfillBindings() // PBAC Phase A: mirror seeded users into role_bindings
@@ -408,5 +410,42 @@ func TestAdminSafeLastSuperAdmin(t *testing.T) {
 	admin := login(t, srv, "admin", "Passw0rd!2345")
 	if st, _ := do(t, srv, "DELETE", "/api/users/admin", admin.Token, nil); st != 400 {
 		t.Errorf("delete last super-admin: status %d, want 400", st)
+	}
+}
+
+// TestWSQueryTokenAuthenticationRemoved is the WS-13 regression: the WebSocket
+// hub route no longer accepts a session credential in the query string. The
+// device-SSH gateway leaked a reusable JWT into the nginx access log exactly
+// because ?token= was accepted for WS routes; that transport is gone. A valid
+// token presented the OLD way (query) must be rejected; the same token in the
+// Authorization header still authenticates (the REST path the SPA uses).
+//
+// The route literal is assembled from parts so this auth-focused test never
+// lands the hub path in the tenant-isolation corpus scanned by
+// route_isolation_coverage_test.go — WS-13 is about credential transport, not
+// tenant isolation, and must not spuriously mark the route as isolation-covered.
+func TestWSQueryTokenAuthenticationRemoved(t *testing.T) {
+	srv := newTestServer(t)
+	tok := login(t, srv, "admin", "Passw0rd!2345").Token
+	hub := "/api/" + "events"
+
+	// OLD way — token in the query — must NOT authenticate (401).
+	req, _ := http.NewRequest("GET", srv.URL+hub+"?token="+tok, nil)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("query-token WS auth: status %d, want 401 — that transport must be gone", resp.StatusCode)
+	}
+
+	// Header auth still gets PAST authentication (the hub then needs a WS
+	// upgrade, so a correctly-authenticated request never fails at 401).
+	if st, _ := do(t, srv, "GET", hub, tok, nil); st == http.StatusUnauthorized {
+		t.Fatalf("Authorization-header request to the hub was rejected as unauthenticated (%d)", st)
 	}
 }
