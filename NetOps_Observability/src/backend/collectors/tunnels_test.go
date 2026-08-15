@@ -3,6 +3,7 @@ package collectors
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -23,6 +24,34 @@ func snmpResponse(oid []int, valTag byte, val []byte, reqID int) []byte {
 	msg := berInt(1)
 	msg = append(msg, berTLV(0x04, []byte("public"))...)
 	msg = append(msg, pdu...)
+	return berTLV(0x30, msg)
+}
+
+// snmpResponseWithPDU is snmpResponse with an arbitrary PDU tag (to forge a
+// non-GetResponse reply).
+func snmpResponseWithPDU(oid []int, valTag byte, val []byte, reqID int, pduTag byte) []byte {
+	vbs := berTLV(0x30, berTLV(0x30, append(berOID(oid), berTLV(valTag, val)...)))
+	body := berInt(reqID)
+	body = append(body, berInt(0)...)
+	body = append(body, berInt(0)...)
+	body = append(body, vbs...)
+	msg := berInt(1)
+	msg = append(msg, berTLV(0x04, []byte("public"))...)
+	msg = append(msg, berTLV(pduTag, body)...)
+	return berTLV(0x30, msg)
+}
+
+// snmpResponseErr builds a GetResponse carrying a non-zero error-status and a
+// NULL value (what an agent answering genErr actually sends).
+func snmpResponseErr(oid []int, reqID, errStatus int) []byte {
+	vbs := berTLV(0x30, berTLV(0x30, append(berOID(oid), berTLV(0x05, nil)...))) // NULL value
+	body := berInt(reqID)
+	body = append(body, berInt(errStatus)...) // error-status
+	body = append(body, berInt(0)...)         // error-index
+	body = append(body, vbs...)
+	msg := berInt(1)
+	msg = append(msg, berTLV(0x04, []byte("public"))...)
+	msg = append(msg, berTLV(0xA2, body)...)
 	return berTLV(0x30, msg)
 }
 
@@ -102,7 +131,7 @@ func TestDecodeValues(t *testing.T) {
 func TestFirstVarbind(t *testing.T) {
 	oid := append(append([]int{}, oidIfOper...), 7) // ifOperStatus.7
 	pkt := snmpResponse(oid, 0x02, []byte{0x01}, 42)
-	gotOID, valTag, val, err := firstVarbind(pkt)
+	gotOID, valTag, val, err := firstVarbind(pkt, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +140,32 @@ func TestFirstVarbind(t *testing.T) {
 	}
 	if valTag != 0x02 || !bytes.Equal(val, []byte{0x01}) {
 		t.Errorf("value tag=%#x val=%x", valTag, val)
+	}
+}
+
+// firstVarbind must reject a reply that does not answer OUR request: a stale
+// retransmit (wrong request-id) and a wrong PDU type are errStaleResponse (the
+// walk re-reads on these), and a non-zero error-status is a hard error so a
+// genErr NULL echo is never read as a 0 sample.
+func TestFirstVarbindRejectsMismatchedAndErroredReplies(t *testing.T) {
+	oid := append(append([]int{}, oidIfOper...), 7)
+
+	// A valid reply to reqID 42, read while expecting 43 → stale.
+	stale := snmpResponse(oid, 0x02, []byte{0x01}, 42)
+	if _, _, _, err := firstVarbind(stale, 43); !errors.Is(err, errStaleResponse) {
+		t.Fatalf("mismatched request-id must be errStaleResponse, got %v", err)
+	}
+
+	// A non-GetResponse PDU (a request echoed back) → stale, not data.
+	wrongPDU := snmpResponseWithPDU(oid, 0x02, []byte{0x01}, 42, 0xA0)
+	if _, _, _, err := firstVarbind(wrongPDU, 42); !errors.Is(err, errStaleResponse) {
+		t.Fatalf("non-GetResponse PDU must be errStaleResponse, got %v", err)
+	}
+
+	// error-status = genErr(5), value echoed as NULL → hard error, NOT a value.
+	genErr := snmpResponseErr(oid, 42, 5)
+	if _, _, _, err := firstVarbind(genErr, 42); err == nil || errors.Is(err, errStaleResponse) {
+		t.Fatalf("non-zero error-status must be a hard error (not a value, not stale), got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"netops/backend/internal/discovery"
@@ -212,9 +213,13 @@ func TestIdlessDeviceCreateDerivesId(t *testing.T) {
 		t.Fatalf("201 returned an EMPTY id — the row is unaddressable and can " +
 			"never be deleted through the API (F-8)")
 	}
-	if got.ID != "cx-f8-router" {
+	want := discovery.ScanDeviceID("CX F8 Router", "203.0.113.7")
+	if got.ID != want {
 		t.Fatalf("derived id = %q, want the ScanDeviceID convention (name "+
-			"lowercased, unsafe runes collapsed) = %q", got.ID, "cx-f8-router")
+			"lowercased+collapsed, disambiguated by address) = %q", got.ID, want)
+	}
+	if !strings.HasPrefix(got.ID, "cx-f8-router-") {
+		t.Fatalf("derived id %q should keep the human-readable name prefix", got.ID)
 	}
 
 	// The device must be addressable end-to-end: delete by the derived id.
@@ -261,9 +266,10 @@ func TestEmptyIDRowIsRepairedAtLoad(t *testing.T) {
 	a.SetStore(newDeviceStore(devicesPath()))
 
 	devs := a.Devices()
-	if len(devs) != 1 || devs[0].ID != "cx-phase11-assurance-dev" {
+	wantID := discovery.ScanDeviceID("cx-phase11-assurance-dev", "203.0.113.99")
+	if len(devs) != 1 || devs[0].ID != wantID {
 		t.Fatalf("after load, devices = %+v — want exactly one row under the "+
-			"derived id (F-8 repair)", devs)
+			"derived id %q (F-8 repair)", devs, wantID)
 	}
 	if devs[0].TenantID != "t_qa" {
 		t.Fatalf("repair must preserve tenant ownership; got %q", devs[0].TenantID)

@@ -27,7 +27,15 @@ var (
 	Versions       = []string{"v1", "v2c", "v3"}
 	SecurityLevels = []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
 	AuthProtocols  = []string{"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512"}
-	PrivProtocols  = []string{"DES", "3DES", "AES128", "AES192", "AES256"}
+	// Privacy protocols the USM engine (collectors/snmpv3.go) can ACTUALLY speak:
+	// RFC 3414 DES-CBC and RFC 3826 AES-128-CFB. 3DES and AES-192/256 were offered
+	// but not implemented — the engine ran AES-192/256 as AES-128 with a truncated
+	// key (the device then rejected every request as "decryptionError (bad priv
+	// password)" for a CORRECT credential), and "3DES" matched no branch at all
+	// ("unknown priv protocol" on every poll). Offering an algorithm we cannot
+	// speak is a silent trap; the list now names only what works, and save
+	// rejects the rest loudly. (Re-add a value only when snmpv3.go implements it.)
+	PrivProtocols = []string{"DES", "AES128"}
 )
 
 func inList(v string, list []string) bool {

@@ -50,7 +50,7 @@ func TestSNMPCredV3Validation(t *testing.T) {
 	}
 	good := Credential{
 		Name: "v3 good", Version: "v3", SecurityName: "noc", SecurityLevel: "authPriv",
-		AuthProtocol: "SHA256", AuthKey: "authpass123", PrivProtocol: "AES256", PrivKey: "privpass123",
+		AuthProtocol: "SHA256", AuthKey: "authpass123", PrivProtocol: "AES128", PrivKey: "privpass123",
 	}
 	pub, err := cs.Upsert(good)
 	if err != nil {
@@ -146,5 +146,32 @@ func TestSNMPCredReloadPropagatesChange(t *testing.T) {
 	}
 	if _, ok := b.Resolve("shared"); ok {
 		t.Fatalf("after reload, B must not resolve the deleted credential")
+	}
+}
+
+// TestSNMPCredRejectsUnimplementedPrivProtocols pins that the store offers ONLY
+// privacy protocols the USM engine can speak. 3DES/AES192/AES256 were accepted
+// at save but never worked (AES192/256 ran as truncated AES-128; 3DES matched no
+// branch), so a "correct" credential failed every poll with a misleading
+// decryption error. They must now be refused at save.
+func TestSNMPCredRejectsUnimplementedPrivProtocols(t *testing.T) {
+	cs, _ := NewStore(filepath.Join(t.TempDir(), "snmp.json"), nil, fileKV{})
+	for _, proto := range []string{"3DES", "AES192", "AES256"} {
+		_, err := cs.Upsert(Credential{
+			Name: "v3-" + proto, Version: "v3", SecurityName: "noc", SecurityLevel: "authPriv",
+			AuthProtocol: "SHA256", AuthKey: "authpass123", PrivProtocol: proto, PrivKey: "privpass123",
+		})
+		if err == nil {
+			t.Errorf("priv protocol %q was accepted but the engine cannot speak it — must be refused", proto)
+		}
+	}
+	// The supported ones still save.
+	for _, proto := range []string{"DES", "AES128"} {
+		if _, err := cs.Upsert(Credential{
+			Name: "v3ok-" + proto, Version: "v3", SecurityName: "noc", SecurityLevel: "authPriv",
+			AuthProtocol: "SHA256", AuthKey: "authpass123", PrivProtocol: proto, PrivKey: "privpass123",
+		}); err != nil {
+			t.Errorf("supported priv protocol %q was rejected: %v", proto, err)
+		}
 	}
 }

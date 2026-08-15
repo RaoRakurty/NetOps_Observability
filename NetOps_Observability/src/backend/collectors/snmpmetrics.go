@@ -18,6 +18,12 @@ import (
 // "onboard a Juniper, see Juniper CPU/temp/memory" actually work — alert rules
 // then reference the metric names (device_cpu_percent, …), not OIDs.
 
+// metricsPollWorkers bounds concurrent per-device SNMP polling (§9: all queues
+// bounded). Matches the discovery scanner's fan-out; enough that a fleet's dead
+// devices (8s timeout each) don't serialize the healthy ones past the interval,
+// without opening a socket storm.
+const metricsPollWorkers = 32
+
 type metricsCollector struct {
 	interval time.Duration
 	targets  TargetFunc
@@ -65,144 +71,57 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		targets = c.targets()
 	}
 	start := time.Now()
-	now := start.UnixMilli()
-	reachable := 0
-	samples := 0
-	meBuilt, meSent := 0, 0 // metric-event lane observability (built vs sent)
-	var lastErr string
-	// enrichErr is kept apart from lastErr: a failed enrichment walk on a device
-	// that otherwise answered is a different fact from an unreachable device, and
-	// must not be lost just because reachability was fine.
-	var enrichErr string
-	ifaddr := map[string]map[string]string{}     // deviceID → (interface IP → ifName), for topology enrichment
-	ifindexMap := map[string]map[string]string{} // deviceID → (ifIndex → ifName), for the C7.1 EntityResolver
+	now := start.UnixMilli() // cycle-level stamp for the summary/health lines only
 
-	for _, tg := range targets {
-		addr := withPort(tg.Address, 161)
-		// Per-device credentials (v2c community or full v3 USM) resolved from the
-		// device's credential profile by the target builder. Essential for a
-		// multi-vendor fleet where each device has its own creds.
-		creds := tg.creds()
-		dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	// Bounded fan-out: poll devices concurrently so a handful of unreachable
+	// devices (8s timeout each) cannot serialize the whole fleet past its
+	// interval. Each worker writes its OWN results[i] — distinct indices, so no
+	// lock is needed during the parallel phase (the established echo.go pattern);
+	// aggregation below is single-goroutine.
+	results := make([]deviceOutcome, len(targets))
+	sem := make(chan struct{}, metricsPollWorkers)
+	var wg sync.WaitGroup
+	for i, tg := range targets {
+		wg.Add(1)
+		go func(i int, tg Target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i] = c.pollDevice(ctx, tg)
+		}(i, tg)
+	}
+	wg.Wait()
 
-		ent, entOK := 0, false
-		if v, err := snmpGet(dctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
-			ent, entOK = enterpriseOf(decodeOID(v.raw))
-		} else if err != nil {
-			cancel()
-			lastErr = err.Error()
-			continue
+	// Aggregate serially — no shared state, no locks.
+	reachable, samples := 0, 0
+	meBuilt, meSent := 0, 0
+	var lastErr, enrichErr string
+	ifaddr := map[string]map[string]string{}
+	ifindexMap := map[string]map[string]string{}
+	for _, r := range results {
+		if r.lastErr != "" {
+			lastErr = r.lastErr
 		}
-		reachable++
-		vendor := vendorLabel(ent, entOK)
-
-		var lines []string
-		// Canonical metric events for the correlation bus (RCA families only;
-		// buildMetricEvent applies the allowlist filter). Forwarded per device.
-		var events []MetricEvent
-		// ifIndex→ifName map, walked lazily once per device the first time an
-		// interface metric is emitted. Without it interface counters are labelled
-		// by bare ifIndex — which a NOC operator can't map to a physical port
-		// (Gi0/1 / ge-0/0/1 / Ethernet1 / ethernet-1/1) and which renumbers on a
-		// reboot or line-card change. The name is the operator-facing identity.
-		var ifNames map[string]string
-		// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
-		// names; empty when the operator configured no interface description.
-		var ifAliases map[string]string
-		for _, prof := range selectProfiles(c.profiles, ent, entOK) {
-			for _, m := range prof.Metrics {
-				// Single-contract ownership: yield a metric to the transport that owns
-				// it on this device (gNMI owns BGP/IS-IS where present); SNMP stays the
-				// universal floor on devices without that transport (agentless fallback).
-				if m.ownedElsewhere(tg) {
-					continue
-				}
-				// Canonical index label (e.g. bgpPeerTable → "peer") so an SNMP-owned
-				// series matches the contract the richer transport uses; "" → "index".
-				idxLabel := m.indexLabel()
-				if m.Table {
-					rows, err := snmpWalkColumn(dctx, addr, creds, m.OID)
-					if err != nil {
-						continue
-					}
-					isIface := strings.HasPrefix(m.Name, "device_if_")
-					if isIface && ifNames == nil {
-						ifNames = ifNameMap(dctx, addr, creds)
-						ifAliases = ifAliasMap(dctx, addr, creds)
-					}
-					for idx, v := range rows {
-						if isIface {
-							// Keep index for series stability; add ifName for humans.
-							name := ifNames[idx]
-							if name == "" {
-								name = "ifIndex " + idx // honest: device named no port
-							}
-							alias := ifAliases[idx] // "" when no description configured
-							lines = append(lines, fmt.Sprintf(
-								"%s{device=%q,vendor=%q,index=%q,ifName=%q,ifAlias=%q} %d %d",
-								m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now))
-							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now); ok {
-								events = append(events, ev)
-							}
-						} else {
-							lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,%s=%q} %d %d",
-								m.Name, tg.ID, vendor, idxLabel, idx, valueInt(v), now))
-							if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
-								events = append(events, ev)
-							}
-						}
-					}
-				} else {
-					v, err := snmpGet(dctx, addr, creds, append(append([]int(nil), m.OID...), 0))
-					if err != nil {
-						continue
-					}
-					lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q} %d %d",
-						m.Name, tg.ID, vendor, valueInt(v), now))
-					if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", "", valueInt(v), now); ok {
-						events = append(events, ev)
-					}
-				}
+		if r.enrichErr != "" {
+			enrichErr = r.enrichErr
+		}
+		if r.reach {
+			reachable++
+		}
+		samples += len(r.lines)
+		if len(r.lines) > 0 {
+			emitMetrics(ctx, strings.Join(r.lines, "\n"))
+		}
+		meBuilt += len(r.events)
+		meSent += forwardMetricEvents(ctx, r.events)
+		if r.id != "" {
+			if len(r.ifaddr) > 0 {
+				ifaddr[r.id] = r.ifaddr
+			}
+			if r.ifindex != nil {
+				ifindexMap[r.id] = r.ifindex
 			}
 		}
-		// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
-		// without ENTITY-MIB yield nothing.
-		lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
-		// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
-		// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
-		// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias
-		// per port; VM-only fast numerics (identity stays relational). Best-effort.
-		if os.Getenv("FEATURE_PORT_DOM") == "true" {
-			if a := domAdapterFor(vendor); a != nil {
-				lines = append(lines, a.collect(dctx, addr, creds, tg.ID, ifNames, now)...)
-			} else {
-				lines = append(lines, collectDOMSensors(dctx, addr, creds, tg.ID, vendor, now)...)
-			}
-		}
-		// Topology enrichment: interface IP → ifName (reuses the ifName map already
-		// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
-		// links (interface IPs) resolve to real port names + join to metrics.
-		if ifNames != nil {
-			m, err := ipIfNameMap(dctx, addr, creds, ifNames)
-			if err != nil {
-				// Enrichment is best-effort, but its FAILURE is not benign: it is
-				// reported rather than vanishing into an empty map.
-				enrichErr = err.Error()
-			}
-			if len(m) > 0 {
-				ifaddr[tg.ID] = m
-			}
-			ifindexMap[tg.ID] = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
-		}
-		cancel()
-		samples += len(lines)
-		if len(lines) > 0 {
-			emitMetrics(ctx, strings.Join(lines, "\n"))
-		}
-		// Forward the RCA-filtered canonical subset to the correlation bus
-		// (best-effort, separate from the VM path above).
-		meBuilt += len(events)
-		meSent += forwardMetricEvents(ctx, events)
 	}
 
 	// Publish the merged interface-address map (replace; TTL self-expires if the
@@ -248,6 +167,152 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 		c.status.LastError = enrichErr // "" when the whole cycle was clean
 	}
 	c.mu.Unlock()
+}
+
+// deviceOutcome is one device's poll result. Each worker fills its OWN struct
+// (no shared mutable state during the parallel phase — the echo.go pattern), and
+// pollOnce aggregates serially after; correctness never depends on -race.
+type deviceOutcome struct {
+	id        string
+	lines     []string
+	events    []MetricEvent
+	reach     bool
+	ifaddr    map[string]string // interface IP → ifName
+	ifindex   map[string]string // ifIndex → ifName
+	lastErr   string
+	enrichErr string
+}
+
+// pollDevice does ALL SNMP work for one device and stamps its samples with THIS
+// device's own poll time. Serial polling stamped every sample with the cycle
+// START time, so a device polled 160s into a cycle (behind 20 dead peers) had
+// its readings back-dated minutes — corrupting rates and delaying alerts during
+// a site outage. Per-device timestamps plus the bounded fan-out in pollOnce fix
+// both the skew and the head-of-line delay.
+func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutcome {
+	var out deviceOutcome
+	now := time.Now().UnixMilli()
+	addr := withPort(tg.Address, 161)
+	// Per-device credentials (v2c community or full v3 USM) resolved from the
+	// device's credential profile by the target builder. Essential for a
+	// multi-vendor fleet where each device has its own creds.
+	creds := tg.creds()
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+
+	ent, entOK := 0, false
+	if v, err := snmpGet(dctx, addr, creds, sysObjectIDOID); err == nil && v.tag == 0x06 {
+		ent, entOK = enterpriseOf(decodeOID(v.raw))
+	} else if err != nil {
+		cancel()
+		out.lastErr = err.Error()
+		return out
+	}
+	out.reach = true
+	vendor := vendorLabel(ent, entOK)
+
+	var lines []string
+	// Canonical metric events for the correlation bus (RCA families only;
+	// buildMetricEvent applies the allowlist filter). Forwarded per device.
+	var events []MetricEvent
+	// ifIndex→ifName map, walked lazily once per device the first time an
+	// interface metric is emitted. Without it interface counters are labelled
+	// by bare ifIndex — which a NOC operator can't map to a physical port
+	// (Gi0/1 / ge-0/0/1 / Ethernet1 / ethernet-1/1) and which renumbers on a
+	// reboot or line-card change. The name is the operator-facing identity.
+	var ifNames map[string]string
+	// ifIndex→ifAlias (operator circuit ID, ifXTable). Walked lazily with the
+	// names; empty when the operator configured no interface description.
+	var ifAliases map[string]string
+	for _, prof := range selectProfiles(c.profiles, ent, entOK) {
+		for _, m := range prof.Metrics {
+			// Single-contract ownership: yield a metric to the transport that owns
+			// it on this device (gNMI owns BGP/IS-IS where present); SNMP stays the
+			// universal floor on devices without that transport (agentless fallback).
+			if m.ownedElsewhere(tg) {
+				continue
+			}
+			// Canonical index label (e.g. bgpPeerTable → "peer") so an SNMP-owned
+			// series matches the contract the richer transport uses; "" → "index".
+			idxLabel := m.indexLabel()
+			if m.Table {
+				rows, err := snmpWalkColumn(dctx, addr, creds, m.OID)
+				if err != nil {
+					continue
+				}
+				isIface := strings.HasPrefix(m.Name, "device_if_")
+				if isIface && ifNames == nil {
+					ifNames = ifNameMap(dctx, addr, creds)
+					ifAliases = ifAliasMap(dctx, addr, creds)
+				}
+				for idx, v := range rows {
+					if isIface {
+						// Keep index for series stability; add ifName for humans.
+						name := ifNames[idx]
+						if name == "" {
+							name = "ifIndex " + idx // honest: device named no port
+						}
+						alias := ifAliases[idx] // "" when no description configured
+						lines = append(lines, fmt.Sprintf(
+							"%s{device=%q,vendor=%q,index=%q,ifName=%q,ifAlias=%q} %d %d",
+							m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now))
+						if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, name, alias, valueInt(v), now); ok {
+							events = append(events, ev)
+						}
+					} else {
+						lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,%s=%q} %d %d",
+							m.Name, tg.ID, vendor, idxLabel, idx, valueInt(v), now))
+						if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, idx, "", "", valueInt(v), now); ok {
+							events = append(events, ev)
+						}
+					}
+				}
+			} else {
+				v, err := snmpGet(dctx, addr, creds, append(append([]int(nil), m.OID...), 0))
+				if err != nil {
+					continue
+				}
+				lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q} %d %d",
+					m.Name, tg.ID, vendor, valueInt(v), now))
+				if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", "", valueInt(v), now); ok {
+					events = append(events, ev)
+				}
+			}
+		}
+	}
+	// FRU inventory (ENTITY-MIB) — info series, VM-only, best-effort. Devices
+	// without ENTITY-MIB yield nothing.
+	lines = append(lines, collectEntityInventory(dctx, addr, creds, tg.ID, vendor, now)...)
+	// DOM/DDM optics — Port Intelligence #94 P3, opt-in. Prefer a vendor DOM
+	// adapter (Juniper jnxDom / Nokia DDM, ifName-resolved); fall back to the
+	// universal ENTITY-SENSOR-MIB. Normalized rx/tx power, temp, voltage, bias
+	// per port; VM-only fast numerics (identity stays relational). Best-effort.
+	if os.Getenv("FEATURE_PORT_DOM") == "true" {
+		if a := domAdapterFor(vendor); a != nil {
+			lines = append(lines, a.collect(dctx, addr, creds, tg.ID, ifNames, now)...)
+		} else {
+			lines = append(lines, collectDOMSensors(dctx, addr, creds, tg.ID, vendor, now)...)
+		}
+	}
+	// Topology enrichment: interface IP → ifName (reuses the ifName map already
+	// walked for interface metrics; one extra ipAddrTable walk). Lets BGP-LS
+	// links (interface IPs) resolve to real port names + join to metrics.
+	if ifNames != nil {
+		m, err := ipIfNameMap(dctx, addr, creds, ifNames)
+		if err != nil {
+			// Enrichment is best-effort, but its FAILURE is not benign: it is
+			// reported rather than vanishing into an empty map.
+			out.enrichErr = err.Error()
+		}
+		if len(m) > 0 {
+			out.ifaddr = m
+		}
+		out.ifindex = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
+	}
+	cancel()
+	out.lines = lines
+	out.events = events
+	out.id = tg.ID
+	return out
 }
 
 // vendorLabel resolves the metric's vendor tag from the enterprise number.

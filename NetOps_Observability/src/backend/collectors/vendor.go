@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -151,17 +152,28 @@ func snmpGet(ctx context.Context, addr string, creds snmpCreds, oid []int) (berV
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
-	if _, err := c.Write(buildSNMPGet(creds.Community, oid, 1)); err != nil {
+	const reqID = 1
+	if _, err := c.Write(buildSNMPGet(creds.Community, oid, reqID)); err != nil {
 		return berVal{}, err
 	}
 	buf := make([]byte, 4096)
-	n, err := c.Read(buf)
-	if err != nil {
-		return berVal{}, err
-	}
-	_, valTag, val, err := firstVarbind(buf[:n])
-	if err != nil {
-		return berVal{}, err
+	// Read past any stale retransmit until this request's own GetResponse (or the
+	// deadline). A stale/wrong-PDU reply is discarded, never read as a value.
+	var valTag byte
+	var val []byte
+	for stale := 0; ; stale++ {
+		n, rerr := c.Read(buf)
+		if rerr != nil {
+			return berVal{}, rerr
+		}
+		var err error
+		_, valTag, val, err = firstVarbind(buf[:n], reqID)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errStaleResponse) || stale >= 8 {
+			return berVal{}, err
+		}
 	}
 	if valTag == tagNoSuchObject || valTag == tagNoSuchInstance || valTag == tagEndOfMibView {
 		return berVal{}, fmt.Errorf("snmp: no such object")

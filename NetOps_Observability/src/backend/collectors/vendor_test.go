@@ -71,7 +71,7 @@ func TestDetectVendor(t *testing.T) {
 			if hits == 0 {
 				resp = snmpResponse(sysObjectIDOID, 0x06, oidContent([]int{1, 3, 6, 1, 4, 1, 9, 1, 222}), 1)
 			} else {
-				resp = snmpResponse(sysDescrOID, 0x04, []byte("Cisco IOS Software"), 2)
+				resp = snmpResponse(sysDescrOID, 0x04, []byte("Cisco IOS Software"), 1) // snmpGet always sends reqID=1
 			}
 			hits++
 			_, _ = conn.WriteTo(resp, peer)

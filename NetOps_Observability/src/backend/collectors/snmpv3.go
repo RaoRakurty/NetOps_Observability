@@ -632,13 +632,22 @@ func varbindFromScoped(scoped []byte) (valTag byte, val []byte, oid []int, err e
 	if pduTag == 0xA8 { // Report PDU — USM rejected us (unknown user, wrong digest, …)
 		return 0, nil, nil, fmt.Errorf("snmpv3: agent returned Report (%s)", reportReason(pdu))
 	}
+	if pduTag != 0xA2 { // must be a GetResponse (auth already verified upstream)
+		return 0, nil, nil, fmt.Errorf("snmpv3: PDU tag 0x%02X is not GetResponse", pduTag)
+	}
 	_, _, p, err := readTLV(pdu) // request-id
 	if err != nil {
 		return
 	}
-	_, _, p, err = readTLV(p) // error-status
+	esTag, esContent, p, err := readTLV(p) // error-status
 	if err != nil {
 		return
+	}
+	if esTag == 0x02 && decodeInt(esContent) != 0 {
+		// Non-zero error-status: the agent could not answer (genErr, noSuchName,
+		// …). Its echoed NULL varbind must NOT be read as a value — valueInt(NULL)
+		// = 0 would surface as a real sample (false peer-down / zero-rate alert).
+		return 0, nil, nil, fmt.Errorf("snmpv3: agent error-status %d (not a value)", decodeInt(esContent))
 	}
 	_, _, p, err = readTLV(p) // error-index
 	if err != nil {

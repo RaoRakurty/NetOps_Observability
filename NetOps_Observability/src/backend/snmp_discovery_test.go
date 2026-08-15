@@ -112,8 +112,11 @@ func TestSNMPSourceDiscoversOnlyUnknownHosts(t *testing.T) {
 		t.Fatalf("want exactly 1 discovered device, got %d: %+v", len(devs), devs)
 	}
 	d := devs[0]
-	if d.ID != "leaf-1" || d.Address != "10.20.0.3" || d.Vendor != "arista" || d.Source != "snmp" {
-		t.Fatalf("device shape wrong: %+v", d)
+	// ID is the ScanDeviceID convention: sysName prefix, disambiguated by address
+	// (two devices sharing a sysName must not collide to one cache key).
+	wantID := discovery.ScanDeviceID("leaf-1", "10.20.0.3")
+	if d.ID != wantID || d.Address != "10.20.0.3" || d.Vendor != "arista" || d.Source != "snmp" {
+		t.Fatalf("device shape wrong: %+v (want ID %q)", d, wantID)
 	}
 	if d.TenantID != "" {
 		t.Fatalf("discovered device must be platform-scoped (empty tenant), got %q", d.TenantID)

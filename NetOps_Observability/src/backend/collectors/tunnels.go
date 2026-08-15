@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -150,10 +151,25 @@ const (
 	tagEndOfMibView   = 0x82
 )
 
+// pduTagGetResponse is the only PDU an agent may answer a Get/GetNext with.
+const pduTagGetResponse = 0xA2
+
+// errStaleResponse marks a reply that does not belong to the request we sent —
+// wrong PDU type or a request-id that does not echo ours. A walk RE-READS on
+// this (a delayed retransmit from an earlier iteration must be discarded, not
+// consumed as the current answer), rather than treating the stale bytes as data.
+var errStaleResponse = errors.New("snmp: response does not match the request (stale/retransmit)")
+
 // firstVarbind decodes an SNMP response packet and returns the first
-// variable-binding's OID and value. It skips version/community and the PDU's
-// request-id/error-status/error-index, then reads varbind { OID, value }.
-func firstVarbind(pkt []byte) (oid []int, valTag byte, val []byte, err error) {
+// variable-binding's OID and value, AFTER validating it actually answers the
+// request `expectReqID`:
+//   - the PDU must be a GetResponse (0xA2) — not a request or a report echoed back;
+//   - the request-id must echo the one we sent (else it is a stale retransmit from
+//     an earlier walk iteration — errStaleResponse, so the caller re-reads);
+//   - error-status must be 0 — an agent answering e.g. genErr echoes the request
+//     varbind with a NULL value, and valueInt(NULL)=0 would otherwise be emitted
+//     as a REAL sample (a false device_bgp_peer_state 0 = "peer down" alert).
+func firstVarbind(pkt []byte, expectReqID int) (oid []int, valTag byte, val []byte, err error) {
 	tag, msg, _, err := readTLV(pkt)
 	if err != nil {
 		return
@@ -169,17 +185,29 @@ func firstVarbind(pkt []byte) (oid []int, valTag byte, val []byte, err error) {
 	if err != nil {
 		return
 	}
-	_, pdu, _, err := readTLV(rest) // PDU (GetResponse 0xA2)
+	pduTag, pdu, _, err := readTLV(rest) // PDU
 	if err != nil {
 		return
 	}
-	_, _, p, err := readTLV(pdu) // request-id
+	if pduTag != pduTagGetResponse {
+		return nil, 0, nil, fmt.Errorf("%w: PDU tag 0x%02X is not GetResponse", errStaleResponse, pduTag)
+	}
+	ridTag, ridContent, p, err := readTLV(pdu) // request-id
 	if err != nil {
 		return
 	}
-	_, _, p, err = readTLV(p) // error-status
+	if ridTag != 0x02 || int(decodeInt(ridContent)) != expectReqID {
+		return nil, 0, nil, fmt.Errorf("%w: request-id %d != expected %d",
+			errStaleResponse, decodeInt(ridContent), expectReqID)
+	}
+	esTag, esContent, p, err := readTLV(p) // error-status
 	if err != nil {
 		return
+	}
+	if esTag == 0x02 && decodeInt(esContent) != 0 {
+		// A non-zero error-status means the agent could not answer (noSuchName,
+		// genErr, …). The echoed varbind is not a measurement — refuse it.
+		return nil, 0, nil, fmt.Errorf("snmp: agent error-status %d (not a value)", decodeInt(esContent))
 	}
 	_, _, p, err = readTLV(p) // error-index
 	if err != nil {
@@ -232,14 +260,31 @@ func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int
 	cur := col
 	buf := make([]byte, 8192)
 	for iter := 0; iter < 4096; iter++ { // guard against a misbehaving agent
-		if _, err := c.Write(buildSNMPGetNext(community, cur, iter+1)); err != nil {
+		reqID := iter + 1
+		if _, err := c.Write(buildSNMPGetNext(community, cur, reqID)); err != nil {
 			return out, err
 		}
-		n, err := c.Read(buf)
-		if err != nil {
-			return out, err
+		// Read until we get THIS request's response: a delayed retransmit from an
+		// earlier iteration echoes an older request-id and must be discarded, not
+		// consumed as the current column value (which would reset `cur` backwards
+		// and loop the walk). Bounded so a flood of stale packets cannot wedge us.
+		var oid []int
+		var valTag byte
+		var val []byte
+		var err error
+		for stale := 0; ; stale++ {
+			n, rerr := c.Read(buf)
+			if rerr != nil {
+				return out, rerr
+			}
+			oid, valTag, val, err = firstVarbind(buf[:n], reqID)
+			if err == nil || !errors.Is(err, errStaleResponse) {
+				break
+			}
+			if stale >= 8 {
+				return out, fmt.Errorf("snmp walk: too many stale responses at reqID %d: %w", reqID, err)
+			}
 		}
-		oid, valTag, val, err := firstVarbind(buf[:n])
 		if err != nil {
 			return out, err
 		}

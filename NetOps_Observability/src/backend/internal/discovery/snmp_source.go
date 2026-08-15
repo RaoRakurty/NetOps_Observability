@@ -9,6 +9,8 @@ package discovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"sort"
@@ -280,8 +282,31 @@ func ScanDeviceID(sysName, addr string) string {
 			b.WriteRune('-')
 		}
 	}
-	if out := strings.Trim(b.String(), "-."); out != "" {
-		return out
+	name := strings.Trim(b.String(), "-.")
+	addr = strings.TrimSpace(addr)
+	// Disambiguate by ADDRESS. sysName alone is not unique: a factory default
+	// ("Switch") repeats across a fleet, and distinct names can sanitize to the
+	// same string ("core#1" and "core@1" both fold to "core-1"). With a name-only
+	// id, two such devices collided on one cache key and one silently overwrote
+	// the other — vanishing from inventory, never polled or alerted, no error.
+	// A short address hash makes the scan id unique per device while staying
+	// stable across re-scans (same device, same address, same id). dedupeDevices
+	// still merges records that are GENUINELY the same device via identity tokens
+	// (ip/serial/name), so this only prevents the silent collision, it does not
+	// fragment a real device across sources.
+	if name != "" && addr != "" {
+		return name + "-" + shortAddrHash(addr)
+	}
+	if name != "" {
+		return name
 	}
 	return addr
+}
+
+// shortAddrHash is a stable, compact, collision-resistant tag for an address —
+// 8 hex chars of its SHA-256, enough to disambiguate a fleet without bloating
+// the id or leaking the full address into an API path segment.
+func shortAddrHash(addr string) string {
+	sum := sha256.Sum256([]byte(addr))
+	return hex.EncodeToString(sum[:])[:8]
 }
