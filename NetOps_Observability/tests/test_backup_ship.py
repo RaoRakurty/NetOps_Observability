@@ -287,7 +287,14 @@ def _run_apply(tmp_path: Path, intent: bool = True, applier_rc=0,
     stamp = tmp_path / ".backup-config.applied"
     if stamp_mtime is not None:
         stamp.write_text("")
-        os.utime(stamp, (stamp_mtime, stamp_mtime))
+        # NANOSECONDS, not float seconds. The script copies the intent's mtime
+        # with `touch -r`, which is nanosecond-exact, and compares with `-nt`,
+        # which is also nanosecond-exact. Round-tripping through st_mtime (a
+        # float in SECONDS) silently truncated the sub-second part, so whenever
+        # the intent's mtime had non-zero nanoseconds the stamp landed a hair
+        # EARLIER and the "unchanged" case re-applied — a coin-flip failure
+        # (3 of 6 identical runs) that had nothing to do with the code.
+        os.utime(stamp, ns=(stamp_mtime, stamp_mtime))
     preamble = (
         "problems=()\n"
         f'BACKUP_INTENT="{intent_f}"\nBACKUP_APPLY="{applier}"\nBACKUP_STAMP="{stamp}"\n'
@@ -323,7 +330,7 @@ def test_apply_intent_unchanged_intent_does_not_reapply(tmp_path):
     intent_f = tmp_path / "system_backup.json"
     intent_f.write_text('{"schedule_enabled": true}')
     r, problems, ncalls, _, _ = _run_apply(
-        tmp_path, stamp_mtime=intent_f.stat().st_mtime)
+        tmp_path, stamp_mtime=intent_f.stat().st_mtime_ns)
     assert r.returncode == 0, r.stderr
     assert ncalls == 0, "unchanged intent must not re-run the applier (stamp discipline)"
     assert problems == []
@@ -334,7 +341,7 @@ def test_apply_intent_newer_intent_reapplies(tmp_path):
     intent_f = tmp_path / "system_backup.json"
     intent_f.write_text('{"schedule_enabled": true}')
     r, problems, ncalls, _, _ = _run_apply(
-        tmp_path, stamp_mtime=intent_f.stat().st_mtime - 60)
+        tmp_path, stamp_mtime=intent_f.stat().st_mtime_ns - 60 * 10**9)
     assert r.returncode == 0, r.stderr
     assert ncalls == 1, "an intent newer than the stamp must re-apply"
 

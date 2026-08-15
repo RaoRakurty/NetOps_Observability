@@ -135,6 +135,186 @@ fi
 
 problems=()
 
+# -----------------------------------------------------------------------------
+# PID/task cgroup capacity (2026-08-15 incident).
+#
+# A container that reaches pids.max cannot fork ANYTHING. Its healthcheck is an
+# exec, so it fails, and the container reads as "unhealthy" with no clue why —
+# while the service inside may be serving perfectly. ClickHouse sat at
+# 19046/19046 for 12 hours against 739 REAL threads, answering every SQL query
+# it was given, and the only symptom anyone could see was "health=unhealthy"
+# plus a watchdog line blaming the database. This check names the actual fault.
+#
+# It reads HOST cgroup state and never uses `docker exec` — the whole point is
+# to stay observant precisely when exec is what is broken.
+#
+# CONFIRMED in that incident: current==max, live tasks far below the charge, a
+# restart cleared it. NOT confirmed: that failed execs CAUSED the accumulation
+# (the arithmetic fits, but the first exec failure has no explanation under that
+# theory). So the leak line below reports the OBSERVATION and explicitly does
+# not name a culprit — no claiming a runc/kernel bug we have not proven.
+#
+# Best-effort by design: cgroup layout varies by driver/host, and a path we
+# cannot read is not a stack fault. pids.max is the literal string "max" when
+# uncapped, so every arithmetic path guards for non-numeric input.
+# -----------------------------------------------------------------------------
+check_pid_capacity() {  # service-name, container-id
+  local svc="$1" cid="$2" t
+  local cid_full cg pids_cur="" pids_max="" pids_evt="" util live=""
+
+  cid_full=$(docker inspect -f '{{.Id}}' "$cid" 2>/dev/null)
+  [ -n "$cid_full" ] || return 0
+  for cg in "${PID_CGROUP_ROOT:-/sys/fs/cgroup}/system.slice/docker-${cid_full}.scope" \
+            "${PID_CGROUP_ROOT:-/sys/fs/cgroup}/docker/${cid_full}"; do
+    if [ -r "$cg/pids.current" ] && [ -r "$cg/pids.max" ]; then
+      pids_cur=$(cat "$cg/pids.current")
+      pids_max=$(cat "$cg/pids.max")
+      # pids.events "max N" = times a fork was REFUSED by this limit. Non-zero
+      # is proof the ceiling was actually hit, not merely approached.
+      [ -r "$cg/pids.events" ] && pids_evt=$(sed -n 's/^max[[:space:]]*//p' "$cg/pids.events")
+      break
+    fi
+  done
+
+  # A non-numeric pids.max means uncapped ("max") or unreadable — nothing to
+  # compare against, and that is not itself a problem worth paging for.
+  case "$pids_cur$pids_max" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$pids_max" -gt 0 ] || return 0
+  util=$(( pids_cur * 100 / pids_max ))
+
+  if [ "$pids_cur" -ge "$pids_max" ]; then
+    problems+=("$svc: PID_LIMIT_REACHED ${pids_cur}/${pids_max} (100%) — the container CANNOT create new processes or threads. Healthchecks and docker exec will fail even while the service itself answers normally. Restarting the container recreates the cgroup and clears the charge.")
+  elif [ "$util" -ge 95 ]; then
+    problems+=("$svc: PID_CAPACITY_CRITICAL ${pids_cur}/${pids_max} (${util}%) — approaching the fork ceiling; exec/healthcheck failure is imminent")
+  elif [ "$util" -ge 85 ]; then
+    problems+=("$svc: PID_CAPACITY_HIGH ${pids_cur}/${pids_max} (${util}%)")
+  elif [ "$util" -ge 70 ]; then
+    problems+=("$svc: PID_CAPACITY_WARNING ${pids_cur}/${pids_max} (${util}%)")
+  fi
+
+  # Leak signal: charged tasks vastly exceeding the tasks we can actually see.
+  # Counting real threads costs a directory listing per process and is only
+  # worth doing once the charge is already elevated.
+  if [ "$util" -ge 70 ] && [ -r "$cg/cgroup.procs" ]; then
+    live=0
+    while read -r p; do
+      # Threads: from /proc/<pid>/status — one read per process, no listing.
+      t=$(sed -n 's/^Threads:[[:space:]]*//p' "/proc/$p/status" 2>/dev/null)
+      case "$t" in ''|*[!0-9]*) continue ;; esac  # process exited mid-scan
+      live=$(( live + t ))
+    done < "$cg/cgroup.procs"
+    # 4x is deliberately conservative: normal churn does not quadruple the
+    # charge. Report the numbers and let a human name the cause.
+    if [ "$live" -gt 0 ] && [ "$pids_cur" -gt $(( live * 4 )) ]; then
+      problems+=("$svc: PID_LEAK_SUSPECTED — cgroup task charge ${pids_cur} is far above the ${live} live threads actually observed (max=${pids_max}, ${util}%, pids.events:max=${pids_evt:-n/a}). Container-runtime/cgroup task leakage may be occurring; this is an observation, not a diagnosis.")
+    fi
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# ClickHouse health over the REAL data path (2026-08-15 incident).
+#
+# This probe used to be `docker exec clickhouse clickhouse-client`. That made
+# the health of the DATABASE depend on the health of the CONTAINER RUNTIME, and
+# when exec broke the watchdog spent 12 hours reporting "store unreachable or
+# query rejected" about a ClickHouse that was answering every query put to it.
+#
+# Now we speak ClickHouse's own network interface — the same authenticated TLS
+# endpoint the application uses — from a container that is ALREADY on the
+# compose network and ALREADY trusts the internal CA. Two properties matter:
+#
+#   * it exercises the real data path, not a side channel;
+#   * the vantage is a DIFFERENT cgroup from ClickHouse's, so ClickHouse's own
+#     task-ceiling saturation cannot blind the probe that must observe it.
+#
+# The host cannot do this directly: ClickHouse deliberately publishes no ports
+# (verified — `docker port` is empty), and publishing one to satisfy a monitor
+# would reverse a posture the TLS programme set on purpose.
+#
+# TLS is VERIFIED against the internal CA — never -k/--insecure. The password is
+# handed to curl through a config file on STDIN, so it appears in no argv on the
+# host or in the container, and never in a log line.
+# -----------------------------------------------------------------------------
+CH_PROBE_FROM="${CH_PROBE_FROM:-vector-router}"
+CH_PROBE_CACERT="${CH_PROBE_CACERT:-/tls/ca.pem}"
+CH_PROBE_URL="${CH_PROBE_URL:-https://clickhouse:8443}"
+CH_ENV_FILE="${CH_ENV_FILE:-$SCRIPT_DIR/../deployment/docker/.env}"
+
+check_clickhouse_health() {  # tel_stale_min
+  local stale_min="$1" probe_cid out rc code age user pw cfg detail
+
+  probe_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$CH_PROBE_FROM" 2>/dev/null)
+  if [ -z "$probe_cid" ]; then
+    problems+=("clickhouse: CANNOT PROBE — no running '$CH_PROBE_FROM' container to reach ClickHouse from (set CH_PROBE_FROM). ClickHouse health is UNKNOWN, not healthy.")
+    return 0
+  fi
+
+  # --- connectivity + TLS, unauthenticated ------------------------------------
+  out=$(timeout 20 docker exec "$probe_cid" curl -sS --max-time 8 \
+    --cacert "$CH_PROBE_CACERT" "$CH_PROBE_URL/ping" 2>&1)
+  rc=$?
+  detail=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)
+  if [ "$rc" -ne 0 ]; then
+    if printf '%s' "$out" |
+         grep -qiE 'OCI runtime|exec failed|procReady|unable to start container process'; then
+      # The VANTAGE is broken, not ClickHouse. Never assert a database outage
+      # from a transport failure — that conflation is the whole reason this
+      # function exists.
+      problems+=("CONTAINER_RUNTIME_EXEC_FAILURE: docker exec into '$CH_PROBE_FROM' failed, so ClickHouse could not be probed. This says NOTHING about the database. Check pid cgroup capacity on that container. Detail: ${detail:-no output}")
+    elif printf '%s' "$out" | grep -qiE 'SSL|TLS|certificate|verify'; then
+      problems+=("CLICKHOUSE_TLS_FAILURE: TLS handshake/verification to $CH_PROBE_URL failed: ${detail:-no output}")
+    else
+      problems+=("CLICKHOUSE_UNREACHABLE: $CH_PROBE_URL/ping failed from '$CH_PROBE_FROM' (curl rc=$rc): ${detail:-no output}")
+    fi
+    return 0
+  fi
+
+  # --- authenticated freshness query -----------------------------------------
+  # Credentials come from the stack's own .env; absence is a real misconfig and
+  # is named rather than silently downgrading to "no telemetry check".
+  if [ ! -r "$CH_ENV_FILE" ]; then
+    problems+=("clickhouse: reachable, but freshness UNCHECKED — cannot read $CH_ENV_FILE for credentials (set CH_ENV_FILE)")
+    return 0
+  fi
+  user=$(sed -n 's/^CLICKHOUSE_USER=//p' "$CH_ENV_FILE" | head -1)
+  pw=$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' "$CH_ENV_FILE" | head -1)
+  if [ -z "$pw" ]; then
+    problems+=("clickhouse: reachable, but freshness UNCHECKED — CLICKHOUSE_PASSWORD is empty in $CH_ENV_FILE")
+    return 0
+  fi
+
+  # curl config on stdin: url/credentials/CA all arrive off the command line.
+  # write-out appends the HTTP status so auth/query faults are distinguishable
+  # from transport faults.
+  cfg=$(printf '%s\n' \
+    "url = \"$CH_PROBE_URL/\"" \
+    "cacert = \"$CH_PROBE_CACERT\"" \
+    "user = \"${user:-netops}:$pw\"" \
+    "data = \"SELECT toInt64(dateDiff('second', max(ts), now())) FROM netops.corr_signals WHERE ts > now() - INTERVAL 1 DAY SETTINGS tenant_scope='__all__'\"" \
+    "max-time = 8" "silent" "show-error" "write-out = \"\\nHTTP:%{http_code}\"")
+  out=$(printf '%s' "$cfg" | timeout 20 docker exec -i "$probe_cid" curl --config - 2>&1)
+  rc=$?
+  code=$(printf '%s' "$out" | sed -n 's/.*HTTP:\([0-9]*\).*/\1/p' | tail -1)
+  # Strip the write-out marker before reading the value, and never echo the body
+  # verbatim into an alert without truncation.
+  age=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr -dc '0-9-')
+  detail=$(printf '%s' "$out" | sed 's/HTTP:[0-9]*//' | tr '\n' ' ' | cut -c1-160)
+
+  case "$code" in
+    401|403|516)
+      problems+=("CLICKHOUSE_AUTH_FAILURE: ClickHouse rejected the watchdog's credentials (HTTP $code). The store is REACHABLE — this is a credential/permission fault, not an outage.")
+      return 0 ;;
+  esac
+  if [ "$rc" -ne 0 ] || [ -z "$age" ]; then
+    problems+=("CLICKHOUSE_QUERY_FAILURE: ClickHouse is reachable over TLS but the corr_signals freshness query did not return a value (curl rc=$rc, HTTP ${code:-none}): ${detail:-no output}")
+    return 0
+  fi
+  if [ "$age" -gt $(( stale_min * 60 )) ]; then
+    problems+=("CLICKHOUSE_DATA_STALE: ClickHouse is HEALTHY and reachable, but the newest correlation signal is $(( age / 60 ))m old (limit ${stale_min}m) — the stack is up and nothing is being correlated")
+  fi
+}
+
 for svc in $EXPECTED_SERVICES; do
   cid=$(docker ps -q \
     --filter "label=com.docker.compose.project=$PROJECT" \
@@ -152,6 +332,8 @@ for svc in $EXPECTED_SERVICES; do
   if [ -n "$health" ] && [ "$health" != "healthy" ]; then
     problems+=("$svc: health=$health")
   fi
+
+  check_pid_capacity "$svc" "$cid"
 done
 
 # Container OOM / restart detection (#102 signoff): cadvisor's per-container
@@ -548,22 +730,7 @@ fi
 # -----------------------------------------------------------------------------
 tel_stale_min="${TELEMETRY_STALE_MIN:-20}"
 if [ "$tel_stale_min" -gt 0 ]; then
-  ch_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
-    --filter "label=com.docker.compose.service=clickhouse" 2>/dev/null)
-  if [ -n "$ch_cid" ]; then
-    # age in seconds of the newest signal, across all tenants.
-    sig_age=$(docker exec "$ch_cid" clickhouse-client -m -q \
-      "SELECT toInt64(dateDiff('second', max(ts), now())) FROM netops.corr_signals \
-       WHERE ts > now() - INTERVAL 1 DAY SETTINGS tenant_scope='__all__'" 2>/dev/null | tr -dc '0-9-')
-    if [ -z "$sig_age" ]; then
-      # Distinguish "the query failed" from "the lane is stale" — conflating the
-      # two is the very defect this release closed. An unanswerable store is its
-      # own problem and must be named as such.
-      problems+=("telemetry: ClickHouse did not answer the corr_signals freshness query (store unreachable or query rejected)")
-    elif [ "$sig_age" -gt $(( tel_stale_min * 60 )) ]; then
-      problems+=("telemetry STALLED: newest correlation signal is $(( sig_age / 60 ))m old (limit ${tel_stale_min}m) — the stack is up but nothing is being correlated")
-    fi
-  fi
+  check_clickhouse_health "$tel_stale_min"
 
   vm_cid=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
     --filter "label=com.docker.compose.service=victoria" 2>/dev/null)
