@@ -44,6 +44,19 @@ type PGStore struct {
 func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
 
 func (s *PGStore) Record(e Event) {
+	if err := s.record(e); err != nil {
+		// Best-effort: an audit write must never break the request, but the
+		// failure must be observable (no silent drop).
+		s.errf("audit", "persist event", map[string]any{"error": err.Error()})
+	}
+}
+
+// RecordStrict propagates the persistence error (see Repo): a failed INSERT is
+// returned to the caller so a high-value action can refuse to complete rather
+// than complete unwitnessed (M19).
+func (s *PGStore) RecordStrict(e Event) error { return s.record(e) }
+
+func (s *PGStore) record(e Event) error {
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
 	}
@@ -52,23 +65,18 @@ func (s *PGStore) Record(e Event) {
 	}
 	data, err := json.Marshal(e)
 	if err != nil {
-		s.errf("audit", "marshal event", map[string]any{"error": err.Error()})
-		return
+		return fmt.Errorf("marshal event: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Record as platform owner ('*'): the middleware logs events across many
 	// tenants and the RLS WITH CHECK would reject any tenant_id != the scoped GUC.
-	if err := s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO audit_events (id, tenant_id, ts, data) VALUES ($1, $2, $3, $4)`,
 			e.ID, normTenant(e.Tenant), e.Time, data)
 		return err
-	}); err != nil {
-		// Best-effort: an audit write must never break the request, but the
-		// failure must be observable (no silent drop).
-		s.errf("audit", "persist event", map[string]any{"error": err.Error()})
-	}
+	})
 }
 
 // pgWhere builds the shared time-window fragment for List and Count so a

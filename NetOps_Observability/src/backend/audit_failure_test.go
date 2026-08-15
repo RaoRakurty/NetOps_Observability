@@ -22,14 +22,22 @@ import (
 // failingAuditRepo answers every read with an error, the way a dead PG pool or
 // a broken RLS policy would.
 type failingAuditRepo struct {
-	inner     auditRepo
-	failList  bool
-	failCount bool
+	inner            auditRepo
+	failList         bool
+	failCount        bool
+	failRecordStrict bool
 }
 
 var errAuditBackendDown = errors.New("audit backend unavailable")
 
 func (f *failingAuditRepo) Record(e AuditEvent) { f.inner.Record(e) }
+
+func (f *failingAuditRepo) RecordStrict(e AuditEvent) error {
+	if f.failRecordStrict {
+		return errAuditBackendDown
+	}
+	return f.inner.RecordStrict(e)
+}
 
 func (f *failingAuditRepo) List(tenant string, cross bool, q auditQuery) ([]AuditEvent, error) {
 	if f.failList {

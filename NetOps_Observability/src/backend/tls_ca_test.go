@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"netops/backend/internal/platformdb"
 	"netops/backend/internal/vault"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,6 +78,56 @@ func TestCAManagerSealsKeyAndIssues(t *testing.T) {
 	}
 	if _, err := rl.Leaf().Verify(x509.VerifyOptions{Roots: tb.Pool(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
 		t.Fatalf("issued SVID does not chain to the CA bundle: %v", err)
+	}
+}
+
+// TestLoadOrCreateCARefusesCorruptState: first-run is ONLY "both blobs absent"
+// — the vault's ErrNoKEK discipline applied to the CA root. A truncated cert
+// blob (file PRESENT but empty) or a half-present pair used to fall through to
+// Generate, silently minting a NEW 10-year root: every issued SVID stops
+// chaining and a store truncation becomes an authenticated trust-anchor swap.
+// Both shapes must now be fatal, with nothing overwritten.
+func TestLoadOrCreateCARefusesCorruptState(t *testing.T) {
+	withTempCAKeys(t)
+	v, err := vault.NewWithProvider(context.Background(), &memSealing{}, &memVaultStore{data: map[string][]byte{}}, func(string, string, map[string]any) {})
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	m1, err := loadOrCreateCA(v, "netops")
+	if err != nil {
+		t.Fatalf("create CA: %v", err)
+	}
+	origCert := m1.ca.CertPEM()
+
+	// Truncated cert: the blob is PRESENT but empty → fatal, never regenerate.
+	if err := platformdb.Save(kvCACertKey, []byte{}); err != nil {
+		t.Fatalf("truncate cert: %v", err)
+	}
+	if _, err := loadOrCreateCA(v, "netops"); err == nil {
+		t.Fatal("a truncated CA cert must be fatal — silently minting a new root re-roots the mesh")
+	}
+	if raw, err := platformdb.Load(kvCACertKey); err != nil || len(raw) != 0 {
+		t.Fatalf("the refusal must not have written a new CA cert: err=%v len=%d", err, len(raw))
+	}
+
+	// Half-present pair: cert restored, key MISSING → also fatal.
+	if err := platformdb.Save(kvCACertKey, origCert); err != nil {
+		t.Fatalf("restore cert: %v", err)
+	}
+	if err := os.Remove(kvCAKeyKey); err != nil {
+		t.Fatalf("remove key blob: %v", err)
+	}
+	if _, err := loadOrCreateCA(v, "netops"); err == nil {
+		t.Fatal("a present cert with a missing key must be fatal, not a silent re-root")
+	}
+
+	// Genuine first-run (BOTH absent) still generates — the recovery path an
+	// operator is pointed at is deleting both blobs explicitly.
+	if err := os.Remove(kvCACertKey); err != nil {
+		t.Fatalf("remove cert blob: %v", err)
+	}
+	if _, err := loadOrCreateCA(v, "netops"); err != nil {
+		t.Fatalf("both blobs absent is first-run and must generate: %v", err)
 	}
 }
 

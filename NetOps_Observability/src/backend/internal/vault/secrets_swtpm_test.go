@@ -37,7 +37,11 @@ func TestSwtpmSealUnseal(t *testing.T) {
 		}
 	}
 
-	// A Vault built on the live provider must round-trip a secret too.
+	// A Vault built on the live provider must round-trip a secret too. The KEK
+	// was just sealed above (so this is NOT an ErrNoKEK first run) while the
+	// test store is fresh/empty — exactly the shape M16 refuses by default, so
+	// the explicit one-boot override applies here.
+	t.Setenv("VAULT_ALLOW_EMPTY_STORE", "true")
 	st, wn := testDeps()
 	v, err := NewWithProvider(ctx, p, st, wn)
 	if err != nil {

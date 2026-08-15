@@ -695,8 +695,16 @@ func (s *server) handleProcessorUnseal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	version, _ := sealing.KeyVersionOf(req.Value)
+	// Audit-BEFORE-commit (M19): the grant is recorded durably FIRST; if the
+	// trail refuses the record, the plaintext is withheld with a 5xx. A reveal
+	// the trail never witnessed must not happen — this is the one compliance
+	// surface whose whole value is "no unrecorded disclosure".
+	if err := s.auditUnsealStrict(claims, req, owner, version, "granted"); err != nil {
+		logError("sealing", "reveal refused: audit trail could not record the grant", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusServiceUnavailable, errors.New("the audit trail could not record this reveal — nothing was disclosed; retry once the trail is healthy"))
+		return
+	}
 	s.sealMetrics.granted.Add(1)
-	s.auditUnseal(claims, req, owner, version, "granted")
 
 	writeJSON(w, http.StatusOK, unsealResponse{
 		Value:      plaintext,
@@ -768,14 +776,31 @@ func (s *server) sealProcessorsFor(ctx context.Context, tenant string) []process
 	return out
 }
 
-// auditUnseal records the attempt. The plaintext, and anything derived from it,
-// is deliberately absent — an audit trail that leaks what it audits is worse
-// than none, because it concentrates every revealed secret in one admin-readable
-// place.
+// auditUnseal records the attempt best-effort (denial paths: the caller got
+// nothing, so a lost record is a gap, not an unwitnessed disclosure). The
+// plaintext, and anything derived from it, is deliberately absent — an audit
+// trail that leaks what it audits is worse than none, because it concentrates
+// every revealed secret in one admin-readable place.
 func (s *server) auditUnseal(claims jwtClaims, req unsealRequest, owner string, version int, outcome string) {
 	if s.audit == nil {
 		return
 	}
+	s.audit.Record(s.unsealAuditEvent(claims, req, owner, version, outcome))
+}
+
+// auditUnsealStrict is the audit-BEFORE-commit variant for the GRANTED path
+// (M19): the reveal is the one route that turns protected data back into
+// plaintext, so "who read what and why" must be durably recorded before the
+// plaintext leaves the process. A failed (or absent) trail returns an error and
+// the caller withholds the plaintext — never the other way around.
+func (s *server) auditUnsealStrict(claims jwtClaims, req unsealRequest, owner string, version int, outcome string) error {
+	if s.audit == nil {
+		return errors.New("audit trail is not configured")
+	}
+	return s.audit.RecordStrict(s.unsealAuditEvent(claims, req, owner, version, outcome))
+}
+
+func (s *server) unsealAuditEvent(claims jwtClaims, req unsealRequest, owner string, version int, outcome string) AuditEvent {
 	tenant, cross := principalTenant(claims)
 	detail := map[string]any{
 		"outcome":       outcome,
@@ -794,7 +819,7 @@ func (s *server) auditUnseal(claims jwtClaims, req unsealRequest, owner string, 
 	if outcome != "granted" {
 		status, decision = http.StatusForbidden, "deny"
 	}
-	s.audit.Record(AuditEvent{
+	return AuditEvent{
 		Actor:    claims.Sub,
 		Tenant:   tenant,
 		Cross:    cross,
@@ -803,7 +828,7 @@ func (s *server) auditUnseal(claims jwtClaims, req unsealRequest, owner string, 
 		Status:   status,
 		Decision: decision,
 		Detail:   detail,
-	})
+	}
 }
 
 // maxReasonLen bounds the operator's justification so a caller cannot use the

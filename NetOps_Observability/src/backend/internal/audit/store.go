@@ -48,6 +48,15 @@ const (
 //     load-all/rewrite-whole, queries served from SQL with RLS scoping the read.
 type Repo interface {
 	Record(e Event)
+	// RecordStrict is Record with the persistence error PROPAGATED instead of
+	// swallowed. M19: high-value actions — today the sealed-PII reveal, which
+	// turns protected data back into plaintext — must be audit-BEFORE-commit:
+	// if the trail cannot durably hold "who read what and why", the action
+	// itself must not complete. Everything else keeps best-effort Record (an
+	// audit blip must not break ordinary requests). Other candidates for the
+	// strict path later: key rotation/retirement, backup restore, custody
+	// overrides.
+	RecordStrict(e Event) error
 	// List returns the matching page, or an ERROR when the backend could not
 	// answer. F-73: this used to return a bare slice, so a failed query was
 	// indistinguishable from "no privileged actions occurred" — on the one
@@ -141,6 +150,19 @@ func NewFileStore(path string, kv KV) (*FileStore, error) {
 // audit write must never break the request, so persistence errors are swallowed
 // (the in-memory trail still has it).
 func (s *FileStore) Record(e Event) {
+	if err := s.record(e); err != nil {
+		// The in-memory trail still has the event (see doc above), but a trail
+		// that stops persisting is an audit gap — it must be visible.
+		applog.Error("audit", "audit trail not persisted; events survive in memory only", map[string]any{"error": err.Error()})
+	}
+}
+
+// RecordStrict propagates the persistence error (see Repo). The event still
+// lands in the in-memory ring either way — a failed strict write refuses the
+// caller's ACTION, it does not un-witness the attempt.
+func (s *FileStore) RecordStrict(e Event) error { return s.record(e) }
+
+func (s *FileStore) record(e Event) error {
 	if e.Time.IsZero() {
 		e.Time = time.Now().UTC()
 	}
@@ -154,14 +176,10 @@ func (s *FileStore) Record(e Event) {
 	}
 	b, err := json.Marshal(s.events)
 	s.mu.Unlock()
-	if err == nil {
-		err = s.kv.Save(s.path, b)
-	}
 	if err != nil {
-		// The in-memory trail still has the event (see doc above), but a trail
-		// that stops persisting is an audit gap — it must be visible.
-		applog.Error("audit", "audit trail not persisted; events survive in memory only", map[string]any{"error": err.Error()})
+		return err
 	}
+	return s.kv.Save(s.path, b)
 }
 
 // List returns events newest-first, scoped to the caller: the platform owner

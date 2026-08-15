@@ -185,6 +185,44 @@ func TestUnsealRevealsAndAudits(t *testing.T) {
 	}
 }
 
+// TestUnsealAuditFailureWithholdsPlaintext (M19): the reveal is
+// audit-BEFORE-commit. When the trail cannot durably record the grant — a dead
+// PG pool, or no trail configured at all — the plaintext is WITHHELD with a
+// 5xx, never disclosed unwitnessed. This previously completed: Record swallowed
+// its persistence error and auditUnseal returned silently on a nil trail.
+func TestUnsealAuditFailureWithholdsPlaintext(t *testing.T) {
+	ts, s, p := sealTestServer(t)
+	admin := login(t, ts, "admin", "Passw0rd!2345").Token
+	tok := sealFor(t, s, p, TenantGlobal, "p-1", "card", "4111111111111111")
+
+	// A trail whose strict write fails, the way a PG outage looks.
+	s.audit = &failingAuditRepo{inner: s.audit, failRecordStrict: true}
+	st, body := do(t, ts, "POST", unsealPath, admin, map[string]any{
+		"value": tok, "reason": "PCI dispute #4471",
+	})
+	if st < 500 || st > 599 {
+		t.Fatalf("a reveal whose audit write failed must answer 5xx, got %d %s", st, body)
+	}
+	if strings.Contains(string(body), "4111111111111111") {
+		t.Fatalf("THE RESPONSE DISCLOSED THE PLAINTEXT despite the failed audit write: %s", body)
+	}
+	if s.sealMetrics.granted.Load() != 0 {
+		t.Fatal("an unwitnessed reveal must not be counted as granted")
+	}
+
+	// No trail configured at all is the same refusal, not a silent skip.
+	s.audit = nil
+	st, body = do(t, ts, "POST", unsealPath, admin, map[string]any{
+		"value": tok, "reason": "PCI dispute #4471",
+	})
+	if st < 500 || st > 599 {
+		t.Fatalf("a reveal with no audit trail must answer 5xx, got %d %s", st, body)
+	}
+	if strings.Contains(string(body), "4111111111111111") {
+		t.Fatalf("THE RESPONSE DISCLOSED THE PLAINTEXT with no audit trail: %s", body)
+	}
+}
+
 // A tampered token must be refused, and refused as unreadable rather than as
 // "forbidden" — the caller was allowed; the value is broken.
 func TestUnsealRejectsTamperedValue(t *testing.T) {

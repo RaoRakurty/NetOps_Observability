@@ -81,6 +81,7 @@ type Vault struct {
 	kek      []byte            // root KEK, unwrapped, memory only
 	deks     map[string][]byte // tenant → unwrapped DEK (memory cache)
 	wrapped  map[string]string // tenant → base64 wrapped DEK (persisted)
+	strict   bool              // VAULT_STRICT=true → active Decrypt refuses non-"v1:" values
 }
 
 // New selects the sealing provider from SEAL_PROVIDER and activates custody,
@@ -124,10 +125,12 @@ func New(ctx context.Context, store Store, warn Warnf) (*Vault, error) {
 // New and by tests with an in-memory provider). It unseals (or, first run,
 // generates+seals) the root KEK and loads the persisted wrapped DEKs.
 func NewWithProvider(ctx context.Context, p SealingProvider, store Store, warn Warnf) (*Vault, error) {
-	v := &Vault{provider: p, store: store, warn: warn, deks: map[string][]byte{}, wrapped: map[string]string{}}
+	v := &Vault{provider: p, store: store, warn: warn, deks: map[string][]byte{}, wrapped: map[string]string{},
+		strict: os.Getenv("VAULT_STRICT") == "true"}
 	kek, err := p.Unseal(ctx)
+	firstRun := errors.Is(err, ErrNoKEK)
 	switch {
-	case errors.Is(err, ErrNoKEK):
+	case firstRun:
 		// Explicit first-run: the provider is healthy and holds no KEK yet.
 		if kek, err = v.firstRunKEK(ctx); err != nil {
 			return nil, fmt.Errorf("vault: seal first-run KEK: %w", err)
@@ -141,8 +144,19 @@ func NewWithProvider(ctx context.Context, p SealingProvider, store Store, warn W
 		return nil, fmt.Errorf("vault: unsealed root KEK has length %d, want %d — custody state may be corrupt; refusing to overwrite it", len(kek), kekLen)
 	}
 	v.kek = kek
-	if err := v.loadWrapped(); err != nil {
+	if err := v.loadWrapped(firstRun); err != nil {
 		return nil, fmt.Errorf("vault: load wrapped keys: %w", err)
+	}
+	if firstRun && len(v.wrapped) == 0 {
+		// Persist an EMPTY (but MAC'd) custody store NOW, so "KEK exists but the
+		// wrapped store is absent" is never a legitimate steady state. From this
+		// boot on, an absent/empty store under an existing KEK can only mean a
+		// wipe/truncation — which loadWrapped refuses (M16) instead of silently
+		// re-keying over it. Construction is single-threaded, so calling
+		// saveWrappedLocked without the mutex is safe (same as the migrate path).
+		if err := v.saveWrappedLocked(); err != nil {
+			return nil, fmt.Errorf("vault: persist first-run custody store: %w", err)
+		}
 	}
 	return v, nil
 }
@@ -181,9 +195,16 @@ func (v *Vault) Encrypt(tenant, fieldID, plaintext string) (string, error) {
 
 // Decrypt reverses Encrypt. Plaintext-passthrough: a value lacking the "v1:"
 // prefix is returned as-is (legacy plaintext, or a dormant Vault), so encryption
-// can be rolled out encrypt-on-next-write without a flag day.
+// can be rolled out encrypt-on-next-write without a flag day. VAULT_STRICT=true
+// closes that door once custody is active: with every value migrated, a non-"v1:"
+// value can only be an injected/downgraded one, and passing it through would let
+// a store-writer bypass the AAD binding entirely. Off by default (compat with
+// the encrypt-on-next-write migration); "" stays passthrough (an unset field).
 func (v *Vault) Decrypt(tenant, fieldID, stored string) (string, error) {
 	if !strings.HasPrefix(stored, VersionPrefix) {
+		if v.active() && v.strict && stored != "" {
+			return "", errors.New("vault: VAULT_STRICT=true — refusing plaintext passthrough of a non-encrypted stored value while custody is active")
+		}
 		return stored, nil // legacy plaintext / dormant
 	}
 	if !v.active() {
@@ -295,16 +316,36 @@ func (v *Vault) wrappedMAC(keys map[string]string) (string, error) {
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (v *Vault) loadWrapped() error {
+// loadWrapped reads the persisted wrapped-DEK custody store. firstRun reports
+// whether THIS boot generated the KEK (the provider returned ErrNoKEK) — the
+// only state in which an absent store is genuinely "no keys yet".
+func (v *Vault) loadWrapped(firstRun bool) error {
+	if os.Getenv("VAULT_MIGRATE_LEGACY_WRAPPED") == "true" {
+		// Loud on EVERY boot the flag is set (M16): while it stands, a MAC-less
+		// (i.e. unauthenticated, possibly tampered) store would be accepted — a
+		// flag meant for one boot must not become a silent standing downgrade.
+		v.warn("secrets", "VAULT_MIGRATE_LEGACY_WRAPPED=true — this boot ACCEPTS a MAC-less wrapped-DEK custody store (tamper-indistinguishable). Intended for a single migration boot; unset it now that the store is MAC'd.", nil)
+	}
 	b, err := v.store.Load(wrappedKeysKey)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil // first run — no wrapped keys yet
-		}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if len(b) == 0 {
-		return nil
+	if errors.Is(err, os.ErrNotExist) || len(b) == 0 {
+		if firstRun {
+			return nil // genuine first run (ErrNoKEK) — no wrapped keys yet
+		}
+		// The KEK EXISTS (we unsealed it from the provider) but the custody
+		// store is gone/empty. Treating that as "first run" — as this code once
+		// did — silently mints fresh DEKs, so a wipe/truncation of the store
+		// becomes a permanent, authenticated re-key that orphans every existing
+		// ciphertext (M16). Refuse instead; the one legitimate shape (custody
+		// activated before this check existed, and no DEK ever wrapped) gets an
+		// explicit one-boot override.
+		if os.Getenv("VAULT_ALLOW_EMPTY_STORE") == "true" {
+			v.warn("secrets", "wrapped-DEK custody store is absent/empty while the root KEK EXISTS — accepted ONLY because VAULT_ALLOW_EMPTY_STORE=true. If any secret was ever encrypted, it is now unrecoverable; unset the flag after this boot.", nil)
+			return nil
+		}
+		return errors.New("vault: root KEK exists but the wrapped-DEK custody store is absent/empty — a wiped or truncated store, not a first run; minting fresh DEKs would permanently orphan every existing ciphertext. Restore the custody store from backup, or (only if no DEK was ever wrapped) set VAULT_ALLOW_EMPTY_STORE=true for ONE boot")
 	}
 	var s wrappedStore
 	if err := json.Unmarshal(b, &s); err != nil {

@@ -54,11 +54,19 @@ type caManager struct {
 
 // loadOrCreateCA loads the internal CA from the kv store (cert plaintext, key
 // Vault-decrypted) or, on first run, generates one and persists it (key sealed).
+//
+// First-run is ONLY "both blobs absent" (os.ErrNotExist) — the same discipline
+// the Vault applies to its KEK (ErrNoKEK, nothing else). Any other load shape
+// (one blob present, a transient read error, a present-but-empty file, a decrypt
+// failure) is fatal: silently minting a fresh 10-year root here would RE-ROOT
+// the mesh — every previously issued SVID stops chaining, and a truncated cert
+// file becomes an authenticated trust-anchor swap.
 func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) {
 	m := &caManager{vault: vault, trustDomain: trustDomain}
 	certPEM, cerr := platformdb.Load(kvCACertKey)
 	keyEnc, kerr := platformdb.Load(kvCAKeyKey)
-	if cerr == nil && kerr == nil && len(certPEM) > 0 && len(keyEnc) > 0 {
+	switch {
+	case cerr == nil && kerr == nil && len(certPEM) > 0 && len(keyEnc) > 0:
 		keyPEM, err := vault.Decrypt("", caKeyField, string(keyEnc))
 		if err != nil {
 			return nil, fmt.Errorf("tls ca: decrypt CA key: %w", err)
@@ -69,6 +77,11 @@ func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) 
 		}
 		m.ca = ca
 		return m, nil
+	case errors.Is(cerr, os.ErrNotExist) && errors.Is(kerr, os.ErrNotExist):
+		// Genuine first run: neither blob exists yet → generate below.
+	default:
+		return nil, fmt.Errorf("tls ca: CA state is present but unreadable (cert err=%v len=%d, key err=%v len=%d) — refusing to mint a NEW root over it; restore or explicitly delete BOTH %s and %s to re-root",
+			cerr, len(certPEM), kerr, len(keyEnc), kvCACertKey, kvCAKeyKey)
 	}
 	ca, err := internalca.Generate("netops internal CA ("+trustDomain+")", caValidity)
 	if err != nil {

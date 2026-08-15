@@ -124,6 +124,27 @@ func TestVaultDecryptPlaintextPassthroughWhenActive(t *testing.T) {
 	if pt, err := v.Decrypt("acme", "f", "still-plain"); err != nil || pt != "still-plain" {
 		t.Fatalf("active Decrypt of legacy plaintext: pt=%q err=%v", pt, err)
 	}
+
+	// VAULT_STRICT=true closes that door: once every value has migrated, a
+	// non-"v1:" value under active custody can only be an injected/downgraded
+	// one, and passing it through would bypass the AAD binding entirely.
+	t.Setenv("VAULT_STRICT", "true")
+	sv := newTestVault(t)
+	if _, err := sv.Decrypt("acme", "f", "still-plain"); err == nil {
+		t.Fatal("VAULT_STRICT=true must refuse plaintext passthrough while custody is active")
+	}
+	// An unset field ("") is not a downgrade — it stays passthrough.
+	if pt, err := sv.Decrypt("acme", "f", ""); err != nil || pt != "" {
+		t.Fatalf("strict mode must still pass an empty (unset) value: pt=%q err=%v", pt, err)
+	}
+	// Real ciphertext still round-trips in strict mode.
+	ct, err := sv.Encrypt("acme", "f", "sealed")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if pt, err := sv.Decrypt("acme", "f", ct); err != nil || pt != "sealed" {
+		t.Fatalf("strict round-trip: pt=%q err=%v", pt, err)
+	}
 }
 
 func TestVaultTamperedCiphertextFails(t *testing.T) {
@@ -266,5 +287,108 @@ func TestVaultRefusesMacLessDowngrade(t *testing.T) {
 	t.Setenv("VAULT_MIGRATE_LEGACY_WRAPPED", "")
 	if _, err := NewWithProvider(context.Background(), prov, st, wn); err != nil {
 		t.Fatalf("migrated MAC'd store must load without the opt-in: %v", err)
+	}
+}
+
+// TestVaultRefusesWipedWrappedStore (M16): once a KEK exists, an absent or
+// zero-length wrapped-DEK store is a WIPE, not a first run. The old code
+// treated both shapes as "no keys yet" and silently minted fresh DEKs on the
+// next Encrypt — turning a store truncation into a permanent, authenticated
+// re-key that orphans every existing ciphertext. Boot must refuse instead,
+// with an explicit one-boot override for the one legitimate shape.
+func TestVaultRefusesWipedWrappedStore(t *testing.T) {
+	prov := &memSealing{}
+	st, wn := newMemStore(), discardWarn
+	v1, err := NewWithProvider(context.Background(), prov, st, wn)
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	if _, err := v1.Encrypt("acme", "f1", "secret"); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	// Wipe shape 1: the store DELETED while the sealed KEK still exists.
+	st.mu.Lock()
+	delete(st.data, wrappedKeysKey)
+	st.mu.Unlock()
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err == nil {
+		t.Fatal("a deleted wrapped store under an EXISTING KEK must refuse boot, not silently re-key")
+	}
+
+	// Wipe shape 2: TRUNCATED to zero bytes.
+	if err := st.Save(wrappedKeysKey, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err == nil {
+		t.Fatal("a truncated (empty) wrapped store under an EXISTING KEK must refuse boot")
+	}
+
+	// The explicit one-boot override accepts — and warns loudly.
+	t.Setenv("VAULT_ALLOW_EMPTY_STORE", "true")
+	var warned bool
+	warnRec := func(_, msg string, _ map[string]any) {
+		if strings.Contains(msg, "VAULT_ALLOW_EMPTY_STORE") {
+			warned = true
+		}
+	}
+	if _, err := NewWithProvider(context.Background(), prov, st, warnRec); err != nil {
+		t.Fatalf("VAULT_ALLOW_EMPTY_STORE=true must permit the one-boot recovery: %v", err)
+	}
+	if !warned {
+		t.Fatal("accepting an empty custody store under an existing KEK must be WARNED, never silent")
+	}
+}
+
+// TestVaultFirstRunPersistsEmptyCustodyStore (M16): a genuine first run
+// (ErrNoKEK) writes an empty-but-MAC'd custody store immediately, so "custody
+// active but store absent" never becomes a legitimate steady state — which is
+// what lets every later boot treat absence as a wipe.
+func TestVaultFirstRunPersistsEmptyCustodyStore(t *testing.T) {
+	prov := &memSealing{}
+	st, wn := newMemStore(), discardWarn
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err != nil {
+		t.Fatalf("first-run activation: %v", err)
+	}
+	raw, err := st.Load(wrappedKeysKey)
+	if err != nil {
+		t.Fatalf("first run must persist the (empty) custody store: %v", err)
+	}
+	if !strings.Contains(string(raw), `"mac"`) {
+		t.Fatalf("first-run custody store is not MAC'd: %s", raw)
+	}
+	// A second boot over that store (KEK exists, store present) loads cleanly
+	// without any override.
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err != nil {
+		t.Fatalf("re-activation over the persisted empty store: %v", err)
+	}
+}
+
+// TestVaultMigrateFlagWarnsEveryBoot (M16): while VAULT_MIGRATE_LEGACY_WRAPPED
+// stands, a MAC-less (tamper-indistinguishable) store would be accepted — so
+// EVERY boot with the flag set must say so loudly, even over a healthy MAC'd
+// store, or a "one boot" flag silently becomes a standing downgrade.
+func TestVaultMigrateFlagWarnsEveryBoot(t *testing.T) {
+	prov := &memSealing{}
+	st, wn := newMemStore(), discardWarn
+	v1, err := NewWithProvider(context.Background(), prov, st, wn)
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	if _, err := v1.Encrypt("acme", "f1", "secret"); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	t.Setenv("VAULT_MIGRATE_LEGACY_WRAPPED", "true")
+	var warned bool
+	warnRec := func(_, msg string, _ map[string]any) {
+		if strings.Contains(msg, "VAULT_MIGRATE_LEGACY_WRAPPED") {
+			warned = true
+		}
+	}
+	if _, err := NewWithProvider(context.Background(), prov, st, warnRec); err != nil {
+		t.Fatalf("healthy MAC'd store must still load with the flag set: %v", err)
+	}
+	if !warned {
+		t.Fatal("a boot with VAULT_MIGRATE_LEGACY_WRAPPED=true recorded no warning")
 	}
 }

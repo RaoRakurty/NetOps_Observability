@@ -364,6 +364,21 @@ func (b *auditSignalBridge) Count(tenant string, cross bool, q auditQuery) int {
 
 func (b *auditSignalBridge) Record(e AuditEvent) {
 	b.inner.Record(e) // the durable trail ALWAYS gets the event first
+	b.mirror(e)
+}
+
+// RecordStrict propagates the durable trail's error (M19): the mirror is
+// attempted only once the durable write succeeded — an event the trail refused
+// must not surface in ClickHouse as if it were recorded.
+func (b *auditSignalBridge) RecordStrict(e AuditEvent) error {
+	if err := b.inner.RecordStrict(e); err != nil {
+		return err
+	}
+	b.mirror(e)
+	return nil
+}
+
+func (b *auditSignalBridge) mirror(e AuditEvent) {
 	if !auditSignalWorthy(e) {
 		return
 	}
