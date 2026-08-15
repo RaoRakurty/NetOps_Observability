@@ -464,6 +464,29 @@ def test_find_merges_requires_window_overlap():
     assert find_merges([survivor], [stale]) == []
 
 
+def test_find_merges_never_crosses_tenants():
+    # §3a default-closed, mirroring test_continuation_never_crosses_tenants.
+    # main.engine_cycle feeds BOTH lists from the process-global all-tenant
+    # OPEN_OBJECTS, so identically-named devices in two tenants (leaf1/spine1 —
+    # the ordinary case) would otherwise tombstone one tenant's live incident
+    # into the other's and write a foreign correlation_id to its merged_into.
+    survivor = dataclasses.replace(
+        _obj(["leaf1", "spine1"], "surv", 2, 7), tenant_id="tenant-b")
+    stale = _obj(["leaf1", "spine1"], "stale", 0, 4)  # tenant-a: 100% entity overlap
+    assert stale.tenant_id != survivor.tenant_id, "fixture must span two tenants"
+    assert find_merges([survivor], [stale]) == []
+
+
+def test_find_merges_still_coalesces_within_one_tenant():
+    # The tenant guard must not disarm the merge itself: same tenant, same
+    # incident re-identified across windowing, still tombstones.
+    survivor = dataclasses.replace(
+        _obj(["leaf1", "spine1"], "surv", 2, 7), tenant_id="tenant-b")
+    stale = dataclasses.replace(
+        _obj(["leaf1", "spine1"], "stale", 0, 4), tenant_id="tenant-b")
+    assert find_merges([survivor], [stale]) == [("stale", "surv")]
+
+
 def test_find_merges_is_deterministic_and_order_invariant():
     a = _obj(["leaf1", "spine1"], "aaa", 0, 5)   # earlier window
     b = _obj(["leaf1", "spine1"], "bbb", 1, 6)

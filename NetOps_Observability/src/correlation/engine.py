@@ -1505,6 +1505,15 @@ def find_merges(
     strongest overlap, tie-broken by earliest window_start then cid (deterministic;
     never depends on input order). Survivors are the live objects this cycle and are
     never merged away. Returns (merged_cid, survivor_cid) pairs, sorted.
+
+    Tenant-guarded (§3a default-closed), exactly as its twin find_continuation is:
+    the caller feeds BOTH lists from the process-global all-tenant OPEN_OBJECTS,
+    so without this check two tenants that merely name their devices alike
+    (leaf1/spine1 — the common case, not the exotic one) reach Jaccard ≥
+    min_overlap and one tenant's live incident is tombstoned state='merged' into
+    the other's, leaking a foreign correlation_id into its merged_into column.
+    A candidate can never merge into another tenant's object, whatever the
+    entity overlap.
     """
     surv = sorted(survivors, key=lambda s: (s.window_start, s.correlation_id))
     pairs: list[tuple[str, str]] = []
@@ -1515,7 +1524,9 @@ def find_merges(
         best: tuple[float, datetime, str] | None = None
         best_cid = ""
         for s in surv:
-            if s.correlation_id == cand.correlation_id or not _windows_overlap(cand, s):
+            if (s.tenant_id != cand.tenant_id
+                    or s.correlation_id == cand.correlation_id
+                    or not _windows_overlap(cand, s)):
                 continue
             se = _entity_ids(s)
             union = ce | se

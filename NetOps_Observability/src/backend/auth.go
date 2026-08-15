@@ -940,10 +940,18 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		// (service accounts / direct API clients) verified against its JWKS.
 		if op := s.oidcProvider(); op.Ready() {
 			if oc, verr := op.VerifyBearer(bearer); verr == nil {
+				// SR-025: the bearer path mints claims DIRECTLY, so it must apply the
+				// same federated platform-owner guard the interactive login gets for
+				// free via users.UpsertFederated (oidc.go). Without it an IdP token
+				// whose roles/groups merely contain "admin" (a default OIDC_ADMIN_ROLES
+				// value) mapped to super-admin + the global tenant — i.e. cross-tenant
+				// platform-owner reach — with FEDERATION_ALLOW_PLATFORM_OWNER unset.
+				sub := firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub)
+				tenant := op.DefaultTenant()
 				ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, jwtClaims{
-					Sub:    firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub),
-					Role:   op.RoleFor(oc),
-					Tenant: op.DefaultTenant(),
+					Sub:    sub,
+					Role:   guardFederatedRole(op.RoleFor(oc), tenant, sub, "oidc-bearer"),
+					Tenant: tenant,
 				}))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
