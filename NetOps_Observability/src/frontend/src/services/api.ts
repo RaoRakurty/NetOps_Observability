@@ -1436,26 +1436,112 @@ export function setRefresh(t: string | null): void {
   else localStorage.setItem(REFRESH_KEY, t);
 }
 
+// sweepScopedUIState clears per-user/per-scope client state that must never
+// survive a session boundary on a shared browser (§3a): the FrontPage
+// KPI-history family (netops.fp.kpihist*) and the active-scope selection.
+// Called on EVERY session edge — logout, the 401 clear path, and each
+// successful login BEFORE the new session's first render — so the previous
+// principal's counts can never seed the next principal's sparklines (M21).
+export function sweepScopedUIState(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("netops.fp.kpihist")) localStorage.removeItem(k);
+    }
+    localStorage.removeItem(ACTIVE_SCOPE_KEY);
+  } catch { /* ignore storage errors */ }
+}
+
+// clearSession = tokens + scoped UI state, in one place. logout() and the 401
+// refresh-failure path MUST both go through here: the 401 path used to drop
+// only the tokens, leaving the kpihist family behind for the next user (M21).
+export function clearSession(): void {
+  setToken(null);
+  setRefresh(null);
+  sweepScopedUIState();
+}
+
+// sessionTenantKey — a storage-key discriminator derived from the SIGNED
+// session token's claims (tenant id, falling back to the subject for the
+// cross-tenant platform owner). Decode-only, no verification: the server
+// enforces authz; this only namespaces client-side UI state per principal so
+// two tenants on a shared browser never share a localStorage key (M21).
+export function sessionTenantKey(): string {
+  const t = getToken();
+  if (!t) return "";
+  try {
+    const seg = t.split(".")[1] ?? "";
+    const b64 = seg.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const c = JSON.parse(atob(pad)) as { tenant?: string; sub?: string };
+    return c.tenant || (c.sub ? `u.${c.sub}` : "");
+  } catch {
+    return "";
+  }
+}
+
 // (Removed the "view as tenant" switcher. Per-tenant data privacy is now a tenant
 // config — "hide from global view" — enforced server-side, not a client view mode.)
+
+// SSO_STATE_KEY holds the browser-side login-CSRF nonce (M20). ssoLoginUrl()
+// mints it into sessionStorage right before the full-page redirect to
+// /api/auth/sso/login; captureSSORedirect() consumes it (single-use) when the
+// callback hands the session back via the URL fragment. sessionStorage on
+// purpose: per-tab, survives the redirect round-trip, and an attacker's page
+// cannot write it — so a fragment DELIVERED to a victim who never started an
+// SSO login (login-CSRF / session fixation) is refused.
+export const SSO_STATE_KEY = "netops.ssoState";
+
+function newSSOState(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
 
 // captureSSORedirect inspects the URL fragment the SSO callback redirects to
 // (#token=…&refresh=…&sso=1, or #sso_error=…) and, on success, stores the
 // session and clears the fragment. Call once at startup before rendering.
 // Returns an error string when the SSO round-trip failed, else null.
+//
+// M20 (login-CSRF / session fixation): the fragment used to be accepted
+// unconditionally — any page that navigated this browser to
+// app/#token=<attacker's own session> silently signed the victim into the
+// attacker's account (and overwrote a real session). Now the token is accepted
+// only when THIS tab initiated the SSO login (pending SSO_STATE_KEY nonce,
+// consumed single-use), and — once the backend echoes the nonce back in the
+// fragment as `state` — only when it round-tripped unchanged. Fail closed:
+// no pending nonce, or a mismatched echo, drops the fragment and stores nothing.
 export function captureSSORedirect(): string | null {
   const hash = window.location.hash.replace(/^#/, "");
   if (!hash.includes("token=") && !hash.includes("sso_error=")) return null;
   const p = new URLSearchParams(hash);
-  const err = p.get("sso_error");
   const clear = () => history.replaceState(null, "", window.location.pathname + window.location.search);
+  // The nonce is single-use: take it out of storage no matter how we exit.
+  let pending: string | null = null;
+  try {
+    pending = sessionStorage.getItem(SSO_STATE_KEY);
+    sessionStorage.removeItem(SSO_STATE_KEY);
+  } catch { /* sessionStorage unavailable -> pending stays null -> fail closed */ }
+  const err = p.get("sso_error");
   if (err) {
     clear();
     return err;
   }
   const token = p.get("token");
   const refresh = p.get("refresh");
+  if (!pending) {
+    // Token fragment with no matching login started from this tab: forged or
+    // replayed. Drop it (and never overwrite an existing session with it).
+    clear();
+    return "SSO sign-in was not started from this browser tab — please sign in again.";
+  }
+  const echoed = p.get("state");
+  if (echoed !== null && echoed !== pending) {
+    clear();
+    return "SSO state mismatch — please sign in again.";
+  }
   if (token) {
+    sweepScopedUIState(); // previous principal's UI state must not leak in (M21)
     setToken(token);
     setRefresh(refresh);
     markFreshLogin();
@@ -1572,9 +1658,11 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
       if (await tryRefresh()) return request<T>(path, init, true);
     }
     // Refresh unavailable/failed — clear and notify so App swaps to Login.
+    // clearSession (not bare setToken/setRefresh): this path must sweep the
+    // same per-scope UI state logout sweeps, or the kpihist family survives
+    // an expired session on a shared browser (M21).
     if (token || getRefresh()) {
-      setToken(null);
-      setRefresh(null);
+      clearSession();
       fireAuthChange(false);
     }
     const text = await res.text().catch(() => "");
@@ -1851,6 +1939,7 @@ export const api = {
     if (r.must_change_password) {
       return { mfaRequired: false, mustChangePassword: true, message: r.message };
     }
+    sweepScopedUIState(); // previous principal's UI state must not leak in (M21)
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     markFreshLogin();
@@ -1863,6 +1952,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ mfa_token: mfaToken, code }),
     });
+    sweepScopedUIState(); // previous principal's UI state must not leak in (M21)
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     markFreshLogin();
@@ -1886,24 +1976,28 @@ export const api = {
         body: JSON.stringify({ refresh_token: rt }),
       }).catch(() => {});
     }
-    setToken(null);
-    setRefresh(null);
-    // Clear per-scope UI state that must not survive a user switch on a shared
-    // browser (§3a): the FrontPage KPI-history family and the active-scope
-    // selection. Scoped keys are prefixed, so sweep the family.
-    try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith("netops.fp.kpihist")) localStorage.removeItem(k);
-      }
-      localStorage.removeItem(ACTIVE_SCOPE_KEY);
-    } catch { /* ignore storage errors */ }
+    // Tokens + per-scope UI state (kpihist family, active scope) in one sweep —
+    // shared with the 401 clear path so the two can never drift apart (M21).
+    clearSession();
     fireAuthChange(false);
   },
   // SSO (OIDC/SAML/LDAP via Keycloak). Config is public; the login flow is a
   // full-page redirect (the browser must follow 302s to the IdP and back).
   ssoConfig: () => request<SSOConfig>("/api/auth/sso/config"),
-  ssoLoginUrl: (idp?: string) => `/api/auth/sso/login${idp ? `?idp=${encodeURIComponent(idp)}` : ""}`,
+  // ssoLoginUrl mints the browser-side login-CSRF nonce (M20) and carries it as
+  // `fe_state` — the backend should thread it through its SSO transaction and
+  // echo it back in the callback fragment as `state` (captureSSORedirect
+  // verifies the round-trip). Until the backend echoes it, the nonce still
+  // proves "this tab started an SSO login", which is what blocks a delivered
+  // fragment. Call ONLY when actually navigating (it arms the nonce).
+  ssoLoginUrl: (idp?: string) => {
+    const st = newSSOState();
+    try { sessionStorage.setItem(SSO_STATE_KEY, st); } catch { /* fail closed at capture */ }
+    const qs = new URLSearchParams();
+    if (idp) qs.set("idp", idp);
+    qs.set("fe_state", st);
+    return `/api/auth/sso/login?${qs.toString()}`;
+  },
 
   // Auth-method discovery for the login page (which sign-in options are enabled).
   authMethods: () => request<AuthMethods>("/api/auth/methods"),
@@ -1914,6 +2008,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
+    sweepScopedUIState(); // previous principal's UI state must not leak in (M21)
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     markFreshLogin();
@@ -1925,6 +2020,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
+    sweepScopedUIState(); // previous principal's UI state must not leak in (M21)
     setToken(r.token);
     setRefresh(r.refresh_token ?? null);
     markFreshLogin();

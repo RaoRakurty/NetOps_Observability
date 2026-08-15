@@ -3,6 +3,7 @@ import ReactECharts from "../components/EChart";
 import { cssVar } from "../theme/tokens";
 import { registerMap } from "echarts/core";
 import { api, DeviceLocationRow, GeomapResponse, GeoSite, SiteRow, ImportResult } from "../services/api";
+import { escapeHtml } from "../lib/text";
 import { StatStrip, Stat, Segmented } from "../components/ui";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
@@ -59,7 +60,10 @@ function MapPanel({ sites, height = 460 }: { sites: GeoSite[]; height?: number }
       formatter: (p: { data?: { site?: GeoSite } }) => {
         const s = p.data?.site;
         if (!s) return "";
-        return `<b>${s.name}</b><br/>${s.devices} device${s.devices === 1 ? "" : "s"} · ${s.up} up · ${s.down} down`;
+        // Tooltip strings are innerHTML to ECharts. The site name is intent
+        // data an SoT editor (or a poisoned SoT sync) controls — escape it
+        // like every other tooltip sink (stored-XSS, H15).
+        return `<b>${escapeHtml(s.name)}</b><br/>${s.devices} device${s.devices === 1 ? "" : "s"} · ${s.up} up · ${s.down} down`;
       },
     },
     series: [

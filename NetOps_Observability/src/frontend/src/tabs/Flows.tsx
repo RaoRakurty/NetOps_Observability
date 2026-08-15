@@ -189,8 +189,12 @@ function TopNView({
               formatter: (ps: any) => {
                 const p = Array.isArray(ps) ? ps[0] : ps;
                 const key = String(p.name);
-                const app = apps[key] ? ` · ${apps[key].app}` : "";
-                return `${label(key)}${app}<br/><b>${fmtBytes(p.value)}</b>`;
+                // ECharts inserts this string via innerHTML. Both the row key
+                // (flow endpoints/exporter fields) and the resolved app name
+                // (FortiGate syslog `app=`) are attacker-influenced, so every
+                // dynamic part goes through escapeHtml (stored-XSS, H15).
+                const app = apps[key] ? ` · ${escapeHtml(apps[key].app)}` : "";
+                return `${escapeHtml(label(key))}${app}<br/><b>${fmtBytes(p.value)}</b>`;
               },
             },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtBytes(v) } },

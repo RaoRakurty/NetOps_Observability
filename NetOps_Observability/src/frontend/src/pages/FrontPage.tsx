@@ -1,5 +1,5 @@
 import { Component, CSSProperties, ReactNode, useEffect, useState } from "react";
-import { api, CorrObject, FeedItem, CorrTimeline, getActiveScope } from "../services/api";
+import { api, CorrObject, FeedItem, CorrTimeline, getActiveScope, sessionTenantKey } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
@@ -77,14 +77,21 @@ function Spark({ pts, color }: { pts: number[]; color: string }) {
 // KPI history persists (localStorage) so the trend is populated on reload — these
 // are real observed samples accumulated each poll, capped to the recent window.
 //
-// The key is SCOPED BY ACTIVE TENANT (§3a): a platform owner switching tenant, or
-// a new user on a shared browser, must not seed their sparkline from the previous
+// The key is SCOPED BY TENANT (§3a): a platform owner switching tenant, or a
+// new user on a shared browser, must not seed their sparkline from the previous
 // scope's counts. An unscoped key bled one tenant's health/confirmed/site/device
-// numbers into another's until 24 fresh samples overwrote them. api.logout()
-// clears the whole netops.fp.kpihist.* family (see services/api.ts).
+// numbers into another's until 24 fresh samples overwrote them. clearSession()
+// (logout AND the 401 path, see services/api.ts) sweeps the whole
+// netops.fp.kpihist.* family at every session edge.
 const KPI_HIST_PREFIX = "netops.fp.kpihist";
-function kpiHistKey(): string {
-  const scope = getActiveScope();
+// Exported for the M21 isolation regression test only — not a public API.
+export function kpiHistKey(): string {
+  // Active scope first (a platform owner viewing a tenant), else the SESSION's
+  // own tenant from the token claims (M21): the old bare-prefix fallback made
+  // every non-cross user write the SAME key, so tenant A's counts seeded
+  // tenant B's sparklines on a shared browser. sessionTenantKey() falls back
+  // to `u.<sub>` for the cross-tenant owner, so no two principals ever share.
+  const scope = getActiveScope() || sessionTenantKey();
   return scope ? `${KPI_HIST_PREFIX}.${scope}` : KPI_HIST_PREFIX;
 }
 function loadKpiHist(): Record<string, number[]> { try { return JSON.parse(localStorage.getItem(kpiHistKey()) || "{}"); } catch { return {}; } }
