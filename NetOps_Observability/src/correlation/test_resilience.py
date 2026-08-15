@@ -90,6 +90,47 @@ def test_prune_ages_out_old_signals_and_their_ids():
     assert len(main._BUFFERED_IDS) == len(main.WINDOW_BUFFER)
 
 
+# ── H14: a device clock years ahead must not freeze window pruning ────────────
+def test_h14_far_future_ts_cannot_freeze_pruning_for_everyone():
+    """_prune_buffer pops from the LEFT of the arrival-ordered deque while
+    ts < horizon — pre-fix, ONE +5y device timestamp at the head stopped
+    pruning for EVERY tenant until restart. buffer_signal now clamps a
+    future-out-of-bounds event ts to arrival time (counted, identity
+    preserved), so the head always ages out."""
+    now = datetime.now(timezone.utc)
+    future_ts = now + timedelta(days=5 * 365)
+    before = main.EVENT_TS_FUTURE_CLAMPED
+    main.buffer_signal(mk(1, ts=future_ts))
+    assert main.EVENT_TS_FUTURE_CLAMPED == before + 1, "clamp must be counted (§10)"
+    head = main.WINDOW_BUFFER[0]
+    assert head.ts <= now + timedelta(seconds=main.METRIC_FUTURE_SKEW_S + 60), \
+        "future ts must be clamped to arrival time"
+    # Identity survives the clamp: the corr_signals row, window dedup and the
+    # archive slice all keep comparing the SAME id.
+    assert str(head.signal_id) == str(mk(1, ts=future_ts).signal_id)
+    for i in range(2, 7):
+        main.buffer_signal(mk(i, ts=now))
+    main._prune_buffer(now + timedelta(hours=2))  # > window_s past every arrival
+    assert len(main.WINDOW_BUFFER) == 0, \
+        "a clamped head must age out — pre-fix the +5y head froze pruning here"
+    assert len(main._BUFFERED_IDS) == 0
+
+
+def test_h14_past_stale_ts_is_counted_but_never_restamped():
+    """The PAST direction is deliberately NOT re-stamped (fabricated freshness
+    would corrupt cause/effect order) — the arrival-ordered deque ages a stale
+    head out on the next prune. But it IS counted, so a device stuck in the
+    past is visible instead of silently never correlating."""
+    now = datetime.now(timezone.utc)
+    stale = mk(1, ts=now - timedelta(hours=3))  # past METRIC_MAX_AGE_S
+    before = main.EVENT_TS_PAST_STALE
+    main.buffer_signal(stale)
+    assert main.EVENT_TS_PAST_STALE == before + 1
+    assert main.WINDOW_BUFFER[0].ts == stale.ts, "honest event time is kept"
+    main._prune_buffer(now)
+    assert len(main.WINDOW_BUFFER) == 0, "stale signal ages out naturally"
+
+
 # ── C2: #76 — debug_only / platform-self-check probes never form objects ──────
 def test_debug_only_probe_is_searchable_but_never_buffered_into_an_object():
     """A platform-self-check probe (e.g. prober->netbox) is DEBUG_ONLY: it stays in

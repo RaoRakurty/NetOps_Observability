@@ -958,35 +958,54 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
 
 # (regex, kind, entity=interface?, severity) — ordered; first match wins. The
 # kinds line up with the sig.ent.spdc catalog's required/supporting evidence.
+#
+# H11 (ReDoS): these rules run on device-supplied syslog text on the single
+# event loop. The original patterns chained unbounded `.*` gaps between the
+# keywords ("(rx|receive).*(power).*(low|below).*(alarm|threshold)"), whose
+# backtracking on a keyword-dense non-matching line was superlinear — a 4KB
+# adversarial message cost ~3.9s and froze consume/healthz/engine. Two bounds
+# fix the class without changing what a real vendor line classifies as:
+#   1. every inter-keyword gap is `[^\n]{0,80}` — real DOM/FEC/optics lines put
+#      their keywords within a few words of each other, never 80+ chars apart,
+#      and a bounded gap makes backtracking cost a small constant;
+#   2. the classification token itself is capped (_PORT_EVENT_TEXT_CAP) before
+#      any regex runs, so total work is bounded regardless of message size.
+_G = r"[^\n]{0,80}"  # bounded keyword gap (see H11 note above)
 _PORT_EVENT_RULES: list[tuple[re.Pattern, str, bool, Severity]] = [
     # Unsupported / unqualified transceiver (Cisco %PLATFORM UNSUPPORTED_TRANSCEIVER,
     # Arista "unsupported transceiver", FortiGate "unqualified SFP").
-    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver.*not\s+supported", re.IGNORECASE),
+    (re.compile(r"unsupported\s+transceiver|unqualified\s+(sfp|transceiver|optic)|not\s+qualified|UNSUPPORTED_TRANSCEIVER|transceiver" + _G + r"not\s+supported", re.IGNORECASE),
      "transceiver_unsupported", True, Severity.HIGH),
     # DOM/DDM optical threshold alarms (SFF-8472 / %OPTICS / vendor DOM).
-    (re.compile(r"(rx|receive).*(power).*(low|below).*(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.IGNORECASE),
+    (re.compile(r"(rx|receive)" + _G + r"power" + _G + r"(low|below)" + _G + r"(alarm|threshold)|RX_POWER_LOW|low\s+rx\s+power", re.IGNORECASE),
      "dom_rx_power_low", True, Severity.HIGH),
-    (re.compile(r"(temperature|temp).*(high|above).*(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.IGNORECASE),
+    (re.compile(r"(temperature|temp)" + _G + r"(high|above)" + _G + r"(alarm|threshold|warning)|TEMP_HIGH|high\s+temperature", re.IGNORECASE),
      "dom_temperature_high", True, Severity.HIGH),
-    (re.compile(r"(tx\s+)?bias.*(high|current).*(alarm|threshold)|BIAS_HIGH", re.IGNORECASE),
+    (re.compile(r"(tx\s+)?bias" + _G + r"(high|current)" + _G + r"(alarm|threshold)|BIAS_HIGH", re.IGNORECASE),
      "dom_lane_bias_anomaly", True, Severity.WARN),
     # FEC / PCS.
-    (re.compile(r"uncorrectable.*(fec|codeword|block)|FEC.*UNCORRECTABLE|post[-_ ]?fec.*(error|ber)", re.IGNORECASE),
+    (re.compile(r"uncorrectable" + _G + r"(fec|codeword|block)|FEC" + _G + r"UNCORRECTABLE|post[-_ ]?fec" + _G + r"(error|ber)", re.IGNORECASE),
      "prefec_ber_rising", True, Severity.HIGH),
-    (re.compile(r"pre[-_ ]?fec\s+ber|fec.*corrected.*(rate|high)|CORRECTED_FEC", re.IGNORECASE),
+    (re.compile(r"pre[-_ ]?fec\s+ber|fec" + _G + r"corrected" + _G + r"(rate|high)|CORRECTED_FEC", re.IGNORECASE),
      "fec_corrected_rate_high", True, Severity.WARN),
     (re.compile(r"local\s+fault|LOCAL_FAULT", re.IGNORECASE), "pcs_local_fault", True, Severity.HIGH),
     (re.compile(r"remote\s+fault|REMOTE_FAULT", re.IGNORECASE), "pcs_remote_fault", True, Severity.HIGH),
-    (re.compile(r"deskew|align.*(marker|lane).*(fail|lost)|PCS.*DESKEW", re.IGNORECASE),
+    (re.compile(r"deskew|align" + _G + r"(marker|lane)" + _G + r"(fail|lost)|PCS" + _G + r"DESKEW", re.IGNORECASE),
      "pcs_deskew_fault", True, Severity.HIGH),
     (re.compile(r"hi[-_ ]?ber|high\s+bit\s+error", re.IGNORECASE), "hi_ber_indication", True, Severity.HIGH),
     # Optic present but no light / signal (link-down-with-optic-in fingerprint).
     (re.compile(r"no\s+(light|signal)|loss\s+of\s+(light|signal)|LOS\b|SIGNAL_LOSS", re.IGNORECASE),
      "link_down_no_light", True, Severity.HIGH),
     # Transceiver insert/remove flap on insert (interop/incompat fingerprint).
-    (re.compile(r"transceiver.*(insert|remov).*(insert|remov)|SFP.*flap|optic.*flap", re.IGNORECASE),
+    (re.compile(r"transceiver" + _G + r"(insert|remov)" + _G + r"(insert|remov)|SFP" + _G + r"flap|optic" + _G + r"flap", re.IGNORECASE),
      "link_flap_on_insert", True, Severity.WARN),
 ]
+
+# H11: classification never needs more text than this — a real vendor DOM/FEC
+# line is well under 2000 chars, and the cap bounds regex work on a hostile or
+# corrupted oversized message BEFORE any pattern runs. The full message still
+# rides the signal (attrs.message, its own 240-char cap) and OpenSearch.
+_PORT_EVENT_TEXT_CAP = 2000
 
 
 def _port_of(ev: dict) -> str:
@@ -1007,7 +1026,15 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
     if not host or host == "unknown":
         return None
     msg = str(ev.get("message") or "")
-    ctoken = msg + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "") + " " + str(ev.get("appname") or "")
+    # H11: cap BEFORE any regex — see _PORT_EVENT_TEXT_CAP. Each part is capped
+    # on its own so an oversized message can never truncate away the structured
+    # fields (facility/event_type/appname) a vendor line may classify on.
+    ctoken = " ".join((
+        msg[:_PORT_EVENT_TEXT_CAP],
+        str(ev.get("facility") or "")[:256],
+        str(ev.get("event_type") or "")[:256],
+        str(ev.get("appname") or "")[:256],
+    ))
     ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
     observer = Observer(

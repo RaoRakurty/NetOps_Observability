@@ -284,3 +284,97 @@ def test_dlq_unset_note_is_env_documented():
     assert main.CORR_BATCH_MAX_ROWS == int(os.environ.get("CORR_BATCH_MAX_ROWS", "500"))
     assert main.CORR_BATCH_MAX_S == float(os.environ.get("CORR_BATCH_MAX_S", "2.0"))
     assert main.CORR_BATCH_QUEUE_MAX == int(os.environ.get("CORR_BATCH_QUEUE_MAX", "5000"))
+
+
+# ── H12: replayed rows must not double-land through a retained batch ─────────
+
+
+def test_h12_replayed_rows_collapse_into_the_retained_batch(monkeypatch):
+    """A flush transport failure retains the rows AND escapes to the supervisor
+    → consumer restart → Kafka redelivers the uncommitted messages → their
+    handlers re-add the SAME rows. Pre-fix those joined the retained batch, so
+    the next flush landed every row twice (and the doubled membership changed
+    the content-hash token, defeating server-side dedup). Identity dedup by
+    signal_id makes the replayed adds no-ops and keeps the retry token stable."""
+    ch = FailingOnceCH()
+    monkeypatch.setattr(main, "ch", ch)
+
+    async def scenario():
+        await main.batch_signal({"signal_id": "s0"})
+        await main.batch_signal({"signal_id": "s1"})
+        with pytest.raises(TimeoutError):
+            await main.SIGNAL_BATCH.flush()
+        # supervisor restart + redelivery: the same handlers re-add the same rows
+        await main.batch_signal({"signal_id": "s0"})
+        await main.batch_signal({"signal_id": "s1"})
+        assert main.SIGNAL_BATCH.pending() == 2, "replayed rows must collapse"
+        await main.SIGNAL_BATCH.flush()
+
+    run(scenario())
+    landed = [r["signal_id"] for _, rows, _ in ch.batches for r in rows]
+    assert sorted(landed) == ["s0", "s1"], f"duplicated rows landed: {landed}"
+    # identical membership ⇒ identical token across the failed attempt + retry.
+    assert len(ch.tokens) == 2 and ch.tokens[0] == ch.tokens[1]
+
+
+def test_h12_new_rows_never_merge_into_the_batch_being_retried(monkeypatch):
+    """Rows added while a failed batch awaits retry (the engine task runs
+    concurrently with the consume loop) must flush as their OWN batch — merging
+    them changed the retried batch's token, so a first attempt that had
+    actually landed server-side was re-inserted under a fresh token and
+    duplicated."""
+    ch = FailingOnceCH()
+    monkeypatch.setattr(main, "ch", ch)
+
+    async def scenario():
+        await main.batch_signal({"signal_id": "s0"})
+        with pytest.raises(TimeoutError):
+            await main.SIGNAL_BATCH.flush()
+        await main.batch_signal({"signal_id": "s-new"})  # e.g. an engine episode
+        await main.SIGNAL_BATCH.flush()
+
+    run(scenario())
+    # retry of [s0] under its ORIGINAL token, then [s-new] separately.
+    assert len(ch.tokens) == 3 and ch.tokens[0] == ch.tokens[1]
+    assert [[r["signal_id"] for r in rows] for _, rows, _ in ch.batches] \
+        == [["s0"], ["s-new"]]
+    assert main.SIGNAL_BATCH.pending() == 0
+
+
+class _FailOnceRecordingCH(RecordingCH):
+    """First insert transport-fails; everything after lands (records batches)."""
+
+    def __init__(self):
+        super().__init__()
+        self.fail_next = True
+
+    async def insert(self, table, rows, dedup_token=""):
+        if self.fail_next:
+            self.fail_next = False
+            raise TimeoutError("clickhouse unreachable")
+        return await super().insert(table, rows, dedup_token)
+
+
+def test_h12_consumer_replay_after_flush_failure_lands_unique_signal_ids(monkeypatch):
+    """End-to-end shape of the finding: CH fails once at the commit-point flush,
+    the supervisor restarts the consumer past its backoff, Kafka redelivers the
+    uncommitted messages, and the rows still land exactly once."""
+    _NConsumer.events = []
+    _NConsumer.count = 2
+    ch = _FailOnceRecordingCH()
+    monkeypatch.setattr(main, "AIOKafkaConsumer", _NConsumer)
+    monkeypatch.setattr(main, "ch", ch)
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_N", 2)
+    monkeypatch.setattr(main, "CORR_COMMIT_EVERY_S", 3600.0)
+    monkeypatch.setattr(main, "CONSUMER_START_TIMEOUT_S", 1.0)
+
+    async def fake_handle(topic, event):
+        await main.batch_signal({"signal_id": f"sig-{event['i']}"})
+
+    monkeypatch.setattr(main, "handle", fake_handle)
+    # 2.5s: past the supervisor's initial 1s backoff, so the replay round runs.
+    run(_drive_consume(seconds=2.5))
+
+    landed = [r["signal_id"] for _, rows, _ in ch.batches for r in rows]
+    assert sorted(landed) == ["sig-0", "sig-1"], f"duplicated rows landed: {landed}"
+    assert "commit" in _NConsumer.events, "the replay round must have committed"

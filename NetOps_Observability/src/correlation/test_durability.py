@@ -552,7 +552,7 @@ def test_legacy_series_map_is_bounded(monkeypatch):
     monkeypatch.setattr(main, "SERIES_MAX", 20)
     main.SERIES.clear()
     for i in range(200):
-        main.score(f"dev-{i}", "cpu", 1.0)
+        main.score("t", f"dev-{i}", "cpu", 1.0)  # M29b: tenant-scoped key
     assert len(main.SERIES) <= 20
 
 
@@ -600,3 +600,58 @@ def test_dedup_token_derived_from_kafka_coordinate(monkeypatch):
     main.set_dedup_coord("netops.probes", 3, 104857)
     run(main.ch_insert("netops.corr_signals", [{"a": 1}]))
     assert sent[0][1] == "netops.probes:3:104857:netops.corr_signals:0"
+
+
+def test_h13_engine_persist_token_not_borrowed_from_consumer_coordinate():
+    """H13: an engine-cycle _persist_snapshot must NOT draw its dedup token from
+    the consumer's Kafka coordinate — after a redelivery the per-message seq
+    resets, so a NEW object version minted during replay reused an already-seen
+    token and ClickHouse silently dropped it. The token derives from the object
+    version identity instead: same coordinate, two different persists ⇒ two
+    different corr_objects tokens."""
+    from test_lane_soak import lane_signal
+
+    sent: list[tuple[str, str]] = []
+
+    class CaptureCH:
+        async def insert(self, table, rows, dedup_token=""):
+            sent.append((table, dedup_token))
+            return True
+
+    now = datetime.now(timezone.utc)
+    saved_ch, saved_open = main.ch, main.OPEN_OBJECTS
+    main.ch, main.OPEN_OBJECTS = CaptureCH(), {}
+    main.WINDOW_BUFFER.clear()
+    main._BUFFERED_IDS.clear()
+    try:
+        # Mint one real ObjectSnapshot the way the engine does.
+        main.buffer_signal(lane_signal("link_state_change", "h13-dev", offset_s=-60, now=now))
+        main.buffer_signal(lane_signal("device_resource_anomaly", "h13-dev", offset_s=-58, now=now))
+        run(main.engine_cycle())
+        assert main.OPEN_OBJECTS, "engine cycle must have opened an object"
+        snap = next(iter(main.OPEN_OBJECTS.values()))["snapshot"]
+        window = list(main.WINDOW_BUFFER)
+
+        # Persist version 2 while a consumer message coordinate is in flight.
+        sent.clear()
+        main.set_dedup_coord("netops.syslog", 0, 42)
+        run(main._persist_snapshot(snap, 2, "open", window))
+        tok_a = next(t for (tbl, t) in sent if tbl == "netops.corr_objects")
+
+        # Redelivery: the SAME coordinate is re-established (seq resets to 0),
+        # then a NEW object version is persisted.
+        sent.clear()
+        main.set_dedup_coord("netops.syslog", 0, 42)
+        run(main._persist_snapshot(snap, 3, "open", window))
+        tok_b = next(t for (tbl, t) in sent if tbl == "netops.corr_objects")
+
+        assert tok_a and tok_b, "engine persists must still carry dedup tokens"
+        assert tok_a != tok_b, (
+            "a new object version under a replayed coordinate reused the spent "
+            f"token {tok_a!r} — ClickHouse would silently drop the new version")
+        # And the token is not the consumer coordinate at all.
+        assert "netops.syslog:0:42" not in tok_a
+    finally:
+        main.ch, main.OPEN_OBJECTS = saved_ch, saved_open
+        main.WINDOW_BUFFER.clear()
+        main._BUFFERED_IDS.clear()

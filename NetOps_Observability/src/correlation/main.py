@@ -529,8 +529,18 @@ class Series:
 # old flat 200k default measured ~2.9 GiB at cap across this store + the
 # episode detector's — the 768 MiB container OOM'd long before the cap engaged.
 # CORR_MAX_SERIES still overrides verbatim.
-SERIES: OrderedDict[tuple[str, str], Series] = OrderedDict()
+# M29b: keyed by (tenant, entity, metric) — two tenants can legitimately own
+# the same device name + metric (overlapping RFC1918 inventories), and a
+# tenant-blind key averaged their baselines into one series: cross-tenant
+# value leakage into the z-score AND wrong anomaly math for both.
+SERIES: OrderedDict[tuple[str, str, str], Series] = OrderedDict()
 SERIES_MAX = derive_max_series()
+# M29a: LRU evictions were silent (§10) — a cardinality storm quietly ate every
+# warm baseline and the only symptom was findings going quiet. Counted here,
+# exposed on /healthz + /metrics, WARNed rate-limited below.
+SERIES_EVICTED = 0
+_SERIES_EVICT_LOG_LAST = -1e9
+SERIES_EVICT_LOG_EVERY_S = 60.0
 
 # ---------------------------------------------------------------------------
 # Correlation Engine v2 — build ②: episode model (stages [1]+[2] of the
@@ -882,6 +892,14 @@ WINDOW_BUFFER: deque[Signal] = deque(
 # signal_count 14 vs 10 unique). The buffer therefore dedupes by signal id;
 # the set is pruned alongside the buffer so memory stays bounded.
 _BUFFERED_IDS: set[str] = set()
+
+# H14: event timestamps entering the LIVE window are bounded (see
+# buffer_signal). Clamped-future / stale-past counts, exposed on /healthz —
+# a device with a broken clock must be visible, never a silent re-stamp (§10).
+EVENT_TS_FUTURE_CLAMPED = 0
+EVENT_TS_PAST_STALE = 0
+_TS_BOUND_LOG_LAST = -1e9      # rate-limits the WARN (one broken clock ≠ log storm)
+TS_BOUND_LOG_EVERY_S = 60.0
 
 # Open-object registry: correlation_id → persistence state. CH stays append-
 # only; this is the engine's working memory (PG corr_active wiring follows
@@ -1383,6 +1401,38 @@ def buffer_signal(sig: Signal) -> None:
     # of pre-fix objects stays bit-perfect (#101 contract).
     if sig.tenant_id != canon_tenant(sig.tenant_id):
         sig = dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id))
+    # H14: bound the DEVICE-supplied event timestamp at the same chokepoint.
+    # _prune_buffer pops from the LEFT of this arrival-ordered deque while
+    # ts < horizon — so ONE far-future head signal (a device clock years ahead)
+    # stopped pruning for EVERY tenant until restart. The metric lane already
+    # bounds its clock (handle_metric, METRIC_FUTURE_SKEW_S/METRIC_MAX_AGE_S);
+    # the syslog/trap/probe lanes trusted the device verbatim. A future ts past
+    # the same skew is clamped to arrival time (the honest estimate — the event
+    # DID just arrive; the device clock is the thing that's broken), preserving
+    # the signal's stored identity so window dedup, the archive slice and
+    # replay keep comparing the id the corr_signals row was written under. A
+    # ts too far in the PAST is deliberately NOT re-stamped — fabricating
+    # freshness would corrupt cause/effect order, and the arrival-ordered deque
+    # ages a stale head out on the very next prune — but it is counted, so a
+    # device stuck in the past is visible instead of silently never
+    # correlating. Both counts surface on /healthz + /metrics.
+    global EVENT_TS_FUTURE_CLAMPED, EVENT_TS_PAST_STALE, _TS_BOUND_LOG_LAST
+    arrival = datetime.now(timezone.utc)
+    age_s = (arrival - sig.ts).total_seconds()
+    if age_s < -METRIC_FUTURE_SKEW_S or age_s > METRIC_MAX_AGE_S:
+        mono = time.monotonic()
+        if (mono - _TS_BOUND_LOG_LAST) >= TS_BOUND_LOG_EVERY_S:
+            _TS_BOUND_LOG_LAST = mono
+            log.warning(
+                "event ts out of bounds (age=%.0fs, %s) tenant=%s entity=%s kind=%s — "
+                "future is clamped to arrival, past ages out of the window",
+                age_s, "future" if age_s < 0 else "past",
+                sig.tenant_id, sig.entity_id, sig.kind)
+        if age_s < 0:
+            EVENT_TS_FUTURE_CLAMPED += 1
+            sig = dc_replace(sig, ts=arrival, stored_signal_id=str(sig.signal_id))
+        else:
+            EVENT_TS_PAST_STALE += 1
     sid = str(sig.signal_id)
     if sid in _BUFFERED_IDS:
         return  # at-least-once redelivery — the window already holds it
@@ -1502,7 +1552,18 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
                             window: list[Signal], merged_into: str = "") -> None:
     assert ch is not None
     obj_row = snap.to_object_row(version, state, merged_into)
+    # H13: these engine-cycle writes run OUTSIDE any consumer message, so they
+    # must not draw tokens from the consumer's Kafka coordinate (a redelivery
+    # resets that seq, colliding a NEW object version's token with a spent one
+    # → ClickHouse silently drops the new version). The object version itself
+    # is the idempotency key: a retry of the SAME (cid, version, state,
+    # content) dedups, any new version/state/content mints a fresh token. The
+    # content-hash suffix guards the restart edge where OPEN_OBJECTS resets
+    # and version numbering restarts at 1 with different content.
+    tok = (f"obj:{snap.correlation_id}:v{version}:{state}:"
+           f"{snap.content_hash()[:16]}")
     await ch_insert("netops.corr_objects", [obj_row],
+                    dedup_token=f"{tok}:objects",
                     corr_id=snap.correlation_id, version=version, tenant=snap.tenant_id)
     # Dual-write the narrow current-state row (app-level, NOT an MV — row
     # policies break MV inserts). ReplacingMergeTree(created_at) keeps the
@@ -1517,7 +1578,8 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
         current_row = {k: obj_row[k] for k in CORR_CURRENT_FIELDS if k in obj_row}
         current_row.update(_current_badges(obj_row.get("hypotheses", "")))
         current_row["chaos_fixture"] = _chaos_fixture_for(snap)
-        if not await ch_insert("netops.corr_current", [current_row]):
+        if not await ch_insert("netops.corr_current", [current_row],
+                               dedup_token=f"{tok}:current"):
             failure = ("clickhouse rejected insert (see preceding error log)", True)
     except Exception as exc:  # noqa: BLE001 — observable, non-fatal (§10)
         # Network/timeout errors are retryable; anything else (serialization,
@@ -1536,6 +1598,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     edge_rows = snap.to_edge_rows(version)
     if edge_rows:
         await ch_insert("netops.corr_edges", edge_rows,
+                        dedup_token=f"{tok}:edges",
                         corr_id=snap.correlation_id, version=version)
         # Contract §5: the typed edge + its evidence block (edge_type, method, rank,
         # evidence_class, evidence_ref, observation_method, confidence, observed_at,
@@ -1549,6 +1612,7 @@ async def _persist_snapshot(snap: ObjectSnapshot, version: int, state: str,
     ev_rows = snap.to_evidence_rows(version)
     if ev_rows:
         await ch_insert("netops.corr_evidence", ev_rows,
+                        dedup_token=f"{tok}:evidence",
                         corr_id=snap.correlation_id, version=version)
     # Stage [8] archive: a BOUNDED, node-complete slice of the tenant window
     # (see _archive_slice — replay-exact for THIS object, no longer the whole
@@ -1891,15 +1955,27 @@ async def feed_episode_detector(
     return True  # an episode signal was emitted this sample
 
 
-def score(device: str, metric: str, value: float) -> float | None:
-    """Return a |z-score| if the value is anomalous, else None."""
-    key = (device, metric)
+def score(tenant: str, device: str, metric: str, value: float) -> float | None:
+    """Return a |z-score| if the value is anomalous, else None. Keyed by the
+    VERIFIED tenant (M29b) so same-named devices in different tenants never
+    share a baseline."""
+    global SERIES_EVICTED, _SERIES_EVICT_LOG_LAST
+    key = (tenant, device, metric)
     s = SERIES.get(key)
     if s is None:
         s = Series()
         SERIES[key] = s
         while len(SERIES) > SERIES_MAX:
             SERIES.popitem(last=False)
+            # M29a: eviction is legitimate LRU behaviour but never silent —
+            # sustained evictions mean cardinality churn is eating warm
+            # baselines and the z-score lane is quietly degrading.
+            SERIES_EVICTED += 1
+            mono = time.monotonic()
+            if (mono - _SERIES_EVICT_LOG_LAST) >= SERIES_EVICT_LOG_EVERY_S:
+                _SERIES_EVICT_LOG_LAST = mono
+                log.warning("z-score series LRU eviction (cap=%d, evicted_total=%d) — "
+                            "cardinality churn is recycling baselines", SERIES_MAX, SERIES_EVICTED)
     else:
         SERIES.move_to_end(key)
     if len(s.values) < 20:
@@ -2142,7 +2218,7 @@ def _next_dedup_token(table: str) -> str:
     return tok
 
 
-async def ch_insert(table: str, rows, **ctx) -> bool:
+async def ch_insert(table: str, rows, *, dedup_token: str | None = None, **ctx) -> bool:
     """`ch.insert` with the failure actually surfaced (log + counter).
 
     Transport exceptions are counted and RE-RAISED (the consumer quarantines the
@@ -2153,9 +2229,17 @@ async def ch_insert(table: str, rows, **ctx) -> bool:
 
     Phase 3: critical-table inserts carry an insert_deduplication_token derived
     from the Kafka coordinate, so a retry/redelivery cannot duplicate the row.
+    H13: a caller that is NOT driven by a consumer message (the engine cycle's
+    _persist_snapshot) passes its own naturally-idempotent dedup_token instead —
+    borrowing the consumer coordinate meant a redelivery reset the per-message
+    seq and a NEW object version minted during replay reused an already-seen
+    token, which ClickHouse then silently dropped.
     """
     assert ch is not None
-    token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
+    if dedup_token is not None:
+        token = dedup_token
+    else:
+        token = _next_dedup_token(table) if table in CH_CRITICAL_TABLES else ""
     try:
         ok = await ch.insert(table, rows, dedup_token=token)
     except Exception as exc:  # blanket on purpose: counted, then re-raised
@@ -2206,10 +2290,22 @@ BATCH_ROWS_QUARANTINED = 0   # rows a rejected batch preserved in the DLQ
 
 
 class _TableBatch:
-    __slots__ = ("first_mono", "rows")
+    __slots__ = ("first_mono", "ids", "rows")
 
     def __init__(self) -> None:
         self.rows: list[dict] = []
+        # H12: per-row identities of everything pending for this table. A flush
+        # transport failure RETAINS the rows for retry, then escapes to the
+        # supervisor → consumer restart → Kafka redelivers the uncommitted
+        # messages → their handlers re-add the SAME rows to the still-retained
+        # batch, and the next flush landed both copies (the doubled membership
+        # also changed the content-hash token, so ClickHouse could not dedup).
+        # Keying pending rows by their stable identity (signal_id — Kafka
+        # redelivery regenerates the same deterministic id) makes the replayed
+        # add a no-op: membership is unchanged, so the retry token stays the
+        # one the failed attempt used and server-side dedup still covers the
+        # attempt-actually-landed case.
+        self.ids: set[str] = set()
         self.first_mono = time.monotonic()
 
 
@@ -2218,10 +2314,32 @@ class CHBatcher:
 
     def __init__(self) -> None:
         self._batches: dict[str, _TableBatch] = {}
+        # H12: a batch whose insert TRANSPORT-failed (outcome unknown) is parked
+        # here and retried with its membership — and therefore its content-hash
+        # token — UNCHANGED. Merging it back into the live batch (the old
+        # front-merge) let rows added while the insert was in flight (the engine
+        # task runs concurrently) change the token, so a first attempt that had
+        # actually landed server-side was re-inserted under a fresh token and
+        # duplicated. At most one parked batch per table: flush retries it
+        # before touching the live batch, and only a successful retry frees the
+        # slot for a newly-failed live batch.
+        self._retry: dict[str, _TableBatch] = {}
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _row_identity(row: dict) -> str:
+        """Stable per-row identity for replay dedup (H12): the deterministic
+        signal_id when present, else the row content itself — identical
+        replayed content collapses either way, distinct rows never do."""
+        rid = row.get("signal_id")
+        if rid:
+            return str(rid)
+        return hashlib.sha256(
+            json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+
     def pending(self) -> int:
-        return sum(len(b.rows) for b in self._batches.values())
+        return (sum(len(b.rows) for b in self._batches.values())
+                + sum(len(b.rows) for b in self._retry.values()))
 
     def drop_pending(self) -> int:
         """Discard buffered rows WITHOUT writing them. Test-hermeticity hook
@@ -2230,10 +2348,13 @@ class CHBatcher:
         never drops; it flushes."""
         n = self.pending()
         self._batches.clear()
+        self._retry.clear()
         return n
 
     def due(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
+        if self._retry:
+            return True  # a parked batch is always due — its rows are only aging
         return any(len(b.rows) >= CORR_BATCH_MAX_ROWS
                    or (now - b.first_mono) >= CORR_BATCH_MAX_S
                    for b in self._batches.values())
@@ -2242,45 +2363,67 @@ class CHBatcher:
         b = self._batches.get(table)
         if b is None:
             b = self._batches[table] = _TableBatch()
+        rid = self._row_identity(row)
+        parked = self._retry.get(table)
+        if rid in b.ids or (parked is not None and rid in parked.ids):
+            return  # H12: redelivered row already pending — replay, not new data
+        b.ids.add(rid)
         b.rows.append(row)
         if len(b.rows) >= CORR_BATCH_MAX_ROWS or self.pending() >= CORR_BATCH_QUEUE_MAX:
             await self.flush()
 
     async def flush(self) -> None:
-        """Flush every pending table batch. Raises on a transport failure
-        (rows retained); a positive rejection quarantines the rows durably."""
-        global BATCH_FLUSHES, BATCH_ROWS_FLUSHED, BATCH_ROWS_QUARANTINED
+        """Flush every pending table batch — a parked retry batch first, and
+        SEPARATELY from the live one, so its content-hash token is byte-stable
+        across the retry (H12). Raises on a transport failure (rows retained);
+        a positive rejection quarantines the rows durably."""
         async with self._lock:
-            for table in sorted(self._batches):
+            if ch is None:
+                return  # startup/shutdown edge: nothing to write to yet; rows stay
+            for table in sorted(set(self._batches) | set(self._retry)):
+                parked = self._retry.pop(table, None)
+                if parked is not None and parked.rows:
+                    try:
+                        await self._insert_batch(table, parked)
+                    except Exception:  # re-park UNCHANGED → same token next try
+                        self._retry[table] = parked
+                        raise
                 b = self._batches.pop(table, None)
                 if b is None or not b.rows:
                     continue
-                if ch is None:
-                    continue  # startup/shutdown edge: nothing to write to yet
-                # Content-hash token: a retry of the SAME retained batch after an
-                # unknown outcome dedups server-side instead of duplicating.
-                token = "batch:" + hashlib.sha256(
-                    "\n".join(json.dumps(r, sort_keys=True, default=str)
-                              for r in b.rows).encode()).hexdigest()[:32]
                 try:
-                    ok = await ch.insert(table, b.rows, dedup_token=token)
-                except Exception as exc:  # counted, retained, re-raised
-                    _note_ch_failure(table, type(exc).__name__,
-                                     {"batched_rows": len(b.rows)})
-                    # Re-queue the popped batch (front-merge: rows added while the
-                    # insert was in flight live in a fresh batch created by add()).
-                    cur = self._batches.get(table)
-                    if cur is not None:
-                        b.rows.extend(cur.rows)
-                    self._batches[table] = b
+                    await self._insert_batch(table, b)
+                except Exception:
+                    # Park with membership (and token) frozen. Rows added while
+                    # this insert was in flight live in the fresh live batch
+                    # add() creates and flush on a later pass — NEVER merged
+                    # into the batch being retried (that changed the token).
+                    self._retry[table] = b
                     raise
-                if ok is False:
-                    _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows)})
-                    self._quarantine_rows(table, b.rows)
-                    BATCH_ROWS_QUARANTINED += len(b.rows)
-                    continue
-                BATCH_FLUSHES += 1
-                BATCH_ROWS_FLUSHED += len(b.rows)
+
+    async def _insert_batch(self, table: str, b: _TableBatch) -> None:
+        """One batch → one insert. Counts every outcome; raises on transport
+        failure (the caller decides where the retained batch lives)."""
+        global BATCH_FLUSHES, BATCH_ROWS_FLUSHED, BATCH_ROWS_QUARANTINED
+        assert ch is not None
+        # Content-hash token: a retry of the SAME retained batch after an
+        # unknown outcome dedups server-side instead of duplicating.
+        token = "batch:" + hashlib.sha256(
+            "\n".join(json.dumps(r, sort_keys=True, default=str)
+                      for r in b.rows).encode()).hexdigest()[:32]
+        try:
+            ok = await ch.insert(table, b.rows, dedup_token=token)
+        except Exception as exc:  # counted, retained by the caller, re-raised
+            _note_ch_failure(table, type(exc).__name__,
+                             {"batched_rows": len(b.rows)})
+            raise
+        if ok is False:
+            _note_ch_failure(table, "rejected", {"batched_rows": len(b.rows)})
+            self._quarantine_rows(table, b.rows)
+            BATCH_ROWS_QUARANTINED += len(b.rows)
+            return
+        BATCH_FLUSHES += 1
+        BATCH_ROWS_FLUSHED += len(b.rows)
 
     @staticmethod
     def _quarantine_rows(table: str, rows: list[dict]) -> None:
@@ -2859,9 +3002,10 @@ async def handle_metric(ev: dict) -> None:
 
     # Legacy rolling z-score finding (back-compat, netops.findings). Keyed on the
     # canonical entity_id so per-interface/per-peer series don't collide on a
-    # shared metric name. Superseded by the episode detector above; kept until
-    # the findings surface retires.
-    z = score(entity_id, metric, value)
+    # shared metric name, and on the VERIFIED tenant (M29b) so same-named
+    # entities in different tenants never share a baseline. Superseded by the
+    # episode detector above; kept until the findings surface retires.
+    z = score(tenant, entity_id, metric, value)
     if z is None:
         return
     await emit(
@@ -2873,6 +3017,9 @@ async def handle_metric(ev: dict) -> None:
         description="Rolling z-score over the baseline window exceeded threshold.",
         score=float(z),
         labels={"metric": metric, "entity": entity_id},
+        # M29b: the finding carries the tenant this event was VERIFIED under,
+        # not a second registry lookup that can disagree with it.
+        tenant_id=tenant,
     )
 
 
@@ -3706,7 +3853,10 @@ async def emit(**kwargs) -> None:
         "summary":     kwargs.get("summary", ""),
         "description": kwargs.get("description", ""),
         "labels":      kwargs.get("labels", {}),
-        "tenant_id":   tenant_for(device),  # #20: same tenant discriminator as flows/logs
+        # M29b: a caller that VERIFIED the event's tenant (handle_metric via
+        # verified_tenant) stamps it; only tenant-less callers fall back to the
+        # registry lookup (#20: same tenant discriminator as flows/logs).
+        "tenant_id":   kwargs.get("tenant_id") or tenant_for(device),
     }
     assert ch is not None
     await ch_insert("netops.findings", [row], kind=row["kind"], device=device)
@@ -3809,6 +3959,13 @@ async def metrics_exposition():
         f"corr_window_signals {eng['window_signals']}",
         "# TYPE corr_open_objects gauge",
         f"corr_open_objects {eng['open_objects']}",
+        # M29a: z-score series budget — evictions must be alertable, not silent.
+        "# HELP corr_zscore_series_evicted_total Legacy z-score baselines evicted by the LRU cap.",
+        "# TYPE corr_zscore_series_evicted_total counter",
+        f"corr_zscore_series_evicted_total {eng['series_evicted']}",
+        "# TYPE corr_zscore_series gauge",
+        f'corr_zscore_series{{k="len"}} {eng["series_len"]}',
+        f'corr_zscore_series{{k="max"}} {eng["series_max"]}',
         # #100 damping: persisted vs suppressed object versions. A damped:persisted
         # ratio collapsing to 0 under a storm means the material gate stopped working.
         "# TYPE corr_versions counter",
@@ -3905,6 +4062,11 @@ async def health() -> dict:
             "chaos_fixtures": sorted(CHAOS_FIXTURES.values()),
             "tenant_write_amp_topk": TENANT_WA_LAST,
             "window_signals": len(WINDOW_BUFFER),
+            # M29a: legacy z-score series budget — evicted rising means
+            # cardinality churn is recycling warm baselines (never silent).
+            "series_len": len(SERIES),
+            "series_max": SERIES_MAX,
+            "series_evicted": SERIES_EVICTED,
             "seam_inventory": len(seam_inventory()),
             "topology_gap_hints": LAST_GAP_HINTS,
             # C7.1 EntityResolver coverage (global slice) — proves the IP/ifIndex→entity
@@ -3962,6 +4124,11 @@ async def health() -> dict:
             "metrics_dropped_stale_ts": METRICS_DROPPED_STALE_TS,
             # Event timestamps that fell back to ingest time (producers.py).
             "event_ts_invalid": ts_invalid_count(),
+            # H14: device event clocks out of bounds at the window chokepoint —
+            # future clamped to arrival (a far-future head froze pruning for
+            # every tenant), past counted and left to age out (see buffer_signal).
+            "event_ts_future_clamped": EVENT_TS_FUTURE_CLAMPED,
+            "event_ts_past_stale": EVENT_TS_PAST_STALE,
             "device_telemetry_signals": DEVICE_TELEMETRY_SIGNALS,
             "traps_received": TRAPS_RECEIVED,
             "traps_normalized": TRAPS_NORMALIZED,
