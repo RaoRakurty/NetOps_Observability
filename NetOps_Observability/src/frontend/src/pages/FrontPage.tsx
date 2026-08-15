@@ -1,5 +1,5 @@
 import { Component, CSSProperties, ReactNode, useEffect, useState } from "react";
-import { api, CorrObject, FeedItem, CorrTimeline } from "../services/api";
+import { api, CorrObject, FeedItem, CorrTimeline, getActiveScope } from "../services/api";
 import { useShell } from "../context/shell";
 import PathHealthList from "../components/PathHealthList";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
@@ -76,8 +76,18 @@ function Spark({ pts, color }: { pts: number[]; color: string }) {
 }
 // KPI history persists (localStorage) so the trend is populated on reload — these
 // are real observed samples accumulated each poll, capped to the recent window.
-const KPI_HIST_KEY = "netops.fp.kpihist";
-function loadKpiHist(): Record<string, number[]> { try { return JSON.parse(localStorage.getItem(KPI_HIST_KEY) || "{}"); } catch { return {}; } }
+//
+// The key is SCOPED BY ACTIVE TENANT (§3a): a platform owner switching tenant, or
+// a new user on a shared browser, must not seed their sparkline from the previous
+// scope's counts. An unscoped key bled one tenant's health/confirmed/site/device
+// numbers into another's until 24 fresh samples overwrote them. api.logout()
+// clears the whole netops.fp.kpihist.* family (see services/api.ts).
+const KPI_HIST_PREFIX = "netops.fp.kpihist";
+function kpiHistKey(): string {
+  const scope = getActiveScope();
+  return scope ? `${KPI_HIST_PREFIX}.${scope}` : KPI_HIST_PREFIX;
+}
+function loadKpiHist(): Record<string, number[]> { try { return JSON.parse(localStorage.getItem(kpiHistKey()) || "{}"); } catch { return {}; } }
 
 type PanelState = "ok" | "inactive" | "degraded";
 
@@ -492,7 +502,7 @@ function KpiStrip() {
       const push = (k: string, v: number) => { next[k] = (next[k] ?? []).concat(v).slice(-24); };
       push("health", insufficient ? NaN : (h?.score ?? NaN));
       push("confirmed", confirmed); push("suspected", suspected); push("sites", sites.size); push("devices", devs.size);
-      try { localStorage.setItem(KPI_HIST_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      try { localStorage.setItem(kpiHistKey(), JSON.stringify(next)); } catch { /* quota */ }
       return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

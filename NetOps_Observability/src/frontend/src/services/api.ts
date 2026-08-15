@@ -1888,6 +1888,16 @@ export const api = {
     }
     setToken(null);
     setRefresh(null);
+    // Clear per-scope UI state that must not survive a user switch on a shared
+    // browser (§3a): the FrontPage KPI-history family and the active-scope
+    // selection. Scoped keys are prefixed, so sweep the family.
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("netops.fp.kpihist")) localStorage.removeItem(k);
+      }
+      localStorage.removeItem(ACTIVE_SCOPE_KEY);
+    } catch { /* ignore storage errors */ }
     fireAuthChange(false);
   },
   // SSO (OIDC/SAML/LDAP via Keycloak). Config is public; the login flow is a

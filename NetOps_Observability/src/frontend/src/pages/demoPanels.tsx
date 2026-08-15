@@ -3,6 +3,7 @@ import ReactECharts from "../components/EChart";
 import { api } from "../services/api";
 import { usePolled, latestFromProm, nowWindow, seriesLabel } from "./panels";
 import { hexToRgba } from "../theme/charts";
+import { escapeHtml } from "../lib/text";
 
 // demoPanels.tsx — the marketing board's chart family.
 //
@@ -257,7 +258,7 @@ export function ActivityHeatmap({ query, height = 236, topN = 12 }: {
 
   const option = {
     ...base,
-    tooltip: { ...base.tooltip, trigger: "item", formatter: (p: { data: [number, number, number] }) => `${rows[p.data[1]]}<br/>${p.data[2]}` },
+    tooltip: { ...base.tooltip, trigger: "item", formatter: (p: { data: [number, number, number] }) => `${escapeHtml(rows[p.data[1]])}<br/>${p.data[2]}` },
     grid: { left: 96, right: 40, top: 6, bottom: 18 },
     xAxis: { type: "category", data: Array.from({ length: buckets }, (_, i) => i), show: false },
     yAxis: { type: "category", data: rows, ...axis, splitLine: { show: false }, axisLabel: { ...axis.axisLabel, fontSize: 9.5 } },

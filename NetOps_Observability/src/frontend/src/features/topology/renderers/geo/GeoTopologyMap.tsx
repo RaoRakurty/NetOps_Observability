@@ -23,6 +23,7 @@ import { TopologySideDrawer } from "../../components";
 import { normalizeView } from "../../utils/topologyMapper";
 import { api } from "../../../../services/api";
 import type { TopologyView, TopologySelection, Health } from "../../api/topologyTypes";
+import { escapeHtml } from "../../../../lib/text";
 
 // Lazily register the world basemap once (shared global ECharts map registry).
 let worldRegistered = false;
@@ -94,7 +95,7 @@ function buildOption(model: GeoModel) {
             const c = p.data?._circuit;
             if (!c) return "";
             const util = fmtUtil(c.utilization);
-            return `<b>${c.fromName} ↔ ${c.toName}</b><br/>${c.status} · util ${util}`;
+            return `<b>${escapeHtml(c.fromName)} ↔ ${escapeHtml(c.toName)}</b><br/>${escapeHtml(c.status)} · util ${util}`;
           },
         },
       },
@@ -123,7 +124,7 @@ function buildOption(model: GeoModel) {
             const s = p.data?._site;
             if (!s) return "";
             const dev = s.devices > 0 ? `${s.devices} device${s.devices === 1 ? "" : "s"}` : "site";
-            return `<b>${s.name}</b><br/>${dev} · ${s.health}`;
+            return `<b>${escapeHtml(s.name)}</b><br/>${dev} · ${escapeHtml(s.health)}`;
           },
           textStyle: { color: muted },
         },

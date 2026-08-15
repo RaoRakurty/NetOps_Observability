@@ -10,6 +10,8 @@ import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexT
 import { cssVar } from "../../theme/tokens";
 import Icon from "../Icon";
 import { Modal, Stat, StatTone } from "../ui";
+import { escapeHtml } from "../../lib/text";
+export { escapeHtml }; // re-exported: panels was the original home; canonical lives in lib/text
 
 // ── formatters ───────────────────────────────────────────────────────────────
 export const fmtNum = (n: number) => Number(n).toLocaleString();
@@ -48,24 +50,6 @@ export function fmtUptime(sec: number): string {
 // come from our own inventory/metric labels; we sanitize regardless.
 export const sanitizeLabel = (v: string) => (v || "").replace(/[^A-Za-z0-9._:\- ]/g, "");
 
-// escapeHtml is the control for the OTHER sink: an ECharts tooltip `formatter`
-// that returns a STRING has that string inserted as HTML, so any device label
-// reaching it is executable markup. Labels come from seriesLabel(), i.e. raw
-// VictoriaMetrics label values (device/instance/ifName) that originate in
-// SNMP-discovered sysName — attacker-controllable by whoever controls a
-// monitored device. A sysName of `<img src=x onerror=…>` then ran in the
-// browser of every operator who viewed the panel (stored XSS).
-//
-// Escaping, not sanitizeLabel's allowlist-strip: this is a display path, and
-// device names legitimately contain `/`, `(` and `+` that stripping would eat.
-// Escaping neutralizes the markup while showing the operator the true name.
-export const escapeHtml = (v: unknown) =>
-  String(v ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 
 // labelSelector builds a `{k="v",…}` PromQL selector from set parts (skips empty).
 export function labelSelector(parts: Record<string, string | undefined>): string {
