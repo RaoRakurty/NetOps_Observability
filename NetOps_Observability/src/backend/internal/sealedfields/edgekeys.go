@@ -55,14 +55,17 @@ type edgeKeyResponse struct {
 // in the access log and the caller's own failure path.
 // EdgeKeyHandler serves derived edge key material for a tenant.
 //
-// tenantKnown, when non-nil, must report whether a tenant id is a REAL tenant.
-// EdgeKey (→ TenantKey) MINTS AND PERSISTS a DEK on first use — lazy provisioning
-// the seal bootstrap relies on — so without this guard any caller holding the
-// stack-internal credential could mint a persisted DEK for an ARBITRARY tenant
-// string, growing the custody store unboundedly. Rejecting an unknown tenant
-// here bounds minting to tenants that actually exist, while preserving lazy-mint
-// for a real tenant's first sealed field. Nil disables the check (tests).
-func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool, tenantKnown func(string) bool, audit func(*http.Request, string)) http.HandlerFunc {
+// resolveScope, when non-nil, maps the UNTRUSTED `?tenant=` value to the
+// CANONICAL key scope (a real tenant's id, or one of the engine's own reserved
+// scopes such as the quarantine scope) or refuses it. EdgeKey (→ TenantKey)
+// MINTS AND PERSISTS a DEK on first use — lazy provisioning the seal bootstrap
+// relies on — so without this guard any caller holding the stack-internal
+// credential could mint a persisted DEK for an ARBITRARY string, growing the
+// custody store unboundedly; and without canonicalisation one tenant could be
+// minted once per spelling. Refusing an unknown scope bounds minting to scopes
+// that actually exist, while preserving lazy-mint for a real tenant's first
+// sealed field. Nil disables the check (tests).
+func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool, resolveScope func(string) (string, bool), audit func(*http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeEdgeError(w, http.StatusMethodNotAllowed, "GET required")
@@ -85,11 +88,16 @@ func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request
 			writeEdgeError(w, http.StatusBadRequest, "tenant is required")
 			return
 		}
-		// Never mint a persisted DEK for a tenant that does not exist. Uniform 404
-		// (same as an absent key) so the caller cannot enumerate real tenants.
-		if tenantKnown != nil && !tenantKnown(tenant) {
-			writeEdgeError(w, http.StatusNotFound, "no sealing key for this tenant")
-			return
+		// Never mint a persisted DEK for a scope that does not exist, and never
+		// key custody by a non-canonical spelling. Uniform 404 (same as an
+		// absent key) so the caller cannot enumerate real tenants.
+		if resolveScope != nil {
+			canonical, ok := resolveScope(tenant)
+			if !ok || canonical == "" {
+				writeEdgeError(w, http.StatusNotFound, "no sealing key for this tenant")
+				return
+			}
+			tenant = canonical
 		}
 
 		m, err := p.EdgeKey(r.Context(), tenant)

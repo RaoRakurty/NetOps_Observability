@@ -158,12 +158,18 @@ func TestEdgeKeysWithoutAProvider(t *testing.T) {
 }
 
 // TestEdgeKeysRejectUnknownTenant pins that EdgeKey material is only minted for a
-// REAL tenant. EdgeKey lazily mints+persists a DEK on first use, so without a
-// tenant-existence guard a caller with the internal credential could mint a
-// persisted DEK for any arbitrary string and grow the custody store unbounded.
+// REAL tenant (or a reserved engine scope). EdgeKey lazily mints+persists a DEK
+// on first use, so without a scope guard a caller with the internal credential
+// could mint a persisted DEK for any arbitrary string and grow the custody store
+// unbounded.
 func TestEdgeKeysRejectUnknownTenant(t *testing.T) {
-	known := func(tenant string) bool { return tenant == "acme" }
-	h := EdgeKeyHandler(testProvider, allow, known, nil)
+	resolve := func(scope string) (string, bool) {
+		if scope == "acme" {
+			return "acme", true
+		}
+		return "", false
+	}
+	h := EdgeKeyHandler(testProvider, allow, resolve, nil)
 
 	// A real tenant is served.
 	rec := httptest.NewRecorder()
@@ -178,4 +184,52 @@ func TestEdgeKeysRejectUnknownTenant(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown tenant: status %d, want 404", rec.Code)
 	}
+	// A resolver that answers "known" with an EMPTY canonical scope is treated
+	// as a refusal — the key store must never be keyed by "".
+	rec = httptest.NewRecorder()
+	EdgeKeyHandler(testProvider, allow, func(string) (string, bool) { return "", true }, nil)(
+		rec, httptest.NewRequest(http.MethodGet, "/x?tenant=acme", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("empty canonical scope: status %d, want 404", rec.Code)
+	}
+}
+
+// TestEdgeKeysUseTheCanonicalScope pins that the handler fetches material under
+// the CANONICAL scope the resolver returns — not the caller's spelling — so one
+// tenant referenced as `Acme`, `ACME` or its slug maps to ONE custody row.
+func TestEdgeKeysUseTheCanonicalScope(t *testing.T) {
+	var minted []string
+	p := recordingProvider{fakeProvider: testProvider().(fakeProvider), seen: &minted}
+	resolve := func(scope string) (string, bool) {
+		if strings.EqualFold(strings.TrimSpace(scope), "acme") {
+			return "acme", true
+		}
+		return "", false
+	}
+	h := EdgeKeyHandler(func() sealing.CryptoProvider { return p }, allow, resolve, nil)
+	for _, spelling := range []string{"acme", "Acme", "ACME"} {
+		rec := edgeRequest(t, h, spelling)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: status %d, want 200", spelling, rec.Code)
+		}
+	}
+	for _, got := range minted {
+		if got != "acme" {
+			t.Fatalf("EdgeKey was asked for scope %q — must be the canonical \"acme\"", got)
+		}
+	}
+	if len(minted) != 3 {
+		t.Fatalf("expected 3 EdgeKey calls, got %d", len(minted))
+	}
+}
+
+// recordingProvider records the scope every EdgeKey call is made with.
+type recordingProvider struct {
+	fakeProvider
+	seen *[]string
+}
+
+func (r recordingProvider) EdgeKey(ctx context.Context, tenant string) (sealing.EdgeMaterial, error) {
+	*r.seen = append(*r.seen, tenant)
+	return r.fakeProvider.EdgeKey(ctx, tenant)
 }

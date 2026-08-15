@@ -1921,8 +1921,9 @@ func (s *server) routes(mux *http.ServeMux) {
 		mux.HandleFunc(sealedfields.EdgeKeyPath, sealedfields.EdgeKeyHandler(
 			func() sealing.CryptoProvider { return s.sealProvider },
 			s.sealingEdgeCaller,
-			// Only mint an edge DEK for a REAL tenant — never an arbitrary string.
-			func(tenant string) bool { _, ok := s.tenants.Resolve(tenant); return ok },
+			// Only mint an edge DEK for a REAL tenant (canonical id) or one of the
+			// engine's reserved scopes — never an arbitrary string.
+			s.edgeKeyScopeResolver(),
 			func(r *http.Request, tenant string) {
 				logInfo("sealing", "edge key served", map[string]any{
 					"tenant": tenant, "peer": sealingEdgePeer(r),

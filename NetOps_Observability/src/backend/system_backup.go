@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,8 +91,29 @@ func sanitizeBackupConfig(in BackupConfig) (BackupConfig, error) {
 		ScheduleEnabled: in.ScheduleEnabled,
 		ScheduleCron:    strings.TrimSpace(in.ScheduleCron),
 	}
+	// Every field flows host-side into the root crontab and .env (see the
+	// applier). A control character — a newline above all — lets a value break
+	// out of its line: a newline in remote_url injects extra .env lines, a
+	// newline in schedule_cron injects extra crontab lines. Reject them on
+	// every field BEFORE any shape check (host RCE class, review 2026-08-15).
+	if hasControlChar(out.RemoteURL) || hasControlChar(out.PushCommand) || hasControlChar(out.ScheduleCron) {
+		return out, errBackupControlChar
+	}
 	if out.RemoteURL != "" && !validBackupRemote(out.RemoteURL) {
 		return out, errBadBackupRemote
+	}
+	// The push command is executed host-side as `$PUSH_CMD <src> <dest>` (word
+	// split, run by the root backup cron). It is a TRANSPORT choice, never an
+	// arbitrary command line: the first token must be an allowlisted binary and
+	// every token a bare flag/value — no shell metacharacters, no second command.
+	if out.PushCommand != "" && !validPushCommand(out.PushCommand) {
+		return out, errBadPushCommand
+	}
+	// The schedule is written verbatim into the root crontab; require a real
+	// 5-field cron expression (each field only digits and the cron operators),
+	// not merely "5 whitespace-separated tokens".
+	if out.ScheduleCron != "" && !validCronExpr(out.ScheduleCron) {
+		return out, errBadBackupCron
 	}
 	// Guard the F-55 footgun at the API, not just in prose: a schedule with no
 	// off-host destination is refused, because it would fill the local disk.
@@ -104,9 +126,80 @@ func sanitizeBackupConfig(in BackupConfig) (BackupConfig, error) {
 	return out, nil
 }
 
+// hasControlChar reports whether s contains any ASCII control character
+// (newline, CR, NUL, tab, …) — the primitive a value uses to break out of its
+// .env or crontab line host-side.
+func hasControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// backupPushBinaries is the allowlist of transports the push command may invoke.
+// The applier runs `<binary> <flags…> <src> <dest>` as the root backup cron, so
+// this set is a privilege boundary, not a convenience list — add only real
+// file-copy transports, never a shell or interpreter.
+var backupPushBinaries = map[string]bool{
+	"rsync": true, "rclone": true, "scp": true, "sftp": true,
+	"aws": true, "gsutil": true, "gcloud": true, "b2": true,
+	"azcopy": true, "cp": true, "mc": true,
+}
+
+// pushTokenRe bounds each token of the push command to a bare flag or value:
+// letters, digits and the characters that appear in flags/paths/URLs. It admits
+// no space (tokens are already split), quote, $, `, ;, |, &, <, >, (, ), \, *,
+// ?, ~ or newline — i.e. no shell metacharacter and no second command.
+var pushTokenRe = regexp.MustCompile(`^[A-Za-z0-9._/@=:+-]+$`)
+
+// validPushCommand reports whether cmd is an allowlisted transport invocation.
+func validPushCommand(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	// The first token names the binary (bare name only — no path, so a planted
+	// ./rsync cannot be selected). aws/gsutil/gcloud/mc take a subcommand; that
+	// is just another allowlisted token, so no special-casing is needed.
+	if !backupPushBinaries[fields[0]] {
+		return false
+	}
+	for _, f := range fields {
+		if !pushTokenRe.MatchString(f) {
+			return false
+		}
+	}
+	return true
+}
+
+// cronFieldRe bounds a single cron field to digits and the cron operators
+// (`*`, `,`, `-`, `/`). No names, no spaces, no other characters.
+var cronFieldRe = regexp.MustCompile(`^[0-9*,/-]+$`)
+
+// validCronExpr reports whether expr is a real 5-field cron expression whose
+// every field is digits/operators only — a stricter check than validCron5
+// (which counts fields), used for the host-installed backup schedule.
+func validCronExpr(expr string) bool {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		return false
+	}
+	for _, f := range fields {
+		if !cronFieldRe.MatchString(f) {
+			return false
+		}
+	}
+	return true
+}
+
 var (
 	errBadBackupRemote     = jsonError("remote must be an absolute path or a rsync:// / s3:// / gs:// / file:// URL")
 	errScheduleNeedsRemote = jsonError("cannot enable the scheduled backup without an off-host remote — a local-only nightly backup fills the disk it needs (F-55)")
+	errBackupControlChar   = jsonError("backup config fields must not contain control characters (newline/tab/etc.)")
+	errBadPushCommand      = jsonError("push_command must be an allowlisted transport (rsync, rclone, scp, aws, gsutil, b2, azcopy, cp, …) with bare flags only — no shell metacharacters")
+	errBadBackupCron       = jsonError("schedule_cron must be a 5-field cron expression using only digits and the operators * , - /")
 )
 
 func jsonError(s string) error { return &simpleErr{s} }

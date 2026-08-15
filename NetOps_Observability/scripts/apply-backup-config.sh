@@ -58,6 +58,44 @@ SCHED="$(read_json schedule_enabled)"    # 'True' / 'False'
 CRON="$(read_json schedule_cron)"
 if [ -z "$CRON" ]; then CRON="30 2 * * *"; fi
 
+# --- INDEPENDENT re-validation (defence in depth; this script is the security
+# boundary, not the API). Every field below is written verbatim into the root
+# crontab or .env, so a value that broke out of its line = host command
+# execution. The API (system_backup.go) validates too; we do NOT trust that it
+# ran — a hand-edited /data/system_backup.json reaches here directly. Refuse
+# anything but the exact shapes we render. (review 2026-08-15, host-RCE class.)
+has_ctrl() { case "$1" in *[[:cntrl:]]*) return 0 ;; *) return 1 ;; esac; }
+for _f in "$REMOTE" "$PUSH" "$CRON"; do
+  if has_ctrl "$_f"; then
+    die "backup config field contains a control character (newline/tab/etc.) — refusing (host-injection guard)"
+  fi
+done
+# push_command: an allowlisted transport binary + bare flag/value tokens only.
+if [ -n "$PUSH" ]; then
+  set -f; # shellcheck disable=SC2086
+  set -- $PUSH; set +f
+  case "$1" in
+    rsync|rclone|scp|sftp|aws|gsutil|gcloud|b2|azcopy|cp|mc) : ;;
+    *) die "push_command must start with an allowlisted transport (rsync/rclone/scp/aws/gsutil/b2/azcopy/cp/…), got '$1' — refusing" ;;
+  esac
+  for _tok in "$@"; do
+    case "$_tok" in
+      *[!A-Za-z0-9._/@=:+-]*) die "push_command token '$_tok' contains a shell metacharacter — refusing" ;;
+    esac
+  done
+fi
+# schedule_cron: exactly 5 fields, each digits and the cron operators only.
+if [ "$SCHED" = "True" ]; then
+  set -f; # shellcheck disable=SC2086
+  set -- $CRON; set +f
+  if [ "$#" -ne 5 ]; then die "schedule_cron must have exactly 5 fields, got $# ('$CRON') — refusing"; fi
+  for _fld in "$@"; do
+    case "$_fld" in
+      *[!0-9*,/-]*) die "schedule_cron field '$_fld' has an illegal character (only digits and * , - / allowed) — refusing" ;;
+    esac
+  done
+fi
+
 # Retention (2026-07-27). The nightly cron wrote a full backup a day and NOTHING
 # pruned them; the only retention in the product was OPENSEARCH_SNAPSHOT_KEEP.
 # BACKUP_KEEP mirrors that convention exactly (keep the N newest, 0 = disabled)

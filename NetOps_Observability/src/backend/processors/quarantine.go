@@ -44,6 +44,17 @@ import (
 // purpose — normTenant and the tenant-guard VRL both downcase.
 const QuarantineScope = "quarantine"
 
+// IsReservedSealScope reports whether scope is one of the engine's OWN sealing
+// scopes — key scopes the router config references that are NOT tenants. The
+// edge-key endpoint guards minting to real tenants (bounded custody store);
+// without this carve-out that guard 404s the router's `SECRET[cxseal.quarantine]`
+// fetch and Vector refuses the whole config (exit 78) — the log pipeline goes
+// down. Every generated SECRET[] scope must be either a real tenant or listed
+// here; TestRouterConfigSecretScopesAreServable pins that round trip.
+func IsReservedSealScope(scope string) bool {
+	return scope == QuarantineScope
+}
+
 // QuarantineProcessorID is the pseudo processor id bound into the token
 // context (and shown in audit trails). One id, stable across lanes: the MAC
 // context already binds the field and scope, and a per-lane id would make

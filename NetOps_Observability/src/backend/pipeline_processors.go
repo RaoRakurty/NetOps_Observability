@@ -982,6 +982,32 @@ func (s *server) sealingEdgeCaller(r *http.Request) bool {
 	return false
 }
 
+// edgeKeyScopeResolver is the edge-key endpoint's scope guard: it maps the
+// UNTRUSTED `?tenant=` string to the canonical key scope, or refuses.
+//
+//   - a reserved engine scope (processors.IsReservedSealScope — today the
+//     quarantine scope the router config references as SECRET[cxseal.quarantine])
+//     is served verbatim; it is not a tenant and must not be resolved as one;
+//   - a real tenant (id OR slug, any case) resolves to its canonical ID, so the
+//     custody store holds exactly one DEK per tenant — a caller cannot mint one
+//     row per spelling (`Acme`, `aCme`, `t_<id>` …);
+//   - anything else is refused (uniform 404 upstream: no enumeration).
+func (s *server) edgeKeyScopeResolver() func(string) (string, bool) {
+	return func(scope string) (string, bool) {
+		if processors.IsReservedSealScope(scope) {
+			return scope, true
+		}
+		if s.tenants == nil {
+			return "", false
+		}
+		t, ok := s.tenants.Resolve(scope)
+		if !ok {
+			return "", false
+		}
+		return t.ID, true
+	}
+}
+
 // sealingEdgePeer names the caller for the key-fetch audit line: the peer
 // certificate's SPIFFE URI when present, else the shared-token label. Never
 // key material, never a token value.

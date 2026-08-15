@@ -15,4 +15,8 @@ regexes = [
   # RFC 6238 published TOTP test seed (base32 of "12345678901234567890"), used in
   # totp_test.go to pin our implementation against the spec — not a real secret.
   '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
+  # RFC 6455 §1.3 published WebSocket handshake sample nonce ("the sample nonce"),
+  # used verbatim in device_ssh_ticket_test.go / auth_flow_test.go to build a valid
+  # WS upgrade request — a spec constant, not a credential.
+  '''dGhlIHNhbXBsZSBub25jZQ==''',
 ]
