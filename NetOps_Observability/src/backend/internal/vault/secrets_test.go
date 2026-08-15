@@ -213,3 +213,58 @@ func TestVaultFirstRunSealsExactlyOnce(t *testing.T) {
 		t.Fatalf("round-trip across activations: pt=%q err=%v", pt, err)
 	}
 }
+
+// TestVaultRefusesMacLessDowngrade pins the SR-027 downgrade fix: a wrapped-DEK
+// store presented WITHOUT its integrity MAC (an attacker who lacks the KEK
+// cannot forge one, so they strip it to a plain map) must be REFUSED by default,
+// not silently accepted as "legacy". A genuine one-time upgrade migrates it
+// under the explicit opt-in and re-persists the MAC'd format.
+func TestVaultRefusesMacLessDowngrade(t *testing.T) {
+	prov := &memSealing{}
+	st, wn := newMemStore(), discardWarn
+	v1, err := NewWithProvider(context.Background(), prov, st, wn)
+	if err != nil {
+		t.Fatalf("vault: %v", err)
+	}
+	if _, err := v1.Encrypt("acme", "f1", "secret"); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	// Downgrade: rewrite the store as a bare plain map (no "mac" field) — exactly
+	// what a tamperer without the KEK can produce.
+	raw, err := st.Load(wrappedKeysKey)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var s wrappedStore
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	plain, _ := json.Marshal(s.Keys) // just the map, no MAC → s.Keys==nil on reload
+	if err := st.Save(wrappedKeysKey, plain); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Default: refuse.
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err == nil {
+		t.Fatal("a MAC-less (downgraded) wrapped store must be REFUSED by default")
+	}
+
+	// Opt-in migration: accept once, and the store is re-persisted WITH a MAC.
+	t.Setenv("VAULT_MIGRATE_LEGACY_WRAPPED", "true")
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err != nil {
+		t.Fatalf("migration opt-in should accept the legacy store: %v", err)
+	}
+	migrated, err := st.Load(wrappedKeysKey)
+	if err != nil {
+		t.Fatalf("load migrated: %v", err)
+	}
+	if !strings.Contains(string(migrated), `"mac"`) {
+		t.Fatal("eager migration must re-persist the store in the MAC'd format")
+	}
+	// After migration, it loads cleanly even WITHOUT the opt-in (it is MAC'd now).
+	t.Setenv("VAULT_MIGRATE_LEGACY_WRAPPED", "")
+	if _, err := NewWithProvider(context.Background(), prov, st, wn); err != nil {
+		t.Fatalf("migrated MAC'd store must load without the opt-in: %v", err)
+	}
+}

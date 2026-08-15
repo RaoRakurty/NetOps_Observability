@@ -260,8 +260,27 @@ func (s *server) handleSystemBackup(w http.ResponseWriter, r *http.Request) {
 		}
 		clean.UpdatedBy = claims.Sub
 		clean.UpdatedAt = time.Now().UTC()
-		if err := s.backupCfg.Put(clean); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		putErr := s.backupCfg.Put(clean)
+		// Audit BOTH outcomes (mirrors the snapshot-policy PUT): a platform-global
+		// backup-posture change — enable/disable, destination, retention — must be
+		// attributable, and a failed write that was never recorded is
+		// indistinguishable from one that never happened. Destination is
+		// security-relevant (data egress target), so remote_url is named.
+		decision, status := "allow", http.StatusOK
+		if putErr != nil {
+			decision, status = "deny", http.StatusInternalServerError
+		}
+		s.audit.Record(AuditEvent{
+			Actor: claims.Sub, Method: r.Method, Path: r.URL.Path,
+			Status: status, Decision: decision, Remote: auditClientIP(r),
+			Detail: map[string]any{
+				"action":     "backup_config_update",
+				"enabled":    clean.ScheduleEnabled,
+				"remote_url": clean.RemoteURL,
+			},
+		})
+		if putErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": putErr.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{

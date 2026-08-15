@@ -1464,11 +1464,18 @@ func Run() {
 				logError("tls", "cert reload", errf(e))
 			})
 		})
-		// Periodic SVID re-issue (#18 phase 4): re-mint + rewrite the API/nginx
-		// certs at ~half the TTL; the reloader hot-swaps them — rotation, no restart.
-		if caMgr != nil {
-			workers.start("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
-		}
+	}
+	// Periodic SVID re-issue (#18 phase 4): re-mint + rewrite the API/nginx/mesh
+	// certs at ~half the TTL. This is gated on the CA being active (caMgr != nil),
+	// NOT on THIS API serving TLS (tlsSrv != nil) — the two are independent env
+	// conditions. When TLS_INTERNAL_CA=true but the API sits behind a TLS-
+	// terminating nginx (no TLS_CERT_FILE, so tlsSrv == nil), the CA still mints
+	// SVIDs for nginx/clickhouse/postgres at boot; nesting the reissue loop under
+	// tlsSrv left those certs un-renewed, so the whole mesh expired at the SVID
+	// TTL (~24h) with no rotation. The loop rewrites the cert FILES on disk; each
+	// consumer reloads its own.
+	if caMgr != nil {
+		workers.start("tls-svid-reissue", func() { caMgr.startReissueLoop(ctx) })
 	}
 	if srv.tlsPeerProber != nil {
 		workers.start("tls-peer-probe", func() { srv.tlsPeerProber.Run(ctx) })
@@ -1914,6 +1921,8 @@ func (s *server) routes(mux *http.ServeMux) {
 		mux.HandleFunc(sealedfields.EdgeKeyPath, sealedfields.EdgeKeyHandler(
 			func() sealing.CryptoProvider { return s.sealProvider },
 			s.sealingEdgeCaller,
+			// Only mint an edge DEK for a REAL tenant — never an arbitrary string.
+			func(tenant string) bool { _, ok := s.tenants.Resolve(tenant); return ok },
 			func(r *http.Request, tenant string) {
 				logInfo("sealing", "edge key served", map[string]any{
 					"tenant": tenant, "peer": sealingEdgePeer(r),

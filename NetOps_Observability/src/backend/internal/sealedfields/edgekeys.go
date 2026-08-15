@@ -53,7 +53,16 @@ type edgeKeyResponse struct {
 // and tenant (SEC-018.1: every fetch is attributable — identity + tenant,
 // never key material). Refusals are not audited here; they surface as 401s
 // in the access log and the caller's own failure path.
-func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool, audit func(*http.Request, string)) http.HandlerFunc {
+// EdgeKeyHandler serves derived edge key material for a tenant.
+//
+// tenantKnown, when non-nil, must report whether a tenant id is a REAL tenant.
+// EdgeKey (→ TenantKey) MINTS AND PERSISTS a DEK on first use — lazy provisioning
+// the seal bootstrap relies on — so without this guard any caller holding the
+// stack-internal credential could mint a persisted DEK for an ARBITRARY tenant
+// string, growing the custody store unboundedly. Rejecting an unknown tenant
+// here bounds minting to tenants that actually exist, while preserving lazy-mint
+// for a real tenant's first sealed field. Nil disables the check (tests).
+func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request) bool, tenantKnown func(string) bool, audit func(*http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeEdgeError(w, http.StatusMethodNotAllowed, "GET required")
@@ -74,6 +83,12 @@ func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request
 		tenant := strings.TrimSpace(r.URL.Query().Get("tenant"))
 		if tenant == "" {
 			writeEdgeError(w, http.StatusBadRequest, "tenant is required")
+			return
+		}
+		// Never mint a persisted DEK for a tenant that does not exist. Uniform 404
+		// (same as an absent key) so the caller cannot enumerate real tenants.
+		if tenantKnown != nil && !tenantKnown(tenant) {
+			writeEdgeError(w, http.StatusNotFound, "no sealing key for this tenant")
 			return
 		}
 

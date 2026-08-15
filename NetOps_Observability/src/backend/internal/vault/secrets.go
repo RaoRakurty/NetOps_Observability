@@ -311,13 +311,35 @@ func (v *Vault) loadWrapped() error {
 		return err
 	}
 	if s.Keys == nil {
-		// Legacy plain-map format (pre-SR-027): accept once, migrate to a MAC'd
-		// store on the next write.
+		// Legacy plain-map format (pre-SR-027): NO integrity MAC. This shape is
+		// indistinguishable from a DOWNGRADE ATTACK — an adversary who can write
+		// the custody store but does not hold the KEK cannot forge a valid MAC, so
+		// they strip it and present a plain map. Accepting it silently (as the old
+		// code did, "accept once") let them tamper with wrapped DEKs — swap or
+		// remove a tenant's key — undetected. So REFUSE by default; a MAC-less
+		// custody store fails closed exactly like a MAC-mismatched one.
+		//
+		// A genuine one-time upgrade from a pre-MAC store sets
+		// VAULT_MIGRATE_LEGACY_WRAPPED=true for a single boot: we accept the plain
+		// map, then IMMEDIATELY re-persist it in the MAC'd format so the
+		// unauthenticated shape never survives to be accepted again, and the
+		// operator unsets the flag.
+		if os.Getenv("VAULT_MIGRATE_LEGACY_WRAPPED") != "true" {
+			return errors.New("vault: wrapped-DEK custody store has NO integrity MAC — refusing to start " +
+				"(this is a pre-SR-027 legacy store OR a downgrade/tamper). For a genuine one-time upgrade " +
+				"set VAULT_MIGRATE_LEGACY_WRAPPED=true for a single boot to migrate it to the MAC'd format, then unset it")
+		}
 		m := map[string]string{}
 		if err := json.Unmarshal(b, &m); err != nil {
 			return err
 		}
 		v.wrapped = m
+		// Eager migrate: persist the MAC'd format NOW (construction is single-
+		// threaded, so calling saveWrappedLocked without the mutex is safe) so the
+		// unauthenticated plain shape does not linger for a second boot to accept.
+		if err := v.saveWrappedLocked(); err != nil {
+			return fmt.Errorf("vault: migrate legacy wrapped store to MAC'd format: %w", err)
+		}
 		return nil
 	}
 	want, err := v.wrappedMAC(s.Keys)
