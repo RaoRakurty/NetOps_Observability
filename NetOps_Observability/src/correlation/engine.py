@@ -32,6 +32,7 @@ from path_assembly import AssembledPath
 from path_attribution import Attribution, object_attribution
 from path_graph import (
     CONTRACT_VERSION,
+    RANK,
     DataClass,
     EvidenceClass,
     PathGraphView,
@@ -75,6 +76,14 @@ class EngineConfig:
     w_topo_adjacency: float = 0.65        # grounding via L2/L3 adjacency (§4.2 ladder)
     w_topo_path: float = 0.9              # OBSERVED explicit path relation (contract §3 ranks 1–5)
     w_topo_inferred: float = 0.5          # INFERRED control-plane relation (§3 rank 6, supporting)
+    w_topo_candidate: float = 0.5         # §3 rank 7 CANDIDATE (shared token/rDNS/name): a weak
+    #                                       grouping hint, NOT authoritative (the authoritative flag
+    #                                       gates confirmation separately). At this weight the
+    #                                       TEMPORAL DECAY is the discriminator: a legitimately
+    #                                       related token pair minutes apart still groups, while an
+    #                                       unrelated coincidence ~5 min apart falls below
+    #                                       attach_threshold — instead of the old containment weight
+    #                                       (0.9, the STRONGEST) that welded any name collision.
     w_topo_stale_cap: float = 0.4         # §8: cap w_topo when the topology view is stale
     reinforce_cross_modality: float = 1.25
     direction_conf: float = 0.8           # claimed only on 2-of-3 agreement
@@ -755,7 +764,17 @@ def build_edges(
         a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
         gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
         w_t = math.exp(-gap / cfg.tau_s)
-        if grounding.ref.startswith("path:"):
+        rel = grounding.relation
+        if rel is not None and rel.rank == 7:
+            # §3 rank 7 — shared token / rDNS / name coincidence: CANDIDATE only,
+            # the weakest relation there is. It used to fall through to the
+            # containment branch (0.9, the STRONGEST weight) because rank-1
+            # identity and rank-7 token BOTH emit a 'shared:<x>' ref, so the ref
+            # prefix could not tell them apart — two unrelated cross-modality
+            # episodes sharing one token welded together and inflated affected()
+            # and merge Jaccard. Branch on the RANK the edge carries, not the ref.
+            w_topo = cfg.w_topo_candidate
+        elif grounding.ref.startswith("path:"):
             # An OBSERVED path relation (ranks 1–5): measured, evidence-bearing.
             w_topo = cfg.w_topo_path
         elif grounding.ref.startswith("route:"):
@@ -1080,7 +1099,16 @@ class ObjectSnapshot:
         # relation was actually used, so every pre-contract object's blob (hence
         # content_hash + replay pin) stays byte-identical and never churns a version.
         rels = self.path_relations()
-        if any(RANK_OBSERVED_PATH(r.method) for r in rels):
+        # Embed for ANY path-graph relation, observed (rank 1-5) OR inferred route
+        # (rank 6) — NOT just observed. A rank-6 cloud-route edge that was not
+        # embedded re-grounded (or vanished) on replay, so DriftReport flagged a
+        # FALSE edge-drift on a matching pin. Rank-7 shared-token edges do NOT use
+        # the path graph (token overlap forms the edge from the signals), so they
+        # stay excluded — an object grounded only on token overlap keeps its
+        # pre-contract byte-identical blob. The view is embedded IN FULL
+        # (nat_sessions/routes/freshness_s included) so run_window can rebuild the
+        # exact PathIndex it grounded against.
+        if any(RANK.get(r.method, 7) <= 6 for r in rels):
             used = set(self.used_observation_ids())
             ctx["path_graph"] = {
                 "contract_version": CONTRACT_VERSION,
@@ -1093,6 +1121,11 @@ class ObjectSnapshot:
                 "service_bindings": [b.to_dict() for b in sorted(
                     self.paths.service_bindings,
                     key=lambda b: (b.service_ref, b.endpoint_ref))],
+                "nat_sessions": [n.to_dict() for n in sorted(
+                    self.paths.nat_sessions, key=lambda n: (n.pre_address, n.post_address))],
+                "routes": [r.to_dict() for r in sorted(
+                    self.paths.routes, key=lambda r: (r.from_ref, r.to_ref))],
+                "freshness_s": self.paths.freshness_s,
             }
         # §1 provenance is declared ONLY when it is not the default live/prod object —
         # same reason: a live object's blob is unchanged by the contract.

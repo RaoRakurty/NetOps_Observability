@@ -30,6 +30,7 @@ from directed_topology import DirectedTopology, frozen_oracle
 from engine import (
     EngineConfig,
     ObjectSnapshot,
+    PathGraphView,
     SeamView,
     TopologyAdjacency,
     engine_version,
@@ -101,6 +102,16 @@ class StoredObject:
         blob = json.loads(self.hypotheses_blob)
         pairs = (blob.get("grounding_context") or {}).get("adjacency") or ()
         return TopologyAdjacency.from_links([{"a": p[0], "b": p[1]} for p in pairs])
+
+    def paths(self) -> PathGraphView | None:
+        """The Service Path Graph view this object grounded against (contract §2),
+        embedded per snapshot so a path/route-grounded edge REPLAYS against the same
+        relations — never the live inventory. Absent block = no path relation used
+        (pre-contract / seam-token-only object) → None → the engine keeps its
+        pre-contract behaviour minus authority. Mirrors adjacency()/directed()."""
+        blob = json.loads(self.hypotheses_blob)
+        pg = (blob.get("grounding_context") or {}).get("path_graph")
+        return PathGraphView.from_dict(pg) if pg else None
 
     def directed(self) -> DirectedTopology | None:
         """A frozen oracle from the embedded directed-topology orientations (C7) — so a
@@ -179,7 +190,7 @@ def replay(
     snapshots = run_window(window, catalog, seams, cfg,
                            adjacency=stored.adjacency(),
                            topology_stale=topo_stale, storm_mode=storm,
-                           directed=stored.directed())
+                           directed=stored.directed(), paths=stored.paths())
     match = next((s for s in snapshots if s.correlation_id == stored.correlation_id), None)
     if match is None and stored.trigger_signal:
         # #111 identity adoption (main.engine_cycle + engine.find_continuation):

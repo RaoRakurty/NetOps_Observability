@@ -92,7 +92,10 @@ def brute_force_edges(nodes, seams, cfg, adjacency=NO_ADJACENCY,
             a_last, b_last = a.signals[-1].ts, b.signals[-1].ts
             gap = max(0.0, (max(a.onset, b.onset) - min(a_last, b_last)).total_seconds())
             w_t = math.exp(-gap / cfg.tau_s)
-            if grounding.ref.startswith("path:"):
+            rel = grounding.relation
+            if rel is not None and rel.rank == 7:
+                w_topo = cfg.w_topo_candidate  # §3 rank 7 candidate (mirrors engine._score_edges)
+            elif grounding.ref.startswith("path:"):
                 w_topo = cfg.w_topo_path
             elif grounding.ref.startswith("route:"):
                 w_topo = cfg.w_topo_inferred

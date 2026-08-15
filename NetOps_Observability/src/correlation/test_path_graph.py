@@ -476,3 +476,63 @@ def test_no_path_view_keeps_the_pre_contract_grounding():
     assert snap.edges[0].grounding.ref == "shared:fabric-core"
     assert snap.paths.is_empty()
     assert snap.path_spine() == {}          # no spine ⇒ the UI must say so, not invent one
+
+
+# ── §6 rule 2: NAT session validity time (the alias must be timely) ───────────
+
+
+def test_nat_alias_respects_session_validity_time():
+    """A NAT translation only aliases pre<->post NEAR its observation time. After
+    NAT-pool reuse the same pair maps a different inside host, so a session observed
+    far from the evidence time must NOT alias (it would weld the wrong host onto the
+    path via an authoritative rank-5 stitch). Fail closed on an untimed session."""
+    from datetime import timedelta
+
+    from path_graph import NatSession
+    fresh = 900.0
+    nat = NatSession(tenant_id="acme", pre_address="10.0.0.5", post_address="203.0.113.9",
+                     evidence_ref="ev-nat-1", observed_at=T0, prov=_prov("acme", "pv-nat-1"))
+    idx = PathIndex(PathGraphView(nat_sessions=(nat,), freshness_s=fresh), "acme")
+    refs = frozenset({"10.0.0.5"})
+
+    # Fresh: observed at T0, evidence at T0 → aliases.
+    assert idx._aliases(refs, T0).get("203.0.113.9") is not None
+
+    # Within the window (edge): still aliases.
+    assert idx._aliases(refs, T0 + timedelta(seconds=fresh - 1)).get("203.0.113.9") is not None
+
+    # Stale: evidence far past the session's validity window → NO alias.
+    assert idx._aliases(refs, T0 + timedelta(seconds=fresh + 60)) == {}
+
+    # Fail closed: an untimed session can never be placed on a timeline.
+    untimed = NatSession(tenant_id="acme", pre_address="10.0.0.5", post_address="203.0.113.9",
+                         evidence_ref="ev-nat-2", observed_at=None, prov=_prov("acme", "pv-nat-2"))
+    idx2 = PathIndex(PathGraphView(nat_sessions=(untimed,), freshness_s=fresh), "acme")
+    assert idx2._aliases(refs, T0) == {}
+
+
+def test_rank7_shared_token_uses_candidate_weight_not_containment():
+    """The rank-7 shared-token edge must weigh at w_topo_candidate (weak), NEVER at
+    w_topo_containment (0.9, the strongest). rank-1 identity and rank-7 token both
+    emit a 'shared:<x>' ref, so the pre-fix ref-prefix branch mis-scored the token
+    edge as containment and welded unrelated cross-modality episodes."""
+    from engine import EngineConfig
+    a = Signal(tenant_id="acme", ts=T0, source=Source.SYSLOG, kind="link_state_change",
+               observer=Observer(observer_id="syslog-leaf1", observer_type=ObserverType.DEVICE),
+               modality_class=ModalityClass.CONTROL_PLANE, entity_type=EntityType.INTERFACE,
+               entity_id="leaf1:Gi0/1", severity=Severity.HIGH, native_id="a|1",
+               entity_tokens=("fabric-core",))
+    b = Signal(tenant_id="acme", ts=T0 + timedelta(seconds=5), source=Source.METRIC,
+               kind="if_metric_anomaly",
+               observer=Observer(observer_id="snmp-poller", observer_type=ObserverType.DEVICE),
+               modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.INTERFACE,
+               entity_id="leaf2:Gi0/2", severity=Severity.HIGH, native_id="b|1",
+               deviation=6.0, entity_tokens=("fabric-core",))
+    cfg = EngineConfig()
+    snap = run_window([a, b], CAT, (), cfg)[0]
+    e = snap.edges[0]
+    assert e.grounding.relation.rank == 7
+    assert e.w_topo == cfg.w_topo_candidate, \
+        f"rank-7 token edge scored at {e.w_topo}, must be w_topo_candidate ({cfg.w_topo_candidate})"
+    assert e.w_topo < cfg.w_topo_containment and e.w_topo < cfg.w_topo_seam, \
+        "a name coincidence must weigh below every real relation"

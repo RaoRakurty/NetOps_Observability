@@ -259,6 +259,13 @@ def parse_event_ts(raw: object, *, reference: datetime | None = None) -> datetim
     """
     if raw is None or raw == "":
         return None
+    # Year inference for a year-less format (RFC 3164 syslog) must anchor on the
+    # event's INGEST time, which every caller holds and now passes. Wall-clock
+    # now() is a last-resort fallback ONLY — delayed reprocessing (quarantine or
+    # flows restore, a consumer backlog) across a year boundary would otherwise
+    # stamp a December event into the current year, corrupting onset order and
+    # CUSUM intervals. This keeps the module's "no wall-clock reads" promise for
+    # every real call path.
     ref = reference or datetime.now(timezone.utc)
     parsed = parse_any_timestamp(raw, reference=ref)
     if parsed is None:
@@ -342,7 +349,7 @@ def probe_signals(
     if not kind or not prober or not target:
         return []
     host = probe_host(target)
-    ts = parse_event_ts(ev.get("ts")) or ingest_ts
+    ts = parse_event_ts(ev.get("ts"), reference=ingest_ts) or ingest_ts
     entity = f"{prober}->{host}"
     observer = Observer(
         observer_id=prober,
@@ -435,7 +442,7 @@ def syslog_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal 
     # structured fields. ctoken ⊇ tag, so every previously-matched event still
     # matches identically — this only ADDS coverage, never changes existing output.
     ctoken = (tag + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "")).upper()
-    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
     observer = Observer(
         observer_id=host,
@@ -810,7 +817,7 @@ def trap_control_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | 
         return None
     oid = str(ev.get("trap_oid") or "")
     name = str(ev.get("trap_name") or "")
-    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
     # v1/v2c traps are spoofable (authenticated=false); recorded as evidence but
     # the flag lets the engine weight it. v3-auth traps are trustworthy.
@@ -1001,7 +1008,7 @@ def port_event_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
         return None
     msg = str(ev.get("message") or "")
     ctoken = msg + " " + str(ev.get("facility") or "") + " " + str(ev.get("event_type") or "") + " " + str(ev.get("appname") or "")
-    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     ts_ms = int(ts.timestamp() * 1000)
     observer = Observer(
         observer_id=host, observer_type=ObserverType.DEVICE,
@@ -1058,7 +1065,7 @@ def clock_skew_signal(ev: dict, tenant: str, ingest_ts: datetime) -> Signal | No
     host = str(ev.get("hostname") or "")
     if not host or host == "unknown":
         return None
-    ts = parse_event_ts(ev.get("timestamp")) or ingest_ts
+    ts = parse_event_ts(ev.get("timestamp"), reference=ingest_ts) or ingest_ts
     direction = "ahead" if skew > 0 else "behind"
     return Signal(
         tenant_id=tenant,

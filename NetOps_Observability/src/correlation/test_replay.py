@@ -235,3 +235,41 @@ def test_replay_dedupes_duplicate_signal_ids_in_window():
     dup_window = list(window) + [window[0]]
     report = replay(stored, dup_window)
     assert report.clean, report.differences
+
+
+def test_route_grounded_object_replays_clean_via_embedded_path_graph():
+    """Path-graph regression: an object whose edge was admitted on a rank-6 cloud
+    route must round-trip drift-free. Before the fix, replay() called run_window
+    with paths=None and the embed omitted nat_sessions/routes, so the route edge
+    re-grounded (or vanished) and DriftReport flagged a FALSE edge drift on a
+    matching pin. Now the full PathGraphView is embedded and rehydrated."""
+    from engine import PathGraphView
+    from path_graph import Provenance, RouteRelation
+
+    def rsig(dev, off):
+        return Signal(
+            tenant_id="acme", ts=T0 + timedelta(seconds=off), source=Source.CLOUD,
+            kind="cloud_reachability_change",
+            observer=Observer(observer_id=dev, observer_type=ObserverType.DEVICE),
+            modality_class=ModalityClass.CONTROL_PLANE, entity_type=EntityType.DEVICE,
+            entity_id=dev, severity=Severity.HIGH, native_id=f"r|{dev}",
+            entity_tokens=(dev,), attrs={"onset_uncertainty_s": 1.0})
+
+    prov = Provenance(tenant_id="acme", producer_id="prober-1", provenance_id="pv-rt-1")
+    view = PathGraphView(routes=(RouteRelation(
+        tenant_id="acme", from_ref="leaf1", to_ref="leaf2", relation="routes_via",
+        network_context="vrf-corp", evidence_ref="ev-rt-1", observed_at=T0, prov=prov),))
+    win = [rsig("leaf1", 0), rsig("leaf2", 20)]
+    snap = run_window(win, builtin_catalog(), (), paths=view)[0]
+    # Sanity: the fixture really is route-grounded (rank 6), else the test proves nothing.
+    assert any((e.grounding.relation and e.grounding.relation.rank == 6) for e in snap.edges), \
+        "fixture must produce a rank-6 route-grounded edge"
+
+    stored, window = persist_and_rehydrate(snap, win)
+    rehydrated = stored.paths()
+    assert rehydrated is not None and rehydrated.routes, \
+        "the embedded path graph must rehydrate the route relation"
+
+    report = replay(stored, window)
+    assert report.engine_pin_match and report.catalog_pin_match
+    assert report.clean, f"route-grounded object drifted on replay: {report.differences}"

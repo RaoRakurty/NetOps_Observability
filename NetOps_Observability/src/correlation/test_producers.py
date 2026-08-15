@@ -40,6 +40,17 @@ def test_probe_host_forms():
     assert probe_host("https://example.com/") == "example.com"
 
 
+def test_parse_event_ts_infers_year_from_ingest_not_wallclock():
+    # RFC 3164 syslog carries no year. Delayed reprocessing (quarantine/flows
+    # restore, consumer backlog) across a year boundary must anchor the year on
+    # the event's INGEST time, never wall-clock now(): a December event replayed
+    # in January must stay in the PRIOR December, or onset order and CUSUM
+    # intervals corrupt.
+    ingest = datetime(2027, 1, 3, 0, 5, 0, tzinfo=timezone.utc)
+    got = parse_event_ts("Dec 11 09:42:00", reference=ingest)
+    assert got is not None and got.year == 2026, f"year inferred as {got}"
+
+
 def test_parse_event_ts_nano_and_fallback():
     ts = parse_event_ts("2026-06-12T10:00:00.123456789Z")
     assert ts is not None and ts.tzinfo is not None

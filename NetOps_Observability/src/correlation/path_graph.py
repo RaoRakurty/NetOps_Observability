@@ -266,9 +266,19 @@ def _dt(v) -> datetime | None:
         return None
     if isinstance(v, datetime):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
-    s = str(v).strip().replace("T", " ").replace("Z", "")
-    fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in s else "%Y-%m-%d %H:%M:%S"
-    return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+    # _iso() emits a tz-aware isoformat ("…+00:00"); parse the FULL inverse so a
+    # path-graph datetime round-trips (blob → replay). fromisoformat handles the
+    # offset (Python 3.11 also handles "Z"; normalize it here for 3.10). The
+    # strptime fallback is for legacy CH strings that carry no offset.
+    s = str(v).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        s2 = s.replace("T", " ")
+        s2 = s2.removesuffix("+00:00")
+        fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in s2 else "%Y-%m-%d %H:%M:%S"
+        return datetime.strptime(s2, fmt).replace(tzinfo=timezone.utc)
 
 
 def _iso(v: datetime | None) -> str:
@@ -819,10 +829,23 @@ class PathIndex:
     def _aliases(self, refs: frozenset[str], when: datetime
                  ) -> dict[str, tuple[str, str]]:
         """address → (evidence_ref, method) for addresses reachable from `refs`
-        through an explicit NAT/flow session record."""
+        through an explicit NAT/flow session record that was valid AT `when`."""
         out: dict[str, tuple[str, str]] = {}
+        fresh = self.view.freshness_s
         for n in self.view.nat_sessions:
             if not n.evidence_ref:
+                continue
+            # §6 rule 2 (compatible time ranges): a NAT translation is only valid
+            # NEAR its observation time. After NAT-pool reuse the SAME pre<->post
+            # pair maps a DIFFERENT inside host, so a session observed far from
+            # `when` must not alias — otherwise it welds the wrong host onto the
+            # path via an authoritative rank-5 stitch and can anchor a confirmed
+            # verdict. Judged against the caller's evidence time, never the wall
+            # clock, so replay is identical. Fail CLOSED when the session carries
+            # no observation time (an untimed translation cannot be placed).
+            if n.observed_at is None:
+                continue
+            if abs((when - n.observed_at).total_seconds()) > fresh:
                 continue
             if n.pre_address and n.pre_address in refs and n.post_address:
                 out[n.post_address] = (n.evidence_ref, ResolutionMethod.FLOW_NAT_STITCH.value)
