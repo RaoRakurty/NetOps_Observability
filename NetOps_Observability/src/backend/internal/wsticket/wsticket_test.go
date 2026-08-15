@@ -1,6 +1,7 @@
 package wsticket
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestReplayDenied(t *testing.T) {
 	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, now); err != nil {
 		t.Fatalf("first redeem: %v", err)
 	}
-	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, now); err != ErrInvalid {
+	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, now); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("replay must be ErrInvalid, got %v", err)
 	}
 }
@@ -83,7 +84,7 @@ func TestExpiry(t *testing.T) {
 	now := time.Now()
 	raw, _ := s.Issue(mk("dev-1"), now)
 	later := now.Add(TTL + time.Second)
-	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, later); err != ErrInvalid {
+	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, later); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expired ticket must be ErrInvalid, got %v", err)
 	}
 	if s.Len() != 0 {
@@ -96,12 +97,12 @@ func TestWrongDeviceDenied(t *testing.T) {
 	s := NewStore()
 	now := time.Now()
 	raw, _ := s.Issue(mk("dev-A"), now)
-	if _, err := s.Redeem(raw, "dev-B", PurposeDeviceSSH, now); err != ErrScope {
+	if _, err := s.Redeem(raw, "dev-B", PurposeDeviceSSH, now); !errors.Is(err, ErrScope) {
 		t.Fatalf("cross-device redeem must be ErrScope, got %v", err)
 	}
 	// A scope mismatch consumes the ticket: a second guess at the right device
 	// must not succeed.
-	if _, err := s.Redeem(raw, "dev-A", PurposeDeviceSSH, now); err != ErrInvalid {
+	if _, err := s.Redeem(raw, "dev-A", PurposeDeviceSSH, now); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("scope-rejected ticket must still be burned, got %v", err)
 	}
 }
@@ -113,7 +114,7 @@ func TestWrongPurposeDenied(t *testing.T) {
 	tk := mk("dev-1")
 	tk.Purpose = "some_other_ws"
 	raw, _ := s.Issue(tk, now)
-	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, now); err != ErrScope {
+	if _, err := s.Redeem(raw, "dev-1", PurposeDeviceSSH, now); !errors.Is(err, ErrScope) {
 		t.Fatalf("wrong-purpose redeem must be ErrScope, got %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestCapRefuses(t *testing.T) {
 			t.Fatalf("issue %d under cap: %v", i, err)
 		}
 	}
-	if _, err := s.Issue(mk("d"), now); err != ErrFull {
+	if _, err := s.Issue(mk("d"), now); !errors.Is(err, ErrFull) {
 		t.Fatalf("over-cap issue must be ErrFull, got %v", err)
 	}
 	// Once the live entries expire, issuance recovers (eviction path).
