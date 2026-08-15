@@ -23,7 +23,24 @@ import (
 	"hash"
 	"net"
 	"strings"
+	"sync/atomic"
 )
+
+// SNMPv3 poll security telemetry. Counters, not per-event logs: an attacker who
+// can forge a UDP response can also flood the log. They surface in the poller's
+// existing metric push (SNMPv3PollSecurityCounters). Never log key material.
+var (
+	snmpV3PollAuthFailures     atomic.Int64 // response HMAC verification failed
+	snmpV3PollDecryptFailures  atomic.Int64 // authPriv decryption failed after a valid HMAC
+	snmpV3PollTimelinessFailed atomic.Int64 // reserved: boots/time window rejects (wired when the window check lands)
+)
+
+// SNMPv3PollSecurityCounters snapshots the poll-path security counters for the
+// metrics exporter. Exported so the poller can publish
+// snmpv3_poll_auth_failures_total / _decrypt_failures_total / _timeliness_failures_total.
+func SNMPv3PollSecurityCounters() (authFailures, decryptFailures, timelinessFailures int64) {
+	return snmpV3PollAuthFailures.Load(), snmpV3PollDecryptFailures.Load(), snmpV3PollTimelinessFailed.Load()
+}
 
 // snmpv3.go — SNMPv3 USM (User-based Security Model, RFC 3414/3826/7860)
 // implemented in pure stdlib so the backend stays dependency-free.
@@ -404,12 +421,43 @@ func (s *v3Session) exchange(conn net.Conn, pduTag byte, oid []int, reqID int) (
 }
 
 // parseScoped extracts (and decrypts if needed) the scopedPDU from a response.
+//
+// SECURITY (SR — poll HMAC): for an authenticated security level the HMAC is
+// verified BEFORE any of this reply is trusted. Previously parseScoped adopted
+// the packet's engineID/boots/etime and then decrypted, all from an UNVERIFIED
+// datagram — so a forged UDP response could move the session's trusted engine
+// clock, and CFB decryption (malleable, no integrity) would hand ciphertext-
+// derived bytes up to the caller as if they were a real sample. sysUpTime and
+// the reachability verdict (ProbeSNMP) rode on that. Decryption is not
+// authentication; only the HMAC is. So the order is now: verify → then adopt
+// engine state → then decrypt. An HMAC failure returns an error and mutates
+// NOTHING on the session.
 func (s *v3Session) parseScoped(pkt []byte) ([]byte, error) {
 	eid, boots, etime, privParams, err := parseV3SecurityParams(pkt)
 	if err != nil {
 		return nil, err
 	}
-	// Track the agent's clock so subsequent auth stays in the time window.
+
+	if s.creds.wantsAuth() {
+		// The reply MUST authenticate under the key localized to the engine we
+		// discovered and have been talking to. verifyV3Auth recomputes the HMAC
+		// over the packet with the auth bytes zeroed — the same primitive the
+		// trap path uses (snmptrap.go), so there is one USM verifier, not two.
+		newHash, macLen := authHash(s.creds.AuthProto)
+		if len(s.authKeyL) == 0 {
+			// Localize lazily if discovery did not (defensive; discoverV3 already
+			// localizes when wantsAuth). Uses the ESTABLISHED engineID, never the
+			// unverified one from this packet.
+			s.authKeyL = localizeKey(newHash, s.creds.AuthKey, s.engineID)
+		}
+		if !verifyV3Auth(pkt, s.authKeyL, newHash, macLen) {
+			snmpV3PollAuthFailures.Add(1)
+			return nil, fmt.Errorf("snmpv3: poll response failed HMAC verification (engine %x) — dropped unauthenticated", s.engineID)
+		}
+	}
+
+	// Authenticated (or an explicit noAuthNoPriv session): NOW it is safe to
+	// track the agent's clock so subsequent requests stay in the time window.
 	if len(eid) > 0 {
 		s.engineID, s.boots, s.etime = eid, boots, etime
 	}
@@ -418,7 +466,12 @@ func (s *v3Session) parseScoped(pkt []byte) ([]byte, error) {
 		return nil, err
 	}
 	if priv {
-		return s.decrypt(s.creds, msgData, privParams)
+		out, derr := s.decrypt(s.creds, msgData, privParams)
+		if derr != nil {
+			snmpV3PollDecryptFailures.Add(1)
+			return nil, derr
+		}
+		return out, nil
 	}
 	return msgData, nil
 }
