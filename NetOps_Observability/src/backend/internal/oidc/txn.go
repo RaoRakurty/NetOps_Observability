@@ -28,7 +28,12 @@ var ErrTxnFull = errors.New("sso: too many logins in flight — try again shortl
 type Txn struct {
 	Nonce    string
 	Verifier string // PKCE code_verifier: lives ONLY here, never in a cookie/URL/log
-	expires  time.Time
+	// FEState is the SPA-minted nonce (sessionStorage) that the SPA requires the
+	// callback fragment to echo, binding the delivered token to the tab that
+	// started the flow — the login-CSRF / session-fixation defence (M20). It is
+	// opaque to the server; carried here so it never rides the browser URL.
+	FEState string
+	expires time.Time
 }
 
 type TxnStore struct {
@@ -44,6 +49,12 @@ func NewTxnStore() *TxnStore {
 // evicted first so an abandoned-login flood cannot wedge the store; if the cap
 // is still hit the login is refused (callers surface 503, not silence).
 func (st *TxnStore) Create(state, nonce, verifier string, now time.Time) error {
+	return st.CreateFlow(state, nonce, verifier, "", now)
+}
+
+// CreateFlow is Create with the SPA-minted FEState (M20). Create delegates here
+// with an empty FEState so existing callers are unchanged.
+func (st *TxnStore) CreateFlow(state, nonce, verifier, feState string, now time.Time) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if len(st.m) >= txnCap {
@@ -56,7 +67,7 @@ func (st *TxnStore) Create(state, nonce, verifier string, now time.Time) error {
 			return ErrTxnFull
 		}
 	}
-	st.m[state] = Txn{Nonce: nonce, Verifier: verifier, expires: now.Add(txnTTL)}
+	st.m[state] = Txn{Nonce: nonce, Verifier: verifier, FEState: feState, expires: now.Add(txnTTL)}
 	return nil
 }
 

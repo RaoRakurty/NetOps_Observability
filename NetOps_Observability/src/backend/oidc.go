@@ -79,8 +79,14 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Server-side transaction: makes state single-use at the callback and keeps
-	// the nonce + PKCE verifier out of the browser entirely.
-	if err := s.ssoTxns.Create(state, nonce, verifier, time.Now()); err != nil {
+	// the nonce + PKCE verifier out of the browser entirely. feState is the SPA's
+	// own nonce (M20): carried through the flow and echoed in the callback
+	// fragment so only the tab that began the login can consume the token.
+	feState := strings.TrimSpace(r.URL.Query().Get("fe_state"))
+	if len(feState) > 128 {
+		feState = feState[:128] // opaque; bound it (never trust caller length)
+	}
+	if err := s.ssoTxns.CreateFlow(state, nonce, verifier, feState, time.Now()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
@@ -238,6 +244,12 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	frag.Set("token", access)
 	frag.Set("refresh", refresh)
 	frag.Set("sso", "1")
+	// Echo the SPA's own nonce (M20) so the SPA accepts this fragment only in the
+	// tab that started the flow; an attacker-delivered #token= fragment carries
+	// no matching state and is dropped client-side.
+	if txn.FEState != "" {
+		frag.Set("state", txn.FEState)
+	}
 	http.Redirect(w, r, p.PostLoginURL()+"#"+frag.Encode(), http.StatusFound)
 }
 

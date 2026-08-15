@@ -104,3 +104,24 @@ func TestTxnCapEvictsExpiredThenRefuses(t *testing.T) {
 		t.Fatal("live transaction lost during cap handling")
 	}
 }
+
+// TestTxnCarriesFEState pins the M20 round trip: CreateFlow stores the SPA's
+// nonce and Consume returns it, so the callback can echo it in the fragment.
+func TestTxnCarriesFEState(t *testing.T) {
+	st := NewTxnStore()
+	now := time.Now()
+	if err := st.CreateFlow("st1", "n", "v", "fe-nonce-abc", now); err != nil {
+		t.Fatal(err)
+	}
+	txn, ok := st.Consume("st1", now)
+	if !ok || txn.FEState != "fe-nonce-abc" {
+		t.Fatalf("FEState round trip: ok=%v FEState=%q", ok, txn.FEState)
+	}
+	// Create (no FEState) still works and yields empty.
+	if err := st.Create("st2", "n", "v", now); err != nil {
+		t.Fatal(err)
+	}
+	if txn, _ := st.Consume("st2", now); txn.FEState != "" {
+		t.Fatalf("Create must leave FEState empty, got %q", txn.FEState)
+	}
+}
