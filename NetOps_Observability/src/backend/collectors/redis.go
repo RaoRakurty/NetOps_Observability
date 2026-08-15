@@ -153,6 +153,12 @@ func redisCmd(c net.Conn, args ...string) (string, error) {
 		if n < 0 {
 			return "", nil // nil bulk → empty
 		}
+		if n > maxRESPBulkLen {
+			// The length header is attacker-influenced wire data; allocating it
+			// blindly is a makeslice panic that kills this collector goroutine
+			// for good (§9: bounded). The stream is desynced anyway — refuse.
+			return "", fmt.Errorf("redis: bulk length %d exceeds %d-byte cap", n, maxRESPBulkLen)
+		}
 		buf := make([]byte, n+2) // payload + CRLF
 		if _, err := readFull(r, buf); err != nil {
 			return "", err
@@ -162,6 +168,12 @@ func redisCmd(c net.Conn, args ...string) (string, error) {
 		return trimCRLF(line[1:]), nil
 	}
 }
+
+// maxRESPBulkLen bounds a RESP bulk-string length BEFORE allocation. Redis
+// itself refuses bulks over proto-max-bulk-len (default 512MB); a bigger length
+// header is a corrupted or malicious frame, and passing it to make([]byte, n)
+// is a remote makeslice panic (the collector goroutine dies unrestarted).
+const maxRESPBulkLen = 512 << 20
 
 func trimCRLF(s string) string {
 	for len(s) > 0 && (s[len(s)-1] == '\r' || s[len(s)-1] == '\n') {
@@ -304,6 +316,12 @@ func redisMembers(c net.Conn, key string) ([]string, error) {
 		ln, err := strconv.Atoi(trimCRLF(hdr[1:]))
 		if err != nil || ln < 0 {
 			continue
+		}
+		if ln > maxRESPBulkLen {
+			// Same cap as redisCmd: an attacker-influenced length must never
+			// reach makeslice (panic kills the caller's goroutine, unrestarted).
+			// Past this point the stream is desynced, so error out.
+			return out, fmt.Errorf("redis: bulk length %d exceeds %d-byte cap", ln, maxRESPBulkLen)
 		}
 		buf := make([]byte, ln+2)
 		if _, err := readFull(r, buf); err != nil {

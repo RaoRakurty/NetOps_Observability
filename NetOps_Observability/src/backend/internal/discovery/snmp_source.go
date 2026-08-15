@@ -261,8 +261,29 @@ func (s *SNMPSource) snapshot() []models.Device {
 }
 
 func (s *SNMPSource) snapshotLocked() []models.Device {
+	// Legacy-id preservation (M1). ScanDeviceID gained an address-hash suffix to
+	// stop same-name collisions, but every consumer keyed by scan id — the F-69
+	// delete tombstones (IsSuppressed) and all per-device state — predates that:
+	// unconditionally re-keying the WHOLE fleet on upgrade would resurrect every
+	// operator-deleted device (its tombstone names the old id) and orphan its
+	// state. So the hash is only KEPT when a name-only collision actually
+	// exists in this source's device set; a uniquely-named device stays on its
+	// pre-change, address-less id. (s.found is sticky across sweeps, so the
+	// collision check covers everything this source has ever seen, not just one
+	// sweep. When a second "Switch" appears later, BOTH switch to hashed ids —
+	// that re-key is the disambiguation working as designed.)
+	legacyCount := make(map[string]int, len(s.found))
+	for _, d := range s.found {
+		legacyCount[ScanDeviceID(d.Name, "")]++
+	}
 	out := make([]models.Device, 0, len(s.found))
 	for _, d := range s.found {
+		legacy := ScanDeviceID(d.Name, "")
+		if legacy != "" && legacy != d.ID &&
+			d.ID == ScanDeviceID(d.Name, d.Address) && // only rewrite the hashed form, never a foreign id
+			legacyCount[legacy] == 1 {
+			d.ID = legacy
+		}
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })

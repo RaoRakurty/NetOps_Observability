@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
 	"net"
@@ -303,6 +304,15 @@ func (s *v3Session) encrypt(creds snmpCreds, scoped []byte, salt8 []byte) ([]byt
 }
 
 func (s *v3Session) decrypt(creds snmpCreds, cipherText, privParams []byte) ([]byte, error) {
+	// Defensive (H3): a priv-flagged packet must never reach here without a
+	// localized priv key — parseScoped/decodeTrapV3 gate that — but indexing
+	// s.privKeyL[:16] on a nil/short key would be a REMOTELY TRIGGERABLE panic
+	// (one UDP datagram with the priv msgFlag set), so refuse instead of
+	// trusting every caller forever. Both ciphers need 16 localized bytes
+	// (AES-128 key; DES key[0:8] + preIV key[8:16]).
+	if len(s.privKeyL) < 16 {
+		return nil, fmt.Errorf("snmpv3: no localized priv key — refusing to decrypt priv-flagged message")
+	}
 	proto := strings.ToUpper(strings.TrimSpace(creds.PrivProto))
 	switch {
 	case strings.HasPrefix(proto, "AES"):
@@ -408,16 +418,90 @@ func (s *v3Session) exchange(conn net.Conn, pduTag byte, oid []int, reqID int) (
 	if _, err = conn.Write(msg); err != nil {
 		return 0, nil, nil, err
 	}
+	// The reply must actually answer THIS request: msgID must echo the header
+	// id we sent, the PDU's request-id must echo reqID, and a GET must return
+	// the OID it was asked for. A datagram failing any of those is a stale
+	// retransmit or an off-path forgery — discard it and re-read (mirroring the
+	// v2c walk's errStaleResponse loop in tunnels.go) instead of consuming it
+	// as this request's answer (M2: the id echoes were previously read and
+	// thrown away).
+	//
+	// TODO(RFC 3414 §2.2.3): the boots/time window check (reject replies whose
+	// engineBoots/engineTime fall outside the ±150s authoritative window) is
+	// the remaining replay defence; wire it to the reserved
+	// snmpV3PollTimelinessFailed counter when it lands.
 	buf := make([]byte, 8192)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return 0, nil, nil, err
+	const maxStaleReads = 4 // same tolerance as the v2c walk
+	for tries := 0; tries < maxStaleReads; tries++ {
+		var n int
+		n, err = conn.Read(buf)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if mid, merr := v3MsgID(buf[:n]); merr != nil || mid != s.msgID {
+			err = fmt.Errorf("%w: v3 msgID does not echo the request", errStaleResponse)
+			continue
+		}
+		var scopedResp []byte
+		scopedResp, err = s.parseScoped(buf[:n])
+		if err != nil {
+			return 0, nil, nil, err // auth/decrypt failure: not stale, refuse outright
+		}
+		valTag, val, retOID, err = varbindFromScoped(scopedResp, reqID)
+		if errors.Is(err, errStaleResponse) {
+			continue
+		}
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if pduTag == 0xA0 && !oidEqual(retOID, oid) {
+			// A GET answered with a different OID is not our answer — an agent
+			// echoes the requested binding (RFC 3416 §4.2.1).
+			err = fmt.Errorf("%w: GET response OID does not match the request", errStaleResponse)
+			continue
+		}
+		return valTag, val, retOID, nil
 	}
-	scopedResp, err := s.parseScoped(buf[:n])
+	return 0, nil, nil, fmt.Errorf("snmpv3: too many stale responses at reqID %d: %w", reqID, err)
+}
+
+// v3MsgID reads the msgID out of a v3 message's msgGlobalData header, so
+// exchange can match a reply to the request it sent.
+func v3MsgID(pkt []byte) (int, error) {
+	_, body, _, err := readTLV(pkt) // outer SEQUENCE
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, err
 	}
-	return varbindFromScoped(scopedResp)
+	_, _, rest, err := readTLV(body) // msgVersion
+	if err != nil {
+		return 0, err
+	}
+	_, global, _, err := readTLV(rest) // msgGlobalData
+	if err != nil {
+		return 0, err
+	}
+	tag, id, _, err := readTLV(global) // msgID INTEGER
+	if err != nil {
+		return 0, err
+	}
+	if tag != 0x02 {
+		return 0, fmt.Errorf("snmpv3: msgID is not an INTEGER")
+	}
+	return int(decodeInt(id)), nil
+}
+
+// oidEqual reports exact OID equality (a GET must be answered with the OID it
+// asked for; oidUnder/oidSuffix cover the walk's prefix semantics instead).
+func oidEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // parseScoped extracts (and decrypts if needed) the scopedPDU from a response.
@@ -466,6 +550,15 @@ func (s *v3Session) parseScoped(pkt []byte) ([]byte, error) {
 		return nil, err
 	}
 	if priv {
+		// The priv flag is read from the PACKET, i.e. attacker-controlled. A
+		// session that never negotiated privacy (noAuthNoPriv/authNoPriv) has no
+		// localized priv key, so honouring the flag would walk decrypt into a
+		// nil-key slice — a remote panic from one forged datagram (H3). Same
+		// guard the trap path applies in decodeTrapV3.
+		if !s.creds.wantsPriv() {
+			snmpV3PollDecryptFailures.Add(1)
+			return nil, fmt.Errorf("snmpv3: priv-flagged response on a %s session — refused", s.creds.Level)
+		}
 		out, derr := s.decrypt(s.creds, msgData, privParams)
 		if derr != nil {
 			snmpV3PollDecryptFailures.Add(1)
@@ -611,8 +704,10 @@ func reportReason(pdu []byte) string {
 }
 
 // varbindFromScoped reads the first varbind of a scopedPDU
-// (SEQUENCE { ctxEngineID, ctxName, PDU }).
-func varbindFromScoped(scoped []byte) (valTag byte, val []byte, oid []int, err error) {
+// (SEQUENCE { ctxEngineID, ctxName, PDU }), refusing a PDU whose request-id
+// does not echo expectReqID (errStaleResponse — the caller re-reads, exactly
+// like the v2c firstVarbind in tunnels.go).
+func varbindFromScoped(scoped []byte, expectReqID int) (valTag byte, val []byte, oid []int, err error) {
 	_, body, _, err := readTLV(scoped) // scopedPDU SEQUENCE
 	if err != nil {
 		return
@@ -633,11 +728,18 @@ func varbindFromScoped(scoped []byte) (valTag byte, val []byte, oid []int, err e
 		return 0, nil, nil, fmt.Errorf("snmpv3: agent returned Report (%s)", reportReason(pdu))
 	}
 	if pduTag != 0xA2 { // must be a GetResponse (auth already verified upstream)
-		return 0, nil, nil, fmt.Errorf("snmpv3: PDU tag 0x%02X is not GetResponse", pduTag)
+		return 0, nil, nil, fmt.Errorf("%w: v3 PDU tag 0x%02X is not GetResponse", errStaleResponse, pduTag)
 	}
-	_, _, p, err := readTLV(pdu) // request-id
+	ridTag, ridContent, p, err := readTLV(pdu) // request-id
 	if err != nil {
 		return
+	}
+	if ridTag != 0x02 || int(decodeInt(ridContent)) != expectReqID {
+		// The echoed request-id was previously read and DISCARDED, so a delayed
+		// retransmit (or an off-path blind spoof) from an earlier iteration was
+		// consumed as the current sample (M2). Mirror the v2c check.
+		return 0, nil, nil, fmt.Errorf("%w: v3 request-id %d != expected %d",
+			errStaleResponse, decodeInt(ridContent), expectReqID)
 	}
 	esTag, esContent, p, err := readTLV(p) // error-status
 	if err != nil {

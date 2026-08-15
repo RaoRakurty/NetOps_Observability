@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"netops/backend/safego"
+
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
@@ -165,15 +167,22 @@ func (s *synthetics) tick(ctx context.Context) {
 		go func(i int, tgt synTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			cctx, cancel := context.WithTimeout(ctx, s.timeout)
-			defer cancel()
-			switch tgt.check {
-			case "http":
-				results[i] = s.checkHTTP(cctx, tgt)
-			case "icmp":
-				results[i] = s.checkICMP(cctx, tgt)
-			case "tcp":
-				results[i] = s.checkTCP(cctx, tgt)
+			// safego (H3): a bare worker goroutine talking to arbitrary remote
+			// endpoints — a panic in one check must cost that check's cycle (it
+			// reports as down), never the process. safego logs name+stack.
+			if !safego.Run(safego.Stderr, "synthetic-check", func() {
+				cctx, cancel := context.WithTimeout(ctx, s.timeout)
+				defer cancel()
+				switch tgt.check {
+				case "http":
+					results[i] = s.checkHTTP(cctx, tgt)
+				case "icmp":
+					results[i] = s.checkICMP(cctx, tgt)
+				case "tcp":
+					results[i] = s.checkTCP(cctx, tgt)
+				}
+			}) {
+				results[i] = synResult{target: tgt, failClass: "unknown"}
 			}
 		}(i, tgt)
 	}

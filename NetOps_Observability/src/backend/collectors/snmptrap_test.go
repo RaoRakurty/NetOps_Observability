@@ -191,16 +191,22 @@ func TestTrapResolveAmbiguityGuard(t *testing.T) {
 
 func TestTrapAttributeDevice(t *testing.T) {
 	ts := []Target{
-		{ID: "leaf1", Address: "10.0.0.5:161"},
-		{ID: "spine1", Address: "10.0.0.9:161"},
+		{ID: "leaf1", Address: "10.0.0.5:161", Community: "nocpub"},
+		{ID: "spine1", Address: "10.0.0.9:161", Community: "nocpub"},
 	}
 	// A NAT gateway fronting both devices — neither leaf1 nor spine1 polls FROM it.
 	nat := []Target{
-		{ID: "leaf1", Address: "192.0.2.120:16001"},
-		{ID: "spine1", Address: "192.0.2.120:16002"},
+		{ID: "leaf1", Address: "192.0.2.120:16001", Community: "nocpub"},
+		{ID: "spine1", Address: "192.0.2.120:16002", Community: "nocpub"},
 	}
 	sysName := func(name string) []TrapVarbind {
 		return []TrapVarbind{{OID: "1.3.6.1.2.1.1.5.0", Name: "sysName", Value: name}}
+	}
+	// M4: the PDU rescue paths only claim an identity the trap can PROVE
+	// (community match for v1/v2c, verified HMAC for v3), so the events below
+	// carry the version + community the wire event would.
+	v2c := func(community string, vbs []TrapVarbind) *TrapEvent {
+		return &TrapEvent{Version: "v2c", Community: community, Varbinds: vbs}
 	}
 
 	cases := []struct {
@@ -214,12 +220,19 @@ func TestTrapAttributeDevice(t *testing.T) {
 		// (source-IP attribution is decodeTrap's job — see TestTrapResolveAmbiguityGuard
 		// + TestV3AuthPrivRoundTrip; attributeDevice only RESCUES identity from the PDU.)
 		{"already attributed is left untouched", ts, &TrapEvent{Device: "leaf1"}, "10.0.0.5", "leaf1", "inventory_matched"},
-		{"sysName recovers identity behind NAT", nat, &TrapEvent{Varbinds: sysName("spine1")}, "192.0.2.120", "spine1", "inventory_matched"},
-		{"v1 agent-addr recovers identity behind NAT", nat, &TrapEvent{agentAddr: "10.0.0.5"}, "192.0.2.120", "", "inventory_missing"}, // agent-addr not in NAT inventory
-		{"v1 agent-addr resolves when in inventory", ts, &TrapEvent{agentAddr: "10.0.0.9"}, "172.16.0.1", "spine1", "inventory_matched"},
-		{"sysName wins over a shared source", nat, &TrapEvent{Varbinds: sysName("leaf1")}, "192.0.2.120", "leaf1", "inventory_matched"},
+		{"sysName recovers identity behind NAT", nat, v2c("nocpub", sysName("spine1")), "192.0.2.120", "spine1", "inventory_matched"},
+		{"v1 agent-addr recovers identity behind NAT", nat, &TrapEvent{Version: "v1", Community: "nocpub", agentAddr: "10.0.0.5"}, "192.0.2.120", "", "inventory_missing"}, // agent-addr not in NAT inventory
+		{"v1 agent-addr resolves when in inventory", ts, &TrapEvent{Version: "v1", Community: "nocpub", agentAddr: "10.0.0.9"}, "172.16.0.1", "spine1", "inventory_matched"},
+		{"sysName wins over a shared source", nat, v2c("nocpub", sysName("leaf1")), "192.0.2.120", "leaf1", "inventory_matched"},
 		{"unknown NAT source stays an honest unknown", nat, &TrapEvent{}, "192.0.2.120", "", "inventory_missing"},
-		{"unmatched sysName falls through to unknown", ts, &TrapEvent{Varbinds: sysName("ghost")}, "192.0.2.120", "", "inventory_missing"},
+		{"unmatched sysName falls through to unknown", ts, v2c("nocpub", sysName("ghost")), "192.0.2.120", "", "inventory_missing"},
+		// M4 regressions: a forged sysName without the device's community must
+		// NOT be attributed — before the gate, ANY host that could reach :162
+		// could file evidence under a real device with a guessed hostname.
+		{"M4: forged sysName with wrong community refused", nat, v2c("wrong", sysName("spine1")), "203.0.113.9", "", "inventory_missing"},
+		{"M4: forged sysName with no community refused", nat, &TrapEvent{Version: "v2c", Varbinds: sysName("spine1")}, "203.0.113.9", "", "inventory_missing"},
+		{"M4: v1 agent-addr with wrong community refused", ts, &TrapEvent{Version: "v1", Community: "wrong", agentAddr: "10.0.0.9"}, "172.16.0.1", "", "inventory_missing"},
+		{"M4: unauthenticated v3 sysName refused", nat, &TrapEvent{Version: "v3", Varbinds: sysName("spine1")}, "203.0.113.9", "", "inventory_missing"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

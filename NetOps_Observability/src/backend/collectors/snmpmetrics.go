@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/safego"
 )
 
 // snmpmetrics.go — the multivendor stats collector. For each device it detects
@@ -29,18 +31,25 @@ type metricsCollector struct {
 	targets  TargetFunc
 	profiles []SNMPProfile
 
+	// pollFn is the per-device poll body (c.pollDevice). Injectable (§1: every
+	// dependency explicit) so the H3 regression test can prove pollOnce survives
+	// a panicking worker without needing a device that still panics.
+	pollFn func(context.Context, Target) deviceOutcome
+
 	mu     sync.RWMutex
 	status Status
 }
 
 // NewSNMPMetrics builds the profile-driven SNMP stats collector.
 func NewSNMPMetrics(targets TargetFunc) Collector {
-	return &metricsCollector{
+	c := &metricsCollector{
 		interval: 60 * time.Second,
 		targets:  targets,
 		profiles: loadProfiles(),
 		status:   Status{Name: "snmpmetrics", Healthy: true, Kind: "metrics"},
 	}
+	c.pollFn = c.pollDevice
+	return c
 }
 
 func (c *metricsCollector) Name() string { return "snmpmetrics" }
@@ -87,7 +96,21 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results[i] = c.pollDevice(ctx, tg)
+			// safego (H3): these workers are bare goroutines — NOT under
+			// net/http's handler recover — and the poll body decodes hand-rolled
+			// BER from unauthenticated UDP replies. Without recovery, one
+			// poisoned reply is a panic that takes down the entire API process
+			// for every tenant. A poisoned device must cost exactly its own
+			// cycle: recover, report (safego logs name+stack), record an honest
+			// per-device error, keep polling the fleet.
+			if !safego.Run(safego.Stderr, "snmpmetrics-poll-device", func() {
+				results[i] = c.pollFn(ctx, tg)
+			}) {
+				results[i] = deviceOutcome{
+					id:      tg.ID,
+					lastErr: fmt.Sprintf("snmpmetrics: panic while polling %s (recovered; stack on stderr)", tg.ID),
+				}
+			}
 		}(i, tg)
 	}
 	wg.Wait()

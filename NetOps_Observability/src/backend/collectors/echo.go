@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"netops/backend/safego"
+
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
@@ -115,6 +117,49 @@ type echoResult struct {
 	failReason string
 }
 
+// echoOutcome is one worker's slot in the probeAll fan-out. Each goroutine
+// writes only its own results[i], so no lock is needed during the parallel
+// phase; aggregation is single-goroutine after wg.Wait.
+type echoOutcome struct {
+	lines      []string
+	event      ProbeEvent
+	reach      bool
+	valid      bool
+	failReason string // why this circuit could not be probed at all
+}
+
+// probeCircuit measures one circuit and formats its metric lines + bus event —
+// the per-worker body of probeAll's fan-out (extracted so the worker can run it
+// under safego.Run: it parses network replies, and a panic on one circuit must
+// never take the process down — H3).
+func (s *wanEcho) probeCircuit(ctx context.Context, tgt EchoTarget, now int64, prober, ts string) echoOutcome {
+	res := s.measure(ctx, tgt)
+	lbl := fmt.Sprintf(
+		`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
+		tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
+		res.method, boolLabel(res.sourceBound))
+	out := echoOutcome{valid: true, reach: res.recv > 0, failReason: res.failReason}
+	if res.recv > 0 {
+		out.lines = append(out.lines,
+			fmt.Sprintf(`circuit_latency_ms{%s} %.3f %d`, lbl, res.latencyMs, now),
+			fmt.Sprintf(`circuit_jitter_ms{%s} %.3f %d`, lbl, res.jitterMs, now),
+			fmt.Sprintf(`circuit_qoe{%s} %.2f %d`, lbl, res.qoe, now),
+		)
+	}
+	// Loss/sent/recv are meaningful even on total loss (the outage signal).
+	out.lines = append(out.lines,
+		fmt.Sprintf(`circuit_loss_pct{%s} %.2f %d`, lbl, res.lossPct, now),
+		fmt.Sprintf(`circuit_sent{%s} %d %d`, lbl, res.sent, now),
+		fmt.Sprintf(`circuit_recv{%s} %d %d`, lbl, res.recv, now),
+	)
+	out.event = ProbeEvent{
+		Kind: res.method, Prober: prober, Target: tgt.RemoteAddr,
+		OK: res.recv > 0, RTTms: res.latencyMs, JitterMs: res.jitterMs,
+		LossPct: res.lossPct, TS: ts,
+	}
+	return out
+}
+
 func (s *wanEcho) probeAll(ctx context.Context) {
 	targets := echoTargets(ctx)
 	now := time.Now().UnixMilli()
@@ -125,15 +170,8 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 	// hundreds of circuits, and an unreachable one costs packets×timeout; serial
 	// probing would stall a whole cycle. Cap keeps socket/CPU use bounded. Each
 	// goroutine writes only its own results[i] slot, so no lock is needed.
-	type outcome struct {
-		lines      []string
-		event      ProbeEvent
-		reach      bool
-		valid      bool
-		failReason string // why this circuit could not be probed at all
-	}
 	sem := make(chan struct{}, echoConcurrency)
-	results := make([]outcome, len(targets))
+	results := make([]echoOutcome, len(targets))
 	var wg sync.WaitGroup
 	for i, tgt := range targets {
 		if tgt.RemoteAddr == "" {
@@ -144,31 +182,15 @@ func (s *wanEcho) probeAll(ctx context.Context) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res := s.measure(ctx, tgt)
-			lbl := fmt.Sprintf(
-				`circuit=%q,dst=%q,local_device=%q,local_if=%q,remote_device=%q,remote_if=%q,tenant=%q,method=%q,source_bound=%q`,
-				tgt.CircuitID, tgt.RemoteAddr, tgt.LocalDevice, tgt.LocalIf, tgt.RemoteDevice, tgt.RemoteIf, tgt.Tenant,
-				res.method, boolLabel(res.sourceBound))
-			out := outcome{valid: true, reach: res.recv > 0, failReason: res.failReason}
-			if res.recv > 0 {
-				out.lines = append(out.lines,
-					fmt.Sprintf(`circuit_latency_ms{%s} %.3f %d`, lbl, res.latencyMs, now),
-					fmt.Sprintf(`circuit_jitter_ms{%s} %.3f %d`, lbl, res.jitterMs, now),
-					fmt.Sprintf(`circuit_qoe{%s} %.2f %d`, lbl, res.qoe, now),
-				)
+			// safego (H3): a bare worker goroutine parsing ICMP replies from the
+			// network — a panic here would kill the whole process, not just this
+			// circuit's probe. Recover, log (name+stack via safego), and record
+			// the circuit as failed for this cycle.
+			if !safego.Run(safego.Stderr, "echo-probe-circuit", func() {
+				results[i] = s.probeCircuit(ctx, tgt, now, prober, ts)
+			}) {
+				results[i] = echoOutcome{valid: true, failReason: "panic during circuit probe (recovered; stack on stderr)"}
 			}
-			// Loss/sent/recv are meaningful even on total loss (the outage signal).
-			out.lines = append(out.lines,
-				fmt.Sprintf(`circuit_loss_pct{%s} %.2f %d`, lbl, res.lossPct, now),
-				fmt.Sprintf(`circuit_sent{%s} %d %d`, lbl, res.sent, now),
-				fmt.Sprintf(`circuit_recv{%s} %d %d`, lbl, res.recv, now),
-			)
-			out.event = ProbeEvent{
-				Kind: res.method, Prober: prober, Target: tgt.RemoteAddr,
-				OK: res.recv > 0, RTTms: res.latencyMs, JitterMs: res.jitterMs,
-				LossPct: res.lossPct, TS: ts,
-			}
-			results[i] = out
 		}(i, tgt)
 	}
 	wg.Wait()

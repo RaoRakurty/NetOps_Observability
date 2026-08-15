@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -601,18 +602,25 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 	// non-NAT norm). When the source is unknown or an ambiguous shared NAT gateway,
 	// this leaves Device empty and attributeDevice (post-decode, in Run) rescues the
 	// identity from the PDU itself — sysName / v1 agent-addr, both NAT-surviving.
+	// For v1/v2c the attribution is CONFIRMED against the device's community once
+	// decoded (guardTrapCommunity, M4) — the source IP alone is spoofable UDP.
+	var srcTG Target
+	srcKnown := false
 	if resolve != nil {
 		if tg, ok := resolve(srcIP); ok {
+			srcTG, srcKnown = tg, true
 			ev.Device = tg.ID
 		}
 	}
 	switch decodeInt(verRaw) {
 	case 0: // SNMPv1
 		ev.Version = "v1"
-		_, _, r, err := readTLV(rest) // community
-		if err != nil {
-			return nil, err
+		commTag, commRaw, r, err := readTLV(rest) // community
+		if err != nil || commTag != 0x04 {
+			return nil, fmt.Errorf("snmptrap: v1 community")
 		}
+		ev.Community = string(commRaw)
+		guardTrapCommunity(ev, srcKnown, srcTG)
 		pduTag, pduBody, _, err := readTLV(r)
 		if err != nil || pduTag != 0xA4 {
 			return nil, fmt.Errorf("snmptrap: v1 pdu tag %#x", pduTag)
@@ -629,6 +637,7 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 			return nil, fmt.Errorf("snmptrap: v2c community")
 		}
 		ev.Community = string(commRaw)
+		guardTrapCommunity(ev, srcKnown, srcTG)
 		pduTag, pduBody, _, err := readTLV(r)
 		if err != nil {
 			return nil, err
@@ -652,6 +661,59 @@ func decodeTrap(pkt []byte, srcIP string, resolve credResolver) (*TrapEvent, err
 	}
 }
 
+// guardTrapCommunity drops the source-IP device attribution when a v1/v2c
+// trap's community does not verify against the resolved device's expected
+// community (M4). The community is the ONLY authenticator those versions have:
+// the trap receiver stored it "for audit" but never compared it, so any host
+// that could reach :162 claimed a known device's identity — and every consumer
+// downstream (events, correlation, RCA) filed the forged evidence under the
+// real device. The trap itself is kept (evidence under its source host, the
+// honest-unknown convention) — only the claimed identity is refused.
+func guardTrapCommunity(ev *TrapEvent, srcKnown bool, tg Target) {
+	if !srcKnown || ev.Device == "" {
+		return
+	}
+	if !communityMatchesDevice(ev.Community, tg) {
+		ev.Device = ""
+	}
+}
+
+// communityMatchesDevice reports whether a v1/v2c trap community proves the
+// sender knows the device's configured community. The expected value resolves
+// exactly the way the poller's creds() does (per-device community, then the
+// SNMP_COMMUNITY env default, then "public"). A v3-configured device has no
+// v2c identity to claim — fail closed. Constant-time compare: the community is
+// a shared secret, and a byte-at-a-time equality would let a sender oracle it.
+func communityMatchesDevice(community string, tg Target) bool {
+	if community == "" || tg.SNMPVersion == 3 {
+		return false
+	}
+	want := tg.creds().Community
+	if want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(community), []byte(want)) == 1
+}
+
+// trapIdentityTrusted reports whether this trap presents enough proof to claim
+// device t's identity from INSIDE the PDU (sysName varbind / v1 agent-addr).
+// Those rescue paths survive NAT precisely because they trust packet CONTENT —
+// which any host that can reach :162 controls — so a forged sysName varbind
+// must not be enough to file an event under a real inventory device (M4):
+// v1/v2c must present the device's community; v3 must have a verified HMAC
+// (or the device be explicitly configured noAuthNoPriv — nothing to verify,
+// the same trust it always had).
+func trapIdentityTrusted(ev *TrapEvent, t Target) bool {
+	switch ev.Version {
+	case "v1", "v2c":
+		return communityMatchesDevice(ev.Community, t)
+	case "v3":
+		return ev.Authenticated || (t.SNMPVersion == 3 && t.V3Level == "noAuthNoPriv")
+	default:
+		return false // no wire identity proof at all
+	}
+}
+
 // decodeTrapV3 verifies/decrypts a v3 trap using the source device's USM creds
 // (resolved by source IP), then decodes the inner SNMPv2-Trap-PDU. A trap whose
 // auth can't be verified (when the creds want auth) is refused.
@@ -667,6 +729,13 @@ func decodeTrapV3(ev *TrapEvent, pkt []byte, resolve credResolver) (*TrapEvent, 
 		if tg, ok := resolve(ev.Host); ok {
 			creds = tg.creds()
 		}
+	}
+	// A device CONFIGURED for an authenticated level whose auth key is missing
+	// or unusable must NOT fall through to the cleartext path below: that would
+	// accept (and attribute) an unauthenticated trap for a device the operator
+	// explicitly required authPriv/authNoPriv from — a forgeable downgrade (M4).
+	if creds.isV3() && creds.Level != "" && creds.Level != "noAuthNoPriv" && !creds.wantsAuth() {
+		return nil, fmt.Errorf("snmptrap: v3 trap from %s: device requires %s but has no usable auth key — refusing unauthenticated trap", ev.Host, creds.Level)
 	}
 	// noAuthNoPriv (or unknown sender): decode the cleartext scopedPDU directly.
 	if !creds.isV3() || !creds.wantsAuth() {
@@ -989,16 +1058,21 @@ func trapSysName(ev *TrapEvent) string {
 // records the outcome for observability. Idempotent; safe to call once per trap.
 func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 	if ev.Device == "" && r.targets != nil {
+		// M4: both rescues read attacker-controlled PDU content, so each is
+		// gated on the trap PROVING the claimed device's identity
+		// (trapIdentityTrusted: community match for v1/v2c, verified HMAC for
+		// v3). Without the gate, a forged trap carrying a victim's sysName from
+		// any unknown source became that device's evidence.
 		if sn := trapSysName(ev); sn != "" {
 			for _, t := range r.targets() {
-				if strings.EqualFold(t.ID, sn) {
+				if strings.EqualFold(t.ID, sn) && trapIdentityTrusted(ev, t) {
 					ev.Device = t.ID
 					break
 				}
 			}
 		}
 		if ev.Device == "" && ev.agentAddr != "" && ev.agentAddr != srcIP {
-			if tg, ok := r.resolve(ev.agentAddr); ok {
+			if tg, ok := r.resolve(ev.agentAddr); ok && trapIdentityTrusted(ev, tg) {
 				ev.Device = tg.ID
 			}
 		}
