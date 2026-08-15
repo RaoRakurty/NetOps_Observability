@@ -61,7 +61,7 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 	}
 
 	for _, stream := range cfg.Streams {
-		cp, _ := cps.Load(ctx, cfg.Tenant, cfg.IntegrationID, stream)
+		cp, _ := cps.Load(ctx, cfg.Tenant, cfg.IntegrationID, stream) // best-effort: a checkpoint read error restarts the stream from the top
 		in := PollInput{
 			Base: cfg.BaseURL, Stream: stream, Session: sess, Checkpoint: cp,
 			Backfill: cfg.Backfill, Do: do, Params: cfg.Creds.Extra,

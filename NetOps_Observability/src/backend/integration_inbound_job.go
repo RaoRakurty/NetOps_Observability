@@ -42,7 +42,7 @@ func (p *reportPipeline) EnqueueIntegrationInbound(ctx context.Context, tenant, 
 		fire = time.Now().UTC() // defensive: a zero fire_time would collide across events
 	}
 	execID := randHex(8)
-	payload, _ := json.Marshal(integrationInboundPayload{EventID: eventID, CorrelationID: correlationID})
+	payload, _ := json.Marshal(integrationInboundPayload{EventID: eventID, CorrelationID: correlationID}) // discard: marshalling an in-memory value cannot fail
 	job := reports.Job{
 		JobType: jobTypeIntegrationInbound, TenantID: tenant,
 		ScheduleID: "itsm-inbound:" + eventID, ExecutionID: execID, FireTime: fire, Payload: payload,

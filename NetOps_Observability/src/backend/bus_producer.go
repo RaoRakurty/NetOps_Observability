@@ -84,7 +84,7 @@ func produceJSON(ctx context.Context, topic string, records []proxyRecord) (int,
 		return 0, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("bus bridge produce %s: status %d: %s", topic, resp.StatusCode, strings.TrimSpace(string(body)))
 	}

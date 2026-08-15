@@ -60,13 +60,13 @@ func (s *server) handleTopologyLinks(w http.ResponseWriter, r *http.Request) {
 	// Merged neighbour records from every discovery protocol (LLDP, CDP, …).
 	// Absent data (collectors off / Redis down) → empty set; the UI falls back to
 	// labelled tier-inference. Not an error condition.
-	neighbors, _ := collectors.FetchTopologyLinks(r.Context())
+	neighbors, _ := collectors.FetchTopologyLinks(r.Context()) // best-effort: collector off/unreachable → empty map
 
 	// Interface-address map (deviceID → interface IP → ifName), published by the
 	// SNMP metrics collector. Lets BGP-LS links (whose descriptors identify
 	// interfaces by IP, not name) show real port names. Best-effort: empty when
 	// the collector is off / Redis is down — enrichment simply no-ops.
-	ifaddr, _ := collectors.FetchIfAddrMap(r.Context())
+	ifaddr, _ := collectors.FetchIfAddrMap(r.Context()) // best-effort: collector off/unreachable → empty map
 
 	links := topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 	writeJSON(w, http.StatusOK, map[string]any{"links": links, "count": len(links), "source": topology.LinkSources(links)})

@@ -95,7 +95,7 @@ func (p *PagerDuty) Send(a models.Alert) error {
 			},
 		},
 	}
-	buf, _ := json.Marshal(payload)
+	buf, _ := json.Marshal(payload) // discard: marshalling an in-memory value cannot fail
 	return p.post(buf)
 }
 
@@ -110,7 +110,7 @@ func (p *PagerDuty) SendResolve(a models.Alert) error {
 	if a.ID == "" {
 		return nil // no dedup key → nothing to resolve
 	}
-	buf, _ := json.Marshal(map[string]any{
+	buf, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 		"routing_key":  p.routingKey,
 		"event_action": "resolve",
 		"dedup_key":    p.dedupFor(a.ID),

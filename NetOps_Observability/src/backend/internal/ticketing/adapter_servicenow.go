@@ -360,7 +360,7 @@ func (a *ServiceNowAdapter) do(ctx context.Context, cfg SystemConfig, method, pa
 		return nil, 0, fmt.Errorf("servicenow: %s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, snowMaxRespBytes))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, snowMaxRespBytes)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return raw, resp.StatusCode, fmt.Errorf("servicenow: %s %s returned %d: %s",
 			method, redactPath(path), resp.StatusCode, snowError(raw))

@@ -138,7 +138,7 @@ func (s *server) geomapResolve(ctx context.Context, claims jwtClaims) (rows []ge
 		// The internal provider never errors; kept for the SoTProvider contract.
 		return nil, nil, 0, false, "fetch", err.Error()
 	}
-	assign, _ := p.DeviceSites(ctx, tenant, cross)
+	assign, _ := p.DeviceSites(ctx, tenant, cross) // best-effort: annotations are optional enrichment; error → none
 
 	// The map renders from EITHER intent source: declared sites and/or operator
 	// location annotations. Onboarding empty-state only when neither exists.

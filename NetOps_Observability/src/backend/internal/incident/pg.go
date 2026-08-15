@@ -112,7 +112,7 @@ func (s *PGStore) Ingest(ctx context.Context, in Input) (Incident, bool, error) 
 		if inserted {
 			evType = "created"
 		}
-		payload, _ := json.Marshal(map[string]any{
+		payload, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 			"severity": sev, "source_type": st, "source_id": in.SourceID, "title": in.Title,
 		})
 		return appendIncidentEvent(ctx, tx, resultID, tid, evType, payload, ActorOr(in.Actor))
@@ -326,7 +326,7 @@ func (s *PGStore) Transition(ctx context.Context, tenant string, cross bool, id,
 			}
 			return ErrBadTransition // lost the race to a conflicting transition
 		}
-		payload, _ := json.Marshal(map[string]any{"from": cur, "to": to, "note": note})
+		payload, _ := json.Marshal(map[string]any{"from": cur, "to": to, "note": note}) // discard: marshalling an in-memory value cannot fail
 		return appendIncidentEvent(ctx, tx, id, tid, "status_change", payload, ActorOr(actor))
 	})
 	if err != nil {
@@ -351,7 +351,7 @@ func (s *PGStore) AddNote(ctx context.Context, tenant string, cross bool, id, ac
 		if _, err := tx.Exec(ctx, `UPDATE incidents SET updated_at=now() WHERE id=$1`, id); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"note": note})
+		payload, _ := json.Marshal(map[string]any{"note": note}) // discard: marshalling an in-memory value cannot fail
 		return appendIncidentEvent(ctx, tx, id, tid, "note", payload, ActorOr(actor))
 	})
 	if err != nil {
@@ -373,7 +373,7 @@ func (s *PGStore) Assign(ctx context.Context, tenant string, cross bool, id, own
 		if _, err := tx.Exec(ctx, `UPDATE incidents SET owner=$2, updated_at=now() WHERE id=$1`, id, owner); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"owner": owner})
+		payload, _ := json.Marshal(map[string]any{"owner": owner}) // discard: marshalling an in-memory value cannot fail
 		return appendIncidentEvent(ctx, tx, id, tid, "assignment", payload, ActorOr(actor))
 	})
 	if err != nil {
@@ -406,7 +406,7 @@ func (s *PGStore) MarkSync(ctx context.Context, id, system, externalID, external
 			id, nullText(system), nullText(externalID), nullText(externalURL), syncStatus, at); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{
+		payload, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 			"system": system, "external_ticket_id": externalID, "sync_status": syncStatus,
 		})
 		return appendIncidentEvent(ctx, tx, id, tid, "sync", payload, "system")
@@ -429,7 +429,7 @@ func (s *PGStore) MarkNotified(ctx context.Context, id, channel string) error {
 			}
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"channel": channel})
+		payload, _ := json.Marshal(map[string]any{"channel": channel}) // discard: marshalling an in-memory value cannot fail
 		return appendIncidentEvent(ctx, tx, id, tid, "notified", payload, "system")
 	})
 }

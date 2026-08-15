@@ -366,7 +366,7 @@ func (a *JiraAdapter) do(ctx context.Context, cfg SystemConfig, method, path str
 		return nil, 0, fmt.Errorf("jira: %s %s: request failed", method, redactPath(path))
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, jiraMaxRespBytes))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, jiraMaxRespBytes)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return raw, resp.StatusCode, nil
 	}

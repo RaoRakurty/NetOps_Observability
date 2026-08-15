@@ -29,7 +29,7 @@ func (p *reportPipeline) EnqueueIncidentSync(ctx context.Context, tenant, incide
 	now := time.Now().UTC()
 	tenant = normTenant(tenant)
 	execID := randHex(8)
-	payload, _ := json.Marshal(incidentSyncPayload{IncidentID: incidentID})
+	payload, _ := json.Marshal(incidentSyncPayload{IncidentID: incidentID}) // discard: marshalling an in-memory value cannot fail
 	job := reports.Job{
 		JobType: jobTypeIncidentSync, TenantID: tenant,
 		ScheduleID: "syncinc:" + incidentID + ":" + execID, ExecutionID: execID, FireTime: now, Payload: payload,

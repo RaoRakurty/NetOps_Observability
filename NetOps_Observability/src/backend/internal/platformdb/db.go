@@ -320,7 +320,7 @@ func (db *DB) WithTenant(ctx context.Context, tenant string, cross bool, fn func
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }() // deferred rollback is a no-op after Commit
+	defer func() { _ = tx.Rollback(ctx) }() // best-effort: deferred rollback is a no-op after Commit
 	// app.tenant_id is the per-request RLS session var read by every tenant_iso
 	// policy (renamed from app.current_tenant in migration 0013). It carries the
 	// canonical OPAQUE tenant id, or '*' for the platform-owner cross-tenant view.

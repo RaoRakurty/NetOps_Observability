@@ -308,7 +308,7 @@ func (s *synthetics) checkHTTP(ctx context.Context, tgt synTarget) synResult {
 	}
 	defer resp.Body.Close()
 	// Drain (bounded) so total includes the body and the connection is reusable.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, synMaxBodyBytes))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, synMaxBodyBytes)) // best-effort: drain for connection reuse
 	total := float64(time.Since(start)) / float64(time.Millisecond)
 
 	res.up = resp.StatusCode >= 200 && resp.StatusCode < 400

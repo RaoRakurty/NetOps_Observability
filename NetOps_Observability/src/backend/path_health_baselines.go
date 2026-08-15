@@ -297,7 +297,7 @@ func insertPathBaselines(ctx context.Context, rows []pathBaselineRow) error {
 // bucket → insert. Latency falls back to synthetic ICMP for dsts with no
 // probe_rtt series (same fallback the live endpoint applies).
 func (s *server) pathBaselineTick(ctx context.Context) error {
-	windowDays, _ := strconv.Atoi(envOr("PATH_BASELINE_WINDOW_DAYS", "28"))
+	windowDays, _ := strconv.Atoi(envOr("PATH_BASELINE_WINDOW_DAYS", "28")) // best-effort: non-numeric → 0
 	if windowDays < 7 || windowDays > 60 {
 		windowDays = 28
 	}

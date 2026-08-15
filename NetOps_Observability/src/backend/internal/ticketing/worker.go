@@ -491,9 +491,9 @@ func EnqueueUpdate(ctx context.Context, store Store, tenant, system string, p Pa
 }
 
 func payloadToMap(p Payload) map[string]any {
-	b, _ := json.Marshal(p)
+	b, _ := json.Marshal(p) // discard: marshalling an in-memory value cannot fail
 	var m map[string]any
-	_ = json.Unmarshal(b, &m) // a struct we authored round-trips cleanly; failure yields an empty map
+	_ = json.Unmarshal(b, &m) // discard: a struct we authored round-trips cleanly; failure yields an empty map
 	return m
 }
 
@@ -523,13 +523,13 @@ func outboxNote(it OutboxItem) string {
 }
 
 func PayloadHash(p Payload) string {
-	b, _ := json.Marshal(p)
+	b, _ := json.Marshal(p) // discard: marshalling an in-memory value cannot fail
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:16]
 }
 
 func PayloadHashRaw(m map[string]any) string {
-	b, _ := json.Marshal(m)
+	b, _ := json.Marshal(m) // discard: marshalling an in-memory value cannot fail
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])[:16]
 }

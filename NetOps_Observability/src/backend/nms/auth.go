@@ -96,7 +96,7 @@ func (VManageAuth) Authenticate(ctx context.Context, base string, creds Credenti
 	if creds.Username == "" {
 		return Session{}, fmt.Errorf("vmanage: username/password required")
 	}
-	payload, _ := json.Marshal(map[string]string{"username": creds.Username, "password": creds.Password})
+	payload, _ := json.Marshal(map[string]string{"username": creds.Username, "password": creds.Password}) // discard: marshalling an in-memory value cannot fail
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/jwt/login", strings.NewReader(string(payload)))
 	if err != nil {
 		return Session{}, err
@@ -138,7 +138,7 @@ func (NDFCAuth) Authenticate(ctx context.Context, base string, creds Credentials
 	if creds.Extra != nil && creds.Extra["domain"] != "" {
 		domain = creds.Extra["domain"]
 	}
-	payload, _ := json.Marshal(map[string]string{"userName": creds.Username, "userPasswd": creds.Password, "domain": domain})
+	payload, _ := json.Marshal(map[string]string{"userName": creds.Username, "userPasswd": creds.Password, "domain": domain}) // discard: marshalling an in-memory value cannot fail
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/login", strings.NewReader(string(payload)))
 	if err != nil {
 		return Session{}, err

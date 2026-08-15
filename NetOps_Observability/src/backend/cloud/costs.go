@@ -126,7 +126,7 @@ func CostWindow(fromRaw, toRaw string, now time.Time) (from, to string, err erro
 		}
 		to = toRaw
 	}
-	toT, _ := time.Parse("2006-01-02", to)
+	toT, _ := time.Parse("2006-01-02", to) // discard: CostDayOK above vetted the format
 	from = toT.AddDate(0, 0, -(CostDefaultWindowDays - 1)).Format("2006-01-02")
 	if fromRaw != "" {
 		if !CostDayOK(fromRaw) {
@@ -134,7 +134,7 @@ func CostWindow(fromRaw, toRaw string, now time.Time) (from, to string, err erro
 		}
 		from = fromRaw
 	}
-	fromT, _ := time.Parse("2006-01-02", from)
+	fromT, _ := time.Parse("2006-01-02", from) // discard: CostDayOK above vetted the format
 	if fromT.After(toT) {
 		return "", "", errors.New("from is after to")
 	}

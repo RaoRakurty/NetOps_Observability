@@ -831,7 +831,7 @@ func (n *NetboxSource) Poll(ctx context.Context) ([]models.Device, error) {
 			return out, err
 		}
 		if resp.StatusCode >= 300 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512)) // best-effort: diagnostic snippet; a read error just leaves it empty
 			resp.Body.Close()
 			return out, fmt.Errorf("netbox %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}

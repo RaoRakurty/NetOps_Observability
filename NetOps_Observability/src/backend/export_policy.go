@@ -73,7 +73,7 @@ func (s *exportPolicyStore) load() error {
 
 func setPositiveIntEnv(key string, v int) {
 	if v > 0 {
-		_ = os.Setenv(key, strconv.Itoa(v)) // os.Setenv fails only on an invalid key; ours are constants
+		_ = os.Setenv(key, strconv.Itoa(v)) // discard: os.Setenv fails only on an invalid key; ours are constants
 	}
 }
 
@@ -83,13 +83,13 @@ func (s *exportPolicyStore) apply(c exportPolicyConfig) {
 	setPositiveIntEnv("MAX_EXPORT_BYTES", c.MaxBytes)
 	setPositiveIntEnv("EXPORT_SYNC_MAX_ROWS", c.SyncMaxRows)
 	if c.MaxRuntimeSec > 0 {
-		_ = os.Setenv("MAX_EXPORT_RUNTIME", (time.Duration(c.MaxRuntimeSec) * time.Second).String()) // os.Setenv fails only on an invalid key; ours are constants
+		_ = os.Setenv("MAX_EXPORT_RUNTIME", (time.Duration(c.MaxRuntimeSec) * time.Second).String()) // discard: os.Setenv fails only on an invalid key; ours are constants
 	}
 	if c.MaxRangeHours > 0 {
-		_ = os.Setenv("MAX_EXPORT_TIME_RANGE", (time.Duration(c.MaxRangeHours) * time.Hour).String()) // os.Setenv fails only on an invalid key; ours are constants
+		_ = os.Setenv("MAX_EXPORT_TIME_RANGE", (time.Duration(c.MaxRangeHours) * time.Hour).String()) // discard: os.Setenv fails only on an invalid key; ours are constants
 	}
 	if c.LinkTTLSeconds > 0 {
-		_ = os.Setenv("EXPORT_LINK_TTL", (time.Duration(c.LinkTTLSeconds) * time.Second).String()) // os.Setenv fails only on an invalid key; ours are constants
+		_ = os.Setenv("EXPORT_LINK_TTL", (time.Duration(c.LinkTTLSeconds) * time.Second).String()) // discard: os.Setenv fails only on an invalid key; ours are constants
 	}
 }
 

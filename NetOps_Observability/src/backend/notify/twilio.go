@@ -81,7 +81,7 @@ func (t *Twilio) Send(a models.Alert) error {
 		}
 		if resp.StatusCode >= 300 {
 			// F-27 class: bounded error-body read (see sns.go).
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyMaxBytes))
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyMaxBytes)) // best-effort: diagnostic snippet; a read error just leaves it empty
 			resp.Body.Close()
 			if firstErr == nil {
 				firstErr = fmt.Errorf("twilio %d: %s", resp.StatusCode, string(b))

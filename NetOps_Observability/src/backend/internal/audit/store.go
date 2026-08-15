@@ -141,7 +141,7 @@ func NewFileStore(path string, kv KV) (*FileStore, error) {
 	}
 	s := &FileStore{path: path, kv: kv}
 	if b, err := kv.Load(path); err == nil {
-		_ = json.Unmarshal(b, &s.events) // a corrupt/empty trail just starts fresh
+		_ = json.Unmarshal(b, &s.events) // best-effort: a corrupt/empty trail just starts fresh
 	}
 	return s, nil
 }

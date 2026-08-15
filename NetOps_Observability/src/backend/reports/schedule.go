@@ -66,7 +66,7 @@ func (r Recurrence) NextFire(after time.Time) (time.Time, bool) {
 	if !r.Valid() {
 		return time.Time{}, false
 	}
-	loc, _ := r.location()
+	loc, _ := r.location() // discard: Valid() has already vetted the timezone
 	a := after.In(loc)
 	switch {
 	case r.DOM > 0:

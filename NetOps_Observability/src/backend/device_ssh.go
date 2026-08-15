@@ -410,7 +410,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 
 	// Wait for the shell to exit, the context (max session), or a closed WS.
 	done := make(chan struct{})
-	go func() { _ = session.Wait(); close(done) }() // teardown: the exit status is not needed
+	go func() { _ = session.Wait(); close(done) }() // discard: teardown: the exit status is not needed
 	select {
 	case <-done:
 	case <-ctx.Done():

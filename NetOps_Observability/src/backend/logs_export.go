@@ -81,7 +81,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 
 	// Decide sync vs async by the matched count (cheap _count), unless forced.
 	mode := strings.ToLower(q.Get("mode"))
-	count, _ := countLogs(r.Context(), spec, start, end)
+	count, _ := countLogs(r.Context(), spec, start, end) // best-effort: count failure → 0 → sync-path fallback
 	syncMax := envInt("EXPORT_SYNC_MAX_ROWS", 5000)
 	wantAsync := mode == "async" || (mode != "sync" && count > syncMax)
 

@@ -206,7 +206,7 @@ func (p *reportPipeline) EnqueueNow(ctx context.Context, o saved.Object) (string
 // ---- worker pool -----------------------------------------------------------
 
 func (p *reportPipeline) runWorker(ctx context.Context, idx int) {
-	host, _ := os.Hostname()
+	host, _ := os.Hostname() // best-effort: a hostname failure just shortens the worker id
 	workerID := host + "-" + strconv.Itoa(idx)
 	for {
 		select {

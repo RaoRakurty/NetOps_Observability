@@ -123,7 +123,7 @@ func buildDOMLines(device, vendor string, sType, sScale, sPrec, sValue, physName
 
 	var lines []string
 	for _, idx := range idxs {
-		st, _ := strconv.ParseInt(strings.TrimSpace(sType[idx]), 10, 64)
+		st, _ := strconv.ParseInt(strings.TrimSpace(sType[idx]), 10, 64) // best-effort: non-numeric → 0
 		name := physName[idx]
 		metric := domMetricFor(st, name)
 		if metric == "" {
@@ -133,8 +133,8 @@ func buildDOMLines(device, vendor string, sType, sScale, sPrec, sValue, physName
 		if err != nil {
 			continue
 		}
-		scale, _ := strconv.ParseInt(strings.TrimSpace(sScale[idx]), 10, 64)
-		prec, _ := strconv.ParseInt(strings.TrimSpace(sPrec[idx]), 10, 64)
+		scale, _ := strconv.ParseInt(strings.TrimSpace(sScale[idx]), 10, 64) // best-effort: non-numeric → 0
+		prec, _ := strconv.ParseInt(strings.TrimSpace(sPrec[idx]), 10, 64)   // best-effort: non-numeric → 0
 		val := scaleSensorValue(raw, scale, prec)
 		port := portNameFromSensor(name, idx)
 		lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q,port=%q} %g %d",

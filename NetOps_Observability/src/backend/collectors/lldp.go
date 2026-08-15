@@ -206,14 +206,14 @@ func pollLLDP(ctx context.Context, addr string, creds snmpCreds, devID string, n
 	}
 	// Remaining remote columns (best-effort — keyed by the same composite index).
 	portIDs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemPortIdOID)
-	portSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemPortIdSubtype)
-	portDescs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemPortDescOID)
-	chassis, _ := snmpWalkColumn(ctx, addr, creds, lldpRemChassisIdOID)
-	chassisSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemChassisIdSubtype)
+	portSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemPortIdSubtype)       // best-effort: a failed walk yields an empty column (partial neighbors)
+	portDescs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemPortDescOID)        // best-effort: a failed walk yields an empty column (partial neighbors)
+	chassis, _ := snmpWalkColumn(ctx, addr, creds, lldpRemChassisIdOID)         // best-effort: a failed walk yields an empty column (partial neighbors)
+	chassisSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpRemChassisIdSubtype) // best-effort: a failed walk yields an empty column (partial neighbors)
 	// Local port table, keyed by lldpLocPortNum (the 2nd component of the index).
-	locDescs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortDescOID)
-	locIDs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortIdOID)
-	locSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortIdSubtype)
+	locDescs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortDescOID)  // best-effort: a failed walk yields an empty column (partial neighbors)
+	locIDs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortIdOID)      // best-effort: a failed walk yields an empty column (partial neighbors)
+	locSubs, _ := snmpWalkColumn(ctx, addr, creds, lldpLocPortIdSubtype) // best-effort: a failed walk yields an empty column (partial neighbors)
 
 	out := make([]LLDPNeighbor, 0, len(sysNames))
 	for idx, name := range sysNames {

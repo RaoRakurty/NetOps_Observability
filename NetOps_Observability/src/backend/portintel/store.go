@@ -392,7 +392,7 @@ func (s *pgPortStore) GetPort(ctx context.Context, tenant string, cross bool, de
 func (s *pgPortStore) UpsertPort(ctx context.Context, r PortRow) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	data, _ := json.Marshal(r)
+	data, _ := json.Marshal(r) // discard: marshalling an in-memory value cannot fail
 	return s.db.WithTenant(ctx, r.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO port_inventory_current

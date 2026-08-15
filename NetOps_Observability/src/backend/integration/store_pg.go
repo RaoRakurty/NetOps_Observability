@@ -168,7 +168,7 @@ type InboundRecord struct {
 func (s *Store) RecordInbound(ctx context.Context, ev IntegrationEvent) (rec InboundRecord, inserted bool, err error) {
 	id := randHex(8)
 	correlationID := "ic-" + randHex(8)
-	payload, _ := json.Marshal(ev)
+	payload, _ := json.Marshal(ev) // discard: marshalling an in-memory value cannot fail
 	var occurred any
 	if !ev.OccurredAt.IsZero() {
 		occurred = ev.OccurredAt

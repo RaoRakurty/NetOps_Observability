@@ -113,7 +113,7 @@ func (s *server) putIntegrationConfig(w http.ResponseWriter, r *http.Request, te
 		in.SyncMode = "outbound"
 	}
 	// Merge against the stored row (preserve write-only secret + token).
-	prev, _, _ := s.integrations.GetConfig(r.Context(), tenant, false, provider)
+	prev, _, _ := s.integrations.GetConfig(r.Context(), tenant, false, provider) // best-effort: a read error reads as no prior config
 	cfg := integration.Config{
 		Tenant: tenant, Provider: provider,
 		Enabled: in.Enabled, SyncMode: in.SyncMode,

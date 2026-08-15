@@ -177,7 +177,7 @@ func (s *server) handleCorrelations(w http.ResponseWriter, r *http.Request) {
 	next := ""
 	if len(rows) == limit {
 		last := rows[len(rows)-1]
-		ms, _ := strconv.ParseInt(fmt.Sprintf("%v", last["created_at_ms"]), 10, 64)
+		ms, _ := strconv.ParseInt(fmt.Sprintf("%v", last["created_at_ms"]), 10, 64) // best-effort: non-numeric → 0
 		if cid := fmt.Sprintf("%v", last["correlation_id"]); ms > 0 && isUUIDToken(cid) {
 			next = encodeFeedCursor(ms, cid)
 		}
@@ -400,7 +400,7 @@ func (s *server) handleCorrelationsSummary(w http.ResponseWriter, r *http.Reques
 		case float64:
 			return int64(v)
 		case string:
-			n, _ := strconv.ParseInt(v, 10, 64)
+			n, _ := strconv.ParseInt(v, 10, 64) // best-effort: non-numeric → 0
 			return n
 		}
 		return 0

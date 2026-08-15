@@ -537,7 +537,7 @@ func parseLDAPResult(content []byte) (int, string) {
 		return -1, ""
 	}
 	rc := beInt(rcBytes)
-	_, _, _ = r.next() // matchedDN
+	_, _, _ = r.next() // discard: matchedDN
 	_, msgBytes, merr := r.next()
 	msg := ""
 	if merr == nil {

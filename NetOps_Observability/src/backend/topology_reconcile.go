@@ -108,8 +108,8 @@ func (s *server) observeTopology(ctx context.Context) topology.GraphRecords {
 			Owner:    f.Owner,
 		})
 	}
-	neighbors, _ := collectors.FetchTopologyLinks(ctx)
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
+	neighbors, _ := collectors.FetchTopologyLinks(ctx) // best-effort: collector off/unreachable → empty map
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx)        // best-effort: collector off/unreachable → empty map
 	for _, l := range observeTopoLinks(devs, neighbors, ifaddr) {
 		g.Edges = append(g.Edges, topology.EdgeRecord{
 			TenantID:      tenantByDev[l.Source], // edge belongs to its source device's tenant

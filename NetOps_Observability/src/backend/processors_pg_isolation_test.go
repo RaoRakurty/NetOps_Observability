@@ -41,6 +41,19 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 		if a.Type == processors.TypeRedactPattern {
 			r.PatternKind, r.Pattern = processors.PatternBuiltin, "email"
 		}
+		// Key-scoped actions need a key list, and seal needs a configured
+		// engine + data type (mirroring generate_test.go's catalog loop) —
+		// without these the fixtures fail Validate before ever reaching
+		// Postgres (found when the DATABASE_URL_TEST corpus was wired into CI,
+		// H8: this test had never actually run).
+		if a.Type == processors.TypeRedactKeys {
+			r.Keys = []string{"password"}
+		}
+		if a.Type == processors.TypeSeal {
+			processors.SetSealEngine(regenStubEngine{})
+			t.Cleanup(func() { processors.SetSealEngine(nil) })
+			r.DataType = "card"
+		}
 		if err := r.Validate(); err != nil {
 			t.Fatalf("action %s: fixture must validate: %v", a.Type, err)
 		}

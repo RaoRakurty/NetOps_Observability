@@ -84,7 +84,7 @@ func InsertIdentities(ctx context.Context, ch CHWorker, ids []FusedIdentity) err
 		for _, c := range fi.Explanations {
 			expl = append(expl, string(c))
 		}
-		alts, _ := json.Marshal(fi.Alternatives)
+		alts, _ := json.Marshal(fi.Alternatives) // discard: marshalling an in-memory value cannot fail
 		rows = append(rows, map[string]any{
 			"tenant_id": fi.TenantID, "fusion_id": fi.FusionID,
 			"fused_at": fi.FusedAt.UTC().UnixMilli(), // epoch-ms scaled insert (S4/R1)

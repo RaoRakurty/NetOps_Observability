@@ -112,7 +112,7 @@ func (s *SNS) publish(message, destKey, destVal string) error {
 		// F-27 class: an error body is diagnostic text, not a payload — read a
 		// bounded prefix. A hostile or broken endpoint must not be able to grow
 		// an error message without limit.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyMaxBytes))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyMaxBytes)) // best-effort: diagnostic snippet; a read error just leaves it empty
 		return fmt.Errorf("sns %d: %s", resp.StatusCode, string(b))
 	}
 	return nil

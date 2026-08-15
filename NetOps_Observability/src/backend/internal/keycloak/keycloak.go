@@ -152,8 +152,8 @@ func (c *Client) send(ctx context.Context, op string, build func() (*http.Reques
 			lastErr = err
 			continue
 		}
-		body, _ := readBody(resp)
-		_ = resp.Body.Close() // body already drained by readBody; nothing to act on
+		body, _ := readBody(resp) // best-effort: diagnostic snippet; a read error just leaves it empty
+		_ = resp.Body.Close()     // body already drained by readBody; nothing to act on
 		lastErr = &APIError{Op: op, Status: resp.StatusCode, Body: string(body)}
 	}
 	return nil, fmt.Errorf("%s: giving up after %d attempts: %w", op, c.cfg.Retries+1, lastErr)

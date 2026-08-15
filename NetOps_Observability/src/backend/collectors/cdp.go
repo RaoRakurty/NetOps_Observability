@@ -81,10 +81,10 @@ func pollCDP(ctx context.Context, addr string, creds snmpCreds, devID string, no
 	if len(deviceIDs) == 0 {
 		return nil, nil
 	}
-	devicePorts, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheDevicePort)
-	addrs, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheAddress)
-	addrTypes, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheAddressType)
-	ifNames := ifNameMap(ctx, addr, creds) // ifIndex → port name
+	devicePorts, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheDevicePort) // best-effort: a failed walk yields an empty column (partial neighbors)
+	addrs, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheAddress)          // best-effort: a failed walk yields an empty column (partial neighbors)
+	addrTypes, _ := snmpWalkColumn(ctx, addr, creds, cdpCacheAddressType)  // best-effort: a failed walk yields an empty column (partial neighbors)
+	ifNames := ifNameMap(ctx, addr, creds)                                 // ifIndex → port name
 
 	out := make([]LLDPNeighbor, 0, len(deviceIDs))
 	for idx, dev := range deviceIDs {

@@ -137,11 +137,27 @@ jobs:
           GRANT CONNECT, CREATE ON DATABASE netops TO netops_app;
           GRANT USAGE, CREATE ON SCHEMA public TO netops_app;
           SQL
-      - name: go test -tags=pgintegration
+      - name: go test -tags=pgintegration (incl. the DATABASE_URL_TEST RLS/isolation corpus)
         env:
           PG_TEST_DSN: postgres://netops_app:apppw@localhost:5432/netops
+          # The DATABASE_URL_TEST corpus (~50 RLS/isolation/conformance tests
+          # across ~25 files: TestPgStore*, *RLSIsolation, TestVault*, the
+          # backend-conformance suite, …) needs the SUPERUSER DSN: each test
+          # provisions its own NOBYPASSRLS app role (provisionAppRole, which
+          # needs CREATE ROLE / DROP SCHEMA rights) and then connects as it —
+          # the POSTGRES_USER service superuser is exactly that DSN.
+          DATABASE_URL_TEST: postgres://netops:pgpw@localhost:5432/netops
+        # No -run filter (H8): the env-gated corpus carries heterogeneous names
+        # (TestPgStore*, TestIncidentDedupAndRLS, TestVault*, TestBackendConformance_*…)
+        # that the old case-sensitive `-run TestPG` never matched — and the env
+        # var was never exported — so the ENTIRE database-enforced isolation
+        # suite silently never ran in CI. env_gate_guard_test.go now pins the
+        # export; running unfiltered pins the names.
+        # -p 1 serializes packages: the DB tests share one database and
+        # provisionAppRole drops/recreates the public schema, so packages
+        # running in parallel would destroy each other's tables mid-run.
         # -count=1 so a cached PASS can never stand in for a real run.
-        run: go test -tags=pgintegration -count=1 -timeout 10m -run TestPG ./...
+        run: go test -tags=pgintegration -count=1 -p 1 -timeout 30m ./...
 
   vuln:
     name: govulncheck (blocking)

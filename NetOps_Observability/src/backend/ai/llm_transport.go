@@ -179,7 +179,7 @@ func ProviderDo(ctx context.Context, urlStr string, headers map[string]string, b
 		return nil, err
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet := rb
 		if len(snippet) > 512 {
@@ -197,7 +197,7 @@ func callOpenAI(ctx context.Context, key, model, system string, msgs []ChatMessa
 	// The server-controlled system prompt goes in as a leading system-role
 	// message; msgs are already sanitized to user/assistant.
 	all := append([]ChatMessage{{Role: "system", Content: system}}, msgs...)
-	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": MaxOutputTokens})
+	body, _ := json.Marshal(map[string]any{"model": model, "messages": all, "max_tokens": MaxOutputTokens}) // discard: marshalling an in-memory value cannot fail
 	rb, err := ProviderDo(ctx, "https://api.openai.com/v1/chat/completions", map[string]string{"Authorization": "Bearer " + key}, body, "openai")
 	if err != nil {
 		return "", err
@@ -241,7 +241,7 @@ func callGemini(ctx context.Context, key, model, system string, msgs []ChatMessa
 		}
 		contents = append(contents, gcontent{Role: role, Parts: []gpart{{Text: m.Content}}})
 	}
-	body, _ := json.Marshal(map[string]any{
+	body, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 		"system_instruction": map[string]any{"parts": []gpart{{Text: system}}},
 		"contents":           contents,
 		"generationConfig":   map[string]any{"maxOutputTokens": MaxOutputTokens},
@@ -284,7 +284,7 @@ func parseGemini(rb []byte) (string, error) {
 
 func callAnthropic(ctx context.Context, key, model, system string, msgs []ChatMessage) (string, error) {
 	// Anthropic Messages API: "system" is separate from messages.
-	body, _ := json.Marshal(map[string]any{
+	body, _ := json.Marshal(map[string]any{ // discard: marshalling an in-memory value cannot fail
 		"model": model, "max_tokens": MaxOutputTokens, "system": system, "messages": msgs,
 	})
 	rb, err := ProviderDo(ctx, "https://api.anthropic.com/v1/messages",

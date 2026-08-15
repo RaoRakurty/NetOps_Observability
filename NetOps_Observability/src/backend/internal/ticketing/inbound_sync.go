@@ -115,7 +115,7 @@ func (sy *StateSyncer) syncLink(ctx context.Context, l Link, now time.Time) int 
 	// read would make an already-recorded action look unrecorded and append it
 	// again. One object's ledger is one row per action, so the max page is
 	// ample — but if it ever were not, say so rather than silently duplicating.
-	existing, existingTotal, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID, MaxPage, 0)
+	existing, existingTotal, _ := sy.store.ListAudit(ctx, l.TenantID, false, l.CorrObjectID, MaxPage, 0) // best-effort: a read error reads as an empty page
 	if existingTotal > len(existing) {
 		applog.Error("ticketing", "audit ledger truncated during inbound dedupe — duplicate audit rows possible",
 			map[string]any{"corr_object_id": l.CorrObjectID, "total": existingTotal, "read": len(existing)})

@@ -500,7 +500,7 @@ func (s *PGStore) GetPolicy(ctx context.Context, tenant string, cross bool, id s
 func (s *PGStore) PutPolicy(ctx context.Context, p IncidentPolicy) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	filters, _ := json.Marshal(orEmptyMap(p.Filters))
+	filters, _ := json.Marshal(orEmptyMap(p.Filters)) // discard: marshalling an in-memory value cannot fail
 	return s.db.WithTenant(ctx, p.TenantID, false, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 INSERT INTO incident_policies (tenant_id, id, name, external_system, enabled, min_verdict,
@@ -690,7 +690,7 @@ func (s *PGStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]Lin
 func (s *PGStore) EnqueueOutbox(ctx context.Context, item OutboxItem) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	payload, _ := json.Marshal(orEmptyMap(item.Payload))
+	payload, _ := json.Marshal(orEmptyMap(item.Payload)) // discard: marshalling an in-memory value cannot fail
 	maxRetries := item.MaxRetries
 	if maxRetries == 0 {
 		maxRetries = 8

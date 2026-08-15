@@ -40,7 +40,7 @@ var oidIdx oidIndex
 func init() {
 	// A malformed embedded index must not crash the binary; fall back to an empty
 	// index (callers then return the raw OID — honest, never a panic).
-	_ = json.Unmarshal(oidIndexJSON, &oidIdx)
+	_ = json.Unmarshal(oidIndexJSON, &oidIdx) // best-effort: embedded JSON; a failure leaves the index empty
 	if oidIdx.Nodes == nil {
 		oidIdx.Nodes = map[string]OIDNode{}
 	}

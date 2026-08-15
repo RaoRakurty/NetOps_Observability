@@ -249,7 +249,7 @@ func (j *Jira) createIssue(a models.Alert) (string, string, error) {
 		"labels":      []string{"netops", "auto-ticket", "sev-" + strings.ToLower(a.Severity)},
 	}
 	payload := map[string]any{"fields": fields}
-	buf, _ := json.Marshal(payload)
+	buf, _ := json.Marshal(payload) // discard: marshalling an in-memory value cannot fail
 
 	url := j.baseURL + "/rest/api/2/issue"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
@@ -298,7 +298,7 @@ func (j *Jira) resolveIssue(key string) error {
 			},
 		},
 	}
-	buf, _ := json.Marshal(payload)
+	buf, _ := json.Marshal(payload) // discard: marshalling an in-memory value cannot fail
 	url := j.baseURL + "/rest/api/2/issue/" + key + "/transitions"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {

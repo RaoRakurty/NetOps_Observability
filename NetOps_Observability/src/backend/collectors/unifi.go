@@ -154,7 +154,7 @@ func (c *unifiClient) login(ctx context.Context) error {
 	if c.cfg.UnifiOS {
 		path = "/api/auth/login"
 	}
-	body, _ := json.Marshal(map[string]string{"username": c.cfg.Username, "password": c.cfg.Password})
+	body, _ := json.Marshal(map[string]string{"username": c.cfg.Username, "password": c.cfg.Password}) // discard: marshalling an in-memory value cannot fail
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return err

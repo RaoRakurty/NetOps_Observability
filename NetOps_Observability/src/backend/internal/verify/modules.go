@@ -217,8 +217,8 @@ func parseNetDuration(s string) (time.Duration, bool) {
 		return 0, false
 	}
 	if m := reDurHMS.FindStringSubmatch(s); m != nil {
-		h, _ := strconv.Atoi(m[1])
-		mi, _ := strconv.Atoi(m[2])
+		h, _ := strconv.Atoi(m[1])  // discard: the regex captured digits only
+		mi, _ := strconv.Atoi(m[2]) // discard: the regex captured digits only
 		sec := 0
 		if m[3] != "" {
 			sec, _ = strconv.Atoi(m[3]) // best-effort: regex-matched digits; failure means 0
@@ -382,10 +382,10 @@ func parseIfaceDeep(txt string, now time.Time, cc CaseContext) (string, string) 
 			addFault(fmt.Sprintf("%d errors (cumulative)", n))
 		}
 		if m := reJunosErrRow.FindStringSubmatch(line); m != nil {
-			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 0 {
+			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 0 { // discard: the regex captured digits only
 				addFault(fmt.Sprintf("%d errors (cumulative)", n))
 			}
-			if n, _ := strconv.ParseInt(m[2], 10, 64); n > 0 {
+			if n, _ := strconv.ParseInt(m[2], 10, 64); n > 0 { // discard: the regex captured digits only
 				addFault(fmt.Sprintf("%d drops (cumulative)", n))
 			}
 		} else if n, ok := nonzero(reOutDrops.FindStringSubmatch(line)); ok {
@@ -398,12 +398,12 @@ func parseIfaceDeep(txt string, now time.Time, cc CaseContext) (string, string) 
 			addFault(fmt.Sprintf("%d interface resets (cumulative)", n))
 		}
 		if m := reCarrierTr.FindStringSubmatch(line); m != nil {
-			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 1 { // 1 = initial link-up
+			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 1 { // discard: digits-only capture; 1 = initial link-up
 				addFault(fmt.Sprintf("%d carrier transitions (cumulative)", n))
 			}
 		}
 		if m := reLinkChanges.FindStringSubmatch(line); m != nil {
-			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 1 {
+			if n, _ := strconv.ParseInt(m[1], 10, 64); n > 1 { // discard: the regex captured digits only
 				addFault(fmt.Sprintf("%d link status changes (cumulative)", n))
 			}
 		}
@@ -519,7 +519,7 @@ func parseBGPEdge(txt string, now time.Time, cc CaseContext) (string, string) {
 			}
 		}
 		if m := reRcvTotal.FindStringSubmatch(line); m != nil {
-			if n, _ := strconv.Atoi(m[1]); n == 0 {
+			if n, _ := strconv.Atoi(m[1]); n == 0 { // discard: the regex captured digits only
 				addReason("received total routes 0 — prefix-count collapse")
 			}
 		}

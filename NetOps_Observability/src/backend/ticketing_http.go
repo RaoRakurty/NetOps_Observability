@@ -91,7 +91,7 @@ func (s *server) handleIncidentPolicyByID(w http.ResponseWriter, r *http.Request
 			return
 		}
 		tenant, cross := principalTenant(claims)
-		if _, found, _ := s.ticketing.GetPolicy(r.Context(), tenant, cross, id); !found {
+		if _, found, _ := s.ticketing.GetPolicy(r.Context(), tenant, cross, id); !found { // best-effort: a read error reads as not-found
 			http.NotFound(w, r) // a PUT must not mint/hijack a policy across tenants
 			return
 		}
@@ -296,7 +296,7 @@ func (s *server) handleCorrelationTickets(w http.ResponseWriter, r *http.Request
 				pdView = v
 			}
 		}
-		audit, _, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketing.AuditDefaultPage, 0)
+		audit, _, _ := s.ticketing.ListAudit(r.Context(), tenant, cross, id, ticketing.AuditDefaultPage, 0) // best-effort: a read error yields an empty audit page
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       ticketStatusView(link, found),
 			"pagerduty":    pdView,
@@ -382,7 +382,7 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 	var enqueued bool
 	if action == "update" {
 		// Sync only makes sense for an existing open ticket.
-		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system)
+		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system) // best-effort: a read error reads as no-link
 		if !found || !link.Open() {
 			writeError(w, http.StatusConflict, errors.New("no open ticket to sync for this object"))
 			return

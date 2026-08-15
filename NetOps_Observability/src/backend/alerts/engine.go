@@ -217,7 +217,7 @@ func (e *Engine) Active() []models.Alert {
 // Start loads rules from disk (if a file is configured) and begins the
 // evaluation loop. Cancelling ctx terminates evaluation.
 func (e *Engine) Start(ctx context.Context) {
-	_ = e.loadRulesFile() // the error is logged + recorded in Health(), not fatal
+	_ = e.loadRulesFile() // best-effort: the error is logged + recorded in Health(), not fatal
 	go e.loop(ctx)
 }
 

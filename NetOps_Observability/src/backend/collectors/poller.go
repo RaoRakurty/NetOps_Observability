@@ -435,11 +435,11 @@ func emitMetrics(ctx context.Context, body string) {
 		// and drops every sample in the batch — previously indistinguishable
 		// from success. Quote a bounded slice of the reply so the cause is in
 		// the log, not just the code.
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512)) // best-effort: diagnostic snippet; a read error just leaves it empty
 		notePushFailure(fmt.Sprintf("%s: HTTP %d %s", url, resp.StatusCode, strings.TrimSpace(string(snippet))))
 		return
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // drain for connection reuse
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // best-effort: drain for connection reuse
 	metricsPushOK.Add(1)
 }
 

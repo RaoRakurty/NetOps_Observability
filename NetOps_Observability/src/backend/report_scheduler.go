@@ -32,18 +32,33 @@ func (s *server) handleReportRuns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Both backends require the same permission and scope by the caller's
+	// tenant (H7): run details carry report names/summaries/channel names, so
+	// an unscoped map is a cross-tenant leak on the file backend.
+	claims, ok := s.requirePerm(w, r, "reports", LevelRead)
+	if !ok {
+		return
+	}
+	tenant, cross := principalTenant(claims)
 	// Under the async backend, derive last/next/status from the execution history
 	// (scoped to the caller's tenant); the file backend uses the in-memory map.
 	if s.reportPipeline != nil {
-		claims, ok := s.requirePerm(w, r, "reports", LevelRead)
-		if !ok {
-			return
-		}
-		tenant, cross := principalTenant(claims)
 		writeJSON(w, http.StatusOK, s.reportPipeline.runsFromExecutions(r.Context(), tenant, cross))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.reports.Runs())
+	// File backend: keep only runs whose owning saved report the caller may
+	// see (mirrors the PG branch). A run for a deleted report has no owner to
+	// authorize against, so a scoped caller doesn't get it either
+	// (default-closed; gc reaps those entries anyway).
+	runs := s.reports.Runs()
+	if !cross {
+		for id := range runs {
+			if o, ok := s.saved.Get(id); !ok || !canSeeSaved(o, tenant, cross) {
+				delete(runs, id)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 
 // handleReportRunNow: POST /api/reports/run {"id":"..."} — deliver a report
@@ -68,6 +83,14 @@ func (s *server) handleReportRunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimSpace(req.ID)
+	// Named notify channels are PLATFORM-GLOBAL resources (M15): a tenant
+	// principal must not be able to point a run at an arbitrary operator
+	// channel (Slack/PagerDuty/... it doesn't own). Only the cross-tenant
+	// platform owner may bind them; default-closed, matching §3a.3.
+	if len(req.Channels) > 0 && !cross {
+		writeError(w, http.StatusForbidden, errors.New("named notify channels are platform-global; contact points are the tenant delivery model"))
+		return
+	}
 
 	// Async path (Postgres): enqueue a job and return immediately — no blocking
 	// render/SMTP in the request. The worker pool delivers and records the
@@ -120,6 +143,11 @@ func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// The channel names enumerate the operator's notification integrations —
+	// gate like every other reports read (M15; was previously unauthenticated).
+	if _, ok := s.requirePerm(w, r, "reports", LevelRead); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, s.notifier.Names())
 }
 
@@ -149,7 +177,9 @@ type reportSpec struct {
 	Enabled         bool   `json:"enabled"`
 	Description     string `json:"description"`
 	// Channels optionally restricts delivery to named notify channels (email,
-	// slack, pagerduty, sns, twilio…). Empty => all configured channels. Used by
+	// slack, pagerduty, sns, twilio…). Empty => contact points only (M15 —
+	// never a broadcast to all channels), and only platform-owned reports may
+	// name channels at all (they are platform-global resources). Used by
 	// scheduled runs and as the default for "Send now".
 	Channels []string `json:"channels,omitempty"`
 	// ContactPoints lists reusable contact-point ids (contactpoints.go) this
@@ -284,8 +314,9 @@ func (rs *reportScheduler) tick() {
 
 // RunNow delivers a report immediately, ignoring its schedule, and reschedules
 // the next automatic delivery from now. Powers the UI's "Send now". channels
-// optionally restricts delivery to specific notify channels for this one send
-// (nil/empty => the report's configured channels, falling back to all).
+// optionally overrides the report's configured notify channels for this one
+// send (nil/empty => the report's configured channels; an empty result means
+// contact points only — deliver never falls back to broadcasting, see M15).
 func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, error) {
 	o, ok := rs.saved.Get(id)
 	if !ok || o.Type != "report" {
@@ -302,11 +333,29 @@ func (rs *reportScheduler) RunNow(id string, channels []string) (reportRun, erro
 	return rs.Run(id), nil
 }
 
-// deliver renders and dispatches a report, then records the outcome. Delivery
-// honours spec.Channels (empty => all configured channels).
+// deliver renders and dispatches a report, then records the outcome.
+//
+// Named-channel semantics (M15, aligned with the async pipeline's Phase-1
+// contract in report_delivery.go): an EMPTY spec.Channels means "contact
+// points only" — it must NOT fan out to every configured channel (DispatchTo's
+// nil fallback), which broadcast a tenant's report to each platform channel.
+// And because notify channels are platform-global resources, only a
+// platform-owned (global/unassigned) report may name them at all; a
+// tenant-owned report's channel list is skipped, default-closed.
 func (rs *reportScheduler) deliver(o saved.Object, spec reportSpec, now time.Time) {
 	msg := rs.render(o, spec, now)
-	sent := rs.notifier.DispatchTo(msg, spec.Channels)
+	t := normTenant(o.TenantID)
+	platformOwned := t == "" || t == TenantGlobal
+	sent := 0
+	var chNote string
+	switch {
+	case len(spec.Channels) == 0:
+		// contact points only — never broadcast
+	case !platformOwned:
+		chNote = "named channels skipped (platform-owned reports only)"
+	default:
+		sent = rs.notifier.DispatchTo(msg, spec.Channels)
+	}
 
 	// Contact-point delivery (the modern recipient model). Resolve the report's
 	// email-type contact points in the report's own tenant scope, then email the
@@ -325,8 +374,11 @@ func (rs *reportScheduler) deliver(o saved.Object, spec reportSpec, now time.Tim
 	}
 	run.Status = "ok"
 	detail := fmt.Sprintf("%s — sent to %d channel(s)", msg.Summary, sent)
-	if len(spec.Channels) > 0 {
+	if sent > 0 {
 		detail += ": " + strings.Join(spec.Channels, ", ")
+	}
+	if chNote != "" {
+		detail += "; " + chNote
 	}
 	if cpNote != "" {
 		detail += "; " + cpNote

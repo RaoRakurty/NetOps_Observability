@@ -90,26 +90,117 @@ func NewPGStore(ctx context.Context, dsn string) (*PGStore, error) {
 		return nil, err
 	}
 	ps := &PGStore{db: db}
+	// Import failures FAIL THE BOOT (M6). The old warn-and-continue left the
+	// worst possible state standing: an early failing key aborted the rest of
+	// the import, the process came up anyway, and SeedAdmin — which runs after
+	// store selection in main — saw an empty users table and minted a fresh
+	// bootstrap admin over an install whose real identities were still sitting
+	// in the un-imported snapshot (a silent identity reset). UsePostgres already
+	// fails fast on a NewPGStore error, so returning here is what keeps
+	// SeedAdmin from ever running against a half-imported store.
 	if err := ps.importLegacy(ctx); err != nil {
-		// A usable database must still start even if the one-time import trips;
-		// surface it loudly rather than aborting (the import is idempotent and
-		// can be retried on next boot once the cause is fixed).
-		logWarn("db", "legacy blob import skipped", map[string]any{"error": err.Error()})
+		db.Close()
+		return nil, fmt.Errorf("legacy blob import: %w", err)
 	}
 	// One-time file→Postgres cutover: import the file-backend /data/*.json
-	// collections when IMPORT_FILE_STATE_DIR points at them (idempotent — fills
-	// empty targets only, never clobbers live data).
+	// collections when IMPORT_FILE_STATE_DIR points at them (idempotent via
+	// per-collection import markers — never clobbers or resurrects state).
 	if dir := os.Getenv("IMPORT_FILE_STATE_DIR"); dir != "" {
 		if err := ps.importFileState(ctx, dir); err != nil {
-			logWarn("db", "file-state import skipped", map[string]any{"error": err.Error()})
+			db.Close()
+			return nil, fmt.Errorf("file-state import: %w", err)
 		}
 	}
 	return ps, nil
 }
 
+// ---- one-time import bookkeeping (M5) --------------------------------------
+//
+// "Has this collection been imported?" used to be answered by row count
+// (targetEmpty). Count is a proxy that lies in one direction: an operator who
+// deletes the LAST row of a collection makes the target look never-imported,
+// and the next boot resurrects the deleted data from the frozen snapshot. The
+// authoritative signal is an explicit marker row in app_kv, written in the SAME
+// transaction as the import itself so a crash can never separate the two.
+// targetEmpty stays as the pre-marker fallback: a populated target without a
+// marker (an install imported before markers existed, or live data written
+// before any import ran) is recorded as done-without-importing.
+
+// importMarkerKey normalizes a backend key to its marker row key. Basename
+// normalization (mirroring specFor) makes the legacy blob key shape
+// ("kv://users") and the file key shape ("/data/users.json") share one marker —
+// they target the same table, so one import decision covers both.
+func importMarkerKey(key string) string {
+	return "import:done:" + strings.TrimSuffix(filepath.Base(key), ".json")
+}
+
+// importDone reports whether the one-time import decision for key is recorded.
+// app_kv carries no RLS, so the bare pool sees the marker.
+func (p *PGStore) importDone(ctx context.Context, key string) (bool, error) {
+	var present bool
+	err := p.db.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM app_kv WHERE key=$1)`, importMarkerKey(key)).Scan(&present)
+	return present, err
+}
+
+// markImportedTx records the import decision inside the import's own
+// transaction (atomic with the rows it covers).
+func markImportedTx(ctx context.Context, tx pgx.Tx, key, how string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO app_kv (key, data, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+		importMarkerKey(key), []byte(`{"import":"`+how+`"}`))
+	return err
+}
+
+// markImported records the decision outside any import write — the
+// "target already populated, never import" case. A failure is returned (and
+// fails the boot) rather than swallowed: an unrecorded skip plus a later
+// row-deletion is exactly the resurrection path the marker exists to close.
+func (p *PGStore) markImported(ctx context.Context, key, how string) error {
+	_, err := p.db.pool.Exec(ctx, `INSERT INTO app_kv (key, data, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+		importMarkerKey(key), []byte(`{"import":"`+how+`"}`))
+	return err
+}
+
+// importKey writes one collection's imported data AND its marker in a single
+// transaction (normalized rows under platform scope, or an app_kv blob).
+func (p *PGStore) importKey(ctx context.Context, key string, data []byte) error {
+	if spec, ok := specFor(key); ok {
+		rows, err := explode(spec, data)
+		if err != nil {
+			return fmt.Errorf("explode %s: %w", spec.table, err)
+		}
+		return p.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+			if err := replaceRowsTx(ctx, tx, spec, rows); err != nil {
+				return err
+			}
+			return markImportedTx(ctx, tx, key, "rows")
+		})
+	}
+	tx, err := p.db.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // best-effort: deferred rollback is a no-op after Commit
+	if _, err := tx.Exec(ctx, `INSERT INTO app_kv (key, data, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, key, data); err != nil {
+		return err
+	}
+	if err := markImportedTx(ctx, tx, key, "blob"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // importFileState migrates the file-backend app-state (the /data/*.json
-// collections) into the normalized tables / app_kv. It only fills EMPTY targets,
-// so re-running it is a no-op once data has moved. Transient state (refresh
+// collections) into the normalized tables / app_kv. Each collection is imported
+// AT MOST ONCE, gated on the import marker (see importDone) — never on row
+// count, which reads a deliberately-emptied collection as "never imported" and
+// resurrects the frozen snapshot on the next boot (M5). Transient state (refresh
 // tokens, the audit ring, ITSM ticket dedup) is intentionally NOT imported — it
 // rebuilds. The durable config (users/tenants/roles/SNMP creds/SSO/contact
 // points/policies) carries over so a cutover preserves logins and secrets.
@@ -129,14 +220,27 @@ func (p *PGStore) importFileState(ctx context.Context, dir string) error {
 		if err != nil || len(data) == 0 {
 			continue // missing/empty file → nothing to import
 		}
+		done, err := p.importDone(ctx, key)
+		if err != nil {
+			return err
+		}
+		if done {
+			continue // decision already recorded — one-time means one-time
+		}
 		empty, err := p.targetEmpty(ctx, key)
 		if err != nil {
 			return err
 		}
 		if !empty {
-			continue // already populated — never clobber live state
+			// Live rows with no marker (pre-marker install, or writes that beat
+			// the import): record done-without-importing so a later deliberate
+			// emptying can never re-trigger the import. Never clobber.
+			if err := p.markImported(ctx, key, "skipped-populated"); err != nil {
+				return err
+			}
+			continue
 		}
-		if err := p.Save(key, data); err != nil {
+		if err := p.importKey(ctx, key, data); err != nil {
 			return fmt.Errorf("import %s: %w", key, err)
 		}
 		imported++
@@ -232,16 +336,22 @@ func (p *PGStore) saveRows(ctx context.Context, spec rowSpec, data []byte) error
 	// handles deletions for free — same whole-collection rewrite the file backend
 	// already does, just transactional.
 	return p.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM "+spec.table); err != nil {
+		return replaceRowsTx(ctx, tx, spec, rows)
+	})
+}
+
+// replaceRowsTx is the whole-table rewrite shared by saveRows and importKey —
+// split out so an import can pair it with its marker in ONE transaction.
+func replaceRowsTx(ctx context.Context, tx pgx.Tx, spec rowSpec, rows []rowValue) error {
+	if _, err := tx.Exec(ctx, "DELETE FROM "+spec.table); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if err := insertRow(ctx, tx, spec, r); err != nil {
 			return err
 		}
-		for _, r := range rows {
-			if err := insertRow(ctx, tx, spec, r); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func (p *PGStore) loadBlob(ctx context.Context, key string) ([]byte, error) {
@@ -299,7 +409,7 @@ func explode(spec rowSpec, blob []byte) ([]rowValue, error) {
 		}
 		rv := rowValue{id: id, data: e}
 		if spec.tenantField != "" && !spec.selfTenant {
-			t, _ := strField(fields, spec.tenantField) // absent/empty → "" (global)
+			t, _ := strField(fields, spec.tenantField) // discard: absent/empty → "" (global)
 			// Normalize to match withTenant's GUC (lower+trim) so the tenant_id
 			// column compares equal to the RLS session tenant; the verbatim object
 			// (original casing) is preserved in the data column.
@@ -415,34 +525,43 @@ func (p *PGStore) importLegacy(ctx context.Context) error {
 
 	imported := 0
 	for _, it := range items {
-		// The "is the target already populated?" guard is the ONLY thing standing
-		// between a stale legacy snapshot and live data, because saveRows below is
-		// DELETE-then-insert of the whole table under platform scope.
+		// Two guards stand between a stale legacy snapshot and live data,
+		// because importKey below is DELETE-then-insert of the whole table under
+		// platform scope:
 		//
-		// It must be asked through targetEmpty, which counts inside
-		// WithTenant(ctx, "", true, …). Asking the bare pool instead — as this did
-		// — runs with no tenant GUC set, so a FORCE-RLS table filters every row out
-		// and the count comes back 0 on a FULL table. The guard then reads "empty",
-		// saveRows DELETEs the live rows (cross-tenant scope, so the delete DOES
-		// see them) and reinserts the cutover-era snapshot. On an upgraded install
-		// that still has netops_kv, that silently destroyed every user, API key,
-		// role binding and dashboard created since cutover — on EVERY BOOT, while
-		// logging only "imported legacy blob app-state". The comment on
-		// NewPGStore calling this import "idempotent" was describing an intent the
-		// guard did not implement.
+		// 1. The import marker (M5): once the decision for a key is recorded,
+		//    the snapshot is never consulted again — row count cannot re-open
+		//    the question, so deleting a collection's last row no longer
+		//    resurrects the cutover-era data on the next boot.
+		// 2. For pre-marker installs, targetEmpty — which MUST count inside
+		//    WithTenant(ctx, "", true, …). Asking the bare pool instead — as
+		//    this once did — runs with no tenant GUC set, so a FORCE-RLS table
+		//    filters every row out and a FULL table counts 0. The guard then
+		//    read "empty", the DELETE ran under cross-tenant scope (which DOES
+		//    see the rows) and the snapshot replaced live state on EVERY BOOT,
+		//    silently destroying every user, API key, role binding and
+		//    dashboard created since cutover.
+		done, err := p.importDone(ctx, it.key)
+		if err != nil {
+			return err
+		}
+		if done {
+			continue
+		}
 		empty, err := p.targetEmpty(ctx, it.key)
 		if err != nil {
 			return err
 		}
 		if !empty {
-			continue // target already populated — never clobber live state
-		}
-		if spec, ok := specFor(it.key); ok {
-			if err := p.saveRows(ctx, spec, it.data); err != nil {
+			// Populated but unmarked (imported before markers existed, or live
+			// writes preceded this import): record the decision, never clobber.
+			if err := p.markImported(ctx, it.key, "skipped-populated"); err != nil {
 				return err
 			}
-		} else if err := p.saveBlob(ctx, it.key, it.data); err != nil {
-			return err
+			continue
+		}
+		if err := p.importKey(ctx, it.key, it.data); err != nil {
+			return fmt.Errorf("import %s: %w", it.key, err)
 		}
 		imported++
 	}

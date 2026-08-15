@@ -437,7 +437,7 @@ func (s *server) startCloudInventory(ctx context.Context) {
 			logError("cloud", "fixture inventory load failed", map[string]any{"err": err.Error()})
 			return
 		}
-		maps, _ := prov.ListIdentityMappings(ctx, tenant, "")
+		maps, _ := prov.ListIdentityMappings(ctx, tenant, "") // best-effort: identity mappings are optional enrichment; error → none
 		if e := s.cloud.ReplaceInventory(ctx, tenant, res, maps); e != nil {
 			logError("cloud", "inventory store failed", map[string]any{"err": e.Error()})
 			return

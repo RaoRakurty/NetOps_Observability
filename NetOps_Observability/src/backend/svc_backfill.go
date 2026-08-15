@@ -93,7 +93,7 @@ func (s *server) serveSelectorBackfill(w http.ResponseWriter, r *http.Request, s
 		writeError(w, http.StatusBadRequest, errors.New("invalid selector version"))
 		return
 	}
-	maxDays, _ := strconv.Atoi(envOr("SVC_BACKFILL_MAX_DAYS", strconv.Itoa(svcBackfillDefaultMaxDays)))
+	maxDays, _ := strconv.Atoi(envOr("SVC_BACKFILL_MAX_DAYS", strconv.Itoa(svcBackfillDefaultMaxDays))) // best-effort: non-numeric → 0
 	if maxDays < 1 || maxDays > 366 {
 		maxDays = svcBackfillDefaultMaxDays
 	}

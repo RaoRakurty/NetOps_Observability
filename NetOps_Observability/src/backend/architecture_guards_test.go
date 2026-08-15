@@ -475,19 +475,78 @@ func TestPaginatedReadsReportTheirTotal(t *testing.T) {
 // vanished silently on store failure (fixed alongside this guard). Prose did
 // not hold that line; this does.
 //
-// The rule: any `=` assignment whose LAST result from a CALL is discarded
-// through a blank identifier (`_ = f()`, `_, _ = f()`, `x, _ = f()`) must
-// carry a comment on the SAME line or the line DIRECTLY above stating why
-// dropping it is safe (`// best-effort: <why>` is the house format). If it is
-// NOT safe to drop, do not write the comment — check the error and
-// log/propagate it. The LAST position is the test because Go convention puts
-// the error there: `_, err = f()` keeps the error and is fine; `x, _ = f()`
-// throws it away.
+// The rule: any assignment — `=` OR `:=` — whose LAST result from a CALL is an
+// ERROR discarded through a blank identifier (`_ = f()`, `_, _ = f()`,
+// `x, _ := f()`) must carry a REAL justification marker on the SAME line or the
+// line DIRECTLY above (`// best-effort: <why>` is the house format; `discard:`,
+// `//nolint`, `// #nosec`, "cannot fail" / "never fails" / "never returns an
+// error" also count). If it is NOT safe to drop, do not write the comment —
+// check the error and log/propagate it. The LAST position is the test because
+// Go convention puts the error there: `_, err = f()` keeps the error and is
+// fine; `x, _ = f()` throws it away.
+//
+// Two weaknesses the first version shipped with (M22), both closed here:
+//   - it checked only token.ASSIGN, so the ~215 `x, _ := f()` DEFINE sites —
+//     the more common way to throw an error away — were invisible; and
+//   - ANY comment on/above the line counted as justification, so a section
+//     header or an unrelated note silently satisfied it.
+//
+// Error-ness is decided WITHOUT a type-checker (a full go/types load of the
+// module costs minutes and needs the go tool): the guard builds a name→
+// signature map from every FuncDecl it parses (unanimous verdicts only) and
+// falls back to a table of well-known stdlib callables and io-convention
+// method names. Anything it cannot prove is an error (comma-ok bools like
+// principalTenant/userFrom, ambiguous names) is deliberately out of scope —
+// under-coverage is acceptable, spamming markers onto bool discards is not.
 //
 // Deliberate scope boundaries: `_ = ident` (keeping a symbol referenced) has
-// no result to lose; `x, _ := f()` (define) and non-call RHS (map/type-assert
-// comma-ok) are different idioms with their own guards. No file allowlist:
-// every site can carry a one-line comment.
+// no result to lose; non-call RHS (map/type-assert comma-ok) are different
+// idioms with their own guards. No file allowlist: every site can carry a
+// one-line comment.
+
+// discardMarkerRe accepts the justification vocabularies in use in this repo.
+// A bare unrelated comment must NOT satisfy the guard.
+var discardMarkerRe = regexp.MustCompile(`(?i)(best-effort|discard:|nolint|#nosec|cannot fail|never fails|never returns an error)`)
+
+// stdlibErrCallables maps qualified stdlib calls whose last result is an error.
+// Fallback only — in-repo declarations are resolved from their own FuncDecls.
+var stdlibErrCallables = map[string]bool{
+	"json.Marshal": true, "json.MarshalIndent": true, "json.Unmarshal": true,
+	"strconv.Atoi": true, "strconv.ParseInt": true, "strconv.ParseUint": true,
+	"strconv.ParseFloat": true, "strconv.ParseBool": true,
+	"io.ReadAll": true, "io.Copy": true, "io.WriteString": true,
+	"time.Parse": true, "time.ParseDuration": true, "time.ParseInLocation": true,
+	"os.Setenv": true, "os.Unsetenv": true, "os.Remove": true, "os.RemoveAll": true,
+	"os.MkdirAll": true, "os.WriteFile": true, "os.ReadFile": true, "os.Hostname": true,
+	"fmt.Sscanf": true, "fmt.Fscanf": true, "fmt.Fprintf": true, "fmt.Fprintln": true, "fmt.Fprint": true,
+	"url.Parse": true, "url.QueryUnescape": true, "url.PathUnescape": true,
+	"hex.DecodeString": true, "rand.Read": true,
+	"net.SplitHostPort": true, "net.ParseMAC": true,
+	"filepath.Rel": true, "filepath.Abs": true, "filepath.Glob": true, "filepath.Walk": true,
+	"fs.WalkDir": true, "filepath.WalkDir": true,
+	"mime.ParseMediaType": true,
+}
+
+// errMethodNames are io-convention method names whose last result is an error
+// on every implementation this module touches (receiver-blind fallback).
+var errMethodNames = map[string]bool{
+	"Write": true, "Read": true, "Close": true, "Flush": true, "Decode": true,
+	"Encode": true, "Rollback": true, "Commit": true, "Shutdown": true,
+	"WriteString": true, "WriteByte": true, "ReadFrom": true, "WriteTo": true,
+	"Sync": true, "Exec": true,
+}
+
+// lastResultIsError reports whether a FuncType's final result is literally
+// `error`.
+func lastResultIsError(ft *ast.FuncType) bool {
+	if ft == nil || ft.Results == nil || len(ft.Results.List) == 0 {
+		return false
+	}
+	lastField := ft.Results.List[len(ft.Results.List)-1]
+	id, ok := lastField.Type.(*ast.Ident)
+	return ok && id.Name == "error"
+}
+
 func TestBlankDiscardsCarryJustification(t *testing.T) {
 	fset := token.NewFileSet()
 	skipDir := map[string]bool{"vendor": true, "testdata": true, "node_modules": true}
@@ -518,40 +577,119 @@ func TestBlankDiscardsCarryJustification(t *testing.T) {
 	if len(files) < 400 {
 		t.Fatalf("only %d source files scanned — the guard is not seeing the whole module", len(files))
 	}
+
+	// Pass 1: name→verdict for every function/method declared in the module.
+	// Receiver-blind by design: if EVERY decl sharing a name agrees on whether
+	// its last result is an error, the name carries that verdict; a split name
+	// is ambiguous and proves nothing.
+	type verdict struct{ errLast, other int }
+	sigs := map[string]*verdict{}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			v := sigs[fd.Name.Name]
+			if v == nil {
+				v = &verdict{}
+				sigs[fd.Name.Name] = v
+			}
+			if lastResultIsError(fd.Type) {
+				v.errLast++
+			} else {
+				v.other++
+			}
+		}
+	}
+	// discardedErrProven: does this call's last result provably carry an error?
+	// importedAs maps a file's package qualifiers to their import paths so a
+	// package-qualified call is never mistaken for a method call: `pem.Decode`
+	// (last result []byte) must not match the io-convention "Decode" fallback.
+	discardedErrProven := func(call *ast.CallExpr, importedAs map[string]string) bool {
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if v, ok := sigs[fn.Name]; ok {
+				return v.errLast > 0 && v.other == 0
+			}
+			return false
+		case *ast.SelectorExpr:
+			if pkg, ok := fn.X.(*ast.Ident); ok {
+				if path, isPkg := importedAs[pkg.Name]; isPkg {
+					if is, ok := stdlibErrCallables[pkg.Name+"."+fn.Sel.Name]; ok {
+						return is
+					}
+					// In-repo packages are covered by the parsed FuncDecls;
+					// unknown external/stdlib callables prove nothing.
+					if strings.HasPrefix(path, "netops/backend") {
+						if v, ok := sigs[fn.Sel.Name]; ok {
+							return v.errLast > 0 && v.other == 0
+						}
+					}
+					return false
+				}
+			}
+			if v, ok := sigs[fn.Sel.Name]; ok && (v.errLast > 0 || v.other > 0) {
+				return v.errLast > 0 && v.other == 0
+			}
+			return errMethodNames[fn.Sel.Name]
+		default:
+			return false
+		}
+	}
+
+	// Pass 2: find the discards.
 	for path, f := range files {
-		// Every line on which a comment exists (or ends): a justification may
-		// sit at the end of the discard line or fill the line above it.
-		commented := map[int]bool{}
+		// This file's package qualifiers (import basename or alias → path).
+		importedAs := map[string]string{}
+		for _, imp := range f.Imports {
+			p := strings.Trim(imp.Path.Value, `"`)
+			name := p[strings.LastIndex(p, "/")+1:]
+			if imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != "." {
+				name = imp.Name.Name
+			}
+			importedAs[name] = p
+		}
+		// Justification lines: a marker comment at the end of the discard line
+		// or filling the line above it.
+		justified := map[int]bool{}
 		for _, cg := range f.Comments {
 			for _, c := range cg.List {
+				if !discardMarkerRe.MatchString(c.Text) {
+					continue
+				}
 				start := fset.Position(c.Pos()).Line
 				end := fset.Position(c.End()).Line
 				for l := start; l <= end; l++ {
-					commented[l] = true
+					justified[l] = true
 				}
 			}
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			as, ok := n.(*ast.AssignStmt)
-			if !ok || as.Tok != token.ASSIGN || len(as.Rhs) != 1 {
+			if !ok || (as.Tok != token.ASSIGN && as.Tok != token.DEFINE) || len(as.Rhs) != 1 {
 				return true
 			}
-			if _, isCall := as.Rhs[0].(*ast.CallExpr); !isCall {
+			call, isCall := as.Rhs[0].(*ast.CallExpr)
+			if !isCall {
 				return true
 			}
 			last, ok := as.Lhs[len(as.Lhs)-1].(*ast.Ident)
 			if !ok || last.Name != "_" {
 				return true // the error-position result is kept
 			}
+			if !discardedErrProven(call, importedAs) {
+				return true // not provably an error (comma-ok bool, ambiguous name)
+			}
 			line := fset.Position(as.Pos()).Line
-			if commented[line] || commented[line-1] {
+			if justified[line] || justified[line-1] {
 				return true
 			}
-			t.Errorf("%s:%d: a call result is discarded with `_` and NO justification.\n"+
+			t.Errorf("%s:%d: an ERROR result is discarded with `_` and NO justification marker.\n"+
 				"  CLAUDE.md §5: ignored errors are forbidden unless justified. Either check the\n"+
 				"  error (log at minimum, propagate where the contract expects it), or state on\n"+
-				"  this line or the line above why the failure is safe to drop\n"+
-				"  (`// best-effort: <why>`).", path, line)
+				"  this line or the line above why the failure is safe to drop, using a marker\n"+
+				"  the guard recognizes (`// best-effort: <why>` is the house format).", path, line)
 			return true
 		})
 	}

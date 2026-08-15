@@ -35,7 +35,7 @@ func (s *Slack) Send(a models.Alert) error {
 	body := map[string]string{
 		"text": fmt.Sprintf("[%s] %s — %s", a.Severity, a.Rule, a.Summary),
 	}
-	buf, _ := json.Marshal(body)
+	buf, _ := json.Marshal(body) // discard: marshalling an in-memory value cannot fail
 	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func (s *Slack) SendIncident(n IncidentNotice) error {
 	if s.webhookURL == "" {
 		return errors.New("slack webhook url not configured")
 	}
-	buf, _ := json.Marshal(BuildIncidentBlocks(n))
+	buf, _ := json.Marshal(BuildIncidentBlocks(n)) // discard: marshalling an in-memory value cannot fail
 	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return err

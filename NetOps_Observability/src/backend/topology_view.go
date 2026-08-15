@@ -42,8 +42,8 @@ func topologyModeOrDefault(m string) string {
 // reconciler all derive links identically and can never disagree.
 func (s *server) gatherTopoLinks(ctx context.Context, devs []models.Device) []topoLink {
 	ownedID, byName, byAddr := topoLinkMaps(devs)
-	neighbors, _ := collectors.FetchTopologyLinks(ctx)
-	ifaddr, _ := collectors.FetchIfAddrMap(ctx)
+	neighbors, _ := collectors.FetchTopologyLinks(ctx) // best-effort: collector off/unreachable → empty map
+	ifaddr, _ := collectors.FetchIfAddrMap(ctx)        // best-effort: collector off/unreachable → empty map
 	return topology.NormalizeLLDP(neighbors, ownedID, byName, byAddr, ifaddr)
 }
 

@@ -130,7 +130,7 @@ SELECT entity_id, count() AS n
 		if len(f) < 2 {
 			continue
 		}
-		n, _ := strconv.Atoi(strings.TrimSpace(f[1]))
+		n, _ := strconv.Atoi(strings.TrimSpace(f[1])) // best-effort: non-numeric → 0
 		if _, dst, ok := strings.Cut(f[0], "->"); ok {
 			probeFail[strings.TrimSpace(dst)] += n
 		} else {

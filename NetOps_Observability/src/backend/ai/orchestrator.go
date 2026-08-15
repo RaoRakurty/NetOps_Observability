@@ -1231,7 +1231,7 @@ func (o *Orchestrator) answerShiftHandoff(ctx context.Context, p Principal, plan
 func parseLookback(q string) (int, string) {
 	ql := strings.ToLower(q)
 	if m := reLookbackNum.FindStringSubmatch(ql); m != nil {
-		n, _ := strconv.Atoi(m[1])
+		n, _ := strconv.Atoi(m[1]) // discard: the regex captured digits only
 		if n < 1 {
 			n = 1
 		}

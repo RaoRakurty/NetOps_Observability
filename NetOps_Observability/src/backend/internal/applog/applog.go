@@ -37,7 +37,7 @@ func (l *Logger) Log(level, component, msg string, fields map[string]any) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_ = json.NewEncoder(l.w).Encode(event) // the logger has nowhere to report its own failure
+	_ = json.NewEncoder(l.w).Encode(event) // best-effort: the logger has nowhere to report its own failure
 }
 
 // std is the process logger. Package-level on purpose: it mirrors the

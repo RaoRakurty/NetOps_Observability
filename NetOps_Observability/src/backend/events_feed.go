@@ -280,7 +280,7 @@ SELECT toString(signal_id) AS signal_id,
 	if n := len(rows); n == limit {
 		last := rows[n-1]
 		msStr := fmt.Sprintf("%v", last["ts_ms"])
-		ms, _ := strconv.ParseInt(msStr, 10, 64)
+		ms, _ := strconv.ParseInt(msStr, 10, 64) // best-effort: non-numeric → 0
 		nextCursor = encodeFeedCursor(ms, fmt.Sprintf("%v", last["signal_id"]))
 	}
 
@@ -345,7 +345,7 @@ func (s *server) feedFacet(r *http.Request, where, dim string) map[string]int64 
 	out := map[string]int64{}
 	for _, row := range rows {
 		k := fmt.Sprintf("%v", row["k"])
-		c, _ := strconv.ParseInt(fmt.Sprintf("%v", row["c"]), 10, 64)
+		c, _ := strconv.ParseInt(fmt.Sprintf("%v", row["c"]), 10, 64) // best-effort: non-numeric → 0
 		out[k] = c
 	}
 	return out

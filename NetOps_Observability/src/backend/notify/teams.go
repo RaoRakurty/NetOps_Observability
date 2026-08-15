@@ -57,7 +57,7 @@ func (t *Teams) Send(a models.Alert) error {
 		"title":      fmt.Sprintf("[%s] %s", a.Severity, a.Rule),
 		"text":       text,
 	}
-	buf, _ := json.Marshal(card)
+	buf, _ := json.Marshal(card) // discard: marshalling an in-memory value cannot fail
 	resp, err := t.client.Post(t.webhookURL, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return err
@@ -77,7 +77,7 @@ func PostWebhook(url, text string) error {
 	if url == "" {
 		return errors.New("webhook url is empty")
 	}
-	buf, _ := json.Marshal(map[string]string{"text": text})
+	buf, _ := json.Marshal(map[string]string{"text": text}) // discard: marshalling an in-memory value cannot fail
 	c := safehttp.Client(10 * time.Second)
 	resp, err := c.Post(url, "application/json", bytes.NewReader(buf))
 	if err != nil {

@@ -309,7 +309,7 @@ func (p *Provider) Exchange(code, redirectURI, codeVerifier string) (string, err
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode >= 300 {
 		return "", errors.New(strings.TrimSpace(string(body)))
 	}

@@ -89,7 +89,7 @@ func (s *ServiceNow) PollState(number string) (state string, version int64, foun
 	if len(out.Result) == 0 {
 		return "", 0, false, nil
 	}
-	v, _ := strconv.ParseInt(out.Result[0].SysModCount, 10, 64)
+	v, _ := strconv.ParseInt(out.Result[0].SysModCount, 10, 64) // best-effort: non-numeric → 0
 	return out.Result[0].State, v, true, nil
 }
 
@@ -289,7 +289,7 @@ func (s *ServiceNow) createIncident(a models.Alert) (string, string, error) {
 	if s.assignmentGroup != "" {
 		payload["assignment_group"] = s.assignmentGroup
 	}
-	buf, _ := json.Marshal(payload)
+	buf, _ := json.Marshal(payload) // discard: marshalling an in-memory value cannot fail
 
 	url := s.instanceURL + "/api/now/table/incident"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
@@ -332,7 +332,7 @@ func (s *ServiceNow) resolveIncident(sysID string) error {
 		"close_notes": "Auto-resolved by Correlix: the underlying alert cleared.",
 		"work_notes":  "Alert cleared; incident auto-resolved by Correlix.",
 	}
-	buf, _ := json.Marshal(payload)
+	buf, _ := json.Marshal(payload) // discard: marshalling an in-memory value cannot fail
 	url := s.instanceURL + "/api/now/table/incident/" + sysID
 	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(buf))
 	if err != nil {

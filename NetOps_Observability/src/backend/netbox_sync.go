@@ -73,9 +73,9 @@ func (s *netboxSyncer) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-first.C:
-				_, _ = s.SyncOnce(ctx) // errors are recorded in Status() and logged by SyncOnce
+				_, _ = s.SyncOnce(ctx) // best-effort: errors are recorded in Status() and logged by SyncOnce
 			case <-tick.C:
-				_, _ = s.SyncOnce(ctx) // errors are recorded in Status() and logged by SyncOnce
+				_, _ = s.SyncOnce(ctx) // best-effort: errors are recorded in Status() and logged by SyncOnce
 			}
 		}
 	}()
@@ -310,7 +310,7 @@ func (s *netboxSyncer) req(ctx context.Context, method, fullURL, token string, b
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // best-effort: diagnostic snippet; a read error just leaves it empty
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("netbox %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
