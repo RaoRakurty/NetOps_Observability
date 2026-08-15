@@ -41,22 +41,7 @@ func (s *server) handleTACACSLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
 		return
 	}
-	user, err := s.users.UpsertFederated(req.Username, "", req.Username, t.DefaultRole(), "tacacs", t.DefaultTenant())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.logBindingSync(user, "tacacs") // PBAC Phase A: mirror the provisioned identity
-	if user.Status == "disabled" {
-		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
-		return
-	}
-	// #146b parity: tenant suspension + hard account-lifecycle denials, same
-	// as the password path (403: the credentials were right).
-	if msg := s.federatedLoginBarrier(r, user); msg != "" {
-		writeError(w, http.StatusForbidden, errors.New(msg))
-		return
-	}
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "tacacs"})
-	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
+	// Provisioning + account-state gates + session, shared with LDAP (auth.go).
+	// H1: refuses outright when the username names a LOCALLY-managed account.
+	s.completeFederatedLogin(w, r, req.Username, "", req.Username, t.DefaultRole(), "tacacs", t.DefaultTenant())
 }

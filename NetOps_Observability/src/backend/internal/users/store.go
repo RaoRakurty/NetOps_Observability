@@ -167,8 +167,24 @@ func (s *FileStore) load() error {
 	if err := json.Unmarshal(b, &list); err != nil {
 		return err
 	}
+	migrated := false
 	for _, u := range list {
+		// One-time migration (H1): Create/SeedAdmin historically never stamped
+		// AuthSource, so pre-existing LOCAL rows (including the bootstrap admin)
+		// carry "". UpsertFederated used to read that "" as "not local" and merge
+		// an IdP identity — role, source and all — straight into the local
+		// account. Every write path now stamps the source explicitly, and legacy
+		// rows are normalized here so the local/federated split is unambiguous.
+		if u.AuthSource == "" {
+			u.AuthSource = "local"
+			migrated = true
+		}
 		s.users[strings.ToLower(u.Username)] = u
+	}
+	if migrated {
+		// Persist the normalization once at load. Safe without s.mu: load runs
+		// inside NewFileStore, before the store is shared.
+		return s.flushLocked()
 	}
 	return nil
 }
@@ -207,6 +223,7 @@ func (s *FileStore) Create(username, password, role string) (User, error) {
 	u := User{
 		Username:     username,
 		Role:         role,
+		AuthSource:   "local", // H1: stamp explicitly — "" must never be read as federated
 		PasswordHash: hash,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -284,8 +301,11 @@ func (s *FileStore) CreateFull(u User, password string) (User, error) {
 // IdP (via Keycloak). On first login it creates a passwordless account
 // (auth_source != local); on subsequent logins it refreshes the profile and the
 // IdP-derived role so Keycloak role/group changes propagate. A pre-existing
-// LOCAL account of the same name is never silently converted or re-roled — the
-// federated login is accepted against it but local management wins.
+// LOCAL account of the same name is REFUSED with ErrLocalAccount (H1): accepting
+// the IdP's verdict against a local record would bypass the local password AND
+// its MFA enrollment — the identity the IdP proved is not the identity the
+// local credential protects. AuthSource=="" counts as local (legacy/bootstrap
+// rows predating the stamp; see load()'s migration).
 
 func (s *FileStore) UpsertFederated(username, email, displayName, role, source, tenant string) (User, error) {
 	username = strings.TrimSpace(username)
@@ -299,15 +319,16 @@ func (s *FileStore) UpsertFederated(username, email, displayName, role, source, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if u, ok := s.users[key]; ok {
-		if u.AuthSource != "local" {
-			// Federated account — keep it in sync with the IdP (SR-025: guard the
-			// IdP-mapped role against silent platform-owner escalation, using the
-			// account's existing tenant).
-			u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
-			s.users[key] = u
-			if err := s.flushLocked(); err != nil {
-				return User{}, err
-			}
+		if IsLocalSource(u.AuthSource) {
+			return User{}, ErrLocalAccount
+		}
+		// Federated account — keep it in sync with the IdP (SR-025: guard the
+		// IdP-mapped role against silent platform-owner escalation, using the
+		// account's existing tenant).
+		u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
+		s.users[key] = u
+		if err := s.flushLocked(); err != nil {
+			return User{}, err
 		}
 		return u, nil
 	}
@@ -493,7 +514,21 @@ var (
 	ErrLastSuperAdmin       = errors.New("cannot demote or disable the last super-admin")
 	ErrLastSuperAdminDelete = errors.New("cannot delete the last super-admin")
 	ErrNoSuchUser           = errors.New("no such user")
+	// ErrLocalAccount is UpsertFederated's typed refusal when the federated
+	// username collides with a LOCALLY-managed account (H1). The caller decides
+	// the HTTP shape; the store only guarantees the local record is untouched.
+	ErrLocalAccount = errors.New("account is managed locally; federated sign-in refused")
 )
+
+// IsLocalSource reports whether an auth_source marks a LOCALLY-managed account
+// (password + MFA owned by us, not an IdP). Mirrors the integrator's
+// isLocalAccount predicate (duplicated per the no-shared-utils rule): an empty
+// source is a legacy/bootstrap LOCAL account — treating it as federated is
+// exactly the H1 hole that let an IdP identity absorb the bootstrap admin.
+func IsLocalSource(authSource string) bool {
+	s := strings.ToLower(strings.TrimSpace(authSource))
+	return s == "" || s == "local"
+}
 
 // ValidatePassword enforces the minimum password length (a non-empty password
 // must be at least 8 characters). Empty is handled by the callers (CreateFull
@@ -553,8 +588,9 @@ func UpdateTouchesLastSuperAdmin(u, patch User, isSuper func(string) bool) bool 
 
 // MergeFederated refreshes a federated (non-local) account from its IdP: any
 // non-empty incoming attribute overwrites, and the auth source is updated so a
-// user that moved IdPs (oidc→ldap) is re-tagged. Pure. A pre-existing LOCAL
-// account is never passed here — local management wins (see UpsertFederated).
+// user that moved IdPs (oidc→ldap) is re-tagged. Pure. A LOCAL account
+// (IsLocalSource) is never passed here — UpsertFederated refuses it with
+// ErrLocalAccount before any merge.
 func MergeFederated(u User, email, displayName, role, source string) User {
 	if email != "" {
 		u.Email = email

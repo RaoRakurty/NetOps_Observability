@@ -11,6 +11,7 @@ package backend
 import (
 	"netops/backend/internal/platformdb"
 	"os"
+	"strings"
 
 	"netops/backend/internal/users"
 )
@@ -25,8 +26,15 @@ type (
 // platform owner (global tenant + super-admin) via an IdP role/tenant mapping
 // (SR-025). A mis-mapped IdP group must not seize cross-tenant control; require
 // an explicit FEDERATION_ALLOW_PLATFORM_OWNER=true opt-in, otherwise downgrade.
+//
+// H1c: the predicate must match isPlatformOwner's exactly, or the guard has
+// holes the owner check does not — tenant is normalized (lowercase/trim) and ""
+// counts as the global/platform realm, and the role goes through
+// isSuperAdminRole so the legacy "admin" alias (which grants full super-admin
+// everywhere else) cannot slip past a literal RoleSuperAdmin comparison.
 func guardFederatedRole(role, tenant, username, source string) string {
-	if tenant == TenantGlobal && role == RoleSuperAdmin && os.Getenv("FEDERATION_ALLOW_PLATFORM_OWNER") != "true" {
+	t := strings.ToLower(strings.TrimSpace(tenant))
+	if (t == "" || t == TenantGlobal) && isSuperAdminRole(role) && os.Getenv("FEDERATION_ALLOW_PLATFORM_OWNER") != "true" {
 		logWarn("auth", "refused federated platform-owner mapping — downgrading role; set FEDERATION_ALLOW_PLATFORM_OWNER=true to allow",
 			map[string]any{"user": username, "source": source})
 		return RoleReadOnly

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"netops/backend/internal/oidc"
+	"netops/backend/internal/users"
 )
 
 // oidc.go — Single Sign-On via Keycloak (broker-and-reissue model).
@@ -189,6 +190,17 @@ func (s *server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	role := p.RoleFor(claims)
 	user, err := s.users.UpsertFederated(username, claims.Email, firstNonEmpty(claims.Name, username), role, "oidc", p.DefaultTenant())
 	if err != nil {
+		// H1: the username names a LOCALLY-managed account — the IdP's verdict
+		// must not be accepted against it (that would bypass the local password
+		// AND its MFA enrollment, and used to let the IdP re-role/re-source the
+		// record, bootstrap admin included). Refuse; the local login path is the
+		// only door for this account.
+		if errors.Is(err, users.ErrLocalAccount) {
+			logWarn("auth", "sso login refused: username collides with a locally-managed account",
+				map[string]any{"user": username, "src": "oidc"})
+			s.ssoFail(w, r, "this account is managed locally; sign in with your local password")
+			return
+		}
 		s.ssoFail(w, r, "provisioning failed: "+err.Error())
 		return
 	}

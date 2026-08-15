@@ -2,6 +2,7 @@ package users
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"netops/backend/internal/platformdb"
 	"os"
@@ -94,23 +95,42 @@ func runUserStoreAuthorizationContract(t *testing.T, newStore func(t *testing.T,
 		}
 	})
 
-	t.Run("local account is never converted or re-roled", func(t *testing.T) {
+	t.Run("local account is refused, never converted or re-roled", func(t *testing.T) {
+		// H1: a colliding LOCAL account is a typed REFUSAL (ErrLocalAccount) —
+		// accepting the IdP's verdict against it would bypass the local password
+		// and its MFA enrollment. The record must come through untouched.
 		if _, err := s.CreateFull(User{Username: "locadmin", Role: "admin", TenantID: "acme"}, "Passw0rd!2345"); err != nil {
 			t.Fatalf("create local: %v", err)
 		}
 		g.calls = nil
-		u, err := s.UpsertFederated("locadmin", "idp@x.com", "IdP", "super-admin", "oidc", "global")
-		if err != nil {
-			t.Fatalf("federated login against local account must be accepted: %v", err)
+		_, err := s.UpsertFederated("locadmin", "idp@x.com", "IdP", "super-admin", "oidc", "global")
+		if !errors.Is(err, ErrLocalAccount) {
+			t.Fatalf("federated login against local account: err = %v, want ErrLocalAccount", err)
 		}
 		if len(g.calls) != 0 {
 			t.Errorf("guard consulted %d times on a local account — its verdict is irrelevant here", len(g.calls))
 		}
-		if u.Role != "admin" || u.AuthSource != "local" || u.Email != "" {
-			t.Errorf("local account mutated by federated login: %+v", u)
+		if got, _ := s.Get("locadmin"); got.Role != "admin" || got.AuthSource != "local" || got.Email != "" {
+			t.Errorf("persisted local account mutated by refused federated login: %+v", got)
 		}
-		if got, _ := s.Get("locadmin"); got.Role != "admin" || got.AuthSource != "local" {
-			t.Errorf("persisted local account mutated: %+v", got)
+	})
+
+	t.Run("H1: bootstrap/seeded admin counts as local", func(t *testing.T) {
+		// SeedAdmin/Create historically left AuthSource "" — which used to count
+		// as federated, letting a TACACS/LDAP/OIDC identity of the same name be
+		// MERGED into the bootstrap admin (re-role, re-source, MFA bypass). The
+		// stamp + the ""-is-local predicate close it; this pins both.
+		if _, err := s.Create("boot-admin", "Passw0rd!2345", "admin"); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if got, _ := s.Get("boot-admin"); got.AuthSource != "local" {
+			t.Fatalf("Create stamped AuthSource=%q, want %q", got.AuthSource, "local")
+		}
+		if _, err := s.UpsertFederated("boot-admin", "a@idp", "IdP Admin", "super-admin", "tacacs", ""); !errors.Is(err, ErrLocalAccount) {
+			t.Fatalf("federated login against seeded admin: err = %v, want ErrLocalAccount", err)
+		}
+		if got, _ := s.Get("boot-admin"); got.Role != "admin" || got.AuthSource != "local" {
+			t.Errorf("seeded admin mutated by refused federated login: %+v", got)
 		}
 	})
 
@@ -151,6 +171,65 @@ func TestPGStoreAuthorizationContract(t *testing.T) {
 		}
 		return s
 	})
+}
+
+// TestPGStoreMigratesEmptyAuthSource — pg twin of the FileStore load migration
+// (H1): a row written before the AuthSource stamp (auth_source "") is
+// normalized to "local" when the store opens, so UpsertFederated's
+// local-account refusal covers the pre-existing bootstrap admin. Gated on
+// DATABASE_URL_TEST like every pg-backed test.
+func TestPGStoreMigratesEmptyAuthSource(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres auth-source migration test")
+	}
+	ctx := context.Background()
+	appDSN := provisionAppRole(ctx, t, adminDSN)
+	ps, err := platformdb.NewPGStore(ctx, appDSN)
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.DB().Close()
+
+	// Seed a LEGACY row directly (no exported write path can produce "" any
+	// more). Platform scope satisfies the FORCE-RLS tenant_iso policy.
+	conn, err := pgx.Connect(ctx, appDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SET app.current_tenant = '*'`); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO users (id, tenant_id, data) VALUES
+		('legacyadmin', '', '{"username":"legacyadmin","role":"admin","password_hash":"x"}')`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	if err := conn.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d := Deps{
+		KV:           fileKV{},
+		Errorf:       func(string, string, map[string]any) {},
+		GuardRole:    func(role, _, _, _ string) string { return role },
+		IsSuperAdmin: func(role string) bool { return role == "super-admin" || role == "admin" },
+		ApplyPasswordChange: func(u *User, hash string, now time.Time) {
+			u.PasswordHash = hash
+			u.PasswordChangedAt = now
+		},
+		DefaultTenant: "global",
+	}
+	s, err := NewPGStore(ps.DB(), d) // constructor runs the one-time migration
+	if err != nil {
+		t.Fatalf("NewPGStore: %v", err)
+	}
+	u, ok := s.Get("legacyadmin")
+	if !ok || u.AuthSource != "local" {
+		t.Fatalf("legacy row after open: AuthSource=%q ok=%v, want \"local\"", u.AuthSource, ok)
+	}
+	if _, err := s.UpsertFederated("legacyadmin", "a@idp", "IdP", "super-admin", "oidc", ""); !errors.Is(err, ErrLocalAccount) {
+		t.Fatalf("federated login against migrated local admin: err = %v, want ErrLocalAccount", err)
+	}
 }
 
 // provisionAppRole duplicates the platformdb test fixture (test files cannot

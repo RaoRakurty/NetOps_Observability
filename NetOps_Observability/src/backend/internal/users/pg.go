@@ -51,7 +51,28 @@ func NewPGStore(db DB, d Deps) (*PGStore, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	return &PGStore{db: db, deps: d}, nil
+	s := &PGStore{db: db, deps: d}
+	if err := s.migrateLocalAuthSource(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// migrateLocalAuthSource is the pg twin of FileStore.load()'s one-time H1
+// normalization: rows written by Create/SeedAdmin before the stamp carry an
+// empty auth_source, which UpsertFederated used to read as "not local" and
+// merge an IdP identity into. Runs at construction, platform scope, and is
+// idempotent (matches nothing once every row is stamped). Fail-closed: a store
+// that cannot prove its local/federated split does not open.
+func (s *PGStore) migrateLocalAuthSource() error {
+	ctx, cancel := usersCtx()
+	defer cancel()
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE users
+			SET data = jsonb_set(data, '{auth_source}', '"local"'), updated_at = now()
+			WHERE COALESCE(data->>'auth_source', '') = ''`)
+		return err
+	})
 }
 
 // normTenant mirrors the integrator's tenant-id normalization (duplicated per
@@ -162,7 +183,8 @@ func (s *PGStore) Create(username, password, role string) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	u := User{Username: username, Role: role, PasswordHash: hash, CreatedAt: time.Now().UTC()}
+	// AuthSource stamped explicitly (H1) — "" must never be read as federated.
+	u := User{Username: username, Role: role, AuthSource: "local", PasswordHash: hash, CreatedAt: time.Now().UTC()}
 	return s.insertNew(u, false)
 }
 
@@ -374,16 +396,18 @@ func (s *PGStore) UpsertFederated(username, email, displayName, role, source, te
 		u, err := loadUserTx(ctx, tx, id)
 		switch {
 		case err == nil:
-			// Existing account. A LOCAL account is never re-roled by federation —
-			// local management wins; the federated login is just accepted against it.
-			if u.AuthSource != "local" {
-				// Federated account — keep it in sync with the IdP (SR-025: guard the
-				// IdP-mapped role against silent platform-owner escalation, using the
-				// account's existing tenant).
-				u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
-				if err := writeUserTx(ctx, tx, u); err != nil {
-					return err
-				}
+			// Existing account. A LOCAL account (IsLocalSource — "" is local) is
+			// REFUSED (H1): merging would bypass the local password + MFA and let
+			// the IdP re-role/re-source the record. See the FileStore doc.
+			if IsLocalSource(u.AuthSource) {
+				return ErrLocalAccount
+			}
+			// Federated account — keep it in sync with the IdP (SR-025: guard the
+			// IdP-mapped role against silent platform-owner escalation, using the
+			// account's existing tenant).
+			u = MergeFederated(u, email, displayName, s.deps.GuardRole(role, u.TenantID, username, source), source)
+			if err := writeUserTx(ctx, tx, u); err != nil {
+				return err
 			}
 			out = u
 			return nil

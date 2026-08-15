@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"netops/backend/internal/apikey"
+	"netops/backend/internal/jwks"
 	"netops/backend/internal/session"
 	"netops/backend/internal/token"
+	"netops/backend/internal/users"
 	"netops/backend/policy"
 )
 
@@ -408,6 +410,45 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, user User)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, RefreshToken: refresh, ExpiresIn: int(ttl.Seconds()), User: toPublic(user),
 	})
+}
+
+// completeFederatedLogin finishes a TACACS+/LDAP sign-in after the external
+// server verified the credentials: JIT-provision/refresh the account, run the
+// same account-state gates as handleLogin, and issue the session. Shared by
+// handleTACACSLogin and handleLDAPLogin so the two JSON federated front doors
+// cannot drift.
+//
+// H1: UpsertFederated REFUSES (users.ErrLocalAccount) when the username
+// collides with a LOCALLY-managed account — accepting the IdP's verdict against
+// a local record would bypass the local password AND its MFA enrollment, and
+// used to let the IdP re-role/re-source the record (the bootstrap admin's empty
+// AuthSource counted as federated). The refusal is 403: the IdP credentials
+// were right; this account just isn't federated — sign in locally instead.
+func (s *server) completeFederatedLogin(w http.ResponseWriter, r *http.Request, username, email, displayName, role, source, tenant string) {
+	user, err := s.users.UpsertFederated(username, email, displayName, role, source, tenant)
+	if err != nil {
+		if errors.Is(err, users.ErrLocalAccount) {
+			logWarn("auth", "federated login refused: username collides with a locally-managed account",
+				map[string]any{"user": username, "src": source})
+			writeError(w, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password"))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.logBindingSync(user, source) // PBAC Phase A: mirror the provisioned identity
+	if user.Status == "disabled" {
+		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
+		return
+	}
+	// #146b parity: tenant suspension + hard account-lifecycle denials, same
+	// as the password path (403: the credentials were right).
+	if msg := s.federatedLoginBarrier(r, user); msg != "" {
+		writeError(w, http.StatusForbidden, errors.New(msg))
+		return
+	}
+	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": source})
+	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
 }
 
 // handleRefresh trades a valid (rotating) refresh token for a fresh access
@@ -864,10 +905,25 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/devices/") && strings.HasSuffix(r.URL.Path, "/ssh") {
 			if raw := r.URL.Query().Get("ticket"); raw != "" && s.wsTickets != nil {
 				if tkt, ok := s.wsTickets.Consume(raw, time.Now()); ok {
-					ctx := context.WithValue(r.Context(), wsTicketCtxKey, tkt)
-					ctx = context.WithValue(ctx, userCtxKey, s.withActingTenant(r, jwtClaims{
+					claims := s.withActingTenant(r, jwtClaims{
 						Sub: tkt.UserID, Role: tkt.Role, Tenant: tkt.TenantID,
-					}))
+					})
+					// Ticket redemption owes the same per-request account gates as
+					// the JWT path below: a ticket minted seconds before an admin
+					// disabled the user (or suspended the tenant) must not open a
+					// device session. The ticket carries no Sid, so session-active
+					// cannot be checked here — that is a separate design item, not
+					// something to fake with a lookup the ticket doesn't bind.
+					if u, uok := s.users.Get(tkt.UserID); !uok || u.Status == "disabled" {
+						writeError(w, http.StatusUnauthorized, errors.New("account unavailable"))
+						return
+					}
+					if s.tenantSuspended(claims) {
+						writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+						return
+					}
+					ctx := context.WithValue(r.Context(), wsTicketCtxKey, tkt)
+					ctx = context.WithValue(ctx, userCtxKey, claims)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -922,7 +978,16 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
 				return
 			}
-			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
+			// M7: re-check suspension on the EFFECTIVE tenant — withActingTenant
+			// rewrites a non-owner's tenant (as_tenant / X-Acting-Tenant into a
+			// reachable tenant), and a suspended tenant must stay closed through
+			// the switcher, not just for principals whose TOKEN names it.
+			eff := s.withActingTenant(r, claims)
+			if s.tenantSuspended(eff) {
+				writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+				return
+			}
+			ctx := context.WithValue(r.Context(), userCtxKey, eff)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -960,33 +1025,106 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 				writeJSONError(w, http.StatusUnauthorized, "session ended", "SESSION_REVOKED")
 				return
 			}
-			ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, claims))
+			// M7: the suspension check above ran on the TOKEN tenant, but
+			// withActingTenant may rewrite a non-owner's tenant (the multi-tenant
+			// switcher, as_tenant / X-Acting-Tenant into any reachable tenant).
+			// Re-evaluate on the EFFECTIVE tenant, or an org-admin/MSP principal
+			// keeps a side door into a tenant the platform just suspended. The
+			// platform owner is exempt inside tenantSuspended by design (it must
+			// reach a suspended tenant to reactivate it).
+			eff := s.withActingTenant(r, claims)
+			if s.tenantSuspended(eff) {
+				writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+				return
+			}
+			ctx := context.WithValue(r.Context(), userCtxKey, eff)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		// Otherwise, if SSO is configured, accept a Keycloak-signed RS256 Bearer
-		// (service accounts / direct API clients) verified against its JWKS.
+		// (service accounts / direct API clients) verified against its JWKS. The
+		// verified token proves the IDENTITY only; bearerPrincipal then applies
+		// the stored-account gates (H2) so this path cannot outlive or outrank
+		// what the account store says about the principal.
 		if op := s.oidcProvider(); op.Ready() {
 			if oc, verr := op.VerifyBearer(bearer); verr == nil {
-				// SR-025: the bearer path mints claims DIRECTLY, so it must apply the
-				// same federated platform-owner guard the interactive login gets for
-				// free via users.UpsertFederated (oidc.go). Without it an IdP token
-				// whose roles/groups merely contain "admin" (a default OIDC_ADMIN_ROLES
-				// value) mapped to super-admin + the global tenant — i.e. cross-tenant
-				// platform-owner reach — with FEDERATION_ALLOW_PLATFORM_OWNER unset.
-				sub := firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub)
-				tenant := op.DefaultTenant()
-				ctx := context.WithValue(r.Context(), userCtxKey, s.withActingTenant(r, jwtClaims{
-					Sub:    sub,
-					Role:   guardFederatedRole(op.RoleFor(oc), tenant, sub, "oidc-bearer"),
-					Tenant: tenant,
-				}))
+				claims, status, berr := s.bearerPrincipal(r, op, oc)
+				if berr != nil {
+					writeError(w, status, berr)
+					return
+				}
+				// M7: suspension on the EFFECTIVE tenant, same as the branches above.
+				eff := s.withActingTenant(r, claims)
+				if s.tenantSuspended(eff) {
+					writeError(w, http.StatusForbidden, errors.New("tenant suspended"))
+					return
+				}
+				ctx := context.WithValue(r.Context(), userCtxKey, eff)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 		}
 		writeError(w, http.StatusUnauthorized, err)
 	})
+}
+
+// bearerPrincipal resolves an IdP-verified RS256 bearer (service accounts /
+// direct API clients) into request claims, applying the SAME stored-account
+// gates the HS256 session branch enforces inline (H2). Before this helper the
+// branch minted claims purely from the IdP token: a DISABLED account kept API
+// access for the token's whole lifetime, the STORED tenant/role (an operator's
+// tenant move or demotion) were ignored in favour of OIDC_DEFAULT_TENANT plus
+// the raw IdP role mapping, and the federatedLoginBarrier lifecycle gates
+// (tenant suspension, account validity/inactivity) never ran here at all.
+//
+//   - Known user → the STORED account is authoritative: disabled → 401, and the
+//     stored tenant/role are what the request acts as. A LOCAL account (H1,
+//     isLocalAccount — "" counts as local) is refused outright: an IdP identity
+//     must never act as a colliding local account, which would bypass its
+//     password and MFA enrollment.
+//   - Unknown user → JIT-provision via UpsertFederated, exactly like the
+//     interactive SSO callback (same SR-025 guardFederatedRole downgrade via
+//     the store's Deps.GuardRole; same JIT tenant default).
+//   - RequireMFA is honoured for USER tokens: the IdP must assert a second
+//     factor (amr/acr), as the SSO callback demands. Tokens carrying an azp
+//     (authorized-party/client id) claim are treated as service-account
+//     (client-credentials) grants and exempted — a machine principal has no
+//     interactive second factor. Deliberate trade-off, documented here: an IdP
+//     that stamps azp on user tokens too (Keycloak often does) bypasses this
+//     check for them; the interactive login path still enforces it, and the
+//     bearer path never mints a session.
+func (s *server) bearerPrincipal(r *http.Request, op *oidcProvider, oc jwks.Claims) (jwtClaims, int, error) {
+	sub := firstNonEmpty(oc.PreferredUsername, oc.Email, oc.Sub)
+	if sub == "" {
+		return jwtClaims{}, http.StatusUnauthorized, errors.New("bearer token carried no usable subject")
+	}
+	if op.RequireMFA() && oc.Azp == "" && !op.MFASatisfied(oc) {
+		logWarn("auth", "bearer rejected — MFA required but not asserted by IdP", map[string]any{"sub": oc.Sub, "amr": oc.Amr, "acr": oc.Acr})
+		return jwtClaims{}, http.StatusUnauthorized, errors.New("multi-factor authentication is required — token does not assert a second factor")
+	}
+	u, ok := s.users.Get(sub)
+	if !ok {
+		var err error
+		u, err = s.users.UpsertFederated(sub, oc.Email, firstNonEmpty(oc.Name, sub), op.RoleFor(oc), "oidc", op.DefaultTenant())
+		if err != nil {
+			if errors.Is(err, users.ErrLocalAccount) {
+				return jwtClaims{}, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password")
+			}
+			return jwtClaims{}, http.StatusInternalServerError, err
+		}
+		s.logBindingSync(u, "oidc") // PBAC Phase A: mirror the provisioned identity
+	} else if isLocalAccount(u.AuthSource) {
+		return jwtClaims{}, http.StatusForbidden, errors.New("this account is managed locally; sign in with your local password")
+	}
+	if u.Status == "disabled" {
+		return jwtClaims{}, http.StatusUnauthorized, errors.New("account unavailable")
+	}
+	// #146b parity: tenant suspension + hard account-lifecycle denials, exactly
+	// what the interactive federated logins run (403: the token was valid).
+	if msg := s.federatedLoginBarrier(r, u); msg != "" {
+		return jwtClaims{}, http.StatusForbidden, errors.New(msg)
+	}
+	return jwtClaims{Sub: u.Username, Role: u.Role, Tenant: u.TenantID}, 0, nil
 }
 
 func userFrom(ctx context.Context) (jwtClaims, bool) {

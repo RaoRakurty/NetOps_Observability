@@ -83,22 +83,7 @@ func (s *server) handleLDAPLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role := ldap.RoleFor(id.Groups, cfg.RoleMappings, cfg.DefaultRole)
-	user, err := s.users.UpsertFederated(req.Username, id.Email, firstNonEmpty(id.DisplayName, req.Username), role, "ldap", cfg.DefaultTenant)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.logBindingSync(user, "ldap") // PBAC Phase A: mirror the provisioned identity
-	if user.Status == "disabled" {
-		writeError(w, http.StatusUnauthorized, errors.New("account disabled"))
-		return
-	}
-	// #146b parity: tenant suspension + hard account-lifecycle denials, same
-	// as the password path (403: the credentials were right).
-	if msg := s.federatedLoginBarrier(r, user); msg != "" {
-		writeError(w, http.StatusForbidden, errors.New(msg))
-		return
-	}
-	logInfo("auth", "login ok", map[string]any{"user": user.Username, "role": user.Role, "src": "ldap"})
-	s.issueSession(w, r, user) // server-side session + tokens (same as password login)
+	// Provisioning + account-state gates + session, shared with TACACS+ (auth.go).
+	// H1: refuses outright when the username names a LOCALLY-managed account.
+	s.completeFederatedLogin(w, r, req.Username, id.Email, firstNonEmpty(id.DisplayName, req.Username), role, "ldap", cfg.DefaultTenant)
 }
