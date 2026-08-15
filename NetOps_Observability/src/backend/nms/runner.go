@@ -72,8 +72,8 @@ func (d *RetryDoer) Do(req *http.Request) (*http.Response, error) {
 			return resp, nil // return the final non-2xx to the caller to inspect
 		}
 		if resp != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-			_ = resp.Body.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16)) // best-effort: drain for connection reuse
+			_ = resp.Body.Close()                                        // best-effort: nothing actionable on close failure
 		}
 		if serr := d.sleep(ctx, delay); serr != nil {
 			if lastErr != nil {

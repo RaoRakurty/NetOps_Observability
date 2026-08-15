@@ -306,7 +306,7 @@ func explode(spec rowSpec, blob []byte) ([]rowValue, error) {
 			rv.tenant = strings.ToLower(strings.TrimSpace(t))
 		}
 		if spec.typeField != "" {
-			rv.typ, _ = strField(fields, spec.typeField)
+			rv.typ, _ = strField(fields, spec.typeField) // best-effort: absent/malformed field leaves it empty
 		}
 		if spec.tsField != "" {
 			if raw, ok := fields[spec.tsField]; ok {

@@ -2,6 +2,8 @@ package backend
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -461,6 +463,97 @@ func TestPaginatedReadsReportTheirTotal(t *testing.T) {
 		t.Error("pageSliceOf must return an empty slice when the offset is past the end. " +
 			"A clamped last page re-serves rows the caller already walked, so a sequential " +
 			"walk never terminates.")
+	}
+}
+
+// TestBlankDiscardsCarryJustification makes CLAUDE.md §5 self-enforcing:
+// "no ignored errors — `_ = err` is forbidden unless justified".
+//
+// The 2026-08 standards audit found ~268 bare `_ =` discards of call results in
+// non-test code, almost all unjustified — among them the report pipeline's
+// RecordEvent phase events and the inbound-integration ledger verdicts, which
+// vanished silently on store failure (fixed alongside this guard). Prose did
+// not hold that line; this does.
+//
+// The rule: any `=` assignment whose LAST result from a CALL is discarded
+// through a blank identifier (`_ = f()`, `_, _ = f()`, `x, _ = f()`) must
+// carry a comment on the SAME line or the line DIRECTLY above stating why
+// dropping it is safe (`// best-effort: <why>` is the house format). If it is
+// NOT safe to drop, do not write the comment — check the error and
+// log/propagate it. The LAST position is the test because Go convention puts
+// the error there: `_, err = f()` keeps the error and is fine; `x, _ = f()`
+// throws it away.
+//
+// Deliberate scope boundaries: `_ = ident` (keeping a symbol referenced) has
+// no result to lose; `x, _ := f()` (define) and non-call RHS (map/type-assert
+// comma-ok) are different idioms with their own guards. No file allowlist:
+// every site can carry a one-line comment.
+func TestBlankDiscardsCarryJustification(t *testing.T) {
+	fset := token.NewFileSet()
+	skipDir := map[string]bool{"vendor": true, "testdata": true, "node_modules": true}
+	files := map[string]*ast.File{}
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDir[d.Name()] || (strings.HasPrefix(d.Name(), ".") && d.Name() != ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if perr != nil {
+			return perr // an unparseable file must FAIL the guard, not shrink its scope (see goSourcesRaw)
+		}
+		files[filepath.ToSlash(path)] = f
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk backend module: %v", err)
+	}
+	if len(files) < 400 {
+		t.Fatalf("only %d source files scanned — the guard is not seeing the whole module", len(files))
+	}
+	for path, f := range files {
+		// Every line on which a comment exists (or ends): a justification may
+		// sit at the end of the discard line or fill the line above it.
+		commented := map[int]bool{}
+		for _, cg := range f.Comments {
+			for _, c := range cg.List {
+				start := fset.Position(c.Pos()).Line
+				end := fset.Position(c.End()).Line
+				for l := start; l <= end; l++ {
+					commented[l] = true
+				}
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ASSIGN || len(as.Rhs) != 1 {
+				return true
+			}
+			if _, isCall := as.Rhs[0].(*ast.CallExpr); !isCall {
+				return true
+			}
+			last, ok := as.Lhs[len(as.Lhs)-1].(*ast.Ident)
+			if !ok || last.Name != "_" {
+				return true // the error-position result is kept
+			}
+			line := fset.Position(as.Pos()).Line
+			if commented[line] || commented[line-1] {
+				return true
+			}
+			t.Errorf("%s:%d: a call result is discarded with `_` and NO justification.\n"+
+				"  CLAUDE.md §5: ignored errors are forbidden unless justified. Either check the\n"+
+				"  error (log at minimum, propagate where the contract expects it), or state on\n"+
+				"  this line or the line above why the failure is safe to drop\n"+
+				"  (`// best-effort: <why>`).", path, line)
+			return true
+		})
 	}
 }
 

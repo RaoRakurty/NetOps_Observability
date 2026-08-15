@@ -136,7 +136,7 @@ func (b *IdentityBroker) Metrics() *ExchangeMetrics { return b.metrics }
 // random bytes, hex) — duplicated per the no-utils rule.
 func mintSecretRefID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return SecretRefIDPrefix + hex.EncodeToString(b)
 }
 

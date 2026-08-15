@@ -830,7 +830,7 @@ func scanPolicy(rows pgx.Rows) (IncidentPolicy, error) {
 		return p, err
 	}
 	if len(filters) > 0 {
-		_ = json.Unmarshal(filters, &p.Filters)
+		_ = json.Unmarshal(filters, &p.Filters) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	return p, nil
 }
@@ -900,7 +900,7 @@ func scanOutbox(rows pgx.Rows) (OutboxItem, error) {
 		return it, err
 	}
 	if len(payload) > 0 {
-		_ = json.Unmarshal(payload, &it.Payload)
+		_ = json.Unmarshal(payload, &it.Payload) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	return it, nil
 }

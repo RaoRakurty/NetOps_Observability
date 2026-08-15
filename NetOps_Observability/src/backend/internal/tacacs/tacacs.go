@@ -205,7 +205,7 @@ func (t *Client) Authenticate(username, password string) (bool, error) {
 	defer conn.Close()
 	if t.timeout > 0 {
 		deadline := time.Now().Add(t.timeout)
-		_ = conn.SetDeadline(deadline)
+		_ = conn.SetDeadline(deadline) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 
 	const version = tacACSPAPVersion

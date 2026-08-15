@@ -87,6 +87,23 @@ func ComputeReportIntegrity(rep Report) (ReportIntegrity, error) {
 		// the DurationMS normalization exists to remove.
 		cp.Summary.Management = ""
 		cp.Summary.Noc = nil
+		// The promotion gate's "duration" criterion prints the same ticking
+		// elapsed value ("801h 29m observed; auto-promotion requires ≥ 2m 00s").
+		// Its Met verdict stays hashed — crossing PromotionMinDuration IS an
+		// analysis change and must mint a new revision — but the Detail string is
+		// pure presentation over the DurationMS normalized just above, so leaving
+		// it re-leaked the wall clock and drifted the snapshot every minute.
+		// Same shallow-copy caution as the symptom slices above.
+		if len(cp.Promotion.Criteria) > 0 {
+			crit := make([]PromotionCriterion, len(cp.Promotion.Criteria))
+			copy(crit, cp.Promotion.Criteria)
+			for i := range crit {
+				if crit[i].Name == "duration" {
+					crit[i].Detail = ""
+				}
+			}
+			cp.Promotion.Criteria = crit
+		}
 	}
 	b, err := json.Marshal(cp)
 	if err != nil {

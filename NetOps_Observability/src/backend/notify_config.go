@@ -40,7 +40,7 @@ func newNotifyConfigStore(path string, srv *server) *notifyConfigStore {
 	s := &notifyConfigStore{path: path, srv: srv}
 	s.cfg = notify.DefaultChannelConfig()
 	if b, err := platformdb.Load(path); err == nil {
-		_ = json.Unmarshal(b, &s.cfg)
+		_ = json.Unmarshal(b, &s.cfg) // best-effort: corrupt state file starts from defaults
 		if dec, derr := mapNotify(s.cfg, openFn(s.vault())); derr != nil {
 			logError("notify.config", "decrypt secrets", errf(derr))
 		} else {

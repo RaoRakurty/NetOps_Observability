@@ -456,7 +456,7 @@ func (s *server) handleTACACSTest(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, tacacsTestResult{Stage: "connect", Message: "connect failed: " + err.Error()})
 			return
 		}
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: probe socket; nothing actionable on close failure
 		writeJSON(w, http.StatusOK, tacacsTestResult{OK: true, Stage: "connect", Message: "TCP connect to " + client.Addr() + " OK (supply a username to test authentication)"})
 		return
 	}

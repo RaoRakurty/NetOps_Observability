@@ -202,7 +202,7 @@ func (s *server) proxyMetrics(w http.ResponseWriter, r *http.Request, path strin
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body) // best-effort: proxy stream; a failed copy means the client is gone
 }
 
 // GET /api/metrics/query?query=<promql>&time=<unix>

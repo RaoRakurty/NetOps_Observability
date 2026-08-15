@@ -45,7 +45,9 @@ func (p *reportPipeline) EnqueueIncidentSync(ctx context.Context, tenant, incide
 		return "", err
 	}
 	if p.srv.incidents != nil {
-		_ = p.srv.incidents.MarkSync(ctx, incidentID, "", "", "", "pending", now)
+		if err := p.srv.incidents.MarkSync(ctx, incidentID, "", "", "", "pending", now); err != nil {
+			logWarn("incidents.sync", "mark pending", map[string]any{"incident_id": incidentID, "error": err.Error()})
+		}
 	}
 	return execID, nil
 }
@@ -83,7 +85,9 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 	system, ticketID, url, perr := p.projectIncident(inc)
 	now := time.Now().UTC()
 	if perr != nil {
-		_ = p.srv.incidents.MarkSync(ctx, inc.ID, system, "", "", "failed", now)
+		if err := p.srv.incidents.MarkSync(ctx, inc.ID, system, "", "", "failed", now); err != nil {
+			logError("incidents.sync", "mark sync failed", merge(fields, errf(err)))
+		}
 		p.srv.incidentSync(false)
 		// Transient ITSM/config error → retry with backoff; the incident is untouched.
 		p.fail(ctx, jctx, job, tenant, "itsm projection: "+perr.Error(), nil, p.dead(job), fields)
@@ -96,10 +100,14 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 	// ticket and so a future inbound webhook correlates by it. applied_seq starts
 	// at 0 — the first poll/webhook that observes a newer version drives state.
 	if p.srv.integrations != nil && ticketID != "" {
-		_ = p.srv.integrations.UpsertMapping(ctx, integration.Mapping{
+		if err := p.srv.integrations.UpsertMapping(ctx, integration.Mapping{
 			Tenant: inc.TenantID, Provider: system, ExternalID: ticketID,
 			IncidentID: inc.ID, State: inc.Status,
-		})
+		}); err != nil {
+			// The ticket exists but the reconciler can't poll it and inbound
+			// webhooks won't correlate — that drift must not be silent.
+			logError("incidents.sync", "record ticket mapping", merge(fields, errf(err)))
+		}
 	}
 	p.srv.incidentSync(true)
 	p.finishIncidentSync(ctx, job, tenant, fields)
@@ -109,8 +117,10 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 
 func (p *reportPipeline) finishIncidentSync(ctx context.Context, job reports.Job, tenant string, fields map[string]any) {
 	now := time.Now().UTC()
-	_ = p.execs.Complete(ctx, job.ExecutionID, now, nil, nil)
-	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
+	if err := p.execs.Complete(ctx, job.ExecutionID, now, nil, nil); err != nil {
+		logError("incidents.sync", "record completion", merge(fields, errf(err)))
+	}
+	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
 	if err := p.queue.Complete(ctx, job.ID); err != nil {
 		logError("incidents.sync", "finalize job", merge(fields, errf(err)))
 	}

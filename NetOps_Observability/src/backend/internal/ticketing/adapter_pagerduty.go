@@ -189,7 +189,7 @@ func (a *PagerDutyAdapter) send(ctx context.Context, cfg SystemConfig, action, d
 		return err // transient: worker backoff
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) // best-effort: drain for connection reuse
 	switch {
 	case resp.StatusCode < 300:
 		return nil

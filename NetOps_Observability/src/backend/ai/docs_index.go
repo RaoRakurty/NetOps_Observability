@@ -104,7 +104,7 @@ func LoadDocsIndex(extras ...ExtraDoc) *DocsIndex {
 			ix.add(c)
 		}
 	}
-	_ = fs.WalkDir(docsCorpusFS, "docs_corpus", func(path string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(docsCorpusFS, "docs_corpus", func(path string, d fs.DirEntry, err error) error { // the walk callback never returns an error
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}

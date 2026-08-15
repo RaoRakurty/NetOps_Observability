@@ -38,7 +38,7 @@ func NewStore(db DB, v *vault.Vault) *Store {
 // randHex mirrors the integrator's id minting (duplicated per the no-utils rule).
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 

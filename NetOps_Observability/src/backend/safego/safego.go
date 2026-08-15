@@ -47,7 +47,7 @@ func Stderr(name string, recovered any, stack []byte) {
 	if err != nil {
 		return
 	}
-	_, _ = os.Stderr.Write(append(line, '\n'))
+	_, _ = os.Stderr.Write(append(line, '\n')) // stderr is the last resort; nowhere left to report
 }
 
 // Go starts fn on its own goroutine with panic recovery, reporting to Stderr.
@@ -60,7 +60,7 @@ func Go(name string, fn func()) {
 // panic through log.
 func GoWith(log Logger, name string, fn func()) {
 	go func() {
-		_ = Run(log, name, fn)
+		_ = Run(log, name, fn) // Run's error is the recovered panic, already reported by Run
 	}()
 }
 
@@ -93,7 +93,7 @@ func Recover(log Logger, name string) {
 // otherwise re-panic inside a deferred recover and kill the process anyway —
 // exactly what the caller was defending against).
 func report(log Logger, name string, recovered any, stack []byte) {
-	defer func() { _ = recover() }()
+	defer func() { _ = recover() }() // swallow a panic from the logger itself (see comment above)
 	if log == nil {
 		log = Stderr
 	}

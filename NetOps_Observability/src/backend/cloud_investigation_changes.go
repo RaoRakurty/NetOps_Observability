@@ -57,7 +57,7 @@ func affectedCloudResources(raw string) []string {
 		CloudResources []string `json:"cloud_resources"`
 	}
 	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &a)
+		_ = json.Unmarshal([]byte(raw), &a) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	if a.CloudResources == nil {
 		return []string{}

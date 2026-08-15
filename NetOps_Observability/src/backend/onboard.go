@@ -66,7 +66,10 @@ func (s *server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 	t, err := s.tenants.Create(req.TenantName, req.TenantSlug, "", req.IsolationMode, org.ID)
 	if err != nil {
 		// Roll back the org so a failed onboard never leaves a tenant-less shell.
-		_ = s.orgs.Delete(org.ID)
+		if derr := s.orgs.Delete(org.ID); derr != nil {
+			logError("onboard", "org rollback failed — an empty org shell remains", map[string]any{
+				"org_id": org.ID, "err": derr.Error()})
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

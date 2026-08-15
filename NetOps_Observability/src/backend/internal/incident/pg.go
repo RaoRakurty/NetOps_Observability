@@ -44,7 +44,7 @@ func nullText(s string) any {
 // randHex mirrors the integrator's id minting (duplicated per the no-utils rule).
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 
@@ -175,7 +175,7 @@ func (s *PGStore) Get(ctx context.Context, tenant string, cross bool, id string)
 				return err
 			}
 			if len(payload) > 0 {
-				_ = json.Unmarshal(payload, &ev.Payload)
+				_ = json.Unmarshal(payload, &ev.Payload) // best-effort: engine-authored JSON; malformed decodes to zero value
 			}
 			events = append(events, ev)
 		}

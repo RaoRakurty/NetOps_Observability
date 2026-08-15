@@ -75,7 +75,7 @@ func vmQueryRangeBy(ctx context.Context, q string, start, end int64, stepSec int
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	body, err := io.ReadAll(io.LimitReader(resp.Body, cloudSeriesMaxResponseByte))
 	if err != nil {
 		return nil, err

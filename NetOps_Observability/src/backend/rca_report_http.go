@@ -36,13 +36,34 @@ import (
 // failure it returns the HTTP status to answer with (404 for an invisible or
 // absent id — never revealing whether it exists elsewhere).
 func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id string, version int) (rca.Report, int, error) {
+	return s.buildRcaReportForIDAt(r, claims, id, version, s.reportNow())
+}
+
+// reportNow is the RCA generation clock: rcaClock when injected (tests), the
+// wall clock otherwise — always UTC and TRUNCATED TO THE SECOND, so that
+// FmtUTC(now) round-trips losslessly through rca.ParseFmtUTC. The document
+// reuse path below parses a prior revision's GeneratedAt back into a build
+// clock; a sub-second remainder on the original build would make that rebuild
+// drift off the recorded bytes by up to a second and defeat the reproduction.
+func (s *server) reportNow() time.Time {
+	now := time.Now()
+	if s.rcaClock != nil {
+		now = s.rcaClock()
+	}
+	return now.UTC().Truncate(time.Second)
+}
+
+// buildRcaReportForIDAt is buildRcaReportForID with an explicit generation
+// clock — the deterministic-regeneration path rebuilds an unchanged analysis
+// at the PRIOR revision's generation instant so it re-renders byte-identically.
+func (s *server) buildRcaReportForIDAt(r *http.Request, claims jwtClaims, id string, version int, now time.Time) (rca.Report, int, error) {
 	meta, sigRows, evRows, edgeRows, status, err := s.loadCorrSlice(r.Context(), chTenantScope(r), id, version)
 	if err != nil {
 		return rca.Report{}, status, err
 	}
 	trigger := fmt.Sprintf("%v", meta["trigger_signal"])
 	// stamps attached/link_status onto sigRows (the same derivation the timeline uses)
-	_ = rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger)
+	_ = rca.MergeTimelineEvidence(sigRows, evRows, edgeRows, trigger) // result unused: the stamp mutates sigRows in place
 
 	// ticket + policy — RLS-scoped store reads; default policy is labelled as such.
 	ticket := s.ticketStatusForObject(r, id)
@@ -68,7 +89,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 	if _, isMerged := rca.MergeIncidentState(asString(meta["state"])); isMerged {
 		if first := asString(meta["merged_into"]); first != "" {
 			owner := canonicalCorrTenant(asString(meta["tenant_id"]))
-			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first)
+			survivingID, _ = s.resolveMergeChain(r.Context(), chTenantScope(r), owner, id, first) // best-effort: on resolve failure the original id stands
 		}
 	}
 	// Manual/ITSM lifecycle stamps (tenant-scoped store) feed the detection
@@ -81,7 +102,7 @@ func (s *server) buildRcaReportForID(r *http.Request, claims jwtClaims, id strin
 		ID: id, Meta: meta, Signals: sigRows, Edges: edgeRows,
 		Ticket: ticket, Policy: pol, PolicyConfigured: configured,
 		Path:                pathBlock,
-		Now:                 time.Now().UTC(),
+		Now:                 now,
 		SurvivingIncidentID: survivingID,
 		Lifecycle:           lc,
 	})
@@ -149,14 +170,35 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 	// by content, and the rendered document embeds its generation timestamp).
 	if format == "html" || format == "pdf" {
 		if prior, ok := s.rcaRevisions.FindBySnapshot(rep.OwnerTenant(), id, integ, format); ok {
-			// EscalationAt is the generation stamp when triggered (buildDecision) —
-			// re-stamp it together with GeneratedAt, or a confirmed case's document
-			// would still embed the fresh clock and never reproduce the revision.
+			// Re-stamping GeneratedAt/EscalationAt is NOT sufficient. Freshness
+			// strings (agoShort, "9m ago") and still-active elapsed durations are
+			// baked into the analysis text at BuildReport time from the build
+			// clock. They are normalized OUT of the snapshot hash — so the register
+			// still matches — but the rendered BYTES drift as soon as the clock
+			// crosses a minute, and every later view would append a junk revision.
+			// So REBUILD the whole document at the prior revision's generation
+			// instant; only then does an unchanged analysis re-render byte-identically
+			// at any later time. Costs one extra slice read on the repeat-view path,
+			// which is the price of an immutable document register that holds.
+			if at, perr := rca.ParseFmtUTC(prior.Integrity.GeneratedAt); perr == nil {
+				if rebuilt, _, rerr := s.buildRcaReportForIDAt(r, claims, id, version, at); rerr == nil {
+					if reInteg, rierr := rca.ComputeReportIntegrity(rebuilt); rierr == nil &&
+						reInteg.AnalysisSnapshotHash == integ.AnalysisSnapshotHash {
+						// Adopt the rebuild only when it is provably the SAME analysis;
+						// otherwise a concurrent change would inherit a stale stamp.
+						rep, integ = rebuilt, reInteg
+					}
+				}
+			}
+			// Belt-and-braces for the fields the rebuild cannot reach (and the
+			// fallback when the rebuild above declined): the document must embed
+			// the prior revision's stamps or it can never reproduce it.
 			if rep.Decision.EscalationAt == rep.GeneratedAt {
 				rep.Decision.EscalationAt = prior.Integrity.GeneratedAt
 			}
 			rep.GeneratedAt = prior.Integrity.GeneratedAt
 			integ.GeneratedAt = prior.Integrity.GeneratedAt
+			rep.Integrity = &integ
 		}
 	}
 
@@ -211,7 +253,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(pdf)
+		_, _ = w.Write(pdf) // best-effort: status committed; a failed write means the client is gone
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("format must be json, html or pdf"))
 	}

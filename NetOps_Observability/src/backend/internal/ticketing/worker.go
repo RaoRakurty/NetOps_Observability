@@ -65,7 +65,7 @@ func canonicalCorrTenant(t string) string {
 // randHexID mirrors the integrator's 32-hex object id (duplicated).
 func randHexID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 
@@ -415,8 +415,8 @@ func backoffDelay(attempt int, id string) time.Duration {
 		base = 30 * time.Minute
 	}
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(id))
-	_, _ = h.Write([]byte{byte(attempt)})
+	_, _ = h.Write([]byte(id))                           // hash.Write never fails
+	_, _ = h.Write([]byte{byte(attempt)})                // hash.Write never fails
 	frac := float64(h.Sum32()) / float64(math.MaxUint32) // [0,1]
 	return base + time.Duration(frac*0.5*float64(base))
 }
@@ -456,7 +456,7 @@ func EnqueueUpdate(ctx context.Context, store Store, tenant, system string, p Pa
 func payloadToMap(p Payload) map[string]any {
 	b, _ := json.Marshal(p)
 	var m map[string]any
-	_ = json.Unmarshal(b, &m)
+	_ = json.Unmarshal(b, &m) // a struct we authored round-trips cleanly; failure yields an empty map
 	return m
 }
 

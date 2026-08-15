@@ -73,9 +73,9 @@ func (s *netboxSyncer) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-first.C:
-				_, _ = s.SyncOnce(ctx)
+				_, _ = s.SyncOnce(ctx) // errors are recorded in Status() and logged by SyncOnce
 			case <-tick.C:
-				_, _ = s.SyncOnce(ctx)
+				_, _ = s.SyncOnce(ctx) // errors are recorded in Status() and logged by SyncOnce
 			}
 		}
 	}()
@@ -316,7 +316,7 @@ func (s *netboxSyncer) req(ctx context.Context, method, fullURL, token string, b
 	}
 	var m map[string]any
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &m)
+		_ = json.Unmarshal(raw, &m) // best-effort: malformed NetBox JSON yields an empty map
 	}
 	return m, nil
 }

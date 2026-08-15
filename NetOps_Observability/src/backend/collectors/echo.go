@@ -309,7 +309,7 @@ func (s *wanEcho) measureICMP(ctx context.Context, tgt EchoTarget) echoResult {
 			continue
 		}
 		res.sent++
-		_ = conn.SetReadDeadline(time.Now().Add(s.timeout))
+		_ = conn.SetReadDeadline(time.Now().Add(s.timeout)) // best-effort: a failed deadline set surfaces as a read/write error
 		for {
 			n, _, err := conn.ReadFrom(buf)
 			if err != nil {
@@ -368,7 +368,7 @@ func (s *wanEcho) measureTCP(ctx context.Context, tgt EchoTarget) echoResult {
 		}
 		res.recv++
 		rtts = append(rtts, float64(time.Since(start))/float64(time.Millisecond))
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: probe socket; nothing actionable on close failure
 		time.Sleep(20 * time.Millisecond)
 	}
 	summarize(&res, rtts)

@@ -22,8 +22,8 @@ import (
 
 func drainClose(resp *http.Response) {
 	if resp != nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-		_ = resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16)) // best-effort: drain for connection reuse
+		_ = resp.Body.Close()                                        // best-effort: nothing actionable on close failure
 	}
 }
 

@@ -225,7 +225,7 @@ func snmpWalkColumn(ctx context.Context, addr string, creds snmpCreds, col []int
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
+		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 
 	out := make(map[string]berVal)

@@ -8,6 +8,7 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"netops/backend/internal/rca"
@@ -207,6 +208,117 @@ func TestServeRcaReportConfirmedCaseCrossSecondIdempotent(t *testing.T) {
 	}
 	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
 		t.Fatalf("confirmed-case re-render appended a revision (escalation-stamp revision spam): %+v", revs)
+	}
+}
+
+// promoFakeCHSignals is promoFakeCHVerdict plus a window signal slice: the
+// archive queries return one attached anomalous signal (the trigger), so the
+// built report carries evidence-freshness (agoShort) and duration display
+// strings — the wall-clock-derived content the minute-boundary contract pins.
+// The bare promoFakeCH fixture has no signals, so nothing in its document
+// drifts at minute granularity and a cross-minute test over it proves nothing.
+func promoFakeCHSignals(t *testing.T, owner, verdict string) {
+	t.Helper()
+	metaRow := map[string]any{
+		"version": "3", "tenant_id": owner, "state": "open", "merged_into": "",
+		"window_start": "2026-07-12T18:10:00Z", "window_end": "2026-07-12T18:30:00Z",
+		"trigger_signal": "00000000-0000-0000-0000-000000000000",
+		"verdict_tier":   verdict, "top_hypothesis": "undetermined", "top_confidence": "0.4",
+		"evidence_missing": "[]", "hypotheses": "{}", "affected": "{}",
+		"layer_coverage": "{}", "app_impact": "{}", "attribution": "{}",
+	}
+	sigRow := map[string]any{
+		"signal_id": "00000000-0000-0000-0000-000000000000",
+		"ts_iso":    "2026-07-12T18:15:00Z", "ingest_ts_iso": "2026-07-12T18:15:01Z",
+		"source": "snmp", "kind": "interface_down", "observer_type": "collector",
+		"observer_id": "col-1", "collection_path": "poll", "modality_class": "network",
+		"clock_quality": "ntp", "entity_type": "device", "entity_id": "core-sw1",
+		"entity_tokens": []any{"core-sw1"}, "severity": "high",
+		"value": "0", "baseline": "1", "deviation": "1", "metric_name": "ifOperStatus",
+		"attrs": "{}", "onset_uncertainty_s": 0.0, "phase": "", "clear_ts": "",
+		"probe_scope": "", "probe_authority": "", "classification_source": "",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		sql := string(b)
+		scope := r.URL.Query().Get("tenant_scope")
+		w.Header().Set("Content-Type", "application/json")
+		visible := scope == owner || scope == "__all__"
+		answer := func(rows ...map[string]any) {
+			enc, _ := json.Marshal(rows)
+			_, _ = fmt.Fprintf(w, `{"meta":[],"data":%s,"rows":%d}`, enc, len(rows))
+		}
+		switch {
+		case !visible:
+			answer()
+		case strings.Contains(sql, "SELECT tenant_id FROM netops.corr_objects"):
+			answer(map[string]any{"tenant_id": owner})
+		case strings.Contains(sql, "FROM netops.corr_objects"):
+			answer(metaRow)
+		case strings.Contains(sql, "max(archived_version)"):
+			answer(map[string]any{"av": "1"})
+		case strings.Contains(sql, "FROM netops.corr_signals_archive"):
+			answer(sigRow)
+		default: // corr_evidence, corr_edges, anything else
+			answer()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("CLICKHOUSE_URL", srv.URL)
+	t.Setenv("CLICKHOUSE_PASSWORD", "")
+}
+
+// Cross-MINUTE regeneration. Re-stamping GeneratedAt/EscalationAt alone is not
+// enough: agoShort freshness strings ("9m ago") and still-active elapsed
+// durations are baked at BuildReport time with the FRESH clock. They are
+// normalized OUT of the analysis snapshot hash, so the register still matches
+// the prior revision — but once the clock crosses a minute boundary the
+// rendered bytes drift anyway, and every later view appends a junk revision
+// (the same spam the cross-second fix closed, one boundary up). The reuse path
+// must REBUILD the report with the prior revision's generation stamp as its
+// clock, so an unchanged analysis re-renders byte-identically at ANY later
+// time. The clock is injected (s.rcaClock) — no 60-second sleeps.
+func TestServeRcaReportRegenerationAcrossMinuteBoundaryIsIdempotent(t *testing.T) {
+	// confirmed + a signal slice: the superset fixture — exercises the Decision
+	// escalation stamp on top of the generation stamp AND the freshness/elapsed
+	// display strings only attached evidence produces.
+	promoFakeCHSignals(t, "acme", "confirmed")
+	s := corrTestServer(t)
+	s.rcaPromotions = newRcaPromotionStore("")
+	s.rcaRevisions = newRcaRevisionStore("")
+	_ = s.rcaPromotions.Set("acme", promoCorrID, rca.PromotionRecord{PromotedBy: "ops@acme", PromotedAt: "2026-07-18 12:00:00 UTC"})
+
+	base := time.Now().UTC().Truncate(time.Second)
+	clock := base
+	s.rcaClock = func() time.Time { return clock }
+
+	render := func() string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.serveRcaReport(w, req(http.MethodGet, "/api/correlations/"+promoCorrID+"/rca-report?format=html", "", acme()), promoCorrID)
+		if w.Code != http.StatusOK {
+			t.Fatalf("render = %d (%s)", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+
+	first := render()
+	if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
+		t.Fatalf("first render must record exactly one revision: %+v", revs)
+	}
+
+	for _, adv := range []time.Duration{
+		61 * time.Second, // crosses the minute boundary the cross-second test cannot see
+		31 * time.Minute, // minute-scale agoShort drift ("9m ago" → "40m ago")
+		26 * time.Hour,   // hour-scale drift + a different calendar day
+	} {
+		clock = base.Add(adv)
+		if got := render(); got != first {
+			t.Fatalf("unchanged analysis re-rendered %v later must be byte-identical (the document is a snapshot of the ANALYSIS, not of the wall clock)", adv)
+		}
+		if revs := s.rcaRevisions.List("acme", promoCorrID); len(revs) != 1 {
+			t.Fatalf("re-render %v later appended a revision (wall-clock revision spam): %+v", adv, revs)
+		}
 	}
 }
 

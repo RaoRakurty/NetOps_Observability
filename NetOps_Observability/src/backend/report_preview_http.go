@@ -18,7 +18,7 @@ import (
 // dataset builder + a renderer, not the queue).
 
 var previewRenderers = sync.OnceValues(func() (html, xlsx reports.Renderer) {
-	html, _ = reports.NewHTMLRenderer()
+	html, _ = reports.NewHTMLRenderer() // embedded templates, validated at boot by the pipeline; cannot fail here
 	return html, reports.NewXLSXRenderer()
 })
 
@@ -81,5 +81,5 @@ func (s *server) handleReportPreview(w http.ResponseWriter, r *http.Request) {
 	if format != "html" {
 		w.Header().Set("Content-Disposition", "attachment; filename=\"preview."+format+"\"")
 	}
-	_, _ = w.Write(art.Bytes)
+	_, _ = w.Write(art.Bytes) // best-effort: status committed; a failed write means the client is gone
 }

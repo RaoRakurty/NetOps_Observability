@@ -29,3 +29,29 @@ func TestParseChTSAcceptsBothWireFormats(t *testing.T) {
 		t.Error("garbage must not parse")
 	}
 }
+
+// ParseFmtUTC must be the exact inverse of FmtUTC: the deterministic document
+// reuse path turns a recorded GeneratedAt stamp back into the build clock, and
+// any loss in the round-trip re-renders different bytes than the revision it
+// claims to reproduce. FmtUTC is second-granular, so the contract holds for
+// second-truncated clocks (which reportNow guarantees).
+func TestParseFmtUTCRoundTripsFmtUTC(t *testing.T) {
+	for _, want := range []time.Time{
+		time.Date(2026, 7, 12, 20, 0, 0, 0, time.UTC),
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+		time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		got, err := ParseFmtUTC(FmtUTC(want))
+		if err != nil || !got.Equal(want) {
+			t.Errorf("ParseFmtUTC(FmtUTC(%v)) = %v err=%v, want lossless round-trip", want, got, err)
+		}
+		if got.Location() != time.UTC {
+			t.Errorf("parsed instant must be UTC, got %v", got.Location())
+		}
+	}
+	for _, bad := range []string{"", "2026-07-12 20:00:00", "2026-07-12T20:00:00Z", "garbage UTC"} {
+		if _, err := ParseFmtUTC(bad); err == nil {
+			t.Errorf("ParseFmtUTC(%q) must refuse a non-FmtUTC stamp", bad)
+		}
+	}
+}

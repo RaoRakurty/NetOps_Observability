@@ -164,7 +164,7 @@ func forwardMetricEvents(ctx context.Context, events []MetricEvent) int {
 	if err != nil {
 		return 0 // bus unreachable: collector keeps running; VM path unaffected
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode >= 300 {
 		// F-08: a 401/403 here means the ingest credential is wrong, and the
 		// symptom — this whole lane going quiet — is indistinguishable from a

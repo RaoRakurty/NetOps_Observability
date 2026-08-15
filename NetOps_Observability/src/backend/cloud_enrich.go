@@ -62,7 +62,7 @@ func vmQueryBy(ctx context.Context, q, keyLabel string) map[string]float64 {
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil

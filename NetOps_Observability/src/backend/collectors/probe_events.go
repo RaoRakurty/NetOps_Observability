@@ -179,6 +179,6 @@ func forwardProbeEvents(ctx context.Context, events []ProbeEvent) {
 		if resp.StatusCode >= 300 {
 			logIngestRejection("probes", sink, resp.StatusCode)
 		}
-		_ = resp.Body.Close()
+		_ = resp.Body.Close() // best-effort: nothing actionable on close failure
 	}
 }

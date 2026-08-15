@@ -146,7 +146,9 @@ func (s *CopilotConfigStore) Set(c CopilotConfig) CopilotConfig {
 		sealed := c
 		sealed.Key = sealedKey
 		if b, err := json.MarshalIndent(sealed, "", "  "); err == nil {
-			_ = platformdb.Save(s.path, b)
+			if serr := platformdb.Save(s.path, b); serr != nil {
+				applog.Error("copilot.config", "assistant config not persisted — settings revert on restart", map[string]any{"error": serr.Error()})
+			}
 		}
 	}
 	s.mu.Unlock()

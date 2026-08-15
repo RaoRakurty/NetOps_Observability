@@ -128,7 +128,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: nothing actionable on close failure
 		for _, id := range ids {
 			out[id] = verify.SSHOut{Err: fmt.Errorf("ssh handshake failed: %w", err)}
 		}
@@ -144,7 +144,7 @@ func (s *server) verifySSHRun(ctx context.Context, dev models.Device, cred verif
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = client.Close()
+			_ = client.Close() // best-effort: watchdog teardown
 		case <-watchdogDone:
 		}
 	}()
@@ -176,7 +176,7 @@ func runOneSSHCommand(client *ssh.Client, cmd string, timeout time.Duration) ver
 	var killed atomic.Bool
 	timer := time.AfterFunc(timeout, func() {
 		killed.Store(true)
-		_ = session.Close()
+		_ = session.Close() // best-effort: watchdog kill; the session error reaches the caller
 	})
 	defer timer.Stop()
 

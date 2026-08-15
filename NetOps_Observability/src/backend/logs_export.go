@@ -105,7 +105,7 @@ func (s *server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 		if isFlowsSignal(spec.Signal) {
 			out["sampling"] = flowsSamplingMeta()
 		}
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 		return
 	}
 
@@ -250,7 +250,7 @@ func (s *server) handleExportStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 }
 
 // exportViewLink builds the public, signed, short-lived, tenant-bound download URL
@@ -331,7 +331,7 @@ func writeDownload(w http.ResponseWriter, art reports.Artifact, basename string)
 	w.Header().Set("Content-Length", strconv.Itoa(len(art.Bytes)))
 	// A forwarded link must not leak the (capability-bearing) URL via Referer.
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	_, _ = w.Write(art.Bytes)
+	_, _ = w.Write(art.Bytes) // best-effort: status committed; a failed write means the client is gone
 }
 
 // exportMaxTimeRange bounds how wide an export window may be (anti-exfiltration /
@@ -416,7 +416,7 @@ func (p *reportPipeline) EnqueueExport(ctx context.Context, tenant string, spec 
 	if err := p.execs.Append(ctx, rec); err != nil {
 		return "", err
 	}
-	_ = p.execs.RecordEvent(ctx, tenant, execID, reports.PhaseQueued, now, "log export")
+	p.recordPhase(ctx, tenant, execID, reports.PhaseQueued, now, "log export")
 	return execID, nil
 }
 
@@ -439,7 +439,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	}
 	start, end := exportTimeRange(spec.From, spec.To)
 
-	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseExporting, time.Now().UTC(), spec.Signal)
+	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseExporting, time.Now().UTC(), spec.Signal)
 	data, err := logexport.FetchBounded(jctx, openSearch, spec, start, end, envInt("MAX_EXPORT_ROWS", 500_000), envInt("MAX_EXPORT_BYTES", 256*1024*1024))
 	if err != nil {
 		// Size-cap breaches are deterministic → dead-letter, don't retry.
@@ -465,7 +465,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	if err := p.execs.Complete(ctx, job.ExecutionID, done, []reports.ArtifactRef{ref}, nil); err != nil {
 		logError("logs.export", "record completion", merge(fields, errf(err)))
 	}
-	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
+	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
 	if err := p.queue.Complete(ctx, job.ID); err != nil {
 		logError("logs.export", "finalize job", merge(fields, errf(err)))
 	}

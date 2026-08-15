@@ -808,5 +808,5 @@ SELECT toString(correlation_id) AS correlation_id
 	defer resp.Body.Close()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20)) // best-effort: proxy stream; a failed copy means the client is gone
 }

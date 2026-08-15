@@ -269,7 +269,7 @@ SELECT toString(correlation_id) AS correlation_id,
 	objs := make([]undeterminedObj, 0, len(rows))
 	for _, ro := range rows {
 		var missing []string
-		_ = json.Unmarshal([]byte(asString(ro["evidence_missing"])), &missing)
+		_ = json.Unmarshal([]byte(asString(ro["evidence_missing"])), &missing) // best-effort: engine-authored JSON; malformed decodes to zero value
 		objs = append(objs, undeterminedObj{
 			CorrelationID:   asString(ro["correlation_id"]),
 			WindowStart:     parseCHTime(ro["window_start"]),

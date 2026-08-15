@@ -74,15 +74,15 @@ func (c *Conn) Closed() <-chan struct{} { return c.closed }
 func (c *Conn) Close() {
 	c.once.Do(func() {
 		close(c.closed)
-		_ = c.conn.Close()
+		_ = c.conn.Close() // best-effort: nothing actionable on close failure
 	})
 }
 
 // wsAcceptKey computes the RFC 6455 §4.2.2 Sec-WebSocket-Accept value. Magic
 // is defined in events.go (same package).
 func AcceptKey(key string) string {
-	h := sha1.New() // #nosec G401 -- RFC 6455 Sec-WebSocket-Accept hash; protocol-mandated
-	_, _ = h.Write([]byte(key + Magic))
+	h := sha1.New()                     // #nosec G401 -- RFC 6455 Sec-WebSocket-Accept hash; protocol-mandated
+	_, _ = h.Write([]byte(key + Magic)) // hash.Write never fails
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
@@ -119,11 +119,11 @@ func Upgrade(w http.ResponseWriter, r *http.Request, allowOrigin func(*http.Requ
 	accept := AcceptKey(key)
 	resp := "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n"
 	if _, err := brw.WriteString(resp); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: handshake failed; tearing down
 		return nil, err
 	}
 	if err := brw.Flush(); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: handshake failed; tearing down
 		return nil, err
 	}
 	return &Conn{conn: conn, br: bufio.NewReader(conn), closed: make(chan struct{})}, nil
@@ -143,7 +143,7 @@ func (c *Conn) ReadMessage() (op byte, payload []byte, err error) {
 		}
 		switch opcode {
 		case opPing:
-			_ = c.writeFrame(opPong, data)
+			_ = c.writeFrame(opPong, data) // best-effort: a failed pong surfaces as the peer's timeout
 			continue
 		case opPong:
 			continue
@@ -240,7 +240,7 @@ func (c *Conn) writeFrame(opcode byte, payload []byte) error {
 			byte(n >> 56), byte(n >> 48), byte(n >> 40), byte(n >> 32),
 			byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
 	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	if _, err := c.conn.Write(hdr); err != nil {
 		return err
 	}

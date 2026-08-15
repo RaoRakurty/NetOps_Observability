@@ -221,7 +221,7 @@ func parseNetDuration(s string) (time.Duration, bool) {
 		mi, _ := strconv.Atoi(m[2])
 		sec := 0
 		if m[3] != "" {
-			sec, _ = strconv.Atoi(m[3])
+			sec, _ = strconv.Atoi(m[3]) // best-effort: regex-matched digits; failure means 0
 		} // else "2:33" is h:mm on summary tables — already assigned
 		return time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute + time.Duration(sec)*time.Second, true
 	}

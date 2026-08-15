@@ -171,7 +171,11 @@ func (r *pathRegistry) persist() {
 		// registry has no request context to inherit.
 		ctx := context.Background()
 		redisPublish(ctx, "probe-paths", probePathsKeyFor(vantage), string(data), probePathsTTL)
-		_ = redisRegisterVantage(ctx, vantage)
+		if err := redisRegisterVantage(ctx, vantage); err != nil {
+			// SEC-012 class: an unregistered vantage is invisible to readers
+			// even though its paths were published.
+			log.Printf("valkey: vantage registration FAILED (%s): %v — readers cannot enumerate this prober", vantage, err)
+		}
 		redisPublish(ctx, "probe-paths-legacy", probePathsKey, string(data), probePathsTTL) // legacy compat
 		return
 	}
@@ -214,7 +218,7 @@ func pushProbePaths(data []byte) {
 func writeAtomic(path string, data []byte) {
 	tmp := path + ".tmp"
 	if os.WriteFile(tmp, data, 0o644) == nil { // #nosec G306 -- non-secret topology
-		_ = os.Rename(tmp, path)
+		_ = os.Rename(tmp, path) // best-effort: readers tolerate a stale fallback file
 	}
 }
 
@@ -503,7 +507,7 @@ func awaitReply(conn *icmp.PacketConn, id, seq int, dstIP net.IP, t0 time.Time, 
 	deadline := time.Now().Add(timeout)
 	rb := make([]byte, 1500)
 	for time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(deadline)
+		_ = conn.SetReadDeadline(deadline) // best-effort: a failed deadline set surfaces as a read/write error
 		n, peer, err := conn.ReadFrom(rb)
 		if err != nil {
 			return "", 0, false, false // timeout
@@ -664,7 +668,7 @@ func traceTCP(ctx context.Context, dst string, dstIP net.IP, cfg traceConfig) (P
 	go func() {
 		rb := make([]byte, 1500)
 		for rctx.Err() == nil {
-			_ = icmpConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			_ = icmpConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // best-effort: a failed deadline set surfaces as a read/write error
 			n, peer, err := icmpConn.ReadFrom(rb)
 			if err != nil {
 				continue
@@ -694,7 +698,7 @@ func traceTCP(ctx context.Context, dst string, dstIP net.IP, cfg traceConfig) (P
 	go func() {
 		rb := make([]byte, 1500)
 		for rctx.Err() == nil {
-			_ = tcpConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+			_ = tcpConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // best-effort: a failed deadline set surfaces as a read/write error
 			n, peer, err := tcpConn.ReadFrom(rb)
 			if err != nil {
 				continue

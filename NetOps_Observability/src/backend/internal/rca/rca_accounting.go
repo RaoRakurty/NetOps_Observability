@@ -198,7 +198,7 @@ type sigAttrs struct {
 func parseSigAttrs(sig map[string]any) sigAttrs {
 	var a sigAttrs
 	if s, ok := sig["attrs"].(string); ok && s != "" {
-		_ = json.Unmarshal([]byte(s), &a)
+		_ = json.Unmarshal([]byte(s), &a) // best-effort: malformed attrs yields empty
 	}
 	return a
 }

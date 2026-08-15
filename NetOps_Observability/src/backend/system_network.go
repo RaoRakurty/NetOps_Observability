@@ -53,7 +53,7 @@ func newSystemNetStore(path string) (*systemNetStore, error) {
 	}
 	s := &systemNetStore{path: path}
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &s.cfg)
+		_ = json.Unmarshal(b, &s.cfg) // best-effort: corrupt state file starts from defaults
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func queryNTP(ctx context.Context, server string) NTPResult {
 		return res
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 
 	req := make([]byte, 48)
 	req[0] = 0x1B // LI=0, VN=3, Mode=3 (client)

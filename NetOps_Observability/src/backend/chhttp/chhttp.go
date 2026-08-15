@@ -340,8 +340,8 @@ func (c *Client) Exec(ctx context.Context, req Request) ([]byte, error) {
 		return nil, err
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-		_ = resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // best-effort: drain for connection reuse
+		_ = resp.Body.Close()                                        // best-effort: nothing actionable on close failure
 	}()
 
 	queryID := resp.Header.Get("X-ClickHouse-Query-Id")
@@ -416,7 +416,7 @@ func (c *Client) ExecStream(ctx context.Context, req Request) (io.ReadCloser, er
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		defer func() { _ = resp.Body.Close() }()
+		defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return nil, classify(req.Op, resp.StatusCode, body, headerExceptionCode(resp), resp.Header.Get("X-ClickHouse-Query-Id"))
 	}

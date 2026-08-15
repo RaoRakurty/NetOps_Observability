@@ -23,6 +23,8 @@ import (
 	"errors"
 	"sort"
 	"sync"
+
+	"netops/backend/internal/applog"
 )
 
 type Collection[T any] struct {
@@ -137,14 +139,24 @@ func (s *Collection[T]) Delete(tenant string, cross bool, id string) bool {
 	defer s.mu.Unlock()
 	if _, ok := s.items[s.key(tenant, id)]; ok {
 		delete(s.items, s.key(tenant, id))
-		_ = s.flushLocked()
+		if err := s.flushLocked(); err != nil {
+			// F-30 class: the delete answered true but persisted nothing —
+			// the record resurrects on restart. Visible, never silent.
+			applog.Error("tenantkv", "delete not persisted; record resurrects on restart", map[string]any{
+				"path": s.path, "id": id, "error": err.Error()})
+		}
 		return true
 	}
 	if cross {
 		for k, r := range s.items {
 			if s.idOf(r) == id {
 				delete(s.items, k)
-				_ = s.flushLocked()
+				if err := s.flushLocked(); err != nil {
+					// F-30 class: the delete answered true but persisted nothing —
+					// the record resurrects on restart. Visible, never silent.
+					applog.Error("tenantkv", "delete not persisted; record resurrects on restart", map[string]any{
+						"path": s.path, "id": id, "error": err.Error()})
+				}
 				return true
 			}
 		}

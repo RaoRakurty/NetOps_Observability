@@ -51,7 +51,7 @@ func toMap(v any) map[string]any {
 		return nil
 	}
 	var m map[string]any
-	_ = json.Unmarshal(b, &m)
+	_ = json.Unmarshal(b, &m) // best-effort: malformed blob renders as an empty map
 	return m
 }
 

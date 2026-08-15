@@ -261,11 +261,11 @@ func (s *server) handleLogsSearch(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(raw, &out) == nil {
 			out["sampling"] = flowsSamplingMeta()
 			w.WriteHeader(resp.StatusCode)
-			_ = json.NewEncoder(w).Encode(out)
+			_ = json.NewEncoder(w).Encode(out) // best-effort: a failed encode/write means the client is gone
 			return
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(raw)
+		_, _ = w.Write(raw) // best-effort: status committed; a failed write means the client is gone
 		return
 	}
 	w.WriteHeader(resp.StatusCode)
@@ -389,7 +389,7 @@ func (s *server) handleLogsIndices(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body) // best-effort: proxy stream; a failed copy means the client is gone
 }
 
 // writeFilteredIndices re-emits a _cat/indices JSON array with any index belonging
@@ -400,7 +400,7 @@ func (s *server) writeFilteredIndices(w http.ResponseWriter, resp *http.Response
 	w.Header().Set("Content-Type", "application/json")
 	var rows []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
-		_, _ = w.Write([]byte("[]"))
+		_, _ = w.Write([]byte("[]")) // best-effort: status committed; a failed write means the client is gone
 		return
 	}
 	segs := make(map[string]bool, len(excludeTenants))
@@ -421,7 +421,7 @@ func (s *server) writeFilteredIndices(w http.ResponseWriter, resp *http.Response
 			kept = append(kept, row)
 		}
 	}
-	_ = json.NewEncoder(w).Encode(kept)
+	_ = json.NewEncoder(w).Encode(kept) // best-effort: a failed encode/write means the client is gone
 }
 
 // indexBase maps a signal to its OpenSearch index base name (no tenant/date).

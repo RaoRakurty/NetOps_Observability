@@ -149,7 +149,7 @@ func snmpGet(ctx context.Context, addr string, creds snmpCreds, oid []int) (berV
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
+		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 	if _, err := c.Write(buildSNMPGet(creds.Community, oid, 1)); err != nil {
 		return berVal{}, err

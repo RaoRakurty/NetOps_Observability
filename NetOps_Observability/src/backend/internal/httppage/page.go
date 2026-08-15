@@ -28,7 +28,7 @@ func writeBody(w http.ResponseWriter, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
+	_, _ = w.Write(b) // best-effort: status committed; a failed write means the client is gone
 }
 
 const (

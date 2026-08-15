@@ -159,5 +159,5 @@ func (s *server) handleReportView(w http.ResponseWriter, r *http.Request) {
 	if ref.Format != "html" {
 		w.Header().Set("Content-Disposition", "attachment; filename=\"report."+ref.Format+"\"")
 	}
-	_, _ = w.Write(art.Bytes)
+	_, _ = w.Write(art.Bytes) // best-effort: status committed; a failed write means the client is gone
 }

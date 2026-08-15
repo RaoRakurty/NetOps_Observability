@@ -393,7 +393,7 @@ func (s *synthetics) checkTCP(ctx context.Context, tgt synTarget) synResult {
 		return res
 	}
 	connectMs := float64(time.Since(start)) / float64(time.Millisecond)
-	_ = conn.Close()
+	_ = conn.Close() // best-effort: probe socket; nothing actionable on close failure
 	res.up = true
 	res.rttMs = connectMs
 	res.connectMs = connectMs
@@ -454,7 +454,7 @@ func (s *synthetics) checkICMP(ctx context.Context, tgt synTarget) synResult {
 		sent++
 		// One read window per packet; a reply for an earlier seq still counts
 		// (datagram sockets demux per-socket, raw sockets see all ICMP).
-		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 		for {
 			n, _, err := conn.ReadFrom(buf)
 			if err != nil {

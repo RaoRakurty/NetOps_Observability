@@ -621,7 +621,7 @@ func snmpGetV3(ctx context.Context, addr string, creds snmpCreds, oid []int) (be
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
+		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 	sess, err := discoverV3(c, creds)
 	if err != nil {
@@ -645,7 +645,7 @@ func snmpWalkColumnV3(ctx context.Context, addr string, creds snmpCreds, col []i
 	}
 	defer c.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(dl)
+		_ = c.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 	sess, err := discoverV3(c, creds)
 	if err != nil {

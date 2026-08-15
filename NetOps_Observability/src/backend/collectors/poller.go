@@ -312,9 +312,9 @@ func sshBannerProbe(ctx context.Context, addr string, _ Target) error {
 	defer c.Close()
 
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.SetReadDeadline(dl)
+		_ = c.SetReadDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	} else {
-		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 
 	// The identification string is CRLF-terminated and capped at 255 bytes

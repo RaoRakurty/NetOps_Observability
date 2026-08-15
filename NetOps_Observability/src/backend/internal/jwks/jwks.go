@@ -87,7 +87,7 @@ func (c Claims) Audiences() []string {
 		return []string{one}
 	}
 	var many []string
-	_ = json.Unmarshal(c.Aud, &many)
+	_ = json.Unmarshal(c.Aud, &many) // best-effort: aud may be a bare string (handled above); malformed yields empty
 	return many
 }
 

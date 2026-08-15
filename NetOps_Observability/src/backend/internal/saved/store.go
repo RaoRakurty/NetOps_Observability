@@ -221,6 +221,6 @@ func sameTenant(resourceTenant, tenant string, cross bool) bool {
 
 func randID() string {
 	var b [16]byte
-	_, _ = rand.Read(b[:])
+	_, _ = rand.Read(b[:]) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b[:])
 }

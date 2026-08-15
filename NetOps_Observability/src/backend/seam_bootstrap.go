@@ -275,7 +275,7 @@ func seamFetchBGPPeers(ctx context.Context) ([]seam.BGPPeer, error) {
 	for _, r := range out.Data.Result {
 		state := 0.0
 		if s, ok := r.Value[1].(string); ok {
-			_, _ = fmtSscanf(s, "%f", &state)
+			_, _ = fmtSscanf(s, "%f", &state) // best-effort: unparseable sample leaves state 0
 		}
 		peers = append(peers, seam.BGPPeer{
 			Device: r.Metric["device"],

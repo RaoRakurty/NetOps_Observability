@@ -178,7 +178,7 @@ func FetchBounded(ctx context.Context, search SearchFn, spec Spec, start, end ti
 		}
 		var parsed osSearchResp
 		decErr := json.NewDecoder(resp.Body).Decode(&parsed)
-		_ = resp.Body.Close()
+		_ = resp.Body.Close() // best-effort: nothing actionable on close failure
 		if resp.StatusCode/100 != 2 {
 			return data, fmt.Errorf("opensearch search status %d", resp.StatusCode)
 		}
@@ -253,7 +253,7 @@ func Encode(ctx context.Context, format string, cols []string, data Data) (repor
 	case "csv":
 		var buf bytes.Buffer
 		w := csv.NewWriter(&buf)
-		_ = w.Write(cols)
+		_ = w.Write(cols) // csv.Writer latches the first error; the row writes below check it
 		for _, r := range data.Rows {
 			if err := w.Write(r); err != nil {
 				return reports.Artifact{}, err

@@ -12,13 +12,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/applog"
 )
 
 // randHex8 / sameTenantStrict mirror the integrator's helpers (duplicated per
 // the no-utils rule).
 func randHex8() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 
@@ -153,7 +155,12 @@ func (s *FileStore) Record(e Event) {
 	b, err := json.Marshal(s.events)
 	s.mu.Unlock()
 	if err == nil {
-		_ = s.kv.Save(s.path, b)
+		err = s.kv.Save(s.path, b)
+	}
+	if err != nil {
+		// The in-memory trail still has the event (see doc above), but a trail
+		// that stops persisting is an audit gap — it must be visible.
+		applog.Error("audit", "audit trail not persisted; events survive in memory only", map[string]any{"error": err.Error()})
 	}
 }
 

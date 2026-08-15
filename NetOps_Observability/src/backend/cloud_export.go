@@ -72,7 +72,7 @@ func writeSignalExport(w http.ResponseWriter, surface, format string, header []s
 	// are gone); csv.Writer accumulates them and Flush surfaces the first one.
 	_ = cw.Write(header)
 	for _, row := range rows {
-		_ = cw.Write(row)
+		_ = cw.Write(row) // best-effort: Flush surfaces the first error (see above)
 	}
 	cw.Flush()
 	if err := cw.Error(); err != nil {

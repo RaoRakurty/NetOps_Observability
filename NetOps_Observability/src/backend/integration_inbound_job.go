@@ -75,7 +75,7 @@ func (p *reportPipeline) processIntegrationInbound(ctx, jctx context.Context, _ 
 	cfg, ok, _ := p.srv.integrations.GetConfig(jctx, ev.Tenant, false, ev.Provider)
 	if !ok {
 		// Config removed after the webhook landed — nothing to apply against.
-		_ = p.srv.integrations.MarkEvent(ctx, pl.EventID, "dropped", "config-removed")
+		p.srv.markInboundEvent(ctx, pl.EventID, "dropped", "config-removed")
 		p.finishInbound(ctx, job, tenant, fields)
 		return
 	}
@@ -89,8 +89,10 @@ func (p *reportPipeline) processIntegrationInbound(ctx, jctx context.Context, _ 
 
 func (p *reportPipeline) finishInbound(ctx context.Context, job reports.Job, tenant string, fields map[string]any) {
 	now := time.Now().UTC()
-	_ = p.execs.Complete(ctx, job.ExecutionID, now, nil, nil)
-	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
+	if err := p.execs.Complete(ctx, job.ExecutionID, now, nil, nil); err != nil {
+		logError("integration.inbound", "record completion", merge(fields, errf(err)))
+	}
+	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
 	if err := p.queue.Complete(ctx, job.ID); err != nil {
 		logError("integration.inbound", "finalize job", merge(fields, errf(err)))
 	}

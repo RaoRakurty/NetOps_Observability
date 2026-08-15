@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"netops/backend/internal/applog"
 )
 
 type refreshToken struct {
@@ -61,7 +63,7 @@ func NewRefreshStore(path string, ttl time.Duration, kv KV) (*RefreshStore, erro
 
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 
@@ -219,7 +221,11 @@ func (s *RefreshStore) RotateSession(secret string) (newSecret, username, sessio
 	if t.Revoked || t.Used {
 		// Replay of a rotated/killed token — treat as compromise.
 		s.revokeFamilyLocked(t.Family)
-		_ = s.flushLocked()
+		if ferr := s.flushLocked(); ferr != nil {
+			// The family IS revoked in memory; only durability failed. A
+			// restart would resurrect the family — that must be visible.
+			applog.Error("session", "family revocation not persisted after refresh-token reuse", map[string]any{"error": ferr.Error()})
+		}
 		return "", "", "", errors.New("refresh token reuse detected; family revoked")
 	}
 	if now.After(t.ExpiresAt) {

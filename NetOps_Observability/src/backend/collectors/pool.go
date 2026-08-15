@@ -8,6 +8,7 @@ package collectors
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -93,7 +94,11 @@ func (p *Pool) Start(ctx context.Context) {
 		// (SNMP, gNMI, syslog, flows). A panic in any one of them would otherwise
 		// take the whole API process with it, not just that collector.
 		safego.Go("collector:"+name, func() {
-			_ = c.Run(ctx)
+			if err := c.Run(ctx); err != nil {
+				// A collector that exits with an error (failed bind, fatal
+				// config) is dead until restart — that must never be silent.
+				log.Printf("collector %s exited: %v", name, err)
+			}
 		})
 	}
 }

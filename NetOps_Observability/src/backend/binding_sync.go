@@ -99,7 +99,12 @@ func (s *server) removeUserBindings(username string) {
 	if s.bindings == nil {
 		return
 	}
-	_ = s.bindings.RemoveByPrincipal(username)
+	if err := s.bindings.RemoveByPrincipal(username); err != nil {
+		// The user is gone but their role bindings may remain — a stale-grant
+		// hazard that must be visible, not discarded.
+		logError("bindings", "removing a deleted user's bindings failed", map[string]any{
+			"user": username, "err": err.Error()})
+	}
 }
 
 // backfillBindings ensures every existing user has its mirror binding. Called

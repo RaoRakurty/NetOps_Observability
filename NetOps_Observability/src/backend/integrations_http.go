@@ -325,17 +325,28 @@ func (o inboundOutcome) body() map[string]any {
 	}
 }
 
+// markInboundEvent records the ledger verdict for an inbound event — the audit
+// trail of what the webhook DID. A verdict that fails to store never fails the
+// apply itself, but it must not vanish silently: an unrecorded drop/apply is
+// unreviewable (2026-08 standards audit, §5 class).
+func (s *server) markInboundEvent(ctx context.Context, ledgerID, verdict, reason string) {
+	if err := s.integrations.MarkEvent(ctx, ledgerID, verdict, reason); err != nil {
+		logWarn("integration", "inbound event verdict not recorded", map[string]any{
+			"ledger_id": ledgerID, "verdict": verdict, "reason": reason, "error": err.Error()})
+	}
+}
+
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict
 // to the incident lifecycle. Returns true when it mutated an incident.
 func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, ev integration.IntegrationEvent, ledgerID, correlationID string) bool {
 	if s.incidents == nil {
-		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "no-incident-store")
+		s.markInboundEvent(ctx, ledgerID, "dropped", "no-incident-store")
 		return false
 	}
 	// Correlate to the originating incident.
 	inc, found := s.correlateIncident(ctx, cfg.Tenant, ev)
 	if !found {
-		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "no-incident")
+		s.markInboundEvent(ctx, ledgerID, "dropped", "no-incident")
 		return false
 	}
 	// Watermark for this external incident (§4a).
@@ -343,7 +354,7 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 
 	decision := cfg.MappingEngineFor().Reconcile(ev, integration.InternalState(inc.Status), m.Applied)
 	if !decision.Apply {
-		_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", decision.Reason)
+		s.markInboundEvent(ctx, ledgerID, "dropped", decision.Reason)
 		return false
 	}
 
@@ -355,17 +366,17 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 	switch {
 	case decision.Target != "":
 		if _, err := s.incidents.Transition(ctx, cfg.Tenant, false, inc.ID, string(decision.Target), actor, "via "+ev.Provider); err != nil {
-			_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "transition: "+err.Error())
+			s.markInboundEvent(ctx, ledgerID, "dropped", "transition: "+err.Error())
 			return false
 		}
 	case decision.Assignee != "":
 		if _, err := s.incidents.Assign(ctx, cfg.Tenant, false, inc.ID, decision.Assignee, actor); err != nil {
-			_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "assign: "+err.Error())
+			s.markInboundEvent(ctx, ledgerID, "dropped", "assign: "+err.Error())
 			return false
 		}
 	case decision.Comment != "":
 		if _, err := s.incidents.AddNote(ctx, cfg.Tenant, false, inc.ID, actor, decision.Comment); err != nil {
-			_ = s.integrations.MarkEvent(ctx, ledgerID, "dropped", "note: "+err.Error())
+			s.markInboundEvent(ctx, ledgerID, "dropped", "note: "+err.Error())
 			return false
 		}
 	default:
@@ -377,11 +388,16 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 	if state == "" {
 		state = inc.Status
 	}
-	_ = s.integrations.UpsertMapping(ctx, integration.Mapping{
+	if err := s.integrations.UpsertMapping(ctx, integration.Mapping{
 		Tenant: cfg.Tenant, Provider: ev.Provider, ExternalID: ev.ExternalID,
 		IncidentID: inc.ID, State: state, Applied: decision.Watermark,
-	})
-	_ = s.integrations.MarkEvent(ctx, ledgerID, "applied", decision.Reason)
+	}); err != nil {
+		// The incident WAS mutated but the watermark did not advance — the same
+		// event can re-apply on the next delivery. Visible, not silent.
+		logError("integration", "advance inbound watermark", map[string]any{
+			"provider": ev.Provider, "external_id": ev.ExternalID, "incident_id": inc.ID, "error": err.Error()})
+	}
+	s.markInboundEvent(ctx, ledgerID, "applied", decision.Reason)
 	logInfo("integration", "inbound applied", map[string]any{
 		"provider": ev.Provider, "external_id": ev.ExternalID, "incident_id": inc.ID,
 		"target": string(decision.Target), "reason": decision.Reason,

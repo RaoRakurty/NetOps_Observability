@@ -493,7 +493,7 @@ type protocolOp struct {
 
 func (c *conn) writeMessage(id int32, op []byte) error {
 	msg := berTLV(tagSequence, concat(berInt(tagInteger, int(id)), op))
-	_ = c.conn.SetWriteDeadline(time.Now().Add(dialTimeout))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(dialTimeout)) // best-effort: a failed deadline set surfaces as a read/write error
 	_, err := c.conn.Write(msg)
 	return err
 }
@@ -501,7 +501,7 @@ func (c *conn) writeMessage(id int32, op []byte) error {
 // readMessage reads one LDAPMessage, validates the messageID, and returns the
 // protocol-op tag and its content.
 func (c *conn) readMessage(wantID int32) (int32, protocolOp, error) {
-	_ = c.conn.SetReadDeadline(time.Now().Add(dialTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(dialTimeout)) // best-effort: a failed deadline set surfaces as a read/write error
 	tag, body, err := readBERElement(c.conn)
 	if err != nil {
 		return 0, protocolOp{}, err

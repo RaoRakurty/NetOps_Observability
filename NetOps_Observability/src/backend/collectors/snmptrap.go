@@ -1048,7 +1048,7 @@ func (r *trapReceiver) Run(ctx context.Context) error {
 		return err
 	}
 	defer pc.Close()
-	safego.Go("snmptrap-closer", func() { <-ctx.Done(); _ = pc.Close() })
+	safego.Go("snmptrap-closer", func() { <-ctx.Done(); _ = pc.Close() }) // ctx teardown; nothing actionable
 	safego.Go("snmptrap-forward-loop", func() { r.forwardLoop(ctx) })
 
 	buf := make([]byte, 65535)
@@ -1135,5 +1135,5 @@ func (r *trapReceiver) forward(ctx context.Context, client *http.Client, ev *Tra
 		r.status.LastError = fmt.Sprintf("forward: sink rejected with status %d", resp.StatusCode)
 		r.mu.Unlock()
 	}
-	_ = resp.Body.Close()
+	_ = resp.Body.Close() // best-effort: nothing actionable on close failure
 }

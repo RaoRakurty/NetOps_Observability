@@ -116,7 +116,7 @@ func probeOne(ctx context.Context, p stackProbe) stackComponentHealth {
 			out.Detail = err.Error()
 			return out
 		}
-		defer func() { _ = resp.Body.Close() }()
+		defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 		if resp.StatusCode >= 500 {
 			out.Status = "degraded"
 		} else {
@@ -131,7 +131,7 @@ func probeOne(ctx context.Context, p stackProbe) stackComponentHealth {
 			out.Detail = err.Error()
 			return out
 		}
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: probe socket; nothing actionable on close failure
 		out.Status = "up"
 	}
 	return out

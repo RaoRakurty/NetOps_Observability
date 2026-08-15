@@ -61,7 +61,7 @@ func (s *Store) scanConfig(row pgx.Row) (Config, error) {
 		return c, err
 	}
 	if len(stateMap) > 0 {
-		_ = json.Unmarshal(stateMap, &c.StateMap)
+		_ = json.Unmarshal(stateMap, &c.StateMap) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	if c.WebhookSecret != "" {
 		sec, derr := s.vault.Decrypt(c.Tenant, webhookSecretField(c.Provider), c.WebhookSecret)

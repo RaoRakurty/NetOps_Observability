@@ -225,7 +225,7 @@ func (e *Email) dial(host string) (net.Conn, error) {
 		return nil, err
 	}
 	if err := conn.SetDeadline(time.Now().Add(deadline)); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: nothing actionable on close failure
 		return nil, err
 	}
 	return conn, nil
@@ -249,7 +249,7 @@ func (e *Email) sendRaw(msg []byte) error {
 	}
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: nothing actionable on close failure
 		return err
 	}
 	// Close (not Quit) on every error path: Quit is attempted at the end, and a

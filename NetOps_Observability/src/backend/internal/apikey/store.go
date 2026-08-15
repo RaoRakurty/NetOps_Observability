@@ -477,7 +477,7 @@ func (s *Store) Verify(secret string) (Key, bool) {
 			// Multi-writer: in-memory only — never rewrite the shared blob from a
 			// possibly-stale map (see multiWriter doc); usage becomes per-instance.
 			if !s.multiWriter {
-				_ = s.flushLocked()
+				_ = s.flushLocked() // best-effort: usage stamp; a failed flush costs telemetry, not auth
 			}
 			return k, true
 		}

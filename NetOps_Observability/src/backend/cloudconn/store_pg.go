@@ -27,11 +27,11 @@ func scanConnector(row pgx.Row) (Connector, error) {
 	if err != nil {
 		return Connector{}, err
 	}
-	_ = json.Unmarshal(identity, &c.Identity)
-	_ = json.Unmarshal(scopes, &c.Scopes)
-	_ = json.Unmarshal(idHealth, &c.IdentityHealth)
-	_ = json.Unmarshal(telHealth, &c.TelemetryHealth)
-	_ = json.Unmarshal(lastVal, &c.LastValidation)
+	_ = json.Unmarshal(identity, &c.Identity)         // best-effort: engine-authored JSON; malformed decodes to zero value
+	_ = json.Unmarshal(scopes, &c.Scopes)             // best-effort: engine-authored JSON; malformed decodes to zero value
+	_ = json.Unmarshal(idHealth, &c.IdentityHealth)   // best-effort: engine-authored JSON; malformed decodes to zero value
+	_ = json.Unmarshal(telHealth, &c.TelemetryHealth) // best-effort: engine-authored JSON; malformed decodes to zero value
+	_ = json.Unmarshal(lastVal, &c.LastValidation)    // best-effort: engine-authored JSON; malformed decodes to zero value
 	if c.Scopes == nil {
 		c.Scopes = []Scope{}
 	}

@@ -248,6 +248,6 @@ func scopeAllows(resourceTenant, principalTenant string, cross bool) bool {
 // never a panic).
 func contactPointID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }

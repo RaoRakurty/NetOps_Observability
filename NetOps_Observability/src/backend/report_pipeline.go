@@ -177,7 +177,7 @@ func (p *reportPipeline) enqueueFire(ctx context.Context, o saved.Object, fire, 
 		logError("reports.scheduler", "append execution", merge(corr(execID, tenant, o.ID, enq.ID, ""), errf(err)))
 		return
 	}
-	_ = p.execs.RecordEvent(ctx, tenant, execID, reports.PhaseQueued, now, "")
+	p.recordPhase(ctx, tenant, execID, reports.PhaseQueued, now, "")
 	logInfo("reports.scheduler", "enqueued report fire", corr(execID, tenant, o.ID, enq.ID, ""))
 }
 
@@ -199,7 +199,7 @@ func (p *reportPipeline) EnqueueNow(ctx context.Context, o saved.Object) (string
 	if err := p.execs.Append(ctx, rec); err != nil {
 		return "", err
 	}
-	_ = p.execs.RecordEvent(ctx, tenant, execID, reports.PhaseQueued, now, "send now")
+	p.recordPhase(ctx, tenant, execID, reports.PhaseQueued, now, "send now")
 	return execID, nil
 }
 
@@ -252,8 +252,10 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 	fields := corr(job.ExecutionID, tenant, job.ScheduleID, job.ID, workerID)
 	now := time.Now().UTC()
 
-	_ = p.execs.MarkRunning(jctx, job.ExecutionID, now)
-	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseRunning, now, workerID)
+	if err := p.execs.MarkRunning(jctx, job.ExecutionID, now); err != nil {
+		logWarn("reports.worker", "mark running", merge(fields, errf(err)))
+	}
+	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseRunning, now, workerID)
 
 	switch job.JobType {
 	case jobTypeExport:
@@ -284,7 +286,7 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	}
 
 	// Build the dataset once, then render every requested format in parallel.
-	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseRendering, time.Now().UTC(), "")
+	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseRendering, time.Now().UTC(), "")
 	vm := p.srv.reports.buildViewModel(o, spec, job.FireTime)
 	alert := reports.AlertFromViewModel(vm, job.FireTime)
 	refs, arts, err := p.renderAll(jctx, job.ExecutionID, vm, normalizeFormats(spec.Formats))
@@ -294,7 +296,7 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	}
 
 	// Deliver: HTML artifact is the email body; xlsx/pdf ride as attachments.
-	_ = p.execs.RecordEvent(jctx, tenant, job.ExecutionID, reports.PhaseDelivering, time.Now().UTC(), "")
+	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseDelivering, time.Now().UTC(), "")
 	cross := tenant == "" || tenant == normTenant(TenantGlobal)
 	htmlArt := arts["html"]
 	var attachments []reports.Artifact
@@ -306,7 +308,12 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	// On a retry, skip recipients already delivered on a prior attempt.
 	var skip map[string]bool
 	if p.deliveries != nil {
-		skip, _ = p.deliveries.Delivered(jctx, job.ExecutionID)
+		var derr error
+		if skip, derr = p.deliveries.Delivered(jctx, job.ExecutionID); derr != nil {
+			// skip stays nil: a retry may re-send to already-delivered recipients,
+			// which must be visible rather than silent.
+			logWarn("reports.worker", "delivered-set read failed; retry may re-send", merge(fields, errf(derr)))
+		}
 	}
 	statuses := p.delivery.Deliver(jctx, deliverReq{
 		Tenant: tenant, Cross: cross,
@@ -332,7 +339,7 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	if err := p.execs.Complete(ctx, job.ExecutionID, done, refs, statuses); err != nil {
 		logError("reports.worker", "record completion", merge(fields, errf(err)))
 	}
-	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
+	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
 	if err := p.queue.Complete(ctx, job.ID); err != nil {
 		logError("reports.worker", "finalize job", merge(fields, errf(err)))
 	}
@@ -358,6 +365,17 @@ func (p *reportPipeline) heartbeat(ctx context.Context, workerID, jobID string, 
 }
 
 func (p *reportPipeline) dead(job reports.Job) bool { return job.Attempts >= p.maxAttempts }
+
+// recordPhase appends an execution-phase timeline event. Phase events are
+// advisory — a store failure never fails the job — but it must be VISIBLE:
+// a silently vanished event is how an execution reads as stuck in "queued"
+// forever with nothing in the logs (2026-08 standards audit, §5 class).
+func (p *reportPipeline) recordPhase(ctx context.Context, tenant, execID string, phase reports.Phase, at time.Time, note string) {
+	if err := p.execs.RecordEvent(ctx, tenant, execID, phase, at, note); err != nil {
+		logWarn("reports.execs", "phase event not recorded", map[string]any{
+			"execution_id": execID, "tenant": tenant, "phase": string(phase), "error": err.Error()})
+	}
+}
 
 // runsFromExecutions derives the legacy reportRun map (last/next/status per
 // report) from the immutable execution history, so GET /api/reports/runs keeps
@@ -439,7 +457,7 @@ func (p *reportPipeline) writeMetrics(w io.Writer) {
 // writes); jctx is the job context (already possibly cancelled).
 func (p *reportPipeline) fail(ctx, _ context.Context, job reports.Job, tenant, cause string, statuses []reports.DeliveryStatus, dead bool, fields map[string]any) {
 	now := time.Now().UTC()
-	_ = p.execs.RecordEvent(ctx, tenant, job.ExecutionID, reports.PhaseFailed, now, cause)
+	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseFailed, now, cause)
 	if dead {
 		if err := p.execs.FailExec(ctx, job.ExecutionID, now, cause, statuses); err != nil {
 			logError("reports.worker", "record failure", merge(fields, errf(err)))

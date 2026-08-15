@@ -155,7 +155,7 @@ func (a *SlackAdapter) post(ctx context.Context, cfg SystemConfig, body map[stri
 		return err // transient
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048)) // best-effort: drain for connection reuse
 	switch {
 	case resp.StatusCode < 300:
 		return nil

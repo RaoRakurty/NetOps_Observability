@@ -81,7 +81,7 @@ type wsClient struct {
 func (c *wsClient) close() {
 	c.once.Do(func() {
 		close(c.done)
-		_ = c.conn.Close()
+		_ = c.conn.Close() // best-effort: nothing actionable on close failure
 	})
 }
 
@@ -310,8 +310,8 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send 101 Switching Protocols.
-	h := sha1.New() // #nosec G401 -- RFC 6455 WebSocket Sec-WebSocket-Accept hash; protocol-mandated
-	_, _ = h.Write([]byte(key + ws.Magic))
+	h := sha1.New()                        // #nosec G401 -- RFC 6455 WebSocket Sec-WebSocket-Accept hash; protocol-mandated
+	_, _ = h.Write([]byte(key + ws.Magic)) // hash.Write never fails
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
@@ -319,11 +319,11 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"
 	if _, err := brw.WriteString(resp); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: handshake failed; tearing down
 		return
 	}
 	if err := brw.Flush(); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: handshake failed; tearing down
 		return
 	}
 
@@ -339,7 +339,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			"remote":  conn.RemoteAddr().String(),
 			"clients": s.hub.Count(),
 		})
-		_ = conn.Close()
+		_ = conn.Close() // best-effort: over-capacity reject; tearing down
 		return
 	}
 	defer s.hub.unregister(client)
@@ -471,7 +471,7 @@ func writeTextFrame(conn net.Conn, payload []byte) error {
 			byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n),
 		}
 	}
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	if _, err := conn.Write(header); err != nil {
 		return err
 	}

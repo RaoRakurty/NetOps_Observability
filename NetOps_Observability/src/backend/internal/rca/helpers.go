@@ -59,6 +59,18 @@ func parseChTS(s string) (time.Time, bool) {
 // FmtUTC renders an instant for operators, always in UTC and always labelled.
 func FmtUTC(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05") + " UTC" }
 
+// ParseFmtUTC is the exact inverse of FmtUTC. The deterministic-regeneration
+// path uses it to turn a recorded revision's GeneratedAt stamp back into the
+// build clock the revision was generated with (FmtUTC is second-granular, so
+// the round-trip is lossless for clocks truncated to the second).
+func ParseFmtUTC(s string) (time.Time, error) {
+	t, err := time.Parse("2006-01-02 15:04:05 UTC", s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
+}
+
 // orDefault returns s when non-empty, else def.
 func orDefault(s, def string) string {
 	if s == "" {

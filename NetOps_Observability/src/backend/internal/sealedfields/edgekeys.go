@@ -99,7 +99,7 @@ func EdgeKeyHandler(provider CryptoProviderSource, authorized func(*http.Request
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 		w.Header().Set("Pragma", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out) // best-effort: status committed; a failed write means the client is gone
 	}
 }
 
@@ -107,7 +107,7 @@ func writeEdgeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg}) // best-effort: status committed; a failed write means the client is gone
 }
 
 // ErrNoProvider is returned by a nil provider source.

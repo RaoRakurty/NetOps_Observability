@@ -109,7 +109,7 @@ func (m *Metrics) query() (depth int64, oldestMillis *float64, err error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return 0, nil, fmt.Errorf("quarantine sampler: opensearch status %d", resp.StatusCode)
 	}

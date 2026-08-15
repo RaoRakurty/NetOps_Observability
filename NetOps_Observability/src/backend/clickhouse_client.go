@@ -332,10 +332,10 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 		writeError(w, status, errors.New("query backend unavailable"))
 		return
 	}
-	defer func() { _ = body.Close() }()
+	defer func() { _ = body.Close() }() // best-effort: nothing actionable on close failure
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, body)
+	_, _ = io.Copy(w, body) // best-effort: proxy stream; a failed copy means the client is gone
 }
 
 // writeEmptyClickHouse emits an empty result set in the same envelope shape the
@@ -343,7 +343,7 @@ func proxyClickHouse(w http.ResponseWriter, r *http.Request, sql string) {
 func writeEmptyClickHouse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`))
+	_, _ = w.Write([]byte(`{"meta":[],"data":[],"rows":0}`)) // best-effort: status committed; a failed write means the client is gone
 }
 
 // chWorkerExec POSTs a statement (INSERT … FORMAT JSONEachRow or DDL) to ClickHouse as

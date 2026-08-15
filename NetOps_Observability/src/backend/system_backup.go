@@ -53,7 +53,7 @@ func newBackupConfigStore(path string) (*backupConfigStore, error) {
 	}
 	s := &backupConfigStore{path: path}
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &s.cfg)
+		_ = json.Unmarshal(b, &s.cfg) // best-effort: corrupt state file starts from defaults
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func (s *server) osSnapshotStatus(ctx context.Context) (ok bool, ageHours *int, 
 	if err != nil {
 		return false, nil, "opensearch unreachable"
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode == http.StatusNotFound {
 		return false, nil, "snapshot repository netops-fs is NOT registered — search tier has no backup"
 	}
@@ -343,7 +343,7 @@ func (s *server) osJSON(ctx context.Context, method, path string, body []byte, o
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return &simpleErr{"opensearch " + resp.Status + " on " + path}
 	}

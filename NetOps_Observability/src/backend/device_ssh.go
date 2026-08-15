@@ -70,7 +70,7 @@ func newSSHHostStore(path string) *sshHostStore {
 	}
 	s := &sshHostStore{path: path, hosts: map[string]string{}}
 	if b, err := platformdb.Load(path); err == nil {
-		_ = json.Unmarshal(b, &s.hosts)
+		_ = json.Unmarshal(b, &s.hosts) // best-effort: corrupt state file starts from defaults
 	}
 	s.loaded = true
 	return s
@@ -88,7 +88,12 @@ func (s *sshHostStore) check(addr, fp string) (firstSeen, ok bool) {
 	}
 	s.hosts[addr] = fp
 	if b, err := json.MarshalIndent(s.hosts, "", "  "); err == nil {
-		_ = platformdb.Save(s.path, b)
+		if serr := platformdb.Save(s.path, b); serr != nil {
+			// A TOFU pin that fails to persist re-trusts WHATEVER key the host
+			// presents after a restart — a silent MITM window. Loudly visible.
+			logError("device-ssh", "host-key pin not persisted; TOFU trust resets on restart", map[string]any{
+				"err": serr.Error()})
+		}
 	}
 	return true, true
 }
@@ -165,18 +170,18 @@ func (s *server) handleDeviceSSH(w http.ResponseWriter, r *http.Request) {
 // open/close pair.
 func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross bool, dev models.Device) {
 	// First frame: the connect request (creds + initial window). Bounded read.
-	_ = sock.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = sock.SetReadDeadline(time.Now().Add(60 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	op, payload, err := sock.ReadMessage()
 	if err != nil || op == ws.OpClose {
 		return
 	}
 	var req sshConnectReq
 	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.Username) == "" {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "first message must be a JSON connect request with a username"})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "first message must be a JSON connect request with a username"}) // best-effort: error report to a client that may be gone
 		return
 	}
 	if req.Password == "" && req.PrivateKey == "" {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "a password or private key is required"})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "a password or private key is required"}) // best-effort: error report to a client that may be gone
 		return
 	}
 	port := req.Port
@@ -189,7 +194,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 	if req.PrivateKey != "" {
 		signer, perr := parsePrivateKey(req.PrivateKey, req.Passphrase)
 		if perr != nil {
-			_ = sock.WriteJSON(map[string]any{"type": "error", "message": "invalid private key: " + perr.Error()})
+			_ = sock.WriteJSON(map[string]any{"type": "error", "message": "invalid private key: " + perr.Error()}) // best-effort: error report to a client that may be gone
 			return
 		}
 		auth = append(auth, ssh.PublicKeys(signer))
@@ -221,7 +226,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 		if !okHost {
 			return fmt.Errorf("host key mismatch for %s (possible MITM) — recorded fingerprint differs", dev.Address)
 		}
-		_ = sock.WriteJSON(map[string]any{"type": "hostkey", "fingerprint": hostFP, "first_seen": first})
+		_ = sock.WriteJSON(map[string]any{"type": "hostkey", "fingerprint": hostFP, "first_seen": first}) // best-effort: informational frame; the session proceeds
 		return nil
 	}
 
@@ -234,13 +239,13 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 
 	conn, err := net.DialTimeout("tcp", addr, sshDialTimeout())
 	if err != nil {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "connect failed: " + err.Error()})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "connect failed: " + err.Error()}) // best-effort: error report to a client that may be gone
 		return
 	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
-		_ = conn.Close()
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "ssh handshake failed: " + err.Error()})
+		_ = conn.Close()                                                                                       // best-effort: nothing actionable on close failure
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "ssh handshake failed: " + err.Error()}) // best-effort: error report to a client that may be gone
 		s.audit.Record(s.sshAudit(claims, tenant, cross, dev, hostFP, "deny", 0, 0))
 		return
 	}
@@ -249,14 +254,14 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 
 	session, err := client.NewSession()
 	if err != nil {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "session open failed: " + err.Error()})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "session open failed: " + err.Error()}) // best-effort: error report to a client that may be gone
 		return
 	}
 	defer session.Close()
 
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := session.RequestPty("xterm-256color", rows, cols, modes); err != nil {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "pty request failed: " + err.Error()})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "pty request failed: " + err.Error()}) // best-effort: error report to a client that may be gone
 		return
 	}
 	stdin, err := session.StdinPipe()
@@ -268,7 +273,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 	session.Stdout = &wsBinWriter{sock: sock, n: counter}
 	session.Stderr = &wsBinWriter{sock: sock, n: counter}
 	if err := session.Shell(); err != nil {
-		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "shell start failed: " + err.Error()})
+		_ = sock.WriteJSON(map[string]any{"type": "error", "message": "shell start failed: " + err.Error()}) // best-effort: error report to a client that may be gone
 		return
 	}
 
@@ -282,7 +287,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 	ctx, cancel := context.WithTimeout(context.Background(), sshMaxSession())
 	defer cancel()
 	idle := time.AfterFunc(sshIdleTimeout(), func() {
-		_ = sock.WriteJSON(map[string]any{"type": "status", "message": "session idle timeout"})
+		_ = sock.WriteJSON(map[string]any{"type": "status", "message": "session idle timeout"}) // best-effort: status frame; teardown follows
 		sock.Close()
 	})
 	defer idle.Stop()
@@ -293,7 +298,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 	go func() {
 		defer session.Close()
 		for {
-			_ = sock.SetReadDeadline(time.Now().Add(sshIdleTimeout() + 30*time.Second))
+			_ = sock.SetReadDeadline(time.Now().Add(sshIdleTimeout() + 30*time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 			op, data, rerr := sock.ReadMessage()
 			if rerr != nil || op == ws.OpClose {
 				return
@@ -311,7 +316,7 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 					Rows int    `json:"rows"`
 				}
 				if json.Unmarshal(data, &ctl) == nil && ctl.Type == "resize" {
-					_ = session.WindowChange(clampDim(ctl.Rows, 24), clampDim(ctl.Cols, 80))
+					_ = session.WindowChange(clampDim(ctl.Rows, 24), clampDim(ctl.Cols, 80)) // best-effort: a failed resize keeps the old PTY size
 				}
 			}
 		}
@@ -319,11 +324,11 @@ func (s *server) bridgeSSH(sock *ws.Conn, claims jwtClaims, tenant string, cross
 
 	// Wait for the shell to exit, the context (max session), or a closed WS.
 	done := make(chan struct{})
-	go func() { _ = session.Wait(); close(done) }()
+	go func() { _ = session.Wait(); close(done) }() // teardown: the exit status is not needed
 	select {
 	case <-done:
 	case <-ctx.Done():
-		_ = sock.WriteJSON(map[string]any{"type": "status", "message": "max session duration reached"})
+		_ = sock.WriteJSON(map[string]any{"type": "status", "message": "max session duration reached"}) // best-effort: status frame; teardown follows
 	case <-sock.Closed():
 	}
 

@@ -61,7 +61,7 @@ func nmsEmitMetrics(ctx context.Context, lines []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("victoria import: status %d", resp.StatusCode)
 	}

@@ -276,7 +276,7 @@ func (s *server) handleIncidentByID(w http.ResponseWriter, r *http.Request) {
 		Note  string `json:"note"`
 		Owner string `json:"owner"`
 	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) // best-effort: note/owner are optional; a bad body just omits them
 	actor := claims.Sub
 
 	var inc Incident

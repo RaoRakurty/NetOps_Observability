@@ -478,7 +478,7 @@ func (s *server) cloudAppsForObject(r *http.Request, affectedRaw string) []strin
 		Paths    []string `json:"paths"`
 	}
 	if affectedRaw != "" {
-		_ = json.Unmarshal([]byte(affectedRaw), &a)
+		_ = json.Unmarshal([]byte(affectedRaw), &a) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	targets := append(append([]string{}, a.Services...), a.Paths...)
 	if len(targets) == 0 {
@@ -500,7 +500,7 @@ func affectedApps(raw string) []string {
 		Apps []string `json:"apps"`
 	}
 	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &a)
+		_ = json.Unmarshal([]byte(raw), &a) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	if a.Apps == nil {
 		return []string{}
@@ -512,7 +512,7 @@ func affectedApps(raw string) []string {
 func missingEvidence(raw string) []string {
 	var out []string
 	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &out)
+		_ = json.Unmarshal([]byte(raw), &out) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	if out == nil {
 		return []string{}

@@ -34,7 +34,7 @@ func (s *server) handleProbePaths(w http.ResponseWriter, r *http.Request) {
 	if collectors.RedisAddr() != "" {
 		if paths, err := collectors.FetchProbePathsAll(r.Context()); err == nil && len(paths) > 0 {
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(paths)
+			_ = json.NewEncoder(w).Encode(paths) // best-effort: a failed encode/write means the client is gone
 			return
 		}
 	}
@@ -43,12 +43,12 @@ func (s *server) handleProbePaths(w http.ResponseWriter, r *http.Request) {
 		// #nosec G304 -- path is the operator-configured PROBE_PATHS_FILE, not user input
 		if data, err := os.ReadFile(path); err == nil {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(data)
+			_, _ = w.Write(data) // best-effort: status committed; a failed write means the client is gone
 			return
 		}
 	}
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(s.mergedProbePaths(collectors.Paths.All()))
+	_ = json.NewEncoder(w).Encode(s.mergedProbePaths(collectors.Paths.All())) // best-effort: a failed encode/write means the client is gone
 }
 
 // mergedProbePaths folds the remote vantages' pushed traces into whatever the local

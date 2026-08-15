@@ -16,6 +16,11 @@ Asserted here:
     Email: header iff WATCHDOG_EMAIL, Authorization: Bearer iff NTFY_TOKEN,
     email-without-topic refused loudly, webhook POSTs bounded (-m) valid JSON
     with an optional bearer token;
+  * the kernel UDP-drop sentinel (executed with a fake `docker` on PATH feeding
+    canned /proc/net/snmp): named-column parsing, run-over-run delta math incl.
+    counter reset (restart makes the counter go BACKWARD — never a huge-delta
+    alarm), transition-only alerting (drops-started / drops-stopped, not one
+    per minute), graceful "not measurable" degradation, bounded docker exec;
   * both scripts stay `bash -n` and shellcheck clean.
 """
 
@@ -319,6 +324,224 @@ def test_webhook_fires_on_both_transitions():
     assert down and 'notify_webhook "down"' in down.group(1)
     up = re.search(r'if \[ "\$prev" = "down" \]; then\n(.*?)\n  fi', text, re.S)
     assert up and 'notify_webhook "up"' in up.group(1)
+
+
+# ---------------------------------------------------------------------------
+# Kernel UDP-drop sentinel: execute check_syslog_udp_drops with a fake docker
+# on PATH feeding canned /proc/net/snmp content
+# ---------------------------------------------------------------------------
+
+# Real-world header shape (column POSITIONS vary across kernels; the check must
+# resolve RcvbufErrors / InErrors by NAME, which the swapped-order test pins).
+SNMP_UDP_HEADER = ("Udp: InDatagrams NoPorts InErrors OutDatagrams "
+                   "RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors")
+
+
+def _snmp_content(in_errors, rcvbuf_errors):
+    return (
+        "Ip: Forwarding DefaultTTL\n"
+        "Ip: 1 64\n"
+        f"{SNMP_UDP_HEADER}\n"
+        f"Udp: 51234 0 {in_errors} 4321 {rcvbuf_errors} 0 0 0 0\n"
+        "UdpLite: InDatagrams NoPorts InErrors\n"
+        "UdpLite: 0 0 0\n"
+    )
+
+
+def _extract_udp_check() -> str:
+    return subprocess.run(
+        ["sed", "-n", "/^check_syslog_udp_drops() {/,/^}/p", str(WATCHDOG)],
+        check=True, capture_output=True, text=True,
+    ).stdout
+
+
+def _run_udp_check(tmp_path, snmp_content, state_before=None,
+                   no_container=False, exec_fail=False):
+    """Execute the extracted check with docker faked and push/webhook recorded.
+
+    Returns (proc, pushes, webhooks, state_after) where pushes/webhooks are the
+    recorded call lines and state_after is the state file content (or None).
+    """
+    funcs = _extract_udp_check()
+    assert "check_syslog_udp_drops()" in funcs, \
+        "check_syslog_udp_drops() not found in stack-watchdog.sh"
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    snmp_file = tmp_path / "proc-net-snmp"
+    snmp_file.write_text(snmp_content)
+    fake_docker = bindir / "docker"
+    # ps → one container id (or none); exec → the canned /proc/net/snmp.
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  ps)\n"
+        '    [ -n "${FAKE_NO_CONTAINER:-}" ] && exit 0\n'
+        "    echo deadbeefcafe\n"
+        "    ;;\n"
+        "  exec)\n"
+        '    if [ -n "${FAKE_EXEC_FAIL:-}" ]; then\n'
+        '      echo "OCI runtime exec failed: container not running" >&2\n'
+        "      exit 1\n"
+        "    fi\n"
+        '    cat "$FAKE_SNMP_FILE"\n'
+        "    ;;\n"
+        "esac\n"
+    )
+    fake_docker.chmod(0o755)
+    state = tmp_path / "udp.state"
+    if state_before is not None:
+        state.write_text(state_before)
+    push_log = tmp_path / "push.log"
+    webhook_log = tmp_path / "webhook.log"
+    stubs = (
+        'push() { printf \'%s|%s|%s|%s\\n\' "$1" "$2" "$3" "$4" >> "$PUSH_LOG"; }\n'
+        'notify_webhook() { printf \'%s|%s\\n\' "$1" "$2" >> "$WEBHOOK_LOG"; }\n'
+        f'PROJECT=netops\nUDP_STATE="{state}"\n'
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["FAKE_SNMP_FILE"] = str(snmp_file)
+    env["PUSH_LOG"] = str(push_log)
+    env["WEBHOOK_LOG"] = str(webhook_log)
+    if no_container:
+        env["FAKE_NO_CONTAINER"] = "1"
+    if exec_fail:
+        env["FAKE_EXEC_FAIL"] = "1"
+    r = subprocess.run(
+        ["bash", "-c", stubs + funcs + "\ncheck_syslog_udp_drops\n"],
+        env=env, capture_output=True, text=True,
+    )
+    pushes = push_log.read_text().splitlines() if push_log.exists() else []
+    webhooks = webhook_log.read_text().splitlines() if webhook_log.exists() else []
+    state_after = state.read_text() if state.exists() else None
+    return r, pushes, webhooks, state_after
+
+
+def test_udp_check_first_run_baselines_without_alert(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(tmp_path, _snmp_content(7, 5))
+    assert r.returncode == 0, r.stderr
+    assert pushes == [] and webhooks == [], "first run must only baseline, never alert"
+    assert state is not None and state.split() == ["5", "7", "clean"], state
+
+
+def test_udp_check_zero_delta_stays_quiet(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(7, 5), state_before="5 7 clean\n")
+    assert r.returncode == 0, r.stderr
+    assert pushes == [] and webhooks == []
+    assert state.split() == ["5", "7", "clean"]
+
+
+def test_udp_check_nonzero_delta_alerts_once_with_exact_deltas(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(12, 9), state_before="5 7 clean\n")
+    assert r.returncode == 0, r.stderr
+    assert len(pushes) == 1, f"exactly one drops-started push expected: {pushes}"
+    body = pushes[0]
+    assert "RcvbufErrors +4" in body and "InErrors +5" in body, \
+        f"push must carry the exact deltas: {body}"
+    assert len(webhooks) == 1, "webhook channel must also carry the transition"
+    assert state.split() == ["9", "12", "dropping"]
+
+
+def test_udp_check_sustained_drops_do_not_realert(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(20, 15), state_before="9 12 dropping\n")
+    assert r.returncode == 0, r.stderr
+    assert pushes == [] and webhooks == [], \
+        "transition-only: sustained drops must not push once per minute"
+    assert state.split() == ["15", "20", "dropping"]
+
+
+def test_udp_check_recovery_alerts_when_drops_stop(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(20, 15), state_before="15 20 dropping\n")
+    assert r.returncode == 0, r.stderr
+    assert len(pushes) == 1 and "STOPPED" in pushes[0].upper(), \
+        f"drops-stopped transition must push once: {pushes}"
+    assert len(webhooks) == 1
+    assert state.split() == ["15", "20", "clean"]
+
+
+def test_udp_check_counter_reset_never_alerts_as_huge_delta(tmp_path):
+    # Container restart resets the netns counters to ~0: the value goes
+    # BACKWARD. An unsigned delta would read as ~2^32 drops; the check must
+    # re-baseline silently instead.
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(4, 3), state_before="5000 6000 clean\n")
+    assert r.returncode == 0, r.stderr
+    assert pushes == [] and webhooks == [], f"counter reset must not alert: {pushes}"
+    assert state.split() == ["3", "4", "clean"]
+
+
+def test_udp_check_counter_reset_while_dropping_keeps_state(tmp_path):
+    # Reset mid-incident: the delta is unknowable, so neither a started nor a
+    # stopped transition may fire; the drop-state carries over unchanged.
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(4, 3), state_before="5000 6000 dropping\n")
+    assert r.returncode == 0, r.stderr
+    assert pushes == [] and webhooks == []
+    assert state.split() == ["3", "4", "dropping"]
+
+
+def test_udp_check_container_absent_is_not_measurable(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(7, 5), no_container=True)
+    assert r.returncode == 0, "absent container must degrade, not fail the run"
+    assert "not measurable" in r.stderr, f"§16.1: degradation must be named: {r.stderr}"
+    assert pushes == [] and webhooks == [], "absent container must never false-alarm"
+    assert state is None, "no measurement, no baseline write"
+
+
+def test_udp_check_exec_failure_is_not_measurable(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, _snmp_content(7, 5), state_before="5 7 clean\n", exec_fail=True)
+    assert r.returncode == 0
+    assert "not measurable" in r.stderr, r.stderr
+    assert pushes == [] and webhooks == []
+    assert state == "5 7 clean\n", "a failed read must not touch the baseline"
+
+
+def test_udp_check_unparsable_snmp_is_not_measurable(tmp_path):
+    r, pushes, webhooks, state = _run_udp_check(
+        tmp_path, "Ip: Forwarding\nIp: 1\nTcp: ActiveOpens\nTcp: 3\n")
+    assert r.returncode == 0
+    assert "not measurable" in r.stderr, r.stderr
+    assert pushes == [] and webhooks == []
+    assert state is None
+
+
+def test_udp_check_resolves_counters_by_column_name(tmp_path):
+    # A kernel with a different column layout: positional parsing would read
+    # the wrong counters; name resolution must still find the right two.
+    content = (
+        "Udp: RcvbufErrors InErrors InDatagrams NoPorts\n"
+        "Udp: 7 9 100 0\n"
+    )
+    r, pushes, _, state = _run_udp_check(
+        tmp_path, content, state_before="5 7 clean\n")
+    assert r.returncode == 0, r.stderr
+    assert len(pushes) == 1
+    assert "RcvbufErrors +2" in pushes[0] and "InErrors +2" in pushes[0], pushes[0]
+    assert state.split() == ["7", "9", "dropping"]
+
+
+def test_udp_check_docker_exec_is_bounded():
+    funcs = _extract_udp_check()
+    assert re.search(r"timeout\s+10\s+docker exec", funcs), \
+        "§16.3: docker exec must run under a hard timeout"
+    assert re.search(r"command -v timeout", funcs), \
+        "§16.2: probe for `timeout` and degrade to 'not measurable' when absent " \
+        "— never fall back to an unbounded docker exec"
+
+
+def test_udp_check_runs_in_main_flow():
+    """The function must actually be invoked by the watchdog run, and its state
+    file must ride the same overridable state-file mechanism as the others."""
+    text = WATCHDOG.read_text()
+    assert re.search(r"^check_syslog_udp_drops$", text, re.M), \
+        "check_syslog_udp_drops is defined but never called"
+    assert 'UDP_STATE="${WATCHDOG_UDPDROPS:-$SCRIPT_DIR/.stack-watchdog.udpdrops}"' in text
 
 
 # ---------------------------------------------------------------------------

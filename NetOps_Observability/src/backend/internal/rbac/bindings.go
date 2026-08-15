@@ -199,7 +199,7 @@ func (s *BindingStore) Add(b RoleBinding) (RoleBinding, error) {
 		b.PrincipalType = PrincipalUser
 	}
 	if b.ScopeType == "" {
-		b.ScopeType, _ = ParseScope(b.ScopeID)
+		b.ScopeType, _ = ParseScope(b.ScopeID) // the remainder (bare id) is not needed here
 	}
 	if b.GrantedAt.IsZero() {
 		b.GrantedAt = time.Now().UTC()

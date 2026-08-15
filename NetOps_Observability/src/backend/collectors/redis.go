@@ -96,7 +96,7 @@ func redisDial(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	if tcfg != nil {
 		tc := tls.Client(c, tcfg)
 		if err := tc.HandshakeContext(ctx); err != nil {
@@ -420,7 +420,7 @@ func FetchIfAddrMap(ctx context.Context) (map[string]map[string]string, error) {
 		return map[string]map[string]string{}, nil
 	}
 	out := map[string]map[string]string{}
-	_ = json.Unmarshal([]byte(raw), &out)
+	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
 	return out, nil
 }
 
@@ -438,7 +438,7 @@ func FetchRoutingDirection(ctx context.Context) ([]RoutingPair, error) {
 		return []RoutingPair{}, nil
 	}
 	var out []RoutingPair
-	_ = json.Unmarshal([]byte(raw), &out)
+	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
 	return out, nil
 }
 
@@ -455,7 +455,7 @@ func FetchIfIndexMap(ctx context.Context) (map[string]map[string]string, error) 
 		return map[string]map[string]string{}, nil
 	}
 	out := map[string]map[string]string{}
-	_ = json.Unmarshal([]byte(raw), &out)
+	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
 	return out, nil
 }
 
@@ -506,6 +506,6 @@ func FetchWANCircuits(ctx context.Context) ([]EchoTarget, error) {
 		return nil, nil
 	}
 	var out []EchoTarget
-	_ = json.Unmarshal([]byte(raw), &out)
+	_ = json.Unmarshal([]byte(raw), &out) // best-effort: cache payload we authored; malformed decodes empty
 	return out, nil
 }

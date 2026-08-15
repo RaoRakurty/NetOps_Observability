@@ -169,7 +169,7 @@ func (f *Feed) loadCSV() (map[string][]Entry, int, int, error) {
 		if e.Vendor == "" || e.Product == "" || !strings.HasPrefix(e.CVE, "CVE-") {
 			continue
 		}
-		e.CVSS, _ = strconv.ParseFloat(rec[4], 64)
+		e.CVSS, _ = strconv.ParseFloat(rec[4], 64) // best-effort: malformed CVSS parses as 0
 		e.KEV = rec[10] == "1" || rec[10] == "true"
 		if len(e.Summary) > maxSummary {
 			e.Summary = e.Summary[:maxSummary] + "…"

@@ -42,7 +42,7 @@ func (s *server) handleWorkloadOIDCDiscovery(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_ = json.NewEncoder(w).Encode(doc)
+	_ = json.NewEncoder(w).Encode(doc) // best-effort: static JSON document; a failed write means the client is gone
 }
 
 // handleWorkloadJWKS serves GET /.well-known/jwks.json — the public signing
@@ -63,7 +63,7 @@ func (s *server) handleWorkloadJWKS(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) // best-effort: static JSON document; a failed write means the client is gone
 }
 
 // bootstrapWorkloadIssuer activates the issuer on the server + broker when

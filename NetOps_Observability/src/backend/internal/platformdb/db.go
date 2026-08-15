@@ -288,15 +288,15 @@ func (db *DB) Migrate(ctx context.Context) error {
 		// DDL on a populated table can exceed the request-path statement_timeout
 		// (F-60); SET LOCAL raises it for this transaction only.
 		if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '`+migrationStatementTimeout+`'`); err != nil {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) // best-effort rollback; the original error is returned
 			return fmt.Errorf("set migration statement_timeout: %w", err)
 		}
 		if _, err := tx.Exec(ctx, string(body)); err != nil {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) // best-effort rollback; the original error is returned
 			return fmt.Errorf("apply %s: %w", f, err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, f); err != nil {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback(ctx) // best-effort rollback; the original error is returned
 			return err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -320,7 +320,7 @@ func (db *DB) WithTenant(ctx context.Context, tenant string, cross bool, fn func
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() // deferred rollback is a no-op after Commit
 	// app.tenant_id is the per-request RLS session var read by every tenant_iso
 	// policy (renamed from app.current_tenant in migration 0013). It carries the
 	// canonical OPAQUE tenant id, or '*' for the platform-owner cross-tenant view.

@@ -142,7 +142,7 @@ func (rt *Runtime) tickOnce(ctx context.Context) {
 		if !rt.due(ic) {
 			continue
 		}
-		_ = rt.PollIntegration(ctx, ic)
+		_ = rt.PollIntegration(ctx, ic) // failures are logged and recorded on the RunRecord inside
 	}
 }
 
@@ -371,6 +371,6 @@ func (rt *Runtime) sinkRouted(ctx context.Context, ic Integration, routed Routed
 // entropy read degrades to a timestamp-only id, never a panic).
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }

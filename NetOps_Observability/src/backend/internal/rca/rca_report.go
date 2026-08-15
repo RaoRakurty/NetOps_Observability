@@ -1802,7 +1802,7 @@ func groundedLocus(edges []map[string]any) string {
 func decodeCloudChange(sig map[string]any, attached bool) rcaCloudChange {
 	attrs := map[string]any{}
 	if a, ok := sig["attrs"].(string); ok && a != "" {
-		_ = json.Unmarshal([]byte(a), &attrs)
+		_ = json.Unmarshal([]byte(a), &attrs) // best-effort: malformed attrs yields empty
 	}
 	str := func(k string) string {
 		if v, ok := attrs[k]; ok && v != nil {

@@ -306,7 +306,7 @@ type RunStore struct {
 func NewRunStore(path string) *RunStore {
 	s := &RunStore{runs: map[string]map[string]RunRecord{}, path: path}
 	if b, err := platformdb.Load(path); err == nil && len(b) > 0 {
-		_ = json.Unmarshal(b, &s.runs)
+		_ = json.Unmarshal(b, &s.runs) // best-effort: corrupt state file starts from defaults
 	}
 	return s
 }

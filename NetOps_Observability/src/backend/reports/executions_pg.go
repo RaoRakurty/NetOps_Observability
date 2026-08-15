@@ -33,7 +33,7 @@ func normTenant(t string) string { return strings.ToLower(strings.TrimSpace(t)) 
 
 func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }
 
@@ -223,10 +223,10 @@ func scanExec(row pgx.Row) (ExecutionRecord, bool, error) {
 		r.CompletedAt = *completed
 	}
 	if len(refJSON) > 0 {
-		_ = json.Unmarshal(refJSON, &r.Artifacts)
+		_ = json.Unmarshal(refJSON, &r.Artifacts) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	if len(delJSON) > 0 {
-		_ = json.Unmarshal(delJSON, &r.Deliveries)
+		_ = json.Unmarshal(delJSON, &r.Deliveries) // best-effort: engine-authored JSON; malformed decodes to zero value
 	}
 	return r, true, nil
 }

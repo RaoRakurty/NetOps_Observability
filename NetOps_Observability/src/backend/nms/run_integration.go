@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"netops/backend/internal/applog"
 	"netops/backend/wireless"
 )
 
@@ -98,7 +99,12 @@ func RunPollSession(ctx context.Context, conn Connector, cfg IntegrationConfig, 
 			}
 		}
 		res.Checkpoints[stream] = next
-		_ = cps.Save(ctx, cfg.Tenant, cfg.IntegrationID, stream, next)
+		if err := cps.Save(ctx, cfg.Tenant, cfg.IntegrationID, stream, next); err != nil {
+			// The next poll re-fetches from the old checkpoint (idempotent
+			// ingest), but a persistently failing store must not be silent.
+			applog.Warn("nms", "checkpoint not persisted", map[string]any{
+				"integration": cfg.IntegrationID, "stream": stream, "error": err.Error()})
+		}
 	}
 	return res, sess, nil
 }

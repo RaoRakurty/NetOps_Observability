@@ -81,7 +81,7 @@ func (p *swtpmSidecarProvider) roundtrip(ctx context.Context, req string) (strin
 	}
 	defer conn.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
+		_ = conn.SetDeadline(dl) // best-effort: a failed deadline set surfaces as a read/write error
 	}
 	if _, err := conn.Write([]byte(req + "\n")); err != nil {
 		return "", err

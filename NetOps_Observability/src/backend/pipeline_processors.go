@@ -1045,7 +1045,7 @@ func (s *server) handleQuarantineList(w http.ResponseWriter, r *http.Request) {
 			errors.New("quarantine index is unreachable — this is NOT an empty quarantine; retry"))
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		writeError(w, http.StatusServiceUnavailable,
 			fmt.Errorf("quarantine index read failed (opensearch status %d) — this is NOT an empty quarantine; retry", resp.StatusCode))
@@ -1159,7 +1159,7 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusServiceUnavailable, errors.New("quarantine index is unreachable; retry"))
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		writeError(w, http.StatusServiceUnavailable,
 			fmt.Errorf("quarantine search failed (opensearch status %d); retry", resp.StatusCode))
@@ -1214,7 +1214,7 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 			if err != nil {
 				return err
 			}
-			defer func() { _ = resp.Body.Close() }()
+			defer func() { _ = resp.Body.Close() }() // best-effort: nothing actionable on close failure
 			if resp.StatusCode == http.StatusConflict {
 				return fmt.Errorf("%w (doc %s/%s)", quarantine.ErrClaimConflict, index, id)
 			}

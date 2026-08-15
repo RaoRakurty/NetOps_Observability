@@ -125,7 +125,7 @@ SELECT tenant_id FROM netops.corr_objects
 		}
 		var owners map[string]seamOwnerEntry
 		if s.governance != nil {
-			owners, _ = s.governance.SeamOwners(objTenant)
+			owners, _ = s.governance.SeamOwners(objTenant) // best-effort: a missing owner map just skips owner suggestions
 		}
 		existing := map[string]bool{}
 		for _, it := range s.rcaActionItems.List(objTenant, id) {

@@ -438,7 +438,7 @@ func writeBGP(conn net.Conn, typ byte, body []byte) error {
 	binary.BigEndian.PutUint16(buf[16:18], uint16(total))
 	buf[18] = typ
 	buf = append(buf, body...)
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 	_, err := conn.Write(buf)
 	return err
 }
@@ -451,7 +451,7 @@ func readBGP(conn net.Conn, hold uint16) (byte, []byte, error) {
 	if hold > 0 {
 		deadline = time.Duration(hold) * time.Second
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(deadline))
+	_ = conn.SetReadDeadline(time.Now().Add(deadline)) // best-effort: a failed deadline set surfaces as a read/write error
 
 	hdr := make([]byte, bgpHeaderLen)
 	if _, err := io.ReadFull(conn, hdr); err != nil {

@@ -164,7 +164,11 @@ func (sy *StateSyncer) advanceLinkStatus(ctx context.Context, l Link, inc Remote
 	l.Status = target
 	t := now
 	l.LastSyncedAt = &t
-	_ = sy.store.PutLink(ctx, l)
+	if err := sy.store.PutLink(ctx, l); err != nil {
+		// Re-derived on the next sync (idempotent), but never silently.
+		applog.Warn("ticketing", "link status advance not persisted", map[string]any{
+			"ticket": l.TicketNumber, "target": target, "error": err.Error()})
+	}
 }
 
 // lifecycleObservation is one (action, timestamp) the inbound sync derives from a
@@ -219,6 +223,6 @@ func firstNonZeroTime(ts ...time.Time) time.Time {
 // no-utils rule; a failed entropy read degrades to a zero id, never a panic).
 func syncEventID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read cannot fail (Go 1.24+ aborts instead)
 	return hex.EncodeToString(b)
 }

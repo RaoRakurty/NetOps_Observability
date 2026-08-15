@@ -79,7 +79,7 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integration.Config) 
 	for _, m := range maps {
 		state, version, found, perr := s.pollExternalState(cfg.Provider, cfg.Tenant, m.ExternalID)
 		// Rotate this mapping to the back of the stalest-first queue regardless.
-		_ = s.integrations.TouchMapping(ctx, cfg.Tenant, cfg.Provider, m.ExternalID)
+		_ = s.integrations.TouchMapping(ctx, cfg.Tenant, cfg.Provider, m.ExternalID) // best-effort: queue rotation only; a failed touch just re-polls sooner
 		if perr != nil || !found {
 			continue // transient poll error or ticket gone — leave for next sweep
 		}
@@ -130,10 +130,14 @@ func (s *server) reconcileProvider(ctx context.Context, cfg integration.Config) 
 			logError("integration.reconcile", "outbound resolve", merge(map[string]any{"external_id": m.ExternalID}, errf(rerr)))
 			continue
 		}
-		_ = s.integrations.UpsertMapping(ctx, integration.Mapping{
+		if uerr := s.integrations.UpsertMapping(ctx, integration.Mapping{
 			Tenant: cfg.Tenant, Provider: cfg.Provider, ExternalID: m.ExternalID,
 			IncidentID: m.IncidentID, State: inc.Status, Applied: m.Applied,
-		})
+		}); uerr != nil {
+			// The resolve WAS pushed; only the local mirror is stale — the next
+			// sweep re-detects and re-pushes (idempotent), but not silently.
+			logWarn("integration.reconcile", "record pushed resolve", merge(map[string]any{"external_id": m.ExternalID}, errf(uerr)))
+		}
 		s.intgDrift(true)
 		logInfo("integration.reconcile", "outbound drift → pushed resolve to ITSM", map[string]any{
 			"tenant": cfg.Tenant, "provider": cfg.Provider, "external_id": m.ExternalID, "nms_status": inc.Status,

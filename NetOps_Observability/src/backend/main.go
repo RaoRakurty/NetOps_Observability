@@ -208,6 +208,7 @@ type server struct {
 	rcaPromotions   *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
 	rcaActionItems  *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
 	rcaRevisions    *rcaRevisionStore      // report revision register, tenant-keyed (postmortem Phase 1 immutability)
+	rcaClock        func() time.Time       // DI seam for the RCA generation clock (nil = wall clock) — deterministic re-render tests inject it
 	portStore       portintel.Store        // Port Intelligence physical-layer store (#94)
 	netboxCfg       *netboxConfigStore     // NetBox source-of-truth discovery config
 	discoveryCfg    *discoveryConfigStore  // SNMP subnet-discovery scan config (platform-owner)
@@ -2215,7 +2216,7 @@ func (s *server) handleTransportPostureExport(w http.ResponseWriter, r *http.Req
 	if format != "html" {
 		w.Header().Set("Content-Disposition", `attachment; filename="transport-posture.`+format+`"`)
 	}
-	_, _ = w.Write(art.Bytes)
+	_, _ = w.Write(art.Bytes) // best-effort: status committed; a failed write means the client is gone
 }
 
 func (s *server) handleVersion(w http.ResponseWriter, _ *http.Request) {
@@ -2628,7 +2629,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 		})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("{\"error\":\"response encoding failed\",\"code\":\"RESPONSE_ENCODE_FAILED\"}\n"))
+		_, _ = w.Write([]byte("{\"error\":\"response encoding failed\",\"code\":\"RESPONSE_ENCODE_FAILED\"}\n")) // last-resort constant payload; the client is gone if this fails
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

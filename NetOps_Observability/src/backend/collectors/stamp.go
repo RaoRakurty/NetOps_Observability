@@ -154,7 +154,7 @@ func (r *stampReflector) Run(ctx context.Context) error {
 		return err
 	}
 	defer pc.Close()
-	go func() { <-ctx.Done(); _ = pc.Close() }()
+	go func() { <-ctx.Done(); _ = pc.Close() }() // ctx teardown; nothing actionable
 
 	buf := make([]byte, 1500)
 	var seq uint32
@@ -175,7 +175,7 @@ func (r *stampReflector) Run(ctx context.Context) error {
 			continue
 		}
 		seq++
-		_, _ = pc.WriteTo(out, src)
+		_, _ = pc.WriteTo(out, src) // best-effort: a lost probe shows as loss in the stats
 		r.mu.Lock()
 		r.count++
 		r.status.LastTick = time.Now().UTC()
@@ -339,7 +339,7 @@ func probeSTAMP(ctx context.Context, target string, count int) (stampResult, err
 			continue
 		}
 		sent++
-		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second)) // best-effort: a failed deadline set surfaces as a read/write error
 		buf := make([]byte, 1500)
 		n, err := conn.Read(buf)
 		t4 := ntpNow()

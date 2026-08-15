@@ -271,7 +271,7 @@ func gcpTokenError(status int, body []byte, attempts int) error {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		_ = json.Unmarshal(body, &rpc)
+		_ = json.Unmarshal(body, &rpc) // best-effort: fall through to status mapping
 		msg = rpc.Error.Status
 		if rpc.Error.Message != "" {
 			msg += ": " + truncateForError(rpc.Error.Message)

@@ -184,8 +184,8 @@ func (p *Prober) probe(ctx context.Context, ep peerEndpoint) peerProbeResult {
 	if err != nil {
 		return peerProbeResult{checkedAt: now}
 	}
-	defer func() { _ = raw.Close() }()
-	_ = raw.SetDeadline(time.Now().Add(p.timeout))
+	defer func() { _ = raw.Close() }()             // best-effort: nothing actionable on close failure
+	_ = raw.SetDeadline(time.Now().Add(p.timeout)) // best-effort: a failed deadline set surfaces as a read/write error
 
 	if ep.Preamble == "postgres" {
 		if !postgresSSLPreamble(raw) {
