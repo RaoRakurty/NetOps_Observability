@@ -415,28 +415,33 @@ func (p *PGStore) importLegacy(ctx context.Context) error {
 
 	imported := 0
 	for _, it := range items {
+		// The "is the target already populated?" guard is the ONLY thing standing
+		// between a stale legacy snapshot and live data, because saveRows below is
+		// DELETE-then-insert of the whole table under platform scope.
+		//
+		// It must be asked through targetEmpty, which counts inside
+		// WithTenant(ctx, "", true, …). Asking the bare pool instead — as this did
+		// — runs with no tenant GUC set, so a FORCE-RLS table filters every row out
+		// and the count comes back 0 on a FULL table. The guard then reads "empty",
+		// saveRows DELETEs the live rows (cross-tenant scope, so the delete DOES
+		// see them) and reinserts the cutover-era snapshot. On an upgraded install
+		// that still has netops_kv, that silently destroyed every user, API key,
+		// role binding and dashboard created since cutover — on EVERY BOOT, while
+		// logging only "imported legacy blob app-state". The comment on
+		// NewPGStore calling this import "idempotent" was describing an intent the
+		// guard did not implement.
+		empty, err := p.targetEmpty(ctx, it.key)
+		if err != nil {
+			return err
+		}
+		if !empty {
+			continue // target already populated — never clobber live state
+		}
 		if spec, ok := specFor(it.key); ok {
-			var n int
-			if err := p.db.pool.QueryRow(ctx, "SELECT count(*) FROM "+spec.table).Scan(&n); err != nil {
-				return err
-			}
-			if n > 0 {
-				continue // target already populated — leave it
-			}
 			if err := p.saveRows(ctx, spec, it.data); err != nil {
 				return err
 			}
-			imported++
-			continue
-		}
-		var present bool
-		if err := p.db.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM app_kv WHERE key = $1)`, it.key).Scan(&present); err != nil {
-			return err
-		}
-		if present {
-			continue
-		}
-		if err := p.saveBlob(ctx, it.key, it.data); err != nil {
+		} else if err := p.saveBlob(ctx, it.key, it.data); err != nil {
 			return err
 		}
 		imported++
