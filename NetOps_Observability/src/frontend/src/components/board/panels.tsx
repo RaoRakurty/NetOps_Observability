@@ -48,6 +48,25 @@ export function fmtUptime(sec: number): string {
 // come from our own inventory/metric labels; we sanitize regardless.
 export const sanitizeLabel = (v: string) => (v || "").replace(/[^A-Za-z0-9._:\- ]/g, "");
 
+// escapeHtml is the control for the OTHER sink: an ECharts tooltip `formatter`
+// that returns a STRING has that string inserted as HTML, so any device label
+// reaching it is executable markup. Labels come from seriesLabel(), i.e. raw
+// VictoriaMetrics label values (device/instance/ifName) that originate in
+// SNMP-discovered sysName — attacker-controllable by whoever controls a
+// monitored device. A sysName of `<img src=x onerror=…>` then ran in the
+// browser of every operator who viewed the panel (stored XSS).
+//
+// Escaping, not sanitizeLabel's allowlist-strip: this is a display path, and
+// device names legitimately contain `/`, `(` and `+` that stripping would eat.
+// Escaping neutralizes the markup while showing the operator the true name.
+export const escapeHtml = (v: unknown) =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 // labelSelector builds a `{k="v",…}` PromQL selector from set parts (skips empty).
 export function labelSelector(parts: Record<string, string | undefined>): string {
   const inner = Object.entries(parts)
@@ -246,7 +265,7 @@ export function MetricTop({ title, query, minutes, fmtX, limit = 10, labelKeys, 
           option={{
             ...chartBase,
             grid: { left: 8, right: 70, top: 6, bottom: 6, containLabel: true },
-            tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${p.name}<br/><b>${fmtX(p.value)}</b>`; } },
+            tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${escapeHtml(p.name)}<br/><b>${fmtX(p.value)}</b>`; } },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtX(v) } },
             yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
             series: [{ type: "bar", barMaxWidth: 16, data: rows.map((r, i) => ({ value: r.value, itemStyle: { color: paletteColor(i), borderRadius: [0, 3, 3, 0] } })) }],
@@ -279,7 +298,7 @@ export function BarPanel({ title, rows, fmtX, loading, err, danger, dataKind = "
           option={{
             ...chartBase,
             grid: { left: 8, right: 76, top: 6, bottom: 6, containLabel: true },
-            tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${p.name}<br/><b>${fmtX(p.value)}</b>`; } },
+            tooltip: { ...chartBase.tooltip, trigger: "axis", axisPointer: { type: "shadow" }, formatter: (ps: any) => { const p = Array.isArray(ps) ? ps[0] : ps; return `${escapeHtml(p.name)}<br/><b>${fmtX(p.value)}</b>`; } },
             xAxis: { type: "value", ...axisStyle, axisLabel: { ...(axisStyle as any).axisLabel, formatter: (v: number) => fmtX(v) } },
             yAxis: { type: "category", inverse: true, data: rows.map((r) => r.label), ...axisStyle, splitLine: { show: false } },
             series: [{

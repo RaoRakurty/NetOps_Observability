@@ -6,7 +6,7 @@ import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric, hexT
 import { cssVar } from "../theme/tokens";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
-import { EmptyHint, MetricStat } from "../components/board/panels";
+import { EmptyHint, MetricStat, escapeHtml } from "../components/board/panels";
 import { StatStrip, Stat } from "../components/ui";
 
 // Flows — the NetFlow/IPFIX/sFlow analytics dashboard. Layout: a left
@@ -473,7 +473,7 @@ function ProtocolsSection({ q }: { q: FlowQuery }) {
           style={{ height: 300 }}
           option={{
             ...chartBase,
-            tooltip: { ...chartBase.tooltip, trigger: "item", formatter: (p: any) => `${p.name}: ${fmtBytes(p.value)} (${p.percent}%)` },
+            tooltip: { ...chartBase.tooltip, trigger: "item", formatter: (p: any) => `${escapeHtml(p.name)}: ${fmtBytes(p.value)} (${p.percent}%)` },
             legend: { ...chartBase.legend, bottom: 0 },
             series: [
               {
