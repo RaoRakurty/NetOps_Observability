@@ -62,7 +62,10 @@ ALLOWLIST: dict[tuple[str, int], str] = {
     ("seed-test-traffic.py", 183): "test-traffic generator prints each send failure to stderr and keeps seeding",
     ("secret_rotation.py", 251): "service-owned marker unreadable from operator uid; commented, rotation proceeds",
     ("secret_rotation.py", 266): "service-owned marker dir unreadable from operator uid; commented fallback",
-    ("install.py", 2169): "external-broker reachability preflight; warn states services retry from inside the network",
+    ("install.py", 2308): "external-broker reachability preflight; warn states services retry from inside the network",
+    ("scale-miniladder.py", 179): "optional .env read; returns '' with a documented callers-decide contract",
+    ("scale-miniladder.py", 571): "preflight ingress probe; failure appended to `problems`, preflight fails on any problem",
+    ("scale-miniladder.py", 578): "preflight API-login probe; failure appended to `problems`, preflight fails on any problem",
     # The four 2026-08-16 chown-swallow findings (enrichment seed, processors
     # seed, appid/cloud fixtures, vuln SUDO_UID dir) were RESOLVED the same
     # day: all now route through chown_tree (repair-or-refuse), and the vuln

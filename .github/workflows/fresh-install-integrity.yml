@@ -158,6 +158,24 @@ jobs:
             exit 1
           fi
 
+      - name: assert the SEC-007 Kafka ACL matrix is live (installer-owned)
+        working-directory: NetOps_Observability/deployment/docker
+        # P0 2026-08-16: the enforcing broker (allow.everyone.if.no.acl.found
+        # =false) boots a fresh install with an EMPTY KRaft ACL store —
+        # install.py now applies deployment/docker/kafka/apply-acls.sh after
+        # phase B and refuses success otherwise. install.py exiting 0 is
+        # necessary but NOT sufficient (this job's doctrine), so read the
+        # state back independently: a known principal/topic pair must exist.
+        run: |
+          set -euo pipefail
+          out=$(sudo docker compose exec -T kafka /opt/kafka/bin/kafka-acls.sh \
+            --bootstrap-server kafka:9094 \
+            --command-config /tmp/kafka-tls/admin.properties \
+            --list --topic netops.deadletter)
+          echo "$out"
+          echo "$out" | grep -q 'CN=spiffe://netops/ns/default/sa/vector-router' \
+            || { echo "::error::vector-router grant missing on netops.deadletter — the installer did not apply the SEC-007 ACL matrix (auth-dead bus)"; exit 1; }
+
       - name: assert the TLS ingress SERVES (CA-verified, full mesh path)
         working-directory: NetOps_Observability
         # nginx :443 with the generated dev cert (SANs cover localhost), through

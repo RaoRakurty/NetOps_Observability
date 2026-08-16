@@ -1,17 +1,29 @@
 #!/bin/sh
-# apply-acls.sh — SEC-007.1: the per-identity Kafka ACL matrix.
+# apply-acls.sh — SEC-007: the per-identity Kafka ACL matrix.
 #
-# Runs INSIDE the kafka container (the only place kafka-acls.sh lives):
+# Runs INSIDE the kafka container (the only place kafka-acls.sh lives),
+# mounted at /acls/apply-acls.sh by compose.tls.yml:
 #   docker compose exec kafka /acls/apply-acls.sh
-# Idempotent: kafka-acls --add of an existing ACL is a no-op, so re-running
-# converges (safe after every broker rebuild or identity change).
+# Idempotent: kafka-acls --add of an existing ACL is a no-op and --remove
+# --force of an absent one is too, so re-running converges (safe after every
+# broker rebuild, identity change, or data/kafka wipe).
 #
-# POSTURE: this script only WRITES the matrix. Enforcement is
-# allow.everyone.if.no.acl.found, which stays TRUE (observe) until the
-# SEC-007.2 flip — after a quiet observation window, per the runbook. In
-# observe mode a principal missing from this matrix keeps working and the
-# authorizer DEBUG log shows the fallback being used; after the flip it is
-# denied outright.
+# CONNECTION: on a TLS deployment the broker admin-plane client config
+# (/tmp/kafka-tls/admin.properties, staged by tls-entrypoint.sh; the broker
+# SVID is the KAFKA_SUPER_USERS principal) is auto-detected and the
+# bootstrap defaults to the mTLS listener kafka:9094. Override with
+# KAFKA_BOOTSTRAP / KAFKA_COMMAND_CONFIG for non-standard layouts; without
+# admin.properties (pre-TLS lab broker) it falls back to localhost:9092.
+#
+# POSTURE: ENFORCED. SEC-007.2 (2026-08-09) flipped
+# allow.everyone.if.no.acl.found to false in compose.tls.yml, so the KRaft
+# ACL store IS the authorization state — and it lives in data/kafka. A
+# fresh install or a data/kafka wipe therefore boots an EMPTY store: every
+# non-super-user principal is denied while every healthcheck stays green
+# (live incident 2026-08-16: vector-router + correlation auth-dead ~80 min,
+# lag frozen, all containers "healthy"). install.py runs this script
+# automatically after TLS phase B; this file stays the manual runbook path
+# (docs/runbooks/tls-enforce-wave.md).
 #
 # PRINCIPALS are full DN strings (no ssl.principal.mapping.rules — see the
 # compose override note: the rule value crosses three escaping layers and
@@ -38,8 +50,23 @@
 #                      that blast radius to exactly this one topic.
 set -eu
 
-BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:9092}"
+ADMIN_PROPS=/tmp/kafka-tls/admin.properties
+BOOTSTRAP="${KAFKA_BOOTSTRAP:-}"
+CONFIG="${KAFKA_COMMAND_CONFIG:-}"
+if [ -z "$BOOTSTRAP" ]; then
+    if [ -f "$ADMIN_PROPS" ]; then
+        # TLS broker: authenticate on the mTLS listener as the super-user
+        # broker SVID (the plaintext 9092 listener died at SEC-006.3).
+        BOOTSTRAP="kafka:9094"
+        CONFIG="${CONFIG:-$ADMIN_PROPS}"
+    else
+        BOOTSTRAP="localhost:9092"
+    fi
+fi
 ACLS="/opt/kafka/bin/kafka-acls.sh --bootstrap-server $BOOTSTRAP"
+if [ -n "$CONFIG" ]; then
+    ACLS="$ACLS --command-config $CONFIG"
+fi
 
 SA="CN=spiffe://netops/ns/default/sa"
 AGG="User:$SA/vector-aggregator"
@@ -117,6 +144,31 @@ for t in netops.cloud netops.cloudcosts netops.cloudlogs netops.probes netops.ap
         --operation Write --operation Describe --topic "$t" >/dev/null
 done
 
-COUNT=$($ACLS --list 2>/dev/null | grep -c "principal=" || true)
-echo "acls: matrix applied — $COUNT ACL entries live (observe posture; the" >&2
-echo "acls: SEC-007.2 flip to allow.everyone=false is a separate, soaked step)" >&2
+# ---- verification (§16.1: no blind success) --------------------------------
+# Every --add above already fails the run via set -e, but read the state BACK:
+# an installer that reports success over an empty/partial matrix is exactly
+# the auth-dead-bus defect this script exists to prevent. Assert one
+# load-bearing principal/topic pair (the router's deadletter grant) plus a
+# count floor over the whole store.
+VERIFY=$($ACLS --list --topic netops.deadletter) || {
+    echo "acls: FATAL: could not list ACLs back after applying — matrix state unknown" >&2
+    exit 1
+}
+case "$VERIFY" in
+*"$ROUTER"*) : ;;
+*)
+    echo "acls: FATAL: router grant missing from netops.deadletter after apply —" >&2
+    echo "acls: the matrix did not take; the bus would be auth-dead" >&2
+    exit 1
+    ;;
+esac
+# grep -c exits 1 on zero matches; a zero count is caught by the floor below,
+# not swallowed (§16.1) — the || true only neutralizes that documented exit.
+COUNT=$($ACLS --list | grep -c "principal=" || true)
+FLOOR=40
+if [ "$COUNT" -lt "$FLOOR" ]; then
+    echo "acls: FATAL: only $COUNT ACL entries live (< $FLOOR) — partial matrix" >&2
+    exit 1
+fi
+echo "acls: matrix applied and verified — $COUNT ACL entries live" >&2
+echo "acls: (enforce posture: allow.everyone.if.no.acl.found=false since SEC-007.2)" >&2

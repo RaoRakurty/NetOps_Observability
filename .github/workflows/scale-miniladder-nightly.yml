@@ -58,25 +58,11 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: sudo -E python3 scripts/install.py --tls=yes
 
-      # INTERIM (remove when the install path applies the ACL matrix itself):
-      # a fresh TLS install boots the broker with StandardAuthorizer +
-      # allow.everyone.if.no.acl.found=false but ZERO ACLs — kafka-init only
-      # creates topics, and nothing re-applies deployment/docker/kafka/
-      # apply-acls.sh, so every downstream consumer (vector-router,
-      # correlation) is denied and the ingest pipeline is dead on arrival
-      # (found live 2026-08-16 by this harness's preflight after a
-      # clean-slate reinstall). Apply the documented SEC-007.1 matrix exactly
-      # as the operator runbook does, so this job measures SCALE regressions,
-      # not the (tracked) install-path defect — which
-      # fresh-install-integrity.yml should grow an assertion for.
-      - name: apply Kafka ACL matrix (interim — install-path gap)
-        run: |
-          set -euo pipefail
-          sudo docker cp NetOps_Observability/deployment/docker/kafka/apply-acls.sh \
-            netops-kafka-1:/tmp/apply-acls.sh
-          sudo docker exec \
-            -e KAFKA_BOOTSTRAP='kafka:9094 --command-config /tmp/kafka-tls/admin.properties' \
-            netops-kafka-1 sh /tmp/apply-acls.sh
+      # No ACL step here ON PURPOSE: install.py applies + verifies the
+      # SEC-007 matrix itself after TLS phase B (P0 fix, 2026-08-16 — the
+      # interim docker-cp/exec workaround that used to live here is gone so
+      # this job keeps PROVING the installer owns it; the harness preflight
+      # fails on an auth-dead bus if that regresses).
 
       - name: assert the mesh stayed up (no crash-loops behind exit 0)
         working-directory: NetOps_Observability/deployment/docker

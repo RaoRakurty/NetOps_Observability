@@ -493,6 +493,12 @@ services:
       - ../../data/kafka:/var/lib/kafka/data
       - ../../data/tls/services/kafka:/certs-src:ro
       - ./kafka/tls-entrypoint.sh:/kafka-tls-entrypoint.sh:ro
+      # SEC-007: the ACL matrix, mounted where its header documents so
+      # install.py (and the runbook operator) can `compose exec` it. With
+      # default-deny above, a fresh/wiped data/kafka is an EMPTY ACL store =
+      # silently auth-dead ingest tier (live 2026-08-16) — install.py applies
+      # this after phase B and refuses to report success if it fails.
+      - ./kafka/apply-acls.sh:/acls/apply-acls.sh:ro
     # Readiness on the MTLS listener (2026-08-06): 9092 dies at SEC-006.3, and
     # a healthcheck probing a removed listener would deadlock the bootstrap
     # (the SEC-008 lesson, healthcheck edition). Same TCP-accept semantics —

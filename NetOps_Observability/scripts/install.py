@@ -88,7 +88,7 @@ def step(msg: str, stage: str | None = None) -> None:
 # these ids; tests/test_installer_gui_contract.py pins the set.
 PROGRESS_STAGES = (
     "prereq", "scaffold", "env", "sizing", "tls-env", "data-dirs",
-    "bundle", "up-a", "mint", "up-b", "status",
+    "bundle", "up-a", "mint", "up-b", "kafka-acls", "status",
     "bootstrap-os", "bootstrap-kc", "bootstrap-grafana",
 )
 
@@ -1800,6 +1800,145 @@ def compose_status(compose_dir: Path) -> None:
     subprocess.run(["docker", "compose", "ps"], cwd=str(compose_dir), check=False)
 
 
+# ---- Kafka authorization (SEC-007) ------------------------------------------
+# The TLS variant boots the broker with StandardAuthorizer and
+# allow.everyone.if.no.acl.found=false (SEC-007.2), and the KRaft ACL store
+# lives in data/kafka — so a fresh install (or a data/kafka wipe, e.g.
+# --rotate-kafka-cluster-id) starts ENFORCING WITH ZERO ACLs: every producer
+# and consumer except the broker's own super-user SVID is denied while every
+# container still reports "healthy". Exactly that shipped live 2026-08-16
+# (~80 min auth-dead ingest tier, router lag frozen, all healthchecks green).
+# kafka-init only creates topics; the installer owns authorization state too,
+# so a completed install is never a silently dead bus.
+
+_ACL_SCRIPT = "/acls/apply-acls.sh"          # mounted by compose.tls.yml
+_KAFKA_ADMIN_PROPS = "/tmp/kafka-tls/admin.properties"  # tls-entrypoint.sh
+
+
+def _kafka_group_members(describe_out: str, group: str) -> int:
+    """Count ACTIVE members in `kafka-consumer-groups.sh --describe` output.
+
+    Data rows are `GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG
+    CONSUMER-ID HOST CLIENT-ID`; a live member shows a real CONSUMER-ID while
+    a dead consumer keeps its committed offsets but shows `-` — exactly the
+    wiped-ACL failure shape. Same parse the scale mini-ladder preflight uses
+    (scripts/scale-miniladder.py group_lag)."""
+    members = 0
+    for line in describe_out.splitlines():
+        f = line.split()
+        if len(f) >= 7 and f[0] == group and f[6] != "-":
+            members += 1
+    return members
+
+
+def apply_kafka_acls(compose_dir: Path, timeout_s: int = 900) -> None:
+    """Run the SEC-007 ACL matrix inside the broker, bounded + loud (§16.1).
+
+    deployment/docker/kafka/apply-acls.sh executes in the kafka container
+    against the mTLS listener with the broker's super-user SVID (it
+    auto-detects /tmp/kafka-tls/admin.properties). It is idempotent
+    (kafka-acls --add of an existing ACL is a no-op) and verifies the matrix
+    back before exiting 0, so a zero exit here is a proven-applied matrix.
+    Retries over a bounded window because right after the phase-B recreate
+    the broker may still be in log recovery; persistent failure FAILS the
+    install — completing with a dead bus is the defect this step removes."""
+    cmd = ["docker", "compose", "exec", "-T", "kafka", _ACL_SCRIPT]
+    deadline = time.time() + timeout_s
+    attempt = 0
+    last = "no output"
+    while True:
+        attempt += 1
+        try:
+            res = subprocess.run(cmd, cwd=str(compose_dir), capture_output=True,
+                                 text=True, timeout=600, check=False)
+            rc, out, err = res.returncode, res.stdout, res.stderr
+        except subprocess.TimeoutExpired:
+            rc, out, err = 1, "", "apply-acls.sh timed out after 600s inside the broker"
+        if rc == 0:
+            applied = [ln for ln in err.splitlines() if "matrix applied" in ln]
+            ok(applied[-1].removeprefix("acls: ") if applied
+               else "Kafka ACL matrix applied and verified (SEC-007)")
+            return
+        last = (err.strip() or out.strip() or "no output")[-500:]
+        if time.time() >= deadline:
+            break
+        warn(f"ACL apply attempt {attempt} failed (broker may still be "
+             f"recovering after the phase-B recreate) — retrying in 15s: "
+             f"{last.splitlines()[-1]}")
+        time.sleep(15)
+    fail("could not apply the SEC-007 Kafka ACL matrix — with "
+         "allow.everyone.if.no.acl.found=false an empty ACL store leaves the "
+         "ENTIRE ingest tier authorization-dead while every container reports "
+         "healthy (live incident 2026-08-16). Refusing to report install "
+         "success over a dead bus. Inspect `docker compose logs kafka`, then "
+         "re-run the installer (idempotent) or the runbook step: "
+         f"docker compose exec kafka {_ACL_SCRIPT}. Last error: {last}")
+
+
+def verify_bus_consumers(compose_dir: Path, group: str = "netops-correlation",
+                         timeout_s: int = 420) -> None:
+    """Post-apply liveness gate (§16.1: no blind success).
+
+    The matrix being WRITTEN is necessary but not sufficient — prove a real
+    workload consumer holds group membership through the enforcing broker
+    before calling the bus alive (the 2026-08-16 incident's signature was
+    committed offsets with zero members). Bounded wait: right after phase B
+    the correlation engine may still be (re)connecting and kafka-init may
+    still be creating topics."""
+    describe = ["docker", "compose", "exec", "-T", "kafka",
+                "/opt/kafka/bin/kafka-consumer-groups.sh",
+                "--bootstrap-server", "kafka:9094",
+                "--command-config", _KAFKA_ADMIN_PROPS,
+                "--describe", "--group", group]
+    deadline = time.time() + timeout_s
+    last = "no output"
+    while time.time() < deadline:
+        try:
+            res = subprocess.run(describe, cwd=str(compose_dir),
+                                 capture_output=True, text=True, timeout=90,
+                                 check=False)
+            if res.returncode == 0 and _kafka_group_members(res.stdout, group) > 0:
+                ok(f"bus alive: consumer group {group} holds active membership "
+                   "through the enforcing broker")
+                return
+            last = (res.stderr.strip() or res.stdout.strip() or "no output")[-400:]
+        except subprocess.TimeoutExpired:
+            last = "kafka-consumer-groups.sh timed out after 90s"
+        time.sleep(10)
+    fail(f"consumer group {group} shows NO active member {timeout_s}s after "
+         "the ACL matrix was applied — the bus is still authorization-dead "
+         "(or the consumer never came up). Refusing to report install "
+         "success. Inspect `docker compose logs correlation` and the broker "
+         "authorizer log (`docker compose logs kafka | grep -i denied`), fix, "
+         f"and re-run the installer. Last probe output: {last}")
+
+
+def apply_bus_authorization(compose_dir: Path, env_path: Path,
+                            tls_enabled: bool) -> None:
+    """Install-owned Kafka authorization convergence (SEC-007, P0 2026-08-16).
+
+    Only the TLS variant runs it: the plaintext baseline configures NO
+    authorizer at all (base docker-compose.yml has no
+    KAFKA_AUTHORIZER_CLASS_NAME), so kafka-acls there fails with
+    SecurityDisabledException and nothing would enforce the result — skipping
+    is correct, not a gap. External-broker installs (embedded-bus profile
+    off) skip too: ACL management on a broker we do not run belongs to its
+    owner (docs/runbooks/tls-enforce-wave.md)."""
+    if not tls_enabled:
+        return
+    active = {p.strip() for p in
+              _parse_env(env_path).get("COMPOSE_PROFILES", "").split(",")
+              if p.strip()}
+    step("applying Kafka ACL matrix (SEC-007)", stage="kafka-acls")
+    if "embedded-bus" not in active:
+        info("external broker (embedded-bus profile off) — ACL management "
+             "belongs to the broker owner; apply the SEC-007 matrix there "
+             "per docs/runbooks/tls-enforce-wave.md")
+        return
+    apply_kafka_acls(compose_dir)
+    verify_bus_consumers(compose_dir)
+
+
 def bootstrap_opensearch(root: Path, tls: bool = False) -> None:
     """Apply index templates after the stack is up. Non-fatal on error —
     OpenSearch may still be starting; the user can re-run the script.
@@ -2215,6 +2354,15 @@ def main() -> None:
         print()
         info("apply the new values (recreates the services that consume them):")
         info("    cd deployment/docker && docker compose up -d --force-recreate")
+        if args.rotate_kafka_cluster_id:
+            # SEC-007: the wiped data/kafka is also the KRaft ACL store — on a
+            # TLS install the recreated broker enforces default-deny over ZERO
+            # ACLs (silently auth-dead bus, live incident 2026-08-16).
+            info("data/kafka was moved aside: on a TLS install the recreated "
+                 "broker boots an EMPTY ACL store (default-deny = auth-dead "
+                 "bus). After the recreate, re-run `python3 scripts/install.py` "
+                 "(idempotent; applies + verifies the SEC-007 matrix) or run "
+                 "the runbook step: docker compose exec kafka /acls/apply-acls.sh")
         if failures:
             fail(f"{failures} secret(s) could not be rotated (details above)")
         return
@@ -2302,6 +2450,12 @@ def main() -> None:
         activate_tls_compose_file(compose_dir, env_path)
         step("starting stack (TLS phase B: fail-closed mesh)", stage="up-b")
         compose_up(compose_dir, offline=args.offline, root=root)
+
+    # SEC-007 P0 (2026-08-16): with default-deny enforced, an empty KRaft ACL
+    # store (fresh install, data/kafka wipe) is a silently auth-dead ingest
+    # tier — apply + verify the matrix before claiming success. No-op on the
+    # plaintext baseline (no authorizer) and external brokers (owner-managed).
+    apply_bus_authorization(compose_dir, env_path, tls_enabled)
 
     step("status", stage="status")
     compose_status(compose_dir)
