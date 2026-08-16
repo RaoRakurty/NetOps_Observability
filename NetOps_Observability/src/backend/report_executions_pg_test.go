@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"netops/backend/internal/platformdb"
 	"os"
 	"testing"
@@ -28,13 +29,29 @@ func TestPgExecStore(t *testing.T) {
 	s := reports.NewPGExecStore(ps.DB())
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
+	// The status transitions are lease-guarded against the report_jobs row
+	// (NV-B), so the lifecycle below claims its jobs exactly like the worker
+	// does before writing to the execution ledger.
+	q := reports.NewPGJobQueue(ps.DB(), 5)
+	claimAs := func(worker, jobID, execID, schedule string, fire time.Time, lease time.Duration) {
+		t.Helper()
+		if _, _, err := q.Enqueue(ctx, reports.Job{ID: jobID, TenantID: "acme", ScheduleID: schedule, ExecutionID: execID, FireTime: fire}, base); err != nil {
+			t.Fatalf("enqueue %s: %v", jobID, err)
+		}
+		jobs, err := q.Claim(ctx, worker, 1, lease)
+		if err != nil || len(jobs) != 1 || jobs[0].ID != jobID {
+			t.Fatalf("claim %s as %s: jobs=%v err=%v", jobID, worker, jobs, err)
+		}
+	}
+
 	// ---- lifecycle: append → running → completed, with events ----
 	rec := reports.ExecutionRecord{ID: "e1", TenantID: "acme", ScheduleID: "rep-1", JobID: "j1", FireTime: base}
 	if err := s.Append(ctx, rec); err != nil {
 		t.Fatalf("append: %v", err)
 	}
+	claimAs("w1", "j1", "e1", "rep-1", base, time.Minute)
 	_ = s.RecordEvent(ctx, "acme", "e1", reports.PhaseQueued, base, "")
-	if err := s.MarkRunning(ctx, "e1", base.Add(2*time.Second)); err != nil {
+	if err := s.MarkRunning(ctx, "e1", base.Add(2*time.Second), "w1"); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
 	_ = s.RecordEvent(ctx, "acme", "e1", reports.PhaseRunning, base.Add(2*time.Second), "worker w1")
@@ -47,7 +64,7 @@ func TestPgExecStore(t *testing.T) {
 		{Format: "html", ContentType: "text/html", SizeBytes: 1234, SHA256: "abc", Summary: "Stack health", Key: "e1_html"},
 		{Format: "xlsx", ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", SizeBytes: 999, SHA256: "def", Summary: "Stack health", Key: "e1_xlsx"},
 	}
-	if err := s.Complete(ctx, "e1", base.Add(6*time.Second), refs, deliveries); err != nil {
+	if err := s.Complete(ctx, "e1", base.Add(6*time.Second), refs, deliveries, "w1"); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
@@ -86,8 +103,9 @@ func TestPgExecStore(t *testing.T) {
 	// ---- failed transition records partial deliveries ----
 	rec2 := reports.ExecutionRecord{ID: "e2", TenantID: "acme", ScheduleID: "rep-1", JobID: "j2", FireTime: base.Add(time.Hour)}
 	_ = s.Append(ctx, rec2)
-	_ = s.MarkRunning(ctx, "e2", base.Add(time.Hour))
-	if err := s.FailExec(ctx, "e2", base.Add(time.Hour+time.Second), "render timeout", deliveries[:1]); err != nil {
+	claimAs("w1", "j2", "e2", "rep-1", base.Add(time.Hour), time.Minute)
+	_ = s.MarkRunning(ctx, "e2", base.Add(time.Hour), "w1")
+	if err := s.FailExec(ctx, "e2", base.Add(time.Hour+time.Second), "render timeout", deliveries[:1], "w1"); err != nil {
 		t.Fatalf("fail e2: %v", err)
 	}
 	g2, _, _, _ := s.Get(ctx, "acme", false, "e2")
@@ -130,6 +148,86 @@ func TestPgExecStore(t *testing.T) {
 	}
 	if len(page) != 1 || page[0].ID != "e1" {
 		t.Fatalf("before-page = %v, want [e1]", execIDs(page))
+	}
+}
+
+// TestPgExecStoreZombieWriteLeaseGuard (NV-B): the execution id is SHARED
+// across re-claims (Claim returns the queue row's execution_id), so a zombie
+// worker whose lease lapsed mid-job could write a terminal execution record
+// over the state the rightful new owner records. The guarded transitions must
+// 0-row (ErrLeaseLost) for the zombie and apply for the lease holder — two
+// writers completing one execution must resolve to the owner's status.
+// Gated on DATABASE_URL_TEST like every PG test in this package.
+func TestPgExecStoreZombieWriteLeaseGuard(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres execution-store test")
+	}
+	ctx := context.Background()
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.DB().Close()
+	s := reports.NewPGExecStore(ps.DB())
+	q := reports.NewPGJobQueue(ps.DB(), 5)
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	if err := s.Append(ctx, reports.ExecutionRecord{ID: "ez", TenantID: "acme", ScheduleID: "rep-z", JobID: "jz", FireTime: base}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, _, err := q.Enqueue(ctx, reports.Job{ID: "jz", TenantID: "acme", ScheduleID: "rep-z", ExecutionID: "ez", FireTime: base}, base); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Worker A claims with a tiny lease, marks running… then stalls.
+	jobs, err := q.Claim(ctx, "wA", 1, 100*time.Millisecond)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("claim as wA: jobs=%v err=%v", jobs, err)
+	}
+	if err := s.MarkRunning(ctx, "ez", base.Add(time.Second), "wA"); err != nil {
+		t.Fatalf("wA mark running: %v", err)
+	}
+
+	// A's lease lapses; worker B re-claims the same job (same execution id).
+	time.Sleep(200 * time.Millisecond)
+	jobs, err = q.Claim(ctx, "wB", 1, time.Minute)
+	if err != nil || len(jobs) != 1 || jobs[0].ExecutionID != "ez" {
+		t.Fatalf("re-claim as wB: jobs=%v err=%v (execution id must be shared across re-claims)", jobs, err)
+	}
+
+	// Zombie A writes a terminal failure — it must 0-row, not overwrite.
+	if err := s.FailExec(ctx, "ez", base.Add(2*time.Second), "zombie abort", nil, "wA"); !errors.Is(err, reports.ErrLeaseLost) {
+		t.Fatalf("zombie FailExec err = %v, want ErrLeaseLost", err)
+	}
+	got, _, ok, err := s.Get(ctx, "acme", false, "ez")
+	if err != nil || !ok {
+		t.Fatalf("get ez: ok=%v err=%v", ok, err)
+	}
+	if got.Status != reports.StatusRunning {
+		t.Fatalf("zombie write applied: status=%q, want running", got.Status)
+	}
+
+	// The rightful owner's terminal write applies.
+	if err := s.Complete(ctx, "ez", base.Add(3*time.Second), nil, nil, "wB"); err != nil {
+		t.Fatalf("wB complete: %v", err)
+	}
+	if err := q.Complete(ctx, "jz", "wB"); err != nil {
+		t.Fatalf("wB queue complete: %v", err)
+	}
+	got, _, _, err = s.Get(ctx, "acme", false, "ez")
+	if err != nil || got.Status != reports.StatusCompleted {
+		t.Fatalf("owner status = %q err=%v, want completed", got.Status, err)
+	}
+
+	// A late zombie failure after the job is done still 0-rows: the ledger keeps
+	// the owner's final state.
+	if err := s.FailExec(ctx, "ez", base.Add(4*time.Second), "very late zombie", nil, "wA"); !errors.Is(err, reports.ErrLeaseLost) {
+		t.Fatalf("late zombie FailExec err = %v, want ErrLeaseLost", err)
+	}
+	got, _, _, _ = s.Get(ctx, "acme", false, "ez")
+	if got.Status != reports.StatusCompleted || got.Error != "" {
+		t.Fatalf("late zombie overwrote owner state: status=%q error=%q", got.Status, got.Error)
 	}
 }
 

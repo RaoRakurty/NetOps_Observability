@@ -117,7 +117,7 @@ func (p *reportPipeline) processIncidentSync(ctx, jctx context.Context, _ string
 
 func (p *reportPipeline) finishIncidentSync(ctx context.Context, job reports.Job, tenant string, fields map[string]any) {
 	now := time.Now().UTC()
-	if err := p.execs.Complete(ctx, job.ExecutionID, now, nil, nil); err != nil {
+	if err := p.execs.Complete(ctx, job.ExecutionID, now, nil, nil, job.LockedBy); err != nil {
 		logError("incidents.sync", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")

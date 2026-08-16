@@ -263,7 +263,7 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 	fields := corr(job.ExecutionID, tenant, job.ScheduleID, job.ID, workerID)
 	now := time.Now().UTC()
 
-	if err := p.execs.MarkRunning(jctx, job.ExecutionID, now); err != nil {
+	if err := p.execs.MarkRunning(jctx, job.ExecutionID, now, job.LockedBy); err != nil {
 		logWarn("reports.worker", "mark running", merge(fields, errf(err)))
 	}
 	p.recordPhase(jctx, tenant, job.ExecutionID, reports.PhaseRunning, now, workerID)
@@ -326,6 +326,22 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 			logWarn("reports.worker", "delivered-set read failed; retry may re-send", merge(fields, errf(derr)))
 		}
 	}
+	// NV-A: ledger each recipient's outcome the moment its send returns — on the
+	// DETACHED ctx, so a lease lost mid-fanout (jctx cancelled) can't stop a send
+	// that already physically happened from being recorded. A worker that
+	// re-claims this job after our lease lapses then observes those sends in its
+	// Delivered() read, narrowing the double-send TOCTOU between "sent" and the
+	// batch Record below (which stays as the reconcile for anything the
+	// incremental writes missed). Email is at-least-once — this narrows the
+	// window, it cannot close it.
+	var recordOne func(reports.DeliveryStatus)
+	if p.deliveries != nil {
+		recordOne = func(ds reports.DeliveryStatus) {
+			if err := p.deliveries.Record(ctx, tenant, job.ExecutionID, []reports.DeliveryStatus{ds}); err != nil {
+				logWarn("reports.worker", "incremental delivery record failed; batch record will reconcile", merge(fields, errf(err)))
+			}
+		}
+	}
 	statuses := p.delivery.Deliver(jctx, deliverReq{
 		Tenant: tenant, Cross: cross,
 		ContactPoints: spec.ContactPoints, Channels: spec.Channels,
@@ -337,7 +353,11 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 		ExecutionID:    job.ExecutionID,
 		Attempt:        job.Attempts,
 		SkipRecipients: skip,
+		Record:         recordOne,
 	})
+	// Batch reconcile: idempotent re-record of everything Deliver reported, in
+	// case any incremental write above failed (the ledger upsert never
+	// downgrades an 'ok', so replaying successes is safe).
 	if p.deliveries != nil {
 		if err := p.deliveries.Record(ctx, tenant, job.ExecutionID, statuses); err != nil {
 			logError("reports.worker", "record deliveries", merge(fields, errf(err)))
@@ -347,7 +367,7 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 	done := time.Now().UTC()
 	// Use the parent ctx for the terminal writes so a job that finished right at
 	// the timeout still records its completion.
-	if err := p.execs.Complete(ctx, job.ExecutionID, done, refs, statuses); err != nil {
+	if err := p.execs.Complete(ctx, job.ExecutionID, done, refs, statuses, job.LockedBy); err != nil {
 		logError("reports.worker", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
@@ -488,7 +508,7 @@ func (p *reportPipeline) fail(ctx, _ context.Context, job reports.Job, tenant, c
 	now := time.Now().UTC()
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseFailed, now, cause)
 	if dead {
-		if err := p.execs.FailExec(ctx, job.ExecutionID, now, cause, statuses); err != nil {
+		if err := p.execs.FailExec(ctx, job.ExecutionID, now, cause, statuses, job.LockedBy); err != nil {
 			logError("reports.worker", "record failure", merge(fields, errf(err)))
 		}
 	}

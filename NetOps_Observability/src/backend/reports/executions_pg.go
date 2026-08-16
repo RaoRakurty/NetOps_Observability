@@ -57,13 +57,25 @@ func (s *PGExecStore) Append(ctx context.Context, e ExecutionRecord) error {
 	})
 }
 
-func (s *PGExecStore) MarkRunning(ctx context.Context, id string, at time.Time) error {
-	return s.exec(ctx, `
+// The worker-owned status transitions below carry a lease guard (NV-B): the
+// UPDATE applies only while the presented worker still holds the report_jobs
+// lease for this execution — report_jobs is the single source of lease truth,
+// mirroring the queue's own Complete/Fail guards. A zombie worker (lease
+// re-claimed elsewhere) matches zero rows and gets ErrLeaseLost instead of
+// overwriting the new owner's ledger state. The worker's exec write always
+// precedes its queue.Complete/Fail (which flips the job out of 'running'), so
+// the rightful lease holder always passes.
+
+func (s *PGExecStore) MarkRunning(ctx context.Context, id string, at time.Time, lockedBy string) error {
+	return s.execOwned(ctx, `
 		UPDATE report_executions SET status='running', started_at=$2, updated_at=now()
-		 WHERE id=$1`, id, at)
+		 WHERE id=$1 AND EXISTS (
+			SELECT 1 FROM report_jobs j
+			 WHERE j.execution_id = report_executions.id
+			   AND j.locked_by = $3 AND j.status = 'running')`, id, at, lockedBy)
 }
 
-func (s *PGExecStore) Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus) error {
+func (s *PGExecStore) Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus, lockedBy string) error {
 	var refJSON []byte
 	if len(refs) > 0 {
 		var err error
@@ -75,21 +87,27 @@ func (s *PGExecStore) Complete(ctx context.Context, id string, at time.Time, ref
 	if err != nil {
 		return err
 	}
-	return s.exec(ctx, `
+	return s.execOwned(ctx, `
 		UPDATE report_executions
 		   SET status='completed', completed_at=$2, artifact_ref=$3, delivery_status=$4, updated_at=now()
-		 WHERE id=$1`, id, at, refJSON, delJSON)
+		 WHERE id=$1 AND EXISTS (
+			SELECT 1 FROM report_jobs j
+			 WHERE j.execution_id = report_executions.id
+			   AND j.locked_by = $5 AND j.status = 'running')`, id, at, refJSON, delJSON, lockedBy)
 }
 
-func (s *PGExecStore) FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus) error {
+func (s *PGExecStore) FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus, lockedBy string) error {
 	delJSON, err := marshalDeliveries(deliveries)
 	if err != nil {
 		return err
 	}
-	return s.exec(ctx, `
+	return s.execOwned(ctx, `
 		UPDATE report_executions
 		   SET status='failed', completed_at=$2, error=$3, delivery_status=$4, updated_at=now()
-		 WHERE id=$1`, id, at, cause, delJSON)
+		 WHERE id=$1 AND EXISTS (
+			SELECT 1 FROM report_jobs j
+			 WHERE j.execution_id = report_executions.id
+			   AND j.locked_by = $5 AND j.status = 'running')`, id, at, cause, delJSON, lockedBy)
 }
 
 func (s *PGExecStore) Cancel(ctx context.Context, id string, at time.Time, reason string) error {
@@ -236,6 +254,22 @@ func (s *PGExecStore) exec(ctx context.Context, sql string, args ...any) error {
 	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, sql, args...)
 		return err
+	})
+}
+
+// execOwned is exec for lease-guarded transitions: zero rows means the caller
+// no longer holds the job lease for this execution (or the row is gone) —
+// surfaced as ErrLeaseLost so the zombie's refusal is observable, never silent.
+func (s *PGExecStore) execOwned(ctx context.Context, sql string, args ...any) error {
+	return s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrLeaseLost
+		}
+		return nil
 	})
 }
 

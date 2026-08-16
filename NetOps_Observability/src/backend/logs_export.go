@@ -462,7 +462,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 	}
 
 	done := time.Now().UTC()
-	if err := p.execs.Complete(ctx, job.ExecutionID, done, []reports.ArtifactRef{ref}, nil); err != nil {
+	if err := p.execs.Complete(ctx, job.ExecutionID, done, []reports.ArtifactRef{ref}, nil, job.LockedBy); err != nil {
 		logError("logs.export", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")

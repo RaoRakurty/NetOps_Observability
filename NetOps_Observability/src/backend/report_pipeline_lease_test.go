@@ -66,11 +66,13 @@ func (q *fakeJobQueue) Pending(context.Context) (int, error)                    
 type leaseFakeExecStore struct{}
 
 func (leaseFakeExecStore) Append(context.Context, reports.ExecutionRecord) error { return nil }
-func (leaseFakeExecStore) MarkRunning(context.Context, string, time.Time) error  { return nil }
-func (leaseFakeExecStore) Complete(context.Context, string, time.Time, []reports.ArtifactRef, []reports.DeliveryStatus) error {
+func (leaseFakeExecStore) MarkRunning(context.Context, string, time.Time, string) error {
 	return nil
 }
-func (leaseFakeExecStore) FailExec(context.Context, string, time.Time, string, []reports.DeliveryStatus) error {
+func (leaseFakeExecStore) Complete(context.Context, string, time.Time, []reports.ArtifactRef, []reports.DeliveryStatus, string) error {
+	return nil
+}
+func (leaseFakeExecStore) FailExec(context.Context, string, time.Time, string, []reports.DeliveryStatus, string) error {
 	return nil
 }
 func (leaseFakeExecStore) Cancel(context.Context, string, time.Time, string) error { return nil }

@@ -73,6 +73,14 @@ type deliverReq struct {
 	ExecutionID    string          // for building the secure link in "link" mode
 	Attempt        int             // current job attempt (stamped on delivery rows)
 	SkipRecipients map[string]bool // recipients already delivered on a prior attempt
+	// Record, when non-nil, is invoked synchronously with each ATTEMPTED
+	// recipient's outcome the moment its send returns (skips are not re-recorded
+	// — the ledger already holds them). The pipeline wires it to an incremental
+	// deliveries.Record so a concurrent worker that re-claims this job after a
+	// lapsed lease observes sends as they happen, narrowing — email is
+	// inherently at-least-once, so never fully closing — the double-send window
+	// between "physically sent" and the batch Record after Deliver returns.
+	Record func(reports.DeliveryStatus)
 }
 
 // Deliver sends to all configured destinations and returns one DeliveryStatus per
@@ -122,6 +130,9 @@ func (d *reportDelivery) Deliver(ctx context.Context, req deliverReq) []reports.
 		if err != nil {
 			ds.Error = err.Error()
 		}
+		if req.Record != nil {
+			req.Record(ds) // ledger the send NOW, before the next recipient (NV-A)
+		}
 		out = append(out, ds)
 	}
 
@@ -144,6 +155,9 @@ func (d *reportDelivery) Deliver(ctx context.Context, req deliverReq) []reports.
 			ds := reports.DeliveryStatus{Channel: cp.Type, Recipient: cp.Name, OK: err == nil, Attempt: attempt, At: at}
 			if err != nil {
 				ds.Error = err.Error()
+			}
+			if req.Record != nil {
+				req.Record(ds) // ledger the post NOW, before the next point (NV-A)
 			}
 			out = append(out, ds)
 		}
@@ -173,6 +187,9 @@ func (d *reportDelivery) Deliver(ctx context.Context, req deliverReq) []reports.
 				ds := reports.DeliveryStatus{Channel: res.Channel, Recipient: res.Channel, Attempt: attempt, At: at, OK: res.Err == nil}
 				if res.Err != nil {
 					ds.Error = res.Err.Error()
+				}
+				if req.Record != nil {
+					req.Record(ds) // ledger each dispatched channel outcome NOW (NV-A)
 				}
 				out = append(out, ds)
 			}

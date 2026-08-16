@@ -192,9 +192,18 @@ type ExecutionStore interface {
 	// run as platform owner (infrastructure); reads are RLS tenant-scoped.
 	Append(ctx context.Context, e ExecutionRecord) error
 	// Status transitions update the row by id (the worker owns the lifecycle).
-	MarkRunning(ctx context.Context, id string, at time.Time) error
-	Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus) error
-	FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus) error
+	// They are lease-guarded like the queue's Complete/Fail (NV-B): lockedBy is
+	// the caller's worker id, and the write applies only while that worker still
+	// holds the job lease for this execution — a zombie worker whose lease was
+	// re-claimed elsewhere gets ErrLeaseLost instead of overwriting the new
+	// owner's ledger state. The execution id is SHARED across re-claims (Claim
+	// returns the queue row's execution_id), so without the guard a zombie's
+	// late terminal write could flip a completed run to failed (or vice versa)
+	// on the /api/reports/runs observability surface.
+	MarkRunning(ctx context.Context, id string, at time.Time, lockedBy string) error
+	Complete(ctx context.Context, id string, at time.Time, refs []ArtifactRef, deliveries []DeliveryStatus, lockedBy string) error
+	FailExec(ctx context.Context, id string, at time.Time, cause string, deliveries []DeliveryStatus, lockedBy string) error
+	// Cancel is operator-initiated (no lease to present) and stays unguarded.
 	Cancel(ctx context.Context, id string, at time.Time, reason string) error
 	// RecordEvent appends a phase transition (tenant sets the events row scope).
 	RecordEvent(ctx context.Context, tenant, execID string, phase Phase, at time.Time, note string) error
