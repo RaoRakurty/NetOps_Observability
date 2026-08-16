@@ -376,6 +376,10 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 			return
 		}
 	}
+	// M10: the enqueue reports whether a row actually landed. Answering 202 for
+	// a deduped no-op told the operator work was queued when nothing was — a
+	// dead-lettered create looked permanently "accepted" while never retrying.
+	var enqueued bool
 	if action == "update" {
 		// Sync only makes sense for an existing open ticket.
 		link, found, _ := s.ticketing.GetLink(r.Context(), owner, false, id, system)
@@ -383,17 +387,26 @@ func (s *server) manualTicketAction(w http.ResponseWriter, r *http.Request, id, 
 			writeError(w, http.StatusConflict, errors.New("no open ticket to sync for this object"))
 			return
 		}
-		if err := ticketing.EnqueueUpdate(r.Context(), s.ticketing, owner, system, payload); err != nil {
+		var err error
+		if enqueued, err = ticketing.EnqueueUpdate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
 	} else {
-		if err := ticketing.EnqueueCreate(r.Context(), s.ticketing, owner, system, payload); err != nil {
+		var err error
+		if enqueued, err = ticketing.EnqueueCreate(r.Context(), s.ticketing, owner, system, payload); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
 	}
-	s.auditTicketing(r, claims, "POST", r.URL.Path, map[string]any{"corr_object_id": id, "action": action})
+	s.auditTicketing(r, claims, "POST", r.URL.Path, map[string]any{"corr_object_id": id, "action": action, "enqueued": enqueued})
+	if !enqueued {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "an equivalent " + action + " is already queued or in flight for this object",
+			"corr_object_id": id, "system": system,
+		})
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"enqueued": action, "corr_object_id": id, "system": system})
 }
 

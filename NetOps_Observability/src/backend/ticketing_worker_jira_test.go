@@ -140,7 +140,7 @@ func TestJiraWorker_CreateAdoptsExistingIssue(t *testing.T) {
 	w.RegisterAdapter("jira", f.adapter())
 
 	const corr = "66666666-6666-4666-8666-666666666666"
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
@@ -214,10 +214,10 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 	w.RegisterAdapter("jira", fA.adapter()) // transport shared; target URL comes from cfg
 
 	const corr = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" // SAME local id in both tenants
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
-	if err := ticketing.EnqueueCreate(ctx, store, "t_b", "jira", jiraPayload(corr)); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_b", "jira", jiraPayload(corr)); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := w.Tick(ctx, time.Now().UTC()); err != nil || n != 2 {
@@ -239,7 +239,7 @@ func TestJiraWorker_TenantIsolation(t *testing.T) {
 	}
 	w2 := ticketing.NewWorker(store, evil, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
 	w2.RegisterAdapter("jira", fA.adapter())
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira",
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "jira",
 		jiraPayload("cccccccc-cccc-4ccc-8ccc-cccccccccccc")); err != nil {
 		t.Fatal(err)
 	}

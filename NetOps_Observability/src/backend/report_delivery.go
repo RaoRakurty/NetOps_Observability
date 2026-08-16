@@ -78,7 +78,13 @@ type deliverReq struct {
 // Deliver sends to all configured destinations and returns one DeliveryStatus per
 // recipient/channel. It never returns an error — partial failures are recorded
 // individually so the execution record reflects exactly what happened.
-func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.DeliveryStatus {
+//
+// ctx IS honoured between sends (M11): when the job context dies mid-fanout —
+// the heartbeat cancels it on a lost lease — no further recipient is contacted,
+// because the lease's new owner is about to deliver to all of them. Recipients
+// never attempted get NO status row, so the retry's SkipRecipients set doesn't
+// contain them and they are sent exactly once by whoever owns the lease.
+func (d *reportDelivery) Deliver(ctx context.Context, req deliverReq) []reports.DeliveryStatus {
 	at := d.now()
 	attempt := req.Attempt
 	if attempt < 1 {
@@ -91,6 +97,9 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 	// skipped and recorded as ok without resending). ----
 	recipients := d.resolveEmail(req.ContactPoints, req.Tenant, req.Cross)
 	for _, rcpt := range recipients {
+		if ctx.Err() != nil {
+			return out // lease lost / shutdown: stop before the next send (M11)
+		}
 		if req.SkipRecipients[rcpt] {
 			out = append(out, reports.DeliveryStatus{Channel: "email", Recipient: rcpt, OK: true, Attempt: attempt, At: at})
 			continue
@@ -120,6 +129,9 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 	// webhook can't carry the HTML body/attachment, so it always links out). ----
 	if d.resolveWebhooks != nil {
 		for _, cp := range d.resolveWebhooks(req.ContactPoints, req.Tenant, req.Cross) {
+			if ctx.Err() != nil {
+				return out // lease lost / shutdown: stop before the next send (M11)
+			}
 			if req.SkipRecipients[cp.Name] {
 				out = append(out, reports.DeliveryStatus{Channel: cp.Type, Recipient: cp.Name, OK: true, Attempt: attempt, At: at})
 				continue
@@ -138,13 +150,27 @@ func (d *reportDelivery) Deliver(_ context.Context, req deliverReq) []reports.De
 	}
 
 	// ---- named notify channels (only when explicitly requested) ----
+	// M11: named channels consult SkipRecipients exactly like the recipient
+	// loops above (they are keyed by channel name in the deliveries ledger) —
+	// without this, a retry whose emails were correctly skipped still re-paged
+	// every slack/pagerduty channel on the report.
 	if len(req.Channels) > 0 {
-		for _, res := range d.dispatch(req.Alert, req.Channels) {
-			ds := reports.DeliveryStatus{Channel: res.Channel, Recipient: res.Channel, Attempt: attempt, At: at, OK: res.Err == nil}
-			if res.Err != nil {
-				ds.Error = res.Err.Error()
+		var pending []string
+		for _, ch := range req.Channels {
+			if req.SkipRecipients[ch] {
+				out = append(out, reports.DeliveryStatus{Channel: ch, Recipient: ch, OK: true, Attempt: attempt, At: at})
+				continue
 			}
-			out = append(out, ds)
+			pending = append(pending, ch)
+		}
+		if len(pending) > 0 && ctx.Err() == nil {
+			for _, res := range d.dispatch(req.Alert, pending) {
+				ds := reports.DeliveryStatus{Channel: res.Channel, Recipient: res.Channel, Attempt: attempt, At: at, OK: res.Err == nil}
+				if res.Err != nil {
+					ds.Error = res.Err.Error()
+				}
+				out = append(out, ds)
+			}
 		}
 	}
 

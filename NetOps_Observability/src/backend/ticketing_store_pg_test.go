@@ -40,13 +40,13 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	// Enqueue is idempotent on idempotency_key.
 	item := ticketing.OutboxItem{TenantID: "acme", ID: "o1", CorrObjectID: "obj-a", ExternalSystem: "servicenow",
 		Action: "create", IdempotencyKey: "servicenow:create:acme:obj-a", Status: "pending", Payload: map[string]any{"k": "v"}}
-	if err := st.EnqueueOutbox(ctx, item); err != nil {
+	if _, err := st.EnqueueOutbox(ctx, item); err != nil {
 		t.Fatalf("EnqueueOutbox: %v", err)
 	}
 	dup := item
 	dup.ID = "o1-dup"
-	if err := st.EnqueueOutbox(ctx, dup); err != nil {
-		t.Fatalf("EnqueueOutbox dup: %v", err)
+	if enq, err := st.EnqueueOutbox(ctx, dup); err != nil || enq {
+		t.Fatalf("EnqueueOutbox dup: enq=%v err=%v, want deduped (false)", enq, err)
 	}
 	if out, _, _ := st.ListOutbox(ctx, "acme", false, ticketing.MaxPage, 0); len(out) != 1 {
 		t.Fatalf("idempotency: outbox has %d rows, want 1", len(out))
@@ -94,6 +94,41 @@ func TestPgTicketingStore_OutboxClaim(t *testing.T) {
 	}
 	if l, found, _ := st.GetLink(ctx, "acme", false, "obj-a", "servicenow"); !found || l.TicketNumber != "INC1" {
 		t.Fatalf("GetLink = %+v found=%v, want INC1", l, found)
+	}
+
+	// ── M10: a dead_letter row must be REVIVED by a fresh enqueue, not hide
+	// behind its permanent idempotency key (the DO UPDATE ... WHERE branch,
+	// which only real Postgres exercises). ──
+	deadItem := ticketing.OutboxItem{TenantID: "acme", ID: "od", CorrObjectID: "obj-dead", ExternalSystem: "servicenow",
+		Action: "create", IdempotencyKey: "servicenow:create:acme:obj-dead", Status: "pending", Payload: map[string]any{"k": "v"}}
+	if enq, err := st.EnqueueOutbox(ctx, deadItem); err != nil || !enq {
+		t.Fatalf("EnqueueOutbox dead-seed: enq=%v err=%v", enq, err)
+	}
+	deadItem.Status = "dead_letter"
+	deadItem.LastError = "gave up"
+	deadItem.RetryCount = 8
+	if err := st.FinishOutbox(ctx, deadItem); err != nil {
+		t.Fatalf("FinishOutbox dead_letter: %v", err)
+	}
+	// A live-row duplicate is still refused (the o1 case above); the dead row
+	// is not "live" — the fresh enqueue must revive it to pending.
+	revive := ticketing.OutboxItem{TenantID: "acme", ID: "od2", CorrObjectID: "obj-dead", ExternalSystem: "servicenow",
+		Action: "create", IdempotencyKey: "servicenow:create:acme:obj-dead", Status: "pending", Payload: map[string]any{"k": "v2"}}
+	if enq, err := st.EnqueueOutbox(ctx, revive); err != nil || !enq {
+		t.Fatalf("re-enqueue after dead_letter: enq=%v err=%v, want revived (true) — a dead-lettered create was permanently un-retryable", enq, err)
+	}
+	found := false
+	out, _, _ = st.ListOutbox(ctx, "acme", false, ticketing.MaxPage, 0)
+	for _, o := range out {
+		if o.CorrObjectID == "obj-dead" {
+			found = true
+			if o.Status != "pending" || o.RetryCount != 0 || o.LastError != "" {
+				t.Fatalf("revived row = %+v, want pending with reset retry state", o)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("revived row missing from outbox: %+v", out)
 	}
 
 	// Tenant isolation through RLS: another tenant sees none of acme's rows.

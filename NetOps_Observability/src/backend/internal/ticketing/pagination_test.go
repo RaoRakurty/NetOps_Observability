@@ -140,7 +140,7 @@ func TestOutboxAndAuditAreBounded(t *testing.T) {
 	ctx := context.Background()
 	const seeded = 60
 	for i := 0; i < seeded; i++ {
-		if err := st.EnqueueOutbox(ctx, OutboxItem{
+		if _, err := st.EnqueueOutbox(ctx, OutboxItem{
 			TenantID: "t_a", ID: "o-" + strconv.Itoa(i), CorrObjectID: "c-" + strconv.Itoa(i),
 			ExternalSystem: "servicenow", Action: "create", IdempotencyKey: "k-" + strconv.Itoa(i),
 			CreatedAt: time.Now().UTC().Add(time.Duration(i) * time.Second),

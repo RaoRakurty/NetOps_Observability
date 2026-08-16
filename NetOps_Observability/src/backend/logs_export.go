@@ -466,7 +466,7 @@ func (p *reportPipeline) processExport(ctx, jctx context.Context, _ string, job 
 		logError("logs.export", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
-	if err := p.queue.Complete(ctx, job.ID); err != nil {
+	if err := p.queue.Complete(ctx, job.ID, job.LockedBy); err != nil {
 		logError("logs.export", "finalize job", merge(fields, errf(err)))
 	}
 	p.metExportDone.Add(1)

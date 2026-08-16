@@ -28,7 +28,7 @@ func TestOutboxWorker_CreateHappyPath(t *testing.T) {
 	w, store := testWorker(t, m)
 	ctx := context.Background()
 
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-1")); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestOutboxWorker_NeverDoubleCreates(t *testing.T) {
 		t.Fatalf("setup expected 1 create, got %d", m.creates)
 	}
 
-	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-2"))
+	_, _ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-2"))
 	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestOutboxWorker_RetryThenDeadLetter(t *testing.T) {
 	ctx := context.Background()
 
 	m.failNext = 10 // every create fails
-	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-3"))
+	_, _ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-3"))
 
 	// First attempt fails → retrying, retry_count=1, future next_retry_at.
 	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
@@ -142,7 +142,7 @@ func TestOutboxWorker_HoldsWhenNoConnection(t *testing.T) {
 	w.RegisterAdapter("servicenow", m.adapter())
 	ctx := context.Background()
 
-	_ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-4"))
+	_, _ = ticketing.EnqueueCreate(ctx, store, "t_a", "servicenow", samplePayload("obj-4"))
 	if _, err := w.Tick(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}

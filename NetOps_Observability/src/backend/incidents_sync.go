@@ -121,7 +121,7 @@ func (p *reportPipeline) finishIncidentSync(ctx context.Context, job reports.Job
 		logError("incidents.sync", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
-	if err := p.queue.Complete(ctx, job.ID); err != nil {
+	if err := p.queue.Complete(ctx, job.ID, job.LockedBy); err != nil {
 		logError("incidents.sync", "finalize job", merge(fields, errf(err)))
 	}
 }

@@ -150,10 +150,10 @@ func TestTicketsOutboxAPI_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed an outbox item for each tenant directly in the store.
-	_ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
+	_, _ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID: a.tenantID, ID: "oa", CorrObjectID: "obj-a", Action: "create",
 		IdempotencyKey: "servicenow:create:" + a.tenantID + ":obj-a", Status: "pending"})
-	_ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
+	_, _ = s.ticketing.EnqueueOutbox(ctx, ticketing.OutboxItem{
 		TenantID: b.tenantID, ID: "ob", CorrObjectID: "obj-b", Action: "create",
 		IdempotencyKey: "servicenow:create:" + b.tenantID + ":obj-b", Status: "pending"})
 
@@ -288,8 +288,9 @@ func TestManualTicketCreate_OwnerGuardDefaultClosed(t *testing.T) {
 // the manual path: the platform owner may ticket a TENANT's object, and the
 // action must be stamped with the OBJECT's tenant (its policy, its connection,
 // its outbox) — never the caller's "global". A manual create by the owning
-// tenant races into the SAME idempotency key, so two clicks file one action; a
-// third tenant still 404s.
+// tenant races into the SAME idempotency key, so two clicks file one action —
+// and since M10 the second click is TOLD so (409, nothing enqueued) instead of
+// a 202 over a silent no-op; a third tenant still 404s.
 func TestManualTicketCreate_TenantObjectOwnerStamped(t *testing.T) {
 	rows := map[string]stubCorrRow{}
 	ch := corrCHStub(t, rows)
@@ -303,8 +304,10 @@ func TestManualTicketCreate_TenantObjectOwnerStamped(t *testing.T) {
 	if st != 202 {
 		t.Fatalf("platform owner create on tenant object = %d %s, want 202", st, body)
 	}
-	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", a.token, map[string]any{}); st != 202 {
-		t.Fatalf("owning tenant create on own object = %d %s, want 202", st, body)
+	// M10: the duplicate create dedupes into the live row AND says so — 409,
+	// not a 202 that pretends a second action was filed.
+	if st, body = do(t, srv, "POST", "/api/correlations/"+tktTenantCorrID+"/ticket", a.token, map[string]any{}); st != 409 {
+		t.Fatalf("duplicate create on own object = %d %s, want 409 (deduped, honestly reported)", st, body)
 	}
 	items, _, err := s.ticketing.ListOutbox(context.Background(), "", true, ticketing.MaxPage, 0)
 	if err != nil || len(items) != 1 {

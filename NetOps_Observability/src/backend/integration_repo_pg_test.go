@@ -66,25 +66,42 @@ func TestIntegrationRepo(t *testing.T) {
 		ExternalID: "INC42", ExternalSeq: 9, Type: integration.EventResolved,
 		OccurredAt: at,
 	}
-	id1, cid1, ins1, err := st.RecordInbound(ctx, ev)
+	rec1, ins1, err := st.RecordInbound(ctx, ev)
 	if err != nil || !ins1 {
 		t.Fatalf("first record should insert: err=%v inserted=%v", err, ins1)
 	}
-	if cid1 == "" {
+	if rec1.CorrelationID == "" {
 		t.Fatal("RecordInbound must mint a correlation_id (§9 end-to-end trace)")
 	}
-	_, _, ins2, err := st.RecordInbound(ctx, ev) // same provider_evt_id
+	if rec1.Status != "received" || rec1.RecordedAt.IsZero() {
+		t.Fatalf("fresh record = %+v, want status=received + a created_at", rec1)
+	}
+	rec2, ins2, err := st.RecordInbound(ctx, ev) // same provider_evt_id
 	if err != nil || ins2 {
 		t.Fatalf("redelivery must be a no-op: err=%v inserted=%v", err, ins2)
 	}
-	if err := st.MarkEvent(ctx, id1, "applied", "applied"); err != nil {
+	// M14: the redelivery must return the EXISTING row's identity — the old
+	// code returned a freshly-minted id that matched nothing in the ledger, so
+	// a recorded-but-never-enqueued event could not be recovered.
+	if rec2.ID != rec1.ID || rec2.CorrelationID != rec1.CorrelationID {
+		t.Fatalf("redelivery returned a phantom identity: first=%+v redelivery=%+v", rec1, rec2)
+	}
+	if !rec2.RecordedAt.Equal(rec1.RecordedAt) {
+		t.Fatalf("redelivery RecordedAt drifted: %v vs %v (the apply job's idempotency key would change)", rec2.RecordedAt, rec1.RecordedAt)
+	}
+	if err := st.MarkEvent(ctx, rec1.ID, "applied", "applied"); err != nil {
 		t.Fatalf("mark event: %v", err)
+	}
+	// After the verdict lands, a further redelivery reports it — the webhook
+	// handler uses this to know the row no longer needs an apply job.
+	if rec3, ins3, err := st.RecordInbound(ctx, ev); err != nil || ins3 || rec3.Status != "applied" {
+		t.Fatalf("post-verdict redelivery = %+v ins=%v err=%v, want status=applied", rec3, ins3, err)
 	}
 
 	// An event with no provider_evt_id is NOT raw-deduped (always inserts).
 	ev2 := ev
 	ev2.ProviderEvtID = ""
-	if _, _, ins, err := st.RecordInbound(ctx, ev2); err != nil || !ins {
+	if _, ins, err := st.RecordInbound(ctx, ev2); err != nil || !ins {
 		t.Fatalf("empty-evtid event should always insert: err=%v inserted=%v", err, ins)
 	}
 }

@@ -141,41 +141,62 @@ func (s *Store) TouchMapping(ctx context.Context, tenant, provider, externalID s
 	})
 }
 
+// InboundRecord identifies one ledger row as RecordInbound left it. On a
+// redelivery (inserted=false) every field describes the EXISTING row — its id,
+// its correlation id, its current verdict and its created_at — which is what
+// lets the webhook handler recover a recorded-but-never-enqueued event (M14)
+// instead of holding a freshly-minted id that matches nothing in the ledger.
+type InboundRecord struct {
+	ID            string
+	CorrelationID string
+	// Status is the row's ledger verdict (received | applied | dropped | …).
+	// "received" on a redelivery means no apply has landed yet.
+	Status string
+	// RecordedAt is the row's created_at — stable across redeliveries, so it
+	// serves as the apply job's deterministic FireTime (idempotent enqueue).
+	RecordedAt time.Time
+}
+
 // RecordInbound persists a normalized inbound event (level-1 raw dedup via the
-// partial unique on provider_evt_id). Returns inserted=false when the event was a
-// redelivery (ON CONFLICT DO NOTHING) — the caller then skips re-applying it.
+// partial unique on provider_evt_id). Returns inserted=false when the event was
+// a redelivery — then rec describes the already-stored row (M14: the caller
+// needs its identity to re-enqueue a lost apply, not a discarded fresh id).
 //
-// correlationID is the single id threaded end-to-end (§9): minted here per
+// The correlation id is the single id threaded end-to-end (§9): minted here per
 // recorded event and carried through enqueue → worker apply → incident
 // transition (and any resulting outbound re-push), so one grep spans the chain.
-func (s *Store) RecordInbound(ctx context.Context, ev IntegrationEvent) (id, correlationID string, inserted bool, err error) {
-	id = randHex(8)
-	correlationID = "ic-" + randHex(8)
+func (s *Store) RecordInbound(ctx context.Context, ev IntegrationEvent) (rec InboundRecord, inserted bool, err error) {
+	id := randHex(8)
+	correlationID := "ic-" + randHex(8)
 	payload, _ := json.Marshal(ev)
 	var occurred any
 	if !ev.OccurredAt.IsZero() {
 		occurred = ev.OccurredAt
 	}
 	err = s.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		var returned string
+		// The no-op DO UPDATE turns the old DO NOTHING into an upsert whose
+		// RETURNING always yields a row — the EXISTING one on conflict, with
+		// (xmax = 0) discriminating fresh insert from redelivery (the same
+		// trick upsertIncidentSQL uses). updated_at records the redelivery.
+		var isInsert bool
 		qerr := tx.QueryRow(ctx, `
 INSERT INTO integration_events
    (id, tenant_id, provider, direction, type, provider_evt_id, external_id, external_seq, alert_id, status, payload, occurred_at, correlation_id)
  VALUES ($1,$2,$3,'inbound',$4,$5,$6,$7,$8,'received',$9,$10,$11)
- ON CONFLICT (tenant_id, provider, provider_evt_id) WHERE provider_evt_id <> '' DO NOTHING
- RETURNING id`,
+ ON CONFLICT (tenant_id, provider, provider_evt_id) WHERE provider_evt_id <> ''
+ DO UPDATE SET updated_at = now()
+ RETURNING id, correlation_id, status, created_at, (xmax = 0) AS inserted`,
 			id, ev.Tenant, ev.Provider, string(ev.Type), ev.ProviderEvtID, ev.ExternalID, ev.ExternalSeq, ev.AlertID, payload, occurred, correlationID)
-		if scanErr := qerr.Scan(&returned); scanErr != nil {
-			if errors.Is(scanErr, pgx.ErrNoRows) {
-				inserted = false // redelivery — collapsed by the unique index
-				return nil
-			}
+		if scanErr := qerr.Scan(&rec.ID, &rec.CorrelationID, &rec.Status, &rec.RecordedAt, &isInsert); scanErr != nil {
 			return scanErr
 		}
-		inserted = true
+		inserted = isInsert
 		return nil
 	})
-	return id, correlationID, inserted, err
+	if err != nil {
+		return InboundRecord{}, false, err
+	}
+	return rec, inserted, nil
 }
 
 // GetInboundEvent reconstructs a recorded inbound event from its ledger row (the

@@ -221,14 +221,14 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 		}
 		switch act.Kind {
 		case "create":
-			if err := ticketing.EnqueueCreate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
+			if _, err := ticketing.EnqueueCreate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
 				logWarn("ticketing", "sweep enqueue create failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue
 			}
 			acted = true
 		case "update":
-			if err := ticketing.EnqueueUpdate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
+			if _, err := ticketing.EnqueueUpdate(ctx, sw.store, c.tenant, system, act.Payload); err != nil {
 				logWarn("ticketing", "sweep enqueue update failed",
 					map[string]any{"corr_object_id": c.id, "system": system, "error": err.Error()})
 				continue

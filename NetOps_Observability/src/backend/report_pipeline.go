@@ -225,6 +225,7 @@ func (p *reportPipeline) runWorker(ctx context.Context, idx int) {
 			continue
 		}
 		for _, j := range jobs {
+			j.LockedBy = workerID // defensive re-stamp; PG Claim already sets it (M11)
 			p.process(ctx, workerID, j)
 		}
 	}
@@ -243,10 +244,20 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 	defer cancel()
 
 	// Heartbeat renews the lease while the job runs so a slow render/export can't
-	// have its lease lapse and be double-claimed by another worker.
+	// have its lease lapse and be double-claimed by another worker. On a LOST
+	// lease it cancels jctx — another worker owns the job now, and continuing to
+	// deliver against a lease we no longer hold is how recipients get the same
+	// report twice (M11).
 	stopHB := make(chan struct{})
-	go p.heartbeat(jctx, workerID, job.ID, stopHB)
+	go p.heartbeat(jctx, cancel, workerID, job.ID, stopHB)
 	defer close(stopHB)
+
+	// Terminal ledger/queue writes ride a ctx DETACHED from worker shutdown
+	// (M12): at SIGTERM the pool ctx cancels first, and running the
+	// Complete/Fail/deliveries.Record writes on it meant a job whose deliveries
+	// had already gone out could not record that fact — it re-ran (and re-sent)
+	// after restart. Bounded implicitly by the pool's statement timeouts.
+	term := context.WithoutCancel(ctx)
 
 	tenant := normTenant(job.TenantID)
 	fields := corr(job.ExecutionID, tenant, job.ScheduleID, job.ID, workerID)
@@ -259,13 +270,13 @@ func (p *reportPipeline) process(ctx context.Context, workerID string, job repor
 
 	switch job.JobType {
 	case jobTypeExport:
-		p.processExport(ctx, jctx, workerID, job, tenant, fields)
+		p.processExport(term, jctx, workerID, job, tenant, fields)
 	case jobTypeIncidentSync:
-		p.processIncidentSync(ctx, jctx, workerID, job, tenant, fields)
+		p.processIncidentSync(term, jctx, workerID, job, tenant, fields)
 	case jobTypeIntegrationInbound:
-		p.processIntegrationInbound(ctx, jctx, workerID, job, tenant, fields)
+		p.processIntegrationInbound(term, jctx, workerID, job, tenant, fields)
 	default:
-		p.processReport(ctx, jctx, workerID, job, tenant, fields)
+		p.processReport(term, jctx, workerID, job, tenant, fields)
 	}
 }
 
@@ -340,14 +351,20 @@ func (p *reportPipeline) processReport(ctx, jctx context.Context, workerID strin
 		logError("reports.worker", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, done, "")
-	if err := p.queue.Complete(ctx, job.ID); err != nil {
+	if err := p.queue.Complete(ctx, job.ID, job.LockedBy); err != nil {
 		logError("reports.worker", "finalize job", merge(fields, errf(err)))
 	}
 	p.metCompleted.Add(1)
 	logInfo("reports.worker", "report delivered", merge(fields, map[string]any{"recipients": len(statuses)}))
 }
 
-func (p *reportPipeline) heartbeat(ctx context.Context, workerID, jobID string, stop <-chan struct{}) {
+// heartbeat renews the lease on a cadence. A definitively LOST lease cancels
+// the job's context (cancelJob) so the in-flight render/delivery aborts —
+// another worker owns the job now and every further send from this one is a
+// duplicate (M11). Transient renew errors (db blip) are logged and RETRIED on
+// the next tick; before this distinction ANY renew error silently stopped the
+// heartbeat, which guaranteed the lease would lapse mid-job.
+func (p *reportPipeline) heartbeat(ctx context.Context, cancelJob context.CancelFunc, workerID, jobID string, stop <-chan struct{}) {
 	t := time.NewTicker(p.lease / 3)
 	defer t.Stop()
 	for {
@@ -357,8 +374,20 @@ func (p *reportPipeline) heartbeat(ctx context.Context, workerID, jobID string, 
 		case <-stop:
 			return
 		case <-t.C:
-			if err := p.queue.RenewLease(ctx, jobID, workerID, p.lease); err != nil {
-				return // lease lost or ctx done; the worker will observe failure/timeout
+			err := p.queue.RenewLease(ctx, jobID, workerID, p.lease)
+			switch {
+			case err == nil:
+				continue
+			case errors.Is(err, reports.ErrLeaseLost):
+				logWarn("reports.worker", "lease lost mid-job — aborting to prevent double delivery",
+					map[string]any{"worker_id": workerID, "job_id": jobID})
+				cancelJob()
+				return
+			case ctx.Err() != nil:
+				return // job finished/timed out; nothing to renew
+			default:
+				logWarn("reports.worker", "lease renew failed (transient) — retrying next tick",
+					map[string]any{"worker_id": workerID, "job_id": jobID, "error": err.Error()})
 			}
 		}
 	}
@@ -464,7 +493,7 @@ func (p *reportPipeline) fail(ctx, _ context.Context, job reports.Job, tenant, c
 		}
 	}
 	retryAfter := now.Add(backoff(job.Attempts))
-	if err := p.queue.Fail(ctx, job.ID, job.Attempts, cause, retryAfter, dead); err != nil {
+	if err := p.queue.Fail(ctx, job.ID, job.LockedBy, job.Attempts, cause, retryAfter, dead); err != nil {
 		logError("reports.worker", "requeue", merge(fields, errf(err)))
 	}
 	if dead {

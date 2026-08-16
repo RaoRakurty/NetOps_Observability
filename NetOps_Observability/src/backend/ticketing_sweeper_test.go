@@ -273,10 +273,10 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 	if act.Kind != "create" {
 		t.Fatalf("precondition: expected create, got %q", act.Kind)
 	}
-	if err := ticketing.EnqueueCreate(ctx, st, "t_a", "servicenow", act.Payload); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, st, "t_a", "servicenow", act.Payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := ticketing.EnqueueCreate(ctx, st, "t_b", "servicenow", act.Payload); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, st, "t_b", "servicenow", act.Payload); err != nil {
 		t.Fatal(err)
 	}
 

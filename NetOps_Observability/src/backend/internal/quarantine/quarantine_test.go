@@ -478,3 +478,76 @@ func TestRestoreDeleteFailureIsCounted(t *testing.T) {
 		t.Fatalf("got %+v, want restored=1 deleted=0 delete_failed=1", res)
 	}
 }
+
+// ── H9: a client disconnect must never strand a claim ────────────────────────
+
+// FAILING-FIRST (H9, 2026-08-15 review): Claim ignored ctx while Produce and
+// Unclaim honoured it. When the request ctx died mid-batch (nginx's 120s read
+// timeout, a closed tab) the claim landed, the produce was refused with
+// context.Canceled, and the rollback was refused too — so the envelope sat
+// "already restored". The NEXT restore run then replay-refused it and
+// tombstoned it: the flow event was lost forever. A pre-cancelled ctx must
+// touch NOTHING — no claim, no produce, no tombstone — so the next run
+// restores the envelope normally.
+func TestRestoreH9PreCancelledCtxTouchesNothing(t *testing.T) {
+	doc := Doc{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 3, PrimaryTerm: 1}
+	claims, produces, deletes := 0, 0, 0
+	deps := RestoreDeps{
+		Unseal:  func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
+		Produce: func(ctx context.Context, _, _ string, _ map[string]any) error { produces++; return ctx.Err() },
+		Delete:  func(context.Context, string, string) error { deletes++; return nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { claims++; return nil },
+		Unclaim: func(ctx context.Context, _, _ string) error { return ctx.Err() },
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := Restore(cancelled, deps, []Doc{doc}, "acme")
+	if claims != 0 || produces != 0 || deletes != 0 {
+		t.Fatalf("cancelled ctx still had effects: claims=%d produces=%d deletes=%d", claims, produces, deletes)
+	}
+	if res.Aborted != 1 || res.Restored != 0 || res.Failed != 0 || res.ReplayRefused != 0 {
+		t.Fatalf("res = %+v, want aborted=1 and nothing else", res)
+	}
+	// The next run (live ctx, same doc — RestoredAt still empty because no
+	// claim ever landed) must restore normally, NOT tombstone a replay refusal.
+	res = Restore(context.Background(), deps, []Doc{doc}, "acme")
+	if res.ReplayRefused != 0 {
+		t.Fatalf("next run replay-refused a never-claimed envelope: %+v", res)
+	}
+	if res.Restored != 1 || claims != 1 || produces != 1 || deletes != 1 {
+		t.Fatalf("next run did not restore cleanly: res=%+v claims=%d produces=%d deletes=%d", res, claims, produces, deletes)
+	}
+}
+
+// H9, second half: a ctx that dies DURING the batch. The ctx-shaped produce
+// error is not "the bus refused" — the event may have reached the bus, so the
+// claim must stay (no rollback that could double-produce) and the batch must
+// stop before claiming any further envelope.
+func TestRestoreH9ProduceCtxCancelAbortsBatch(t *testing.T) {
+	docs := []Doc{
+		{Index: "netops-quarantine-2026.08.12", ID: "f1", EventID: "e1", Lane: "flows", Payload: "tok", SeqNo: 1, PrimaryTerm: 1},
+		{Index: "netops-quarantine-2026.08.12", ID: "f2", EventID: "e2", Lane: "flows", Payload: "tok", SeqNo: 2, PrimaryTerm: 1},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	claims, unclaims := 0, 0
+	deps := RestoreDeps{
+		Unseal: func(context.Context, string) (string, error) { return `{"bytes":1}`, nil },
+		Produce: func(context.Context, string, string, map[string]any) error {
+			cancel() // the client disconnects while the produce is in flight
+			return context.Canceled
+		},
+		Delete:  func(context.Context, string, string) error { return nil },
+		Claim:   func(context.Context, string, string, int64, int64) error { claims++; return nil },
+		Unclaim: func(context.Context, string, string) error { unclaims++; return nil },
+	}
+	res := Restore(ctx, deps, docs, "acme")
+	if unclaims != 0 {
+		t.Fatal("rolled back a claim after a ctx-cancelled produce — the event may be in ClickHouse; unclaiming reopens the duplication path")
+	}
+	if claims != 1 {
+		t.Fatalf("claimed %d envelopes after the ctx died, want 1 (the in-flight one only)", claims)
+	}
+	if res.Failed != 1 || res.UnclaimFailed != 1 || res.Aborted != 1 {
+		t.Fatalf("res = %+v, want failed=1 unclaim_failed=1 aborted=1", res)
+	}
+}

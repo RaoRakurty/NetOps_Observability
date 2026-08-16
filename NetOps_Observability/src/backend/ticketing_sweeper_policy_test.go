@@ -143,10 +143,10 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 
 	corrA := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	corrB := corrA // SAME local id in both tenants — keys must still differ
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty", pdPayload(corrA)); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty", pdPayload(corrA)); err != nil {
 		t.Fatal(err)
 	}
-	if err := ticketing.EnqueueCreate(ctx, store, "t_b", "pagerduty", pdPayload(corrB)); err != nil {
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_b", "pagerduty", pdPayload(corrB)); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := w.Tick(ctx, time.Now().UTC()); err != nil || n != 2 {
@@ -174,7 +174,7 @@ func TestPDWorker_TenantIsolation(t *testing.T) {
 	}
 	w2 := ticketing.NewWorker(store, evil, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
 	w2.RegisterAdapter("pagerduty", fA.adapter())
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty",
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "pagerduty",
 		pdPayload("cccccccc-cccc-4ccc-8ccc-cccccccccccc")); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestSlackLink_NeverStoresWebhookSecret(t *testing.T) {
 	}
 	w := ticketing.NewWorker(store, resolve, func(msg string, fields map[string]any) { logWarn("ticketing", msg, fields) }, func(msg string, fields map[string]any) { logError("ticketing", msg, fields) })
 	w.RegisterAdapter("slack", ticketing.NewSlackAdapterWithClient(f.srv.Client()))
-	if err := ticketing.EnqueueCreate(ctx, store, "t_a", "slack",
+	if _, err := ticketing.EnqueueCreate(ctx, store, "t_a", "slack",
 		pdPayload("44444444-4444-4444-8444-444444444444")); err != nil {
 		t.Fatal(err)
 	}

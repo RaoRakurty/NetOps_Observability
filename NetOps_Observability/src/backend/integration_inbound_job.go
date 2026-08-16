@@ -28,26 +28,40 @@ type integrationInboundPayload struct {
 // EnqueueIntegrationInbound queues the apply of a recorded inbound event. The
 // correlationID is persisted in the job payload so it survives a crash/re-claim
 // and threads into the worker's apply logs.
-func (p *reportPipeline) EnqueueIntegrationInbound(ctx context.Context, tenant, eventID, correlationID string) (string, error) {
-	now := time.Now().UTC()
+//
+// IDEMPOTENT PER EVENT (M14): recordedAt is the ledger row's created_at —
+// stable across redeliveries — and becomes the job's FireTime, so the queue's
+// UNIQUE(schedule_id, fire_time) collapses a re-enqueue of the same event into
+// the existing job (created=false, no duplicate execution record). The
+// previous FireTime=now() made every redelivery's enqueue a NEW job, which is
+// exactly why the recorded-but-never-enqueued recovery path couldn't exist.
+func (p *reportPipeline) EnqueueIntegrationInbound(ctx context.Context, tenant, eventID, correlationID string, recordedAt time.Time) (string, bool, error) {
 	tenant = normTenant(tenant)
+	fire := recordedAt.UTC()
+	if fire.IsZero() {
+		fire = time.Now().UTC() // defensive: a zero fire_time would collide across events
+	}
 	execID := randHex(8)
 	payload, _ := json.Marshal(integrationInboundPayload{EventID: eventID, CorrelationID: correlationID})
 	job := reports.Job{
 		JobType: jobTypeIntegrationInbound, TenantID: tenant,
-		ScheduleID: "itsm-inbound:" + eventID, ExecutionID: execID, FireTime: now, Payload: payload,
+		ScheduleID: "itsm-inbound:" + eventID, ExecutionID: execID, FireTime: fire, Payload: payload,
 	}
-	if _, _, err := p.queue.Enqueue(ctx, job, now); err != nil {
-		return "", err
+	_, created, err := p.queue.Enqueue(ctx, job, time.Now().UTC())
+	if err != nil {
+		return "", false, err
+	}
+	if !created {
+		return "", false, nil // the apply job already exists — nothing new to record
 	}
 	rec := reports.ExecutionRecord{
 		ID: execID, Kind: jobTypeIntegrationInbound, TenantID: tenant,
-		ScheduleID: job.ScheduleID, JobID: execID, FireTime: now, Status: reports.StatusQueued,
+		ScheduleID: job.ScheduleID, JobID: execID, FireTime: fire, Status: reports.StatusQueued,
 	}
 	if err := p.execs.Append(ctx, rec); err != nil {
-		return "", err
+		return "", true, err
 	}
-	return execID, nil
+	return execID, true, nil
 }
 
 // processIntegrationInbound loads the recorded event + its tenant config and
@@ -72,15 +86,30 @@ func (p *reportPipeline) processIntegrationInbound(ctx, jctx context.Context, _ 
 		p.fail(ctx, jctx, job, tenant, "inbound event no longer exists", nil, true, fields)
 		return
 	}
-	cfg, ok, _ := p.srv.integrations.GetConfig(jctx, ev.Tenant, false, ev.Provider)
+	cfg, ok, cfgErr := p.srv.integrations.GetConfig(jctx, ev.Tenant, false, ev.Provider)
+	if cfgErr != nil {
+		// M14: a store ERROR is not "config removed" — dropping here turned a
+		// transient database blip into a permanently un-applied transition.
+		// Retry (dead-letter only after max attempts) so the verdict reflects
+		// what happened, not what the outage looked like.
+		p.fail(ctx, jctx, job, tenant, "load integration config: "+cfgErr.Error(), nil, p.dead(job), fields)
+		return
+	}
 	if !ok {
 		// Config removed after the webhook landed — nothing to apply against.
 		p.srv.markInboundEvent(ctx, pl.EventID, "dropped", "config-removed")
 		p.finishInbound(ctx, job, tenant, fields)
 		return
 	}
-	// applyInboundEvent records its own ledger verdict + advances the watermark.
-	p.srv.intgInbound(p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID, pl.CorrelationID))
+	// applyInboundEvent records its own ledger verdict + advances the watermark;
+	// a returned error is a TRANSIENT store failure → retry, never a "dropped"
+	// verdict (M14).
+	mutated, applyErr := p.srv.applyInboundEvent(jctx, cfg, ev, pl.EventID, pl.CorrelationID)
+	if applyErr != nil {
+		p.fail(ctx, jctx, job, tenant, "apply inbound event: "+applyErr.Error(), nil, p.dead(job), fields)
+		return
+	}
+	p.srv.intgInbound(mutated)
 	p.finishInbound(ctx, job, tenant, fields)
 	logInfo("integration.inbound", "applied", merge(fields, map[string]any{
 		"provider": ev.Provider, "external_id": ev.ExternalID, "event_id": pl.EventID,
@@ -93,7 +122,7 @@ func (p *reportPipeline) finishInbound(ctx context.Context, job reports.Job, ten
 		logError("integration.inbound", "record completion", merge(fields, errf(err)))
 	}
 	p.recordPhase(ctx, tenant, job.ExecutionID, reports.PhaseCompleted, now, "")
-	if err := p.queue.Complete(ctx, job.ID); err != nil {
+	if err := p.queue.Complete(ctx, job.ID, job.LockedBy); err != nil {
 		logError("integration.inbound", "finalize job", merge(fields, errf(err)))
 	}
 }

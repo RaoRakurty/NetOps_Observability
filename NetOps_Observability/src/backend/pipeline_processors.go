@@ -1061,6 +1061,10 @@ const (
 	// reports the remainder so the operator repeats until zero.
 	quarantineBatchLimit = 500
 	quarantineListLimit  = 50 // default page size for the metadata list
+	// quarantineRestoreTimeout bounds one restore batch on its DETACHED ctx
+	// (H9): generous enough for a full 500-envelope batch against a slow bus,
+	// finite so an abandoned run cannot hold the claim path open forever.
+	quarantineRestoreTimeout = 5 * time.Minute
 )
 
 // handleQuarantineList — GET /api/quarantine (requirePlatformAdmin): the
@@ -1287,7 +1291,18 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 			return err
 		},
 	}
-	res := quarantine.Restore(r.Context(), deps, docs, tenant)
+	// H9: run the restore loop on a ctx DETACHED from the client connection,
+	// bounded by its own timeout. The loop's steps are persistent side-effects
+	// (claim → produce → tombstone); with r.Context() a closed tab or nginx's
+	// 120s read timeout cancelled the ctx mid-envelope, stranding a flows
+	// claim whose produce never ran — the next restore then read the claim as
+	// "already restored" and tombstoned the envelope: the event was lost
+	// forever on nothing more than a disconnect. WithoutCancel keeps the
+	// request's values (trace ids) while ignoring its cancellation; the
+	// explicit timeout keeps the batch bounded (§9: all IO has a timeout).
+	restoreCtx, cancelRestore := context.WithTimeout(context.WithoutCancel(r.Context()), quarantineRestoreTimeout)
+	defer cancelRestore()
+	res := quarantine.Restore(restoreCtx, deps, docs, tenant)
 	// Replay-refused envelopes are resolved too: either their tombstone was
 	// just retried or a concurrent restore owns them — they do not remain.
 	remaining := int(total) - res.Restored - res.ReplayRefused
@@ -1309,6 +1324,7 @@ func (s *server) handleQuarantineReattribute(w http.ResponseWriter, r *http.Requ
 		"delete_failed":          res.DeleteFailed,
 		"replay_refused":         res.ReplayRefused,
 		"unclaim_failed":         res.UnclaimFailed,
+		"aborted":                res.Aborted,
 	})
 }
 
@@ -1339,6 +1355,7 @@ func (s *server) auditQuarantineRestore(claims jwtClaims, sha, tenant string, re
 			"delete_failed":    res.DeleteFailed,
 			"replay_refused":   res.ReplayRefused,
 			"unclaim_failed":   res.UnclaimFailed,
+			"aborted":          res.Aborted,
 			"actor_tenant":     actorTenant,
 			"cross_tenant":     cross,
 		},

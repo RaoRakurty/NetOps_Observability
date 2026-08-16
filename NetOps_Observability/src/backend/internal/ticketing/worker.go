@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -189,8 +190,16 @@ func (w *Worker) dispatch(ctx context.Context, adapter Adapter, cfg SystemConfig
 			case "resolved":
 				// Stale OPEN arriving after a RESOLVE: automatic reopening is
 				// policy territory (flap suppression), not a queue accident.
-				w.audit(ctx, it, "create", "noop_stale_after_resolve", "resolved", "resolved")
-				return nil
+				// A create minted AFTER the resolve carries the reopen-epoch
+				// key (createIdempotencyKey) — that IS the new decision the
+				// state machine documents, so it proceeds; only the epoch-less
+				// key of the previous life is the stale row this no-op exists
+				// for (M10: the reopen path was dead — every create no-op'd
+				// here once the link resolved).
+				if !strings.Contains(it.IdempotencyKey, reopenKeyMarker) {
+					w.audit(ctx, it, "create", "noop_stale_after_resolve", "resolved", "resolved")
+					return nil
+				}
 			}
 		}
 		return w.doCreate(ctx, adapter, cfg, it, now)
@@ -423,16 +432,44 @@ func backoffDelay(attempt int, id string) time.Duration {
 
 // ── outbox payload helpers ───────────────────────────────────────────────────
 
+// reopenKeyMarker tags a create idempotency key minted AFTER the link
+// resolved: the reopen generation. dispatch trusts it to distinguish a NEW
+// create decision (legitimate reopen) from a stale queued row of the previous
+// life, which keeps carrying the base (epoch-less) key.
+const reopenKeyMarker = ":reopen:"
+
+// createIdempotencyKey builds the create key, folding in the link's
+// resolved-epoch when one exists (M10). Without the epoch the key was
+// PERMANENT: once the first create existed (even dead-lettered, even after the
+// ticket resolved) every later create collapsed into it and the documented
+// reopen path could never enqueue at all.
+func createIdempotencyKey(ctx context.Context, store Store, tenant, system string, p Payload) string {
+	key := fmt.Sprintf("%s:create:%s:%s", system, normTenant(tenant), p.CorrObjectID)
+	link, found, err := store.GetLink(ctx, tenant, false, p.CorrObjectID, system)
+	if err != nil || !found || link.Status != "resolved" {
+		// No resolved life behind us (or the store didn't answer — fail toward
+		// the dedup-safe base key): first-life create semantics.
+		return key
+	}
+	epoch := "1"
+	if link.LastSyncedAt != nil {
+		epoch = fmt.Sprintf("%d", link.LastSyncedAt.Unix())
+	}
+	return key + reopenKeyMarker + epoch
+}
+
 // EnqueueCreate enqueues a create action for an RCA object. Used by P3's
-// policy layer and the P2/E2E tests. Idempotency-keyed so re-enqueue is a no-op.
-func EnqueueCreate(ctx context.Context, store Store, tenant, system string, p Payload) error {
+// policy layer and the P2/E2E tests. Idempotency-keyed so re-enqueue is a
+// no-op; enqueued=false reports the dedup so callers can refuse honestly
+// instead of answering 202 for a row that never existed (M10).
+func EnqueueCreate(ctx context.Context, store Store, tenant, system string, p Payload) (bool, error) {
 	return store.EnqueueOutbox(ctx, OutboxItem{
 		TenantID:       tenant,
 		ID:             randHexID(),
 		CorrObjectID:   p.CorrObjectID,
 		ExternalSystem: system,
 		Action:         "create",
-		IdempotencyKey: fmt.Sprintf("%s:create:%s:%s", system, normTenant(tenant), p.CorrObjectID),
+		IdempotencyKey: createIdempotencyKey(ctx, store, tenant, system, p),
 		Payload:        payloadToMap(p),
 		Status:         "pending",
 	})
@@ -440,7 +477,7 @@ func EnqueueCreate(ctx context.Context, store Store, tenant, system string, p Pa
 
 // EnqueueUpdate enqueues an update keyed by the payload hash (one row per
 // distinct RCA state) so identical re-syncs collapse.
-func EnqueueUpdate(ctx context.Context, store Store, tenant, system string, p Payload) error {
+func EnqueueUpdate(ctx context.Context, store Store, tenant, system string, p Payload) (bool, error) {
 	return store.EnqueueOutbox(ctx, OutboxItem{
 		TenantID:       tenant,
 		ID:             randHexID(),

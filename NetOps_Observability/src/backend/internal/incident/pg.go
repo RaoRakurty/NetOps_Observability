@@ -295,15 +295,36 @@ func (s *PGStore) Transition(ctx context.Context, tenant string, cross bool, id,
 		if !ValidTransition(cur, to) {
 			return ErrBadTransition
 		}
-		if _, err := tx.Exec(ctx, `
+		// M13: the UPDATE re-asserts the status the transition was validated
+		// against. Without `AND status=$3` this was read-check-update with no
+		// row lock: two concurrent transitions (resolve vs acknowledge) could
+		// both validate against the same `cur` and the loser would apply an
+		// edge the state machine forbids (resolved→acknowledged). Zero rows =
+		// somebody else moved the incident first — re-read and re-validate
+		// against the ACTUAL current status instead of guessing.
+		tag, err := tx.Exec(ctx, `
 			UPDATE incidents
 			   SET status=$2,
 			       resolved_at = CASE WHEN $2='resolved' THEN now()
 			                          WHEN $2='open' THEN NULL
 			                          ELSE resolved_at END,
 			       updated_at=now()
-			 WHERE id=$1`, id, to); err != nil {
+			 WHERE id=$1 AND status=$3`, id, to, cur)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var now string
+			if err := tx.QueryRow(ctx, `SELECT status FROM incidents WHERE id=$1`, id).Scan(&now); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound // deleted between read and write
+				}
+				return err
+			}
+			if now == to {
+				return nil // the concurrent writer applied the SAME transition — idempotent
+			}
+			return ErrBadTransition // lost the race to a conflicting transition
 		}
 		payload, _ := json.Marshal(map[string]any{"from": cur, "to": to, "note": note})
 		return appendIncidentEvent(ctx, tx, id, tid, "status_change", payload, ActorOr(actor))

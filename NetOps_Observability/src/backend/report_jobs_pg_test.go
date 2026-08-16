@@ -57,7 +57,10 @@ func TestPgJobQueue(t *testing.T) {
 	if got[0].Attempts != 1 {
 		t.Fatalf("claimed attempts = %d, want 1", got[0].Attempts)
 	}
-	if err := q.Complete(ctx, "j1"); err != nil {
+	if got[0].LockedBy != "w1" {
+		t.Fatalf("claimed LockedBy = %q, want w1 (M11: workers present it on Complete/Fail)", got[0].LockedBy)
+	}
+	if err := q.Complete(ctx, "j1", "w1"); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if p, _ := q.Pending(ctx); p != 0 {
@@ -116,7 +119,14 @@ func TestPgJobQueue(t *testing.T) {
 	if js2[0].Attempts != 2 {
 		t.Fatalf("re-claim attempts = %d, want 2", js2[0].Attempts)
 	}
-	_ = q.Complete(ctx, "lease1")
+	// M11 lease guard: the crashed worker (w1) can no longer finalize the job
+	// w2 re-claimed; only the current lease holder can.
+	if err := q.Complete(ctx, "lease1", "w1"); !errors.Is(err, reports.ErrLeaseLost) {
+		t.Fatalf("complete by evicted worker = %v, want reports.ErrLeaseLost", err)
+	}
+	if err := q.Complete(ctx, "lease1", "w2"); err != nil {
+		t.Fatalf("complete by current holder: %v", err)
+	}
 
 	// ---- lease renewal keeps a long job out of other workers' reach ----
 	if _, _, err := q.Enqueue(ctx, mk("ren1", "sr", "acme", fire(101)), now); err != nil {
@@ -135,7 +145,7 @@ func TestPgJobQueue(t *testing.T) {
 	if err := q.RenewLease(ctx, "ren1", "w-other", 60*time.Second); !errors.Is(err, reports.ErrLeaseLost) {
 		t.Fatalf("renew by wrong worker = %v, want reports.ErrLeaseLost", err)
 	}
-	_ = q.Complete(ctx, "ren1")
+	_ = q.Complete(ctx, "ren1", "w1")
 
 	// ---- backoff + dead-letter ----
 	if _, _, err := q.Enqueue(ctx, mk("f1", "sf", "acme", fire(102)), now); err != nil {
@@ -144,13 +154,21 @@ func TestPgJobQueue(t *testing.T) {
 	if js, _ := q.Claim(ctx, "w1", 10, 30*time.Second); len(js) != 1 {
 		t.Fatalf("claim f1 failed")
 	}
-	if err := q.Fail(ctx, "f1", 1, "boom", time.Now().Add(time.Hour), false); err != nil {
+	if err := q.Fail(ctx, "f1", "w1", 1, "boom", time.Now().Add(time.Hour), false); err != nil {
 		t.Fatalf("fail-retry: %v", err)
 	}
 	if js, _ := q.Claim(ctx, "w1", 10, 30*time.Second); len(js) != 0 {
 		t.Fatalf("backoff (future run_after) should hide f1, got %v", js)
 	}
-	if err := q.Fail(ctx, "f1", 3, "boom again", time.Now().UTC(), true); err != nil {
+	// Dead-letter happens from a RUNNING job (Fail is lease-guarded, M11): a
+	// second job walks the claim→fail(dead) path.
+	if _, _, err := q.Enqueue(ctx, mk("f2", "sf2", "acme", fire(103)), now); err != nil {
+		t.Fatalf("enqueue f2: %v", err)
+	}
+	if js, _ := q.Claim(ctx, "w1", 10, 30*time.Second); len(js) != 1 || js[0].ID != "f2" {
+		t.Fatalf("claim f2 failed")
+	}
+	if err := q.Fail(ctx, "f2", "w1", 3, "boom again", time.Now().UTC(), true); err != nil {
 		t.Fatalf("dead-letter: %v", err)
 	}
 	if js, _ := q.Claim(ctx, "w1", 10, 30*time.Second); len(js) != 0 {

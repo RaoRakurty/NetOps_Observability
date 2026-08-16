@@ -116,6 +116,7 @@ func (q *PGJobQueue) Claim(ctx context.Context, workerID string, n int, lease ti
 				return err
 			}
 			j.Payload = json.RawMessage(payload)
+			j.LockedBy = workerID // the lease holder; presented back on Complete/Fail (M11)
 			out = append(out, j)
 		}
 		return rows.Err()
@@ -143,17 +144,28 @@ func (q *PGJobQueue) RenewLease(ctx context.Context, jobID, workerID string, lea
 	})
 }
 
-func (q *PGJobQueue) Complete(ctx context.Context, jobID string) error {
+// Complete and Fail are lease-guarded (M11): `locked_by = worker AND
+// status = 'running'` means a worker whose lease lapsed and was re-claimed
+// elsewhere gets ErrLeaseLost instead of overwriting the new owner's run —
+// without the guard a zombie worker could mark done (or re-queue) a job
+// another worker was actively processing, double- or under-delivering it.
+func (q *PGJobQueue) Complete(ctx context.Context, jobID, workerID string) error {
 	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status='done', lease_until=NULL, updated_at=now()
-			 WHERE id=$1`, jobID)
-		return err
+			 WHERE id=$1 AND locked_by=$2 AND status='running'`, jobID, workerID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrLeaseLost
+		}
+		return nil
 	})
 }
 
-func (q *PGJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause string, retryAfter time.Time, dead bool) error {
+func (q *PGJobQueue) Fail(ctx context.Context, jobID, workerID string, attempt int, cause string, retryAfter time.Time, dead bool) error {
 	status := "queued"
 	if dead {
 		status = "failed"
@@ -162,13 +174,19 @@ func (q *PGJobQueue) Fail(ctx context.Context, jobID string, attempt int, cause 
 		retryAfter = time.Now().UTC()
 	}
 	return q.db.WithTenant(ctx, "", true, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 			UPDATE report_jobs
 			   SET status=$2, last_error=$3, run_after=$4,
 			       locked_by=NULL, locked_at=NULL, lease_until=NULL, updated_at=now()
-			 WHERE id=$1`,
-			jobID, status, cause, retryAfter)
-		return err
+			 WHERE id=$1 AND locked_by=$5 AND status='running'`,
+			jobID, status, cause, retryAfter, workerID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrLeaseLost
+		}
+		return nil
 	})
 }
 

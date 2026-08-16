@@ -63,7 +63,11 @@ type Store interface {
 	ListSyncableLinks(ctx context.Context, since time.Time) ([]Link, error)
 
 	// outbox + audit
-	EnqueueOutbox(ctx context.Context, item OutboxItem) error
+	// EnqueueOutbox inserts one action, deduped by idempotency_key. enqueued
+	// reports whether a row was actually created (or a dead_letter row REVIVED
+	// to pending — M10: dead-lettering must never make a create permanently
+	// un-retryable); false means an equivalent live row already exists.
+	EnqueueOutbox(ctx context.Context, item OutboxItem) (enqueued bool, err error)
 	// ListOutbox returns ONE page plus the true total. F-66: this had no LIMIT
 	// in the SQL at all and both tables are append-only, so the endpoint served
 	// a 22 MB response that grew forever and any infrastructure:read user could
@@ -303,13 +307,20 @@ func (m *MemStore) ListSyncableLinks(_ context.Context, since time.Time) ([]Link
 	return out, nil
 }
 
-func (m *MemStore) EnqueueOutbox(_ context.Context, item OutboxItem) error {
+func (m *MemStore) EnqueueOutbox(_ context.Context, item OutboxItem) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Idempotency: an item with the same idempotency_key is a no-op (at-most-once).
-	for _, ex := range m.outbox {
+	// Idempotency: an item with the same idempotency_key is a no-op
+	// (at-most-once) — UNLESS the existing row is dead_letter (M10): a
+	// dead-lettered action already gave up, so a fresh enqueue is the
+	// operator's/policy's explicit retry and must revive it, not vanish.
+	for k, ex := range m.outbox {
 		if ex.IdempotencyKey == item.IdempotencyKey {
-			return nil
+			if ex.Status != "dead_letter" {
+				return false, nil
+			}
+			delete(m.outbox, k) // revive: replace the dead row with the fresh pending one
+			break
 		}
 	}
 	if item.CreatedAt.IsZero() {
@@ -317,7 +328,7 @@ func (m *MemStore) EnqueueOutbox(_ context.Context, item OutboxItem) error {
 	}
 	item.UpdatedAt = time.Now().UTC()
 	m.outbox[memKey(item.TenantID, item.ID)] = item
-	return nil
+	return true, nil
 }
 
 func (m *MemStore) ListOutbox(_ context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error) {
@@ -676,7 +687,7 @@ func (s *PGStore) ListSyncableLinks(ctx context.Context, since time.Time) ([]Lin
 	return out, err
 }
 
-func (s *PGStore) EnqueueOutbox(ctx context.Context, item OutboxItem) error {
+func (s *PGStore) EnqueueOutbox(ctx context.Context, item OutboxItem) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	payload, _ := json.Marshal(orEmptyMap(item.Payload))
@@ -688,18 +699,32 @@ func (s *PGStore) EnqueueOutbox(ctx context.Context, item OutboxItem) error {
 	if next.IsZero() {
 		next = time.Now().UTC()
 	}
-	return s.db.WithTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
-		// ON CONFLICT on the unique idempotency_key makes enqueue at-most-once.
-		_, err := tx.Exec(ctx, `
+	var enqueued bool
+	err := s.db.WithTenant(ctx, item.TenantID, false, func(tx pgx.Tx) error {
+		// ON CONFLICT on the unique idempotency_key makes enqueue at-most-once
+		// — except a dead_letter row, which the conflict REVIVES to a fresh
+		// pending attempt (M10: dead-lettering must never be permanent for a
+		// re-requested action). The DO UPDATE ... WHERE keeps live rows
+		// (pending/retrying/sent) untouched: those report enqueued=false.
+		tag, err := tx.Exec(ctx, `
 INSERT INTO ticket_outbox (tenant_id, id, corr_object_id, external_system, action, idempotency_key,
     payload, status, retry_count, max_retries, next_retry_at, last_error)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-ON CONFLICT (idempotency_key) DO NOTHING`,
+ON CONFLICT (idempotency_key) DO UPDATE SET
+    payload = EXCLUDED.payload, status = EXCLUDED.status,
+    retry_count = 0, next_retry_at = EXCLUDED.next_retry_at,
+    last_error = '', updated_at = now()
+  WHERE ticket_outbox.status = 'dead_letter'`,
 			normTenant(item.TenantID), item.ID, item.CorrObjectID, orDefault(item.ExternalSystem, "servicenow"),
 			item.Action, item.IdempotencyKey, payload, orDefault(item.Status, "pending"),
 			item.RetryCount, maxRetries, next, item.LastError)
-		return err
+		if err != nil {
+			return err
+		}
+		enqueued = tag.RowsAffected() == 1
+		return nil
 	})
+	return enqueued, err
 }
 
 func (s *PGStore) ListOutbox(ctx context.Context, tenant string, cross bool, limit, offset int) ([]OutboxItem, int, error) {

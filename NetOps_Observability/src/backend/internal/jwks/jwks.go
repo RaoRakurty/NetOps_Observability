@@ -93,16 +93,41 @@ func (c Claims) Audiences() []string {
 
 // Cache fetches and caches an issuer's discovery doc and signing keys.
 // Keys are refreshed on a TTL and on a cache miss (Keycloak rotates kids).
+//
+// H10 (fetch-amplification guard): an unknown `kid` used to trigger one
+// outbound IdP fetch PER verification — unauthenticated callers could aim a
+// firehose of made-up kids at us and we would relay it to the IdP. Refreshes
+// are now single-flighted (refreshMu — concurrent verifications share one
+// fetch) and rate-floored (minRefreshInterval between kid-miss fetches);
+// within the floor an unknown kid fails from cache — the negative-cache
+// effect: a kid the last fetch didn't know stays unknown until the floor
+// elapses. A real Keycloak rotation is still picked up on the first miss
+// after the floor.
 type Cache struct {
 	issuer string
 	client *http.Client
 	ttl    time.Duration
 
+	// refreshMu single-flights the JWKS fetch: one holder performs it, every
+	// concurrent kid-miss waits and re-checks the refreshed cache (stdlib-only
+	// per §6 — no x/sync singleflight).
+	refreshMu sync.Mutex
+
 	mu        sync.RWMutex
 	disc      *Discovery
 	keys      map[string]*rsa.PublicKey // kid -> key
 	fetchedAt time.Time
+	// attemptedAt is the last refresh ATTEMPT (success or failure) — the
+	// floor between kid-miss fetches. Failure counts too: a down IdP must not
+	// be hammered by every bad token.
+	attemptedAt time.Time
 }
+
+// minRefreshInterval is the floor between kid-miss-driven JWKS fetches: an
+// unknown kid within the floor is answered from cache (i.e. refused) instead
+// of relayed to the IdP. 30s keeps rotation pickup prompt while capping the
+// amplification an attacker gets to ~2 fetches/min regardless of volume.
+const minRefreshInterval = 30 * time.Second
 
 // New builds a cache for one issuer. ttl is how long signing keys are cached
 // before a refresh (the IdP cert-rollover interval; the integrator reads it
@@ -143,7 +168,8 @@ func (c *Cache) Discovery() (*Discovery, error) {
 }
 
 // keyFor returns the signing key for kid, refreshing the JWKS if it's unknown
-// or the cache has gone stale.
+// or the cache has gone stale — at most once per minRefreshInterval, shared
+// across concurrent callers (H10).
 func (c *Cache) keyFor(kid string) (*rsa.PublicKey, error) {
 	c.mu.RLock()
 	k, ok := c.keys[kid]
@@ -152,10 +178,31 @@ func (c *Cache) keyFor(kid string) (*rsa.PublicKey, error) {
 	if ok && fresh {
 		return k, nil
 	}
+	// Single-flight: the first miss fetches; everyone else queues here and
+	// re-checks the cache the winner just refreshed.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.mu.RLock()
+	k2, ok2 := c.keys[kid]
+	fresh2 := time.Since(c.fetchedAt) < c.ttl
+	floored := time.Since(c.attemptedAt) < minRefreshInterval
+	c.mu.RUnlock()
+	if ok2 && fresh2 {
+		return k2, nil // a concurrent verification already refreshed
+	}
+	if floored {
+		// Negative cache: a fetch within the floor already didn't know this
+		// kid (or already failed). Serve the stale key if we hold one; refuse
+		// the unknown kid WITHOUT another outbound call.
+		if ok2 {
+			return k2, nil
+		}
+		return nil, fmt.Errorf("no JWKS key for kid %q", kid)
+	}
 	if err := c.refresh(); err != nil {
 		// Serve a stale key rather than fail if we have one.
-		if ok {
-			return k, nil
+		if ok2 {
+			return k2, nil
 		}
 		return nil, err
 	}
@@ -174,7 +221,13 @@ func (c *Cache) keyFor(kid string) (*rsa.PublicKey, error) {
 
 // Refresh eagerly fetches the discovery document and signing keys — useful to
 // pre-warm the cache or probe a live IdP; VerifyRS256 refreshes on demand.
-func (c *Cache) Refresh() error { return c.refresh() }
+func (c *Cache) Refresh() error {
+	// Explicit refreshes (boot pre-warm, admin probe) bypass the kid-miss
+	// floor but still single-flight against concurrent verifications.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	return c.refresh()
+}
 
 // KeyCount reports how many signing keys are currently cached.
 func (c *Cache) KeyCount() int {
@@ -184,6 +237,12 @@ func (c *Cache) KeyCount() int {
 }
 
 func (c *Cache) refresh() error {
+	// Stamp the ATTEMPT before any network IO, success or not: the floor in
+	// keyFor must hold even (especially) when the IdP is down or slow —
+	// otherwise every bad token still produces an outbound connection.
+	c.mu.Lock()
+	c.attemptedAt = time.Now()
+	c.mu.Unlock()
 	disc, err := c.Discovery()
 	if err != nil {
 		return err
@@ -273,18 +332,16 @@ func (c *Cache) VerifyRS256(token, wantIssuer, wantAudience string) (Claims, err
 	if hdr.Alg != "RS256" {
 		return Claims{}, fmt.Errorf("unexpected jwt alg %q", hdr.Alg)
 	}
-	pub, err := c.keyFor(hdr.Kid)
-	if err != nil {
-		return Claims{}, err
-	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return Claims{}, errors.New("bad jwt signature encoding")
 	}
-	signed := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, signed[:], sig); err != nil {
-		return Claims{}, errors.New("jwt signature invalid")
-	}
+	// H10: decode + structurally validate the claims BEFORE the key lookup —
+	// keyFor can trigger an outbound IdP fetch on an unknown kid, and a
+	// malformed/expired/wrong-issuer token must be refused without ever
+	// costing a network call. Nothing here TRUSTS the claims yet: every
+	// checked value is re-covered by the signature verified below, and the
+	// claims are only returned after that verification passes.
 	cb, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return Claims{}, errors.New("bad jwt claims encoding")
@@ -298,6 +355,14 @@ func (c *Cache) VerifyRS256(token, wantIssuer, wantAudience string) (Claims, err
 	}
 	if wantIssuer != "" && strings.TrimRight(claims.Iss, "/") != strings.TrimRight(wantIssuer, "/") {
 		return Claims{}, fmt.Errorf("issuer mismatch: %s", claims.Iss)
+	}
+	pub, err := c.keyFor(hdr.Kid)
+	if err != nil {
+		return Claims{}, err
+	}
+	signed := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, signed[:], sig); err != nil {
+		return Claims{}, errors.New("jwt signature invalid")
 	}
 	if wantAudience != "" {
 		ok := claims.Azp == wantAudience

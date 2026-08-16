@@ -70,8 +70,8 @@ func TestTicketingStore_TenantIsolation(t *testing.T) {
 	}
 
 	// Outbox + audit scope the same way.
-	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "servicenow:create:t_a:obj-a"})
-	_ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_b", ID: "o2", CorrObjectID: "obj-b", Action: "create", IdempotencyKey: "servicenow:create:t_b:obj-b"})
+	_, _ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "servicenow:create:t_a:obj-a"})
+	_, _ = st.EnqueueOutbox(ctx, ticketing.OutboxItem{TenantID: "t_b", ID: "o2", CorrObjectID: "obj-b", Action: "create", IdempotencyKey: "servicenow:create:t_b:obj-b"})
 	aOut, _, _ := st.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	if len(aOut) != 1 || aOut[0].TenantID != "t_a" {
 		t.Fatalf("outbox leaked across tenants: %+v", aOut)
@@ -89,10 +89,10 @@ func TestTicketingStore_OutboxIdempotent(t *testing.T) {
 	ctx := context.Background()
 	st := ticketing.NewMemStore()
 	item := ticketing.OutboxItem{TenantID: "t_a", ID: "o1", CorrObjectID: "obj-a", Action: "create", IdempotencyKey: "k1"}
-	_ = st.EnqueueOutbox(ctx, item)
+	_, _ = st.EnqueueOutbox(ctx, item)
 	dup := item
 	dup.ID = "o2" // different id, same idempotency key
-	_ = st.EnqueueOutbox(ctx, dup)
+	_, _ = st.EnqueueOutbox(ctx, dup)
 	out, _, _ := st.ListOutbox(ctx, "t_a", false, ticketing.MaxPage, 0)
 	if len(out) != 1 {
 		t.Fatalf("idempotency key should dedupe enqueue, got %d items", len(out))

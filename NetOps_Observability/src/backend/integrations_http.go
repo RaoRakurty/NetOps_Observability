@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -236,8 +237,9 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 	// for an inbound ticket-state transition. A 200 over a failed write turned a
 	// transient database error into permanent, unrecoverable loss.
 	recorded, duplicates, failed := 0, 0, 0
+	applyGated := itsmInboundEnabled() && cfg.Bidirectional() && s.reportPipeline != nil
 	for _, ev := range events {
-		id, correlationID, inserted, err := s.integrations.RecordInbound(ctx, ev)
+		rec, inserted, err := s.integrations.RecordInbound(ctx, ev)
 		if err != nil {
 			failed++
 			logError("integration", "record inbound", map[string]any{"provider": providerType, "error": err.Error()})
@@ -245,29 +247,45 @@ func (s *server) handleIntegrationWebhook(w http.ResponseWriter, r *http.Request
 		}
 		if !inserted {
 			duplicates++
-			continue // level-1 raw duplicate (redelivery) — already handled
+			// M14: "already handled" was a lie when the FIRST delivery recorded
+			// the row but failed to enqueue its apply job — the redelivery (the
+			// sender's only recovery mechanism) hit this dedup and the
+			// transition sat unapplied forever. A still-unapplied row
+			// (verdict 'received') gets its apply (re-)enqueued here; the
+			// event-keyed job id makes this a no-op when the job already exists.
+			if applyGated && rec.Status == "received" {
+				if _, created, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, rec.ID, rec.CorrelationID, rec.RecordedAt); err != nil {
+					failed++ // still not queued — keep asking the sender to redeliver
+					logError("integration", "enqueue inbound (redelivery recovery)", map[string]any{"provider": providerType, "event_id": rec.ID, "error": err.Error()})
+				} else if created {
+					queued++
+					logInfo("integration", "redelivery recovered a recorded-but-unqueued event", map[string]any{
+						"provider": providerType, "event_id": rec.ID, "correlation_id": rec.CorrelationID})
+				}
+			}
+			continue
 		}
 		recorded++
 		s.intgWebhookReceived()
 		logInfo("integration", "inbound recorded", map[string]any{
-			"provider": providerType, "external_id": ev.ExternalID, "event_id": id,
-			"correlation_id": correlationID, "alert_id": ev.AlertID})
+			"provider": providerType, "external_id": ev.ExternalID, "event_id": rec.ID,
+			"correlation_id": rec.CorrelationID, "alert_id": ev.AlertID})
 		// Mutation is gated: only a bidirectional config with the flag on drives
 		// state. The apply is ENQUEUED (async, crash-safe via the worker lease),
 		// so the webhook returns immediately and never blocks the caller.
-		if itsmInboundEnabled() && cfg.Bidirectional() && s.reportPipeline != nil {
-			if _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, id, correlationID); err != nil {
+		if applyGated {
+			if _, _, err := s.reportPipeline.EnqueueIntegrationInbound(ctx, ev.Tenant, rec.ID, rec.CorrelationID, rec.RecordedAt); err != nil {
 				// Recorded in the ledger but never queued: the transition would
 				// sit forever unapplied. Count it as failed so the sender
-				// redelivers — RecordInbound dedupes the replay.
+				// redelivers — the redelivery branch above then enqueues it.
 				failed++
 				logError("integration", "enqueue inbound", map[string]any{"provider": providerType, "error": err.Error()})
 				continue
 			}
 			queued++
-		} else if err := s.integrations.MarkEvent(ctx, id, "received", "ingest-only"); err != nil {
+		} else if err := s.integrations.MarkEvent(ctx, rec.ID, "received", "ingest-only"); err != nil {
 			// Not fatal — the event IS in the ledger — but it must not vanish.
-			logError("integration", "mark event", map[string]any{"provider": providerType, "event_id": id, "error": err.Error()})
+			logError("integration", "mark event", map[string]any{"provider": providerType, "event_id": rec.ID, "error": err.Error()})
 		}
 	}
 
@@ -337,25 +355,37 @@ func (s *server) markInboundEvent(ctx context.Context, ledgerID, verdict, reason
 }
 
 // applyInboundEvent orders/reconciles one recorded event and applies the verdict
-// to the incident lifecycle. Returns true when it mutated an incident.
-func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, ev integration.IntegrationEvent, ledgerID, correlationID string) bool {
+// to the incident lifecycle. Returns mutated=true when it changed an incident.
+// A non-nil error is a TRANSIENT store failure (M14) — the caller retries the
+// job; only definitive outcomes (no incident, stale, applied) write a verdict.
+func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, ev integration.IntegrationEvent, ledgerID, correlationID string) (bool, error) {
 	if s.incidents == nil {
 		s.markInboundEvent(ctx, ledgerID, "dropped", "no-incident-store")
-		return false
+		return false, nil
 	}
-	// Correlate to the originating incident.
-	inc, found := s.correlateIncident(ctx, cfg.Tenant, ev)
+	// Correlate to the originating incident. An ERROR is not "not found" —
+	// recording `dropped: no-incident` off the back of a db blip made the
+	// transition permanently unapplied (M14); bubble it up for a retry.
+	inc, found, corrErr := s.correlateIncident(ctx, cfg.Tenant, ev)
+	if corrErr != nil {
+		return false, fmt.Errorf("correlate incident: %w", corrErr)
+	}
 	if !found {
 		s.markInboundEvent(ctx, ledgerID, "dropped", "no-incident")
-		return false
+		return false, nil
 	}
-	// Watermark for this external incident (§4a).
-	m, _, _ := s.integrations.GetMapping(ctx, cfg.Tenant, false, ev.Provider, ev.ExternalID)
+	// Watermark for this external incident (§4a). A read error must not be
+	// treated as "no watermark" (M14): a zero watermark would let a STALE
+	// event re-apply over newer state the moment the store hiccuped.
+	m, _, merr := s.integrations.GetMapping(ctx, cfg.Tenant, false, ev.Provider, ev.ExternalID)
+	if merr != nil {
+		return false, fmt.Errorf("read inbound watermark: %w", merr)
+	}
 
 	decision := cfg.MappingEngineFor().Reconcile(ev, integration.InternalState(inc.Status), m.Applied)
 	if !decision.Apply {
 		s.markInboundEvent(ctx, ledgerID, "dropped", decision.Reason)
-		return false
+		return false, nil
 	}
 
 	actor := "itsm:" + ev.Provider
@@ -367,17 +397,17 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 	case decision.Target != "":
 		if _, err := s.incidents.Transition(ctx, cfg.Tenant, false, inc.ID, string(decision.Target), actor, "via "+ev.Provider); err != nil {
 			s.markInboundEvent(ctx, ledgerID, "dropped", "transition: "+err.Error())
-			return false
+			return false, nil
 		}
 	case decision.Assignee != "":
 		if _, err := s.incidents.Assign(ctx, cfg.Tenant, false, inc.ID, decision.Assignee, actor); err != nil {
 			s.markInboundEvent(ctx, ledgerID, "dropped", "assign: "+err.Error())
-			return false
+			return false, nil
 		}
 	case decision.Comment != "":
 		if _, err := s.incidents.AddNote(ctx, cfg.Tenant, false, inc.ID, actor, decision.Comment); err != nil {
 			s.markInboundEvent(ctx, ledgerID, "dropped", "note: "+err.Error())
-			return false
+			return false, nil
 		}
 	default:
 		mutated = false
@@ -403,23 +433,25 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 		"target": string(decision.Target), "reason": decision.Reason,
 		"correlation_id": correlationID, "alert_id": ev.AlertID,
 	})
-	return mutated
+	return mutated, nil
 }
 
 // correlateIncident resolves the internal incident an inbound event refers to.
 // Slack actions carry our internal incident id directly (the button value);
 // ticketing providers correlate via the external_ticket_id forward link.
-func (s *server) correlateIncident(ctx context.Context, tenant string, ev integration.IntegrationEvent) (Incident, bool) {
+// A store error is returned as-is (M14) — the caller must retry, not conclude
+// "no incident".
+func (s *server) correlateIncident(ctx context.Context, tenant string, ev integration.IntegrationEvent) (Incident, bool, error) {
 	if ev.Provider == "slack" && ev.AlertID != "" {
 		inc, _, found, err := s.incidents.Get(ctx, tenant, false, ev.AlertID)
 		if err != nil {
-			return Incident{}, false
+			return Incident{}, false, err
 		}
-		return inc, found
+		return inc, found, nil
 	}
 	inc, found, err := s.incidents.FindByExternalTicket(ctx, tenant, ev.Provider, ev.ExternalID)
 	if err != nil {
-		return Incident{}, false
+		return Incident{}, false, err
 	}
-	return inc, found
+	return inc, found, nil
 }

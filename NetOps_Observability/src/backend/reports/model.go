@@ -67,6 +67,11 @@ type Job struct {
 	FireTime    time.Time
 	Attempts    int
 	Payload     json.RawMessage
+	// LockedBy is the worker holding the lease, stamped by Claim (transient —
+	// never part of the enqueue payload). Terminal writes (Complete/Fail) must
+	// present it so a worker that lost its lease cannot finalize a job another
+	// worker now owns (M11).
+	LockedBy string
 }
 
 // JobQueue is the durable, Postgres-backed work queue (FOR UPDATE SKIP LOCKED).
@@ -83,11 +88,13 @@ type JobQueue interface {
 	// RenewLease extends the lease while a long job is still in flight; returns an
 	// error if the job is no longer leased by workerID (lease lost).
 	RenewLease(ctx context.Context, jobID, workerID string, lease time.Duration) error
-	// Complete finalizes a successfully processed job (terminal, not re-claimable).
-	Complete(ctx context.Context, jobID string) error
+	// Complete finalizes a successfully processed job (terminal, not
+	// re-claimable) — only while workerID still holds the lease; a lost lease
+	// returns ErrLeaseLost instead of clobbering the new owner's run (M11).
+	Complete(ctx context.Context, jobID, workerID string) error
 	// Fail reschedules with backoff (dead=false → back to runnable at retryAfter)
-	// or dead-letters (dead=true → terminal failed).
-	Fail(ctx context.Context, jobID string, attempt int, cause string, retryAfter time.Time, dead bool) error
+	// or dead-letters (dead=true → terminal failed). Lease-guarded like Complete.
+	Fail(ctx context.Context, jobID, workerID string, attempt int, cause string, retryAfter time.Time, dead bool) error
 	// Release returns a leased job to runnable (e.g. graceful shutdown mid-flight).
 	Release(ctx context.Context, jobID string) error
 	// RecoverExpiredLeases resets jobs whose lease lapsed back to runnable and

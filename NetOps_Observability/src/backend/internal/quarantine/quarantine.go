@@ -332,6 +332,8 @@ type RestoreDeps struct {
 // ReplayRefused counts envelopes skipped by the replay guard (already claimed
 // by an earlier or concurrent run); UnclaimFailed counts claim rollbacks that
 // failed after a refused produce (the envelope will be refused, not retried).
+// Aborted counts envelopes never attempted because ctx was cancelled mid-batch
+// — they stay untouched (no claim, no tombstone) and restore on the next run.
 type RestoreResult struct {
 	Restored      int
 	Failed        int
@@ -339,10 +341,16 @@ type RestoreResult struct {
 	DeleteFailed  int
 	ReplayRefused int
 	UnclaimFailed int
+	Aborted       int
 }
 
 // Restore unseals and re-injects each doc, then tombstones it. Per-doc
-// failures are counted and never abort the batch.
+// failures are counted and never abort the batch; a cancelled/expired ctx DOES
+// abort it (counted in Aborted) — the guarded claim is a persistent
+// side-effect, and taking it with a ctx the remaining steps will refuse is how
+// an envelope gets stranded as "already restored" and later tombstoned without
+// its event ever reaching the bus (H9). Callers therefore run Restore on a
+// context detached from the client connection (see handleQuarantineReattribute).
 //
 // REPLAY SAFETY — two dedup contracts, by lane, both promising "re-running
 // the same restore never duplicates tenant data":
@@ -359,7 +367,18 @@ type RestoreResult struct {
 //     the event outright.
 func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) RestoreResult {
 	var res RestoreResult
-	for _, d := range docs {
+	for i, d := range docs {
+		// H9: a cancelled ctx must stop the batch BEFORE the next claim. The
+		// effectful deps honour ctx, so claiming here would stamp the
+		// persistent restored-at marker and then have Produce refused — the
+		// next run would see the claim, refuse the replay and tombstone an
+		// envelope whose event never reached the bus: silent data loss from
+		// nothing more than a client disconnect. Stop instead; untouched
+		// envelopes restore cleanly on the next run.
+		if ctx.Err() != nil {
+			res.Aborted += len(docs) - i
+			break
+		}
 		topic, ok := TopicForLane(d.Lane)
 		if !ok {
 			res.Failed++
@@ -417,6 +436,18 @@ func Restore(ctx context.Context, deps RestoreDeps, docs []Doc, tenant string) R
 		}
 		if err := deps.Produce(ctx, topic, tenant, ev); err != nil {
 			res.Failed++
+			// H9: a ctx-shaped produce error is NOT "the bus refused" — the
+			// event may or may not have reached the bus, so a guarded claim
+			// must STAY (unclaiming could double-produce a flow that did
+			// land; keeping it is the documented at-most-once window). Either
+			// way the ctx is dead: stop before claiming more envelopes.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if guarded {
+					res.UnclaimFailed++ // the claim sticks; refused, not retried
+				}
+				res.Aborted += len(docs) - i - 1
+				break
+			}
 			if guarded {
 				// The bus refused, so the event is NOT in ClickHouse — roll
 				// the claim back so the envelope stays restorable. If the
