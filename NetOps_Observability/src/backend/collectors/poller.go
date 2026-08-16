@@ -28,7 +28,15 @@ import (
 
 // Target is one device the collectors poll.
 type Target struct {
-	ID        string
+	ID string
+	// Name is the device's stored display name — for scan devices the RAW
+	// sysName the device reported (e.g. "core-sw#1"), where ID is the derived
+	// ScanDeviceID (sanitized, lowercased, address-hash-suffixed). The trap
+	// receiver's NAT-surviving sysName rescue compares the trap's sysName
+	// varbind against it: the derived id can never equal the on-wire sysName
+	// once folding/hashing applies, so id-only matching stranded every
+	// legitimately-authenticated scan-device trap as inventory_missing.
+	Name      string
 	Address   string // host or host:port
 	Protocol  string // preferred protocol: snmp|gnmi|netconf ("" => snmp)
 	Community string // resolved SNMP v2c community ("" => SNMP_COMMUNITY/"public")

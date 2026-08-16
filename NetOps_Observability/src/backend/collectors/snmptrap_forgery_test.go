@@ -146,3 +146,42 @@ func TestM4V3AuthConfiguredNeverAcceptedCleartext(t *testing.T) {
 		t.Fatalf("unknown v3 sender attributed to %q", ev.Device)
 	}
 }
+
+// TestM4SysNameRescueMatchesStoredName: the sysName rescue must compare the
+// trap's sysName varbind against the device's STORED name, not only the derived
+// inventory id. Scan devices are keyed ScanDeviceID(sysName, addr) — sanitized,
+// lowercased, address-hash-suffixed — so a device named "core-sw#1" has an id
+// like "core-sw-1-9f3a2b" that can NEVER equal-fold the real sysName the trap
+// carries. Before the Name compare, every legitimately-authenticated NAT-fronted
+// trap from a scan device was left inventory_missing.
+func TestM4SysNameRescueMatchesStoredName(t *testing.T) {
+	targets := func() []Target {
+		return []Target{{
+			ID:        "core-sw-1-9f3a2b", // ScanDeviceID-style: sanitized + addr hash
+			Name:      "core-sw#1",        // the device's real sysName
+			Address:   "10.0.0.7:161",
+			Community: "s3cret",
+		}}
+	}
+	r := &trapReceiver{targets: targets}
+
+	// Genuine NAT-fronted trap: unresolved source, real sysName, RIGHT community.
+	ev, err := r.decodePacket(buildV2cSysNameTrap("s3cret", "core-sw#1"), "203.0.113.60")
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ev.Device != "core-sw-1-9f3a2b" || ev.EnrichmentStatus != "inventory_matched" {
+		t.Fatalf("authenticated trap with stored sysName not attributed (Device=%q status=%q)",
+			ev.Device, ev.EnrichmentStatus)
+	}
+
+	// M4 gate preserved: same sysName, WRONG community — still refused.
+	ev, err = r.decodePacket(buildV2cSysNameTrap("public", "core-sw#1"), "203.0.113.60")
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ev.Device != "" || ev.EnrichmentStatus != "inventory_missing" {
+		t.Fatalf("forged trap with stored sysName attributed to %q (status %q) — M4 gate lost",
+			ev.Device, ev.EnrichmentStatus)
+	}
+}

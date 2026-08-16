@@ -363,7 +363,12 @@ func newServer() *server {
 			// full USM params; a v1/v2c profile threads the community. An empty
 			// community falls back to the global SNMP_COMMUNITY in the poller.
 			tgt := collectors.Target{
-				ID:      dev.ID,
+				ID: dev.ID,
+				// The stored name (raw sysName for scan devices) rides along so
+				// the trap receiver's NAT-surviving sysName rescue can match a
+				// trap's sysName varbind against what the device actually
+				// reports — the derived id (sanitized + addr-hash) never can.
+				Name:    dev.Name,
 				Address: dev.Address,
 				// §3a.2 / F-56: the owning tenant travels with the target so a
 				// collector that persists rows stamps it from the inventory,

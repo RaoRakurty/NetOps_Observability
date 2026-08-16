@@ -1050,7 +1050,8 @@ func trapSysName(ev *TrapEvent) string {
 // IP (fail-closed on an ambiguous shared NAT source); this RESCUES the identity from
 // inside the PDU when the source IP didn't resolve — both signals survive NAT:
 //
-//  1. sysName.0 varbind matched (case-insensitively) to a device id — by NAME.
+//  1. sysName.0 varbind matched (case-insensitively) to a device's stored
+//     name — or its id, for inventory whose id IS its name — by NAME.
 //  2. v1 agent-addr resolved by IP — the device's own address inside the PDU.
 //
 // When nothing resolves, Device stays "" — an honest unknown: the producer keeps the
@@ -1065,7 +1066,14 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 		// any unknown source became that device's evidence.
 		if sn := trapSysName(ev); sn != "" {
 			for _, t := range r.targets() {
-				if strings.EqualFold(t.ID, sn) && trapIdentityTrusted(ev, t) {
+				// Match on the STORED name (the raw sysName the inventory holds)
+				// first: scan-device ids are ScanDeviceID(sysName, addr) —
+				// sanitized + address-hash-suffixed — so the on-wire sysName
+				// (e.g. "core-sw#1") never equal-folds an id like
+				// "core-sw-1-9f3a2b". The id compare stays for devices whose id
+				// IS their name (static/operator-created inventory). Either way
+				// the trap must still PROVE the identity (M4 gate below).
+				if (strings.EqualFold(t.Name, sn) || strings.EqualFold(t.ID, sn)) && trapIdentityTrusted(ev, t) {
 					ev.Device = t.ID
 					break
 				}
