@@ -124,6 +124,10 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 	if _, found, _ := st.Get(ctx, "acme", false, created.ID); !found {
 		t.Fatal("the stamped rule must be readable by its real owner acme")
 	}
+	// Remove it so the AllEnabled count below reflects only the two seeded rules.
+	if _, err := st.Delete(ctx, "acme", false, created.ID); err != nil {
+		t.Fatalf("cleanup forged-then-stamped rule: %v", err)
+	}
 
 	// The config writer's cross-tenant read sees both.
 	if all, _ := st.AllEnabled(ctx); len(all) != 2 {

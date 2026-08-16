@@ -65,8 +65,43 @@ func pgDSN(t *testing.T) string {
 
 // openPG builds a *platformdb.DB the production way (connect + migrate + apply the F-60
 // runtime params). Any override of the timeout envs must be set BEFORE this.
+// pgResetPublicAsAdmin drops and recreates the public schema on the shared test
+// database using the SUPERUSER DSN, then re-grants it to every role. The
+// pg-integration corpus (this file, PG_TEST_DSN = the non-super netops_app) and
+// the DATABASE_URL_TEST/RLS corpus (provisionAppRole, a netops_app_test role)
+// run in the SAME package against ONE database and both live in `public`; a
+// prior test leaves tables owned by the OTHER role, so a migrate as netops_app
+// would hit "permission denied for schema_migrations". Reset makes each test
+// order-independent. No-op when DATABASE_URL_TEST is unset (single-DSN local run
+// against a fresh database — see the file header).
+func pgResetPublicAsAdmin(t *testing.T) {
+	t.Helper()
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Fatalf("admin connect for schema reset: %v", err)
+	}
+	defer admin.Close(ctx)
+	for _, stmt := range []string{
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
+		"DROP SCHEMA IF EXISTS public CASCADE",
+		"CREATE SCHEMA public",
+		"GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC",
+	} {
+		if _, err := admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("schema reset (%s): %v", stmt, err)
+		}
+	}
+}
+
 func openPG(t *testing.T) *platformdb.DB {
 	t.Helper()
+	pgResetPublicAsAdmin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	db, err := platformdb.NewDB(ctx, pgDSN(t))
