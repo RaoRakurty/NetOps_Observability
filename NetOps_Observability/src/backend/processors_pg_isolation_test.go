@@ -38,7 +38,12 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 			r.Field = ""
 			r.Match = &processors.Match{Field: "level", Op: processors.MatchEquals, Value: "debug"}
 		}
-		if a.Type == processors.TypeRedactPattern {
+		// Pattern-bearing actions need a detector. Both redact_pattern and tag
+		// report UsesPattern()==true (registry.go); the first H8 fixture pass
+		// covered only redact_pattern, so the tag action failed Validate. These
+		// are the only two pattern-bearing actions — keep in sync with the
+		// registry's UsesPattern verdicts.
+		if a.Type == processors.TypeRedactPattern || a.Type == processors.TypeTag {
 			r.PatternKind, r.Pattern = processors.PatternBuiltin, "email"
 		}
 		// Key-scoped actions need a key list, and seal needs a configured
