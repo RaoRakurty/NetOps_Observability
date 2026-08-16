@@ -218,3 +218,26 @@ the §7 correlated-failure scenarios; L2+ needs the readiness-doc rig._
   build item for a real correlation/RCA scale test (readiness-doc Network Digital Twin).
 - What IS proven end-to-end: tenant attribution (tagged index), correlation
   consumption + throughput ceiling (~1k evt/s), ingest→storage flow.
+
+---
+
+## 2026-08-16 (evening) — GA hotfix wave: live verification on the lab stack
+
+All hardware-independent GA-plan items were implemented and the stack redeployed
+(TLS variant, `BUS_PARTITIONS=4`, `--scale correlation=2`). Live results:
+
+| Fix | Live evidence |
+|---|---|
+| Devstore per-record O(1) (P0) | Onboard 100 devices through the API on the new image: first-100 rate 93.8–100.1/s vs last-100 96.5–111.8/s (**ratio 1.03–1.12** — linear; the old blob store degraded 155→14/s by 3.3k) |
+| Correlation co-partitioning (P0) | Replica-1 owns partitions **[0,1] of all 12 topics**, replica-2 **[2,3]** (range assignor); all topics altered 1→4 partitions by kafka-init `BUS_PARTITIONS`; ACL matrix re-applied (62 entries incl. `flows.raw`) |
+| Rebalance-thrash fix (P1) | 120,001-event burst at ~1,888 ev/s (2× single-replica ceiling): **zero** UnknownMemberId/CommitFailed/restarts (old engine: 225/18/99), lag drained **monotonically to ~0** (old: stuck forever). Drain exceeded the harness 3× budget — expected: single-tenant workload keys to ONE partition/replica; this is the documented per-tenant ceiling, not thrash |
+| Failure accounting | **Exact balance: 120,001 injected == 120,001 persisted + 0 DLQ + 0 rejections**; 100/100 devices covered in corr_signals |
+| DLQ fail-fast + installer chown + Kafka-ACL install (P0) | In the tree with tests; ACL matrix + DLQ ownership manually repaired live per runbook (the defects were found ON this deployment by the mini-ladder) |
+| healthz `registry_identities` | Was lazy (idle replica reported 0 for a healthy 201-row registry, failing the propagation gate) — now eager; verified by rerun's burst gate passing |
+
+Known-good residual behavior: unregistered live devices (spine1/2 sRLinux) are
+tenant-refused into the bounded DLQ — correct on a clean-slate stack with no
+inventory. Mini-ladder runs archived under `data/miniladder/` (gitignored).
+
+**Still unproven (needs the rig — tracker 152/153):** multi-tenant partition
+spread under sustained load, capacity at L2+, sizing-table validation.
