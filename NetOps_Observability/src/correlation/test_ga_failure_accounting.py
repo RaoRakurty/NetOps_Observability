@@ -362,3 +362,39 @@ def test_burst_drains_to_steady_state_memory(monkeypatch, registry):
     monkeypatch.setattr(main, "_SYSLOG_SWEEP_LAST", 0.0)
     main._sweep_syslog_buckets(time.time() + main.SYSLOG_WINDOW + 1)
     assert len(main.SYSLOG_BUCKET) == 0, "syslog burst buckets did not sweep to empty"
+
+
+def test_healthz_registry_count_is_eager_not_lazy(tmp_path, monkeypatch):
+    """registry_identities must reflect the CSV even if no event has triggered
+    a lookup yet (idle replica). Proven live 2026-08-16: a 2-replica deployment's
+    idle member reported 0 for a healthy 201-row registry and failed the
+    mini-ladder propagation gate."""
+    import main as m
+
+    csv_path = tmp_path / "device_tenant.csv"
+    csv_path.write_text(
+        "identity,tenant_id\ndev-a,tenant-1\ndev-b,\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(m, "TENANT_ENRICHMENT_FILE", str(csv_path))
+    # Simulate the idle-replica state: nothing loaded, no lookups performed.
+    monkeypatch.setattr(m, "_tenant_map", {})
+    monkeypatch.setattr(m, "_tenant_mtime", None)
+    # The healthz computation must refresh from disk, not echo the lazy global.
+    assert len(m._tenant_registry()) == 2
+    # And pin that health() actually uses the eager accessor — a regression to
+    # the raw `_tenant_map` global re-introduces the idle-replica lie.
+    import ast
+    import inspect
+    import pathlib
+
+    src = pathlib.Path(inspect.getfile(m)).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    joined = ast.dump(tree)
+    assert "_tenant_registry" in joined  # sanity: accessor exists
+    import re
+
+    m_ = re.search(r'"registry_identities":\s*len\(([_a-zA-Z()]+)\)', src)
+    assert m_ is not None, "registry_identities line not found in main.py"
+    assert m_.group(1) == "_tenant_registry()", (
+        f"healthz registry_identities must call _tenant_registry(), got {m_.group(1)}"
+    )

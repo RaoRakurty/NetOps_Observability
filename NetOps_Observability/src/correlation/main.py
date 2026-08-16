@@ -4455,7 +4455,14 @@ async def health() -> dict:
             "claims_verified": TENANT_CLAIMS_VERIFIED,
             "claims_refused": TENANT_CLAIMS_REFUSED,
             "refusals": dict(sorted(TENANT_REFUSALS.items())),
-            "registry_identities": len(_tenant_map),
+            # _tenant_registry(), not the raw global: the map loads lazily on
+            # the first lookup, so an idle replica (no events on its partitions
+            # yet) would report 0 for a perfectly healthy registry file. The
+            # refresh is a single stat() unless the file changed. Proven live
+            # 2026-08-16: a 2-replica deployment's idle member reported
+            # registry_identities=0 and failed the mini-ladder propagation gate
+            # while the CSV held 201 rows.
+            "registry_identities": len(_tenant_registry()),
             "cross_tenant_inserts": dict(sorted(CH_CROSS_TENANT_INSERTS.items())),
         },
         "durability": {
