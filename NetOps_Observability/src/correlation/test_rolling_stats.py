@@ -101,13 +101,13 @@ def test_series_negative_variance_self_heals():
 def test_score_behaviour_unchanged():
     main.SERIES.clear()
     for _ in range(25):
-        assert main.score("dev1", "cpu", 10.0) is None or True
+        assert main.score("t", "dev1", "cpu", 10.0) is None or True
     # constant series: σ==0 → never a z-score
-    assert main.score("dev1", "cpu", 10.0) is None
+    assert main.score("t", "dev1", "cpu", 10.0) is None
     main.SERIES.clear()
     for v in _stream(50):
-        main.score("dev2", "cpu", v)
-    z = main.score("dev2", "cpu", 1000.0)   # gross outlier must still fire
+        main.score("t", "dev2", "cpu", v)
+    z = main.score("t", "dev2", "cpu", 1000.0)   # gross outlier must still fire
     assert z is not None and z >= main.Z_THRESHOLD
     main.SERIES.clear()
 

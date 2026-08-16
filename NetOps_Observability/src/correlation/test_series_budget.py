@@ -162,7 +162,7 @@ def test_series_store_still_bounded_by_the_cap(monkeypatch):
     main.SERIES.clear()
     try:
         for i in range(50):
-            main.score(f"dev-{i}", "metric", 1.0)
+            main.score("t", f"dev-{i}", "metric", 1.0)
         assert len(main.SERIES) <= 8
     finally:
         main.SERIES.clear()
