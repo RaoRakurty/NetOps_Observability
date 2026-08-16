@@ -245,7 +245,15 @@ def store_initialized(root: Path, store: str, profiles: str = "") -> bool:
         # main Postgres, created by hand, and only runs under the `sso` profile.
         return ("sso" in _csv(profiles)) and store_initialized(root, "postgres")
     for marker in STORE_MARKERS.get(store, ()):
-        if (root / marker).exists():
+        try:
+            if (root / marker).exists():
+                return True
+        except PermissionError:
+            # The marker lives inside a data dir the SERVICE owns (e.g. Postgres'
+            # PG_VERSION under a uid-70 mode-0700 PGDATA) — we can't stat it as the
+            # installer user, but its very unreadability is evidence the store was
+            # initialized. Treat as initialized (a false "initialized" only costs an
+            # override flag; a false "fresh" is the FUNC-HIGH-1 rotation outage).
             return True
     rel = STORE_DIRS.get(store)
     if rel is None:

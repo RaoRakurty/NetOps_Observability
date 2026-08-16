@@ -550,3 +550,49 @@ def test_docs_do_not_promise_a_blanket_reset_env_rotation():
     body = runbook.read_text()
     for name in ("KAFKA_CLUSTER_ID", "DB_PASSWORD", "--rotate-app-secrets"):
         assert name in body
+
+
+# ── customer reset/reinstall robustness (2026-08-16) ────────────────────────
+
+def test_store_initialized_treats_unreadable_marker_as_initialized(tmp_path, monkeypatch):
+    """A store marker inside a service-owned mode-0700 data dir (e.g. Postgres'
+    PG_VERSION under uid 70) is unreadable to the installer user. store_initialized
+    must treat the PermissionError as "initialized" (conservative), not crash the
+    --reset-env preflight with a raw traceback."""
+    import secret_rotation as sr
+
+    orig_exists = Path.exists
+
+    def boom(self, *a, **k):
+        # Only the store marker stat raises; everything else behaves normally.
+        if self.name in ("PG_VERSION",) or "postgres" in str(self):
+            raise PermissionError(13, "Permission denied", str(self))
+        return orig_exists(self, *a, **k)
+
+    monkeypatch.setattr(Path, "exists", boom)
+    # Must not raise, and must report initialized rather than "fresh".
+    assert sr.store_initialized(tmp_path, "postgres") is True
+
+
+def test_normalize_database_url_strips_verify_full_for_phase_a(tmp_path):
+    """TLS phase-A minting needs a plaintext DB DSN. A .env that baked in
+    sslmode=verify-full + sslrootcert (older install / manual edit / backup
+    restore) must be normalized to sslmode=disable so the api can boot and mint
+    the mesh CA; verify-full is re-supplied by compose.tls.yml in phase B."""
+    import install
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "FOO=1\n"
+        "DATABASE_URL=postgres://netops_app:pw@postgres:5432/netops"
+        "?sslmode=verify-full&sslrootcert=/data/tls/ca.pem\n"
+        "BAR=2\n"
+    )
+    install.normalize_database_url_for_bootstrap(env)
+    dsn = next(l for l in env.read_text().splitlines() if l.startswith("DATABASE_URL="))
+    assert "sslmode=disable" in dsn
+    assert "verify-full" not in dsn and "sslrootcert" not in dsn
+    # Unrelated lines and the DSN's userinfo/host/db are untouched.
+    txt = env.read_text()
+    assert "FOO=1" in txt and "BAR=2" in txt
+    assert "netops_app:pw@postgres:5432/netops" in dsn

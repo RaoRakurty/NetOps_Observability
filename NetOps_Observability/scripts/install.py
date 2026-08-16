@@ -1199,7 +1199,26 @@ def ensure_data_dirs(root: Path) -> None:
     }
     for name, uid_gid in owners.items():
         d = root / "data" / name
-        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # The dir (or an ancestor) already exists owned by a SERVICE uid
+            # (e.g. a re-install over a uid-70 mode-0700 data/postgres, or a
+            # data/ tree left container-owned by a prior run) so the installer
+            # user can neither create the subdir nor traverse in. Fail with an
+            # actionable remedy instead of a raw traceback (customer reset/
+            # reinstall experience, 2026-08-16).
+            fail(
+                f"cannot create data/{name}: it (or a parent) is owned by another "
+                f"user and not writable by {os.getenv('USER', 'the installer')}. "
+                f"This usually means a previous run left data/ owned by container "
+                f"UIDs. Fix ownership and retry, e.g.:\n"
+                f"    sudo chown -R $(id -u):$(id -g) {root / 'data'}\n"
+                f"or, to start from a clean slate, stop the stack and remove data/ "
+                f"(this DELETES all stored telemetry/state):\n"
+                f"    cd {root / 'deployment' / 'docker'} && docker compose down\n"
+                f"    docker run --rm -v {root / 'data'}:/d alpine sh -c 'rm -rf /d/*'"
+            )
         if uid_gid is not None:
             try:
                 os.chown(d, uid_gid[0], uid_gid[1])
@@ -1440,6 +1459,42 @@ def splice_env_values(env_path: Path, values: dict[str, str],
         info(f"{label} already present in .env")
 
 
+def normalize_database_url_for_bootstrap(env_path: Path) -> None:
+    """Force .env's DATABASE_URL to the PLAINTEXT bootstrap form (sslmode=disable,
+    no sslrootcert) so TLS phase A can always mint the mesh CA.
+
+    In the working model .env keeps a plaintext DATABASE_URL and the verify-full
+    DSN comes ONLY from compose.tls.yml (activated in phase B). If an older install
+    or a manual edit baked `sslmode=verify-full&sslrootcert=/data/tls/ca.pem` into
+    .env, phase A's api dies at config-parse ("unable to read CA file …/ca.pem")
+    because the CA does not exist yet — the api is the thing that mints it. That is
+    a silent crash-loop on re-install / backup-restore (customer experience,
+    2026-08-16). Normalizing here is a no-op on a standard plaintext .env and
+    self-heals the baked-in-verify-full case; the phase-B compose override still
+    provides verify-full for the final running state."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    lines = env_path.read_text().splitlines()
+    changed = False
+    for i, line in enumerate(lines):
+        if not line.startswith("DATABASE_URL="):
+            continue
+        val = line.split("=", 1)[1]
+        parts = urlsplit(val)
+        q = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+             if k not in ("sslmode", "sslrootcert", "sslcert", "sslkey")]
+        q.append(("sslmode", "disable"))
+        newval = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                             urlencode(q), parts.fragment))
+        if newval != val:
+            lines[i] = f"DATABASE_URL={newval}"
+            changed = True
+        break
+    if changed:
+        env_path.write_text("\n".join(lines) + "\n")
+        info("normalized DATABASE_URL to the plaintext bootstrap form for TLS "
+             "phase-A minting (verify-full is supplied by compose.tls.yml in phase B)")
+
+
 def enable_tls_env(env_path: Path) -> None:
     """Line-surgery the TLS values into .env (idempotent)."""
     splice_env_values(
@@ -1447,6 +1502,8 @@ def enable_tls_env(env_path: Path) -> None:
         ["# ---- TLS/mTLS mesh (tracker #151) — written by install.py --tls=yes ----",
          "# Values pair with deployment/docker/compose.tls.yml; keep in lockstep."],
         "TLS variables")
+    # Guarantee phase A can mint even if .env carried a baked-in verify-full DSN.
+    normalize_database_url_for_bootstrap(env_path)
 
 
 def enable_snmp_discovery_env(env_path: Path, cidrs: str) -> None:
