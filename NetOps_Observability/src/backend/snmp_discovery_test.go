@@ -112,10 +112,11 @@ func TestSNMPSourceDiscoversOnlyUnknownHosts(t *testing.T) {
 		t.Fatalf("want exactly 1 discovered device, got %d: %+v", len(devs), devs)
 	}
 	d := devs[0]
-	// ID is the ScanDeviceID convention: a UNIQUE sysName keeps its stable
-	// address-less id (M1 upgrade-continuity: only a real name collision appends
-	// the address hash, so tombstones/state keyed by the legacy id keep matching).
-	wantID := discovery.ScanDeviceID("leaf-1", "")
+	// ID is the ScanDeviceID convention: the collision-safe hashed form
+	// name+address (3rd-pass F5/F6: the legacy address-less id collided with a
+	// same-named static device and missed hash-window tombstones; suppression is
+	// now era-independent via dual-derivation lookup, so the id stays hashed).
+	wantID := discovery.ScanDeviceID("leaf-1", "10.20.0.3")
 	if d.ID != wantID || d.Address != "10.20.0.3" || d.Vendor != "arista" || d.Source != "snmp" {
 		t.Fatalf("device shape wrong: %+v (want ID %q)", d, wantID)
 	}
