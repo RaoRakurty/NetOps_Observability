@@ -2630,6 +2630,49 @@ QUARANTINE_LOG_EVERY_S = float(os.environ.get("CORR_QUARANTINE_LOG_EVERY_S", "30
 CORR_QUARANTINE_BURST_MAX = int(os.environ.get("CORR_QUARANTINE_BURST_MAX", "100"))
 
 
+def dlq_startup_check() -> None:
+    """Fail fast at BOOT when CORR_DLQ_DIR is configured but not writable.
+
+    The runtime write path (`_dlq_append`) deliberately never raises — the
+    quarantine must not kill the consumer over one bad write. But that policy
+    made a *permanently* unwritable DLQ invisible: the 2026-08 scale test lost
+    238k dead-lettered payloads because the bind-mount source was owned by the
+    wrong uid (root-created), every append failed, and the service kept
+    starting and advancing offsets anyway. Durability that is configured but
+    cannot work is a misconfiguration, and misconfigurations refuse to boot
+    (same posture as the partial-TLS check above): probe the exact runtime
+    write path once at startup and raise with the precise remedy.
+
+    Unset CORR_DLQ_DIR is untouched — memory-only quarantine remains a legal
+    (warned-about) posture; see `_dlq_append`.
+    """
+    if not CORR_DLQ_DIR:
+        return
+    path = os.path.join(CORR_DLQ_DIR, "corr-deadletter.ndjson")
+    try:
+        os.makedirs(CORR_DLQ_DIR, exist_ok=True)
+        # Open the real dead-letter file for append — the exact operation
+        # every quarantined payload needs — and fsync so a lying filesystem
+        # (full/read-only remount) fails here, not at the first drop.
+        with open(path, "a", encoding="utf-8") as f:
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError as exc:
+        raise RuntimeError(
+            f"CORR_DLQ_DIR={CORR_DLQ_DIR!r} is configured but NOT writable by "
+            f"this process (uid={os.getuid()} gid={os.getgid()}): "
+            f"{type(exc).__name__}: {exc}. Refusing to start: every "
+            "dead-lettered payload would be silently lost while offsets "
+            "advance. Fix the ownership of the HOST directory bind-mounted at "
+            f"{CORR_DLQ_DIR} (compose default: data/correlation/deadletter) "
+            f"and restart:\n"
+            f"    sudo chown -R {os.getuid()}:{os.getgid()} "
+            "data/correlation/deadletter\n"
+            "or rerun scripts/install.py, which repairs data/ ownership."
+        ) from exc
+    log.info("CORR_DLQ_DIR=%s verified writable at startup", CORR_DLQ_DIR)
+
+
 def _dlq_append(record: dict) -> None:
     """Append one quarantined event to the on-disk dead-letter file.
 
@@ -3871,6 +3914,10 @@ async def emit(**kwargs) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global ch
+    # Boot gate: a configured-but-unwritable dead-letter dir refuses startup
+    # (raising here aborts uvicorn's lifespan startup → non-zero exit → the
+    # container restarts loudly instead of silently losing evidence).
+    dlq_startup_check()
     ch = CH(CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASS)
     tasks = [
         asyncio.create_task(consume()),

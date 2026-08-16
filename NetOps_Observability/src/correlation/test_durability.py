@@ -452,6 +452,83 @@ def test_unwritable_dlq_never_raises(monkeypatch):
     assert len(main.QUARANTINE) == 1              # in-memory copy still kept
 
 
+# ── DLQ startup probe: configured-but-unwritable REFUSES to boot ─────────────
+#
+# The runtime path above must never raise; the STARTUP probe is the opposite:
+# a CORR_DLQ_DIR that cannot take an append at boot is a misconfiguration and
+# the service refuses to start (2026-08 scale test: 238k payloads lost to a
+# root-owned bind mount while the service booted fine and offsets advanced).
+
+def test_startup_probe_refuses_uncreatable_dlq_dir(monkeypatch):
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", "/proc/definitely/not/writable")
+    with pytest.raises(RuntimeError) as excinfo:
+        main.dlq_startup_check()
+    msg = str(excinfo.value)
+    assert "Refusing to start" in msg
+    assert "chown -R" in msg                       # names the exact remedy
+    assert "data/correlation/deadletter" in msg    # ...and the host dir
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root ignores directory modes")
+def test_startup_probe_refuses_unwritable_existing_dir(monkeypatch, tmp_path):
+    blocked = tmp_path / "deadletter"
+    blocked.mkdir(mode=0o555)                      # exists, owned, not writable
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", str(blocked))
+    with pytest.raises(RuntimeError, match="chown -R"):
+        main.dlq_startup_check()
+
+
+def test_startup_probe_passes_writable_dir_and_creates_it(monkeypatch, tmp_path):
+    dlq = tmp_path / "made" / "at" / "boot"
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", str(dlq))
+    main.dlq_startup_check()                       # must not raise
+    # The probe opens the REAL runtime file for append, so it now exists and a
+    # first quarantined payload has a durable landing spot from second zero.
+    assert (dlq / "corr-deadletter.ndjson").exists()
+
+
+def test_startup_probe_appends_no_records(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", str(tmp_path))
+    main.quarantine_event("netops.cloud", {"a": 1}, ValueError("v"))
+    path = tmp_path / "corr-deadletter.ndjson"
+    before = path.read_text()
+    main.dlq_startup_check()                       # probe, not a writer
+    assert path.read_text() == before
+
+
+def test_startup_probe_is_a_noop_when_dlq_dir_unset(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(main, "CORR_DLQ_DIR", "")
+    monkeypatch.chdir(tmp_path)
+    main.dlq_startup_check()                       # no raise, nothing created
+    assert list(tmp_path.iterdir()) == []
+    # The existing memory-only posture warning (runtime, once) is unchanged.
+    monkeypatch.setattr(main, "_DLQ_UNSET_WARNED", False)
+    with caplog.at_level("WARNING", logger=main.log.name):
+        main.quarantine_event("netops.cloud", {"a": 1}, ValueError("v"))
+    assert any("CORR_DLQ_DIR unset" in r.message for r in caplog.records)
+
+
+def test_boot_refuses_before_any_task_starts_when_probe_fails(monkeypatch):
+    """The lifespan hook runs the probe FIRST: a failing probe aborts startup
+    before the consumer exists, so no offset can ever advance past a payload
+    with nowhere durable to land."""
+    def boom():
+        raise RuntimeError("dlq probe sentinel")
+
+    started = []
+    monkeypatch.setattr(main, "dlq_startup_check", boom)
+    monkeypatch.setattr(main, "CH",
+                        lambda *a, **k: started.append("ch") or object())
+
+    async def enter():
+        async with main.lifespan(None):
+            pass
+
+    with pytest.raises(RuntimeError, match="dlq probe sentinel"):
+        run(enter())
+    assert started == []                           # nothing constructed
+
+
 # ── F-42 / F-39: intake observability ────────────────────────────────────────
 
 def test_unparseable_flow_is_counted(monkeypatch):

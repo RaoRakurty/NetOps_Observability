@@ -1148,6 +1148,88 @@ def api_runtime_uid(root: Path) -> tuple[int, int]:
     return uid, gid
 
 
+# Helper image for the not-root chown fallback below. This is the SAME pinned
+# ref compose pulls for the postgres service (and restore-drill.sh reuses for
+# its scratch container) — on any install that reaches "up" this image is on
+# the host anyway, so the fallback introduces no new image and no unpinned pull.
+CHOWN_HELPER_IMAGE = ("postgres:16-alpine@sha256:"
+                      "16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229")
+
+
+def _docker_chown(d: Path, uid: int, gid: int) -> tuple[bool, str]:
+    """Chown a data dir recursively via a throwaway helper container.
+
+    The installer already REQUIRES a working Docker daemon (which is
+    root-equivalent on the host), so a non-root install can still repair
+    bind-mount ownership this way. Returns (ok, error-detail). Bounded (§16.3):
+    a wedged daemon cannot hang the install forever.
+    """
+    cmd = ["docker", "run", "--rm", "--network", "none",
+           "--entrypoint", "/bin/chown",
+           "-v", f"{d}:/target",
+           CHOWN_HELPER_IMAGE,
+           "-R", "-h", f"{uid}:{gid}", "/target"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=180, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout or "").strip() or f"exit {res.returncode}"
+        return False, detail
+    return True, ""
+
+
+def chown_tree(d: Path, uid: int, gid: int, name: str) -> None:
+    """Make `d` and EVERYTHING under it owned uid:gid, or fail the install.
+
+    Direct chown first (works under sudo/root); when that cannot finish — the
+    normal case for a non-root installer targeting a service uid, and for
+    stale root-owned subtrees left by Docker on a previous run — fall back to
+    a root helper container (_docker_chown). The old behavior (print a
+    "Fix: sudo chown ..." hint and CONTINUE) is the §16.1 swallow that shipped
+    two broken deployments in one week: an unwritable correlation DLQ that
+    silently dropped 238k dead-letter payloads, and a root-owned
+    data/tls/services that crash-looped the api before it could mint SVIDs.
+    Fails (exit 1, actionable remedy) only when BOTH paths fail.
+    """
+    direct_err: str | None = None
+    try:
+        os.chown(d, uid, gid)
+        # Existing contents too: a re-install must repair stale ownership from
+        # previous runs (e.g. Docker auto-created subdirs as root). Collect
+        # failures instead of swallowing them — a child we can SEE but not
+        # chown means the tree is not ours; a child we cannot even see lives
+        # under a dir that itself just failed, so it is covered as well.
+        failed: list[tuple[Path, OSError]] = []
+        for child in d.rglob("*"):
+            try:
+                os.chown(child, uid, gid, follow_symlinks=False)
+            except OSError as exc:
+                failed.append((child, exc))
+        if not failed:
+            return
+        direct_err = (f"{len(failed)} path(s) not chownable "
+                      f"(first: {failed[0][0]}: {failed[0][1]})")
+    except OSError as exc:  # PermissionError: non-root installer, service uid
+        direct_err = str(exc)
+    docker_ok, docker_err = _docker_chown(d, uid, gid)
+    if docker_ok:
+        info(f"data/{name}: ownership repaired to {uid}:{gid} via helper "
+             f"container (direct chown unavailable: {direct_err})")
+        return
+    fail(
+        f"cannot set ownership of {d} to {uid}:{gid}.\n"
+        f"  direct chown failed: {direct_err}\n"
+        f"  docker helper fallback failed: {docker_err}\n"
+        f"  The {name} service cannot run against a mis-owned data dir — "
+        f"continuing would ship a broken deployment (an unwritable "
+        f"correlation DLQ silently dropped 238k payloads exactly this way).\n"
+        f"  Fix and re-run the installer (it is idempotent):\n"
+        f"    sudo chown -R {uid}:{gid} {d}"
+    )
+
+
 def ensure_data_dirs(root: Path) -> None:
     """Create per-service subdirectories under data/ and (where we know
     the container runs as a non-root user) chown them to that UID/GID.
@@ -1184,17 +1266,19 @@ def ensure_data_dirs(root: Path) -> None:
         "swtpm":      None,             # #17 software-TPM state (sealed KEK objects); root-owned
         "netbox-postgres": None,        # bundled-NetBox DB (opt-in 'netbox' profile); initdb self-chowns
         "netbox-media":    None,        # bundled-NetBox media (opt-in 'netbox' profile)
-        # F-38/durability: the correlation dead-letter volume. The Python service
-        # runs as root inside its container and writes NDJSON, so no chown — but
-        # the directory must exist and be writable before first boot, or the very
-        # first rejected RCA-critical evidence has nowhere durable to land.
-        # F-38: the correlation service (uid 10001) must own its durable DLQ —
-        # root-created on 2026-07-27 and invisible until the RCA canary paged.
+        # F-38/durability: the correlation dead-letter volume. The service runs
+        # as uid 10001 (Dockerfile.correlation appuser) and MUST own its durable
+        # DLQ — root-created on 2026-07-27 and invisible until the RCA canary
+        # paged; a wrong-owned dir then silently dropped 238k payloads in the
+        # 2026-08 scale test (the service now also refuses to boot on it).
         "correlation/deadletter": (10001, 999),
         # tracker #151: the internal CA's mint target (SVIDs, trust bundle).
         # Docker would auto-create a bind-mount source as ROOT, and a
         # non-matching api uid could then never mint into it — pre-create
         # owned by the api's RUNTIME uid. Dormant/empty on plaintext installs.
+        # RECURSIVE repair matters here: it is populated across installs, and a
+        # stale root-owned data/tls/services deadlocked the TLS phase-A
+        # bootstrap (api: "mkdir /data/tls/services/api: permission denied").
         "tls": (api_uid, api_gid),
     }
     for name, uid_gid in owners.items():
@@ -1220,23 +1304,7 @@ def ensure_data_dirs(root: Path) -> None:
                 f"    docker run --rm -v {root / 'data'}:/d alpine sh -c 'rm -rf /d/*'"
             )
         if uid_gid is not None:
-            try:
-                os.chown(d, uid_gid[0], uid_gid[1])
-                # Be permissive on existing contents too, in case this is a
-                # re-run after a previous failed install left files behind.
-                for child in d.rglob("*"):
-                    try: os.chown(child, uid_gid[0], uid_gid[1])
-                    except OSError: pass
-            except PermissionError:
-                # Not root — note it but continue. The relevant containers
-                # will fail to start until the user fixes ownership.
-                warn(
-                    f"can't chown data/{name} to {uid_gid[0]}:{uid_gid[1]} "
-                    f"(not root). The {name} container may fail to start."
-                )
-                info(
-                    f"  Fix: sudo chown -R {uid_gid[0]}:{uid_gid[1]} {d}"
-                )
+            chown_tree(d, uid_gid[0], uid_gid[1], name)
 
     # #20: device→tenant enrichment dir. The api exports the CSV here; the
     # Vector aggregator + correlation mount it read-only. Seed a header-only
