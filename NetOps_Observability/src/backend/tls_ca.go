@@ -80,7 +80,7 @@ func loadOrCreateCA(vault *vault.Vault, trustDomain string) (*caManager, error) 
 	case errors.Is(cerr, os.ErrNotExist) && errors.Is(kerr, os.ErrNotExist):
 		// Genuine first run: neither blob exists yet → generate below.
 	default:
-		return nil, fmt.Errorf("tls ca: CA state is present but unreadable (cert err=%v len=%d, key err=%v len=%d) — refusing to mint a NEW root over it; restore or explicitly delete BOTH %s and %s to re-root",
+		return nil, fmt.Errorf("tls ca: CA state is present but unreadable (cert err=%w len=%d, key err=%w len=%d) — refusing to mint a NEW root over it; restore or explicitly delete BOTH %s and %s to re-root",
 			cerr, len(certPEM), kerr, len(keyEnc), kvCACertKey, kvCAKeyKey)
 	}
 	ca, err := internalca.Generate("netops internal CA ("+trustDomain+")", caValidity)
