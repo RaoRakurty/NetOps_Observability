@@ -1,0 +1,142 @@
+# Scale SLO alert rules (GA readiness) — evaluated by vmalert ONLY.
+#
+# Companion to rules.yaml. Loaded via an additional -rule= flag on the vmalert
+# service (docker-compose.yml AND compose.tls.yml — the TLS variant replaces
+# the whole `command:` list, so both carry the flag). The in-API engine
+# (RULES_FILE=/config/rules.yaml) does NOT read this file: every rule here is
+# a platform-scale SLO, not a tenant-facing NOC alert, and it must keep firing
+# when the api itself is the thing that is drowning.
+#
+# Thresholds are tied to the MEASURED L0/L1 ceilings in
+# docs/scale/CORRELIX_SCALE_TEST_REPORT.md (4 vCPU / 16 GiB rig):
+#   - correlation engine processes ~850–1,050 events/s (single event loop);
+#     consumer-group lag therefore converts to RCA staleness at ~1k msg/s.
+#   - Kafka lag grew unbounded under 8k EPS (peak ~3.1M) and drained ~10k/s
+#     once input stopped; disk drained ~3 GB during that run (~1 h to full).
+#   - VictoriaMetrics idled at ~21k active hourly series; cardinality was NOT
+#     pushed on the L1 rig, so the growth alert is a change-detector, not a cap.
+# Every metric name below was verified against the live stack (VM
+# /api/v1/query) or this branch's exposition code — none is invented.
+#
+# Each alert's `runbook` annotation anchors into
+# docs/ops/OBSERVABILITY_AUDIT.md — the operator first-response plays.
+
+groups:
+
+  - name: scale-slo
+    interval: 30s
+    rules:
+
+      # ------------------------------------------------------------------
+      # RCA staleness budget (bus → correlation). kafka_consumergroup_lag_sum
+      # comes from the kafka-exporter sidecar (self-monitoring add-on;
+      # KafkaLagMetricsMissing in rules.yaml meta-alerts its absence).
+      # Measured: correlation drains ~1k events/s, so lag ≈ seconds of RCA
+      # staleness / 1000. 60k lag ≈ 1 min behind; 300k ≈ 5 min behind.
+      # The generic bus alerts (bus-consumer-lag group) watch every group;
+      # these two watch the SLOWEST, highest-value consumer specifically.
+      # ------------------------------------------------------------------
+      - alert: CorrelationRcaLagBudgetWarning
+        expr: sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 60000
+        for: 5m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "RCA pipeline is ~{{ $value }} events behind (≈1+ min of incident-detection staleness at the measured ~1k evt/s drain rate)"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      - alert: CorrelationRcaLagBudgetBreached
+        expr: sum(kafka_consumergroup_lag_sum{consumergroup="netops-correlation"}) > 300000
+        for: 5m
+        labels: { severity: critical, layer: correlation, slo: scale }
+        annotations:
+          summary: "RCA staleness SLO breached: correlation is {{ $value }} events behind (≥5 min at ~1k evt/s). Storage stays current; RCA does not."
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-consumer-lag"
+
+      # ------------------------------------------------------------------
+      # VictoriaMetrics ingestion health. Slow inserts = the active-series
+      # working set no longer fits the fast path (VM's own guidance: sustained
+      # >5% means cardinality/memory pressure). Verified live: both counters
+      # exist (vm_slow_row_inserts_total, vm_rows_inserted_total).
+      # ------------------------------------------------------------------
+      - alert: VMSlowInsertRatioHigh
+        expr: >
+          rate(vm_slow_row_inserts_total[5m])
+            / clamp_min(sum(rate(vm_rows_inserted_total[5m])), 1) > 0.05
+        for: 15m
+        labels: { severity: warning, layer: metrics, slo: scale }
+        annotations:
+          summary: "VictoriaMetrics slow-insert ratio {{ $value | humanizePercentage }} (>5% for 15m) — active series exceed the memory fast path"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-vm-series-growth"
+
+      # Active-series surge (cardinality explosion). The hourly active-series
+      # gauge is vm_cache_entries{type="storage/hour_metric_ids"} (~21k idle
+      # on the L1 rig). +100k in one hour is never organic on a single-node
+      # bundle — it is a label-cardinality bug or a discovery storm.
+      - alert: VMActiveSeriesSurge
+        expr: delta(vm_cache_entries{type="storage/hour_metric_ids"}[1h]) > 100000
+        for: 10m
+        labels: { severity: warning, layer: metrics, slo: scale }
+        annotations:
+          summary: "VictoriaMetrics active series grew by {{ $value }} in 1h — cardinality explosion (bad label, discovery storm, or scrape misconfig)"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-vm-series-growth"
+
+      # ------------------------------------------------------------------
+      # Correlation internal queue depths (engine-side, distinct from bus lag).
+      # corr_window_signals is the in-memory correlation window buffer; its
+      # deque cap is max(50000, CORR_WINDOW_BUFFER) — at the cap, oldest
+      # signals are silently evicted before correlation. Verified live.
+      # ------------------------------------------------------------------
+      - alert: CorrWindowBufferNearCap
+        expr: corr_window_signals > 40000
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "Correlation window buffer at {{ $value }} signals (cap floor 50k) — nearing silent eviction of oldest signals"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Batched corr_signals writer backlog. pending>0 is normal (≤2 s of
+      # traffic); a sustained multi-thousand backlog means ClickHouse inserts
+      # cannot keep pace. NOTE: corr_signal_batch_pending ships with this
+      # branch's correlation build — on an older deployed image the series is
+      # absent and this rule is a silent no-op (never false-fires).
+      - alert: CorrSignalBatchBacklog
+        expr: corr_signal_batch_pending > 5000
+        for: 10m
+        labels: { severity: warning, layer: correlation, slo: scale }
+        annotations:
+          summary: "corr_signals batch writer backlog {{ $value }} rows for 10m — ClickHouse insert path not keeping up"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-queues"
+
+      # Rows a REJECTED ClickHouse batch parked in the durable DLQ: the write
+      # path is doing its durability job, but those rows are missing from
+      # netops.corr_signals until replayed. Same branch-build note as above.
+      - alert: CorrSignalRowsQuarantined
+        expr: increase(corr_signal_batch{event="rows_quarantined"}[15m]) > 0
+        for: 1m
+        labels: { severity: critical, layer: correlation, slo: scale }
+        annotations:
+          summary: "{{ $value }} corr_signals rows parked in the durable DLQ in 15m — ClickHouse rejected a batch; rows need replay"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-correlation-dlq"
+
+      # ------------------------------------------------------------------
+      # OpenSearch RED (or unreachable/unparsable health). Vector's health
+      # poll maps green/yellow/red/unknown → 0/1/2/3 (vector.yaml
+      # opensearch_health_vm). Yellow is already alerted at warning by
+      # OpenSearchClusterNotGreen (rules.yaml); RED means a primary shard is
+      # gone and writes to it FAIL — that is a page, not a ticket.
+      # ------------------------------------------------------------------
+      - alert: OpenSearchClusterRed
+        expr: opensearch_cluster_status >= 2
+        for: 5m
+        labels: { severity: critical, layer: storage, slo: scale }
+        annotations:
+          summary: "OpenSearch cluster status is {{ $labels.status_text }} — primary shard(s) unavailable, log/event writes are failing"
+          runbook: "docs/ops/OBSERVABILITY_AUDIT.md#runbook-opensearch-red"
+
+      # NOTE (deliberate absence): "correlation dead-letter WRITE failures"
+      # (QUARANTINE_WRITE_FAILURES — the 238k-drop incident in the scale
+      # report) has NO Prometheus exposition today; it is only in the
+      # /healthz JSON (durability.quarantine_write_failures). Per the audit
+      # doc §9, that signal is covered by scripts/stack-watchdog.sh, not by an
+      # invented metric. corr_deadletters (engine dead-letter COUNT) is
+      # already alerted by CorrDeadLettersRising in rules.yaml.

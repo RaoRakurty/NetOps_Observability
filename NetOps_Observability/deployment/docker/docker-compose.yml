@@ -810,6 +810,9 @@ services:
       # F-51: rules come from a DIRECTORY mount, so editing rules.yaml and
       # restarting actually reloads the edited file.
       - "-rule=/etc/vmalert/config/rules.yaml"
+      # Scale-SLO rules (GA readiness): vmalert-only — the in-API engine keeps
+      # reading rules.yaml alone. Runbooks: docs/ops/OBSERVABILITY_AUDIT.md.
+      - "-rule=/etc/vmalert/config/rules-scale-slo.yaml"
       - "-datasource.url=http://victoria:8428"
       - "-remoteWrite.url=http://victoria:8428"
       - "-remoteRead.url=http://victoria:8428"

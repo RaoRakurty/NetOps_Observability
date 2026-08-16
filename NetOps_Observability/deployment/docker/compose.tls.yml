@@ -267,6 +267,9 @@ services:
   vmalert:
     command:
       - "-rule=/etc/vmalert/config/rules.yaml"
+      # Scale-SLO rules: this variant file REPLACES the whole command list, so
+      # the second -rule flag from the base file must be restated here.
+      - "-rule=/etc/vmalert/config/rules-scale-slo.yaml"
       - "-datasource.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
       - "-remoteWrite.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
       - "-remoteRead.url=https://svc-vmalert:${VMAUTH_VMALERT_PASSWORD}@vmauth:8427"
