@@ -1215,16 +1215,16 @@ def chown_tree(d: Path, uid: int, gid: int, name: str) -> None:
         direct_err = str(exc)
     docker_ok, docker_err = _docker_chown(d, uid, gid)
     if docker_ok:
-        info(f"data/{name}: ownership repaired to {uid}:{gid} via helper "
+        info(f"{name}: ownership repaired to {uid}:{gid} via helper "
              f"container (direct chown unavailable: {direct_err})")
         return
     fail(
         f"cannot set ownership of {d} to {uid}:{gid}.\n"
         f"  direct chown failed: {direct_err}\n"
         f"  docker helper fallback failed: {docker_err}\n"
-        f"  The {name} service cannot run against a mis-owned data dir — "
-        f"continuing would ship a broken deployment (an unwritable "
-        f"correlation DLQ silently dropped 238k payloads exactly this way).\n"
+        f"  The stack cannot run with a mis-owned {name} — continuing would "
+        f"ship a broken deployment (an unwritable correlation DLQ silently "
+        f"dropped 238k payloads exactly this way).\n"
         f"  Fix and re-run the installer (it is idempotent):\n"
         f"    sudo chown -R {uid}:{gid} {d}"
     )
@@ -1304,7 +1304,7 @@ def ensure_data_dirs(root: Path) -> None:
                 f"    docker run --rm -v {root / 'data'}:/d alpine sh -c 'rm -rf /d/*'"
             )
         if uid_gid is not None:
-            chown_tree(d, uid_gid[0], uid_gid[1], name)
+            chown_tree(d, uid_gid[0], uid_gid[1], f"data/{name}")
 
     # #20: device→tenant enrichment dir. The api exports the CSV here; the
     # Vector aggregator + correlation mount it read-only. Seed a header-only
@@ -1654,6 +1654,26 @@ def wait_for_minted_certs(root: Path, timeout_s: int = 300) -> None:
          "data/tls writable by the api uid?) and rerun the installer — it is idempotent.")
 
 
+def ensure_ingress_key_owner(key: Path, statfn=os.stat) -> None:
+    """The 0600 ingress private key MUST be owned by uid 101: the hardened
+    nginx image runs as USER 101 with cap_drop:ALL (no DAC_OVERRIDE), so a
+    key owned by anyone else crash-loops the ingress on "cannot load
+    certificate key ... Permission denied" (CI tls-boot leg, 2026-08-13).
+    Already-correct ownership is left alone (no helper container spawned on
+    every re-run); otherwise the same direct-chown → docker-helper → fail
+    contract as the data dirs (chown_tree) — the old warn-and-continue here
+    was one more instance of the §16.1 swallow that shipped broken installs.
+    """
+    if not key.exists():
+        fail(f"ingress private key missing: {key} — certificate generation "
+             "claimed success but produced no key; refusing to continue to a "
+             "TLS ingress that cannot start")
+    st = statfn(key)
+    if (st.st_uid, st.st_gid) == (101, 101):
+        return
+    chown_tree(key, 101, 101, "nginx ingress TLS key (privkey.pem)")
+
+
 def ensure_ingress_cert(root: Path) -> None:
     """The nginx TLS ingress needs a cert before its first TLS start. Dev/lab:
     self-signed via gen-dev-cert.sh; production replaces the files in place
@@ -1661,14 +1681,13 @@ def ensure_ingress_cert(root: Path) -> None:
     certs = root / "deployment" / "docker" / "nginx" / "certs"
     if certs.exists() and (any(certs.glob("*.crt")) or (certs / "fullchain.pem").exists()):
         info("nginx ingress certs already present")
-        # Re-run path: a previous root install may have left the key unreadable
-        # by nginx (uid 101, cap_drop:ALL). Idempotent fix-up, root only.
+        # Re-run path: a previous run may have left the key owned by the wrong
+        # uid (e.g. root-installed then re-run, or vice versa). Idempotent
+        # fix-up; non-root repairs through the docker helper. Guarded on
+        # exists(): a production cert replaced in place may use its own layout.
         key = certs / "privkey.pem"
-        if key.exists() and os.getuid() == 0:
-            try:
-                os.chown(key, 101, 101)
-            except OSError as e:
-                warn(f"could not chown {key} to uid 101: {e}")
+        if key.exists():
+            ensure_ingress_key_owner(key)
         return
     step("generating a self-signed ingress certificate (replace for production)")
     res = subprocess.run(["bash", str(root / "scripts" / "gen-dev-cert.sh")],
@@ -1676,19 +1695,11 @@ def ensure_ingress_cert(root: Path) -> None:
     if res.returncode != 0:
         fail(f"gen-dev-cert.sh failed: {res.stderr.strip() or res.stdout.strip()}")
         raise SystemExit(2)
-    # The hardened nginx image runs as USER 101 with cap_drop:ALL (no
-    # DAC_OVERRIDE), so the 0600 key MUST be owned by uid 101 or the ingress
-    # crash-loops on "cannot load certificate key ... Permission denied" —
-    # gen-dev-cert.sh documents this as a manual step; an unattended install
-    # has to complete it itself (CI tls-boot leg, 2026-08-13). Non-root
-    # installs can't chown: leave the operator instruction to do it.
-    key = certs / "privkey.pem"
-    try:
-        os.chown(key, 101, 101)
-    except (PermissionError, OSError):
-        warn(f"can't chown {key} to uid 101 (not root) — nginx (uid 101) "
-             "cannot read a 0600 key owned by you.")
-        info(f"  Fix: sudo chown 101 {key}")
+    # gen-dev-cert.sh documents the uid-101 handoff as a manual step; an
+    # unattended install completes it itself — see ensure_ingress_key_owner
+    # (direct chown, docker-helper fallback for non-root, hard fail if both
+    # fail; never the old warn-and-continue into a crash-looping ingress).
+    ensure_ingress_key_owner(certs / "privkey.pem")
     ok("self-signed ingress certificate generated")
 
 

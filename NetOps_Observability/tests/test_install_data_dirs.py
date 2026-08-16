@@ -202,8 +202,81 @@ def test_ensure_data_dirs_covers_tls_and_deadletter(fake_root, monkeypatch):
     install.ensure_data_dirs(fake_root)
 
     # The two dirs whose wrong ownership shipped broken deployments:
-    assert seen["correlation/deadletter"] == (10001, 999)
-    assert seen["tls"] == (os.getuid(), os.getgid())     # api runtime uid (.env)
+    assert seen["data/correlation/deadletter"] == (10001, 999)
+    assert seen["data/tls"] == (os.getuid(), os.getgid())     # api runtime uid (.env)
     # ...and both directories exist afterwards.
     assert (fake_root / "data" / "tls").is_dir()
     assert (fake_root / "data" / "correlation" / "deadletter").is_dir()
+
+
+# ── nginx ingress TLS key: same §16.1 class, same contract ───────────────────
+#
+# ensure_ingress_cert used to warn "Fix: sudo chown 101 ..." and continue when
+# a non-root installer could not hand the 0600 privkey.pem to nginx (uid 101,
+# cap_drop:ALL, no DAC_OVERRIDE) — shipping an ingress that crash-loops on
+# "cannot load certificate key ... Permission denied".
+
+def _stat_owned_by(uid: int, gid: int):
+    class _St:
+        st_uid = uid
+        st_gid = gid
+    return lambda _p: _St()
+
+
+def test_ingress_key_already_owned_by_nginx_is_left_alone(tmp_path, monkeypatch):
+    key = tmp_path / "privkey.pem"
+    key.write_text("key")
+    monkeypatch.setattr(os, "chown", deny_chown)      # would blow up if called
+    docker = DockerRecorder()
+    monkeypatch.setattr(install.subprocess, "run", docker)
+
+    install.ensure_ingress_key_owner(key, statfn=_stat_owned_by(101, 101))
+
+    assert docker.calls == []                          # no helper spawned on re-runs
+
+
+def test_ingress_key_nonroot_falls_back_to_helper_container(tmp_path, monkeypatch):
+    key = tmp_path / "privkey.pem"
+    key.write_text("key")
+    monkeypatch.setattr(os, "chown", deny_chown)
+    docker = DockerRecorder(returncode=0)
+    monkeypatch.setattr(install.subprocess, "run", docker)
+
+    install.ensure_ingress_key_owner(key, statfn=_stat_owned_by(1000, 1000))
+
+    assert len(docker.calls) == 1
+    cmd = docker.calls[0]
+    assert install.CHOWN_HELPER_IMAGE in cmd
+    assert f"{key}:/target" in cmd                     # the key file itself is mounted
+    assert "101:101" in cmd
+
+
+def test_ingress_key_both_paths_failing_fails_the_install(tmp_path, monkeypatch, capsys):
+    key = tmp_path / "privkey.pem"
+    key.write_text("key")
+    monkeypatch.setattr(os, "chown", deny_chown)
+    docker = DockerRecorder(returncode=125, stderr="docker: daemon down")
+    monkeypatch.setattr(install.subprocess, "run", docker)
+
+    with pytest.raises(SystemExit) as excinfo:
+        install.ensure_ingress_key_owner(key, statfn=_stat_owned_by(1000, 1000))
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert f"sudo chown -R 101:101 {key}" in err       # exact remedy
+    assert "docker: daemon down" in err                # §16.1: real stderr shown
+
+
+def test_ingress_key_missing_fails_instead_of_chowning_nothing(tmp_path, monkeypatch, capsys):
+    """A missing key must fail loudly, and must NOT reach the docker fallback:
+    bind-mounting a nonexistent source would make docker CREATE it as a
+    root-owned directory — manufacturing the exact broken state this exists
+    to prevent."""
+    docker = DockerRecorder()
+    monkeypatch.setattr(install.subprocess, "run", docker)
+
+    with pytest.raises(SystemExit):
+        install.ensure_ingress_key_owner(tmp_path / "privkey.pem")
+
+    assert docker.calls == []
+    assert "ingress private key missing" in capsys.readouterr().err
