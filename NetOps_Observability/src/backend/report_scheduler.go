@@ -143,9 +143,12 @@ func (s *server) handleReportChannels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// The channel names enumerate the operator's notification integrations —
-	// gate like every other reports read (M15; was previously unauthenticated).
-	if _, ok := s.requirePerm(w, r, "reports", LevelRead); !ok {
+	// The channel names enumerate the operator's notification integrations,
+	// which are PLATFORM-GLOBAL resources (§3a.3): a tenant admin must not be
+	// able to enumerate operator channel names. Gate as the notify_config.go
+	// siblings do and as RunNow's channel-binding cross gate does — platform
+	// admin only, default-closed (M15; was under-gated at reports:read).
+	if _, ok := s.requirePlatformAdmin(w, r); !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.notifier.Names())

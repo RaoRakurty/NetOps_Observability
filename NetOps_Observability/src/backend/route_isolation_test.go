@@ -206,7 +206,6 @@ var routeIsolationLedger = map[string]string{
 	"/api/notify/contact-points/": "scoped",
 	"/api/notify/itsm":            "scoped",
 	"/api/regions/topology":       "scoped",
-	"/api/reports/channels":       "scoped",
 	"/api/reports/executions":     "scoped",
 	"/api/reports/executions/":    "scoped",
 	"/api/reports/preview":        "scoped",
@@ -395,10 +394,14 @@ var routeIsolationLedger = map[string]string{
 	"/api/notify/ntfy/test":           "platform",
 	"/api/notify/pagerduty":           "platform",
 	"/api/notify/pagerduty/test":      "platform",
-	"/api/exports/policy":             "platform",
-	"/api/breakglass":                 "platform",
-	"/api/breakglass/":                "platform",
-	"/api/onboard":                    "platform",
+	// The channel enumeration is over the SAME platform-global notify integrations
+	// as /api/notify/* — a tenant admin must not enumerate operator channel names
+	// (requirePlatformAdmin; report_scheduler.go handleReportChannels).
+	"/api/reports/channels": "platform",
+	"/api/exports/policy":   "platform",
+	"/api/breakglass":       "platform",
+	"/api/breakglass/":      "platform",
+	"/api/onboard":          "platform",
 	// SNMP config generator — platform-owner action that mints a credential.
 	"/api/onboard/snmp-config":    "platform",
 	"/api/discovery/refresh":      "platform",

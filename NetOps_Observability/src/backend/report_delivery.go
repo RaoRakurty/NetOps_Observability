@@ -154,7 +154,12 @@ func (d *reportDelivery) Deliver(ctx context.Context, req deliverReq) []reports.
 	// loops above (they are keyed by channel name in the deliveries ledger) —
 	// without this, a retry whose emails were correctly skipped still re-paged
 	// every slack/pagerduty channel on the report.
-	if len(req.Channels) > 0 {
+	// M15/§3a.3: notify channels are platform-global resources, so only a
+	// platform-owned (Cross) report may fan out to named channels — mirroring
+	// the file-backend gate in reportScheduler.deliver. A tenant-owned report's
+	// channel list is skipped, default-closed, even though the async pipeline is
+	// the default (postgres) backend.
+	if len(req.Channels) > 0 && req.Cross {
 		var pending []string
 		for _, ch := range req.Channels {
 			if req.SkipRecipients[ch] {

@@ -438,17 +438,34 @@ func TestReportDeliverDoesNotBroadcastOrBindForeignChannels(t *testing.T) {
 	}
 }
 
-func TestHTTPReportChannelsRequiresReportsRead(t *testing.T) {
+// TestReportChannelsRefusesTenantPrincipal pins the §3a.3/M15 gate on
+// GET /api/reports/channels: notify channels are PLATFORM-GLOBAL resources, so a
+// tenant admin must not enumerate the operator's channel names. Only the
+// platform owner may — matching notify_config.go and RunNow's channel-binding
+// cross gate. (Was under-gated at reports:read.)
+func TestReportChannelsRefusesTenantPrincipal(t *testing.T) {
 	s := tenantServer(t)
 	s.notifier = notify.NewDispatcher()
+
+	// Unauthenticated → 401.
 	w := httptest.NewRecorder()
 	s.handleReportChannels(w, httptest.NewRequest("GET", "/api/reports/channels", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated /api/reports/channels should be 401, got %d", w.Code)
 	}
+
+	// A tenant admin (super-admin scoped to its OWN tenant, non-owner) → 403:
+	// it must not enumerate platform-global channel names.
 	w = httptest.NewRecorder()
-	s.handleReportChannels(w, req("GET", "/api/reports/channels", "", acme()))
+	s.handleReportChannels(w, req("GET", "/api/reports/channels", "", tAdmin("t-a")))
+	if w.Code != http.StatusForbidden {
+		t.Errorf("tenant admin GET /api/reports/channels should be 403 (platform-only), got %d", w.Code)
+	}
+
+	// The platform owner still lists channels — the operator's own UI keeps working.
+	w = httptest.NewRecorder()
+	s.handleReportChannels(w, req("GET", "/api/reports/channels", "", platformOwner()))
 	if w.Code != http.StatusOK {
-		t.Errorf("reports:read caller should list channels, got %d", w.Code)
+		t.Errorf("platform owner should list channels, got %d", w.Code)
 	}
 }

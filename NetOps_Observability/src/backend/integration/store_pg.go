@@ -94,7 +94,10 @@ INSERT INTO integration_mappings
    applied_seq          = EXCLUDED.applied_seq,
    applied_at           = EXCLUDED.applied_at,
    last_synced_at       = now(),
-   updated_at           = now()`,
+   updated_at           = now()
+ WHERE EXCLUDED.applied_seq > integration_mappings.applied_seq
+    OR (EXCLUDED.applied_seq = integration_mappings.applied_seq
+        AND EXCLUDED.applied_at > integration_mappings.applied_at)`,
 			m.Tenant, m.Provider, m.ExternalID, m.IncidentID, m.State, m.Applied.Seq, at)
 		return err
 	})

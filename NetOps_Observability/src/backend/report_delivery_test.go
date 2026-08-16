@@ -176,3 +176,52 @@ func TestDeliverEmptyChannelsNoFanout(t *testing.T) {
 		t.Fatalf("expected no deliveries, got %+v", got)
 	}
 }
+
+// TestAsyncDeliveryRefusesNamedChannelsForTenantReport pins the M15/§3a.3 gate on
+// the ASYNC (Postgres, default backend) delivery path: notify channels are
+// platform-global resources, so a TENANT-owned report (Cross=false) must never
+// fan out to named channels — even though its saved body may carry a channel
+// list. Only a platform-owned (Cross=true) report may. Mirrors the file-backend
+// reportScheduler.deliver gate. Before the fix, the tenant report dispatched
+// every named channel.
+func TestAsyncDeliveryRefusesNamedChannelsForTenantReport(t *testing.T) {
+	var dispatched [][]string
+	d := &reportDelivery{
+		// No email / webhook destinations — this test is only about named channels.
+		resolveEmail:    func(ids []string, tenant string, cross bool) []string { return nil },
+		resolveWebhooks: func(ids []string, tenant string, cross bool) []ContactPoint { return nil },
+		dispatch: func(a models.Alert, names []string) []notify.SendResult {
+			dispatched = append(dispatched, names)
+			out := make([]notify.SendResult, 0, len(names))
+			for _, n := range names {
+				out = append(out, notify.SendResult{Channel: n})
+			}
+			return out
+		},
+		now: fixedNow,
+	}
+
+	// Tenant-owned report (Cross=false) naming platform-global channels: refused.
+	tenantReq := deliverReq{
+		Tenant:   "acme",
+		Cross:    false,
+		Channels: []string{"ops-slack", "pagerduty-critical"},
+	}
+	if got := d.Deliver(context.Background(), tenantReq); len(got) != 0 {
+		t.Fatalf("tenant-owned report must produce NO channel deliveries, got %+v", got)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("CHANNEL LEAK: tenant-owned report dispatched to platform channels %v", dispatched)
+	}
+
+	// Platform-owned report (Cross=true) with the same channels: still delivered,
+	// so the refusal above is the gate, not a broken dispatch path.
+	platformReq := tenantReq
+	platformReq.Cross = true
+	if got := d.Deliver(context.Background(), platformReq); len(got) != 2 {
+		t.Fatalf("platform-owned report should dispatch both channels, got %+v", got)
+	}
+	if len(dispatched) != 1 || len(dispatched[0]) != 2 {
+		t.Fatalf("platform-owned report should dispatch exactly the 2 named channels, got %v", dispatched)
+	}
+}

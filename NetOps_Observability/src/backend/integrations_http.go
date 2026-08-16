@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"netops/backend/integration"
+	"netops/backend/internal/incident"
 )
 
 // readBounded reads the request body with a hard size cap (webhook bodies are
@@ -396,18 +397,30 @@ func (s *server) applyInboundEvent(ctx context.Context, cfg integration.Config, 
 	switch {
 	case decision.Target != "":
 		if _, err := s.incidents.Transition(ctx, cfg.Tenant, false, inc.ID, string(decision.Target), actor, "via "+ev.Provider); err != nil {
-			s.markInboundEvent(ctx, ledgerID, "dropped", "transition: "+err.Error())
-			return false, nil
+			// A DEFINITIVE rejection (bad transition / gone) is a real drop; any
+			// other error is a TRANSIENT store failure (M14) — retry, do not
+			// stamp a permanent "dropped" verdict the redelivery can't rescue.
+			if errors.Is(err, incident.ErrBadTransition) || errors.Is(err, incident.ErrNotFound) {
+				s.markInboundEvent(ctx, ledgerID, "dropped", "transition: "+err.Error())
+				return false, nil
+			}
+			return false, fmt.Errorf("apply transition: %w", err)
 		}
 	case decision.Assignee != "":
 		if _, err := s.incidents.Assign(ctx, cfg.Tenant, false, inc.ID, decision.Assignee, actor); err != nil {
-			s.markInboundEvent(ctx, ledgerID, "dropped", "assign: "+err.Error())
-			return false, nil
+			if errors.Is(err, incident.ErrNotFound) {
+				s.markInboundEvent(ctx, ledgerID, "dropped", "assign: "+err.Error())
+				return false, nil
+			}
+			return false, fmt.Errorf("apply assign: %w", err)
 		}
 	case decision.Comment != "":
 		if _, err := s.incidents.AddNote(ctx, cfg.Tenant, false, inc.ID, actor, decision.Comment); err != nil {
-			s.markInboundEvent(ctx, ledgerID, "dropped", "note: "+err.Error())
-			return false, nil
+			if errors.Is(err, incident.ErrNotFound) {
+				s.markInboundEvent(ctx, ledgerID, "dropped", "note: "+err.Error())
+				return false, nil
+			}
+			return false, fmt.Errorf("apply note: %w", err)
 		}
 	default:
 		mutated = false

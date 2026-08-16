@@ -105,3 +105,71 @@ func TestIntegrationRepo(t *testing.T) {
 		t.Fatalf("empty-evtid event should always insert: err=%v inserted=%v", err, ins)
 	}
 }
+
+// TestUpsertMappingMonotonic pins the watermark's monotonicity (third-pass F2).
+// UpsertMapping must NEVER let the persisted watermark REGRESS: under concurrent
+// inbound applies (two events for one external incident, two workers, no
+// per-external-id lock) an out-of-order upsert of an OLDER (seq, applied_at)
+// must be a no-op, or a later redelivery of the newer event is no longer
+// detected as stale and a stale transition re-applies. The ON CONFLICT guard
+// mirrors compareOrder (seq primary, applied_at tie-break).
+func TestUpsertMappingMonotonic(t *testing.T) {
+	adminDSN := os.Getenv("DATABASE_URL_TEST")
+	if adminDSN == "" {
+		t.Skip("set DATABASE_URL_TEST to run the Postgres monotonic-upsert test")
+	}
+	ctx := context.Background()
+	ps, err := platformdb.NewPGStore(ctx, provisionAppRole(ctx, t, adminDSN))
+	if err != nil {
+		t.Fatalf("newPgStore: %v", err)
+	}
+	defer ps.DB().Close()
+	st := integration.NewStore(ps.DB(), vault.Dormant())
+
+	at := time.Now().UTC().Truncate(time.Second)
+	base := integration.Mapping{
+		Tenant: "acme", Provider: "servicenow", ExternalID: "INC-MONO",
+		IncidentID: "inc-mono", State: "acknowledged",
+	}
+
+	// Land the newer event first (seq=7).
+	newer := base
+	newer.State = "resolved"
+	newer.Applied = integration.Watermark{Seq: 7, At: at}
+	if err := st.UpsertMapping(ctx, newer); err != nil {
+		t.Fatalf("upsert seq=7: %v", err)
+	}
+
+	// A racing OLDER event (seq=6) arrives second — it must NOT regress the
+	// watermark (nor overwrite the state the newer event established).
+	older := base
+	older.State = "acknowledged"
+	older.Applied = integration.Watermark{Seq: 6, At: at.Add(-time.Minute)}
+	if err := st.UpsertMapping(ctx, older); err != nil {
+		t.Fatalf("upsert seq=6: %v", err)
+	}
+
+	got, found, err := st.GetMapping(ctx, "acme", false, "servicenow", "INC-MONO")
+	if err != nil || !found {
+		t.Fatalf("get: err=%v found=%v", err, found)
+	}
+	if got.Applied.Seq != 7 {
+		t.Fatalf("REGRESSED watermark: applied_seq=%d, want 7 (the older seq=6 upsert must be a no-op)", got.Applied.Seq)
+	}
+	if got.State != "resolved" {
+		t.Fatalf("stale upsert overwrote state: %q, want \"resolved\"", got.State)
+	}
+
+	// A legitimately NEWER event (seq=8) still advances — the guard blocks only
+	// regressions, never real progress.
+	adv := base
+	adv.State = "closed"
+	adv.Applied = integration.Watermark{Seq: 8, At: at.Add(time.Minute)}
+	if err := st.UpsertMapping(ctx, adv); err != nil {
+		t.Fatalf("upsert seq=8: %v", err)
+	}
+	got, _, _ = st.GetMapping(ctx, "acme", false, "servicenow", "INC-MONO")
+	if got.Applied.Seq != 8 || got.State != "closed" {
+		t.Fatalf("legit advance blocked: %+v, want seq=8 state=closed", got)
+	}
+}
