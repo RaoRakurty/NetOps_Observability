@@ -61,6 +61,11 @@ SIG="$IN.sig"
 SIGN_KEY="${BACKUP_SIGN_KEY:-}"
 if [[ -z "$SIGN_KEY" && -f "$COMPOSE_DIR/.env" ]]; then
   SIGN_KEY="$(sed -n 's/^BACKUP_SIGN_KEY=//p' "$COMPOSE_DIR/.env" | head -1)"
+  # Match backup.sh's load_env_default: strip ONE surrounding pair of quotes so a
+  # quoted .env value (BACKUP_SIGN_KEY="k") verifies — else the HMAC keys differ
+  # and a legitimately-signed backup is refused at DR time (review 2026-08-16).
+  SIGN_KEY="${SIGN_KEY%\"}"; SIGN_KEY="${SIGN_KEY#\"}"
+  SIGN_KEY="${SIGN_KEY%\'}"; SIGN_KEY="${SIGN_KEY#\'}"
 fi
 if [[ ! -f "$SIG" ]]; then
   if [[ "${RESTORE_FORCE:-0}" != "1" ]]; then
@@ -159,6 +164,8 @@ if [[ -f "$STAGE/env.backup" ]]; then
   CUR_SIGN_KEY=""
   if [[ -f "$COMPOSE_DIR/.env" ]]; then
     CUR_SIGN_KEY="$(sed -n 's/^BACKUP_SIGN_KEY=//p' "$COMPOSE_DIR/.env" | head -1)"
+    CUR_SIGN_KEY="${CUR_SIGN_KEY%\"}"; CUR_SIGN_KEY="${CUR_SIGN_KEY#\"}"
+    CUR_SIGN_KEY="${CUR_SIGN_KEY%\'}"; CUR_SIGN_KEY="${CUR_SIGN_KEY#\'}"
   fi
   install -m 0600 "$STAGE/env.backup" "$COMPOSE_DIR/.env"
   if [[ -n "$CUR_SIGN_KEY" ]] && ! grep -q '^BACKUP_SIGN_KEY=' "$COMPOSE_DIR/.env"; then

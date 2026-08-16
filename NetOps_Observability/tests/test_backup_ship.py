@@ -902,6 +902,29 @@ def test_h4_h5_restore_good_archive_preserves_custody_and_backups(tmp_path, sign
     assert "DB_PASSWORD=super-secret" in env_text
 
 
+def test_h4_restore_verifies_a_quoted_sign_key(tmp_path):
+    """A .env value written with surrounding quotes (BACKUP_SIGN_KEY="k") — a
+    normal .env convention that backup.sh's load_env_default strips — must also
+    be stripped by restore.sh, or the two HMAC keys differ and a legitimately
+    signed backup is refused at DR time (review 2026-08-16). backup signs with
+    the stripped key; restore must verify against the same stripped key."""
+    quoted = '"' + SIGN_KEY + '"'  # literal surrounding double-quotes in the .env
+    r, out, _ = _real_backup_tree(tmp_path / "src-host", sign_key=quoted)
+    assert r.returncode == 0, r.stderr
+    sig = Path(str(out) + ".sig")
+    # backup signed with the STRIPPED key, so the sidecar HMAC is keyed by SIGN_KEY.
+    lines = dict(ln.split(" ", 1) for ln in sig.read_text().splitlines())
+    assert lines["hmac-sha256"] == _hmac(out, SIGN_KEY), (
+        "backup.sh must sign with the quote-stripped key")
+    # restore with the SAME quoted .env value must strip and verify — not refuse.
+    rr, host, _ = _restore_tree(tmp_path, out, sig=sig, env_key=quoted)
+    assert rr.returncode == 0, (
+        "restore.sh refused a legitimately-signed backup because it did not strip "
+        f"surrounding quotes from BACKUP_SIGN_KEY:\nstdout:\n{rr.stdout}\nstderr:\n{rr.stderr}")
+    assert "signature OK" in rr.stdout
+    assert (host / "data" / "postgres" / "pg.dat").exists()
+
+
 def test_h5_prune_removes_signature_sidecar_with_artifact(tmp_path):
     d = tmp_path / "backups"
     d.mkdir()
