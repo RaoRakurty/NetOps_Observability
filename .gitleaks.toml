@@ -19,4 +19,11 @@ regexes = [
   # used verbatim in device_ssh_ticket_test.go / auth_flow_test.go to build a valid
   # WS upgrade request — a spec constant, not a credential.
   '''dGhlIHNhbXBsZSBub25jZQ==''',
+  # Fabricated HMAC key constant in tests/test_backup_ship.py (SIGN_KEY) used to
+  # sign/verify backup artifacts in the round-trip tests — not a real credential.
+  '''test-sign-key-[0-9]+''',
+  # The env-var NAME in a vault WARN log message (secrets.go), flagged by the
+  # generic-api-key heuristic because it follows the word "secrets" — a log
+  # string / flag name, never a secret value.
+  '''VAULT_MIGRATE_LEGACY_WRAPPED''',
 ]
