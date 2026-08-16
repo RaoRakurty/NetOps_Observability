@@ -48,7 +48,7 @@ Verify (gate):
 - [ ] kafka-exporter still scraping (its group Describe needs an ACL — watch
       for denials naming `kafka-exporter`).
 - [ ] Authorizer log: any NEW denial → add the missing grant to
-      `scripts/apply-acls.sh` (tracked), re-apply, re-verify. Do NOT widen
+      `deployment/docker/kafka/apply-acls.sh` (tracked), re-apply, re-verify. Do NOT widen
       with wildcards.
 - [ ] Admin plane: `kafka-topics.sh --bootstrap-server kafka:9094
       --command-config /tmp/kafka-tls/admin.properties --list` works

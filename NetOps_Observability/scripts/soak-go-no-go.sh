@@ -46,5 +46,5 @@ if [ -z "$denials" ] && [ -z "$kafka_alerts" ]; then
     echo "[soak] GO — zero authorizer denials, zero kafka alerts. Proceed per docs/runbooks/tls-enforce-wave.md"
     exit 0
 fi
-echo "[soak] NO-GO — classify each denial (missing grant -> scripts/apply-acls.sh; unexpected principal -> investigate) before the flip"
+echo "[soak] NO-GO — classify each denial (missing grant -> deployment/docker/kafka/apply-acls.sh; unexpected principal -> investigate) before the flip"
 exit 1
