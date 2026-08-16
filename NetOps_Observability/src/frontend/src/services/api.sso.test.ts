@@ -17,9 +17,17 @@ import {
   setRefresh,
 } from "./api";
 
+function clearCookies() {
+  for (const part of document.cookie.split(";")) {
+    const name = part.split("=")[0].trim();
+    if (name) document.cookie = `${name}=; Path=/; Max-Age=0`;
+  }
+}
+
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  clearCookies();
   window.location.hash = "";
 });
 
@@ -99,5 +107,48 @@ describe("M20 — captureSSORedirect requires a tab-armed SSO state", () => {
   it("still reports sso_error fragments verbatim", () => {
     window.location.hash = "#sso_error=upstream%20said%20no";
     expect(captureSSORedirect()).toBe("upstream said no");
+  });
+});
+
+describe("F3 — bookmark / IdP-initiated login (cookie-backed nonce)", () => {
+  it("accepts the fragment when the netops_sso_pending cookie matches the echoed state", () => {
+    // Okta dashboard tile: the full-page nav went straight to /sso/login, so
+    // ssoLoginUrl() never armed SSO_STATE_KEY. The backend set a JS-readable
+    // single-use cookie and echoed the same value as `state`.
+    document.cookie = "netops_sso_pending=abc; Path=/";
+    window.location.hash = "#token=tok&refresh=ref&sso=1&state=abc";
+    const err = captureSSORedirect();
+    expect(err).toBeNull();
+    expect(getToken()).toBe("tok");
+    expect(getRefresh()).toBe("ref");
+    // Cookie is single-use: consumed on capture.
+    expect(document.cookie).not.toContain("netops_sso_pending=abc");
+  });
+
+  it("drops an attacker-delivered fragment when neither nonce nor cookie is present", () => {
+    window.location.hash = "#token=attacker-token&refresh=attacker-refresh&sso=1&state=whatever";
+    const err = captureSSORedirect();
+    expect(getToken()).toBeNull();
+    expect(getRefresh()).toBeNull();
+    expect(err).toMatch(/sign in again/i);
+  });
+
+  it("rejects a bookmark fragment whose state does not match the cookie", () => {
+    document.cookie = "netops_sso_pending=abc; Path=/";
+    window.location.hash = "#token=tok&refresh=ref&sso=1&state=not-abc";
+    const err = captureSSORedirect();
+    expect(getToken()).toBeNull();
+    expect(err).toMatch(/state mismatch/i);
+  });
+
+  it("prefers the sessionStorage nonce over the cookie (SP-initiated unchanged)", () => {
+    sessionStorage.setItem(SSO_STATE_KEY, "sp-nonce");
+    document.cookie = "netops_sso_pending=cookie-nonce; Path=/";
+    window.location.hash = "#token=tok&refresh=ref&sso=1&state=sp-nonce";
+    const err = captureSSORedirect();
+    expect(err).toBeNull();
+    expect(getToken()).toBe("tok");
+    // The cookie was NOT consumed — the SP path never touched it.
+    expect(document.cookie).toContain("netops_sso_pending=cookie-nonce");
   });
 });

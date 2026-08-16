@@ -45,6 +45,12 @@ func (s *server) handleSSOConfig(w http.ResponseWriter, _ *http.Request) {
 
 const ssoStateCookie = "netops_sso_state"
 
+// ssoPendingCookie is the JS-readable, single-use fallback nonce set only on
+// bookmark / IdP-initiated logins (no SPA-supplied fe_state). The SPA reads and
+// clears it, requiring it to equal the `state` echoed in the callback fragment,
+// so a token delivered to a browser that never hit /sso/login is still refused.
+const ssoPendingCookie = "netops_sso_pending"
+
 // handleSSOLogin (public) starts the Authorization Code flow: set a CSRF state
 // cookie and 302 to Keycloak. ?idp=<id> selects a federated IdP via kc_idp_hint.
 func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +91,35 @@ func (s *server) handleSSOLogin(w http.ResponseWriter, r *http.Request) {
 	feState := strings.TrimSpace(r.URL.Query().Get("fe_state"))
 	if len(feState) > 128 {
 		feState = feState[:128] // opaque; bound it (never trust caller length)
+	}
+	// Bookmark / IdP-initiated entry (Okta dashboard tile → …/sso/login?idp=okta,
+	// docs/runbooks/okta-sso-setup.md): the full-page navigation never runs the
+	// SPA's ssoLoginUrl(), so no fe_state is supplied and the M20 sessionStorage
+	// nonce is never armed — the returning token would be discarded. Synthesize
+	// the nonce server-side instead: a random value carried through the flow as
+	// feState (echoed as `state` in the callback fragment) AND mirrored into a
+	// JS-readable, short-TTL cookie the SPA falls back to when it has no
+	// sessionStorage nonce. This still binds the token to a browser that actually
+	// hit /sso/login: an attacker who delivers a #token= fragment to a victim who
+	// never started a flow has neither the sessionStorage nonce nor this cookie,
+	// so the token is refused. SP-initiated logins (SPA supplies fe_state) are
+	// untouched — no cookie is synthesized in that path.
+	if feState == "" {
+		syn, err := randomToken(24)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		feState = syn
+		http.SetCookie(w, &http.Cookie{
+			Name:     ssoPendingCookie,
+			Value:    syn,
+			Path:     "/",
+			HttpOnly: false, // SPA must read it to match the echoed `state`
+			Secure:   cookieSecure(r),
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   600,
+		})
 	}
 	if err := s.ssoTxns.CreateFlow(state, nonce, verifier, feState, time.Now()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)

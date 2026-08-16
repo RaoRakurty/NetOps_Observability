@@ -1498,6 +1498,35 @@ function newSSOState(): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// SSO_PENDING_COOKIE is the JS-readable, single-use fallback nonce the backend
+// sets ONLY on bookmark / IdP-initiated logins (Okta dashboard tile → the full
+// page navigates straight to /api/auth/sso/login, so ssoLoginUrl() never ran to
+// arm SSO_STATE_KEY). captureSSORedirect() reads and clears it and requires it
+// to equal the `state` echoed in the callback fragment, so the token is still
+// bound to a browser that actually hit /sso/login. Kept in sync with
+// oidc.go's ssoPendingCookie.
+const SSO_PENDING_COOKIE = "netops_sso_pending";
+
+// takeSSOPendingCookie reads the bookmark-login fallback nonce and clears it
+// (single-use), matching the backend cookie's Path=/. Returns null when absent.
+function takeSSOPendingCookie(): string | null {
+  let val: string | null = null;
+  try {
+    const pref = SSO_PENDING_COOKIE + "=";
+    for (const part of document.cookie.split(";")) {
+      const c = part.trim();
+      if (c.startsWith(pref)) {
+        val = decodeURIComponent(c.slice(pref.length));
+        break;
+      }
+    }
+    if (val) {
+      document.cookie = SSO_PENDING_COOKIE + "=; Path=/; Max-Age=0; SameSite=Lax";
+    }
+  } catch { /* document.cookie unavailable -> null -> fail closed */ }
+  return val || null;
+}
+
 // captureSSORedirect inspects the URL fragment the SSO callback redirects to
 // (#token=…&refresh=…&sso=1, or #sso_error=…) and, on success, stores the
 // session and clears the fragment. Call once at startup before rendering.
@@ -1529,6 +1558,19 @@ export function captureSSORedirect(): string | null {
   }
   const token = p.get("token");
   const refresh = p.get("refresh");
+  // Bookmark / IdP-initiated login (Okta dashboard tile): ssoLoginUrl() never
+  // ran, so SSO_STATE_KEY is empty. Fall back to the single-use cookie the
+  // backend set on /sso/login. An attacker who delivers a #token= fragment to a
+  // victim who never hit /sso/login has neither the sessionStorage nonce nor the
+  // cookie, so this still fails closed.
+  let fromCookie = false;
+  if (!pending) {
+    const c = takeSSOPendingCookie();
+    if (c) {
+      pending = c;
+      fromCookie = true;
+    }
+  }
   if (!pending) {
     // Token fragment with no matching login started from this tab: forged or
     // replayed. Drop it (and never overwrite an existing session with it).
@@ -1536,7 +1578,13 @@ export function captureSSORedirect(): string | null {
     return "SSO sign-in was not started from this browser tab — please sign in again.";
   }
   const echoed = p.get("state");
-  if (echoed !== null && echoed !== pending) {
+  // Bookmark path: the backend ALWAYS echoes the cookie value as `state`, so
+  // require an exact match. SP-initiated path is unchanged (lenient if the
+  // backend echoed nothing, exact match when it did).
+  const echoMismatch = fromCookie
+    ? echoed !== pending
+    : (echoed !== null && echoed !== pending);
+  if (echoMismatch) {
     clear();
     return "SSO state mismatch — please sign in again.";
   }
