@@ -24,6 +24,14 @@ func provisionAppRole(ctx context.Context, t *testing.T, adminDSN string) string
 
 	const role, pass = "netops_app_test", "apppw"
 	stmts := []string{
+		// Clear residue from a prior package's tests on this shared database
+		// BEFORE dropping: the pg-integration CI job runs the whole corpus with
+		// `-p 1 ./...` against ONE database, and a leaked/late-closing connection
+		// as the app role would otherwise block DROP ROLE / hold the objects the
+		// schema drop needs. Terminate other backends, then drop what the role
+		// still owns, so provisioning is deterministic regardless of run order.
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
+		"DO $do$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + role + "') THEN EXECUTE 'DROP OWNED BY " + role + "'; END IF; END $do$",
 		"DROP SCHEMA IF EXISTS public CASCADE",
 		"CREATE SCHEMA public",
 		"DROP ROLE IF EXISTS " + role,
