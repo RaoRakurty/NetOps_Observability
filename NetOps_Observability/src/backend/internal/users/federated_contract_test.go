@@ -197,7 +197,7 @@ func TestPGStoreMigratesEmptyAuthSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if _, err := conn.Exec(ctx, `SET app.current_tenant = '*'`); err != nil {
+	if _, err := conn.Exec(ctx, `SET app.tenant_id = '*'`); err != nil {
 		t.Fatalf("set tenant: %v", err)
 	}
 	if _, err := conn.Exec(ctx, `INSERT INTO users (id, tenant_id, data) VALUES
@@ -255,6 +255,12 @@ func provisionAppRole(ctx context.Context, t *testing.T, adminDSN string) string
 		"DO $do$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + role + "') THEN EXECUTE 'DROP OWNED BY " + role + "'; END IF; END $do$",
 		"DROP SCHEMA IF EXISTS public CASCADE",
 		"CREATE SCHEMA public",
+		// Recreating public leaves it owned by the superuser with no CREATE for
+		// anyone else (PG15+ dropped the public-CREATE-to-PUBLIC default), which
+		// strips the persistent CI app role's (PG_TEST_DSN) grant and makes the
+		// next non-provisioning test fail "no schema has been selected to create
+		// in". Restore usability for every role on this shared test database.
+		"GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC",
 		"DROP ROLE IF EXISTS " + role,
 		"CREATE ROLE " + role + " LOGIN PASSWORD '" + pass + "' NOSUPERUSER",
 		"GRANT ALL ON SCHEMA public TO " + role,

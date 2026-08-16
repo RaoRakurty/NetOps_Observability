@@ -6,11 +6,8 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"os"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"netops/backend/internal/platformdb"
 	"netops/backend/processors"
@@ -102,15 +99,30 @@ func TestProcessorRulesRLSIsolation(t *testing.T) {
 		t.Fatal("RLS LEAK: acme deleted globex's rule")
 	}
 
-	// WITH CHECK forge → SQLSTATE 42501.
+	// A forged body tenant is NEUTRALIZED at the app layer (§3a.2: the owner is
+	// stamped from the caller, never the body — store.go Create), so a non-cross
+	// Create with TenantID "globex" is written as the caller's "acme" rather than
+	// reaching the database as a cross-tenant row. Assert the neutralization is
+	// real: the rule is stamped acme, acme can read it, and globex cannot. (The
+	// database WITH CHECK policy is the defence-in-depth backstop for a bug that
+	// bypasses this stamping; it is exercised by the raw-SQL RLS tests, not
+	// through the store which never emits a forged tenant.)
 	forged := processors.Rule{TenantID: "globex", Lane: "syslog", Type: processors.TypeDropField, Field: "x", Enabled: true}
 	if err := forged.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.Create(ctx, "acme", false, forged)
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
-		t.Fatalf("WITH CHECK must refuse a forged tenant, got %v", err)
+	created, err := st.Create(ctx, "acme", false, forged)
+	if err != nil {
+		t.Fatalf("non-cross Create must succeed with the body tenant stamped away, got %v", err)
+	}
+	if created.TenantID != "acme" {
+		t.Fatalf("forged body tenant must be stamped to the caller: got %q, want acme", created.TenantID)
+	}
+	if _, found, _ := st.Get(ctx, "globex", false, created.ID); found {
+		t.Fatal("RLS LEAK: globex read a rule the forge tried to plant in it")
+	}
+	if _, found, _ := st.Get(ctx, "acme", false, created.ID); !found {
+		t.Fatal("the stamped rule must be readable by its real owner acme")
 	}
 
 	// The config writer's cross-tenant read sees both.
